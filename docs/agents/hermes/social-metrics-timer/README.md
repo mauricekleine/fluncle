@@ -21,7 +21,7 @@ The selection is a pure function of DB state + the clock, so it is deterministic
 
 The box holds no computation authority — it only fires the trigger. Per tick:
 
-1. **POST** `/api/admin/social/metrics/record` with the box's AGENT token — a bare trigger (no body).
+1. **POST** `/api/v1/admin/social/metrics/record` with the box's AGENT token — a bare trigger (no body).
 2. The **Worker** selects the budget, reads Postiz per-post analytics, and **appends** one snapshot per (post, source, UTC day) — `INSERT … ON CONFLICT(external_id, source, captured_day) DO NOTHING`, so a re-fired tick the same day appends nothing.
 
 **It calls the oRPC HTTP endpoint directly** (the `funnel-snapshot` / `reach` precedent), never a `fluncle admin …` subcommand — the box's baked CLI is a PINNED release and must not gain a new dependency. **No new secret**: the Postiz key (and the Simple-Analytics key) live Worker-side, so the box is a bare trigger; `FLUNCLE_API_TOKEN` (the box's agent token) is already present.

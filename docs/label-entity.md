@@ -167,7 +167,7 @@ The album entity inherits the same class of collision (two records that share a 
 
 ## Merging a slug-split label (the operator cleanup)
 
-Aliases stop a split going FORWARD; `merge_label` cleans up the PRE-EXISTING ones — two `labels` rows that already mean one label because their spellings slugged apart before an alias caught them (the Med School / Medschool class). The operator runs `fluncle admin labels merge <losingSlug> <canonicalSlug>` (operator tier, `POST /api/admin/labels/{slug}/merge`), folding the LOSING row into the CANONICAL one in a single transaction. `mergeLabel` in `apps/web/src/lib/server/labels.ts` does the work; a merge is proven by the harness in `labels.test.ts`.
+Aliases stop a split going FORWARD; `merge_label` cleans up the PRE-EXISTING ones — two `labels` rows that already mean one label because their spellings slugged apart before an alias caught them (the Med School / Medschool class). The operator runs `fluncle admin labels merge <losingSlug> <canonicalSlug>` (operator tier, `POST /api/v1/admin/labels/{slug}/merge`), folding the LOSING row into the CANONICAL one in a single transaction. `mergeLabel` in `apps/web/src/lib/server/labels.ts` does the work; a merge is proven by the harness in `labels.test.ts`.
 
 A merge repoints every label foreign key, including `tracks.label_id`, `labels.parent_label_id`, and `label_aliases.label_id`. `albums` carries no label FK — its label edge is derived at read time from the raw string, so there is nothing to re-point there. The `crawl_frontier` queue keys by label SLUG, not by id, and is transient resumable state, so it is deliberately outside this id-FK re-point.
 

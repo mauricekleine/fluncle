@@ -1,6 +1,6 @@
 # fluncle-social-capture-timer — the social-URL-capture sweep on a host timer
 
-The rave-02 host trigger for the `--no-agent` **social-URL-capture** sweep. `fluncle-social-capture` captures the public post URLs Postiz withholds on create (the YouTube watch URL, the TikTok permalink) and writes them back, flipping a captured TikTok inbox draft `draft` → `published`. The box holds no Postiz key, so it just TRIGGERS — one `curl` POST to the agent-tier `/api/admin/social/posts/capture` per tick, and the Worker does the work. Zero box tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 10m.
+The rave-02 host trigger for the `--no-agent` **social-URL-capture** sweep. `fluncle-social-capture` captures the public post URLs Postiz withholds on create (the YouTube watch URL, the TikTok permalink) and writes them back, flipping a captured TikTok inbox draft `draft` → `published`. The box holds no Postiz key, so it just TRIGGERS — one `curl` POST to the agent-tier `/api/v1/admin/social/posts/capture` per tick, and the Worker does the work. Zero box tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 10m.
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — a lone [`../scripts/social-capture-sweep.sh`](../scripts/social-capture-sweep.sh) (no `.ts`; the whole job is one POST) — riding the image and auto-updating from `main` via pin-watch (Unit A). The host timer only triggers it.
 

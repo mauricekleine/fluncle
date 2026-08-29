@@ -21,7 +21,7 @@ One Bun orchestrator, `scripts/e2e-stack.ts`, is Playwright's `webServer`. It bu
 3. boots `turso dev` over a **fresh empty** db file
 4. runs `db:migrate` — the real generated migrations plus the FTS5 index
 5. applies the synthetic seed (`seed.ts`)
-6. boots Vite; Playwright waits on `/api/health`
+6. boots Vite; Playwright waits on `/api/v1/health`
 
 `globalSetup` then warms the dev server (see below), and `globalTeardown` restores `.dev.vars` afterwards. A crashed run self-heals: the next boot restores from the backup it finds under the gitignored `.dev/`.
 

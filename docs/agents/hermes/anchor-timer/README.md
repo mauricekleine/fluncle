@@ -12,7 +12,7 @@ Filling the anchor used to run **in the Worker** against the official (dev-mode)
 
 The box holds no verification authority — it only fetches candidates, and even that only for the paid last resort. Per tick it runs the resolver waterfall (docs/catalogue-crawler.md § the anchor):
 
-1. **Fetch** the anchor worklist from the Worker with the box's AGENT token (`GET /api/admin/tracks/work?kind=anchor`). Each row carries a ready-made `anchorQuery` (its artists + title), so the driver never builds the query.
+1. **Fetch** the anchor worklist from the Worker with the box's AGENT token (`GET /api/v1/admin/tracks/work?kind=anchor`). Each row carries a ready-made `anchorQuery` (its artists + title), so the driver never builds the query.
 2. **`resolve_anchor` FIRST, per row** (agent tier — the box POSTs just the `trackId`). The Worker resolves the row from the FREE ListenBrainz rung (recording MBID → Spotify ids → one by-id read) and, **only when the dark flag `anchor_spotify_search_enabled` is on** (default OFF) and outside the Friday-refresh window, from the free Spotify SEARCH rungs (exact ISRC, then fuzzy). A hit here spends **no Apify money**. The response carries `source` (which rung anchored) and `spotifySearchDone` (whether a Spotify search ran — the sweep's pacer signal).
 3. **Apify only on a `resolve_anchor` miss.** For the rows that missed every free rung, **run** the Apify actor (`run-sync-get-dataset-items`, `searchKeywordLimit: 3`), **group** its flat results by `target` (the query), and **POST** each row's candidates to `anchor_track` (agent tier).
 

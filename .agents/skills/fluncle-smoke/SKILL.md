@@ -38,7 +38,7 @@ Default prod `https://www.fluncle.com`. For a pre-merge PR, smoke its Cloudflare
 3. **Subdomains.** `galaxy.`, `radio.`, `status.` → `200`. `found.` is the R2 object store — its **root 404s by design**; probe a real object (`found.fluncle.com/<logId>/set.mp4` → `200`).
 4. **CLI.** Dry-run the thin client's read paths against the target: `bun run --cwd apps/cli fluncle recent --limit 1 --json`, `fluncle tracks get <logId> --json`, `fluncle status`. Confirms the CLI→API contract end to end.
 5. **MCP / SSH / DNS.** MCP at `/mcp` (GET `405` / POST `400` = served). SSH terminal `rave.fluncle.com:22` TCP-open (`bash -c 'cat </dev/null >/dev/tcp/rave.fluncle.com/22'`). DNS `dig +short @rave.fluncle.com <name> TXT`.
-6. **/api/status aggregate.** The box's own view: `services` all `ok`, `secondsSinceFreshestReport` small (the host-timer healthcheck is fresh).
+6. **/api/v1/status aggregate.** The box's own view: `services` all `ok`, `secondsSinceFreshestReport` small (the host-timer healthcheck is fresh).
 7. **Interactive surfaces — only when the change touched them.** The video players and admin UI need a real browser past hydration, not a `200`. Drive the chrome-devtools MCP (logged-out: the public `/log/<mixtape>` player) or claude-in-chrome (the authed admin): verify playback / seek / overlay / the actual interaction. See the `verify-interactive-states-visually` memory.
 
 ## Judgment (what a frozen script gets wrong)
