@@ -33,6 +33,7 @@
  * `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`; locally they come from `.dev.vars`.
  */
 import { type Client, createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
@@ -40,6 +41,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { hubCountDeltaStatement } from "../src/lib/server/hub-counts";
+import { restaleCatalogueRankByLabelStatement } from "../src/lib/server/catalogue-rank-restale";
+import {
+  batchDueWorkSourceMutation,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
+} from "../src/lib/server/due-work";
 
 /** The once-ever marker: present ⇒ the D7 bootstrap has already run. */
 const SEED_MARKER_KEY = "labels_seeded_at";
@@ -186,8 +194,17 @@ export async function linkTracksToLabels(
 
     const certified = Number(census.rows[0]?.cert ?? 0);
     // ONE batch, because a half-applied pair IS drift and a maintained counter fails silently.
-    const [updated] = await client.batch(
+    const results = await client.batch(
       [
+        ...markDueWorkSourceMaintenanceFromSelectStatements(
+          "track",
+          {
+            args: [raw],
+            sql: `select track_id as subject_id from tracks
+                  where label_id is null and trim(label) = ?`,
+          },
+          { producer: "backfill-label-link" },
+        ),
         {
           args: [labelId, raw],
           sql: `update tracks set label_id = ? where label_id is null and trim(label) = ?`,
@@ -197,7 +214,7 @@ export async function linkTracksToLabels(
       "write",
     );
 
-    linked += updated?.rowsAffected ?? 0;
+    linked += results.at(-2)?.rowsAffected ?? 0;
   }
 
   return linked;
@@ -256,14 +273,22 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
   }
 
   for (const [slug, name] of bySlug) {
-    const inserted = await client.execute({
-      args: [`lbl_${randomUUID()}`, name, slug, now, now],
-      sql: `insert into labels (id, name, slug, created_at, updated_at)
-            values (?, ?, ?, ?, ?)
-            on conflict (slug) do nothing`,
-    });
+    const labelId = `lbl_${randomUUID()}`;
+    const [inserted] = await batchDueWorkSourceMutation(
+      client,
+      [
+        {
+          args: [labelId, name, slug, now, now],
+          sql: `insert into labels (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)
+                on conflict (slug) do nothing`,
+        },
+      ],
+      [{ subjectId: labelId, subjectType: "label" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "backfill-label-mint" },
+    );
 
-    result.minted += inserted.rowsAffected;
+    result.minted += inserted?.rowsAffected ?? 0;
   }
 
   // ── 1b. LINK (every deploy) — the `tracks.label_id` pointer for every track whose label
@@ -302,7 +327,7 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
   const rows = await client.execute({
     // `ruled_at is null` is belt and braces: an operator ruling is never clobbered, even
     // if the marker were cleared by hand.
-    sql: `select id, slug from labels where ruled_at is null`,
+    sql: `select id, slug, seed_state from labels where ruled_at is null`,
   });
 
   for (const row of rows.rows) {
@@ -313,11 +338,44 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
         ? "undecided"
         : "enabled";
 
-    await client.execute({
-      // `ruled_at` stays NULL: this is the machine's bootstrap, not a human's ruling.
-      args: [state, now, asText(row.id)],
-      sql: `update labels set seed_state = ?, updated_at = ? where id = ? and ruled_at is null`,
-    });
+    const labelId = asText(row.id);
+    if (asText(row.seed_state) !== state) {
+      const restale = restaleCatalogueRankByLabelStatement(labelId);
+      await client.batch(
+        [
+          {
+            // `ruled_at` stays NULL: this is the machine's bootstrap, not a human's ruling.
+            args: [state, now, labelId, state],
+            sql: `update labels set seed_state = ?, updated_at = ?
+                  where id = ? and ruled_at is null and seed_state <> ?`,
+          },
+          ...markDueWorkSourceMaintenanceStatements(
+            [
+              { subjectId: labelId, subjectType: "label" },
+              {
+                subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                subjectType: "track",
+              },
+            ],
+            { onlyIfPreviousStatementChanged: true, producer: "backfill-label-seed" },
+          ),
+          {
+            ...restale,
+            sql: `${restale.sql} and changes() > 0`,
+          },
+          ...markDueWorkSourceMaintenanceFromSelectStatements(
+            "track",
+            {
+              args: [labelId],
+              sql: `select track_id as subject_id from tracks
+                    where label_id = ? and changes() > 0`,
+            },
+            { producer: "backfill-label-seed" },
+          ),
+        ],
+        "write",
+      );
+    }
 
     result[state] += 1;
   }
@@ -345,7 +403,11 @@ async function main(): Promise<void> {
   }
 
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
   const result = await backfillLabels(client);
 
   console.log(

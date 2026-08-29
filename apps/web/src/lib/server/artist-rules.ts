@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { parseSpotifyArtistId } from "./artist-resolution";
+import {
+  markCrawlProjectionRepairStatement,
+  markCrawlProjectionRepairsFromSelectStatement,
+} from "./crawl-due-work";
 import { getDb, typedRows } from "./db";
+import {
+  type DueWorkStatement,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceMaintenanceStatements,
+} from "./due-work";
 import { LabelNotFoundError } from "./labels";
 import { mbFetch } from "./musicbrainz";
 
@@ -209,7 +218,6 @@ export async function replaceLabelArtistRules(
 
   const db = await getDb();
   await assertLabelExists(labelId);
-
   const prepared = await Promise.all(
     rules.map(async (rule) => ({
       artistMbid: rule.artistMbid,
@@ -219,9 +227,20 @@ export async function replaceLabelArtistRules(
     })),
   );
   const now = new Date().toISOString();
-  const statements: Array<{ args: Array<null | string>; sql: string }> = [
+  const sourceVersion = `artist-rules-replace:${randomUUID()}`;
+  const statements: DueWorkStatement[] = [
+    markCrawlProjectionRepairsFromSelectStatement(
+      "artist",
+      {
+        args: [labelId],
+        sql: `select distinct artist_mbid as source_id from artist_rules where label_id = ?`,
+      },
+      { now, sourceVersion },
+    ),
     { args: [labelId], sql: `delete from artist_rules where label_id = ?` },
-    ...prepared.map((rule) => ({
+  ];
+  for (const rule of prepared) {
+    statements.push({
       args: [
         `arl_${randomUUID()}`,
         rule.artistMbid,
@@ -237,12 +256,38 @@ export async function replaceLabelArtistRules(
               (id, artist_mbid, artist_name, artist_spotify_id, verdict, label_id, source,
                resolved_mbid, resolved_name, checked_at, rearmed_at, created_at, updated_at)
             values (?, ?, ?, ?, ?, ?, ?, null, null, null, null, ?, ?)`,
-    })),
+    });
+  }
+  statements.push(
     {
       args: [now, now, labelId],
       sql: `update labels set scope_changed_at = ?, updated_at = ? where id = ?`,
     },
-  ];
+    ...markDueWorkSourceMaintenanceStatements(
+      [
+        { subjectId: labelId, subjectType: "label" },
+        { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+      ],
+      {
+        markerVersion: sourceVersion,
+        now,
+        producer: "label-artist-rules-replace",
+      },
+    ),
+    markCrawlProjectionRepairsFromSelectStatement(
+      "label",
+      { args: [labelId], sql: `select slug as source_id from labels where id = ?` },
+      { now, sourceVersion },
+    ),
+    markCrawlProjectionRepairsFromSelectStatement(
+      "artist",
+      {
+        args: [labelId],
+        sql: `select distinct artist_mbid as source_id from artist_rules where label_id = ?`,
+      },
+      { now, sourceVersion },
+    ),
+  );
 
   await db.batch(statements, "write");
 
@@ -289,13 +334,31 @@ export async function addArtistRule(input: GlobalArtistRuleInput): Promise<Artis
   const now = new Date().toISOString();
 
   try {
-    await db.execute({
-      args: [id, input.artistMbid, artistName, identity.artistSpotifyId, input.verdict, now, now],
-      sql: `insert into artist_rules
-              (id, artist_mbid, artist_name, artist_spotify_id, verdict, label_id, source,
-               resolved_mbid, resolved_name, checked_at, rearmed_at, created_at, updated_at)
-            values (?, ?, ?, ?, ?, null, 'operator', null, null, null, null, ?, ?)`,
-    });
+    await db.batch(
+      [
+        {
+          args: [
+            id,
+            input.artistMbid,
+            artistName,
+            identity.artistSpotifyId,
+            input.verdict,
+            now,
+            now,
+          ],
+          sql: `insert into artist_rules
+                  (id, artist_mbid, artist_name, artist_spotify_id, verdict, label_id, source,
+                   resolved_mbid, resolved_name, checked_at, rearmed_at, created_at, updated_at)
+                values (?, ?, ?, ?, ?, null, 'operator', null, null, null, null, ?, ?)`,
+        },
+        markCrawlProjectionRepairStatement("artist", input.artistMbid, {
+          now,
+          onlyIfPreviousStatementChanged: true,
+          sourceVersion: `artist-rule-add:${randomUUID()}`,
+        }),
+      ],
+      "write",
+    );
   } catch (error) {
     if (isGlobalArtistRuleCollision(error)) {
       throw new DuplicateGlobalArtistRuleError(
@@ -321,11 +384,26 @@ export async function addArtistRule(input: GlobalArtistRuleInput): Promise<Artis
 
 export async function removeArtistRule(id: string): Promise<void> {
   const db = await getDb();
-
-  await db.execute({
-    args: [id],
-    sql: `delete from artist_rules where id = ? and label_id is null`,
-  });
+  const now = new Date().toISOString();
+  const sourceVersion = `artist-rule-remove:${randomUUID()}`;
+  await db.batch(
+    [
+      markCrawlProjectionRepairsFromSelectStatement(
+        "artist",
+        {
+          args: [id],
+          sql: `select artist_mbid as source_id from artist_rules
+                where id = ? and label_id is null`,
+        },
+        { now, sourceVersion },
+      ),
+      {
+        args: [id],
+        sql: `delete from artist_rules where id = ? and label_id is null`,
+      },
+    ],
+    "write",
+  );
 }
 
 /**

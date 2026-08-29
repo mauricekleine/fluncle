@@ -25,9 +25,9 @@
 // immediately and schedules a refresh. Deep filtered pages build the same SQL-only boundary window
 // once per exact clause-set memo. The nearest boundary plus an offset remainder preserves tail
 // reachability when a stored set predates corpus growth. The primary sort rides
-// `tracks_release_date_idx`; TRACK_SELECT stays a NAMED column list, so neither boundary extraction
-// nor hydration brings the wide embedding BLOBs across the isolate. The total remains a separate
-// memoized `count(*)`. Hosted Turso is still the only performance proof
+// `tracks_release_date_track_id_idx`; TRACK_SELECT stays a NAMED column list, so neither boundary
+// extraction nor hydration brings the wide embedding BLOBs across the isolate. The total remains a
+// separate memoized `count(*)`. Hosted Turso is still the only performance proof
 // (`scripts/bench-tracks-hub.ts --seek-vs-offset`); local libSQL proves correctness only.
 //
 // ── THE JOIN IS PAID ONLY WHEN IT IS READ ──────────────────────────────────────────────
@@ -41,7 +41,7 @@
 //   • THE YEAR LANE is where it is large. Carrying the join, the planner chose a bare `SCAN tracks`
 //     — a full scan of the WIDE row, dragging every `F32_BLOB(1024)` embedding off disk to read one
 //     10-byte date — plus a `findings` probe per row. Without it: `SEARCH tracks USING COVERING
-//     INDEX tracks_release_date_idx`. The table is never touched at all.
+//     INDEX tracks_release_date_track_id_idx`. The table is never touched at all.
 //   • THE `count(*)` loses its per-row `findings` probe: `SCAN tracks USING COVERING INDEX …
 //     + SEARCH findings … LEFT-JOIN` becomes a lone covering scan.
 //   • THE ID PAGE is unchanged — SQLite already proved the join unused there and elided it. Dropping
@@ -59,6 +59,7 @@
 // window is already what the bare hub's edge cache accepts.
 
 import { type CatalogueTrackListItem, type SearchFilters } from "@fluncle/contracts/orpc";
+import { type Client } from "@libsql/client";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import {
@@ -81,11 +82,17 @@ import {
   hubSeekPageQuery,
   isShallowHubPage,
   loadPersistedHubPageAnchors,
+  nearestHubPageAnchor,
   persistHubPageAnchors,
   persistedAnchorDecision,
   scheduleHubPageAnchorRefresh,
 } from "./hub-page-anchors";
 import { type CatalogueHubNumberedPage, CatalogueHubPageOutOfRangeError } from "./labels";
+import {
+  readProjectedAggregateBuckets,
+  readProjectedDefaultTrackTotal,
+  readProjectedTrackHubAnchors,
+} from "./public-projection-cutover";
 import {
   type Clause,
   compileFilters,
@@ -494,7 +501,7 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
 /**
  * ONE numbered page of the `/tracks` hub: every track (findings + catalogue) that survives the
  * filters, newest release first, as a shallow offset or anchored seek riding
- * `tracks_release_date_idx`.
+ * `tracks_release_date_track_id_idx`.
  * Throws {@link CatalogueHubPageOutOfRangeError} for a page past the end (page 1 of an empty result
  * is a legitimate empty page, never a throw) so the route can 404 rather than clamp — a `?page=99`
  * on a 3-page hub is NOT a second URL for page 1's rows. The `count(*)` for the total runs in
@@ -536,11 +543,11 @@ export function tracksHubCountQuery(
 
 /**
  * Step 1's SQL: the bare id slice. No SELECT-list subqueries, so the offset walk touches only the
- * `tracks_release_date_idx` order and the filter predicates. The `findings` join appears ONLY when a
- * predicate reads it (the galaxy filter) — the plan here is identical either way (SQLite already
- * elided the unused join), so that is tidiness rather than a speedup; the join drop earns its keep
- * on the year lane and the `count(*)`. Exported so the hosted bench (`scripts/bench-tracks-hub.ts`)
- * measures the EXACT production shape.
+ * `tracks_release_date_track_id_idx` order and the filter predicates. The `findings` join appears
+ * ONLY when a predicate reads it (the galaxy filter) — the plan here is identical either way
+ * (SQLite already elided the unused join), so that is tidiness rather than a speedup; the join drop
+ * earns its keep on the year lane and the `count(*)`. Exported so the hosted bench
+ * (`scripts/bench-tracks-hub.ts`) measures the EXACT production shape.
  */
 export function tracksHubIdPageQuery(
   filters: TracksHubFilters,
@@ -581,6 +588,94 @@ export function tracksHubSeekIdPageQuery(
   return { args: query.args, remainder: query.remainder, sql: query.sql };
 }
 
+type ProjectedTracksHubIdQuery = { args: (number | string)[]; sql: string };
+
+export type ProjectedTracksHubIdPageQueries = {
+  nullFill?: (remaining: number) => ProjectedTracksHubIdQuery;
+  primary: ProjectedTracksHubIdQuery;
+};
+
+/**
+ * The complete projected anchor document gives every numbered page an exact preceding boundary.
+ * Split the one transition page at the NULL zone so both halves are true composite-index ranges.
+ * The row-value bound intentionally excludes NULL release dates under SQL's three-valued logic;
+ * `nullFill` reads that zone explicitly. The general OR-shaped legacy seek remains available only
+ * to shadow/rollback callers.
+ */
+export function projectedTracksHubIdPageQueries(
+  page: number,
+  anchors: HubPageAnchor[],
+  limit: number,
+): ProjectedTracksHubIdPageQueries {
+  const anchor = nearestHubPageAnchor(page, anchors);
+
+  if (page === 1) {
+    return {
+      primary: {
+        args: [limit],
+        sql: `select tracks.track_id as track_id
+          from tracks indexed by tracks_release_date_track_id_idx
+          order by ${TRACKS_HUB_ORDER_BY}
+          limit ?`,
+      },
+    };
+  }
+
+  if (anchor === undefined) {
+    throw new Error("projected tracks hub anchors do not cover the requested page");
+  }
+
+  if (anchor.key === null) {
+    return {
+      primary: {
+        args: [anchor.id, limit],
+        sql: `select tracks.track_id as track_id
+          from tracks indexed by tracks_release_date_track_id_idx
+          where tracks.release_date is null and tracks.track_id < ?
+          order by ${TRACKS_HUB_ORDER_BY}
+          limit ?`,
+      },
+    };
+  }
+
+  return {
+    nullFill: (remaining) => ({
+      args: [remaining],
+      sql: `select tracks.track_id as track_id
+        from tracks indexed by tracks_release_date_track_id_idx
+        where tracks.release_date is null
+        order by ${TRACKS_HUB_ORDER_BY}
+        limit ?`,
+    }),
+    primary: {
+      args: [anchor.key, anchor.id, limit],
+      sql: `select tracks.track_id as track_id
+        from tracks indexed by tracks_release_date_track_id_idx
+        where (tracks.release_date, tracks.track_id) < (?, ?)
+        order by ${TRACKS_HUB_ORDER_BY}
+        limit ?`,
+    },
+  };
+}
+
+async function readProjectedTracksHubIdPage(
+  client: Pick<Client, "execute">,
+  page: number,
+  anchors: HubPageAnchor[],
+  limit: number,
+): Promise<Awaited<ReturnType<Client["execute"]>>> {
+  const queries = projectedTracksHubIdPageQueries(page, anchors, limit);
+  const primary = await client.execute(queries.primary);
+  const remaining = limit - primary.rows.length;
+
+  if (remaining <= 0 || queries.nullFill === undefined) {
+    return primary;
+  }
+
+  const fill = await client.execute(queries.nullFill(remaining));
+  return { ...primary, rows: [...primary.rows, ...fill.rows] };
+}
+
 /**
  * Step 2's SQL: hydrate exactly one page's ids with the full column set. The per-row subqueries run
  * once per HYDRATED row (≤ the page size), whatever the offset was. Exported for the hosted bench.
@@ -611,6 +706,9 @@ async function countTracksHub(
 
   return memoizedAggregate(aggregateKey("count", clauses), async () => {
     const db = await getDb();
+    if (clauses.length === 0) {
+      return readDefaultTracksHubTotal(db);
+    }
     const result = await db.execute(query);
 
     return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
@@ -675,15 +773,25 @@ export async function listTracksHubPage(
   // compile the same clause set (the memo key is that clause set) and both ride `tracks_label_id_idx`.
   const resolved = await resolveTracksHubEntities(filters);
   const clauses = tracksHubClauses(filters, resolved);
-  const totalPromise = countTracksHub(filters, resolved);
   let total: number;
   let idsResult: Awaited<ReturnType<typeof db.execute>>;
 
-  if (isShallowHubPage(page, limit)) {
+  const projectedAnchors =
+    clauses.length === 0
+      ? await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, limit)
+      : undefined;
+
+  if (projectedAnchors !== undefined) {
+    total = projectedAnchors.total;
+    if (page > Math.max(Math.ceil(total / limit), 1)) {
+      throw new CatalogueHubPageOutOfRangeError();
+    }
+    idsResult = await readProjectedTracksHubIdPage(db, page, projectedAnchors.anchors, limit);
+  } else if (isShallowHubPage(page, limit)) {
     // The bounded front of the pager stays on today's direct offset path; the total remains
     // page-independent and memoized.
     [total, idsResult] = await Promise.all([
-      totalPromise,
+      countTracksHub(filters, resolved),
       db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved)),
     ]);
   } else if (clauses.length > 0) {
@@ -692,7 +800,7 @@ export async function listTracksHubPage(
     const anchorsPromise = memoizedAggregate(aggregateKey("anchors", clauses), () =>
       extractTracksHubAnchors(filters, resolved),
     );
-    const result = await Promise.all([totalPromise, anchorsPromise]);
+    const result = await Promise.all([countTracksHub(filters, resolved), anchorsPromise]);
     total = result[0];
     idsResult = await db.execute(tracksHubSeekIdPageQuery(filters, page, result[1], resolved));
   } else {
@@ -701,7 +809,7 @@ export async function listTracksHubPage(
     // immediately and self-heals in the same non-blocking way.
     const firstQuery = tracksHubIdPageQuery({}, 1, 0);
     const [resolvedTotal, stored, firstResult] = await Promise.all([
-      totalPromise,
+      countTracksHub(filters, resolved),
       loadPersistedHubPageAnchors(
         TRACKS_HUB_ANCHOR_ADDRESS.hub,
         TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
@@ -770,10 +878,18 @@ export async function listTracksHubPage(
 export async function countAllTracks(): Promise<number> {
   return memoizedAggregate(aggregateKey("count", []), async () => {
     const db = await getDb();
-    const result = await db.execute(`select count(*) as total from tracks`);
-
-    return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
+    return readDefaultTracksHubTotal(db);
   });
+}
+
+/** The shared cutover-safe default total used by the hub, its OG count, and the admin funnel. */
+export async function readDefaultTracksHubTotal(client: Pick<Client, "execute">): Promise<number> {
+  const projected = await readProjectedDefaultTrackTotal(client);
+  if (projected !== undefined) {
+    return projected;
+  }
+  const result = await client.execute(tracksHubCountQuery({}));
+  return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
 }
 
 /** A lane chip is only ever a four-digit year. The lane read's `release_date is not null` gate lets
@@ -838,8 +954,9 @@ export function tracksHubYearLaneQuery(
     args,
     clauses,
     // Unfiltered (and under any `tracks`-only filter) this references `tracks.release_date` and
-    // nothing else, so the grouped scan is a covering read of `tracks_release_date_idx` rather than a
-    // drag over the wide row — the embedding BLOBs on `tracks` are never touched.
+    // nothing else, so the grouped scan is a covering read of
+    // `tracks_release_date_track_id_idx` rather than a drag over the wide row — the embedding BLOBs
+    // on `tracks` are never touched.
     sql: `select substr(tracks.release_date, 1, 4) as year, count(*) as n
           from tracks
           ${findingsJoinFor(clauses)}
@@ -852,13 +969,21 @@ export function tracksHubYearLaneQuery(
 export async function listTracksHubYearLane(
   filters: TracksHubFilters,
 ): Promise<TracksHubYearLaneEntry[]> {
-  const { clauses, ...query } = tracksHubYearLaneQuery(
-    filters,
-    await resolveTracksHubEntities(filters),
-  );
+  const resolved = await resolveTracksHubEntities(filters);
+  const hubClauses = tracksHubClauses(filters, resolved);
+  const { clauses, ...query } = tracksHubYearLaneQuery(filters, resolved);
 
   return memoizedAggregate(aggregateKey("years", clauses), async () => {
     const db = await getDb();
+    if (hubClauses.length === 0) {
+      const projected = await readProjectedAggregateBuckets(db, "release_date_bucket");
+      if (projected !== undefined) {
+        return yearPages(
+          projected.map(({ bucket, count }) => ({ n: count, year: bucket })),
+          TRACKS_HUB_PAGE_SIZE,
+        );
+      }
+    }
     const result = await db.execute(query);
 
     return yearPages(typedRows<{ n: number; year: string }>(result.rows), TRACKS_HUB_PAGE_SIZE);

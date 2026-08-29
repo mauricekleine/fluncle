@@ -8,6 +8,7 @@
  * rail: the Worker must never rank against a partially materialized identity corpus.
  */
 import { type Client, createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -117,7 +118,11 @@ async function main(): Promise<void> {
   }
 
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
   const result = await backfillTrackDuplicateKeys(client);
 
   console.log(

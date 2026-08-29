@@ -154,8 +154,8 @@ describe('listTracks status: "queue" (the self-healing filter)', () => {
   it("binds the stale-processing cutoff as a parameter, never interpolated", async () => {
     await listTracks({ limit: 50, order: "asc", status: "queue" });
 
-    const listCall = execute.mock.calls.find(
-      (c) => !(c[0] as { sql: string }).sql.includes("count(*)"),
+    const listCall = execute.mock.calls.find((c) =>
+      (c[0] as { sql: string }).sql.includes("from findings join tracks"),
     )?.[0] as { args: unknown[]; sql: string };
 
     expect(listCall.sql).toContain("enrichment_status");
@@ -198,8 +198,8 @@ describe('listTracks status: "queue" (the self-healing filter)', () => {
 // clauses, so assert the generated SQL (the archive mock above ignores them).
 describe("listTracks hasContext / hasObservation filters (the observation queues)", () => {
   function lastListSql(): string {
-    const listCall = execute.mock.calls.find(
-      (c) => !(c[0] as { sql: string }).sql.includes("count(*)"),
+    const listCall = execute.mock.calls.find((c) =>
+      (c[0] as { sql: string }).sql.includes("from findings join tracks"),
     )?.[0] as { sql: string };
 
     return listCall.sql;

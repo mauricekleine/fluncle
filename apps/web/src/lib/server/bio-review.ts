@@ -30,6 +30,7 @@
 
 import { getDb, typedRows } from "./db";
 import { type EntityKind } from "./bio";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
 
 /** One bypassed bio waiting on the operator's eye — the `bio-review` attention row's raw shape. */
 export type BioReviewRow = {
@@ -177,15 +178,29 @@ export async function resolveBioReview(input: {
     input.resolution === "rewrite"
       ? `bio = null, bio_prompt_version = null, bio_status = 'pending', `
       : "";
-  const result = await db.execute({
-    args: [new Date().toISOString(), input.slug],
-    // The `bio_gate_bypassed_at is not null` predicate lives HERE, not in a prior read: it is what
-    // makes `rewrite` unable to empty a bio nobody flagged, however this op is replayed or raced.
-    sql: `update ${tableFor(input.kind)}
-            set ${wipe}${clear}, updated_at = ?
-          where slug = ?
-            and bio_gate_bypassed_at is not null`,
-  });
+  const table = tableFor(input.kind);
+  const results = await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        input.kind,
+        {
+          args: [input.slug],
+          sql: `select id as subject_id from ${table}
+                where slug = ? and bio_gate_bypassed_at is not null`,
+        },
+        { producer: "bio-review-resolution" },
+      ),
+      {
+        args: [new Date().toISOString(), input.slug],
+        // The review predicate lives HERE, not in a prior read: a replay cannot empty a clean bio.
+        sql: `update ${table}
+                set ${wipe}${clear}, updated_at = ?
+              where slug = ?
+                and bio_gate_bypassed_at is not null`,
+      },
+    ],
+    "write",
+  );
 
-  return result.rowsAffected > 0;
+  return (results.at(-1)?.rowsAffected ?? 0) > 0;
 }

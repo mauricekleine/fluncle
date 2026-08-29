@@ -1,5 +1,6 @@
 import { getDb, typedRow } from "./db";
 import { ApiError } from "./spotify";
+import { FINDING_TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
 
 type PreviewArchiveTrack = {
   logId?: string;
@@ -181,12 +182,14 @@ export async function getPreviewArchiveMetadata(
 ): Promise<(PreviewArchiveMetadata & { logId?: string; trackId: string }) | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    args: [idOrLogId, idOrLogId],
-    sql: `select tracks.track_id, findings.log_id, tracks.preview_archive_key,
+    args: [idOrLogId, idOrLogId, idOrLogId],
+    sql: `with ${FINDING_TRACK_OR_LOG_ID_CTE}
+          select tracks.track_id, findings.log_id, tracks.preview_archive_key,
             tracks.preview_archive_source, tracks.preview_archive_mime,
             tracks.preview_archived_at
-          from findings join tracks on tracks.track_id = findings.track_id
-          where tracks.track_id = ? or findings.log_id = ?
+          from resolved_track
+          join findings on findings.track_id = resolved_track.track_id
+          join tracks on tracks.track_id = resolved_track.track_id
           limit 1`,
   });
   const row = typedRow<ArchiveRow>(result.rows);

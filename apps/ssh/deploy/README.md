@@ -46,9 +46,12 @@ Discord alerts (deploy / rollback / failure) use `DISCORD_ALERT_WEBHOOK` from th
 # 1. Drop the script (0755) at its deployed path (sibling to the other box binaries).
 sudo install -D -m 0755 apps/ssh/deploy/fluncle-ssh-freshen.sh \
   /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh
+sudo install -D -m 0755 docs/agents/hermes/scripts/database-admission-runner.sh \
+  /opt/fluncle-database-admission/database-admission-runner.sh
 
 # 2. (Optional) Place the 0600 operator env file for the Discord alert + /status post.
-#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN (values in the ops runbook note in
+#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN, DATABASE_ADMISSION_FAIL_CLOSED
+#    (values in the ops runbook note in
 #    1Password — the same pair the watchdog uses). Skip this and the self-deploy still
 #    runs, just without Discord/status visibility.
 sudo install -d -m 0755 /etc/fluncle

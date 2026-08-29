@@ -27,6 +27,7 @@
 import { type Subprocess } from "bun";
 import { connect } from "node:net";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 
 // Dedicated ports — high and distinctive so they never collide with the everyday
 // dev stack (Vite :3000, per-worktree libSQL :81xx–:89xx). We REFUSE, never kill,
@@ -162,7 +163,11 @@ async function waitForHttp(url: string, children: Captured[]): Promise<void> {
 /** Wait for the local libSQL server to answer a trivial query. */
 async function waitForDb(children: Captured[]): Promise<void> {
   const { createClient } = await import("@libsql/client/web");
-  const client = createClient({ authToken: "local-dev", url: LIBSQL_URL });
+  const client = createClient({
+    authToken: "local-dev",
+    concurrency: LOCAL_DB_CONCURRENCY,
+    url: LIBSQL_URL,
+  });
   const deadline = Date.now() + READINESS_TIMEOUT_MS;
 
   while (Date.now() < deadline) {

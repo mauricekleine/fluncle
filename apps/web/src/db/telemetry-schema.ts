@@ -23,8 +23,9 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
  * id as the idempotency key, and `occurred_at` (box time) kept DISTINCT from
  * `created_at` (Worker write time).
  *
- * WHAT THIS TABLE EXISTS TO CATCH — every column below was earned by a real, measured
- * defect, not by imagination:
+ * WHAT THIS TABLE EXISTS TO CATCH — its diagnostic columns were earned by real, measured
+ * defects; the bounded database vocabulary adds the shared performance contract without
+ * placing SQL or payload data in telemetry:
  *
  *   - Seven days of a broken Deezer rung were invisible because
  *     `isrcRecoveredByDeezer: 0` was printed in every tick summary and read by nobody.
@@ -47,6 +48,16 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 export const runEvents = sqliteTable(
   "run_events",
   {
+    // The aggregate database access class of this whole run, derived from the checked-in
+    // operation registry by `unit`. NULL means the unit has no registered database effect
+    // or is an unregistered legacy writer; the caller never supplies this classification.
+    accessClass: text("access_class", { enum: ["heavy-read", "read", "write"] }),
+    // Total database attempts the run itself measured. NULL means unknowable, never an
+    // invented one; unlike `exit_code`, this cannot be inferred from process completion.
+    attemptCount: integer("attempt_count"),
+    // Total statements submitted in database batches, when the run measured it. NULL is
+    // distinct from zero and is the honest value for current wrappers that do not know.
+    batchCount: integer("batch_count"),
     // The DENOMINATOR — units of work the run LOOKED at. NULL when the summary did not
     // carry it (and the name then appears in `missing_fields`); never guessed to 0,
     // because 0 is a real and DIFFERENT reading: "I looked at nothing", which for a
@@ -101,6 +112,14 @@ export const runEvents = sqliteTable(
     // because the defect that motivated this ledger was a sweep asserting its own health
     // next to the number that disproved it.
     ok: integer("ok").notNull(),
+    // Stable run-level operation ID, derived from the checked-in operation registry by
+    // unit. Registered no-database timers keep their ID with a NULL access class; only
+    // legacy/unregistered writers stay NULL instead of receiving a manufactured identity.
+    operationId: text("operation_id"),
+    // The bounded run outcome derived from `ok`; never accepted from the emitter. NULL is
+    // reserved for a rolling-deploy writer that predates this column; the reader derives
+    // that compatibility row from the same authoritative `ok` and new writes are explicit.
+    outcome: text("outcome", { enum: ["failure", "success"] }),
     // Units of work actually WRITTEN this run — not rows visited (that is `checked`).
     // The numerator of the alarm conjunction.
     produced: integer("produced"),
@@ -110,6 +129,9 @@ export const runEvents = sqliteTable(
     // wearing a depth's name, and laundering one into this column would manufacture a
     // healthy-looking backlog out of a pagination constant.
     queueDepth: integer("queue_depth"),
+    // The emitter's public build identifier in the same bounded format as a Sentry release.
+    // `unknown` is the honest fallback; hostnames, URLs, and topology never enter it.
+    release: text("release").notNull().default("unknown"),
     // ended_at − started_at in ms, derived by the Worker. NULL when either timestamp is
     // not parseable — recorded as unknown rather than as 0.
     runDurationMs: integer("run_duration_ms"),

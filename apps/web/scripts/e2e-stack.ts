@@ -26,6 +26,7 @@
  */
 import { type Subprocess } from "bun";
 import { seedE2eData } from "../tests/e2e/seed";
+import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import {
   isPortListening,
   killProc,
@@ -85,7 +86,11 @@ async function main(): Promise<void> {
 
   console.log("e2e-stack: seeding synthetic fixtures…");
   const { createClient } = await import("@libsql/client");
-  const client = createClient({ authToken: "e2e-local", url: LIBSQL_URL });
+  const client = createClient({
+    authToken: "e2e-local",
+    concurrency: LOCAL_DB_CONCURRENCY,
+    url: LIBSQL_URL,
+  });
   await seedE2eData(client);
   client.close();
 

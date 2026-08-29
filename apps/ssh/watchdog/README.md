@@ -55,13 +55,16 @@ The script's deployed path is `/opt/fluncle-rave-watchdog/fluncle-rave-watchdog.
 # 1. Drop the script (0755) at its deployed path.
 sudo install -D -m 0755 apps/ssh/watchdog/fluncle-rave-watchdog.sh \
   /opt/fluncle-rave-watchdog/fluncle-rave-watchdog.sh
+sudo install -D -m 0755 docs/agents/hermes/scripts/database-admission-runner.sh \
+  /opt/fluncle-database-admission/database-admission-runner.sh
 
 # 2. Place the 0600 operator env file (values from the ops runbook note in 1Password).
 #    Keys: RAVE01_BEACON_URL, WATCH_STATUS_URL, WATCH_STALE_MINUTES, DISCORD_ALERT_WEBHOOK,
-#    + (job 3 / onion) WATCH_ONION_URL, WATCH_WORKER_URL, FLUNCLE_API_TOKEN.
+#    + (job 3 / onion and admission) WATCH_ONION_URL, WATCH_WORKER_URL, FLUNCLE_API_TOKEN,
+#    DATABASE_ADMISSION_FAIL_CLOSED. The admission gate is inert unless exactly true.
 sudo install -d -m 0755 /etc/fluncle
 sudo install -m 0600 /dev/null /etc/fluncle/rave-watchdog.env
-sudo "$EDITOR" /etc/fluncle/rave-watchdog.env   # paste the four keys
+sudo "$EDITOR" /etc/fluncle/rave-watchdog.env   # paste the listed keys
 
 # 3. Install the units, reload, enable + start the timer.
 sudo install -m 0644 apps/ssh/watchdog/fluncle-rave-watchdog.service /etc/systemd/system/

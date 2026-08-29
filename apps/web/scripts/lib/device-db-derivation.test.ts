@@ -8,7 +8,11 @@ import {
   seedEmbedding,
   seedTrack,
 } from "../../src/lib/server/integration-db";
-import { selectDeviceRowsSql } from "./device-db-derivation";
+import {
+  DEVICE_SELECTED_TRACKS_TABLE,
+  materializeSelectedTrackIdsSql,
+  selectDeviceRowsSql,
+} from "./device-db-derivation";
 import { DEVICE_DB_COLUMNS, DEVICE_SOURCE_TABLES } from "./device-db-schema";
 
 let db: Client;
@@ -23,10 +27,12 @@ afterEach(() => {
 
 describe("device database source selection", () => {
   test("executes every allowlisted projection against the generated production schema", async () => {
+    for (const sql of materializeSelectedTrackIdsSql("anchored", REC_ELIGIBLE_WHERE, "main")) {
+      await db.execute(sql);
+    }
+
     for (const table of DEVICE_SOURCE_TABLES) {
-      const result = await db.execute(
-        selectDeviceRowsSql(table, "anchored", REC_ELIGIBLE_WHERE, "main"),
-      );
+      const result = await db.execute(selectDeviceRowsSql(table, "anchored", "main"));
 
       expect(result.columns, table).toEqual([...DEVICE_DB_COLUMNS[table]]);
     }
@@ -66,12 +72,30 @@ describe("device database source selection", () => {
       sql: "update tracks set nearest_finding_score = ? where track_id = ?",
     });
 
-    const result = await db.execute(
-      selectDeviceRowsSql("tracks", "anchored", REC_ELIGIBLE_WHERE, "main"),
-    );
+    for (const sql of materializeSelectedTrackIdsSql("anchored", REC_ELIGIBLE_WHERE, "main")) {
+      await db.execute(sql);
+    }
+
+    const result = await db.execute(selectDeviceRowsSql("tracks", "anchored", "main"));
 
     expect(result.columns).toEqual([...DEVICE_DB_COLUMNS.tracks]);
     expect(result.columns).not.toContain("embedding_blob");
     expect(result.rows.map((row) => row.track_id)).toEqual(["anchored", "certified"]);
+  });
+
+  test("materializes the growing anchored scan once and makes every copy read that relation", () => {
+    const materialization = materializeSelectedTrackIdsSql("anchored", REC_ELIGIBLE_WHERE, "main");
+
+    expect(materialization).toHaveLength(2);
+    expect(materialization[1]).toContain("track_embeddings");
+    expect(materialization[1]).toContain(REC_ELIGIBLE_WHERE);
+
+    for (const table of DEVICE_SOURCE_TABLES) {
+      const copySql = selectDeviceRowsSql(table, "anchored", "main");
+
+      expect(copySql, table).toContain(`temp."${DEVICE_SELECTED_TRACKS_TABLE}"`);
+      expect(copySql, table).not.toContain("track_embeddings");
+      expect(copySql, table).not.toContain(REC_ELIGIBLE_WHERE);
+    }
   });
 });

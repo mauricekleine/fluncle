@@ -42,6 +42,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 
 /** apps/web — every path below is resolved against it, so the stack works from any cwd. */
 export const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -177,7 +178,11 @@ function readTursoLog(): string {
 /** Wait for the local libSQL server to answer a trivial query. */
 async function waitForDb(proc: Subprocess): Promise<void> {
   const { createClient } = await import("@libsql/client");
-  const client = createClient({ authToken: "e2e-local", url: LIBSQL_URL });
+  const client = createClient({
+    authToken: "e2e-local",
+    concurrency: LOCAL_DB_CONCURRENCY,
+    url: LIBSQL_URL,
+  });
   const deadline = Date.now() + READINESS_TIMEOUT_MS;
 
   while (Date.now() < deadline) {

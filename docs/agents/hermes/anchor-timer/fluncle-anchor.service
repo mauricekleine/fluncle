@@ -15,7 +15,7 @@ Type=oneshot
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). Secrets (the agent token + APIFY_API_TOKEN) come from the shared op-injected
 # ${HOME}/.fluncle-secrets.env the wrapper sources.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=250 hermes bash /opt/hermes-scripts/anchor-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=250 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-anchor -- bash /opt/hermes-scripts/anchor-sweep.sh
 # One tick drains 250 rows (`FLUNCLE_ANCHOR_BATCH`) — the sweep PAGES the worklist in ≤200-row reads
 # (the server clamp), so the batch may exceed one read's cap (anchor-sweep.ts `runAnchorSweep`).
 # Safe to run large because the FREE rungs resolve most rows at zero Apify cost, and 250 is the hard
@@ -37,7 +37,7 @@ ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHO
 # The 50-min timeout leaves generous headroom and still sits under the 1h cadence, so an over-long
 # tick just skips the next trigger and self-heals. Once the ready pool is dry the sweep no-ops on an
 # empty queue, so the batch is a ceiling rather than a spend.
-TimeoutStartSec=3000
+TimeoutStartSec=3130
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

@@ -89,6 +89,8 @@ Four properties make the hour actually fill, and each is proven with a fake cloc
 
 **It is resumable, and it reports honestly.** An embedded track leaves the `source_audio_key is not null and has_embedding = 0` queue and the write-back is per _track_, so a pod reclaimed at track 400 of 500 has 400 vectors safely in the archive and the next run picks up at 401 — nothing is checkpointed because nothing needs to be. And the summary carries **`remaining`**: the size of the whole backlog, **counted server-side** after the write-backs. A run that says "done" while 8,000 tracks are still queued is lying to the person deciding whether to rent another hour.
 
+**The derived-artifact handoff has one versioned contract.** [`docs/artifact-change-protocol.md`](./artifact-change-protocol.md) defines the `sonar.track@1/1` producer event and bootstrap projection: the filter metadata and exact 4,096 vector bytes that a filesystemful consumer needs. `updateTrack` appends the current material revision or delete tombstone in the same database transaction as every accepted vector upsert or clear, so the source and incremental log cannot become visible apart.
+
 **It is one inference script, not two.** `embed-track.py` runs both paths, switched by two env knobs:
 
 | knob               | box (CPU)    | pod (GPU)             |

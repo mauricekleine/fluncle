@@ -1,5 +1,8 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
@@ -8,11 +11,12 @@ import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
 //
 // The crawler's guarantees are all statements about SQL and about a graph walk, so a
 // mocked database would prove none of them. These cases run the actual walk against the
-// in-memory libSQL database built from the generated migrations, with MusicBrainz stubbed
+// file-backed libSQL database built from the generated migrations, with MusicBrainz stubbed
 // at the `fetch` boundary — so the frontier, the dedupe, the hop limit, the label mint and
 // the certification firewall are exercised exactly as they run in production.
 
 let db: Client;
+let fixtureDirectory: string | undefined;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -317,12 +321,22 @@ async function seedFrontierNode(node: {
 }
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-crawl-"));
+  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
   setMusicbrainzRateLimitForTests(0);
   stubMusicbrainz();
   // The operator's ruling: Medschool is in. Nothing else is.
   await seedLabel("Medschool", "medschool", "enabled");
   await seedLabel("Anjunabeats", "anjunabeats", "disabled");
+});
+
+afterEach(async () => {
+  db.close();
+
+  if (fixtureDirectory) {
+    await rm(fixtureDirectory, { force: true, recursive: true });
+    fixtureDirectory = undefined;
+  }
 });
 
 describe("the catalogue crawler", () => {

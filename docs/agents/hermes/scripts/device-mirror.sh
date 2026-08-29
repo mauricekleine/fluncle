@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # device-mirror.sh — the `fluncle-device-mirror` host-timer entry.
 #
-# The Bun orchestrator beside it diffs production Turso's anchored public cut into ONE shared
-# read-only device database. The target is mutated in place: rebuilding it would reset libSQL's
-# replication log and force every installed device to bootstrap the full database again.
+# The Bun orchestrator beside it syncs production ONCE into a restart-safe local embedded replica,
+# derives and verifies the anchored public cut locally, then stages it into ONE shared read-only
+# device database. A final target transaction performs the live cutover without resetting libSQL's
+# replication log or exposing a batch-wise partial generation.
 #
 # The source uses TURSO_DATABASE_URL + the read-only TURSO_AUTH_TOKEN already used by the backup
 # sweep. The target uses DEVICE_TURSO_DATABASE_URL + a write-scoped DEVICE_TURSO_AUTH_TOKEN. All
@@ -12,6 +13,7 @@ set -euo pipefail
 
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
+export DEVICE_DERIVE_SCRIPT="${DEVICE_DERIVE_SCRIPT:-/opt/hermes-device/apps/web/scripts/derive-device-db.ts}"
 
 DEVICE_MIRROR_ENV_FILE="${DEVICE_MIRROR_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${DEVICE_MIRROR_ENV_FILE}" ]; then

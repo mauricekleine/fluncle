@@ -15,11 +15,11 @@ Type=oneshot
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). The agent token comes from the shared op-injected ${HOME}/.fluncle-secrets.env
 # the wrapper sources; no new secret (the Postiz + SA keys live Worker-side).
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/social-metrics-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-social-metrics -- bash /opt/hermes-scripts/social-metrics-sweep.sh
 # One tick is a single bare trigger → one Worker request that reads ≤25 posts from Postiz and
 # appends their snapshots. Bounded by the Postiz 30/hour cap; a generous ceiling well under the 24h
 # cadence, so an over-long tick just skips the next trigger and self-heals.
-TimeoutStartSec=600
+TimeoutStartSec=730
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

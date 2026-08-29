@@ -15,7 +15,7 @@ Type=oneshot
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). NO new secret: `rank_catalogue` is AGENT tier, so the box's existing
 # agent-scoped token drives it.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/rank-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-rank -- bash /opt/hermes-scripts/rank-sweep.sh
 # A PURE trigger — zero LLM tokens. The work is SQL inside the Worker; the tick drains up to
 # FLUNCLE_RANK_MAX_CALLS batches and stops, so it is bounded even right after a big crawl.
 # The BUDGET is the bound, not the wall clock: a full tick is MAX_CALLS=8 × BATCH=250, and as
@@ -27,7 +27,7 @@ ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt
 # red and OnFailure alerted — pure phantom red. 900s covers the measured tick with headroom
 # and still sits well under the 30-min cadence, so there is no overlap risk (systemd skips an
 # overlapping trigger on a oneshot rather than double-firing).
-TimeoutStartSec=900
+TimeoutStartSec=1030
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

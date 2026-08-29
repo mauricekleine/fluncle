@@ -15,6 +15,7 @@
 // telemetry test.
 
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
@@ -25,12 +26,12 @@ const migrationsFolder = fileURLToPath(new URL("../../../drizzle-telemetry", imp
  * A fresh in-memory libSQL database with every generated TELEMETRY migration applied.
  * Each call is an isolated `:memory:` database, so a test can rebuild it per case.
  *
- * The primary harness caches the end-state DDL because replaying 131 migrations per test
- * cost ~102 s across the suite. This folder holds one migration, so the chain is already
- * the cheap path and the cache would be complexity bought for nothing.
+ * The primary harness caches the end-state DDL because replaying its long migration chain
+ * dominates the suite. The telemetry folder deliberately stays tiny, so replaying it is
+ * already the cheap path and a second cache would be complexity bought for nothing.
  */
 export async function createTelemetryIntegrationDb(): Promise<Client> {
-  const client = createClient({ url: ":memory:" });
+  const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
   await migrate(drizzle(client), { migrationsFolder });
 

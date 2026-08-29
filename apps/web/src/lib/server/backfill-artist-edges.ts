@@ -38,6 +38,13 @@
 // cursor loop fires exactly ONE HTTP request per tick.
 
 import { getDb, typedRows } from "./db";
+import {
+  batchDueWorkSourceMutation,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceMaintenanceStatements,
+} from "./due-work";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 import { parseArtistsJson } from "./artists";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { hubCountArtistEdgeStatements } from "./hub-counts";
@@ -303,6 +310,27 @@ async function listWork(
   return typedRows<WorkRow>(result.rows);
 }
 
+async function hydrateProjectedWork(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackIds: readonly string[],
+): Promise<WorkRow[]> {
+  if (trackIds.length === 0) {
+    return [];
+  }
+
+  const result = await db.execute({
+    args: [...trackIds],
+    sql: `select track_id, artists_json, is_catalogue from tracks
+          where track_id in (${trackIds.map(() => "?").join(", ")})`,
+  });
+  const byId = new Map(typedRows<WorkRow>(result.rows).map((row) => [row.track_id, row]));
+
+  return trackIds.flatMap((trackId) => {
+    const row = byId.get(trackId);
+    return row === undefined ? [] : [row];
+  });
+}
+
 /**
  * Authoritative remaining work after a pass. The candidate predicate rides
  * `tracks_artist_edges_backfill_queue_idx`; the anti-join probes
@@ -387,6 +415,20 @@ async function insertEdges(
         // in the chunk just gained the artist graph the capture gate reads — re-stale it for the
         // next `rank_catalogue` tick, atomically with the edge write (catalogue-rank-restale.ts).
         ...restaleCatalogueRankStatements(chunk.map(([trackId]) => trackId)),
+        ...markDueWorkSourceMaintenanceStatements(
+          [
+            {
+              subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+              subjectType: "track" as const,
+            },
+            ...chunk.map(([trackId]) => ({ subjectId: trackId, subjectType: "track" as const })),
+            ...chunk.map(([, artistId]) => ({
+              subjectId: artistId,
+              subjectType: "artist" as const,
+            })),
+          ],
+          { producer: "artist-edge-backfill" },
+        ),
       ],
       "write",
     );
@@ -408,11 +450,18 @@ async function stampVisited(
     const chunk = trackIds.slice(i, i + STAMP_CHUNK);
     const placeholders = chunk.map(() => "?").join(", ");
 
-    await db.execute({
-      args: [now, ...chunk],
-      sql: `update tracks set artist_edges_backfilled_at = ?
-            where track_id in (${placeholders})`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [now, ...chunk],
+          sql: `update tracks set artist_edges_backfilled_at = ?
+                where track_id in (${placeholders})`,
+        },
+      ],
+      chunk.map((subjectId) => ({ subjectId, subjectType: "track" })),
+      { producer: "artist-edge-backfill-stamp" },
+    );
   }
 }
 
@@ -432,8 +481,24 @@ export async function resolveArtistEdges(
 ): Promise<ArtistEdgesBackfillResult> {
   const db = await getDb();
   const batchLimit = Math.max(1, Math.min(limit, MAX_BATCH));
+  const dueWorkCutoverEnabled = await isDueWorkCutoverEnabled();
+  let rows: WorkRow[];
 
-  const rows = await listWork(db, batchLimit, cursor);
+  if (dueWorkCutoverEnabled) {
+    const page = await readPromotedDueWorkPage(db, "artist-edges", {
+      continuation: cursor
+        ? {
+            sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: cursor }]),
+            subjectId: cursor,
+          }
+        : undefined,
+      limit: batchLimit,
+    });
+    rows = await hydrateProjectedWork(db, page.subjectIds);
+  } else {
+    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
+    rows = await listWork(db, batchLimit, cursor);
+  }
 
   const fullyMatched: string[] = [];
   const partiallyMatched: string[] = [];

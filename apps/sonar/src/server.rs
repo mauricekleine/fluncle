@@ -3,8 +3,8 @@
 //! `/search` requires a constant-time-checked `x-sonar-secret` header. `/health`
 //! and `/` are open (Cloudflare health checks hit `/health` unauthenticated).
 
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
@@ -22,11 +22,32 @@ use crate::search::{cap_violation, search, IndexName, SearchRequest, SearchRespo
 
 /// Shared, atomically-swappable server state.
 pub struct AppState {
-    pub tracks: ArcSwap<Index>,
-    pub centroids: ArcSwap<Index>,
+    pub snapshot: ArcSwap<PublishedSnapshot>,
     pub last_refresh: AtomicI64,
+    pub head_seq: AtomicU64,
+    pub replica_synced_at: AtomicI64,
+    pub replica_frame: AtomicU64,
+    pub replica_frames_synced: AtomicU64,
+    pub rebuild_duration_ms: AtomicU64,
+    pub rebuild_cause: AtomicU64,
+    pub validation_failed: AtomicBool,
+    pending_ack: AtomicBool,
+    retired: Mutex<Option<Weak<PublishedSnapshot>>>,
     /// Shared secret for `/search` (compared in constant time).
     pub secret: String,
+}
+
+/// One complete generation. Tracks, centroids, durable checkpoint, and
+/// validation counters become visible in one ArcSwap store.
+pub struct PublishedSnapshot {
+    pub artifact_digest: String,
+    pub tracks: Arc<Index>,
+    pub centroids: Arc<Index>,
+    pub checkpoint: u64,
+    pub baseline_seq: u64,
+    pub raw_vector_bytes: u64,
+    pub validated_at: i64,
+    pub pending_ack: bool,
 }
 
 /// Current unix time in seconds (saturating; never panics).
@@ -40,12 +61,125 @@ pub fn now_unix() -> i64 {
 impl AppState {
     /// Build state from two ready indexes, stamping the refresh time as now.
     pub fn new(tracks: Index, centroids: Index, secret: String) -> Self {
+        let now = now_unix();
         Self {
-            tracks: ArcSwap::from_pointee(tracks),
-            centroids: ArcSwap::from_pointee(centroids),
-            last_refresh: AtomicI64::new(now_unix()),
+            snapshot: ArcSwap::from_pointee(PublishedSnapshot {
+                artifact_digest: String::new(),
+                raw_vector_bytes: (tracks.vector_bytes() + centroids.vector_bytes()) as u64,
+                tracks: Arc::new(tracks),
+                centroids: Arc::new(centroids),
+                checkpoint: 0,
+                baseline_seq: 0,
+                validated_at: now,
+                pending_ack: false,
+            }),
+            last_refresh: AtomicI64::new(now),
+            head_seq: AtomicU64::new(0),
+            replica_synced_at: AtomicI64::new(0),
+            replica_frame: AtomicU64::new(0),
+            replica_frames_synced: AtomicU64::new(0),
+            rebuild_duration_ms: AtomicU64::new(0),
+            rebuild_cause: AtomicU64::new(0),
+            validation_failed: AtomicBool::new(false),
+            pending_ack: AtomicBool::new(false),
+            retired: Mutex::new(None),
             secret,
         }
+    }
+
+    pub fn from_snapshot(snapshot: PublishedSnapshot, secret: String) -> Self {
+        let pending_ack = snapshot.pending_ack;
+        Self {
+            last_refresh: AtomicI64::new(snapshot.validated_at),
+            head_seq: AtomicU64::new(snapshot.checkpoint),
+            replica_synced_at: AtomicI64::new(0),
+            replica_frame: AtomicU64::new(0),
+            replica_frames_synced: AtomicU64::new(0),
+            rebuild_duration_ms: AtomicU64::new(0),
+            rebuild_cause: AtomicU64::new(0),
+            validation_failed: AtomicBool::new(false),
+            pending_ack: AtomicBool::new(pending_ack),
+            snapshot: ArcSwap::from_pointee(snapshot),
+            retired: Mutex::new(None),
+            secret,
+        }
+    }
+
+    /// Publish only when the prior retired generation is no longer held by a
+    /// request. Freshness may wait; resident generations never grow unbounded.
+    pub fn publish(&self, snapshot: PublishedSnapshot) -> anyhow::Result<()> {
+        let mut retired = self.publish_guard()?;
+        let pending_ack = snapshot.pending_ack;
+        let previous = self.snapshot.swap(Arc::new(snapshot));
+        *retired = Some(Arc::downgrade(&previous));
+        drop(previous);
+        self.last_refresh.store(now_unix(), Ordering::Relaxed);
+        self.validation_failed.store(false, Ordering::Relaxed);
+        self.pending_ack.store(pending_ack, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn ensure_publish_capacity(&self) -> anyhow::Result<()> {
+        drop(self.publish_guard()?);
+        Ok(())
+    }
+
+    fn publish_guard(
+        &self,
+    ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<Weak<PublishedSnapshot>>>> {
+        let retired = self
+            .retired
+            .lock()
+            .map_err(|_| anyhow::anyhow!("retired snapshot lock poisoned"))?;
+        if retired.as_ref().and_then(Weak::upgrade).is_some() {
+            anyhow::bail!("previous index generation is still in flight");
+        }
+        Ok(retired)
+    }
+
+    pub fn serves(&self, artifact_digest: &str, checkpoint: u64) -> bool {
+        let snapshot = self.snapshot.load();
+        snapshot.artifact_digest == artifact_digest && snapshot.checkpoint == checkpoint
+    }
+
+    pub fn record_pending_ack(&self, pending: bool) {
+        self.pending_ack.store(pending, Ordering::Relaxed);
+    }
+
+    pub fn record_replica_sync(&self, frame_no: Option<u64>, frames_synced: u64) {
+        self.replica_frame
+            .store(frame_no.unwrap_or_default(), Ordering::Relaxed);
+        self.replica_frames_synced
+            .store(frames_synced, Ordering::Relaxed);
+        self.replica_synced_at.store(now_unix(), Ordering::Relaxed);
+    }
+
+    pub fn record_rebuild(&self, cause: RebuildCause, duration_ms: u64) {
+        self.rebuild_cause.store(cause as u64, Ordering::Relaxed);
+        self.rebuild_duration_ms
+            .store(duration_ms, Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(u64)]
+pub enum RebuildCause {
+    Startup = 0,
+    ScheduledLocal = 1,
+    StateCorrupt = 2,
+    CompactionGap = 3,
+    CheckpointDivergence = 4,
+    PendingDivergence = 5,
+}
+
+fn rebuild_cause(value: u64) -> &'static str {
+    match value {
+        1 => "scheduled_local",
+        2 => "state_corrupt",
+        3 => "compaction_gap",
+        4 => "checkpoint_divergence",
+        5 => "pending_divergence",
+        _ => "startup",
     }
 }
 
@@ -82,15 +216,57 @@ struct Health {
     tracks: usize,
     centroids: usize,
     last_refresh_unix: i64,
+    replica_synced_unix: i64,
+    replica_lag_seconds: i64,
+    replica_frame: u64,
+    replica_frames_synced: u64,
+    checkpoint: u64,
+    head_seq: u64,
+    delta_backlog: u64,
+    delta_age_seconds: i64,
+    baseline_seq: u64,
+    raw_vector_bytes: u64,
+    artifact_version: &'static str,
+    validation: &'static str,
+    pending_ack: bool,
+    rebuild_cause: &'static str,
+    rebuild_duration_ms: u64,
     commit: &'static str,
     ok: bool,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
+    let snapshot = state.snapshot.load_full();
+    let now = now_unix();
+    let head = state.head_seq.load(Ordering::Relaxed);
+    let replica_synced = state.replica_synced_at.load(Ordering::Relaxed);
     Json(Health {
-        tracks: state.tracks.load().len(),
-        centroids: state.centroids.load().len(),
+        tracks: snapshot.tracks.len(),
+        centroids: snapshot.centroids.len(),
         last_refresh_unix: state.last_refresh.load(Ordering::Relaxed),
+        replica_synced_unix: replica_synced,
+        replica_lag_seconds: if replica_synced > 0 {
+            now.saturating_sub(replica_synced)
+        } else {
+            -1
+        },
+        replica_frame: state.replica_frame.load(Ordering::Relaxed),
+        replica_frames_synced: state.replica_frames_synced.load(Ordering::Relaxed),
+        checkpoint: snapshot.checkpoint,
+        head_seq: head,
+        delta_backlog: head.saturating_sub(snapshot.checkpoint),
+        delta_age_seconds: now.saturating_sub(snapshot.validated_at),
+        baseline_seq: snapshot.baseline_seq,
+        raw_vector_bytes: snapshot.raw_vector_bytes,
+        artifact_version: crate::artifact::CONTRACT,
+        validation: if state.validation_failed.load(Ordering::Relaxed) {
+            "last_attempt_failed"
+        } else {
+            "valid"
+        },
+        pending_ack: state.pending_ack.load(Ordering::Relaxed),
+        rebuild_cause: rebuild_cause(state.rebuild_cause.load(Ordering::Relaxed)),
+        rebuild_duration_ms: state.rebuild_duration_ms.load(Ordering::Relaxed),
         commit: BUILD_COMMIT,
         ok: true,
     })
@@ -141,12 +317,13 @@ async fn search_handler(
         return (StatusCode::BAD_REQUEST, reason).into_response();
     }
 
-    let guard = match req.index {
-        IndexName::Tracks => state.tracks.load(),
-        IndexName::Centroids => state.centroids.load(),
+    let snapshot = state.snapshot.load_full();
+    let index = match req.index {
+        IndexName::Tracks => &snapshot.tracks,
+        IndexName::Centroids => &snapshot.centroids,
     };
 
-    let resp = search(&guard, &req);
+    let resp = search(index, &req);
     Json(resp).into_response()
 }
 
@@ -179,5 +356,36 @@ mod tests {
 
         // missing header
         assert!(!authorized(&HeaderMap::new(), &state.secret));
+    }
+
+    #[test]
+    fn publication_is_atomic_and_refuses_unbounded_retired_generations() {
+        let state = state_with("sekret");
+        let held = state.snapshot.load_full();
+        let replacement = PublishedSnapshot {
+            artifact_digest: "one".into(),
+            tracks: Arc::new(Index::empty()),
+            centroids: Arc::new(Index::empty()),
+            checkpoint: 1,
+            baseline_seq: 1,
+            raw_vector_bytes: 0,
+            validated_at: now_unix(),
+            pending_ack: false,
+        };
+        state.publish(replacement).unwrap();
+        assert_eq!(state.snapshot.load_full().checkpoint, 1);
+        let another = PublishedSnapshot {
+            artifact_digest: "two".into(),
+            tracks: Arc::new(Index::empty()),
+            centroids: Arc::new(Index::empty()),
+            checkpoint: 2,
+            baseline_seq: 2,
+            raw_vector_bytes: 0,
+            validated_at: now_unix(),
+            pending_ack: false,
+        };
+        assert!(state.publish(another).is_err());
+        assert_eq!(state.snapshot.load_full().checkpoint, 1);
+        drop(held);
     }
 }

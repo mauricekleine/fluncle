@@ -436,7 +436,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "web_route",
     name: "web.fresh",
     operatorNotes:
-      "The new-releases lens over the whole archive — the SEO answer to 'new dnb releases', a weekly-refreshed query. Orders by tracks.release_date (when a tune CAME OUT), never findings.added_at (when Fluncle FOUND it) — the two are unrelated, and the copy never claims he found these. A HUB, so it is always indexable + listed unconditionally in the sitemap (like /albums), never the per-detail thin-content gate. The window read rides the tracks_release_date_idx btree so it stays a bounded range scan as the catalogue grows (lib/server/fresh.ts). The INDEX is always-200, so it is HTTP-probeable.",
+      "The new-releases lens over the whole archive — the SEO answer to 'new dnb releases', a weekly-refreshed query. Orders by tracks.release_date (when a tune CAME OUT), never findings.added_at (when Fluncle FOUND it) — the two are unrelated, and the copy never claims he found these. A HUB, so it is always indexable + listed unconditionally in the sitemap (like /albums), never the per-detail thin-content gate. The window read rides the release-date prefix of the tracks_release_date_track_id_idx btree so it stays a bounded range scan as the catalogue grows (lib/server/fresh.ts). The INDEX is always-200, so it is HTTP-probeable.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/fresh",
     url: `${SITE}/fresh`,
@@ -450,7 +450,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "web_route",
     name: "web.tracks",
     operatorNotes:
-      "The top-level track index — the whole archive as one browse list, findings in full voice and the catalogue rows in the unlit register (DESIGN.md). Ordered by tracks.release_date (what came out), never findings.added_at (the Found Rule), numbered-paginated (?page=N) over the tracks_release_date_idx btree with a quiet YEAR fast lane, so a crawler with no JS walks the whole list (lib/server/tracks-hub.ts). The filter params MIRROR the search vocabulary verbatim (yearMin/yearMax, bpmMin/bpmMax, key, label; galaxy is the one extension). The bare HUB is always indexable + in the sitemap, each page self-canonical; ANY filter param present flips it to noindex, and paged bare URLs stay out of the sitemap. The INDEX is always-200, so it is HTTP-probeable.",
+      "The top-level track index — the whole archive as one browse list, findings in full voice and the catalogue rows in the unlit register (DESIGN.md). Ordered by tracks.release_date (what came out), never findings.added_at (the Found Rule), numbered-paginated (?page=N) over the tracks_release_date_track_id_idx btree with a quiet YEAR fast lane, so a crawler with no JS walks the whole list (lib/server/tracks-hub.ts). The filter params MIRROR the search vocabulary verbatim (yearMin/yearMax, bpmMin/bpmMax, key, label; galaxy is the one extension). The bare HUB is always indexable + in the sitemap, each page self-canonical; ANY filter param present flips it to noindex, and paged bare URLs stay out of the sitemap. The INDEX is always-200, so it is HTTP-probeable.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/tracks",
     url: `${SITE}/tracks`,
@@ -1316,7 +1316,7 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "fluncle admin",
     exposedContent: [
-      "the operator/agent command group (hidden): a bare `queue` read plus ~22 plural groups — tracks (publish|update|enrich|embed|capture|video|draft|social|preview|observe|context|note|work|get|list|queue|mixable-order|requeue-analysis|vehicles), catalogue (the crawler + The Ear), frontier, labels, artists, albums, galaxies, notes, observations, clips, recordings, publish, capture, mixtapes, newsletter, logbook, prompts, submissions, reach, backfills, migrations, auth",
+      "the operator/agent command group (hidden): a bare `queue` read plus plural groups — tracks (publish|update|enrich|embed|capture|video|draft|social|preview|observe|context|note|work|get|list|queue|mixable-order|requeue-analysis|vehicles), artifacts (register|status|bootstrap|bootstrap-checkpoint|activate|list|checkpoint|inactivate|compact), receipts (get|repair), catalogue (the crawler + The Ear), frontier, labels, artists, albums, galaxies, notes, observations, clips, recordings, publish, capture, mixtapes, newsletter, logbook, prompts, submissions, reach, backfills, migrations, auth",
     ],
     kind: "cli",
     name: "cli.admin",
@@ -1497,7 +1497,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.device-mirror",
     operatorNotes:
-      "hourly, run by a host systemd timer (docs/agents/hermes/device-mirror-timer/). Reads one consistent anchored-cut snapshot through a read-only source credential, diffs every whitelisted tuple against the shared device database, then applies dependent-first deletes and parent-first upserts in bounded parameterized batches. The target is mutated IN PLACE: rebuilding it would reset the libSQL replication log and force every device to bootstrap the full database again. A schema-version mismatch stops for an operator migration; the content fingerprint and derived timestamp update only after a verified zero-drift tick. Zero LLM tokens. Source: docs/agents/hermes/scripts/device-mirror.*. See docs/planning/offline-first-mobile-research.md.",
+      "hourly, run by a host systemd timer (docs/agents/hermes/device-mirror-timer/). Explicitly synchronizes one restart-safe local embedded replica, materializes the anchored track IDs once, derives and validates one allowlisted generation locally, then stages bounded changes and atomically cuts the complete verified generation into the shared device database. Sync, derivation, upload, validation, or cutover failure leaves the previous generation visible; rebuilding the target database remains forbidden because it would reset the libSQL replication log and force every device to bootstrap again. A schema-version mismatch stops for an operator migration. Zero LLM tokens. Source: docs/agents/hermes/scripts/device-mirror.*. See docs/planning/offline-first-mobile-research.md.",
     probeConfig: {
       cadenceMs: 60 * MINUTE_MS,
       cronName: "fluncle-device-mirror",

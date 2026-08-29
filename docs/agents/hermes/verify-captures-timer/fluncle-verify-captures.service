@@ -15,10 +15,10 @@ Type=oneshot
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). NO new secret: both ops are AGENT tier and the private-bucket R2 token is
 # the same one capture/embed already read from ~/.fluncle-secrets.env.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/verify-captures.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-verify-captures -- bash /opt/hermes-scripts/verify-captures.sh
 # One tick is a bounded batch (FLUNCLE_VERIFY_BATCH, default 20): per row one R2 GET, one
 # preview fetch, two fpcalc runs, one agent-tier POST — a few minutes at most. Zero LLM tokens.
-TimeoutStartSec=600
+TimeoutStartSec=730
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

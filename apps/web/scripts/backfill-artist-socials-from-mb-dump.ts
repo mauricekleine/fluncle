@@ -30,6 +30,7 @@
  *   bun run apps/web/scripts/backfill-artist-socials-from-mb-dump.ts --confirm  # write
  */
 import { type Client, createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -128,7 +129,11 @@ function dbFromEnv(): Client {
     );
   }
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  return createClient(authToken ? { authToken, url } : { url });
+  return createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
 }
 
 const SPOTIFY_RE = /open\.spotify\.com\/artist\/([A-Za-z0-9]+)/;

@@ -2,11 +2,12 @@ import { type Client, type InArgs, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { insertRunEvent, readRunLedger } from "./run-events";
+import { resolveDatabaseOperationOwner } from "./database-operation-registry";
 import { readClientProperty } from "./db";
 import { createTelemetryIntegrationDb } from "./telemetry-integration-db";
 
 // The run ledger's SQL half — the REAL parameterized insert against the REAL generated
-// telemetry migration (`apps/web/drizzle-telemetry`), in an in-memory libSQL database.
+// telemetry migrations (`apps/web/drizzle-telemetry`), in an in-memory libSQL database.
 //
 // WHY THIS FILE IS NOT OPTIONAL: `insertRunEvent` writes through a hand-built column list
 // and a positional argument tuple. Nothing else in the suite touches this table's DDL, so
@@ -126,7 +127,9 @@ describe("insertRunEvent — the round trip", () => {
   it("lands every normalized value in its own column", async () => {
     // The tuple-alignment check. Each expectation below is a DISTINCT value, so a single
     // off-by-one in the argument list cannot pass by coincidence.
-    const recorded = await insertRunEvent(envelope());
+    const recorded = await insertRunEvent(
+      envelope({ attempt_count: 3, batch_count: 11, release: "emitter-build-abc123" }),
+    );
 
     expect(recorded).toMatchObject({
       id: "fluncle-enrich:2026-07-29T03:00:00.000Z",
@@ -138,8 +141,16 @@ describe("insertRunEvent — the round trip", () => {
     });
 
     const row = await onlyRow();
+    const operation = resolveDatabaseOperationOwner("fluncle-enrich");
+
+    if (operation === undefined) {
+      throw new Error("fluncle-enrich must resolve through the database operation registry");
+    }
 
     expect(row).toMatchObject({
+      access_class: operation.accessClass,
+      attempt_count: 3,
+      batch_count: 11,
       checked: 120,
       ended_at: "2026-07-29T03:00:12.500Z",
       errors: 0,
@@ -151,8 +162,11 @@ describe("insertRunEvent — the round trip", () => {
       missing_fields: "[]",
       occurred_at: "2026-07-29T03:00:00.000Z",
       ok: 1,
+      operation_id: operation.operationId,
+      outcome: "success",
       produced: 4,
       queue_depth: 17,
+      release: "emitter-build-abc123",
       run_duration_ms: 12_500,
       self_asserted_ok: null,
       summary_status: "parsed",
@@ -176,8 +190,72 @@ describe("insertRunEvent — the round trip", () => {
     expect(row.summary_raw).toBe("Killed (OOM)");
     expect(row.summary_status).toBe("malformed");
     expect(row.ok).toBe(0);
+    expect(row.outcome).toBe("failure");
     expect(row.expected_interval_ms).toBe(300_000);
     expect(row.missing_fields).toBe('["checked","errors","produced","queue_depth"]');
+  });
+
+  it("keeps unknowable counts and unregistered operation identity NULL", async () => {
+    await insertRunEvent(envelope({ unit: "legacy-unregistered-runner" }));
+
+    const row = await onlyRow();
+
+    expect(row).toMatchObject({
+      access_class: null,
+      attempt_count: null,
+      batch_count: null,
+      operation_id: null,
+      release: "unknown",
+    });
+  });
+
+  it("keeps a registered no-database run ID while leaving access NULL", async () => {
+    await insertRunEvent(envelope({ unit: "fluncle-audit" }));
+
+    const row = await onlyRow();
+
+    expect(row).toMatchObject({
+      access_class: null,
+      operation_id: "ops.audit",
+    });
+  });
+
+  it("reads a rolling-deploy row's outcome from its authoritative ok verdict", async () => {
+    const client = telemetryDb;
+
+    if (!client) {
+      throw new Error("no telemetry database in this test");
+    }
+
+    await client.execute({
+      args: [
+        "rolling-writer:2026-07-29T03:00:00.000Z",
+        "2026-07-29T03:00:12.600Z",
+        "2026-07-29T03:00:12.500Z",
+        0,
+        "[]",
+        "2026-07-29T03:00:00.000Z",
+        1,
+        "parsed",
+        "rolling-writer",
+        "[]",
+      ],
+      sql: `insert into run_events (
+              id, created_at, ended_at, exit_code, missing_fields,
+              occurred_at, ok, summary_status, unit, unrecognised_fields
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    });
+
+    const page = await readRunLedger({ limit: 10, unit: "rolling-writer" });
+
+    expect(page.rows).toMatchObject([
+      {
+        accessClass: null,
+        operationId: null,
+        outcome: "success",
+        release: "unknown",
+      },
+    ]);
   });
 });
 

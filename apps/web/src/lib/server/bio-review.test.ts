@@ -10,6 +10,7 @@
 //     source the operator stops reading, which is where this started);
 //   - both rulings CLEAR the row, and a later clean bio clears it too, by construction.
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -63,12 +64,31 @@ describe("the bio-review ledger", () => {
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     for (const table of ["artists", "labels", "albums"] as const) {
       await db.execute(`create table ${table} (${ENTITY_COLUMNS})`);
     }
+    await db.execute(`create table due_work (
+      work_kind text not null, subject_type text not null, subject_id text not null,
+      state text not null, sort_key text not null, next_due_at text not null,
+      source_version text not null, generation text not null, updated_at text not null,
+      claim_token text, claim_expires_at text, claimed_by text,
+      primary key (work_kind, subject_type, subject_id)
+    )`);
+    await db.execute(`create table artist_qualification_state (
+      scope text primary key, generation text not null, cursor text, scanned_count integer not null,
+      source_qualified_count integer not null, projected_qualified_count integer not null,
+      source_epoch integer not null, projection_epoch integer not null,
+      rebuild_start_epoch integer not null, state text not null, started_at text not null,
+      updated_at text not null, completed_at text, source_digest text, projected_digest text
+    )`);
+    await db.execute(`create table projection_repairs (
+      projection text not null, subject_type text not null, subject_id text not null,
+      source_epoch integer not null, source_version text not null, created_at text not null,
+      updated_at text not null, primary key (projection, subject_type, subject_id)
+    )`);
   });
 
   // ── The bypass raises a row ────────────────────────────────────────────────────────────────
@@ -167,6 +187,10 @@ describe("the bio-review ledger", () => {
     expect(stored?.bio_prompt_version).toBeNull();
     expect(stored?.bio_status).toBe("pending");
     expect(stored?.bio_gate_bypassed_at).toBeNull();
+    const marker = await db.execute(
+      `select subject_type, subject_id from due_work where work_kind = 'source-repair'`,
+    );
+    expect(marker.rows[0]).toMatchObject({ subject_id: "l1", subject_type: "label" });
   });
 
   it("re-authoring a bio that clears the gate wipes the flag in the same write", async () => {

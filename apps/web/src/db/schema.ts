@@ -1102,29 +1102,20 @@ export const tracks = sqliteTable(
       table.artistsJson,
       table.labelId,
     ),
-    // The `/fresh` window read ("what just came out"): `release_date BETWEEN <30d ago> AND
-    // <today>` ordered `release_date DESC`. Over a table built to grow to five figures, an
-    // unindexed range scan is exactly the full scan of a growing table AGENTS.md forbids, so
-    // release_date is a btree index — the range predicate + the ORDER BY both ride it, and the
-    // window bounds the scan to ~a month of rows however big the catalogue gets. A plain btree
-    // over a text column (not the vector `libsql_vector_idx` that wedges hosted Turso), so it
-    // builds like `tracks_key_idx` / `tracks_isrc_idx` beside it.
+    // Entity-scoped freshness reads retain the narrow release-date tree: their artist/label join
+    // drivers otherwise spill the final order to a temporary btree and exceed the hosted 2x
+    // contract. The projected `/tracks` anchor document separately needs the exact strict
+    // `(release_date, track_id)` suffix below. Both are load-bearing despite the prefix overlap.
     index("tracks_release_date_idx").on(table.releaseDate),
+    index("tracks_release_date_track_id_idx").on(table.releaseDate, table.trackId),
     // The `/tracks` hub's BPM-range filter (`bpm >= ? and bpm <= ?`) over the whole-archive
     // browse list. A plain ASC btree — SQLite reverse-scans it, and a `desc()` index would poison
     // the drizzle snapshot into rebuilding every index on the next migration (the ratified trap).
-    // The hub's primary sort still rides `tracks_release_date_idx`; this index earns its keep for a
-    // narrow BPM range the planner can seek rather than filtering every scanned row. Builds like the
-    // `tracks_key_idx` btree beside it (never the vector `libsql_vector_idx` that wedges hosted Turso).
+    // The hub's primary sort still rides `tracks_release_date_track_id_idx`; this index earns its
+    // keep for a narrow BPM range the planner can seek rather than filtering every scanned row.
+    // Builds like the `tracks_key_idx` btree beside it (never the vector `libsql_vector_idx` that
+    // wedges hosted Turso).
     index("tracks_bpm_idx").on(table.bpm),
-    index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
-    // THE METADATA-BACKFILL ORDER. This full index is load-bearing for the catalogue Apple and
-    // Deezer worklists: both order by `capture_priority desc, track_id` without a
-    // `capture_priority is not null` predicate, so the partial composite below cannot serve them.
-    // That omission is deliberate. Metadata link backfill stays independent of the ranking rail,
-    // including never-ranked rows whose priority is NULL, so replacing this with the partial index
-    // would strand valid work.
-    index("tracks_capture_priority_idx").on(table.capturePriority),
     index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),
     // THE CAPTURE-MISMATCH ATTENTION READ (attention.ts `listCaptureSuspectRows`, docs/the-ear.md
     // § Wrong audio). The /admin attention queue's suspect list is `capture_verification =
@@ -1428,6 +1419,798 @@ export const trackDuplicateKeys = sqliteTable(
   (table) => [
     index("track_duplicate_keys_match_key_track_id_idx").on(table.matchKey, table.trackId),
     index("track_duplicate_keys_isrc_track_id_idx").on(table.normalizedIsrc, table.trackId),
+  ],
+);
+
+/**
+ * The single maintained backlog projection for recurring database work.
+ *
+ * A row exists only while one subject has work outstanding, so an empty check probes this backlog
+ * rather than the growing source table. `sort_key` is a pre-normalized binary-order key: every
+ * queue maps its existing multi-column order onto one ascending value, which lets the shared ready
+ * index preserve each queue's exact priority without a temporary sort. Future retry windows stay
+ * `scheduled` until an indexed due-time promotion makes them `ready`; a lease never removes the row,
+ * so expiry can safely make the same unique subject claimable again.
+ *
+ * `repair` rows are transactionally coupled source-change markers. They live in this table rather
+ * than a second backlog, keeping one durable resume query for both projection maintenance and work
+ * claims. Reconciliation replaces a marker with the subject's complete derived work set in one
+ * write transaction. Built-in CDC is deliberately not part of the contract.
+ */
+export const dueWork = sqliteTable(
+  "due_work",
+  {
+    claimExpiresAt: text("claim_expires_at"),
+    claimToken: text("claim_token"),
+    claimedBy: text("claimed_by"),
+    generation: text("generation").notNull(),
+    nextDueAt: text("next_due_at").notNull(),
+    sortKey: text("sort_key").notNull(),
+    sourceVersion: text("source_version").notNull(),
+    state: text("state").notNull(),
+    subjectId: text("subject_id").notNull(),
+    subjectType: text("subject_type").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    workKind: text("work_kind").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workKind, table.subjectType, table.subjectId] }),
+    check(
+      "due_work_state_check",
+      sql`${table.state} in ('ready', 'scheduled', 'leased', 'repair')`,
+    ),
+    check(
+      "due_work_subject_type_check",
+      sql`${table.subjectType} in ('track', 'artist', 'album', 'label')`,
+    ),
+    // `sort_key` already encodes every DESC/NULLS FIRST term, so this stays plain ASC. A `.desc()`
+    // index would make drizzle-kit rebuild it on later snapshots and is unnecessary here.
+    index("due_work_ready_idx")
+      .on(table.workKind, table.state, table.sortKey, table.subjectId)
+      .where(sql`${table.state} = 'ready'`),
+    index("due_work_scheduled_idx")
+      .on(table.workKind, table.state, table.nextDueAt, table.subjectId)
+      .where(sql`${table.state} = 'scheduled'`),
+    index("due_work_repair_idx")
+      .on(table.state, table.subjectType, table.subjectId)
+      .where(sql`${table.state} = 'repair'`),
+    index("due_work_lease_idx")
+      .on(table.state, table.claimExpiresAt, table.workKind, table.subjectId)
+      .where(sql`${table.state} = 'leased'`),
+    index("due_work_claim_idx")
+      .on(
+        table.workKind,
+        table.state,
+        table.claimedBy,
+        table.claimToken,
+        table.sortKey,
+        table.subjectId,
+      )
+      .where(sql`${table.state} = 'leased'`),
+  ],
+);
+
+/**
+ * Durable per-queue checkpoints for the chunked source-of-truth rebuild.
+ *
+ * A generation is reused across retries until its final audit and stale-row prune commit together.
+ * Zero, midpoint, and complete restarts therefore resume from the last committed source cursor;
+ * starting a new generation is explicit rather than an accidental consequence of process restart.
+ */
+export const dueWorkRebuilds = sqliteTable(
+  "due_work_rebuilds",
+  {
+    completedAt: text("completed_at"),
+    cursor: text("cursor"),
+    generation: text("generation").notNull(),
+    projectedCount: integer("projected_count").notNull().default(0),
+    scannedCount: integer("scanned_count").notNull().default(0),
+    startedAt: text("started_at").notNull(),
+    state: text("state").notNull(),
+    subjectType: text("subject_type").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    workKind: text("work_kind").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workKind, table.subjectType] }),
+    check("due_work_rebuilds_state_check", sql`${table.state} in ('running', 'complete')`),
+    check(
+      "due_work_rebuilds_subject_type_check",
+      sql`${table.subjectType} in ('track', 'artist', 'album', 'label')`,
+    ),
+  ],
+);
+
+/**
+ * Crawl-specific due state. The crawler has a two-lane claim law that the generic `due_work`
+ * projection cannot express: reserve up to half the page for storable-first releases, then fill
+ * the remainder from the whole frontier's breadth-first order. Keeping frontier nodes here avoids
+ * widening `due_work.subject_type`, while the lease position makes a retried owner/token return the
+ * exact same combined page.
+ */
+export const crawlDueWork = sqliteTable(
+  "crawl_due_work",
+  {
+    claimExpiresAt: text("claim_expires_at"),
+    claimPosition: integer("claim_position"),
+    claimToken: text("claim_token"),
+    claimedBy: text("claimed_by"),
+    createdAt: text("created_at").notNull(),
+    demandRank: integer("demand_rank").notNull(),
+    generation: text("generation").notNull(),
+    hop: integer("hop").notNull(),
+    labelSlug: text("label_slug"),
+    nextDueAt: text("next_due_at"),
+    nodeId: text("node_id").primaryKey(),
+    nodeKind: text("node_kind", { enum: ["artist", "label", "release"] }).notNull(),
+    parentId: text("parent_id"),
+    sourceVersion: text("source_version").notNull(),
+    state: text("state", { enum: ["ready", "scheduled", "leased", "repair"] }).notNull(),
+    // 0 sorts a release whose current provenance can store ahead of 1. Non-release rows carry NULL
+    // because storage priority is a release-lane heuristic, never an authorization decision.
+    storableRank: integer("storable_rank"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "crawl_due_work_node_kind_check",
+      sql`${table.nodeKind} in ('artist', 'label', 'release')`,
+    ),
+    check(
+      "crawl_due_work_state_check",
+      sql`${table.state} in ('ready', 'scheduled', 'leased', 'repair')`,
+    ),
+    check("crawl_due_work_hop_check", sql`${table.hop} >= 0`),
+    check("crawl_due_work_demand_rank_check", sql`${table.demandRank} in (0, 1)`),
+    check(
+      "crawl_due_work_storable_rank_check",
+      sql`(${table.nodeKind} = 'release' and ${table.storableRank} in (0, 1)) or (${table.nodeKind} <> 'release' and ${table.storableRank} is null)`,
+    ),
+    check(
+      "crawl_due_work_lifecycle_check",
+      sql`(${table.state} = 'ready' and ${table.nextDueAt} is null and ${table.claimExpiresAt} is null and ${table.claimPosition} is null and ${table.claimToken} is null and ${table.claimedBy} is null)
+        or (${table.state} = 'scheduled' and ${table.nextDueAt} is not null and ${table.claimExpiresAt} is null and ${table.claimPosition} is null and ${table.claimToken} is null and ${table.claimedBy} is null)
+        or (${table.state} = 'leased' and ${table.nextDueAt} is null and ${table.claimExpiresAt} is not null and ${table.claimPosition} is not null and ${table.claimPosition} >= 0 and ${table.claimToken} is not null and ${table.claimedBy} is not null)
+        or (${table.state} = 'repair' and ${table.nextDueAt} is null and ${table.claimExpiresAt} is null and ${table.claimPosition} is null and ${table.claimToken} is null and ${table.claimedBy} is null)`,
+    ),
+    index("crawl_due_work_release_ready_idx")
+      .on(
+        table.state,
+        table.storableRank,
+        table.hop,
+        table.demandRank,
+        table.createdAt,
+        table.nodeId,
+      )
+      .where(sql`${table.state} = 'ready' and ${table.nodeKind} = 'release'`),
+    index("crawl_due_work_ready_idx")
+      .on(table.state, table.hop, table.demandRank, table.createdAt, table.nodeId)
+      .where(sql`${table.state} = 'ready'`),
+    index("crawl_due_work_scheduled_idx")
+      .on(table.state, table.nextDueAt, table.nodeId)
+      .where(sql`${table.state} = 'scheduled'`),
+    index("crawl_due_work_repair_idx")
+      .on(table.state, table.nodeId)
+      .where(sql`${table.state} = 'repair'`),
+    index("crawl_due_work_lease_idx")
+      .on(table.state, table.claimExpiresAt, table.nodeId)
+      .where(sql`${table.state} = 'leased'`),
+    index("crawl_due_work_label_slug_node_id_idx").on(table.labelSlug, table.nodeId),
+    index("crawl_due_work_parent_id_node_id_idx").on(table.parentId, table.nodeId),
+    uniqueIndex("crawl_due_work_claim_position_idx")
+      .on(table.claimedBy, table.claimToken, table.claimPosition)
+      .where(sql`${table.state} = 'leased'`),
+  ],
+);
+
+/**
+ * Source fanout markers for crawl due-state repair. Keeping these separate preserves each affected
+ * frontier node's ready or scheduled lifecycle while a bounded source-epoch walk fans out repairs.
+ */
+export const crawlProjectionRepairs = sqliteTable(
+  "crawl_projection_repairs",
+  {
+    createdAt: text("created_at").notNull(),
+    sourceEpoch: integer("source_epoch").notNull(),
+    sourceId: text("source_id").notNull(),
+    sourceType: text("source_type", { enum: ["artist", "label"] }).notNull(),
+    sourceVersion: text("source_version").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourceType, table.sourceId] }),
+    check(
+      "crawl_projection_repairs_source_type_check",
+      sql`${table.sourceType} in ('label', 'artist')`,
+    ),
+    check("crawl_projection_repairs_epoch_check", sql`${table.sourceEpoch} >= 0`),
+    index("crawl_projection_repairs_order_idx").on(
+      table.sourceEpoch,
+      table.sourceType,
+      table.sourceId,
+    ),
+  ],
+);
+
+/** One resumable generation/checkpoint for rebuilding crawl due state from `crawl_frontier`. */
+export const crawlDueWorkRebuilds = sqliteTable(
+  "crawl_due_work_rebuilds",
+  {
+    completedAt: text("completed_at"),
+    cursor: text("cursor"),
+    generation: text("generation").notNull(),
+    projectedCount: integer("projected_count").notNull(),
+    projectedDigest: text("projected_digest"),
+    scannedCount: integer("scanned_count").notNull(),
+    scope: text("scope").primaryKey(),
+    sourceDigest: text("source_digest"),
+    startedAt: text("started_at").notNull(),
+    state: text("state", { enum: ["running", "complete"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check("crawl_due_work_rebuilds_scope_check", sql`${table.scope} = 'frontier'`),
+    check(
+      "crawl_due_work_rebuilds_count_check",
+      sql`${table.projectedCount} >= 0 and ${table.scannedCount} >= 0`,
+    ),
+    check(
+      "crawl_due_work_rebuilds_state_check",
+      sql`(${table.state} = 'running' and ${table.completedAt} is null)
+        or (${table.state} = 'complete' and ${table.completedAt} is not null and ${table.sourceDigest} is not null and ${table.projectedDigest} is not null)`,
+    ),
+  ],
+);
+
+/**
+ * Exact qualified-artist projection. Primary credits contribute two half-units and remixer credits
+ * one, so the three-credit threshold stays integer-exact. The qualification bit is stored for its
+ * sorted-ID partial index and constrained to agree with the two authoritative counters.
+ */
+export const artistQualification = sqliteTable(
+  "artist_qualification",
+  {
+    artistId: text("artist_id").primaryKey(),
+    certifiedFindingCount: integer("certified_finding_count").notNull(),
+    enabledCreditHalfUnits: integer("enabled_credit_half_units").notNull(),
+    generation: text("generation").notNull(),
+    isQualified: integer("is_qualified", { mode: "boolean" }).notNull(),
+    sourceVersion: text("source_version").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "artist_qualification_count_check",
+      sql`${table.certifiedFindingCount} >= 0 and ${table.enabledCreditHalfUnits} >= 0`,
+    ),
+    check(
+      "artist_qualification_exact_check",
+      sql`(${table.isQualified} = 1 and (${table.certifiedFindingCount} > 0 or ${table.enabledCreditHalfUnits} >= 6))
+        or (${table.isQualified} = 0 and ${table.certifiedFindingCount} = 0 and ${table.enabledCreditHalfUnits} < 6)`,
+    ),
+    index("artist_qualification_qualified_idx")
+      .on(table.isQualified, table.artistId)
+      .where(sql`${table.isQualified} = 1`),
+  ],
+);
+
+/**
+ * Per-track artist contributions retained for exact repair deltas. A certified track contributes
+ * one finding and an enabled primary/remixer credit contributes two/one half-units respectively.
+ */
+export const artistQualificationContributions = sqliteTable(
+  "artist_qualification_contributions",
+  {
+    artistId: text("artist_id").notNull(),
+    certifiedContribution: integer("certified_contribution").notNull(),
+    enabledCreditHalfUnits: integer("enabled_credit_half_units").notNull(),
+    generation: text("generation").notNull(),
+    sourceVersion: text("source_version").notNull(),
+    trackId: text("track_id").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.trackId, table.artistId] }),
+    check(
+      "artist_qualification_contributions_certified_check",
+      sql`${table.certifiedContribution} in (0, 1)`,
+    ),
+    check(
+      "artist_qualification_contributions_credit_check",
+      sql`${table.enabledCreditHalfUnits} in (0, 1, 2)`,
+    ),
+    index("artist_qualification_contributions_artist_track_idx").on(table.artistId, table.trackId),
+  ],
+);
+
+/**
+ * The clean-through epoch and resumable sorted-ID digest checkpoint for artist qualification.
+ * Source writers advance `source_epoch`; readers may trust the projection only when no repair rows
+ * remain and `projection_epoch = source_epoch`.
+ */
+export const artistQualificationState = sqliteTable(
+  "artist_qualification_state",
+  {
+    auditedAt: text("audited_at"),
+    completedAt: text("completed_at"),
+    cursor: text("cursor"),
+    generation: text("generation").notNull(),
+    projectedDigest: text("projected_digest"),
+    projectedQualifiedCount: integer("projected_qualified_count").notNull(),
+    projectionEpoch: integer("projection_epoch").notNull(),
+    rebuildStartEpoch: integer("rebuild_start_epoch").notNull(),
+    scannedCount: integer("scanned_count").notNull(),
+    scope: text("scope").primaryKey(),
+    sourceDigest: text("source_digest"),
+    sourceEpoch: integer("source_epoch").notNull(),
+    sourceQualifiedCount: integer("source_qualified_count").notNull(),
+    startedAt: text("started_at").notNull(),
+    state: text("state", { enum: ["running", "complete"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check("artist_qualification_state_scope_check", sql`${table.scope} = 'artists'`),
+    check(
+      "artist_qualification_state_epoch_check",
+      sql`${table.sourceEpoch} >= 0 and ${table.projectionEpoch} >= 0 and ${table.projectionEpoch} <= ${table.sourceEpoch} and ${table.rebuildStartEpoch} >= 0 and ${table.rebuildStartEpoch} <= ${table.sourceEpoch}`,
+    ),
+    check(
+      "artist_qualification_state_count_check",
+      sql`${table.scannedCount} >= 0 and ${table.sourceQualifiedCount} >= 0 and ${table.projectedQualifiedCount} >= 0`,
+    ),
+    check(
+      "artist_qualification_state_lifecycle_check",
+      sql`(${table.state} = 'running' and ${table.completedAt} is null)
+        or (${table.state} = 'complete' and ${table.completedAt} is not null and ${table.sourceDigest} is not null and ${table.projectedDigest} is not null)`,
+    ),
+  ],
+);
+
+/**
+ * Literal public counts only: every non-NULL `substr(release_date, 1, 4)` bucket (including empty
+ * or malformed values) and every non-NULL key. Arbitrary filter combinations deliberately remain
+ * outside this projection.
+ */
+export const publicAggregateCounts = sqliteTable(
+  "public_aggregate_counts",
+  {
+    aggregateKind: text("aggregate_kind", {
+      enum: ["key", "release_date_bucket"],
+    }).notNull(),
+    bucket: text("bucket").notNull(),
+    generation: text("generation").notNull(),
+    sourceVersion: text("source_version").notNull(),
+    trackCount: integer("track_count").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.aggregateKind, table.bucket] }),
+    check(
+      "public_aggregate_counts_kind_check",
+      sql`${table.aggregateKind} in ('key', 'release_date_bucket')`,
+    ),
+    check("public_aggregate_counts_count_check", sql`${table.trackCount} >= 0`),
+    check(
+      "public_aggregate_counts_bucket_check",
+      sql`${table.aggregateKind} <> 'release_date_bucket' or length(${table.bucket}) <= 4`,
+    ),
+  ],
+);
+
+/** Literal aggregate membership retained per track so repairs can apply exact old-to-new deltas. */
+export const publicAggregateMembership = sqliteTable(
+  "public_aggregate_membership",
+  {
+    generation: text("generation").notNull(),
+    keyBucket: text("key_bucket"),
+    releaseDateBucket: text("release_date_bucket"),
+    sourceVersion: text("source_version").notNull(),
+    trackId: text("track_id").primaryKey(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "public_aggregate_membership_release_date_bucket_check",
+      sql`${table.releaseDateBucket} is null or length(${table.releaseDateBucket}) <= 4`,
+    ),
+  ],
+);
+
+/**
+ * Exact default-track total plus the monotonic epoch for `release_date DESC, track_id DESC`.
+ * Rebuild state is colocated because both aggregate families are rebuilt in one track-ID walk.
+ */
+export const publicAggregateState = sqliteTable(
+  "public_aggregate_state",
+  {
+    aggregateEpoch: integer("aggregate_epoch").notNull(),
+    auditedAt: text("audited_at"),
+    completedAt: text("completed_at"),
+    cursor: text("cursor"),
+    defaultTrackTotal: integer("default_track_total").notNull(),
+    generation: text("generation").notNull(),
+    projectedDigest: text("projected_digest"),
+    projectedEntryCount: integer("projected_entry_count").notNull(),
+    rebuildStartEpoch: integer("rebuild_start_epoch").notNull(),
+    releaseHubOrderEpoch: integer("release_hub_order_epoch").notNull(),
+    scannedCount: integer("scanned_count").notNull(),
+    scope: text("scope").primaryKey(),
+    sourceDigest: text("source_digest"),
+    sourceEntryCount: integer("source_entry_count").notNull(),
+    sourceEpoch: integer("source_epoch").notNull(),
+    startedAt: text("started_at").notNull(),
+    state: text("state", { enum: ["running", "complete"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check("public_aggregate_state_scope_check", sql`${table.scope} = 'tracks'`),
+    check(
+      "public_aggregate_state_epoch_check",
+      sql`${table.sourceEpoch} >= 0 and ${table.aggregateEpoch} >= 0 and ${table.aggregateEpoch} <= ${table.sourceEpoch} and ${table.rebuildStartEpoch} >= 0 and ${table.rebuildStartEpoch} <= ${table.sourceEpoch} and ${table.releaseHubOrderEpoch} >= 0`,
+    ),
+    check(
+      "public_aggregate_state_count_check",
+      sql`${table.defaultTrackTotal} >= 0 and ${table.scannedCount} >= 0 and ${table.sourceEntryCount} >= 0 and ${table.projectedEntryCount} >= 0`,
+    ),
+    check(
+      "public_aggregate_state_lifecycle_check",
+      sql`(${table.state} = 'running' and ${table.completedAt} is null)
+        or (${table.state} = 'complete' and ${table.completedAt} is not null and ${table.sourceDigest} is not null and ${table.projectedDigest} is not null)`,
+    ),
+  ],
+);
+
+/** Transactionally coupled source-change markers for the materialized public projections. */
+export const projectionRepairs = sqliteTable(
+  "projection_repairs",
+  {
+    createdAt: text("created_at").notNull(),
+    projection: text("projection", {
+      enum: ["artist_qualification", "public_aggregates"],
+    }).notNull(),
+    sourceEpoch: integer("source_epoch").notNull(),
+    sourceVersion: text("source_version").notNull(),
+    subjectId: text("subject_id").notNull(),
+    subjectType: text("subject_type", { enum: ["artist", "label", "track"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.projection, table.subjectType, table.subjectId] }),
+    check(
+      "projection_repairs_projection_check",
+      sql`${table.projection} in ('artist_qualification', 'public_aggregates')`,
+    ),
+    check(
+      "projection_repairs_subject_check",
+      sql`(${table.projection} = 'artist_qualification' and ${table.subjectType} in ('artist', 'label', 'track'))
+        or (${table.projection} = 'public_aggregates' and ${table.subjectType} = 'track')`,
+    ),
+    check("projection_repairs_epoch_check", sql`${table.sourceEpoch} >= 0`),
+    index("projection_repairs_order_idx").on(
+      table.projection,
+      table.sourceEpoch,
+      table.subjectType,
+      table.subjectId,
+    ),
+  ],
+);
+
+/**
+ * Public-safe idempotency receipts for operations whose effect and terminal receipt will later be
+ * committed atomically. Request bodies are represented only by their digest; accepted is the sole
+ * in-progress state, and terminal rows carry one bounded identity plus canonical JSON.
+ */
+export const operationReceipts = sqliteTable(
+  "operation_receipts",
+  {
+    createdAt: text("created_at").notNull(),
+    operationId: text("operation_id").notNull(),
+    operationKey: text("operation_key").primaryKey(),
+    requestDigest: text("request_digest").notNull(),
+    resultIdentity: text("result_identity"),
+    resultJson: text("result_json"),
+    state: text("state", { enum: ["accepted", "committed", "rejected"] }).notNull(),
+    terminalAt: text("terminal_at"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "operation_receipts_identity_bounds_check",
+      sql`typeof(${table.operationKey}) = 'text' and length(cast(${table.operationKey} as blob)) between 1 and 256
+        and typeof(${table.operationId}) = 'text' and length(cast(${table.operationId} as blob)) between 1 and 64
+        and (${table.resultIdentity} is null or (typeof(${table.resultIdentity}) = 'text' and length(cast(${table.resultIdentity} as blob)) between 1 and 512))`,
+    ),
+    check(
+      "operation_receipts_digest_check",
+      sql`typeof(${table.requestDigest}) = 'text' and length(${table.requestDigest}) = 64 and length(cast(${table.requestDigest} as blob)) = 64 and ${table.requestDigest} not glob '*[^0-9a-f]*'`,
+    ),
+    check(
+      "operation_receipts_result_json_check",
+      sql`${table.resultJson} is null or (typeof(${table.resultJson}) = 'text' and length(cast(${table.resultJson} as blob)) between 1 and 16384 and json_valid(${table.resultJson}))`,
+    ),
+    check(
+      "operation_receipts_timestamp_check",
+      sql`typeof(${table.createdAt}) = 'text' and length(cast(${table.createdAt} as blob)) between 1 and 64
+        and typeof(${table.updatedAt}) = 'text' and length(cast(${table.updatedAt} as blob)) between 1 and 64
+        and ${table.updatedAt} >= ${table.createdAt}
+        and (${table.terminalAt} is null or (typeof(${table.terminalAt}) = 'text' and length(cast(${table.terminalAt} as blob)) between 1 and 64 and ${table.terminalAt} >= ${table.createdAt} and ${table.terminalAt} <= ${table.updatedAt}))`,
+    ),
+    check(
+      "operation_receipts_state_check",
+      sql`${table.state} in ('accepted', 'committed', 'rejected')`,
+    ),
+    check(
+      "operation_receipts_lifecycle_check",
+      sql`(${table.state} = 'accepted' and ${table.resultIdentity} is null and ${table.resultJson} is null and ${table.terminalAt} is null)
+        or (${table.state} in ('committed', 'rejected') and ${table.resultIdentity} is not null and ${table.resultJson} is not null and ${table.terminalAt} is not null)`,
+    ),
+    index("operation_receipts_stale_accepted_idx")
+      .on(table.state, table.updatedAt, table.operationKey)
+      .where(sql`${table.state} = 'accepted'`),
+  ],
+);
+
+/**
+ * The two global background-work admission lanes.
+ *
+ * One row owns the monotone fencing sequence for either background writers or the explicitly
+ * classified heavy reader. Active ownership itself lives on `database_admission_contenders`; the
+ * lane row survives release and abandoned-owner recovery so a fencing token is never reused.
+ * Rows are created only when the admission coordinator first serves a lane.
+ */
+export const databaseAdmissionLanes = sqliteTable(
+  "database_admission_lanes",
+  {
+    lane: text("lane", { enum: ["heavy-read", "write"] }).primaryKey(),
+    nextFencingToken: integer("next_fencing_token").notNull().default(0),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (table) => [
+    check("database_admission_lanes_lane_check", sql`${table.lane} in ('heavy-read', 'write')`),
+    check(
+      "database_admission_lanes_token_check",
+      sql`${table.nextFencingToken} >= 0 and ${table.updatedAtMs} >= 0`,
+    ),
+  ],
+);
+
+/**
+ * The bounded, durable FIFO behind the global background-work lanes.
+ *
+ * Queue order is `(lane, enqueued_at_ms, contender_id)`. A granted contender remains in the same
+ * row with a lease expiry and fencing token; release/cancellation removes it, so the table is
+ * bounded by live and recoverable contenders rather than run history. Run history belongs in the
+ * separate fleet ledger. The partial unique index is the final concurrency backstop: even if two
+ * acquisition requests race, the database can hold at most one active row per lane.
+ */
+export const databaseAdmissionContenders = sqliteTable(
+  "database_admission_contenders",
+  {
+    acquiredAtMs: integer("acquired_at_ms"),
+    contenderId: text("contender_id").primaryKey(),
+    enqueuedAtMs: integer("enqueued_at_ms").notNull(),
+    fencingToken: integer("fencing_token"),
+    lane: text("lane", { enum: ["heavy-read", "write"] }).notNull(),
+    leaseExpiresAtMs: integer("lease_expires_at_ms"),
+    operationId: text("operation_id").notNull(),
+    ownerId: text("owner_id").notNull(),
+    queueHeartbeatAtMs: integer("queue_heartbeat_at_ms").notNull(),
+    runId: text("run_id").notNull(),
+    state: text("state", { enum: ["active", "queued"] }).notNull(),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (table) => [
+    check(
+      "database_admission_contenders_lane_check",
+      sql`${table.lane} in ('heavy-read', 'write')`,
+    ),
+    check("database_admission_contenders_state_check", sql`${table.state} in ('active', 'queued')`),
+    check(
+      "database_admission_contenders_identity_bounds_check",
+      sql`typeof(${table.contenderId}) = 'text' and length(cast(${table.contenderId} as blob)) between 1 and 192
+        and typeof(${table.operationId}) = 'text' and length(cast(${table.operationId} as blob)) between 1 and 64
+        and typeof(${table.ownerId}) = 'text' and length(cast(${table.ownerId} as blob)) between 1 and 128
+        and typeof(${table.runId}) = 'text' and length(cast(${table.runId} as blob)) between 1 and 128`,
+    ),
+    check(
+      "database_admission_contenders_time_check",
+      sql`${table.enqueuedAtMs} >= 0 and ${table.queueHeartbeatAtMs} >= ${table.enqueuedAtMs}
+        and ${table.updatedAtMs} >= ${table.enqueuedAtMs}
+        and (${table.acquiredAtMs} is null or ${table.acquiredAtMs} >= ${table.enqueuedAtMs})
+        and (${table.leaseExpiresAtMs} is null or ${table.leaseExpiresAtMs} >= ${table.enqueuedAtMs})`,
+    ),
+    check(
+      "database_admission_contenders_lifecycle_check",
+      sql`(${table.state} = 'queued' and ${table.acquiredAtMs} is null and ${table.fencingToken} is null and ${table.leaseExpiresAtMs} is null)
+        or (${table.state} = 'active' and ${table.acquiredAtMs} is not null and ${table.fencingToken} is not null and ${table.fencingToken} > 0 and ${table.leaseExpiresAtMs} is not null and ${table.leaseExpiresAtMs} > ${table.acquiredAtMs})`,
+    ),
+    uniqueIndex("database_admission_contenders_owner_run_idx").on(table.ownerId, table.runId),
+    uniqueIndex("database_admission_contenders_active_lane_idx")
+      .on(table.lane)
+      .where(sql`${table.state} = 'active'`),
+    index("database_admission_contenders_queue_idx")
+      .on(table.lane, table.state, table.enqueuedAtMs, table.contenderId)
+      .where(sql`${table.state} = 'queued'`),
+    index("database_admission_contenders_queue_heartbeat_idx")
+      .on(table.state, table.queueHeartbeatAtMs, table.contenderId)
+      .where(sql`${table.state} = 'queued'`),
+    index("database_admission_contenders_lease_idx")
+      .on(table.state, table.leaseExpiresAtMs, table.lane, table.contenderId)
+      .where(sql`${table.state} = 'active'`),
+  ],
+);
+
+/**
+ * Append-only artifact/vector producer log. `AUTOINCREMENT` makes sequence values globally
+ * monotonic without reuse; producer revisions make a retry idempotent; delete events are explicit
+ * tombstones and therefore cannot carry a stale vector payload.
+ */
+export const artifactChanges = sqliteTable(
+  "artifact_changes",
+  {
+    createdAt: text("created_at").notNull(),
+    formatVersion: integer("format_version").notNull(),
+    operation: text("operation", { enum: ["upsert", "delete"] }).notNull(),
+    payloadBlob: float32Vector("payload_blob"),
+    payloadJson: text("payload_json").notNull(),
+    producer: text("producer").notNull(),
+    revision: integer("revision").notNull(),
+    seq: integer("seq").primaryKey({ autoIncrement: true }),
+    stream: text("stream").notNull(),
+    streamVersion: integer("stream_version").notNull(),
+    subjectId: text("subject_id").notNull(),
+    subjectType: text("subject_type").notNull(),
+  },
+  (table) => [
+    check("artifact_changes_operation_check", sql`${table.operation} in ('upsert', 'delete')`),
+    check(
+      "artifact_changes_version_check",
+      sql`${table.formatVersion} >= 1 and ${table.streamVersion} >= 1 and ${table.revision} >= 1`,
+    ),
+    check(
+      "artifact_changes_tombstone_check",
+      sql`${table.operation} <> 'delete' or ${table.payloadBlob} is null`,
+    ),
+    uniqueIndex("artifact_changes_revision_idx").on(
+      table.stream,
+      table.streamVersion,
+      table.subjectType,
+      table.subjectId,
+      table.revision,
+    ),
+    index("artifact_changes_stream_seq_idx").on(table.stream, table.streamVersion, table.seq),
+  ],
+);
+
+/**
+ * Durable producer idempotency receipts. Compaction may remove an acknowledged event body, but a
+ * producer that lost the original commit response must still recover the same sequence instead of
+ * re-emitting that material revision. The digest proves immutable content without duplicating the
+ * JSON or vector bytes retained in the bounded log.
+ */
+export const artifactChangeRevisions = sqliteTable(
+  "artifact_change_revisions",
+  {
+    contentDigest: text("content_digest").notNull(),
+    createdAt: text("created_at").notNull(),
+    eventSeq: integer("event_seq").notNull(),
+    producer: text("producer").notNull(),
+    revision: integer("revision").notNull(),
+    stream: text("stream").notNull(),
+    streamVersion: integer("stream_version").notNull(),
+    subjectId: text("subject_id").notNull(),
+    subjectType: text("subject_type").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.stream,
+        table.streamVersion,
+        table.subjectType,
+        table.subjectId,
+        table.revision,
+      ],
+    }),
+    check(
+      "artifact_change_revisions_value_check",
+      sql`${table.streamVersion} >= 1 and ${table.revision} >= 1 and ${table.eventSeq} >= 1`,
+    ),
+    uniqueIndex("artifact_change_revisions_event_seq_idx").on(table.eventSeq),
+  ],
+);
+
+/**
+ * Registered artifact-log consumers. Active rows always expose a non-NULL compaction barrier;
+ * inactive rows retain no reusable snapshot or checkpoint, so reactivation structurally begins as
+ * a new rebuild instead of resuming after events may have been compacted.
+ */
+export const artifactChangeConsumers = sqliteTable(
+  "artifact_change_consumers",
+  {
+    appliedThroughSeq: integer("applied_through_seq"),
+    checkpointedAt: text("checkpointed_at"),
+    consumerId: text("consumer_id").primaryKey(),
+    registeredAt: text("registered_at").notNull(),
+    snapshotSeq: integer("snapshot_seq"),
+    state: text("state", { enum: ["rebuilding", "active", "inactive"] }).notNull(),
+    stateChangedAt: text("state_changed_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "artifact_change_consumers_state_check",
+      sql`${table.state} in ('rebuilding', 'active', 'inactive')`,
+    ),
+    check(
+      "artifact_change_consumers_checkpoint_check",
+      sql`(${table.state} = 'rebuilding' and ${table.snapshotSeq} is not null and ${table.snapshotSeq} >= 0 and ${table.appliedThroughSeq} is null and ${table.checkpointedAt} is null)
+        or (${table.state} = 'active' and ${table.snapshotSeq} is not null and ${table.snapshotSeq} >= 0 and ${table.appliedThroughSeq} is not null and ${table.appliedThroughSeq} >= ${table.snapshotSeq} and ${table.checkpointedAt} is not null)
+        or (${table.state} = 'inactive' and ${table.snapshotSeq} is null and ${table.appliedThroughSeq} is null and ${table.checkpointedAt} is null)`,
+    ),
+  ],
+);
+
+/** Structured declaration of every stream/format contract a registered consumer supports. */
+export const artifactChangeConsumerContracts = sqliteTable(
+  "artifact_change_consumer_contracts",
+  {
+    consumerId: text("consumer_id")
+      .notNull()
+      .references(() => artifactChangeConsumers.consumerId, { onDelete: "cascade" }),
+    declaredAt: text("declared_at").notNull(),
+    formatVersion: integer("format_version").notNull(),
+    stream: text("stream").notNull(),
+    streamVersion: integer("stream_version").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.consumerId, table.stream, table.streamVersion, table.formatVersion],
+    }),
+    check(
+      "artifact_change_consumer_contracts_version_check",
+      sql`${table.streamVersion} >= 1 and ${table.formatVersion} >= 1`,
+    ),
+  ],
+);
+
+/** Per-consumer, per-stream resumable source rebuild and deterministic drift-audit checkpoints. */
+export const artifactChangeCheckpoints = sqliteTable(
+  "artifact_change_checkpoints",
+  {
+    completedAt: text("completed_at"),
+    consumerDigest: text("consumer_digest"),
+    consumerId: text("consumer_id")
+      .notNull()
+      .references(() => artifactChangeConsumers.consumerId, { onDelete: "cascade" }),
+    consumerItemCount: integer("consumer_item_count").notNull(),
+    cursor: text("cursor"),
+    generation: text("generation").notNull(),
+    phase: text("phase", { enum: ["rebuild", "audit"] }).notNull(),
+    snapshotSeq: integer("snapshot_seq").notNull(),
+    sourceDigest: text("source_digest"),
+    sourceItemCount: integer("source_item_count").notNull(),
+    startedAt: text("started_at").notNull(),
+    state: text("state", { enum: ["running", "complete"] }).notNull(),
+    stream: text("stream").notNull(),
+    streamVersion: integer("stream_version").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.consumerId, table.stream, table.streamVersion, table.phase] }),
+    check("artifact_change_checkpoints_phase_check", sql`${table.phase} in ('rebuild', 'audit')`),
+    check(
+      "artifact_change_checkpoints_state_check",
+      sql`${table.state} in ('running', 'complete')`,
+    ),
+    check(
+      "artifact_change_checkpoints_value_check",
+      sql`${table.streamVersion} >= 1 and ${table.snapshotSeq} >= 0 and ${table.sourceItemCount} >= 0 and ${table.consumerItemCount} >= 0`,
+    ),
+    check(
+      "artifact_change_checkpoints_lifecycle_check",
+      sql`(${table.state} = 'running' and ${table.completedAt} is null)
+        or (${table.state} = 'complete' and ${table.completedAt} is not null and ${table.sourceDigest} is not null and ${table.consumerDigest} is not null)`,
+    ),
   ],
 );
 
@@ -4458,4 +5241,28 @@ export const hubPageAnchors = sqliteTable(
     hub: text("hub").notNull(),
   },
   (table) => [primaryKey({ columns: [table.hub, table.clauseHash] })],
+);
+
+/**
+ * Version/epoch proof for a persisted anchor document. It is separate from the populated anchor
+ * table so phase-one expansion stays CREATE-only; a future reader accepts an anchor only when this
+ * row's format and release-hub order epoch match the current aggregate state.
+ */
+export const hubPageAnchorValidity = sqliteTable(
+  "hub_page_anchor_validity",
+  {
+    anchorFormatVersion: integer("anchor_format_version").notNull(),
+    clauseHash: text("clause_hash").notNull(),
+    generation: text("generation").notNull(),
+    hub: text("hub").notNull(),
+    orderEpoch: integer("order_epoch").notNull(),
+    publishedAt: text("published_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.hub, table.clauseHash] }),
+    check(
+      "hub_page_anchor_validity_version_check",
+      sql`${table.anchorFormatVersion} >= 1 and ${table.orderEpoch} >= 0`,
+    ),
+  ],
 );

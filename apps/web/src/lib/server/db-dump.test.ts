@@ -1,4 +1,5 @@
 import { createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { describe, expect, it } from "vitest";
 
 import { type DumpManifest, type DumpTable, type SchemaObject } from "./db-dump";
@@ -200,7 +201,7 @@ describe("selectExpiredBackupKeys", () => {
 
 describe("dump/restore round trip", () => {
   it("restores a dump byte-faithfully and the manifest confirms it", async () => {
-    const source = createClient({ url: ":memory:" });
+    const source = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     await source.executeMultiple(`
       CREATE TABLE tracks (track_id text primary key, title text, bpm real, art blob, note text);
       INSERT INTO tracks VALUES ('a1', 'O''Brien''s Anthem', 174.0, X'00ff10', NULL);
@@ -273,7 +274,7 @@ describe("dump/restore round trip", () => {
     const dumpSql = buildDumpSql(schema, tables);
 
     // Restore into a fresh scratch database (the drill's core move).
-    const restored = createClient({ url: ":memory:" });
+    const restored = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     await restored.executeMultiple(dumpSql);
 
     const restoredTables = await restored.execute(

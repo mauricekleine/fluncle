@@ -460,20 +460,31 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
       [labelCalls, "labels", "label_id"],
       [albumCalls, "albums", "album_id"],
     ] as const) {
-      expect(calls).toHaveLength(1);
+      const linkCalls = calls.filter((call) =>
+        call.statements.some((statement) =>
+          statement.sql?.includes(`update tracks set ${foreignKey} = ?`),
+        ),
+      );
+      expect(linkCalls).toHaveLength(1);
 
-      const call = calls[0];
+      const call = linkCalls[0];
 
       expect(call?.mode).toBe("write");
-      expect(call?.statements).toHaveLength(2);
-      // The edge write first, the counter move second, in the same atomic batch.
-      expect(call?.statements[0]?.sql).toContain(`update tracks set ${foreignKey} = ?`);
-      expect(call?.statements[1]?.sql).toContain(`update ${table}`);
-      expect(call?.statements[1]?.sql).toContain("renderable_track_count");
-      expect(call?.statements[1]?.sql).toContain("certified_finding_count");
+      expect(call?.statements).toHaveLength(7);
+      // Both repair rails, the edge write, and the counter move share one atomic batch.
+      expect(call?.statements[0]?.sql).toContain("insert into due_work");
+      expect(
+        call?.statements.some(
+          (statement) => statement.sql?.includes("projection_repairs") === true,
+        ),
+      ).toBe(true);
+      expect(call?.statements.at(-2)?.sql).toContain(`update tracks set ${foreignKey} = ?`);
+      expect(call?.statements.at(-1)?.sql).toContain(`update ${table}`);
+      expect(call?.statements.at(-1)?.sql).toContain("renderable_track_count");
+      expect(call?.statements.at(-1)?.sql).toContain("certified_finding_count");
       // The credit is a PURE credit (+1 renderable / +1 certified) — a fill-null-only WHERE has
       // no old entity to debit, so no debit statement is in the batch at all.
-      expect(call?.statements[1]?.args).toEqual([1, 1, expect.any(String)]);
+      expect(call?.statements.at(-1)?.args).toEqual([1, 1, expect.any(String)]);
     }
   });
 });

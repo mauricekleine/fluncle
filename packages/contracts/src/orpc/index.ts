@@ -23,6 +23,7 @@
 
 import { isContractProcedure } from "@orpc/contract";
 import { adminAlbumsContract } from "./admin-albums";
+import { adminArtifactsContract } from "./admin-artifacts";
 import { adminArtistRulesContract } from "./admin-artist-rules";
 import { adminArtistsContract } from "./admin-artists";
 import { adminAttentionContract } from "./admin-attention";
@@ -30,8 +31,10 @@ import { adminBackfillsContract } from "./admin-backfills";
 import { adminBiosContract } from "./admin-bios";
 import { adminCatalogueContract } from "./admin-catalogue";
 import { adminCostsContract } from "./admin-costs";
+import { adminDatabaseAdmissionContract } from "./admin-database-admission";
 import { adminGalaxiesContract } from "./admin-galaxies";
 import { adminPromptsContract } from "./admin-prompts";
+import { adminProjectionsContract } from "./admin-projections";
 import { adminReachContract } from "./admin-reach";
 import { albumsContract } from "./albums";
 import { artistsContract } from "./artists";
@@ -49,6 +52,7 @@ import { adminMigrationsContract } from "./admin-migrations";
 import { adminMixtapesContract } from "./admin-mixtapes";
 import { adminNotesContract } from "./admin-notes";
 import { adminObservationsContract } from "./admin-observations";
+import { adminOperationReceiptsContract } from "./admin-operation-receipts";
 import { adminRecordingsContract } from "./admin-recordings";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
@@ -128,6 +132,63 @@ export {
   draftAlbumBio,
   listAlbumsMissingBio,
 } from "./admin-albums";
+export {
+  acknowledgeArtifactChanges,
+  activateArtifactConsumer,
+  adminArtifactsContract,
+  ARTIFACT_CHANGE_API_MAX_LIMIT,
+  ARTIFACT_COMPACTION_API_MAX_LIMIT,
+  type ArtifactChangeEvent,
+  ArtifactChangeEventSchema,
+  type ArtifactChangePage,
+  ArtifactChangePageSchema,
+  type ArtifactCompactionResult,
+  ArtifactCompactionResultSchema,
+  type ArtifactConsumerStatus,
+  ArtifactConsumerStatusSchema,
+  type ArtifactContract,
+  ArtifactContractSchema,
+  type ArtifactRebuildCheckpoint,
+  ArtifactRebuildCheckpointSchema,
+  ARTIFACT_SNAPSHOT_API_MAX_LIMIT,
+  ARTIFACT_SUPPORTED_CONTRACTS,
+  type ArtifactSnapshotItem,
+  ArtifactSnapshotItemSchema,
+  type ArtifactSnapshotPage,
+  ArtifactSnapshotPageSchema,
+  type ArtifactStream,
+  ArtifactStreamSchema,
+  checkpointArtifactRebuild,
+  compactArtifactChanges,
+  getArtifactConsumer,
+  inactivateArtifactConsumer,
+  listArtifactChanges,
+  listArtifactSnapshot,
+  registerArtifactConsumer,
+} from "./admin-artifacts";
+export {
+  adminOperationReceiptsContract,
+  getOperationReceipt,
+  OPERATION_RECEIPT_KEY_MAX,
+  OPERATION_RECEIPT_KEY_PATTERN,
+  OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
+  OPERATION_RECEIPT_REQUEST_DIGEST_PATTERN,
+  OperationReceiptReconciliationOutcomeSchema,
+  OperationReceiptStateSchema,
+  reconcileOperationReceipts,
+  resolveOperationReceipt,
+} from "./admin-operation-receipts";
+export {
+  advanceProjection,
+  adminProjectionsContract,
+  getProjectionStatus,
+  PROJECTION_STEP_LIMIT_MAX,
+  ProjectionCutoverSchema,
+  ProjectionStatusSchema,
+  ProjectionStepActionSchema,
+  ProjectionTargetSchema,
+  setProjectionCutover,
+} from "./admin-projections";
 export {
   addArtistRule,
   AddArtistRuleInputSchema,
@@ -245,7 +306,18 @@ export {
 } from "./admin-observations";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export {
+  adminDatabaseAdmissionContract,
+  coordinateDatabaseAdmission,
+  DatabaseAdmissionActionSchema,
+  DatabaseAdmissionLaneSchema,
+  DatabaseAdmissionOutcomeSchema,
+  type DatabaseAdmissionResponse,
+  DatabaseAdmissionResponseSchema,
+  DatabaseAdmissionYieldReasonSchema,
+} from "./admin-database-admission";
+export {
   adminTelemetryContract,
+  MAX_RUN_DATABASE_COUNT,
   MAX_RUN_LEDGER_PAGE_SIZE,
   MAX_SUMMARY_RAW_CHARS,
   type ReadRunLedgerInput,
@@ -263,7 +335,12 @@ export {
   type RunLedgerUnitRollup,
   RunLedgerUnitRollupSchema,
 } from "./admin-telemetry";
-export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
+export {
+  HEALTH_SNAPSHOT_PRODUCER_MAX,
+  HEALTH_SNAPSHOT_PRODUCER_PATTERN,
+  recordHealth,
+  ServiceHealthStatusSchema,
+} from "./admin-health";
 export { adminReachContract, recordPlatformStats } from "./admin-reach";
 export { listPlatformStats, reachContract } from "./reach";
 export {
@@ -484,6 +561,7 @@ export {
  */
 export const contract = {
   ...adminAlbumsContract,
+  ...adminArtifactsContract,
   ...adminArtistRulesContract,
   ...adminArtistsContract,
   ...adminAttentionContract,
@@ -491,8 +569,10 @@ export const contract = {
   ...adminBiosContract,
   ...adminCatalogueContract,
   ...adminCostsContract,
+  ...adminDatabaseAdmissionContract,
   ...adminGalaxiesContract,
   ...adminPromptsContract,
+  ...adminProjectionsContract,
   ...adminReachContract,
   ...albumsContract,
   ...artistsContract,
@@ -510,6 +590,7 @@ export const contract = {
   ...adminMixtapesContract,
   ...adminNotesContract,
   ...adminObservationsContract,
+  ...adminOperationReceiptsContract,
   ...adminRecordingsContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,

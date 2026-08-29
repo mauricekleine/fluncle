@@ -216,6 +216,72 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
+  test("admin receipts exposes read-only reconciliation and bounded repair", async () => {
+    const result = await runCli(["admin", "receipts", "--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("get");
+    expect(result.stdout).toContain("reconcile");
+    expect(result.stdout).toContain("repair");
+  });
+
+  test("admin receipts validates repair bounds before fetching", async () => {
+    const result = await runCli([
+      "admin",
+      "receipts",
+      "repair",
+      "--stale-before",
+      "2026-08-26T10:00:00.000Z",
+      "--limit",
+      "101",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--limit must be a whole number from 1 through 100");
+  });
+
+  test("admin artifacts exposes the complete consumer lifecycle", async () => {
+    const result = await runCli(["admin", "artifacts", "--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("register");
+    expect(result.stdout).toContain("bootstrap-checkpoint");
+    expect(result.stdout).toContain("activate");
+    expect(result.stdout).toContain("list");
+    expect(result.stdout).toContain("checkpoint");
+    expect(result.stdout).toContain("inactivate");
+    expect(result.stdout).toContain("compact");
+  });
+
+  test("admin artifacts rejects unknown contracts and over-cap pages before fetching", async () => {
+    const contract = await runCli([
+      "admin",
+      "artifacts",
+      "register",
+      "goal-g",
+      "--contract",
+      "sonar.track@2/1",
+      "--json",
+    ]);
+    const limit = await runCli([
+      "admin",
+      "artifacts",
+      "list",
+      "goal-g",
+      "--limit",
+      "501",
+      "--json",
+    ]);
+
+    expect(contract.exitCode).toBe(1);
+    expect(contract.stdout).toContain("Unsupported artifact contract");
+    expect(limit.exitCode).toBe(1);
+    expect(limit.stdout).toContain("between 1 and 500");
+  });
+
   test("admin telemetry keeps derived --ok a closed true/false filter", async () => {
     const result = await runCli(["admin", "telemetry", "read", "--ok", "yes", "--json"]);
 
@@ -677,6 +743,105 @@ describe("fluncle CLI parsing and JSON output", () => {
     // The catalogue crawler's group (`crawl_catalogue` + `get_crawl_status`).
     expect(adminHelp.stdout).toContain("catalogue");
   });
+
+  test("projection value options reach their fixed path and body", async () => {
+    const requests: Array<{ body: unknown; method: string; path: string }> = [];
+
+    await withStubApi(
+      async (req, url) => {
+        const body = await req.json();
+        requests.push({ body, method: req.method, path: url.pathname });
+
+        if (
+          req.method === "POST" &&
+          url.pathname === "/api/v1/admin/projections/public_aggregates/advance"
+        ) {
+          return Response.json({
+            action: "audit",
+            complete: false,
+            ok: true,
+            processed: 17,
+            scheduled: 0,
+            status: {},
+            target: "public_aggregates",
+          });
+        }
+
+        if (
+          req.method === "PUT" &&
+          url.pathname === "/api/v1/admin/projections/track_due_work/cutover"
+        ) {
+          return Response.json({ enabled: false, ok: true, status: {}, target: "track_due_work" });
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const env = {
+          FLUNCLE_API_BASE_URL: baseUrl,
+          FLUNCLE_API_TOKEN: "test-token",
+        };
+        const advance = await runCli(
+          [
+            "admin",
+            "projections",
+            "advance",
+            "--target",
+            "public_aggregates",
+            "--action",
+            "audit",
+            "--limit",
+            "17",
+            "--json",
+          ],
+          env,
+        );
+        const cutover = await runCli(
+          [
+            "admin",
+            "projections",
+            "set",
+            "--target",
+            "track_due_work",
+            "--enabled",
+            "false",
+            "--json",
+          ],
+          env,
+        );
+
+        expect(advance.exitCode).toBe(0);
+        expect(advance.stderr).toBe("");
+        expect(JSON.parse(advance.stdout)).toMatchObject({
+          action: "audit",
+          processed: 17,
+          target: "public_aggregates",
+        });
+        expect(cutover.exitCode).toBe(0);
+        expect(cutover.stderr).toBe("");
+        expect(JSON.parse(cutover.stdout)).toMatchObject({
+          enabled: false,
+          target: "track_due_work",
+        });
+      },
+    );
+
+    expect(requests).toEqual([
+      {
+        body: { action: "audit", limit: 17 },
+        method: "POST",
+        path: "/api/v1/admin/projections/public_aggregates/advance",
+      },
+      {
+        body: { enabled: false },
+        method: "PUT",
+        path: "/api/v1/admin/projections/track_due_work/cutover",
+      },
+    ]);
+  });
 });
 
 describe("sweep commands surface partial failure", () => {
@@ -1055,11 +1220,11 @@ describe("sweep commands surface partial failure", () => {
 // subprocess is pointed at it via FLUNCLE_API_BASE_URL (process env beats the
 // dotenv profile file, so no operator config can leak in).
 async function withStubApi(
-  handler: (req: Request, url: URL) => Response,
+  handler: (req: Request, url: URL) => Promise<Response> | Response,
   fn: (baseUrl: string) => Promise<void>,
 ): Promise<void> {
   const server = Bun.serve({
-    fetch: (req) => handler(req, new URL(req.url)),
+    fetch: async (req) => handler(req, new URL(req.url)),
     hostname: "127.0.0.1",
     port: 0,
   });

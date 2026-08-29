@@ -45,6 +45,12 @@
 // recording somebody else asked about last week.
 
 import { getDb, typedRows } from "./db";
+import {
+  batchDueWorkSourceMutation,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+} from "./due-work";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 import { FILL_ISRC_SQL } from "./isrc";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
@@ -187,26 +193,95 @@ type IsrcRefreshRow = { mb_recording_id: string; track_id: string };
 async function stripCrawlerPrefixes(): Promise<number> {
   const db = await getDb();
 
-  const result = await db.execute({
-    // BOTH placeholders bound — the prefix AND the limit. The arity guard in the test file
-    // pins every statement this module issues.
+  const source = {
     args: [CRAWLER_TRACK_ID_PREFIX, PREFIX_STRIP_BATCH],
-    // `substr(track_id, 4)` drops the leading `mb_` (3 chars). `substr(track_id, 1, 3) = 'mb_'`
-    // is the EXACT prefix test — never a `like 'mb_%'`, whose `_` is a single-char wildcard that
-    // would also match a Spotify id. The inner select rides the partial fill index.
-    sql: `update tracks
-          set mb_recording_id = substr(track_id, 4)
-          where track_id in (
-            select track_id from tracks
-            where mb_recording_id is null
-              and mb_recording_id_attempted_at is null
-              and substr(track_id, 1, 3) = ?
-            order by track_id asc
-            limit ?
-          )`,
-  });
+    sql: `select track_id as subject_id from tracks indexed by tracks_mb_recording_id_queue_idx
+          where mb_recording_id is null
+            and mb_recording_id_attempted_at is null
+            and substr(track_id, 1, 3) = ?
+          order by track_id asc
+          limit ?`,
+  };
+  const results = await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
+        producer: "recording-mbid-prefix-strip",
+      }),
+      {
+        // BOTH placeholders bound — the prefix AND the limit. The arity guard in the test file
+        // pins every statement this module issues.
+        args: [CRAWLER_TRACK_ID_PREFIX, PREFIX_STRIP_BATCH],
+        // `substr(track_id, 4)` drops the leading `mb_` (3 chars). `substr(track_id, 1, 3) = 'mb_'`
+        // is the EXACT prefix test — never a `like 'mb_%'`, whose `_` is a single-char wildcard that
+        // would also match a Spotify id. The inner select rides the partial fill index.
+        sql: `update tracks
+              set mb_recording_id = substr(track_id, 4)
+              where track_id in (
+                select track_id from tracks indexed by tracks_mb_recording_id_queue_idx
+                where mb_recording_id is null
+                  and mb_recording_id_attempted_at is null
+                  and substr(track_id, 1, 3) = ?
+                order by track_id asc
+                limit ?
+              )`,
+      },
+    ],
+    "write",
+  );
+  const result = results.at(-1);
 
-  return result.rowsAffected;
+  return result?.rowsAffected ?? 0;
+}
+
+/** Re-check only projected subjects against the prefix strip's exact source predicate. */
+async function projectedStrippableCrawlerIds(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackIds: readonly string[],
+): Promise<string[]> {
+  if (trackIds.length === 0) {
+    return [];
+  }
+
+  const result = await db.execute({
+    args: [...trackIds, CRAWLER_TRACK_ID_PREFIX],
+    sql: `select track_id from tracks
+          where track_id in (${trackIds.map(() => "?").join(", ")})
+            and mb_recording_id is null
+            and mb_recording_id_attempted_at is null
+            and substr(track_id, 1, 3) = ?`,
+  });
+  const eligible = new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
+
+  return trackIds.filter((trackId) => eligible.has(trackId));
+}
+
+/** Fill only eligible prefix-strip subjects chosen by the maintained projection. */
+async function stripProjectedCrawlerPrefixes(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackIds: readonly string[],
+): Promise<number> {
+  if (trackIds.length === 0) {
+    return 0;
+  }
+
+  const [result] = await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [...trackIds, CRAWLER_TRACK_ID_PREFIX],
+        sql: `update tracks
+              set mb_recording_id = substr(track_id, 4)
+              where track_id in (${trackIds.map(() => "?").join(", ")})
+                and mb_recording_id is null
+                and mb_recording_id_attempted_at is null
+                and substr(track_id, 1, 3) = ?`,
+      },
+    ],
+    trackIds.map((subjectId) => ({ subjectId, subjectType: "track" })),
+    { producer: "recording-mbid-prefix-strip" },
+  );
+
+  return result?.rowsAffected ?? 0;
 }
 
 /** Count crawler-history rows the prefix strip WOULD fill (dry run only; bounded by the batch). */
@@ -216,7 +291,7 @@ async function countStrippableCrawlerRows(): Promise<number> {
   const result = await db.execute({
     args: [PREFIX_STRIP_BATCH],
     sql: `select count(*) as n from (
-            select track_id from tracks
+            select track_id from tracks indexed by tracks_mb_recording_id_queue_idx
             where mb_recording_id is null
               and mb_recording_id_attempted_at is null
               and substr(track_id, 1, 3) = 'mb_'
@@ -238,14 +313,14 @@ async function listIsrcWork(limit: number, cursor: string | undefined): Promise<
   const result = await db.execute({
     args: cursor ? [cursor, limit] : [limit],
     sql: cursor
-      ? `select track_id, isrc from tracks
+      ? `select track_id, isrc from tracks indexed by tracks_mb_recording_id_queue_idx
          where mb_recording_id is null
            and mb_recording_id_attempted_at is null
            and isrc is not null and isrc != ''
            and substr(track_id, 1, 3) != 'mb_'
            and track_id > ?
          order by track_id asc limit ?`
-      : `select track_id, isrc from tracks
+      : `select track_id, isrc from tracks indexed by tracks_mb_recording_id_queue_idx
          where mb_recording_id is null
            and mb_recording_id_attempted_at is null
            and isrc is not null and isrc != ''
@@ -256,6 +331,25 @@ async function listIsrcWork(limit: number, cursor: string | undefined): Promise<
   return typedRows<IsrcWorkRow>(result.rows);
 }
 
+async function hydrateIsrcWork(trackIds: readonly string[]): Promise<IsrcWorkRow[]> {
+  if (trackIds.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: [...trackIds],
+    sql: `select track_id, isrc from tracks
+          where track_id in (${trackIds.map(() => "?").join(", ")})`,
+  });
+  const byId = new Map(typedRows<IsrcWorkRow>(result.rows).map((row) => [row.track_id, row]));
+
+  return trackIds.flatMap((trackId) => {
+    const row = byId.get(trackId);
+    return row === undefined ? [] : [row];
+  });
+}
+
 /**
  * Stamp a resolved MBID + the attempt marker. Non-clobbering on `mb_recording_id` (never overwrite
  * one a mint/strip already set). The MBID is a PUBLIC identity change (it becomes a `/log` `sameAs`),
@@ -264,12 +358,19 @@ async function listIsrcWork(limit: number, cursor: string | undefined): Promise<
 async function markResolved(trackId: string, mbid: string): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    args: [mbid, new Date().toISOString(), trackId],
-    sql: `update tracks
-          set mb_recording_id = coalesce(mb_recording_id, ?), mb_recording_id_attempted_at = ?
-          where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [mbid, new Date().toISOString(), trackId],
+        sql: `update tracks
+              set mb_recording_id = coalesce(mb_recording_id, ?), mb_recording_id_attempted_at = ?
+              where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "recording-mbid-resolved" },
+  );
 }
 
 /**
@@ -303,6 +404,25 @@ async function listIsrcRefreshWork(limit: number, cutoff: string): Promise<IsrcR
   return typedRows<IsrcRefreshRow>(result.rows);
 }
 
+async function hydrateIsrcRefreshWork(trackIds: readonly string[]): Promise<IsrcRefreshRow[]> {
+  if (trackIds.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: [...trackIds],
+    sql: `select track_id, mb_recording_id from tracks
+          where track_id in (${trackIds.map(() => "?").join(", ")})`,
+  });
+  const byId = new Map(typedRows<IsrcRefreshRow>(result.rows).map((row) => [row.track_id, row]));
+
+  return trackIds.flatMap((trackId) => {
+    const row = byId.get(trackId);
+    return row === undefined ? [] : [row];
+  });
+}
+
 /**
  * Write a refreshed ISRC and stamp the look. FILL-EMPTY-ONLY via `coalesce`, the discipline every
  * other ISRC writer here shares (schema.ts § `isrc`): the worklist already selects only ISRC-less
@@ -314,7 +434,8 @@ async function listIsrcRefreshWork(limit: number, cutoff: string): Promise<IsrcR
 async function markIsrcRefreshed(trackId: string, isrc: null | string): Promise<void> {
   const db = await getDb();
 
-  await db.batch(
+  await batchDueWorkSourceMutation(
+    db,
     [
       {
         // The ISRC binds twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
@@ -325,7 +446,8 @@ async function markIsrcRefreshed(trackId: string, isrc: null | string): Promise<
       },
       updateTrackDuplicateIsrcStatement(trackId, isrc),
     ],
-    "write",
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "recording-isrc-refresh" },
   );
 }
 
@@ -333,10 +455,17 @@ async function markIsrcRefreshed(trackId: string, isrc: null | string): Promise<
 async function markMissed(trackId: string): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    args: [new Date().toISOString(), trackId],
-    sql: `update tracks set mb_recording_id_attempted_at = ? where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [new Date().toISOString(), trackId],
+        sql: `update tracks set mb_recording_id_attempted_at = ? where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "recording-mbid-missed" },
+  );
 }
 
 // ── The pass ───────────────────────────────────────────────────────────────────────────────────
@@ -362,17 +491,44 @@ export async function resolveRecordingMbids(
 ): Promise<RecordingMbidsResolveResult> {
   const batchLimit = Math.max(1, Math.min(limit, MAX_API_BATCH));
   const refreshLimit = Math.max(0, Math.min(isrcRefreshLimit, MAX_ISRC_REFRESH_BATCH));
+  const dueWorkCutoverEnabled = await isDueWorkCutoverEnabled();
+  const db = await getDb();
 
   // ── 1. The free prefix strip (crawler history). Only on the first page of a loop, so the CLI's
   //    cursor loop doesn't re-run it each iteration; a fresh tick always starts at cursor=undefined.
-  const prefixStripped = cursor
-    ? 0
-    : dryRun
-      ? await countStrippableCrawlerRows()
-      : await stripCrawlerPrefixes();
+  let prefixStripped = 0;
+  if (!cursor && dueWorkCutoverEnabled) {
+    const prefixPage = await readPromotedDueWorkPage(db, "mbid-prefix-strip", {
+      limit: PREFIX_STRIP_BATCH,
+    });
+    const eligiblePrefixIds = await projectedStrippableCrawlerIds(db, prefixPage.subjectIds);
+    prefixStripped = dryRun
+      ? eligiblePrefixIds.length
+      : await stripProjectedCrawlerPrefixes(db, eligiblePrefixIds);
+  } else if (!cursor) {
+    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
+    prefixStripped = dryRun ? await countStrippableCrawlerRows() : await stripCrawlerPrefixes();
+  }
 
   // ── 2. The ISRC drain.
-  const rows = await listIsrcWork(batchLimit, cursor);
+  let rows: IsrcWorkRow[];
+  let lookupProjectionEmpty = false;
+  if (dueWorkCutoverEnabled) {
+    const lookupPage = await readPromotedDueWorkPage(db, "mbid-isrc-lookup", {
+      continuation: cursor
+        ? {
+            sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: cursor }]),
+            subjectId: cursor,
+          }
+        : undefined,
+      limit: batchLimit,
+    });
+    lookupProjectionEmpty = lookupPage.subjectIds.length === 0;
+    rows = await hydrateIsrcWork(lookupPage.subjectIds);
+  } else {
+    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
+    rows = await listIsrcWork(batchLimit, cursor);
+  }
 
   const resolved: string[] = [];
   const missed: string[] = [];
@@ -438,19 +594,34 @@ export async function resolveRecordingMbids(
   // would just re-ask the same 25 rows.
   const isrcRefreshed: string[] = [];
   const isrcRefreshMissed: string[] = [];
-  const refreshCutoff = new Date(
-    Date.now() - ISRC_REFRESH_AFTER_DAYS * 24 * 60 * 60 * 1000,
-  ).toISOString();
-  const refreshIdle = !cursor && !rateLimited && rows.length === 0 && refreshLimit > 0;
+  const refreshIdle =
+    !cursor &&
+    !rateLimited &&
+    (dueWorkCutoverEnabled ? lookupProjectionEmpty : rows.length === 0) &&
+    refreshLimit > 0;
+  let refreshRows: IsrcRefreshRow[] = [];
+
+  if (refreshIdle && dueWorkCutoverEnabled) {
+    const refreshPage = await readPromotedDueWorkPage(db, "mbid-isrc-refresh", {
+      limit: refreshLimit,
+    });
+    refreshRows = await hydrateIsrcRefreshWork(refreshPage.subjectIds);
+  } else if (refreshIdle) {
+    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
+    const refreshCutoff = new Date(
+      Date.now() - ISRC_REFRESH_AFTER_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    refreshRows = await listIsrcRefreshWork(refreshLimit, refreshCutoff);
+  }
 
   if (refreshIdle && dryRun) {
     // The drain's own dry-run convention: report the rows it WOULD visit, by id, with no vendor call
     // and no write. Same worklist read, so the dry run proves the real query.
-    for (const row of await listIsrcRefreshWork(refreshLimit, refreshCutoff)) {
+    for (const row of refreshRows) {
       isrcRefreshed.push(row.track_id);
     }
   } else if (refreshIdle) {
-    for (const row of await listIsrcRefreshWork(refreshLimit, refreshCutoff)) {
+    for (const row of refreshRows) {
       try {
         const { isrc, rateLimited: throttled } = await refreshIsrcByRecordingMbid(
           row.mb_recording_id,

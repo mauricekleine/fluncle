@@ -51,6 +51,13 @@
 // loop fires one request per tick (a budget pause resumes with a fresh budget on the next request).
 
 import { getDb, typedRows } from "./db";
+import {
+  batchDueWorkSourceMutation,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceMaintenanceStatements,
+} from "./due-work";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 import { adoptArtistMbid, mintArtistByMbid } from "./artists";
 import { buildArtistFoldMap } from "./backfill-artist-edges";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
@@ -309,6 +316,27 @@ async function listWork(
   return typedRows<WorkRow>(result.rows);
 }
 
+async function hydrateProjectedWork(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackIds: readonly string[],
+): Promise<WorkRow[]> {
+  if (trackIds.length === 0) {
+    return [];
+  }
+
+  const result = await db.execute({
+    args: [...trackIds],
+    sql: `select track_id, mb_recording_id, is_catalogue from tracks
+          where track_id in (${trackIds.map(() => "?").join(", ")})`,
+  });
+  const byId = new Map(typedRows<WorkRow>(result.rows).map((row) => [row.track_id, row]));
+
+  return trackIds.flatMap((trackId) => {
+    const row = byId.get(trackId);
+    return row === undefined ? [] : [row];
+  });
+}
+
 /**
  * Write one track's edges `insert or ignore` on the natural key `(track_id, artist_id)`, together
  * with the maintained artists hub-count deltas (keystone 2) in one atomic batch, so a new edge and
@@ -344,6 +372,17 @@ async function insertEdges(
       // The worklist selects edge-less tracks, so this track just gained its artist graph — re-stale
       // the catalogue row for the next `rank_catalogue` tick, atomically (catalogue-rank-restale.ts).
       ...restaleCatalogueRankStatements([trackId]),
+      ...markDueWorkSourceMaintenanceStatements(
+        [
+          { subjectId: trackId, subjectType: "track" },
+          {
+            subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+            subjectType: "track",
+          },
+          ...edges.map((edge) => ({ subjectId: edge.artistId, subjectType: "artist" as const })),
+        ],
+        { producer: "artist-credit-edges" },
+      ),
     ],
     "write",
   );
@@ -353,10 +392,17 @@ async function insertEdges(
 
 /** Stamp one visited track's `artist_credits_backfilled_at` so it drains the worklist. */
 async function stampVisited(db: Awaited<ReturnType<typeof getDb>>, trackId: string): Promise<void> {
-  await db.execute({
-    args: [new Date().toISOString(), trackId],
-    sql: `update tracks set artist_credits_backfilled_at = ? where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [new Date().toISOString(), trackId],
+        sql: `update tracks set artist_credits_backfilled_at = ? where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "artist-credit-stamp" },
+  );
 }
 
 // ── The pass ─────────────────────────────────────────────────────────────────────────────────────
@@ -376,7 +422,24 @@ export async function resolveArtistCredits(
 ): Promise<ArtistCreditsBackfillResult> {
   const db = await getDb();
   const batchLimit = Math.max(1, Math.min(limit, MAX_BATCH));
-  const rows = await listWork(db, batchLimit, cursor);
+  const dueWorkCutoverEnabled = await isDueWorkCutoverEnabled();
+  let rows: WorkRow[];
+
+  if (dueWorkCutoverEnabled) {
+    const page = await readPromotedDueWorkPage(db, "artist-credits", {
+      continuation: cursor
+        ? {
+            sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: cursor }]),
+            subjectId: cursor,
+          }
+        : undefined,
+      limit: batchLimit,
+    });
+    rows = await hydrateProjectedWork(db, page.subjectIds);
+  } else {
+    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
+    rows = await listWork(db, batchLimit, cursor);
+  }
 
   let scanned = 0;
   let mintedArtists = 0;

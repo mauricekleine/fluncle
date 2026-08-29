@@ -20,8 +20,8 @@ export const WORKER_SENTRY_DSN =
 // falling back to `git rev-parse HEAD` locally. Empty when neither is resolvable
 // (e.g. a shallow CI checkout with no git), in which case events carry no release
 // rather than a wrong one — so it degrades to `undefined`, never a bogus string.
+const configuredSentryRelease = import.meta.env?.VITE_FLUNCLE_SENTRY_RELEASE;
 export const SENTRY_RELEASE: string | undefined =
-  typeof import.meta.env.VITE_FLUNCLE_SENTRY_RELEASE === "string" &&
-  import.meta.env.VITE_FLUNCLE_SENTRY_RELEASE.length > 0
-    ? import.meta.env.VITE_FLUNCLE_SENTRY_RELEASE
+  typeof configuredSentryRelease === "string" && configuredSentryRelease.length > 0
+    ? configuredSentryRelease
     : undefined;

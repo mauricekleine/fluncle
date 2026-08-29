@@ -67,6 +67,7 @@
 // "skips a night" rather than to a wedged page.
 
 import { getDb } from "./db";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
 
 /** One table's reconciliation outcome — an object so the shape has room to grow. */
 export type HubCountsTableResult = {
@@ -89,91 +90,116 @@ export type HubCountsReconcileResult = {
  * diff them at a glance.
  */
 type ReconcilePass = {
-  /** The grouped `UPDATE … FROM (…) WHERE id = src.fk AND counts differ`. */
-  correct: string;
   key: "albums" | "artists" | "labels";
-  /** The `UPDATE … SET both = 0` for entities absent from the grouped source. */
-  zero: string;
+  source: string;
 };
 
 /** The three passes, in the order the result reports them. */
 const PASSES: ReconcilePass[] = [
   {
-    correct: `update labels
-                set renderable_track_count = src.renderable,
-                    certified_finding_count = src.certified
-              from (select label_id,
-                           count(*) as renderable,
-                           sum(case when is_catalogue = 0 then 1 else 0 end) as certified
-                    from tracks
-                    where label_id is not null
-                    group by label_id) src
-              where labels.id = src.label_id
-                and (labels.renderable_track_count <> src.renderable
-                     or labels.certified_finding_count <> src.certified)`,
     key: "labels",
-    zero: `update labels
-             set renderable_track_count = 0,
-                 certified_finding_count = 0
-           where (renderable_track_count <> 0 or certified_finding_count <> 0)
-             and id not in (select label_id from tracks where label_id is not null)`,
+    source: `select label_id as entity_id,
+                    count(*) as renderable,
+                    sum(case when is_catalogue = 0 then 1 else 0 end) as certified
+             from tracks
+             where label_id is not null
+             group by label_id`,
   },
   {
-    correct: `update albums
-                set renderable_track_count = src.renderable,
-                    certified_finding_count = src.certified
-              from (select album_id,
-                           count(*) as renderable,
-                           sum(case when is_catalogue = 0 then 1 else 0 end) as certified
-                    from tracks
-                    where album_id is not null
-                    group by album_id) src
-              where albums.id = src.album_id
-                and (albums.renderable_track_count <> src.renderable
-                     or albums.certified_finding_count <> src.certified)`,
     key: "albums",
-    zero: `update albums
-             set renderable_track_count = 0,
-                 certified_finding_count = 0
-           where (renderable_track_count <> 0 or certified_finding_count <> 0)
-             and id not in (select album_id from tracks where album_id is not null)`,
+    source: `select album_id as entity_id,
+                    count(*) as renderable,
+                    sum(case when is_catalogue = 0 then 1 else 0 end) as certified
+             from tracks
+             where album_id is not null
+             group by album_id`,
   },
   {
     // THE PINNED SHAPE: the source joins `tracks`, so an ORPHANED edge (a `track_artists` row
     // whose track was deleted out of band) does NOT count. The
     // hub reads join `tracks` too, so a raw-edge count would correct these into disagreeing with
     // what renders. The zero pass carries the same join for the same reason.
-    correct: `update artists
-                set renderable_track_count = src.renderable,
-                    certified_finding_count = src.certified
-              from (select ta.artist_id,
-                           count(*) as renderable,
-                           sum(case when t.is_catalogue = 0 then 1 else 0 end) as certified
-                    from track_artists ta
-                    join tracks t on t.track_id = ta.track_id
-                    group by ta.artist_id) src
-              where artists.id = src.artist_id
-                and (artists.renderable_track_count <> src.renderable
-                     or artists.certified_finding_count <> src.certified)`,
     key: "artists",
-    zero: `update artists
-             set renderable_track_count = 0,
-                 certified_finding_count = 0
-           where (renderable_track_count <> 0 or certified_finding_count <> 0)
-             and id not in (select ta.artist_id
-                            from track_artists ta
-                            join tracks t on t.track_id = ta.track_id)`,
+    source: `select ta.artist_id as entity_id,
+                    count(*) as renderable,
+                    sum(case when t.is_catalogue = 0 then 1 else 0 end) as certified
+             from track_artists ta
+             join tracks t on t.track_id = ta.track_id
+             group by ta.artist_id`,
   },
 ];
+
+function correctionSelection(pass: ReconcilePass): string {
+  return `select ${pass.key}.id as subject_id
+          from ${pass.key}
+          join (${pass.source}) src on src.entity_id = ${pass.key}.id
+          where ${pass.key}.renderable_track_count <> src.renderable
+             or ${pass.key}.certified_finding_count <> src.certified`;
+}
+
+function correctionStatement(pass: ReconcilePass): string {
+  return `update ${pass.key}
+          set renderable_track_count = src.renderable,
+              certified_finding_count = src.certified
+          from (${pass.source}) src
+          where ${pass.key}.id = src.entity_id
+            and (${pass.key}.renderable_track_count <> src.renderable
+                 or ${pass.key}.certified_finding_count <> src.certified)`;
+}
+
+function zeroSelection(pass: ReconcilePass): string {
+  return `select id as subject_id from ${pass.key}
+          where (renderable_track_count <> 0 or certified_finding_count <> 0)
+            and id not in (select entity_id from (${pass.source}))`;
+}
+
+function zeroStatement(pass: ReconcilePass): string {
+  return `update ${pass.key}
+          set renderable_track_count = 0, certified_finding_count = 0
+          where (renderable_track_count <> 0 or certified_finding_count <> 0)
+            and id not in (select entity_id from (${pass.source}))`;
+}
+
+function repairMarker(pass: ReconcilePass, phase: "grouped" | "zero") {
+  const selection = {
+    args: [],
+    sql: phase === "grouped" ? correctionSelection(pass) : zeroSelection(pass),
+  };
+  if (pass.key === "albums") {
+    return phase === "grouped"
+      ? markDueWorkSourceMaintenanceFromSelectStatements("album", selection, {
+          producer: "hub-counts-reconcile-album-grouped",
+        })
+      : markDueWorkSourceMaintenanceFromSelectStatements("album", selection, {
+          producer: "hub-counts-reconcile-album-zero",
+        });
+  }
+  if (pass.key === "artists") {
+    return phase === "grouped"
+      ? markDueWorkSourceMaintenanceFromSelectStatements("artist", selection, {
+          producer: "hub-counts-reconcile-artist-grouped",
+        })
+      : markDueWorkSourceMaintenanceFromSelectStatements("artist", selection, {
+          producer: "hub-counts-reconcile-artist-zero",
+        });
+  }
+  return phase === "grouped"
+    ? markDueWorkSourceMaintenanceFromSelectStatements("label", selection, {
+        producer: "hub-counts-reconcile-label-grouped",
+      })
+    : markDueWorkSourceMaintenanceFromSelectStatements("label", selection, {
+        producer: "hub-counts-reconcile-label-zero",
+      });
+}
 
 /**
  * Run ONE reconciliation pass over all three entity tables and report how many rows each one had
  * to correct. Idempotent by construction: on a healthy archive every statement matches zero rows,
  * so a re-run reports `{ corrected: 0 }` across the board and writes nothing.
  *
- * The statements are deliberately NOT batched into one transaction. Each is independently
- * self-correcting and order-free, and a nightly backstop that half-fails should leave the half it
- * did fix in place — the next tick closes the rest.
+ * Each correction half commits independently so a later failure preserves earlier progress. Within
+ * a half, the pre-mutation subject selection, source update, and due-work marker are one transaction:
+ * the marker cannot be lost, and a failed correction rolls its marker back with it.
  */
 export async function reconcileHubCounts(): Promise<HubCountsReconcileResult> {
   const db = await getDb();
@@ -181,9 +207,12 @@ export async function reconcileHubCounts(): Promise<HubCountsReconcileResult> {
   const corrected = { albums: 0, artists: 0, labels: 0 };
 
   for (const pass of PASSES) {
-    const grouped = await db.execute(pass.correct);
-    const zeroed = await db.execute(pass.zero);
-    corrected[pass.key] = grouped.rowsAffected + zeroed.rowsAffected;
+    const grouped = await db.batch(
+      [...repairMarker(pass, "grouped"), correctionStatement(pass)],
+      "write",
+    );
+    const zeroed = await db.batch([...repairMarker(pass, "zero"), zeroStatement(pass)], "write");
+    corrected[pass.key] = (grouped.at(-1)?.rowsAffected ?? 0) + (zeroed.at(-1)?.rowsAffected ?? 0);
   }
 
   return {

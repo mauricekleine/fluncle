@@ -33,6 +33,10 @@ vi.mock("./db", async () => {
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
 vi.mock("./musicbrainz", () => ({ mbFetch }));
 vi.mock("./artists", () => ({ adoptArtistMbid, mintArtistByMbid }));
+vi.mock("./due-work-cutover", () => ({
+  isDueWorkCutoverEnabled: async () => false,
+  readPromotedDueWorkPage: vi.fn(),
+}));
 
 const { resolveArtistCredits } = await import("./backfill-artist-credits");
 

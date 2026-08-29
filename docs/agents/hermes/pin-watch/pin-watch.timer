@@ -7,6 +7,8 @@ Description=fluncle-pin-watch timer — hourly check for a drifted baked CLI pin
 # the pins are current, so hourly is free; a real rebuild only runs on drift.
 OnBootSec=10min
 OnUnitActiveSec=1h
+# Supplemental spreading only; the database admission lease is the global concurrency authority.
+RandomizedDelaySec=90
 Persistent=true
 
 [Install]

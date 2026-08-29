@@ -193,11 +193,17 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 // private     = the `/me` cookie-session tier (read via privateUserAuth, write via
 //               privateUserMutation).
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
+  // A filesystemful artifact consumer acknowledges only the exact batch it was served. Agent tier
+  // lets the consumer own its durable progress without granting irreversible prefix deletion.
+  acknowledge_artifact_changes: "admin",
+  activate_artifact_consumer: "admin",
   // Global artist acquisition rules are editorial scope changes.
   add_artist_rule: "operator",
   // The `/admin/artists` follow queue's inline add (Unit 5, Epic B) — operator tier: an
   // operator-entered social lands confirmed + public at once.
   add_artist_social: "operator",
+  // Production projection convergence is a rollout act even though it only writes derived state.
+  advance_projection: "operator",
   // The render → publish AUTO-ADVANCE tick — ADMIN tier (adminAuth only, no
   // operatorGuard): the on-box `fluncle-publish-advance` cron drives it with the agent
   // token (the `drip_clips` / `capture_post_urls` precedent — the Worker owns the Postiz
@@ -283,11 +289,15 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // agent-tier sweep is agent-allowed precisely because it can never certify). The
   // `update_label` / `set_capture_budget` rule.
   certify_track: "operator",
+  checkpoint_artifact_rebuild: "admin",
   // The wrong-audio quarantine override (docs/the-ear.md § Wrong audio) — operator tier: an
   // agent does not get to reverse the machine's own wrong-audio verdict on its own output, the
   // same reasoning that keeps `update_label` and `set_capture_budget` operator-tier.
   clear_wrong_audio: "operator",
   collect_private_galaxy_log: "private-session",
+  // Prefix deletion is irreversible even though the runtime proves every live consumer is beyond
+  // the barrier, so only an operator may trigger a bounded compaction transaction.
+  compact_artifact_changes: "operator",
   // The follow queue's one-tap confirm (candidate → confirmed) — operator tier: it lets
   // a Firecrawl-sourced link onto the public artist page.
   confirm_artist_social: "operator",
@@ -296,6 +306,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (the confirm_artist_social / update_label precedent).
   confirm_label_alias: "operator",
   context_track: "admin",
+  // The recurring-work coordinator is agent tier: committed background units use the existing
+  // agent principal to observe or acquire their registry-classified lane. It changes only
+  // admission protocol state and never performs the payload's domain mutation.
+  coordinate_database_admission: "admin",
   // The catalogue crawler — admin tier (adminAuth only, no operatorGuard): it acquires
   // METADATA and nothing else. It publishes nothing, certifies nothing (a crawled row has
   // no `findings` row, so no coordinate, no note, no video, no public surface), and
@@ -382,6 +396,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // operatorGuard), the list_*_admin precedent: it composes the same admin-tier reads
   // the snapshot draws from and publishes nothing, so the operator's CLI + Raycast
   // menu bar (and the box) read it with the agent token.
+  get_artifact_consumer: "admin",
   get_attention: "admin",
   // The capture budget's spend readout — admin tier (agent-allowed READ), the
   // `get_crawl_status` precedent. Reading what a metered budget has left spends nothing and
@@ -406,6 +421,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // no operatorGuard. `promote_recording` remains the only way a mixtape exists.
   get_mixable_order: "admin",
   get_mixtape_social: "admin",
+  // The health writer's agent must inspect an ambiguous timeout before any replay. The bounded
+  // key travels in a POST body so diagnostics never capture it from a route URL.
+  get_operation_receipt: "admin",
   get_private_account_export: "private-session",
   // One of the signed-in user's frozen Frontier editions + its tracklist — private-session
   // (privateUserAuth), the get_private_frontier_playlist precedent. Scoped by the session
@@ -421,6 +439,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_private_preferences: "private-session",
   // The recording reads — admin tier (agent-allowed): the box's clip-cut cron resolves a
   // clip's recording (r2Key + tracklist + promoted logId) via `get_recording`.
+  get_projection_status: "operator",
   // The prompt registry's per-tick resolve — AGENT tier (adminAuth only, no
   // operatorGuard), the record_cost/context_track precedent. This is THE read that lets a
   // prompt live in the database at all: the box runs a pinned CLI and a baked image, so
@@ -443,10 +462,15 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // list_tracks_admin / get_recording precedent: an authoritative by-coordinate read
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
+  // Inactivation deliberately discards the consumer's reusable checkpoint and forces a rebuild;
+  // the affected agent may retire its own consumer identity without compacting the shared log.
+  inactivate_artifact_consumer: "admin",
   initiate_mixtape_youtube: "operator",
   // The album-bio worklist (albums with findings but no bio yet) — admin tier (agent-allowed
   // read), the list_labels_missing_bio precedent; the bio cron drains it. Publishes nothing.
   list_albums_missing_bio: "admin",
+  list_artifact_changes: "admin",
+  list_artifact_snapshot: "admin",
   // Reading global artist acquisition scope changes nothing.
   list_artist_rules: "admin",
   // The `/admin/artists` review queue read — admin tier (agent-allowed), the list_*_admin
@@ -608,6 +632,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // whose stored counts disagreed with truth — it cannot mint a coordinate, write a note, or
   // certify anything — so the box's nightly cron drives it with the agent token it already holds.
   reconcile_hub_counts: "admin",
+  // Stale accepted receipt repair terminalizes rows and remains operator-only.
+  reconcile_operation_receipts: "operator",
   // The append-only cost ledger's write (COST-01) — agent tier (adminAuth only, no
   // operatorGuard), the record_health precedent; the box's sweeps POST their cost
   // rows with the agent token, and it writes only the internal cost_events ledger
@@ -652,6 +678,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // `advance_publish_queue` / `rank_catalogue` precedent. It re-mirrors playlists that
   // already exist (each minted by its own owner), so it creates no new public authority.
   refresh_frontier_playlists: "admin",
+  // Registration/re-registration creates a fresh immutable snapshot fence. It publishes nothing
+  // and is the entry point for the same agent that consumes the resulting stream.
+  register_artifact_consumer: "admin",
   // Discard a label-alias candidate — operator tier: ruling two spellings are NOT one label
   // is an editorial act (the remove_artist_social / confirm_label_alias precedent).
   reject_label_alias: "operator",
@@ -713,6 +742,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   resolve_note_rejection: "operator",
   // Rendering a held observation overrules the gate and spends a Cartesia render — publish-class.
   resolve_observation_rejection: "operator",
+  // Digest-bound reconciliation is read-only and agent-allowed.
+  resolve_operation_receipt: "admin",
   // The Mixcloud metadata re-sync — operator tier: it EDITS a LIVE published cloudcast's
   // sections[] (the Mixcloud edit endpoint, server-side with the mixcloud_auth token),
   // so the agent token 403s (the parity twin of resync_mixtape_youtube).
@@ -769,6 +800,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The hardened post-publish cue backfill — operator tier: it rewrites a published
   // set's surface, so the agent token 403s.
   set_mixtape_cues: "operator",
+  // The only supported cutover writer; opening is readiness-gated and closing is the rollback rail.
+  set_projection_cutover: "operator",
   // The auto-advance kill switch — operator tier, like `set_clip_drip`: pausing/resuming
   // the whole auto-publish is the operator's control, never the box's.
   set_publish_advance: "operator",

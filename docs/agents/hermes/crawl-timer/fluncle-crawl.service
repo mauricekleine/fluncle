@@ -21,7 +21,7 @@ Type=oneshot
 # shared 1 req/s MusicBrainz budget, so the pass must stay a MINORITY of the 600s window — the same
 # serialized budget feeds the sibling MB sweeps, and the ledger's throttled-tick ratio is the gauge
 # that says the value is too high. 60 nodes ≈ 180s (~30% duty cycle).
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_CRAWL_NODES=60 hermes bash /opt/hermes-scripts/crawl-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_CRAWL_NODES=60 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-crawl -- bash /opt/hermes-scripts/crawl-sweep.sh
 # A PURE trigger — zero LLM tokens. One pass is ~3 MusicBrainz calls per node paced at ~1 req/s in
 # the Worker (measured ~3s/node, so ≈180s at 60 nodes), plus headroom for a Retry-After'd 503.
 # The ceiling must fit the sweep's WORST case, not the nominal pass: the CLI caps one request at
@@ -31,7 +31,7 @@ ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_CRAWL
 # retry window with margin. Past the 10-min cadence an over-long pass just eats the next
 # trigger (systemd never starts a new tick while one is active) and self-heals — this is a
 # backstop, never the normal path.
-TimeoutStartSec=900
+TimeoutStartSec=1030
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

@@ -1,5 +1,8 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createIntegrationDb,
@@ -26,6 +29,7 @@ import { renderSitemap } from "./sitemap-test-kit";
 // schema under test is byte-identical to production.
 
 let db: Client;
+let fixtureDirectory: string | undefined;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -99,7 +103,8 @@ async function embed(trackId: string, first: number): Promise<void> {
 }
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-findings-certification-"));
+  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
   // Seeded FULLY ANNOUNCED (both legs done): certify's resume semantics re-run missing legs on
   // an incompletely-announced finding, so only a complete one exercises the 409.
   await seedTrack(db, {
@@ -115,6 +120,15 @@ beforeEach(async () => {
   blueskyPosts.length = 0;
   isrcLookup = { rateLimited: false };
   recoveredIsrc = undefined;
+});
+
+afterEach(async () => {
+  db.close();
+
+  if (fixtureDirectory !== undefined) {
+    await rm(fixtureDirectory, { force: true, recursive: true });
+    fixtureDirectory = undefined;
+  }
 });
 
 describe("the tracks/findings split — an uncertified catalogue track is not a finding", () => {

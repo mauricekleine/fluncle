@@ -16,11 +16,11 @@ Type=oneshot
 # and the Simple Analytics key lives Worker-side. The .sh/.ts pair is BAKED at /opt/hermes-scripts/
 # (Unit A — auto-updates from main via pin-watch); this host unit only TRIGGERS it, and the sweep
 # self-writes its /status marker (cron-output.sh) so the prober stays honest.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/demand-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-demand -- bash /opt/hermes-scripts/demand-sweep.sh
 # One `fluncle admin catalogue demand` call; the Worker fetches Simple Analytics (bounded page cap)
 # and rewrites two reorder columns. A generous ceiling for a slow SA read or a cold Worker, with the
 # sweep's own single retry inside it.
-TimeoutStartSec=300
+TimeoutStartSec=430
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

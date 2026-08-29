@@ -8,6 +8,7 @@
 //     TRUE total so overflow past the cap is visible,
 //   - listArtistReviewRows is capped at ARTIST_REVIEW_QUEUE_LIMIT (the label-review twin).
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -84,7 +85,7 @@ describe("the paginated /admin/artists board reads", () => {
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     await db.execute(

@@ -55,6 +55,53 @@ type AdminTelemetryOptions = AdminListOptions & {
   until?: string;
 };
 
+type AdminReceiptRepairOptions = JsonOptions & {
+  limit: string;
+  staleBefore: string;
+};
+
+type AdminProjectionStepOptions = JsonOptions & {
+  action: string;
+  limit: string;
+  target: string;
+};
+
+type AdminProjectionCutoverOptions = JsonOptions & {
+  enabled: string;
+  target: string;
+};
+
+type AdminArtifactRegisterOptions = JsonOptions & {
+  contract: string[];
+};
+
+type AdminArtifactSnapshotOptions = JsonOptions & {
+  limit: string;
+  stream: string;
+  streamVersion: string;
+};
+
+type AdminArtifactRebuildCheckpointOptions = JsonOptions & {
+  consumerDigest: string;
+  consumerItemCount: string;
+  generation: string;
+  pageDigest: string;
+  pageLimit: string;
+  stream: string;
+  streamVersion: string;
+};
+
+type AdminArtifactListOptions = JsonOptions & {
+  limit: string;
+};
+
+type AdminArtifactCheckpointOptions = JsonOptions & {
+  batchDigest: string;
+  eventCount: string;
+  fromSeq: string;
+  throughSeq: string;
+};
+
 // `admin tracks requeue-analysis` — the archive-wide BPM/key provenance repair. Dry-run
 // unless `--apply`; `--limit` caps the archive walk (absent ⇒ the whole archive).
 type AdminRequeueAnalysisOptions = {
@@ -822,6 +869,13 @@ Evidence and rollups:
 JSON field reference:
   top-level ok        Request acknowledgement only; never a run verdict.
   rows[].ok           Worker's derived verdict for that run.
+  rows[].operationId  Registry-derived stable database operation, or null.
+  rows[].accessClass  Aggregate read/write/heavy-read class, or null.
+  rows[].release      Bounded emitter build identifier; unknown when absent.
+  rows[].attemptCount Measured attempts only; null means the run could not know.
+  rows[].batchCount   Measured batch statements only; null means unknown.
+  rows[].runDurationMs Derived wall-clock duration; null for invalid/negative time.
+  rows[].outcome      Derived success/failure vocabulary matching rows[].ok.
   rollups[]           Whole-window unit totals, including expectedIntervalMs.
   missingRoster[]     Expected writers with no run in the selected window.
 `,
@@ -829,6 +883,394 @@ JSON field reference:
     .action(async (options: AdminTelemetryOptions) => {
       const { telemetryCommand } = await import("./commands/admin-telemetry");
       await runAdminTelemetry(options, telemetryCommand);
+    });
+
+  const adminReceipts = configureCommand(
+    admin.command("receipts").description("Atomic database operation receipts"),
+  );
+
+  adminReceipts.action(() => {
+    adminReceipts.outputHelp();
+  });
+
+  adminReceipts
+    .command("get")
+    .description("Inspect one operation key")
+    .argument("<operationKey>")
+    .option("--json", "Print lossless bounded receipt metadata as JSON", false)
+    .action(async (operationKey: string, options: JsonOptions) => {
+      const receipts = await import("./commands/admin-operation-receipts");
+      const result = await receipts.getOperationReceiptCommand(operationKey);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(receipts.operationReceiptLines(result.receipt).join("\n"));
+    });
+
+  adminReceipts
+    .command("reconcile")
+    .description("Reconcile one digest-bound operation")
+    .argument("<operationId>")
+    .argument("<operationKey>")
+    .argument("<requestDigest>")
+    .option("--json", "Print lossless bounded receipt metadata as JSON", false)
+    .action(
+      async (
+        operationId: string,
+        operationKey: string,
+        requestDigest: string,
+        options: JsonOptions,
+      ) => {
+        const receipts = await import("./commands/admin-operation-receipts");
+        const result = await receipts.reconcileOperationReceiptCommand({
+          operationId,
+          operationKey,
+          requestDigest,
+        });
+
+        if (options.json) {
+          printJson(result);
+          return;
+        }
+
+        console.log(receipts.operationReceiptLines(result.receipt).join("\n"));
+      },
+    );
+
+  adminReceipts
+    .command("repair")
+    .description("Reject a bounded page of stale in-progress receipts")
+    .requiredOption("--stale-before <iso>", "Repair only receipts older than this ISO timestamp")
+    .option("--limit <limit>", "Maximum receipts to repair (1-100)", "50")
+    .option("--json", "Print the repair counts as JSON", false)
+    .action(async (options: AdminReceiptRepairOptions) => {
+      const receipts = await import("./commands/admin-operation-receipts");
+      const result = await receipts.repairOperationReceiptsCommand({
+        limit: receipts.parseOperationReceiptRepairLimit(options.limit),
+        staleBefore: receipts.parseOperationReceiptFence(options.staleBefore),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      const noun = result.repaired === 1 ? "receipt" : "receipts";
+      console.log(`Repaired ${result.repaired} stale ${noun} after scanning ${result.scanned}.`);
+    });
+
+  const adminProjections = configureCommand(
+    admin.command("projections").description("Projection convergence and cutover controls"),
+  );
+
+  adminProjections.action(() => {
+    adminProjections.outputHelp();
+  });
+
+  adminProjections
+    .command("get")
+    .description("Read bounded projection convergence and cutover readiness")
+    .option("--json", "Print the complete machine-readable readiness contract", false)
+    .action(async (options: JsonOptions) => {
+      const projections = await import("./commands/admin-projections");
+      const result = await projections.getProjectionStatusCommand();
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(projections.projectionStatusLines(result.status).join("\n"));
+    });
+
+  adminProjections
+    .command("advance")
+    .description("Run one bounded, resumable rebuild, repair, or audit step")
+    .requiredOption(
+      "--target <target>",
+      "track_due_work, crawl_due_work, public_aggregates, or artist_qualification",
+    )
+    .requiredOption("--action <action>", "rebuild, repair, or audit")
+    .option("--limit <limit>", "Maximum rows or repairs in this request (1-100)", "100")
+    .option("--json", "Print the step result and current readiness as JSON", false)
+    .action(async (options: AdminProjectionStepOptions) => {
+      const projections = await import("./commands/admin-projections");
+      const result = await projections.advanceProjectionCommand({
+        action: projections.parseProjectionAction(options.action),
+        limit: projections.parseProjectionLimit(options.limit),
+        target: projections.parseProjectionTarget(options.target),
+      });
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(
+        `${result.target} ${result.action}: processed ${result.processed}, scheduled ${result.scheduled}, ${result.complete ? "complete" : "more work remains"}.`,
+      );
+    });
+
+  adminProjections
+    .command("set")
+    .description("Open or close one readiness-gated projection cutover")
+    .requiredOption("--target <target>", "track_due_work, crawl_due_work, or public_projections")
+    .requiredOption("--enabled <boolean>", "true opens; false closes unconditionally")
+    .option("--json", "Print the stored flag and current readiness as JSON", false)
+    .action(async (options: AdminProjectionCutoverOptions) => {
+      const projections = await import("./commands/admin-projections");
+      const result = await projections.setProjectionCutoverCommand({
+        enabled: projections.parseProjectionEnabled(options.enabled),
+        target: projections.parseProjectionCutover(options.target),
+      });
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(`${result.target}: cutover ${result.enabled ? "open" : "dark"}.`);
+    });
+
+  // The versioned artifact-log transport. These are deliberately literal operator controls: the
+  // filesystemful consumer applies the JSON bytes, while the Worker owns ordering and checkpoints.
+  const adminArtifacts = configureCommand(
+    admin.command("artifacts").description("Versioned derived-artifact change log"),
+  );
+
+  adminArtifacts.action(() => {
+    adminArtifacts.outputHelp();
+  });
+
+  adminArtifacts
+    .command("register")
+    .description("Register or re-register a consumer at a fresh snapshot fence")
+    .argument("<consumerId>")
+    .requiredOption(
+      "--contract <contract...>",
+      "Supported contract(s), as stream@streamVersion/formatVersion",
+    )
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactRegisterOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.registerArtifactConsumerCommand({
+        consumerId,
+        contracts: artifacts.parseArtifactContracts(options.contract),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.consumer.consumerId}: rebuilding at snapshot seq ${result.consumer.snapshotSeq ?? 0}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("status")
+    .description("Read a consumer's contracts, rebuilds, and checkpoints")
+    .argument("<consumerId>")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: JsonOptions) => {
+      const { getArtifactConsumerCommand } = await import("./commands/admin-artifacts");
+      const result = await getArtifactConsumerCommand(consumerId);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.consumer.consumerId}: ${result.consumer.state}, head ${result.consumer.headSeq}, applied ${result.consumer.appliedThroughSeq ?? "none"}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("bootstrap")
+    .description("Read the next deterministic source-snapshot page")
+    .argument("<consumerId>")
+    .requiredOption("--stream <stream>", "Registered artifact stream")
+    .option("--stream-version <version>", "Exact stream version", "1")
+    .option("--limit <limit>", "Snapshot items to read (1-200)", "100")
+    .option("--json", "Print lossless payloads and digests as JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactSnapshotOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.listArtifactSnapshotCommand({
+        consumerId,
+        limit: artifacts.parseArtifactInteger(options.limit, "--limit", {
+          maximum: artifacts.ARTIFACT_SNAPSHOT_API_MAX_LIMIT,
+        }),
+        stream: artifacts.parseArtifactStream(options.stream),
+        streamVersion: artifacts.parseArtifactInteger(options.streamVersion, "--stream-version"),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.stream}@${result.streamVersion}/${result.formatVersion}: ${result.itemCount} item(s), snapshot seq ${result.snapshotSeq}, page ${result.pageDigest}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("bootstrap-checkpoint")
+    .description("Checkpoint one source page after applying its exact payloads")
+    .argument("<consumerId>")
+    .requiredOption("--stream <stream>", "Registered artifact stream")
+    .option("--stream-version <version>", "Exact stream version", "1")
+    .requiredOption("--generation <generation>", "Generation from the snapshot page")
+    .requiredOption("--page-digest <digest>", "Digest from the snapshot page")
+    .option("--page-limit <limit>", "Page limit used for the snapshot read (1-200)", "100")
+    .requiredOption("--consumer-digest <digest>", "Running digest after applying the page")
+    .requiredOption("--consumer-item-count <count>", "Running applied item count")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactRebuildCheckpointOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.checkpointArtifactRebuildCommand({
+        consumerDigest: options.consumerDigest,
+        consumerId,
+        consumerItemCount: artifacts.parseArtifactInteger(
+          options.consumerItemCount,
+          "--consumer-item-count",
+          { minimum: 0 },
+        ),
+        generation: options.generation,
+        pageDigest: options.pageDigest,
+        pageLimit: artifacts.parseArtifactInteger(options.pageLimit, "--page-limit", {
+          maximum: artifacts.ARTIFACT_SNAPSHOT_API_MAX_LIMIT,
+        }),
+        stream: artifacts.parseArtifactStream(options.stream),
+        streamVersion: artifacts.parseArtifactInteger(options.streamVersion, "--stream-version"),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.checkpoint.stream}: ${result.checkpoint.state}, ${result.checkpoint.sourceItemCount} item(s) checkpointed.`,
+      );
+    });
+
+  adminArtifacts
+    .command("activate")
+    .description("Activate a consumer after every registered rebuild matches")
+    .argument("<consumerId>")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: JsonOptions) => {
+      const { activateArtifactConsumerCommand } = await import("./commands/admin-artifacts");
+      const result = await activateArtifactConsumerCommand(consumerId);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.consumer.consumerId}: active at seq ${result.consumer.appliedThroughSeq ?? 0}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("list")
+    .description("Read the next ordered event batch from a consumer checkpoint")
+    .argument("<consumerId>")
+    .option("--limit <limit>", "Events to read (1-500)", "100")
+    .option("--json", "Print lossless payloads and digests as JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactListOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.listArtifactChangesCommand({
+        consumerId,
+        limit: artifacts.parseArtifactInteger(options.limit, "--limit", {
+          maximum: artifacts.ARTIFACT_CHANGE_API_MAX_LIMIT,
+        }),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.events.length} event(s), seq ${result.fromSeq} through ${result.throughSeq}, head ${result.headSeq}, batch ${result.batchDigest}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("checkpoint")
+    .description("Acknowledge the exact event batch after applying it")
+    .argument("<consumerId>")
+    .requiredOption("--batch-digest <digest>", "Digest from the event batch")
+    .requiredOption("--event-count <count>", "Event count from the event batch")
+    .requiredOption("--from-seq <seq>", "First sequence from the event batch")
+    .requiredOption("--through-seq <seq>", "Last sequence from the event batch")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactCheckpointOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.acknowledgeArtifactChangesCommand({
+        batchDigest: options.batchDigest,
+        consumerId,
+        eventCount: artifacts.parseArtifactInteger(options.eventCount, "--event-count", {
+          maximum: artifacts.ARTIFACT_CHANGE_API_MAX_LIMIT,
+        }),
+        fromSeq: artifacts.parseArtifactInteger(options.fromSeq, "--from-seq", { minimum: 0 }),
+        throughSeq: artifacts.parseArtifactInteger(options.throughSeq, "--through-seq", {
+          minimum: 0,
+        }),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.consumer.consumerId}: applied through seq ${result.consumer.appliedThroughSeq ?? 0}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("inactivate")
+    .description("Retire a consumer and discard its reusable checkpoint")
+    .argument("<consumerId>")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: JsonOptions) => {
+      const { inactivateArtifactConsumerCommand } = await import("./commands/admin-artifacts");
+      const result = await inactivateArtifactConsumerCommand(consumerId);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(`${result.consumer.consumerId}: inactive, bootstrap required before reuse.`);
+    });
+
+  adminArtifacts
+    .command("compact")
+    .description("Delete one bounded prefix below every live consumer barrier")
+    .option("--limit <limit>", "Events to delete (1-1000)", "1000")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminArtifactListOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.compactArtifactChangesCommand(
+        artifacts.parseArtifactInteger(options.limit, "--limit", {
+          maximum: artifacts.ARTIFACT_COMPACTION_API_MAX_LIMIT,
+        }),
+      );
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        result.deletedCount === 0
+          ? `Compaction: ${result.reason}.`
+          : `Compaction: deleted ${result.deletedCount} event(s), seq ${result.deletedFromSeq ?? 0} through ${result.deletedThroughSeq ?? 0}.`,
+      );
     });
 
   // Convention B: the admin CLI is `group noun-verb` with PLURAL groups. The canonical
@@ -8019,11 +8461,13 @@ function normalizeCommanderError(error: unknown): unknown {
 // is absent from this set — add every new value-taking option here.
 const stringOptions = new Set([
   "--isrc-refresh-limit",
+  "--action",
   "--against",
   "--analyzed-at",
   "--analyzed-from",
   "--at",
   "--audio",
+  "--batch-digest",
   "--bio",
   "--bio-file",
   "--body",
@@ -8032,7 +8476,10 @@ const stringOptions = new Set([
   "--bpm-confidence",
   "--bpm-source",
   "--composition",
+  "--consumer-digest",
+  "--consumer-item-count",
   "--content-file",
+  "--contract",
   "--context-note",
   "--cover",
   "--cues-file",
@@ -8042,6 +8489,8 @@ const stringOptions = new Set([
   "--duration-target-sec",
   "--embedding",
   "--embedding-file",
+  "--enabled",
+  "--event-count",
   "--features",
   "--file",
   "--footage",
@@ -8050,8 +8499,10 @@ const stringOptions = new Set([
   "--footage-notext",
   "--footage-social",
   "--from",
+  "--from-seq",
   "--galaxy-id",
   "--gb",
+  "--generation",
   "--has-key",
   "--intent",
   "--isrc",
@@ -8073,6 +8524,8 @@ const stringOptions = new Set([
   "--ok",
   "--order",
   "--page",
+  "--page-digest",
+  "--page-limit",
   "--parent-id",
   "--plate",
   "--plate-background",
@@ -8099,8 +8552,13 @@ const stringOptions = new Set([
   "--soundcloud-url",
   "--source",
   "--status",
+  "--stale-before",
+  "--stream",
+  "--stream-version",
   "--subject",
+  "--target",
   "--title",
+  "--through-seq",
   "--token",
   "--tracklist-file",
   "--tracks",

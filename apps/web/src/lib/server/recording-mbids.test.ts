@@ -9,12 +9,23 @@ const mbFetch = vi.fn();
 
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
+  const projectionMaintenance = (sql: string) =>
+    sql.includes("insert into due_work") ||
+    sql.includes("public_aggregate_state") ||
+    sql.includes("artist_qualification_state") ||
+    sql.includes("projection_repairs");
 
   return {
     ...actual,
     getDb: async () => ({
       batch: (statements: { args?: unknown[]; sql: string }[]) =>
-        Promise.all(statements.map((statement) => execute(statement))),
+        Promise.all(
+          statements.map((statement) =>
+            projectionMaintenance(statement.sql)
+              ? Promise.resolve({ rows: [], rowsAffected: 1 })
+              : execute(statement),
+          ),
+        ),
       execute,
     }),
   };
@@ -27,6 +38,10 @@ vi.mock("./musicbrainz", async () => {
 });
 
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
+vi.mock("./due-work-cutover", () => ({
+  isDueWorkCutoverEnabled: async () => false,
+  readPromotedDueWorkPage: vi.fn(),
+}));
 
 const { recordingMbidFromTrackId, resolveRecordingMbids } = await import("./recording-mbids");
 
@@ -81,6 +96,11 @@ describe("resolveRecordingMbids", () => {
     expect(result.failedCount).toBe(0);
     expect(result.rateLimited).toBe(false);
     expect(result.nextCursor).toBeNull(); // 2 rows < batch limit 10 ⇒ drained
+
+    const prefixStrip = String(execute.mock.calls[0]?.[0].sql);
+    const isrcWorklist = String(execute.mock.calls[1]?.[0].sql);
+    expect(prefixStrip).toContain("from tracks indexed by tracks_mb_recording_id_queue_idx");
+    expect(isrcWorklist).toContain("from tracks indexed by tracks_mb_recording_id_queue_idx");
 
     // The MB lookup hit /isrc/<isrc> for each row.
     expect(mbFetch).toHaveBeenCalledWith("/isrc/GBABC1200001");
@@ -159,6 +179,11 @@ describe("resolveRecordingMbids", () => {
     expect(result.resolved).toEqual(["spotifyF"]); // the eligible worklist, not a real resolve
     expect(mbFetch).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledTimes(2); // count + list, no writes
+    expect(
+      execute.mock.calls.every((call) =>
+        String(call[0].sql).includes("from tracks indexed by tracks_mb_recording_id_queue_idx"),
+      ),
+    ).toBe(true);
   });
 });
 

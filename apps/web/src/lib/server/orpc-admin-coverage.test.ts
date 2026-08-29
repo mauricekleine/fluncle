@@ -85,6 +85,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token; the
   // describe_album sibling.
   "GET /admin/albums/{slug}/bio-draft": "draft_album_bio",
+  // The versioned artifact-log transport is contract-only oRPC. Filesystemful consumers use the
+  // agent tier to rebuild and advance; the prefix compactor alone is operator tier.
+  "GET /admin/artifacts/changes": "list_artifact_changes",
+  "GET /admin/artifacts/consumers/{consumerId}": "get_artifact_consumer",
+  "GET /admin/artifacts/snapshots": "list_artifact_snapshot",
   // Global artist acquisition rules — contract-only oRPC. The list is an agent-allowed read.
   "GET /admin/artist-rules": "list_artist_rules",
   // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
@@ -169,6 +174,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The observation echo gate's ledger — contract-only oRPC (no TanStack route file), the
   // spoken sibling of the note-rejections ledger.
   "GET /admin/observation-rejections": "list_observation_rejections",
+  // The projection rollout control plane is contract-only and operator-only. Status exposes
+  // bounded aggregate evidence; advance accepts only fixed targets/actions and bounded limits.
+  "GET /admin/projections/status": "get_projection_status",
   // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
   // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is
   // the AGENT-tier per-tick resolve the on-box sweeps live on — the box runs a pinned CLI
@@ -257,6 +265,13 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly). Agent tier: the box's bio sweep drives the
   // fill-empty-only write with its agent token, the note_track precedent.
   "POST /admin/albums/{slug}/bio": "describe_album",
+  "POST /admin/artifacts/changes/compact": "compact_artifact_changes",
+  "POST /admin/artifacts/consumers": "register_artifact_consumer",
+  "POST /admin/artifacts/consumers/{consumerId}/activate": "activate_artifact_consumer",
+  "POST /admin/artifacts/consumers/{consumerId}/checkpoint": "acknowledge_artifact_changes",
+  "POST /admin/artifacts/consumers/{consumerId}/inactivate": "inactivate_artifact_consumer",
+  "POST /admin/artifacts/consumers/{consumerId}/rebuilds/{stream}/checkpoint":
+    "checkpoint_artifact_rebuild",
   // Add one global artist acquisition rule. Operator tier.
   "POST /admin/artist-rules": "add_artist_rule",
   // The similar-artists precompute sweep (D6) — contract-only oRPC (no TanStack route file;
@@ -417,6 +432,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly, like record_health). Admin tier
   // (agent-allowed): the box's sweeps POST a tick's cost rows with the agent token.
   "POST /admin/costs/events": "record_cost",
+  // Registry-classified recurring units use this one agent-tier protocol endpoint for shadow
+  // observation and fenced acquire/heartbeat/release/cancel after the default-off cutover.
+  "POST /admin/database-admission": "coordinate_database_admission",
   // The weekly Frontier refresh (E2, the public recommendation machine) — contract-only
   // oRPC (no TanStack route file; oRPC owns the path). Admin tier (agent-allowed): the
   // box's `fluncle-frontier-refresh` cron re-mirrors every crew member's playlist with
@@ -496,10 +514,14 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The operator's ruling on a held observation — contract-only oRPC. OPERATOR tier:
   // `accepted` renders the held script (a Cartesia spend, publish-class), so the agent 403s.
   "POST /admin/observation-rejections/{id}/resolve": "resolve_observation_rejection",
+  "POST /admin/operation-receipts/inspect": "get_operation_receipt",
+  "POST /admin/operation-receipts/reconcile": "reconcile_operation_receipts",
+  "POST /admin/operation-receipts/resolve": "resolve_operation_receipt",
   // The push receipts sweep is a contract-only admin op (no TanStack route file —
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
+  "POST /admin/projections/{target}/advance": "advance_projection",
   // Appending a prompt version — an edit, a rollback, or a reset (they are one op, because
   // the history is append-only). OPERATOR tier: a prompt IS code, so an agent token 403s.
   "POST /admin/prompts/{slug}": "update_prompt",
@@ -601,6 +623,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
   // re-times an existing minted tracklist's start_ms; operator tier.
   "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",
+  // The only supported projection-flag writer. Opening is convergence-gated; closing always works.
+  "PUT /admin/projections/{target}/cutover": "set_projection_cutover",
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.
   // Replace a recording's whole cue set (RFC plan→recording→mixtape §4) — contract-only

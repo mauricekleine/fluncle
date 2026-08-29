@@ -39,10 +39,15 @@
  * nothing for a human to decide about a record. See docs/album-entity.md.
  */
 import { type Client, createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { randomUUID } from "node:crypto";
 
 import { hubCountDeltaStatement } from "../src/lib/server/hub-counts";
+import {
+  batchDueWorkSourceMutation,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+} from "../src/lib/server/due-work";
 
 export type AlbumsBackfillResult = {
   /** Tracks whose `album_id` pointer this run stamped. */
@@ -91,14 +96,22 @@ export async function backfillAlbums(client: Client): Promise<AlbumsBackfillResu
   }
 
   for (const [slug, name] of bySlug) {
-    const inserted = await client.execute({
-      args: [`alb_${randomUUID()}`, name, slug, now, now],
-      sql: `insert into albums (id, name, slug, created_at, updated_at)
-            values (?, ?, ?, ?, ?)
-            on conflict (slug) do nothing`,
-    });
+    const albumId = `alb_${randomUUID()}`;
+    const [inserted] = await batchDueWorkSourceMutation(
+      client,
+      [
+        {
+          args: [albumId, name, slug, now, now],
+          sql: `insert into albums (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)
+                on conflict (slug) do nothing`,
+        },
+      ],
+      [{ subjectId: albumId, subjectType: "album" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "backfill-album-mint" },
+    );
 
-    result.minted += inserted.rowsAffected;
+    result.minted += inserted?.rowsAffected ?? 0;
   }
 
   // ── 2. LINK — the pointer, for every track whose album now has a row. Runs AFTER the
@@ -177,8 +190,17 @@ export async function linkTracksToAlbums(client: Client): Promise<number> {
 
     const certified = Number(census.rows[0]?.cert ?? 0);
     // ONE batch, because a half-applied pair IS drift and a maintained counter fails silently.
-    const [updated] = await client.batch(
+    const results = await client.batch(
       [
+        ...markDueWorkSourceMaintenanceFromSelectStatements(
+          "track",
+          {
+            args: [raw],
+            sql: `select track_id as subject_id from tracks
+                  where album_id is null and trim(album) = ?`,
+          },
+          { producer: "backfill-album-link" },
+        ),
         {
           args: [albumId, raw],
           sql: `update tracks set album_id = ? where album_id is null and trim(album) = ?`,
@@ -188,7 +210,7 @@ export async function linkTracksToAlbums(client: Client): Promise<number> {
       "write",
     );
 
-    linked += updated?.rowsAffected ?? 0;
+    linked += results.at(-2)?.rowsAffected ?? 0;
   }
 
   return linked;
@@ -220,7 +242,12 @@ async function main(): Promise<void> {
   const authToken = await readSecret("TURSO_AUTH_TOKEN");
   // intMode:"bigint" keeps large catalogue integers exact; the script reads only text cells and
   // `rowsAffected` (always a JS number), so nothing here needs bigint narrowing.
-  const client = createClient({ authToken, intMode: "bigint", url });
+  const client = createClient({
+    authToken,
+    concurrency: REMOTE_DB_CONCURRENCY,
+    intMode: "bigint",
+    url,
+  });
   const result = await backfillAlbums(client);
 
   console.log(`album-graph backfill: ${result.minted} minted · ${result.linked} linked.`);

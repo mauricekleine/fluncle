@@ -32,6 +32,7 @@
  * `nextCursor`; every write is idempotent, so a re-run is safe. See docs/artist-relationship.md.
  */
 import { type Client, createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { spotifyTrackIdOf } from "../src/lib/spotify-track-id";
 import { fetchTrackMetadata } from "../src/lib/server/spotify";
 import { upsertTrackArtists } from "../src/lib/server/artists";
@@ -188,7 +189,12 @@ async function main(): Promise<void> {
   const authToken = await readSecret("TURSO_AUTH_TOKEN");
   // intMode:"bigint" keeps large integers exact; the script reads only text cells and uses JS array
   // lengths for the batch check, so nothing here needs bigint narrowing.
-  const client = createClient({ authToken, intMode: "bigint", url });
+  const client = createClient({
+    authToken,
+    concurrency: REMOTE_DB_CONCURRENCY,
+    intMode: "bigint",
+    url,
+  });
   const cursor = process.argv[2];
 
   const result = await backfillArtistGraph(

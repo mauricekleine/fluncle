@@ -161,7 +161,7 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 | `cli.about`          | `fluncle about`          | Fluncle, and where to find him                                                                                    | tertiary  |
 | `cli.version`        | `fluncle version`        | print or check the version (`--check` hits the latest GitHub release)                                             | tertiary  |
 | `cli.status`         | `fluncle status`         | how Fluncle's services are holding up (the `/status` board, in the terminal)                                      | tertiary  |
-| `cli.admin`          | `fluncle admin`          | the operator/agent command group (hidden): `tracks`, `mixtapes`, `newsletter`, `backfills`, `auth`                | hidden    |
+| `cli.admin`          | `fluncle admin`          | the hidden operator/agent groups, including the versioned `artifacts` bootstrap/change/checkpoint protocol        | hidden    |
 
 ### Browser extensions — vendor-store surfaces
 

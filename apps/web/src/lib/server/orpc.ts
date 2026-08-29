@@ -32,6 +32,7 @@ import { type OrpcContext } from "./orpc-auth";
 import { applyPublicCors, buildPublicCorsMatcher, corsPreflightResponse } from "./orpc-cors";
 import { isApiFaultData } from "./orpc/_shared";
 import { adminAlbumsHandlers } from "./orpc/admin-albums";
+import { adminArtifactsHandlers } from "./orpc/admin-artifacts";
 import { adminArtistRulesHandlers } from "./orpc/admin-artist-rules";
 import { adminArtistsHandlers } from "./orpc/admin-artists";
 import { adminAttentionHandlers } from "./orpc/admin-attention";
@@ -39,8 +40,10 @@ import { adminBackfillsHandlers } from "./orpc/admin-backfills";
 import { adminBiosHandlers } from "./orpc/admin-bios";
 import { adminCatalogueHandlers } from "./orpc/admin-catalogue";
 import { adminCostsHandlers } from "./orpc/admin-costs";
+import { adminDatabaseAdmissionHandlers } from "./orpc/admin-database-admission";
 import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
 import { adminPromptsHandlers } from "./orpc/admin-prompts";
+import { adminProjectionHandlers } from "./orpc/admin-projections";
 import { adminReachHandlers } from "./orpc/admin-reach";
 import { albumsHandlers } from "./orpc/albums";
 import { artistsHandlers } from "./orpc/artists";
@@ -58,6 +61,7 @@ import { adminMigrationsHandlers } from "./orpc/admin-migrations";
 import { adminMixtapesHandlers } from "./orpc/admin-mixtapes";
 import { adminNotesHandlers } from "./orpc/admin-notes";
 import { adminObservationsHandlers } from "./orpc/admin-observations";
+import { adminOperationReceiptHandlers } from "./orpc/admin-operation-receipts";
 import { adminRecordingsHandlers } from "./orpc/admin-recordings";
 import { adminSocialHandlers } from "./orpc/admin-social";
 import { adminSubmissionsHandlers } from "./orpc/admin-submissions";
@@ -105,6 +109,7 @@ const os = implement(contract).$context<OrpcContext>();
 // Add a domain: import its `*Handlers(os)` factory and spread it here.
 export const router = os.router({
   ...adminAlbumsHandlers(os),
+  ...adminArtifactsHandlers(os),
   ...adminArtistRulesHandlers(os),
   ...adminArtistsHandlers(os),
   ...adminAttentionHandlers(os),
@@ -112,8 +117,10 @@ export const router = os.router({
   ...adminBiosHandlers(os),
   ...adminCatalogueHandlers(os),
   ...adminCostsHandlers(os),
+  ...adminDatabaseAdmissionHandlers(os),
   ...adminGalaxiesHandlers(os),
   ...adminPromptsHandlers(os),
+  ...adminProjectionHandlers(os),
   ...adminReachHandlers(os),
   ...albumsHandlers(os),
   ...artistsHandlers(os),
@@ -131,6 +138,7 @@ export const router = os.router({
   ...adminMixtapesHandlers(os),
   ...adminNotesHandlers(os),
   ...adminObservationsHandlers(os),
+  ...adminOperationReceiptHandlers(os),
   ...adminRecordingsHandlers(os),
   ...adminSocialHandlers(os),
   ...adminSubmissionsHandlers(os),

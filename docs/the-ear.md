@@ -31,7 +31,7 @@ Six columns on `tracks`, written **only** by the sweep and meaningful **only** o
 | `catalogue_rank_corpus`    | the corpus fingerprint the values above were computed against, `"<logic-version>:<findings>:<embedded>:<qualified-count>:<qualified-digest>"`. Staleness. |
 | `catalogue_ranked_at`      | when. Freshness for the operator; never a predicate.                                                                                                      |
 
-Two indexes (`tracks_nearest_finding_score_idx`, `tracks_capture_priority_idx`) serve the two ordered reads. NULLs sort first in an ASC index, so a DESC walk hits the ranked rows first and stops at the page's `LIMIT` — the cost is the page, not the corpus.
+The Ear read uses `tracks_catalogue_ear_idx` (`is_catalogue`, `dismissed_at`, `nearest_finding_score`, `track_id`) so the active catalogue slice and stable score order share one composite walk. Its capture lens uses `tracks_catalogue_capture_idx` (`is_catalogue`, `dismissed_at`, `capture_priority`, `track_id`); vendor capture work uses the sibling `tracks_vendor_worklist_idx` without the dismissed-state key. NULLs sort first in an ASC index, so a DESC walk reaches ranked rows first and stops at the page's `LIMIT` — the cost is the page, not the corpus.
 
 ### The three database rules, all load-bearing
 

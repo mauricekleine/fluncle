@@ -7,6 +7,11 @@ import {
   seedCatalogueTrack,
   seedTrack,
 } from "../src/lib/server/integration-db";
+import {
+  initializePublicProjectionTestState,
+  readPublicProjectionMaintenanceSnapshot,
+  settlePublicProjectionTestState,
+} from "./lib/public-projection-test-state";
 import { backfillIsCatalogue } from "./backfill-is-catalogue";
 
 // The keystone-1 backfill (docs/db-scale-backlog Wave 2 #1): the migration adds `is_catalogue`
@@ -27,6 +32,7 @@ async function flag(trackId: string): Promise<number> {
 
 beforeEach(async () => {
   db = await createIntegrationDb();
+  await initializePublicProjectionTestState(db);
   // A certified track and a raw catalogue track.
   await seedTrack(db, { logId: "004.7.2I", title: "Certified", trackId: "cert00000000000000000a" });
   await seedCatalogueTrack(db, { title: "Catalogue", trackId: "cat000000000000000000a" });
@@ -49,10 +55,37 @@ describe("backfillIsCatalogue", () => {
 
   it("is idempotent — a second run flips nothing and changes no state", async () => {
     await backfillIsCatalogue(db);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual({
+      aggregate: { projectionEpoch: 0, ready: false, sourceEpoch: 1 },
+      artists: { projectionEpoch: 0, ready: false, sourceEpoch: 1 },
+      repairs: [
+        {
+          projection: "artist_qualification",
+          sourceEpoch: 1,
+          subjectId: "cert00000000000000000a",
+          subjectType: "track",
+        },
+        {
+          projection: "public_aggregates",
+          sourceEpoch: 1,
+          subjectId: "cert00000000000000000a",
+          subjectType: "track",
+        },
+      ],
+    });
+    await settlePublicProjectionTestState(db);
+    const ready = await readPublicProjectionMaintenanceSnapshot(db);
+    expect(ready).toEqual({
+      aggregate: { projectionEpoch: 1, ready: true, sourceEpoch: 1 },
+      artists: { projectionEpoch: 1, ready: true, sourceEpoch: 1 },
+      repairs: [],
+    });
+
     const { flipped } = await backfillIsCatalogue(db);
 
     expect(flipped).toBe(0);
     expect(await flag("cert00000000000000000a")).toBe(0);
     expect(await flag("cat000000000000000000a")).toBe(1);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual(ready);
   });
 });

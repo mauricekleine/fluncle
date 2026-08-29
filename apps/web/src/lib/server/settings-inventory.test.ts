@@ -22,16 +22,24 @@ const SETTINGS_INVENTORY = {
     "catalogue_capture_daily_tracks",
     "catalogue_capture_paused",
   ],
-  "catalogue.ts": ["catalogue_affinity_cache", "catalogue_summary_cache"],
+  "catalogue.ts": [
+    "catalogue_affinity_cache",
+    "catalogue_rank_state_cache",
+    "catalogue_summary_cache",
+  ],
   "clip-social.ts": ["clip_drip_paused"],
+  "crawl-cutover.ts": ["crawl_due_cutover_enabled"],
+  "due-work-cutover.ts": ["track_work_due_cutover_enabled"],
   "env.ts": ["admin_grant_epoch"],
   "frontier-playlist.ts": ["frontier.minting"],
+  "health-receipt-cutover.ts": ["health_snapshot_receipts_enabled"],
   "logbook-echo.ts": ["logbook_echo_max_overlap", "logbook_echo_min_phrase_words"],
   "note-rejections.ts": ["note_echo_max_overlap", "note_echo_min_phrase_words"],
   "observation-rejections.ts": [
     "observation_echo_max_overlap",
     "observation_echo_min_phrase_words",
   ],
+  "public-projection-cutover.ts": ["public_projection_cutover_enabled"],
   "publish-advance.ts": ["publish_advance_paused"],
   "sonar.ts": [
     "sonar_artists_enabled",
@@ -151,7 +159,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(36);
-    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(16);
+    expect(registered.size).toBe(41);
+    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(20);
   });
 });

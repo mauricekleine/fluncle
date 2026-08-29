@@ -306,13 +306,54 @@ alert() {
 # Needs the agent token + worker URL from the operator EnvironmentFile; unset → skipped.
 post_health() {
   [ -n "${FLUNCLE_API_TOKEN:-}" ] || return 0
-  local status="$1" esc
+  local status="$1" esc at producer core digest key body reconcile_body response http_status response_body attempt
   esc="$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  curl -fsS -m 10 \
-    -H 'Content-Type: application/json' -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
-    -d "$(printf '{"at":"%s","checks":[{"service":"self-deploy-sonar","status":"%s","message":"%s","latencyMs":null,"transitioned":false}]}' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" "$esc")" \
-    "${WORKER_URL%/}/api/v1/admin/health" >/dev/null 2>&1 || true
+  at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  producer="sonar-freshen"
+  core="$(printf '{"at":"%s","checks":[{"latencyMs":null,"message":"%s","service":"self-deploy-sonar","status":"%s","transitioned":false}],"producer":"%s"}' \
+    "$at" "$esc" "$status" "$producer")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
+  else
+    digest="$(printf '%s' "$core" | shasum -a 256 | awk '{print $1}')"
+  fi
+  key="health.snapshot:${producer}:${at}"
+  body="$(printf '{"at":"%s","checks":[{"service":"self-deploy-sonar","status":"%s","message":"%s","latencyMs":null,"transitioned":false}],"operationKey":"%s","producer":"%s","requestDigest":"%s"}' \
+    "$at" "$status" "$esc" "$key" "$producer" "$digest")"
+  reconcile_body="$(printf '{"operationId":"health.snapshot","operationKey":"%s","requestDigest":"%s"}' "$key" "$digest")"
+
+  for attempt in 1 2; do
+    http_status=""
+    if http_status="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' \
+      -H 'Content-Type: application/json' -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+      -d "$body" "${WORKER_URL%/}/api/v1/admin/health" 2>/dev/null)"; then
+      case "$http_status" in
+        2??) return 0 ;;
+        4??) log "record_health rejected the snapshot (best-effort, not replayed)"; return 0 ;;
+      esac
+    fi
+
+    if ! response="$(curl -sS -m 10 -w $'\n%{http_code}' \
+      -H 'Content-Type: application/json' -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+      -d "$reconcile_body" "${WORKER_URL%/}/api/v1/admin/operation-receipts/resolve" 2>/dev/null)"; then
+      log "record_health reconciliation unavailable; snapshot was not replayed"
+      return 0
+    fi
+    http_status="${response##*$'\n'}"
+    response_body="${response%$'\n'*}"
+    case "$http_status" in
+      2??) ;;
+      *) log "record_health reconciliation unavailable; snapshot was not replayed"; return 0 ;;
+    esac
+    if printf '%s' "$response_body" | grep -Eq '"outcome"[[:space:]]*:[[:space:]]*"committed"'; then
+      return 0
+    fi
+    if printf '%s' "$response_body" | grep -Eq '"outcome"[[:space:]]*:[[:space:]]*"safely-retryable"' && [ "$attempt" -lt 2 ]; then
+      continue
+    fi
+    log "record_health reconciliation did not authorize replay"
+    return 0
+  done
 }
 
 # Read one KEY=value out of the live service's EnvironmentFile WITHOUT sourcing it
@@ -437,16 +478,17 @@ log "checksum verified for ${NEW_SHA:0:12}"
 
 # ── 4. PRE-SMOKE the new binary in ISOLATION (live service untouched) ─────────
 # Boot the new binary on a free high loopback port with TLS DISABLED (no cert/key in
-# its env ⇒ sonar serves plain HTTP; see apps/sonar/src/config.rs) and the live env's
-# Turso creds, then poll its /health until it answers `"ok":true`. That single call
-# proves a lot: the binary runs on this CPU (a bad -C target-cpu would SIGILL right
-# here, with the live service untouched), it reaches Turso, decodes the vector blobs,
-# builds both in-memory indexes, and serves HTTP.
+# its env ⇒ sonar serves plain HTTP; see apps/sonar/src/config.rs) in validate-only
+# mode against the durable local state, then poll /health. Validate-only performs no
+# state mutation, replica open/sync, consumer registration, change read, checkpoint,
+# or acknowledgement.
+# This proves the binary runs on this CPU (a bad -C target-cpu would SIGILL here,
+# with the live service untouched), validates the durable raw vectors, builds both
+# in-memory indexes, and serves HTTP.
 #
 # MEMORY: for the duration of this smoke the box holds TWO full copies of the index —
 # the live one and the smoke's. Headroom must exceed 2x the index (see the README).
-# The refresh interval is pushed far out so the throwaway process never loads a
-# second time; it is reaped the moment the smoke resolves.
+# Validate-only starts no consumer loop; the process is reaped when the smoke resolves.
 presmoke_fail() {
   SF_ERRORS=$((SF_ERRORS + 1))
   alert "🛰️ sonar-freshen: PRE-SMOKE FAILED ($1) for ${NEW_SHA:0:12} on rave-01 — box untouched, staying on the current sonar binary"
@@ -454,11 +496,10 @@ presmoke_fail() {
   die "pre-smoke failed: $1"
 }
 
-SMOKE_TURSO_URL="$(env_value TURSO_DATABASE_URL)"
-SMOKE_TURSO_TOKEN="$(env_value TURSO_AUTH_TOKEN)"
+SMOKE_STATE_PATH="$(env_value SONAR_STATE_PATH)"
 SMOKE_SECRET="$(env_value SONAR_SECRET)"
-[ -n "$SMOKE_TURSO_URL" ] && [ -n "$SMOKE_TURSO_TOKEN" ] && [ -n "$SMOKE_SECRET" ] \
-  || presmoke_fail "could not read the Turso creds / secret from the live service env"
+[ -n "$SMOKE_STATE_PATH" ] && [ -n "$SMOKE_SECRET" ] \
+  || presmoke_fail "could not read the local-state contract from the live service env"
 
 # Pick a free high loopback port (bash /dev/tcp probe; no external tool needed).
 port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
@@ -469,9 +510,10 @@ done
 [ -n "$SMOKE_PORT" ] || presmoke_fail "no free loopback port for the isolated boot"
 
 SMOKE_LOG="$WORK_DIR/boot.log"
-TURSO_DATABASE_URL="$SMOKE_TURSO_URL" TURSO_AUTH_TOKEN="$SMOKE_TURSO_TOKEN" \
+SONAR_STATE_PATH="$SMOKE_STATE_PATH" \
+  SONAR_VALIDATE_ONLY=true \
   SONAR_SECRET="$SMOKE_SECRET" SONAR_BIND=127.0.0.1 SONAR_PORT="$SMOKE_PORT" \
-  SONAR_REFRESH_SECS=86400 SONAR_TLS_CERT='' SONAR_TLS_KEY='' \
+  SONAR_TLS_CERT='' SONAR_TLS_KEY='' \
   "$NEW_BIN" >"$SMOKE_LOG" 2>&1 &
 SMOKE_PID=$!
 # Always reap the throwaway server — it holds a second full copy of the index in RAM.
@@ -540,8 +582,8 @@ mv -f "$APP_BIN.new" "$APP_BIN"
 log "swapping $SERVICE to ${NEW_SHA:0:12} and restarting"
 service_healthy() {
   systemctl restart "$SERVICE" || return 1
-  # A restart re-reads the whole corpus out of Turso before /health answers, so poll
-  # rather than sleeping a fixed beat.
+  # A restart validates and rebuilds the durable local corpus before /health answers,
+  # so poll rather than sleeping a fixed beat.
   local i
   for ((i = 0; i < BOOT_TIMEOUT_SECS; i++)); do
     if ! systemctl is-active --quiet "$SERVICE"; then return 1; fi

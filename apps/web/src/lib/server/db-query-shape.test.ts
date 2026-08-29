@@ -479,6 +479,13 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
   },
   {
     count: 1,
+    file: "lib/server/artifact-changes.ts",
+    pattern: "anti-join:findings-is-null",
+    reason:
+      "The shared REC_ELIGIBLE_WHERE interpolation defines the anchored device-bootstrap cut only. It is reached by agent-authenticated, primary-key-keyset snapshot pages capped at 200 rows, never by a public request; keeping the canonical fragment here is the correctness contract that makes device bootstrap select the same catalogue rows as the recommendation projection.",
+  },
+  {
+    count: 1,
     file: "lib/server/recommendations.ts",
     pattern: "anti-join:findings-is-null",
     reason:
@@ -504,6 +511,13 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
     pattern: "anti-join:findings-is-null",
     reason:
       "The `/album/<slug>` unlit slice. Album-SEEKED (`tracks.album_id = ?` over tracks_album_id_idx), so the anti-join is a residual on one album's rows.",
+  },
+  {
+    count: 4,
+    file: "lib/server/public-projections.ts",
+    pattern: "anti-join:findings-is-null",
+    reason:
+      "The artist-qualification shadow projection. One occurrence is a track-id-seeked repair; two are the exact source digest and bounded drift scheduler used by the local-only audit/backfill command, never a public request path. The operator audit lane is primary-key keyset paged on `(track_id, artist_id)` and capped at 100 rows, with its indexed SEARCH plan pinned in projection-cleanup-plans.integration.test.ts. All four compute a contribution bit from a left join rather than filter the catalogue through an anti-join.",
   },
 
   // ── the catalogue anti-join, `not exists (select 1 from findings …)` ────────────
@@ -549,7 +563,14 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
     file: "lib/server/tracks-hub.ts",
     pattern: "fn-wrapped:substr-release-date",
     reason:
-      "tracksHubYearLaneQuery's `group by substr(tracks.release_date, 1, 4)` — BOUNDED on purpose, behind the 60s memo the unfiltered lane always reads. The maintained year→renderable-count rollup that would have retired it was DROPPED from the backlog on 2026-07-27 (operator ruling, docs/db-scale-backlog.md status header), so this is a standing survivor rather than a queued one; git history holds the rollup analysis if the lane ever starts costing.",
+      "tracksHubYearLaneQuery is the exact compatibility query for every filtered lane and for flag-off or unusable public projection state. The default unfiltered lane reads `public_aggregate_counts`; this literal `substr(release_date, 1, 4)` source scan remains only as the reversible legacy fallback until contraction.",
+  },
+  {
+    count: 1,
+    file: "lib/server/public-projections.ts",
+    pattern: "fn-wrapped:substr-release-date",
+    reason:
+      "The exact public-aggregate drift scheduler must compare the shadow membership with the legacy literal `substr(release_date, 1, 4)` semantics. It runs only in the local-only audit/backfill command, is capped by its repair limit, and is never a public request path.",
   },
   {
     count: 1,
@@ -632,6 +653,7 @@ describe("DB query-shape guardrail (growing tables)", () => {
     // A path typo would make every other assertion vacuously pass, so pin the shape of
     // the surface itself: both roots present, and the known SQL-heavy files reached.
     expect(scans.length).toBeGreaterThan(100);
+    expect(scans.map((scan) => scan.file)).toContain("lib/server/artifact-changes.ts");
     expect(scans.map((scan) => scan.file)).toContain("lib/server/catalogue.ts");
     expect(scans.map((scan) => scan.file)).toContain("db/schema.ts");
   });
@@ -716,6 +738,14 @@ describe("DB query-shape guardrail — detector", () => {
         "const q = `select count(*) from tracks where not exists (select 1 from findings where findings.track_id = tracks.track_id)`;",
       ),
     ).toEqual(["anti-join:not-exists-findings"]);
+  });
+
+  it("registers a shared REC_ELIGIBLE_WHERE interpolation as catalogue anti-join debt", () => {
+    expect(
+      patternsIn(
+        "const q = `select t.track_id from tracks t left join findings f on f.track_id = t.track_id where ${REC_ELIGIBLE_WHERE}`;",
+      ),
+    ).toEqual(["anti-join:findings-is-null"]);
   });
 
   it("does not fire once the statement reads the materialized discriminator", () => {

@@ -16,10 +16,15 @@
  * Reads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from the environment (locally, `.dev.vars`).
  */
 import { type Client, createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveRemixerNames, fold } from "../src/lib/server/track-match";
+import {
+  batchDueWorkSourceMutation,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+} from "../src/lib/server/due-work";
 
 export type RemixerRolesBackfillResult = {
   /** `track_artists` rows this run stamped `role='remixer'`. Zero on a steady-state deploy. */
@@ -111,13 +116,26 @@ export async function backfillRemixerRoles(client: Client): Promise<RemixerRoles
           continue;
         }
 
-        const result = await client.execute({
-          args: [artist.artist_id, record.track_id],
-          sql: `update track_artists set role = 'remixer'
-                where artist_id = ? and track_id = ? and role is null`,
-        });
+        const [result] = await batchDueWorkSourceMutation(
+          client,
+          [
+            {
+              args: [artist.artist_id, record.track_id],
+              sql: `update track_artists set role = 'remixer'
+                    where artist_id = ? and track_id = ? and role is null`,
+            },
+          ],
+          [
+            { subjectId: record.track_id, subjectType: "track" },
+            {
+              subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+              subjectType: "track",
+            },
+          ],
+          { onlyIfLastSourceStatementChanged: true, producer: "backfill-remixer-role" },
+        );
 
-        stamped += result.rowsAffected;
+        stamped += result?.rowsAffected ?? 0;
       }
     }
 
@@ -141,7 +159,11 @@ async function main(): Promise<void> {
   }
 
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
   const result = await backfillRemixerRoles(client);
 
   console.log(`remixer roles backfill: ${result.stamped} stamped.`);

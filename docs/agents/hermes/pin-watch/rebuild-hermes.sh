@@ -305,13 +305,54 @@ WORKER_URL="${PINWATCH_WORKER_URL:-https://www.fluncle.com}"
 APITOKEN="$(docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^FLUNCLE_API_TOKEN=//p' | head -1 || true)"
 post_health() {
   [ -n "$APITOKEN" ] || return 0
-  local status="$1" esc
+  local status="$1" esc at producer core digest key body reconcile_body response http_status response_body attempt
   esc="$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  curl -fsS -m 10 \
-    -H 'Content-Type: application/json' -H "Authorization: Bearer $APITOKEN" \
-    -d "$(printf '{"at":"%s","checks":[{"service":"self-deploy","status":"%s","message":"%s","latencyMs":null,"transitioned":false}]}' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" "$esc")" \
-    "${WORKER_URL%/}/api/v1/admin/health" >/dev/null 2>&1 || true
+  at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  producer="hermes-pin-watch"
+  core="$(printf '{"at":"%s","checks":[{"latencyMs":null,"message":"%s","service":"self-deploy","status":"%s","transitioned":false}],"producer":"%s"}' \
+    "$at" "$esc" "$status" "$producer")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
+  else
+    digest="$(printf '%s' "$core" | shasum -a 256 | awk '{print $1}')"
+  fi
+  key="health.snapshot:${producer}:${at}"
+  body="$(printf '{"at":"%s","checks":[{"service":"self-deploy","status":"%s","message":"%s","latencyMs":null,"transitioned":false}],"operationKey":"%s","producer":"%s","requestDigest":"%s"}' \
+    "$at" "$status" "$esc" "$key" "$producer" "$digest")"
+  reconcile_body="$(printf '{"operationId":"health.snapshot","operationKey":"%s","requestDigest":"%s"}' "$key" "$digest")"
+
+  for attempt in 1 2; do
+    http_status=""
+    if http_status="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' \
+      -H 'Content-Type: application/json' -H "Authorization: Bearer $APITOKEN" \
+      -d "$body" "${WORKER_URL%/}/api/v1/admin/health" 2>/dev/null)"; then
+      case "$http_status" in
+        2??) return 0 ;;
+        4??) log "record_health rejected the snapshot (best-effort, not replayed)"; return 0 ;;
+      esac
+    fi
+
+    if ! response="$(curl -sS -m 10 -w $'\n%{http_code}' \
+      -H 'Content-Type: application/json' -H "Authorization: Bearer $APITOKEN" \
+      -d "$reconcile_body" "${WORKER_URL%/}/api/v1/admin/operation-receipts/resolve" 2>/dev/null)"; then
+      log "record_health reconciliation unavailable; snapshot was not replayed"
+      return 0
+    fi
+    http_status="${response##*$'\n'}"
+    response_body="${response%$'\n'*}"
+    case "$http_status" in
+      2??) ;;
+      *) log "record_health reconciliation unavailable; snapshot was not replayed"; return 0 ;;
+    esac
+    if printf '%s' "$response_body" | grep -Eq '"outcome"[[:space:]]*:[[:space:]]*"committed"'; then
+      return 0
+    fi
+    if printf '%s' "$response_body" | grep -Eq '"outcome"[[:space:]]*:[[:space:]]*"safely-retryable"' && [ "$attempt" -lt 2 ]; then
+      continue
+    fi
+    log "record_health reconciliation did not authorize replay"
+    return 0
+  done
 }
 
 # ── 1. sync the build context (public repo, no credential) ────────────────────

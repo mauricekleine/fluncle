@@ -7,18 +7,28 @@
 //   - WRITE (the agent cron): `recordHealthSnapshot` — for each check, upsert the
 //     single `service_status` row (carry `since` forward while the status is
 //     unchanged, reset it on a flip), append a `status_events` row for every
-//     `transitioned` check, then prune the ledger to its most recent 200 rows.
+//     `transitioned` check, then prune the ledgers. Under receipt cutover, those
+//     effects and spent rate-limit pruning commit with the terminal receipt.
 //
 // Everything here is PUBLIC-SAFE by construction: only service name + status +
 // short message + latency + timestamps ever flow through, never an internal
 // address or raw error body (the probe is responsible for keeping `message` clean).
 
 import { randomUUID } from "node:crypto";
+import { type Client } from "@libsql/client";
+import {
+  HEALTH_SNAPSHOT_PRODUCER_MAX,
+  HEALTH_SNAPSHOT_PRODUCER_PATTERN,
+} from "@fluncle/contracts/orpc";
 import { cronSurfaces } from "@fluncle/registry";
 import { SELF_POSTED_AUTOMATION_ORDER } from "../status-services";
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
-import { pruneRateLimitCounters } from "./rate-limit";
+import {
+  digestOperationRequest,
+  executeReceiptBackedOperation,
+  type OperationReceiptOutcome,
+} from "./operation-receipts";
 
 /** The three-state health enum, shared with the `@fluncle/contracts` snapshot schema. */
 export type ServiceHealthStatus = "ok" | "degraded" | "down";
@@ -59,6 +69,76 @@ export type HealthCheckInput = {
   transitioned: boolean;
 };
 
+export const HEALTH_SNAPSHOT_OPERATION_ID = "health.snapshot";
+
+const MESSAGE_MAX = 160;
+const RATE_LIMIT_COUNTER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Canonicalize every accepted offset onto the one UTC representation used by keys and storage. */
+export function normalizeHealthSnapshotAt(at: string): string {
+  try {
+    return new Date(at).toISOString();
+  } catch {
+    throw new TypeError("at must be a valid ISO timestamp");
+  }
+}
+
+/** Trim, collapse whitespace, and cap a probe message; an empty result is null. */
+export function normalizeHealthCheck(check: HealthCheckInput): HealthCheckInput {
+  const collapsed = check.message?.replace(/\s+/g, " ").trim() ?? "";
+  const message =
+    collapsed.length === 0
+      ? null
+      : collapsed.length > MESSAGE_MAX
+        ? `${collapsed.slice(0, MESSAGE_MAX - 1)}…`
+        : collapsed;
+
+  return {
+    latencyMs: check.latencyMs,
+    message,
+    service: check.service.trim(),
+    status: check.status,
+    transitioned: check.transitioned,
+  };
+}
+
+export function normalizeHealthSnapshot(
+  at: string,
+  checks: HealthCheckInput[],
+): { at: string; checks: HealthCheckInput[] } {
+  return {
+    at: normalizeHealthSnapshotAt(at),
+    checks: checks.map(normalizeHealthCheck),
+  };
+}
+
+function validateHealthSnapshotProducer(producer: string): void {
+  if (
+    producer.length > HEALTH_SNAPSHOT_PRODUCER_MAX ||
+    !HEALTH_SNAPSHOT_PRODUCER_PATTERN.test(producer)
+  ) {
+    throw new TypeError("producer must be a bounded stable identifier");
+  }
+}
+
+/** Independent producers share timestamps safely by carrying their stable identity in the key. */
+export function healthSnapshotOperationKey(producer: string, at: string): string {
+  validateHealthSnapshotProducer(producer);
+  return `${HEALTH_SNAPSHOT_OPERATION_ID}:${producer}:${normalizeHealthSnapshotAt(at)}`;
+}
+
+/** The caller and Worker digest the same normalized request before any effect can execute. */
+export async function healthSnapshotRequestDigest(
+  producer: string,
+  at: string,
+  checks: HealthCheckInput[],
+): Promise<string> {
+  validateHealthSnapshotProducer(producer);
+  const snapshot = normalizeHealthSnapshot(at, checks);
+
+  return digestOperationRequest({ ...snapshot, producer });
+}
+
 // The ledger is trimmed to this many most-recent rows on every write — a status
 // page never needs deep history, and this keeps the table bounded without a cron.
 const STATUS_EVENTS_KEEP = 200;
@@ -67,6 +147,8 @@ const STATUS_EVENTS_KEEP = 200;
 // every write — the uptime bar shows the last N checks (≈ N × the 10m cadence),
 // bounded without a cron. It fills in over time, then rolls.
 const SERVICE_CHECK_SAMPLES_KEEP = 90;
+
+type HealthSnapshotWriteClient = Pick<Client, "execute">;
 
 // The SHARED expected-writers roster. Registry cron ids are build-bound to the
 // committed timer units by docs/agents/hermes/scripts/cron-roster.test.ts, so the
@@ -278,9 +360,12 @@ export async function getServiceCheckSamples(): Promise<Record<string, ServiceCh
  * also appends a `status_events` row. After the writes, the ledger is pruned to
  * its most recent `STATUS_EVENTS_KEEP` rows.
  */
-export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[]): Promise<void> {
-  const db = await getDb();
-
+async function writeHealthSnapshot(
+  db: HealthSnapshotWriteClient,
+  at: string,
+  checks: HealthCheckInput[],
+  strictSamples: boolean,
+): Promise<void> {
   for (const check of checks) {
     // `since` preservation lives in the conflict clause: on a fresh row it is the
     // incoming `at`; on an existing row it stays put while the status is unchanged
@@ -310,12 +395,10 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
       });
     }
 
-    // Append this check to the recent-samples ledger (the uptime bar), then prune
-    // this service to its most-recent SERVICE_CHECK_SAMPLES_KEEP rows. NON-CRITICAL:
-    // the bar is an enhancement, so a failure here (e.g. the table not yet migrated
-    // during a deploy window) must never lose the service_status upsert + the event
-    // above — it is caught and logged, not thrown.
-    try {
+    // Append this check to the recent-samples ledger (the uptime bar), then prune this service to
+    // its most-recent SERVICE_CHECK_SAMPLES_KEEP rows. The legacy writer keeps this best-effort;
+    // the receipt-backed writer makes it part of the atomic effect so its terminal result is exact.
+    const appendSample = async () => {
       await db.execute({
         args: [randomUUID(), check.service, check.status, check.latencyMs, at],
         sql: `insert into service_check_samples (id, service, status, latency_ms, at)
@@ -332,8 +415,16 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
                     limit ?
                   )`,
       });
-    } catch (error) {
-      logEvent("error", "status.health-snapshot-write-failed", { error });
+    };
+
+    if (strictSamples) {
+      await appendSample();
+    } else {
+      try {
+        await appendSample();
+      } catch (error) {
+        logEvent("error", "status.health-snapshot-write-failed", { error });
+      }
     }
   }
 
@@ -348,14 +439,69 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
               limit ?
             )`,
   });
+}
 
+export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[]): Promise<void> {
+  await recordHealthSnapshotFor(await getDb(), at, checks);
+}
+
+/** Client-injected legacy writer retained as the default-off rollback path. */
+export async function recordHealthSnapshotFor(
+  db: Client,
+  at: string,
+  checks: HealthCheckInput[],
+): Promise<void> {
+  const snapshot = normalizeHealthSnapshot(at, checks);
+
+  await writeHealthSnapshot(db, snapshot.at, snapshot.checks, false);
+  await pruneRateLimitsAfterHealthSnapshot(db, snapshot.at);
+}
+
+/** Persist a health snapshot and its terminal receipt in one transaction. */
+export async function recordHealthSnapshotWithReceipt(
+  operationKey: string,
+  producer: string,
+  at: string,
+  checks: HealthCheckInput[],
+): Promise<OperationReceiptOutcome> {
+  return recordHealthSnapshotWithReceiptFor(await getDb(), operationKey, producer, at, checks);
+}
+
+/** Client-injected receipt writer for real-libSQL failure and compatibility tests. */
+export async function recordHealthSnapshotWithReceiptFor(
+  client: Client,
+  operationKey: string,
+  producer: string,
+  at: string,
+  checks: HealthCheckInput[],
+): Promise<OperationReceiptOutcome> {
+  const snapshot = normalizeHealthSnapshot(at, checks);
+  const requestDigest = await healthSnapshotRequestDigest(producer, snapshot.at, snapshot.checks);
+  return executeReceiptBackedOperation({
+    client,
+    effect: async (transaction) => {
+      await writeHealthSnapshot(transaction, snapshot.at, snapshot.checks, true);
+      await pruneRateLimitCountersInSnapshot(transaction, snapshot.at);
+      return {
+        result: { at: snapshot.at },
+        resultIdentity: operationKey,
+        state: "committed",
+      };
+    },
+    operationId: HEALTH_SNAPSHOT_OPERATION_ID,
+    operationKey,
+    requestDigest,
+  });
+}
+
+async function pruneRateLimitsAfterHealthSnapshot(db: Client, at: string): Promise<void> {
   // And prune the rate limiter's spent windows, which nothing deleted from before (rate-limit.ts
   // `pruneRateLimitCounters`). It rides here because this is the repo's periodic-maintenance write
   // and a housekeeping delete must never sit on a read a caller is waiting for. NON-CRITICAL, the
   // samples-ledger discipline above: a failure here is logged and swallowed, because the health
   // snapshot this function exists for is already complete and must not be lost to upkeep.
   try {
-    const pruned = await pruneRateLimitCounters();
+    const pruned = await pruneRateLimitCountersInSnapshot(db, at);
 
     if (pruned > 0) {
       logEvent("info", "status.rate-limit-counters-pruned", { rows: pruned });
@@ -363,4 +509,16 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
   } catch (error) {
     logEvent("error", "status.rate-limit-prune-failed", { error });
   }
+}
+
+async function pruneRateLimitCountersInSnapshot(
+  db: Pick<Client, "execute">,
+  at: string,
+): Promise<number> {
+  const cutoff = new Date(Date.parse(at) - RATE_LIMIT_COUNTER_RETENTION_MS).toISOString();
+  const result = await db.execute({
+    args: [cutoff],
+    sql: "delete from rate_limit_counters where window_start < ?",
+  });
+  return result.rowsAffected;
 }

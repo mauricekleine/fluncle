@@ -10,11 +10,11 @@
 // their footage does). Same ordering as the stories feed, so it lines up.
 
 import { type FeedListPage } from "@fluncle/contracts";
+import { HOME_PAGE_SIZE } from "@/lib/home";
 import { getLiveState, type LiveState } from "@/lib/server/live";
 import { listTracks, toPublicTrackListItem } from "@/lib/server/tracks";
 
-/** How many feed rows the home loader server-renders — page one of the infinite feed. */
-export const HOME_PAGE_SIZE = 10;
+export { HOME_PAGE_SIZE } from "@/lib/home";
 
 /**
  * The home page's loaded data: the merged first feed page (findings + mixtapes, with its

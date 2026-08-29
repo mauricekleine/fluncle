@@ -26,6 +26,13 @@ export type DeviceDbSqliteColumn = {
   type: string;
 };
 
+export type DeviceDbClosureCheck = {
+  edge: string;
+  sql: string;
+};
+
+export const DEVICE_SELECTED_TRACKS_TABLE = "device_selected_track_ids";
+
 export const DEVICE_DB_PRIMARY_KEYS: Record<DeviceSourceTable, readonly string[]> = {
   albums: ["id"],
   artists: ["id"],
@@ -124,57 +131,59 @@ export function createDeviceTableSql(
   return `CREATE TABLE main.${quoteDeviceDbIdentifier(table)} (${definitions.join(", ")})`;
 }
 
-function selectedTracksCte(
+function selectedTracksWhere(cut: DeviceDbCut, recEligibleWhere: string): string {
+  if (cut === "certified") {
+    return "f.track_id is not null";
+  }
+  if (cut === "anchored") {
+    return `f.track_id is not null or (${recEligibleWhere})`;
+  }
+
+  return `f.track_id is not null
+    or (t.dismissed_at is null and t.duplicate_of_track_id is null)`;
+}
+
+/**
+ * Build the anchored-ID relation once. Every corpus copy query below reads this TEMP table and
+ * therefore cannot accidentally re-run the growing recommendation-eligibility scan.
+ */
+export function materializeSelectedTrackIdsSql(
   cut: DeviceDbCut,
   recEligibleWhere: string,
-  sourceSchema: "main" | "source",
-): string {
-  const where =
-    cut === "certified"
-      ? "f.track_id is not null"
-      : cut === "anchored"
-        ? `f.track_id is not null or (${recEligibleWhere})`
-        : `f.track_id is not null
-           or (t.dismissed_at is null and t.duplicate_of_track_id is null)`;
+  sourceSchema: "main" | "source" = "source",
+): readonly string[] {
   const schema = quoteDeviceDbIdentifier(sourceSchema);
+  const selected = quoteDeviceDbIdentifier(DEVICE_SELECTED_TRACKS_TABLE);
 
-  // `emb` is joined for the SELECTION only, and never reaches the output: the device schema is
-  // built from the `DEVICE_DB_COLUMNS` allowlist, which has no `track_embeddings` entry at all, so
-  // the vector cannot ship even though the anchored cut's predicate reads its presence. That is
-  // the same boundary `embedding_blob` sat behind when it was a `tracks` column — a cut input, not
-  // a payload — and the split makes it structural rather than a column left off a list.
-  return `WITH selected_tracks(track_id) AS (
-    SELECT t.track_id
-    FROM ${schema}.${quoteDeviceDbIdentifier("tracks")} AS t
-    LEFT JOIN ${schema}.${quoteDeviceDbIdentifier("findings")} AS f ON f.track_id = t.track_id
-    LEFT JOIN ${schema}.${quoteDeviceDbIdentifier("track_embeddings")} AS emb
-      ON emb.track_id = t.track_id
-    WHERE ${where}
-  )`;
+  return [
+    `CREATE TEMP TABLE ${selected} (
+      ${quoteDeviceDbIdentifier("track_id")} TEXT NOT NULL PRIMARY KEY
+    ) WITHOUT ROWID`,
+    `INSERT INTO temp.${selected} (${quoteDeviceDbIdentifier("track_id")})
+      SELECT t.${quoteDeviceDbIdentifier("track_id")}
+      FROM ${schema}.${quoteDeviceDbIdentifier("tracks")} AS t
+      LEFT JOIN ${schema}.${quoteDeviceDbIdentifier("findings")} AS f
+        ON f.track_id = t.track_id
+      LEFT JOIN ${schema}.${quoteDeviceDbIdentifier("track_embeddings")} AS emb
+        ON emb.track_id = t.track_id
+      WHERE ${selectedTracksWhere(cut, recEligibleWhere)}
+      ORDER BY t.${quoteDeviceDbIdentifier("track_id")}`,
+  ];
 }
 
 function selectedSourceSql(
   table: DeviceSourceTable,
   cut: DeviceDbCut,
-  recEligibleWhere: string,
   sourceSchema: "main" | "source",
 ): string {
-  const cte = selectedTracksCte(cut, recEligibleWhere, sourceSchema);
   const schema = quoteDeviceDbIdentifier(sourceSchema);
   const sourceTable = `${schema}.${quoteDeviceDbIdentifier(table)}`;
+  const selected = `temp.${quoteDeviceDbIdentifier(DEVICE_SELECTED_TRACKS_TABLE)}`;
 
-  if (table === "tracks") {
-    return `${cte}
-      SELECT source_row.*
+  if (table === "tracks" || table === "findings" || table === "track_artists") {
+    return `SELECT source_row.*
       FROM ${sourceTable} AS source_row
-      JOIN selected_tracks selected ON selected.track_id = source_row.track_id`;
-  }
-
-  if (table === "findings" || table === "track_artists") {
-    return `${cte}
-      SELECT source_row.*
-      FROM ${sourceTable} AS source_row
-      JOIN selected_tracks selected ON selected.track_id = source_row.track_id`;
+      JOIN ${selected} AS selected ON selected.track_id = source_row.track_id`;
   }
 
   if (cut === "full") {
@@ -182,33 +191,47 @@ function selectedSourceSql(
   }
 
   if (table === "artists") {
-    return `${cte}
-      SELECT source_row.*
+    return `SELECT source_row.*
       FROM ${sourceTable} AS source_row
       WHERE source_row.id IN (
         SELECT track_artist.artist_id
         FROM ${schema}.${quoteDeviceDbIdentifier("track_artists")} AS track_artist
-        JOIN selected_tracks selected ON selected.track_id = track_artist.track_id
+        JOIN ${selected} AS selected ON selected.track_id = track_artist.track_id
       )`;
   }
 
-  const pointer = table === "labels" ? "label_id" : "album_id";
+  if (table === "labels") {
+    // The parent pointer ships, so its complete ancestry must ship as well. UNION (not UNION ALL)
+    // both deduplicates shared ancestry and terminates a malformed parent cycle deterministically.
+    return `WITH RECURSIVE selected_labels(id) AS (
+        SELECT track.label_id
+        FROM ${schema}.${quoteDeviceDbIdentifier("tracks")} AS track
+        JOIN ${selected} AS selected ON selected.track_id = track.track_id
+        WHERE track.label_id IS NOT NULL
+        UNION
+        SELECT label.parent_label_id
+        FROM ${schema}.${quoteDeviceDbIdentifier("labels")} AS label
+        JOIN selected_labels AS child ON child.id = label.id
+        WHERE label.parent_label_id IS NOT NULL
+      )
+      SELECT source_row.*
+      FROM ${sourceTable} AS source_row
+      JOIN selected_labels AS selected_label ON selected_label.id = source_row.id`;
+  }
 
-  return `${cte}
-    SELECT source_row.*
+  return `SELECT source_row.*
     FROM ${sourceTable} AS source_row
     WHERE source_row.id IN (
-      SELECT track.${quoteDeviceDbIdentifier(pointer)}
+      SELECT track.album_id
       FROM ${schema}.${quoteDeviceDbIdentifier("tracks")} AS track
-      JOIN selected_tracks selected ON selected.track_id = track.track_id
-      WHERE track.${quoteDeviceDbIdentifier(pointer)} IS NOT NULL
+      JOIN ${selected} AS selected ON selected.track_id = track.track_id
+      WHERE track.album_id IS NOT NULL
     )`;
 }
 
 export function selectDeviceRowsSql(
   table: DeviceSourceTable,
   cut: DeviceDbCut,
-  recEligibleWhere: string,
   sourceSchema: "main" | "source" = "source",
 ): string {
   const projection = DEVICE_DB_COLUMNS[table]
@@ -217,7 +240,7 @@ export function selectDeviceRowsSql(
   const order = DEVICE_DB_PRIMARY_KEYS[table]
     .map((column) => `source_row.${quoteDeviceDbIdentifier(column)}`)
     .join(", ");
-  const selectedSql = selectedSourceSql(table, cut, recEligibleWhere, sourceSchema).replace(
+  const selectedSql = selectedSourceSql(table, cut, sourceSchema).replace(
     "SELECT source_row.*",
     `SELECT ${projection}`,
   );
@@ -226,15 +249,56 @@ export function selectDeviceRowsSql(
     ORDER BY ${order}`;
 }
 
-export function insertDeviceTableSql(
-  table: DeviceSourceTable,
-  cut: DeviceDbCut,
-  recEligibleWhere: string,
-): string {
+export function insertDeviceTableSql(table: DeviceSourceTable, cut: DeviceDbCut): string {
   const columns = DEVICE_DB_COLUMNS[table];
 
   return `INSERT INTO main.${quoteDeviceDbIdentifier(table)} (${columns
     .map(quoteDeviceDbIdentifier)
     .join(", ")})
-    ${selectDeviceRowsSql(table, cut, recEligibleWhere)}`;
+    ${selectDeviceRowsSql(table, cut)}`;
+}
+
+/** Every pointer copied into the public artifact has a matching copied destination row. */
+export function deviceDbClosureChecksSql(schemaName = "main"): readonly DeviceDbClosureCheck[] {
+  const schema = quoteDeviceDbIdentifier(schemaName);
+  const table = (name: DeviceSourceTable) => `${schema}.${quoteDeviceDbIdentifier(name)}`;
+
+  return [
+    {
+      edge: "findings.track_id -> tracks.track_id",
+      sql: `SELECT count(*) AS count FROM ${table("findings")} AS child
+        LEFT JOIN ${table("tracks")} AS parent ON parent.track_id = child.track_id
+        WHERE parent.track_id IS NULL`,
+    },
+    {
+      edge: "track_artists.track_id -> tracks.track_id",
+      sql: `SELECT count(*) AS count FROM ${table("track_artists")} AS child
+        LEFT JOIN ${table("tracks")} AS parent ON parent.track_id = child.track_id
+        WHERE parent.track_id IS NULL`,
+    },
+    {
+      edge: "track_artists.artist_id -> artists.id",
+      sql: `SELECT count(*) AS count FROM ${table("track_artists")} AS child
+        LEFT JOIN ${table("artists")} AS parent ON parent.id = child.artist_id
+        WHERE parent.id IS NULL`,
+    },
+    {
+      edge: "tracks.album_id -> albums.id",
+      sql: `SELECT count(*) AS count FROM ${table("tracks")} AS child
+        LEFT JOIN ${table("albums")} AS parent ON parent.id = child.album_id
+        WHERE child.album_id IS NOT NULL AND parent.id IS NULL`,
+    },
+    {
+      edge: "tracks.label_id -> labels.id",
+      sql: `SELECT count(*) AS count FROM ${table("tracks")} AS child
+        LEFT JOIN ${table("labels")} AS parent ON parent.id = child.label_id
+        WHERE child.label_id IS NOT NULL AND parent.id IS NULL`,
+    },
+    {
+      edge: "labels.parent_label_id -> labels.id",
+      sql: `SELECT count(*) AS count FROM ${table("labels")} AS child
+        LEFT JOIN ${table("labels")} AS parent ON parent.id = child.parent_label_id
+        WHERE child.parent_label_id IS NOT NULL AND parent.id IS NULL`,
+    },
+  ];
 }

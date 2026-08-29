@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-device-mirror — host trigger for the in-place shared device-replica mirror
+Description=fluncle-device-mirror — host trigger for the atomic shared device-replica publisher
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/device-mirror-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
@@ -11,11 +11,12 @@ OnFailure=fluncle-sweep-failure@%n.service
 Type=oneshot
 # Root drives Docker; the unprivileged hermes user runs the baked wrapper and reads the shared
 # 0600 secrets file. That file supplies read-only source credentials and write-scoped target
-# credentials. The script mutates the target in place and self-writes its ledger/status marker.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/device-mirror.sh
-# A complete ~20k-row source/target diff plus bounded parameterized write batches. Keep the
-# ceiling below the hourly cadence; the script's own atomic lock is the second overlap guard.
-TimeoutStartSec=3300
+# credentials. The script keeps its embedded replica/generation under HOME and self-writes its
+# ledger/status marker; the target's live mutation is one transaction after staged validation.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-device-mirror -- bash /opt/hermes-scripts/device-mirror.sh
+# One embedded-replica sync, a local derivation, bounded staging upload, and one target cutover.
+# Keep the ceiling below the hourly cadence; the script's own atomic lock is the second guard.
+TimeoutStartSec=3430
 NoNewPrivileges=true
 ProtectControlGroups=true
 ProtectKernelTunables=true

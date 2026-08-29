@@ -12,6 +12,9 @@
 import { $ } from "bun";
 import { createClient, type Client } from "@libsql/client/web";
 
+/** The pruning helper performs its remote maintenance work serially. */
+const CATALOGUE_PRUNE_DB_CONCURRENCY = 1;
+
 export async function getDb(): Promise<Client> {
   let url = process.env.TURSO_DATABASE_URL;
   let authToken = process.env.TURSO_AUTH_TOKEN;
@@ -29,7 +32,11 @@ export async function getDb(): Promise<Client> {
       "No prod creds. Export TURSO_DATABASE_URL/TURSO_AUTH_TOKEN, or set FLUNCLE_TURSO_OP_ITEM to the 1Password item (op must be unlocked).",
     );
   }
-  return createClient(authToken ? { authToken, url } : { url });
+  return createClient(
+    authToken
+      ? { authToken, concurrency: CATALOGUE_PRUNE_DB_CONCURRENCY, url }
+      : { concurrency: CATALOGUE_PRUNE_DB_CONCURRENCY, url },
+  );
 }
 
 export const slugify = (s: string | null | undefined): string =>

@@ -7,9 +7,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execute = vi.fn();
+const projectionMaintenance = (sql: string) =>
+  sql.includes("insert into due_work") ||
+  sql.includes("public_aggregate_state") ||
+  sql.includes("artist_qualification_state") ||
+  sql.includes("projection_repairs");
 
 vi.mock("./db", () => ({
-  getDb: async () => ({ execute }),
+  getDb: async () => ({
+    batch: (statements: { args?: unknown[]; sql: string }[]) =>
+      Promise.all(
+        statements.map((statement) =>
+          projectionMaintenance(statement.sql)
+            ? Promise.resolve({ rows: [], rowsAffected: 1 })
+            : execute(statement),
+        ),
+      ),
+    execute,
+  }),
   typedRows: (rows: unknown) => rows,
 }));
 

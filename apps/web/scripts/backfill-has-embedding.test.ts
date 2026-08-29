@@ -3,6 +3,11 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack } from "../src/lib/server/integration-db";
+import {
+  initializePublicProjectionTestState,
+  readPublicProjectionMaintenanceSnapshot,
+  settlePublicProjectionTestState,
+} from "./lib/public-projection-test-state";
 import { backfillHasEmbedding } from "./backfill-has-embedding";
 
 // The `has_embedding` backfill (docs/db-scale-backlog Wave 2 #4, built for #7): the migration adds
@@ -28,6 +33,7 @@ async function mirror(trackId: string): Promise<number> {
 
 beforeEach(async () => {
   db = await createIntegrationDb();
+  await initializePublicProjectionTestState(db);
   await seedCatalogueTrack(db, { title: "Embedded", trackId: "emb000000000000000000a" });
   await seedCatalogueTrack(db, { title: "Bare", trackId: "bare00000000000000000a" });
   // Recreate the pre-backfill state the migration leaves behind: a row that HAS a vector but whose
@@ -50,15 +56,49 @@ describe("backfillHasEmbedding", () => {
     expect(flipped).toBe(1);
     expect(await mirror("emb000000000000000000a")).toBe(1);
     expect(await mirror("bare00000000000000000a")).toBe(0);
+    const markers = await db.execute({
+      sql: `select subject_id from due_work where work_kind = 'source-repair'
+            order by subject_id`,
+    });
+    expect(markers.rows.map((row) => row.subject_id)).toEqual([
+      "@catalogue-rank-corpus",
+      "emb000000000000000000a",
+    ]);
   });
 
   it("is idempotent — a second run flips nothing and changes no state", async () => {
     await backfillHasEmbedding(db);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual({
+      aggregate: { projectionEpoch: 0, ready: false, sourceEpoch: 1 },
+      artists: { projectionEpoch: 0, ready: false, sourceEpoch: 1 },
+      repairs: [
+        {
+          projection: "artist_qualification",
+          sourceEpoch: 1,
+          subjectId: "emb000000000000000000a",
+          subjectType: "track",
+        },
+        {
+          projection: "public_aggregates",
+          sourceEpoch: 1,
+          subjectId: "emb000000000000000000a",
+          subjectType: "track",
+        },
+      ],
+    });
+    await settlePublicProjectionTestState(db);
+    const ready = await readPublicProjectionMaintenanceSnapshot(db);
+    expect(ready).toEqual({
+      aggregate: { projectionEpoch: 1, ready: true, sourceEpoch: 1 },
+      artists: { projectionEpoch: 1, ready: true, sourceEpoch: 1 },
+      repairs: [],
+    });
     const { flipped } = await backfillHasEmbedding(db);
 
     expect(flipped).toBe(0);
     expect(await mirror("emb000000000000000000a")).toBe(1);
     expect(await mirror("bare00000000000000000a")).toBe(0);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual(ready);
   });
 
   it("corrects drift in BOTH directions in one pass", async () => {

@@ -38,6 +38,7 @@ import {
   findJsonSummary,
   foldStrain,
   formatStreakDuration,
+  healthSnapshotReceiptMetadata,
   isStrained,
   judgeCron,
   MAX_TIMER_JITTER_MS,
@@ -47,6 +48,7 @@ import {
   normalizeState,
   normalizeStrain,
   probeSweepStrain,
+  postSnapshot,
   serializeState,
   type ServiceState,
   STDERR_DELIMITER,
@@ -116,6 +118,132 @@ describe("findJsonSummary", () => {
   test("a JSON array or a bare human line is not a summary", () => {
     expect(findJsonSummary(marker("[1,2,3]\n"))).toBeNull();
     expect(findJsonSummary(marker("backed up fine\n"))).toBeNull();
+  });
+});
+
+describe("receipt-backed health caller", () => {
+  const at = "2026-08-26T14:00:00+02:00";
+  const checks = [
+    {
+      latencyMs: 12,
+      message: "  ready   now ",
+      service: " web ",
+      status: "ok" as const,
+      transitioned: false,
+    },
+  ];
+  const config = {
+    token: "test-token",
+    wait: async () => {},
+    workerUrl: "https://example.invalid",
+  };
+  const outcomeResponse = (outcome: string) =>
+    new Response(JSON.stringify({ ok: true, receipt: { outcome } }), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+
+  test("derives the same canonical UTC digest and stable producer key as the server", async () => {
+    const metadata = await healthSnapshotReceiptMetadata(at, checks);
+
+    expect(metadata.at).toBe("2026-08-26T12:00:00.000Z");
+    expect(metadata.checks[0]).toMatchObject({ message: "ready now", service: "web" });
+    expect(metadata.operationKey).toBe(
+      "health.snapshot:hermes-healthcheck:2026-08-26T12:00:00.000Z",
+    );
+    expect(metadata.requestDigest).toBe(
+      "6fd0cc06222383cbf4619c7892fff5d4b8c3dc1d864be04dc9d7149c19658807",
+    );
+    expect(await healthSnapshotReceiptMetadata(at, checks)).toEqual(metadata);
+  });
+
+  test("treats a committed reconciliation after timeout as success without replay", async () => {
+    const calls: RequestInit[] = [];
+    const urls: string[] = [];
+    const transport = async (url: string, init: RequestInit) => {
+      urls.push(url);
+      calls.push(init);
+      if (calls.length === 1) {
+        throw new Error("response lost");
+      }
+      return outcomeResponse("committed");
+    };
+
+    expect(await postSnapshot(at, checks, transport, config)).toBe(true);
+    expect(urls).toEqual([
+      "https://example.invalid/api/v1/admin/health",
+      "https://example.invalid/api/v1/admin/operation-receipts/resolve",
+    ]);
+    expect(calls.map((call) => call.method)).toEqual(["POST", "POST"]);
+  });
+
+  test("reconciles an HTTP 524 response before deciding whether to replay", async () => {
+    let calls = 0;
+    const transport = async () => {
+      calls += 1;
+      return calls === 1 ? new Response(null, { status: 524 }) : outcomeResponse("committed");
+    };
+
+    expect(await postSnapshot(at, checks, transport, config)).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("treats a client rejection as definitive without reconciliation", async () => {
+    let calls = 0;
+    const transport = async () => {
+      calls += 1;
+      return new Response(null, { status: 409 });
+    };
+
+    expect(await postSnapshot(at, checks, transport, config)).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  test("safely-retryable reconciliation is the explicit replay authorization", async () => {
+    let calls = 0;
+    const transport = async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("response lost");
+      }
+      return calls === 2
+        ? outcomeResponse("safely-retryable")
+        : new Response(null, { status: 204 });
+    };
+
+    expect(await postSnapshot(at, checks, transport, config)).toBe(true);
+    expect(calls).toBe(3);
+  });
+
+  test.each(["conflict", "cutover-disabled", "rejected", "in-progress", "not-found"])(
+    "%s reconciliation never replays",
+    async (outcome) => {
+      let calls = 0;
+      const transport = async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("response lost");
+        }
+        return outcomeResponse(outcome);
+      };
+
+      expect(await postSnapshot(at, checks, transport, config)).toBe(false);
+      expect(calls).toBe(2);
+    },
+  );
+
+  test("reconciliation lookup failure never replays", async () => {
+    let calls = 0;
+    const transport = async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("response lost");
+      }
+      return new Response(null, { status: 503 });
+    };
+
+    expect(await postSnapshot(at, checks, transport, config)).toBe(false);
+    expect(calls).toBe(2);
   });
 });
 
@@ -465,7 +593,7 @@ const REAL_PROBLEMS: readonly { count: number; line: string }[] = [
   { count: 50, line: "[fluncle-live] poll failed, retrying once: The operation was aborted." },
   {
     count: 49,
-    line: "[fluncle-healthcheck] record_health POST attempt 1/3 failed (The operation was aborted.); retrying",
+    line: "[fluncle-healthcheck] record_health reconciliation unavailable; snapshot was not replayed",
   },
 ];
 

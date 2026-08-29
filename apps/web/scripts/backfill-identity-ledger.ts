@@ -39,9 +39,11 @@
  * apps/web/.dev.vars), exactly like `db:migrate` and its sibling backfills.
  */
 import { type Client, createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "../src/lib/server/due-work";
 
 export type IdentityLedgerBackfillResult = {
   /** Rows given a Discogs attempt record because they already carry a Discogs id. */
@@ -62,30 +64,57 @@ export async function backfillIdentityLedger(
 ): Promise<IdentityLedgerBackfillResult> {
   // A non-empty ISRC is proof an ISRC path concluded for this row. `findings.added_at` is a PK
   // lookup on the certification half; a catalogue row has no finding, so `coalesce` falls to now.
-  const isrc = await client.execute({
-    args: [now],
-    sql: `update tracks
-          set isrc_attempted_at = coalesce(
-                (select f.added_at from findings f where f.track_id = tracks.track_id),
-                ?)
-          where isrc is not null and trim(isrc) <> '' and isrc_attempted_at is null`,
-  });
+  const isrcResults = await client.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "track",
+        {
+          sql: `select track_id as subject_id from tracks
+                where isrc is not null and trim(isrc) <> '' and isrc_attempted_at is null`,
+        },
+        { producer: "backfill-identity-isrc-attempt" },
+      ),
+      {
+        args: [now],
+        sql: `update tracks
+              set isrc_attempted_at = coalesce(
+                    (select f.added_at from findings f where f.track_id = tracks.track_id),
+                    ?)
+              where isrc is not null and trim(isrc) <> '' and isrc_attempted_at is null`,
+      },
+    ],
+    "write",
+  );
 
   // Same argument for Discogs: an id present means the look landed, so the row is both attempted
   // AND done. `attempts` goes to 1 — a floor, and the only count history can support.
-  const discogs = await client.execute({
-    args: [now, now],
-    sql: `update tracks
-          set backfill_discogs_attempted_at = coalesce(
-                (select f.added_at from findings f where f.track_id = tracks.track_id),
-                ?),
-              backfill_discogs_done_at = coalesce(
-                (select f.added_at from findings f where f.track_id = tracks.track_id),
-                ?),
-              backfill_discogs_attempts = 1
-          where (in_release_id is not null or in_master_id is not null)
-            and backfill_discogs_attempted_at is null`,
-  });
+  const discogsResults = await client.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "track",
+        {
+          sql: `select track_id as subject_id from tracks
+                where (in_release_id is not null or in_master_id is not null)
+                  and backfill_discogs_attempted_at is null`,
+        },
+        { producer: "backfill-identity-discogs-attempt" },
+      ),
+      {
+        args: [now, now],
+        sql: `update tracks
+              set backfill_discogs_attempted_at = coalesce(
+                    (select f.added_at from findings f where f.track_id = tracks.track_id),
+                    ?),
+                  backfill_discogs_done_at = coalesce(
+                    (select f.added_at from findings f where f.track_id = tracks.track_id),
+                    ?),
+                  backfill_discogs_attempts = 1
+              where (in_release_id is not null or in_master_id is not null)
+                and backfill_discogs_attempted_at is null`,
+      },
+    ],
+    "write",
+  );
 
   // ── THE PUBLISH-BORN ANCHOR PROVENANCE (RFC dnb-identity-graph, Unit 1 item 4) ─────────────
   // Publish now stamps `source`/`verified_by`/`anchored_at` = 'publish' as it mints, but every
@@ -126,8 +155,8 @@ export async function backfillIdentityLedger(
   });
 
   return {
-    discogsStamped: discogs.rowsAffected,
-    isrcStamped: isrc.rowsAffected,
+    discogsStamped: discogsResults.at(-1)?.rowsAffected ?? 0,
+    isrcStamped: isrcResults.at(-1)?.rowsAffected ?? 0,
     publishAnchorsStamped: publishAnchors.rowsAffected,
   };
 }
@@ -144,7 +173,11 @@ async function main(): Promise<void> {
   }
 
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
   const result = await backfillIdentityLedger(client);
 
   console.log(

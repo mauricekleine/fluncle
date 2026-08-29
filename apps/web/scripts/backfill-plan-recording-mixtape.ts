@@ -43,6 +43,7 @@
  * (same loading as drizzle.config.ts).
  */
 import { type Client, createClient, type InArgs } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
@@ -428,7 +429,11 @@ async function main(): Promise<void> {
   }
 
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
   const result = await backfillPlanRecordingMixtape(client);
 
   console.log(

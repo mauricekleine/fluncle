@@ -16,6 +16,9 @@
 
 import { fetchArtistImages } from "./spotify";
 import { getDb, typedRow, typedRows } from "./db";
+import { batchDueWorkSourceMutation } from "./due-work";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 
 // Keep the DB page bounded even though the per-id call meter normally pauses a
 // fresh-window pass after at most 24 lookups.
@@ -25,6 +28,30 @@ type BackfillRow = {
   id: string;
   spotify_artist_id: string;
 };
+
+function artistImageContinuation(
+  cursor: string | undefined,
+): { sortKey: string; subjectId: string } | undefined {
+  if (cursor === undefined) {
+    return undefined;
+  }
+
+  return {
+    sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: cursor }]),
+    subjectId: cursor,
+  };
+}
+
+function restoreArtistImageOrder(
+  rows: BackfillRow[],
+  subjectIds: readonly string[],
+): BackfillRow[] {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return subjectIds.flatMap((id) => {
+    const row = byId.get(id);
+    return row === undefined ? [] : [row];
+  });
+}
 
 export type ArtistImagesBackfillResult = {
   budgetLimited: boolean;
@@ -49,28 +76,50 @@ export async function backfillArtistImages(
 ): Promise<ArtistImagesBackfillResult> {
   const db = await getDb();
   const batchLimit = Math.min(Math.max(1, limit), MAX_BATCH);
+  const dueCutoverEnabled = await isDueWorkCutoverEnabled();
 
-  // The eligible page: pending artists still missing an image that carry a Spotify
-  // id to look up, cursor-paged by id (text-comparable, stable across passes).
-  const rows = typedRows<BackfillRow>(
-    (
-      await db.execute({
-        args: cursor ? [cursor, batchLimit] : [batchLimit],
-        sql: cursor
-          ? `select id, spotify_artist_id from artists
-             where image_url is null
-               and spotify_artist_id is not null
-               and image_state = 'pending'
-               and id > ?
-             order by id asc limit ?`
-          : `select id, spotify_artist_id from artists
-             where image_url is null
-               and spotify_artist_id is not null
-               and image_state = 'pending'
-             order by id asc limit ?`,
-      })
-    ).rows,
-  );
+  let rows: BackfillRow[];
+
+  if (dueCutoverEnabled) {
+    const page = await readPromotedDueWorkPage(db, "artist.image", {
+      continuation: artistImageContinuation(cursor),
+      limit: batchLimit,
+    });
+
+    if (page.subjectIds.length === 0) {
+      rows = [];
+    } else {
+      const placeholders = page.subjectIds.map(() => "?").join(", ");
+      const result = await db.execute({
+        args: page.subjectIds,
+        sql: `select id, spotify_artist_id from artists
+              where id in (${placeholders})`,
+      });
+      rows = restoreArtistImageOrder(typedRows<BackfillRow>(result.rows), page.subjectIds);
+    }
+  } else {
+    // GOAL H CONTRACTION: this is the unchanged source-table selector retained while Goal C's
+    // default-off cutover proves the due_work projection.
+    rows = typedRows<BackfillRow>(
+      (
+        await db.execute({
+          args: cursor ? [cursor, batchLimit] : [batchLimit],
+          sql: cursor
+            ? `select id, spotify_artist_id from artists
+               where image_url is null
+                 and spotify_artist_id is not null
+                 and image_state = 'pending'
+                 and id > ?
+               order by id asc limit ?`
+            : `select id, spotify_artist_id from artists
+               where image_url is null
+                 and spotify_artist_id is not null
+                 and image_state = 'pending'
+               order by id asc limit ?`,
+        })
+      ).rows,
+    );
+  }
 
   const filled: string[] = [];
   const skipped: string[] = [];
@@ -100,12 +149,19 @@ export async function backfillArtistImages(
         if (url) {
           // Keep image_state pending: the downstream owned-master sweep still has to
           // ingest this Spotify source into Fluncle's R2.
-          await db.execute({
-            args: [url, nowIso, row.id],
-            sql: `update artists
-                  set image_url = ?, updated_at = ?
-                  where id = ? and image_url is null and image_state = 'pending'`,
-          });
+          await batchDueWorkSourceMutation(
+            db,
+            [
+              {
+                args: [url, nowIso, row.id],
+                sql: `update artists
+                      set image_url = ?, updated_at = ?
+                      where id = ? and image_url is null and image_state = 'pending'`,
+              },
+            ],
+            [{ subjectId: row.id, subjectType: "artist" }],
+            { onlyIfLastSourceStatementChanged: true, producer: "artist-image-backfill-fill" },
+          );
           filled.push(row.id);
           continue;
         }
@@ -113,12 +169,19 @@ export async function backfillArtistImages(
         if (result.missingIds.has(row.spotify_artist_id)) {
           // A matching 200 response with no usable image is a terminal verdict. It
           // also removes the row from the owned-master sweep's pending source queue.
-          await db.execute({
-            args: [nowIso, row.id],
-            sql: `update artists
-                  set image_state = 'none', image_attempted_at = ?, image_failures = 0
-                  where id = ? and image_url is null and image_state = 'pending'`,
-          });
+          await batchDueWorkSourceMutation(
+            db,
+            [
+              {
+                args: [nowIso, row.id],
+                sql: `update artists
+                      set image_state = 'none', image_attempted_at = ?, image_failures = 0
+                      where id = ? and image_url is null and image_state = 'pending'`,
+              },
+            ],
+            [{ subjectId: row.id, subjectType: "artist" }],
+            { onlyIfLastSourceStatementChanged: true, producer: "artist-image-backfill-none" },
+          );
           skipped.push(row.id);
           continue;
         }
@@ -138,6 +201,9 @@ export async function backfillArtistImages(
     }
   }
 
+  // `queueDepth` is an exact public/CLI contract, so it is the explicit exception to replacing
+  // corpus counts with projection probes during Goal C. Producer retirement is not in this slice;
+  // a projection count or page sentinel would report stale/inexact work after the writes above.
   const queueDepthRow = typedRow<{ queue_depth: number }>(
     (
       await db.execute({

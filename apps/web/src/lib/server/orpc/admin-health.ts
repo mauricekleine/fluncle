@@ -3,51 +3,181 @@
 //
 //   - `record_health` — POST /admin/health on `adminAuth` ONLY (no
 //     `operatorGuard`): agent tier, like `context_track`/`note_track`. The box's
-//     status cron POSTs one snapshot; the handler persists it via
-//     `recordHealthSnapshot` (upsert each `service_status` row + append the
-//     transitioned `status_events`, then prune the ledger) and acks `{ ok: true }`.
+//     health producers POST one snapshot. Default-off preserves the legacy writer;
+//     flag-on requires producer-scoped receipt metadata and commits the snapshot,
+//     pruning, and terminal receipt together before acknowledging it.
 //
 // The contract's Zod input has already validated the shape (an ISO `at` string +
 // a `checks` array of `{ service, status, message, latencyMs, transitioned }`),
-// so the handler trusts the types and only normalizes the free-text `message`
-// (trim + cap) to keep the public page tidy — it never re-derives the snapshot.
+// The handler canonicalizes the timestamp and check fields before verifying the
+// caller's key and digest or persisting any effect.
 
 import { type InferContractRouterInputs } from "@orpc/contract";
+import { type Client } from "@libsql/client";
 import { type contract } from "@fluncle/contracts/orpc";
-import { type HealthCheckInput, recordHealthSnapshot } from "../status";
+import { getDb } from "../db";
+import { getHealthSnapshotReceiptCutoverDispositionFor } from "../health-receipt-cutover";
 import { adminAuth } from "../orpc-auth";
-import { apiFault, type Implementer } from "./_shared";
+import { ApiError } from "../spotify";
+import {
+  healthSnapshotOperationKey,
+  healthSnapshotRequestDigest,
+  type HealthCheckInput,
+  normalizeHealthSnapshot,
+  recordHealthSnapshotFor,
+  recordHealthSnapshotWithReceiptFor,
+} from "../status";
+import { type Implementer, toFault } from "./_shared";
 
 type RecordHealthInput = InferContractRouterInputs<typeof contract>["record_health"];
 type RawCheck = RecordHealthInput["checks"][number];
 
-// Keep a message short + single-line for the public grid; a probe should already
-// send something clean, this is the belt-and-braces cap.
-const MESSAGE_MAX = 160;
-
-/** Trim, collapse whitespace, and cap a probe message; an empty result is null. */
-function cleanMessage(message: string | null): string | null {
-  if (message === null) {
-    return null;
-  }
-
-  const collapsed = message.replace(/\s+/g, " ").trim();
-
-  if (collapsed.length === 0) {
-    return null;
-  }
-
-  return collapsed.length > MESSAGE_MAX ? `${collapsed.slice(0, MESSAGE_MAX - 1)}…` : collapsed;
-}
-
 function normalizeCheck(check: RawCheck): HealthCheckInput {
   return {
     latencyMs: check.latencyMs,
-    message: cleanMessage(check.message),
-    service: check.service.trim(),
+    message: check.message,
+    service: check.service,
     status: check.status,
     transitioned: check.transitioned,
   };
+}
+
+/** Execute the handler's cutover decision against an injected real libSQL client. */
+export async function recordHealthSnapshotRequestFor(
+  db: Client,
+  input: RecordHealthInput,
+): Promise<void> {
+  const snapshot = normalizeHealthSnapshot(input.at, input.checks.map(normalizeCheck));
+  const cutover = await getHealthSnapshotReceiptCutoverDispositionFor(db);
+  const metadata = [input.operationKey, input.producer, input.requestDigest];
+  const metadataCount = metadata.filter((value) => value !== undefined).length;
+
+  if (metadataCount === 0) {
+    if (cutover === "enabled") {
+      throw new ApiError(
+        "operation_receipt_required",
+        "Receipt metadata is required for health snapshot writes.",
+        400,
+      );
+    }
+
+    if (cutover === "unavailable") {
+      throw new ApiError(
+        "operation_receipt_cutover_unavailable",
+        "The health snapshot write path could not be selected safely.",
+        503,
+      );
+    }
+
+    await recordHealthSnapshotFor(db, snapshot.at, snapshot.checks);
+    return;
+  }
+
+  if (
+    metadataCount === 1 &&
+    input.operationKey !== undefined &&
+    input.producer === undefined &&
+    input.requestDigest === undefined
+  ) {
+    if (cutover === "enabled") {
+      throw new ApiError(
+        "operation_receipt_required",
+        "Producer and request digest are required when receipt-backed writes are enabled.",
+        400,
+      );
+    }
+
+    if (cutover === "unavailable") {
+      throw new ApiError(
+        "operation_receipt_cutover_unavailable",
+        "The health snapshot write path could not be selected safely.",
+        503,
+      );
+    }
+
+    await recordHealthSnapshotFor(db, snapshot.at, snapshot.checks);
+    return;
+  }
+
+  if (
+    input.operationKey === undefined ||
+    input.producer === undefined ||
+    input.requestDigest === undefined
+  ) {
+    throw new ApiError(
+      "operation_receipt_incomplete",
+      "Operation key, producer, and request digest are required together.",
+      400,
+    );
+  }
+
+  const expectedOperationKey = healthSnapshotOperationKey(input.producer, snapshot.at);
+  if (input.operationKey !== expectedOperationKey) {
+    throw new ApiError(
+      "operation_key_mismatch",
+      "The operation key does not identify this health snapshot.",
+      409,
+    );
+  }
+
+  const expectedRequestDigest = await healthSnapshotRequestDigest(
+    input.producer,
+    snapshot.at,
+    snapshot.checks,
+  );
+  if (input.requestDigest !== expectedRequestDigest) {
+    throw new ApiError(
+      "operation_receipt_digest_mismatch",
+      "The request digest does not identify this health snapshot.",
+      409,
+    );
+  }
+
+  if (cutover === "unavailable") {
+    throw new ApiError(
+      "operation_receipt_cutover_unavailable",
+      "The health snapshot write path could not be selected safely.",
+      503,
+    );
+  }
+
+  if (cutover === "disabled") {
+    await recordHealthSnapshotFor(db, snapshot.at, snapshot.checks);
+    return;
+  }
+
+  const outcome = await recordHealthSnapshotWithReceiptFor(
+    db,
+    input.operationKey,
+    input.producer,
+    snapshot.at,
+    snapshot.checks,
+  );
+  if (outcome.outcome === "committed") {
+    return;
+  }
+
+  if (outcome.outcome === "conflict") {
+    throw new ApiError(
+      "operation_receipt_digest_mismatch",
+      "The operation key is already bound to a different health snapshot.",
+      409,
+    );
+  }
+
+  if (outcome.outcome === "in-progress" || outcome.outcome === "rejected") {
+    throw new ApiError(
+      "operation_receipt_terminal",
+      "The operation receipt is not eligible for automatic replay.",
+      409,
+    );
+  }
+
+  throw new ApiError(
+    "operation_receipt_unavailable",
+    "The operation outcome could not be reconciled safely.",
+    503,
+  );
 }
 
 /** Build the `admin-health` domain's handlers. */
@@ -56,11 +186,10 @@ export function adminHealthHandlers(os: Implementer) {
   // ack. Internal write (service_status / status_events); no public lastmod moves.
   const recordHealthHandler = os.record_health.use(adminAuth).handler(async ({ input }) => {
     try {
-      await recordHealthSnapshot(input.at, input.checks.map(normalizeCheck));
-
+      await recordHealthSnapshotRequestFor(await getDb(), input);
       return { ok: true as const };
     } catch (error) {
-      throw apiFault(error);
+      throw toFault(error);
     }
   });
 

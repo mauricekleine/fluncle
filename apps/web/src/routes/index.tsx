@@ -21,9 +21,9 @@ import { fluncleEntityId, fluncleWebsiteId, siteUrl } from "@/lib/fluncle-links"
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
+import { HOME_PAGE_SIZE } from "@/lib/home";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
-import { HOME_PAGE_SIZE, loadHomeData } from "./-home-data";
 
 type HomeSearch = {
   /** The Log ID of the story open in the dialog (masked to /log/<id>). */
@@ -32,7 +32,10 @@ type HomeSearch = {
 
 // The home feed's composition lives in `./-home-data` (a testable pure function); the serverFn is a
 // thin wrapper so the loader keeps its one-primitive shape.
-const fetchHomeData = createServerFn({ method: "GET" }).handler(loadHomeData);
+const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
+  const { loadHomeData } = await import("./-home-data");
+  return loadHomeData();
+});
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.

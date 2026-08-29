@@ -76,6 +76,9 @@ beforeEach(() => {
       return Promise.resolve({
         rows: [
           {
+            access_class: "write",
+            attempt_count: 2,
+            batch_count: 5,
             checked: null,
             created_at: "2026-07-30T19:00:00.100Z",
             ended_at: "2026-07-30T19:00:05.000Z",
@@ -87,8 +90,11 @@ beforeEach(() => {
             missing_fields: '["checked","expected_interval_ms","produced","queue_depth"]',
             occurred_at: "2026-07-30T19:00:00.000Z",
             ok: 0,
+            operation_id: "telemetry.test-run",
+            outcome: "failure",
             produced: null,
             queue_depth: null,
+            release: "test-release",
             run_duration_ms: 5000,
             self_asserted_ok: 1,
             summary_raw: '{"errors":2,"ok":true}',
@@ -107,8 +113,11 @@ beforeEach(() => {
 
 /** The envelope the box's `record_run_event` bash function builds, field for field. */
 const ENVELOPE = {
+  attempt_count: 2,
+  batch_count: 5,
   ended_at: "2026-07-29T03:00:12Z",
   exit_code: 0,
+  release: "emitter-build-abc123",
   started_at: "2026-07-29T03:00:00Z",
   summary_raw:
     '{"checked":1,"produced":1,"errors":0,"queueDepth":0,"gateState":null,"expectedIntervalMs":3600000}',
@@ -195,6 +204,18 @@ describe(`record_run — POST ${RUN_EVENT_PATH}`, () => {
     expect(response?.status).toBe(400);
     expect(rows).toHaveLength(0);
   });
+
+  it("rejects an unsafe emitter release without reflecting it", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const unsafeRelease = "private/build/path";
+    const response = await handleOrpc(
+      req(RUN_EVENT_PATH, "POST", AGENT_TOKEN, { ...ENVELOPE, release: unsafeRelease }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(await response?.text()).not.toContain(unsafeRelease);
+    expect(rows).toHaveLength(0);
+  });
 });
 
 describe(`read_run_ledger — GET ${RUN_EVENT_PATH}`, () => {
@@ -226,6 +247,9 @@ describe(`read_run_ledger — GET ${RUN_EVENT_PATH}`, () => {
       ],
       rows: [
         {
+          accessClass: "write",
+          attemptCount: 2,
+          batchCount: 5,
           checked: null,
           createdAt: "2026-07-30T19:00:00.100Z",
           endedAt: "2026-07-30T19:00:05.000Z",
@@ -237,8 +261,11 @@ describe(`read_run_ledger — GET ${RUN_EVENT_PATH}`, () => {
           missingFields: ["checked", "expected_interval_ms", "produced", "queue_depth"],
           occurredAt: "2026-07-30T19:00:00.000Z",
           ok: false,
+          operationId: "telemetry.test-run",
+          outcome: "failure",
           produced: null,
           queueDepth: null,
+          release: "test-release",
           runDurationMs: 5000,
           selfAssertedOk: true,
           summaryRaw: '{"errors":2,"ok":true}',

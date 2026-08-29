@@ -52,8 +52,19 @@ import { type InStatement } from "@libsql/client/web";
 import { DUPLICATE_SIMILARITY, LONG_FORM_MS } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
+import {
+  batchDueWorkSourceMutation,
+  countDueWorkNow,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  DueWorkMaintenancePendingError,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
+} from "./due-work";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 import { CLEAR_EMBEDDING_SQL, clearEmbeddingSatellite } from "./embedding";
 import { labelSlug } from "./labels";
+import { readQualifiedArtistIds } from "./public-projection-cutover";
 import { getSetting, setSetting } from "./settings";
 import { matchKey, normalizeIsrc } from "./track-match";
 
@@ -692,6 +703,78 @@ export type RankCatalogueSummary = {
   scored: number;
 };
 
+type CatalogueRankState = Pick<RankCatalogueSummary, "corpus" | "embeddedFindings" | "findings">;
+
+/** The live rank fingerprint cached by a completed projection backfill or an active legacy tick. */
+export const CATALOGUE_RANK_STATE_KEY = "catalogue_rank_state_cache";
+
+function parseCatalogueRankState(value: string | undefined): CatalogueRankState | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<CatalogueRankState>;
+    return typeof parsed.corpus === "string" &&
+      Number.isSafeInteger(parsed.embeddedFindings) &&
+      Number(parsed.embeddedFindings) >= 0 &&
+      Number.isSafeInteger(parsed.findings) &&
+      Number(parsed.findings) >= 0
+      ? {
+          corpus: parsed.corpus,
+          embeddedFindings: Number(parsed.embeddedFindings),
+          findings: Number(parsed.findings),
+        }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLiveCatalogueRankState(): Promise<CatalogueRankState> {
+  const db = await getDb();
+  const countResult = await db.execute({
+    args: [],
+    // CROSS JOIN pins findings as the tiny driver. See rankCatalogue's ranking doctrine below.
+    sql: `select
+            (select count(*) from findings) as findings,
+            (select count(*) from findings cross join tracks ft on ft.track_id = findings.track_id
+             where ft.has_embedding = 1) as embedded`,
+  });
+  const counts = typedRows<{
+    embedded: number;
+    findings: number;
+  }>(countResult.rows)[0];
+  const findings = Number(counts?.findings ?? 0);
+  const embeddedFindings = Number(counts?.embedded ?? 0);
+  const qualifiedArtistIds = await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL);
+
+  return {
+    corpus: rankCorpus(
+      findings,
+      embeddedFindings,
+      qualifiedArtistIds.length,
+      qualifiedArtistsDigest(qualifiedArtistIds),
+    ),
+    embeddedFindings,
+    findings,
+  };
+}
+
+async function persistCatalogueRankState(state: CatalogueRankState): Promise<void> {
+  await setSetting(CATALOGUE_RANK_STATE_KEY, JSON.stringify(state));
+}
+
+/**
+ * Refresh the fingerprint cache after the resumable projection rebuild. The cutover's empty rank
+ * probe reads this single KV row, so returning its legacy summary never re-scans the live corpus.
+ */
+export async function refreshCatalogueRankStateCache(): Promise<CatalogueRankState> {
+  const state = await readLiveCatalogueRankState();
+  await persistCatalogueRankState(state);
+  return state;
+}
+
 /** The default candidates per tick. `batch × findings` bounds the tick's cosine work. */
 export const RANK_BATCH_SIZE = 250;
 
@@ -830,7 +913,7 @@ async function readTrackArtistIds(trackIds: string[]): Promise<Map<string, strin
 //   cross join: SCAN f (94 rows)                +  SEARCH ta (track_id=?)
 //
 // Both return 103 distinct artist ids.
-const FINDING_QUALIFIED_ARTISTS_SQL = `select distinct ta.artist_id as artist_id
+export const FINDING_QUALIFIED_ARTISTS_SQL = `select distinct ta.artist_id as artist_id
       from findings f
       cross join track_artists ta on ta.track_id = f.track_id`;
 
@@ -839,7 +922,7 @@ const FINDING_QUALIFIED_ARTISTS_SQL = `select distinct ta.artist_id as artist_id
 // (via the indexed `tracks.label_id` → `labels.id` join, `tracks_label_id_idx`), never the whole
 // catalogue. `label_id` is the graph-resolved pointer, so an unlinked label STRING that merely folds
 // to an enabled slug does not count — exactly the identity-only discipline the qualified set is built on.
-const WEIGHTED_QUALIFIED_ARTISTS_SQL = `select ta.artist_id as artist_id
+export const WEIGHTED_QUALIFIED_ARTISTS_SQL = `select ta.artist_id as artist_id
       from labels l
       join tracks t on t.label_id = l.id
       join track_artists ta on ta.track_id = t.track_id
@@ -850,7 +933,7 @@ const WEIGHTED_QUALIFIED_ARTISTS_SQL = `select ta.artist_id as artist_id
 // The DISTINCT qualified-artist ids (a ∪ b). `union` (not `union all`) dedupes an artist qualified
 // both ways. Each arm is wrapped as a derived table so its own distinct/group-by/having stays local
 // to that arm. Bounded by findings + the enabled-label subset, exactly like each fragment it wraps.
-const QUALIFIED_ARTISTS_SQL = `select artist_id from (${FINDING_QUALIFIED_ARTISTS_SQL})
+export const QUALIFIED_ARTISTS_SQL = `select artist_id from (${FINDING_QUALIFIED_ARTISTS_SQL})
       union
       select artist_id from (${WEIGHTED_QUALIFIED_ARTISTS_SQL})`;
 
@@ -861,32 +944,29 @@ const QUALIFIED_ARTISTS_SQL = `select artist_id from (${FINDING_QUALIFIED_ARTIST
  */
 async function readArchiveAffinity(): Promise<ArchiveAffinity> {
   const db = await getDb();
-  const [artistResult, labelResult, seedResult, findingQualifiedResult, weightedQualifiedResult] =
-    await Promise.all([
-      db.execute({
-        args: [],
-        sql: `select tracks.artists_json as artists_json
+  const [artistResult, labelResult, seedResult, qualifiedArtistIds] = await Promise.all([
+    db.execute({
+      args: [],
+      sql: `select tracks.artists_json as artists_json
               from findings cross join tracks on tracks.track_id = findings.track_id`,
-      }),
-      db.execute({
-        args: [],
-        sql: `select distinct tracks.label as label
+    }),
+    db.execute({
+      args: [],
+      sql: `select distinct tracks.label as label
               from findings cross join tracks on tracks.track_id = findings.track_id
               where tracks.label is not null and trim(tracks.label) <> ''`,
-      }),
-      db.execute({
-        args: [],
-        // The operator's rulings. The ONE sanctioned way `seed_state` reaches this module: it
-        // orders what Fluncle ACQUIRES next (a capture is an acquisition), and it never decides
-        // what is shown, kept, or removed — see `capturePriorityFor`.
-        sql: `select slug, seed_state from labels where seed_state in ('enabled', 'disabled')`,
-      }),
-      // QUALIFIED (a): ≥1 CERTIFIED finding, through the graph — the shared fragment folded into the
-      // fingerprint's set size, so the set the sweep authorizes against and the set it counts agree.
-      db.execute({ args: [], sql: FINDING_QUALIFIED_ARTISTS_SQL }),
-      // QUALIFIED (b): a WEIGHTED enabled-label release count ≥ 3 — the shared fragment's other arm.
-      db.execute({ args: [], sql: WEIGHTED_QUALIFIED_ARTISTS_SQL }),
-    ]);
+    }),
+    db.execute({
+      args: [],
+      // The operator's rulings. The ONE sanctioned way `seed_state` reaches this module: it
+      // orders what Fluncle ACQUIRES next (a capture is an acquisition), and it never decides
+      // what is shown, kept, or removed — see `capturePriorityFor`.
+      sql: `select slug, seed_state from labels where seed_state in ('enabled', 'disabled')`,
+    }),
+    // The exact projected set is read only behind its complete clean-through proof. Flag-off or
+    // unusable projection state executes the unchanged legacy union.
+    readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL),
+  ]);
 
   const findingArtists = new Set<string>();
 
@@ -915,12 +995,8 @@ async function readArchiveAffinity(): Promise<ArchiveAffinity> {
 
   const qualifiedArtists = new Set<string>();
 
-  for (const row of typedRows<{ artist_id: string }>(findingQualifiedResult.rows)) {
-    qualifiedArtists.add(row.artist_id);
-  }
-
-  for (const row of typedRows<{ artist_id: string }>(weightedQualifiedResult.rows)) {
-    qualifiedArtists.add(row.artist_id);
+  for (const artistId of qualifiedArtistIds) {
+    qualifiedArtists.add(artistId);
   }
 
   return { disabledLabels, findingArtists, findingLabels, qualifiedArtists, seedLabels };
@@ -1175,6 +1251,126 @@ function catalogueDuplicateOf(
   return byIsrc && byIsrc !== candidate.track_id ? byIsrc : null;
 }
 
+async function readProjectedCatalogueRankBatch(
+  db: Awaited<ReturnType<typeof getDb>>,
+  limit: number,
+): Promise<{ candidates: CandidateRow[]; hasMore: boolean }> {
+  const selectedIds: string[] = [];
+  let continuation: { sortKey: string; subjectId: string } | undefined;
+  let hasMore = false;
+
+  // The shared projection reader caps one operation at 500 rows. Use 250-row seeks so each
+  // promotion can also expose the +1 sentinel, preserving rankCatalogue's public 1,000-row cap.
+  while (selectedIds.length < limit) {
+    const pageLimit = Math.min(250, limit - selectedIds.length);
+    const page = await readPromotedDueWorkPage(db, "catalogue-rank", {
+      continuation,
+      limit: pageLimit,
+    });
+    selectedIds.push(...page.subjectIds);
+    hasMore = page.hasMore;
+
+    const lastId = page.subjectIds.at(-1);
+    if (lastId === undefined || page.subjectIds.length < pageLimit) {
+      break;
+    }
+    continuation = {
+      sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: lastId }]),
+      subjectId: lastId,
+    };
+  }
+
+  if (selectedIds.length === 0) {
+    return { candidates: [], hasMore };
+  }
+
+  const candidateResult = await db.execute({
+    args: selectedIds,
+    sql: `select ct.track_id as track_id,
+                 ct.title as title,
+                 ct.artists_json as artists_json,
+                 ct.label as label,
+                 ct.isrc as isrc,
+                 ct.capture_status as capture_status,
+                 ct.source_audio_key as source_audio_key,
+                 ct.source_audio_rejected as source_audio_rejected,
+                 ct.has_embedding as has_vector
+          from tracks ct
+          where ct.track_id in (${selectedIds.map(() => "?").join(", ")})`,
+  });
+  const byId = new Map(
+    typedRows<CandidateRow>(candidateResult.rows).map((row) => [row.track_id, row]),
+  );
+
+  return {
+    candidates: selectedIds.flatMap((trackId) => {
+      const row = byId.get(trackId);
+      return row === undefined ? [] : [row];
+    }),
+    hasMore,
+  };
+}
+
+async function emptyCatalogueRankSummary(options: {
+  corpus: string;
+  db: Awaited<ReturnType<typeof getDb>>;
+  dueWorkCutoverEnabled: boolean;
+  embeddedFindings: number;
+  findings: number;
+  limit: number;
+  projectionHasMore: boolean;
+}): Promise<RankCatalogueSummary> {
+  // Refresh the cached counts + affinity even on an idle legacy tick so the first empty tick
+  // after a deploy warms the request-path cache.
+  if (!options.dueWorkCutoverEnabled) {
+    await persistCatalogueCaches();
+  }
+
+  let remaining = 0;
+  if (options.limit <= 0) {
+    remaining = options.dueWorkCutoverEnabled
+      ? await countDueWorkNow(options.db, "catalogue-rank")
+      : await countStale(options.corpus);
+  } else if (options.dueWorkCutoverEnabled && options.projectionHasMore) {
+    remaining = RANK_MORE_REMAIN;
+  }
+
+  return {
+    catalogueDuplicates: 0,
+    corpus: options.corpus,
+    embeddedFindings: options.embeddedFindings,
+    findings: options.findings,
+    prioritized: 0,
+    quarantined: 0,
+    remaining,
+    scored: 0,
+  };
+}
+
+async function remainingCatalogueRankWork(options: {
+  candidateCount: number;
+  corpus: string;
+  countRemaining: boolean;
+  db: Awaited<ReturnType<typeof getDb>>;
+  dueWorkCutoverEnabled: boolean;
+  limit: number;
+  projectionHasMore: boolean;
+}): Promise<number> {
+  if (options.countRemaining) {
+    return options.dueWorkCutoverEnabled
+      ? countDueWorkNow(options.db, "catalogue-rank")
+      : countStale(options.corpus);
+  }
+
+  return options.dueWorkCutoverEnabled
+    ? options.projectionHasMore
+      ? RANK_MORE_REMAIN
+      : 0
+    : options.candidateCount >= options.limit
+      ? RANK_MORE_REMAIN
+      : 0;
+}
+
 /**
  * ONE TICK of the ranking sweep — the whole of The Ear's arithmetic, and the only writer of
  * the five `tracks` ranking columns.
@@ -1207,55 +1403,7 @@ export async function rankCatalogue(
   countRemaining = false,
 ): Promise<RankCatalogueSummary> {
   const db = await getDb();
-  const countResult = await db.execute({
-    args: [],
-    // The two finding counts — the corpus half of the fingerprint (`rankCorpus`).
-    //
-    // CROSS JOIN is load-bearing, not style. `findings` holds 94 rows and `tracks` holds 117,526,
-    // so this counts a set that cannot exceed 94 — but a plain JOIN let the planner drive from
-    // `tracks` and SCAN all 117k rows, probing `findings` per row. Hosted Turso has no ANALYZE
-    // statistics (libsql-server rejects the statement), so the planner cannot know `findings` is
-    // tiny and guesses the join order wrong. At this table size that guess cost a Turso gateway
-    // timeout: `LibsqlError: SERVER_ERROR: Server returned HTTP status 524` inside `rankCatalogue`,
-    // which the sweep reports as a bare "Internal error". SQLite treats CROSS JOIN as "do not
-    // reorder", so it pins `findings` as the outer loop. Measured on prod, plan only:
-    //
-    //   join:       SCAN ft  +  SEARCH findings (track_id=?)          ← 117,526 rows scanned
-    //   cross join: SCAN findings  +  SEARCH ft (track_id=?)          ←      94 rows scanned
-    //
-    // Both return 93. Forcing the index alone did NOT flip it — only pinning the join order did.
-    sql: `select
-            (select count(*) from findings) as findings,
-            (select count(*) from findings cross join tracks ft on ft.track_id = findings.track_id
-             where ft.has_embedding = 1) as embedded`,
-  });
-  const counts = typedRows<{
-    embedded: number;
-    findings: number;
-  }>(countResult.rows)[0];
-  const findings = Number(counts?.findings ?? 0);
-  const embeddedFindings = Number(counts?.embedded ?? 0);
-
-  // The AUTHORIZATION half — the qualified-artist SET, read as its SORTED member ids so the tick can
-  // fold both its size and an order-independent DIGEST into the fingerprint (see `rankCorpus` § the
-  // swap hole: the size alone misses a batch-ruling membership swap, the money direction). One bounded
-  // read (~3.5k ids today) over the SAME `QUALIFIED_ARTISTS_SQL` fragment `readArchiveAffinity` builds
-  // the membership set from, so the set counted here and the set authorized against can never drift.
-  // Bounded by findings + the enabled-label subset — never the growing catalogue (unlike `v4`'s full
-  // `count(*) from track_artists`, which this also retires).
-  const qualifiedResult = await db.execute({
-    args: [],
-    sql: `select artist_id from (${QUALIFIED_ARTISTS_SQL}) order by artist_id`,
-  });
-  const qualifiedArtistIds = typedRows<{ artist_id: string }>(qualifiedResult.rows).map(
-    (row) => row.artist_id,
-  );
-  const corpus = rankCorpus(
-    findings,
-    embeddedFindings,
-    qualifiedArtistIds.length,
-    qualifiedArtistsDigest(qualifiedArtistIds),
-  );
+  const dueWorkCutoverEnabled = await isDueWorkCutoverEnabled();
 
   // The stale catalogue rows: fingerprint drift (the corpus moved) OR a vector that arrived
   // after the row was last ranked (it still carries a NON-NEGATIVE pre-audio tier the scoring
@@ -1269,9 +1417,36 @@ export async function rankCatalogue(
   // operator's actions) is excluded here so the sweep never spends cosine work re-ranking a row
   // the operator has taken out of the telescope; on restore it re-enters this candidate set and
   // re-ranks if its fingerprint has drifted.
-  const candidateResult = await db.execute({
-    args: [corpus, Math.max(0, limit)],
-    sql: `select ct.track_id as track_id,
+  let projectedBatch: Awaited<ReturnType<typeof readProjectedCatalogueRankBatch>> = {
+    candidates: [],
+    hasMore: false,
+  };
+  if (dueWorkCutoverEnabled) {
+    projectedBatch = await readProjectedCatalogueRankBatch(db, Math.max(0, limit));
+  }
+  let candidates = projectedBatch.candidates;
+  const projectionHasMore = projectedBatch.hasMore;
+
+  // A projected empty check reaches this point after only repair/index probes. Its legacy response
+  // fields come from the cache written by the completed backfill (and by every default-off tick),
+  // never by asking the growing source corpus to prove that nothing is due.
+  let rankState =
+    dueWorkCutoverEnabled && candidates.length === 0
+      ? parseCatalogueRankState(await getSetting(CATALOGUE_RANK_STATE_KEY))
+      : undefined;
+  if (rankState === undefined) {
+    if (dueWorkCutoverEnabled && candidates.length === 0) {
+      throw new DueWorkMaintenancePendingError("catalogue-rank-state");
+    }
+    rankState = await refreshCatalogueRankStateCache();
+  }
+  const { corpus, embeddedFindings, findings } = rankState;
+
+  if (!dueWorkCutoverEnabled) {
+    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
+    const candidateResult = await db.execute({
+      args: [corpus, Math.max(0, limit)],
+      sql: `select ct.track_id as track_id,
                  ct.title as title,
                  ct.artists_json as artists_json,
                  ct.label as label,
@@ -1290,30 +1465,25 @@ export async function rankCatalogue(
                      and ct.capture_priority >= 0))
           order by ct.track_id asc
           limit ?`,
-  });
-  const candidates = typedRows<CandidateRow>(candidateResult.rows);
+    });
+    candidates = typedRows<CandidateRow>(candidateResult.rows);
+  }
 
   if (candidates.length === 0) {
-    // Refresh the cached counts + affinity even on an idle tick: nothing changed this tick, but
-    // this is the read `getCatalogueSummary` serves off the hot path, so keeping it warm here means
-    // a fresh deploy's very first (empty) rank tick already populates the cache.
-    await persistCatalogueCaches();
-
     // `remaining` on an empty batch: with a POSITIVE `limit` the stale set is genuinely drained (an
     // empty page over `order by track_id asc limit N` means no stale row exists), so the drain
     // signal is 0 with no scan. The real COUNT survives ONLY for the `limit <= 0` guard — there no
     // batch was observed, so an assumed 0 would stop a cron while rows were still stale, and the one
     // cheap scoped COUNT is paid only on that already-idle, can't-have-looked tick.
-    return {
-      catalogueDuplicates: 0,
+    return emptyCatalogueRankSummary({
       corpus,
+      db,
+      dueWorkCutoverEnabled,
       embeddedFindings,
       findings,
-      prioritized: 0,
-      quarantined: 0,
-      remaining: limit <= 0 ? await countStale(corpus) : 0,
-      scored: 0,
-    };
+      limit,
+      projectionHasMore,
+    });
   }
 
   const vectored = candidates.filter((row) => Number(row.has_vector) === 1);
@@ -1697,7 +1867,16 @@ export async function rankCatalogue(
 
   // One implicit write transaction. Every statement is PK-keyed and idempotent, so a retry
   // after a partial failure converges on the same rows.
-  await db.batch(writes, "write");
+  await db.batch(
+    [
+      ...writes,
+      ...markDueWorkSourceMaintenanceStatements(
+        movedIds.map((subjectId) => ({ subjectId, subjectType: "track" })),
+        { producer: "catalogue-rank" },
+      ),
+    ],
+    "write",
+  );
 
   // The tick's writes have landed. The cached six counts move by a BATCH DELTA — the moved rows'
   // (after − before) buckets, the batched twin of `withSummaryDelta` — NOT the O(catalogue) full
@@ -1719,13 +1898,15 @@ export async function rankCatalogue(
   // batch exhausted the stale set (0). `countRemaining` opts into the real live COUNT for the
   // human-facing CLI readout — one ~19s scan on a deliberate manual run, never on the box sweep,
   // which keeps the default sentinel (docs/db-scale-backlog Wave 1 #1).
-  let remaining = 0;
-
-  if (countRemaining) {
-    remaining = await countStale(corpus);
-  } else if (candidates.length >= limit) {
-    remaining = RANK_MORE_REMAIN;
-  }
+  const remaining = await remainingCatalogueRankWork({
+    candidateCount: candidates.length,
+    corpus,
+    countRemaining,
+    db,
+    dueWorkCutoverEnabled,
+    limit,
+    projectionHasMore,
+  });
 
   return {
     catalogueDuplicates,
@@ -2822,16 +3003,23 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
   // immediately without the O(catalogue) recompute (docs/the-ear.md § the surface).
   return withSummaryDelta(trackId, async () => {
     const db = await getDb();
-    const result = await db.execute({
-      args: [QUARANTINE_CLEARED, trackId, WRONG_AUDIO_STATUS],
-      sql: `update tracks
-          set capture_status = ?
-          where track_id = ?
-            and capture_status = ?
-            and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
-    });
+    const [result] = await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [QUARANTINE_CLEARED, trackId, WRONG_AUDIO_STATUS],
+          sql: `update tracks
+              set capture_status = ?
+              where track_id = ?
+                and capture_status = ?
+                and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+        },
+      ],
+      [{ subjectId: trackId, subjectType: "track" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "catalogue-clear-wrong-audio" },
+    );
 
-    return result.rowsAffected > 0;
+    return (result?.rowsAffected ?? 0) > 0;
   });
 }
 
@@ -2862,18 +3050,34 @@ export async function requeueUnmatchedCaptures(): Promise<{
                  or duration_ms < ${MIN_TRACK_MS}
                  or duration_ms >= ${LONG_FORM_MS})`,
   });
-  const result = await db.execute({
-    sql: `update tracks
+  const source = {
+    sql: `select track_id as subject_id from tracks
+          where capture_status = 'unmatched'
+            and is_catalogue = 1
+            and duration_ms >= ${MIN_TRACK_MS}
+            and duration_ms < ${LONG_FORM_MS}`,
+  };
+  const results = await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
+        producer: "catalogue-requeue-unmatched",
+      }),
+      {
+        sql: `update tracks
           set capture_status = 'pending',
               source_audio_failures = 0
           where capture_status = 'unmatched'
             and not exists (select 1 from findings where findings.track_id = tracks.track_id)
             and duration_ms >= ${MIN_TRACK_MS}
             and duration_ms < ${LONG_FORM_MS}`,
-  });
+      },
+    ],
+    "write",
+  );
+  const result = results.at(-1);
 
   return {
-    requeued: result.rowsAffected,
+    requeued: result?.rowsAffected ?? 0,
     skippedVetoed: Number(typedRows<{ vetoed: number | null }>(vetoed.rows)[0]?.vetoed ?? 0),
   };
 }
@@ -2910,19 +3114,26 @@ export async function forceCapture(trackId: string): Promise<boolean> {
   // no full recompute.
   return withSummaryDelta(trackId, async () => {
     const db = await getDb();
-    const result = await db.execute({
-      args: [DUPLICATE_CLEARED, trackId],
-      sql: `update tracks
-          set capture_status = ?,
-              duplicate_of_track_id = null,
-              capture_priority = null,
-              catalogue_rank_corpus = null
-          where track_id = ?
-            and duplicate_of_track_id is not null
-            and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
-    });
+    const [result] = await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [DUPLICATE_CLEARED, trackId],
+          sql: `update tracks
+              set capture_status = ?,
+                  duplicate_of_track_id = null,
+                  capture_priority = null,
+                  catalogue_rank_corpus = null
+              where track_id = ?
+                and duplicate_of_track_id is not null
+                and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+        },
+      ],
+      [{ subjectId: trackId, subjectType: "track" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "catalogue-force-capture" },
+    );
 
-    return result.rowsAffected > 0;
+    return (result?.rowsAffected ?? 0) > 0;
   });
 }
 
@@ -2985,7 +3196,8 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
   // delete is driven by the `has_embedding = 0` it writes (embedding.ts § the clearing
   // statement). A guard that matched nothing therefore leaves the vector standing, with no
   // second copy of the guard to drift.
-  const [result] = await db.batch(
+  const [result] = await batchDueWorkSourceMutation(
+    db,
     [
       {
         args: [WRONG_AUDIO_STATUS, rejected, trackId],
@@ -3002,7 +3214,11 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
       },
       clearEmbeddingSatellite(trackId),
     ],
-    "write",
+    [
+      { subjectId: trackId, subjectType: "track" },
+      { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+    ],
+    { producer: "catalogue-flag-wrong-audio" },
   );
 
   return (result?.rowsAffected ?? 0) > 0;
@@ -3028,25 +3244,32 @@ export async function setTrackDismissed(trackId: string, dismissed: boolean): Pr
   // This is the mutation the "counts stay consistent with the lenses" test exercises after a tick.
   return withSummaryDelta(trackId, async () => {
     const db = await getDb();
-    const result = dismissed
-      ? await db.execute({
-          args: [new Date().toISOString(), trackId],
-          sql: `update tracks
+    const [result] = await batchDueWorkSourceMutation(
+      db,
+      [
+        dismissed
+          ? {
+              args: [new Date().toISOString(), trackId],
+              sql: `update tracks
               set dismissed_at = ?
               where track_id = ?
                 and dismissed_at is null
                 and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
-        })
-      : await db.execute({
-          args: [trackId],
-          sql: `update tracks
+            }
+          : {
+              args: [trackId],
+              sql: `update tracks
               set dismissed_at = null
               where track_id = ?
                 and dismissed_at is not null
                 and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
-        });
+            },
+      ],
+      [{ subjectId: trackId, subjectType: "track" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "catalogue-dismiss-track" },
+    );
 
-    return result.rowsAffected > 0;
+    return (result?.rowsAffected ?? 0) > 0;
   });
 }
 
@@ -3104,9 +3327,47 @@ type VerifyRow = {
 export async function listUnverifiedCaptures(limit = 50): Promise<CaptureVerifyItem[]> {
   const page = Math.min(Math.max(1, Math.trunc(limit)), 200);
   const db = await getDb();
-  const result = await db.execute({
-    args: [WRONG_AUDIO_STATUS, page],
-    sql: `select ct.track_id as track_id, ct.title as title, ct.artists_json as artists_json,
+  const dueWorkCutoverEnabled = await isDueWorkCutoverEnabled();
+  let rows: Array<{
+    artists_json: string;
+    certified: number;
+    duration_ms: null | number;
+    isrc: null | string;
+    log_id: null | string;
+    source_audio_key: string;
+    title: string;
+    track_id: string;
+  }>;
+
+  if (dueWorkCutoverEnabled) {
+    const selected = await readPromotedDueWorkPage(db, "capture-verification", { limit: page });
+
+    if (selected.subjectIds.length === 0) {
+      rows = [];
+    } else {
+      const result = await db.execute({
+        args: selected.subjectIds,
+        sql: `select ct.track_id as track_id, ct.title as title, ct.artists_json as artists_json,
+                     ct.isrc as isrc, ct.duration_ms as duration_ms,
+                     ct.source_audio_key as source_audio_key, f.log_id as log_id,
+                     (f.track_id is not null) as certified
+              from tracks ct
+              left join findings f on f.track_id = ct.track_id
+              where ct.track_id in (${selected.subjectIds.map(() => "?").join(", ")})`,
+      });
+      const byId = new Map(
+        typedRows<(typeof rows)[number]>(result.rows).map((row) => [row.track_id, row]),
+      );
+      rows = selected.subjectIds.flatMap((trackId) => {
+        const row = byId.get(trackId);
+        return row === undefined ? [] : [row];
+      });
+    }
+  } else {
+    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
+    const result = await db.execute({
+      args: [WRONG_AUDIO_STATUS, page],
+      sql: `select ct.track_id as track_id, ct.title as title, ct.artists_json as artists_json,
                  ct.isrc as isrc, ct.duration_ms as duration_ms, ct.source_audio_key as source_audio_key,
                  f.log_id as log_id, (f.track_id is not null) as certified
           from tracks ct
@@ -3116,18 +3377,11 @@ export async function listUnverifiedCaptures(limit = 50): Promise<CaptureVerifyI
             and (ct.capture_status is null or ct.capture_status <> ?)
           order by ct.track_id asc
           limit ?`,
-  });
+    });
+    rows = typedRows<(typeof rows)[number]>(result.rows);
+  }
 
-  return typedRows<{
-    artists_json: string;
-    certified: number;
-    duration_ms: null | number;
-    isrc: null | string;
-    log_id: null | string;
-    source_audio_key: string;
-    title: string;
-    track_id: string;
-  }>(result.rows).map((row) => ({
+  return rows.map((row) => ({
     artists: parseArtistsJson(row.artists_json),
     certified: Number(row.certified) === 1,
     durationMs: Number(row.duration_ms) || 0,
@@ -3153,6 +3407,13 @@ export const COUNT_UNVERIFIED_CAPTURES_SQL = `select count(*) as queued
  */
 export async function countUnverifiedCaptures(): Promise<number> {
   const db = await getDb();
+  if (await isDueWorkCutoverEnabled()) {
+    const { repairDueWorkBeforeRead } = await import("./due-work-source-repair");
+    await repairDueWorkBeforeRead(db, "capture-verification");
+    return countDueWorkNow(db, "capture-verification");
+  }
+
+  // GOAL H: delete this source-table count with the legacy selector after cutover proves stable.
   const result = await db.execute({
     args: [WRONG_AUDIO_STATUS],
     sql: COUNT_UNVERIFIED_CAPTURES_SQL,
@@ -3207,20 +3468,34 @@ export async function verifyCapture(
   if (verdict === "match" || verdict === "no-preview") {
     const verification = verdict === "match" ? "preview-match" : "unverified";
 
-    await db.execute({
-      args: [verification, now, trackId],
-      sql: `update tracks set capture_verification = ?, capture_verified_at = ? where track_id = ?`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [verification, now, trackId],
+          sql: `update tracks set capture_verification = ?, capture_verified_at = ? where track_id = ?`,
+        },
+      ],
+      [{ subjectId: trackId, subjectType: "track" }],
+      { producer: "capture-verification" },
+    );
 
     return verification;
   }
 
   // A MISMATCH on a FINDING — stamp the suspicion, raise the attention item, do NOT rewind.
   if (certified) {
-    await db.execute({
-      args: [now, trackId],
-      sql: `update tracks set capture_verification = 'mismatch', capture_verified_at = ? where track_id = ?`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [now, trackId],
+          sql: `update tracks set capture_verification = 'mismatch', capture_verified_at = ? where track_id = ?`,
+        },
+      ],
+      [{ subjectId: trackId, subjectType: "track" }],
+      { producer: "capture-verification" },
+    );
 
     return "flagged-finding";
   }
@@ -3260,7 +3535,8 @@ export async function verifyCapture(
 
   // One batch, update first — the satellite delete reads the mirror the update just cleared
   // (embedding.ts § the clearing statement), so the pair can never be written apart.
-  await db.batch(
+  await batchDueWorkSourceMutation(
+    db,
     [
       {
         args: [WRONG_AUDIO_STATUS, preAudio.priority, preAudio.duplicateOf, rejected, now, trackId],
@@ -3278,7 +3554,11 @@ export async function verifyCapture(
       },
       clearEmbeddingSatellite(trackId),
     ],
-    "write",
+    [
+      { subjectId: trackId, subjectType: "track" },
+      { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+    ],
+    { producer: "capture-verification-quarantine" },
   );
 
   await applyCatalogueSummaryDelta(before, await readRowBuckets(trackId));

@@ -1,4 +1,5 @@
 import { createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
@@ -35,7 +36,7 @@ async function fingerprint(client: {
 
 describe("createIntegrationDb replays the migrations' end state", () => {
   it("produces a schema identical to running the full migration chain", async () => {
-    const viaMigrations = createClient({ url: ":memory:" });
+    const viaMigrations = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
     await migrate(drizzle(viaMigrations), { migrationsFolder });
 

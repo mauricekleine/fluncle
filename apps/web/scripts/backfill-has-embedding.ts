@@ -18,10 +18,11 @@
  * embedded. An under-report, never an over-report, and never a wrong RANKING (the vector reads
  * join the satellite itself).
  *
- * DEPLOY ORDER IS WHAT MAKES THAT SAFE. `deploy:cf` is `db:migrate && db:backfill && wrangler
- * deploy` (package.json), so the column is added and flipped BEFORE the Worker that reads it ships.
- * The old Worker in front of a migrated database reads a column it never mentions; the new Worker
- * never sees an unflipped one.
+ * DEPLOY ORDER IS WHAT MAKES THAT SAFE. `deploy:cf` runs the bounded primary migration, then
+ * `db:backfill`, then the required telemetry migration and `wrangler deploy` (package.json), so the
+ * column exists before the backfill flips it and before the Worker that reads it ships. The old
+ * Worker in front of a migrated database reads a column it never mentions; the new Worker never
+ * sees an unflipped one.
  *
  * THE SHAPE, AND WHY IT CORRECTS BOTH DIRECTIONS. It sets the flag to the satellite's answer
  * wherever the two disagree — not the narrower "flip the un-flagged embedded rows". Seeding
@@ -48,9 +49,15 @@
  * from apps/web/.dev.vars), exactly like `db:migrate` and its sibling backfills.
  */
 import { type Client, createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
+} from "../src/lib/server/due-work";
 
 export type HasEmbeddingBackfillResult = {
   /** How many rows this run reconciled against their vector, in either direction. */
@@ -65,12 +72,32 @@ const HAS_VECTOR = `exists (select 1 from track_embeddings te where te.track_id 
  * the real migrations applied (the `backfillIsCatalogue` precedent).
  */
 export async function backfillHasEmbedding(client: Client): Promise<HasEmbeddingBackfillResult> {
-  const result = await client.execute({
-    sql: `update tracks set has_embedding = ${HAS_VECTOR}
-          where has_embedding <> ${HAS_VECTOR}`,
-  });
+  const results = await client.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "track",
+        {
+          sql: `select track_id as subject_id from tracks
+                where has_embedding <> ${HAS_VECTOR}`,
+        },
+        { producer: "backfill-has-embedding-subjects" },
+      ),
+      {
+        sql: `update tracks set has_embedding = ${HAS_VECTOR}
+              where has_embedding <> ${HAS_VECTOR}`,
+      },
+      ...markDueWorkSourceMaintenanceStatements(
+        [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }],
+        {
+          onlyIfPreviousStatementChanged: true,
+          producer: "backfill-has-embedding-rank-corpus",
+        },
+      ),
+    ],
+    "write",
+  );
 
-  return { flipped: result.rowsAffected };
+  return { flipped: results.at(-2)?.rowsAffected ?? 0 };
 }
 
 async function main(): Promise<void> {
@@ -85,7 +112,11 @@ async function main(): Promise<void> {
   }
 
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
   const result = await backfillHasEmbedding(client);
 
   console.log(`has_embedding backfill: ${result.flipped} row(s) reconciled against their vector.`);

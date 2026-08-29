@@ -32,6 +32,9 @@ import {
   verifyDiscogsLabelEvidence,
 } from "./discogs";
 import { getDb, typedRows } from "./db";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import { MB_USER_AGENT, mbFetch } from "./musicbrainz";
@@ -307,6 +310,61 @@ type LabelWorkRow = {
   slug: string;
 };
 
+function labelImageContinuation(
+  cursor: string | undefined,
+): { sortKey: string; subjectId: string } | undefined {
+  if (cursor === undefined) {
+    return undefined;
+  }
+
+  return {
+    sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: cursor }]),
+    subjectId: cursor,
+  };
+}
+
+function restoreLabelImageOrder(
+  rows: LabelWorkRow[],
+  subjectIds: readonly string[],
+): LabelWorkRow[] {
+  const bySlug = new Map(rows.map((row) => [row.slug, row]));
+  return subjectIds.flatMap((slug) => {
+    const row = bySlug.get(slug);
+    return row === undefined ? [] : [row];
+  });
+}
+
+async function listProjectedLabels(
+  limit: number,
+  cursor: string | undefined,
+  slugs?: string[],
+): Promise<LabelWorkRow[]> {
+  if (slugs?.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const page = await readPromotedDueWorkPage(db, "label.image", {
+    ...(cursor === undefined ? {} : { continuation: labelImageContinuation(cursor) }),
+    limit,
+    ...(slugs === undefined ? {} : { subjectIds: slugs }),
+  });
+
+  if (page.subjectIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = page.subjectIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: page.subjectIds,
+    sql: `select slug, name, mb_label_id, discogs_label_id, image_failures
+          from labels
+          where slug in (${placeholders})`,
+  });
+
+  return restoreLabelImageOrder(typedRows<LabelWorkRow>(result.rows), page.subjectIds);
+}
+
 /**
  * One bounded page of the resolve worklist: `pending` labels not currently cooling down,
  * slug-cursored (the same opaque cursor convention as the artist backfills). A resolved/none
@@ -381,24 +439,50 @@ async function markResolved(slug: string, imageKey: string): Promise<void> {
   // a REPLACED logo at the same R2 key re-key every cached rendition instead of serving the old
   // picture forever behind the transform cache (the video-variants `?v` lesson — a transform cache
   // survives a zone purge). The albums/artists cover-master sweep stamps its twin for the same reason.
-  await db.execute({
-    args: [imageKey, now, now, now, slug],
-    sql: `update labels
-          set image_key = ?, image_state = 'resolved', image_failures = 0,
-              image_attempted_at = ?, image_updated_at = ?, updated_at = ?
-          where slug = ?`,
-  });
+  await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "label",
+        {
+          args: [slug],
+          sql: `select id as subject_id from labels where slug = ?`,
+        },
+        { producer: "label-image-resolved" },
+      ),
+      {
+        args: [imageKey, now, now, now, slug],
+        sql: `update labels
+              set image_key = ?, image_state = 'resolved', image_failures = 0,
+                  image_attempted_at = ?, image_updated_at = ?, updated_at = ?
+              where slug = ?`,
+      },
+    ],
+    "write",
+  );
 }
 
 async function markNone(slug: string): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    args: [new Date().toISOString(), slug],
-    sql: `update labels
-          set image_state = 'none', image_failures = 0, image_attempted_at = ?
-          where slug = ?`,
-  });
+  await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "label",
+        {
+          args: [slug],
+          sql: `select id as subject_id from labels where slug = ?`,
+        },
+        { producer: "label-image-none" },
+      ),
+      {
+        args: [new Date().toISOString(), slug],
+        sql: `update labels
+              set image_state = 'none', image_failures = 0, image_attempted_at = ?
+              where slug = ?`,
+      },
+    ],
+    "write",
+  );
 }
 
 /**
@@ -411,12 +495,25 @@ async function recordFailure(slug: string, priorFailures: number): Promise<void>
   const db = await getDb();
   const failures = priorFailures + 1;
 
-  await db.execute({
-    args: [failures, new Date().toISOString(), slug],
-    sql: `update labels
-          set image_failures = ?, image_state = 'pending', image_attempted_at = ?
-          where slug = ?`,
-  });
+  await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "label",
+        {
+          args: [slug],
+          sql: `select id as subject_id from labels where slug = ?`,
+        },
+        { producer: "label-image-failure" },
+      ),
+      {
+        args: [failures, new Date().toISOString(), slug],
+        sql: `update labels
+              set image_failures = ?, image_state = 'pending', image_attempted_at = ?
+              where slug = ?`,
+      },
+    ],
+    "write",
+  );
 }
 
 // ── The per-label resolve (the ladder) ────────────────────────────────────────────────────────
@@ -588,11 +685,13 @@ export async function resolveLabelImages(
     };
   }
 
-  const rows = await listPendingLabels(
-    batchLimit,
-    candidateSlugs && candidateSlugs.length > 0 ? undefined : cursor,
-    candidateSlugs && candidateSlugs.length > 0 ? candidateSlugs : undefined,
-  );
+  const selectedCursor = candidateSlugs && candidateSlugs.length > 0 ? undefined : cursor;
+  const selectedSlugs = candidateSlugs && candidateSlugs.length > 0 ? candidateSlugs : undefined;
+  const rows = (await isDueWorkCutoverEnabled())
+    ? await listProjectedLabels(batchLimit, selectedCursor, selectedSlugs)
+    : // GOAL H CONTRACTION: this is the unchanged source-table selector retained while Goal C's
+      // default-off cutover proves the due_work projection.
+      await listPendingLabels(batchLimit, selectedCursor, selectedSlugs);
 
   const discogsWork: DiscogsLabelWork[] = [];
   const resolved: string[] = [];

@@ -7,6 +7,7 @@ import { type SocialPostItem, type SocialStatusUpdate } from "@fluncle/contracts
 export type { SocialPostItem, SocialStatusUpdate };
 
 import { getDb, typedRow, typedRows } from "./db";
+import { batchDueWorkSourceMutation } from "./due-work";
 
 type SocialPostRow = {
   created_at: string;
@@ -308,10 +309,17 @@ export async function recordPostUrl(
 async function touchTrack(trackId: string, now: string): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    args: [now, trackId],
-    sql: `update findings set updated_at = ? where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [now, trackId],
+        sql: `update findings set updated_at = ? where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { onlyIfLastSourceStatementChanged: true, producer: "social-finding-touch" },
+  );
 }
 
 /** Update a platform post after the operator reviews/publishes in-app. Returns

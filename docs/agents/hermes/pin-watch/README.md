@@ -82,6 +82,13 @@ Every run also reports a **`self-deploy` health check** to the public [`/status`
 # 1. Drop the script (0755) at its deployed path.
 sudo install -D -m 0755 docs/agents/hermes/pin-watch/rebuild-hermes.sh \
   /opt/fluncle-pin-watch/rebuild-hermes.sh
+sudo install -D -m 0755 docs/agents/hermes/scripts/database-admission-runner.sh \
+  /opt/fluncle-database-admission/database-admission-runner.sh
+
+# The shared runner reads FLUNCLE_API_TOKEN and the default-off
+# DATABASE_ADMISSION_FAIL_CLOSED readiness gate from the root-owned 0600
+# /etc/fluncle/database-admission.env operator file. The concrete render/install recipe stays in
+# the private companion; this public repository contains neither its value nor secret-manager map.
 
 # 2. Clear any accumulated debt + validate the recipe end to end (the pilot).
 sudo /opt/fluncle-pin-watch/rebuild-hermes.sh --force

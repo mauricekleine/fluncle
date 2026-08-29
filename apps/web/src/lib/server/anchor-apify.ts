@@ -53,6 +53,7 @@
 // (the flip-ON), never a per-tick/hot path, so its full-table scan is acceptable.
 
 import { getDb } from "./db";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
 import { deleteSetting, getSetting, setSetting } from "./settings";
 
 /** The kill-flag on the shared `settings` KV. DEFAULT ON — only the literal "false" disables it. */
@@ -115,17 +116,32 @@ async function requeueOffWindowDeferrals(): Promise<number> {
   }
 
   const db = await getDb();
-  const result = await db.execute({
+  const selection = {
     args: [disabledAt],
-    sql: `update tracks
-          set spotify_anchor_attempted_at = null,
-              spotify_anchor_attempts = max(coalesce(spotify_anchor_attempts, 0) - 1, 0)
+    sql: `select track_id as subject_id from tracks
           where spotify_uri is null
             and spotify_anchor_attempted_at >= ?
             and has_isrc = 1`,
-  });
+  };
+  const results = await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", selection, {
+        producer: "anchor-apify-requeue",
+      }),
+      {
+        args: [disabledAt],
+        sql: `update tracks
+              set spotify_anchor_attempted_at = null,
+                  spotify_anchor_attempts = max(coalesce(spotify_anchor_attempts, 0) - 1, 0)
+              where spotify_uri is null
+                and spotify_anchor_attempted_at >= ?
+                and has_isrc = 1`,
+      },
+    ],
+    "write",
+  );
 
-  return result.rowsAffected;
+  return results.at(-1)?.rowsAffected ?? 0;
 }
 
 /**

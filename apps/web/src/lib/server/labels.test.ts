@@ -17,6 +17,11 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { backfillLabels, linkTracksToLabels } from "../../../scripts/backfill-labels";
+import {
+  initializePublicProjectionTestState,
+  readPublicProjectionMaintenanceSnapshot,
+  settlePublicProjectionTestState,
+} from "../../../scripts/lib/public-projection-test-state";
 import { createIntegrationDb } from "./integration-db";
 import { bestAlbumCoverUrl } from "../media";
 import {
@@ -301,6 +306,24 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
 
     expect(ruled.seedState).toBe("disabled");
     expect(ruled.ruledAt).not.toBeNull();
+    expect(
+      (
+        await db.execute(`select source_type, source_id from crawl_projection_repairs
+          order by source_type, source_id`)
+      ).rows,
+    ).toEqual([{ source_id: label.slug, source_type: "label" }]);
+    expect(
+      (
+        await db.execute(`select projection, subject_type, subject_id from projection_repairs
+          where subject_type = 'label'`)
+      ).rows,
+    ).toEqual([
+      {
+        projection: "artist_qualification",
+        subject_id: label.id,
+        subject_type: "label",
+      },
+    ]);
   });
 
   it("stamps the label-scope watermark when the operator enables a label", async () => {
@@ -470,6 +493,47 @@ describe("listLabelReviewRows (the attention-queue source)", () => {
 });
 
 describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
+  it("advances only the changed label source and keeps an empty track selection ready", async () => {
+    await initializePublicProjectionTestState(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    await db.batch(
+      [
+        {
+          args: ["lab-enabled", "Hospital Records", "hospital-records", now, now],
+          sql: `insert into labels (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)`,
+        },
+        {
+          args: ["lab-held", "UKF", "ukf", now, now],
+          sql: `insert into labels (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)`,
+        },
+      ],
+      "write",
+    );
+
+    await backfillLabels(db);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual({
+      aggregate: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      artists: { projectionEpoch: 0, ready: false, sourceEpoch: 1 },
+      repairs: [
+        {
+          projection: "artist_qualification",
+          sourceEpoch: 1,
+          subjectId: "lab-enabled",
+          subjectType: "label",
+        },
+      ],
+    });
+    await settlePublicProjectionTestState(db);
+    const ready = await readPublicProjectionMaintenanceSnapshot(db);
+
+    const second = await backfillLabels(db);
+
+    expect(second.bootstrapped).toBe(false);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual(ready);
+  });
+
   it("reconciles, applies the starting ruling, and never runs a second time", async () => {
     await seedFinding("t1", "Hospital Records");
     await seedFinding("t2", "Anjunabeats");
@@ -1067,6 +1131,11 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
       labelId: "lbl_loser",
       status: "confirmed",
     });
+    await insertArtistRule({
+      artistMbid: "artist-loser",
+      id: "rule-loser",
+      labelId: "lbl_loser",
+    });
 
     const result = await mergeLabel("medschool", "med-school");
 
@@ -1096,6 +1165,17 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
     // The loser row is gone; the moved alias survives on the canonical.
     expect(await labelSlugs()).toEqual(["med-school", "sub-imprint"]);
     expect(await getConfirmedAliasNames("lbl_canon")).toContain("Med-School");
+    expect(result.droppedRules).toBe(1);
+    expect(
+      (
+        await db.execute(`select source_type, source_id from crawl_projection_repairs
+          order by source_type, source_id`)
+      ).rows,
+    ).toEqual([
+      { source_id: "artist-loser", source_type: "artist" },
+      { source_id: "med-school", source_type: "label" },
+      { source_id: "medschool", source_type: "label" },
+    ]);
   });
 
   it("resolves seed_state by ruled_at precedence — the more recent ruling wins", async () => {

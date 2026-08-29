@@ -1,0 +1,1 @@
+CREATE INDEX `due_work_claim_idx` ON `due_work` (`work_kind`,`state`,`claimed_by`,`claim_token`,`sort_key`,`subject_id`) WHERE "due_work"."state" = 'leased';

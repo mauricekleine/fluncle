@@ -28,6 +28,7 @@
  * ── USAGE ─────────────────────────────────────────────────────────────────────
  *   SCRATCH_TURSO_DATABASE_URL=libsql://<scratch>.turso.io \
  *   SCRATCH_TURSO_AUTH_TOKEN=<token> \
+ *   SCRATCH_TURSO_DATABASE_IDENTITY=<exact-scratch-host> \
  *   bun run apps/web/scripts/bench-db-scale.ts
  *
  * Optional env:
@@ -36,17 +37,20 @@
  *   BENCH_ONLY=13,21,22,23   run only these item numbers (default: all)
  *   BENCH_SKIP_SEED=1        skip the seed phase and bench an already-seeded DB (iterate on benches)
  *
- * The operator CREATES the scratch DB before and DESTROYS it after — this only measures. It NEVER
- * points at `fluncle`/`fluncle-dev`/local (it refuses a URL containing either name, `127.0.0.1`, or
- * `file:`, exactly like the tracks-hub bench).
+ * The operator CREATES the scratch DB before and DESTROYS it after — this only measures. Before a
+ * client exists, the script requires a second, exact confirmation of the parsed URL host and also
+ * rejects production/development/local-looking targets. The confirmation is the positive identity
+ * gate; the denylist is defense in depth, never the authority.
  */
 import { createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
 
 import { ensureSearchIndex } from "../src/db/search-index";
 import { compileFilters } from "../src/lib/server/search";
+import { resolveScaleBenchTarget, type ScaleBenchTarget } from "./bench-db-scale-target";
 import { SEED_NOW, seedScale } from "./lib/scale-seed";
 
 function fail(message: string): never {
@@ -60,17 +64,15 @@ function envInt(name: string, fallback: number): number {
   return raw ? Number.parseInt(raw, 10) : fallback;
 }
 
-const url = process.env.SCRATCH_TURSO_DATABASE_URL;
-const authToken = process.env.SCRATCH_TURSO_AUTH_TOKEN;
-
-if (!url || !authToken) {
-  fail("set SCRATCH_TURSO_DATABASE_URL and SCRATCH_TURSO_AUTH_TOKEN (a THROWAWAY hosted DB)");
+function readScaleBenchTarget(): ScaleBenchTarget {
+  try {
+    return resolveScaleBenchTarget();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "scratch target confirmation failed");
+  }
 }
 
-if (/fluncle(-dev)?\b/.test(url) || url.includes("127.0.0.1") || url.startsWith("file:")) {
-  fail(`refusing to run against ${url} — use a SCRATCH hosted Turso DB, never prod/dev/local`);
-}
-
+const target = readScaleBenchTarget();
 const scale = envInt("BENCH_SCALE", 150_000);
 const iterations = envInt("BENCH_ITERATIONS", 12);
 const only = (process.env.BENCH_ONLY ?? "")
@@ -79,7 +81,11 @@ const only = (process.env.BENCH_ONLY ?? "")
   .filter((value) => Number.isInteger(value));
 const skipSeed = process.env.BENCH_SKIP_SEED === "1";
 
-const client = createClient({ authToken, url });
+const client = createClient({
+  authToken: target.authToken,
+  concurrency: REMOTE_DB_CONCURRENCY,
+  url: target.url,
+});
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
 // ── The stamps the seeder wrote are relative to SEED_NOW, so the bench's cutoffs are too ──────────
@@ -215,7 +221,8 @@ const PROOFS: Proof[] = [
   },
   {
     // search.ts:678-690 compileFilters year — `substr(release_date,1,4)` wraps the column and defeats
-    // tracks_release_date_idx. Rewrite: a bare lexicographic range that rides the existing index.
+    // tracks_release_date_track_id_idx. Rewrite: a bare lexicographic range that rides the existing
+    // index.
     after: [
       {
         args: [],
@@ -263,21 +270,20 @@ const PROOFS: Proof[] = [
     title: "analyze worklist: captured-row scan → tracks_analyze_queue_idx seek",
   },
   {
-    // backfill.ts listCatalogueAppleWork — the shipped catalogue discriminator + cooldown shape.
-    // The query deliberately admits NULL capture_priority rows, so the partial composite cannot
-    // serve it. Trial-drop the plain index to prove why it remains load-bearing.
+    // backfill.ts listCatalogueAppleWork — the full vendor composite carries is_catalogue,
+    // nullable capture_priority, and the track-id tiebreak. Trial-drop the shadowed singleton.
     after: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql() }],
     baseline: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql() }],
     index: {
       baselineDdl: `create index if not exists tracks_capture_priority_idx on tracks(capture_priority)`,
       ddl: `drop index if exists tracks_capture_priority_idx`,
-      expected: "load-bearing",
+      expected: "redundant",
       mode: "drop",
       name: "tracks_capture_priority_idx",
     },
     item: 13,
     rewrite: false,
-    title: "catalogue Apple worklist: tracks_capture_priority_idx keep proof",
+    title: "catalogue Apple worklist: capture-priority singleton → vendor composite",
   },
   {
     // catalogue.ts:2401-2412 quarantine lens — `capture_status = ?` is unindexed → full anti-join scan
@@ -351,18 +357,18 @@ const PROOFS: Proof[] = [
     title: "candidate queue: status='candidate' scan → partial index seek",
   },
   {
-    // catalogue.ts:2384-2399 ear lens — walks tracks_nearest_finding_score_idx DESC but the near-1.0
-    // duplicate prefix (dupes score ~1.0) is a residual, so the walk reads the whole dupe head first.
+    // The Ear's final read walks the active-catalogue prefix before its score order, so dismissed
+    // rows never become a growing residual prefix and the page remains bounded by its LIMIT.
     after: [{ args: [175], sql: earLensSql() }],
     baseline: [{ args: [175], sql: earLensSql() }],
     index: {
-      ddl: `create index if not exists tracks_ear_lens_idx on tracks(nearest_finding_score)
-            where duplicate_of_track_id is null and nearest_finding_score is not null`,
-      name: "tracks_ear_lens_idx",
+      ddl: `create index if not exists tracks_catalogue_ear_idx
+            on tracks(is_catalogue, dismissed_at, nearest_finding_score, track_id)`,
+      name: "tracks_catalogue_ear_idx",
     },
     item: 19,
     rewrite: false,
-    title: "Ear lens: duplicate-prefix walk → partial index skipping the dupe head",
+    title: "Ear lens: residual prefix walk → active-catalogue composite seek",
   },
   {
     // search.ts compileFilters — the name filters (backlog Wave 3-2). Baseline: the artist's
@@ -383,21 +389,21 @@ const PROOFS: Proof[] = [
       "search name filters: JSON LIKE + lower() scans → track_artists / label_id / album_id / key seeks",
   },
   {
-    // backfill.ts listDeezerWork catalogue arm — the second metadata worklist with the same
-    // deliberate nullable-priority order. Trial-drop the plain index independently so this proof
-    // cannot inherit item 13's DDL state.
+    // backfill.ts listDeezerWork catalogue arm — the second metadata worklist with the same full
+    // vendor-composite order. Trial-drop the singleton independently so this proof cannot inherit
+    // item 13's DDL state.
     after: [{ args: [3, 100], sql: deezerCatalogueWorklistSql() }],
     baseline: [{ args: [3, 100], sql: deezerCatalogueWorklistSql() }],
     index: {
       baselineDdl: `create index if not exists tracks_capture_priority_idx on tracks(capture_priority)`,
       ddl: `drop index if exists tracks_capture_priority_idx`,
-      expected: "load-bearing",
+      expected: "redundant",
       mode: "drop",
       name: "tracks_capture_priority_idx",
     },
     item: 21,
     rewrite: false,
-    title: "catalogue Deezer worklist: tracks_capture_priority_idx keep proof",
+    title: "catalogue Deezer worklist: capture-priority singleton → vendor composite",
   },
   {
     // artists.ts getPublicArtistSocials + hydrateArtistOverview — equality and bounded IN reads.

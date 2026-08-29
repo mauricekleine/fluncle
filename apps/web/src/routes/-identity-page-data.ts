@@ -36,9 +36,9 @@ import {
  *   · `isrc`      — the recording's own international standard code.
  *   · `mbid`      — a MusicBrainz recording id.
  *   · `platform`  — a pasted Spotify or Deezer track link, collapsed to `<platform>:track:<id>`.
- *   · `reference` — a Log ID coordinate or Fluncle's own track id. One branch, because both answer
- *                   through the same indexed `track_id = ? or log_id = ?` read and neither has a
- *                   shape a caller has to be taught to tell apart.
+ *   · `reference` — a Log ID coordinate or Fluncle's own track ID. One branch, because separate
+ *                   indexed identity seeks answer both and neither has a shape a caller has to be
+ *                   taught to tell apart.
  */
 export type IdentityKeyKind = "isrc" | "mbid" | "platform" | "reference";
 
