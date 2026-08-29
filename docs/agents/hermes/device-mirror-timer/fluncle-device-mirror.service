@@ -9,11 +9,12 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives Docker; the unprivileged hermes user runs the baked wrapper and reads the shared
 # 0600 secrets file. That file supplies read-only source credentials and write-scoped target
 # credentials. The script keeps its embedded replica/generation under HOME and self-writes its
 # ledger/status marker; the target's live mutation is one transaction after staged validation.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-device-mirror -- bash /opt/hermes-scripts/device-mirror.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-device-mirror -- bash /opt/hermes-scripts/device-mirror.sh
 # One embedded-replica sync, a local derivation, bounded staging upload, and one target cutover.
 # Keep the ceiling below the hourly cadence; the script's own atomic lock is the second guard.
 TimeoutStartSec=3430

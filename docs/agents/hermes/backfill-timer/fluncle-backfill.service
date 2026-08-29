@@ -10,11 +10,12 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
 # hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from
 # main via pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status
 # marker (cron-output.sh) so the prober stays honest.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-backfill -- bash /opt/hermes-scripts/backfill-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-backfill -- bash /opt/hermes-scripts/backfill-sweep.sh
 # A pure Worker-trigger (Discogs id, Last.fm love, Apple URL over findings, then Apple URL +
 # album facts over the catalogue), one bounded batch of each source per tick. The Worker carries
 # the Retry-After backoff, so the box stays dumb + fast. The old 180s ceiling false-killed a tick

@@ -10,12 +10,13 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
 # hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). NO new secret: `refresh_frontier_playlists` is AGENT tier, so the box's
 # existing agent-scoped token drives it.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-frontier-refresh -- bash /opt/hermes-scripts/frontier-refresh-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-frontier-refresh -- bash /opt/hermes-scripts/frontier-refresh-sweep.sh
 # A PURE trigger — zero LLM tokens. The work is the mirror + the Spotify item replaces inside
 # the Worker; one `fluncle admin frontier refresh` processes ONE paced batch of due users and
 # stops (the batch is small by design, so a tick is short). Headroom for the per-user Spotify

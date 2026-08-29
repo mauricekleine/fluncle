@@ -10,13 +10,14 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged hermes
 # user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via pin-watch);
 # this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh).
 # NO new secret: `backfill_label_releases` is AGENT tier, so the box's existing agent-scoped token
 # drives it, and the tap reuses the publish path's Spotify OAuth (already on the WORKER). The probe
 # is a Worker-paced sweep, so the box just drives the CLI.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-label-releases -- bash /opt/hermes-scripts/label-releases-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-label-releases -- bash /opt/hermes-scripts/label-releases-sweep.sh
 # A PURE trigger — zero LLM tokens. The probe's Spotify calls ride the client's 429 backoff, so the
 # CLI can loop passes for a few minutes when a fresh label has many releases; 600s clears that with
 # room to spare and still sits far under the 24h cadence.

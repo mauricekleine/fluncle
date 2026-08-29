@@ -334,6 +334,30 @@ describe("every in-container script a unit execs is baked from scripts/", () => 
 
     expect(missing).toEqual([]);
   });
+
+  test("every in-container admission runner receives the local fail-closed gate", () => {
+    let covered = 0;
+
+    for (const entry of unitDirs) {
+      for (const service of entry.services) {
+        const unit = readFileSync(join(HERMES_DIR, entry.dir, service), "utf8");
+        const execStart = unit.split("\n").find((line) => line.startsWith("ExecStart="));
+        if (!execStart?.includes("/opt/hermes-scripts/database-admission-runner.sh")) {
+          continue;
+        }
+
+        covered += 1;
+        expect(unit.split("\n"), `${entry.dir}/${service}`).toContain(
+          "EnvironmentFile=-/etc/fluncle/database-admission.env",
+        );
+        expect(execStart, `${entry.dir}/${service}`).toContain(
+          "/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED ",
+        );
+      }
+    }
+
+    expect(covered).toBeGreaterThan(0);
+  });
 });
 
 describe("the installer refuses to half-install", () => {

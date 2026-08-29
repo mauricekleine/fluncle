@@ -10,12 +10,13 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged hermes
 # user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via pin-watch);
 # this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh).
 # NO new secret: `backfill_recording_mbids` is AGENT tier, so the box's existing agent-scoped token
 # drives it.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-recording-mbids -- bash /opt/hermes-scripts/recording-mbids-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-recording-mbids -- bash /opt/hermes-scripts/recording-mbids-sweep.sh
 # A PURE trigger — zero LLM tokens. One batch is a free SQL strip plus up to 25 ISRC lookups paced
 # at ~1 req/s in the Worker; the vendor circuit breaker stops the pass on a throttle, so a tick is
 # well under a minute normally. The 480s ceiling clears a window that merely overlaps a pin-watch

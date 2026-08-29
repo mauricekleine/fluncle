@@ -10,12 +10,13 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged hermes
 # user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via pin-watch);
 # this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh).
 # NO new secret: `backfill_artist_edges` is AGENT tier, so the box's existing agent-scoped token
 # drives it.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-artist-edges -- bash /opt/hermes-scripts/artist-edges-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-artist-edges -- bash /opt/hermes-scripts/artist-edges-sweep.sh
 # A PURE trigger — zero LLM tokens, no vendor call. One batch is a set-based name→identity fold plus
 # the edge writes for up to 200 tracks in the Worker; a full pass is well under a minute, and a
 # drained worklist is a cheap no-op. The 480s ceiling clears a window that merely overlaps a

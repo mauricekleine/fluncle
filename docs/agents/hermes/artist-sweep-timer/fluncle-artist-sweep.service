@@ -10,11 +10,12 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
 # hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from
 # main via pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status
 # marker (cron-output.sh) so the prober stays honest.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-artist-sweep -- bash /opt/hermes-scripts/artist-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-artist-sweep -- bash /opt/hermes-scripts/artist-sweep.sh
 # A pure Worker-trigger (agent-tier resolve_artist: the MusicBrainz url-rel walk + Firecrawl
 # gap-fill + YouTube channel-ID resolution); one bounded batch per tick. Zero box tokens. A
 # healthy tick is ~55s. The real fix for the chronic timeouts is upstream — every external

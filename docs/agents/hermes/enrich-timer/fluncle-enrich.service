@@ -10,6 +10,7 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # The host unit runs as root (to drive the Docker daemon); `docker exec -u hermes` runs the
 # in-container enrichment WORK as the UNPRIVILEGED hermes user (hermes owns the 0600 secrets
 # file the .sh sources). The sweep trio is BAKED into the image at /opt/hermes-scripts/ and
@@ -22,7 +23,7 @@ Type=oneshot
 # while capture drains the crawled backlog at ~2,200/day — a measured 2-row tick used 8-15s of
 # its 5-minute window, so 12 stays comfortably inside it. At saturation, delete the -e flag to
 # fall back to the sweep's conservative baked default of 2.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ENRICH_CATALOGUE_BATCH=12 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-enrich -- bash /opt/hermes-scripts/enrich-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home -e FLUNCLE_ENRICH_CATALOGUE_BATCH=12 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-enrich -- bash /opt/hermes-scripts/enrich-sweep.sh
 # Pure on-box DSP over a bounded batch (cap 4); a clean tick is seconds, a full batch well
 # under two minutes. This is the most CPU-bound sweep, so a pin-watch docker image build (~4
 # min of heavy CPU contention on this 4-vCPU box) overlapping a full batch stretches it the

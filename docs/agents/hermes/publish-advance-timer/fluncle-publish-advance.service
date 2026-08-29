@@ -10,11 +10,12 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
 # hermes user. The lone .sh is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from main
 # via pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status
 # marker (cron-output.sh) so the prober stays honest.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-publish-advance -- bash /opt/hermes-scripts/publish-advance-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-publish-advance -- bash /opt/hermes-scripts/publish-advance-sweep.sh
 # One `curl --max-time 30` POST that triggers the Worker to advance at most ONE ready
 # finding into the publish push. The Worker no-ops instantly while the kill switch is on
 # (which is the default), and on an empty/unready queue. The curl is wall-clock-capped at

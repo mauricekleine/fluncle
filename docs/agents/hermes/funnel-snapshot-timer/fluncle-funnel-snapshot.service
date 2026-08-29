@@ -10,12 +10,13 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
 # hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). The agent token comes from the shared op-injected ${HOME}/.fluncle-secrets.env
 # the wrapper sources; no new secret (every count is computed Worker-side).
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-funnel-snapshot -- bash /opt/hermes-scripts/funnel-snapshot-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-funnel-snapshot -- bash /opt/hermes-scripts/funnel-snapshot-sweep.sh
 # One tick is a single bare trigger → one Worker request that computes the counts + upserts one row.
 # The stage scan is a once-a-day full scan of `tracks`; the ceiling has ample headroom and sits well
 # under the 24h cadence, so an over-long tick just skips the next trigger and self-heals.

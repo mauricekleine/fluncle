@@ -10,6 +10,7 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
 # The host unit runs as root (to drive the Docker daemon); `docker exec -u hermes` runs the
 # in-container capture WORK as the UNPRIVILEGED hermes user — yt-dlp handles untrusted network
 # content, so it must not run as container-root (hermes owns the 10000 secrets file the .sh
@@ -27,7 +28,7 @@ Type=oneshot
 # just delays the next; there is no overload spiral.
 # QUEUE_LIMIT rides along at 2× the batch (the 4/8 defaults' ratio), so pre-filtered rows
 # (the bad-audio memory, a mid-tick budget close) never starve the batch of candidates.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_CAPTURE_BATCH_CAP=12 -e FLUNCLE_CAPTURE_QUEUE_LIMIT=24 -e FLUNCLE_CAPTURE_CONCURRENCY=2 -e FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT=5 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-capture -- bash /opt/hermes-scripts/capture-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home -e FLUNCLE_CAPTURE_BATCH_CAP=12 -e FLUNCLE_CAPTURE_QUEUE_LIMIT=24 -e FLUNCLE_CAPTURE_CONCURRENCY=2 -e FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT=5 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-capture -- bash /opt/hermes-scripts/capture-sweep.sh
 # A worst-case tick (BATCH_CAP findings, each up to a 60s search + a 180s download) can run
 # tens of minutes; the timeout scales with the batch (12 × ~240s + overhead) so a
 # slow-download tick is never killed mid-batch (a kill mid-track wastes billed bytes).
