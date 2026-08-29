@@ -536,8 +536,8 @@ describe("synthetic database performance fixture", () => {
       await writeFixture(client, "1x", { counts: SMALL_COUNTS });
       await client.execute("delete from perf_artists where rowid = 1");
       await client.execute(
-        `insert into perf_artists (rowid, id, name, renderable_track_count)
-         values (12, 'synthetic-extra-artist', 'Synthetic Extra', 0)`,
+        `insert into perf_artists (rowid, id, name, renderable_track_count, rankable_track_count)
+         values (12, 'synthetic-extra-artist', 'Synthetic Extra', 0, 0)`,
       );
       await client.execute(
         `insert into perf_galaxies (rowid, id, name) values

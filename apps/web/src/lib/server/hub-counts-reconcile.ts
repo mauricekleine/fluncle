@@ -100,7 +100,8 @@ const PASSES: ReconcilePass[] = [
     key: "labels",
     source: `select label_id as entity_id,
                     count(*) as renderable,
-                    sum(case when is_catalogue = 0 then 1 else 0 end) as certified
+                    sum(case when is_catalogue = 0 then 1 else 0 end) as certified,
+                    0 as rankable
              from tracks
              where label_id is not null
              group by label_id`,
@@ -109,7 +110,8 @@ const PASSES: ReconcilePass[] = [
     key: "albums",
     source: `select album_id as entity_id,
                     count(*) as renderable,
-                    sum(case when is_catalogue = 0 then 1 else 0 end) as certified
+                    sum(case when is_catalogue = 0 then 1 else 0 end) as certified,
+                    0 as rankable
              from tracks
              where album_id is not null
              group by album_id`,
@@ -122,7 +124,8 @@ const PASSES: ReconcilePass[] = [
     key: "artists",
     source: `select ta.artist_id as entity_id,
                     count(*) as renderable,
-                    sum(case when t.is_catalogue = 0 then 1 else 0 end) as certified
+                    sum(case when t.is_catalogue = 0 then 1 else 0 end) as certified,
+                    sum(case when t.key is not null and t.has_embedding = 1 then 1 else 0 end) as rankable
              from track_artists ta
              join tracks t on t.track_id = ta.track_id
              group by ta.artist_id`,
@@ -134,29 +137,35 @@ function correctionSelection(pass: ReconcilePass): string {
           from ${pass.key}
           join (${pass.source}) src on src.entity_id = ${pass.key}.id
           where ${pass.key}.renderable_track_count <> src.renderable
-             or ${pass.key}.certified_finding_count <> src.certified`;
+             or ${pass.key}.certified_finding_count <> src.certified
+             ${pass.key === "artists" ? "or artists.rankable_track_count <> src.rankable" : ""}`;
 }
 
 function correctionStatement(pass: ReconcilePass): string {
   return `update ${pass.key}
           set renderable_track_count = src.renderable,
               certified_finding_count = src.certified
+              ${pass.key === "artists" ? ", rankable_track_count = src.rankable" : ""}
           from (${pass.source}) src
           where ${pass.key}.id = src.entity_id
             and (${pass.key}.renderable_track_count <> src.renderable
-                 or ${pass.key}.certified_finding_count <> src.certified)`;
+                 or ${pass.key}.certified_finding_count <> src.certified
+                 ${pass.key === "artists" ? "or artists.rankable_track_count <> src.rankable" : ""})`;
 }
 
 function zeroSelection(pass: ReconcilePass): string {
   return `select id as subject_id from ${pass.key}
-          where (renderable_track_count <> 0 or certified_finding_count <> 0)
+          where (renderable_track_count <> 0 or certified_finding_count <> 0
+                 ${pass.key === "artists" ? "or rankable_track_count <> 0" : ""})
             and id not in (select entity_id from (${pass.source}))`;
 }
 
 function zeroStatement(pass: ReconcilePass): string {
   return `update ${pass.key}
           set renderable_track_count = 0, certified_finding_count = 0
-          where (renderable_track_count <> 0 or certified_finding_count <> 0)
+              ${pass.key === "artists" ? ", rankable_track_count = 0" : ""}
+          where (renderable_track_count <> 0 or certified_finding_count <> 0
+                 ${pass.key === "artists" ? "or rankable_track_count <> 0" : ""})
             and id not in (select entity_id from (${pass.source}))`;
 }
 

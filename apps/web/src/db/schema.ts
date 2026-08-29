@@ -4209,6 +4209,12 @@ export const artists = sqliteTable(
     lastfmUrl: text("lastfm_url"),
     mbid: text("mbid"),
     name: text("name").notNull(),
+    /**
+     * Tracks credited to this artist that the mix engine can actually place: a non-null key and a
+     * stored MuQ embedding. Maintained atomically with key/embedding and `track_artists` writes so
+     * `/mix/artists` reads the artist-grain projection instead of grouping the growing edge table.
+     */
+    rankableTrackCount: integer("rankable_track_count").notNull().default(0),
     /** Total linked tracks (certified + catalogue) — see `certified_finding_count` above. */
     renderableTrackCount: integer("renderable_track_count").notNull().default(0),
     resolvedAt: text("resolved_at"),
@@ -4234,6 +4240,12 @@ export const artists = sqliteTable(
     // so the planner SEEKS via this index instead. Plain ASC (SQLite reverse-scans it). Keeps
     // the binary `artists_name_idx` above for exact-case seeks.
     index("artists_name_nocase_idx").on(sql`${table.name} collate nocase`, table.slug),
+    // The taste picker's exact order: most rankable tracks first, then name ASC. Negating the count
+    // makes both terms ASC so one ordinary expression index serves the mixed-direction order without
+    // a temporary sort (and avoids a DESC declaration changing unrelated generated migrations).
+    index("artists_mixable_order_idx")
+      .on(sql`-${table.rankableTrackCount}`, table.name, table.slug)
+      .where(sql`${table.rankableTrackCount} > 0`),
     // The maintained hub gate's ordering/filtering column (keystone 2): the hub read becomes a
     // walk of THIS index over the small artists table instead of a grouped scan of the ~225k-edge
     // `track_artists`. Plain ASC — SQLite reverse-scans it, and a drizzle `desc()` index poisons

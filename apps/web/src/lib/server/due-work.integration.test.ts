@@ -305,6 +305,8 @@ describe("due-work repair and drift", () => {
       `create table guarded_source_probe (id text primary key, value text not null)`,
     );
     await db.execute(`insert into guarded_source_probe (id, value) values ('source-1', 'held')`);
+    await db.execute(`create table after_maintenance_probe (value integer not null)`);
+    await db.execute(`insert into after_maintenance_probe (value) values (0)`);
 
     await batchDueWorkSourceMutation(
       db,
@@ -316,6 +318,9 @@ describe("due-work repair and drift", () => {
       ],
       [{ subjectId: "missing", subjectType: "track" }],
       {
+        afterMaintenanceStatements: [
+          { sql: `update after_maintenance_probe set value = value + 1` },
+        ],
         markerVersion: "guarded-v1",
         now: T0,
         onlyIfLastSourceStatementChanged: true,
@@ -331,6 +336,9 @@ describe("due-work repair and drift", () => {
     expect((await db.execute(`select subject_id from projection_repairs`)).rows).toEqual([]);
     expect((await db.execute(`select scope from public_aggregate_state`)).rows).toEqual([]);
     expect((await db.execute(`select scope from artist_qualification_state`)).rows).toEqual([]);
+    expect((await db.execute(`select value from after_maintenance_probe`)).rows).toEqual([
+      { value: 1 },
+    ]);
   });
 
   it("does not advance public epochs when a bounded source selection is empty", async () => {

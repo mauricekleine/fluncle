@@ -40,6 +40,9 @@ export type HubCountDelta = {
   renderable: number;
 };
 
+/** Artist-only extension: linked tracks that satisfy the mix engine's key + embedding gate. */
+export type HubCountArtistDelta = HubCountDelta & { rankable: number };
+
 /** A libSQL statement, in the shape `db.batch` / `db.execute` take. */
 export type HubCountStatement = { args: Array<null | number | string>; sql: string };
 
@@ -70,6 +73,61 @@ export function hubCountDeltaStatement(
             set renderable_track_count = max(0, renderable_track_count + ?),
                 certified_finding_count = max(0, certified_finding_count + ?)
           where id = ?`,
+  };
+}
+
+/** Move all three artist-grain counters in one statement. */
+export function hubCountArtistDeltaStatement(
+  artistId: string,
+  delta: HubCountArtistDelta,
+): HubCountStatement {
+  return {
+    args: [delta.renderable, delta.certified, delta.rankable, artistId],
+    sql: `update artists
+            set renderable_track_count = max(0, renderable_track_count + ?),
+                certified_finding_count = max(0, certified_finding_count + ?),
+                rankable_track_count = max(0, rankable_track_count + ?)
+          where id = ?`,
+  };
+}
+
+/** Move rankable membership for every artist currently credited on one track. */
+export function rankableArtistDeltaForTrackStatement(
+  trackId: string,
+  delta: -1 | 1,
+): HubCountStatement {
+  return {
+    args: [delta, trackId],
+    sql: `update artists
+            set rankable_track_count = max(0, rankable_track_count + ?)
+          where id in (select artist_id from track_artists where track_id = ?)`,
+  };
+}
+
+/**
+ * Re-read the exact rankable count for the bounded artist fan-out of one changed track. This is
+ * the idempotent hook for guarded embedding clears whose source UPDATE can legitimately match a
+ * row that was already unembedded, so a blind decrement cannot be correct.
+ */
+export function repairRankableArtistsForTrackStatement(trackId: string): HubCountStatement {
+  return {
+    args: [trackId],
+    sql: `with affected(id) as (
+            select artist_id from track_artists where track_id = ?
+          ), truth(id, rankable) as (
+            select affected.id, count(tracks.track_id)
+            from affected
+            left join track_artists artist_tracks indexed by track_artists_artist_id_idx
+              on artist_tracks.artist_id = affected.id
+            left join tracks on tracks.track_id = artist_tracks.track_id
+              and tracks.key is not null and tracks.has_embedding = 1
+            group by affected.id
+          )
+          update artists
+          set rankable_track_count = truth.rankable
+          from truth
+          where artists.id = truth.id
+            and artists.rankable_track_count <> truth.rankable`,
   };
 }
 
@@ -191,6 +249,8 @@ export type HubCountArtistEdge = {
   artistId: string;
   /** The track's `is_catalogue = 0` reading — whether this edge also moves the certified half. */
   certified: boolean;
+  /** Whether the linked track currently has both a key and an embedding. */
+  rankable: boolean;
   trackId: string;
 };
 
@@ -211,29 +271,31 @@ export function hubCountArtistEdgeStatements(
   edges: readonly HubCountArtistEdge[],
 ): HubCountStatement[] {
   const seen = new Set<string>();
-  const byArtist = new Map<string, HubCountDelta>();
+  const byArtist = new Map<string, HubCountArtistDelta>();
 
   for (const edge of edges) {
-    const key = `${edge.trackId} ${edge.artistId}`;
+    const key = JSON.stringify([edge.trackId, edge.artistId]);
 
     if (seen.has(key)) {
       continue;
     }
 
     seen.add(key);
-    const delta = byArtist.get(edge.artistId) ?? { certified: 0, renderable: 0 };
+    const delta = byArtist.get(edge.artistId) ?? { certified: 0, rankable: 0, renderable: 0 };
     delta.renderable += 1;
 
     if (edge.certified) {
       delta.certified += 1;
     }
 
+    if (edge.rankable) {
+      delta.rankable += 1;
+    }
+
     byArtist.set(edge.artistId, delta);
   }
 
-  return [...byArtist].map(([artistId, delta]) =>
-    hubCountDeltaStatement("artists", artistId, delta),
-  );
+  return [...byArtist].map(([artistId, delta]) => hubCountArtistDeltaStatement(artistId, delta));
 }
 
 /** The `tracks` column each entity's edge lives in. */

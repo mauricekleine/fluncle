@@ -40,6 +40,7 @@ import { purgeTrackEntityPages } from "./entity-cache-purge";
 import { type AdminRole } from "./env";
 import { type IdentityMethod } from "./identity-envelope";
 import { hasIsrc } from "./isrc";
+import { rankableArtistDeltaForTrackStatement } from "./hub-counts";
 import { resolveLogId } from "./log-id";
 import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
@@ -397,6 +398,10 @@ type ExistingRow = {
   // 1 when a `findings` row exists — i.e. the track is a FINDING, not a catalogue row.
   certified: number;
   isrc: string | null;
+  /** Stored embedding-presence mirror used by the mixable-artist projection delta. */
+  has_embedding: bigint | number;
+  /** Stored musical key used by the mixable-artist projection delta. */
+  key: string | null;
   key_source: string | null;
   // The RAW `tracks.label` spelling — the officialness gate's fallback label name, for a row the
   // crawler minted before it had a canonical `labels` row to point at.
@@ -454,6 +459,7 @@ export async function updateTrack(
     // join, so a row with no canonical label resolves exactly as before and falls back to the raw
     // `tracks.label` string.
     sql: `select tracks.isrc, tracks.title, tracks.bpm_source, tracks.key_source,
+                 tracks.key, tracks.has_embedding,
                  tracks.artists_json, tracks.youtube_video_id, tracks.youtube_video_official,
                  tracks.label, labels.name as label_name,
                  findings.log_id, findings.added_at,
@@ -1155,6 +1161,13 @@ export async function updateTrack(
     findingArgs.push(new Date().toISOString());
   }
 
+  const wasRankable = existing.key !== null && Number(existing.has_embedding) === 1;
+  const nextKey = update.key === undefined ? existing.key : update.key;
+  const nextHasEmbedding =
+    update.embedding === undefined ? Number(existing.has_embedding) === 1 : update.embedding !== "";
+  const isRankable = nextKey !== null && nextHasEmbedding;
+  const rankableDelta = Number(isRankable) - Number(wasRankable);
+
   // Source statements come first, each fired only when its half actually has something to write;
   // the due/public maintenance statements follow in the same fixed list so every changes()-based
   // marker still reads the immediately preceding result. Non-embedding updates issue this list as
@@ -1208,6 +1221,9 @@ export async function updateTrack(
       ],
       { producer: "track-update" },
     ),
+    ...(rankableDelta === 0
+      ? []
+      : [rankableArtistDeltaForTrackStatement(trackId, rankableDelta > 0 ? 1 : -1)]),
   ];
 
   if (embeddingStatement === undefined) {

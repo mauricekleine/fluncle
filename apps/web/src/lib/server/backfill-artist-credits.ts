@@ -249,6 +249,8 @@ async function resolveRecordingCredits(
 type WorkRow = {
   /** Keystone 1's catalogue discriminator — `0` means the track HAS a findings row (certified). */
   is_catalogue?: bigint | number;
+  /** The mix projection contribution carried beside the edge candidate. */
+  is_rankable?: bigint | number;
   mb_recording_id: string | null;
   track_id: string;
 };
@@ -294,7 +296,8 @@ async function listWork(
   const result = await db.execute({
     args: cursor ? [cursor, limit] : [limit],
     sql: cursor
-      ? `select t.track_id, t.mb_recording_id, t.is_catalogue
+      ? `select t.track_id, t.mb_recording_id, t.is_catalogue,
+                t.key is not null and t.has_embedding = 1 as is_rankable
          from tracks t
          left join track_artists ta on ta.track_id = t.track_id
          where ta.track_id is null
@@ -303,7 +306,8 @@ async function listWork(
            and t.track_id > ?
          order by t.track_id asc
          limit ?`
-      : `select t.track_id, t.mb_recording_id, t.is_catalogue
+      : `select t.track_id, t.mb_recording_id, t.is_catalogue,
+                t.key is not null and t.has_embedding = 1 as is_rankable
          from tracks t
          left join track_artists ta on ta.track_id = t.track_id
          where ta.track_id is null
@@ -326,7 +330,9 @@ async function hydrateProjectedWork(
 
   const result = await db.execute({
     args: [...trackIds],
-    sql: `select track_id, mb_recording_id, is_catalogue from tracks
+    sql: `select track_id, mb_recording_id, is_catalogue,
+                 key is not null and has_embedding = 1 as is_rankable
+          from tracks
           where track_id in (${trackIds.map(() => "?").join(", ")})`,
   });
   const byId = new Map(typedRows<WorkRow>(result.rows).map((row) => [row.track_id, row]));
@@ -352,6 +358,7 @@ async function insertEdges(
   trackId: string,
   edges: ReadonlyArray<CreditEdge>,
   certified: boolean,
+  rankable: boolean,
 ): Promise<number> {
   if (edges.length === 0) {
     return 0;
@@ -367,7 +374,7 @@ async function insertEdges(
         sql: `insert or ignore into track_artists (track_id, artist_id, position) values ${values}`,
       },
       ...hubCountArtistEdgeStatements(
-        edges.map((edge) => ({ artistId: edge.artistId, certified, trackId })),
+        edges.map((edge) => ({ artistId: edge.artistId, certified, rankable, trackId })),
       ),
       // The worklist selects edge-less tracks, so this track just gained its artist graph — re-stale
       // the catalogue row for the next `rank_catalogue` tick, atomically (catalogue-rank-restale.ts).
@@ -526,6 +533,7 @@ export async function resolveArtistCredits(
       outcome.edges,
       // Keystone 1's flag, read off the worklist row — the hub-count deltas need no extra query.
       row.is_catalogue !== undefined && Number(row.is_catalogue) === 0,
+      row.is_rankable !== undefined && Number(row.is_rankable) === 1,
     );
     mintedArtists += outcome.minted;
     matchedArtists += outcome.matched;

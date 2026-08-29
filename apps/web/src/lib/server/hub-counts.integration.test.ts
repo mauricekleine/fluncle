@@ -370,15 +370,15 @@ describe("the arithmetic", () => {
 
   it("hubCountArtistEdgeStatements folds duplicate pairs and sums per artist", () => {
     const statements = hubCountArtistEdgeStatements([
-      { artistId: "art-a", certified: true, trackId: "t1" },
-      { artistId: "art-a", certified: true, trackId: "t1" }, // the same edge twice
-      { artistId: "art-a", certified: false, trackId: "t2" },
-      { artistId: "art-b", certified: true, trackId: "t1" },
+      { artistId: "art-a", certified: true, rankable: true, trackId: "t1" },
+      { artistId: "art-a", certified: true, rankable: true, trackId: "t1" }, // the same edge twice
+      { artistId: "art-a", certified: false, rankable: false, trackId: "t2" },
+      { artistId: "art-b", certified: true, rankable: true, trackId: "t1" },
     ]);
 
     expect(statements).toHaveLength(2);
-    expect(statements[0]?.args).toEqual([2, 1, "art-a"]);
-    expect(statements[1]?.args).toEqual([1, 1, "art-b"]);
+    expect(statements[0]?.args).toEqual([2, 1, 1, "art-a"]);
+    expect(statements[1]?.args).toEqual([1, 1, 1, "art-b"]);
   });
 
   it("a counter never reads negative — the clamp holds", async () => {

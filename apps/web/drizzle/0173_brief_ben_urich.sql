@@ -1,0 +1,2 @@
+ALTER TABLE `artists` ADD `rankable_track_count` integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+CREATE INDEX `artists_mixable_order_idx` ON `artists` (-"rankable_track_count",`name`,`slug`) WHERE "artists"."rankable_track_count" > 0;

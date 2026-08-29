@@ -12,6 +12,8 @@ import {
   type PublicProjectionReadClient,
 } from "./public-projection-cutover";
 import {
+  PUBLIC_PROJECTION_WRITE_STATEMENT_LIMIT,
+  PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE,
   artistQualificationLabelFanoutQuery,
   auditPublicProjections,
   markPublicLabelSourceChangedStatements,
@@ -120,6 +122,121 @@ async function seedProjectionWorld(): Promise<void> {
     releaseDate: "2024-06-01",
     trackId: "track-certified",
   });
+}
+
+async function seedBulkProjectionWorld(total = 501): Promise<void> {
+  await seedLabel("bulk-lane", true);
+  await seedArtist("bulk-primary");
+  await seedArtist("bulk-secondary");
+  await db.execute({
+    args: [total - 1, JSON.stringify(["Bulk Artist"])],
+    sql: `with recursive source(n) as (
+        select 0 union all select n + 1 from source where n < ?
+      )
+      insert into tracks
+        (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, label_id,
+         release_date, key)
+      select printf('bulk-%03d', n), printf('Bulk Track %03d', n), ?,
+        'spotify:track:' || printf('bulk-%03d', n),
+        'https://example.invalid/' || printf('bulk-%03d', n), 270000, 'bulk-lane',
+        case when n % 11 = 0 then null when n % 7 = 0 then ''
+          else printf('%04d-01-01', 2000 + n % 27) end,
+        case when n % 13 = 0 then null when n % 5 = 0 then ''
+          else case n % 3 when 0 then 'Am' when 1 then 'Dm' else 'F#m' end end
+      from source`,
+  });
+  await db.execute(`insert into track_artists (track_id, artist_id, position, role)
+    select track_id, 'bulk-primary', 1,
+      case when cast(substr(track_id, 6) as integer) % 7 = 0 then 'remixer' else null end
+    from tracks where track_id >= 'bulk-' and track_id < 'bulk.'`);
+  await db.execute(`insert into track_artists (track_id, artist_id, position, role)
+    select track_id, 'bulk-secondary', 2, null from tracks
+    where track_id >= 'bulk-' and track_id < 'bulk.'
+      and cast(substr(track_id, 6) as integer) % 10 = 0`);
+  await db.execute({
+    args: [OLD],
+    sql: `insert into findings
+      (track_id, log_id, added_at, added_to_spotify, posted_to_telegram)
+      values ('bulk-000', '999.9.9', ?, 0, 0)`,
+  });
+}
+
+async function seedHighCreditTracks(trackIds: readonly string[], creditsPerTrack: number) {
+  await seedLabel("credit-lane", true);
+  await db.execute({
+    args: [creditsPerTrack - 1, OLD, OLD],
+    sql: `with recursive source(n) as (
+        select 0 union all select n + 1 from source where n < ?
+      )
+      insert into artists (id, name, slug, created_at, updated_at)
+      select printf('credit-%03d', n), printf('Credit Artist %03d', n),
+        printf('credit-artist-%03d', n), ?, ? from source`,
+  });
+  for (const trackId of trackIds) {
+    await seedCatalogueTrack(db, { trackId });
+    await db.execute({
+      args: [trackId],
+      sql: `update tracks set label_id = 'credit-lane' where track_id = ?`,
+    });
+    await db.execute({
+      args: [trackId],
+      sql: `insert into track_artists (track_id, artist_id, position)
+        select ?, id, cast(substr(id, 8) as integer) + 1
+        from artists where id >= 'credit-' and id < 'credit.' order by id`,
+    });
+  }
+}
+
+function projectionClientProbe(options: { failWriteSubpage?: number } = {}) {
+  const evidence = {
+    batchCalls: 0,
+    executeCalls: 0,
+    executeSql: [] as string[],
+    maximumBatchStatements: 0,
+    writeSubpages: 0,
+  };
+  let failurePending = options.failWriteSubpage !== undefined;
+  const client: PublicProjectionClient = {
+    batch: async (statements, mode) => {
+      evidence.batchCalls += 1;
+      evidence.maximumBatchStatements = Math.max(
+        evidence.maximumBatchStatements,
+        statements.length,
+      );
+      const writeSubpage = statements.some((statement) => {
+        const sql =
+          typeof statement === "string"
+            ? statement
+            : Array.isArray(statement)
+              ? statement[0]
+              : statement.sql;
+        return (
+          sql.includes("delete from public_aggregate_membership") ||
+          sql.includes("delete from artist_qualification_contributions")
+        );
+      });
+      if (writeSubpage) {
+        evidence.writeSubpages += 1;
+        if (failurePending && evidence.writeSubpages === options.failWriteSubpage) {
+          failurePending = false;
+          throw new Error("injected projection write-subpage failure");
+        }
+      }
+      return db.batch(statements, mode);
+    },
+    execute: async (statement) => {
+      evidence.executeCalls += 1;
+      evidence.executeSql.push(
+        typeof statement === "string"
+          ? statement
+          : Array.isArray(statement)
+            ? statement[0]
+            : statement.sql,
+      );
+      return db.execute(statement);
+    },
+  };
+  return { client, evidence };
 }
 
 async function rebuildAll(): Promise<void> {
@@ -742,6 +859,518 @@ describe("public shadow projections", () => {
     ).toMatchObject({ audited_at: expect.any(String), digests_match: 1 });
   });
 
+  it("preserves an aggregate live repair that lands in the bulk read-to-batch gap", async () => {
+    await seedProjectedTrack({
+      key: "A minor",
+      releaseDate: "2024-01-01",
+      trackId: "aggregate-gap",
+    });
+    await rebuildPublicProjection(db, "public_aggregates", {
+      generation: "aggregate-gap-base",
+      limit: 1,
+      now: () => new Date(OLD),
+    });
+
+    let intercepted = false;
+    const racingClient: PublicProjectionClient = {
+      batch: async (statements, mode) => {
+        const isRebuildWrite = statements.some((statement) => {
+          const sql =
+            typeof statement === "string"
+              ? statement
+              : Array.isArray(statement)
+                ? statement[0]
+                : statement.sql;
+          return sql.includes("delete from public_aggregate_membership");
+        });
+        if (!intercepted && isRebuildWrite) {
+          intercepted = true;
+          const liveAt = "2026-01-10T00:00:00.000Z";
+          await db.batch(
+            [
+              {
+                args: [],
+                sql: `update tracks set key = 'B minor' where track_id = 'aggregate-gap'`,
+              },
+              ...markPublicTrackSourceChangedStatements(
+                "aggregate-gap",
+                publicTrackSourceVersion({ key: "B minor", releaseDate: "2024-01-01" }),
+                { now: liveAt },
+              ),
+            ],
+            "write",
+          );
+          expect(
+            await repairPublicAggregateTrack(db, "aggregate-gap", {
+              now: () => new Date(liveAt),
+            }),
+          ).toBe(true);
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    await expect(
+      runPublicProjectionRebuildChunk(racingClient, "public_aggregates", {
+        boundedCleanup: true,
+        generation: "aggregate-gap-rebuild",
+        limit: 1,
+        newGeneration: true,
+        now: () => new Date("2026-01-10T00:00:00.000Z"),
+      }),
+    ).rejects.toThrow("public_aggregates source epoch changed during rebuild page; retry required");
+    expect(intercepted).toBe(true);
+    expect(
+      (await db.execute(`select cursor from public_aggregate_state where scope = 'tracks'`)).rows[0]
+        ?.cursor,
+    ).toBeNull();
+    const rebuilt = await runPublicProjectionRebuildChunk(db, "public_aggregates", {
+      boundedCleanup: true,
+      generation: "aggregate-gap-rebuild",
+      limit: 1,
+      now: () => new Date("2026-01-10T00:00:00.000Z"),
+    });
+    expect(rebuilt.checkpoint.cursor).toBe("aggregate-gap");
+    expect(
+      (
+        await db.execute(`select generation, key_bucket, updated_at
+          from public_aggregate_membership where track_id = 'aggregate-gap'`)
+      ).rows[0],
+    ).toEqual({
+      generation: "live",
+      key_bucket: "B minor",
+      updated_at: "2026-01-10T00:00:00.000Z",
+    });
+    expect(
+      (
+        await db.execute(`select bucket, track_count from public_aggregate_counts
+          where aggregate_kind = 'key' order by bucket`)
+      ).rows,
+    ).toEqual([{ bucket: "B minor", track_count: 1 }]);
+  });
+
+  it("preserves an artist live repair that lands in the bulk read-to-batch gap", async () => {
+    await seedLabel("artist-gap-lane", true);
+    await seedArtist("artist-gap-credit");
+    await seedProjectedTrack({
+      artistIds: [{ id: "artist-gap-credit" }],
+      key: null,
+      labelId: "artist-gap-lane",
+      releaseDate: null,
+      trackId: "artist-gap",
+    });
+    await rebuildPublicProjection(db, "artist_qualification", {
+      generation: "artist-gap-base",
+      limit: 1,
+      now: () => new Date(OLD),
+    });
+
+    let intercepted = false;
+    const racingClient: PublicProjectionClient = {
+      batch: async (statements, mode) => {
+        const isRebuildWrite = statements.some((statement) => {
+          const sql =
+            typeof statement === "string"
+              ? statement
+              : Array.isArray(statement)
+                ? statement[0]
+                : statement.sql;
+          return sql.includes("delete from artist_qualification_contributions");
+        });
+        if (!intercepted && isRebuildWrite) {
+          intercepted = true;
+          const liveAt = "2026-01-10T00:00:00.000Z";
+          await db.batch(
+            [
+              {
+                args: [],
+                sql: `update track_artists set role = 'remixer'
+                  where track_id = 'artist-gap' and artist_id = 'artist-gap-credit'`,
+              },
+              ...markPublicTrackSourceChangedStatements("artist-gap", "artist-gap-live", {
+                now: liveAt,
+              }),
+            ],
+            "write",
+          );
+          expect(
+            await repairPublicProjectionChunk(db, {
+              limit: 1,
+              now: () => new Date(liveAt),
+              projection: "artist_qualification",
+            }),
+          ).toEqual({ fanout: 0, repaired: 1 });
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    await expect(
+      runPublicProjectionRebuildChunk(racingClient, "artist_qualification", {
+        boundedCleanup: true,
+        generation: "artist-gap-rebuild",
+        limit: 1,
+        newGeneration: true,
+        now: () => new Date("2026-01-10T00:00:00.000Z"),
+      }),
+    ).rejects.toThrow(
+      "artist_qualification source epoch changed during rebuild page; retry required",
+    );
+    expect(intercepted).toBe(true);
+    expect(
+      (await db.execute(`select cursor from artist_qualification_state where scope = 'artists'`))
+        .rows[0]?.cursor,
+    ).toBeNull();
+    const rebuilt = await runPublicProjectionRebuildChunk(db, "artist_qualification", {
+      boundedCleanup: true,
+      generation: "artist-gap-rebuild",
+      limit: 1,
+      now: () => new Date("2026-01-10T00:00:00.000Z"),
+    });
+    expect(rebuilt.checkpoint.cursor).toBe("artist-gap");
+    expect(
+      (
+        await db.execute(`select generation, enabled_credit_half_units, updated_at
+          from artist_qualification_contributions
+          where track_id = 'artist-gap' and artist_id = 'artist-gap-credit'`)
+      ).rows[0],
+    ).toEqual({
+      enabled_credit_half_units: 1,
+      generation: "live",
+      updated_at: "2026-01-10T00:00:00.000Z",
+    });
+    expect(
+      (
+        await db.execute(`select enabled_credit_half_units from artist_qualification
+          where artist_id = 'artist-gap-credit'`)
+      ).rows[0]?.enabled_credit_half_units,
+    ).toBe(1);
+  });
+
+  it("preserves an aggregate deletion repair that leaves no live membership tombstone", async () => {
+    await seedProjectedTrack({
+      key: "C minor",
+      releaseDate: "2023-01-01",
+      trackId: "aggregate-delete-gap",
+    });
+    await rebuildPublicProjection(db, "public_aggregates", {
+      generation: "aggregate-delete-base",
+      limit: 1,
+      now: () => new Date(OLD),
+    });
+
+    let intercepted = false;
+    const racingClient: PublicProjectionClient = {
+      batch: async (statements, mode) => {
+        const isRebuildWrite = statements.some((statement) => {
+          const sql =
+            typeof statement === "string"
+              ? statement
+              : Array.isArray(statement)
+                ? statement[0]
+                : statement.sql;
+          return sql.includes("delete from public_aggregate_membership");
+        });
+        if (!intercepted && isRebuildWrite) {
+          intercepted = true;
+          await db.batch(
+            [
+              { args: [], sql: `delete from tracks where track_id = 'aggregate-delete-gap'` },
+              ...markPublicTrackSourceChangedStatements(
+                "aggregate-delete-gap",
+                "aggregate-deleted",
+                { now: "2026-01-10T00:00:00.000Z" },
+              ),
+            ],
+            "write",
+          );
+          expect(
+            await repairPublicAggregateTrack(db, "aggregate-delete-gap", {
+              now: () => new Date("2026-01-10T00:00:00.000Z"),
+            }),
+          ).toBe(true);
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    await expect(
+      runPublicProjectionRebuildChunk(racingClient, "public_aggregates", {
+        boundedCleanup: true,
+        generation: "aggregate-delete-rebuild",
+        limit: 1,
+        newGeneration: true,
+        now: () => new Date("2026-01-10T00:00:00.000Z"),
+      }),
+    ).rejects.toThrow("public_aggregates source epoch changed during rebuild page; retry required");
+    expect(intercepted).toBe(true);
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from public_aggregate_membership
+            where track_id = 'aggregate-delete-gap'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(0);
+    expect(
+      Number((await db.execute(`select count(*) as n from public_aggregate_counts`)).rows[0]?.n),
+    ).toBe(0);
+    expect(
+      (await db.execute(`select cursor from public_aggregate_state where scope = 'tracks'`)).rows[0]
+        ?.cursor,
+    ).toBeNull();
+  });
+
+  it("preserves an all-edges deletion repair that leaves no live contribution tombstone", async () => {
+    await seedLabel("artist-delete-lane", true);
+    await seedArtist("artist-delete-credit");
+    await seedProjectedTrack({
+      artistIds: [{ id: "artist-delete-credit" }],
+      key: null,
+      labelId: "artist-delete-lane",
+      releaseDate: null,
+      trackId: "artist-delete-gap",
+    });
+    await rebuildPublicProjection(db, "artist_qualification", {
+      generation: "artist-delete-base",
+      limit: 1,
+      now: () => new Date(OLD),
+    });
+
+    let intercepted = false;
+    const racingClient: PublicProjectionClient = {
+      batch: async (statements, mode) => {
+        const isRebuildWrite = statements.some((statement) => {
+          const sql =
+            typeof statement === "string"
+              ? statement
+              : Array.isArray(statement)
+                ? statement[0]
+                : statement.sql;
+          return sql.includes("delete from artist_qualification_contributions");
+        });
+        if (!intercepted && isRebuildWrite) {
+          intercepted = true;
+          await db.batch(
+            [
+              {
+                args: [],
+                sql: `delete from track_artists where track_id = 'artist-delete-gap'`,
+              },
+              ...markPublicTrackSourceChangedStatements(
+                "artist-delete-gap",
+                "artist-edges-deleted",
+                { now: "2026-01-10T00:00:00.000Z" },
+              ),
+            ],
+            "write",
+          );
+          expect(
+            await repairPublicProjectionChunk(db, {
+              limit: 1,
+              now: () => new Date("2026-01-10T00:00:00.000Z"),
+              projection: "artist_qualification",
+            }),
+          ).toEqual({ fanout: 0, repaired: 1 });
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    await expect(
+      runPublicProjectionRebuildChunk(racingClient, "artist_qualification", {
+        boundedCleanup: true,
+        generation: "artist-delete-rebuild",
+        limit: 1,
+        newGeneration: true,
+        now: () => new Date("2026-01-10T00:00:00.000Z"),
+      }),
+    ).rejects.toThrow(
+      "artist_qualification source epoch changed during rebuild page; retry required",
+    );
+    expect(intercepted).toBe(true);
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from artist_qualification_contributions
+            where track_id = 'artist-delete-gap'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(0);
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from artist_qualification
+            where artist_id = 'artist-delete-credit'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(0);
+    expect(
+      (await db.execute(`select cursor from artist_qualification_state where scope = 'artists'`))
+        .rows[0]?.cursor,
+    ).toBeNull();
+  });
+
+  it("packs high-credit artist plans whole under the remote statement ceiling", async () => {
+    await seedHighCreditTracks(["credit-track-a", "credit-track-b"], 180);
+    const writeBatches: string[][] = [];
+    let maximumStatements = 0;
+    const boundedClient: PublicProjectionClient = {
+      batch: async (statements, mode) => {
+        const trackDeletes = statements.flatMap((statement) => {
+          const sql =
+            typeof statement === "string"
+              ? statement
+              : Array.isArray(statement)
+                ? statement[0]
+                : statement.sql;
+          if (!sql.includes("delete from artist_qualification_contributions")) {
+            return [];
+          }
+          const args =
+            typeof statement === "string"
+              ? undefined
+              : Array.isArray(statement)
+                ? statement[1]
+                : statement.args;
+          const trackId = Array.isArray(args) ? args[0] : undefined;
+          return typeof trackId === "string" ? [trackId] : [];
+        });
+        if (trackDeletes.length > 0) {
+          writeBatches.push(trackDeletes);
+          maximumStatements = Math.max(maximumStatements, statements.length);
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    const rebuilt = await runPublicProjectionRebuildChunk(boundedClient, "artist_qualification", {
+      boundedCleanup: true,
+      generation: "artist-credit-bounded",
+      limit: 2,
+      newGeneration: true,
+      now: () => NOW,
+    });
+    expect(rebuilt.checkpoint.cursor).toBe("credit-track-b");
+    expect(writeBatches).toEqual([["credit-track-a"], ["credit-track-b"]]);
+    expect(maximumStatements).toBeLessThanOrEqual(PUBLIC_PROJECTION_WRITE_STATEMENT_LIMIT);
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from artist_qualification_contributions
+            where generation = 'artist-credit-bounded'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(360);
+  });
+
+  it("retries the largest admitted high-credit plan after projection commit but before cursor commit", async () => {
+    await seedHighCreditTracks(["credit-track-retry-boundary"], 199);
+    let cursorFailurePending = true;
+    const failingCursorClient: PublicProjectionClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement) => {
+        const sql =
+          typeof statement === "string"
+            ? statement
+            : Array.isArray(statement)
+              ? statement[0]
+              : statement.sql;
+        if (cursorFailurePending && sql.includes("set cursor = ?, scanned_count")) {
+          cursorFailurePending = false;
+          throw new Error("injected cursor write failure after projection commit");
+        }
+        return db.execute(statement);
+      },
+    };
+
+    await expect(
+      runPublicProjectionRebuildChunk(failingCursorClient, "artist_qualification", {
+        boundedCleanup: true,
+        generation: "artist-credit-retry-boundary",
+        limit: 1,
+        newGeneration: true,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow("injected cursor write failure after projection commit");
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from artist_qualification_contributions
+            where track_id = 'credit-track-retry-boundary'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(199);
+    expect(
+      (await db.execute(`select cursor from artist_qualification_state where scope = 'artists'`))
+        .rows[0]?.cursor,
+    ).toBeNull();
+
+    const retryProbe = projectionClientProbe();
+    const retried = await runPublicProjectionRebuildChunk(
+      retryProbe.client,
+      "artist_qualification",
+      {
+        boundedCleanup: true,
+        generation: "artist-credit-retry-boundary",
+        limit: 1,
+        now: () => NOW,
+      },
+    );
+    expect(retried.checkpoint.cursor).toBe("credit-track-retry-boundary");
+    expect(retryProbe.evidence.maximumBatchStatements).toBeLessThanOrEqual(
+      PUBLIC_PROJECTION_WRITE_STATEMENT_LIMIT,
+    );
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from artist_qualification_contributions
+            where track_id = 'credit-track-retry-boundary'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(199);
+    expect(
+      Number(
+        (
+          await db.execute(`select max(enabled_credit_half_units) as n
+            from artist_qualification where artist_id >= 'credit-' and artist_id < 'credit.'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(2);
+  });
+
+  it("fails closed before splitting one artist plan that exceeds the statement ceiling", async () => {
+    await seedHighCreditTracks(["credit-track-oversized"], 200);
+    await expect(
+      runPublicProjectionRebuildChunk(db, "artist_qualification", {
+        boundedCleanup: true,
+        generation: "artist-credit-oversized",
+        limit: 1,
+        newGeneration: true,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow(
+      "artist qualification projection plan for track credit-track-oversized requires 803 statements; per-plan limit is 799",
+    );
+    expect(
+      (await db.execute(`select cursor from artist_qualification_state where scope = 'artists'`))
+        .rows[0]?.cursor,
+    ).toBeNull();
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from artist_qualification_contributions
+            where track_id = 'credit-track-oversized'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(0);
+  });
+
   it("bounds source and cleanup pages for both production rebuild targets", async () => {
     await seedProjectionWorld();
     for (const projection of ["public_aggregates", "artist_qualification"] as const) {
@@ -761,5 +1390,202 @@ describe("public shadow projections", () => {
     const audit = await auditPublicProjections(db);
     expect(audit.aggregatesMatched).toBe(true);
     expect(audit.artistMatched).toBe(true);
+  });
+
+  it("executes each 500-track rebuild page through fixed VALUES-backed write subpages", async () => {
+    await seedBulkProjectionWorld();
+
+    const aggregateProbe = projectionClientProbe();
+    const aggregate = await runPublicProjectionRebuildChunk(
+      aggregateProbe.client,
+      "public_aggregates",
+      {
+        boundedCleanup: true,
+        generation: "aggregate-bulk",
+        limit: 500,
+        newGeneration: true,
+        now: () => NOW,
+      },
+    );
+    expect(aggregate.scanned).toBe(500);
+    expect(aggregate.checkpoint.cursor).toBe("bulk-499");
+    expect(aggregateProbe.evidence.writeSubpages).toBe(500 / PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE);
+    expect(aggregateProbe.evidence.batchCalls).toBeLessThanOrEqual(11);
+    expect(aggregateProbe.evidence.executeCalls).toBeLessThanOrEqual(16);
+    expect(aggregateProbe.evidence.maximumBatchStatements).toBeLessThanOrEqual(350);
+    const aggregatePageReads = aggregateProbe.evidence.executeSql.filter((sql) =>
+      sql.includes("with selected(track_id) as (values"),
+    );
+    expect(aggregatePageReads).toHaveLength(10);
+    expect(aggregatePageReads.every((sql) => !sql.toLowerCase().includes("union all"))).toBe(true);
+
+    const artistProbe = projectionClientProbe();
+    const artists = await runPublicProjectionRebuildChunk(
+      artistProbe.client,
+      "artist_qualification",
+      {
+        boundedCleanup: true,
+        generation: "artists-bulk",
+        limit: 500,
+        newGeneration: true,
+        now: () => NOW,
+      },
+    );
+    expect(artists.scanned).toBe(500);
+    expect(artists.checkpoint.cursor).toBe("bulk-499");
+    expect(artistProbe.evidence.writeSubpages).toBe(10);
+    expect(artistProbe.evidence.batchCalls).toBeLessThanOrEqual(11);
+    expect(artistProbe.evidence.executeCalls).toBeLessThanOrEqual(36);
+    expect(artistProbe.evidence.maximumBatchStatements).toBeLessThanOrEqual(350);
+    const artistPageReads = artistProbe.evidence.executeSql.filter((sql) =>
+      sql.includes("with selected(track_id) as (values"),
+    );
+    expect(artistPageReads).toHaveLength(30);
+    expect(artistPageReads.every((sql) => !sql.toLowerCase().includes("union all"))).toBe(true);
+  });
+
+  it("retries a partially committed rebuild page without double-counting", async () => {
+    await seedBulkProjectionWorld();
+    const failedProbe = projectionClientProbe({ failWriteSubpage: 3 });
+    await expect(
+      runPublicProjectionRebuildChunk(failedProbe.client, "public_aggregates", {
+        boundedCleanup: true,
+        generation: "aggregate-retry",
+        limit: 500,
+        newGeneration: true,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow("injected projection write-subpage failure");
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from public_aggregate_membership
+            where generation = 'aggregate-retry'`)
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(100);
+    expect(
+      (await db.execute(`select cursor from public_aggregate_state where scope = 'tracks'`)).rows[0]
+        ?.cursor,
+    ).toBeNull();
+
+    const retryProbe = projectionClientProbe();
+    const retry = await runPublicProjectionRebuildChunk(retryProbe.client, "public_aggregates", {
+      boundedCleanup: true,
+      generation: "aggregate-retry",
+      limit: 500,
+      now: () => NOW,
+    });
+    expect(retry.scanned).toBe(500);
+    expect(retry.checkpoint.cursor).toBe("bulk-499");
+    const [membership, aggregateState, sourceBuckets, projectedBuckets] = await Promise.all([
+      db.execute(`select count(*) as n from public_aggregate_membership`),
+      db.execute(`select default_track_total from public_aggregate_state where scope = 'tracks'`),
+      db.execute(`select aggregate_kind, bucket, count(*) as track_count from (
+          select 'release_date_bucket' as aggregate_kind, substr(release_date, 1, 4) as bucket
+          from tracks where track_id <= 'bulk-499' and release_date is not null
+          union all
+          select 'key', key from tracks where track_id <= 'bulk-499' and key is not null
+        ) group by aggregate_kind, bucket order by aggregate_kind, bucket`),
+      db.execute(`select aggregate_kind, bucket, track_count from public_aggregate_counts
+        order by aggregate_kind, bucket`),
+    ]);
+    expect(Number(membership.rows[0]?.n ?? 0)).toBe(500);
+    expect(Number(aggregateState.rows[0]?.default_track_total ?? 0)).toBe(500);
+    expect(projectedBuckets.rows).toEqual(sourceBuckets.rows);
+    expect(retryProbe.evidence.writeSubpages).toBe(10);
+  });
+
+  it("repairs 500 aggregate markers without restoring per-track round trips", async () => {
+    await seedBulkProjectionWorld(500);
+    await rebuildPublicProjection(db, "public_aggregates", {
+      generation: "aggregate-repair-source",
+      limit: 500,
+      now: () => NOW,
+    });
+    await db.execute(`update tracks set key = case when key = 'Am' then 'Bm' else key end
+      where track_id >= 'bulk-' and track_id < 'bulk.'`);
+    await db.execute(`update public_aggregate_state set source_epoch = 1
+      where scope = 'tracks'`);
+    await db.execute({
+      args: [OLD, OLD],
+      sql: `insert into projection_repairs
+        (projection, subject_type, subject_id, source_epoch, source_version, created_at, updated_at)
+        select 'public_aggregates', 'track', track_id, 1, 'bulk-repair', ?, ?
+        from tracks where track_id >= 'bulk-' and track_id < 'bulk.'`,
+    });
+
+    const probe = projectionClientProbe();
+    const repaired = await repairPublicProjectionChunk(probe.client, {
+      limit: 500,
+      now: () => NOW,
+      projection: "public_aggregates",
+    });
+    expect(repaired).toEqual({ fanout: 0, repaired: 500 });
+    expect(probe.evidence.writeSubpages).toBe(10);
+    expect(probe.evidence.batchCalls).toBe(10);
+    expect(probe.evidence.executeCalls).toBe(11);
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from projection_repairs
+            where projection = 'public_aggregates'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(0);
+    const [sourceBuckets, projectedBuckets] = await Promise.all([
+      db.execute(`select aggregate_kind, bucket, count(*) as track_count from (
+          select 'release_date_bucket' as aggregate_kind, substr(release_date, 1, 4) as bucket
+          from tracks where release_date is not null
+          union all select 'key', key from tracks where key is not null
+        ) group by aggregate_kind, bucket order by aggregate_kind, bucket`),
+      db.execute(`select aggregate_kind, bucket, track_count from public_aggregate_counts
+        order by aggregate_kind, bucket`),
+    ]);
+    expect(projectedBuckets.rows).toEqual(sourceBuckets.rows);
+  });
+
+  it("cleans a 500-row stale generation through bounded subpages before moving its cursor", async () => {
+    await db.execute({
+      args: [499, publicTrackSourceVersion({ key: "Am", releaseDate: "2024-01-01" }), OLD],
+      sql: `with recursive source(n) as (
+          select 0 union all select n + 1 from source where n < ?
+        )
+        insert into public_aggregate_membership
+          (track_id, release_date_bucket, key_bucket, generation, source_version, updated_at)
+        select printf('stale-%03d', n), '2024', 'Am', 'stale', ?, ? from source`,
+    });
+    await db.execute({
+      args: [500, OLD, OLD, 500, OLD, OLD],
+      sql: `insert into public_aggregate_counts
+        (aggregate_kind, bucket, track_count, generation, source_version, updated_at)
+        values ('release_date_bucket', '2024', ?, 'stale', ?, ?),
+          ('key', 'Am', ?, 'stale', ?, ?)`,
+    });
+
+    const probe = projectionClientProbe();
+    const cleanup = await runPublicProjectionRebuildChunk(probe.client, "public_aggregates", {
+      boundedCleanup: true,
+      generation: "aggregate-cleanup",
+      limit: 500,
+      newGeneration: true,
+      now: () => NOW,
+    });
+    expect(cleanup.scanned).toBe(500);
+    expect(cleanup.complete).toBe(false);
+    expect(probe.evidence.writeSubpages).toBe(10);
+    expect(
+      Number(
+        (await db.execute(`select count(*) as n from public_aggregate_membership`)).rows[0]?.n,
+      ),
+    ).toBe(0);
+    expect(
+      Number((await db.execute(`select count(*) as n from public_aggregate_counts`)).rows[0]?.n),
+    ).toBe(0);
+    const cleanupState = await db.execute(
+      `select json_extract(value, '$.cursor') as cursor from settings
+        where key like 'projection_cleanup_public_aggregates_v1:%'`,
+    );
+    expect(cleanupState.rows[0]?.cursor).toBe("stale-499");
   });
 });

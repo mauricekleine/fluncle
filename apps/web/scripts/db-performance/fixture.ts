@@ -372,11 +372,15 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     image_key text,
     image_state text,
     image_updated_at text,
-    renderable_track_count integer not null
+    renderable_track_count integer not null,
+    rankable_track_count integer not null
   )`,
   `create index if not exists perf_artists_mbid_idx on perf_artists(mbid)`,
   `create index if not exists perf_artists_name_nocase_idx
     on perf_artists(name collate nocase)`,
+  `create index if not exists perf_artists_mixable_order_idx
+    on perf_artists(-rankable_track_count, name, id)
+    where rankable_track_count > 0`,
   `create table if not exists perf_labels (
     id text primary key,
     name text not null,
@@ -1057,10 +1061,11 @@ export async function* generateFixture(
         "resolved",
         syntheticTimestamp(index),
         4,
+        (index % 8) + 1,
       ],
       sql: `insert or ignore into perf_artists
               (id, name, mbid, image_url, image_key, image_state, image_updated_at,
-               renderable_track_count) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+               renderable_track_count, rankable_track_count) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     };
   });
 

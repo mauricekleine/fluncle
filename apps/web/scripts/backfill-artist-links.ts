@@ -29,13 +29,8 @@
  * It cannot make a catalogue track countable as a finding: every read that means "finding"
  * inner-joins `findings … log_id is not null`. See `artists.ts` and the rail test beside it.
  *
- * ── AFTER A RUN, RESEED THE HUB COUNTS ───────────────────────────────────────────────────────
- * This is the one artist-edge writer that is deliberately UNBOUNDED (the whole corpus in one
- * statement), so it cannot carry the maintained hub-count deltas the inline paths do — attributing
- * them per artist would mean dragging every new edge through the isolate. So when a run reports a
- * non-zero `linked`, follow it with the guarded recompute:
- *   `bun run --cwd apps/web scripts/backfill-hub-counts.ts --force`
- * (docs/db-scale-backlog Wave 2 keystone 2; lib/server/hub-counts.ts holds the delta contract.)
+ * The pass is edge-keyseted and carries the maintained artist counters in the same bounded write
+ * batch as each insert, so a completed run needs no whole-corpus counter reseed.
  */
 import { type Client, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
@@ -47,6 +42,7 @@ import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   markDueWorkSourceMaintenanceStatements,
 } from "../src/lib/server/due-work";
+import { hubCountArtistEdgeStatements } from "../src/lib/server/hub-counts";
 
 export type ArtistLinksBackfillResult = {
   /** `track_artists` rows this run stamped. Zero on a steady-state deploy. */
@@ -70,7 +66,9 @@ const PAGE = 200;
  * then nulled — so a steady-state re-run that inserts nothing re-stales nothing.
  */
 export async function backfillArtistLinks(client: Client): Promise<ArtistLinksBackfillResult> {
-  const linkSelect = `select tracks.track_id, a.id as artist_id, credit.key + 1 as position
+  const linkSelect = `select tracks.track_id, a.id as artist_id, credit.key + 1 as position,
+                             tracks.is_catalogue,
+                             tracks.key is not null and tracks.has_embedding = 1 as is_rankable
                       from tracks
                       join json_each(tracks.artists_json) credit
                       join artists a on a.name = credit.value collate nocase`;
@@ -82,31 +80,51 @@ export async function backfillArtistLinks(client: Client): Promise<ArtistLinksBa
     // and rank re-stale then succeed or roll back together; a restart simply selects the next page.
     const pending = await client.execute({
       args: [PAGE],
-      sql: `select distinct candidate.track_id as track_id
+      sql: `select distinct candidate.track_id, candidate.artist_id, candidate.position,
+                            candidate.is_catalogue, candidate.is_rankable
             from (${linkSelect}) candidate
             where not exists (
               select 1 from track_artists ta
               where ta.track_id = candidate.track_id and ta.artist_id = candidate.artist_id
             )
-            order by candidate.track_id
+            order by candidate.track_id, candidate.artist_id
             limit ?`,
     });
-    const trackIds = pending.rows
-      .map((row) => row["track_id"])
-      .filter((id): id is string => typeof id === "string");
+    const edges = pending.rows.flatMap((row) => {
+      const trackId = row["track_id"];
+      const artistId = row["artist_id"];
+      const position = Number(row["position"]);
+      if (
+        typeof trackId !== "string" ||
+        typeof artistId !== "string" ||
+        !Number.isSafeInteger(position)
+      ) {
+        return [];
+      }
+      return [
+        {
+          artistId,
+          certified: Number(row["is_catalogue"]) === 0,
+          position,
+          rankable: Number(row["is_rankable"]) === 1,
+          trackId,
+        },
+      ];
+    });
+    const trackIds = [...new Set(edges.map((edge) => edge.trackId))];
 
-    if (trackIds.length === 0) {
+    if (edges.length === 0) {
       break;
     }
 
     const [inserted] = await client.batch(
       [
         {
-          args: trackIds,
-          sql: `insert or ignore into track_artists (track_id, artist_id, position)
-                select track_id, artist_id, position from (${linkSelect}) candidate
-                where candidate.track_id in (${trackIds.map(() => "?").join(", ")})`,
+          args: edges.flatMap((edge) => [edge.trackId, edge.artistId, edge.position]),
+          sql: `insert or ignore into track_artists (track_id, artist_id, position) values
+                ${edges.map(() => "(?, ?, ?)").join(", ")}`,
         },
+        ...hubCountArtistEdgeStatements(edges),
         ...restaleCatalogueRankStatements(trackIds),
         ...markDueWorkSourceMaintenanceStatements(
           [

@@ -574,6 +574,7 @@ export async function batchDueWorkSourceMutation(
   statements: readonly InStatement[],
   subjects: readonly DueWorkSourceSubject[],
   options: {
+    afterMaintenanceStatements?: readonly InStatement[];
     markerVersion?: string;
     now?: Date | string;
     onlyIfLastSourceStatementChanged?: boolean;
@@ -590,13 +591,14 @@ export async function batchDueWorkSourceMutation(
     onlyIfPreviousStatementChanged: options.onlyIfLastSourceStatementChanged,
     producer: options.producer,
   });
-  if (statements.length + maintenance.length > MAX_DUE_WORK_CHUNK_SIZE) {
+  const afterMaintenance = options.afterMaintenanceStatements ?? [];
+  if (statements.length + maintenance.length + afterMaintenance.length > MAX_DUE_WORK_CHUNK_SIZE) {
     throw new Error(
       `due-work source mutation batches may contain at most ${MAX_DUE_WORK_CHUNK_SIZE - maintenance.length} source statements for their maintenance shape`,
     );
   }
 
-  return client.batch([...statements, ...maintenance], "write");
+  return client.batch([...statements, ...maintenance, ...afterMaintenance], "write");
 }
 
 export async function listReadyDueWork<WorkKind extends string>(

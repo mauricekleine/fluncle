@@ -78,12 +78,25 @@ beforeEach(async () => {
        values ('t-cert-0000000000000a', 'art-1', 1),
               ('t-cert-0000000000000b', 'art-1', 1),
               ('t-cat-00000000000000a', 'art-1', 1)`,
+      `update tracks set key = '8A', has_embedding = 1
+       where track_id = 't-cert-0000000000000a'`,
     ],
     "write",
   );
 });
 
 describe("reconcileHubCounts — the grouped correction", () => {
+  it("repairs the artist-grain rankable-track projection", async () => {
+    await reconcileHubCounts();
+    let row = await db.execute(`select rankable_track_count as n from artists where id = 'art-1'`);
+    expect(Number(row.rows[0]?.n ?? -1)).toBe(1);
+
+    await db.execute(`update artists set rankable_track_count = 9 where id = 'art-1'`);
+    const result = await reconcileHubCounts();
+    row = await db.execute(`select rankable_track_count as n from artists where id = 'art-1'`);
+    expect(result.artists).toEqual({ corrected: 1 });
+    expect(Number(row.rows[0]?.n ?? -1)).toBe(1);
+  });
   it("corrects a drifted counter on all three tables and reports one row each", async () => {
     // The slice-A rollout shape: the edges exist, the counters were never moved for them.
     const result = await reconcileHubCounts();

@@ -13,7 +13,7 @@ import {
   listArtifactSnapshot,
   registerArtifactConsumer,
 } from "./artifact-changes";
-import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
+import { createIntegrationDb, seedArtist, seedEmbedding, seedTrack } from "./integration-db";
 
 let db: Client;
 let fixtureDirectory: string | undefined;
@@ -24,11 +24,7 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-vi.mock("./edge-cache", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./edge-cache")>();
-
-  return { ...actual, purgeLogCache: () => undefined };
-});
+vi.mock("./edge-cache", () => ({ purgeLogCache: () => undefined }));
 
 vi.mock("./entity-cache-purge", () => ({ purgeTrackEntityPages: () => undefined }));
 
@@ -64,6 +60,11 @@ beforeEach(async () => {
   fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-track-update-artifact-"));
   db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
   await seedTrack(db, { logId: "004.7.2I", trackId: TRACK_ID });
+  await seedArtist(db, { id: "artifact-artist", name: "Artifact Artist", slug: "artifact-artist" });
+  await db.execute({
+    args: [TRACK_ID, "artifact-artist"],
+    sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
+  });
 });
 
 afterEach(async () => {
@@ -100,6 +101,10 @@ describe("updateTrack Sonar artifact coupling", () => {
     });
 
     expect(source.rows[0]?.has_embedding).toBe(1);
+    const artist = await db.execute(
+      `select rankable_track_count as n from artists where id = 'artifact-artist'`,
+    );
+    expect(Number(artist.rows[0]?.n ?? -1)).toBe(1);
     expect(event.rows).toHaveLength(1);
     expect(event.rows[0]).toMatchObject({
       format_version: 1,

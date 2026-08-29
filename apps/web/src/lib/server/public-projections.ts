@@ -31,6 +31,10 @@ export {
 export { PUBLIC_ANCHOR_FORMAT_VERSION } from "./public-projection-cutover";
 
 export const MAX_PUBLIC_PROJECTION_CHUNK_SIZE = 500;
+/** A logical page may carry 500 tracks; each remote write transaction owns at most 50 plans. */
+export const PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE = 50;
+/** Leave headroom below the remote batch ceiling while never splitting one track's atomic plan. */
+export const PUBLIC_PROJECTION_WRITE_STATEMENT_LIMIT = 800;
 
 export type PublicProjectionClient = Pick<Client, "batch" | "execute">;
 export type { PublicProjectionStatement } from "./public-projection-source-maintenance";
@@ -312,6 +316,95 @@ function markerGuard(marker: ProjectionRepairMarker): { args: (number | string)[
   };
 }
 
+type ProjectionWriteGuard = { args: (number | string)[]; sql: string };
+
+function combineProjectionWriteGuards(
+  ...guards: Array<ProjectionWriteGuard | undefined>
+): ProjectionWriteGuard | undefined {
+  const present = guards.filter((guard): guard is ProjectionWriteGuard => guard !== undefined);
+  if (present.length === 0) {
+    return undefined;
+  }
+  return {
+    args: present.flatMap((guard) => guard.args),
+    sql: present.map((guard) => `(${guard.sql})`).join(" and "),
+  };
+}
+
+function preserveAggregateLiveWriteGuard(
+  trackId: string,
+  preserveAfter: string | undefined,
+): ProjectionWriteGuard | undefined {
+  return preserveAfter === undefined
+    ? undefined
+    : {
+        args: [trackId, preserveAfter],
+        sql: `not exists (
+          select 1 from public_aggregate_membership preserved
+          where preserved.track_id = ?
+            and preserved.generation = '${PUBLIC_PROJECTION_LIVE_GENERATION}'
+            and preserved.updated_at >= ?
+        )`,
+      };
+}
+
+function preserveArtistLiveWriteGuard(
+  trackId: string,
+  preserveAfter: string | undefined,
+): ProjectionWriteGuard | undefined {
+  return preserveAfter === undefined
+    ? undefined
+    : {
+        args: [trackId, preserveAfter],
+        sql: `not exists (
+          select 1 from artist_qualification_contributions preserved
+          where preserved.track_id = ?
+            and preserved.generation = '${PUBLIC_PROJECTION_LIVE_GENERATION}'
+            and preserved.updated_at >= ?
+        )`,
+      };
+}
+
+function projectionSourceEpochWriteGuard(
+  projection: PublicProjectionName,
+  expectedSourceEpoch: number | undefined,
+): ProjectionWriteGuard | undefined {
+  if (expectedSourceEpoch === undefined) {
+    return undefined;
+  }
+  const stateTable =
+    projection === "public_aggregates" ? "public_aggregate_state" : "artist_qualification_state";
+  const scope = projection === "public_aggregates" ? "tracks" : "artists";
+  return {
+    args: [expectedSourceEpoch],
+    sql: `exists (select 1 from ${stateTable}
+      where scope = '${scope}' and source_epoch = ?)`,
+  };
+}
+
+function projectionSourceEpochFenceStatement(
+  projection: PublicProjectionName,
+  expectedSourceEpoch: number,
+): PublicProjectionStatement {
+  const stateTable =
+    projection === "public_aggregates" ? "public_aggregate_state" : "artist_qualification_state";
+  const scope = projection === "public_aggregates" ? "tracks" : "artists";
+  return {
+    args: [expectedSourceEpoch],
+    sql: `update ${stateTable} set updated_at = updated_at
+      where scope = '${scope}' and source_epoch = ?`,
+  };
+}
+
+function assertProjectionSourceEpochFence(
+  projection: PublicProjectionName,
+  rowsAffected: number | undefined,
+): void {
+  if ((rowsAffected ?? 0) !== 1) {
+    throw new Error(`${projection} source epoch changed during rebuild page; retry required`);
+  }
+}
+
 async function readTrackProjectionSource(
   client: PublicProjectionClient,
   trackId: string,
@@ -375,10 +468,104 @@ async function readAggregateMembership(
       };
 }
 
+function selectedTrackCte(trackIds: readonly string[]): {
+  args: string[];
+  sql: string;
+} {
+  if (trackIds.length < 1 || trackIds.length > PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE) {
+    throw new Error(
+      `public projection write subpage must contain 1 through ${PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE} tracks`,
+    );
+  }
+  return {
+    args: [...trackIds],
+    sql: `selected(track_id) as (values ${trackIds.map(() => "(?)").join(", ")})`,
+  };
+}
+
+async function readAggregateProjectionPage(
+  client: PublicProjectionClient,
+  trackIds: readonly string[],
+): Promise<Map<string, { old?: AggregateMembership; source?: TrackProjectionSource }>> {
+  const selected = selectedTrackCte(trackIds);
+  const result = await client.execute({
+    args: selected.args,
+    sql: `with ${selected.sql}
+      select selected.track_id as selected_track_id,
+        source.track_id as source_track_id, source.release_date,
+        substr(source.release_date, 1, 4) as release_date_bucket, source.key as key_bucket,
+        membership.track_id as membership_track_id,
+        membership.release_date_bucket as membership_release_date_bucket,
+        membership.key_bucket as membership_key_bucket, membership.generation,
+        membership.source_version as membership_source_version, membership.updated_at
+      from selected
+      left join tracks source on source.track_id = selected.track_id
+      left join public_aggregate_membership membership
+        on membership.track_id = selected.track_id
+      order by selected.track_id`,
+  });
+  const page = new Map<string, { old?: AggregateMembership; source?: TrackProjectionSource }>();
+  const rows = result.rows as unknown as {
+    generation: null | string;
+    key_bucket: null | string;
+    membership_key_bucket: null | string;
+    membership_release_date_bucket: null | string;
+    membership_source_version: null | string;
+    membership_track_id: null | string;
+    release_date: null | string;
+    release_date_bucket: null | string;
+    selected_track_id: string;
+    source_track_id: null | string;
+    updated_at: null | string;
+  }[];
+  for (const row of rows) {
+    const trackId = row.selected_track_id;
+    const sourceTrackId = row.source_track_id;
+    const membershipTrackId = row.membership_track_id;
+    if (
+      typeof membershipTrackId === "string" &&
+      (typeof row.generation !== "string" ||
+        typeof row.membership_source_version !== "string" ||
+        typeof row.updated_at !== "string")
+    ) {
+      throw new Error("public aggregate rebuild membership is malformed");
+    }
+    page.set(trackId, {
+      ...(typeof membershipTrackId === "string"
+        ? {
+            old: {
+              generation: row.generation ?? "",
+              keyBucket: row.membership_key_bucket,
+              releaseDateBucket: row.membership_release_date_bucket,
+              sourceVersion: row.membership_source_version ?? "",
+              trackId: membershipTrackId,
+              updatedAt: row.updated_at ?? "",
+            },
+          }
+        : {}),
+      ...(typeof sourceTrackId === "string"
+        ? {
+            source: {
+              keyBucket: row.key_bucket,
+              releaseDate: row.release_date,
+              releaseDateBucket: row.release_date_bucket,
+              sourceVersion: publicTrackSourceVersion({
+                key: row.key_bucket,
+                releaseDate: row.release_date,
+              }),
+              trackId: sourceTrackId,
+            },
+          }
+        : {}),
+    });
+  }
+  return page;
+}
+
 function decrementAggregateBucketStatement(
   kind: "key" | "release_date_bucket",
   bucket: string,
-  guard?: ReturnType<typeof markerGuard>,
+  guard?: ProjectionWriteGuard,
 ): PublicProjectionStatement {
   return {
     args: [kind, bucket, ...(guard?.args ?? [])],
@@ -394,7 +581,7 @@ function incrementAggregateBucketStatement(
   generation: string,
   sourceVersion: string,
   updatedAt: string,
-  guard?: ReturnType<typeof markerGuard>,
+  guard?: ProjectionWriteGuard,
 ): PublicProjectionStatement {
   return {
     args: [kind, bucket, generation, sourceVersion, updatedAt, ...(guard?.args ?? [])],
@@ -427,6 +614,7 @@ async function repairPublicAggregateTrackProjection(
   client: PublicProjectionClient,
   trackId: string,
   options: {
+    expectedSourceEpoch?: number;
     generation: string;
     guard?: ReturnType<typeof markerGuard>;
     marker?: ProjectionRepairMarker;
@@ -438,14 +626,41 @@ async function repairPublicAggregateTrackProjection(
     readTrackProjectionSource(client, trackId),
     readAggregateMembership(client, trackId),
   ]);
+  const writes = publicAggregateTrackProjectionStatements(trackId, source, old, options);
+  if (writes === undefined) {
+    return false;
+  }
+  const results = await client.batch(writes, "write");
+  return options.marker === undefined || (results.at(-2)?.rowsAffected ?? 0) > 0;
+}
+
+function publicAggregateTrackProjectionStatements(
+  trackId: string,
+  source: TrackProjectionSource | undefined,
+  old: AggregateMembership | undefined,
+  options: {
+    expectedSourceEpoch?: number;
+    generation: string;
+    guard?: ReturnType<typeof markerGuard>;
+    marker?: ProjectionRepairMarker;
+    now: string;
+    preserveAfter?: string;
+  },
+): PublicProjectionStatement[] | undefined {
   if (
     options.preserveAfter !== undefined &&
     old?.generation === PUBLIC_PROJECTION_LIVE_GENERATION &&
     old.updatedAt >= options.preserveAfter
   ) {
-    return false;
+    return undefined;
   }
-  const guard = options.guard;
+  // The snapshot check above avoids unnecessary work. This SQL guard is the correctness boundary:
+  // a live repair may commit after the bulk read and before this transaction begins.
+  const guard = combineProjectionWriteGuards(
+    options.guard,
+    preserveAggregateLiveWriteGuard(trackId, options.preserveAfter),
+    projectionSourceEpochWriteGuard("public_aggregates", options.expectedSourceEpoch),
+  );
   const writes: PublicProjectionStatement[] = [];
   if (old?.releaseDateBucket !== null && old?.releaseDateBucket !== undefined) {
     writes.push(
@@ -546,8 +761,7 @@ async function repairPublicAggregateTrackProjection(
     });
     writes.push(cleanAggregateEpochStatement(options.now));
   }
-  const results = await client.batch(writes, "write");
-  return options.marker === undefined || (results.at(-2)?.rowsAffected ?? 0) > 0;
+  return writes;
 }
 
 export async function repairPublicAggregateTrack(
@@ -629,6 +843,116 @@ async function readStoredArtistContributions(
   }));
 }
 
+type StoredArtistContribution = ArtistContribution & { generation: string; updatedAt: string };
+
+async function readArtistProjectionPage(
+  client: PublicProjectionClient,
+  trackIds: readonly string[],
+): Promise<
+  Map<
+    string,
+    {
+      current: ArtistContribution[];
+      old: StoredArtistContribution[];
+      sourceVersion: string;
+    }
+  >
+> {
+  const selected = selectedTrackCte(trackIds);
+  const [sourceResult, currentResult, oldResult] = await Promise.all([
+    client.execute({
+      args: selected.args,
+      sql: `with ${selected.sql}
+        select source.track_id, source.release_date, source.key
+        from selected join tracks source on source.track_id = selected.track_id
+        order by source.track_id`,
+    }),
+    client.execute({
+      args: selected.args,
+      sql: `with ${selected.sql}
+        select ta.track_id, ta.artist_id,
+          case when f.track_id is null then 0 else 1 end as certified_contribution,
+          case when l.seed_state = 'enabled'
+            then case when ta.role = 'remixer' then 1 else 2 end else 0 end
+            as enabled_credit_half_units
+        from selected join track_artists ta on ta.track_id = selected.track_id
+        join tracks t on t.track_id = ta.track_id
+        left join findings f on f.track_id = ta.track_id
+        left join labels l on l.id = t.label_id
+        order by ta.track_id, ta.artist_id`,
+    }),
+    client.execute({
+      args: selected.args,
+      sql: `with ${selected.sql}
+        select contribution.track_id, contribution.artist_id,
+          contribution.certified_contribution, contribution.enabled_credit_half_units,
+          contribution.generation, contribution.updated_at
+        from selected join artist_qualification_contributions contribution
+          on contribution.track_id = selected.track_id
+        order by contribution.track_id, contribution.artist_id`,
+    }),
+  ]);
+  const page = new Map<
+    string,
+    {
+      current: ArtistContribution[];
+      old: StoredArtistContribution[];
+      sourceVersion: string;
+    }
+  >();
+  for (const trackId of trackIds) {
+    page.set(trackId, {
+      current: [],
+      old: [],
+      sourceVersion: publicTrackSourceVersion({ key: null, releaseDate: null }),
+    });
+  }
+  for (const row of sourceResult.rows) {
+    if (typeof row.track_id !== "string") {
+      continue;
+    }
+    const state = page.get(row.track_id);
+    if (state !== undefined) {
+      state.sourceVersion = publicTrackSourceVersion({
+        key: (row.key as null | string) ?? null,
+        releaseDate: (row.release_date as null | string) ?? null,
+      });
+    }
+  }
+  for (const row of currentResult.rows) {
+    if (typeof row.track_id !== "string" || typeof row.artist_id !== "string") {
+      continue;
+    }
+    page.get(row.track_id)?.current.push({
+      artistId: row.artist_id,
+      certifiedContribution: Number(row.certified_contribution),
+      enabledCreditHalfUnits: Number(row.enabled_credit_half_units),
+      trackId: row.track_id,
+    });
+  }
+  for (const row of oldResult.rows as unknown as {
+    artist_id: string;
+    certified_contribution: number;
+    enabled_credit_half_units: number;
+    generation: string;
+    track_id: string;
+    updated_at: string;
+  }[]) {
+    if (typeof row.track_id !== "string" || typeof row.artist_id !== "string") {
+      continue;
+    }
+    page.get(row.track_id)?.old.push({
+      artistId: row.artist_id,
+      certifiedContribution: Number(row.certified_contribution),
+      enabledCreditHalfUnits: Number(row.enabled_credit_half_units),
+      generation: row.generation,
+      trackId: row.track_id,
+      updatedAt: row.updated_at,
+    });
+  }
+  return page;
+}
+
 function cleanArtistEpochStatement(updatedAt: string): PublicProjectionStatement {
   return {
     args: [updatedAt],
@@ -648,6 +972,7 @@ async function repairArtistContributionTrackProjection(
   client: PublicProjectionClient,
   trackId: string,
   options: {
+    expectedSourceEpoch?: number;
     generation: string;
     guard?: ReturnType<typeof markerGuard>;
     marker?: ProjectionRepairMarker;
@@ -660,6 +985,37 @@ async function repairArtistContributionTrackProjection(
     readTrackArtistContributions(client, trackId),
     readStoredArtistContributions(client, trackId),
   ]);
+  const writes = artistContributionTrackProjectionStatements(trackId, current, old, options);
+  if (writes === undefined) {
+    return false;
+  }
+  if (writes.length === 0) {
+    return true;
+  }
+  const repairedMarkers = await executeArtistProjectionWritePlans(client, [
+    {
+      ...(options.marker === undefined ? {} : { markerDeleteOffset: writes.length - 2 }),
+      statements: writes,
+      trackId,
+    },
+  ]);
+  return options.marker === undefined || repairedMarkers > 0;
+}
+
+function artistContributionTrackProjectionStatements(
+  trackId: string,
+  current: readonly ArtistContribution[],
+  old: readonly (ArtistContribution & { generation: string; updatedAt: string })[],
+  options: {
+    expectedSourceEpoch?: number;
+    generation: string;
+    guard?: ReturnType<typeof markerGuard>;
+    marker?: ProjectionRepairMarker;
+    now: string;
+    preserveAfter?: string;
+    sourceVersion: string;
+  },
+): PublicProjectionStatement[] | undefined {
   if (
     options.preserveAfter !== undefined &&
     old.some(
@@ -668,10 +1024,16 @@ async function repairArtistContributionTrackProjection(
         row.updatedAt >= (options.preserveAfter ?? ""),
     )
   ) {
-    return false;
+    return undefined;
   }
   const artistIds = [...new Set([...old, ...current].map((row) => row.artistId))].sort();
-  const guard = options.guard;
+  // Keep the live-generation test inside every statement. The bulk source/stored reads are not a
+  // transaction, so a repair that lands in their read-to-batch gap must make the stale plan inert.
+  const guard = combineProjectionWriteGuards(
+    options.guard,
+    preserveArtistLiveWriteGuard(trackId, options.preserveAfter),
+    projectionSourceEpochWriteGuard("artist_qualification", options.expectedSourceEpoch),
+  );
   const writes: PublicProjectionStatement[] = [];
 
   for (const artistId of artistIds) {
@@ -794,10 +1156,9 @@ async function repairArtistContributionTrackProjection(
     writes.push(cleanArtistEpochStatement(options.now));
   }
   if (writes.length === 0) {
-    return true;
+    return [];
   }
-  const results = await client.batch(writes, "write");
-  return options.marker === undefined || (results.at(-2)?.rowsAffected ?? 0) > 0;
+  return writes;
 }
 
 export async function repairArtistQualificationTrack(
@@ -1004,6 +1365,91 @@ async function firstRepairOfType(
       };
 }
 
+async function repairPublicAggregateMarkerPage(
+  client: PublicProjectionClient,
+  markers: readonly ProjectionRepairMarker[],
+  now: string,
+): Promise<number> {
+  let repaired = 0;
+  for (let start = 0; start < markers.length; start += PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE) {
+    const subpage = markers.slice(start, start + PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE);
+    const state = await readAggregateProjectionPage(
+      client,
+      subpage.map((marker) => marker.subjectId),
+    );
+    const writes: PublicProjectionStatement[] = [];
+    const markerDeleteIndexes: number[] = [];
+    for (const marker of subpage) {
+      const row = state.get(marker.subjectId);
+      const plan = publicAggregateTrackProjectionStatements(
+        marker.subjectId,
+        row?.source,
+        row?.old,
+        {
+          generation: PUBLIC_PROJECTION_LIVE_GENERATION,
+          guard: markerGuard(marker),
+          marker,
+          now,
+        },
+      );
+      if (plan === undefined) {
+        continue;
+      }
+      markerDeleteIndexes.push(writes.length + plan.length - 2);
+      writes.push(...plan);
+    }
+    if (writes.length === 0) {
+      continue;
+    }
+    const results = await client.batch(writes, "write");
+    repaired += markerDeleteIndexes.filter(
+      (index) => (results[index]?.rowsAffected ?? 0) > 0,
+    ).length;
+  }
+  return repaired;
+}
+
+async function repairArtistQualificationMarkerPage(
+  client: PublicProjectionClient,
+  markers: readonly ProjectionRepairMarker[],
+  now: string,
+): Promise<number> {
+  let repaired = 0;
+  for (let start = 0; start < markers.length; start += PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE) {
+    const subpage = markers.slice(start, start + PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE);
+    const state = await readArtistProjectionPage(
+      client,
+      subpage.map((marker) => marker.subjectId),
+    );
+    const plans: ArtistProjectionWritePlan[] = [];
+    for (const marker of subpage) {
+      const row = state.get(marker.subjectId);
+      const plan = artistContributionTrackProjectionStatements(
+        marker.subjectId,
+        row?.current ?? [],
+        row?.old ?? [],
+        {
+          generation: PUBLIC_PROJECTION_LIVE_GENERATION,
+          guard: markerGuard(marker),
+          marker,
+          now,
+          sourceVersion: marker.sourceVersion,
+        },
+      );
+      if (plan === undefined || plan.length === 0) {
+        continue;
+      }
+      plans.push({
+        markerDeleteOffset: plan.length - 2,
+        statements: plan,
+        trackId: marker.subjectId,
+      });
+    }
+    repaired += await executeArtistProjectionWritePlans(client, plans);
+  }
+  return repaired;
+}
+
 export async function repairPublicProjectionChunk(
   client: PublicProjectionClient,
   options: { limit?: number; now?: () => Date; projection?: PublicProjectionName } = {},
@@ -1027,20 +1473,36 @@ export async function repairPublicProjectionChunk(
   for (const projection of projections) {
     const result = await client.execute({
       args: [projection, limit - attempted],
-      sql: `select subject_id from projection_repairs indexed by projection_repairs_order_idx
+      sql: `select projection, subject_type, subject_id, source_epoch, source_version
+        from projection_repairs indexed by projection_repairs_order_idx
         where projection = ? and subject_type = 'track'
         order by source_epoch, subject_type, subject_id limit ?`,
     });
-    for (const row of result.rows as unknown as { subject_id: string }[]) {
-      attempted += 1;
-      const changed =
-        projection === "public_aggregates"
-          ? await repairPublicAggregateTrack(client, row.subject_id, options)
-          : await repairArtistQualificationTrack(client, row.subject_id, options);
-      repaired += changed ? 1 : 0;
-      if (attempted >= limit) {
-        return { fanout: 0, repaired };
-      }
+    const markers = (
+      result.rows as unknown as {
+        projection: PublicProjectionName;
+        source_epoch: number;
+        source_version: string;
+        subject_id: string;
+        subject_type: "track";
+      }[]
+    ).map(
+      (row): ProjectionRepairMarker => ({
+        projection: row.projection,
+        sourceEpoch: Number(row.source_epoch),
+        sourceVersion: row.source_version,
+        subjectId: row.subject_id,
+        subjectType: row.subject_type,
+      }),
+    );
+    attempted += markers.length;
+    const now = nowIso(options.now);
+    repaired +=
+      projection === "public_aggregates"
+        ? await repairPublicAggregateMarkerPage(client, markers, now)
+        : await repairArtistQualificationMarkerPage(client, markers, now);
+    if (attempted >= limit) {
+      return { fanout: 0, repaired };
     }
   }
   while (attempted < limit && options.projection !== "public_aggregates") {
@@ -1707,6 +2169,162 @@ async function finishArtistRebuild(
   });
 }
 
+function projectionWriteSubpages(trackIds: readonly string[]): string[][] {
+  const pages: string[][] = [];
+  for (let start = 0; start < trackIds.length; start += PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE) {
+    pages.push(trackIds.slice(start, start + PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE));
+  }
+  return pages;
+}
+
+type ArtistProjectionWritePlan = {
+  admissionStatementCount?: number;
+  markerDeleteOffset?: number;
+  statements: PublicProjectionStatement[];
+  trackId: string;
+};
+
+async function executeArtistProjectionWritePlans(
+  client: PublicProjectionClient,
+  plans: readonly ArtistProjectionWritePlan[],
+  options: { expectedSourceEpoch?: number } = {},
+): Promise<number> {
+  let pending: ArtistProjectionWritePlan[] = [];
+  let pendingStatementCount = 0;
+  let repairedMarkers = 0;
+  const fence =
+    options.expectedSourceEpoch === undefined
+      ? undefined
+      : projectionSourceEpochFenceStatement("artist_qualification", options.expectedSourceEpoch);
+  const planStatementLimit =
+    PUBLIC_PROJECTION_WRITE_STATEMENT_LIMIT - (fence === undefined ? 0 : 1);
+
+  const flush = async (): Promise<void> => {
+    if (pending.length === 0) {
+      return;
+    }
+    const statements = [
+      ...pending.flatMap((plan) => plan.statements),
+      ...(fence === undefined ? [] : [fence]),
+    ];
+    const results = await client.batch(statements, "write");
+    let offset = 0;
+    for (const plan of pending) {
+      if (
+        plan.markerDeleteOffset !== undefined &&
+        (results[offset + plan.markerDeleteOffset]?.rowsAffected ?? 0) > 0
+      ) {
+        repairedMarkers += 1;
+      }
+      offset += plan.statements.length;
+    }
+    if (fence !== undefined) {
+      assertProjectionSourceEpochFence("artist_qualification", results.at(-1)?.rowsAffected);
+    }
+    pending = [];
+    pendingStatementCount = 0;
+  };
+
+  for (const plan of plans) {
+    const admissionStatementCount = Math.max(
+      plan.statements.length,
+      plan.admissionStatementCount ?? 0,
+    );
+    if (admissionStatementCount > planStatementLimit) {
+      throw new Error(
+        `artist qualification projection plan for track ${plan.trackId} requires ${admissionStatementCount} statements; per-plan limit is ${planStatementLimit}`,
+      );
+    }
+    if (
+      pendingStatementCount > 0 &&
+      pendingStatementCount + admissionStatementCount > planStatementLimit
+    ) {
+      await flush();
+    }
+    pending.push(plan);
+    pendingStatementCount += admissionStatementCount;
+  }
+  if (pending.length > 0) {
+    await flush();
+  } else if (fence !== undefined) {
+    const results = await client.batch([fence], "write");
+    assertProjectionSourceEpochFence("artist_qualification", results[0]?.rowsAffected);
+  }
+  return repairedMarkers;
+}
+
+async function rebuildPublicAggregatePage(
+  client: PublicProjectionClient,
+  trackIds: readonly string[],
+  options: {
+    expectedSourceEpoch: number;
+    generation: string;
+    now: string;
+    preserveAfter: string;
+  },
+): Promise<void> {
+  for (const subpage of projectionWriteSubpages(trackIds)) {
+    const state = await readAggregateProjectionPage(client, subpage);
+    const writes = subpage.flatMap((trackId) => {
+      const row = state.get(trackId);
+      return (
+        publicAggregateTrackProjectionStatements(trackId, row?.source, row?.old, options) ?? []
+      );
+    });
+    const results = await client.batch(
+      [
+        ...writes,
+        projectionSourceEpochFenceStatement("public_aggregates", options.expectedSourceEpoch),
+      ],
+      "write",
+    );
+    assertProjectionSourceEpochFence("public_aggregates", results.at(-1)?.rowsAffected);
+  }
+}
+
+async function rebuildArtistQualificationPage(
+  client: PublicProjectionClient,
+  trackIds: readonly string[],
+  options: {
+    expectedSourceEpoch: number;
+    generation: string;
+    now: string;
+    preserveAfter: string;
+  },
+): Promise<void> {
+  for (const subpage of projectionWriteSubpages(trackIds)) {
+    const state = await readArtistProjectionPage(client, subpage);
+    const plans = subpage.flatMap((trackId): ArtistProjectionWritePlan[] => {
+      const row = state.get(trackId);
+      const statements = artistContributionTrackProjectionStatements(
+        trackId,
+        row?.current ?? [],
+        row?.old ?? [],
+        {
+          ...options,
+          sourceVersion:
+            row?.sourceVersion ?? publicTrackSourceVersion({ key: null, releaseDate: null }),
+        },
+      );
+      return statements === undefined || statements.length === 0
+        ? []
+        : [
+            {
+              admissionStatementCount: Math.max(
+                statements.length,
+                row === undefined || row.current.length === 0 ? 1 : 4 * row.current.length + 3,
+              ),
+              statements,
+              trackId,
+            },
+          ];
+    });
+    await executeArtistProjectionWritePlans(client, plans, {
+      expectedSourceEpoch: options.expectedSourceEpoch,
+    });
+  }
+}
+
 export async function runPublicProjectionRebuildChunk(
   client: PublicProjectionClient,
   projection: PublicProjectionName,
@@ -1763,13 +2381,12 @@ export async function runPublicProjectionRebuildChunk(
               row.updated_at < checkpoint.startedAt),
         )
         .map((row) => row.track_id);
-      for (const trackId of staleTrackIds) {
-        await repairPublicAggregateTrackProjection(client, trackId, {
-          generation: checkpoint.generation,
-          now,
-          preserveAfter: checkpoint.startedAt,
-        });
-      }
+      await rebuildPublicAggregatePage(client, staleTrackIds, {
+        expectedSourceEpoch: checkpoint.sourceEpoch,
+        generation: checkpoint.generation,
+        now,
+        preserveAfter: checkpoint.startedAt,
+      });
       cleanup.cursor = pageRows.at(-1)?.track_id ?? null;
       cleanupComplete = pageRows.length === 0;
     } else {
@@ -1800,16 +2417,12 @@ export async function runPublicProjectionRebuildChunk(
               .map((row) => row.track_id),
           ),
         ];
-        for (const trackId of staleTrackIds) {
-          const source = await readTrackProjectionSource(client, trackId);
-          await repairArtistContributionTrackProjection(client, trackId, {
-            generation: checkpoint.generation,
-            now,
-            preserveAfter: checkpoint.startedAt,
-            sourceVersion:
-              source?.sourceVersion ?? publicTrackSourceVersion({ key: null, releaseDate: null }),
-          });
-        }
+        await rebuildArtistQualificationPage(client, staleTrackIds, {
+          expectedSourceEpoch: checkpoint.sourceEpoch,
+          generation: checkpoint.generation,
+          now,
+          preserveAfter: checkpoint.startedAt,
+        });
         const terminal = pageRows.at(-1);
         cleanup.cursor =
           terminal === undefined ? null : JSON.stringify([terminal.track_id, terminal.artist_id]);
@@ -1900,34 +2513,40 @@ export async function runPublicProjectionRebuildChunk(
     }
     return { checkpoint: current, complete: current.state === "complete", scanned };
   }
-  for (const trackId of trackIds) {
-    if (projection === "public_aggregates") {
-      await repairPublicAggregateTrackProjection(client, trackId, {
-        generation: checkpoint.generation,
-        now,
-        preserveAfter: checkpoint.startedAt,
-      });
-    } else {
-      const source = await readTrackProjectionSource(client, trackId);
-      await repairArtistContributionTrackProjection(client, trackId, {
-        generation: checkpoint.generation,
-        now,
-        preserveAfter: checkpoint.startedAt,
-        sourceVersion:
-          source?.sourceVersion ?? publicTrackSourceVersion({ key: null, releaseDate: null }),
-      });
-    }
+  if (projection === "public_aggregates") {
+    await rebuildPublicAggregatePage(client, trackIds, {
+      expectedSourceEpoch: checkpoint.sourceEpoch,
+      generation: checkpoint.generation,
+      now,
+      preserveAfter: checkpoint.startedAt,
+    });
+  } else {
+    await rebuildArtistQualificationPage(client, trackIds, {
+      expectedSourceEpoch: checkpoint.sourceEpoch,
+      generation: checkpoint.generation,
+      now,
+      preserveAfter: checkpoint.startedAt,
+    });
   }
   const nextCursor = trackIds.at(-1) ?? checkpoint.cursor;
   const stateTable =
     projection === "public_aggregates" ? "public_aggregate_state" : "artist_qualification_state";
   const scope = projection === "public_aggregates" ? "tracks" : "artists";
-  await client.execute({
-    args: [nextCursor, trackIds.length, now, checkpoint.generation, checkpoint.cursor],
+  const cursorAdvance = await client.execute({
+    args: [
+      nextCursor,
+      trackIds.length,
+      now,
+      checkpoint.generation,
+      checkpoint.cursor,
+      checkpoint.sourceEpoch,
+    ],
     sql: `update ${stateTable}
       set cursor = ?, scanned_count = scanned_count + ?, updated_at = ?
-      where scope = '${scope}' and generation = ? and state = 'running' and cursor is ?`,
+      where scope = '${scope}' and generation = ? and state = 'running' and cursor is ?
+        and source_epoch = ?`,
   });
+  assertProjectionSourceEpochFence(projection, cursorAdvance.rowsAffected);
   if (trackIds.length < limit && options.boundedCleanup !== true) {
     if (projection === "public_aggregates") {
       await finishAggregateRebuild(client, checkpoint, now);

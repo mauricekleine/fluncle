@@ -276,6 +276,8 @@ type WorkRow = {
   artists_json: string;
   /** Keystone 1's catalogue discriminator — `0` means the track HAS a findings row (certified). */
   is_catalogue?: bigint | number;
+  /** The mix projection contribution carried beside the edge candidate. */
+  is_rankable?: bigint | number;
   track_id: string;
 };
 
@@ -290,7 +292,8 @@ async function listWork(
   const result = await db.execute({
     args: cursor ? [cursor, limit] : [limit],
     sql: cursor
-      ? `select t.track_id, t.artists_json, t.is_catalogue
+      ? `select t.track_id, t.artists_json, t.is_catalogue,
+                t.key is not null and t.has_embedding = 1 as is_rankable
          from tracks t
          left join track_artists ta on ta.track_id = t.track_id
          where ta.track_id is null
@@ -298,7 +301,8 @@ async function listWork(
            and t.track_id > ?
          order by t.track_id asc
          limit ?`
-      : `select t.track_id, t.artists_json, t.is_catalogue
+      : `select t.track_id, t.artists_json, t.is_catalogue,
+                t.key is not null and t.has_embedding = 1 as is_rankable
          from tracks t
          left join track_artists ta on ta.track_id = t.track_id
          where ta.track_id is null
@@ -320,7 +324,9 @@ async function hydrateProjectedWork(
 
   const result = await db.execute({
     args: [...trackIds],
-    sql: `select track_id, artists_json, is_catalogue from tracks
+    sql: `select track_id, artists_json, is_catalogue,
+                 key is not null and has_embedding = 1 as is_rankable
+          from tracks
           where track_id in (${trackIds.map(() => "?").join(", ")})`,
   });
   const byId = new Map(typedRows<WorkRow>(result.rows).map((row) => [row.track_id, row]));
@@ -392,6 +398,7 @@ async function insertEdges(
   db: Awaited<ReturnType<typeof getDb>>,
   tuples: ReadonlyArray<[string, string, number]>,
   certifiedTracks: ReadonlySet<string>,
+  rankableTracks: ReadonlySet<string>,
 ): Promise<number> {
   let affected = 0;
 
@@ -408,6 +415,7 @@ async function insertEdges(
           chunk.map(([trackId, artistId]) => ({
             artistId,
             certified: certifiedTracks.has(trackId),
+            rankable: rankableTracks.has(trackId),
             trackId,
           })),
         ),
@@ -533,12 +541,17 @@ export async function resolveArtistEdges(
   // Which of the batch's tracks are CERTIFIED — read straight off the worklist row (keystone 1's
   // `is_catalogue`), so the hub-count deltas the insert carries need no extra query.
   const certifiedTracks = new Set<string>();
+  const rankableTracks = new Set<string>();
 
   for (const row of rows) {
     visited.push(row.track_id);
 
     if (row.is_catalogue !== undefined && Number(row.is_catalogue) === 0) {
       certifiedTracks.add(row.track_id);
+    }
+
+    if (row.is_rankable !== undefined && Number(row.is_rankable) === 1) {
+      rankableTracks.add(row.track_id);
     }
 
     const match = matchTrackNames(
@@ -567,7 +580,7 @@ export async function resolveArtistEdges(
   let edgesWritten = tuples.length;
 
   if (!dryRun) {
-    edgesWritten = await insertEdges(db, tuples, certifiedTracks);
+    edgesWritten = await insertEdges(db, tuples, certifiedTracks, rankableTracks);
     await stampVisited(db, visited);
   }
 

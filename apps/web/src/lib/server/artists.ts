@@ -15,8 +15,8 @@ import {
 } from "./due-work";
 import {
   hubCountArtistEdgeStatements,
-  type HubCountDelta,
-  hubCountDeltaStatement,
+  type HubCountArtistDelta,
+  hubCountArtistDeltaStatement,
 } from "./hub-counts";
 import {
   type CatalogueBrowsePage,
@@ -1048,7 +1048,10 @@ export function buildArtistLinkStatement(
           returning track_id, artist_id,
                     (select tracks.is_catalogue
                        from tracks
-                      where tracks.track_id = track_artists.track_id) as is_catalogue`,
+                      where tracks.track_id = track_artists.track_id) as is_catalogue,
+                    (select tracks.key is not null and tracks.has_embedding = 1
+                       from tracks
+                      where tracks.track_id = track_artists.track_id) as is_rankable`,
   };
 }
 
@@ -1068,10 +1071,12 @@ export async function linkTracksToArtistEntities(
     const newEdges = typedRows<{
       artist_id: string;
       is_catalogue: bigint | number;
+      is_rankable: bigint | number;
       track_id: string;
     }>(inserted.rows).map((row) => ({
       artistId: row.artist_id,
       certified: Number(row.is_catalogue) === 0,
+      rankable: Number(row.is_rankable) === 1,
       trackId: row.track_id,
     }));
     const followUp = [
@@ -1257,19 +1262,27 @@ export async function upsertTrackArtists(
     }),
     db.execute({
       args: [trackId],
-      sql: `select is_catalogue from tracks where track_id = ? limit 1`,
+      sql: `select is_catalogue, key is not null and has_embedding = 1 as is_rankable
+            from tracks where track_id = ? limit 1`,
     }),
   ]);
   const held = new Set(
     typedRows<{ artist_id: string }>(heldEdges.rows).map((row) => row.artist_id),
   );
-  const catalogueFlag = typedRows<{ is_catalogue: bigint | number }>(trackRow.rows)[0];
+  const catalogueFlag = typedRows<{
+    is_catalogue: bigint | number;
+    is_rankable: bigint | number;
+  }>(trackRow.rows)[0];
   // No `tracks` row means no edge worth counting — the upsert still runs (it always has), the
   // counters simply do not move.
-  const edgeDelta: HubCountDelta | undefined =
+  const edgeDelta: HubCountArtistDelta | undefined =
     catalogueFlag === undefined
       ? undefined
-      : { certified: Number(catalogueFlag.is_catalogue) === 0 ? 1 : 0, renderable: 1 };
+      : {
+          certified: Number(catalogueFlag.is_catalogue) === 0 ? 1 : 0,
+          rankable: Number(catalogueFlag.is_rankable) === 1 ? 1 : 0,
+          renderable: 1,
+        };
   // Whether this call GENUINELY creates a `track_artists` edge — the trigger for the first-order rank
   // re-stale a catalogue row owes The Ear (RFC artist-primary-capture; catalogue-rank-restale.ts).
   let anyNewEdge = false;
@@ -1404,7 +1417,7 @@ export async function upsertTrackArtists(
                 on conflict(track_id, artist_id) do update set
                   position = excluded.position`,
         },
-        ...(isNewEdge && edgeDelta ? [hubCountDeltaStatement("artists", artistId, edgeDelta)] : []),
+        ...(isNewEdge && edgeDelta ? [hubCountArtistDeltaStatement(artistId, edgeDelta)] : []),
         ...(isNewEdge
           ? [
               ...markDueWorkSourceMaintenanceStatements(

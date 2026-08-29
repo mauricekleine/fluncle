@@ -64,6 +64,7 @@ import {
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
 import { CLEAR_EMBEDDING_SQL, clearEmbeddingSatellite } from "./embedding";
+import { repairRankableArtistsForTrackStatement } from "./hub-counts";
 import { labelSlug } from "./labels";
 import { readQualifiedArtistIds } from "./public-projection-cutover";
 import { getSetting, setSetting } from "./settings";
@@ -1513,6 +1514,7 @@ export async function rankCatalogue(
   const unvectored = candidates.filter((row) => Number(row.has_vector) !== 1);
   const now = new Date().toISOString();
   const writes: InStatement[] = [];
+  const rankableRepairs: InStatement[] = [];
 
   // ── The scored half: max-similarity to ANY finding, computed in SQL ────────────────
   // The cross join is `vectored × embedded findings` and nothing else — the batch is what
@@ -1732,6 +1734,7 @@ export async function rankCatalogue(
         // The satellite half of the clear, in the SAME batch and immediately after its update —
         // the delete reads the `has_embedding = 0` that update just wrote (embedding.ts).
         writes.push(clearEmbeddingSatellite(candidate.track_id));
+        rankableRepairs.push(repairRankableArtistsForTrackStatement(candidate.track_id));
         continue;
       }
     }
@@ -1891,7 +1894,11 @@ export async function rankCatalogue(
   // One implicit write transaction. Every statement is PK-keyed and idempotent, so a retry
   // after a partial failure converges on the same rows.
   await db.batch(
-    [...writes, ...rankMaintenanceStatements(movedIds, new Date().toISOString())],
+    [
+      ...writes,
+      ...rankMaintenanceStatements(movedIds, new Date().toISOString()),
+      ...rankableRepairs,
+    ],
     "write",
   );
 
@@ -3235,7 +3242,10 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
       { subjectId: trackId, subjectType: "track" },
       { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
     ],
-    { producer: "catalogue-flag-wrong-audio" },
+    {
+      afterMaintenanceStatements: [repairRankableArtistsForTrackStatement(trackId)],
+      producer: "catalogue-flag-wrong-audio",
+    },
   );
 
   return (result?.rowsAffected ?? 0) > 0;
@@ -3575,7 +3585,10 @@ export async function verifyCapture(
       { subjectId: trackId, subjectType: "track" },
       { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
     ],
-    { producer: "capture-verification-quarantine" },
+    {
+      afterMaintenanceStatements: [repairRankableArtistsForTrackStatement(trackId)],
+      producer: "capture-verification-quarantine",
+    },
   );
 
   await applyCatalogueSummaryDelta(before, await readRowBuckets(trackId));

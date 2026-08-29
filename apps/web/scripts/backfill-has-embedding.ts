@@ -58,6 +58,7 @@ import {
   markDueWorkSourceMaintenanceFromSelectStatements,
   markDueWorkSourceMaintenanceStatements,
 } from "../src/lib/server/due-work";
+import { MIXABLE_ARTISTS_PROJECTION_STATE_KEY } from "../src/lib/server/mixable-artists-projection";
 
 export type HasEmbeddingBackfillResult = {
   /** How many rows this run reconciled against their vector, in either direction. */
@@ -72,19 +73,26 @@ const HAS_VECTOR = `exists (select 1 from track_embeddings te where te.track_id 
  * the real migrations applied (the `backfillIsCatalogue` precedent).
  */
 export async function backfillHasEmbedding(client: Client): Promise<HasEmbeddingBackfillResult> {
+  const sourceMarkers = markDueWorkSourceMaintenanceFromSelectStatements(
+    "track",
+    {
+      sql: `select track_id as subject_id from tracks
+            where has_embedding <> ${HAS_VECTOR}`,
+    },
+    { producer: "backfill-has-embedding-subjects" },
+  );
   const results = await client.batch(
     [
-      ...markDueWorkSourceMaintenanceFromSelectStatements(
-        "track",
-        {
-          sql: `select track_id as subject_id from tracks
-                where has_embedding <> ${HAS_VECTOR}`,
-        },
-        { producer: "backfill-has-embedding-subjects" },
-      ),
+      ...sourceMarkers,
       {
         sql: `update tracks set has_embedding = ${HAS_VECTOR}
               where has_embedding <> ${HAS_VECTOR}`,
+      },
+      {
+        args: [MIXABLE_ARTISTS_PROJECTION_STATE_KEY, "dirty:has-embedding"],
+        sql: `insert into settings (key, value)
+              select ?, ? where changes() > 0
+              on conflict(key) do update set value = excluded.value`,
       },
       ...markDueWorkSourceMaintenanceStatements(
         [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }],
@@ -97,7 +105,7 @@ export async function backfillHasEmbedding(client: Client): Promise<HasEmbedding
     "write",
   );
 
-  return { flipped: results.at(-2)?.rowsAffected ?? 0 };
+  return { flipped: results[sourceMarkers.length]?.rowsAffected ?? 0 };
 }
 
 async function main(): Promise<void> {

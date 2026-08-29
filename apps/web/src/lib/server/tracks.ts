@@ -23,6 +23,7 @@ import { encodeDueWorkOrder } from "./due-work-order";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { readKeyHistogram } from "./key-histogram";
 import { logEvent } from "./log";
+import { readMixableArtistsProjection } from "./mixable-artists-projection";
 import { isSonarLogEnabled, isSonarMixEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { isLogId } from "../log-id";
 import { dedupeByRecordingIdentity } from "./track-match";
@@ -2228,32 +2229,7 @@ export async function listMixableArtists(
   const q = options.q?.trim() ?? "";
   const db = await getDb();
 
-  const result = await db.execute({
-    args: q ? [`%${q}%`, limit] : [limit],
-    sql: `select artists.name as name, artists.slug as slug, artists.image_url as image_url,
-                 count(*) as track_count
-          from artists
-          join track_artists on track_artists.artist_id = artists.id
-          join tracks on tracks.track_id = track_artists.track_id
-          where tracks.key is not null
-            and tracks.has_embedding = 1
-            ${q ? "and artists.name like ? collate nocase" : ""}
-          group by artists.id
-          order by track_count desc, artists.name asc
-          limit ?`,
-  });
-
-  return typedRows<{
-    image_url: string | null;
-    name: string;
-    slug: string;
-    track_count: number;
-  }>(result.rows).map((row) => ({
-    imageUrl: row.image_url ?? undefined,
-    name: row.name,
-    slug: row.slug,
-    trackCount: row.track_count,
-  }));
+  return readMixableArtistsProjection(db, { limit, q });
 }
 
 /**

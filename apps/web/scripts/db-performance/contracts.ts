@@ -990,6 +990,53 @@ const DUE_WORK_EMPTY_READ = {
     limit ?`,
 };
 
+for (const mixableArtists of [
+  {
+    args: [60],
+    id: "mix.artists-default",
+    predicate: "",
+  },
+  {
+    args: ["%Synthetic Artist%", 60],
+    id: "mix.artists-search",
+    predicate: "and name like ? collate nocase",
+  },
+]) {
+  const statement = {
+    args: mixableArtists.args,
+    sql: `select name, id, image_url, rankable_track_count as track_count
+          from perf_artists indexed by perf_artists_mixable_order_idx
+          where rankable_track_count > 0
+            ${mixableArtists.predicate}
+          order by -rankable_track_count asc, name asc
+          limit ?`,
+  };
+  performanceRegistry.register(
+    sqlContract({
+      description: "The mixable-artist picker walks the artist-grain maintained ordering index",
+      id: mixableArtists.id,
+      iterations: 20,
+      plan: {
+        policy: {
+          allowFullScanOf: ["perf_artists"],
+          forbidTempSort: true,
+          growingTables: ["perf_artists"],
+          requiredDetails: [/perf_artists_mixable_order_idx/i],
+        },
+        statement,
+      },
+      statement,
+      validate(execution) {
+        return execution.resultRowCount > 0 && execution.resultRowCount <= 60
+          ? []
+          : [`mixable artist read returned ${execution.resultRowCount} rows`];
+      },
+      warmupIterations: 2,
+      workClass: "route-db",
+    }),
+  );
+}
+
 performanceRegistry.register(
   sqlContract({
     convergence: (context) =>
