@@ -100,8 +100,8 @@ describe("projection operator commands", () => {
   });
 
   test("rejects unbounded or invented controls before transport", () => {
-    expect(projections.parseProjectionLimit("1000")).toBe(1000);
-    expect(() => projections.parseProjectionLimit("1001")).toThrow(/1 through 1000/);
+    expect(projections.parseProjectionLimit("500")).toBe(500);
+    expect(() => projections.parseProjectionLimit("501")).toThrow(/1 through 500/);
     expect(() => projections.parseProjectionTarget("tracks")).toThrow(/must be/);
     expect(() => projections.parseProjectionAction("sql")).toThrow(/audit, rebuild, or repair/);
     expect(() => projections.parseProjectionCutover("public_aggregates")).toThrow(/must be/);

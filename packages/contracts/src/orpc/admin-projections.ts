@@ -1,7 +1,7 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-export const PROJECTION_STEP_LIMIT_MAX = 1_000;
+export const PROJECTION_STEP_LIMIT_MAX = 500;
 
 export const ProjectionTargetSchema = z
   .enum(["artist_qualification", "crawl_due_work", "public_aggregates", "track_due_work"])
