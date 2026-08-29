@@ -1887,11 +1887,13 @@ export async function rankCatalogue(
   // batch, pair with the AFTER read below into a batch delta.
   const movedIds = candidates.map((candidate) => candidate.track_id);
   const before = await readBatchRowBuckets(movedIds);
-  const maintenance = rankMaintenanceStatements(movedIds, new Date().toISOString());
 
   // One implicit write transaction. Every statement is PK-keyed and idempotent, so a retry
   // after a partial failure converges on the same rows.
-  await db.batch([...writes, ...maintenance], "write");
+  await db.batch(
+    [...writes, ...rankMaintenanceStatements(movedIds, new Date().toISOString())],
+    "write",
+  );
 
   // The tick's writes have landed. The cached six counts move by a BATCH DELTA — the moved rows'
   // (after − before) buckets, the batched twin of `withSummaryDelta` — NOT the O(catalogue) full
