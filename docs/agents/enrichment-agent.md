@@ -40,7 +40,7 @@ Rendering the per-track video is a **separate capability** — Remotion needs th
 fluncle admin tracks video <track_id|log_id> --dir out/<log-id>
 ```
 
-The CLI uploads each artifact **directly to R2** via short-lived presigned PUT URLs the Worker signs (`POST .../video/uploads` → PUT each file to its R2 S3 URL → `POST .../video/finalize`), so the bytes never traverse the Worker and a large (crf-20, ~99MB/cut) bundle bypasses Cloudflare's ~100MB edge body limit. Each artifact lands at `<log-id>/<name>` on R2 (`found.fluncle.com`) and `video_url` is set to the review cut. **The Worker owns R2; the agent uploads with its admin token and never holds R2 credentials** — it only ever sees the expiring presigned URLs. Requires the track to have a Log ID (one identity everywhere). Small bundles may also use the single multipart `POST /api/v1/admin/tracks/:id/video` endpoint.
+The CLI uploads each artifact **directly to R2** via short-lived presigned PUT URLs the Worker signs (`POST .../video/uploads` → PUT each file to its R2 S3 URL → `POST .../video/finalize`), so the bytes never traverse the Worker and a large (crf-20, ~99MB/cut) bundle bypasses Cloudflare's ~100MB edge body limit. Each artifact lands at `<log-id>/<name>` on R2 (`found.fluncle.com`) and `video_url` is set to the review cut. **The Worker owns R2; the agent uploads with its admin token and never holds R2 credentials** — it only ever sees the expiring presigned URLs. Requires the track to have a Log ID (one identity everywhere).
 
 ## Publish draft (separate, via Postiz)
 
