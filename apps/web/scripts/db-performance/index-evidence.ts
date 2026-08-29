@@ -666,7 +666,7 @@ const DEFAULT_HUB_NULL_SUPPLEMENTAL = indexPlanStatement(
   "supplemental-force",
 );
 
-function releaseDateDropComparison(
+function releaseDateComparison(
   references: PerformanceStatement[],
   supplementalStatements: PerformanceStatement[],
   productionPlanPolicies: ExplainPlanPolicy[],
@@ -820,7 +820,7 @@ function validateComparisonProof(
   const failures = [...validateSimpleIndexProof(definition, spec, execution)];
 
   if (metadata.outputsEquivalent !== true) {
-    failures.push("consumer output changed after singleton removal");
+    failures.push("consumer output changed against its alternate indexed proof");
   }
   if (
     definition.inventoryEntry.decision === "drop" &&
@@ -846,7 +846,6 @@ function definitionFor(entry: IndexInventoryEntry): IndexEvidenceDefinition {
     operation_receipts_operation_audit_idx: "operation-receipts-primary-key",
     tracks_capture_priority_idx: "tracks_vendor_worklist_idx",
     tracks_nearest_finding_score_idx: "tracks_catalogue_ear_idx",
-    tracks_release_date_idx: "tracks_release_date_track_id_idx",
   };
   const requiredIndexName = replacementIndexes[entry.name] ?? entry.name;
 
@@ -973,11 +972,11 @@ function planSpecFor(
   }
 
   if (entry.name === "tracks_release_date_idx") {
-    if (contractId === "index.tracks-release-date-drop-default-hub") {
+    if (contractId === "index.tracks-release-date-default-hub") {
       return defaultHubComparison();
     }
 
-    if (contractId === "index.tracks-release-date-drop-fresh") {
+    if (contractId === "index.tracks-release-date-fresh") {
       const projection =
         "tracks.id, tracks.title, tracks.artists_json, tracks.release_date, findings.log_id";
       const branches = [
@@ -1039,7 +1038,7 @@ function planSpecFor(
         ),
       );
       return {
-        ...releaseDateDropComparison(
+        ...releaseDateComparison(
           references,
           supplemental,
           branches.map((branch) => ({
@@ -1052,7 +1051,7 @@ function planSpecFor(
       };
     }
 
-    if (contractId === "index.tracks-release-date-drop-public-findings") {
+    if (contractId === "index.tracks-release-date-public-findings") {
       const exact = `select tracks.id, tracks.title, tracks.artists_json, tracks.album_image_url,
                 tracks.release_date, findings.log_id,
                 fresh_lead_artist.image_url as artist_image_url,
@@ -1073,7 +1072,7 @@ function planSpecFor(
         "perf_tracks tracks indexed by perf_tracks_release_date_track_id_idx",
       );
       return {
-        ...releaseDateDropComparison(
+        ...releaseDateComparison(
           [statement(exact, args)],
           [statement(forced, args)],
           [
@@ -1094,7 +1093,7 @@ function planSpecFor(
       };
     }
 
-    if (contractId === "index.tracks-release-date-drop-public-records") {
+    if (contractId === "index.tracks-release-date-public-records") {
       const exact = `select albums.slug as slug, min(albums.name) as name,
                 max(tracks.release_date) as release_date,
                 count(distinct tracks.id) as track_count,
@@ -1120,7 +1119,7 @@ function planSpecFor(
         "from perf_tracks tracks indexed by perf_tracks_release_date_track_id_idx",
       );
       return {
-        ...releaseDateDropComparison(
+        ...releaseDateComparison(
           [statement(exact, args)],
           [statement(forced, args)],
           [
@@ -1136,7 +1135,7 @@ function planSpecFor(
       };
     }
 
-    if (contractId === "index.tracks-release-date-drop-year") {
+    if (contractId === "index.tracks-release-date-year") {
       const exact = `select substr(tracks.release_date, 1, 4) as year, count(*) as n
          from perf_tracks tracks
         where tracks.release_date is not null
@@ -1147,7 +1146,7 @@ function planSpecFor(
         "from perf_tracks tracks indexed by perf_tracks_release_date_track_id_idx",
       );
       return {
-        ...releaseDateDropComparison(
+        ...releaseDateComparison(
           [statement(exact)],
           [statement(forced)],
           [
@@ -1165,7 +1164,7 @@ function planSpecFor(
       };
     }
 
-    if (contractId === "index.tracks-release-date-drop-search") {
+    if (contractId === "index.tracks-release-date-search") {
       const exact = `select tracks.id as track_id, tracks.title, tracks.artists_json, tracks.album,
                 tracks.album_image_url, tracks.bpm, tracks.key, tracks.label,
                 tracks.release_date, tracks.spotify_url, findings.log_id,
@@ -1182,7 +1181,7 @@ function planSpecFor(
         "from perf_tracks tracks indexed by perf_tracks_release_date_track_id_idx",
       );
       return {
-        ...releaseDateDropComparison(
+        ...releaseDateComparison(
           [statement(exact)],
           [statement(forced)],
           [

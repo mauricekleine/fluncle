@@ -8,8 +8,8 @@
       "tracksIndexes": 32
     },
     "finalSchemaAfterContraction": {
-      "indexes": 171,
-      "tracksIndexes": 29
+      "indexes": 172,
+      "tracksIndexes": 30
     }
   },
   "tracksIndexes": [
@@ -300,7 +300,7 @@
       "name": "tracks_release_date_idx",
       "columns": ["release_date"],
       "partialPredicate": null,
-      "decision": "drop",
+      "decision": "keep",
       "finalConsumer": {
         "coordinates": [
           {
@@ -324,12 +324,12 @@
             "marker": "runFilters"
           }
         ],
-        "query": "The exact entity-fresh, public findings, public records, year-grouping, projected keyset/NULL-zone, and filtered-search release-date consumers retain a classified bounded driver after the singleton is removed."
+        "query": "The exact entity-fresh, public findings, public records, year-grouping, projected keyset/NULL-zone, and filtered-search release-date consumers retain a bounded release-date driver."
       },
-      "structuralRationale": "Drop in the final contraction: (release_date) is a strict prefix of tracks_release_date_track_id_idx. Unforced plans prove the public findings lane through the composite plus finding/artist primary-key probes, and the entity-fresh, records, year, search, and default-hub consumers through their exact surviving indexed drivers.",
+      "structuralRationale": "Retain the narrow release-date index because the entity-scoped freshness reads need its lower write-independent traversal cost to stay inside the hosted 2x latency budget; the wider composite remains load-bearing for stable keyset pagination.",
       "performanceContracts": [
         {
-          "id": "index.tracks-release-date-drop-fresh",
+          "id": "index.tracks-release-date-fresh",
           "consumer": [
             {
               "file": "apps/web/src/lib/server/fresh-entity.ts",
@@ -339,7 +339,7 @@
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
-          "id": "index.tracks-release-date-drop-public-findings",
+          "id": "index.tracks-release-date-public-findings",
           "consumer": [
             {
               "file": "apps/web/src/lib/server/fresh.ts",
@@ -349,7 +349,7 @@
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
-          "id": "index.tracks-release-date-drop-public-records",
+          "id": "index.tracks-release-date-public-records",
           "consumer": [
             {
               "file": "apps/web/src/lib/server/fresh.ts",
@@ -359,7 +359,7 @@
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
-          "id": "index.tracks-release-date-drop-year",
+          "id": "index.tracks-release-date-year",
           "consumer": [
             {
               "file": "apps/web/src/lib/server/tracks-hub.ts",
@@ -369,7 +369,7 @@
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
-          "id": "index.tracks-release-date-drop-default-hub",
+          "id": "index.tracks-release-date-default-hub",
           "consumer": [
             {
               "file": "apps/web/src/lib/server/tracks-hub.ts",
@@ -379,7 +379,7 @@
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
-          "id": "index.tracks-release-date-drop-search",
+          "id": "index.tracks-release-date-search",
           "consumer": [
             {
               "file": "apps/web/src/lib/server/search.ts",
@@ -1923,8 +1923,8 @@
     "tracksIndexes": 32,
     "databaseScaleIndexes": 30,
     "decisions": {
-      "keep": 55,
-      "drop": 7,
+      "keep": 56,
+      "drop": 6,
       "add": 0
     },
     "planContractCount": 67,

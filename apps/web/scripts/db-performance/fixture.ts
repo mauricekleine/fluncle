@@ -457,6 +457,7 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
       dismissed_at, duplicate_of_track_id, nearest_finding_score, duration_ms,
       spotify_anchor_attempted_at, isrc, spotify_anchor_attempts, artists_json, label_id
     )`,
+  `create index if not exists perf_tracks_release_date_idx on perf_tracks(release_date)`,
   `create index if not exists perf_tracks_release_date_track_id_idx
     on perf_tracks(release_date, id)`,
   `create index if not exists perf_tracks_bpm_idx on perf_tracks(bpm)`,

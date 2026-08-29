@@ -1102,11 +1102,11 @@ export const tracks = sqliteTable(
       table.artistsJson,
       table.labelId,
     ),
-    // `/fresh` and the filtered release-year reads use the leading `release_date` column for
-    // bounded ranges, while the projected `/tracks` anchor document turns every numbered page
-    // into an exact strict `(release_date, track_id)` suffix. The tie-breaker lets both the
-    // non-NULL range and the NULL-zone range seek without a corpus walk or temporary tie sort.
-    // This one plain btree therefore serves the release window, grouping, and keyset consumers.
+    // Entity-scoped freshness reads retain the narrow release-date tree: their artist/label join
+    // drivers otherwise spill the final order to a temporary btree and exceed the hosted 2x
+    // contract. The projected `/tracks` anchor document separately needs the exact strict
+    // `(release_date, track_id)` suffix below. Both are load-bearing despite the prefix overlap.
+    index("tracks_release_date_idx").on(table.releaseDate),
     index("tracks_release_date_track_id_idx").on(table.releaseDate, table.trackId),
     // The `/tracks` hub's BPM-range filter (`bpm >= ? and bpm <= ?`) over the whole-archive
     // browse list. A plain ASC btree — SQLite reverse-scans it, and a `desc()` index would poison

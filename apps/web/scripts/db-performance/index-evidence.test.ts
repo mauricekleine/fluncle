@@ -195,7 +195,7 @@ describe("final index plan evidence", () => {
 
   it("keeps forced release-date variants supplemental to the unforced production plan", async () => {
     const contract = indexEvidenceContracts().find(
-      (candidate) => candidate.id === "index.tracks-release-date-drop-default-hub",
+      (candidate) => candidate.id === "index.tracks-release-date-default-hub",
     );
     if (!contract?.plan || !contract.terminalProof) {
       throw new Error("default hub release-date comparison contract has no plan");
@@ -309,7 +309,7 @@ describe("final index plan evidence", () => {
 
   it("budgets a multi-consumer proof by its slowest final statement", async () => {
     const contract = indexEvidenceContracts().find(
-      (candidate) => candidate.id === "index.tracks-release-date-drop-default-hub",
+      (candidate) => candidate.id === "index.tracks-release-date-default-hub",
     );
     if (!contract) {
       throw new Error("default hub release-date comparison contract is missing");
@@ -355,9 +355,9 @@ describe("final index plan evidence", () => {
       finalStatementRequestCount: 2,
       measuredRequestCount: 6,
       terminalPlanRequestCount: 1,
-      terminalProofRequestCount: 7,
+      terminalProofRequestCount: 6,
       timingScope: "worst-single-final-statement",
-      totalRequestCount: 14,
+      totalRequestCount: 13,
     });
     expect(evidence?.budget.failures).toEqual(["p95 300ms exceeds 250ms"]);
     expect(evidence?.validationFailures).toEqual([]);
@@ -473,7 +473,7 @@ describe("final index plan evidence", () => {
     expect(audit?.passed).toBe(false);
   });
 
-  it("runs all declared evidence at every local profile and omits the dropped singleton", async () => {
+  it("runs all declared evidence at every local profile and retains the proven singleton", async () => {
     const contracts = indexEvidenceContracts();
 
     expect(contracts).toHaveLength(67);
@@ -509,10 +509,10 @@ describe("final index plan evidence", () => {
           indexes: 62,
           tracksIndexes: 32,
         });
-        expect(report.indexAudit?.decisions.counts).toEqual({ add: 0, drop: 7, keep: 55 });
+        expect(report.indexAudit?.decisions.counts).toEqual({ add: 0, drop: 6, keep: 56 });
         expect(report.indexAudit?.productionInventory).toEqual({
           currentFinalSchemaBeforeContraction: { indexes: 178, tracksIndexes: 32 },
-          finalSchemaAfterContraction: { indexes: 171, tracksIndexes: 29 },
+          finalSchemaAfterContraction: { indexes: 172, tracksIndexes: 30 },
         });
         expect(report.indexAudit?.missingConsumers).toEqual([]);
         expect(report.indexAudit?.missingPlanEvidence).toEqual([]);
@@ -547,22 +547,24 @@ describe("final index plan evidence", () => {
           ),
         ).toBe(true);
 
-        const droppedIndex = auditEntries.find((entry) => entry.name === "tracks_release_date_idx");
-        expect(droppedIndex?.decision).toBe("drop");
-        expect(droppedIndex?.contracts).toHaveLength(6);
-        expect(droppedIndex?.contracts.map((contract) => contract.contractId)).toEqual([
-          "index.tracks-release-date-drop-fresh",
-          "index.tracks-release-date-drop-public-findings",
-          "index.tracks-release-date-drop-public-records",
-          "index.tracks-release-date-drop-year",
-          "index.tracks-release-date-drop-default-hub",
-          "index.tracks-release-date-drop-search",
+        const releaseDateIndex = auditEntries.find(
+          (entry) => entry.name === "tracks_release_date_idx",
+        );
+        expect(releaseDateIndex?.decision).toBe("keep");
+        expect(releaseDateIndex?.contracts).toHaveLength(6);
+        expect(releaseDateIndex?.contracts.map((contract) => contract.contractId)).toEqual([
+          "index.tracks-release-date-fresh",
+          "index.tracks-release-date-public-findings",
+          "index.tracks-release-date-public-records",
+          "index.tracks-release-date-year",
+          "index.tracks-release-date-default-hub",
+          "index.tracks-release-date-search",
         ]);
         expect(
-          droppedIndex?.contracts.every(
+          releaseDateIndex?.contracts.every(
             (contract) =>
               contract.metadata?.outputsEquivalent === true &&
-              contract.metadata.requiredIndex === "tracks_release_date_track_id_idx" &&
+              contract.metadata.requiredIndex === "tracks_release_date_idx" &&
               contract.metadata.productionPlanUsesDroppedIndex === false &&
               contract.metadata.productionPlanViolations === 0,
           ),
@@ -578,8 +580,8 @@ describe("final index plan evidence", () => {
           productionPlanViolations: 0,
           requiredIndex: "tracks_vendor_worklist_idx",
         });
-        const freshEvidence = droppedIndex?.contracts.find(
-          (contract) => contract.contractId === "index.tracks-release-date-drop-fresh",
+        const freshEvidence = releaseDateIndex?.contracts.find(
+          (contract) => contract.contractId === "index.tracks-release-date-fresh",
         );
         const freshPlans = JSON.parse(String(freshEvidence?.metadata?.productionPlanDetails)) as
           | string[][]
@@ -588,8 +590,8 @@ describe("final index plan evidence", () => {
         expect(
           freshPlans?.every((details) => details.some((detail) => /USING INDEX/.test(detail))),
         ).toBe(true);
-        const publicFindingsEvidence = droppedIndex?.contracts.find(
-          (contract) => contract.contractId === "index.tracks-release-date-drop-public-findings",
+        const publicFindingsEvidence = releaseDateIndex?.contracts.find(
+          (contract) => contract.contractId === "index.tracks-release-date-public-findings",
         );
         const publicFindingsPlans = JSON.parse(
           String(publicFindingsEvidence?.metadata?.productionPlanDetails),
@@ -602,8 +604,8 @@ describe("final index plan evidence", () => {
             expect.stringMatching(/perf_artists/i),
           ]),
         );
-        const publicRecordsEvidence = droppedIndex?.contracts.find(
-          (contract) => contract.contractId === "index.tracks-release-date-drop-public-records",
+        const publicRecordsEvidence = releaseDateIndex?.contracts.find(
+          (contract) => contract.contractId === "index.tracks-release-date-public-records",
         );
         const publicRecordsPlans = JSON.parse(
           String(publicRecordsEvidence?.metadata?.productionPlanDetails),
@@ -617,7 +619,7 @@ describe("final index plan evidence", () => {
         const indexes = await client.execute(
           "select name from sqlite_master where type = 'index' and name = 'perf_tracks_release_date_idx'",
         );
-        expect(indexes.rows).toEqual([]);
+        expect(indexes.rows).toEqual([{ name: "perf_tracks_release_date_idx" }]);
         const allDroppedIndexes = [
           "perf_artifact_change_checkpoints_running_idx",
           "perf_artifact_change_consumers_compaction_idx",
@@ -625,7 +627,6 @@ describe("final index plan evidence", () => {
           "perf_operation_receipts_operation_audit_idx",
           "perf_tracks_capture_priority_idx",
           "perf_tracks_nearest_finding_score_idx",
-          "perf_tracks_release_date_idx",
         ];
         const droppedRows = await client.execute({
           args: allDroppedIndexes,
