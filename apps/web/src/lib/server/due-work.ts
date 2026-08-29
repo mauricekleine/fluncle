@@ -414,12 +414,10 @@ export function markDueWorkSourceRepairsStatement(
   assertNonEmpty(options.producer, "due-work producer");
   const markerVersion = options.markerVersion ?? `${options.producer}:${randomToken()}`;
   assertNonEmpty(markerVersion, "source repair marker version");
-  const rows = unique
-    .map(
-      () =>
-        "select ? as work_kind, ? as subject_type, ? as subject_id, 'repair' as state, '' as sort_key, ? as next_due_at, ? as source_version, ? as generation, ? as updated_at",
-    )
-    .join(" union all ");
+  // Turso's hosted SQLite build caps compound SELECTs at 50 terms. A VALUES CTE is the same
+  // parameterized row constructor without that parser limit, preserves the immediately-adjacent
+  // `changes()` gate, and supports the helper's full 500-subject API bound.
+  const rows = unique.map(() => "(?, ?, ?, 'repair', '', ?, ?, ?, ?)").join(", ");
   const args = unique.flatMap((subject) => [
     DUE_WORK_SOURCE_REPAIR_KIND,
     subject.subjectType,
@@ -432,10 +430,13 @@ export function markDueWorkSourceRepairsStatement(
 
   return {
     args,
-    sql: `insert into due_work
+    sql: `with source
+      (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+       source_version, generation, updated_at) as (values ${rows})
+      insert into due_work
       (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
        source_version, generation, updated_at)
-      select * from (${rows})
+      select * from source
       where 1 = 1${options.onlyIfPreviousStatementChanged === true ? " and changes() > 0" : ""}
       on conflict(work_kind, subject_type, subject_id) do update set
         state = 'repair',

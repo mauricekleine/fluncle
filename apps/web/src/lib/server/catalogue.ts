@@ -780,11 +780,11 @@ export async function refreshCatalogueRankStateCache(): Promise<CatalogueRankSta
 export const RANK_BATCH_SIZE = 250;
 
 /**
- * Shape ranked-track maintenance below SQLite's compound SELECT ceiling. The maintenance builder
- * represents its subject set as one `UNION ALL` arm per track, while the public rank contract
- * deliberately accepts up to 1,000 candidates. Every returned statement still joins the source
- * writes in one transaction; later chunks may advance the shadow epochs again, and every moved
- * subject carries the epoch it entered under so reconciliation remains complete and race-token safe.
+ * Shape ranked-track maintenance to the due-work helper's 500-subject API bound while the public
+ * rank contract deliberately accepts up to 1,000 candidates. Every returned statement still joins
+ * the source writes in one transaction; later chunks may advance the shadow epochs again, and every
+ * moved subject carries the epoch it entered under so reconciliation remains complete and
+ * race-token safe.
  */
 function rankMaintenanceStatements(movedIds: string[], now: string): InStatement[] {
   const maintenance: InStatement[] = [];
