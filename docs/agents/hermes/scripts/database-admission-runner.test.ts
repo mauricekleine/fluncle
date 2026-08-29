@@ -319,6 +319,17 @@ ${ACQUIRED_RESPONSE}`);
     expect(result.stderr).toContain('"run_id":"');
   });
 
+  it("uses the in-group owner watcher when parent-death signaling is unavailable", () => {
+    fakeExecutable("setpriv", "exit 1");
+    fakeCurl(ACQUIRED_RESPONSE);
+    const result = run(["bash", "-c", "printf fallback"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("fallback");
+    expect(result.stderr).toContain('"outcome":"released"');
+    expect(result.stderr).toContain('"enforced":true');
+  });
+
   it("kills an in-session descendant before releasing a completed payload", () => {
     const descendantMarker = join(directory, "residual-descendant");
     const releaseObservation = join(directory, "release-observation");

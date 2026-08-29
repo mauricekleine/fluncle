@@ -265,19 +265,25 @@ while :; do
   fi
 done
 
-# `setsid` makes every descendant one killable process group. `setpriv --pdeathsig` gives the
-# group leader a kernel-delivered TERM if this heartbeat owner dies abruptly; its trap fans that
-# signal across the group. An enforced grant is useless without both containment primitives.
-if ! command -v setsid >/dev/null 2>&1 || ! command -v setpriv >/dev/null 2>&1; then
+# `setsid` makes every descendant one killable process group. The supervisor watches this
+# heartbeat owner's exact PID and tears that group down if the owner disappears. Where the unit's
+# capability sandbox permits it, `setpriv --pdeathsig` adds a kernel-delivered TERM to the same
+# path; hardened DynamicUser units may reject that optional acceleration, so the explicit watcher
+# remains the portable containment primitive.
+if ! command -v setsid >/dev/null 2>&1; then
   terminal_admission
   yield_reason="containment-unavailable"
   emit_admission_event containment-unavailable 0
   exit 0
 fi
+pdeathsig_available=false
+if command -v setpriv >/dev/null 2>&1 && setpriv --pdeathsig TERM true >/dev/null 2>&1; then
+  pdeathsig_available=true
+fi
 owner_pid="$$"
 # Expanded by the child bash, not this admission-owner shell.
 # shellcheck disable=SC2016
-setsid setpriv --pdeathsig TERM bash -c '
+payload_supervisor_source='
   set -uo pipefail
   expected_parent="$1"
   kill_grace="$2"
@@ -309,7 +315,14 @@ setsid setpriv --pdeathsig TERM bash -c '
   wait "$watchdog_pid" 2>/dev/null || true
   trap - TERM INT HUP
   exit "$child_rc"
-' database-admission-payload "$owner_pid" "$ADMISSION_KILL_GRACE_SECS" "$@" &
+'
+if [ "$pdeathsig_available" = true ]; then
+  setsid setpriv --pdeathsig TERM bash -c "$payload_supervisor_source" \
+    database-admission-payload "$owner_pid" "$ADMISSION_KILL_GRACE_SECS" "$@" &
+else
+  setsid bash -c "$payload_supervisor_source" \
+    database-admission-payload "$owner_pid" "$ADMISSION_KILL_GRACE_SECS" "$@" &
+fi
 payload_pid="$!"
 payload_started_seconds="$SECONDS"
 heartbeat_seconds=$(( (heartbeat_after_ms + 999) / 1000 ))
