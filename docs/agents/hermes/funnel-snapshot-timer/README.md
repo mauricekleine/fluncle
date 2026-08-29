@@ -12,7 +12,7 @@ Live counts are cheap; the growth-per-day charts on `/admin/funnel` need history
 
 The box holds no computation authority — it only fires the trigger. Per tick:
 
-1. **POST** `/api/admin/funnel/snapshot` with the box's AGENT token — a bare trigger (no body).
+1. **POST** `/api/v1/admin/funnel/snapshot` with the box's AGENT token — a bare trigger (no body).
 2. The **Worker** computes every stage total + queue depth + frontier count through the product's own predicates and **UPSERTS one row for the UTC day** (`on conflict(day) do update`), so a re-fired tick **overwrites** rather than doubles a bar.
 
 **It calls the oRPC HTTP endpoint directly** (the `anchor-sweep.ts` / `verify-captures.ts` precedent), never a `fluncle admin …` subcommand — the box's baked CLI is a PINNED release and must not gain a new dependency. **No new secret**: every count is computed Worker-side, so the box is a bare trigger like the reach cron; `FLUNCLE_API_TOKEN` (the box's agent token) is already present.

@@ -66,12 +66,12 @@
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "c67d565a71c00af4f01e54773bbd921353e509ae907c99a50aabd5421912529f"
+      "computedHash": "3888d9f8530be43f5ab153d788780f779e0c6b3f99a8815297634f22275442eb"
     },
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "dab14b0f9f79ce562196911f6cc31a4d626c202166b049484b8025150348d65e"
+      "computedHash": "0c5d4d5c940cae5bdca3065b43536e6e7ccdc1c4e64ef67d117c68a4b43e2801"
     },
     "fluncle-publish": {
       "source": "packages/skills/fluncle-publish",
@@ -86,12 +86,12 @@
     "fluncle-rfc-writer": {
       "source": "packages/skills/fluncle-rfc-writer",
       "sourceType": "local",
-      "computedHash": "3db0292013220832073a5021ee9a5f029920f7b4a67dcc2452dd22de59ee9fd2"
+      "computedHash": "ed3d06e1751592de822017cac39a8c08fa83319c51a4e58bf31cc1739c32ca4e"
     },
     "fluncle-smoke": {
       "source": "packages/skills/fluncle-smoke",
       "sourceType": "local",
-      "computedHash": "50e1d9b9e2621781a15a26276659199ceed04b431d1ed26cdaa4be4eccecef0d"
+      "computedHash": "1b0213f00baff44dd62f5e9cf29ea4c19b8d8653c21c6c113828b2829cc761d8"
     },
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
@@ -111,7 +111,7 @@
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "53b75d91508399ec970746bc28c3d80d6807129a56c2b1ba3773eab64bac6676"
+      "computedHash": "fc4679fa04c9dd87bf6dbdb77914fa6d01168d130f825c6b7aa04c9a98b944dd"
     },
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",

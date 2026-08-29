@@ -2,13 +2,13 @@
 
 The rave-02 host trigger for the `--no-agent` **render → publish auto-advance** sweep — the last autonomy gap in the finding pipeline. The render conductor finishes a finding's video; this closes the chain to publish with no operator beat between the two: a freshly-rendered, READY finding goes out as a hands-off PUBLIC YouTube Short and a TikTok inbox draft. (TikTok still needs the operator to finish it in-app — the licensed sound attaches only there. That is a platform limit, not ours, and it stays.)
 
-The box holds no Postiz key, so it just TRIGGERS — one `curl` POST to the admin-tier `/api/admin/social/publish/advance` per tick, and the Worker does the work behind every safety gate. Zero LLM tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 30m.
+The box holds no Postiz key, so it just TRIGGERS — one `curl` POST to the admin-tier `/api/v1/admin/social/publish/advance` per tick, and the Worker does the work behind every safety gate. Zero LLM tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 30m.
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — a lone [`../scripts/publish-advance-sweep.sh`](../scripts/publish-advance-sweep.sh) (no `.ts`; the whole job is one POST) — riding the image and auto-updating from `main` via pin-watch (Unit A). The host timer only triggers it.
 
 ## It ships DARK — the timer runs, the advance does not
 
-**The Worker's kill switch defaults to PAUSED.** `is_publish_advance_paused` is default-deny: only the explicit string `"false"` in the `settings` row `publish_advance_paused` means running, so an unset key — which is what a fresh deploy has — reads as paused. Installing this timer therefore posts nothing. The tick fires, the Worker reads the switch, and returns `{ "paused": true }`.
+**The Worker's kill switch defaults to PAUSED.** `isPublishAdvancePaused` (`apps/web/src/lib/server/publish-advance.ts`) is default-deny: only the explicit string `"false"` in the `settings` row `publish_advance_paused` means running, so an unset key — which is what a fresh deploy has — reads as paused. Installing this timer therefore posts nothing. The tick fires, the Worker reads the switch, and returns `{ "paused": true }`.
 
 Turning it on is ONE operator flip, no deploy:
 
