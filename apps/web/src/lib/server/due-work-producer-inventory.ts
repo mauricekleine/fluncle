@@ -313,7 +313,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     file: "artists.ts",
     rationale:
       "The edge statement builder is executed only by the inventoried explicit write transaction.",
-    sites: ["artists.ts:insert:track_artists:52cae2df"],
+    sites: ["artists.ts:insert:track_artists:6430174d"],
   },
   {
     disposition: "non-eligibility",
@@ -372,22 +372,36 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     rationale:
       "Each generated count correction executes beside its selection marker in one write batch.",
     sites: [
-      "hub-counts-reconcile.ts:update:dynamic:dc26152e",
-      "hub-counts-reconcile.ts:update:dynamic:cf192f5e",
+      "hub-counts-reconcile.ts:update:dynamic:239a77b2",
+      "hub-counts-reconcile.ts:update:dynamic:b3c3aab2",
     ],
   },
   {
     delegates: [
+      "hubCountArtistDeltaStatement",
       "hubCountArtistEdgeStatements",
       "hubCountDeltaForTrackArtistsStatement",
       "hubCountDeltaStatement",
       "hubCountMoveStatements",
+      "rankableArtistDeltaForTrackStatement",
     ],
     disposition: "delegated-atomicity",
     file: "hub-counts.ts",
     rationale:
       "Every entity-count delta builder call is checked inside its producer's write batch.",
-    sites: ["hub-counts.ts:update:dynamic:4b68e04a", "hub-counts.ts:update:artists:d23372bf"],
+    sites: [
+      "hub-counts.ts:update:dynamic:4b68e04a",
+      "hub-counts.ts:update:artists:d23372bf",
+      "hub-counts.ts:update:artists:b06285c6",
+      "hub-counts.ts:update:artists:f35e8253",
+    ],
+  },
+  {
+    disposition: "non-eligibility",
+    file: "hub-counts.ts",
+    rationale:
+      "Recomputes the maintained artist mixability counter after a guarded embedding clear; no due-work evaluator reads that derived counter.",
+    sites: ["hub-counts.ts:update:artists:f6f4cece"],
   },
   {
     disposition: "test-fixture",
@@ -443,7 +457,10 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     file: "public-projections.ts",
     rationale:
       "Updates the selected shadow rebuild checkpoint table and never mutates an authoritative due-work source.",
-    sites: ["public-projections.ts:update:dynamic:c5abf67b"],
+    sites: [
+      "public-projections.ts:update:dynamic:b32e954f",
+      "public-projections.ts:update:dynamic:87624bb3",
+    ],
   },
   {
     disposition: "non-eligibility",
@@ -515,6 +532,13 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
       "scripts/backfill-hub-counts.ts:insert:dynamic:c0d12468",
       "scripts/backfill-hub-counts.ts:insert:dynamic:1305bca4",
     ],
+  },
+  {
+    disposition: "non-eligibility",
+    file: "scripts/backfill-mixable-artists-projection.ts",
+    rationale:
+      "Reconciles the maintained artist-grain mix counter after deploy; no due-work evaluator reads it.",
+    sites: ["scripts/backfill-mixable-artists-projection.ts:update:artists:b379bc6e"],
   },
   {
     disposition: "non-eligibility",
@@ -645,7 +669,10 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     disposition: "derived-projection-write",
     file: "public-projections.ts",
     rationale: "Writes a projection checkpoint table selected dynamically, never source truth.",
-    sites: ["public-projections.ts:update:dynamic:c5abf67b"],
+    sites: [
+      "public-projections.ts:update:dynamic:b32e954f",
+      "public-projections.ts:update:dynamic:87624bb3",
+    ],
   },
   {
     disposition: "non-projection-fact",
@@ -662,8 +689,7 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
   {
     disposition: "derived-projection-write",
     file: "hub-counts.ts",
-    rationale:
-      "Updates maintained hub counters on a dynamic entity table, not Goal D source facts.",
+    rationale: "Updates maintained entity and mixability counters, not Goal D source facts.",
     sites: ["hub-counts.ts:update:dynamic:4b68e04a"],
   },
   {
@@ -710,15 +736,15 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     file: "artists.ts",
     rationale:
       "The edge statement builder is called only by the inventoried explicit write transaction.",
-    sites: ["artists.ts:insert:track_artists:52cae2df"],
+    sites: ["artists.ts:insert:track_artists:6430174d"],
   },
   {
     disposition: "derived-projection-write",
     file: "hub-counts-reconcile.ts",
     rationale: "Reconciles maintained hub counters on dynamic entity tables only.",
     sites: [
-      "hub-counts-reconcile.ts:update:dynamic:dc26152e",
-      "hub-counts-reconcile.ts:update:dynamic:cf192f5e",
+      "hub-counts-reconcile.ts:update:dynamic:239a77b2",
+      "hub-counts-reconcile.ts:update:dynamic:b3c3aab2",
     ],
   },
   {

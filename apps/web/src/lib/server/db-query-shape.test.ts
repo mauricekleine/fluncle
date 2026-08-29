@@ -513,11 +513,11 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "The `/album/<slug>` unlit slice. Album-SEEKED (`tracks.album_id = ?` over tracks_album_id_idx), so the anti-join is a residual on one album's rows.",
   },
   {
-    count: 4,
+    count: 5,
     file: "lib/server/public-projections.ts",
     pattern: "anti-join:findings-is-null",
     reason:
-      "The artist-qualification shadow projection. One occurrence is a track-id-seeked repair; two are the exact source digest and bounded drift scheduler used by the local-only audit/backfill command, never a public request path. The operator audit lane is primary-key keyset paged on `(track_id, artist_id)` and capped at 100 rows, with its indexed SEARCH plan pinned in projection-cleanup-plans.integration.test.ts. All four compute a contribution bit from a left join rather than filter the catalogue through an anti-join.",
+      "The artist-qualification shadow projection. One occurrence is a track-id-seeked repair and one bulk-rebuild source read is fenced by a `selected(track_id) as (values …)` page capped at 50 tracks. Two are the exact source digest and bounded drift scheduler used by the local-only audit/backfill command, never a public request path. The operator audit lane is primary-key keyset paged on `(track_id, artist_id)` and capped at 100 rows, with its indexed SEARCH plan pinned in projection-cleanup-plans.integration.test.ts. All five compute a contribution bit from a left join rather than filter the catalogue through an anti-join.",
   },
 
   // ── the catalogue anti-join, `not exists (select 1 from findings …)` ────────────
@@ -566,11 +566,11 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "tracksHubYearLaneQuery is the exact compatibility query for every filtered lane and for flag-off or unusable public projection state. The default unfiltered lane reads `public_aggregate_counts`; this literal `substr(release_date, 1, 4)` source scan remains only as the reversible legacy fallback until contraction.",
   },
   {
-    count: 1,
+    count: 2,
     file: "lib/server/public-projections.ts",
     pattern: "fn-wrapped:substr-release-date",
     reason:
-      "The exact public-aggregate drift scheduler must compare the shadow membership with the legacy literal `substr(release_date, 1, 4)` semantics. It runs only in the local-only audit/backfill command, is capped by its repair limit, and is never a public request path.",
+      "The bulk public-aggregate rebuild computes the literal compatibility bucket only after joining a `selected(track_id) as (values …)` page capped at 50 tracks. The exact drift scheduler must compare shadow membership with the same legacy `substr(release_date, 1, 4)` semantics; it runs only in the local-only audit/backfill command, is capped by its repair limit, and is never a public request path.",
   },
   {
     count: 1,

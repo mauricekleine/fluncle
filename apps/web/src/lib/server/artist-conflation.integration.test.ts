@@ -310,8 +310,13 @@ describe("linkTracksToArtistEntities — the homonym seal", () => {
     const duplicate = await db.execute(statement);
 
     expect(
-      typedRows<{ artist_id: string; is_catalogue: bigint | number; track_id: string }>(first.rows),
-    ).toEqual([{ artist_id: "art-returning", is_catalogue: 1, track_id: trackId }]);
+      typedRows<{
+        artist_id: string;
+        is_catalogue: bigint | number;
+        is_rankable: bigint | number;
+        track_id: string;
+      }>(first.rows),
+    ).toEqual([{ artist_id: "art-returning", is_catalogue: 1, is_rankable: 0, track_id: trackId }]);
     expect(duplicate.rows).toHaveLength(0);
   });
 
