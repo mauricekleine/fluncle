@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** Apply exactly the generated migration prefix authorized for a production release phase. */
+/** Apply the generated migration suffix not yet stamped in production. */
 import { createClient, type Client, type InStatement } from "@libsql/client";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -7,35 +7,15 @@ import { readMigrationFiles, type MigrationMeta } from "drizzle-orm/migrator";
 
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import {
-  guardProtectedProductionMigrations,
   parseMigrationJournal,
-  PRODUCTION_MIGRATION_PHASES,
-  PROTECTED_MIGRATION_APPROVAL_ENV,
+  planPendingProductionMigrations,
   readLastAppliedMigrationWhen,
   type MigrationJournalEntry,
-  type ProductionMigrationPhase,
   type ProductionMigrationPlan,
 } from "./guard-production-migrations";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const journalUrl = new URL("../drizzle/meta/_journal.json", import.meta.url);
-
-export function parseProductionMigrationPhase(args: readonly string[]): ProductionMigrationPhase {
-  if (args.length !== 2 || args[0] !== "--phase") {
-    throw new Error(
-      `production migration runner: expected --phase ${PRODUCTION_MIGRATION_PHASES.join("|")}`,
-    );
-  }
-
-  const phase = args[1];
-  if (!PRODUCTION_MIGRATION_PHASES.some((candidate) => candidate === phase)) {
-    throw new Error(
-      `production migration runner: phase must be one of ${PRODUCTION_MIGRATION_PHASES.join(", ")}`,
-    );
-  }
-
-  return phase;
-}
 
 /** Prove Drizzle's file reader and the parsed journal still describe the same ordered chain. */
 export function pairJournalWithMigrations(
@@ -58,7 +38,7 @@ export function pairJournalWithMigrations(
   });
 }
 
-/** Build the exact atomic libSQL batch Drizzle uses, bounded by the already-authorized plan. */
+/** Build the exact atomic libSQL batch for the pending journal entries. */
 export function statementsForMigrationPlan(
   pairs: ReadonlyArray<{ entry: MigrationJournalEntry; migration: MigrationMeta }>,
   plan: ProductionMigrationPlan,
@@ -69,7 +49,7 @@ export function statementsForMigrationPlan(
     const pair = pairs.find(({ entry }) => entry.tag === pendingEntry.tag);
     if (!pair || pair.entry.when !== pendingEntry.when) {
       throw new Error(
-        `production migration runner: authorized entry ${pendingEntry.tag} is absent from the loaded SQL chain`,
+        `production migration runner: pending entry ${pendingEntry.tag} is absent from the loaded SQL chain`,
       );
     }
   }
@@ -78,12 +58,6 @@ export function statementsForMigrationPlan(
     if (!pendingTags.has(entry.tag)) {
       return [];
     }
-    if (plan.throughWhen === null || entry.when > plan.throughWhen) {
-      throw new Error(
-        `production migration runner: planned migration ${entry.tag} crosses phase ${plan.phase}`,
-      );
-    }
-
     return [
       ...migration.sql.map((sql) => ({ args: [], sql })),
       {
@@ -121,8 +95,6 @@ export async function applyProductionMigrationPlan(
 }
 
 async function main(): Promise<void> {
-  const phase = parseProductionMigrationPhase(process.argv.slice(2));
-
   const url = process.env.TURSO_DATABASE_URL?.trim();
   const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
   if (!url || !authToken) {
@@ -138,23 +110,16 @@ async function main(): Promise<void> {
   const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
 
   try {
-    const plan = await guardProtectedProductionMigrations({
-      approval: process.env[PROTECTED_MIGRATION_APPROVAL_ENV],
+    const plan = await planPendingProductionMigrations({
       journalJson,
-      phase,
       readLastAppliedWhen: () => readLastAppliedMigrationWhen(client),
     });
 
     await applyProductionMigrationPlan(client, pairs, plan);
 
     console.warn(
-      `PRODUCTION MIGRATION: phase ${phase} complete — through ${plan.throughTag ?? "empty journal"}; applied ${plan.pendingEntries.map((entry) => entry.tag).join(",") || "none"}.`,
+      `PRODUCTION MIGRATION: complete — through ${plan.throughTag ?? "empty journal"}; applied ${plan.pendingEntries.map((entry) => entry.tag).join(",") || "none"}.`,
     );
-    if (plan.blockedProtectedTags.length > 0) {
-      console.warn(
-        `PRODUCTION MIGRATION: held for a later attended phase — ${plan.blockedProtectedTags.join(",")}.`,
-      );
-    }
   } finally {
     client.close();
   }

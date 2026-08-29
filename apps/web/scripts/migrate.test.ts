@@ -11,7 +11,6 @@ import {
 import {
   applyProductionMigrationPlan,
   pairJournalWithMigrations,
-  parseProductionMigrationPhase,
   statementsForMigrationPlan,
 } from "./migrate";
 
@@ -34,29 +33,15 @@ const MIGRATIONS: MigrationMeta[] = [
   },
 ];
 
-function expansionPlan(): ProductionMigrationPlan {
+function planFor(entries: MigrationJournalEntry[]): ProductionMigrationPlan {
   return {
-    blockedProtectedTags: ["0001_contraction"],
     lastAppliedWhen: null,
-    pendingEntries: [ENTRIES[0]],
-    pendingProtectedTags: [],
-    phase: "deploy",
-    throughTag: ENTRIES[0].tag,
-    throughWhen: ENTRIES[0].when,
+    pendingEntries: entries,
+    throughTag: entries.at(-1)?.tag ?? null,
   };
 }
 
 describe("production migration runner", () => {
-  it("accepts only the three named phases", () => {
-    expect(parseProductionMigrationPhase(["--phase", "deploy"])).toBe("deploy");
-    expect(parseProductionMigrationPhase(["--phase", "h4"])).toBe("h4");
-    expect(parseProductionMigrationPhase(["--phase", "h8"])).toBe("h8");
-    expect(() => parseProductionMigrationPhase(["--phase", "0171_watery_skreet"])).toThrow(
-      /phase must be one of/,
-    );
-    expect(() => parseProductionMigrationPhase([])).toThrow(/expected --phase/);
-  });
-
   it("fails closed when Drizzle's loaded files do not match the parsed journal", () => {
     expect(() => pairJournalWithMigrations(ENTRIES, MIGRATIONS.slice(0, 1))).toThrow(
       /counts differ/,
@@ -66,26 +51,26 @@ describe("production migration runner", () => {
     ).toThrow(/does not match/);
   });
 
-  it("builds statements for only the journal entries inside the authorized prefix", () => {
+  it("builds statements for every pending journal entry", () => {
     const pairs = pairJournalWithMigrations(ENTRIES, MIGRATIONS);
-    const statements = statementsForMigrationPlan(pairs, expansionPlan());
+    const statements = statementsForMigrationPlan(pairs, planFor(ENTRIES));
     const sql = statements.map((statement) =>
       typeof statement === "string" ? statement : statement.sql,
     );
 
     expect(sql).toContain("create table expansion (id integer primary key);");
-    expect(sql).not.toContain("create table contraction (id integer primary key);");
-    expect(sql.filter((statement) => statement.includes("__drizzle_migrations"))).toHaveLength(1);
+    expect(sql).toContain("create table contraction (id integer primary key);");
+    expect(sql.filter((statement) => statement.includes("__drizzle_migrations"))).toHaveLength(2);
   });
 
-  it("applies and stamps only the authorized prefix in a real libSQL database", async () => {
+  it("applies and stamps the complete pending journal in a real libSQL database", async () => {
     const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
     try {
       await applyProductionMigrationPlan(
         client,
         pairJournalWithMigrations(ENTRIES, MIGRATIONS),
-        expansionPlan(),
+        planFor(ENTRIES),
       );
 
       const tables = await client.execute(
@@ -96,8 +81,11 @@ describe("production migration runner", () => {
       );
 
       expect(tables.rows.map((row) => row.name)).toContain("expansion");
-      expect(tables.rows.map((row) => row.name)).not.toContain("contraction");
-      expect(ledger.rows).toEqual([{ created_at: 100, hash: "expansion-hash" }]);
+      expect(tables.rows.map((row) => row.name)).toContain("contraction");
+      expect(ledger.rows).toEqual([
+        { created_at: 100, hash: "expansion-hash" },
+        { created_at: 200, hash: "contraction-hash" },
+      ]);
     } finally {
       client.close();
     }
@@ -120,7 +108,7 @@ describe("production migration runner", () => {
         applyProductionMigrationPlan(
           client,
           pairJournalWithMigrations(entries, failingMigrations),
-          expansionPlan(),
+          planFor(entries),
         ),
       ).rejects.toThrow();
 
