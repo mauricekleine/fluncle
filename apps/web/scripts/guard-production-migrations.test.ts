@@ -3,61 +3,36 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  EXPANSION_CEILING_TAG,
-  guardProtectedProductionMigrations,
   parseMigrationJournal,
-  pendingProtectedMigrationTags,
+  planPendingProductionMigrations,
   planProductionMigrations,
-  PROTECTED_CONTRACTION_TAGS,
-  PROTECTED_MIGRATION_APPROVAL_ENV,
   readLastAppliedMigrationWhen,
-  requireProtectedMigrationApproval,
 } from "./guard-production-migrations";
 
 const JOURNAL_JSON = JSON.stringify({
   dialect: "sqlite",
   entries: [
-    { breakpoints: true, idx: 0, tag: EXPANSION_CEILING_TAG, version: "6", when: 100 },
-    {
-      breakpoints: true,
-      idx: 1,
-      tag: PROTECTED_CONTRACTION_TAGS[0],
-      version: "6",
-      when: 200,
-    },
-    {
-      breakpoints: true,
-      idx: 2,
-      tag: PROTECTED_CONTRACTION_TAGS[1],
-      version: "6",
-      when: 300,
-    },
-    {
-      breakpoints: true,
-      idx: 3,
-      tag: PROTECTED_CONTRACTION_TAGS[2],
-      version: "6",
-      when: 400,
-    },
-    { breakpoints: true, idx: 4, tag: "0172_future_expansion", version: "6", when: 500 },
+    { breakpoints: true, idx: 0, tag: "0168_expansion", version: "6", when: 100 },
+    { breakpoints: true, idx: 1, tag: "0169_contraction", version: "6", when: 200 },
+    { breakpoints: true, idx: 2, tag: "0170_contraction", version: "6", when: 300 },
+    { breakpoints: true, idx: 3, tag: "0171_contraction", version: "6", when: 400 },
+    { breakpoints: true, idx: 4, tag: "0172_expansion", version: "6", when: 500 },
   ],
   version: "7",
 });
 
 const ENTRIES = parseMigrationJournal(JOURNAL_JSON);
-const H4_APPROVAL = PROTECTED_CONTRACTION_TAGS.slice(0, 2).join(",");
-const H8_APPROVAL = PROTECTED_CONTRACTION_TAGS[2];
 
-describe("protected production migration journal", () => {
-  it("finds the checked-in expansion ceiling and protected tags in exact contiguous order", () => {
+describe("production migration journal", () => {
+  it("parses the complete checked-in journal in generated order", () => {
     const journal = readFileSync(
       fileURLToPath(new URL("../drizzle/meta/_journal.json", import.meta.url)),
       "utf8",
     );
     const entries = parseMigrationJournal(journal);
 
-    expect(entries.find((entry) => entry.tag === EXPANSION_CEILING_TAG)).toBeDefined();
-    expect(pendingProtectedMigrationTags(entries, null)).toEqual(PROTECTED_CONTRACTION_TAGS);
+    expect(entries.at(-1)?.tag).toBe("0172_uneven_obadiah_stane");
+    expect(entries.map((entry) => entry.idx)).toEqual(entries.map((_, index) => index));
   });
 
   it.each([
@@ -82,154 +57,49 @@ describe("protected production migration journal", () => {
     expect(() => parseMigrationJournal(journal)).toThrow(/production migration guard/);
   });
 
-  it("fails closed if the expansion ceiling or a protected tag is absent, reordered, or split", () => {
-    expect(() =>
-      pendingProtectedMigrationTags(
-        ENTRIES.filter((entry) => entry.tag !== PROTECTED_CONTRACTION_TAGS[1]),
-        null,
-      ),
-    ).toThrow(/missing or out of journal order/);
-    expect(() =>
-      pendingProtectedMigrationTags(
-        [ENTRIES[0], ENTRIES[2], ENTRIES[1], ...ENTRIES.slice(3)],
-        null,
-      ),
-    ).toThrow(/missing or out of journal order/);
+  it("fails closed when generated entries are reordered", () => {
+    const reordered = ENTRIES.map((entry) => ({ ...entry }));
+    const second = reordered[1];
+    const third = reordered[2];
+    if (!second || !third) {
+      throw new Error("fixture requires at least three migration entries");
+    }
+    reordered[1] = { ...third, idx: 1 };
+    reordered[2] = { ...second, idx: 2 };
 
-    const splitEntries = ENTRIES.map((entry) => ({ ...entry }));
-    splitEntries.splice(2, 0, { idx: 2, tag: "0169_unprotected_gap", when: 250 });
-    splitEntries.forEach((entry, idx) => {
-      entry.idx = idx;
-    });
-    expect(() => pendingProtectedMigrationTags(splitEntries, null)).toThrow(
-      /missing or out of journal order/,
-    );
+    const journal = JSON.stringify({ dialect: "sqlite", entries: reordered, version: "7" });
+    expect(() => parseMigrationJournal(journal)).toThrow(/journal entry \d+ is invalid/);
   });
 });
 
-describe("phase-bounded production migration planning", () => {
-  it("lets an ordinary deploy apply expansions while holding every pending contraction", () => {
-    const plan = planProductionMigrations({
-      approval: undefined,
-      entries: ENTRIES,
-      lastAppliedWhen: null,
-      phase: "deploy",
-    });
+describe("production migration planning", () => {
+  it("plans the complete journal suffix above the ledger maximum", () => {
+    const plan = planProductionMigrations(ENTRIES, 100);
 
-    expect(plan.throughTag).toBe(EXPANSION_CEILING_TAG);
-    expect(plan.pendingEntries.map((entry) => entry.tag)).toEqual([EXPANSION_CEILING_TAG]);
-    expect(plan.pendingProtectedTags).toEqual([]);
-    expect(plan.blockedProtectedTags).toEqual(PROTECTED_CONTRACTION_TAGS);
-  });
-
-  it("rejects a protected approval on the ordinary deploy path", () => {
-    expect(() =>
-      planProductionMigrations({
-        approval: H4_APPROVAL,
-        entries: ENTRIES,
-        lastAppliedWhen: 100,
-        phase: "deploy",
-      }),
-    ).toThrow(new RegExp(PROTECTED_MIGRATION_APPROVAL_ENV));
-  });
-
-  it("continues with later expansions once every protected contraction is applied", () => {
-    const plan = planProductionMigrations({
-      approval: undefined,
-      entries: ENTRIES,
-      lastAppliedWhen: 400,
-      phase: "deploy",
-    });
-
-    expect(plan.throughTag).toBe("0172_future_expansion");
-    expect(plan.pendingEntries.map((entry) => entry.tag)).toEqual(["0172_future_expansion"]);
-    expect(plan.blockedProtectedTags).toEqual([]);
-  });
-
-  it("bounds H4 at 0170 and requires exactly its pending protected prefix", () => {
-    const plan = planProductionMigrations({
-      approval: H4_APPROVAL,
-      entries: ENTRIES,
+    expect(plan).toEqual({
       lastAppliedWhen: 100,
-      phase: "h4",
+      pendingEntries: ENTRIES.slice(1),
+      throughTag: "0172_expansion",
     });
-
-    expect(plan.throughTag).toBe(PROTECTED_CONTRACTION_TAGS[1]);
-    expect(plan.pendingProtectedTags).toEqual(PROTECTED_CONTRACTION_TAGS.slice(0, 2));
-    expect(plan.blockedProtectedTags).toEqual([PROTECTED_CONTRACTION_TAGS[2]]);
-    expect(plan.pendingEntries.map((entry) => entry.tag)).not.toContain(
-      PROTECTED_CONTRACTION_TAGS[2],
-    );
   });
 
-  it("requires expansion through 0168 before H4 and H4 through 0170 before H8", () => {
-    expect(() =>
-      planProductionMigrations({
-        approval: H4_APPROVAL,
-        entries: ENTRIES,
-        lastAppliedWhen: null,
-        phase: "h4",
-      }),
-    ).toThrow(new RegExp(EXPANSION_CEILING_TAG));
-    expect(() =>
-      planProductionMigrations({
-        approval: H8_APPROVAL,
-        entries: ENTRIES,
-        lastAppliedWhen: 200,
-        phase: "h8",
-      }),
-    ).toThrow(new RegExp(PROTECTED_CONTRACTION_TAGS[1]));
-  });
-
-  it("bounds H8 at 0171 and accepts only its one pending tag", () => {
-    const plan = planProductionMigrations({
-      approval: H8_APPROVAL,
-      entries: ENTRIES,
-      lastAppliedWhen: 300,
-      phase: "h8",
+  it("returns an empty plan when the target is current", () => {
+    expect(planProductionMigrations(ENTRIES, 500)).toEqual({
+      lastAppliedWhen: 500,
+      pendingEntries: [],
+      throughTag: null,
     });
-
-    expect(plan.throughTag).toBe(PROTECTED_CONTRACTION_TAGS[2]);
-    expect(plan.pendingProtectedTags).toEqual([PROTECTED_CONTRACTION_TAGS[2]]);
-    expect(plan.pendingEntries.map((entry) => entry.tag)).toEqual([PROTECTED_CONTRACTION_TAGS[2]]);
   });
 
-  it("requires the literal pending tag list and rejects stale approvals", () => {
-    expect(() =>
-      requireProtectedMigrationApproval(PROTECTED_CONTRACTION_TAGS.slice(0, 2), H4_APPROVAL),
-    ).not.toThrow();
-
-    for (const approval of [
-      undefined,
-      "",
-      ` ${H4_APPROVAL}`,
-      `${H4_APPROVAL} `,
-      PROTECTED_CONTRACTION_TAGS[0],
-      PROTECTED_CONTRACTION_TAGS.slice(0, 2).reverse().join(","),
-    ]) {
-      expect(() =>
-        requireProtectedMigrationApproval(PROTECTED_CONTRACTION_TAGS.slice(0, 2), approval),
-      ).toThrow(new RegExp(PROTECTED_MIGRATION_APPROVAL_ENV));
-    }
-
-    expect(() => requireProtectedMigrationApproval([], H8_APPROVAL)).toThrow(/must be unset/);
-  });
-
-  it("inspects the ledger before deciding the phase plan", async () => {
+  it("inspects the ledger before planning the pending suffix", async () => {
     const readLastAppliedWhen = vi.fn(async () => 300);
 
     await expect(
-      guardProtectedProductionMigrations({
-        approval: H8_APPROVAL,
-        journalJson: JOURNAL_JSON,
-        phase: "h8",
-        readLastAppliedWhen,
-      }),
-    ).resolves.toMatchObject({
+      planPendingProductionMigrations({ journalJson: JOURNAL_JSON, readLastAppliedWhen }),
+    ).resolves.toEqual({
       lastAppliedWhen: 300,
-      pendingProtectedTags: [PROTECTED_CONTRACTION_TAGS[2]],
-      phase: "h8",
-      throughTag: PROTECTED_CONTRACTION_TAGS[2],
+      pendingEntries: ENTRIES.slice(3),
+      throughTag: "0172_expansion",
     });
     expect(readLastAppliedWhen).toHaveBeenCalledOnce();
   });
@@ -279,16 +149,18 @@ describe("production deploy migration boundary", () => {
     readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
   ) as { scripts: Record<string, string> };
 
-  it("keeps local db:migrate unchanged and uses fixed phases only in production commands", () => {
+  it("keeps local migration unchanged and gives production one complete journal command", () => {
     expect(pkg.scripts["db:migrate"]).toBe(
       "drizzle-kit migrate && bun run scripts/ensure-search-index.ts",
     );
-    expect(pkg.scripts["db:migrate:production"]).toContain("scripts/migrate.ts --phase deploy");
-    expect(pkg.scripts["db:migrate:production:h4"]).toContain("scripts/migrate.ts --phase h4");
-    expect(pkg.scripts["db:migrate:production:h8"]).toContain("scripts/migrate.ts --phase h8");
+    expect(pkg.scripts["db:migrate:production"]).toBe(
+      "bun run scripts/migrate.ts && bun run scripts/ensure-search-index.ts",
+    );
+    expect(pkg.scripts["db:migrate:production:h4"]).toBeUndefined();
+    expect(pkg.scripts["db:migrate:production:h8"]).toBeUndefined();
   });
 
-  it("routes deploy:cf through the bounded deploy phase before backfill and deploy", () => {
+  it("routes deploy:cf through the complete pending journal before backfill and deploy", () => {
     const chain = pkg.scripts["deploy:cf"] ?? "";
     const migrationAt = chain.indexOf("bun run db:migrate:production");
     const backfillAt = chain.indexOf("bun run db:backfill");

@@ -71,18 +71,9 @@ Cloudflare deploys via Workers Builds, and migrations run as part of the **deplo
 "deploy:cf": "bun run db:migrate:production && bun run db:backfill && bun run db:migrate:telemetry:production && wrangler deploy && bun scripts/purge-edge-cache.ts"
 ```
 
-`db:migrate:production` runs the phase-bounded `scripts/migrate.ts --phase deploy`, not the ordinary full-journal Drizzle command.
+`db:migrate:production` validates the generated journal against the loaded migration files, reads the target database's Drizzle ledger, and sends the complete pending journal suffix as one atomic libSQL migration batch. Each migration's ledger stamp is part of the same transaction, so a failed statement rolls back the schema changes and stamps together. The local `db:migrate` command and the `dev` startup path remain the ordinary full-journal Drizzle path.
 
-The deploy phase reads the generated journal and the target database's Drizzle ledger, then constructs one atomic libSQL batch ending immediately before the first pending protected contraction. It can apply expansions `0161` through `0168`, but it cannot execute `0169`, `0170`, or `0171`; setting `FLUNCLE_PROTECTED_MIGRATION_APPROVAL` on this path is rejected rather than treated as permission. Once all three contractions have been applied by their attended phases, the same rule advances to later journal entries normally. The local `db:migrate` command and the `dev` startup path remain the full-journal Drizzle path.
-
-The contractions have two fixed attended commands, matching the release manifest rather than accepting an arbitrary `--through` tag. H4 requires the target ledger through `0168`, stops through `0170`, and requires the exact tags it would apply; H8 requires the ledger through `0170`, stops through `0171`, and requires only `0171`. From the initial `0168` state the exact invocations are:
-
-```bash
-FLUNCLE_PROTECTED_MIGRATION_APPROVAL=0169_lonely_mariko_yashida,0170_motionless_squadron_supreme bun run --cwd apps/web db:migrate:production:h4
-FLUNCLE_PROTECTED_MIGRATION_APPROVAL=0171_watery_skreet bun run --cwd apps/web db:migrate:production:h8
-```
-
-Run H4 only after H1–H3, clean-checkout 1×/2×/4× proof, package gates, and attended hosted scratch evidence are green. Run H8 only after H7 and the final 171-index/29-track-index/67-consumer proof is green. A partially applied earlier phase changes the required approval to only its still-pending suffix; never reuse a stale approval. Each bounded migration batch includes its matching Drizzle ledger stamps in the same transaction, so a failed statement rolls back that batch. Applied expansions stay in place on application rollback. Applied contractions are never down-migrated: restore any required index forward before rolling application code back.
+Production migrations run only from the Cloudflare deploy chain. Applied migrations are never down-migrated: restore any required schema forward before rolling application code back.
 
 `db:backfill` is the idempotent data-backfill step folded into the deploy (a chain of `scripts/backfill-*.ts` scripts, beginning with `scripts/backfill-plan-recording-mixtape.ts`): DDL and the data it populates ship atomically, and because every backfill step is guarded (`where not exists` / convergent updates), re-running it on every deploy is a no-op once done. A new schema change that needs a data backfill appends another `backfill-*.ts` script to the chain rather than relying on a manual post-deploy step.
 
@@ -96,8 +87,8 @@ The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build s
 - `apps/web/scripts/render-dev-vars.ts` — render `apps/web/.dev.vars` from `apps/web/.dev.vars.tpl` via `op inject --account "$FLUNCLE_1PASSWORD_ACCOUNT"`; the 1Password item path comes from `FLUNCLE_1PASSWORD_ENV_ITEM`.
 - `apps/web/scripts/db-refresh.ts` — clone the snapshot into this worktree's `local.db` and point `.dev.vars` at a local port.
 - `apps/web/scripts/db-pull-prod.ts` — dump production to `.dev/seed.sql` over libSQL HTTP, with prod creds read from 1Password at run time (no `turso` CLI login, no creds in `.dev.vars`). The dump skips `tracks_fts` and its FTS5 shadow tables — a derived artifact ([docs/search.md](./search.md)) the dev flow's own `db:migrate` rebuilds; dumping them double-creates the shadow tables on restore.
-- `apps/web/scripts/migrate.ts`: load the real generated SQL, request one fixed production phase, authorize it against the target ledger, and atomically apply only that journal prefix.
-- `apps/web/scripts/guard-production-migrations.ts`: validate the generated phase boundary, enforce each attended phase's predecessor ledger, and require the exact pending protected tags while keeping the ordinary deploy phase contraction-free.
+- `apps/web/scripts/migrate.ts`: load the generated SQL, pair it with the journal, and atomically apply the pending suffix with its ledger stamps.
+- `apps/web/scripts/guard-production-migrations.ts`: validate the generated journal and read the target ledger maximum that determines the pending suffix.
 - `apps/web/scripts/migrate-telemetry.ts`: keep local unprovisioned runs optional, but make the pre-publication production telemetry migration required and fatal on failure.
 - `apps/web/.dev.vars.tpl` — committed 1Password reference template for local Worker secrets.
 - `apps/web/.dev/` — local database + snapshot (gitignored).
