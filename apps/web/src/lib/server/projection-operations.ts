@@ -190,6 +190,19 @@ async function anchorsReady(client: ProjectionClient): Promise<boolean> {
   );
 }
 
+async function hasPublicProjectionRepairDebt(
+  client: ProjectionClient,
+  projection: PublicProjectionName,
+): Promise<boolean> {
+  const result = await client.execute({
+    args: [projection],
+    sql: `select 1 from projection_repairs indexed by projection_repairs_order_idx
+      where projection = ?
+      order by projection, source_epoch, subject_type, subject_id limit 1`,
+  });
+  return result.rows.length > 0;
+}
+
 function trackFamilyStatus(
   results: readonly ResultSet[],
   audit: ProjectionAuditEvidence | undefined,
@@ -540,6 +553,12 @@ const PUBLIC_ANCHOR_REBUILD_KEY = "projection_rebuild_public_anchors_v1";
 const PUBLIC_ANCHOR_CLEANUP_KEY = "projection_cleanup_public_anchor_generations_v1";
 const PUBLIC_ANCHOR_ROLLBACK_KEY = "projection_public_anchor_rollback_generation_v1";
 const PUBLIC_ANCHOR_RESTART_PREFIX = "projection_restart_public_anchors_v1:";
+const PUBLIC_ANCHOR_SOURCE_READY_SQL = `exists (select 1 from public_aggregate_state aggregate
+  where aggregate.scope = 'tracks' and aggregate.state = 'complete'
+    and aggregate.generation = ? and aggregate.release_hub_order_epoch = ?
+    and aggregate.aggregate_epoch = aggregate.source_epoch
+    and not exists (select 1 from projection_repairs
+      indexed by projection_repairs_order_idx where projection = 'public_aggregates'))`;
 
 type AnchorRebuildState = {
   cursorId: null | string;
@@ -880,7 +899,11 @@ export async function advancePublicAnchors(
   const [projection, persisted, cleanupResult, publishedResult, rollbackResult] = await Promise.all(
     [
       client.execute(`select default_track_total, generation, release_hub_order_epoch
-      from public_aggregate_state where scope = 'tracks' and state = 'complete'`),
+      from public_aggregate_state aggregate
+      where aggregate.scope = 'tracks' and aggregate.state = 'complete'
+        and aggregate.aggregate_epoch = aggregate.source_epoch
+        and not exists (select 1 from projection_repairs
+          indexed by projection_repairs_order_idx where projection = 'public_aggregates')`),
       client.execute({
         args: [PUBLIC_ANCHOR_REBUILD_KEY],
         sql: `select value from settings where key = ?`,
@@ -980,7 +1003,11 @@ export async function advancePublicAnchors(
   state.cursorKey = page.cursor.key;
   state.phase = page.cursor.phase;
   const current = await client.execute(`select generation, release_hub_order_epoch
-    from public_aggregate_state where scope = 'tracks' and state = 'complete'`);
+    from public_aggregate_state aggregate
+    where aggregate.scope = 'tracks' and aggregate.state = 'complete'
+      and aggregate.aggregate_epoch = aggregate.source_epoch
+      and not exists (select 1 from projection_repairs
+        indexed by projection_repairs_order_idx where projection = 'public_aggregates')`);
   const currentRow = current.rows[0] as
     | { generation: string; release_hub_order_epoch: number }
     | undefined;
@@ -1006,17 +1033,21 @@ export async function advancePublicAnchors(
       JSON.stringify(anchors),
       `${total}:${state.firstId ?? ""}:${state.shard}`,
       now,
+      generation,
+      orderEpoch,
     ],
     sql: `insert into hub_page_anchors
-      (hub, clause_hash, anchors_json, fingerprint, computed_at) values (?, ?, ?, ?, ?)
+      (hub, clause_hash, anchors_json, fingerprint, computed_at)
+      select ?, ?, ?, ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
       on conflict(hub, clause_hash) do update set anchors_json = excluded.anchors_json,
         fingerprint = excluded.fingerprint, computed_at = excluded.computed_at`,
   };
   if (!page.complete) {
     state.shard += 1;
     const stateStatement = {
-      args: [PUBLIC_ANCHOR_REBUILD_KEY, JSON.stringify(state)],
-      sql: `insert into settings (key, value) values (?, ?)
+      args: [PUBLIC_ANCHOR_REBUILD_KEY, JSON.stringify(state), generation, orderEpoch],
+      sql: `insert into settings (key, value)
+        select ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
         on conflict(key) do update set value = excluded.value`,
     };
     await client.batch(
@@ -1067,9 +1098,7 @@ export async function advancePublicAnchors(
       ],
       sql: `insert into hub_page_anchor_validity
           (hub, clause_hash, anchor_format_version, order_epoch, generation, published_at)
-          select ?, ?, ?, ?, ?, ? where exists (select 1 from public_aggregate_state
-            where scope = 'tracks' and state = 'complete' and generation = ?
-              and release_hub_order_epoch = ?)
+          select ?, ?, ?, ?, ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
           on conflict(hub, clause_hash) do update set
             anchor_format_version = excluded.anchor_format_version,
             order_epoch = excluded.order_epoch, generation = excluded.generation,
@@ -1203,8 +1232,9 @@ export async function advanceProjectionFor(
         limit: input.limit,
         projection,
       });
+      const remainingDebt = await hasPublicProjectionRepairDebt(client, projection);
       outcome = {
-        complete: result.fanout === 0 && result.repaired === 0,
+        complete: !remainingDebt,
         processed: result.fanout + result.repaired,
         scheduled: result.fanout,
       };

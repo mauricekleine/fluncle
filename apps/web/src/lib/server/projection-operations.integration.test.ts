@@ -20,6 +20,7 @@ import {
   TRACK_DUE_AUDIT_FENCE_KEY,
 } from "./projection-fences";
 import {
+  advanceProjectionFor,
   advancePublicAnchors,
   getProjectionStatusFor,
   setProjectionCutoverFor,
@@ -79,12 +80,22 @@ describe("projection production operations", () => {
       );
       create table projection_repairs (
         projection text not null, source_epoch integer not null default 0,
-        subject_type text not null default '', subject_id text not null default ''
+        subject_type text not null default '', subject_id text not null default '',
+        source_version text not null default '', created_at text not null default '',
+        updated_at text not null default '',
+        primary key (projection, subject_type, subject_id)
       );
       create index projection_repairs_order_idx
         on projection_repairs(projection, source_epoch, subject_type, subject_id);
-      create table tracks (track_id text primary key, release_date text, key text);
+      create table tracks (
+        track_id text primary key, release_date text, key text, label_id text
+      );
       create index tracks_release_date_track_id_idx on tracks(release_date desc, track_id desc);
+      create index tracks_label_id_idx on tracks(label_id, track_id);
+      create table track_artists (
+        track_id text not null, artist_id text not null,
+        primary key (track_id, artist_id)
+      );
       create table public_aggregate_membership (
         track_id text primary key, release_date_bucket text, key_bucket text
       );
@@ -294,6 +305,62 @@ describe("projection production operations", () => {
       target: "track_due_work",
     });
     expect(closed.cutovers.trackDueWork).toBe(false);
+  });
+
+  it("reports artist repair completion from remaining debt after zero-expansion fanout", async () => {
+    await db.execute(`insert into projection_repairs
+      (projection, subject_type, subject_id, source_epoch, source_version)
+      values ('artist_qualification', 'label', 'empty-label', 1, 'initial')`);
+
+    const drained = await advanceProjectionFor(db, {
+      action: "repair",
+      limit: 10,
+      target: "artist_qualification",
+    });
+    expect(drained).toMatchObject({ complete: true, processed: 0, scheduled: 0 });
+    expect(
+      (
+        await db.execute(`select 1 from projection_repairs
+          where projection = 'artist_qualification'`)
+      ).rows,
+    ).toHaveLength(0);
+
+    await db.execute(`insert into projection_repairs
+      (projection, subject_type, subject_id, source_epoch, source_version)
+      values ('artist_qualification', 'label', 'refreshed-label', 1, 'initial')`);
+    let refreshed = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const deletesLabelMarker = statements.some((statement) => {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          return sql.includes("delete from projection_repairs");
+        });
+        if (!refreshed && deletesLabelMarker) {
+          refreshed = true;
+          await db.execute(`update projection_repairs
+            set source_epoch = 2, source_version = 'refreshed'
+            where projection = 'artist_qualification' and subject_type = 'label'
+              and subject_id = 'refreshed-label'`);
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    const retained = await advanceProjectionFor(racingClient, {
+      action: "repair",
+      limit: 10,
+      target: "artist_qualification",
+    });
+    expect(refreshed).toBe(true);
+    expect(retained).toMatchObject({ complete: false, processed: 0, scheduled: 0 });
+    expect(
+      (
+        await db.execute(`select source_epoch, source_version from projection_repairs
+          where projection = 'artist_qualification' and subject_type = 'label'
+            and subject_id = 'refreshed-label'`)
+      ).rows[0],
+    ).toMatchObject({ source_epoch: 2, source_version: "refreshed" });
   });
 
   it("atomically rejects an open when readiness changes before the conditional write", async () => {
@@ -627,6 +694,120 @@ describe("projection production operations", () => {
     await expect(
       setProjectionCutoverFor(db, { enabled: true, target: "public_projections" }),
     ).rejects.toThrow(/not converged/);
+  });
+
+  it("does not start anchors while aggregate epoch or repair debt is outstanding", async () => {
+    await db.execute(`update public_aggregate_state
+      set generation = 'blocked', release_hub_order_epoch = 1,
+          source_epoch = 2, aggregate_epoch = 1
+      where scope = 'tracks'`);
+
+    expect(await advancePublicAnchors(db, 10)).toEqual({ complete: false, processed: 0 });
+    expect(
+      (
+        await db.execute(`select 1 from settings
+          where key = 'projection_rebuild_public_anchors_v1'`)
+      ).rows,
+    ).toHaveLength(0);
+
+    await db.execute(`update public_aggregate_state
+      set aggregate_epoch = source_epoch where scope = 'tracks'`);
+    await db.execute(`insert into projection_repairs
+      (projection, subject_type, subject_id, source_epoch, source_version)
+      values ('public_aggregates', 'track', 'blocked-track', 2, 'repair')`);
+
+    expect(await advancePublicAnchors(db, 10)).toEqual({ complete: false, processed: 0 });
+    expect(
+      (
+        await db.execute(`select 1 from hub_page_anchors
+          where clause_hash like '%:blocked:%'`)
+      ).rows,
+    ).toHaveLength(0);
+  });
+
+  it("does not publish anchors when repair debt arrives at the terminal write", async () => {
+    await db.execute(`update public_aggregate_state
+      set generation = 'raced', release_hub_order_epoch = 1,
+          source_epoch = 1, aggregate_epoch = 1
+      where scope = 'tracks'`);
+    let raced = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const publishesValidity = statements.some((statement) => {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          return sql.includes("insert into hub_page_anchor_validity");
+        });
+        if (!raced && publishesValidity) {
+          raced = true;
+          await db.execute(`insert into projection_repairs
+            (projection, subject_type, subject_id, source_epoch, source_version)
+            values ('public_aggregates', 'track', 'raced-track', 1, 'repair')`);
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    expect(await advancePublicAnchors(racingClient, 10)).toEqual({
+      complete: false,
+      processed: 0,
+    });
+    expect(raced).toBe(true);
+    expect(
+      (
+        await db.execute({
+          args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
+          sql: `select generation from hub_page_anchor_validity
+            where hub = ? and clause_hash = ?`,
+        })
+      ).rows[0]?.generation,
+    ).toBe("agg");
+    expect(
+      (
+        await db.execute(`select 1 from hub_page_anchors
+          where clause_hash like '%:raced:%'`)
+      ).rows,
+    ).toHaveLength(0);
+  });
+
+  it("does not persist anchor progress when repair debt arrives at an intermediate write", async () => {
+    await db.executeMultiple(`
+      insert into tracks (track_id, release_date) values ('raced-progress-b', '2026-01-01');
+      insert into tracks (track_id, release_date) values ('raced-progress-a', '2025-01-01');
+      update public_aggregate_state
+        set generation = 'raced-progress', release_hub_order_epoch = 1,
+            source_epoch = 1, aggregate_epoch = 1, default_track_total = 2
+        where scope = 'tracks';
+    `);
+    let raced = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const persistsProgress = statements.some((statement) => {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          return sql.includes("insert into settings (key, value)");
+        });
+        if (!raced && persistsProgress) {
+          raced = true;
+          await db.execute(`insert into projection_repairs
+            (projection, subject_type, subject_id, source_epoch, source_version)
+            values ('public_aggregates', 'track', 'raced-progress-track', 1, 'repair')`);
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    expect(await advancePublicAnchors(racingClient, 1)).toEqual({
+      complete: false,
+      processed: 1,
+    });
+    expect(raced).toBe(true);
+    expect(
+      (
+        await db.execute(`select 1 from settings
+          where key = 'projection_rebuild_public_anchors_v1'`)
+      ).rows,
+    ).toHaveLength(0);
   });
 
   it("builds scaled anchors in bounded shards and publishes only a complete document", async () => {
