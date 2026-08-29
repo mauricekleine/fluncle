@@ -16,10 +16,6 @@ import {
   type ProductionMigrationPhase,
   type ProductionMigrationPlan,
 } from "./guard-production-migrations";
-import {
-  guardCheckedOutOperationReceiptContract,
-  OPERATION_RECEIPT_CALLER_FLOOR_SHA,
-} from "./guard-production-contract";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const journalUrl = new URL("../drizzle/meta/_journal.json", import.meta.url);
@@ -126,7 +122,6 @@ export async function applyProductionMigrationPlan(
 
 async function main(): Promise<void> {
   const phase = parseProductionMigrationPhase(process.argv.slice(2));
-  const legacyOperationReceiptRoutePresent = guardCheckedOutOperationReceiptContract();
 
   const url = process.env.TURSO_DATABASE_URL?.trim();
   const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
@@ -152,15 +147,6 @@ async function main(): Promise<void> {
 
     await applyProductionMigrationPlan(client, pairs, plan);
 
-    if (legacyOperationReceiptRoutePresent) {
-      console.warn(
-        "PRODUCTION MIGRATION: caller compatibility clear — get_operation_receipt_legacy remains.",
-      );
-    } else {
-      console.warn(
-        `PRODUCTION MIGRATION: caller floor confirmed — ${OPERATION_RECEIPT_CALLER_FLOOR_SHA}.`,
-      );
-    }
     console.warn(
       `PRODUCTION MIGRATION: phase ${phase} complete — through ${plan.throughTag ?? "empty journal"}; applied ${plan.pendingEntries.map((entry) => entry.tag).join(",") || "none"}.`,
     );
