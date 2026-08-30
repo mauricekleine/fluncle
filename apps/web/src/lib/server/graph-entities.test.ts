@@ -468,16 +468,17 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
       expect(linkCalls).toHaveLength(1);
 
       const call = linkCalls[0];
+      const targetsArtistQualification = foreignKey === "label_id";
 
       expect(call?.mode).toBe("write");
-      expect(call?.statements).toHaveLength(7);
-      // Both repair rails, the edge write, and the counter move share one atomic batch.
+      expect(call?.statements).toHaveLength(targetsArtistQualification ? 5 : 3);
+      // The dependency-scoped repair rail, the edge write, and the counter move share one batch.
       expect(call?.statements[0]?.sql).toContain("insert into due_work");
       expect(
         call?.statements.some(
           (statement) => statement.sql?.includes("projection_repairs") === true,
         ),
-      ).toBe(true);
+      ).toBe(targetsArtistQualification);
       expect(call?.statements.at(-2)?.sql).toContain(`update tracks set ${foreignKey} = ?`);
       expect(call?.statements.at(-1)?.sql).toContain(`update ${table}`);
       expect(call?.statements.at(-1)?.sql).toContain("renderable_track_count");

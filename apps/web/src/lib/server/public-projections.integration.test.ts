@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 import { batchDueWorkSourceMutation } from "./due-work";
+import { markPublicProjectionSourceChangedStatements } from "./public-projection-source-maintenance";
 import {
   PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
   readProjectedAggregateBuckets,
@@ -761,13 +762,21 @@ describe("public shadow projections", () => {
       db,
       [{ args: [], sql: `update tracks set key = 'F minor' where track_id = 'track-empty'` }],
       [{ subjectId: "track-empty", subjectType: "track" }],
-      { markerVersion: "track-write", now: NOW, producer: "test-track-writer" },
+      {
+        markerVersion: "track-write",
+        now: NOW,
+        producer: "track-update",
+        publicProjectionImpact: {
+          impact: "public_aggregates",
+          justification: "The test mutation writes tracks.key.",
+        },
+      },
     );
     await batchDueWorkSourceMutation(
       db,
       [{ args: [], sql: `delete from findings where track_id = 'track-certified'` }],
       [{ subjectId: "track-certified", subjectType: "track" }],
-      { markerVersion: "finding-write", now: NOW, producer: "test-finding-writer" },
+      { markerVersion: "finding-write", now: NOW, producer: "certify-track" },
     );
     await batchDueWorkSourceMutation(
       db,
@@ -779,13 +788,21 @@ describe("public shadow projections", () => {
         },
       ],
       [{ subjectId: "track-null", subjectType: "track" }],
-      { markerVersion: "edge-write", now: NOW, producer: "test-edge-writer" },
+      { markerVersion: "edge-write", now: NOW, producer: "artist-remixer-role-stamp" },
     );
     await batchDueWorkSourceMutation(
       db,
       [{ args: [], sql: `update labels set seed_state = 'disabled' where id = 'lane'` }],
       [{ subjectId: "lane", subjectType: "label" }],
-      { markerVersion: "label-write", now: NOW, producer: "test-label-writer" },
+      {
+        markerVersion: "label-write",
+        now: NOW,
+        producer: "label-seed-state",
+        publicProjectionImpact: {
+          impact: "artist_qualification",
+          justification: "The test mutation writes labels.seed_state.",
+        },
+      },
     );
 
     await drainRepairs(1);
@@ -988,9 +1005,12 @@ describe("public shadow projections", () => {
                 sql: `update track_artists set role = 'remixer'
                   where track_id = 'artist-gap' and artist_id = 'artist-gap-credit'`,
               },
-              ...markPublicTrackSourceChangedStatements("artist-gap", "artist-gap-live", {
-                now: liveAt,
-              }),
+              ...markPublicProjectionSourceChangedStatements(
+                [{ subjectId: "artist-gap", subjectType: "track" }],
+                "artist-gap-live",
+                ["artist_qualification"],
+                { now: liveAt },
+              ),
             ],
             "write",
           );
@@ -1160,9 +1180,10 @@ describe("public shadow projections", () => {
                 args: [],
                 sql: `delete from track_artists where track_id = 'artist-delete-gap'`,
               },
-              ...markPublicTrackSourceChangedStatements(
-                "artist-delete-gap",
+              ...markPublicProjectionSourceChangedStatements(
+                [{ subjectId: "artist-delete-gap", subjectType: "track" }],
                 "artist-edges-deleted",
+                ["artist_qualification"],
                 { now: "2026-01-10T00:00:00.000Z" },
               ),
             ],

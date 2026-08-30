@@ -468,10 +468,9 @@ describe("the sweep — batching, staleness, and self-healing", () => {
       where subject_type = 'track' and subject_id like 'cat-wide-%'
       group by projection
       order by projection`);
-    expect(publicRepairs.rows).toEqual([
-      { n: batchSize, projection: "artist_qualification" },
-      { n: batchSize, projection: "public_aggregates" },
-    ]);
+    expect(publicRepairs.rows).toEqual([]);
+    expect((await db.execute(`select scope from public_aggregate_state`)).rows).toEqual([]);
+    expect((await db.execute(`select scope from artist_qualification_state`)).rows).toEqual([]);
   });
 
   it("the sweep's `remaining > 0` drain loop TERMINATES and fully ranks the backlog", async () => {

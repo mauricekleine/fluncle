@@ -144,7 +144,7 @@ describe("backfillHubCounts", () => {
         entity: "labels",
         entityDriver: "from labels left join",
         groupBy: "group by label_id",
-        hasProjectionRepair: true,
+        hasProjectionRepair: false,
         source: "from tracks where label_id is not null group by label_id",
         stagePrefix: "backfill_hub_counts_labels_stage_",
       },
@@ -160,7 +160,7 @@ describe("backfillHubCounts", () => {
         entity: "artists",
         entityDriver: "from artists left join",
         groupBy: "group by ta.artist_id",
-        hasProjectionRepair: true,
+        hasProjectionRepair: false,
         source:
           "from track_artists ta join tracks t on t.track_id = ta.track_id group by ta.artist_id",
         stagePrefix: "backfill_hub_counts_artists_stage_",
@@ -540,27 +540,14 @@ describe("backfillHubCounts", () => {
     await backfillHubCounts(db, { force: true });
     expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual({
       aggregate: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
-      artists: { projectionEpoch: 0, ready: false, sourceEpoch: 2 },
-      repairs: [
-        {
-          projection: "artist_qualification",
-          sourceEpoch: 2,
-          subjectId: "art-1",
-          subjectType: "artist",
-        },
-        {
-          projection: "artist_qualification",
-          sourceEpoch: 1,
-          subjectId: "lab-1",
-          subjectType: "label",
-        },
-      ],
+      artists: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      repairs: [],
     });
     await settlePublicProjectionTestState(db);
     const ready = await readPublicProjectionMaintenanceSnapshot(db);
     expect(ready).toEqual({
       aggregate: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
-      artists: { projectionEpoch: 2, ready: true, sourceEpoch: 2 },
+      artists: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
       repairs: [],
     });
 

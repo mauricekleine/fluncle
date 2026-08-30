@@ -382,6 +382,10 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
       sql: `update tracks set catalogue_rank_corpus = 'still-fresh' where label_id = ?`,
     });
     const before = await labelScopeState(label.slug);
+    const beforeProjection = await db.execute(
+      `select source_epoch from artist_qualification_state where scope = 'artists'`,
+    );
+    const beforeRepairs = await db.execute(`select count(*) as n from projection_repairs`);
 
     const rewalked = await updateLabelSeedState(label.id, undefined, true);
     const after = await labelScopeState(label.slug);
@@ -396,6 +400,16 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
     expect(after?.ruledAt).toBe(before?.ruledAt);
     expect(after?.updatedAt).not.toBe(before?.updatedAt);
     expect(ranked.rows[0]?.catalogue_rank_corpus).toBe("still-fresh");
+    expect(
+      (
+        await db.execute(
+          `select source_epoch from artist_qualification_state where scope = 'artists'`,
+        )
+      ).rows,
+    ).toEqual(beforeProjection.rows);
+    expect((await db.execute(`select count(*) as n from projection_repairs`)).rows).toEqual(
+      beforeRepairs.rows,
+    );
   });
 
   it("404s on an id that is not there", async () => {

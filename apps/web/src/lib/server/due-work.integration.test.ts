@@ -216,7 +216,7 @@ describe("due-work repair and drift", () => {
         db,
         [{ args: ["source-1"], sql: `insert into source_probe (id) values (?)` }],
         [{ subjectId: "source-1", subjectType: "track" }],
-        { markerVersion: "source-v1", now: T0, producer: "test-source-writer" },
+        { markerVersion: "source-v1", now: T0, producer: "catalogue-rank" },
       ),
     ).rejects.toThrow("marker rejected");
 
@@ -236,7 +236,7 @@ describe("due-work repair and drift", () => {
         db,
         [{ args: ["source-1"], sql: `insert into projection_source_probe (id) values (?)` }],
         [{ subjectId: "source-1", subjectType: "track" }],
-        { markerVersion: "source-v1", now: T0, producer: "test-source-writer" },
+        { markerVersion: "source-v1", now: T0, producer: "publish-track" },
       ),
     ).rejects.toThrow("public marker rejected");
 
@@ -252,7 +252,7 @@ describe("due-work repair and drift", () => {
       db,
       [{ args: ["source-1"], sql: `insert into committed_source_probe (id) values (?)` }],
       [{ subjectId: "source-1", subjectType: "track" }],
-      { markerVersion: "stable-v1", now: T0, producer: "test-source-writer" },
+      { markerVersion: "stable-v1", now: T0, producer: "publish-track" },
     );
 
     expect(
@@ -280,6 +280,66 @@ describe("due-work repair and drift", () => {
     ]);
   });
 
+  it("moves only the epochs and repairs declared by static producer impacts", async () => {
+    await db.execute(`create table impact_source_probe (id text primary key)`);
+
+    await batchDueWorkSourceMutation(
+      db,
+      [{ args: ["none"], sql: `insert into impact_source_probe (id) values (?)` }],
+      [{ subjectId: "none", subjectType: "track" }],
+      { markerVersion: "none-v1", now: T0, producer: "catalogue-rank" },
+    );
+    expect((await db.execute(`select scope from public_aggregate_state`)).rows).toEqual([]);
+    expect((await db.execute(`select scope from artist_qualification_state`)).rows).toEqual([]);
+    expect((await db.execute(`select subject_id from projection_repairs`)).rows).toEqual([]);
+
+    await batchDueWorkSourceMutation(
+      db,
+      [{ args: ["aggregate"], sql: `insert into impact_source_probe (id) values (?)` }],
+      [{ subjectId: "aggregate", subjectType: "track" }],
+      { markerVersion: "aggregate-v1", now: T0, producer: "crawl-track-mint" },
+    );
+    await batchDueWorkSourceMutation(
+      db,
+      [{ args: ["artist"], sql: `insert into impact_source_probe (id) values (?)` }],
+      [{ subjectId: "artist", subjectType: "track" }],
+      { markerVersion: "artist-v1", now: T0, producer: "certify-track" },
+    );
+    await batchDueWorkSourceMutation(
+      db,
+      [{ args: ["both"], sql: `insert into impact_source_probe (id) values (?)` }],
+      [{ subjectId: "both", subjectType: "track" }],
+      { markerVersion: "both-v1", now: T0, producer: "publish-track" },
+    );
+
+    expect(
+      (
+        await db.execute(`select projection, subject_id from projection_repairs
+          order by subject_id, projection`)
+      ).rows,
+    ).toEqual([
+      { projection: "public_aggregates", subject_id: "aggregate" },
+      { projection: "artist_qualification", subject_id: "artist" },
+      { projection: "artist_qualification", subject_id: "both" },
+      { projection: "public_aggregates", subject_id: "both" },
+    ]);
+    expect(
+      (await db.execute(`select source_epoch from public_aggregate_state where scope = 'tracks'`))
+        .rows,
+    ).toEqual([{ source_epoch: 2 }]);
+    expect(
+      (
+        await db.execute(
+          `select source_epoch from artist_qualification_state where scope = 'artists'`,
+        )
+      ).rows,
+    ).toEqual([{ source_epoch: 2 }]);
+    expect(
+      (await db.execute(`select count(*) as n from due_work where work_kind = 'source-repair'`))
+        .rows[0]?.n,
+    ).toBe(4);
+  });
+
   it("does not treat the catalogue-rank corpus marker as a physical track", async () => {
     await db.execute(`create table synthetic_source_probe (id text primary key)`);
     await batchDueWorkSourceMutation(
@@ -291,7 +351,7 @@ describe("due-work repair and drift", () => {
           subjectType: "track",
         },
       ],
-      { markerVersion: "synthetic-v1", now: T0, producer: "test-source-writer" },
+      { markerVersion: "synthetic-v1", now: T0, producer: "crawl-track-mint" },
     );
 
     expect((await db.execute(`select subject_id from projection_repairs`)).rows).toEqual([]);
@@ -324,7 +384,7 @@ describe("due-work repair and drift", () => {
         markerVersion: "guarded-v1",
         now: T0,
         onlyIfLastSourceStatementChanged: true,
-        producer: "test-guarded-writer",
+        producer: "crawl-track-mint",
       },
     );
 
@@ -348,7 +408,7 @@ describe("due-work repair and drift", () => {
         ...markDueWorkSourceMaintenanceFromSelectStatements(
           "track",
           { sql: `select id as subject_id from selected_source_probe` },
-          { markerVersion: "empty-v1", now: T0, producer: "test-selected-writer" },
+          { markerVersion: "empty-v1", now: T0, producer: "publish-track" },
         ),
         { sql: `update selected_source_probe set id = id` },
       ],
@@ -361,12 +421,47 @@ describe("due-work repair and drift", () => {
     expect((await db.execute(`select scope from artist_qualification_state`)).rows).toEqual([]);
   });
 
+  it("marks both projections from one non-empty bounded selection in order", async () => {
+    await db.execute(`create table selected_impact_probe (id text primary key)`);
+    await db.execute(`insert into selected_impact_probe (id) values ('selected-track')`);
+
+    await db.batch(
+      markDueWorkSourceMaintenanceFromSelectStatements(
+        "track",
+        { sql: `select id as subject_id from selected_impact_probe` },
+        { markerVersion: "selected-v1", now: T0, producer: "publish-track" },
+      ),
+      "write",
+    );
+
+    expect(
+      (
+        await db.execute(`select projection, subject_id from projection_repairs
+          order by projection`)
+      ).rows,
+    ).toEqual([
+      { projection: "artist_qualification", subject_id: "selected-track" },
+      { projection: "public_aggregates", subject_id: "selected-track" },
+    ]);
+    expect(
+      (await db.execute(`select source_epoch from public_aggregate_state where scope = 'tracks'`))
+        .rows,
+    ).toEqual([{ source_epoch: 1 }]);
+    expect(
+      (
+        await db.execute(
+          `select source_epoch from artist_qualification_state where scope = 'artists'`,
+        )
+      ).rows,
+    ).toEqual([{ source_epoch: 1 }]);
+  });
+
   it("keeps one idempotent source marker per subject and preserves a concurrent rewrite", async () => {
     const source = { subjectId: "repair-track", subjectType: "track" } as const;
     const first = markDueWorkSourceRepairsStatement([source, source], {
       markerVersion: "source-v1",
       now: T0,
-      producer: "test-source-writer",
+      producer: "capture-verification",
     });
 
     await db.batch([first, first], "write");
@@ -383,7 +478,7 @@ describe("due-work repair and drift", () => {
         markDueWorkSourceRepairsStatement([source], {
           markerVersion: "source-v2",
           now: T1,
-          producer: "test-source-writer",
+          producer: "capture-verification",
         }),
         clearDueWorkSourceRepairStatement({ ...source, sourceVersion: "source-v1" }),
       ],
@@ -411,7 +506,7 @@ describe("due-work repair and drift", () => {
     const statement = markDueWorkSourceRepairsStatement(subjects, {
       markerVersion: "wide-v1",
       now: T0,
-      producer: "test-wide-source-writer",
+      producer: "capture-verification",
     });
 
     expect(statement.sql).toContain("with source");

@@ -77,7 +77,7 @@ afterEach(async () => {
 });
 
 describe("updateTrack Sonar artifact coupling", () => {
-  it("commits the embedding, maintained shadows, and one exact current-row upsert together", async () => {
+  it("commits a key write, aggregate repair, and one exact current-row upsert together", async () => {
     const { updateTrack } = await import("./track-update");
 
     await updateTrack(TRACK_ID, {
@@ -128,7 +128,9 @@ describe("updateTrack Sonar artifact coupling", () => {
     );
     expect(await rowCount("artifact_change_revisions")).toBe(1);
     expect(await rowCount("due_work")).toBe(2);
-    expect(await rowCount("projection_repairs")).toBe(2);
+    expect(await rowCount("projection_repairs")).toBe(1);
+    expect(await rowCount("public_aggregate_state")).toBe(1);
+    expect(await rowCount("artist_qualification_state")).toBe(0);
   });
 
   it("commits a clear as one delete tombstone beside both source halves", async () => {
@@ -247,6 +249,8 @@ describe("updateTrack Sonar artifact coupling", () => {
     expect(await rowCount("artifact_changes")).toBe(0);
     expect(await rowCount("artifact_change_revisions")).toBe(0);
     expect(await rowCount("due_work")).toBe(1);
-    expect(await rowCount("projection_repairs")).toBe(2);
+    expect(await rowCount("public_aggregate_state")).toBe(0);
+    expect(await rowCount("artist_qualification_state")).toBe(0);
+    expect(await rowCount("projection_repairs")).toBe(0);
   });
 });

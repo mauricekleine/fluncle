@@ -3,6 +3,10 @@ import { type Client, type InStatement, type InValue, type ResultSet } from "@li
 import { getDb } from "./db";
 import { DUE_WORK_COLUMNS } from "./due-work-columns";
 import {
+  type PublicProjectionDynamicImpactOverride,
+  resolvePublicProjectionProducerTargets,
+} from "./public-projection-producer-policy";
+import {
   markPublicProjectionSourceChangedFromSelectStatements,
   markPublicProjectionSourceChangedStatements,
 } from "./public-projection-source-maintenance";
@@ -506,8 +510,9 @@ export function markDueWorkSourceRepairsFromSelectStatement(
 }
 
 /**
- * Append the legacy due-work marker and every public shadow marker with one race token and time.
- * The returned statements belong immediately after the bounded source statement they describe.
+ * Append the unchanged legacy due-work marker and the producer policy's public shadow markers with
+ * one race token and time. The returned statements belong immediately after the bounded source
+ * statement they describe.
  */
 export function markDueWorkSourceMaintenanceStatements(
   subjects: readonly DueWorkSourceSubject[],
@@ -516,12 +521,17 @@ export function markDueWorkSourceMaintenanceStatements(
     now?: Date | string;
     onlyIfPreviousStatementChanged?: boolean;
     producer: string;
+    publicProjectionImpact?: PublicProjectionDynamicImpactOverride;
   },
 ): DueWorkStatement[] {
   const updatedAt = iso(options.now ?? new Date(), "updated time");
   assertNonEmpty(options.producer, "due-work producer");
   const markerVersion = options.markerVersion ?? `${options.producer}:${randomToken()}`;
   assertNonEmpty(markerVersion, "source repair marker version");
+  const publicProjectionTargets = resolvePublicProjectionProducerTargets(
+    options.producer,
+    options.publicProjectionImpact,
+  );
   return [
     markDueWorkSourceRepairsStatement(subjects, {
       markerVersion,
@@ -529,16 +539,21 @@ export function markDueWorkSourceMaintenanceStatements(
       onlyIfPreviousStatementChanged: options.onlyIfPreviousStatementChanged,
       producer: options.producer,
     }),
-    ...markPublicProjectionSourceChangedStatements(subjects, markerVersion, {
-      now: updatedAt,
-      onlyIfPreviousStatementChanged: true,
-    }),
+    ...markPublicProjectionSourceChangedStatements(
+      subjects,
+      markerVersion,
+      publicProjectionTargets,
+      {
+        now: updatedAt,
+        onlyIfPreviousStatementChanged: true,
+      },
+    ),
   ];
 }
 
 /**
- * Build both maintenance rails from one bounded producer-owned `subject_id` selection. The legacy
- * marker is first because its affected-row count is the public epoch admission gate.
+ * Build legacy and policy-selected public maintenance from one bounded producer-owned `subject_id`
+ * selection. The legacy marker is first because its affected-row count is the public epoch gate.
  */
 export function markDueWorkSourceMaintenanceFromSelectStatements(
   subjectType: DueWorkSubjectType,
@@ -547,12 +562,17 @@ export function markDueWorkSourceMaintenanceFromSelectStatements(
     markerVersion?: string;
     now?: Date | string;
     producer: string;
+    publicProjectionImpact?: PublicProjectionDynamicImpactOverride;
   },
 ): DueWorkStatement[] {
   const updatedAt = iso(options.now ?? new Date(), "updated time");
   assertNonEmpty(options.producer, "due-work producer");
   const markerVersion = options.markerVersion ?? `${options.producer}:${randomToken()}`;
   assertNonEmpty(markerVersion, "source repair marker version");
+  const publicProjectionTargets = resolvePublicProjectionProducerTargets(
+    options.producer,
+    options.publicProjectionImpact,
+  );
   return [
     markDueWorkSourceRepairsFromSelectStatement(subjectType, selection, {
       markerVersion,
@@ -563,6 +583,7 @@ export function markDueWorkSourceMaintenanceFromSelectStatements(
       subjectType,
       selection,
       markerVersion,
+      publicProjectionTargets,
       { now: updatedAt },
     ),
   ];
@@ -579,6 +600,7 @@ export async function batchDueWorkSourceMutation(
     now?: Date | string;
     onlyIfLastSourceStatementChanged?: boolean;
     producer: string;
+    publicProjectionImpact?: PublicProjectionDynamicImpactOverride;
   },
 ): Promise<ResultSet[]> {
   if (statements.length === 0) {
@@ -590,6 +612,7 @@ export async function batchDueWorkSourceMutation(
     now: options.now,
     onlyIfPreviousStatementChanged: options.onlyIfLastSourceStatementChanged,
     producer: options.producer,
+    publicProjectionImpact: options.publicProjectionImpact,
   });
   const afterMaintenance = options.afterMaintenanceStatements ?? [];
   if (statements.length + maintenance.length + afterMaintenance.length > MAX_DUE_WORK_CHUNK_SIZE) {

@@ -35,7 +35,7 @@ describe("transactionally coupled due-work source repair", () => {
         },
       ],
       [{ subjectId: "repair-track", subjectType: "track" }],
-      { markerVersion: "track-source-v1", producer: "test-track-source" },
+      { markerVersion: "track-source-v1", producer: "capture-verification" },
     );
 
     expect((await fanOutDueWorkSourceRepairs(db, { limit: 1 })).expanded).toBe(1);
@@ -56,7 +56,7 @@ describe("transactionally coupled due-work source repair", () => {
     await db.execute(
       markDueWorkSourceRepairsStatement([{ subjectId: "album-id", subjectType: "album" }], {
         markerVersion: "album-source-v1",
-        producer: "test-album-source",
+        producer: "album-bio-fill",
       }),
     );
 
@@ -85,7 +85,7 @@ describe("transactionally coupled due-work source repair", () => {
             subjectType: "track",
           },
         ],
-        { markerVersion: "rank-corpus-v1", producer: "test-rank-corpus" },
+        { markerVersion: "rank-corpus-v1", producer: "catalogue-rank" },
       ),
     );
 
@@ -110,7 +110,7 @@ describe("transactionally coupled due-work source repair", () => {
       [
         markDueWorkSourceRepairsStatement([{ subjectId: "blocking-album", subjectType: "album" }], {
           markerVersion: "album-v1",
-          producer: "test-blocking-album",
+          producer: "album-bio-fill",
         }),
         markDueWorkSourceRepairsStatement(
           [
@@ -119,11 +119,11 @@ describe("transactionally coupled due-work source repair", () => {
               subjectType: "track",
             },
           ],
-          { markerVersion: "rank-v1", producer: "test-blocking-rank" },
+          { markerVersion: "rank-v1", producer: "catalogue-rank" },
         ),
         markDueWorkSourceRepairsStatement([{ subjectId: "target-track", subjectType: "track" }], {
           markerVersion: "track-v1",
-          producer: "test-target-track",
+          producer: "capture-verification",
         }),
       ],
       "write",
@@ -151,7 +151,7 @@ describe("transactionally coupled due-work source repair", () => {
       await db.execute(
         markDueWorkSourceRepairsStatement([{ subjectId: trackId, subjectType: "track" }], {
           markerVersion: `pending-v${index}`,
-          producer: "test-pending-page",
+          producer: "capture-verification",
         }),
       );
     }
