@@ -1413,6 +1413,41 @@ describe("public shadow projections", () => {
     expect(audit.artistMatched).toBe(true);
   });
 
+  it("removes recent live artist contributions whose source track is absent", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+    await db.execute({
+      args: ["2026-01-10T01:00:00.000Z"],
+      sql: `insert into artist_qualification_contributions
+        (track_id, artist_id, certified_contribution, enabled_credit_half_units,
+         generation, source_version, updated_at)
+        values ('missing-recent-track', 'primary', 1, 0, 'live', 'recent-orphan', ?)`,
+    });
+
+    let complete = false;
+    for (let chunk = 0; chunk < 20 && !complete; chunk += 1) {
+      const result = await runPublicProjectionRebuildChunk(db, "artist_qualification", {
+        boundedCleanup: true,
+        generation: "artist-source-missing-cleanup",
+        limit: 2,
+        newGeneration: chunk === 0,
+        now: () => new Date("2026-01-10T00:00:00.000Z"),
+      });
+      complete = result.complete;
+    }
+
+    expect(complete).toBe(true);
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from artist_qualification_contributions
+            where track_id = 'missing-recent-track'`)
+        ).rows[0]?.n,
+      ),
+    ).toBe(0);
+    expect((await auditPublicProjections(db)).artistMatched).toBe(true);
+  });
+
   it("executes each 500-track rebuild page through fixed VALUES-backed write subpages", async () => {
     await seedBulkProjectionWorld();
 

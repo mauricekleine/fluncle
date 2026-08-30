@@ -37,8 +37,10 @@ describe("bounded projection cleanup plans", () => {
       },
       {
         args: ["", "", 10],
-        sql: `select artist_id, generation, track_id, updated_at
-          from artist_qualification_contributions
+        sql: `select artist_id, generation, track_id, updated_at,
+          not exists (select 1 from tracks source where source.track_id = contribution.track_id)
+            as source_missing
+          from artist_qualification_contributions contribution
           where (track_id, artist_id) > (?, ?) order by track_id, artist_id limit ?`,
       },
       {

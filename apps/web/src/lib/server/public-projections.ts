@@ -2292,7 +2292,7 @@ async function rebuildArtistQualificationPage(
     expectedSourceEpoch: number;
     generation: string;
     now: string;
-    preserveAfter: string;
+    preserveAfter?: string;
   },
 ): Promise<void> {
   for (const subpage of projectionWriteSubpages(trackIds)) {
@@ -2397,13 +2397,16 @@ export async function runPublicProjectionRebuildChunk(
         const [afterTrack, afterArtist] = pairCursor(cleanup.cursor);
         const page = await client.execute({
           args: [afterTrack, afterArtist, limit],
-          sql: `select artist_id, generation, track_id, updated_at
-            from artist_qualification_contributions
+          sql: `select artist_id, generation, track_id, updated_at,
+              not exists (select 1 from tracks source where source.track_id = contribution.track_id)
+                as source_missing
+            from artist_qualification_contributions contribution
             where (track_id, artist_id) > (?, ?) order by track_id, artist_id limit ?`,
         });
         const pageRows = page.rows as unknown as {
           artist_id: string;
           generation: string;
+          source_missing: number;
           track_id: string;
           updated_at: string;
         }[];
@@ -2413,6 +2416,7 @@ export async function runPublicProjectionRebuildChunk(
             pageRows
               .filter(
                 (row) =>
+                  row.source_missing === 0 &&
                   row.generation !== checkpoint.generation &&
                   (row.generation !== PUBLIC_PROJECTION_LIVE_GENERATION ||
                     row.updated_at < checkpoint.startedAt),
@@ -2420,11 +2424,19 @@ export async function runPublicProjectionRebuildChunk(
               .map((row) => row.track_id),
           ),
         ];
+        const sourceMissingTrackIds = [
+          ...new Set(pageRows.filter((row) => row.source_missing === 1).map((row) => row.track_id)),
+        ];
         await rebuildArtistQualificationPage(client, staleTrackIds, {
           expectedSourceEpoch: checkpoint.sourceEpoch,
           generation: checkpoint.generation,
           now,
           preserveAfter: checkpoint.startedAt,
+        });
+        await rebuildArtistQualificationPage(client, sourceMissingTrackIds, {
+          expectedSourceEpoch: checkpoint.sourceEpoch,
+          generation: checkpoint.generation,
+          now,
         });
         const terminal = pageRows.at(-1);
         cleanup.cursor =
