@@ -86,7 +86,7 @@ export async function backfillMixableArtistsProjection(
   let owned: RunningState = { cursor, pass, runId, state: "running", version: 1 };
   let ownedValue = JSON.stringify(owned);
   await client.execute({
-    args: [MIXABLE_ARTISTS_PROJECTION_STATE_KEY, ownedValue, ownedValue],
+    args: [MIXABLE_ARTISTS_PROJECTION_STATE_KEY, ownedValue],
     sql: `insert into settings (key, value) values (?, ?)
           on conflict(key) do update set value = excluded.value`,
   });

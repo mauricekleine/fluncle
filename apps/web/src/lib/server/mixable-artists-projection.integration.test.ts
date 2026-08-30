@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { backfillMixableArtistsProjection } from "../../../scripts/backfill-mixable-artists-projection";
 import { createIntegrationDb, seedArtist, seedCatalogueTrack } from "./integration-db";
@@ -10,6 +10,38 @@ import {
 } from "./mixable-artists-projection";
 
 let db: Client;
+
+function assertPositionalBindCount(statement: InStatement): void {
+  if (typeof statement === "string") {
+    return;
+  }
+  const args = statement.args;
+  if (args === undefined || !Array.isArray(args)) {
+    return;
+  }
+  expect(args).toHaveLength(statement.sql.match(/\?/g)?.length ?? 0);
+}
+
+function strictBindClient(client: Client): Client {
+  return new Proxy(client, {
+    get(target, property) {
+      if (property === "execute") {
+        return (statement: InStatement) => {
+          assertPositionalBindCount(statement);
+          return target.execute(statement);
+        };
+      }
+      if (property === "batch") {
+        return (statements: Array<InStatement>, mode?: "read" | "write" | "deferred") => {
+          statements.forEach(assertPositionalBindCount);
+          return target.batch(statements, mode);
+        };
+      }
+      const value: unknown = target[property as keyof Client];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
 
 beforeEach(async () => {
   db = await createIntegrationDb();
@@ -48,7 +80,9 @@ describe("mixable artist projection cutover", () => {
       { imageUrl: undefined, name: "Gamma", slug: "gamma", trackCount: 1 },
     ]);
 
-    const activation = await backfillMixableArtistsProjection(db, { activate: true });
+    const activation = await backfillMixableArtistsProjection(strictBindClient(db), {
+      activate: true,
+    });
     expect(activation).toMatchObject({ artists: 6, pages: 2, passes: 2, skipped: false });
     let state = await db.execute({
       args: [MIXABLE_ARTISTS_PROJECTION_STATE_KEY],
