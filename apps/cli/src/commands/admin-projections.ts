@@ -3,6 +3,7 @@ import { PROJECTION_STEP_LIMIT_MAX } from "@fluncle/contracts/orpc";
 import { adminApiGet, adminApiPost, adminApiPut } from "../api";
 
 export { PROJECTION_STEP_LIMIT_MAX };
+export const PROJECTION_MAX_STEPS = 100;
 
 export type ProjectionTarget =
   | "artist_qualification"
@@ -69,6 +70,7 @@ export type ProjectionStepResponse = ProjectionStatusResponse & {
   scheduled: number;
   target: ProjectionTarget;
 };
+export type ProjectionAdvanceResponse = ProjectionStepResponse & { steps: number };
 
 export async function getProjectionStatusCommand(): Promise<ProjectionStatusResponse> {
   return adminApiGet<ProjectionStatusResponse>("/api/v1/admin/projections/status");
@@ -77,10 +79,29 @@ export async function getProjectionStatusCommand(): Promise<ProjectionStatusResp
 export async function advanceProjectionCommand(input: {
   action: ProjectionAction;
   limit: number;
+  maxSteps?: number;
   target: ProjectionTarget;
-}): Promise<ProjectionStepResponse> {
-  const { target, ...body } = input;
-  return adminApiPost<ProjectionStepResponse>(`/api/v1/admin/projections/${target}/advance`, body);
+}): Promise<ProjectionAdvanceResponse> {
+  const { maxSteps = 1, target, ...body } = input;
+  let response = await adminApiPost<ProjectionStepResponse>(
+    `/api/v1/admin/projections/${target}/advance`,
+    body,
+  );
+  let steps = 1;
+  let processed = response.processed;
+  let scheduled = response.scheduled;
+
+  while (!response.complete && steps < maxSteps) {
+    response = await adminApiPost<ProjectionStepResponse>(
+      `/api/v1/admin/projections/${target}/advance`,
+      body,
+    );
+    steps += 1;
+    processed += response.processed;
+    scheduled += response.scheduled;
+  }
+
+  return { ...response, processed, scheduled, steps };
 }
 
 export async function setProjectionCutoverCommand(input: {
@@ -107,6 +128,14 @@ export function parseProjectionLimit(value: string): number {
     throw new Error(`--limit must be a whole number from 1 through ${PROJECTION_STEP_LIMIT_MAX}`);
   }
   return limit;
+}
+
+export function parseProjectionMaxSteps(value: string): number {
+  const maxSteps = Number(value);
+  if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > PROJECTION_MAX_STEPS) {
+    throw new Error(`--max-steps must be a whole number from 1 through ${PROJECTION_MAX_STEPS}`);
+  }
+  return maxSteps;
 }
 
 export function parseProjectionTarget(value: string): ProjectionTarget {

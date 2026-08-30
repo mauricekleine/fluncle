@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realApi from "../api";
 
 const calls: { body?: unknown; method: string; path: string }[] = [];
+const postResponses: unknown[] = [];
 const status = {
   cutovers: { crawlDueWork: false, publicProjections: false, trackDueWork: false },
   projections: {
@@ -53,6 +54,13 @@ await mock.module("../api", () => ({
   },
   adminApiPost: async (path: string, body: unknown) => {
     calls.push({ body, method: "POST", path });
+    const queued = postResponses.shift();
+    if (queued instanceof Error) {
+      throw queued;
+    }
+    if (queued !== undefined) {
+      return queued;
+    }
     return {
       ...(body as Record<string, unknown>),
       complete: false,
@@ -72,6 +80,7 @@ const projections = await import("./admin-projections");
 
 beforeEach(() => {
   calls.length = 0;
+  postResponses.length = 0;
 });
 
 describe("projection operator commands", () => {
@@ -99,9 +108,184 @@ describe("projection operator commands", () => {
     ]);
   });
 
+  test("defaults advance to one call and returns the one-step total", async () => {
+    postResponses.push({
+      action: "repair",
+      complete: false,
+      ok: true,
+      processed: 10,
+      scheduled: 1,
+      status,
+      target: "crawl_due_work",
+    });
+
+    const result = await projections.advanceProjectionCommand({
+      action: "repair",
+      limit: 25,
+      target: "crawl_due_work",
+    });
+
+    expect(result).toEqual({
+      action: "repair",
+      complete: false,
+      ok: true,
+      processed: 10,
+      scheduled: 1,
+      status,
+      steps: 1,
+      target: "crawl_due_work",
+    });
+    expect(calls).toEqual([
+      {
+        body: { action: "repair", limit: 25 },
+        method: "POST",
+        path: "/api/v1/admin/projections/crawl_due_work/advance",
+      },
+    ]);
+  });
+
+  test("stops after a completing response", async () => {
+    postResponses.push(
+      {
+        action: "audit",
+        complete: true,
+        ok: true,
+        processed: 4,
+        scheduled: 0,
+        status,
+        target: "public_aggregates",
+      },
+      {
+        action: "audit",
+        complete: false,
+        ok: true,
+        processed: 99,
+        scheduled: 99,
+        status,
+        target: "public_aggregates",
+      },
+    );
+
+    const result = await projections.advanceProjectionCommand({
+      action: "audit",
+      limit: 50,
+      maxSteps: 5,
+      target: "public_aggregates",
+    });
+
+    expect(result.steps).toBe(1);
+    expect(result.processed).toBe(4);
+    expect(result.scheduled).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("aggregates exhausted steps and preserves the final payload", async () => {
+    const finalStatus = {
+      ...status,
+      readyToOpen: { ...status.readyToOpen, publicProjections: false },
+    };
+    postResponses.push(
+      {
+        action: "rebuild",
+        complete: false,
+        ok: true,
+        processed: 2,
+        scheduled: 3,
+        status,
+        target: "track_due_work",
+      },
+      {
+        action: "rebuild",
+        complete: false,
+        ok: true,
+        processed: 5,
+        scheduled: 7,
+        status,
+        target: "track_due_work",
+      },
+      {
+        action: "rebuild",
+        complete: false,
+        ok: true,
+        processed: 11,
+        scheduled: 13,
+        status: finalStatus,
+        target: "track_due_work",
+      },
+    );
+
+    const result = await projections.advanceProjectionCommand({
+      action: "rebuild",
+      limit: 100,
+      maxSteps: 3,
+      target: "track_due_work",
+    });
+
+    expect(result).toEqual({
+      action: "rebuild",
+      complete: false,
+      ok: true,
+      processed: 18,
+      scheduled: 23,
+      status: finalStatus,
+      steps: 3,
+      target: "track_due_work",
+    });
+    expect(calls).toHaveLength(3);
+    expect(calls.map((call) => call.body)).toEqual([
+      { action: "rebuild", limit: 100 },
+      { action: "rebuild", limit: 100 },
+      { action: "rebuild", limit: 100 },
+    ]);
+  });
+
+  test("stops at the first API error without retrying", async () => {
+    const firstError = new Error("projection API failed");
+    postResponses.push(
+      {
+        action: "repair",
+        complete: false,
+        ok: true,
+        processed: 1,
+        scheduled: 1,
+        status,
+        target: "crawl_due_work",
+      },
+      firstError,
+      {
+        action: "repair",
+        complete: false,
+        ok: true,
+        processed: 100,
+        scheduled: 100,
+        status,
+        target: "crawl_due_work",
+      },
+    );
+
+    let thrown: unknown;
+    try {
+      await projections.advanceProjectionCommand({
+        action: "repair",
+        limit: 25,
+        maxSteps: 5,
+        target: "crawl_due_work",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(firstError);
+    expect(calls).toHaveLength(2);
+  });
+
   test("rejects unbounded or invented controls before transport", () => {
     expect(projections.parseProjectionLimit("500")).toBe(500);
     expect(() => projections.parseProjectionLimit("501")).toThrow(/1 through 500/);
+    expect(projections.parseProjectionMaxSteps("100")).toBe(100);
+    expect(() => projections.parseProjectionMaxSteps("0")).toThrow(/1 through 100/);
+    expect(() => projections.parseProjectionMaxSteps("1.5")).toThrow(/whole number/);
+    expect(() => projections.parseProjectionMaxSteps("101")).toThrow(/1 through 100/);
+    expect(() => projections.parseProjectionMaxSteps("9007199254740992")).toThrow(/whole number/);
     expect(() => projections.parseProjectionTarget("tracks")).toThrow(/must be/);
     expect(() => projections.parseProjectionAction("sql")).toThrow(/audit, rebuild, or repair/);
     expect(() => projections.parseProjectionCutover("public_aggregates")).toThrow(/must be/);
