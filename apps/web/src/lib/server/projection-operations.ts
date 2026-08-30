@@ -1267,6 +1267,7 @@ const CUTOVER_KEYS: Record<ProjectionCutover, string> = {
 };
 
 function matchingAuditSql(alias: string, target: ProjectionAuditTarget): string {
+  const auditVersion = target === "artist_qualification" ? 4 : 3;
   const sourceFence =
     target === "track_due_work" || target === "crawl_due_work"
       ? `and json_extract(${alias}.value, '$.sourceFence') = coalesce((select cast(fence.value as integer)
@@ -1274,7 +1275,7 @@ function matchingAuditSql(alias: string, target: ProjectionAuditTarget): string 
             and fence.value <> '' and fence.value not glob '*[^0-9]*'), 0)`
       : "";
   return `json_valid(${alias}.value)
-    and json_extract(${alias}.value, '$.version') = 3
+    and json_extract(${alias}.value, '$.version') = ${auditVersion}
     and json_extract(${alias}.value, '$.target') = '${target}'
     and json_extract(${alias}.value, '$.complete') = 1
     and json_extract(${alias}.value, '$.matched') = 1

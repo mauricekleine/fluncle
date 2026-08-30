@@ -39,7 +39,7 @@ type AuditState = {
   sourceFence: number;
   startedAt: string;
   target: ProjectionAuditTarget;
-  version: 3;
+  version: 3 | 4;
 };
 
 export type ProjectionAuditEvidence = Pick<
@@ -131,7 +131,7 @@ function newState(
     sourceFence: fence.sourceFence,
     startedAt: new Date().toISOString(),
     target,
-    version: 3,
+    version: target === "artist_qualification" ? 4 : 3,
   };
 }
 
@@ -141,7 +141,9 @@ function parseState(value: unknown, target: ProjectionAuditTarget): AuditState |
   }
   try {
     const state = JSON.parse(value) as Partial<AuditState>;
-    return state.version === 3 && state.target === target ? (state as AuditState) : undefined;
+    const versionMatches =
+      target === "artist_qualification" ? state.version === 4 : state.version === 3;
+    return versionMatches && state.target === target ? (state as AuditState) : undefined;
   } catch {
     return undefined;
   }

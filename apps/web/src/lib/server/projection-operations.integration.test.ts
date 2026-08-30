@@ -201,7 +201,7 @@ describe("projection production operations", () => {
             sourceFence: 0,
             startedAt: "2026-01-01T00:00:00.000Z",
             target,
-            version: 3,
+            version: target === "artist_qualification" ? 4 : 3,
           }),
         ],
         sql: `insert into settings (key, value) values (?, ?)`,
@@ -525,10 +525,11 @@ describe("projection production operations", () => {
     expect(complete).toBe(true);
   });
 
-  it("audits artist rollups over the edge domain when an artist entity is absent", async () => {
+  it("invalidates legacy artist evidence and audits the edge domain when an entity is absent", async () => {
     await db.execute({
       args: [PROJECTION_AUDIT_SETTING_KEYS.artist_qualification],
-      sql: `delete from settings where key = ?`,
+      sql: `update settings set value = json_set(value,
+        '$.version', 3, '$.complete', 1, '$.matched', 0) where key = ?`,
     });
     await db.executeMultiple(`
       insert into tracks (track_id) values ('orphan-edge-track');
