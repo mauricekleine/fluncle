@@ -130,7 +130,7 @@ describe("due-work producer maintenance inventory", () => {
           { sql: "update tracks set title = ? where track_id = ?" },
         ], "write");
         await db.batch([
-          markDueWorkSourceRepairsStatement(subjects, { producer: "unrelated" }),
+          markDueWorkSourceRepairsStatement(subjects, { producer: "catalogue-rank" }),
         ], "write");
       }`,
     );
@@ -162,14 +162,14 @@ describe("due-work producer maintenance inventory", () => {
       `async function batched(db: Db) {
         await db.batch([
           { sql: "update findings set note = ? where track_id = ?" },
-          markDueWorkSourceRepairsStatement(subjects, { producer: "finding-note" }),
+          markDueWorkSourceRepairsStatement(subjects, { producer: "track-note-fill" }),
         ], "write");
       }
       async function transactional(db: Db) {
         const transaction = await db.transaction("write");
         await transaction.execute({ sql: "insert into track_artists values (?, ?)" });
         await transaction.batch([
-          markDueWorkSourceRepairsStatement(subjects, { producer: "artist-edge" }),
+          markDueWorkSourceRepairsStatement(subjects, { producer: "artist-edge-upsert" }),
         ]);
         await transaction.commit();
       }`,

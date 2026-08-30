@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { typedRows } from "./db";
 import {
   createIntegrationDb,
+  seedAlbum,
   seedArtist,
   seedCatalogueTrack,
   seedLabel,
@@ -170,6 +171,27 @@ describe("relinkTracksToEntity — the bulk link", () => {
     // lab-new starts at 0 (its pre-existing catalogue track was raw-linked without a delta) and
     // gains exactly the three that moved: two certified, one catalogue.
     expect(await counts("labels", "lab-new")).toEqual({ certified: 2, renderable: 3 });
+    expect((await db.execute(`select distinct projection from projection_repairs`)).rows).toEqual([
+      { projection: "artist_qualification" },
+    ]);
+    expect((await db.execute(`select count(*) as n from public_aggregate_state`)).rows[0]?.n).toBe(
+      0,
+    );
+  });
+
+  it("moves album relationships without creating public projection maintenance", async () => {
+    await seedAlbum(db, { id: "album-target", slug: "album-target" });
+    await seedCatalogueTrack(db, { trackId: "album-track-000000001" });
+
+    const { relinkTracksToEntity } = await import("./hub-counts");
+    expect(await relinkTracksToEntity("albums", "album-target", ["album-track-000000001"])).toBe(1);
+    expect((await db.execute(`select count(*) as n from projection_repairs`)).rows[0]?.n).toBe(0);
+    expect((await db.execute(`select count(*) as n from public_aggregate_state`)).rows[0]?.n).toBe(
+      0,
+    );
+    expect(
+      (await db.execute(`select count(*) as n from artist_qualification_state`)).rows[0]?.n,
+    ).toBe(0);
   });
 });
 

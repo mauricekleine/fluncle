@@ -316,40 +316,15 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
     const first = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
     const before = [await ledger("sp_2"), await ledger("mb_2")];
     expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual({
-      aggregate: { projectionEpoch: 0, ready: false, sourceEpoch: 2 },
-      artists: { projectionEpoch: 0, ready: false, sourceEpoch: 2 },
-      repairs: [
-        {
-          projection: "artist_qualification",
-          sourceEpoch: 1,
-          subjectId: "mb_2",
-          subjectType: "track",
-        },
-        {
-          projection: "artist_qualification",
-          sourceEpoch: 2,
-          subjectId: "sp_2",
-          subjectType: "track",
-        },
-        {
-          projection: "public_aggregates",
-          sourceEpoch: 1,
-          subjectId: "mb_2",
-          subjectType: "track",
-        },
-        {
-          projection: "public_aggregates",
-          sourceEpoch: 2,
-          subjectId: "sp_2",
-          subjectType: "track",
-        },
-      ],
+      aggregate: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      artists: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      repairs: [],
     });
     await settlePublicProjectionTestState(db);
     const ready = await readPublicProjectionMaintenanceSnapshot(db);
     expect(ready).toEqual({
-      aggregate: { projectionEpoch: 2, ready: true, sourceEpoch: 2 },
-      artists: { projectionEpoch: 2, ready: true, sourceEpoch: 2 },
+      aggregate: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      artists: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
       repairs: [],
     });
 

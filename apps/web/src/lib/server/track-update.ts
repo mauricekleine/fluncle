@@ -1219,7 +1219,16 @@ export async function updateTrack(
             ]
           : []),
       ],
-      { producer: "track-update" },
+      {
+        producer: "track-update",
+        publicProjectionImpact: {
+          impact: update.key === undefined ? "neither" : "public_aggregates",
+          justification:
+            update.key === undefined
+              ? "This update does not write tracks.key."
+              : "This update writes tracks.key.",
+        },
+      },
     ),
     ...(rankableDelta === 0
       ? []

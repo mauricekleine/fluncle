@@ -2057,6 +2057,13 @@ export async function updateLabelSeedState(
         now,
         onlyIfPreviousStatementChanged: true,
         producer: "label-seed-state",
+        publicProjectionImpact: {
+          impact: seedState === undefined ? "neither" : "artist_qualification",
+          justification:
+            seedState === undefined
+              ? "A bare re-walk does not write labels.seed_state."
+              : "The supplied ruling writes labels.seed_state.",
+        },
       },
     ),
   ];
@@ -2076,6 +2083,10 @@ export async function updateLabelSeedState(
           markerVersion: sourceVersion,
           now,
           producer: "label-seed-state",
+          publicProjectionImpact: {
+            impact: "artist_qualification",
+            justification: "The bounded track selection belongs to a supplied seed-state ruling.",
+          },
         },
       ),
     );

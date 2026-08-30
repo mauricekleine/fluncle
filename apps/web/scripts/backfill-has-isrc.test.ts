@@ -56,28 +56,15 @@ describe("backfillHasIsrc", () => {
   it("is idempotent — a second run flips nothing", async () => {
     await backfillHasIsrc(db);
     expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual({
-      aggregate: { projectionEpoch: 0, ready: false, sourceEpoch: 1 },
-      artists: { projectionEpoch: 0, ready: false, sourceEpoch: 1 },
-      repairs: [
-        {
-          projection: "artist_qualification",
-          sourceEpoch: 1,
-          subjectId: "isrc00000000000000000a",
-          subjectType: "track",
-        },
-        {
-          projection: "public_aggregates",
-          sourceEpoch: 1,
-          subjectId: "isrc00000000000000000a",
-          subjectType: "track",
-        },
-      ],
+      aggregate: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      artists: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      repairs: [],
     });
     await settlePublicProjectionTestState(db);
     const ready = await readPublicProjectionMaintenanceSnapshot(db);
     expect(ready).toEqual({
-      aggregate: { projectionEpoch: 1, ready: true, sourceEpoch: 1 },
-      artists: { projectionEpoch: 1, ready: true, sourceEpoch: 1 },
+      aggregate: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      artists: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
       repairs: [],
     });
     const { flipped } = await backfillHasIsrc(db);

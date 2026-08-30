@@ -353,7 +353,16 @@ export async function relinkTracksToEntity(
             }),
           ),
         ],
-        { producer: "hub-entity-relink" },
+        {
+          producer: "hub-entity-relink",
+          publicProjectionImpact: {
+            impact: entity === "labels" ? "artist_qualification" : "neither",
+            justification:
+              entity === "labels"
+                ? "This relink writes tracks.label_id."
+                : "This relink writes tracks.album_id, which no public projection reads.",
+          },
+        },
       ),
     ],
     "write",
