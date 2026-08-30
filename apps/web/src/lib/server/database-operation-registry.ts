@@ -334,6 +334,14 @@ export const DATABASE_MUTATION_POLICIES = {
     rationale: "Repository sync, build, swap, and restart cannot share a database transaction.",
     reconciliation: "Inspect the source and running release before rerunning deployment.",
   },
+  "projections.repair": {
+    evidenceSource: "apps/web/src/lib/server/projection-operations.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "Fixed-target repair consumes epoch-fenced markers and resumes aggregate anchors from durable cursors.",
+    reconciliation:
+      "Read bounded projection status, then repeat repair only for the still-incomplete public family.",
+  },
   "reach.collect": {
     evidenceSource: "apps/web/src/lib/server/platform-stats.ts",
     kind: "replay-safe-idempotent",
@@ -471,6 +479,7 @@ export const TRIGGER_MUTATION_POLICY_IDS = {
   "live.snapshot": "live.snapshot",
   "logbook.create": "logbook.draft",
   "newsletter.draft": "newsletter.draft",
+  "projections.repair": "projections.repair",
   "reach.collect": "reach.collect",
   "render.tracks.queue-read": "due-work.queue-maintenance",
   "social.capture": "social.capture",
@@ -1948,6 +1957,40 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       ),
     ],
     wrapperSource: `${SCRIPTS}/rank-sweep.sh`,
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: every("4min", "5min"),
+    compatibility: { accessClass: "read", mutationTarget: null },
+    directory: "projection-maintenance-timer",
+    heavy: false,
+    mutationTarget: "primary",
+    operationId: "projections.repair",
+    service: "fluncle-projection-maintenance.service",
+    telemetryUnit: "projection-maintenance",
+    timer: "fluncle-projection-maintenance.timer",
+    triggers: [
+      cli(
+        "projections.status",
+        "read",
+        ["admin", "projections", "get"],
+        "fluncle admin projections get --json",
+        `${SCRIPTS}/projection-maintenance-sweep.ts`,
+        { mutationTarget: null },
+      ),
+      cli(
+        "projections.repair",
+        "write",
+        ["admin", "projections", "advance"],
+        "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --json",
+        `${SCRIPTS}/projection-maintenance-sweep.ts`,
+        {
+          compatibility: { accessClass: "read", mutationTarget: null },
+          mutationTarget: "primary",
+        },
+      ),
+    ],
+    wrapperSource: `${SCRIPTS}/projection-maintenance-sweep.sh`,
   }),
   defineOperation({
     accessClass: "write",

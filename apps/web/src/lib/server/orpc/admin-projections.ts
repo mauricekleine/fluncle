@@ -1,5 +1,6 @@
-// Operator-only projection control plane. Reads return aggregate operational evidence only; writes
-// are fixed-target, bounded steps and never accept SQL, table names, or database coordinates.
+// Projection control plane. Admin reads return aggregate operational evidence only. Operators own
+// every control; the agent has one narrow exception for bounded repair of the two public families.
+// Writes are fixed-target steps and never accept SQL, table names, or database coordinates.
 
 import { getDb } from "../db";
 import {
@@ -12,22 +13,25 @@ import { ApiError } from "../spotify";
 import { type Implementer, toFault } from "./_shared";
 
 export function adminProjectionHandlers(os: Implementer) {
-  const getProjectionStatusHandler = os.get_projection_status
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async () => {
-      try {
-        return { ok: true as const, status: await getProjectionStatusFor(await getDb()) };
-      } catch (error) {
-        throw toFault(error);
-      }
-    });
+  const getProjectionStatusHandler = os.get_projection_status.use(adminAuth).handler(async () => {
+    try {
+      return { ok: true as const, status: await getProjectionStatusFor(await getDb()) };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
 
   const advanceProjectionHandler = os.advance_projection
     .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
+    .handler(async ({ context, input }) => {
       try {
+        if (
+          context.role !== "operator" &&
+          (input.action !== "repair" ||
+            (input.target !== "public_aggregates" && input.target !== "artist_qualification"))
+        ) {
+          throw new ApiError("forbidden", "This action requires the operator role", 403);
+        }
         const result = await advanceProjectionFor(await getDb(), input);
         return { ...input, ...result, ok: true as const };
       } catch (error) {

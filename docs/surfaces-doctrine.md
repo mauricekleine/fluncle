@@ -183,52 +183,53 @@ Same posture as the extensions: a listing on a third-party store, so no `/status
 
 Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName` + cadence instead of a URL probe.
 
-| Surface                     | Cron job                       | Cadence             | Exposes                                                                                                                                                                                                                                          | Weight    |
-| --------------------------- | ------------------------------ | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
-| `cron.newsletter`           | `fluncle-newsletter`           | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated)                                                                                                             | secondary |
-| `cron.enrich`               | `fluncle-enrich`               | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                                                                                                                                 | hidden    |
-| `cron.cluster`              | `fluncle-cluster`              | nightly 02:20 Amst. | assign each finding to its nearest sonic galaxy (assignment-only k-means over the MuQ space; a full fit is an operator act), retire empties, consume a split request (`--no-agent`, zero LLM tokens)                                             | hidden    |
-| `cron.context-note`         | `fluncle-context-note`         | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                                                                                                                              | hidden    |
-| `cron.note`                 | `fluncle-note`                 | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)                                                                                                                           | hidden    |
-| `cron.artist-bio`           | `fluncle-artist-bio`           | every 30m           | auto-author the `/artist/<slug>` voiced bio off best-effort Firecrawl facts + identity, fill-empty-only (hybrid: one `claude -p` call; box activation operator-gated)                                                                            | hidden    |
-| `cron.label-bio`            | `fluncle-label-bio`            | every 30m           | auto-author the `/label/<slug>` voiced bio off best-effort Firecrawl facts + identity, fill-empty-only (hybrid: one `claude -p` call; box activation operator-gated)                                                                             | hidden    |
-| `cron.album-bio`            | `fluncle-album-bio`            | every 30m           | auto-author the `/album/<slug>` voiced bio off Worker-assembled grounding (Firecrawl facts + the album's finding titles), fill-empty-only (hybrid: one `claude -p` call)                                                                         | hidden    |
-| `cron.triage`               | `fluncle-triage`               | every 15m           | pre-chew a pending crew submission → an advisory verdict on the `/admin` attention queue, fill-first (hybrid: one `claude -p` call; approve/reject stays operator tier)                                                                          | hidden    |
-| `cron.logbook`              | `fluncle-logbook`              | 00:40 Amsterdam     | author the previous day's Logbook travelogue entry, fill-empty-only (hybrid: one `claude -p` call; self-healing gap window backfills history)                                                                                                    | hidden    |
-| `cron.observation`          | `fluncle-observation`          | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)                                                                                                                          | hidden    |
-| `cron.backfill`             | `fluncle-backfill`             | every 30m           | Discogs id + Last.fm love + Apple + Beatport + record catalogue-number repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                                                                                                       | hidden    |
-| `cron.social-capture`       | `fluncle-social-capture`       | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                                                                                                                                         | hidden    |
-| `cron.live`                 | `fluncle-live`                 | every 1m            | poll Twitch for the live set → POST the live state that lights the cross-surface callout (`--no-agent`, zero LLM tokens; auto-clear is read-side)                                                                                                | hidden    |
-| `cron.render`               | `fluncle-render`               | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                                                                                                                              | hidden    |
-| `cron.publish-advance`      | `fluncle-publish-advance`      | every 30m           | advance one freshly-rendered finding into the publish push — YouTube Short + TikTok inbox draft (`--no-agent`, Worker HTTP; default-deny kill switch)                                                                                            | hidden    |
-| `cron.studio-clip`          | `fluncle-studio-clip`          | every 15m           | cut each pending operator-framed 9:16 clip out of its set video → ship to R2 (`--no-agent`, ffmpeg)                                                                                                                                              | hidden    |
-| `cron.capture`              | `fluncle-capture`              | every 5m            | capture each finding's full song once → private R2 (the metered side-channel; the capture budget gates the catalogue rows)                                                                                                                       | hidden    |
-| `cron.verify-captures`      | `fluncle-verify-captures`      | every 30m           | fingerprint-check each captured song against its ISRC-resolved official preview → the wrong-audio verdict (`--no-agent`, box measures / Worker routes, zero LLM tokens); the HISTORIC half of the capture-verification gate                      | hidden    |
-| `cron.embed`                | `fluncle-embed`                | every 5m            | MuQ-large audio embedding (1024-d) for sonic similarity + clusters (`--no-agent`, on-box torch)                                                                                                                                                  | hidden    |
-| `cron.crawl`                | `fluncle-crawl`                | every 10m           | walk the MusicBrainz release graph outward from the operator's enabled seed labels → uncertified catalogue rows (`--no-agent`)                                                                                                                   | hidden    |
-| `cron.label-releases`       | `fluncle-label-releases`       | every 24h           | tap day-one fresh releases for the operator's enabled seed labels → uncertified catalogue rows with their real dates, closing the MusicBrainz lag under `/fresh` (`--no-agent`, Worker-side Spotify, zero LLM tokens)                            | hidden    |
-| `cron.rank`                 | `fluncle-rank`                 | every 30m           | score each stale catalogue track against every embedded finding → its nearest finding + capture priority (`--no-agent`)                                                                                                                          | hidden    |
-| `cron.anchor`               | `fluncle-anchor`               | hourly              | fill each un-anchored catalogue row's Spotify anchor via an Apify actor → `anchor_track` (Worker verifies; the official Spotify app is left for user-facing paths; box activation operator-gated)                                                | hidden    |
-| `cron.isrc-recovery`        | `fluncle-isrc-recovery`        | hourly              | recover missing catalogue ISRCs through tokenless Deezer search → feed the exact-ISRC anchor queue (`resolve_anchor` with `spotifySearch: false`; never `anchor_track`, zero Apify)                                                              | hidden    |
-| `cron.device-mirror`        | `fluncle-device-mirror`        | hourly              | mirror the anchored public-catalogue cut into the shared read-only device replica — diff-based, in-place upserts/deletes so the libSQL replication log survives (`--no-agent`; box activation operator-gated)                                    | hidden    |
-| `cron.frontier-refresh`     | `fluncle-frontier-refresh`     | every 15m           | re-mirror each crew member's public Fluncle's Frontier playlist from their current recommendations — a paced, resumable drain against the shared Spotify budget (`--no-agent`, default-deny kill switch)                                         | hidden    |
-| `cron.artist-sweep`         | `fluncle-artist-sweep`         | every 60m           | resolve each artist's social identity: MB url-rel walk + Firecrawl gap-fill (`--no-agent`, Worker-side)                                                                                                                                          | hidden    |
-| `cron.label-images`         | `fluncle-label-images`         | every 60m           | resolve each pending label's own logo (Discogs → Wikidata → cover floor) → its own R2 image (`--no-agent`, Worker-side)                                                                                                                          | hidden    |
-| `cron.cover-masters`        | `fluncle-cover-masters`        | every 60m           | resolve each pending album/artist its own ≤1200² cover master (best source wins) → its own R2 image (`--no-agent`, Worker-side)                                                                                                                  | hidden    |
-| `cron.recording-mbids`      | `fluncle-recording-mbids`      | every 60m           | fill each track's canonical MusicBrainz recording MBID — a free SQL strip of crawler-born PKs, then an ISRC resolve of the Spotify-born tail (`--no-agent`, Worker-paced, zero LLM tokens)                                                       | hidden    |
-| `cron.artist-edges`         | `fluncle-artist-edges`         | every 60m           | fold each edge-less track's `artists_json` names onto existing artist identities → `track_artists` edges; mints nothing, fails closed on an ambiguous fold (`--no-agent`, no vendor call)                                                        | hidden    |
-| `cron.artist-credits`       | `fluncle-artist-credits`       | every 5m            | mint identity-true artists from MusicBrainz credits for the zero-matched residual `cron.artist-edges` leaves → `track_artists` edges (`--no-agent`, Worker-paced, zero LLM tokens)                                                               | hidden    |
-| `cron.label-lineage`        | `fluncle-label-lineage`        | every 60m           | resolve each label's founding date + place + parent imprint from MusicBrainz → the `labels` row (`--no-agent`, Worker-paced; matches an existing parent, never mints one)                                                                        | hidden    |
-| `cron.audit`                | `fluncle-audit`                | nightly 01:00 Amst. | the nightly codebase audit — one domain/night on a 7-day rotation; opens a PR the reviewer merges (`claude -p`, subscription auth)                                                                                                               | secondary |
-| `cron.audit-review`         | `fluncle-audit-review`         | daily 05:00 Amst.   | the reviewer for the nightly audit PR — fix-small-and-merge on green CI, else comment + hold (`claude -p`)                                                                                                                                       | secondary |
-| `cron.healthcheck`          | `fluncle-healthcheck`          | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)                                                                                                              | hidden    |
-| `cron.backup`               | `fluncle-backup`               | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)                                                                                                               | secondary |
-| `cron.reach`                | `fluncle-reach`                | daily 04:00 Amst.   | snapshot Fluncle's follower / subscriber / play / star counts across every platform → one append-only row per (platform, metric) behind the public /reach page (`--no-agent`, Worker HTTP, zero LLM tokens)                                      | secondary |
-| `cron.demand`               | `fluncle-demand`               | daily 04:40 Amst.   | read the trailing-30-day Simple Analytics pageviews for `/artist` + `/label` → rewrite the two derived reorder columns so crawl + capture lean toward what visitors looked at; rank order only, never the veto (`--no-agent`, zero LLM tokens)   | hidden    |
-| `cron.funnel-snapshot`      | `fluncle-funnel-snapshot`      | 23:45 UTC           | upsert one row per UTC day of the catalogue funnel's stage totals + queue depths + frontier counts behind `/admin/funnel` (`--no-agent`, Worker SQL, zero LLM tokens)                                                                            | hidden    |
-| `cron.social-metrics`       | `fluncle-social-metrics`       | 22:15 UTC           | append each published post's Postiz reach (views / likes / comments) into the append-only ledger, one row per post per UTC day (`--no-agent`, Worker HTTP, zero LLM tokens)                                                                      | hidden    |
-| `cron.reconcile-hub-counts` | `fluncle-reconcile-hub-counts` | daily 04:10 Amst.   | re-derive `renderable_track_count` / `certified_finding_count` for every label/album/artist and correct only the rows that drifted — the self-healing backstop under the delta-maintained hub counts (`--no-agent`, Worker SQL, zero LLM tokens) | hidden    |
-| `cron.sentry-triage`        | `fluncle-sentry-triage`        | nightly 03:30 Amst. | read the day's unresolved Sentry errors → open a fix PR per straightforward one, file the rest to `docs/sentry-backlog.md` (`claude -p`, subscription auth; its own cron, not the audit rotation)                                                | secondary |
+| Surface                       | Cron job                         | Cadence             | Exposes                                                                                                                                                                                                                                          | Weight    |
+| ----------------------------- | -------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| `cron.newsletter`             | `fluncle-newsletter`             | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated)                                                                                                             | secondary |
+| `cron.enrich`                 | `fluncle-enrich`                 | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                                                                                                                                 | hidden    |
+| `cron.cluster`                | `fluncle-cluster`                | nightly 02:20 Amst. | assign each finding to its nearest sonic galaxy (assignment-only k-means over the MuQ space; a full fit is an operator act), retire empties, consume a split request (`--no-agent`, zero LLM tokens)                                             | hidden    |
+| `cron.context-note`           | `fluncle-context-note`           | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                                                                                                                              | hidden    |
+| `cron.note`                   | `fluncle-note`                   | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)                                                                                                                           | hidden    |
+| `cron.artist-bio`             | `fluncle-artist-bio`             | every 30m           | auto-author the `/artist/<slug>` voiced bio off best-effort Firecrawl facts + identity, fill-empty-only (hybrid: one `claude -p` call; box activation operator-gated)                                                                            | hidden    |
+| `cron.label-bio`              | `fluncle-label-bio`              | every 30m           | auto-author the `/label/<slug>` voiced bio off best-effort Firecrawl facts + identity, fill-empty-only (hybrid: one `claude -p` call; box activation operator-gated)                                                                             | hidden    |
+| `cron.album-bio`              | `fluncle-album-bio`              | every 30m           | auto-author the `/album/<slug>` voiced bio off Worker-assembled grounding (Firecrawl facts + the album's finding titles), fill-empty-only (hybrid: one `claude -p` call)                                                                         | hidden    |
+| `cron.triage`                 | `fluncle-triage`                 | every 15m           | pre-chew a pending crew submission → an advisory verdict on the `/admin` attention queue, fill-first (hybrid: one `claude -p` call; approve/reject stays operator tier)                                                                          | hidden    |
+| `cron.logbook`                | `fluncle-logbook`                | 00:40 Amsterdam     | author the previous day's Logbook travelogue entry, fill-empty-only (hybrid: one `claude -p` call; self-healing gap window backfills history)                                                                                                    | hidden    |
+| `cron.observation`            | `fluncle-observation`            | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)                                                                                                                          | hidden    |
+| `cron.backfill`               | `fluncle-backfill`               | every 30m           | Discogs id + Last.fm love + Apple + Beatport + record catalogue-number repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                                                                                                       | hidden    |
+| `cron.social-capture`         | `fluncle-social-capture`         | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                                                                                                                                         | hidden    |
+| `cron.live`                   | `fluncle-live`                   | every 1m            | poll Twitch for the live set → POST the live state that lights the cross-surface callout (`--no-agent`, zero LLM tokens; auto-clear is read-side)                                                                                                | hidden    |
+| `cron.render`                 | `fluncle-render`                 | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                                                                                                                              | hidden    |
+| `cron.publish-advance`        | `fluncle-publish-advance`        | every 30m           | advance one freshly-rendered finding into the publish push — YouTube Short + TikTok inbox draft (`--no-agent`, Worker HTTP; default-deny kill switch)                                                                                            | hidden    |
+| `cron.studio-clip`            | `fluncle-studio-clip`            | every 15m           | cut each pending operator-framed 9:16 clip out of its set video → ship to R2 (`--no-agent`, ffmpeg)                                                                                                                                              | hidden    |
+| `cron.capture`                | `fluncle-capture`                | every 5m            | capture each finding's full song once → private R2 (the metered side-channel; the capture budget gates the catalogue rows)                                                                                                                       | hidden    |
+| `cron.verify-captures`        | `fluncle-verify-captures`        | every 30m           | fingerprint-check each captured song against its ISRC-resolved official preview → the wrong-audio verdict (`--no-agent`, box measures / Worker routes, zero LLM tokens); the HISTORIC half of the capture-verification gate                      | hidden    |
+| `cron.embed`                  | `fluncle-embed`                  | every 5m            | MuQ-large audio embedding (1024-d) for sonic similarity + clusters (`--no-agent`, on-box torch)                                                                                                                                                  | hidden    |
+| `cron.crawl`                  | `fluncle-crawl`                  | every 10m           | walk the MusicBrainz release graph outward from the operator's enabled seed labels → uncertified catalogue rows (`--no-agent`)                                                                                                                   | hidden    |
+| `cron.label-releases`         | `fluncle-label-releases`         | every 24h           | tap day-one fresh releases for the operator's enabled seed labels → uncertified catalogue rows with their real dates, closing the MusicBrainz lag under `/fresh` (`--no-agent`, Worker-side Spotify, zero LLM tokens)                            | hidden    |
+| `cron.rank`                   | `fluncle-rank`                   | every 30m           | score each stale catalogue track against every embedded finding → its nearest finding + capture priority (`--no-agent`)                                                                                                                          | hidden    |
+| `cron.projection-maintenance` | `fluncle-projection-maintenance` | every 5m            | read the shared public cutover first, then drain bounded aggregate and artist repair debt (`--no-agent`, Worker SQL, four repair pages per family; rebuild, audit, and cutover stay operator-only)                                               | hidden    |
+| `cron.anchor`                 | `fluncle-anchor`                 | hourly              | fill each un-anchored catalogue row's Spotify anchor via an Apify actor → `anchor_track` (Worker verifies; the official Spotify app is left for user-facing paths; box activation operator-gated)                                                | hidden    |
+| `cron.isrc-recovery`          | `fluncle-isrc-recovery`          | hourly              | recover missing catalogue ISRCs through tokenless Deezer search → feed the exact-ISRC anchor queue (`resolve_anchor` with `spotifySearch: false`; never `anchor_track`, zero Apify)                                                              | hidden    |
+| `cron.device-mirror`          | `fluncle-device-mirror`          | hourly              | mirror the anchored public-catalogue cut into the shared read-only device replica — diff-based, in-place upserts/deletes so the libSQL replication log survives (`--no-agent`; box activation operator-gated)                                    | hidden    |
+| `cron.frontier-refresh`       | `fluncle-frontier-refresh`       | every 15m           | re-mirror each crew member's public Fluncle's Frontier playlist from their current recommendations — a paced, resumable drain against the shared Spotify budget (`--no-agent`, default-deny kill switch)                                         | hidden    |
+| `cron.artist-sweep`           | `fluncle-artist-sweep`           | every 60m           | resolve each artist's social identity: MB url-rel walk + Firecrawl gap-fill (`--no-agent`, Worker-side)                                                                                                                                          | hidden    |
+| `cron.label-images`           | `fluncle-label-images`           | every 60m           | resolve each pending label's own logo (Discogs → Wikidata → cover floor) → its own R2 image (`--no-agent`, Worker-side)                                                                                                                          | hidden    |
+| `cron.cover-masters`          | `fluncle-cover-masters`          | every 60m           | resolve each pending album/artist its own ≤1200² cover master (best source wins) → its own R2 image (`--no-agent`, Worker-side)                                                                                                                  | hidden    |
+| `cron.recording-mbids`        | `fluncle-recording-mbids`        | every 60m           | fill each track's canonical MusicBrainz recording MBID — a free SQL strip of crawler-born PKs, then an ISRC resolve of the Spotify-born tail (`--no-agent`, Worker-paced, zero LLM tokens)                                                       | hidden    |
+| `cron.artist-edges`           | `fluncle-artist-edges`           | every 60m           | fold each edge-less track's `artists_json` names onto existing artist identities → `track_artists` edges; mints nothing, fails closed on an ambiguous fold (`--no-agent`, no vendor call)                                                        | hidden    |
+| `cron.artist-credits`         | `fluncle-artist-credits`         | every 5m            | mint identity-true artists from MusicBrainz credits for the zero-matched residual `cron.artist-edges` leaves → `track_artists` edges (`--no-agent`, Worker-paced, zero LLM tokens)                                                               | hidden    |
+| `cron.label-lineage`          | `fluncle-label-lineage`          | every 60m           | resolve each label's founding date + place + parent imprint from MusicBrainz → the `labels` row (`--no-agent`, Worker-paced; matches an existing parent, never mints one)                                                                        | hidden    |
+| `cron.audit`                  | `fluncle-audit`                  | nightly 01:00 Amst. | the nightly codebase audit — one domain/night on a 7-day rotation; opens a PR the reviewer merges (`claude -p`, subscription auth)                                                                                                               | secondary |
+| `cron.audit-review`           | `fluncle-audit-review`           | daily 05:00 Amst.   | the reviewer for the nightly audit PR — fix-small-and-merge on green CI, else comment + hold (`claude -p`)                                                                                                                                       | secondary |
+| `cron.healthcheck`            | `fluncle-healthcheck`            | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)                                                                                                              | hidden    |
+| `cron.backup`                 | `fluncle-backup`                 | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)                                                                                                               | secondary |
+| `cron.reach`                  | `fluncle-reach`                  | daily 04:00 Amst.   | snapshot Fluncle's follower / subscriber / play / star counts across every platform → one append-only row per (platform, metric) behind the public /reach page (`--no-agent`, Worker HTTP, zero LLM tokens)                                      | secondary |
+| `cron.demand`                 | `fluncle-demand`                 | daily 04:40 Amst.   | read the trailing-30-day Simple Analytics pageviews for `/artist` + `/label` → rewrite the two derived reorder columns so crawl + capture lean toward what visitors looked at; rank order only, never the veto (`--no-agent`, zero LLM tokens)   | hidden    |
+| `cron.funnel-snapshot`        | `fluncle-funnel-snapshot`        | 23:45 UTC           | upsert one row per UTC day of the catalogue funnel's stage totals + queue depths + frontier counts behind `/admin/funnel` (`--no-agent`, Worker SQL, zero LLM tokens)                                                                            | hidden    |
+| `cron.social-metrics`         | `fluncle-social-metrics`         | 22:15 UTC           | append each published post's Postiz reach (views / likes / comments) into the append-only ledger, one row per post per UTC day (`--no-agent`, Worker HTTP, zero LLM tokens)                                                                      | hidden    |
+| `cron.reconcile-hub-counts`   | `fluncle-reconcile-hub-counts`   | daily 04:10 Amst.   | re-derive `renderable_track_count` / `certified_finding_count` for every label/album/artist and correct only the rows that drifted — the self-healing backstop under the delta-maintained hub counts (`--no-agent`, Worker SQL, zero LLM tokens) | hidden    |
+| `cron.sentry-triage`          | `fluncle-sentry-triage`          | nightly 03:30 Amst. | read the day's unresolved Sentry errors → open a fix PR per straightforward one, file the rest to `docs/sentry-backlog.md` (`claude -p`, subscription auth; its own cron, not the audit rotation)                                                | secondary |
 
 ## 3. The per-context weight matrix
 
@@ -245,145 +246,146 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 
 `surfacesForContext(ctx)` returns the surfaces a context displays, sorted loudest-first; `surfacesByWeight(ctx, weight)` returns one tier within a context.
 
-| Surface                     | `web`     | `ssh`     | `cli`     | `status`  |
-| --------------------------- | --------- | --------- | --------- | --------- |
-| `web.home`                  | primary   |           |           |           |
-| `web.log`                   | primary   | secondary |           |           |
-| `web.logbook`               | primary   |           |           |           |
-| `web.mixtapes`              | primary   | secondary |           |           |
-| `web.galaxy`                | primary   | secondary |           |           |
-| `web.about`                 | secondary | tertiary  |           |           |
-| `web.newsletter`            | secondary |           |           |           |
-| `web.docs`                  | secondary |           |           |           |
-| `web.status`                | secondary |           |           | primary   |
-| `web.reach`                 | secondary |           |           | secondary |
-| `web.radio`                 | secondary |           |           |           |
-| `web.artist`                | secondary | secondary |           |           |
-| `web.labels`                | secondary |           |           |           |
-| `web.albums`                | secondary |           |           |           |
-| `web.fresh`                 | secondary |           |           |           |
-| `web.tracks`                | secondary |           |           |           |
-| `web.galaxies`              | secondary | secondary |           |           |
-| `web.account`               | secondary |           |           |           |
-| `web.identity`              | tertiary  |           |           |           |
-| `web.pipeline`              | tertiary  |           |           |           |
-| `web.privacy`               | tertiary  |           |           |           |
-| `web.terms`                 | tertiary  |           |           |           |
-| `subdomain.galaxy`          | primary   | secondary |           |           |
-| `subdomain.radio`           | secondary |           |           |           |
-| `subdomain.found`           | tertiary  |           |           | tertiary  |
-| `subdomain.dig`             | tertiary  |           |           |           |
-| `subdomain.status`          | tertiary  |           |           | tertiary  |
-| `subdomain.onion`           | tertiary  |           |           | tertiary  |
-| `api.findings`              | primary   |           |           | secondary |
-| `api.tracks`                | primary   |           |           | secondary |
-| `api.track`                 | secondary |           |           |           |
-| `api.tracks.random`         | secondary |           |           |           |
-| `api.fresh`                 | secondary |           |           |           |
-| `api.mixtapes`              | secondary |           |           |           |
-| `api.albums`                | secondary |           |           |           |
-| `api.artists`               | secondary |           |           |           |
-| `api.labels`                | secondary |           |           |           |
-| `api.galaxies`              | secondary |           |           |           |
-| `api.search`                | secondary |           |           |           |
-| `api.search.archive`        | primary   |           |           |           |
-| `api.submissions`           | secondary |           |           |           |
-| `api.newsletter`            | secondary |           |           |           |
-| `api.stories`               | tertiary  |           |           |           |
-| `api.radio.now-playing`     | tertiary  |           |           |           |
-| `api.health`                | tertiary  |           |           | tertiary  |
-| `feed.rss`                  | primary   |           |           |           |
-| `feed.atom`                 | secondary |           |           |           |
-| `feed.json`                 | secondary |           |           |           |
-| `feed.fresh.rss`            | secondary |           |           |           |
-| `feed.fresh.json`           | secondary |           |           |           |
-| `feed.fresh.artist.rss`     | tertiary  |           |           |           |
-| `feed.fresh.label.rss`      | tertiary  |           |           |           |
-| `feed.podcast`              | secondary |           |           |           |
-| `feed.calendar`             | tertiary  |           |           |           |
-| `discovery.llms`            | primary   |           |           |           |
-| `discovery.sitemap`         | secondary |           |           |           |
-| `discovery.sitemap-shard`   |           |           |           |           |
-| `discovery.llms-full`       | secondary |           |           |           |
-| `discovery.openapi`         | secondary |           |           |           |
-| `discovery.robots`          | tertiary  |           |           |           |
-| `discovery.mcp-server-card` | tertiary  |           |           |           |
-| `discovery.api-catalog`     | tertiary  |           |           |           |
-| `discovery.agent-card`      | tertiary  |           |           |           |
-| `discovery.agent-skills`    | tertiary  |           |           |           |
-| `discovery.oembed`          | tertiary  |           |           |           |
-| `discovery.docs-markdown`   | tertiary  |           |           |           |
-| `discovery.cli-installer`   | tertiary  |           |           |           |
-| `mcp.server`                | primary   |           |           |           |
-| `dns.zone`                  | tertiary  |           |           | tertiary  |
-| `ssh.rave`                  | primary   | primary   |           | secondary |
-| `cli.recent`                | tertiary  |           | primary   |           |
-| `cli.fresh`                 | tertiary  |           | secondary |           |
-| `cli.mixtapes`              |           |           | secondary |           |
-| `cli.artists`               |           |           | secondary |           |
-| `cli.albums`                |           |           | secondary |           |
-| `cli.labels`                |           |           | secondary |           |
-| `cli.galaxies`              |           |           | secondary |           |
-| `cli.search`                |           |           | secondary |           |
-| `cli.open`                  |           |           | secondary |           |
-| `cli.random`                |           |           | secondary |           |
-| `cli.subscribe`             |           |           | secondary |           |
-| `cli.submit`                |           |           | secondary |           |
-| `cli.login`                 |           |           | secondary |           |
-| `cli.me`                    |           |           | secondary |           |
-| `cli.logout`                |           |           | tertiary  |           |
-| `cli.tracks-get`            |           |           | tertiary  |           |
-| `cli.tracks-similar`        |           |           | tertiary  |           |
-| `cli.about`                 |           |           | tertiary  |           |
-| `cli.version`               |           |           | tertiary  |           |
-| `cli.status`                |           |           | tertiary  |           |
-| `cli.admin`                 |           |           | hidden    |           |
-| `extension.lens`            | secondary |           |           |           |
-| `app.ios`                   | secondary |           |           |           |
-| `cron.newsletter`           |           |           |           | secondary |
-| `cron.enrich`               |           |           |           | hidden    |
-| `cron.cluster`              |           |           |           | hidden    |
-| `cron.context-note`         |           |           |           | hidden    |
-| `cron.note`                 |           |           |           | hidden    |
-| `cron.artist-bio`           |           |           |           | hidden    |
-| `cron.label-bio`            |           |           |           | hidden    |
-| `cron.album-bio`            |           |           |           | hidden    |
-| `cron.triage`               |           |           |           | hidden    |
-| `cron.logbook`              |           |           |           | hidden    |
-| `cron.observation`          |           |           |           | hidden    |
-| `cron.backfill`             |           |           |           | hidden    |
-| `cron.social-capture`       |           |           |           | hidden    |
-| `cron.live`                 |           |           |           | hidden    |
-| `cron.render`               |           |           |           | hidden    |
-| `cron.publish-advance`      |           |           |           | hidden    |
-| `cron.studio-clip`          |           |           |           | hidden    |
-| `cron.capture`              |           |           |           | hidden    |
-| `cron.verify-captures`      |           |           |           | hidden    |
-| `cron.embed`                |           |           |           | hidden    |
-| `cron.crawl`                |           |           |           | hidden    |
-| `cron.label-releases`       |           |           |           | hidden    |
-| `cron.rank`                 |           |           |           | hidden    |
-| `cron.anchor`               |           |           |           | hidden    |
-| `cron.isrc-recovery`        |           |           |           | hidden    |
-| `cron.device-mirror`        |           |           |           | hidden    |
-| `cron.frontier-refresh`     |           |           |           | hidden    |
-| `cron.artist-sweep`         |           |           |           | hidden    |
-| `cron.label-images`         |           |           |           | hidden    |
-| `cron.cover-masters`        |           |           |           | hidden    |
-| `cron.recording-mbids`      |           |           |           | hidden    |
-| `cron.artist-edges`         |           |           |           | hidden    |
-| `cron.artist-credits`       |           |           |           | hidden    |
-| `cron.label-lineage`        |           |           |           | hidden    |
-| `cron.audit`                |           |           |           | secondary |
-| `cron.audit-review`         |           |           |           | secondary |
-| `cron.healthcheck`          |           |           |           | hidden    |
-| `cron.backup`               |           |           |           | secondary |
-| `cron.reach`                |           |           |           | secondary |
-| `cron.demand`               |           |           |           | hidden    |
-| `cron.funnel-snapshot`      |           |           |           | hidden    |
-| `cron.social-metrics`       |           |           |           | hidden    |
-| `cron.reconcile-hub-counts` |           |           |           | hidden    |
-| `cron.sentry-triage`        |           |           |           | secondary |
+| Surface                       | `web`     | `ssh`     | `cli`     | `status`  |
+| ----------------------------- | --------- | --------- | --------- | --------- |
+| `web.home`                    | primary   |           |           |           |
+| `web.log`                     | primary   | secondary |           |           |
+| `web.logbook`                 | primary   |           |           |           |
+| `web.mixtapes`                | primary   | secondary |           |           |
+| `web.galaxy`                  | primary   | secondary |           |           |
+| `web.about`                   | secondary | tertiary  |           |           |
+| `web.newsletter`              | secondary |           |           |           |
+| `web.docs`                    | secondary |           |           |           |
+| `web.status`                  | secondary |           |           | primary   |
+| `web.reach`                   | secondary |           |           | secondary |
+| `web.radio`                   | secondary |           |           |           |
+| `web.artist`                  | secondary | secondary |           |           |
+| `web.labels`                  | secondary |           |           |           |
+| `web.albums`                  | secondary |           |           |           |
+| `web.fresh`                   | secondary |           |           |           |
+| `web.tracks`                  | secondary |           |           |           |
+| `web.galaxies`                | secondary | secondary |           |           |
+| `web.account`                 | secondary |           |           |           |
+| `web.identity`                | tertiary  |           |           |           |
+| `web.pipeline`                | tertiary  |           |           |           |
+| `web.privacy`                 | tertiary  |           |           |           |
+| `web.terms`                   | tertiary  |           |           |           |
+| `subdomain.galaxy`            | primary   | secondary |           |           |
+| `subdomain.radio`             | secondary |           |           |           |
+| `subdomain.found`             | tertiary  |           |           | tertiary  |
+| `subdomain.dig`               | tertiary  |           |           |           |
+| `subdomain.status`            | tertiary  |           |           | tertiary  |
+| `subdomain.onion`             | tertiary  |           |           | tertiary  |
+| `api.findings`                | primary   |           |           | secondary |
+| `api.tracks`                  | primary   |           |           | secondary |
+| `api.track`                   | secondary |           |           |           |
+| `api.tracks.random`           | secondary |           |           |           |
+| `api.fresh`                   | secondary |           |           |           |
+| `api.mixtapes`                | secondary |           |           |           |
+| `api.albums`                  | secondary |           |           |           |
+| `api.artists`                 | secondary |           |           |           |
+| `api.labels`                  | secondary |           |           |           |
+| `api.galaxies`                | secondary |           |           |           |
+| `api.search`                  | secondary |           |           |           |
+| `api.search.archive`          | primary   |           |           |           |
+| `api.submissions`             | secondary |           |           |           |
+| `api.newsletter`              | secondary |           |           |           |
+| `api.stories`                 | tertiary  |           |           |           |
+| `api.radio.now-playing`       | tertiary  |           |           |           |
+| `api.health`                  | tertiary  |           |           | tertiary  |
+| `feed.rss`                    | primary   |           |           |           |
+| `feed.atom`                   | secondary |           |           |           |
+| `feed.json`                   | secondary |           |           |           |
+| `feed.fresh.rss`              | secondary |           |           |           |
+| `feed.fresh.json`             | secondary |           |           |           |
+| `feed.fresh.artist.rss`       | tertiary  |           |           |           |
+| `feed.fresh.label.rss`        | tertiary  |           |           |           |
+| `feed.podcast`                | secondary |           |           |           |
+| `feed.calendar`               | tertiary  |           |           |           |
+| `discovery.llms`              | primary   |           |           |           |
+| `discovery.sitemap`           | secondary |           |           |           |
+| `discovery.sitemap-shard`     |           |           |           |           |
+| `discovery.llms-full`         | secondary |           |           |           |
+| `discovery.openapi`           | secondary |           |           |           |
+| `discovery.robots`            | tertiary  |           |           |           |
+| `discovery.mcp-server-card`   | tertiary  |           |           |           |
+| `discovery.api-catalog`       | tertiary  |           |           |           |
+| `discovery.agent-card`        | tertiary  |           |           |           |
+| `discovery.agent-skills`      | tertiary  |           |           |           |
+| `discovery.oembed`            | tertiary  |           |           |           |
+| `discovery.docs-markdown`     | tertiary  |           |           |           |
+| `discovery.cli-installer`     | tertiary  |           |           |           |
+| `mcp.server`                  | primary   |           |           |           |
+| `dns.zone`                    | tertiary  |           |           | tertiary  |
+| `ssh.rave`                    | primary   | primary   |           | secondary |
+| `cli.recent`                  | tertiary  |           | primary   |           |
+| `cli.fresh`                   | tertiary  |           | secondary |           |
+| `cli.mixtapes`                |           |           | secondary |           |
+| `cli.artists`                 |           |           | secondary |           |
+| `cli.albums`                  |           |           | secondary |           |
+| `cli.labels`                  |           |           | secondary |           |
+| `cli.galaxies`                |           |           | secondary |           |
+| `cli.search`                  |           |           | secondary |           |
+| `cli.open`                    |           |           | secondary |           |
+| `cli.random`                  |           |           | secondary |           |
+| `cli.subscribe`               |           |           | secondary |           |
+| `cli.submit`                  |           |           | secondary |           |
+| `cli.login`                   |           |           | secondary |           |
+| `cli.me`                      |           |           | secondary |           |
+| `cli.logout`                  |           |           | tertiary  |           |
+| `cli.tracks-get`              |           |           | tertiary  |           |
+| `cli.tracks-similar`          |           |           | tertiary  |           |
+| `cli.about`                   |           |           | tertiary  |           |
+| `cli.version`                 |           |           | tertiary  |           |
+| `cli.status`                  |           |           | tertiary  |           |
+| `cli.admin`                   |           |           | hidden    |           |
+| `extension.lens`              | secondary |           |           |           |
+| `app.ios`                     | secondary |           |           |           |
+| `cron.newsletter`             |           |           |           | secondary |
+| `cron.enrich`                 |           |           |           | hidden    |
+| `cron.cluster`                |           |           |           | hidden    |
+| `cron.context-note`           |           |           |           | hidden    |
+| `cron.note`                   |           |           |           | hidden    |
+| `cron.artist-bio`             |           |           |           | hidden    |
+| `cron.label-bio`              |           |           |           | hidden    |
+| `cron.album-bio`              |           |           |           | hidden    |
+| `cron.triage`                 |           |           |           | hidden    |
+| `cron.logbook`                |           |           |           | hidden    |
+| `cron.observation`            |           |           |           | hidden    |
+| `cron.backfill`               |           |           |           | hidden    |
+| `cron.social-capture`         |           |           |           | hidden    |
+| `cron.live`                   |           |           |           | hidden    |
+| `cron.render`                 |           |           |           | hidden    |
+| `cron.publish-advance`        |           |           |           | hidden    |
+| `cron.studio-clip`            |           |           |           | hidden    |
+| `cron.capture`                |           |           |           | hidden    |
+| `cron.verify-captures`        |           |           |           | hidden    |
+| `cron.embed`                  |           |           |           | hidden    |
+| `cron.crawl`                  |           |           |           | hidden    |
+| `cron.label-releases`         |           |           |           | hidden    |
+| `cron.rank`                   |           |           |           | hidden    |
+| `cron.projection-maintenance` |           |           |           | hidden    |
+| `cron.anchor`                 |           |           |           | hidden    |
+| `cron.isrc-recovery`          |           |           |           | hidden    |
+| `cron.device-mirror`          |           |           |           | hidden    |
+| `cron.frontier-refresh`       |           |           |           | hidden    |
+| `cron.artist-sweep`           |           |           |           | hidden    |
+| `cron.label-images`           |           |           |           | hidden    |
+| `cron.cover-masters`          |           |           |           | hidden    |
+| `cron.recording-mbids`        |           |           |           | hidden    |
+| `cron.artist-edges`           |           |           |           | hidden    |
+| `cron.artist-credits`         |           |           |           | hidden    |
+| `cron.label-lineage`          |           |           |           | hidden    |
+| `cron.audit`                  |           |           |           | secondary |
+| `cron.audit-review`           |           |           |           | secondary |
+| `cron.healthcheck`            |           |           |           | hidden    |
+| `cron.backup`                 |           |           |           | secondary |
+| `cron.reach`                  |           |           |           | secondary |
+| `cron.demand`                 |           |           |           | hidden    |
+| `cron.funnel-snapshot`        |           |           |           | hidden    |
+| `cron.social-metrics`         |           |           |           | hidden    |
+| `cron.reconcile-hub-counts`   |           |           |           | hidden    |
+| `cron.sentry-triage`          |           |           |           | secondary |
 
 A surface is operator/agent-only where its only display weight is `hidden` (`cli.admin` in `cli`; most crons in `status` — the newsletter, the backup, the reach snapshot, and the audit pair rank `secondary` there) — registered (and probeable) without being advertised.
 

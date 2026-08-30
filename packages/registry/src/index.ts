@@ -1925,6 +1925,25 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command:
+      "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4",
+    exposedContent: [
+      "keep the two public projection families converged after cutover with status-gated, bounded repair (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.projection-maintenance",
+    operatorNotes:
+      "every 5m with per-firing jitter, run by a rave-02 host systemd timer (docs/agents/hermes/projection-maintenance-timer/). Reads bounded projection status first. A dark shared cutover issues zero repair calls; an open idle cutover also writes nothing. Each affected public family gets at most four sequential repair pages of 500 subjects, with independent failure handling. Public aggregate repair also advances the bounded anchor cursor after marker debt drains. Rebuild, audit, track/crawl repair, and every cutover mutation remain operator-only. Zero LLM tokens; no new secret.",
+    probeConfig: {
+      cadenceMs: 5 * MINUTE_MS,
+      cronName: "fluncle-projection-maintenance",
+      kind: "cron",
+    },
+    statusDescription: "keeps the public catalogue projections caught up",
+    title: "Projection upkeep",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin reach collect",
     exposedContent: [
       "daily snapshot of Fluncle's numbers across every platform (followers / subscribers / plays / stars) → one append-only row per (platform, metric) behind the public /reach page (--no-agent)",

@@ -61,6 +61,7 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "ops.rave-watchdog",
   "ops.sonar-freshen",
   "ops.ssh-freshen",
+  "projections.repair",
   "reach.collect",
   "render.conductor",
   "social.capture",

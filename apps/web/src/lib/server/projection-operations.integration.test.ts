@@ -725,6 +725,45 @@ describe("projection production operations", () => {
     ).toHaveLength(0);
   });
 
+  it("advances invalid public anchors through the bounded repair action", async () => {
+    await db.execute(`update public_aggregate_state
+      set generation = 'maintenance', release_hub_order_epoch = 1,
+          source_epoch = 1, aggregate_epoch = 1
+      where scope = 'tracks'`);
+
+    let complete = false;
+    let totalProcessed = 0;
+    for (let step = 0; step < 6 && !complete; step += 1) {
+      const result = await advanceProjectionFor(db, {
+        action: "repair",
+        limit: 500,
+        target: "public_aggregates",
+      });
+      expect(result.processed).toBeLessThanOrEqual(100);
+      totalProcessed += result.processed;
+      complete = result.complete;
+      if (!complete) {
+        expect(result.status.projections.publicAggregates.anchorsReady || step < 1).toBe(true);
+      }
+    }
+
+    expect(complete).toBe(true);
+    expect(totalProcessed).toBeGreaterThan(0);
+    expect(
+      await readCurrentProjectedTrackHubAnchors(
+        db,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+      ),
+    ).toMatchObject({ anchors: [], total: 0 });
+    expect(
+      (
+        await db.execute(`select generation from hub_page_anchor_validity
+          where hub = '${TRACKS_HUB_ANCHOR_ADDRESS.hub}'`)
+      ).rows[0]?.generation,
+    ).toBe("maintenance");
+  });
+
   it("does not publish anchors when repair debt arrives at the terminal write", async () => {
     await db.execute(`update public_aggregate_state
       set generation = 'raced', release_hub_order_epoch = 1,

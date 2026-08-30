@@ -1233,10 +1233,26 @@ export async function advanceProjectionFor(
         projection,
       });
       const remainingDebt = await hasPublicProjectionRepairDebt(client, projection);
-      outcome = {
-        complete: !remainingDebt,
-        processed: result.fanout + result.repaired,
+      const repairProcessed = result.fanout + result.repaired;
+      const anchors =
+        projection === "public_aggregates" && !remainingDebt && repairProcessed === 0
+          ? await advancePublicAnchors(client, Math.min(input.limit, 100))
+          : { complete: projection !== "public_aggregates", processed: 0 };
+      const status = await getProjectionStatusFor(client);
+      const family =
+        projection === "public_aggregates"
+          ? status.projections.publicAggregates
+          : status.projections.artistQualification;
+      const complete =
+        !remainingDebt &&
+        family.convergence.epochMatched === true &&
+        (projection !== "public_aggregates" ||
+          (anchors.complete && status.projections.publicAggregates.anchorsReady));
+      return {
+        complete,
+        processed: repairProcessed + anchors.processed,
         scheduled: result.fanout,
+        status,
       };
     }
   }

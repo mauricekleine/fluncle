@@ -79,7 +79,7 @@ export const ProjectionStatusSchema = z.object({
   }),
 });
 
-/** Operator-only, bounded diagnostic read. No raw rows, SQL, or source identifiers leave it. */
+/** Admin-authenticated bounded diagnostic read. No raw rows or identifiers leave it. */
 export const getProjectionStatus = oc
   .route({
     method: "GET",
@@ -90,7 +90,7 @@ export const getProjectionStatus = oc
   })
   .output(z.object({ ok: z.literal(true), status: ProjectionStatusSchema }));
 
-/** Run one bounded, resumable projection-control step. */
+/** Run one bounded step; agent authority is handler-limited to public-family repair. */
 export const advanceProjection = oc
   .route({
     method: "POST",
