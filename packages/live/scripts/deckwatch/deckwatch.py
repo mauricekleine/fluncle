@@ -78,6 +78,38 @@ def strip_leading_punct(s: str) -> str:
     return re.sub(r"^[^\w(]+", "", s).strip()
 
 
+# Deck-header CHROME: the transport/button captions and counters Rekordbox draws on the same
+# visual row as the title, which Vision groups into one OCR line. They are always ALL-CAPS
+# (or a counter), so an all-caps match cannot eat a Title-Cased word. Only a LEADING or
+# TRAILING run is dropped — a chrome word sitting mid-title would be part of the title.
+CHROME_TOKENS = frozenset(
+    """AUTO BARS BEAT CALL CBG CUE GRID IN JUMP KEY KEYSYNC LOOP MASTER MEMORY OUT
+    QUANTIZE RELOOP RST SLIP SYNC TEMPO""".split()
+)
+# A transport counter: "-00:00.0", "05:42.7", "190.2Bars", "4Bars".
+COUNTER_RE = re.compile(r"^-?\d{1,3}:\d{2}(\.\d+)?$|^-?\d+(\.\d+)?Bars$", re.IGNORECASE)
+
+
+def is_chrome(token: str) -> bool:
+    """True when a token is deck chrome rather than title text."""
+    t = token.strip()
+    if not t:
+        return True
+    if COUNTER_RE.match(t):
+        return True
+    return t.isupper() and t in CHROME_TOKENS
+
+
+def strip_chrome(s: str) -> str:
+    """Drop counters anywhere, plus any leading/trailing run of chrome captions."""
+    toks = [t for t in s.split() if not COUNTER_RE.match(t)]
+    while toks and is_chrome(toks[0]):
+        toks.pop(0)
+    while toks and is_chrome(toks[-1]):
+        toks.pop()
+    return " ".join(toks).strip()
+
+
 # ── Window discovery + capture ────────────────────────────────────────────────
 
 
@@ -243,7 +275,7 @@ def parse_fields(lines):
     """Turn grouped OCR lines into {title, artist, bpm, key} (all best-effort, any may be None)."""
     if not lines:
         return None
-    title = strip_leading_punct(fold(" ".join(lines[0])))
+    title = strip_leading_punct(strip_chrome(fold(" ".join(lines[0]))))
     artist = bpm = key = None
     if len(lines) > 1:
         toks = [fold(t) for t in lines[1]]
@@ -256,12 +288,16 @@ def parse_fields(lines):
         else:
             m = KEY_CLASSIC_RE.search(joined)
             key = m.group(1) if m else None
-        # artist = leftmost token that isn't the bpm/key/time blob
+        # artist = leftmost token that isn't the bpm/key/time blob. A COUNTER, not any colon:
+        # "Nu:Tone" is an artist, and rejecting every colon-bearing token dropped it.
         for t in toks:
-            if not BPM_RE.search(t) and not t.startswith("-") and ":" not in t:
+            if not BPM_RE.search(t) and not t.startswith("-") and not COUNTER_RE.match(t):
                 if t.strip() and not KEY_CAMELOT_RE.fullmatch(t.strip()):
                     artist = t.strip()
                     break
+    # A chrome caption is not an artist: the button row shares line 2 when the header is tight.
+    if artist is not None and is_chrome(artist):
+        artist = None
     return {"artist": artist, "bpm": bpm, "key": key, "title": title}
 
 
