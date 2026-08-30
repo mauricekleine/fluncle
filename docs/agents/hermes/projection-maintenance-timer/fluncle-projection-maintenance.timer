@@ -1,0 +1,11 @@
+[Unit]
+Description=fluncle-projection-maintenance timer — repair open public projections every 5m
+
+[Timer]
+RandomizedDelaySec=90
+OnBootSec=4min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -202,8 +202,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The `/admin/artists` follow queue's inline add (Unit 5, Epic B) — operator tier: an
   // operator-entered social lands confirmed + public at once.
   add_artist_social: "operator",
-  // Production projection convergence is a rollout act even though it only writes derived state.
-  advance_projection: "operator",
+  // The handler narrows the agent further to repair on the two public families only. Rebuild,
+  // audit, and track/crawl repair still 403 there; the operator retains the full matrix.
+  advance_projection: "admin",
   // The render → publish AUTO-ADVANCE tick — ADMIN tier (adminAuth only, no
   // operatorGuard): the on-box `fluncle-publish-advance` cron drives it with the agent
   // token (the `drip_clips` / `capture_post_urls` precedent — the Worker owns the Postiz
@@ -439,7 +440,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_private_preferences: "private-session",
   // The recording reads — admin tier (agent-allowed): the box's clip-cut cron resolves a
   // clip's recording (r2Key + tracklist + promoted logId) via `get_recording`.
-  get_projection_status: "operator",
+  // The recurring public repair sweep needs this bounded aggregate read before it may mutate.
+  get_projection_status: "admin",
   // The prompt registry's per-tick resolve — AGENT tier (adminAuth only, no
   // operatorGuard), the record_cost/context_track precedent. This is THE read that lets a
   // prompt live in the database at all: the box runs a pinned CLI and a baked image, so

@@ -628,6 +628,11 @@ export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 10 * 60_000, match: "crawl", service: "cron.crawl" }, // catalogue crawl — one bounded MusicBrainz pass per tick
   { cadenceMs: 24 * 60 * 60_000, match: "label-releases", service: "cron.label-releases" }, // freshness tap — day-one Spotify releases for enabled seed labels
   { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" }, // The Ear's ranking — drains the stale catalogue
+  {
+    cadenceMs: 5 * 60_000,
+    match: "projection-maintenance",
+    service: "cron.projection-maintenance",
+  },
   { cadenceMs: 60 * 60_000, match: "anchor", service: "cron.anchor" }, // catalogue Spotify anchors via Apify — one bounded batch per hour
   { cadenceMs: 60 * 60_000, match: "isrc-recovery", service: "cron.isrc-recovery" }, // free Deezer ISRC recovery — one paced batch per hour
   { cadenceMs: 60 * 60_000, match: "device-mirror", service: "cron.device-mirror" }, // shared anchored-cut device replica — full diff, in-place writes
