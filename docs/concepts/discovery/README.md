@@ -96,7 +96,7 @@ bun run --cwd apps/web concepts:evidence           # in a second shell
 - **Keyboard evidence:** a shot per concept taken after tabbing in, so the focus indicator is visible rather than asserted.
 - **Failure evidence:** the front page with every third-party cover host aborted, and the Desk's empty result.
 - **Motion evidence:** a still cannot carry a state transition, so Concept C's branch step is captured as two **filmstrips** — one at `prefers-reduced-motion: no-preference`, one at `reduce`. Placed beside each other they are the reduced-motion proof.
-- `evidence/manifest.json` records what each picture is evidence of.
+- `evidence/manifest.json` records what each picture is evidence of, and `evidence/contrast.json` records every measured contrast reading (below).
 
 | Files                                                                          | What it is evidence of                                                                                                                                                                             |
 | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -117,9 +117,13 @@ bun run --cwd apps/web concepts:evidence           # in a second shell
 | `run/frames-motion.jpg` · `run/frames-motion/`                                 | Six frames across one branch step at `prefers-reduced-motion: no-preference`. All six differ (`manifest.json` → `filmstrips.motion.distinctFrames` 6 of 6): the cross-fade is genuinely in flight. |
 | `run/frames-reduced.jpg` · `run/frames-reduced/`                               | The same step under `reduce`. The burst settles and the tail frames are byte-identical (`filmstrips.reduced.distinctFrames` 4 of 6): there is no animation to ground, because none runs.           |
 
-Contrast is not read off the palette either. Every pane in this world is translucent over the cover-art backdrop and the sun bloom, so what sits behind a line of text is a composite the stylesheet never names. `bun run --cwd apps/web concepts:contrast` photographs it — it hides the ink, keeps the layout, screenshots the element's own box, averages the pixels, and computes the ratio. Sixteen samples across the three concepts; the lowest clears 8:1 against WCAG AA's 4.5:1 floor.
+Contrast is not read off the palette either, and it is not asserted in prose. Every pane in this world is translucent over the cover-art backdrop and the sun bloom, so what sits behind a line of text is a composite the stylesheet never names. The check photographs it: hide the ink, keep the layout, screenshot the element's own box, and score the ratio twice — once against the mean ground and once against the WORST 6px tile of it, because an average can clear AA while a bright band under one word does not.
 
-The assertions a picture cannot carry live in `apps/web/tests/e2e/concepts.spec.ts`: SSR of every concept, the tier is never named, outbound links are real destinations opened with `rel="noreferrer"`, the keyboard reaches real controls with a visible focus indicator, Concept C's motion is genuinely absent under `reduce`, the exhibit is `noindex` and in no sitemap or feed, and the product's own surfaces are unchanged and do not link it.
+**It runs in CI, so the number is yours to check rather than mine to claim.** `apps/web/tests/e2e/concepts-contrast.spec.ts` runs inside the hosted **Public flows (chromium)** job on every push to this branch, on the isolated stack that job already boots. The full table is printed in the run log, and the same numbers are uploaded as the **`concepts-contrast-report`** artifact on every run, pass or fail. The measurement itself lives once, in `apps/web/tests/e2e/contrast.ts`, so the hosted run and the local `bun run --cwd apps/web concepts:contrast` cannot disagree about what was measured.
+
+The retained result is [`evidence/contrast.json`](./evidence/contrast.json) — **26 samples across the three concepts, none under AA, lowest 5.22:1 against the 4.5:1 floor** — and the spec re-measures it rather than trusting it: a run that finds a different sample count, a moved floor, or any sample under AA fails the job. The run is hermetic (third-party covers are stubbed), so the ground under every sampled line is the local backdrop and the panes over it, and a cold runner reproduces the number.
+
+The assertions a picture cannot carry live in `apps/web/tests/e2e/concepts.spec.ts`: SSR of every concept, the tier is never named, outbound links are real destinations opened with `rel="noreferrer"`, the keyboard reaches real controls with a visible focus indicator, Concept C's motion is genuinely absent under `reduce`, the exhibit is `noindex` and in no sitemap or feed, and the product's own surfaces are unchanged and do not link it. Both that spec and the contrast spec beside it run in the hosted **Public flows (chromium)** check, so every claim on this page is a check somebody else can open rather than a sentence they have to believe.
 
 ---
 
@@ -132,7 +136,7 @@ bun run --cwd apps/web scripts/e2e-stack.ts        # :3140
 open http://127.0.0.1:3140/concepts
 ```
 
-It requires `turso` and `sqld` on `PATH` (the same prerequisite the e2e suite already has).
+It requires `turso` and `sqld` on `PATH` (the same prerequisite the e2e suite already has, and the same two the CI job installs for itself). Without them there is nothing to install and nothing to fix: the screenshots in [`evidence/`](./evidence) and the **Public flows (chromium)** run on the PR carry the same surfaces and the same measurements.
 
 ---
 
