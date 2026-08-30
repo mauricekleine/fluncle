@@ -2418,7 +2418,8 @@ export async function runPublicProjectionRebuildChunk(
                 (row) =>
                   row.source_missing === 0 &&
                   row.generation !== checkpoint.generation &&
-                  (row.generation !== PUBLIC_PROJECTION_LIVE_GENERATION ||
+                  (checkpoint.sourceEpoch === checkpoint.rebuildStartEpoch ||
+                    row.generation !== PUBLIC_PROJECTION_LIVE_GENERATION ||
                     row.updated_at < checkpoint.startedAt),
               )
               .map((row) => row.track_id),
@@ -2431,7 +2432,10 @@ export async function runPublicProjectionRebuildChunk(
           expectedSourceEpoch: checkpoint.sourceEpoch,
           generation: checkpoint.generation,
           now,
-          preserveAfter: checkpoint.startedAt,
+          preserveAfter:
+            checkpoint.sourceEpoch === checkpoint.rebuildStartEpoch
+              ? undefined
+              : checkpoint.startedAt,
         });
         await rebuildArtistQualificationPage(client, sourceMissingTrackIds, {
           expectedSourceEpoch: checkpoint.sourceEpoch,
@@ -2456,32 +2460,60 @@ export async function runPublicProjectionRebuildChunk(
           updated_at: string;
         }[];
         scanned = pageRows.length;
-        const artistIds = pageRows
-          .filter(
-            (row) =>
-              row.generation !== checkpoint.generation &&
-              (row.generation !== PUBLIC_PROJECTION_LIVE_GENERATION ||
-                row.updated_at < checkpoint.startedAt),
-          )
-          .map((row) => row.artist_id);
+        const artistIds = pageRows.map((row) => row.artist_id);
         if (artistIds.length > 0) {
           const placeholders = artistIds.map(() => "?").join(", ");
-          await client.execute({
-            args: [
-              ...artistIds,
-              checkpoint.generation,
-              checkpoint.startedAt,
-              checkpoint.generation,
-              checkpoint.cursor,
+          const results = await client.batch(
+            [
+              {
+                args: [
+                  ...artistIds,
+                  checkpoint.generation,
+                  checkpoint.cursor,
+                  checkpoint.sourceEpoch,
+                ],
+                sql: `delete from artist_qualification where artist_id in (${placeholders})
+                  and exists (select 1 from artist_qualification_state where scope = 'artists'
+                    and generation = ? and state = 'running' and cursor is ?
+                    and source_epoch = ?)`,
+              },
+              {
+                args: [
+                  checkpoint.generation,
+                  `rebuild:${checkpoint.generation}`,
+                  now,
+                  ...artistIds,
+                  checkpoint.generation,
+                  checkpoint.cursor,
+                  checkpoint.sourceEpoch,
+                ],
+                sql: `insert into artist_qualification
+                  (artist_id, certified_finding_count, enabled_credit_half_units, is_qualified,
+                   generation, source_version, updated_at)
+                  select contribution.artist_id, sum(contribution.certified_contribution),
+                    sum(contribution.enabled_credit_half_units),
+                    case when sum(contribution.certified_contribution) > 0
+                      or sum(contribution.enabled_credit_half_units) >= 6 then 1 else 0 end,
+                    ?, ?, ?
+                  from artist_qualification_contributions contribution
+                  where contribution.artist_id in (${placeholders})
+                    and exists (select 1 from artist_qualification_state where scope = 'artists'
+                      and generation = ? and state = 'running' and cursor is ?
+                      and source_epoch = ?)
+                  group by contribution.artist_id
+                  having sum(contribution.certified_contribution) > 0
+                    or sum(contribution.enabled_credit_half_units) > 0
+                  on conflict(artist_id) do update set
+                    certified_finding_count = excluded.certified_finding_count,
+                    enabled_credit_half_units = excluded.enabled_credit_half_units,
+                    is_qualified = excluded.is_qualified, generation = excluded.generation,
+                    source_version = excluded.source_version, updated_at = excluded.updated_at`,
+              },
+              projectionSourceEpochFenceStatement("artist_qualification", checkpoint.sourceEpoch),
             ],
-            sql: `delete from artist_qualification where artist_id in (${placeholders})
-              and generation <> ? and (generation <> '${PUBLIC_PROJECTION_LIVE_GENERATION}'
-                or updated_at < ?)
-              and not exists (select 1 from artist_qualification_contributions contribution
-                where contribution.artist_id = artist_qualification.artist_id)
-              and exists (select 1 from artist_qualification_state where scope = 'artists'
-                and generation = ? and state = 'running' and cursor is ?)`,
-          });
+            "write",
+          );
+          assertProjectionSourceEpochFence("artist_qualification", results.at(-1)?.rowsAffected);
         }
         cleanup.cursor = pageRows.at(-1)?.artist_id ?? null;
         cleanupComplete = pageRows.length === 0;
@@ -2540,7 +2572,8 @@ export async function runPublicProjectionRebuildChunk(
       expectedSourceEpoch: checkpoint.sourceEpoch,
       generation: checkpoint.generation,
       now,
-      preserveAfter: checkpoint.startedAt,
+      preserveAfter:
+        checkpoint.sourceEpoch === checkpoint.rebuildStartEpoch ? undefined : checkpoint.startedAt,
     });
   }
   const nextCursor = trackIds.at(-1) ?? checkpoint.cursor;

@@ -1448,6 +1448,33 @@ describe("public shadow projections", () => {
     expect((await auditPublicProjections(db)).artistMatched).toBe(true);
   });
 
+  it("replaces recent live artist drift when the rebuild source epoch is stable", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+    await db.execute({
+      args: ["2026-01-10T01:00:00.000Z"],
+      sql: `update artist_qualification_contributions
+        set certified_contribution = 1, enabled_credit_half_units = 0,
+            generation = 'live', source_version = 'stale-live', updated_at = ?
+        where track_id = 'track-null' and artist_id = 'primary'`,
+    });
+
+    let complete = false;
+    for (let chunk = 0; chunk < 20 && !complete; chunk += 1) {
+      const result = await runPublicProjectionRebuildChunk(db, "artist_qualification", {
+        boundedCleanup: true,
+        generation: "artist-stable-epoch-cleanup",
+        limit: 2,
+        newGeneration: chunk === 0,
+        now: () => new Date("2026-01-10T00:00:00.000Z"),
+      });
+      complete = result.complete;
+    }
+
+    expect(complete).toBe(true);
+    expect((await auditPublicProjections(db)).artistMatched).toBe(true);
+  });
+
   it("executes each 500-track rebuild page through fixed VALUES-backed write subpages", async () => {
     await seedBulkProjectionWorld();
 

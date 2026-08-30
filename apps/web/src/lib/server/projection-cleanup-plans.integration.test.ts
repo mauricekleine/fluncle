@@ -49,6 +49,15 @@ describe("bounded projection cleanup plans", () => {
           where artist_id > ? order by artist_id limit ?`,
       },
       {
+        args: ["artist-a", "artist-b"],
+        sql: `select contribution.artist_id,
+          sum(contribution.certified_contribution) as certified_finding_count,
+          sum(contribution.enabled_credit_half_units) as enabled_credit_half_units
+          from artist_qualification_contributions contribution
+          where contribution.artist_id in (?, ?)
+          group by contribution.artist_id`,
+      },
+      {
         args: ["tracks", "all:", "all:\uffff", "all:", 10],
         sql: `select clause_hash from hub_page_anchors
           where hub = ? and clause_hash >= ? and clause_hash < ? and clause_hash > ?
