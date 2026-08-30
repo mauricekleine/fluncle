@@ -1,0 +1,111 @@
+{
+  "base": "http://127.0.0.1:3140",
+  "filmstrips": {
+    "motion": {
+      "dir": "run/frames-motion",
+      "distinctFrames": 6,
+      "frames": 6
+    },
+    "reduced": {
+      "dir": "run/frames-reduced",
+      "distinctFrames": 3,
+      "frames": 6
+    }
+  },
+  "shots": [
+    {
+      "concept": "exhibit",
+      "desktop": "exhibit/index-desktop.jpg",
+      "mobile": "exhibit/index-mobile.jpg",
+      "proves": "The exhibit index: what each concept is for and where the data came from."
+    },
+    {
+      "concept": "front",
+      "desktop": "front/zero-input-desktop.jpg",
+      "mobile": "front/zero-input-mobile.jpg",
+      "proves": "Zero-input discovery: a visitor who types nothing gets a lead, a column of recommendations, and what came out lately."
+    },
+    {
+      "concept": "front",
+      "desktop": "front/seed-to-neighbour-desktop.jpg",
+      "mobile": "front/seed-to-neighbour-mobile.jpg",
+      "proves": "A known seed continues to unfamiliar sonic neighbours through the Close in sound block, with an accurate outbound destination on each row."
+    },
+    {
+      "concept": "front",
+      "desktop": "front/entity-landing-desktop.jpg",
+      "mobile": "front/entity-landing-mobile.jpg",
+      "proves": "A direct entity landing: identity and dossier, findings first, the rest unheaded, then the sonic step out."
+    },
+    {
+      "concept": "front",
+      "desktop": "front/keyboard-focus-desktop.jpg",
+      "mobile": "front/keyboard-focus-mobile.jpg",
+      "proves": "Keyboard operation: the focus ring is visible on the first reachable control."
+    },
+    {
+      "concept": "front",
+      "desktop": "front/covers-unavailable-desktop.jpg",
+      "mobile": "front/covers-unavailable-mobile.jpg",
+      "proves": "Resilient real-data loading: with every third-party cover host failing, the page keeps its structure and falls back to the eclipse gradient."
+    },
+    {
+      "concept": "desk",
+      "desktop": "desk/zero-input-desktop.jpg",
+      "mobile": "desk/zero-input-mobile.jpg",
+      "proves": "Zero-input discovery: the whole board with live facet counts and no query typed."
+    },
+    {
+      "concept": "desk",
+      "desktop": "desk/seed-to-neighbour-desktop.jpg",
+      "mobile": "desk/seed-to-neighbour-mobile.jpg",
+      "proves": "A known seed continues to unfamiliar sonic neighbours: the board holds Fluncle's own ranking around the anchor."
+    },
+    {
+      "concept": "desk",
+      "desktop": "desk/entity-landing-desktop.jpg",
+      "mobile": "desk/entity-landing-mobile.jpg",
+      "proves": "A direct entity landing is the board pre-filled and headed by that entity."
+    },
+    {
+      "concept": "desk",
+      "desktop": "desk/empty-desktop.jpg",
+      "mobile": "desk/empty-mobile.jpg",
+      "proves": "The empty state names what happened and offers a way back."
+    },
+    {
+      "concept": "desk",
+      "desktop": "desk/keyboard-focus-desktop.jpg",
+      "mobile": "desk/keyboard-focus-mobile.jpg",
+      "proves": "Keyboard operation: the focus ring is visible on a facet control."
+    },
+    {
+      "concept": "run",
+      "desktop": "run/zero-input-desktop.jpg",
+      "mobile": "run/zero-input-mobile.jpg",
+      "proves": "Zero-input discovery: the lane opens on a real record with branches ahead."
+    },
+    {
+      "concept": "run",
+      "desktop": "run/entity-landing-desktop.jpg",
+      "mobile": "run/entity-landing-mobile.jpg",
+      "proves": "A direct entity landing opens the lane on what Fluncle holds at that node."
+    },
+    {
+      "concept": "run",
+      "desktop": "run/reduced-motion-desktop.jpg",
+      "mobile": "run/reduced-motion-mobile.jpg",
+      "proves": "Under prefers-reduced-motion: reduce the lane still reads; nothing slides or fades."
+    }
+  ],
+  "viewports": {
+    "desktop": {
+      "height": 900,
+      "width": 1440
+    },
+    "mobile": {
+      "height": 844,
+      "width": 390
+    }
+  }
+}

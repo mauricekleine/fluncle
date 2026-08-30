@@ -1,0 +1,318 @@
+/* Concept A — the front page.
+ *
+ * An EDITED surface: placement is the product. The grid below is the argument —
+ * one lead that gets the room, a column of the week under it, and a release band
+ * that is visibly a different KIND of thing from the certifications above it.
+ *
+ * Loaded through the route's `head` with `?url` (docs/client-bundle.md, rule 2).
+ * No ambient motion is added here: the app already spends its whole two-movement
+ * budget on the cosmos drift and the sun-bloom breath (DESIGN.md §5). Everything
+ * that moves in this file moves because a pointer or a key asked it to. */
+
+/* The page is a PANE, not bare canvas. Text never sits on the raw backdrop: the
+   cover art behind every screen is bright enough in places to break AA, so the
+   ground dims what it covers rather than the ink being dimmed (DESIGN.md, The
+   Legible Sky Rule). */
+.front-page {
+  margin: 1.5rem auto 4rem;
+  max-width: 74rem;
+  padding: 1.75rem 1.15rem 3rem;
+}
+
+@media (min-width: 48rem) {
+  .front-page {
+    margin-block-start: 2rem;
+    padding: 2.5rem 2.25rem 3.5rem;
+  }
+}
+
+/* ── the masthead ─────────────────────────────────────────────────────────── */
+
+.front-masthead {
+  align-items: baseline;
+  border-block-end: 1px solid var(--dust-line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  padding-block-end: 1rem;
+}
+
+.front-masthead-title {
+  color: var(--starlight-cream);
+  font-size: clamp(1.7rem, 5vw, 2.4rem);
+  font-weight: 800;
+  line-height: 1.02;
+}
+
+/* ── the lead ─────────────────────────────────────────────────────────────── */
+
+.front-lead {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: 1fr;
+  padding-block: 2rem;
+}
+
+@media (min-width: 56rem) {
+  .front-lead {
+    align-items: center;
+    gap: 2.5rem;
+    grid-template-columns: minmax(0, 22rem) minmax(0, 1fr);
+  }
+}
+
+/* The cover frame: the artwork mounted flat, its edge LIT from the sun side over
+   a bent warm gradient with the grain blended in. The artwork itself stays
+   untouched (DESIGN.md, Cover Frame). Capped, because a front page whose top
+   story fills the whole first viewport is a poster, not a front page. */
+.front-lead-frame {
+  max-inline-size: 22rem;
+  background-image:
+    var(--grain-tile),
+    radial-gradient(
+      120% 120% at 8% 4%,
+      color-mix(in oklch, var(--eclipse-gold) 30%, transparent),
+      color-mix(in oklch, var(--reentry-red) 18%, transparent) 52%,
+      transparent 78%
+    );
+  background-blend-mode: overlay, normal;
+  background-size:
+    160px 160px,
+    cover;
+  border: 1px solid color-mix(in oklch, var(--eclipse-gold) 26%, var(--dust-line));
+  border-block-end-color: var(--dust-line);
+  border-inline-end-color: var(--dust-line);
+  border-radius: var(--rounded-lg);
+  padding: 0.75rem;
+}
+
+.front-lead-cover {
+  aspect-ratio: 1;
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-artwork);
+  inline-size: 100%;
+}
+
+.front-lead-title {
+  color: var(--starlight-cream);
+  font-size: clamp(1.5rem, 4vw, 2.1rem);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.12;
+}
+
+/* Fluncle's own line about the record, printed as the copy it is. Held to a
+   reading measure so it stays a sentence rather than a banner. */
+.front-note {
+  color: var(--starlight-cream);
+  font-size: 1.02rem;
+  line-height: 1.5;
+  max-inline-size: 46ch;
+}
+
+/* ── the column ───────────────────────────────────────────────────────────── */
+
+.front-column {
+  border-block-start: 1px solid var(--dust-line);
+  display: grid;
+  gap: 0;
+  grid-template-columns: 1fr;
+  padding-block-start: 1.25rem;
+}
+
+@media (min-width: 48rem) {
+  .front-column {
+    column-gap: 2rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.front-entry {
+  border-block-end: 1px solid color-mix(in oklch, var(--dust-line) 72%, transparent);
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: 3.6rem minmax(0, 1fr);
+  padding-block: 1rem;
+  position: relative;
+}
+
+.front-entry-cover {
+  aspect-ratio: 1;
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-artwork);
+  inline-size: 3.6rem;
+  transition:
+    transform 160ms ease-out,
+    border-color 160ms ease-out;
+}
+
+/* Interaction heats; it never dims (The Ignition Rule). The wash is Gold Veil
+   because every row in this block is one Fluncle certified. */
+.front-entry:hover,
+.front-entry:focus-within {
+  background: var(--gold-veil);
+}
+
+.front-entry:hover .front-entry-cover,
+.front-entry:focus-within .front-entry-cover {
+  border-color: color-mix(in oklch, var(--eclipse-gold) 46%, transparent);
+}
+
+.front-entry-coord {
+  transition: color 150ms ease-out;
+}
+
+.front-entry:hover .front-entry-coord,
+.front-entry:focus-within .front-entry-coord {
+  color: var(--accent-foreground);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .front-entry:hover .front-entry-cover,
+  .front-entry:focus-within .front-entry-cover {
+    transform: scale(1.06);
+  }
+}
+
+/* The whole entry is one link; the stretched anchor sits under the outbound
+   controls rather than around them, so a control is never nested in a link. */
+.front-entry-link::after {
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
+.front-entry:has(.front-entry-link:focus-visible) {
+  outline: 2px solid var(--eclipse-gold);
+  outline-offset: -2px;
+}
+
+/* ── the release band ─────────────────────────────────────────────────────── */
+
+/* Deliberately a different GROUND from the certifications above: a printed field
+   on the plate rather than another editorial column, so the eye reads the change
+   of kind before it reads a word. Nothing in here takes gold (The Unlit Rule). */
+.front-band {
+  background: color-mix(in oklch, var(--tape-black) 62%, transparent);
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-lg);
+  margin-block-start: 2.5rem;
+  padding: 1.25rem 1rem;
+}
+
+@media (min-width: 48rem) {
+  .front-band {
+    padding: 1.5rem;
+  }
+}
+
+.front-release {
+  border-block-start: 1px solid color-mix(in oklch, var(--dust-line) 60%, transparent);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  justify-content: space-between;
+  padding-block: 0.55rem;
+}
+
+/* Dust Veil, not Gold Veil, and the ink warms to cream rather than igniting to
+   gold: the cold light of a thing seen from a distance rather than visited
+   (The Unlit Rule). */
+.front-release:hover,
+.front-release:focus-within {
+  background: var(--dust-veil);
+}
+
+.front-release p {
+  transition: color 150ms ease-out;
+}
+
+.front-release:hover p,
+.front-release:focus-within p {
+  color: var(--starlight-cream);
+}
+
+/* ── the archive grid ─────────────────────────────────────────────────────── */
+
+.front-archive {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-block-start: 2.5rem;
+}
+
+@media (min-width: 36rem) {
+  .front-archive {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 56rem) {
+  .front-archive {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+.front-tile {
+  position: relative;
+}
+
+.front-tile-cover {
+  aspect-ratio: 1;
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-artwork);
+  inline-size: 100%;
+  transition:
+    transform 160ms ease-out,
+    border-color 160ms ease-out;
+}
+
+.front-tile:hover .front-tile-cover,
+.front-tile:focus-within .front-tile-cover {
+  border-color: color-mix(in oklch, var(--eclipse-gold) 46%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .front-tile:hover .front-tile-cover,
+  .front-tile:focus-within .front-tile-cover {
+    transform: scale(1.04);
+  }
+}
+
+/* ── the dossier ──────────────────────────────────────────────────────────── */
+
+.front-dossier {
+  display: grid;
+  gap: 1.75rem;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 60rem) {
+  .front-dossier {
+    align-items: start;
+    gap: 2.5rem;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+}
+
+.front-sidebar {
+  border-block-start: 1px solid var(--dust-line);
+  padding-block-start: 1.25rem;
+}
+
+@media (min-width: 60rem) {
+  .front-sidebar {
+    border-block-start: 0;
+    border-inline-start: 1px solid var(--dust-line);
+    padding-block-start: 0;
+    padding-inline-start: 1.75rem;
+  }
+}
+
+.front-entity-portrait {
+  aspect-ratio: 1;
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-lg);
+  inline-size: 100%;
+  max-inline-size: 12rem;
+}

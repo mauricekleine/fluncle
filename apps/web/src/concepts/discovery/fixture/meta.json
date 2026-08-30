@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-08-30T15:42:19.620Z",
+  "catalogueRows": 144,
+  "findingCount": 98,
+  "productionSha": "e87e6c073702489d8ff2683a0393ce534aad9caa",
+  "source": "https://www.fluncle.com",
+  "surfaces": [
+    "/api/v1/findings",
+    "/api/v1/tracks?certified=false",
+    "/api/v1/tracks/fresh",
+    "/api/v1/search/archive",
+    "/api/v1/{artists,labels,albums}/{slug}"
+  ]
+}

@@ -21,7 +21,18 @@ import { SearchTrigger } from "@/components/search/search-command";
 //   canvas, the draggable machinery map). Each is a fixed inset-0 viewport that owns its
 //   own chrome (its own bottom status bar), so a mounted colophon only overlaps it.
 // - /device, /cli: bare auth / install flows.
-const CHROMELESS_PREFIXES = ["/admin", "/radio", "/galaxy", "/pipeline", "/device", "/cli"];
+// - /concepts: the held discovery exhibit. Each concept proposes its OWN arrival
+//   and navigation, so mounting the incumbent colophon over one would answer the
+//   question the exhibit exists to ask. It carries its own exhibit bar instead.
+const CHROMELESS_PREFIXES = [
+  "/admin",
+  "/radio",
+  "/galaxy",
+  "/pipeline",
+  "/device",
+  "/cli",
+  "/concepts",
+];
 
 function isChromeless(pathname: string): boolean {
   return CHROMELESS_PREFIXES.some(

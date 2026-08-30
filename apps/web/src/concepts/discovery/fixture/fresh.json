@@ -1,0 +1,511 @@
+{
+  "albums": [
+    {
+      "artists": ["Coben"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/icarus.jpg?v=1784234062248",
+      "name": "Icarus",
+      "releaseDate": "2026-08-22",
+      "slug": "icarus"
+    },
+    {
+      "artists": ["Friction", "IRAH"],
+      "name": "Lead Dem",
+      "releaseDate": "2026-08-21",
+      "slug": "lead-dem"
+    },
+    {
+      "artists": ["Buunshin", "Mara Necia"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/save-crystal.jpg?v=1787482829826",
+      "name": "Save Crystal",
+      "releaseDate": "2026-08-21",
+      "slug": "save-crystal"
+    },
+    {
+      "artists": ["Hobzee", "Uneven", "Response", "Justice"],
+      "name": "Things Are Different Now EP",
+      "releaseDate": "2026-08-21",
+      "slug": "things-are-different-now-ep"
+    },
+    {
+      "artists": ["Sàigòn Soul Revival"],
+      "coverImageUrl": "https://coverartarchive.org/release/62911ebe-9afd-42ff-a3bf-e1623a1d64ee/front-500",
+      "name": "Trúc xinh (Brotha Lok remix)",
+      "releaseDate": "2026-08-21",
+      "slug": "truc-xinh-brotha-lok-remix"
+    },
+    {
+      "artists": ["IMANU", "A Girl Named Sue"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/all-u-need.jpg?v=1787344025742",
+      "name": "All U Need",
+      "releaseDate": "2026-08-20",
+      "slug": "all-u-need"
+    },
+    {
+      "artists": ["Axel Boy", "Dr. Ushūu", "OHKAY"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/proximity-ep.jpg?v=1787205498532",
+      "name": "Proximity EP",
+      "releaseDate": "2026-08-14",
+      "slug": "proximity-ep"
+    },
+    {
+      "artists": ["P Money", "Whiney", "Fred V", "Doktor"],
+      "name": "Crash 'n Burn",
+      "releaseDate": "2026-08-13",
+      "slug": "crash-n-burn"
+    },
+    {
+      "artists": ["ring noord", "The Upbeats"],
+      "name": "Lownoise",
+      "releaseDate": "2026-08-13",
+      "slug": "lownoise"
+    },
+    {
+      "artists": ["FFF"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/big-taste-ep.jpg?v=1786405964514",
+      "name": "Big Taste EP",
+      "releaseDate": "2026-08-07",
+      "slug": "big-taste-ep"
+    },
+    {
+      "artists": ["Dillinja"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/deadly-deep-subs-remix-baby-your.jpg?v=1786402280403",
+      "name": "Deadly Deep Subs (Remix) / Baby Your",
+      "releaseDate": "2026-08-07",
+      "slug": "deadly-deep-subs-remix-baby-your"
+    },
+    {
+      "artists": ["DJ Harmony"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/dimension-edge-pieces.jpg?v=1786405978114",
+      "name": "Dimension / Edge / Pieces",
+      "releaseDate": "2026-08-07",
+      "slug": "dimension-edge-pieces"
+    },
+    {
+      "artists": ["Dev/Null"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/drum-damage.jpg?v=1786405984763",
+      "name": "Drum Damage",
+      "releaseDate": "2026-08-07",
+      "slug": "drum-damage"
+    },
+    {
+      "artists": ["A Little Sound", "Kelvin 373"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/same-thing.jpg?v=1787406262922",
+      "name": "Same Thing",
+      "releaseDate": "2026-08-07",
+      "slug": "same-thing"
+    },
+    {
+      "artists": ["Koven"],
+      "coverImageUrl": "https://coverartarchive.org/release/b9077f57-3b85-47bc-8294-8d8205c197a5/front-500",
+      "name": "wHERE the rhythm goes",
+      "releaseDate": "2026-08-06",
+      "slug": "where-the-rhythm-goes"
+    },
+    {
+      "artists": ["Sabre"],
+      "coverImageUrl": "https://coverartarchive.org/release/7f96ea92-f544-40cd-a8c7-29ea4d0ad52e/front-500",
+      "name": "Brisket",
+      "releaseDate": "2026-08-05",
+      "slug": "brisket"
+    },
+    {
+      "artists": ["Mary Droppinz", "SVDKO", "JONCASS"],
+      "name": "140 MAFIA",
+      "releaseDate": "2026-07-31",
+      "slug": "140-mafia"
+    },
+    {
+      "artists": ["d:enigma", "yunis"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/bad-slander-fume.jpg?v=1785676761803",
+      "name": "Bad Slander / Fume",
+      "releaseDate": "2026-07-31",
+      "slug": "bad-slander-fume"
+    },
+    {
+      "artists": ["Coben", "Constance Pennycuick", "WAVES"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/icarus-sonder.jpg?v=1786493501815",
+      "name": "Icarus / Sonder",
+      "releaseDate": "2026-07-31",
+      "slug": "icarus-sonder"
+    },
+    {
+      "artists": ["Benny L", "Cleveland Watkiss"],
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/metaphors-workhouse.jpg?v=1786848204905",
+      "name": "Metaphors / Workhouse",
+      "releaseDate": "2026-07-31",
+      "slug": "metaphors-workhouse"
+    },
+    {
+      "artists": ["NERO", "Taiki Nulight", "Emily Makis"],
+      "coverImageUrl": "https://coverartarchive.org/release/413b1cfc-cc62-4678-bc4f-002388050d9d/front-500",
+      "name": "We're Not Alone",
+      "releaseDate": "2026-07-31",
+      "slug": "we-re-not-alone"
+    }
+  ],
+  "tracks": [
+    {
+      "artists": ["Coben"],
+      "certified": false,
+      "releaseDate": "2026-08-22",
+      "title": "For the Both of Us"
+    },
+    {
+      "artists": ["Coben"],
+      "certified": false,
+      "releaseDate": "2026-08-22",
+      "title": "Rushing, Dragging"
+    },
+    {
+      "artists": ["Hobzee", "Uneven"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Edge of the Sea"
+    },
+    {
+      "artists": ["Hobzee"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Is It a Dream"
+    },
+    {
+      "artists": ["Friction", "IRAH"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Lead Dem"
+    },
+    {
+      "artists": ["Buunshin"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Luminous Body"
+    },
+    {
+      "artists": ["Hobzee", "Justice"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Revox"
+    },
+    {
+      "artists": ["Buunshin", "Mara Necia"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Save Crystal"
+    },
+    {
+      "artists": ["Hobzee", "Uneven"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Sound of Surprise"
+    },
+    {
+      "artists": ["Hobzee", "Response"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Things Are Different Now"
+    },
+    {
+      "artists": ["Sàigòn Soul Revival"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Trúc xinh"
+    },
+    {
+      "artists": ["Sàigòn Soul Revival"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Trúc xinh (Brotha Lok remix instrumental)"
+    },
+    {
+      "artists": ["Sàigòn Soul Revival"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Trúc xinh (Brotha Lok remix)"
+    },
+    {
+      "artists": ["Sàigòn Soul Revival"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Trúc xinh (instrumental)"
+    },
+    {
+      "artists": ["Sàigòn Soul Revival"],
+      "certified": false,
+      "releaseDate": "2026-08-21",
+      "title": "Trúc xinh (radio edit)"
+    },
+    {
+      "artists": ["IMANU", "A Girl Named Sue"],
+      "certified": false,
+      "releaseDate": "2026-08-20",
+      "title": "All U Need"
+    },
+    {
+      "artists": ["Axel Boy", "OHKAY"],
+      "certified": false,
+      "releaseDate": "2026-08-14",
+      "title": "Crawling"
+    },
+    {
+      "artists": ["Axel Boy"],
+      "certified": false,
+      "releaseDate": "2026-08-14",
+      "title": "Make You Feel"
+    },
+    {
+      "artists": ["Axel Boy", "Dr. Ushūu"],
+      "certified": false,
+      "releaseDate": "2026-08-14",
+      "title": "Promise Me"
+    },
+    {
+      "artists": ["Axel Boy"],
+      "certified": false,
+      "releaseDate": "2026-08-14",
+      "title": "Proximity"
+    },
+    {
+      "artists": ["ring noord"],
+      "certified": false,
+      "releaseDate": "2026-08-13",
+      "title": "All Mine"
+    },
+    {
+      "artists": ["ring noord"],
+      "certified": false,
+      "releaseDate": "2026-08-13",
+      "title": "Born Again (Lownoise)"
+    },
+    {
+      "artists": ["P Money", "Whiney", "Fred V", "Doktor"],
+      "certified": false,
+      "releaseDate": "2026-08-13",
+      "title": "Crash 'n Burn"
+    },
+    {
+      "artists": ["ring noord"],
+      "certified": false,
+      "releaseDate": "2026-08-13",
+      "title": "Founder"
+    },
+    {
+      "artists": ["ring noord", "The Upbeats"],
+      "certified": false,
+      "releaseDate": "2026-08-13",
+      "title": "No Secret"
+    },
+    {
+      "artists": ["Speaker Louis", "G-Class", "RJD", "Koa"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Bun Dem Down"
+    },
+    {
+      "artists": ["Diagnostix"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Clarted"
+    },
+    {
+      "artists": ["IYRE", "Mark Menzies"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Fallen Crowns"
+    },
+    {
+      "artists": ["Note", "Zar", "Jess Edie"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Gettin' Sentimental"
+    },
+    {
+      "artists": ["Surreal"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Into You"
+    },
+    {
+      "artists": ["Fonts"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Revel"
+    },
+    {
+      "artists": ["Flint & Figure"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "See the Light"
+    },
+    {
+      "artists": ["Silloh", "Leks"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Sleep Now"
+    },
+    {
+      "artists": ["Tian"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Smooth"
+    },
+    {
+      "artists": ["Martial Taktics", "Lottie Jones"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Three Words"
+    },
+    {
+      "artists": ["OVERTONE", "Sofia Tea"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Time"
+    },
+    {
+      "artists": ["Viridity"],
+      "certified": false,
+      "releaseDate": "2026-08-12",
+      "title": "Up to Fate"
+    },
+    {
+      "artists": ["Dillinja"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Baby Your"
+    },
+    {
+      "artists": ["FFF"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Big Taste"
+    },
+    {
+      "artists": ["Dev/Null"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Brain Bomb"
+    },
+    {
+      "artists": ["Dev/Null"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Come Now"
+    },
+    {
+      "artists": ["Dillinja"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Deadly Deep Subs (remix)"
+    },
+    {
+      "artists": ["DJ Harmony"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Dimension"
+    },
+    {
+      "artists": ["DJ Harmony"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Edge"
+    },
+    {
+      "artists": ["FFF"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Future Is Made"
+    },
+    {
+      "artists": ["Dev/Null"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Gateway"
+    },
+    {
+      "artists": ["DJ Harmony"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Pieces"
+    },
+    {
+      "artists": ["A Little Sound", "Kelvin 373"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Same Thing"
+    },
+    {
+      "artists": ["Dev/Null"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Space Rush"
+    },
+    {
+      "artists": ["FFF"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "The Key"
+    },
+    {
+      "artists": ["FFF"],
+      "certified": false,
+      "releaseDate": "2026-08-07",
+      "title": "Way You Dance"
+    },
+    {
+      "artists": ["Koven"],
+      "certified": false,
+      "releaseDate": "2026-08-06",
+      "title": "wHERE the rhythm goes"
+    },
+    {
+      "artists": ["Sabre"],
+      "certified": false,
+      "releaseDate": "2026-08-05",
+      "title": "Brisket"
+    },
+    {
+      "artists": ["d:enigma"],
+      "certified": false,
+      "releaseDate": "2026-07-31",
+      "spotifyUrl": "https://open.spotify.com/track/6y1UNrmAtQMrPRkVd8qgYA",
+      "title": "Bad Slander"
+    },
+    {
+      "artists": ["Coben", "Constance Pennycuick"],
+      "certified": false,
+      "releaseDate": "2026-07-31",
+      "title": "Icarus"
+    },
+    {
+      "artists": ["Mary Droppinz", "SVDKO", "JONCASS"],
+      "certified": false,
+      "releaseDate": "2026-07-31",
+      "title": "LOUDER"
+    },
+    {
+      "artists": ["Mary Droppinz", "SVDKO", "JONCASS"],
+      "certified": false,
+      "releaseDate": "2026-07-31",
+      "title": "READY"
+    },
+    {
+      "artists": ["Coben", "WAVES"],
+      "certified": false,
+      "releaseDate": "2026-07-31",
+      "title": "Sonder"
+    },
+    {
+      "artists": ["NERO", "Taiki Nulight", "Emily Makis"],
+      "certified": false,
+      "releaseDate": "2026-07-31",
+      "spotifyUrl": "https://open.spotify.com/track/6XmyL6AjHgssLxJEWUBocv",
+      "title": "We’re Not Alone"
+    },
+    {
+      "artists": ["Benny L"],
+      "certified": false,
+      "releaseDate": "2026-07-31",
+      "title": "Workhouse"
+    }
+  ],
+  "windowDays": 30
+}
