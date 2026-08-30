@@ -93,8 +93,21 @@ describe("projection production operations", () => {
       create index tracks_release_date_track_id_idx on tracks(release_date desc, track_id desc);
       create index tracks_label_id_idx on tracks(label_id, track_id);
       create table track_artists (
-        track_id text not null, artist_id text not null,
+        track_id text not null, artist_id text not null, role text,
         primary key (track_id, artist_id)
+      );
+      create index track_artists_artist_id_idx on track_artists(artist_id);
+      create table findings (track_id text primary key);
+      create table labels (id text primary key, seed_state text);
+      create table artists (id text primary key);
+      create table artist_qualification_contributions (
+        track_id text not null, artist_id text not null,
+        certified_contribution integer not null, enabled_credit_half_units integer not null,
+        primary key (track_id, artist_id)
+      );
+      create table artist_qualification (
+        artist_id text primary key, certified_finding_count integer not null,
+        enabled_credit_half_units integer not null, is_qualified integer not null
       );
       create table public_aggregate_membership (
         track_id text primary key, release_date_bucket text, key_bucket text
@@ -503,6 +516,35 @@ describe("projection production operations", () => {
     let complete = false;
     for (let step = 0; step < 20 && !complete; step += 1) {
       const result = await advanceProjectionAudit(db, "public_aggregates", 1);
+      expect(result.processed).toBeLessThanOrEqual(1);
+      complete = result.complete;
+      if (complete) {
+        expect(result.matched).toBe(true);
+      }
+    }
+    expect(complete).toBe(true);
+  });
+
+  it("audits artist rollups over the edge domain when an artist entity is absent", async () => {
+    await db.execute({
+      args: [PROJECTION_AUDIT_SETTING_KEYS.artist_qualification],
+      sql: `delete from settings where key = ?`,
+    });
+    await db.executeMultiple(`
+      insert into tracks (track_id) values ('orphan-edge-track');
+      insert into track_artists (track_id, artist_id) values ('orphan-edge-track', 'orphan-artist');
+      insert into findings (track_id) values ('orphan-edge-track');
+      insert into artist_qualification_contributions
+        (track_id, artist_id, certified_contribution, enabled_credit_half_units)
+        values ('orphan-edge-track', 'orphan-artist', 1, 0);
+      insert into artist_qualification
+        (artist_id, certified_finding_count, enabled_credit_half_units, is_qualified)
+        values ('orphan-artist', 1, 0, 1);
+    `);
+
+    let complete = false;
+    for (let step = 0; step < 12 && !complete; step += 1) {
+      const result = await advanceProjectionAudit(db, "artist_qualification", 1);
       expect(result.processed).toBeLessThanOrEqual(1);
       complete = result.complete;
       if (complete) {

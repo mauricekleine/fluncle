@@ -131,4 +131,43 @@ describe("bounded projection cleanup plans", () => {
       expect(detail).not.toContain("USE TEMP B-TREE");
     }
   });
+
+  it("keyset-pages artist rollups over every credited artist through the edge index", async () => {
+    const statements: Array<Exclude<InStatement, string>> = [];
+    const traced: PublicProjectionClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement) => {
+        if (typeof statement === "string") {
+          return db.execute(statement);
+        }
+        statements.push(statement);
+        return db.execute(statement);
+      },
+    };
+
+    await readPublicProjectionAuditChunk(traced, "artist_source_rollups", {
+      cursor: null,
+      limit: 10,
+    });
+    await readPublicProjectionAuditChunk(traced, "artist_source_rollups", {
+      cursor: "artist-a",
+      limit: 10,
+    });
+
+    expect(statements).toHaveLength(2);
+    for (const statement of statements) {
+      const args = statement.args;
+      if (!Array.isArray(args)) {
+        throw new Error("artist rollup audit query must use positional arguments");
+      }
+      expect(statement.sql).toContain("track_artists indexed by track_artists_artist_id_idx");
+      expect(statement.sql).toContain("where artist_id > ? order by artist_id limit ?");
+      expect(args.at(-1)).toBe(10);
+      const detail = (await db.execute({ args, sql: `explain query plan ${statement.sql}` })).rows
+        .flatMap((row) => (typeof row.detail === "string" ? [row.detail] : []))
+        .join("\n");
+      expect(detail).toContain("track_artists_artist_id_idx (artist_id>?)");
+      expect(detail).not.toMatch(/SCAN track_artists/);
+    }
+  });
 });
