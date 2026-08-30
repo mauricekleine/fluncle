@@ -28,12 +28,12 @@ export default defineConfig({
       // without failing the current suite. Re-measure with `bun run --cwd apps/web test`
       // (the summary it prints IS the input) and re-ratchet whenever coverage has grown a
       // few points — slack here is a regression budget nobody chose. Measured against the
-      // floors below: stmts 54.88 / branch 48.88 / funcs 48.80 / lines 55.00.
+      // floors below: stmts 59.30 / branch 53.67 / funcs 54.56 / lines 59.39.
       thresholds: {
-        branches: 44,
-        functions: 44,
-        lines: 51,
-        statements: 50,
+        branches: 49,
+        functions: 50,
+        lines: 55,
+        statements: 55,
       },
     },
     environment: "node",
