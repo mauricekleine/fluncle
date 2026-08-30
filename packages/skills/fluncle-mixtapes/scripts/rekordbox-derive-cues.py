@@ -232,6 +232,7 @@ class Cue:
     flagged_reason: str | None = None  # "repeat" for non-consecutive repeats
     flag_detail: str | None = None  # Ambiguous candidate ids
     fuzzy: bool = False  # matched via the tolerant retailer-credit fallback — eyeball it
+    load_time: str | None = None  # when the deck loaded it; the --since/--until window reads this
 
     def to_cue_dict(self) -> dict:
         d: dict = {
@@ -293,6 +294,7 @@ def derive_cues(rows: list[dict], catalogue_index: dict[tuple, list[dict]]) -> l
                     title_text=title_str,
                     position=0,  # set after dedup
                     match_bucket="unmatched",
+                    load_time=row.get("load_time"),
                 )
             )
         elif len(candidates) == 1:
@@ -309,6 +311,7 @@ def derive_cues(rows: list[dict], catalogue_index: dict[tuple, list[dict]]) -> l
                     position=0,
                     match_bucket="matched",
                     fuzzy=fuzzy,
+                    load_time=row.get("load_time"),
                 )
             )
         else:
@@ -325,6 +328,7 @@ def derive_cues(rows: list[dict], catalogue_index: dict[tuple, list[dict]]) -> l
                     position=0,
                     match_bucket="ambiguous",
                     flag_detail=ids,
+                    load_time=row.get("load_time"),
                 )
             )
     return cues
@@ -402,6 +406,77 @@ def write_cues(fluncle_bin: str, recording_id: str, cues: list[Cue]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+def parse_window_bound(raw: str, what: str):
+    """Parse a --since/--until value into a datetime.
+
+    Accepts a full timestamp ("2026-08-30 11:17", "2026-08-30T11:17:00") or a bare
+    clock time ("11:17"), which resolves against the session's own calendar day —
+    the common case, since a window is nearly always carved out of one night.
+    """
+    from datetime import datetime
+
+    text = raw.strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(text, fmt).time()
+        except ValueError:
+            pass
+    die(f"could not read --{what} {raw!r}",
+        "use 'YYYY-MM-DD HH:MM', 'YYYY-MM-DD', or a bare 'HH:MM'")
+
+
+def filter_rows_by_window(rows: list[dict], since, until) -> list[dict]:
+    """Keep rows whose load_time falls inside [since, until].
+
+    A row with NO load_time is DROPPED whenever a window is given: a set carved out
+    of a longer session must not silently inherit an untimed row, and Rekordbox
+    stamps every real load. Bare clock times bind to the first row's own date.
+    """
+    from datetime import datetime, time as _time
+
+    if since is None and until is None:
+        return rows
+
+    day = None
+    for row in rows:
+        if row.get("load_time"):
+            try:
+                day = datetime.fromisoformat(str(row["load_time"])).date()
+                break
+            except ValueError:
+                continue
+    if day is None:
+        die("this session carries no load times — the --since/--until window cannot be applied")
+
+    def bind(bound):
+        if bound is None:
+            return None
+        return datetime.combine(day, bound) if isinstance(bound, _time) else bound
+
+    lo, hi = bind(since), bind(until)
+    kept: list[dict] = []
+    for row in rows:
+        stamp = row.get("load_time")
+        if not stamp:
+            continue
+        try:
+            when = datetime.fromisoformat(str(stamp))
+        except ValueError:
+            continue
+        if lo is not None and when < lo:
+            continue
+        if hi is not None and when > hi:
+            continue
+        kept.append(row)
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Main.
 # ---------------------------------------------------------------------------
 
@@ -419,6 +494,15 @@ def main() -> None:
         dest="list_sessions",
         action="store_true",
         help="List available sessions and exit",
+    )
+    parser.add_argument(
+        "--since",
+        help="Keep only tracks loaded at or after this time "
+        "('YYYY-MM-DD HH:MM' or a bare 'HH:MM' on the session's day)",
+    )
+    parser.add_argument(
+        "--until",
+        help="Keep only tracks loaded at or before this time (same formats as --since)",
     )
     parser.add_argument("--db", help="Path to the Rekordbox master.db (default: auto-detect)")
     parser.add_argument(
@@ -474,6 +558,15 @@ def main() -> None:
     if not rows:
         die(f"no tracks in session {session.Name!r}")
 
+    # A Rekordbox session spans every load since the app opened, so one session can hold
+    # several nights plus rehearsal and soundcheck loads. The window carves out the set.
+    since = parse_window_bound(args.since, "since") if args.since else None
+    until = parse_window_bound(args.until, "until") if args.until else None
+    n_before_window = len(rows)
+    rows = filter_rows_by_window(rows, since, until)
+    if not rows:
+        die("no tracks fall inside the given --since/--until window")
+
     # Fetch Fluncle catalogue and match.
     catalogue = fetch_fluncle_catalogue(args.fluncle_bin)
     index = build_catalogue_index(catalogue)
@@ -499,6 +592,7 @@ def main() -> None:
                 {
                     "mode": "apply" if args.apply else "dry-run",
                     "session": session.Name,
+                    "sessionRows": n_before_window,
                     "inputRows": n_input,
                     "prunedConsecutive": n_pruned,
                     "cues": [
@@ -508,6 +602,7 @@ def main() -> None:
                             "flaggedReason": c.flagged_reason,
                             "flagDetail": c.flag_detail,
                             "fuzzy": c.fuzzy,
+                            "loadTime": c.load_time,
                         }
                         for c in cues
                     ],
@@ -528,6 +623,11 @@ def main() -> None:
 
     # Human-readable report.
     print(f"Session: {session.Name}")
+    if since or until:
+        print(
+            f"  Window: {args.since or '—'} → {args.until or '—'}  "
+            f"|  {n_input} of {n_before_window} session rows"
+        )
     print(
         f"  Input rows: {n_input}  |  consecutive-pruned: {n_pruned}  |  "
         f"output cues: {len(cues)}\n"
@@ -547,7 +647,8 @@ def main() -> None:
         elif cue.match_bucket == "unmatched":
             flag += "  [UNMATCHED — findingId=null]"
         bucket_mark = "≈" if cue.fuzzy else "✓" if cue.match_bucket == "matched" else "?"
-        print(f"  {cue.position:>2}. {bucket_mark} {label:<{w}}{flag}")
+        clock = (str(cue.load_time)[11:16] + "  ") if cue.load_time else ""
+        print(f"  {cue.position:>2}. {clock}{bucket_mark} {label:<{w}}{flag}")
 
     print(
         f"\n  Matched: {n_matched} (fuzzy: {n_fuzzy})  Ambiguous: {n_ambiguous}  "
