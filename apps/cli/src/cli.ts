@@ -987,7 +987,7 @@ JSON field reference:
 
   adminProjections
     .command("advance")
-    .description("Run one bounded, resumable rebuild, repair, or audit step")
+    .description("Run bounded, resumable rebuild, repair, or audit steps")
     .requiredOption(
       "--target <target>",
       "track_due_work, crawl_due_work, public_aggregates, or artist_qualification",
@@ -995,7 +995,7 @@ JSON field reference:
     .requiredOption("--action <action>", "rebuild, repair, or audit")
     .option("--limit <limit>", "Maximum rows or repairs in this request (1-500)", "100")
     .option("--max-steps <steps>", "Maximum sequential advance calls (1-100)")
-    .option("--json", "Print the step result and current readiness as JSON", false)
+    .option("--json", "Print the aggregate result and current readiness as JSON", false)
     .action(async (options: AdminProjectionStepOptions) => {
       const projections = await import("./commands/admin-projections");
       const result = await projections.advanceProjectionCommand({
@@ -1012,7 +1012,7 @@ JSON field reference:
         return;
       }
       console.log(
-        `${result.target} ${result.action}: processed ${result.processed}, scheduled ${result.scheduled}, ${result.complete ? "complete" : "more work remains"}.`,
+        `${result.target} ${result.action}: steps ${result.steps}, processed ${result.processed}, scheduled ${result.scheduled}, ${result.complete ? "complete" : "more work remains"}.`,
       );
     });
 

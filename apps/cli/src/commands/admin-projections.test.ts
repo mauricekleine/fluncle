@@ -180,7 +180,10 @@ describe("projection operator commands", () => {
   });
 
   test("aggregates exhausted steps and preserves the final payload", async () => {
-    const finalStatus = { ...status, readyToOpen: { ...status.readyToOpen, publicProjections: false } };
+    const finalStatus = {
+      ...status,
+      readyToOpen: { ...status.readyToOpen, publicProjections: false },
+    };
     postResponses.push(
       {
         action: "rebuild",
@@ -260,14 +263,18 @@ describe("projection operator commands", () => {
       },
     );
 
-    await expect(
-      projections.advanceProjectionCommand({
+    let thrown: unknown;
+    try {
+      await projections.advanceProjectionCommand({
         action: "repair",
         limit: 25,
         maxSteps: 5,
         target: "crawl_due_work",
-      }),
-    ).rejects.toBe(firstError);
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(firstError);
     expect(calls).toHaveLength(2);
   });
 
@@ -276,11 +283,9 @@ describe("projection operator commands", () => {
     expect(() => projections.parseProjectionLimit("501")).toThrow(/1 through 500/);
     expect(projections.parseProjectionMaxSteps("100")).toBe(100);
     expect(() => projections.parseProjectionMaxSteps("0")).toThrow(/1 through 100/);
-    expect(() => projections.parseProjectionMaxSteps("1.5")).toThrow(/safe integer/);
+    expect(() => projections.parseProjectionMaxSteps("1.5")).toThrow(/whole number/);
     expect(() => projections.parseProjectionMaxSteps("101")).toThrow(/1 through 100/);
-    expect(() => projections.parseProjectionMaxSteps("9007199254740992")).toThrow(
-      /safe integer/,
-    );
+    expect(() => projections.parseProjectionMaxSteps("9007199254740992")).toThrow(/whole number/);
     expect(() => projections.parseProjectionTarget("tracks")).toThrow(/must be/);
     expect(() => projections.parseProjectionAction("sql")).toThrow(/audit, rebuild, or repair/);
     expect(() => projections.parseProjectionCutover("public_aggregates")).toThrow(/must be/);

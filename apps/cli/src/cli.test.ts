@@ -866,7 +866,10 @@ describe("fluncle CLI parsing and JSON output", () => {
           });
         }
 
-        return Response.json({ ok: false, code: "not_found", message: url.pathname }, { status: 404 });
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
       },
       async (baseUrl) => {
         const result = await runCli(
@@ -903,6 +906,51 @@ describe("fluncle CLI parsing and JSON output", () => {
     );
 
     expect(requests).toEqual([{ action: "audit", limit: 17 }]);
+  });
+
+  test("projection advance includes aggregate totals in human output", async () => {
+    await withStubApi(
+      (_req, url) => {
+        if (url.pathname === "/api/v1/admin/projections/artist_qualification/advance") {
+          return Response.json({
+            action: "repair",
+            complete: false,
+            ok: true,
+            processed: 6,
+            scheduled: 2,
+            status: { phase: "running" },
+            target: "artist_qualification",
+          });
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const result = await runCli(
+          [
+            "admin",
+            "projections",
+            "advance",
+            "--target",
+            "artist_qualification",
+            "--action",
+            "repair",
+            "--max-steps",
+            "2",
+          ],
+          { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(result.stdout).toBe(
+          "artist_qualification repair: steps 2, processed 12, scheduled 4, more work remains.\n",
+        );
+      },
+    );
   });
 
   test("projection advance aggregates an exhausted serial budget", async () => {
@@ -945,7 +993,10 @@ describe("fluncle CLI parsing and JSON output", () => {
           });
         }
 
-        return Response.json({ ok: false, code: "not_found", message: url.pathname }, { status: 404 });
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
       },
       async (baseUrl) => {
         const result = await runCli(
@@ -996,7 +1047,10 @@ describe("fluncle CLI parsing and JSON output", () => {
     await withStubApi(
       () => {
         requests += 1;
-        return Response.json({ code: "unexpected_request", message: "transport reached", ok: false }, { status: 500 });
+        return Response.json(
+          { code: "unexpected_request", message: "transport reached", ok: false },
+          { status: 500 },
+        );
       },
       async (baseUrl) => {
         for (const maxSteps of invalidValues) {
@@ -1054,7 +1108,10 @@ describe("fluncle CLI parsing and JSON output", () => {
           );
         }
 
-        return Response.json({ ok: false, code: "not_found", message: url.pathname }, { status: 404 });
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
       },
       async (baseUrl) => {
         const result = await runCli(
