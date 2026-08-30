@@ -2034,8 +2034,8 @@ export async function readPublicProjectionAuditChunk(
           coalesce(sum(case when l.seed_state = 'enabled'
             then case when ta.role = 'remixer' then 1 else 2 end else 0 end), 0)
             as enabled_credit_half_units
-        from page join track_artists ta on ta.artist_id = page.id
-        join tracks t on t.track_id = ta.track_id left join findings f on f.track_id = ta.track_id
+        from page left join track_artists ta on ta.artist_id = page.id
+        left join tracks t on t.track_id = ta.track_id left join findings f on f.track_id = t.track_id
         left join labels l on l.id = t.label_id group by page.id order by page.id`
       : `select artist_id, certified_finding_count, enabled_credit_half_units, is_qualified
         from artist_qualification where artist_id > ? order by artist_id limit ?`,

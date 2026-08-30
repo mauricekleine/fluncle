@@ -1267,7 +1267,7 @@ const CUTOVER_KEYS: Record<ProjectionCutover, string> = {
 };
 
 function matchingAuditSql(alias: string, target: ProjectionAuditTarget): string {
-  const auditVersion = target === "artist_qualification" ? 4 : 3;
+  const auditVersion = target === "artist_qualification" ? 5 : 3;
   const sourceFence =
     target === "track_due_work" || target === "crawl_due_work"
       ? `and json_extract(${alias}.value, '$.sourceFence') = coalesce((select cast(fence.value as integer)

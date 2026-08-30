@@ -201,7 +201,7 @@ describe("projection production operations", () => {
             sourceFence: 0,
             startedAt: "2026-01-01T00:00:00.000Z",
             target,
-            version: target === "artist_qualification" ? 4 : 3,
+            version: target === "artist_qualification" ? 5 : 3,
           }),
         ],
         sql: `insert into settings (key, value) values (?, ?)`,
@@ -525,26 +525,31 @@ describe("projection production operations", () => {
     expect(complete).toBe(true);
   });
 
-  it("invalidates legacy artist evidence and audits the edge domain when an entity is absent", async () => {
+  it("invalidates legacy artist evidence and audits past missing entities and dangling edges", async () => {
     await db.execute({
       args: [PROJECTION_AUDIT_SETTING_KEYS.artist_qualification],
       sql: `update settings set value = json_set(value,
-        '$.version', 3, '$.complete', 1, '$.matched', 0) where key = ?`,
+        '$.version', 4, '$.complete', 1, '$.matched', 0) where key = ?`,
     });
     await db.executeMultiple(`
-      insert into tracks (track_id) values ('orphan-edge-track');
-      insert into track_artists (track_id, artist_id) values ('orphan-edge-track', 'orphan-artist');
-      insert into findings (track_id) values ('orphan-edge-track');
+      insert into tracks (track_id) values ('orphan-edge-track'), ('valid-later-track');
+      insert into track_artists (track_id, artist_id) values
+        ('orphan-edge-track', 'orphan-artist'),
+        ('missing-track', 'orphan-mid'),
+        ('valid-later-track', 'orphan-z');
+      insert into findings (track_id) values ('orphan-edge-track'), ('valid-later-track');
       insert into artist_qualification_contributions
         (track_id, artist_id, certified_contribution, enabled_credit_half_units)
-        values ('orphan-edge-track', 'orphan-artist', 1, 0);
+        values
+          ('orphan-edge-track', 'orphan-artist', 1, 0),
+          ('valid-later-track', 'orphan-z', 1, 0);
       insert into artist_qualification
         (artist_id, certified_finding_count, enabled_credit_half_units, is_qualified)
-        values ('orphan-artist', 1, 0, 1);
+        values ('orphan-artist', 1, 0, 1), ('orphan-z', 1, 0, 1);
     `);
 
     let complete = false;
-    for (let step = 0; step < 12 && !complete; step += 1) {
+    for (let step = 0; step < 24 && !complete; step += 1) {
       const result = await advanceProjectionAudit(db, "artist_qualification", 1);
       expect(result.processed).toBeLessThanOrEqual(1);
       complete = result.complete;
