@@ -63,6 +63,7 @@ type AdminReceiptRepairOptions = JsonOptions & {
 type AdminProjectionStepOptions = JsonOptions & {
   action: string;
   limit: string;
+  maxSteps?: string;
   target: string;
 };
 
@@ -993,12 +994,17 @@ JSON field reference:
     )
     .requiredOption("--action <action>", "rebuild, repair, or audit")
     .option("--limit <limit>", "Maximum rows or repairs in this request (1-500)", "100")
+    .option("--max-steps <steps>", "Maximum sequential advance calls (1-100)")
     .option("--json", "Print the step result and current readiness as JSON", false)
     .action(async (options: AdminProjectionStepOptions) => {
       const projections = await import("./commands/admin-projections");
       const result = await projections.advanceProjectionCommand({
         action: projections.parseProjectionAction(options.action),
         limit: projections.parseProjectionLimit(options.limit),
+        maxSteps:
+          options.maxSteps === undefined
+            ? undefined
+            : projections.parseProjectionMaxSteps(options.maxSteps),
         target: projections.parseProjectionTarget(options.target),
       });
       if (options.json) {
@@ -8513,6 +8519,7 @@ const stringOptions = new Set([
   "--lens",
   "--limit",
   "--max-hop",
+  "--max-steps",
   "--max-overlap",
   "--metrics",
   "--missing-field",

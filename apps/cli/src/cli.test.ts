@@ -818,6 +818,8 @@ describe("fluncle CLI parsing and JSON output", () => {
         expect(JSON.parse(advance.stdout)).toMatchObject({
           action: "audit",
           processed: 17,
+          scheduled: 0,
+          steps: 1,
           target: "public_aggregates",
         });
         expect(cutover.exitCode).toBe(0);
@@ -840,6 +842,250 @@ describe("fluncle CLI parsing and JSON output", () => {
         method: "PUT",
         path: "/api/v1/admin/projections/track_due_work/cutover",
       },
+    ]);
+  });
+
+  test("projection advance stops after the first completing response", async () => {
+    const requests: unknown[] = [];
+
+    await withStubApi(
+      async (req, url) => {
+        if (
+          req.method === "POST" &&
+          url.pathname === "/api/v1/admin/projections/public_aggregates/advance"
+        ) {
+          requests.push(await req.json());
+          return Response.json({
+            action: "audit",
+            complete: true,
+            ok: true,
+            processed: 4,
+            scheduled: 0,
+            status: { phase: "complete" },
+            target: "public_aggregates",
+          });
+        }
+
+        return Response.json({ ok: false, code: "not_found", message: url.pathname }, { status: 404 });
+      },
+      async (baseUrl) => {
+        const result = await runCli(
+          [
+            "admin",
+            "projections",
+            "advance",
+            "--target",
+            "public_aggregates",
+            "--action",
+            "audit",
+            "--limit",
+            "17",
+            "--max-steps",
+            "5",
+            "--json",
+          ],
+          { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toEqual({
+          action: "audit",
+          complete: true,
+          ok: true,
+          processed: 4,
+          scheduled: 0,
+          status: { phase: "complete" },
+          steps: 1,
+          target: "public_aggregates",
+        });
+      },
+    );
+
+    expect(requests).toEqual([{ action: "audit", limit: 17 }]);
+  });
+
+  test("projection advance aggregates an exhausted serial budget", async () => {
+    const requests: unknown[] = [];
+    let active = 0;
+    let overlapped = false;
+    const responses = [
+      { complete: false, processed: 2, scheduled: 3, status: { phase: "first" } },
+      { complete: false, processed: 5, scheduled: 7, status: { phase: "middle" } },
+      { complete: false, processed: 11, scheduled: 13, status: { phase: "final" } },
+    ];
+
+    await withStubApi(
+      async (req, url) => {
+        if (
+          req.method === "POST" &&
+          url.pathname === "/api/v1/admin/projections/track_due_work/advance"
+        ) {
+          active += 1;
+          if (active > 1) {
+            overlapped = true;
+          }
+          requests.push(await req.json());
+          await Promise.resolve();
+          const response = responses[requests.length - 1];
+          active -= 1;
+
+          if (response === undefined) {
+            return Response.json(
+              { code: "too_many_calls", message: "budget exceeded", ok: false },
+              { status: 500 },
+            );
+          }
+
+          return Response.json({
+            action: "rebuild",
+            ...response,
+            ok: true,
+            target: "track_due_work",
+          });
+        }
+
+        return Response.json({ ok: false, code: "not_found", message: url.pathname }, { status: 404 });
+      },
+      async (baseUrl) => {
+        const result = await runCli(
+          [
+            "admin",
+            "projections",
+            "advance",
+            "--target",
+            "track_due_work",
+            "--action",
+            "rebuild",
+            "--limit",
+            "100",
+            "--max-steps",
+            "3",
+            "--json",
+          ],
+          { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toEqual({
+          action: "rebuild",
+          complete: false,
+          ok: true,
+          processed: 18,
+          scheduled: 23,
+          status: { phase: "final" },
+          steps: 3,
+          target: "track_due_work",
+        });
+      },
+    );
+
+    expect(overlapped).toBe(false);
+    expect(requests).toEqual([
+      { action: "rebuild", limit: 100 },
+      { action: "rebuild", limit: 100 },
+      { action: "rebuild", limit: 100 },
+    ]);
+  });
+
+  test("rejects invalid max-steps values before transport", async () => {
+    let requests = 0;
+    const invalidValues = ["0", "1.5", "101", "9007199254740992"];
+
+    await withStubApi(
+      () => {
+        requests += 1;
+        return Response.json({ code: "unexpected_request", message: "transport reached", ok: false }, { status: 500 });
+      },
+      async (baseUrl) => {
+        for (const maxSteps of invalidValues) {
+          const result = await runCli(
+            [
+              "admin",
+              "projections",
+              "advance",
+              "--target",
+              "track_due_work",
+              "--action",
+              "repair",
+              "--max-steps",
+              maxSteps,
+              "--json",
+            ],
+            { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+          );
+
+          expect(result.exitCode).toBe(1);
+          expect(result.stderr).toBe("");
+          expect(result.stdout).toContain("--max-steps");
+        }
+      },
+    );
+
+    expect(requests).toBe(0);
+  });
+
+  test("projection advance stops on the first API error without retrying", async () => {
+    const requests: unknown[] = [];
+
+    await withStubApi(
+      async (req, url) => {
+        if (
+          req.method === "POST" &&
+          url.pathname === "/api/v1/admin/projections/crawl_due_work/advance"
+        ) {
+          requests.push(await req.json());
+          if (requests.length === 1) {
+            return Response.json({
+              action: "repair",
+              complete: false,
+              ok: true,
+              processed: 1,
+              scheduled: 1,
+              status: { phase: "first" },
+              target: "crawl_due_work",
+            });
+          }
+
+          return Response.json(
+            { code: "first_projection_error", message: "first failure", ok: false },
+            { status: 503 },
+          );
+        }
+
+        return Response.json({ ok: false, code: "not_found", message: url.pathname }, { status: 404 });
+      },
+      async (baseUrl) => {
+        const result = await runCli(
+          [
+            "admin",
+            "projections",
+            "advance",
+            "--target",
+            "crawl_due_work",
+            "--action",
+            "repair",
+            "--max-steps",
+            "5",
+            "--json",
+          ],
+          { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+        );
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toEqual({
+          code: "first_projection_error",
+          message: "first failure",
+          ok: false,
+        });
+      },
+    );
+
+    expect(requests).toEqual([
+      { action: "repair", limit: 100 },
+      { action: "repair", limit: 100 },
     ]);
   });
 });
