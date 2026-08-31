@@ -74,21 +74,8 @@ export function formatReleaseDate(releaseDate: string): string {
  * every surface routes its count string through here. Pluralization is arithmetic, not a
  * per-surface decision, so no caller repeats the `count === 1 ? … : …` rule.
  */
-/**
- * The ONE grouping every public count reads through. At catalogue scale a bare `1234` sits beside a
- * grouped `1,234` in the same view (the front door prints both a findings total and four shelf
- * counts), and two spellings of one number read as two different numbers. Numbers stay tabular and
- * exact (VOICE.md §6); this only decides where the separators go.
- */
-const countFormatter = new Intl.NumberFormat("en-US");
-
-/** A count with its thousands separators, for a caller that supplies its own noun. */
-export function formatCount(count: number): string {
-  return countFormatter.format(count);
-}
-
 export function findingsCount(count: number): string {
-  return `${countFormatter.format(count)} ${count === 1 ? "finding" : "findings"}`;
+  return `${count} ${count === 1 ? "finding" : "findings"}`;
 }
 
 /**
@@ -97,7 +84,7 @@ export function findingsCount(count: number): string {
  * count through here keeps the pluralization arithmetic in one place, same as findings.
  */
 export function bangersCount(count: number): string {
-  return `${countFormatter.format(count)} ${count === 1 ? "banger" : "bangers"}`;
+  return `${count} ${count === 1 ? "banger" : "bangers"}`;
 }
 
 /**
@@ -107,7 +94,7 @@ export function bangersCount(count: number): string {
  * never findings (docs/album-entity.md, the unnamed tier). Same one-place pluralization.
  */
 export function tracksCount(count: number): string {
-  return `${countFormatter.format(count)} ${count === 1 ? "track" : "tracks"}`;
+  return `${count} ${count === 1 ? "track" : "tracks"}`;
 }
 
 export function formatIsoDuration(durationMs: number): string {

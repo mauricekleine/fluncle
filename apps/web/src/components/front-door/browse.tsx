@@ -20,8 +20,7 @@
 
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
-import { type FrontDoorCounts } from "@/lib/front-door";
-import { formatCount } from "@/lib/format";
+import { type FrontDoorCounts, frontDoorCount } from "@/lib/front-door";
 import { navSections } from "@/lib/nav-model";
 
 type BrowseCard = {
@@ -29,14 +28,10 @@ type BrowseCard = {
   blurb: string;
   count: (counts: FrontDoorCounts) => number;
   label: string;
-  /** "12 albums" — the shelf's real size, in the superset noun. */
+  /** "1,234 albums" — the shelf's real size, in the superset noun, grouped for this page. */
   noun: (count: number) => string;
   to: string;
 };
-
-/** "1,234 albums" — the shelf's real size, grouped by the same formatter every public count uses. */
-const plural = (count: number, one: string, many: string): string =>
-  `${formatCount(count)} ${count === 1 ? one : many}`;
 
 /**
  * The blurb the nav model already publishes for a hub, read rather than re-typed. The colophon and
@@ -57,28 +52,28 @@ const CARDS: BrowseCard[] = [
     blurb: navBlurb("tracks"),
     count: (counts) => counts.tracks,
     label: "Tracks",
-    noun: (count) => plural(count, "track", "tracks"),
+    noun: (count) => frontDoorCount(count, "track", "tracks"),
     to: "/tracks",
   },
   {
     blurb: navBlurb("artists"),
     count: (counts) => counts.artists,
     label: "Artists",
-    noun: (count) => plural(count, "artist", "artists"),
+    noun: (count) => frontDoorCount(count, "artist", "artists"),
     to: "/artists",
   },
   {
     blurb: navBlurb("albums"),
     count: (counts) => counts.albums,
     label: "Albums",
-    noun: (count) => plural(count, "album", "albums"),
+    noun: (count) => frontDoorCount(count, "album", "albums"),
     to: "/albums",
   },
   {
     blurb: navBlurb("labels"),
     count: (counts) => counts.labels,
     label: "Labels",
-    noun: (count) => plural(count, "label", "labels"),
+    noun: (count) => frontDoorCount(count, "label", "labels"),
     to: "/labels",
   },
 ];

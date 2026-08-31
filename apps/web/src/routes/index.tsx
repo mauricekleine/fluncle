@@ -10,7 +10,7 @@ import { FrontDoorSection } from "@/components/front-door/section";
 import { LiveBanner } from "@/components/home/live-banner";
 import { printConsoleGreeting } from "@/lib/console-greeting";
 import { fluncleEntityId, fluncleWebsiteId, siteUrl } from "@/lib/fluncle-links";
-import { findingsCount } from "@/lib/format";
+import { frontDoorCount } from "@/lib/front-door";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { logPageUrl } from "@/lib/log-schema";
@@ -216,7 +216,10 @@ function FrontDoorPage() {
           intro="I rewound every one of these before I logged it. Freshest at the front, so take your pick, fam."
           link={
             findingsTotal > 0
-              ? { label: `All ${findingsCount(findingsTotal)}`, to: "/findings" }
+              ? {
+                  label: `All ${frontDoorCount(findingsTotal, "finding", "findings")}`,
+                  to: "/findings",
+                }
               : { label: "The whole log", to: "/findings" }
           }
           title="Latest findings"
