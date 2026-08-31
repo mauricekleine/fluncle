@@ -49,6 +49,19 @@ Drop a `tests/e2e/<name>.spec.ts` (only `*.spec.ts` is collected; helpers alongs
 
 If a new spec needs data the seed does not carry, extend `seed.ts` (and, if a new table is involved, add the factory to `integration-db.ts`) rather than writing rows inline in the spec — the seed stays the single description of the world every spec shares.
 
+## The front door's scroll evidence
+
+`front-door.spec.ts` writes a full-page screenshot per width — `desktop-1440x900.png` and `mobile-390x844.png` — into the gitignored `apps/web/.dev/front-door/`. They are evidence that `/` reads as one long deliberate scroll at both widths, and the assertions in that spec (every band visible with height, bands ordered down the page, `scrollHeight` past one viewport, no horizontal bleed) are what actually gate it; the images are for a human to look at.
+
+Regenerate them at any commit with:
+
+```bash
+bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts
+FRONT_DOOR_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts   # elsewhere
+```
+
+They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. `.github/workflows/e2e.yml` uploads `front-door-scroll` on every run, green or red, so each commit's evidence is retained for 30 days and downloadable from its own check without a byte entering history.
+
 ## Adding an env var
 
 If a new code path reads an env key on a public route, add a plainly-fake value of the right shape to `.dev.vars.e2e.tpl`. Never a real credential, hostname, or `op://` path — this repo is public, and a test run must not be able to reach anything real.
