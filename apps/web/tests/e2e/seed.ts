@@ -313,10 +313,15 @@ async function seedDestinationFixtures(client: Client): Promise<void> {
 
   // The BARE row loses the Spotify anchor `seedCatalogueTrack` mints for every fixture, and never
   // gets a vector below — so its page has no outbound control and no neighbour band, which is the
-  // whole reason it exists.
+  // whole reason it exists. Its `duration_ms` goes to 0 as well: that is what the crawler actually
+  // writes when MusicBrainz does not know a recording's length (`recording.length ?? track.length
+  // ?? 0`, "the honest 'unknown'"), and it is the value the page must NOT render as "0:00" or
+  // assert as `"duration": "PT0M0S"`.
   await client.execute({
     args: [SEEDED_BARE_TRACK.trackId],
-    sql: `update tracks set spotify_uri = null, spotify_url = null where track_id = ?`,
+    sql: `update tracks
+             set spotify_uri = null, spotify_url = null, duration_ms = 0
+           where track_id = ?`,
   });
 
   // The vectors. The destination sits on axis 0; the neighbour on axis 1 (nearest); the thin row on

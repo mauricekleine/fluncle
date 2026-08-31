@@ -74,6 +74,32 @@ function expectCanonical(html: string, path: string): void {
   expect(canonical).toContain(`href="https://www.fluncle.com${path}"`);
 }
 
+/**
+ * The page's `MusicRecording` node, parsed out of the SSR HTML. Returned as an object so a test can
+ * assert on the presence or ABSENCE of a key — which is the assertion that matters for a field
+ * whose "absent" is a value: a `duration` of `null`, `""` or `"PT0M0S"` all fail a key check and
+ * all sail past a string check.
+ */
+function trackJsonLd(html: string): Record<string, unknown> | undefined {
+  for (const [, body] of html.matchAll(/<script type="application\/ld\+json">(.*?)<\/script>/gs)) {
+    try {
+      const parsed: unknown = JSON.parse(body.replaceAll("&#x27;", "'").replaceAll("&amp;", "&"));
+
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        (parsed as Record<string, unknown>)["@type"] === "MusicRecording"
+      ) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return undefined;
+}
+
 /** Collect every console error + page error for a fail-on-any assertion at the end. */
 function watchForErrors(page: Page): string[] {
   const problems: string[] = [];
@@ -132,7 +158,14 @@ test("the destination SSRs every fact the archive holds, and names no tier", asy
   expect(description.toLowerCase()).not.toContain("archive");
   expect(description).toContain(SEEDED_DESTINATION_TRACK.title);
 
-  // (4) The rendered page agrees with the SSR, and hydration is clean.
+  // (4) THE GRAPH ASSERTS ONLY WHAT THE ARCHIVE HOLDS. The length is real here, so the key is
+  // present — the mirror of the bare row's assertion below.
+  const recording = trackJsonLd(raw);
+
+  expect(recording).toHaveProperty("duration");
+  expect(recording?.["name"]).toBe(SEEDED_DESTINATION_TRACK.title);
+
+  // (5) The rendered page agrees with the SSR, and hydration is clean.
   await page.goto(DESTINATION_PATH, { waitUntil: "networkidle" });
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(SEEDED_DESTINATION_TRACK.title);
   await expect(page.getByRole("link", { name: "Listen on Spotify" })).toBeVisible();
@@ -336,10 +369,21 @@ test("a page with nowhere to send you promises nothing, in the markup or the sni
 
   const raw = decoded(await response.text());
 
-  // The page is about what it HAS: a name, and the two facts every row carries.
+  // The page is about what it HAS: a name, and nothing it does not.
   expect(raw).toContain(SEEDED_BARE_TRACK.title);
   expect(raw).toContain(SEEDED_BARE_TRACK.artist);
-  expect(raw).toContain("Length");
+
+  // NO LENGTH FIELD. `tracks.duration_ms` is NOT NULL and the crawler writes 0 as its honest
+  // "unknown", so an unguarded field would print "0:00" — a measurement the archive does not hold.
+  expect(raw).not.toContain("<dt>Length</dt>");
+
+  // AND NO `duration` KEY IN THE GRAPH. Asserted on the parsed node's KEY rather than on the
+  // string "PT0M0S", because a node emitting `duration: null` or `duration: ""` would be the same
+  // defect wearing a different value and a string check would sail past it.
+  const recording = trackJsonLd(raw);
+
+  expect(recording, "the page emits a MusicRecording node").toBeDefined();
+  expect(recording).not.toHaveProperty("duration");
 
   // NEITHER BAND RENDERS. No outbound control (nothing is stored), no preview control (no short
   // source to resolve one from), and no neighbour band (no vector). Not an empty state — absent.
