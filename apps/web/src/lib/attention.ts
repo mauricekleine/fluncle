@@ -334,20 +334,8 @@ export function newsletterDeadline(draftedAt: string): string {
   return new Date(Date.parse(draftedAt) + 24 * 60 * 60 * 1000).toISOString();
 }
 
-/**
- * Map the sources' raw rows into queue items. Pure and clock-injected. A clip's two
- * distribution legs (TikTok, YouTube) are SEPARATE todos — each posts differently — so a
- * clip yields up to two rows, but only the oldest clip with a pending leg surfaces them:
- * the next clip appears once both of this one's legs land. Independent of that gate, every
- * TikTok inbox draft is a deadline row racing its 24h bounce (finish it / re-push it), so an
- * in-flight draft is never hidden behind the one-clip-at-a-time queue.
- */
-export function deriveAttentionItems(inputs: AttentionInputs, now: number): AttentionItem[] {
-  const items: AttentionItem[] = [];
-
-  // Every pending TikTok inbox draft races the 24h bounce — the one true deadline. ALL are
-  // shown (urgency), regardless of the one-clip-at-a-time gate on fresh pushes below.
-  for (const clip of inputs.clips) {
+function appendClipAttentionItems(items: AttentionItem[], clips: ClipInput[]): void {
+  for (const clip of clips) {
     if (clip.tiktokStatus !== "draft" || !clip.tiktokUpdatedAt) {
       continue;
     }
@@ -362,43 +350,53 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       trackId: clip.trackId,
     });
   }
-
-  // The oldest clip with a pending leg is the focus — its pending platforms surface as
-  // separate todos, and the next clip appears only once BOTH of these land. The rest ride as
-  // the `waiting` datum. (TikTok caps pending inbox drafts at 5/24h, so posting stays serial.)
-  const pending = inputs.clips.filter(
+  const pending = clips.filter(
     (clip) => !isPosted(clip.tiktokStatus) || !isPosted(clip.youtubeStatus),
   );
   const focus = pending[0];
-  if (focus) {
-    // The TikTok leg — a FRESH push (no post yet, or a prior failed one). A draft is already
-    // the deadline row above, so it is not re-emitted here.
-    if (!isPosted(focus.tiktokStatus) && focus.tiktokStatus !== "draft") {
-      items.push({
-        anchorAt: focus.addedAt,
-        ...(focus.artUrl ? { artUrl: focus.artUrl } : {}),
-        id: `post-tiktok:${focus.trackId}`,
-        ...(focus.logId ? { logId: focus.logId } : {}),
-        source: "post-tiktok",
-        title: trackLabel(focus.artists, focus.title),
-        trackId: focus.trackId,
-        waiting: pending.length,
-      });
-    }
-    // The YouTube leg — a public Short posts the moment you push, so it's a one-tap todo.
-    if (!isPosted(focus.youtubeStatus)) {
-      items.push({
-        anchorAt: focus.addedAt,
-        ...(focus.artUrl ? { artUrl: focus.artUrl } : {}),
-        id: `post-youtube:${focus.trackId}`,
-        ...(focus.logId ? { logId: focus.logId } : {}),
-        source: "post-youtube",
-        title: trackLabel(focus.artists, focus.title),
-        trackId: focus.trackId,
-        waiting: pending.length,
-      });
-    }
+  if (!focus) {
+    return;
   }
+  if (!isPosted(focus.tiktokStatus) && focus.tiktokStatus !== "draft") {
+    items.push({
+      anchorAt: focus.addedAt,
+      ...(focus.artUrl ? { artUrl: focus.artUrl } : {}),
+      id: `post-tiktok:${focus.trackId}`,
+      ...(focus.logId ? { logId: focus.logId } : {}),
+      source: "post-tiktok",
+      title: trackLabel(focus.artists, focus.title),
+      trackId: focus.trackId,
+      waiting: pending.length,
+    });
+  }
+  if (!isPosted(focus.youtubeStatus)) {
+    items.push({
+      anchorAt: focus.addedAt,
+      ...(focus.artUrl ? { artUrl: focus.artUrl } : {}),
+      id: `post-youtube:${focus.trackId}`,
+      ...(focus.logId ? { logId: focus.logId } : {}),
+      source: "post-youtube",
+      title: trackLabel(focus.artists, focus.title),
+      trackId: focus.trackId,
+      waiting: pending.length,
+    });
+  }
+}
+
+/**
+ * Map the sources' raw rows into queue items. Pure and clock-injected. A clip's two
+ * distribution legs (TikTok, YouTube) are SEPARATE todos — each posts differently — so a
+ * clip yields up to two rows, but only the oldest clip with a pending leg surfaces them:
+ * the next clip appears once both of this one's legs land. Independent of that gate, every
+ * TikTok inbox draft is a deadline row racing its 24h bounce (finish it / re-push it), so an
+ * in-flight draft is never hidden behind the one-clip-at-a-time queue.
+ */
+export function deriveAttentionItems(inputs: AttentionInputs, now: number): AttentionItem[] {
+  const items: AttentionItem[] = [];
+
+  // Every pending TikTok inbox draft races the 24h bounce — the one true deadline. ALL are
+  // shown (urgency), regardless of the one-clip-at-a-time gate on fresh pushes below.
+  appendClipAttentionItems(items, inputs.clips);
 
   // A recorded take with no cue tracklist — nothing downstream (chapters, clips,
   // promote) works without cues. Derivation runs against Rekordbox on the M2.

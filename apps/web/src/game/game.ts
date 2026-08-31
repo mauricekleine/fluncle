@@ -382,25 +382,7 @@ export function createGame(container: HTMLElement): Game {
       }
     }
 
-    const acted = input.consumeAction();
-
-    if (acted) {
-      if (atlasOpen) {
-        // The chart holds the helm: keys steer nothing and depart nothing
-        // while the atlas is up (C or Esc puts you back in the cockpit).
-      } else if (paused) {
-        // Any key or tap also resumes; Esc isn't the only way back.
-        setPaused(false);
-      } else if (phase === "play") {
-        // In flight, keys are controls; parked on a banger, any key flies on
-        // (after a beat of grace so a held boost key doesn't eject you).
-        if (sim?.phase === "orbiting" && towedT <= 0 && nowS - orbitEnteredAt > DEPART_GRACE) {
-          departOrbit(sim);
-        }
-      } else {
-        onAction();
-      }
-    }
+    handleFrameAction(input.consumeAction());
 
     if (phase === "boot") {
       bootT += dt / BOOT_DURATION;
@@ -492,6 +474,23 @@ export function createGame(container: HTMLElement): Game {
     }
 
     rafId = window.requestAnimationFrame(frame);
+  }
+
+  function handleFrameAction(acted: boolean): void {
+    if (!acted || atlasOpen) {
+      return;
+    }
+    if (paused) {
+      setPaused(false);
+      return;
+    }
+    if (phase !== "play") {
+      onAction();
+      return;
+    }
+    if (sim?.phase === "orbiting" && towedT <= 0 && nowS - orbitEnteredAt > DEPART_GRACE) {
+      departOrbit(sim);
+    }
   }
 
   // The gate before the catalogue lands (or when there is nothing out there

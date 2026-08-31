@@ -436,6 +436,47 @@ function recordingNames(existing: ExistingRow): { artists: string[]; labels: str
   return { artists: parseArtistsJson(existing.artists_json ?? "[]"), labels };
 }
 
+function applySourceHierarchy(
+  existing: ExistingRow,
+  update: TrackUpdate,
+  writer: AdminRole | undefined,
+): boolean {
+  if (writer === "agent") {
+    const writesKey =
+      update.key !== undefined ||
+      update.keySource !== undefined ||
+      update.keyConfidence !== undefined;
+    const writesBpm =
+      update.bpm !== undefined ||
+      update.bpmSource !== undefined ||
+      update.bpmConfidence !== undefined;
+    const protectedKey =
+      writesKey && existing.key_source && PROTECTED_SOURCES.has(existing.key_source);
+    const protectedBpm =
+      writesBpm && existing.bpm_source && PROTECTED_SOURCES.has(existing.bpm_source);
+    if (protectedKey) {
+      delete update.key;
+      delete update.keySource;
+      delete update.keyConfidence;
+    }
+    if (protectedBpm) {
+      delete update.bpm;
+      delete update.bpmSource;
+      delete update.bpmConfidence;
+    }
+    return Boolean(protectedKey || protectedBpm);
+  }
+  if (writer === "operator") {
+    if (update.key !== undefined && update.keySource === undefined) {
+      update.keySource = "operator";
+    }
+    if (update.bpm !== undefined && update.bpmSource === undefined) {
+      update.bpmSource = "operator";
+    }
+  }
+  return false;
+}
+
 export async function updateTrack(
   trackId: string,
   update: TrackUpdate,
@@ -501,48 +542,7 @@ export async function updateTrack(
   // The guard mutates the caller's fresh-per-request `update` object in place: it
   // either drops an agent's downgrading key/bpm fields, or stamps an operator's
   // hand-set value with the `operator` source so a later DSP pass can't clobber it.
-  let guardDroppedFields = false;
-
-  if (options.writer === "agent") {
-    // An agent write of key (or its provenance) onto a rekordbox/operator-graded row
-    // is a silent no-op for the KEY: drop key + keySource + keyConfidence, leave the
-    // rest of the same update (bpm, features, status, analyzedFrom…) to apply.
-    const writesKey =
-      update.key !== undefined ||
-      update.keySource !== undefined ||
-      update.keyConfidence !== undefined;
-
-    if (writesKey && existing.key_source && PROTECTED_SOURCES.has(existing.key_source)) {
-      delete update.key;
-      delete update.keySource;
-      delete update.keyConfidence;
-      guardDroppedFields = true;
-    }
-
-    // Symmetric for bpm.
-    const writesBpm =
-      update.bpm !== undefined ||
-      update.bpmSource !== undefined ||
-      update.bpmConfidence !== undefined;
-
-    if (writesBpm && existing.bpm_source && PROTECTED_SOURCES.has(existing.bpm_source)) {
-      delete update.bpm;
-      delete update.bpmSource;
-      delete update.bpmConfidence;
-      guardDroppedFields = true;
-    }
-  } else if (options.writer === "operator") {
-    // The operator always wins. A hand-set key/bpm with NO explicit source is stamped
-    // `operator` server-side, so the value is durably protected from future DSP passes
-    // (an explicit `--key-source rekordbox` on the backfill is left untouched).
-    if (update.key !== undefined && update.keySource === undefined) {
-      update.keySource = "operator";
-    }
-
-    if (update.bpm !== undefined && update.bpmSource === undefined) {
-      update.bpmSource = "operator";
-    }
-  }
+  const guardDroppedFields = applySourceHierarchy(existing, update, options.writer);
 
   // TWO SET-LISTS, one per half of the tracks/findings pair (docs/track-lifecycle.md).
   // `updateTrack` is one logical write across a supertype/subtype pair, so it fans out to
