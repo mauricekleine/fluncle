@@ -230,13 +230,26 @@ const MINUTE_MS = 60 * 1000;
 export const SURFACES: readonly Surface[] = [
   // ── Web routes (www.fluncle.com) ──────────────────────────────────────────
   {
-    exposedContent: ["the archive — every certified finding, newest first, cover-led"],
+    exposedContent: [
+      "the front door — search with real example queries, one edited lead finding, the newest findings, what just came out, and the four routes into the wider archive",
+    ],
     kind: "web_route",
     name: "web.home",
     operatorNotes: "The Worker root. galaxy./radio. rewrite their root to /galaxy and /radio.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/",
     url: `${SITE}/`,
+    weights: { web: "primary" },
+  },
+  {
+    exposedContent: ["the archive — every certified finding, newest first, cover-led"],
+    kind: "web_route",
+    name: "web.findings",
+    operatorNotes:
+      "The cover-led archive page the root used to be. Carries the Stories viewer (?story=<logId>, masked to /log/<id>); /?story= 301s to /log/<id>.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/findings",
+    url: `${SITE}/findings`,
     weights: { web: "primary" },
   },
   {

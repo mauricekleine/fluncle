@@ -171,6 +171,7 @@ describe("a child sitemap", () => {
 
     for (const hub of [
       "/",
+      "/findings",
       "/log",
       "/logbook",
       "/mixtapes",
@@ -500,6 +501,7 @@ describe("the URL set is preserved across the split", () => {
     const expected = new Set([
       // pages (the static hubs — /galaxies is lit because the map is named here)
       `${siteUrl}/`,
+      `${siteUrl}/findings`,
       `${siteUrl}/log`,
       `${siteUrl}/logbook`,
       `${siteUrl}/mixtapes`,

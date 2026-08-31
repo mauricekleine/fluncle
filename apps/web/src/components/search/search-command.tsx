@@ -41,7 +41,15 @@ import {
 } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { SpotifyIcon } from "@/components/platform-icons";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
@@ -130,12 +138,37 @@ const MIN_QUERY_LENGTH = 2;
  * They are REAL — each one returns rows against the live archive. An example query that finds
  * nothing teaches the opposite of what it was for.
  */
-const EXAMPLES = [
+export const SEARCH_EXAMPLES = [
   { icon: "token", query: "netsky" },
   { icon: "token", query: "Hospital Records" },
   { icon: "filters", query: "tracks in A minor above 170 bpm" },
   { icon: "sonic", query: "tracks that sound like Nine Clouds" },
-] as const;
+] as const satisfies readonly { icon: SearchExampleIcon; query: string }[];
+
+/** Which glyph an example carries — the tier it teaches, not a label anyone reads. */
+export type SearchExampleIcon = "filters" | "sonic" | "token";
+
+/**
+ * The glyph for one example query, shared by the dialog's own pills and the front door's.
+ * Exported so the two can never drift into teaching the same tier with different marks.
+ */
+export function SearchExampleGlyph({
+  className,
+  icon,
+}: {
+  className?: string;
+  icon: SearchExampleIcon;
+}): ReactNode {
+  if (icon === "sonic") {
+    return <WaveformIcon aria-hidden="true" className={className} />;
+  }
+
+  if (icon === "filters") {
+    return <SparkleIcon aria-hidden="true" className={className} />;
+  }
+
+  return <MagnifyingGlassIcon aria-hidden="true" className={className} />;
+}
 
 async function fetchSearch(q: string): Promise<SearchResponse> {
   const response = await fetch(`/api/v1/search/archive?q=${encodeURIComponent(q)}`);
@@ -288,16 +321,39 @@ function FilterChips({ filters }: { filters: SearchFilters }): ReactNode {
 
 // ── The dialog ───────────────────────────────────────────────────────────────────────
 
-function SearchDialog({
+export function SearchDialog({
   onOpenChange,
   open,
+  seed,
 }: {
   onOpenChange: (open: boolean) => void;
   open: boolean;
+  /**
+   * A query to open WITH — the front door's example pills hand one over, so a click lands in the
+   * dialog already answering rather than in an empty field the reader has to retype into. It is a
+   * SEED, not a controlled value: the reader owns the field from the first keystroke after. Bumping
+   * the token re-seeds, so clicking the same example twice re-opens it the same way.
+   */
+  seed?: { query: string; token: number };
 }): ReactNode {
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(seed?.query ?? "");
   const [debounced, setDebounced] = useState("");
+  const seedToken = seed?.token;
+  const seedQuery = seed?.query;
+
+  // Seeding is an EFFECT on the token rather than a prop read on every render, because the field is
+  // the reader's the moment they type. Without the token a re-render would keep stamping the
+  // example back over what they wrote.
+  useEffect(() => {
+    if (seedToken === undefined || seedQuery === undefined) {
+      return;
+    }
+
+    setQuery(seedQuery);
+    // Answer immediately: the reader picked a whole query, so there is no typing to wait out.
+    setDebounced(seedQuery.trim());
+  }, [seedQuery, seedToken]);
 
   // A keystroke is not a query. The debounce is what keeps a typed word from firing five
   // round trips (and, on the fourth tier, five model calls) on its way to being one.
@@ -398,20 +454,14 @@ function SearchDialog({
 
         {showExamples ? (
           <div className="search-examples">
-            {EXAMPLES.map((example) => (
+            {SEARCH_EXAMPLES.map((example) => (
               <button
                 className="search-example"
                 key={example.query}
                 onClick={() => setQuery(example.query)}
                 type="button"
               >
-                {example.icon === "sonic" ? (
-                  <WaveformIcon aria-hidden="true" className="search-example-icon" />
-                ) : example.icon === "filters" ? (
-                  <SparkleIcon aria-hidden="true" className="search-example-icon" />
-                ) : (
-                  <MagnifyingGlassIcon aria-hidden="true" className="search-example-icon" />
-                )}
+                <SearchExampleGlyph className="search-example-icon" icon={example.icon} />
                 {example.query}
               </button>
             ))}
@@ -495,23 +545,42 @@ function SearchDialog({
   );
 }
 
-// ── The trigger ──────────────────────────────────────────────────────────────────────
+// ── The one dialog, and the two ways in ──────────────────────────────────────────────
 
 /**
- * The one control in the top bar, and the ⌘K listener behind it. Mounted once inside
- * `PublicChrome`, so the shortcut works from every public page — the trigger is a way in, not
- * the only way in.
- *
- * `⌘K` on Apple, `Ctrl+K` elsewhere. The hint renders from the same check, so it never tells
- * a Windows reader to press a key their keyboard does not have.
+ * The search controller: `open()` with nothing to land in an empty field, or with a query to land
+ * already answering.
  */
-export function SearchTrigger(): ReactNode {
-  const [open, setOpen] = useState(false);
-  const [isApple, setIsApple] = useState(false);
+export type SearchController = { open: (query?: string) => void };
 
-  useEffect(() => {
-    setIsApple(/mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent));
-  }, []);
+const SearchContext = createContext<SearchController | undefined>(undefined);
+
+/**
+ * ONE dialog and ONE ⌘K listener for the whole public app, mounted by `PublicChrome`.
+ *
+ * It is a provider rather than state inside the trigger because search now has TWO ways in — the
+ * colophon's quiet glyph on every page, and the front door's large seeding entry with its example
+ * pills. Two mounted dialogs would mean two ⌘K owners and two answer surfaces to keep in step; one
+ * provider means the ways in are genuinely just doors onto the same room.
+ */
+export function SearchProvider({ children }: { children: ReactNode }): ReactNode {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState<{ query: string; token: number }>();
+
+  // A monotonic token, not the query string: opening on the SAME example twice has to re-seed, and
+  // the token is the only thing that changes on the second click.
+  const controller = useMemo<SearchController>(
+    () => ({
+      open: (query?: string) => {
+        if (query !== undefined) {
+          setSeed((current) => ({ query, token: (current?.token ?? 0) + 1 }));
+        }
+
+        setOpen(true);
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
@@ -527,29 +596,71 @@ export function SearchTrigger(): ReactNode {
   }, []);
 
   return (
-    <>
-      <button
-        aria-keyshortcuts={isApple ? "Meta+K" : "Control+K"}
-        aria-label="Search the archive"
-        className="search-trigger"
-        onClick={() => setOpen(true)}
-        type="button"
-      >
-        <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
-        <span className="search-trigger-label">Search</span>
-        {/* The key hint is a VISUAL affordance only. Left exposed, the button's visible text reads
-            "Search ⌘K" while its accessible name is "Search the archive" — the visible label is
-            then not contained in the accessible name, which is a WCAG 2.5.3 failure (Lighthouse's
-            `label-content-name-mismatch`) and, worse, leaves a voice-control user saying a phrase
-            the button does not answer to. Hidden, the visible label is "Search", which the
-            accessible name does contain; `aria-keyshortcuts` above already tells assistive tech
-            about the shortcut, in the form it is meant to be announced. */}
-        <kbd aria-hidden="true" className="search-trigger-kbd">
-          {isApple ? "⌘K" : "Ctrl K"}
-        </kbd>
-      </button>
-
-      <SearchDialog onOpenChange={setOpen} open={open} />
-    </>
+    <SearchContext.Provider value={controller}>
+      {children}
+      <SearchDialog onOpenChange={setOpen} open={open} seed={seed} />
+    </SearchContext.Provider>
   );
+}
+
+/**
+ * Reach the one dialog from anywhere under the chrome. Outside a provider (the chromeless
+ * full-bleed surfaces) it is a no-op rather than a throw: a way IN that cannot open is a dead
+ * control, never a crashed page.
+ */
+export function useSearchController(): SearchController {
+  const controller = useContext(SearchContext);
+
+  return controller ?? NO_SEARCH;
+}
+
+const NO_SEARCH: SearchController = { open: () => {} };
+
+/**
+ * The one control in the top bar. Mounted once inside `PublicChrome`, beside the provider that owns
+ * the dialog and the shortcut — the trigger is a way in, not the only way in.
+ *
+ * `⌘K` on Apple, `Ctrl+K` elsewhere. The hint renders from the same check, so it never tells
+ * a Windows reader to press a key their keyboard does not have.
+ */
+export function SearchTrigger(): ReactNode {
+  const { open } = useSearchController();
+  const isApple = useIsApple();
+
+  return (
+    <button
+      aria-keyshortcuts={isApple ? "Meta+K" : "Control+K"}
+      aria-label="Search the archive"
+      className="search-trigger"
+      onClick={() => open()}
+      type="button"
+    >
+      <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
+      <span className="search-trigger-label">Search</span>
+      {/* The key hint is a VISUAL affordance only. Left exposed, the button's visible text reads
+          "Search ⌘K" while its accessible name is "Search the archive" — the visible label is
+          then not contained in the accessible name, which is a WCAG 2.5.3 failure (Lighthouse's
+          `label-content-name-mismatch`) and, worse, leaves a voice-control user saying a phrase
+          the button does not answer to. Hidden, the visible label is "Search", which the
+          accessible name does contain; `aria-keyshortcuts` above already tells assistive tech
+          about the shortcut, in the form it is meant to be announced. */}
+      <kbd aria-hidden="true" className="search-trigger-kbd">
+        {isApple ? "⌘K" : "Ctrl K"}
+      </kbd>
+    </button>
+  );
+}
+
+/**
+ * Whether the reader is on an Apple keyboard, resolved after mount. Shared by both ways in so the
+ * colophon glyph and the front door's field never disagree about which key to name.
+ */
+export function useIsApple(): boolean {
+  const [isApple, setIsApple] = useState(false);
+
+  useEffect(() => {
+    setIsApple(/mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent));
+  }, []);
+
+  return isApple;
 }

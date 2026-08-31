@@ -110,6 +110,13 @@ export type NavNerd =
 // went; nothing here would be here if he had stayed home.
 const travelItems: NavItem[] = [
   {
+    blurb: "Every banger I've certified, newest first.",
+    id: "findings",
+    kind: "route",
+    label: "Findings",
+    to: "/findings",
+  },
+  {
     blurb: "Every finding, one coordinate each.",
     id: "log",
     kind: "route",
@@ -156,6 +163,15 @@ const travelItems: NavItem[] = [
 // The heading names the ACT, not the shelf, and it is deliberately NOT the internal
 // word for this tier — that word never appears in public copy (docs/album-entity.md).
 const browseItems: NavItem[] = [
+  {
+    // The whole list, the shelf the other three are cut out of. It leads because it is the widest
+    // door: an artist, a record, and a label are all ways of narrowing this one.
+    blurb: "Every track I hold, newest release first.",
+    id: "tracks",
+    kind: "route",
+    label: "Tracks",
+    to: "/tracks",
+  },
   {
     blurb: "Everyone I've found a banger from.",
     id: "artists",

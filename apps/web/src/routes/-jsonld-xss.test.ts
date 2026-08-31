@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { serializeJsonLd } from "@/lib/json-ld";
-import { Route as HomeRoute } from "./index";
+import { Route as FindingsRoute } from "./findings";
+import { Route as FrontDoorRoute } from "./index";
 import { Route as LogRoute } from "./log.$logId";
 
 // The stored-XSS regression guard for the JSON-LD emitters.
@@ -52,7 +53,7 @@ describe("jsonLdScript (serializeJsonLd)", () => {
 });
 
 describe("JSON-LD output encoding (stored-XSS guard)", () => {
-  it("homepage MusicPlaylist neutralizes a </script> in a track title/artist/album", () => {
+  it("the archive page's MusicPlaylist neutralizes a </script> in a track title/artist/album", () => {
     const loaderData = {
       totalCount: 1,
       tracks: [
@@ -66,7 +67,7 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
       ],
     } as never;
 
-    const head = HomeRoute.options.head?.({ loaderData } as never) as HeadResult;
+    const head = FindingsRoute.options.head?.({ loaderData } as never) as HeadResult;
     const playlist = ldChildren(head).find((c) => c.includes("MusicPlaylist"));
 
     expect(playlist).toBeDefined();
@@ -83,6 +84,34 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
     }
     expect(firstTrack.name).toBe(PAYLOAD);
     expect(firstTrack.inAlbum.name).toBe(PAYLOAD);
+  });
+
+  it("the front door's CollectionPage ItemList neutralizes a </script> in a finding", () => {
+    // The front door describes only what it RENDERS — the lead plus the findings band — as an
+    // ItemList of MusicRecordings. Same sink, same escaping, different emitter.
+    const loaderData = {
+      counts: { albums: 0, artists: 0, labels: 0, tracks: 0 },
+      findings: [{ artists: [PAYLOAD], logId: "004.7.2I", title: PAYLOAD }],
+      findingsTotal: 1,
+      lead: { artists: [PAYLOAD], logId: "011.6.8K", title: PAYLOAD },
+      releaseWindowDays: 30,
+      releases: [],
+    } as never;
+
+    const head = FrontDoorRoute.options.head?.({ loaderData } as never) as HeadResult;
+    const collection = ldChildren(head).find((c) => c.includes("CollectionPage"));
+
+    expect(collection).toBeDefined();
+    expect(collection).not.toContain("</script>");
+    expect(collection).toContain("\\u003c/script\\u003e");
+
+    const parsed = JSON.parse(collection as string) as {
+      mainEntity: { itemListElement: Array<{ item: { name: string } }>; numberOfItems: number };
+    };
+
+    // The lead leads, then the band — exactly the set the page renders, never the whole archive.
+    expect(parsed.mainEntity.numberOfItems).toBe(2);
+    expect(parsed.mainEntity.itemListElement[0]?.item.name).toBe(PAYLOAD);
   });
 
   it("log page MusicRecording neutralizes a </script> in the title and the operator note", () => {

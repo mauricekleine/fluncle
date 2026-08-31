@@ -365,6 +365,11 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
 
       return [
         staticEntry(`${siteUrl}/`, latest),
+        // The cover-led archive page: every finding, newest-found first, on the logbook plate.
+        // It shares the front door's `latest` stamp because it is the same content, and both are
+        // indexable and self-canonical — `/` is the door (search, one edited lead, a few findings,
+        // what just came out, the four hubs), `/findings` is the whole feed.
+        staticEntry(`${siteUrl}/findings`, latest),
         staticEntry(`${siteUrl}/log`, latest),
         staticEntry(`${siteUrl}/logbook`, logbookLatest),
         staticEntry(`${siteUrl}/mixtapes`, latest),

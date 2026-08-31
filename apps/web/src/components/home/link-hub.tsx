@@ -86,7 +86,7 @@ function SectionHeader({ children, className = "" }: { children: string; classNa
 // (decision 5): the /galaxies lens 404s until the operator has NAMED the whole
 // sonic map, so the link only shows once the map is fully named — resolved on the
 // home loader (isGalaxyMapFullyNamed) so the homepage never links a dead lens.
-export function HomeLinkHub({ galaxiesLive = false }: { galaxiesLive?: boolean }) {
+export function FindingsLinkHub({ galaxiesLive = false }: { galaxiesLive?: boolean }) {
   return (
     <div className="mt-3 flex flex-1 flex-col">
       {/* The actions: the gold Galaxy CTA (One Sun), the listen pair (Playlist +

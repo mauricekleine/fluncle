@@ -150,13 +150,14 @@ describe("Cache-Control on the edge-cached HTML surfaces", () => {
 
     for (const path of [
       // The paginated catalogue hubs.
-      "/",
       "/artists",
       "/albums",
       "/labels",
       "/tracks",
       "/fresh",
       // The stable public pages enrolled at the hub policy (previously emitted no directive).
+      "/",
+      "/findings",
       "/galaxies",
       "/galaxies/drift",
       "/mixtapes",

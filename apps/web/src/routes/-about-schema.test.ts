@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { fluncleEntityId, fluncleWebsiteId } from "@/lib/fluncle-links";
 import { fluncleDescription, fluncleMetaDescription } from "@/lib/identity";
 import { faqAnchor, Route as AboutRoute } from "./about";
-import { Route as HomeRoute } from "./index";
+import { Route as FindingsRoute } from "./findings";
+import { Route as FrontDoorRoute } from "./index";
 import { MEASURED_FAQ_ANCHOR } from "./log.$logId";
 import { Route as ReachRoute } from "./reach";
 
@@ -107,7 +108,18 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
       .map((script) => JSON.parse(script.children) as Record<string, unknown>);
   }
 
-  const homeHead = HomeRoute.options.head?.({
+  // The FRONT DOOR (`/`) carries the site-level `WebSite` node — highest authority, hit first.
+  const homeHead = FrontDoorRoute.options.head?.({
+    loaderData: {
+      counts: { albums: 0, artists: 0, labels: 0, tracks: 0 },
+      findings: [],
+      findingsTotal: 0,
+      releaseWindowDays: 30,
+      releases: [],
+    },
+  } as never) as HeadResult;
+  // The ARCHIVE page (`/findings`) carries the `MusicPlaylist` — it IS the playlist of findings.
+  const findingsHead = FindingsRoute.options.head?.({
     loaderData: { totalCount: 0, tracks: [] },
   } as never) as HeadResult;
 
@@ -117,31 +129,52 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
     expect(person?.["@id"]).toBe(fluncleEntityId);
   });
 
-  it("the home WebSite carries its own @id and is publisher-ed BY the canonical node", () => {
+  it("the front door's WebSite carries its own @id and is publisher-ed BY the canonical node", () => {
     const website = schemasOf(homeHead).find((schema) => schema["@type"] === "WebSite");
 
     expect(website?.["@id"]).toBe(fluncleWebsiteId);
     expect(website?.publisher).toEqual({ "@id": fluncleEntityId });
   });
 
-  it("the home MusicPlaylist is created BY the canonical node and does not re-declare sameAs", () => {
-    const playlist = schemasOf(homeHead).find((schema) => schema["@type"] === "MusicPlaylist");
+  it("the archive page's MusicPlaylist is created BY the canonical node and re-declares no sameAs", () => {
+    const playlist = schemasOf(findingsHead).find((schema) => schema["@type"] === "MusicPlaylist");
 
     expect(playlist?.creator).toEqual({ "@id": fluncleEntityId });
     // The identity graph lives once (on /about), not duplicated here.
     expect(playlist).not.toHaveProperty("sameAs");
   });
 
-  it("carries its OWN meta description, never the homepage's entity line", () => {
-    // Two indexable pages may not go to search wearing one description. `/` keeps the canonical
-    // ≤155-char entity line; `/about` describes what /about answers, under the same cap.
+  it("carries its OWN meta description, never the front door's entity line", () => {
+    // Two indexable pages may not go to search wearing one description. `/` sets NO description of
+    // its own, so it inherits the root's canonical ≤155-char entity line; `/about` describes what
+    // /about answers, under the same cap.
     const aboutHead = AboutRoute.options.head?.({} as never) as HeadResult;
     const aboutDescription = metaDescriptionOf(aboutHead);
 
+    expect(metaDescriptionOf(homeHead)).toBeUndefined();
     expect(aboutDescription).toBeDefined();
-    expect(aboutDescription).not.toBe(metaDescriptionOf(homeHead));
     expect(aboutDescription).not.toBe(fluncleMetaDescription);
     expect((aboutDescription ?? "").length).toBeLessThanOrEqual(155);
+  });
+
+  it("the archive page carries its own description, distinct from the front door's inherited one", () => {
+    // `/` and `/findings` are BOTH indexable and both about the archive, which is exactly the pair
+    // most at risk of shipping one description twice. `/` inherits the root entity line; `/findings`
+    // states what its own page is.
+    const findingsDescription = metaDescriptionOf(findingsHead);
+
+    expect(findingsDescription).toBeDefined();
+    expect(findingsDescription).not.toBe(fluncleMetaDescription);
+    expect((findingsDescription ?? "").length).toBeLessThanOrEqual(160);
+  });
+
+  it("the front door and the archive page each self-canonicalize to their own URL", () => {
+    // The pair must never point at each other: two real pages, two canonicals, no consolidation.
+    expect(homeHead.links).toContainEqual({ href: "https://www.fluncle.com/", rel: "canonical" });
+    expect(findingsHead.links).toContainEqual({
+      href: "https://www.fluncle.com/findings",
+      rel: "canonical",
+    });
   });
 
   it("the reach page hangs its interactionStatistic on the canonical node (not a parallel entity)", () => {

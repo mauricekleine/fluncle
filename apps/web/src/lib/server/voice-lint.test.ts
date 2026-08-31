@@ -46,7 +46,7 @@
 //     violations it asserts on (this file included).
 //   - `*.d.ts` files are skipped: declarations carry no copy.
 //   - TanStack's `-*` route-helper files ARE scanned. They are excluded from
-//     ROUTING, not from copy (`-docs-page.tsx` renders UI, `-home-data.ts` carries
+//     ROUTING, not from copy (`-docs-page.tsx` renders UI, `-findings-data.ts` carries
 //     page strings), and including them measured clean.
 //
 // OUT OF SCOPE — each a real boundary with a real cost, not a claim that nothing

@@ -1,4 +1,4 @@
-// `loadHomeData` — the home feed's server-side composition — against a REAL libSQL database (the
+// `loadFindingsData` — the `/findings` feed's server-side composition — against a REAL libSQL database (the
 // migrations, the finding inner-join, the mixtape merge). The home page is the highest-traffic
 // surface, and its loader is a three-read fan-out whose merge rules (findings + mixtapes interleaved
 // by date, a findings-only `totalCount`, the newest-finding-with-footage resolved across the WHOLE
@@ -8,7 +8,7 @@
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "@/lib/server/integration-db";
-import { HOME_PAGE_SIZE, loadHomeData } from "./-home-data";
+import { FINDINGS_PAGE_SIZE, loadFindingsData } from "./-findings-data";
 
 // The one live database, swapped in fresh for each test. `getDb` closes over it, so the REAL query
 // functions (`listTracks`, `getLiveState`) run REAL SQL against the REAL
@@ -91,9 +91,9 @@ afterEach(() => {
   db.close();
 });
 
-describe("loadHomeData — the empty archive", () => {
+describe("loadFindingsData — the empty archive", () => {
   it("returns an honest empty shape, no story, and offline", async () => {
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
     expect(data.tracks).toEqual([]);
     expect(data.totalCount).toBe(0);
@@ -106,7 +106,7 @@ describe("loadHomeData — the empty archive", () => {
   });
 });
 
-describe("loadHomeData — the findings/catalogue split drives totalCount", () => {
+describe("loadFindingsData — the findings/catalogue split drives totalCount", () => {
   it("returns only findings and counts only findings (a catalogue row is invisible to both)", async () => {
     await seedFinding("t-a", "001.1.1A", day(3));
     await seedFinding("t-b", "002.1.1A", day(2));
@@ -115,7 +115,7 @@ describe("loadHomeData — the findings/catalogue split drives totalCount", () =
     // move the count (the count is a `count(*)` over the finding inner-join).
     await seedCatalogueTrack(db, { title: "Uncertified Cut", trackId: "cat-1" });
 
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
     expect(data.tracks).toHaveLength(3);
     expect(data.tracks.every((item) => item.type !== "mixtape")).toBe(true);
@@ -127,14 +127,14 @@ describe("loadHomeData — the findings/catalogue split drives totalCount", () =
   });
 });
 
-describe("loadHomeData — the mixtape merge", () => {
+describe("loadFindingsData — the mixtape merge", () => {
   it("interleaves a published mixtape into the feed by its added_at", async () => {
     await seedFinding("t-new", "010.1.1A", day(5));
     await seedFinding("t-old", "011.1.1A", day(1));
     // A mixtape recorded BETWEEN the two findings — it sorts second, ahead of the older finding.
     await seedMixtape("mix-1", "019.F.1A", day(3), "Deep Space Session");
 
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
     expect(data.tracks).toHaveLength(3);
     expect(data.tracks.map((item) => item.type)).toEqual(["finding", "mixtape", "finding"]);
@@ -153,15 +153,15 @@ describe("loadHomeData — the mixtape merge", () => {
             values (?, ?, ?, 'draft', ?, '2026-01-03', '2026-01-03')`,
     });
 
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
     expect(data.tracks).toHaveLength(1);
     expect(data.tracks[0]?.type).toBe("finding");
   });
 });
 
-describe("loadHomeData — page one and the stories entry point", () => {
-  it("caps page one at HOME_PAGE_SIZE, sets a nextCursor, and returns the newest rows", async () => {
+describe("loadFindingsData — page one and the stories entry point", () => {
+  it("caps page one at FINDINGS_PAGE_SIZE, sets a nextCursor, and returns the newest rows", async () => {
     // Twelve findings, oldest→newest — more than one page, so page one is capped and a cursor opens.
     for (let n = 1; n <= 12; n += 1) {
       await seedFinding(
@@ -171,9 +171,9 @@ describe("loadHomeData — page one and the stories entry point", () => {
       );
     }
 
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
-    expect(data.tracks).toHaveLength(HOME_PAGE_SIZE);
+    expect(data.tracks).toHaveLength(FINDINGS_PAGE_SIZE);
     // A twelfth finding sits past the page, so the infinite-query contract needs a cursor to fetch on.
     expect(typeof data.nextCursor).toBe("string");
     // The ten NEWEST (day 12 → day 3), newest first.
@@ -194,7 +194,7 @@ describe("loadHomeData — page one and the stories entry point", () => {
     // The stories entry must still find it, because the footage read scans the WHOLE archive.
     await giveFooting("s-01");
 
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
     expect(data.newestStoryLogId).toBe("201.1.1A");
     // And it is genuinely off page one — proving the loader did not just read the first page.
@@ -211,13 +211,13 @@ describe("loadHomeData — page one and the stories entry point", () => {
     await giveFooting("v-1");
     await giveFooting("v-3");
 
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
     expect(data.newestStoryLogId).toBe("032.1.1A");
   });
 });
 
-describe("loadHomeData — the public strip (no private capture fields leak)", () => {
+describe("loadFindingsData — the public strip (no private capture fields leak)", () => {
   it("strips PRIVATE_TRACK_FIELDS from every feed row (regression: the SSR feed once shipped sourceAudioKey)", async () => {
     await seedFinding("t-cap", "040.1.1A", day(2));
     // A CAPTURED finding — its `tracks` row carries the R2 key of the copyrighted full song plus the
@@ -225,7 +225,7 @@ describe("loadHomeData — the public strip (no private capture fields leak)", (
     // these straight to the world; it is the one public read that skipped `toPublicTrackListItem`.
     await markCaptured("t-cap");
 
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
     expect(data.tracks).toHaveLength(1);
     const item = data.tracks[0];
@@ -243,7 +243,7 @@ describe("loadHomeData — the public strip (no private capture fields leak)", (
   });
 });
 
-describe("loadHomeData — the Galaxies gate is NOT the home loader's job", () => {
+describe("loadFindingsData — the Galaxies gate is NOT this loader's job", () => {
   it("never carries a galaxiesLive of its own (the root loader owns that one read)", async () => {
     await db.execute({
       args: [],
@@ -251,7 +251,7 @@ describe("loadHomeData — the Galaxies gate is NOT the home loader's job", () =
             values ('g1', 'g-01', '[]', 'The Deep', 'the-deep', '2026-01-01', '2026-01-01')`,
     });
 
-    const data = await loadHomeData();
+    const data = await loadFindingsData();
 
     // The home page reads `galaxiesLive` from the root loader, so this loader must not ask the
     // database again or expose a duplicate field.

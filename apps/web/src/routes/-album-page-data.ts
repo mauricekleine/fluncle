@@ -1,5 +1,5 @@
 // The album page's server-side resolution, lifted out of `album.$slug.tsx` — the
-// `-home-data.ts` / `-artist-page-data.ts` sibling-module pattern.
+// `-findings-data.ts` / `-artist-page-data.ts` sibling-module pattern.
 //
 // WHY IT IS NOT IN THE ROUTE FILE. A route's `loader`, `head` and `validateSearch` live in the
 // route's CRITICAL half: only the `component` is auto-split into a lazy chunk, so everything
