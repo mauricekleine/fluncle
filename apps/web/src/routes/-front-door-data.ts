@@ -86,6 +86,11 @@ export async function loadFrontDoorData(now: Date = new Date()): Promise<FrontDo
     // One extra row, so dropping the lead (when it is also the newest finding) still fills the block.
     listTracks({ lean: true, limit: FRONT_DOOR_FINDINGS + 1 }),
     listFreshReleases(now),
+    // The four shelf sizes. Each entity count is the INDEXABLE set — every entity whose page
+    // clears the thin-content floor, the same set the sitemap submits — which is a hair NARROWER
+    // than what the hub itself lists: `hubInclusionWhere` also admits a sub-floor entity that
+    // carries a certified finding. The card therefore never promises more than the page holds,
+    // which is the direction to be wrong in; the alternative would have a count outrun its own hub.
     countAllTracks(),
     countIndexableArtists(),
     countIndexableLabels(),

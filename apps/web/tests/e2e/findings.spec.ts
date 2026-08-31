@@ -1,10 +1,10 @@
-// The pilot public-flow spec: the home page (`/`).
+// The archive page (`/findings`) — the cover-led feed of every certified finding.
 //
 // It proves the four things every public-page spec should prove, so a follow-up
 // spec can copy this shape (see `tests/e2e/README.md`):
 //   1. SSR — the server returns 200 AND the seeded findings are in the initial
 //      HTML (what a crawler with no JavaScript sees; the whole point of SSRing the
-//      feed, per the route comment in `src/routes/index.tsx`).
+//      feed, per the route comment in `src/routes/findings.tsx`).
 //   2. Identity — the page renders the SEEDED finding titles (assert on identity,
 //      not counts, so the check does not rot as the fixture set grows).
 //   3. Hydration — a genuinely client-only control responds to a click (a finding
@@ -36,7 +36,9 @@ function watchForErrors(page: Page): string[] {
   return problems;
 }
 
-test("home page SSRs the seeded findings, hydrates, and logs no errors", async ({ page }) => {
+test("the archive page SSRs the seeded findings, hydrates, and logs no errors", async ({
+  page,
+}) => {
   // Keep the run hermetic: a few product URLs (a mixtape row's cover) are hardcoded
   // to the absolute prod host and would 404 against synthetic fixtures. Stubbing any
   // non-local request isolates the suite without weakening the no-errors gate below.
@@ -46,7 +48,7 @@ test("home page SSRs the seeded findings, hydrates, and logs no errors", async (
 
   // (1) SSR — the raw server response, before any client JS runs, already carries
   // the findings. `page.request` does no rendering, so this is the crawler's view.
-  const rawHtml = await (await page.request.get("/")).text();
+  const rawHtml = await (await page.request.get("/findings")).text();
   for (const title of SEEDED_FINDING_TITLES) {
     expect(rawHtml, `SSR HTML should contain "${title}"`).toContain(title);
   }
@@ -54,7 +56,7 @@ test("home page SSRs the seeded findings, hydrates, and logs no errors", async (
   // The navigation itself returns 200. `networkidle` lets the Vite DEV module
   // graph finish loading — the client bundle is compiled on demand here, so
   // hydration lands seconds after `load`.
-  const response = await page.goto("/", { waitUntil: "networkidle" });
+  const response = await page.goto("/findings", { waitUntil: "networkidle" });
   expect(response?.status()).toBe(200);
 
   // (2) Identity — every seeded finding renders, plus the seeded mixtape (proving
@@ -98,7 +100,7 @@ test("the cover backdrop can paint: body stays transparent under the z:-2 pseudo
   // Scalar's sheet away). See the paint contract beside `body::before` in
   // src/styles.css.
   await blockExternalRequests(page);
-  await page.goto("/");
+  await page.goto("/findings");
 
   const paint = await page.evaluate(() => ({
     backdropImage: getComputedStyle(document.body, "::before").backgroundImage,

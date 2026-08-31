@@ -23,7 +23,9 @@ export function FrontDoorReleases({
 }): ReactNode {
   if (releases.length === 0) {
     return (
-      <p className="fd-empty empty-scanlines">No new releases in the last {windowDays} days.</p>
+      <p className="fd-empty empty-scanlines">
+        Nothing new off the press in the last {windowDays} days. Quiet stretch.
+      </p>
     );
   }
 

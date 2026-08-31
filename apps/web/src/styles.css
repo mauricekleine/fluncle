@@ -180,11 +180,11 @@
 
 /* ————— THE SPACING SCALE —————
 
-   ONE rhythm, so a long page has a beat rather than a pile of one-off gaps. Every
-   step is a real ratio off the 1rem base (roughly 1.4×, rounded to values that land
-   on a 4px grid at the default root size), and a surface picks a STEP rather than
-   inventing a number. The canon read is DESIGN.md §5, "The Long Scroll"; this block
-   is that scale in CSS.
+   ONE rhythm, so a long page has a beat rather than a pile of one-off gaps. From
+   `xs` up each step is roughly 1.5× the last off the 1rem base; the three below it
+   are hand-set, because a ratio that size cannot express the small gaps cleanly. A
+   surface picks a STEP rather than inventing a number. The canon read is DESIGN.md
+   §5, "The Long Scroll"; this block is that scale in CSS.
 
    `--space-band` is the one responsive member: the gap BETWEEN sections of a long
    scroll. It has to breathe on a 1440px desktop and stay walkable on a 390px phone,
@@ -203,7 +203,6 @@
   --space-lg: 2.25rem;
   --space-xl: 3.5rem;
   --space-2xl: 5.25rem;
-  --space-3xl: 8rem;
   --space-band: clamp(var(--space-xl), 7vw, var(--space-2xl));
 }
 
@@ -8225,6 +8224,12 @@ a.catalogue-letter:focus-visible {
   line-height: 1.2;
   margin-top: var(--space-3xs);
   overflow-wrap: anywhere;
+}
+
+.fd-lead-imprint {
+  color: var(--muted-foreground);
+  font-size: 0.84rem;
+  margin-top: var(--space-3xs);
 }
 
 .fd-lead-note {

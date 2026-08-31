@@ -196,14 +196,14 @@ function FrontDoorPage() {
           so no band carries a pane of its own. */}
       <article className="fd-plate">
         <header className="fd-masthead">
-          <h1 className="fd-nameplate">Fluncle</h1>
-          <p className="fd-tagline">Drum &amp; bass bangers from another dimension.</p>
+          <h1 className="fd-nameplate">Fluncle&apos;s Findings</h1>
           <p className="fd-standfirst">
-            I go out, I find bangers, I log every find. Start wherever you like.
+            Now and then a tune lands and my knees go before I do. That one gets logged, and it is
+            in here with everything else I brought back. Start wherever you like, fam.
           </p>
         </header>
 
-        <FrontDoorSection id="fd-search" title="Search the archive">
+        <FrontDoorSection id="fd-search" quietTitle title="Search the archive">
           <FrontDoorSearch />
         </FrontDoorSection>
 
@@ -215,20 +215,20 @@ function FrontDoorPage() {
 
         <FrontDoorSection
           id="fd-findings"
-          intro="Tracks I heard, rewound, and logged. Newest first."
+          intro="I rewound every one of these before I logged it. Freshest at the front, so take your pick, fam."
           link={
             findingsTotal > 0
               ? { label: `All ${findingsCount(findingsTotal)}`, to: "/findings" }
               : { label: "The whole log", to: "/findings" }
           }
-          title="Fluncle's Findings"
+          title="Latest findings"
         >
           <FrontDoorFindings findings={findings} />
         </FrontDoorSection>
 
         <FrontDoorSection
           id="fd-fresh"
-          intro={`The newest drum & bass releases from the last ${releaseWindowDays} days.`}
+          intro={`Still warm off the press: the last ${releaseWindowDays} days of drum & bass. Get your ears on it early.`}
           link={{ label: "All new releases", to: "/fresh" }}
           title="Fresh"
         >
@@ -237,8 +237,8 @@ function FrontDoorPage() {
 
         <FrontDoorSection
           id="fd-browse"
-          intro="Everything printed on the sleeve: who made it, what it came off, who pressed it. This is what I dig through."
-          title="Browse"
+          intro="I dig through these crates most nights, hunting whatever makes my nose scrunch. They are open, have a rummage."
+          title="Dig through the crates"
         >
           <FrontDoorBrowse counts={counts} />
         </FrontDoorSection>

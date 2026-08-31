@@ -7,7 +7,7 @@
 // rather than a stack of landing-page panels (PRODUCT.md's anti-references, DESIGN.md's Don'ts).
 //
 // Rhythm is carried entirely by the documented spacing scale (`--space-*` in styles.css): sections
-// are separated by `--space-3xl`, a section's header sits `--space-md` above its body, and the
+// are separated by `--space-band`, a section's header sits `--space-md` above its body, and the
 // heading and its intro sit `--space-2xs` apart. A section never invents a gap.
 //
 // The heading is a real `<h2>` and the body is `aria-labelledby` it, so the page outline is
@@ -25,6 +25,7 @@ export function FrontDoorSection({
   id,
   intro,
   link,
+  quietTitle = false,
   title,
 }: {
   children: ReactNode;
@@ -33,6 +34,12 @@ export function FrontDoorSection({
   /** One line, or none. Never two. */
   intro?: string;
   link?: SectionLink;
+  /**
+   * Render the heading `sr-only`. Still a real `<h2>` in the outline — a band is always jumpable —
+   * but not printed, for the one band whose own control already says the heading's words out loud
+   * (the search field). Never a way to drop a heading from the outline.
+   */
+  quietTitle?: boolean;
   title: string;
 }): ReactNode {
   const headingId = `${id}-heading`;
@@ -41,7 +48,7 @@ export function FrontDoorSection({
     <section aria-labelledby={headingId} className="fd-section" id={id}>
       <header className="fd-section-head">
         <div className="fd-section-titling">
-          <h2 className="fd-section-title" id={headingId}>
+          <h2 className={quietTitle ? "sr-only" : "fd-section-title"} id={headingId}>
             {title}
           </h2>
           {intro ? <p className="fd-section-intro">{intro}</p> : undefined}

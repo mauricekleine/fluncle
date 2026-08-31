@@ -10,6 +10,10 @@
 // uncertified track can never reach this slot, and the surface never says so — the register IS the
 // claim (DESIGN.md's Unlit Rule).
 //
+// The placement carries the full instrument readout (The Readout Rule): the chip row — duration,
+// then BPM, then key — and the release year on its metadata line beside the imprint, wherever the
+// data exists. A missing chip is a data gap upstream, never a layout choice.
+//
 // ── LCP ──────────────────────────────────────────────────────────────────────────────────────
 // This cover is the front door's largest contentful element. It fetches EAGERLY at high priority
 // (`priority`, which `TrackArtwork` turns into `loading="eager" fetchpriority="high"`), and the route
@@ -23,6 +27,7 @@
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
+import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
 import { formatDateLong } from "@/lib/format";
@@ -34,6 +39,7 @@ const LEAD_COVER_SIZE = "large" as const;
 
 export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
   const line = artistTitleLine(lead);
+  const releaseYear = lead.releaseDate?.slice(0, 4);
 
   return (
     <article className="fd-lead">
@@ -46,6 +52,22 @@ export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
       <div className="fd-lead-body">
         {lead.logId ? <p className="fd-lead-coordinate">{lead.logId}</p> : undefined}
         <p className="fd-lead-line">{line}</p>
+        {/* The imprint line, the same one the Track Row prints: the label as a graph link when the
+            imprint has a page, plain text when it does not, with the release year beside it and
+            never inside the link (a year names no entity). A missing piece drops — an honest data
+            gap, never a layout choice (The Readout Rule). */}
+        {lead.label || releaseYear ? (
+          <p className="fd-lead-imprint">
+            {lead.label && lead.labelSlug ? (
+              <GraphLink kind="label" slug={lead.labelSlug}>
+                {lead.label}
+              </GraphLink>
+            ) : (
+              lead.label
+            )}
+            {releaseYear ? (lead.label ? ` (${releaseYear})` : releaseYear) : ""}
+          </p>
+        ) : undefined}
         {lead.note ? <p className="fd-lead-note">{lead.note}</p> : undefined}
         <TrackChips
           bpm={lead.bpm}

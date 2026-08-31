@@ -10,10 +10,19 @@
 // certifications, none of them separates the two registers, and none of them attaches a noun or a
 // badge that would imply Fluncle stands behind every indexed row. The findings are a DIFFERENT band,
 // further up the page, and the distinction is carried by placement and light alone.
+//
+// The BLURB is held to the same rule and it is the easier one to get wrong. Each hub lists every
+// entity Fluncle holds, certified and catalogue alike (`countIndexableHubEntities` gates on
+// `renderable_track_count` and knows nothing about certification), so a line like "everyone I've
+// found a banger from" printed beside that number would claim he stands behind rows he has ruled on
+// nothing about. The blurbs are therefore read from the nav model, which owns them for the same four
+// hubs — one sentence per shelf, in one place, held to the superset rule there.
 
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { type FrontDoorCounts } from "@/lib/front-door";
+import { formatCount } from "@/lib/format";
+import { navSections } from "@/lib/nav-model";
 
 type BrowseCard = {
   /** One line, self-contained: it must name its own nouns, since a card is read on its own. */
@@ -25,35 +34,48 @@ type BrowseCard = {
   to: string;
 };
 
-const countFormatter = new Intl.NumberFormat("en-US");
-
+/** "1,234 albums" — the shelf's real size, grouped by the same formatter every public count uses. */
 const plural = (count: number, one: string, many: string): string =>
-  `${countFormatter.format(count)} ${count === 1 ? one : many}`;
+  `${formatCount(count)} ${count === 1 ? one : many}`;
+
+/**
+ * The blurb the nav model already publishes for a hub, read rather than re-typed. The colophon and
+ * this card print the same sentence about the same shelf, so one of them owning it is the only way
+ * they cannot drift — and the blurb is load-bearing here (see the Unlit note above), so a silent
+ * divergence would be a claim, not a wording nit.
+ */
+function navBlurb(id: string): string {
+  const item = navSections
+    .flatMap((section) => section.items)
+    .find((candidate) => candidate.id === id);
+
+  return item?.blurb ?? "";
+}
 
 const CARDS: BrowseCard[] = [
   {
-    blurb: "Every track I hold, newest release first.",
+    blurb: navBlurb("tracks"),
     count: (counts) => counts.tracks,
     label: "Tracks",
     noun: (count) => plural(count, "track", "tracks"),
     to: "/tracks",
   },
   {
-    blurb: "Everyone I've found a banger from.",
+    blurb: navBlurb("artists"),
     count: (counts) => counts.artists,
     label: "Artists",
     noun: (count) => plural(count, "artist", "artists"),
     to: "/artists",
   },
   {
-    blurb: "Every record I've pulled a track off.",
+    blurb: navBlurb("albums"),
     count: (counts) => counts.albums,
     label: "Albums",
     noun: (count) => plural(count, "album", "albums"),
     to: "/albums",
   },
   {
-    blurb: "The labels behind the bangers.",
+    blurb: navBlurb("labels"),
     count: (counts) => counts.labels,
     label: "Labels",
     noun: (count) => plural(count, "label", "labels"),

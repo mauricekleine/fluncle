@@ -83,9 +83,9 @@ test("the front door SSRs every band from real data, hydrates its search, and lo
   for (const heading of [
     "Search the archive",
     "What I'm on right now",
-    "Fluncle's Findings",
+    "Latest findings",
     "Fresh",
-    "Browse",
+    "Dig through the crates",
   ]) {
     expect(rawHtml, `SSR HTML should carry the "${heading}" band`).toContain(heading);
   }
@@ -128,9 +128,8 @@ test("the front door SSRs every band from real data, hydrates its search, and lo
   // search dialog through context), so a pre-hydration click no-ops. The retry is state-safe:
   // Escape resets to CLOSED before each attempt, because a naive loop against a toggle can
   // alternate forever.
-  const field = page
-    .getByRole("button", { name: "Search the archive" })
-    .and(page.locator(".fd-search-field"));
+  // The colophon carries the same accessible name on its own door, so scope to the page's field.
+  const field = page.locator("button.fd-search-field");
   const input = page.getByPlaceholder("A name, a coordinate, or the sound of it…");
 
   await expect(async () => {
@@ -602,4 +601,45 @@ test("the incumbent archive page is whole at /findings, and /?story= permanently
   expect(bare.status()).toBe(200);
 
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
+});
+
+test("the cover backdrop can paint on the front door: body stays transparent", async ({ page }) => {
+  // The sitewide paint contract, pinned on `/` as well as on `/findings`: `body` must stay
+  // transparent, because an opaque body background paints ABOVE the `z-index: -2` fixed
+  // pseudo-element that carries the cover art and erases the backdrop everywhere. See the contract
+  // beside `body::before` in src/styles.css.
+  await blockExternalRequests(page);
+  await page.goto("/");
+
+  const paint = await page.evaluate(() => ({
+    backdropImage: getComputedStyle(document.body, "::before").backgroundImage,
+    bodyBackground: getComputedStyle(document.body).backgroundColor,
+  }));
+
+  expect(paint.bodyBackground).toBe("rgba(0, 0, 0, 0)");
+  expect(paint.backdropImage).toContain("fluncle-cover-no-text");
+});
+
+test("every static page the sitemap submits still resolves", async ({ page }) => {
+  await blockExternalRequests(page);
+
+  // A sitemap is a submission for indexing, so a `<loc>` that does not resolve is a promise the
+  // site cannot keep. This walks the STATIC hubs the `pages` child emits — the set the front-door
+  // move touched — and requires each to answer 200 with no redirect hop. Entity and finding URLs
+  // are covered by `graph.spec.ts` and `log.spec.ts`; the point here is the hub layer.
+  const sitemap = await (await page.request.get("/sitemap/pages-1.xml")).text();
+  const locs = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1] ?? "");
+
+  expect(locs.length, "the pages child should list the static hubs").toBeGreaterThan(5);
+  // The two the move created or renamed must both be in there.
+  expect(locs.some((loc) => loc.endsWith("/"))).toBe(true);
+  expect(locs.some((loc) => loc.endsWith("/findings"))).toBe(true);
+
+  for (const loc of locs) {
+    // The sitemap names absolute prod URLs; drive the same PATH against this stack.
+    const path = new URL(loc).pathname;
+    const response = await page.request.get(path, { maxRedirects: 0 });
+
+    expect(response.status(), `${path} (submitted by the sitemap) should resolve`).toBe(200);
+  }
 });

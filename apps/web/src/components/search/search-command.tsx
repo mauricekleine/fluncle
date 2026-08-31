@@ -551,7 +551,15 @@ export function SearchDialog({
  * The search controller: `open()` with nothing to land in an empty field, or with a query to land
  * already answering.
  */
-export type SearchController = { open: (query?: string) => void };
+export type SearchController = {
+  open: (query?: string) => void;
+  /** The seed the dialog is mounted with, owned by the provider. */
+  seed?: { query: string; token: number };
+  /** The dialog's setter, so the one MOUNT POINT below can close it. */
+  setOpen: (open: boolean) => void;
+  /** Whether the dialog is open — read only by the mount point. */
+  state: boolean;
+};
 
 const SearchContext = createContext<SearchController | undefined>(undefined);
 
@@ -578,8 +586,11 @@ export function SearchProvider({ children }: { children: ReactNode }): ReactNode
 
         setOpen(true);
       },
+      seed,
+      setOpen,
+      state: open,
     }),
-    [],
+    [open, seed],
   );
 
   useEffect(() => {
@@ -595,12 +606,7 @@ export function SearchProvider({ children }: { children: ReactNode }): ReactNode
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  return (
-    <SearchContext.Provider value={controller}>
-      {children}
-      <SearchDialog onOpenChange={setOpen} open={open} seed={seed} />
-    </SearchContext.Provider>
-  );
+  return <SearchContext.Provider value={controller}>{children}</SearchContext.Provider>;
 }
 
 /**
@@ -614,7 +620,7 @@ export function useSearchController(): SearchController {
   return controller ?? NO_SEARCH;
 }
 
-const NO_SEARCH: SearchController = { open: () => {} };
+const NO_SEARCH: SearchController = { open: () => {}, setOpen: () => {}, state: false };
 
 /**
  * The one control in the top bar. Mounted once inside `PublicChrome`, beside the provider that owns
@@ -624,30 +630,40 @@ const NO_SEARCH: SearchController = { open: () => {} };
  * a Windows reader to press a key their keyboard does not have.
  */
 export function SearchTrigger(): ReactNode {
-  const { open } = useSearchController();
+  const { open, seed, setOpen, state } = useSearchController();
   const isApple = useIsApple();
 
   return (
-    <button
-      aria-keyshortcuts={isApple ? "Meta+K" : "Control+K"}
-      aria-label="Search the archive"
-      className="search-trigger"
-      onClick={() => open()}
-      type="button"
-    >
-      <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
-      <span className="search-trigger-label">Search</span>
-      {/* The key hint is a VISUAL affordance only. Left exposed, the button's visible text reads
-          "Search ⌘K" while its accessible name is "Search the archive" — the visible label is
-          then not contained in the accessible name, which is a WCAG 2.5.3 failure (Lighthouse's
-          `label-content-name-mismatch`) and, worse, leaves a voice-control user saying a phrase
-          the button does not answer to. Hidden, the visible label is "Search", which the
-          accessible name does contain; `aria-keyshortcuts` above already tells assistive tech
-          about the shortcut, in the form it is meant to be announced. */}
-      <kbd aria-hidden="true" className="search-trigger-kbd">
-        {isApple ? "⌘K" : "Ctrl K"}
-      </kbd>
-    </button>
+    <>
+      <button
+        aria-keyshortcuts={isApple ? "Meta+K" : "Control+K"}
+        aria-label="Search the archive"
+        className="search-trigger"
+        onClick={() => open()}
+        type="button"
+      >
+        <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
+        <span className="search-trigger-label">Search</span>
+        {/* The key hint is a VISUAL affordance only. Left exposed, the button's visible text reads
+            "Search ⌘K" while its accessible name is "Search the archive" — the visible label is
+            then not contained in the accessible name, which is a WCAG 2.5.3 failure (Lighthouse's
+            `label-content-name-mismatch`) and, worse, leaves a voice-control user saying a phrase
+            the button does not answer to. Hidden, the visible label is "Search", which the
+            accessible name does contain; `aria-keyshortcuts` above already tells assistive tech
+            about the shortcut, in the form it is meant to be announced. */}
+        <kbd aria-hidden="true" className="search-trigger-kbd">
+          {isApple ? "⌘K" : "Ctrl K"}
+        </kbd>
+      </button>
+
+      {/* THE ONE MOUNT POINT, and it sits HERE — immediately after the colophon trigger — rather
+          than beside the provider. The Command dialog server-renders its own sr-only header, so its
+          DOM position is part of the SSR tree; mounting it anywhere else moves that markup and
+          React's hydration walk finds the shell's next element where the dialog's used to be. The
+          state is the provider's, so the front door's field opens this same dialog; only the
+          rendering stays put. */}
+      <SearchDialog onOpenChange={setOpen} open={state} seed={seed} />
+    </>
   );
 }
 

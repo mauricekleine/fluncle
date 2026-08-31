@@ -18,9 +18,16 @@
 //
 // ── WHY A BUTTON AND NOT A FIELD ─────────────────────────────────────────────────────────────
 // A second text input would be a second search: its own state, its own debounce, its own results to
-// render. The control is therefore a button dressed as a field, and its accessible name is its own
-// visible text ("Search the archive") so a voice-control reader can say what they see (WCAG 2.5.3).
-// The `⌘K` hint is decorative and hidden, exactly as the colophon trigger does it.
+// render. The control is therefore a button dressed as a field, carrying no `aria-label` at all, so
+// its accessible name IS its visible text and a voice-control reader can say what they see (WCAG
+// 2.5.3). The `⌘K` hint is decorative and hidden, exactly as the colophon trigger does it.
+//
+// The label is "Search the archive" — the SAME words the colophon door carries, because one action
+// takes one label and a new phrase for an existing action is a bug, not a variation (VOICE.md's
+// Chrome Rule). What a reader may type belongs in the hint line below, not in the control's name.
+// The band's own heading is therefore `sr-only`: it is still a real `<h2>`, so the long scroll's
+// outline survives and a screen reader can jump to the band, but it does not print the same three
+// words twice above a control that already says them.
 
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { type ReactNode } from "react";
@@ -54,7 +61,7 @@ export function FrontDoorSearch(): ReactNode {
       </button>
 
       <p className="fd-search-hint" id="fd-search-examples-hint">
-        Try one of these searches.
+        Give me a name, a coordinate, or the sound of a track. Try one of these.
       </p>
       <ul aria-labelledby="fd-search-examples-hint" className="fd-search-examples">
         {SEARCH_EXAMPLES.map((example) => (
