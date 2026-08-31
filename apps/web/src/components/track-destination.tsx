@@ -25,7 +25,7 @@ import { CaretRightIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { siApplemusic, siBeatport, siDeezer, siSpotify, siYoutube } from "simple-icons";
 import { type SimpleIcon } from "simple-icons";
-import { Button } from "@fluncle/ui/components/button";
+import { Button, buttonVariants } from "@fluncle/ui/components/button";
 import { BrandIcon } from "@/components/brand-icon";
 import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
@@ -34,6 +34,7 @@ import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize } from "@/lib/media";
 import { usePreviewPlayer } from "@/lib/preview-player";
+import { cn } from "@/lib/utils";
 import {
   type ListenDestination,
   type SonicNeighbour,
@@ -98,17 +99,28 @@ export function TrackListenBand({ track }: { track: TrackDestination }) {
         const meta = LISTEN_META[destination.kind];
 
         return (
-          <Button
+          // A REAL ANCHOR wearing the button's look, via the shadcn button's own `buttonVariants`
+          // export — the canonical way to give a link a button's appearance, and here it is a
+          // correctness fix rather than a style choice. These controls NAVIGATE, to another site;
+          // Base UI's `Button` with `nativeButton={false}` stamps `role="button"` on whatever it
+          // renders, so an outbound listening destination would announce itself to a screen reader
+          // as a button and answer to Space rather than Enter. The whole errand of this band is
+          // "leave here and go hear it", and that is a link.
+          <a
+            className={cn(
+              buttonVariants({
+                size: "lg",
+                variant: index === 0 && !track.previewable ? "default" : "outline",
+              }),
+            )}
+            href={destination.href}
             key={destination.kind}
-            nativeButton={false}
-            // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
-            render={<a href={destination.href} rel="noreferrer" target="_blank" />}
-            size="lg"
-            variant={index === 0 && !track.previewable ? "default" : "outline"}
+            rel="noreferrer"
+            target="_blank"
           >
             <BrandIcon icon={meta.icon} />
             {meta.label}
-          </Button>
+          </a>
         );
       })}
     </div>

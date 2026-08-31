@@ -17,6 +17,7 @@ import {
   seedAlbum,
   seedArtist,
   seedCatalogueTrack,
+  seedEmbedding,
   seedLabel,
   seedMixtape,
   seedTrack,
@@ -205,6 +206,99 @@ function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+// ── APPENDED: the ARCHIVE TRACK DESTINATION's fixtures (track.spec.ts) ───────────────────────
+//
+// The destination (`/track/<trackId>`) needs a world the base fixtures cannot describe, because
+// every one of them is either a certified finding or a bare crawl row:
+//
+//   - an EVIDENCE-RICH uncertified track, so the indexed half of the surface exists at all: a
+//     record, a release date, a cover, and two outbound services. It is the journey's first stop.
+//   - a NEIGHBOUR for it to continue into — a SECOND uncertified track, so the journey's middle
+//     step lands somewhere unfamiliar rather than back on a finding, with an outbound service of
+//     its own so the journey can finish where it is meant to.
+//   - a THIN uncertified track, so the noindex half of the evidence gate is observable.
+//   - MuQ embeddings on all three, because "close in sound" is a vector scan and without vectors
+//     the band correctly renders nothing — which would make the journey untestable rather than
+//     absent.
+//
+// Nothing here touches the base eight or the front door's rows.
+
+const DESTINATION_ALBUM = {
+  id: "e2e-album-ledger",
+  name: "Undertow Ledger",
+  slug: "undertow-ledger",
+};
+
+/** The journey's first stop: the evidence-rich uncertified track. Indexed, and in the sitemap. */
+export const SEEDED_DESTINATION_TRACK = {
+  appleMusicUrl: "https://music.apple.com/us/album/undertow/1?i=2",
+  artist: "Ashen Relay",
+  coverUrl: "https://found.fluncle.com/e2e/ledger-cover.jpg",
+  title: "Undertow Ledger",
+  trackId: "e2e-track-destination",
+} as const;
+
+/** The journey's second stop: an unfamiliar neighbour, itself uncertified, with a way out. */
+export const SEEDED_DESTINATION_NEIGHBOUR = {
+  artist: "Cinder Vane",
+  title: "Halide Drift",
+  trackId: "e2e-track-neighbour",
+} as const;
+
+/** The low-evidence page: reachable and navigable, deliberately not indexed and not in the sitemap. */
+export const SEEDED_THIN_TRACK = {
+  artist: "Pale Kestrel",
+  title: "Nettle Dust",
+  trackId: "e2e-track-thin",
+} as const;
+
+/** A unit vector on one axis — nearness is how close two axes are, so the order is deterministic. */
+function axisVector(axis: number): number[] {
+  return Array.from({ length: 1024 }, (_unused, index) => (index === axis ? 1 : 0));
+}
+
+async function seedDestinationFixtures(client: Client): Promise<void> {
+  await seedAlbum(client, DESTINATION_ALBUM);
+
+  for (const track of [SEEDED_DESTINATION_TRACK, SEEDED_DESTINATION_NEIGHBOUR, SEEDED_THIN_TRACK]) {
+    await seedCatalogueTrack(client, {
+      artists: [track.artist],
+      label: LABEL.name,
+      title: track.title,
+      trackId: track.trackId,
+    });
+  }
+
+  // The EVIDENCE the gate reads, on the first two only: a record, a date, a cover, and a second
+  // outbound service beside the Spotify anchor `seedCatalogueTrack` already minted. The tempo, key
+  // and ISRC ride along because a real enriched row carries them and the page prints them; they are
+  // not gates.
+  for (const track of [SEEDED_DESTINATION_TRACK, SEEDED_DESTINATION_NEIGHBOUR]) {
+    await client.execute({
+      args: [
+        DESTINATION_ALBUM.id,
+        DESTINATION_ALBUM.name,
+        daysAgo(20),
+        "coverUrl" in track ? track.coverUrl : "https://found.fluncle.com/e2e/neighbour-cover.jpg",
+        "appleMusicUrl" in track
+          ? track.appleMusicUrl
+          : "https://music.apple.com/us/album/halide/3?i=4",
+        track.trackId,
+      ],
+      sql: `update tracks
+               set album_id = ?, album = ?, release_date = ?, album_image_url = ?,
+                   apple_music_url = ?, bpm = 174, key = 'F minor', isrc = 'GBE2E2600001'
+             where track_id = ?`,
+    });
+  }
+
+  // The vectors. The destination sits on axis 0; the neighbour on axis 1 (nearest); the thin row on
+  // axis 900 (far), so "close in sound" has a deterministic order to assert on.
+  await seedEmbedding(client, SEEDED_DESTINATION_TRACK.trackId, axisVector(0));
+  await seedEmbedding(client, SEEDED_DESTINATION_NEIGHBOUR.trackId, axisVector(1));
+  await seedEmbedding(client, SEEDED_THIN_TRACK.trackId, axisVector(900));
+}
+
 export async function seedE2eData(client: Client): Promise<void> {
   await seedArtist(client, ARTIST);
   await seedLabel(client, LABEL);
@@ -281,6 +375,7 @@ export async function seedE2eData(client: Client): Promise<void> {
   });
 
   await seedFrontDoorFixtures(client);
+  await seedDestinationFixtures(client);
   await stampLabelPointers(client);
 }
 
@@ -372,7 +467,7 @@ async function main(): Promise<void> {
   await seedE2eData(client);
   client.close();
   console.log(
-    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 1 catalogue track + artist/label/album.`,
+    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 4 catalogue tracks (3 with vectors) + artist/label/albums.`,
   );
 }
 
