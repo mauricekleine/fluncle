@@ -216,6 +216,8 @@ async function convergeEvaluatedSourceMarkers(
   }
   if (removed.length > 0) {
     const rows = removed.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+    // Keep the bounded candidate set on the driving side. A correlated EXISTS with `due_work` as
+    // the outer DELETE turns this into a full projection scan instead of primary-key removals.
     writes.push({
       args: removed.flatMap((outcome) => [
         outcome.workKind,
@@ -227,17 +229,15 @@ async function convergeEvaluatedSourceMarkers(
         (work_kind, subject_type, subject_id, marker_subject_type, marker_subject_id,
          marker_source_version) as (values ${rows})
         delete from due_work
-        where exists (
-          select 1 from candidate
+        where (work_kind, subject_type, subject_id) in (
+          select candidate.work_kind, candidate.subject_type, candidate.subject_id
+          from candidate
           join due_work marker
             on marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
             and marker.subject_type = candidate.marker_subject_type
             and marker.subject_id = candidate.marker_subject_id
             and marker.state = 'repair'
             and marker.source_version = candidate.marker_source_version
-          where candidate.work_kind = due_work.work_kind
-            and candidate.subject_type = due_work.subject_type
-            and candidate.subject_id = due_work.subject_id
         )`,
     });
   }

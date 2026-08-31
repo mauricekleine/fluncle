@@ -188,6 +188,7 @@ describe("transactionally coupled due-work source repair", () => {
     let maximumBatchArgs = 0;
     let maximumBatchStatements = 0;
     let maximumStatementArgs = 0;
+    let removalStatement: Exclude<InStatement, string> | undefined;
     const recordArgs = (statement: InStatement): void => {
       if (typeof statement !== "string" && Array.isArray(statement.args)) {
         maximumStatementArgs = Math.max(maximumStatementArgs, statement.args.length);
@@ -210,6 +211,14 @@ describe("transactionally coupled due-work source repair", () => {
         );
         for (const statement of statements) {
           recordArgs(statement);
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          if (
+            typeof statement !== "string" &&
+            sql.includes("delete from due_work") &&
+            sql.includes("from candidate")
+          ) {
+            removalStatement = statement;
+          }
         }
         return db.batch(statements, mode);
       },
@@ -283,6 +292,17 @@ describe("transactionally coupled due-work source repair", () => {
         })
       ).rows[0],
     ).toMatchObject({ state: "scheduled" });
+    if (removalStatement === undefined) {
+      throw new Error("source repair did not emit the obsolete-row delete");
+    }
+    const removalPlan = (
+      await db.execute({
+        args: removalStatement.args,
+        sql: `explain query plan ${removalStatement.sql}`,
+      })
+    ).rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
+    expect(removalPlan).toContainEqual(expect.stringContaining("SEARCH due_work USING"));
+    expect(removalPlan).not.toContainEqual(expect.stringMatching(/^SCAN due_work$/));
   });
 
   it("maps canonical entity markers onto slug-keyed artwork projections", async () => {
@@ -402,6 +422,77 @@ describe("transactionally coupled due-work source repair", () => {
       (
         await db.execute({
           args: ["embed-catalogue", "raced-track"],
+          sql: `select state, source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "newer-projection", state: "scheduled" });
+  });
+
+  it("preserves a newer marker and target row after an obsolete-row decision", async () => {
+    await seedCatalogueTrack(db, { trackId: "removed-race-track" });
+    await db.batch(
+      [
+        {
+          args: [],
+          sql: `insert into due_work
+            (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+             source_version, generation, updated_at)
+            values ('embed-catalogue', 'track', 'removed-race-track', 'ready', '', '', 'old',
+              'live', '2026-08-26T12:00:00.000Z')`,
+        },
+        markDueWorkSourceRepairsStatement(
+          [{ subjectId: "removed-race-track", subjectType: "track" }],
+          { markerVersion: "removed-race-v1", producer: "capture-verification" },
+        ),
+      ],
+      "write",
+    );
+    let raced = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const isConvergence = statements.some((statement) =>
+          typeof statement === "string" ? false : statement.sql.includes("marker_source_version"),
+        );
+        if (!raced && isConvergence) {
+          raced = true;
+          await db.batch(
+            [
+              markDueWorkSourceRepairsStatement(
+                [{ subjectId: "removed-race-track", subjectType: "track" }],
+                { markerVersion: "removed-race-v2", producer: "capture-verification" },
+              ),
+              {
+                args: [],
+                sql: `update due_work set state = 'scheduled', sort_key = 'newer',
+                    next_due_at = '2099-01-01T00:00:00.000Z', source_version = 'newer-projection'
+                  where work_kind = 'embed-catalogue' and subject_type = 'track'
+                    and subject_id = 'removed-race-track'`,
+              },
+            ],
+            "write",
+          );
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 1 })).toMatchObject({
+      deferred: 1,
+      expanded: 0,
+    });
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, "removed-race-track"],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "removed-race-v2" });
+    expect(
+      (
+        await db.execute({
+          args: ["embed-catalogue", "removed-race-track"],
           sql: `select state, source_version from due_work where work_kind = ? and subject_id = ?`,
         })
       ).rows[0],
