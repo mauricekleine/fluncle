@@ -20,6 +20,7 @@ import {
   runCrawlDueRebuildChunk,
   shadowCrawlDueWork,
 } from "./crawl-due-work";
+import { CRAWL_DUE_AUDIT_FENCE_KEY, readProjectionFence } from "./projection-fences";
 
 const NOW = new Date("2026-01-10T12:00:00.000Z");
 const OLD = "2026-01-01T00:00:00.000Z";
@@ -625,6 +626,206 @@ describe("crawl due-work shadow runtime", () => {
         .rows[0]?.total,
     ).toBe(0);
     expect((await auditCrawlDueWork(db)).matched).toBe(true);
+  });
+
+  it("repairs a full 500-marker page with fixed database round trips", async () => {
+    const nodeIds = Array.from(
+      { length: 500 },
+      (_, index) => `repair-wide-${String(index).padStart(3, "0")}`,
+    );
+    await db.batch(
+      nodeIds.map((nodeId, index) => ({
+        args: [
+          nodeId,
+          `external-${index}`,
+          index === 0 ? "failed" : index === nodeIds.length - 1 ? "skipped" : "pending",
+          index === 0 ? OLD : null,
+          OLD,
+          OLD,
+        ],
+        sql: `insert into crawl_frontier
+          (id, kind, source, external_id, hop, state, failures, attempted_at, created_at, updated_at)
+          values (?, 'artist', 'musicbrainz', ?, 0, ?, 1, ?, ?, ?)`,
+      })),
+      "write",
+    );
+    await db.batch(
+      nodeIds.map((nodeId) =>
+        markCrawlNodeRepairStatement(nodeId, `repair-wide:${nodeId}`, { now: OLD }),
+      ),
+      "write",
+    );
+
+    let batchCalls = 0;
+    let executeCalls = 0;
+    let maxStatementArgs = 0;
+    const measuredClient = {
+      batch: (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        batchCalls += 1;
+        maxStatementArgs = Math.max(
+          ...statements.map((statement) => {
+            if (typeof statement === "string") {
+              return 0;
+            }
+            return Array.isArray(statement.args)
+              ? statement.args.length
+              : Object.keys(statement.args ?? {}).length;
+          }),
+        );
+        return db.batch(statements, mode);
+      },
+      execute: (...args: Parameters<Client["execute"]>) => {
+        executeCalls += 1;
+        return db.execute(...args);
+      },
+    };
+    const result = await repairCrawlDueNodes(measuredClient, {
+      limit: 500,
+      now: () => NOW,
+    });
+
+    expect(result).toEqual({ deferred: 0, hasMore: false, repaired: 500, scanned: 500 });
+    expect(executeCalls).toBeLessThanOrEqual(3);
+    expect(batchCalls).toBe(1);
+    expect(maxStatementArgs).toBeLessThanOrEqual(700);
+    expect(
+      (
+        await db.execute(`select state, count(*) as n from crawl_due_work group by state
+          order by state`)
+      ).rows,
+    ).toEqual([
+      { n: 498, state: "ready" },
+      { n: 1, state: "scheduled" },
+    ]);
+  });
+
+  it("defers raced repair versions and leases without overwriting them", async () => {
+    for (const suffix of ["newer", "leased"]) {
+      await node({
+        externalId: suffix,
+        hop: 0,
+        id: `repair-race-${suffix}`,
+        kind: "artist",
+      });
+      await db.execute(
+        markCrawlNodeRepairStatement(`repair-race-${suffix}`, `old-${suffix}`, { now: OLD }),
+      );
+    }
+    let intercepted = false;
+    const racingClient = {
+      batch: async (...args: Parameters<Client["batch"]>) => {
+        if (!intercepted) {
+          intercepted = true;
+          await db.batch(
+            [
+              {
+                args: [],
+                sql: `update crawl_due_work set source_version = 'newer-version'
+                  where node_id = 'repair-race-newer'`,
+              },
+              {
+                args: [],
+                sql: `update crawl_due_work set state = 'leased', claim_token = 'newer-lease',
+                  claim_expires_at = '2026-01-11T00:00:00.000Z', claim_position = 0,
+                  claimed_by = 'newer-worker'
+                  where node_id = 'repair-race-leased'`,
+              },
+            ],
+            "write",
+          );
+        }
+        return db.batch(...args);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    expect(await repairCrawlDueNodes(racingClient, { limit: 2, now: () => NOW })).toEqual({
+      deferred: 2,
+      hasMore: true,
+      repaired: 0,
+      scanned: 2,
+    });
+    expect(
+      (
+        await db.execute(`select node_id, state, source_version, claim_token
+          from crawl_due_work where node_id like 'repair-race-%' order by node_id`)
+      ).rows,
+    ).toEqual([
+      {
+        claim_token: "newer-lease",
+        node_id: "repair-race-leased",
+        source_version: "old-leased",
+        state: "leased",
+      },
+      {
+        claim_token: null,
+        node_id: "repair-race-newer",
+        source_version: "newer-version",
+        state: "repair",
+      },
+    ]);
+  });
+
+  it("advances the audit fence when an early mutation succeeds and a final mutation races", async () => {
+    await node({
+      externalId: "fence-changed",
+      hop: 0,
+      id: "repair-fence-changed",
+      kind: "artist",
+    });
+    await node({
+      externalId: "fence-raced",
+      hop: 0,
+      id: "repair-fence-raced",
+      kind: "artist",
+      state: "skipped",
+    });
+    await db.batch(
+      [
+        markCrawlNodeRepairStatement("repair-fence-changed", "fence-changed-old", { now: OLD }),
+        markCrawlNodeRepairStatement("repair-fence-raced", "fence-raced-old", { now: OLD }),
+      ],
+      "write",
+    );
+    const fenceBefore = await readProjectionFence(db, CRAWL_DUE_AUDIT_FENCE_KEY);
+    let intercepted = false;
+    const racingClient = {
+      batch: async (...args: Parameters<Client["batch"]>) => {
+        if (!intercepted) {
+          intercepted = true;
+          await db.execute({
+            args: [],
+            sql: `update crawl_due_work set source_version = 'fence-raced-newer'
+              where node_id = 'repair-fence-raced'`,
+          });
+        }
+        return db.batch(...args);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    expect(await repairCrawlDueNodes(racingClient, { limit: 2, now: () => NOW })).toEqual({
+      deferred: 1,
+      hasMore: true,
+      repaired: 1,
+      scanned: 2,
+    });
+    expect(await readProjectionFence(db, CRAWL_DUE_AUDIT_FENCE_KEY)).toBe(fenceBefore + 1);
+    expect(
+      (
+        await db.execute(`select node_id, state from crawl_due_work
+          where node_id like 'repair-fence-%' order by node_id`)
+      ).rows,
+    ).toEqual([
+      { node_id: "repair-fence-changed", state: "ready" },
+      { node_id: "repair-fence-raced", state: "repair" },
+    ]);
+    expect(
+      (
+        await db.execute(`select source_version from crawl_due_work
+          where node_id = 'repair-fence-raced'`)
+      ).rows[0]?.source_version,
+    ).toBe("fence-raced-newer");
   });
 
   it("bounds source and stale-row cleanup pages in the production rebuild mode", async () => {

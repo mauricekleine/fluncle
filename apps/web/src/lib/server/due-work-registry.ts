@@ -808,6 +808,139 @@ export const ENTITY_DUE_WORK_BACKFILLS = ENTITY_DEFINITIONS.map(
   (definition) => definition.backfill,
 );
 
+export type TrackDueWorkSourceRepairProjection<Marker extends DueWorkRow<string>> = {
+  marker: Marker;
+  projection: DueWorkProjection<string> | null;
+  workKind: string;
+};
+
+function projectFindingSourceRepair(
+  kind: Extract<DueWorkEntityKind, `finding.${string}`>,
+  source: FindingSourceSnapshot,
+  marker: DueWorkRow<string>,
+): DueWorkProjection<string> | null {
+  const row = (() => {
+    switch (kind) {
+      case "finding.enrich":
+        return evaluateFindingEnrich(source, marker.updatedAt);
+      case "finding.context":
+        return evaluateFindingContextNormal(source, marker.updatedAt);
+      case "finding.context.retry-empty":
+        return evaluateFindingContextRetryEmpty(source, marker.updatedAt);
+      case "finding.note":
+        return evaluateFindingNote(source, marker.updatedAt);
+      case "finding.observe":
+        return evaluateFindingObserve(source, marker.updatedAt);
+      case "finding.render":
+        return evaluateFindingRenderNormal(source, marker.updatedAt);
+      case "finding.render.requires-observation":
+        return evaluateFindingRenderRequiresObservation(source, marker.updatedAt);
+    }
+  })();
+  return row === null
+    ? null
+    : projectionFromRow(
+        row,
+        {
+          generation: marker.generation,
+          subjectId: marker.subjectId,
+          subjectType: "track",
+          workKind: kind,
+        },
+        marker.updatedAt,
+      );
+}
+
+const FINDING_DUE_WORK_KINDS = [
+  "finding.enrich",
+  "finding.context",
+  "finding.context.retry-empty",
+  "finding.note",
+  "finding.observe",
+  "finding.render",
+  "finding.render.requires-observation",
+] as const;
+
+/** Project a source-marker page from one authoritative read per track source family. */
+export async function projectTrackDueWorkSourceRepairs<Marker extends DueWorkRow<string>>(
+  client: DueWorkClient,
+  markers: readonly Marker[],
+): Promise<TrackDueWorkSourceRepairProjection<Marker>[]> {
+  if (markers.length === 0) {
+    return [];
+  }
+  const trackIds = markers.map((marker) => marker.subjectId);
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const trackSources = await readTrackDueWorkSources(client, trackIds);
+  const vendorRows = await client.execute({
+    args: trackIds,
+    sql: `${VENDOR_SOURCE_SELECT} where t.track_id in (${placeholders})`,
+  });
+  const findingRows = await client.execute({
+    args: trackIds,
+    sql: `${FINDING_SOURCE_SELECT} where track_id in (${placeholders})`,
+  });
+  const currentRankCorpus =
+    vendorRows.rows.length === 0 ? undefined : await readCatalogueRankCorpus(client);
+  const vendors = new Map(
+    (vendorRows.rows as VendorSourceRow[]).map((row) => {
+      const source = vendorSource(row);
+      return [source.trackId, source] as const;
+    }),
+  );
+  const findings = new Map(
+    (findingRows.rows as unknown as FindingSourceSnapshot[]).map((source) => [
+      source.track_id,
+      source,
+    ]),
+  );
+  const projected: TrackDueWorkSourceRepairProjection<Marker>[] = [];
+
+  for (const marker of markers) {
+    const track = trackSources.get(marker.subjectId);
+    for (const entry of DUE_WORK_TRACK_WORK_KIND_INVENTORY) {
+      projected.push({
+        marker,
+        projection:
+          track === undefined ? null : projectTrackSource(entry, track, markerContext(marker)),
+        workKind: entry.workKind,
+      });
+    }
+
+    const vendor = vendors.get(marker.subjectId);
+    for (const entry of DUE_WORK_VENDOR_WORK_KIND_INVENTORY) {
+      const rank = entry.workKind === "catalogue-rank" ? currentRankCorpus : undefined;
+      const source: VendorDueWorkSource | undefined =
+        vendor === undefined
+          ? undefined
+          : {
+              ...vendor,
+              cursor: vendor.trackId,
+              rankCorpus: rank,
+              sourceVersion: dueWorkVendorSourceVersion(vendor, entry.workKind, rank),
+              subjectId: vendor.trackId,
+            };
+      projected.push({
+        marker,
+        projection:
+          source === undefined ? null : projectVendorSource(entry, source, markerContext(marker)),
+        workKind: entry.workKind,
+      });
+    }
+
+    const finding = findings.get(marker.subjectId);
+    for (const kind of FINDING_DUE_WORK_KINDS) {
+      projected.push({
+        marker,
+        projection:
+          finding === undefined ? null : projectFindingSourceRepair(kind, finding, marker),
+        workKind: kind,
+      });
+    }
+  }
+  return projected;
+}
+
 function projectionFromRow(
   row: { nextDueAt: string; orderKey: string; sourceVersion: string },
   identity: {

@@ -11,7 +11,11 @@ import {
 } from "./catalogue";
 import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
-import { DueWorkMaintenancePendingError, upsertDueWork } from "./due-work";
+import {
+  DUE_WORK_SOURCE_REPAIR_KIND,
+  DueWorkMaintenancePendingError,
+  upsertDueWork,
+} from "./due-work";
 import { createIntegrationDb, seedArtist, seedCatalogueTrack } from "./integration-db";
 import { resolveRecordingMbids } from "./recording-mbids";
 
@@ -142,7 +146,7 @@ describe("Goal C core vendor selector cutovers", () => {
     expect(row.rows[0]?.mb_recording_id).toBe("already-resolved");
   });
 
-  it("marks projected prefix work for repair with the source mutation", async () => {
+  it("removes projected prefix work after converging the source mutation", async () => {
     await seedCatalogueTrack(db, { trackId: "mb_live" });
     await enableCutover();
     await schedule("mbid-prefix-strip", "mb_live");
@@ -150,10 +154,11 @@ describe("Goal C core vendor selector cutovers", () => {
     expect((await resolveRecordingMbids(1, false, undefined, 0)).prefixStripped).toBe(1);
 
     const result = await db.execute({
-      args: ["mbid-prefix-strip", "mb_live"],
-      sql: `select state from due_work where work_kind = ? and subject_id = ?`,
+      args: ["mb_live", "mbid-prefix-strip", DUE_WORK_SOURCE_REPAIR_KIND],
+      sql: `select work_kind, state from due_work where subject_id = ?
+        and work_kind in (?, ?)`,
     });
-    expect(result.rows[0]?.state).toBe("repair");
+    expect(result.rows).toEqual([]);
   });
 
   it("preserves artist-edge and artist-credit dry-run cursors from projection order", async () => {

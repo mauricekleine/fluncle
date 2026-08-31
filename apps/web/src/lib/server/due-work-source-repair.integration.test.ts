@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("transactionally coupled due-work source repair", () => {
-  it("fans one track marker out to every physical queue and repairs the requested queue", async () => {
+  it("converges one track marker directly into final queue rows", async () => {
     await seedCatalogueTrack(db, { trackId: "repair-track" });
     await batchDueWorkSourceMutation(
       db,
@@ -43,28 +43,80 @@ describe("transactionally coupled due-work source repair", () => {
       `select work_kind, state from due_work where subject_id = 'repair-track'`,
     );
     expect(markers.rows.some((row) => row.work_kind === DUE_WORK_SOURCE_REPAIR_KIND)).toBe(false);
-    expect(markers.rows.filter((row) => row.state === "repair")).toHaveLength(34);
+    expect(markers.rows.some((row) => row.state === "repair")).toBe(false);
 
-    await repairDueWorkBeforeRead(db, "embed-catalogue");
     expect(
       (await listReadyDueWork(db, "embed-catalogue")).items.map((row) => row.subjectId),
     ).toEqual(["repair-track"]);
   });
 
-  it("fans out the full 500-source operator page in bounded set batches", async () => {
+  it("converges the full 500-source page to ready and scheduled rows without repair debt", async () => {
     const subjects = Array.from({ length: 500 }, (_, index) => ({
       subjectId: `wide-fanout-${String(index).padStart(3, "0")}`,
       subjectType: "track" as const,
     }));
+    await db.execute({
+      args: subjects.flatMap(({ subjectId }) => [
+        subjectId,
+        `Track ${subjectId}`,
+        '["Test Artist"]',
+        `spotify:track:${subjectId}`,
+        270_000,
+      ]),
+      sql: `insert into tracks
+        (track_id, title, artists_json, spotify_uri, duration_ms)
+        values ${subjects.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+    });
+    await db.batch(
+      [
+        {
+          args: ["wide-fanout-000/audio.webm", "wide-fanout-000"],
+          sql: `update tracks set source_audio_key = ?, capture_status = 'done'
+            where track_id = ?`,
+        },
+        {
+          args: ["2026-08-26T12:00:00.000Z", "wide-fanout-001"],
+          sql: `update tracks set capture_status = 'failed', capture_priority = 0,
+            source_audio_failures = 1, source_audio_attempted_at = ? where track_id = ?`,
+        },
+      ],
+      "write",
+    );
     await db.execute(
       markDueWorkSourceRepairsStatement(subjects, {
         markerVersion: "wide-fanout-v1",
+        now: "2026-08-26T12:00:00.000Z",
         producer: "capture-verification",
       }),
     );
 
-    const result = await fanOutDueWorkSourceRepairs(db, { limit: 500 });
+    let batchCalls = 0;
+    let executeCalls = 0;
+    let maximumStatementArgs = 0;
+    const recordArgs = (statement: InStatement): void => {
+      if (typeof statement !== "string" && Array.isArray(statement.args)) {
+        maximumStatementArgs = Math.max(maximumStatementArgs, statement.args.length);
+      }
+    };
+    const measuredClient = {
+      batch: (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        batchCalls += 1;
+        for (const statement of statements) {
+          recordArgs(statement);
+        }
+        return db.batch(statements, mode);
+      },
+      execute: (...args: Parameters<Client["execute"]>) => {
+        executeCalls += 1;
+        recordArgs(args[0]);
+        return db.execute(...args);
+      },
+    };
+    const result = await fanOutDueWorkSourceRepairs(measuredClient, { limit: 500 });
     expect(result).toMatchObject({ deferred: 0, expanded: 500, scanned: 500 });
+    expect(executeCalls).toBeLessThanOrEqual(7);
+    expect(batchCalls).toBe(10);
+    expect(maximumStatementArgs).toBeLessThanOrEqual(20_400);
     expect(
       Number(
         (
@@ -84,7 +136,28 @@ describe("transactionally coupled due-work source repair", () => {
           })
         ).rows[0]?.n ?? 0,
       ),
-    ).toBe(17_000);
+    ).toBe(0);
+    expect(
+      (await listReadyDueWork(db, "embed-catalogue")).items.map((row) => row.subjectId),
+    ).toEqual(["wide-fanout-000"]);
+    expect(
+      Number(
+        (
+          await db.execute({
+            args: ["artist-edges"],
+            sql: `select count(*) as n from due_work where work_kind = ?`,
+          })
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(500);
+    expect(
+      (
+        await db.execute({
+          args: ["capture-catalogue", "wide-fanout-001"],
+          sql: `select state from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ state: "scheduled" });
   });
 
   it("maps canonical entity markers onto slug-keyed artwork projections", async () => {
@@ -97,16 +170,117 @@ describe("transactionally coupled due-work source repair", () => {
     );
 
     await fanOutDueWorkSourceRepairs(db, { limit: 1 });
-    const marker = await db.execute({
+    const projection = await db.execute({
       args: ["album.cover-master"],
       sql: `select subject_id, state from due_work where work_kind = ?`,
     });
-    expect(marker.rows[0]).toMatchObject({ state: "repair", subject_id: "album-slug" });
-
-    await repairDueWorkBeforeRead(db, "album.cover-master");
+    expect(projection.rows[0]).toMatchObject({ state: "ready", subject_id: "album-slug" });
     expect(
       (await listReadyDueWork(db, "album.cover-master")).items.map((row) => row.subjectId),
     ).toEqual(["album-slug"]);
+  });
+
+  it("deletes an ineligible projection while clearing its source marker", async () => {
+    await db.batch(
+      [
+        {
+          args: [],
+          sql: `insert into due_work
+            (work_kind, subject_type, subject_id, state, sort_key, next_due_at, source_version,
+             generation, updated_at)
+            values ('embed-catalogue', 'track', 'deleted-track', 'ready', '', '', 'old',
+              'live', '2026-08-26T12:00:00.000Z')`,
+        },
+        markDueWorkSourceRepairsStatement([{ subjectId: "deleted-track", subjectType: "track" }], {
+          markerVersion: "deleted-v1",
+          producer: "capture-verification",
+        }),
+      ],
+      "write",
+    );
+
+    expect(await fanOutDueWorkSourceRepairs(db, { limit: 1 })).toMatchObject({
+      deferred: 0,
+      expanded: 1,
+    });
+    expect(
+      (
+        await db.execute({
+          args: ["deleted-track"],
+          sql: `select work_kind from due_work where subject_id = ?`,
+        })
+      ).rows,
+    ).toEqual([]);
+  });
+
+  it("preserves a newer source marker and projection row across evaluation", async () => {
+    await seedCatalogueTrack(db, { trackId: "raced-track" });
+    await db.execute({
+      args: ["raced-track/audio.webm", "raced-track"],
+      sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
+    });
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "raced-track", subjectType: "track" }], {
+        markerVersion: "raced-v1",
+        producer: "capture-verification",
+      }),
+    );
+    let raced = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const isConvergence = statements.some((statement) =>
+          typeof statement === "string" ? false : statement.sql.includes("marker_source_version"),
+        );
+        if (!raced && isConvergence) {
+          raced = true;
+          await db.batch(
+            [
+              markDueWorkSourceRepairsStatement(
+                [{ subjectId: "raced-track", subjectType: "track" }],
+                { markerVersion: "raced-v2", producer: "capture-verification" },
+              ),
+              {
+                args: [],
+                sql: `insert into due_work
+                  (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+                   source_version, generation, updated_at)
+                  values ('embed-catalogue', 'track', 'raced-track', 'scheduled', 'newer',
+                    '2099-01-01T00:00:00.000Z', 'newer-projection', 'live',
+                    '2026-08-26T12:00:00.000Z')
+                  on conflict(work_kind, subject_type, subject_id) do update set
+                    state = excluded.state, sort_key = excluded.sort_key,
+                    next_due_at = excluded.next_due_at,
+                    source_version = excluded.source_version`,
+              },
+            ],
+            "write",
+          );
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 1 })).toMatchObject({
+      deferred: 1,
+      expanded: 0,
+    });
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, "raced-track"],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "raced-v2" });
+    expect(
+      (
+        await db.execute({
+          args: ["embed-catalogue", "raced-track"],
+          sql: `select state, source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "newer-projection", state: "scheduled" });
   });
 
   it("turns a coupled catalogue-corpus marker into a resumable rank rebuild", async () => {
@@ -133,6 +307,69 @@ describe("transactionally coupled due-work source repair", () => {
       sql: `select subject_id from due_work where work_kind = ? and subject_id = ?`,
     });
     expect(sourceMarker.rows).toEqual([]);
+  });
+
+  it("defers a completed rank rebuild when a newer corpus marker wins the clear race", async () => {
+    for (const trackId of ["rank-race-a", "rank-race-b"]) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [
+          {
+            subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+            subjectType: "track",
+          },
+        ],
+        { markerVersion: "rank-race-v1", producer: "catalogue-rank" },
+      ),
+    );
+    let raced = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const clearsSourceMarker = statements.some((statement) => {
+          if (typeof statement === "string" || !Array.isArray(statement.args)) {
+            return false;
+          }
+          return (
+            statement.args[0] === DUE_WORK_SOURCE_REPAIR_KIND &&
+            statement.args[2] === DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID &&
+            statement.sql.startsWith("delete from due_work")
+          );
+        });
+        if (!raced && clearsSourceMarker) {
+          raced = true;
+          await db.execute(
+            markDueWorkSourceRepairsStatement(
+              [
+                {
+                  subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                  subjectType: "track",
+                },
+              ],
+              { markerVersion: "rank-race-v2", producer: "catalogue-rank" },
+            ),
+          );
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 1 })).toMatchObject({
+      deferred: 1,
+      expanded: 0,
+      hasMore: true,
+      rankRebuildScanned: 2,
+    });
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "rank-race-v2" });
   });
 
   it("repairs the requested subject family without unrelated or rank-marker head blocking", async () => {

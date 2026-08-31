@@ -8,11 +8,17 @@ import {
   repairDueWorkChunk,
   runDueWorkRebuildChunk,
   type DueWorkClient,
+  type DueWorkProjection,
   type DueWorkRepairResult,
   type DueWorkRow,
+  type DueWorkStatement,
   type DueWorkSubjectType,
 } from "./due-work";
-import { DUE_WORK_BACKFILLS, dueWorkRepairDefinitions } from "./due-work-registry";
+import {
+  DUE_WORK_BACKFILLS,
+  dueWorkRepairDefinitions,
+  projectTrackDueWorkSourceRepairs,
+} from "./due-work-registry";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
 const SOURCE_REPAIR_LIMIT = 5;
@@ -53,16 +59,29 @@ function usesSlugIdentity(workKind: string): boolean {
   );
 }
 
-async function expandSourceMarkers(
+type SourceRepairOutcome = {
+  marker: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>;
+  physicalSubjectId: string;
+  projection: DueWorkProjection<string> | null;
+  workKind: string;
+};
+
+function markerForDefinition(
+  marker: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>,
+  workKind: string,
+  physicalSubjectId: string,
+): DueWorkRow<string> {
+  return { ...marker, subjectId: physicalSubjectId, workKind };
+}
+
+async function evaluateSourceMarkers(
   client: DueWorkClient,
   markers: readonly DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>[],
-): Promise<number> {
-  if (markers.length === 0) {
-    return 0;
-  }
+): Promise<SourceRepairOutcome[]> {
   const subjectTypes = new Set(markers.map((marker) => marker.subjectType));
-  const definitions = dueWorkRepairDefinitions(client).filter((definition) =>
-    subjectTypes.has(definition.subjectType),
+  const registeredDefinitions = dueWorkRepairDefinitions(client);
+  const definitions = registeredDefinitions.filter(
+    (definition) => definition.subjectType !== "track" && subjectTypes.has(definition.subjectType),
   );
   const slugs = new Map<string, string>();
   for (const subjectType of ["album", "artist", "label"] as const) {
@@ -73,80 +92,171 @@ async function expandSourceMarkers(
       slugs.set(`${subjectType}\u0000${id}`, slug);
     }
   }
-  const markerRows = markers.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-  const definitionRows = definitions.map(() => "(?, ?, ?)").join(", ");
-  const clearRows = markers.map(() => "(?, ?, ?)").join(", ");
-  const results = await client.batch(
-    [
-      {
-        args: [
-          ...markers.flatMap((marker) => [
-            marker.subjectType,
-            marker.subjectId,
-            slugs.get(`${marker.subjectType}\u0000${marker.subjectId}`) ?? null,
-            marker.sourceVersion,
-            marker.generation,
-            marker.updatedAt,
-          ]),
-          ...definitions.flatMap((definition) => [
-            definition.workKind,
-            definition.subjectType,
-            usesSlugIdentity(definition.workKind) ? 1 : 0,
-          ]),
-        ],
-        sql: `with
-          marker(subject_type, subject_id, slug, source_version, generation, updated_at)
-            as (values ${markerRows}),
-          definition(work_kind, subject_type, uses_slug) as (values ${definitionRows})
-          insert into due_work
-          (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
-           source_version, generation, updated_at)
-          select definition.work_kind, marker.subject_type,
-            case when definition.uses_slug = 1 then coalesce(marker.slug, marker.subject_id)
-              else marker.subject_id end,
-            'repair', '', marker.updated_at, marker.source_version, marker.generation,
-            marker.updated_at
-          from marker
-          join definition on definition.subject_type = marker.subject_type
-          join due_work source_marker
-            on source_marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
-            and source_marker.subject_type = marker.subject_type
-            and source_marker.subject_id = marker.subject_id
-            and source_marker.state = 'repair'
-            and source_marker.source_version = marker.source_version
-          on conflict(work_kind, subject_type, subject_id) do update set
-            state = 'repair',
-            sort_key = '',
-            next_due_at = excluded.next_due_at,
-            source_version = excluded.source_version,
-            generation = excluded.generation,
-            claim_token = null,
-            claim_expires_at = null,
-            claimed_by = null,
-            updated_at = excluded.updated_at`,
-      },
-      {
-        args: markers.flatMap((marker) => [
-          marker.subjectType,
-          marker.subjectId,
-          marker.sourceVersion,
-        ]),
-        sql: `with marker(subject_type, subject_id, source_version) as (values ${clearRows})
-          delete from due_work
-          where work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}' and state = 'repair'
-            and exists (
-              select 1 from marker
-              where marker.subject_type = due_work.subject_type
-                and marker.subject_id = due_work.subject_id
-                and marker.source_version = due_work.source_version
-            )
-          returning subject_id`,
-      },
-      advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY),
-    ],
-    "write",
+  const outcomes: SourceRepairOutcome[] = [];
+  const trackMarkers = markers.filter((marker) => marker.subjectType === "track");
+  outcomes.push(
+    ...(await projectTrackDueWorkSourceRepairs(client, trackMarkers)).map((outcome) => ({
+      ...outcome,
+      physicalSubjectId: outcome.marker.subjectId,
+    })),
   );
-  return results[1]?.rows.length ?? 0;
+  for (const definition of definitions) {
+    const sourceMarkers = markers.filter((marker) => marker.subjectType === definition.subjectType);
+    const evaluationMarkers = sourceMarkers.map((marker) => {
+      const physicalSubjectId = usesSlugIdentity(definition.workKind)
+        ? (slugs.get(`${marker.subjectType}\u0000${marker.subjectId}`) ?? marker.subjectId)
+        : marker.subjectId;
+      return markerForDefinition(marker, definition.workKind, physicalSubjectId);
+    });
+    const projections: Array<DueWorkProjection<string> | null> = [];
+    if (definition.projectMany === undefined) {
+      for (const marker of evaluationMarkers) {
+        projections.push(await definition.project(marker));
+      }
+    } else {
+      projections.push(...(await definition.projectMany(evaluationMarkers)));
+    }
+    if (projections.length !== evaluationMarkers.length) {
+      throw new Error("due-work bulk source repair must return one result per marker");
+    }
+    for (const [index, marker] of sourceMarkers.entries()) {
+      const evaluationMarker = evaluationMarkers[index];
+      if (evaluationMarker === undefined) {
+        throw new Error("due-work source repair marker evaluation is missing");
+      }
+      outcomes.push({
+        marker,
+        physicalSubjectId: evaluationMarker.subjectId,
+        projection: projections[index] ?? null,
+        workKind: definition.workKind,
+      });
+    }
+  }
+  const expectedOutcomes = markers.reduce(
+    (count, marker) =>
+      count +
+      registeredDefinitions.filter((definition) => definition.subjectType === marker.subjectType)
+        .length,
+    0,
+  );
+  if (outcomes.length !== expectedOutcomes) {
+    throw new Error("due-work source repair must evaluate every registered physical queue");
+  }
+  return outcomes;
+}
+
+function sourceMarkerGuard(
+  marker: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>,
+): [string, string, string] {
+  return [marker.subjectType, marker.subjectId, marker.sourceVersion];
+}
+
+async function convergeEvaluatedSourceMarkers(
+  client: DueWorkClient,
+  markers: readonly DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>[],
+  outcomes: readonly SourceRepairOutcome[],
+): Promise<number> {
+  if (markers.length === 0) {
+    return 0;
+  }
+  const projected = outcomes.filter(
+    (outcome): outcome is SourceRepairOutcome & { projection: DueWorkProjection<string> } =>
+      outcome.projection !== null,
+  );
+  const removed = outcomes.filter((outcome) => outcome.projection === null);
+  const updatedAt = new Date().toISOString();
+  const writes: DueWorkStatement[] = [];
+
+  if (projected.length > 0) {
+    const rows = projected.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    writes.push({
+      args: projected.flatMap(({ marker, projection }) => [
+        projection.workKind,
+        projection.subjectType,
+        projection.subjectId,
+        projection.state,
+        projection.sortKey,
+        projection.nextDueAt,
+        projection.sourceVersion,
+        projection.generation ?? marker.generation,
+        updatedAt,
+        ...sourceMarkerGuard(marker),
+      ]),
+      sql: `with candidate
+        (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+         source_version, generation, updated_at, marker_subject_type, marker_subject_id,
+         marker_source_version) as (values ${rows})
+        insert into due_work
+        (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+         source_version, generation, updated_at)
+        select candidate.work_kind, candidate.subject_type, candidate.subject_id,
+          candidate.state, candidate.sort_key, candidate.next_due_at, candidate.source_version,
+          candidate.generation, candidate.updated_at
+        from candidate
+        where exists (
+          select 1 from due_work marker
+          where marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
+            and marker.subject_type = candidate.marker_subject_type
+            and marker.subject_id = candidate.marker_subject_id
+            and marker.state = 'repair'
+            and marker.source_version = candidate.marker_source_version
+        )
+        on conflict(work_kind, subject_type, subject_id) do update set
+          state = excluded.state,
+          sort_key = excluded.sort_key,
+          next_due_at = excluded.next_due_at,
+          source_version = excluded.source_version,
+          generation = excluded.generation,
+          claim_token = null,
+          claim_expires_at = null,
+          claimed_by = null,
+          updated_at = excluded.updated_at`,
+    });
+  }
+  if (removed.length > 0) {
+    const rows = removed.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+    writes.push({
+      args: removed.flatMap((outcome) => [
+        outcome.workKind,
+        outcome.marker.subjectType,
+        outcome.physicalSubjectId,
+        ...sourceMarkerGuard(outcome.marker),
+      ]),
+      sql: `with candidate
+        (work_kind, subject_type, subject_id, marker_subject_type, marker_subject_id,
+         marker_source_version) as (values ${rows})
+        delete from due_work
+        where exists (
+          select 1 from candidate
+          join due_work marker
+            on marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
+            and marker.subject_type = candidate.marker_subject_type
+            and marker.subject_id = candidate.marker_subject_id
+            and marker.state = 'repair'
+            and marker.source_version = candidate.marker_source_version
+          where candidate.work_kind = due_work.work_kind
+            and candidate.subject_type = due_work.subject_type
+            and candidate.subject_id = due_work.subject_id
+        )`,
+    });
+  }
+  const clearRows = markers.map(() => "(?, ?, ?)").join(", ");
+  writes.push({
+    args: markers.flatMap((marker) => [marker.subjectType, marker.subjectId, marker.sourceVersion]),
+    sql: `with marker(subject_type, subject_id, source_version) as (values ${clearRows})
+      delete from due_work
+      where work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}' and state = 'repair'
+        and exists (
+          select 1 from marker
+          where marker.subject_type = due_work.subject_type
+            and marker.subject_id = due_work.subject_id
+            and marker.source_version = due_work.source_version
+        )
+      returning subject_id`,
+  });
+  writes.push(advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY));
+  const results = await client.batch(writes, "write");
+  return results[writes.length - 2]?.rows.length ?? 0;
 }
 
 async function advanceCatalogueRankRebuild(
@@ -166,23 +276,26 @@ async function advanceCatalogueRankRebuild(
     newGeneration: checkpoint?.generation !== marker.sourceVersion,
   });
 
+  let markerCleared = false;
   if (result.complete) {
-    await client.batch(
+    const clearResults = await client.batch(
       [
         clearDueWorkSourceRepairStatement(marker),
         advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY),
       ],
       "write",
     );
+    markerCleared = (clearResults[0]?.rowsAffected ?? 0) > 0;
   }
-  return { complete: result.complete, scanned: result.scanned };
+  return { complete: result.complete && markerCleared, scanned: result.scanned };
 }
 
 /**
- * Expand a bounded page of transactionally coupled source markers into the exact physical repair
- * rows. The generic marker is cleared in the same transaction as its fan-out; its version guard
- * leaves a concurrent producer marker intact. Catalogue-rank corpus changes instead advance one
- * resumable rebuild chunk under the producer marker's generation.
+ * Converge a bounded page of transactionally coupled source markers directly into final physical
+ * rows. Each generic marker is cleared atomically with all of its eligible upserts and ineligible
+ * deletes; its version guard leaves a concurrent producer marker and projection rows intact.
+ * Catalogue-rank corpus changes instead advance one resumable rebuild chunk under the producer
+ * marker's generation.
  */
 export async function fanOutDueWorkSourceRepairs(
   client: DueWorkClient,
@@ -222,9 +335,12 @@ export async function fanOutDueWorkSourceRepairs(
     }
     regular.push(marker);
   }
+  const regularOutcomes = await evaluateSourceMarkers(client, regular);
   for (let index = 0; index < regular.length; index += SOURCE_FANOUT_WRITE_BATCH_SIZE) {
     const chunk = regular.slice(index, index + SOURCE_FANOUT_WRITE_BATCH_SIZE);
-    const cleared = await expandSourceMarkers(client, chunk);
+    const chunkMarkers = new Set(chunk);
+    const outcomes = regularOutcomes.filter((outcome) => chunkMarkers.has(outcome.marker));
+    const cleared = await convergeEvaluatedSourceMarkers(client, chunk, outcomes);
     expanded += cleared;
     deferred += chunk.length - cleared;
   }

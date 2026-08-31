@@ -12,6 +12,8 @@ const MAX_FAILURES = 5;
 const RETRY_BASE_MS = 15 * 60 * 1000;
 const RETRY_MAX_MS = 24 * 60 * 60 * 1000;
 const STALE_ALLOWED_ARTIST_MS = 24 * 60 * 60 * 1000;
+const CRAWL_REPAIR_WRITE_SUBPAGE_SIZE = 50;
+const CRAWL_REPAIR_MAX_STATEMENT_ARGS = CRAWL_REPAIR_WRITE_SUBPAGE_SIZE * 14;
 
 export type CrawlDueClient = Pick<Client, "batch" | "execute">;
 export type CrawlDueStatement = Exclude<InStatement, string>;
@@ -612,23 +614,137 @@ export async function repairCrawlDueNode(
 export async function repairCrawlDueNodes(
   client: CrawlDueClient,
   options: { limit?: number; now?: () => Date } = {},
-): Promise<{ hasMore: boolean; repaired: number; scanned: number }> {
+): Promise<{ deferred: number; hasMore: boolean; repaired: number; scanned: number }> {
   const limit = options.limit ?? 100;
   assertLimit(limit);
   if ((await firstCrawlRepairMarker(client)) !== undefined) {
-    return { hasMore: true, repaired: 0, scanned: 0 };
+    return { deferred: 0, hasMore: true, repaired: 0, scanned: 0 };
   }
-  const result = await client.execute({
-    args: [limit + 1],
-    sql: `select node_id from crawl_due_work indexed by crawl_due_work_repair_idx
+  const markerResult = await client.execute({
+    args: [limit],
+    sql: `select ${CRAWL_DUE_COLUMNS}
+      from crawl_due_work indexed by crawl_due_work_repair_idx
       where state = 'repair' order by node_id limit ?`,
   });
-  const ids = (result.rows as unknown as { node_id: string }[]).map((row) => row.node_id);
-  let repaired = 0;
-  for (const nodeId of ids.slice(0, limit)) {
-    repaired += (await repairCrawlDueNode(client, nodeId, options)) ? 1 : 0;
+  const markers = crawlDueRows(markerResult);
+  if (markers.length === 0) {
+    return { deferred: 0, hasMore: false, repaired: 0, scanned: 0 };
   }
-  return { hasMore: ids.length > limit, repaired, scanned: Math.min(ids.length, limit) };
+
+  const placeholders = markers.map(() => "?").join(", ");
+  const sourceResult = await client.execute({
+    args: markers.map((marker) => marker.nodeId),
+    sql: `select ${CRAWL_SOURCE_COLUMNS}
+      from crawl_frontier cf
+      left join labels provenance_label on provenance_label.slug = cf.label_slug
+      where cf.id in (${placeholders})`,
+  });
+  const sourcesById = new Map(
+    (sourceResult.rows as unknown as CrawlSourceSqlRow[]).map((row) => [row.id, row]),
+  );
+  const outcomes = markers.map((marker) => {
+    const source = sourcesById.get(marker.nodeId);
+    return {
+      marker,
+      projection: source === undefined ? null : projectCrawlSource(source),
+    };
+  });
+  const writes: CrawlDueStatement[] = [];
+  const mutationIndexes: number[] = [];
+  const updatedAt = nowIso(options.now);
+  const appendMutation = (statement: CrawlDueStatement): void => {
+    const argumentCount = Array.isArray(statement.args)
+      ? statement.args.length
+      : Object.keys(statement.args ?? {}).length;
+    if (argumentCount > CRAWL_REPAIR_MAX_STATEMENT_ARGS) {
+      throw new Error(
+        `crawl repair mutation may contain at most ${CRAWL_REPAIR_MAX_STATEMENT_ARGS} arguments`,
+      );
+    }
+    mutationIndexes.push(writes.length);
+    writes.push(statement, advanceProjectionFenceStatement(CRAWL_DUE_AUDIT_FENCE_KEY));
+  };
+
+  for (let index = 0; index < outcomes.length; index += CRAWL_REPAIR_WRITE_SUBPAGE_SIZE) {
+    const subpage = outcomes.slice(index, index + CRAWL_REPAIR_WRITE_SUBPAGE_SIZE);
+    const projected = subpage.filter(
+      (outcome): outcome is (typeof outcomes)[number] & { projection: CrawlDueProjection } =>
+        outcome.projection !== null,
+    );
+    if (projected.length > 0) {
+      const rows = projected.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+      appendMutation({
+        args: projected.flatMap(({ marker, projection }) => [
+          ...projectionArgs(projection, CRAWL_DUE_LIVE_GENERATION, updatedAt),
+          marker.sourceVersion,
+        ]),
+        sql: `with candidate
+          (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
+           label_slug, parent_id, generation, source_version, updated_at, marker_source_version)
+          as (values ${rows})
+          insert into crawl_due_work
+          (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
+           label_slug, parent_id, generation, source_version, updated_at)
+          select candidate.node_id, candidate.node_kind, candidate.state, candidate.hop,
+            candidate.demand_rank, candidate.created_at, candidate.storable_rank,
+            candidate.next_due_at, candidate.label_slug, candidate.parent_id,
+            candidate.generation, candidate.source_version, candidate.updated_at
+          from candidate
+          where exists (
+            select 1 from crawl_due_work marker
+            where marker.node_id = candidate.node_id and marker.state = 'repair'
+              and marker.source_version = candidate.marker_source_version
+          )
+          on conflict(node_id) do update set
+            node_kind = excluded.node_kind, state = excluded.state, hop = excluded.hop,
+            demand_rank = excluded.demand_rank, created_at = excluded.created_at,
+            storable_rank = excluded.storable_rank, next_due_at = excluded.next_due_at,
+            label_slug = excluded.label_slug, parent_id = excluded.parent_id,
+            generation = excluded.generation, source_version = excluded.source_version,
+            claim_expires_at = null, claim_position = null, claim_token = null,
+            claimed_by = null, updated_at = excluded.updated_at`,
+      });
+    }
+
+    const removed = subpage.filter((outcome) => outcome.projection === null);
+    if (removed.length > 0) {
+      const rows = removed.map(() => "(?, ?)").join(", ");
+      appendMutation({
+        args: removed.flatMap(({ marker }) => [marker.nodeId, marker.sourceVersion]),
+        sql: `with candidate(node_id, marker_source_version) as (values ${rows})
+          delete from crawl_due_work
+          where state = 'repair' and exists (
+            select 1 from candidate
+            where candidate.node_id = crawl_due_work.node_id
+              and candidate.marker_source_version = crawl_due_work.source_version
+          )`,
+      });
+    }
+  }
+
+  const remainingIndex = writes.length;
+  writes.push({
+    args: [],
+    sql: `select 1 as pending
+      where exists (
+        select 1 from crawl_projection_repairs
+          indexed by crawl_projection_repairs_order_idx limit 1
+      ) or exists (
+        select 1 from crawl_due_work indexed by crawl_due_work_repair_idx
+        where state = 'repair' limit 1
+      )`,
+  });
+  const results = await client.batch(writes, "write");
+  const repaired = mutationIndexes.reduce(
+    (total, mutationIndex) => total + (results[mutationIndex]?.rowsAffected ?? 0),
+    0,
+  );
+  return {
+    deferred: markers.length - repaired,
+    hasMore: (results[remainingIndex]?.rows.length ?? 0) > 0,
+    repaired,
+    scanned: markers.length,
+  };
 }
 
 async function firstCrawlRepairMarker(

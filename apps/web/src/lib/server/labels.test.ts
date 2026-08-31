@@ -24,6 +24,8 @@ import {
 } from "../../../scripts/lib/public-projection-test-state";
 import { createIntegrationDb } from "./integration-db";
 import { bestAlbumCoverUrl } from "../media";
+import { DUE_WORK_SOURCE_REPAIR_KIND } from "./due-work";
+import { fanOutDueWorkSourceRepairs } from "./due-work-source-repair";
 import {
   confirmLabelAlias,
   coverFromJson,
@@ -1109,6 +1111,40 @@ async function scopeChangedAtOf(labelId: string): Promise<null | string> {
 }
 
 describe("mergeLabel (the operator's slug-split cleanup)", () => {
+  it("removes the deleted label's slug projection before convergence loses its identity", async () => {
+    await insertFullLabel({ id: "lbl_canon", name: "Canon", slug: "canon" });
+    await insertFullLabel({ id: "lbl_loser", name: "Loser", slug: "loser" });
+    await db.execute({
+      args: [],
+      sql: `insert into due_work
+        (work_kind, subject_type, subject_id, state, sort_key, next_due_at, source_version,
+         generation, updated_at)
+        values ('label.image', 'label', 'loser', 'ready', '', '', 'old', 'live',
+          '2026-08-26T12:00:00.000Z')`,
+    });
+
+    await mergeLabel("loser", "canon");
+    expect(
+      (
+        await db.execute({
+          args: ["label.image", "loser"],
+          sql: `select state from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows,
+    ).toEqual([]);
+
+    await fanOutDueWorkSourceRepairs(db, { limit: 2, subjectType: "label" });
+    expect(
+      (
+        await db.execute({
+          args: ["loser", "lbl_loser", DUE_WORK_SOURCE_REPAIR_KIND],
+          sql: `select work_kind from due_work
+            where subject_id in (?, ?) and work_kind = ?`,
+        })
+      ).rows,
+    ).toEqual([]);
+  });
+
   it("re-points every FK, reconciles canonical-wins, writes the alias, deletes the loser", async () => {
     // Canonical carries the CORRECT identity (a right MBID) but is MISSING founding facts.
     await insertFullLabel({
