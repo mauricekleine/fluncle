@@ -272,17 +272,22 @@ async function advanceCatalogueRankRebuild(
     throw new Error("catalogue-rank due-work rebuild definition is missing");
   }
   const checkpoint = await readDueWorkRebuild(client, definition);
-  if (checkpoint?.generation !== marker.sourceVersion) {
+  // A newer corpus marker must not reset a running whole-catalogue rebuild. Finish the owned
+  // generation, leave the newer marker intact, then start its generation on the next call. This
+  // coalesces continuous catalogue writes without losing an invalidation or starving the cursor.
+  const generation = checkpoint?.state === "running" ? checkpoint.generation : marker.sourceVersion;
+  const newGeneration = checkpoint === undefined || checkpoint.generation !== generation;
+  if (newGeneration) {
     await refreshDueWorkCatalogueRankCorpus(client);
   }
   const result = await runDueWorkRebuildChunk(client, definition, {
-    generation: marker.sourceVersion,
+    generation,
     limit,
-    newGeneration: checkpoint?.generation !== marker.sourceVersion,
+    newGeneration,
   });
 
   let markerCleared = false;
-  if (result.complete) {
+  if (result.complete && generation === marker.sourceVersion) {
     const clearResults = await client.batch(
       [
         clearDueWorkSourceRepairStatement(marker),

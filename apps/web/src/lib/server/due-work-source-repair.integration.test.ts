@@ -594,6 +594,103 @@ describe("transactionally coupled due-work source repair", () => {
     expect(sourceMarker.rows).toEqual([]);
   });
 
+  it("finishes an owned rank generation before starting a newer corpus marker", async () => {
+    for (const trackId of Array.from({ length: 6 }, (_, index) => `rank-roll-${index}`)) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [
+          {
+            subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+            subjectType: "track",
+          },
+        ],
+        { markerVersion: "rank-roll-v1", producer: "catalogue-rank" },
+      ),
+    );
+    let corpusRefreshes = 0;
+    const countedClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("from findings cross join tracks ft")) {
+          corpusRefreshes += 1;
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
+
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
+      deferred: 1,
+      rankRebuildScanned: 5,
+    });
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [
+          {
+            subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+            subjectType: "track",
+          },
+        ],
+        { markerVersion: "rank-roll-v2", producer: "catalogue-rank" },
+      ),
+    );
+
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
+      deferred: 1,
+      expanded: 0,
+      rankRebuildScanned: 1,
+    });
+    expect(
+      (
+        await db.execute({
+          args: ["catalogue-rank", "track"],
+          sql: `select generation, scanned_count, state from due_work_rebuilds
+            where work_kind = ? and subject_type = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ generation: "rank-roll-v1", scanned_count: 6, state: "complete" });
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "rank-roll-v2" });
+    expect(corpusRefreshes).toBe(1);
+
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
+      deferred: 1,
+      rankRebuildScanned: 5,
+    });
+    expect(
+      (
+        await db.execute({
+          args: ["catalogue-rank", "track"],
+          sql: `select generation, scanned_count, state from due_work_rebuilds
+            where work_kind = ? and subject_type = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ generation: "rank-roll-v2", scanned_count: 5, state: "running" });
+    expect(corpusRefreshes).toBe(2);
+
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
+      deferred: 0,
+      expanded: 1,
+      rankRebuildScanned: 1,
+    });
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows,
+    ).toEqual([]);
+  });
+
   it("defers a completed rank rebuild when a newer corpus marker wins the clear race", async () => {
     for (const trackId of ["rank-race-a", "rank-race-b"]) {
       await seedCatalogueTrack(db, { trackId });
