@@ -1,11 +1,10 @@
 // THE ARCHIVE TRACK DESTINATION (`/track/<trackId>`) — the client-safe half.
 //
 // Fluncle holds far more recordings than he has ever certified. A certified one is a FINDING and
-// lives at `/log/<coordinate>` — that URL, that identifier, and that page are untouched by this
-// module and by everything downstream of it. What had no destination at all was the rest of the
-// archive: a `tracks` row the crawler or the freshness tap put there, rendered as a quiet row on an
-// entity page and linking straight back out to a streaming service. This module defines the one
-// thing that changes: those rows get a page of their own, at a permanent address.
+// lives at `/log/<coordinate>`; that URL, that identifier, and that page belong to the
+// certification and are not this module's to touch. The rest of the archive — a `tracks` row the
+// crawler or the freshness tap put there — has a destination of its own, at a permanent address,
+// and this module defines that address.
 //
 // ── THE IDENTIFIER, AND WHY IT IS `tracks.track_id` ────────────────────────────────────────────
 // The address is the row's own PRIMARY KEY. Four properties decided it, in this order:
@@ -66,8 +65,8 @@ export type ListenKind = "apple" | "beatport" | "deezer" | "spotify" | "youtube"
  * feeding AI. `tracks.beatport_url`'s §F rail in db/schema.ts therefore keeps the URL out of every
  * derived corpus, and structured data is a derived corpus: a page's `sameAs` graph exists, in
  * log-schema.ts's own words, "for crawlers + AI answer-engines". The certified `/log` page's
- * `musicRecordingJsonLd` already withholds it — there is no Beatport entry in its `sameAs`, and
- * that shipped behaviour is the specification this surface follows.
+ * `musicRecordingJsonLd` holds the same line — it emits no Beatport entry in its `sameAs` — and
+ * every surface that renders the link owes that graph the same silence.
  *
  * So a Beatport link is RENDERED as an outbound control and is never an identity claim. This is
  * the single seam where that is enforced: the route's `head()` builds its `sameAs` input through

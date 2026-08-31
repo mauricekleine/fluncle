@@ -705,12 +705,15 @@ export type RankCatalogueSummary = {
   scored: number;
 };
 
-type CatalogueRankState = Pick<RankCatalogueSummary, "corpus" | "embeddedFindings" | "findings">;
+export type CatalogueRankState = Pick<
+  RankCatalogueSummary,
+  "corpus" | "embeddedFindings" | "findings"
+>;
 
 /** The live rank fingerprint cached by a completed projection backfill or an active legacy tick. */
 export const CATALOGUE_RANK_STATE_KEY = "catalogue_rank_state_cache";
 
-function parseCatalogueRankState(value: string | undefined): CatalogueRankState | undefined {
+export function parseCatalogueRankState(value: string | undefined): CatalogueRankState | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -1371,6 +1374,20 @@ async function emptyCatalogueRankSummary(options: {
   };
 }
 
+async function readRankStateForCandidates(
+  dueWorkCutoverEnabled: boolean,
+  candidates: CandidateRow[],
+): Promise<CatalogueRankState> {
+  if (!dueWorkCutoverEnabled || candidates.length > 0) {
+    return refreshCatalogueRankStateCache();
+  }
+  const state = parseCatalogueRankState(await getSetting(CATALOGUE_RANK_STATE_KEY));
+  if (state === undefined) {
+    throw new DueWorkMaintenancePendingError("catalogue-rank-state");
+  }
+  return state;
+}
+
 async function remainingCatalogueRankWork(options: {
   candidateCount: number;
   corpus: string;
@@ -1454,16 +1471,7 @@ export async function rankCatalogue(
   // A projected empty check reaches this point after only repair/index probes. Its legacy response
   // fields come from the cache written by the completed backfill (and by every default-off tick),
   // never by asking the growing source corpus to prove that nothing is due.
-  let rankState =
-    dueWorkCutoverEnabled && candidates.length === 0
-      ? parseCatalogueRankState(await getSetting(CATALOGUE_RANK_STATE_KEY))
-      : undefined;
-  if (rankState === undefined) {
-    if (dueWorkCutoverEnabled && candidates.length === 0) {
-      throw new DueWorkMaintenancePendingError("catalogue-rank-state");
-    }
-    rankState = await refreshCatalogueRankStateCache();
-  }
+  const rankState = await readRankStateForCandidates(dueWorkCutoverEnabled, candidates);
   const { corpus, embeddedFindings, findings } = rankState;
 
   if (!dueWorkCutoverEnabled) {

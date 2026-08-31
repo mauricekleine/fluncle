@@ -23,6 +23,7 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, f
 - [The log](https://www.fluncle.com/log): every finding's coordinate page, one per Log ID (e.g. https://www.fluncle.com/log/004.7.2I)
 - [The Logbook](https://www.fluncle.com/logbook): the voyage written up as a first-person travelogue, one entry per sector-day, with that day's findings inlined. One page per day, at https://www.fluncle.com/logbook/<sector>
 - [Every track](https://www.fluncle.com/tracks): the whole list, newest release first, filterable by release year, tempo, key, and label
+- [Search the archive](https://www.fluncle.com/search): one query box over everything Fluncle holds. A coordinate, an artist, a label, an album, a plain word, a sentence such as "tracks in A minor above 170 bpm", or a sonic reference such as "tracks that sound like Nine Clouds". The whole query lives in the URL, so https://www.fluncle.com/search?q=<query> is a shareable result set
 - [What just came out](https://www.fluncle.com/fresh): every drum & bass release from the last 30 days, freshest first, ordered by when the tune came out and not by when Fluncle found it
 - [Mixtapes](https://www.fluncle.com/mixtapes): Fluncle's own DJ mixtapes, each a checkpoint with a Log ID such as https://www.fluncle.com/log/019.F.1A
 - [The observation station](https://www.fluncle.com/radio): Fluncle's spoken field observations on a loop, one finding at a time, with transcripts. Also at https://radio.fluncle.com

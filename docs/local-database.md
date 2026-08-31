@@ -68,16 +68,16 @@ Cloudflare deploys via Workers Builds, and migrations run as part of the **deplo
 
 ```jsonc
 // apps/web/package.json
-"deploy:cf": "bun run db:migrate:production && bun run db:backfill && bun run db:migrate:telemetry:production && wrangler deploy && bun scripts/purge-edge-cache.ts"
+"deploy:cf": "bun run db:migrate:production && bun run db:migrate:telemetry:production && wrangler deploy && bun run scripts/backfill-mixable-artists-projection.ts --activate && bun scripts/purge-edge-cache.ts"
 ```
 
 `db:migrate:production` validates the generated journal against the loaded migration files, reads the target database's Drizzle ledger, and sends the complete pending journal suffix as one atomic libSQL migration batch. Each migration's ledger stamp is part of the same transaction, so a failed statement rolls back the schema changes and stamps together. The local `db:migrate` command and the `dev` startup path remain the ordinary full-journal Drizzle path.
 
 Production migrations run only from the Cloudflare deploy chain. Applied migrations are never down-migrated: restore any required schema forward before rolling application code back.
 
-`db:backfill` is the idempotent data-backfill step folded into the deploy (a chain of `scripts/backfill-*.ts` scripts, beginning with `scripts/backfill-plan-recording-mixtape.ts`): DDL and the data it populates ship atomically, and because every backfill step is guarded (`where not exists` / convergent updates), re-running it on every deploy is a no-op once done. A new schema change that needs a data backfill appends another `backfill-*.ts` script to the chain rather than relying on a manual post-deploy step.
+`db:backfill` is the explicit historical catch-up and repair chain for the older `scripts/backfill-*.ts` utilities. It is deliberately absent from `deploy:cf`: a convergent write may be a logical no-op while its residual probe still scans a growing table, and chaining every historical repair into every release can starve the live database writer or prevent Wrangler from publishing otherwise independent code. A new schema change that needs existing rows transformed must carry its own bounded, resumable migration or an explicit guarded activation with a legacy read fallback; it must not silently join the generic deployment path.
 
-The telemetry migration is required and runs after the primary backfills but before `wrangler deploy`. Missing telemetry credentials or a failed telemetry migration exits non-zero, so a new Worker cannot become live before its additive run-ledger schema. The telemetry expansion may safely remain if the later Worker deployment fails or is rolled back.
+The telemetry migration is required and runs after the primary migration but before `wrangler deploy`. Missing telemetry credentials or a failed telemetry migration exits non-zero, so a new Worker cannot become live before its additive run-ledger schema. The telemetry expansion may safely remain if the later Worker deployment fails or is rolled back.
 
 The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build still runs separately as the Build command). Prod `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` and `TURSO_TELEMETRY_DATABASE_URL` / `TURSO_TELEMETRY_AUTH_TOKEN` come from the Cloudflare build/deploy environment, so the two migration steps inspect and migrate their disjoint production databases there.
 

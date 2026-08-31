@@ -160,15 +160,14 @@ describe("production deploy migration boundary", () => {
     expect(pkg.scripts["db:migrate:production:h8"]).toBeUndefined();
   });
 
-  it("routes deploy:cf through the complete pending journal before backfill and deploy", () => {
+  it("routes deploy:cf through the complete pending journal without a generic history sweep", () => {
     const chain = pkg.scripts["deploy:cf"] ?? "";
     const migrationAt = chain.indexOf("bun run db:migrate:production");
-    const backfillAt = chain.indexOf("bun run db:backfill");
     const deployAt = chain.indexOf("wrangler deploy");
 
     expect(migrationAt).toBe(0);
-    expect(backfillAt).toBeGreaterThan(migrationAt);
-    expect(deployAt).toBeGreaterThan(backfillAt);
+    expect(deployAt).toBeGreaterThan(migrationAt);
+    expect(chain).not.toContain("bun run db:backfill");
     expect(chain).not.toContain("bun run db:migrate &&");
   });
 

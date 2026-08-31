@@ -38,6 +38,46 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 const CLEARED_VERDICTS = ["pass", "fail", "inconclusive", "unknown"] as const;
 
+function validateGlsl(
+  raw: Record<string, unknown>,
+  err: (path: string, message: string) => void,
+): void {
+  if (!isRecord(raw.glsl)) {
+    err("glsl", "must be an object { body, headerVersion, glsl3 }");
+    return;
+  }
+  if (typeof raw.glsl.body !== "string" || raw.glsl.body.length === 0) {
+    err("glsl.body", "must be a non-empty string");
+  } else if (/\$\{/.test(raw.glsl.body)) {
+    err("glsl.body", "must be fully RESOLVED — no `${…}` interpolations may remain");
+  }
+  if (typeof raw.glsl.headerVersion !== "string") {
+    err("glsl.headerVersion", "must be a string");
+  }
+  if (typeof raw.glsl.glsl3 !== "boolean") {
+    err("glsl.glsl3", "must be a boolean");
+  }
+  if (raw.glsl.textures === undefined) {
+    return;
+  }
+  if (!Array.isArray(raw.glsl.textures)) {
+    err("glsl.textures", "when present, must be an array");
+    return;
+  }
+  raw.glsl.textures.forEach((t, i) => {
+    if (
+      !isRecord(t) ||
+      typeof t.name !== "string" ||
+      !SCENE_TEXTURE_SOURCES.includes(t.source as SceneTextureSource)
+    ) {
+      err(
+        `glsl.textures[${i}]`,
+        `must be { name: string, source: ${SCENE_TEXTURE_SOURCES.map((s) => `"${s}"`).join(" | ")} }`,
+      );
+    }
+  });
+}
+
 /** Strict, error-collecting validation of an already-parsed value. */
 export function validateSceneStrict(raw: unknown): ValidateSceneResult {
   const errors: SceneError[] = [];
@@ -65,40 +105,7 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
     err("kind", `must be one of finding | default | holding (got ${JSON.stringify(raw.kind)})`);
   }
 
-  // glsl block
-  if (!isRecord(raw.glsl)) {
-    err("glsl", "must be an object { body, headerVersion, glsl3 }");
-  } else {
-    if (typeof raw.glsl.body !== "string" || raw.glsl.body.length === 0) {
-      err("glsl.body", "must be a non-empty string");
-    } else if (/\$\{/.test(raw.glsl.body)) {
-      err("glsl.body", "must be fully RESOLVED — no `${…}` interpolations may remain");
-    }
-    if (typeof raw.glsl.headerVersion !== "string") {
-      err("glsl.headerVersion", "must be a string");
-    }
-    if (typeof raw.glsl.glsl3 !== "boolean") {
-      err("glsl.glsl3", "must be a boolean");
-    }
-    if (raw.glsl.textures !== undefined) {
-      if (!Array.isArray(raw.glsl.textures)) {
-        err("glsl.textures", "when present, must be an array");
-      } else {
-        raw.glsl.textures.forEach((t, i) => {
-          if (
-            !isRecord(t) ||
-            typeof t.name !== "string" ||
-            !SCENE_TEXTURE_SOURCES.includes(t.source as SceneTextureSource)
-          ) {
-            err(
-              `glsl.textures[${i}]`,
-              `must be { name: string, source: ${SCENE_TEXTURE_SOURCES.map((s) => `"${s}"`).join(" | ")} }`,
-            );
-          }
-        });
-      }
-    }
-  }
+  validateGlsl(raw, err);
 
   // palette
   if (

@@ -19,6 +19,7 @@ import {
   DUE_WORK_BACKFILLS,
   dueWorkRepairDefinitions,
   projectTrackDueWorkSourceRepairs,
+  refreshDueWorkCatalogueRankCorpus,
 } from "./due-work-registry";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
@@ -215,6 +216,8 @@ async function convergeEvaluatedSourceMarkers(
   }
   if (removed.length > 0) {
     const rows = removed.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+    // Keep the bounded candidate set on the driving side. A correlated EXISTS with `due_work` as
+    // the outer DELETE turns this into a full projection scan instead of primary-key removals.
     writes.push({
       args: removed.flatMap((outcome) => [
         outcome.workKind,
@@ -226,17 +229,15 @@ async function convergeEvaluatedSourceMarkers(
         (work_kind, subject_type, subject_id, marker_subject_type, marker_subject_id,
          marker_source_version) as (values ${rows})
         delete from due_work
-        where exists (
-          select 1 from candidate
+        where (work_kind, subject_type, subject_id) in (
+          select candidate.work_kind, candidate.subject_type, candidate.subject_id
+          from candidate
           join due_work marker
             on marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
             and marker.subject_type = candidate.marker_subject_type
             and marker.subject_id = candidate.marker_subject_id
             and marker.state = 'repair'
             and marker.source_version = candidate.marker_source_version
-          where candidate.work_kind = due_work.work_kind
-            and candidate.subject_type = due_work.subject_type
-            and candidate.subject_id = due_work.subject_id
         )`,
     });
   }
@@ -271,14 +272,22 @@ async function advanceCatalogueRankRebuild(
     throw new Error("catalogue-rank due-work rebuild definition is missing");
   }
   const checkpoint = await readDueWorkRebuild(client, definition);
+  // A newer corpus marker must not reset a running whole-catalogue rebuild. Finish the owned
+  // generation, leave the newer marker intact, then start its generation on the next call. This
+  // coalesces continuous catalogue writes without losing an invalidation or starving the cursor.
+  const generation = checkpoint?.state === "running" ? checkpoint.generation : marker.sourceVersion;
+  const newGeneration = checkpoint === undefined || checkpoint.generation !== generation;
+  if (newGeneration) {
+    await refreshDueWorkCatalogueRankCorpus(client);
+  }
   const result = await runDueWorkRebuildChunk(client, definition, {
-    generation: marker.sourceVersion,
+    generation,
     limit,
-    newGeneration: checkpoint?.generation !== marker.sourceVersion,
+    newGeneration,
   });
 
   let markerCleared = false;
-  if (result.complete) {
+  if (result.complete && generation === marker.sourceVersion) {
     const clearResults = await client.batch(
       [
         clearDueWorkSourceRepairStatement(marker),

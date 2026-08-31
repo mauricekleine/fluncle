@@ -449,6 +449,12 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         // findings + catalogue, newest release first. Listed unconditionally like /fresh; a
         // filtered view (`?bpmMin=…`) is `noindex` per-request, so only the bare hub is a URL here.
         staticEntry(`${siteUrl}/tracks`, latest),
+        // The search surface, BARE only. `/search` with no query is a real page — the four worked
+        // example queries, the way in, and the WebSite SearchAction that tells an engine how to
+        // query the archive directly — so it is listed like any other hub. A `?q=` view is
+        // `noindex, follow` per-request (lib/search-page.ts) and its query space is unbounded, so
+        // it is exactly the thing a sitemap must not enumerate.
+        staticEntry(`${siteUrl}/search`, latest),
         // The graph HUBS are listed unconditionally, exactly like /artists: a hub is a real
         // page whose content is the whole list, so the per-page thin-content gate (which can,
         // legitimately, admit no DETAIL pages at all) says nothing about whether the hub

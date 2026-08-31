@@ -1,7 +1,19 @@
-// FLUNCLE'S SEARCH — the surface.
+// FLUNCLE'S SEARCH — the ACCELERATOR.
 //
 // A trigger in the top bar, ⌘K / Ctrl+K from anywhere, and one Shadcn `Command` dialog. The
 // text input lives INSIDE the dialog; the bar is only a way in.
+//
+// ── IT IS ONE OF TWO SURFACES, AND IT IS THE FAST ONE ────────────────────────────────
+// The palette is the quickest way to reach one known thing and the worst way to HOLD a result
+// set: it has no URL, so what it shows cannot be shared, reloaded, or walked back to. `/search`
+// (routes/search.tsx) is the other half — the same resolver, server-rendered, with the whole
+// query state in `?q=`. This dialog therefore HANDS OFF to it (the last row of every answer,
+// `openPage` below) rather than being replaced by it: ⌘K stays one keystroke from every public
+// page, and nothing a reader finds through it is trapped in a dialog.
+//
+// Everything that is not a rendering decision — the wire types, the grouping, the example
+// queries, the two destinations, the URL builders — lives in `lib/search-results.ts`, which the
+// page imports too, so the two rooms cannot drift on what an answer means.
 //
 // ── WHAT THE DIALOG IS SAYING, DESIGN-WISE ───────────────────────────────────────────
 // The colophon nav is deliberately restrained — a wordmark, a breadcrumb, and nothing else —
@@ -26,7 +38,6 @@
 import {
   Command,
   CommandDialog,
-  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
@@ -36,8 +47,8 @@ import {
 import {
   ArrowRightIcon,
   CaretRightIcon,
+  ListMagnifyingGlassIcon,
   MagnifyingGlassIcon,
-  SparkleIcon,
   WaveformIcon,
 } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
@@ -52,131 +63,30 @@ import {
   useState,
 } from "react";
 import { SpotifyIcon } from "@/components/platform-icons";
-import { formatKey, useKeyNotation } from "@/lib/key-notation";
+import { SearchFilterChips } from "@/components/search/search-filter-chips";
+import { SearchExampleGlyph } from "@/components/search/search-glyph";
+import { anchorCredit } from "@/components/search/search-results-list";
 import { albumCoverAtSize } from "@/lib/media";
+import {
+  EMPTY_SEARCH,
+  ENTITY_GROUPS,
+  MIN_QUERY_LENGTH,
+  SEARCH_EXAMPLES,
+  type SearchEntity,
+  type SearchHit,
+  type SearchResponse,
+  entityHref,
+  searchArchiveApiPath,
+  searchPagePath,
+} from "@/lib/search-results";
 import { hasTrackPageIdentity, trackPagePath } from "@/lib/track-page";
 import { cn } from "@/lib/utils";
 
-// ── The wire ─────────────────────────────────────────────────────────────────────────
-
-type SearchHit = {
-  album?: string;
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  certified: boolean;
-  galaxy?: string;
-  key?: string;
-  label?: string;
-  logId?: string;
-  releaseDate?: string;
-  spotifyUrl?: string;
-  title: string;
-  trackId: string;
-};
-
-type EntityKind = "album" | "artist" | "galaxy" | "label" | "mixtape";
-
-type SearchEntity = {
-  imageUrl?: string;
-  kind: EntityKind;
-  name: string;
-  slug: string;
-  url?: string;
-};
-
-/**
- * The graph nodes that HAVE a page, in the order they render — and the order a reader
- * means, because a name is most often a person. Each gets the identical row: the picture, the
- * name, the arrow. An artist is the precedent and a label and an album are not a lesser
- * citizen of it; the only thing `kind` decides is which page the arrow goes to.
- *
- * The heading names the KIND, which it is allowed to do because all of them are named objects in
- * Fluncle's world — unlike the uncertified tracks below, which have no name and get no heading
- * (the Unlit Rule, above).
- */
-const ENTITY_GROUPS = [
-  { heading: "Artists", kind: "artist" },
-  { heading: "Labels", kind: "label" },
-  { heading: "Albums", kind: "album" },
-  { heading: "Galaxies", kind: "galaxy" },
-  { heading: "Mixtapes", kind: "mixtape" },
-] as const satisfies readonly { heading: string; kind: EntityKind }[];
-
-type SearchFilters = {
-  album?: string;
-  artist?: string;
-  bpmMax?: number;
-  bpmMin?: number;
-  key?: string;
-  label?: string;
-  soundsLike?: string;
-  soundsLikeArtists?: string[];
-  text?: string;
-  yearMax?: number;
-  yearMin?: number;
-};
-
-type SearchResponse = {
-  anchor?: SearchHit;
-  degraded: boolean;
-  entities: SearchEntity[];
-  filters?: SearchFilters;
-  kind: "coordinate" | "empty" | "entity" | "filters" | "sonic" | "token";
-  redirect?: string;
-  results: SearchHit[];
-};
-
-const EMPTY: SearchResponse = { degraded: false, entities: [], kind: "empty", results: [] };
-
-/** The floor the server also enforces — below it there is nothing to go on yet. */
-const MIN_QUERY_LENGTH = 2;
-
-/**
- * The four example queries, and they are a lesson disguised as a shortcut: one bare artist
- * name, one label, one natural-language filter, and one sonic. Between them they teach every
- * tier of the resolver without ever explaining that there are tiers.
- *
- * They are REAL — each one returns rows against the live archive. An example query that finds
- * nothing teaches the opposite of what it was for.
- */
-export const SEARCH_EXAMPLES = [
-  { icon: "token", query: "netsky" },
-  { icon: "token", query: "Hospital Records" },
-  { icon: "filters", query: "tracks in A minor above 170 bpm" },
-  { icon: "sonic", query: "tracks that sound like Nine Clouds" },
-] as const satisfies readonly { icon: SearchExampleIcon; query: string }[];
-
-/** Which glyph an example carries — the tier it teaches, not a label anyone reads. */
-export type SearchExampleIcon = "filters" | "sonic" | "token";
-
-/**
- * The glyph for one example query, shared by the dialog's own pills and the front door's.
- * Exported so the two can never drift into teaching the same tier with different marks.
- */
-export function SearchExampleGlyph({
-  className,
-  icon,
-}: {
-  className?: string;
-  icon: SearchExampleIcon;
-}): ReactNode {
-  if (icon === "sonic") {
-    return <WaveformIcon aria-hidden="true" className={className} />;
-  }
-
-  if (icon === "filters") {
-    return <SparkleIcon aria-hidden="true" className={className} />;
-  }
-
-  return <MagnifyingGlassIcon aria-hidden="true" className={className} />;
-}
-
 async function fetchSearch(q: string): Promise<SearchResponse> {
-  const response = await fetch(`/api/v1/search/archive?q=${encodeURIComponent(q)}`);
+  const response = await fetch(searchArchiveApiPath(q));
 
   if (!response.ok) {
-    return EMPTY;
+    return EMPTY_SEARCH;
   }
 
   return (await response.json()) as SearchResponse;
@@ -290,46 +200,6 @@ function EntityRow({
   );
 }
 
-/**
- * What the model understood, echoed back. Not decoration: it is the only way a reader can see
- * that "in A minor" became a key filter and correct it when it did not. A search that quietly
- * reinterprets you is a search you cannot trust.
- */
-function FilterChips({ filters }: { filters: SearchFilters }): ReactNode {
-  // The key filter echoes in the app-wide notation (Scales/Camelot), like every other
-  // key readout. `formatKey` renders an unparseable key verbatim, so a filter the
-  // model phrased oddly still shows what it understood.
-  const { notation } = useKeyNotation();
-  const chips = [
-    filters.artist && `artist: ${filters.artist}`,
-    filters.label && `label: ${filters.label}`,
-    filters.album && `album: ${filters.album}`,
-    filters.soundsLikeArtists &&
-      filters.soundsLikeArtists.length > 0 &&
-      `sounds like: ${filters.soundsLikeArtists.join(", ")}`,
-    filters.key && `key: ${formatKey(filters.key, notation)}`,
-    filters.bpmMin !== undefined && `bpm ≥ ${filters.bpmMin}`,
-    filters.bpmMax !== undefined && `bpm ≤ ${filters.bpmMax}`,
-    filters.yearMin !== undefined && `from ${filters.yearMin}`,
-    filters.yearMax !== undefined && `to ${filters.yearMax}`,
-    filters.text && `“${filters.text}”`,
-  ].filter((chip): chip is string => Boolean(chip));
-
-  if (chips.length === 0) {
-    return undefined;
-  }
-
-  return (
-    <div className="search-chips">
-      {chips.map((chip) => (
-        <span className="search-chip" key={chip}>
-          {chip}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 // ── The dialog ───────────────────────────────────────────────────────────────────────
 
 export function SearchDialog({
@@ -375,7 +245,7 @@ export function SearchDialog({
   }, [query]);
 
   const enabled = debounced.length >= MIN_QUERY_LENGTH;
-  const { data = EMPTY, isFetching } = useQuery({
+  const { data = EMPTY_SEARCH, isFetching } = useQuery({
     enabled,
     queryFn: () => fetchSearch(debounced),
     queryKey: ["search", debounced],
@@ -404,10 +274,7 @@ export function SearchDialog({
 
   /** An entity goes to its page — the row's own `url` when it carries one (a galaxy's plural
       segment, a mixtape's log page), else the `/<kind>/<slug>` default. */
-  const pickEntity = useCallback(
-    (entity: SearchEntity) => goTo(entity.url ?? `/${entity.kind}/${entity.slug}`),
-    [goTo],
-  );
+  const pickEntity = useCallback((entity: SearchEntity) => goTo(entityHref(entity)), [goTo]);
 
   /**
    * A finding goes to its coordinate. A track with no coordinate goes to its own
@@ -437,6 +304,13 @@ export function SearchDialog({
     },
     [close, goTo],
   );
+
+  /**
+   * THE HANDOFF. The palette is the accelerator; `/search` is the room you can link to, reload, and
+   * walk back through. So the last thing in every answer is the door to it, carrying the query the
+   * reader already typed — the palette stays the fast way in and stops being the ONLY way in.
+   */
+  const openPage = useCallback(() => goTo(searchPagePath(debounced)), [debounced, goTo]);
 
   const showExamples = query.trim().length === 0;
   const nothing = enabled && !isFetching && data.results.length === 0 && data.entities.length === 0;
@@ -494,8 +368,9 @@ export function SearchDialog({
         {data.anchor ? (
           <p className="search-note">
             <WaveformIcon aria-hidden="true" className="search-note-icon" />
-            Near <strong>{data.anchor.title}</strong>
-            {data.anchor.artists.length > 0 ? ` — ${data.anchor.artists.join(", ")}` : ""}
+            {/* `Artist — Title`, the one sanctioned em dash (VOICE.md §6); inverted it would be an
+                em dash in prose, which the same rule bans. Shared with `/search`'s own note. */}
+            Near <strong>{anchorCredit(data.anchor)}</strong>
           </p>
         ) : undefined}
 
@@ -508,16 +383,20 @@ export function SearchDialog({
           </p>
         ) : undefined}
 
-        {data.filters ? <FilterChips filters={data.filters} /> : undefined}
+        {data.filters ? <SearchFilterChips filters={data.filters} /> : undefined}
 
         {/* There is no synthetic "Go to /artist/netsky" row anywhere in here, deliberately. A
             resolved coordinate comes back as the FINDING (cover, title, coordinate) and a
             resolved artist, label, or album as the ENTITY — the thing, never a rendering of the
             URL you are about to visit. Each is first in the list, so Enter lands exactly where
             the redirect would have taken you. */}
-        <CommandList>
-          {nothing ? <CommandEmpty>{emptyCopy}</CommandEmpty> : undefined}
+        {/* The empty line sits OUTSIDE `CommandList`, where `CommandEmpty` used to live inside it.
+            `CommandEmpty` renders only while the list holds no items, and the handoff row below is
+            an item that is always there once a query is long enough — so keeping the message in
+            `CommandEmpty` would have silently deleted it in exactly the state it exists for. */}
+        {nothing ? <p className="search-note search-note--empty">{emptyCopy}</p> : undefined}
 
+        <CommandList>
           {ENTITY_GROUPS.map((group) => {
             const entities = data.entities.filter((entity) => entity.kind === group.kind);
 
@@ -538,10 +417,12 @@ export function SearchDialog({
             );
           })}
 
-          {/* The findings lead under the archive's own name — a finding is a named object, so
-              its heading is allowed. */}
+          {/* The findings lead, headed by the NAMED OBJECT rather than the collection's nameplate:
+              DESIGN.md's Unlit Rule reserves "Fluncle's Findings" for lore-area surfaces, and a
+              palette that opens over every page is not one. Same heading as `/search`, so the two
+              doors onto one resolver cannot drift. */}
           {findings.length > 0 ? (
-            <CommandGroup heading="Fluncle's Findings">
+            <CommandGroup heading="Findings">
               {findings.map((hit) => (
                 <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
               ))}
@@ -561,6 +442,27 @@ export function SearchDialog({
             ) : (
               unlit.map((hit) => <TrackRow hit={hit} key={hit.trackId} onPick={pick} />)
             )
+          ) : undefined}
+
+          {/* Last, and present in EVERY answered state including the empty one — a query that found
+              nothing in a palette is precisely when a reader wants the surface that can explain
+              itself, hold the query in a URL, and be sent to someone else. */}
+          {enabled ? (
+            <CommandGroup>
+              <CommandItem
+                className="search-row search-handoff"
+                onSelect={openPage}
+                value="__open-search-page"
+              >
+                <ListMagnifyingGlassIcon aria-hidden="true" className="search-handoff-icon" />
+                <span className="search-row-text">
+                  <span className="search-row-title">Open this search as a page</span>
+                </span>
+                <CommandShortcut className="search-row-tail">
+                  <ArrowRightIcon aria-hidden="true" className="search-jump-icon" />
+                </CommandShortcut>
+              </CommandItem>
+            </CommandGroup>
           ) : undefined}
         </CommandList>
       </Command>

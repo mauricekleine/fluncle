@@ -1,4 +1,4 @@
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type MixTrack } from "@fluncle/contracts";
@@ -259,7 +259,7 @@ function MixPage() {
             I'm Fluncle. I dig drum &amp; bass out of the far sectors and log every banger I bring
             back. This runs on that logbook, and it gets sharper every time I find another one.
           </p>
-          <a href="/">See the findings</a>
+          <Link to="/findings">See the findings</Link>
         </footer>
       </article>
     </main>

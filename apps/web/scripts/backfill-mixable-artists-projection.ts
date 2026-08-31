@@ -74,9 +74,13 @@ export async function backfillMixableArtistsProjection(
   if (options.activate !== true) {
     throw new Error("mixable artist projection activation must run after wrangler deploy");
   }
+  if (observed === MIXABLE_ARTISTS_PROJECTION_COMPLETE_VALUE) {
+    return { artists: 0, pages: 0, passes: 0, skipped: true };
+  }
   const runId = randomUUID();
-  // A normal deploy ALWAYS starts at the first artist, even from COMPLETE: predeploy repair scripts
-  // may have changed source truth. `--resume` is only for retrying this same post-deploy activation.
+  // Production writers maintain the projection transactionally, while an out-of-band source
+  // repair explicitly marks this state dirty. A complete fence therefore makes an ordinary deploy
+  // a true no-op; absent, dirty, and interrupted states still reconcile before activation.
   const resumed = options.resume === true ? parseRunningState(observed) : null;
   // Resume restarts the interrupted pass from its beginning. That repeats bounded idempotent pages,
   // but preserves the pass-wide "zero corrections" proof that a mid-pass cursor alone cannot.

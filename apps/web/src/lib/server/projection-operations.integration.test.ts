@@ -2,6 +2,7 @@ import { createClient, type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
+import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   advanceProjectionAudit,
@@ -96,7 +97,8 @@ describe("projection production operations", () => {
       create index projection_repairs_order_idx
         on projection_repairs(projection, source_epoch, subject_type, subject_id);
       create table tracks (
-        track_id text primary key, release_date text, key text, label_id text
+        track_id text primary key, release_date text, key text, label_id text,
+        has_embedding integer not null default 0
       );
       create index tracks_release_date_track_id_idx on tracks(release_date desc, track_id desc);
       create index tracks_label_id_idx on tracks(label_id, track_id);
@@ -382,6 +384,16 @@ describe("projection production operations", () => {
         args: [PROJECTION_AUDIT_SETTING_KEYS[target]],
         sql: `delete from settings where key = ?`,
       });
+      if (target === "track_due_work") {
+        await db.execute({
+          args: [
+            CATALOGUE_RANK_STATE_KEY,
+            JSON.stringify({ corpus: "v5:stale", embeddedFindings: 0, findings: 0 }),
+          ],
+          sql: `insert into settings (key, value) values (?, ?)
+            on conflict(key) do update set value = excluded.value`,
+        });
+      }
 
       const auditClient = {
         batch: db.batch.bind(db),
@@ -408,6 +420,15 @@ describe("projection production operations", () => {
         throw new Error("projection audit state was not stored as JSON text");
       }
       expect(JSON.parse(savedValue)).toMatchObject({ complete: false, target });
+      if (target === "track_due_work") {
+        const rankState = await db.execute({
+          args: [CATALOGUE_RANK_STATE_KEY],
+          sql: `select value from settings where key = ?`,
+        });
+        expect(rankState.rows[0]?.value).not.toBe(
+          JSON.stringify({ corpus: "v5:stale", embeddedFindings: 0, findings: 0 }),
+        );
+      }
       await expect(setProjectionCutoverFor(db, { enabled: true, target: cutover })).rejects.toThrow(
         /not converged/,
       );

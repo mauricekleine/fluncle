@@ -8,6 +8,7 @@ import {
   listReadyDueWork,
   markDueWorkSourceRepairsStatement,
 } from "./due-work";
+import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
 import { fanOutDueWorkSourceRepairs, repairDueWorkBeforeRead } from "./due-work-source-repair";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { createIntegrationDb, seedAlbum, seedCatalogueTrack } from "./integration-db";
@@ -104,6 +105,44 @@ describe("transactionally coupled due-work source repair", () => {
     ).toEqual(["repair-track"]);
   });
 
+  it("uses the maintained rank corpus cache for ordinary track source repair", async () => {
+    await seedCatalogueTrack(db, { trackId: "cached-rank-repair" });
+    await db.batch(
+      [
+        {
+          args: [
+            CATALOGUE_RANK_STATE_KEY,
+            JSON.stringify({ corpus: "v5:0:0:0:cached", embeddedFindings: 0, findings: 0 }),
+          ],
+          sql: `insert into settings (key, value) values (?, ?)`,
+        },
+        markDueWorkSourceRepairsStatement(
+          [{ subjectId: "cached-rank-repair", subjectType: "track" }],
+          { markerVersion: "cached-rank-v1", producer: "capture-verification" },
+        ),
+      ],
+      "write",
+    );
+    const cacheOnlyClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (
+          sql.includes("from findings cross join tracks ft") ||
+          sql.includes("having sum(case when ta.role = 'remixer'")
+        ) {
+          throw new Error("ordinary repair recomputed the live rank corpus");
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
+
+    await expect(fanOutDueWorkSourceRepairs(cacheOnlyClient, { limit: 1 })).resolves.toMatchObject({
+      expanded: 1,
+      scanned: 1,
+    });
+  });
+
   it("caps a requested 500-source page and continues from the durable marker set", async () => {
     const subjects = Array.from({ length: 6 }, (_, index) => ({
       subjectId: `wide-fanout-${String(index).padStart(3, "0")}`,
@@ -149,6 +188,7 @@ describe("transactionally coupled due-work source repair", () => {
     let maximumBatchArgs = 0;
     let maximumBatchStatements = 0;
     let maximumStatementArgs = 0;
+    let removalStatement: Exclude<InStatement, string> | undefined;
     const recordArgs = (statement: InStatement): void => {
       if (typeof statement !== "string" && Array.isArray(statement.args)) {
         maximumStatementArgs = Math.max(maximumStatementArgs, statement.args.length);
@@ -171,6 +211,14 @@ describe("transactionally coupled due-work source repair", () => {
         );
         for (const statement of statements) {
           recordArgs(statement);
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          if (
+            typeof statement !== "string" &&
+            sql.includes("delete from due_work") &&
+            sql.includes("from candidate")
+          ) {
+            removalStatement = statement;
+          }
         }
         return db.batch(statements, mode);
       },
@@ -182,7 +230,9 @@ describe("transactionally coupled due-work source repair", () => {
     };
     const first = await fanOutDueWorkSourceRepairs(measuredClient, { limit: 500 });
     expect(first).toMatchObject({ deferred: 0, expanded: 5, hasMore: true, scanned: 5 });
-    expect(executeCalls).toBeLessThanOrEqual(7);
+    // A missing rank-state cache pays one bounded read plus one fill before later pages become
+    // cache-only. The source page itself remains capped at five markers.
+    expect(executeCalls).toBeLessThanOrEqual(9);
     expect(batchCalls).toBe(1);
     expect(maximumBatchStatements).toBeLessThanOrEqual(4);
     expect(maximumStatementArgs).toBeLessThanOrEqual(2_040);
@@ -242,6 +292,17 @@ describe("transactionally coupled due-work source repair", () => {
         })
       ).rows[0],
     ).toMatchObject({ state: "scheduled" });
+    if (removalStatement === undefined) {
+      throw new Error("source repair did not emit the obsolete-row delete");
+    }
+    const removalPlan = (
+      await db.execute({
+        args: removalStatement.args,
+        sql: `explain query plan ${removalStatement.sql}`,
+      })
+    ).rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
+    expect(removalPlan).toContainEqual(expect.stringContaining("SEARCH due_work USING"));
+    expect(removalPlan).not.toContainEqual(expect.stringMatching(/^SCAN due_work$/));
   });
 
   it("maps canonical entity markers onto slug-keyed artwork projections", async () => {
@@ -367,6 +428,77 @@ describe("transactionally coupled due-work source repair", () => {
     ).toMatchObject({ source_version: "newer-projection", state: "scheduled" });
   });
 
+  it("preserves a newer marker and target row after an obsolete-row decision", async () => {
+    await seedCatalogueTrack(db, { trackId: "removed-race-track" });
+    await db.batch(
+      [
+        {
+          args: [],
+          sql: `insert into due_work
+            (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+             source_version, generation, updated_at)
+            values ('embed-catalogue', 'track', 'removed-race-track', 'ready', '', '', 'old',
+              'live', '2026-08-26T12:00:00.000Z')`,
+        },
+        markDueWorkSourceRepairsStatement(
+          [{ subjectId: "removed-race-track", subjectType: "track" }],
+          { markerVersion: "removed-race-v1", producer: "capture-verification" },
+        ),
+      ],
+      "write",
+    );
+    let raced = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const isConvergence = statements.some((statement) =>
+          typeof statement === "string" ? false : statement.sql.includes("marker_source_version"),
+        );
+        if (!raced && isConvergence) {
+          raced = true;
+          await db.batch(
+            [
+              markDueWorkSourceRepairsStatement(
+                [{ subjectId: "removed-race-track", subjectType: "track" }],
+                { markerVersion: "removed-race-v2", producer: "capture-verification" },
+              ),
+              {
+                args: [],
+                sql: `update due_work set state = 'scheduled', sort_key = 'newer',
+                    next_due_at = '2099-01-01T00:00:00.000Z', source_version = 'newer-projection'
+                  where work_kind = 'embed-catalogue' and subject_type = 'track'
+                    and subject_id = 'removed-race-track'`,
+              },
+            ],
+            "write",
+          );
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 1 })).toMatchObject({
+      deferred: 1,
+      expanded: 0,
+    });
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, "removed-race-track"],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "removed-race-v2" });
+    expect(
+      (
+        await db.execute({
+          args: ["embed-catalogue", "removed-race-track"],
+          sql: `select state, source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "newer-projection", state: "scheduled" });
+  });
+
   it("isolates a requested 500-row rank page before resuming ordinary marker work", async () => {
     const trackIds = Array.from(
       { length: 501 },
@@ -375,6 +507,13 @@ describe("transactionally coupled due-work source repair", () => {
     for (const trackId of trackIds) {
       await seedCatalogueTrack(db, { trackId });
     }
+    await db.execute({
+      args: [
+        CATALOGUE_RANK_STATE_KEY,
+        JSON.stringify({ corpus: "v5:stale", embeddedFindings: 0, findings: 0 }),
+      ],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
     await db.execute(
       markDueWorkSourceRepairsStatement(
         [
@@ -387,8 +526,19 @@ describe("transactionally coupled due-work source repair", () => {
         { markerVersion: "rank-corpus-v1", producer: "catalogue-rank" },
       ),
     );
+    let corpusRefreshes = 0;
+    const countedClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("from findings cross join tracks ft")) {
+          corpusRefreshes += 1;
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
 
-    const first = await fanOutDueWorkSourceRepairs(db, { limit: 500 });
+    const first = await fanOutDueWorkSourceRepairs(countedClient, { limit: 500 });
     expect(first).toMatchObject({
       deferred: 1,
       expanded: 0,
@@ -398,8 +548,17 @@ describe("transactionally coupled due-work source repair", () => {
     });
     expect((await listReadyDueWork(db, "catalogue-rank", { limit: 500 })).items).toHaveLength(500);
     expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(0);
+    const refreshedRankState = await db.execute({
+      args: [CATALOGUE_RANK_STATE_KEY],
+      sql: `select value from settings where key = ?`,
+    });
+    const refreshedValue = refreshedRankState.rows[0]?.value;
+    if (typeof refreshedValue !== "string") {
+      throw new Error("catalogue rank state cache was not persisted");
+    }
+    expect(refreshedValue).not.toContain("v5:stale");
 
-    const second = await fanOutDueWorkSourceRepairs(db, { limit: 500 });
+    const second = await fanOutDueWorkSourceRepairs(countedClient, { limit: 500 });
     expect(second).toMatchObject({
       deferred: 0,
       expanded: 1,
@@ -419,19 +578,117 @@ describe("transactionally coupled due-work source repair", () => {
     ).toBe(501);
     expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(0);
 
-    expect(await fanOutDueWorkSourceRepairs(db, { limit: 500 })).toMatchObject({
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 500 })).toMatchObject({
       deferred: 0,
       expanded: 1,
       hasMore: false,
       rankRebuildScanned: 0,
       scanned: 1,
     });
+    expect(corpusRefreshes).toBe(1);
     expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(1);
     const sourceMarker = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
       sql: `select subject_id from due_work where work_kind = ? and subject_id = ?`,
     });
     expect(sourceMarker.rows).toEqual([]);
+  });
+
+  it("finishes an owned rank generation before starting a newer corpus marker", async () => {
+    for (const trackId of Array.from({ length: 6 }, (_, index) => `rank-roll-${index}`)) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [
+          {
+            subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+            subjectType: "track",
+          },
+        ],
+        { markerVersion: "rank-roll-v1", producer: "catalogue-rank" },
+      ),
+    );
+    let corpusRefreshes = 0;
+    const countedClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("from findings cross join tracks ft")) {
+          corpusRefreshes += 1;
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
+
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
+      deferred: 1,
+      rankRebuildScanned: 5,
+    });
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [
+          {
+            subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+            subjectType: "track",
+          },
+        ],
+        { markerVersion: "rank-roll-v2", producer: "catalogue-rank" },
+      ),
+    );
+
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
+      deferred: 1,
+      expanded: 0,
+      rankRebuildScanned: 1,
+    });
+    expect(
+      (
+        await db.execute({
+          args: ["catalogue-rank", "track"],
+          sql: `select generation, scanned_count, state from due_work_rebuilds
+            where work_kind = ? and subject_type = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ generation: "rank-roll-v1", scanned_count: 6, state: "complete" });
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "rank-roll-v2" });
+    expect(corpusRefreshes).toBe(1);
+
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
+      deferred: 1,
+      rankRebuildScanned: 5,
+    });
+    expect(
+      (
+        await db.execute({
+          args: ["catalogue-rank", "track"],
+          sql: `select generation, scanned_count, state from due_work_rebuilds
+            where work_kind = ? and subject_type = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ generation: "rank-roll-v2", scanned_count: 5, state: "running" });
+    expect(corpusRefreshes).toBe(2);
+
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
+      deferred: 0,
+      expanded: 1,
+      rankRebuildScanned: 1,
+    });
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows,
+    ).toEqual([]);
   });
 
   it("defers a completed rank rebuild when a newer corpus marker wins the clear race", async () => {

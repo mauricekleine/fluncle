@@ -346,7 +346,7 @@ describe("the sitemap at catalogue volume", () => {
     expect(xml).not.toContain("Crawled");
     expect(xml).not.toContain("mb_lbl_");
     expect(xml).not.toContain("/track/");
-    expect(locs).toHaveLength(19 + 1 + 2 + 2 * CRAWLED_ARTISTS + DOCS_PAGES.length);
+    expect(locs).toHaveLength(20 + 1 + 2 + 2 * CRAWLED_ARTISTS + DOCS_PAGES.length);
   });
 
   it("LISTS the discovered label — the page exists, so the sitemap must point at it", async () => {

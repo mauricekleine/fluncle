@@ -36,6 +36,7 @@ import { Route as ReachRouteImport } from './routes/reach'
 import { Route as RecommendationsRouteImport } from './routes/recommendations'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
+import { Route as SearchRouteImport } from './routes/search'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as StatusRouteImport } from './routes/status'
 import { Route as TermsRouteImport } from './routes/terms'
@@ -283,6 +284,11 @@ const ResetPasswordRoute = ResetPasswordRouteImport.update({
 const RssDotxmlRoute = RssDotxmlRouteImport.update({
   id: '/rss.xml',
   path: '/rss.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SearchRoute = SearchRouteImport.update({
+  id: '/search',
+  path: '/search',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -906,6 +912,7 @@ export interface FileRoutesByFullPath {
   '/recommendations': typeof RecommendationsRoute
   '/reset-password': typeof ResetPasswordRoute
   '/rss.xml': typeof RssDotxmlRoute
+  '/search': typeof SearchRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
   '/terms': typeof TermsRoute
@@ -1045,6 +1052,7 @@ export interface FileRoutesByTo {
   '/recommendations': typeof RecommendationsRoute
   '/reset-password': typeof ResetPasswordRoute
   '/rss.xml': typeof RssDotxmlRoute
+  '/search': typeof SearchRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
   '/terms': typeof TermsRoute
@@ -1187,6 +1195,7 @@ export interface FileRoutesById {
   '/recommendations': typeof RecommendationsRoute
   '/reset-password': typeof ResetPasswordRoute
   '/rss.xml': typeof RssDotxmlRoute
+  '/search': typeof SearchRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
   '/terms': typeof TermsRoute
@@ -1330,6 +1339,7 @@ export interface FileRouteTypes {
     | '/recommendations'
     | '/reset-password'
     | '/rss.xml'
+    | '/search'
     | '/sitemap.xml'
     | '/status'
     | '/terms'
@@ -1469,6 +1479,7 @@ export interface FileRouteTypes {
     | '/recommendations'
     | '/reset-password'
     | '/rss.xml'
+    | '/search'
     | '/sitemap.xml'
     | '/status'
     | '/terms'
@@ -1610,6 +1621,7 @@ export interface FileRouteTypes {
     | '/recommendations'
     | '/reset-password'
     | '/rss.xml'
+    | '/search'
     | '/sitemap.xml'
     | '/status'
     | '/terms'
@@ -1752,6 +1764,7 @@ export interface RootRouteChildren {
   RecommendationsRoute: typeof RecommendationsRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
+  SearchRoute: typeof SearchRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   StatusRoute: typeof StatusRoute
   TermsRoute: typeof TermsRoute
@@ -2028,6 +2041,13 @@ declare module '@tanstack/react-router' {
       path: '/rss.xml'
       fullPath: '/rss.xml'
       preLoaderRoute: typeof RssDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/search': {
+      id: '/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof SearchRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sitemap.xml': {
@@ -2938,6 +2958,7 @@ const rootRouteChildren: RootRouteChildren = {
   RecommendationsRoute: RecommendationsRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   RssDotxmlRoute: RssDotxmlRoute,
+  SearchRoute: SearchRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   StatusRoute: StatusRoute,
   TermsRoute: TermsRoute,

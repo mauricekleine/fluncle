@@ -5,7 +5,7 @@ import { type Client } from "@libsql/client";
 import { CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
 import { readCrawlDueAuditChunk } from "./crawl-due-work";
 import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
-import { DUE_WORK_BACKFILLS } from "./due-work-registry";
+import { DUE_WORK_BACKFILLS, refreshDueWorkCatalogueRankCorpus } from "./due-work-registry";
 import {
   readPublicProjectionAuditChunk,
   type PublicProjectionAuditLane,
@@ -36,6 +36,7 @@ type AuditState = {
   matched: boolean;
   projectedCount: number;
   projectedDigest: string;
+  rankCorpusRefreshed?: boolean;
   sourceCount: number;
   sourceDigest: string;
   sourceEpoch: null | number;
@@ -526,6 +527,11 @@ export async function advanceProjectionAudit(
   }
   if (state.complete) {
     return { complete: true, matched: state.matched, processed: 0 };
+  }
+  if (target === "track_due_work" && state.rankCorpusRefreshed !== true) {
+    await refreshDueWorkCatalogueRankCorpus(client);
+    state.rankCorpusRefreshed = true;
+    await writeState(client, state);
   }
   const processed =
     target === "track_due_work"

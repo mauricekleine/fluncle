@@ -112,16 +112,15 @@ describe("deploy:cf telemetry ordering", () => {
   ) as { scripts: Record<string, string> };
   const chain = pkg.scripts["deploy:cf"] ?? "";
 
-  it("requires telemetry migration after primary data preparation and before Worker publication", () => {
+  it("requires telemetry migration after the primary migration and before Worker publication", () => {
     const primaryAt = chain.indexOf("bun run db:migrate:production");
-    const backfillAt = chain.indexOf("bun run db:backfill");
     const telemetryAt = chain.indexOf("bun run db:migrate:telemetry:production");
     const deployAt = chain.indexOf("wrangler deploy");
 
     expect(primaryAt).toBe(0);
-    expect(backfillAt).toBeGreaterThan(primaryAt);
-    expect(telemetryAt).toBeGreaterThan(backfillAt);
+    expect(telemetryAt).toBeGreaterThan(primaryAt);
     expect(deployAt).toBeGreaterThan(telemetryAt);
+    expect(chain).not.toContain("bun run db:backfill");
   });
 
   it("pins the production wrapper to required mode", () => {

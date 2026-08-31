@@ -368,12 +368,14 @@ export async function readTrackDestination(trackId: string): Promise<TrackPageRo
         row.in_release_id === null ? undefined : discogsReleaseUrl(row.in_release_id),
       durationMs: row.duration_ms > 0 ? row.duration_ms : undefined,
       indexable: row.indexable === 1,
-      // TRIMMED TO ABSENT for the same reason `duration_ms` is: these two carry an EMPTY STRING as
-      // a legacy "unknown" (schema.ts's `has_isrc` mirror trims before testing, precisely because
-      // legacy rows hold `''`). An empty ISRC would print a labelled field with no value, and an
-      // empty MBID would emit an identifier naming nothing.
+      // TRIMMED for the same reason `duration_ms` is converted: a column whose "unknown" is an
+      // EMPTY STRING rather than a null (schema.ts's `has_isrc` mirror trims before testing,
+      // precisely because rows hold `''`). An untrimmed read prints a labelled field with no
+      // value, or emits an identifier naming nothing. The guard and the VALUE trim together —
+      // testing the trimmed form and then serving the padded one would put the padding on the
+      // page and in the structured data, which is the same defect one step later.
       isrc: row.isrc?.trim() ? row.isrc.trim() : undefined,
-      key: row.key?.trim() ? row.key : undefined,
+      key: row.key?.trim() ? row.key.trim() : undefined,
       label: graphLink(row.label, row.label_slug),
       listen: listenDestinations(row, row.spotify_url),
       mbRecordingId: row.mb_recording_id?.trim() ? row.mb_recording_id.trim() : undefined,
@@ -517,12 +519,12 @@ export async function listSonicNeighbours(
   // WHAT IT COSTS, stated rather than hidden. A window is a hard filter, so a candidate whose
   // tempo is unmeasured (`bpm is null` fails a `between`) or genuinely distant leaves the
   // candidate set, and where the window is full the band can differ from the unfiltered answer.
-  // Two degrades keep that from ever making the band WORSE than it was:
-  //   - a target with no measured tempo has no window to build, so it scans unfiltered, exactly as
-  //     before;
+  // Two degrades hold the band's length invariant, so the window narrows the candidate set and
+  // never shortens the answer:
+  //   - a target with no measured tempo has no window to build from, so it scans unfiltered;
   //   - a windowed scan that comes back short of `limit` is re-run unfiltered and the wider answer
-  //     is used. That is one extra bounded query in the SPARSE case — which is the cheap case —
-  //     and none in the dense case, which is the one the pre-filter exists for.
+  //     stands. That is one extra bounded query in the SPARSE case — which is the cheap case — and
+  //     none in the dense case, which is the one the pre-filter exists for.
   //
   // The other three rails are untouched: the probe still binds as a RAW BLOB (`toVectorProbe`), the
   // ranking still happens IN SQL and returns the ~8 winners rather than a column of vectors, and it

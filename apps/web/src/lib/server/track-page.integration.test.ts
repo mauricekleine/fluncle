@@ -404,10 +404,10 @@ describe("the sentinels that are values, not nulls", () => {
     expect(data.status === "found" && data.track.durationMs).toBeUndefined();
   });
 
-  it("reports NO isrc and NO recording mbid for the legacy empty string", async () => {
-    // `schema.ts`'s `has_isrc` mirror trims before testing precisely because legacy rows carry
-    // `''`. An untrimmed read prints a labelled field with no value and emits an identifier that
-    // names nothing.
+  it("reports NO isrc and NO recording mbid for the empty string", async () => {
+    // `schema.ts`'s `has_isrc` mirror trims before testing precisely because rows carry `''`. An
+    // untrimmed read prints a labelled field with no value and emits an identifier that names
+    // nothing.
     await db.execute({
       args: [THIN],
       sql: `update tracks set isrc = '', mb_recording_id = '   ' where track_id = ?`,
@@ -416,6 +416,26 @@ describe("the sentinels that are values, not nulls", () => {
 
     expect(data.status === "found" && data.track.isrc).toBeUndefined();
     expect(data.status === "found" && data.track.mbRecordingId).toBeUndefined();
+  });
+
+  it("serves the TRIMMED value, not the padded one the guard tested", async () => {
+    // The guard and the value must trim together. Testing the trimmed form and then serving the
+    // padded one puts the padding on the page and into the structured data — the same defect one
+    // step later, and invisible to a check that only asks whether the field is present.
+    await db.execute({
+      args: [THIN],
+      sql: `update tracks
+               set isrc = '  GBTEST2600042  ', key = '  F minor  ',
+                   mb_recording_id = '  11111111-2222-3333-4444-555555555555  '
+             where track_id = ?`,
+    });
+    const data = await resolveTrackPageData(THIN);
+
+    expect(data.status === "found" && data.track.isrc).toBe("GBTEST2600042");
+    expect(data.status === "found" && data.track.key).toBe("F minor");
+    expect(data.status === "found" && data.track.mbRecordingId).toBe(
+      "11111111-2222-3333-4444-555555555555",
+    );
   });
 
   it("still reports a real length, isrc and mbid when the archive holds them", async () => {
@@ -495,8 +515,8 @@ describe("the tempo pre-filter on close in sound", () => {
 
   it("widens to the unfiltered scan rather than returning a short band", async () => {
     // Nothing else sits in the window, so the windowed scan comes back short of the limit and the
-    // wider answer is used — the band is never WORSE than it was before the pre-filter existed,
-    // and the nearest row leads it.
+    // unfiltered answer stands in for it. The window narrows the candidate set; it never shortens
+    // the band, and the nearest row still leads it.
     await db.execute({
       args: [SOURCELESS],
       sql: `update tracks set bpm = 87 where track_id = ?`,
@@ -515,7 +535,7 @@ describe("the tempo pre-filter on close in sound", () => {
     ]);
   });
 
-  it("scans unfiltered when the target has no measured tempo, exactly as before", async () => {
+  it("scans unfiltered when the target has no measured tempo to build a window from", async () => {
     await db.execute({
       args: [RICH],
       sql: `update tracks set bpm = null where track_id = ?`,

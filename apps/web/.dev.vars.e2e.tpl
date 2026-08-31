@@ -56,5 +56,11 @@ R2_ACCOUNT_ID=e2efakeaccountid
 VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL=https://open.spotify.com/playlist/e2efakeplaylist
 VITE_FLUNCLE_TELEGRAM_URL=https://t.me/e2efake
 
-# OpenRouter — search/context distil degrade cleanly without it; left fake here.
-OPENROUTER_API_KEY=e2e-fake-openrouter-key
+# OpenRouter — DELIBERATELY ABSENT, and that absence is a test rail rather than an omission.
+# A fake key does NOT make search hermetic: `translateQuery` only short-circuits on
+# "unprovisioned", so a key of any shape sends a REAL fetch to openrouter.ai from the WORKER,
+# which `blockExternalRequests` cannot see (it stubs the BROWSER's requests, never the server's).
+# With the key absent, tier 4 returns null immediately, the resolver degrades to full text, and the
+# response says so (`degraded: true`) — the documented degradation contract, which is also the
+# local-dev steady state, exercised for free on every run. Search still answers; nothing leaves the
+# machine. Anything else that reads this key degrades the same way.

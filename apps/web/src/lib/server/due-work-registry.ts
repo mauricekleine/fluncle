@@ -1,7 +1,13 @@
 import { type Row } from "@libsql/client";
 
 import { parseArtistsJson } from "./artists";
-import { QUALIFIED_ARTISTS_SQL, qualifiedArtistsDigest, rankCorpus } from "./catalogue";
+import {
+  CATALOGUE_RANK_STATE_KEY,
+  QUALIFIED_ARTISTS_SQL,
+  parseCatalogueRankState,
+  qualifiedArtistsDigest,
+  rankCorpus,
+} from "./catalogue";
 import { readQualifiedArtistIds } from "./public-projection-cutover";
 import {
   DUE_WORK_KINDS,
@@ -322,7 +328,7 @@ const VENDOR_SOURCE_SELECT = `select
 from tracks t
 left join findings f on f.track_id = t.track_id`;
 
-async function readCatalogueRankCorpus(client: DueWorkClient): Promise<string> {
+export async function refreshDueWorkCatalogueRankCorpus(client: DueWorkClient): Promise<string> {
   const counts = await client.execute(`select
     (select count(*) from findings) as findings,
     (select count(*) from findings cross join tracks ft on ft.track_id = findings.track_id
@@ -331,12 +337,35 @@ async function readCatalogueRankCorpus(client: DueWorkClient): Promise<string> {
     | { embedded: bigint | number; findings: bigint | number }
     | undefined;
   const artistIds = await readQualifiedArtistIds(client, QUALIFIED_ARTISTS_SQL);
-  return rankCorpus(
+  const corpus = rankCorpus(
     Number(countRow?.findings ?? 0),
     Number(countRow?.embedded ?? 0),
     artistIds.length,
     qualifiedArtistsDigest(artistIds),
   );
+  await client.execute({
+    args: [
+      CATALOGUE_RANK_STATE_KEY,
+      JSON.stringify({
+        corpus,
+        embeddedFindings: Number(countRow?.embedded ?? 0),
+        findings: Number(countRow?.findings ?? 0),
+      }),
+    ],
+    sql: `insert into settings (key, value) values (?, ?)
+      on conflict(key) do update set value = excluded.value`,
+  });
+  return corpus;
+}
+
+async function readCatalogueRankCorpus(client: DueWorkClient): Promise<string> {
+  const cached = await client.execute({
+    args: [CATALOGUE_RANK_STATE_KEY],
+    sql: `select value from settings where key = ? limit 1`,
+  });
+  const value = cached.rows[0]?.value;
+  const corpus = parseCatalogueRankState(typeof value === "string" ? value : undefined)?.corpus;
+  return corpus ?? (await refreshDueWorkCatalogueRankCorpus(client));
 }
 
 function discogsUrl(releaseId: bigint | null | number): null | string {

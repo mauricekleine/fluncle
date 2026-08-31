@@ -151,21 +151,21 @@ export function isCacheableLogPath(pathname: string): boolean {
 // not a detail page. `/tracks` (the plural hub) does not match: the alternation requires a `/`
 // after the segment, so the hub keeps its own HUB-policy enrolment below.
 //
-// `/track/<trackId>` EARNS THIS TIER RATHER THAN INHERITING IT, on both halves of the policy:
+// `/track/<trackId>` belongs on this tier on both halves of the policy:
 //   - The FRESH window. A track destination is a detail page in exactly the sense this policy
 //     means: its content is one row's enrichment (tempo, key, cover, the outbound links) plus its
-//     neighbours, and a re-enrichment should surface inside minutes even if a purge is missed.
-//     300s is the same trade `/log/<id>` and `/album/<slug>` already make for the same reason.
-//   - The PURGE. It is not left to the window: `track` is an `EntityCacheKind`, and
-//     `getTrackEntityPurgeTargets` now returns the track's own page alongside its artist/album/
-//     label pages, so every write path that already calls `purgeTrackEntityPages` (track-update,
-//     publish) evicts this page too. That is the explicit invalidation the detail tier assumes.
+//     neighbours, and a re-enrichment must surface inside minutes even when a purge is missed.
+//     300s is the same trade `/log/<id>` and `/album/<slug>` make for the same reason.
+//   - The PURGE, which the window does not stand in for. `track` is an `EntityCacheKind`, and
+//     `getTrackEntityPurgeTargets` returns the track's own page alongside its artist/album/label
+//     pages, so every write path that calls `purgeTrackEntityPages` (track-update, publish) evicts
+//     this page too. That is the explicit invalidation the detail tier assumes.
 // The stale tail is the shared hour, bounded for the same build-scoped-asset reason as every other
-// HTML tier — nothing about a track page changes that argument.
+// HTML tier; a track page carries the same build-scoped assets and so the same bound.
 //
-// It matters more here than anywhere else in the alternation, because this is the surface with
-// ~122k crawlable URLs behind it and an uncached view pays an exact whole-corpus vector scan for
-// its neighbours (lib/server/track-page.ts). Crawler traffic is uncached-first by definition.
+// The enrolment carries more weight here than anywhere else in the alternation: this is the
+// surface with ~122k crawlable URLs behind it, an uncached view pays an exact vector scan for its
+// neighbours (lib/server/track-page.ts), and crawler traffic is uncached-first by definition.
 const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label|track)\/[^/]+\/?$/;
 
 /**
