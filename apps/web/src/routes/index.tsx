@@ -158,15 +158,13 @@ export const Route = createFileRoute("/")({
   component: FrontDoorPage,
 });
 
+/** The shape the structured data needs off a finding — the loader's rows satisfy it structurally. */
+type SchemaFinding = { artists: string[]; logId?: string; title: string };
+
 /** The findings the page renders, lead first — the exact set the ItemList above describes. */
 function frontDoorFindings(
-  loaderData:
-    | {
-        findings: { artists: string[]; logId?: string; title: string }[];
-        lead?: { artists: string[]; logId?: string; title: string };
-      }
-    | undefined,
-): { artists: string[]; logId?: string; title: string }[] {
+  loaderData: { findings: SchemaFinding[]; lead?: SchemaFinding } | undefined,
+): SchemaFinding[] {
   if (!loaderData) {
     return [];
   }
