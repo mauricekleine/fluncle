@@ -11,7 +11,13 @@
 // every previewable row.
 
 import { useCallback, useSyncExternalStore } from "react";
-import { emitDiscoveryEvent, shouldEmitDiscoveryPreview } from "./discovery-emit";
+import {
+  emitDiscoveryEvent,
+  shouldEmitDiscoveryPreview,
+  type StartPreviewOptions,
+} from "./discovery-emit";
+
+export type { StartPreviewOptions };
 
 function previewProxyUrl(idOrLogId: string): string {
   return `/api/preview/${encodeURIComponent(idOrLogId)}`;
@@ -34,6 +40,7 @@ type PreviewProgress = {
 const idleProgress: PreviewProgress = { currentTime: 0, duration: 0 };
 
 let audio: HTMLAudioElement | undefined;
+let pendingPublicPreview = false;
 let state: PreviewState = idleState;
 let progress: PreviewProgress = idleProgress;
 const listeners = new Set<() => void>();
@@ -79,6 +86,7 @@ function readTime(): PreviewProgress {
 }
 
 function stop(): void {
+  pendingPublicPreview = false;
   audio?.pause();
   audio?.removeAttribute("src");
   emit(idleState);
@@ -96,12 +104,21 @@ function ensureAudio(): HTMLAudioElement {
   element.addEventListener("error", () => {
     // A dead preview degrades to silence; the row returns to idle and the bar
     // closes on its own (never a thrown error up the chain).
+    pendingPublicPreview = false;
+
     if (state.status !== "idle") {
       emit(idleState);
       emitProgress(idleProgress);
     }
   });
-  element.addEventListener("playing", () => emit({ status: "playing", trackId: state.trackId }));
+  element.addEventListener("playing", () => {
+    emit({ status: "playing", trackId: state.trackId });
+
+    if (pendingPublicPreview) {
+      pendingPublicPreview = false;
+      emitDiscoveryEvent("discovery_preview");
+    }
+  });
   element.addEventListener("timeupdate", () => emitProgress(readTime()));
   element.addEventListener("loadedmetadata", () => emitProgress(readTime()));
   element.addEventListener("durationchange", () => emitProgress(readTime()));
@@ -113,17 +130,19 @@ function ensureAudio(): HTMLAudioElement {
 // `src` overrides the default preview proxy: the admin quarantine lens auditions the CAPTURED
 // bytes (`/api/v1/admin/tracks/:id/source-audio`) through this same singleton, so starting a
 // captured audition stops a preview and vice versa. One element, one thing playing, everywhere.
-function start(trackId: string, src?: string): void {
-  if (shouldEmitDiscoveryPreview(src)) {
-    emitDiscoveryEvent("discovery_preview");
-  }
+// Public visitor previews pass `publicPreview: true`. Admin starts omit it, even when they also
+// omit `src` and use the public proxy. The event fires only after playback actually starts.
+export function startPreview(trackId: string, options?: StartPreviewOptions): void {
+  pendingPublicPreview = shouldEmitDiscoveryPreview(options);
 
   const element = ensureAudio();
 
-  element.src = src ?? previewProxyUrl(trackId);
+  element.src = options?.src ?? previewProxyUrl(trackId);
   emit({ status: "loading", trackId });
   emitProgress(idleProgress);
   element.play().catch(() => {
+    pendingPublicPreview = false;
+
     if (state.trackId === trackId) {
       emit(idleState);
       emitProgress(idleProgress);
@@ -133,14 +152,14 @@ function start(trackId: string, src?: string): void {
 
 // The feed toggle (unchanged): the same track playing → stop; anything else → start.
 // Used by the log-footage + note-dialog previews, which never pause.
-function toggle(trackId: string): void {
+function toggle(trackId: string, options?: StartPreviewOptions): void {
   if (state.trackId === trackId && state.status !== "idle") {
     stop();
 
     return;
   }
 
-  start(trackId);
+  startPreview(trackId, options);
 }
 
 // Pause/resume the CURRENT preview in place (the /mix bar + row overlays): the clip
@@ -172,7 +191,10 @@ export function stopPreview(): void {
   stop();
 }
 
-export function usePreviewPlayer(trackId: string): {
+export function usePreviewPlayer(
+  trackId: string,
+  options?: StartPreviewOptions,
+): {
   isActive: boolean;
   isLoading: boolean;
   toggle: () => void;
@@ -182,11 +204,16 @@ export function usePreviewPlayer(trackId: string): {
     () => state,
     () => idleState,
   );
+  const publicPreview = options?.publicPreview === true;
+  const src = options?.src;
 
   return {
     isActive: snapshot.trackId === trackId && snapshot.status !== "idle",
     isLoading: snapshot.trackId === trackId && snapshot.status === "loading",
-    toggle: useCallback(() => toggle(trackId), [trackId]),
+    toggle: useCallback(
+      () => toggle(trackId, { publicPreview, src }),
+      [publicPreview, src, trackId],
+    ),
   };
 }
 
@@ -197,7 +224,7 @@ export function usePreviewPlayer(trackId: string): {
 export function usePreviewControls(): {
   activeTrackId: string | undefined;
   pauseResume: () => void;
-  start: (trackId: string, src?: string) => void;
+  start: typeof startPreview;
   status: PreviewStatus;
 } {
   const snapshot = useSyncExternalStore(
@@ -209,9 +236,15 @@ export function usePreviewControls(): {
   return {
     activeTrackId: snapshot.status === "idle" ? undefined : snapshot.trackId,
     pauseResume,
-    start,
+    start: startPreview,
     status: snapshot.status,
   };
+}
+
+/** Drop the shared element so the next start constructs a fresh Audio (tests). */
+export function resetPreviewPlayer(): void {
+  stop();
+  audio = undefined;
 }
 
 /** Elapsed/total seconds of the current preview — the /mix bar's own clock. */

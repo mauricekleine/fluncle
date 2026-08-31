@@ -312,7 +312,7 @@ function SavedFindingLitRow({
   // Key the preview off the trackId (the row's own identity, and what `/api/preview`
   // resolves). One shared <audio> element backs every row, so `toggle` starts this
   // finding and stops whatever was playing.
-  const preview = usePreviewPlayer(finding.trackId);
+  const preview = usePreviewPlayer(finding.trackId, { publicPreview: true });
 
   return (
     <li className="saves-row">

@@ -6,9 +6,8 @@
 // route stub fulfils them). JSON lands in the gitignored `apps/web/.dev/discovery-events/`
 // and CI uploads it as the `discovery-events` artifact.
 //
-// A fourth test proves analytics-independence: with the probe OFF and the real tag
-// stubbed empty by `blockExternalRequests`, the same clicks still navigate, no error
-// surfaces, and no event request is required for the action to complete.
+// Negative tests prove analytics-independence: navigation, outbound, /search submit,
+// and preview start still complete when the tag is absent or `sa_event` throws.
 
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -220,6 +219,21 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
+const SILENT_WAV = Buffer.from(
+  "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=",
+  "base64",
+);
+
+async function installThrowingAnalytics(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    (
+      window as Window & { sa_event?: (event: string, metadata?: Record<string, string>) => void }
+    ).sa_event = () => {
+      throw new Error("blocked");
+    };
+  });
+}
+
 test("discovery actions complete when Simple Analytics is absent", async ({ page }) => {
   await blockExternalRequests(page);
 
@@ -248,4 +262,45 @@ test("discovery actions complete when Simple Analytics is absent", async ({ page
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
   expect(page.url()).toMatch(/\/log\//);
   expect(saRequests.every((url) => !url.includes("event="))).toBe(true);
+});
+
+test("search form submits when Simple Analytics throws", async ({ page }) => {
+  await blockExternalRequests(page);
+  await installThrowingAnalytics(page);
+
+  const problems = watchForErrors(page);
+
+  await hydrate(page, "/search");
+
+  const field = page.getByRole("searchbox", { name: "Search the archive" });
+
+  await field.fill("netsky");
+  await field.press("Enter");
+  await expect(page).toHaveURL(/q=netsky/);
+  await expect(page.locator("html[data-discovery-listening]")).toBeAttached();
+  expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
+});
+
+test("preview starts when Simple Analytics throws", async ({ page }) => {
+  await blockExternalRequests(page);
+  await page.route("**/api/preview/**", async (route) => {
+    await route.fulfill({
+      body: SILENT_WAV,
+      contentType: "audio/wav",
+      status: 200,
+    });
+  });
+  await installThrowingAnalytics(page);
+
+  const problems = watchForErrors(page);
+
+  await hydrate(page, `/log/${SEEDED_LEAD.logId}`);
+
+  const play = page.getByRole("button", { name: "Play the preview" });
+
+  await expect(play).toBeVisible({ timeout: 15_000 });
+  await play.click();
+  await expect(page).toHaveURL(new RegExp(`/log/${SEEDED_LEAD.logId}`));
+  await expect(play).toBeAttached();
+  expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
 });

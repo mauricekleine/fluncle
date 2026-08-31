@@ -1035,7 +1035,7 @@ function CatalogueCover({
         }
         aria-pressed={isCurrent}
         className="absolute inset-0 flex items-center justify-center rounded-md bg-background/55 text-foreground opacity-0 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring aria-pressed:opacity-100"
-        onClick={() => (isCurrent ? pauseResume() : start(trackId, auditionSrc))}
+        onClick={() => (isCurrent ? pauseResume() : start(trackId, { src: auditionSrc }))}
         title={auditionSrc ? "Plays the captured file itself, not the store preview" : undefined}
         type="button"
       >

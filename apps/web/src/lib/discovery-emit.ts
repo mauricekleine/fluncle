@@ -132,7 +132,12 @@ export function emitDiscoveryEvent(event: DiscoveryEventName, metadata?: Discove
   }
 }
 
-/** Public previews use the `/api/preview` proxy (`src` omitted). Admin source-audio passes `src`. */
-export function shouldEmitDiscoveryPreview(src?: string): boolean {
-  return src === undefined;
+export type StartPreviewOptions = {
+  publicPreview?: boolean;
+  src?: string;
+};
+
+/** Public visitor previews opt in. Omitted `src` is not public intent — admin auditions omit it too. */
+export function shouldEmitDiscoveryPreview(options?: StartPreviewOptions): boolean {
+  return options?.publicPreview === true;
 }

@@ -351,6 +351,12 @@ async function seedFrontDoorFixtures(client: Client): Promise<void> {
     args: [SEEDED_LEAD_COVER_URL, SEEDED_LEAD.trackId],
     sql: `update tracks set album_image_url = ? where track_id = ?`,
   });
+  // A resolvable preview so `/log/<lead>` paints the in-place play control. Discovery's
+  // analytics-absent spec clicks that button; without a URL the pane has no preview to start.
+  await client.execute({
+    args: ["https://found.fluncle.com/e2e/lead-preview.mp3", SEEDED_LEAD.trackId],
+    sql: `update tracks set preview_url = ? where track_id = ?`,
+  });
 
   for (const covered of SEEDED_COVERED_FINDINGS) {
     await client.execute({

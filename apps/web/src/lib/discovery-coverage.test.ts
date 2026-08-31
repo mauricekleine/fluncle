@@ -14,7 +14,7 @@ const WEB_SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const SKIP_DIR_NAMES = new Set(["admin", "api", "db", "game", "pipeline", "server", "test"]);
 
-function walk(dir: string): string[] {
+function walk(dir: string, skip: ReadonlySet<string> = SKIP_DIR_NAMES): string[] {
   const out: string[] = [];
 
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -25,11 +25,11 @@ function walk(dir: string): string[] {
     const path = join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      if (SKIP_DIR_NAMES.has(entry.name)) {
+      if (skip.has(entry.name)) {
         continue;
       }
 
-      out.push(...walk(path));
+      out.push(...walk(path, skip));
       continue;
     }
 
@@ -119,12 +119,27 @@ describe("public discovery event coverage", () => {
     expect(window).toContain("emitDiscoveryFromHref");
   });
 
-  it("emits discovery_preview from the public preview start, not from an admin src override", () => {
+  it("emits discovery_preview only from an explicit public preview after playback starts", () => {
     const player = sources.find((file) => file.rel === "lib/preview-player.ts");
+    const source = player?.source ?? "";
 
-    expect(player?.source).toContain("shouldEmitDiscoveryPreview(src)");
-    expect(player?.source).toContain('"discovery_preview"');
-    expect(player?.source).toContain('from "./discovery-emit"');
+    expect(source).toContain("shouldEmitDiscoveryPreview(options)");
+    expect(source).toContain("publicPreview");
+    expect(source).toContain('"discovery_preview"');
+    expect(source).toContain('from "./discovery-emit"');
+
+    const playingHandler = source.match(
+      /addEventListener\("playing",\s*\(\) => \{([\s\S]*?)\n  \}\)/,
+    );
+
+    expect(playingHandler?.[1]).toContain('emitDiscoveryEvent("discovery_preview")');
+
+    const startBody = source.match(
+      /export function startPreview\([\s\S]*?element\.play\(\)\.catch/,
+    )?.[0];
+
+    expect(startBody).toBeDefined();
+    expect(startBody).not.toContain("emitDiscoveryEvent");
   });
 
   it("marks neighbour rails as similar by behaviour, not by the English on the chip", () => {
@@ -205,5 +220,77 @@ describe("public discovery event coverage", () => {
     expect(emit).toContain("sanitizeMetadata");
     expect(emit).toContain("DISCOVERY_QUERY_KINDS");
     expect(emitCode).not.toMatch(/sessionId|userId|visitorId|personaliz/i);
+  });
+});
+
+describe("preview call sites state public intent", () => {
+  const SKIP_FOR_SITES = new Set(["api", "db", "game", "pipeline", "server", "test"]);
+  const siteFiles = walk(WEB_SRC, SKIP_FOR_SITES).map((path) => ({
+    rel: rel(path),
+    source: read(path),
+  }));
+
+  it("public usePreviewPlayer call sites opt in; admin ones never do", () => {
+    const hookSites = siteFiles.filter(
+      (file) => file.rel !== "lib/preview-player.ts" && file.source.includes("usePreviewPlayer("),
+    );
+    const publicSites = hookSites.filter((file) => !file.rel.includes("/admin/"));
+    const adminSites = hookSites.filter((file) => file.rel.includes("/admin/"));
+
+    expect(publicSites.map((file) => file.rel).sort()).toEqual([
+      "components/account/saves-door.tsx",
+      "components/chat/chain-card.tsx",
+      "components/chat/finding-card.tsx",
+      "components/log/log-footage.tsx",
+      "components/recommendations/recommended-panel.tsx",
+    ]);
+    expect(adminSites.map((file) => file.rel).sort()).toEqual(["components/admin/note-dialog.tsx"]);
+
+    for (const file of publicSites) {
+      expect(file.source, `${file.rel} must pass publicPreview: true`).toMatch(
+        /usePreviewPlayer\([\s\S]*publicPreview:\s*true/,
+      );
+    }
+
+    for (const file of adminSites) {
+      expect(file.source, `${file.rel} must not opt into public preview`).not.toContain(
+        "publicPreview",
+      );
+    }
+  });
+
+  it("public usePreviewControls start opts in; admin starts stay silent even when src is omitted", () => {
+    const startSites = siteFiles.filter(
+      (file) =>
+        file.rel !== "lib/preview-player.ts" &&
+        file.source.includes("usePreviewControls") &&
+        /\bstart\(/.test(file.source),
+    );
+    const publicSites = startSites.filter((file) => !file.rel.includes("/admin/"));
+    const adminSites = startSites.filter((file) => file.rel.includes("/admin/"));
+
+    expect(publicSites.map((file) => file.rel).sort()).toEqual(["components/mix/mix-builder.tsx"]);
+    expect(adminSites.map((file) => file.rel).sort()).toEqual([
+      "routes/admin/catalogue.tsx",
+      "routes/admin/galaxies.tsx",
+    ]);
+
+    for (const file of publicSites) {
+      expect(file.source, `${file.rel} must pass publicPreview: true`).toMatch(
+        /\bstart\([\s\S]*publicPreview:\s*true/,
+      );
+    }
+
+    for (const file of adminSites) {
+      expect(file.source, `${file.rel} must not opt into public preview`).not.toContain(
+        "publicPreview",
+      );
+    }
+
+    const galaxies = adminSites.find((file) => file.rel === "routes/admin/galaxies.tsx");
+    const catalogue = adminSites.find((file) => file.rel === "routes/admin/catalogue.tsx");
+
+    expect(galaxies?.source).toMatch(/\bstart\(\s*logId\s*\)/);
+    expect(catalogue?.source).toMatch(/\bstart\(\s*trackId,\s*\{\s*src:\s*auditionSrc\s*\}\s*\)/);
   });
 });

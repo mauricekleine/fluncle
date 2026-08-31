@@ -98,10 +98,14 @@ describe("classifyDiscoveryHref — resolved destination, not the English on the
 });
 
 describe("shouldEmitDiscoveryPreview", () => {
-  it("emits for the public preview proxy and not for an admin source override", () => {
-    expect(shouldEmitDiscoveryPreview()).toBe(true);
-    expect(shouldEmitDiscoveryPreview(undefined)).toBe(true);
-    expect(shouldEmitDiscoveryPreview("/api/v1/admin/tracks/x/source-audio")).toBe(false);
+  it("emits only when a call site opts into a public visitor preview", () => {
+    expect(shouldEmitDiscoveryPreview()).toBe(false);
+    expect(shouldEmitDiscoveryPreview(undefined)).toBe(false);
+    expect(shouldEmitDiscoveryPreview({})).toBe(false);
+    expect(shouldEmitDiscoveryPreview({ src: undefined })).toBe(false);
+    expect(shouldEmitDiscoveryPreview({ src: "/api/v1/admin/tracks/x/source-audio" })).toBe(false);
+    expect(shouldEmitDiscoveryPreview({ publicPreview: false })).toBe(false);
+    expect(shouldEmitDiscoveryPreview({ publicPreview: true })).toBe(true);
   });
 });
 

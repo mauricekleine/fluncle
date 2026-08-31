@@ -48,6 +48,7 @@ export {
   type DiscoveryQueryKind,
   type DiscoveryService,
   type DiscoverySimilarKind,
+  type StartPreviewOptions,
 } from "./discovery-emit";
 
 export type ClassifiedDiscovery = {

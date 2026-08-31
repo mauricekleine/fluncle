@@ -71,7 +71,7 @@ bun run --cwd apps/web test:e2e -- tests/e2e/discovery-journeys.spec.ts
 DISCOVERY_EVENT_DIR=/tmp/discovery-events bun run --cwd apps/web test:e2e -- tests/e2e/discovery-journeys.spec.ts
 ```
 
-The same spec proves the actions still complete when the Simple Analytics tag is absent (the hermetic suite already stubs the CDN script empty).
+The same spec proves the actions still complete when the Simple Analytics tag is absent or `sa_event` throws: navigation, outbound listen, `/search` form submit, and in-place preview start.
 
 ## The search surface's viewport evidence
 

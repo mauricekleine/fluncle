@@ -175,7 +175,7 @@ Nothing that names a person, a session, a profile, a ranking, or the words typed
 | `kind`    | search, example, open, similar | search: `coordinate` / `sonic` / `token` / `other`; open: entity kind  | The resolver-tier _shape_ of a query, or the kind of page opened. Never the query string, slug, or Log ID. |
 | `service` | outbound                       | `spotify` / `apple` / `youtube` / `mixcloud` / `soundcloud` / `deezer` | Which listening service the link left for. A host allow-list, not the track URL.                           |
 
-`emitDiscoveryEvent` strips any other key. The helper never awaits, never throws, and never calls `preventDefault`. If the Simple Analytics tag is blocked, absent, or throws, the control still does its job. `apps/web/src/lib/discovery-coverage.test.ts` fails a new control of an instrumented class that ships without its event.
+`emitDiscoveryEvent` strips any other key. The helper never awaits, never throws, and never calls `preventDefault`. If the Simple Analytics tag is blocked, absent, or throws, the control still does its job. `discovery_preview` fires only when a public control opts in (`publicPreview: true`) and playback actually starts; admin auditions and failed or aborted starts stay silent. `apps/web/src/lib/discovery-coverage.test.ts` fails a new control of an instrumented class that ships without its event.
 
 No new vendor, script, or CSP host: events go through the `sa_event` the page already loads, which beacons `queue.simpleanalyticscdn.com` (already on `img-src` and `connect-src`).
 

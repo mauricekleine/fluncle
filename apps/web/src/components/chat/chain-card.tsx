@@ -121,7 +121,7 @@ function ChainStep({
   // hook is called unconditionally with a stable key ("" never matches an active track) so hooks
   // stay unconditional even when this step is not playable.
   const playable = Boolean(step.hasPreview && logId);
-  const { isActive, isLoading, toggle } = usePreviewPlayer(logId ?? "");
+  const { isActive, isLoading, toggle } = usePreviewPlayer(logId ?? "", { publicPreview: true });
 
   const artwork = <TrackArtwork alt={`${trackLine} cover art`} src={coverSrc} />;
 

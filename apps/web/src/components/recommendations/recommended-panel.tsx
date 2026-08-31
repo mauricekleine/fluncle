@@ -156,7 +156,7 @@ function FindingRow({
   onPick: () => void;
   picked: boolean;
 }) {
-  const preview = usePreviewPlayer(finding.trackId);
+  const preview = usePreviewPlayer(finding.trackId, { publicPreview: true });
   const trackLine = `${finding.artists.join(", ")} — ${finding.title}`;
 
   return (

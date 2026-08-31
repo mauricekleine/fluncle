@@ -98,7 +98,7 @@ export function LogFootage({ track }: { track: Track }) {
   // `false` until mounted, so SSR/first paint is the mobile-first portrait pane.
   const isDesktop = useMediaQuery(DESKTOP_QUERY);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const preview = usePreviewPlayer(track.trackId);
+  const preview = usePreviewPlayer(track.trackId, { publicPreview: true });
 
   // Lazy gate: a clip below the fold fetches nothing (preload="none" + no
   // rendition) until the reader is about to reach it, then arms in one step.
