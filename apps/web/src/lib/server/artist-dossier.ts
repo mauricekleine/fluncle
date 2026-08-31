@@ -355,7 +355,14 @@ const STALE_ARTISTS_PAGE = `select artist_id from (${STALE_ARTISTS_INNER})
           order by artist_id asc
           limit ?`;
 
-/** Count the stale/orphan artists still pending — the `remaining` gauge. */
+/**
+ * Count the stale/orphan artists still pending — the `remaining` gauge.
+ *
+ * This is the SECOND full pass over `STALE_ARTISTS_INNER` a tick can pay: a `group by ta.artist_id`
+ * over `track_artists ⋈ track_embeddings` — the largest join table in the database — plus one
+ * correlated probe per `artist_centroids` row. `rankArtists` therefore calls it only when the
+ * answer is not already known from the batch it just took (see the drain-signal note there).
+ */
 async function countStaleArtists(): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
@@ -445,13 +452,22 @@ export async function rankArtists(
   const staleArtists = typedRows<StaleArtistRow>(staleResult.rows).map((row) => row.artist_id);
 
   if (staleArtists.length === 0) {
-    // `remaining` is COUNTED, never assumed zero (a `limit` of 0 idles with rows still stale).
+    // THE DRAIN SIGNAL ON AN EMPTY BATCH, with no second scan — the `rankCatalogue` hoist
+    // (docs/db-scale-backlog Wave 1 #1) applied to the artist sweep. `STALE_ARTISTS_PAGE` is
+    // `select … from (STALE_ARTISTS_INNER) order by artist_id asc limit ?`, so with a POSITIVE
+    // `limit` an empty page means the stale set is EMPTY — `count(*)` over the same subquery can
+    // only be 0, and asking it is a second `group by` over `track_artists ⋈ track_embeddings` for
+    // a number already in hand. This is the branch every settled tick takes (staleness is the
+    // per-artist fingerprint, so most ticks find nothing), so it is where the scan is paid most.
+    //
+    // The real COUNT survives ONLY for the `limit <= 0` guard: there no batch was OBSERVED, so an
+    // assumed 0 would tell the CLI's drain loop to stop while artists were still stale.
     return {
       centroidsComputed: 0,
       centroidsRemoved: 0,
       edgesWritten: 0,
       logicVersion: ARTIST_RANK_LOGIC_VERSION,
-      remaining: await countStaleArtists(),
+      remaining: bounded > 0 ? 0 : await countStaleArtists(),
     };
   }
 
@@ -601,11 +617,37 @@ type NeighbourRow = {
 };
 
 /**
+ * The neighbour rail's statement, exported so the shape is asserted rather than remembered: the
+ * integration test EXPLAINs THIS text (it must name neither `track_artists` nor `findings`), and
+ * `scripts/bench-artist-rank.ts` measures it instead of a hand-copied twin that can drift.
+ * Binds `(artist_id, limit)`.
+ */
+export const ARTIST_NEIGHBOURS_SQL = `select a.name as name, a.slug as slug, a.image_url as image_url,
+             (a.certified_finding_count > 0) as certified
+      from artist_similar s
+      join artists a on a.id = s.neighbour_artist_id
+      where s.artist_id = ?
+      order by s.rank asc
+      limit ?`;
+
+/**
  * The artist page's "same sector" neighbours — now a cheap read of the PRECOMPUTED edges
  * (`artist_similar ⋈ artists`), no vector math on the request path. Walks the target's edges
  * in stored `rank` order (a PK-prefix scan) and joins each neighbour's public identity, up to
  * `limit`. Each neighbour carries `certified` — whether it has ≥1 finding — so the rail can
  * render a catalogue-only neighbour in the unlit register (never as a Finding).
+ *
+ * `certified` reads the MAINTAINED `artists.certified_finding_count` (keystone 2, whose canonical
+ * semantics live on that column in schema.ts and whose deltas are written by hub-counts.ts) — the
+ * same stored mirror every other artist read answers the certification light from, so no two
+ * surfaces can disagree about which artists are lit. It is a column on the row the join already
+ * has. The shape it replaces asked the same question as a correlated `exists` over
+ * `track_artists ⋈ findings`, evaluated once PER NEIGHBOUR ROW: for an uncertified neighbour —
+ * the common case, since showing catalogue-only artists in the unlit register is the whole point
+ * of the rail — that walked every one of its `track_artists` edges probing `findings` before it
+ * could answer false, on a table the crawler grows. `certified_finding_count > 0` is the same
+ * predicate the write side defines certification by (`tracks.is_catalogue = 0`, i.e. a `findings`
+ * row exists), so this is the mirror's own question, not an approximation of it.
  *
  * Returns `[]` when the artist has no edge rows yet (the `rank_artists` sweep has not reached
  * it, or it has no embedded track to rank from) — the rail simply does not render, the same
@@ -623,17 +665,7 @@ export async function getArtistNeighbours(
   const db = await getDb();
   const result = await db.execute({
     args: [artistId, Math.max(0, limit)],
-    sql: `select a.name as name, a.slug as slug, a.image_url as image_url,
-                 exists(
-                   select 1 from track_artists ta
-                   join findings f on f.track_id = ta.track_id
-                   where ta.artist_id = s.neighbour_artist_id
-                 ) as certified
-          from artist_similar s
-          join artists a on a.id = s.neighbour_artist_id
-          where s.artist_id = ?
-          order by s.rank asc
-          limit ?`,
+    sql: ARTIST_NEIGHBOURS_SQL,
   });
 
   return typedRows<NeighbourRow>(result.rows).map((row) => ({

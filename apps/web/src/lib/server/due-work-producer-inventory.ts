@@ -571,7 +571,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     rationale: "Seeds an isolated benchmark database and is not a production mutation surface.",
     sites: [
       "scripts/bench-artist-rank.ts:insert:artists:ba5328f9",
-      "scripts/bench-artist-rank.ts:insert:tracks:2ddb456f",
+      "scripts/bench-artist-rank.ts:insert:tracks:5a7ca12a",
       "scripts/bench-artist-rank.ts:insert:track_embeddings:0d46046d",
       "scripts/bench-artist-rank.ts:insert:track_artists:afc239c0",
       "scripts/bench-artist-rank.ts:insert:findings:ccca5fec",
@@ -788,7 +788,7 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     file: "scripts/bench-artist-rank.ts",
     rationale: "Seeds an isolated benchmark database only.",
     sites: [
-      "scripts/bench-artist-rank.ts:insert:tracks:2ddb456f",
+      "scripts/bench-artist-rank.ts:insert:tracks:5a7ca12a",
       "scripts/bench-artist-rank.ts:insert:track_artists:afc239c0",
       "scripts/bench-artist-rank.ts:insert:findings:ccca5fec",
     ],
