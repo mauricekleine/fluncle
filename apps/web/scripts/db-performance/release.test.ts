@@ -59,7 +59,7 @@ async function git(cwd: string, args: readonly string[]): Promise<string> {
   });
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
-    child.once("exit", resolve);
+    child.once("close", resolve);
   });
   if (exitCode !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${stderr}`);
@@ -307,6 +307,30 @@ describe("database performance release proof", () => {
       "child process exceeded its absolute deadline",
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "captures output held by the owned process group before returning",
+    async () => {
+      const marker = "owned-descendant-output\n";
+      const descendantProgram = `setTimeout(() => process.stdout.write(${JSON.stringify(marker)}), 100);`;
+      const parentProgram = `const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantProgram)}], { stdio: ["ignore", "inherit", "inherit"] }); child.unref();`;
+      const result = await captureChild({
+        categories: [],
+        command: [process.execPath, "-e", parentProgram],
+        cwd: ".",
+        id: "captured-process-group-output",
+        timeoutMs: 2_000,
+      });
+
+      expect(result).toMatchObject({
+        exitCode: 0,
+        spawnError: null,
+        stdout: marker,
+        timedOut: false,
+      });
+    },
+    5_000,
+  );
 
   it.skipIf(process.platform === "win32")(
     "enforces an absolute command deadline and kills the owned process group",
