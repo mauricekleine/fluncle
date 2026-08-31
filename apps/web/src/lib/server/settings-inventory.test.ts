@@ -48,6 +48,7 @@ const SETTINGS_INVENTORY = {
     "sonar_recs_catalogue_enabled",
     "sonar_recs_enabled",
     "sonar_sonic_enabled",
+    "sonar_track_enabled",
   ],
   "spotify-anchor-breaker.ts": [
     "spotify_anchor_breaker_failures",

@@ -1,4 +1,5 @@
 import { fluncleEntityId, logPageUrl, siteUrl } from "./fluncle-links";
+import { trackPageUrl } from "./track-page";
 import { formatIsoDuration } from "./format";
 import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
 import { type MixtapeDTO } from "./mixtapes";
@@ -102,7 +103,11 @@ function remixerContributorNodes(
  * The whole node is omitted when the finding carries neither. Additive to the
  * MusicRecording — it does not alter the recording's own Rich-Results shape.
  */
-function measuredCompositionNode(track: LogSchemaInput): Record<string, unknown> | undefined {
+function measuredCompositionNode(track: {
+  bpm?: number;
+  key?: string;
+  title: string;
+}): Record<string, unknown> | undefined {
   if (!track.bpm && !track.key) {
     return undefined;
   }
@@ -926,6 +931,115 @@ export function labelBreadcrumbsJsonLd(name: string): Record<string, unknown> {
     itemListElement: [
       { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
       { "@type": "ListItem", item: `${siteUrl}/labels`, name: "Labels", position: 2 },
+      { "@type": "ListItem", name, position: 3 },
+    ],
+  };
+}
+
+/**
+ * THE ARCHIVE TRACK's structured data — the `MusicRecording` for `/track/<trackId>`.
+ *
+ * It is a SEPARATE builder from {@link musicRecordingJsonLd}, and the separation is the
+ * certification rail expressed in schema. That one is a FINDING's node: its `url` is the
+ * coordinate's page, and it emits `fluncle-log-id` identifiers, a Found `datePublished`, and the
+ * definitional prose Fluncle wrote. None of that is true of a recording he has never ruled on, and
+ * a node that claimed any of it would be a claim the archive cannot back. This one carries only
+ * what the archive actually holds about the RECORDING: who made it, what record it is on, whose
+ * imprint pressed it, when it came out, how long it is, its measured tempo and key, and the
+ * identifiers and platform pages that name the same recording elsewhere.
+ *
+ * `datePublished` is the RELEASE date here, never a Found date, because there is no found date to
+ * tell — the Found Rule holds precisely by having nothing to say (VOICE.md).
+ */
+export function archiveTrackJsonLd(track: ArchiveTrackSchemaInput): Record<string, unknown> {
+  const recordingOf = measuredCompositionNode(track);
+  const sameAs = [
+    ...track.listenUrls,
+    ...(track.discogsReleaseUrl ? [track.discogsReleaseUrl] : []),
+    ...(track.mbRecordingId ? [`https://musicbrainz.org/recording/${track.mbRecordingId}`] : []),
+  ];
+  const identifier = track.mbRecordingId
+    ? [
+        {
+          "@type": "PropertyValue",
+          propertyID: "musicbrainz-recording-id",
+          value: track.mbRecordingId,
+        },
+      ]
+    : [];
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "MusicRecording",
+    byArtist: track.artists.map((artist) => byArtistNode(artist, track.artistSlugs)),
+    ...(track.releaseDate ? { datePublished: track.releaseDate } : {}),
+    duration: formatIsoDuration(track.durationMs),
+    genre: "Drum and Bass",
+    ...(identifier.length > 0 ? { identifier } : {}),
+    ...(track.imageUrl ? { image: track.imageUrl } : {}),
+    // The record this recording is on, stamped with the album page's own `@id` when the entity
+    // resolved — the same cross-page anchor `/album/<slug>` emits, so a crawler reconciles the
+    // track, its record, and its imprint into one graph rather than three loose nodes.
+    ...(track.album
+      ? {
+          inAlbum: track.album.slug
+            ? {
+                "@id": albumPageUrl(track.album.slug),
+                "@type": "MusicAlbum",
+                name: track.album.name,
+                url: albumPageUrl(track.album.slug),
+              }
+            : { "@type": "MusicAlbum", name: track.album.name },
+        }
+      : {}),
+    ...(track.isrc ? { isrcCode: track.isrc } : {}),
+    name: track.title,
+    ...(track.label?.slug
+      ? {
+          recordLabel: {
+            "@id": `${labelPageUrl(track.label.slug)}#organization`,
+            "@type": "Organization",
+            name: track.label.name,
+            url: labelPageUrl(track.label.slug),
+          },
+        }
+      : track.label
+        ? { recordLabel: { "@type": "Organization", name: track.label.name } }
+        : {}),
+    ...(recordingOf ? { recordingOf } : {}),
+    ...(sameAs.length > 0 ? { sameAs } : {}),
+    url: trackPageUrl(track.trackId),
+  };
+}
+
+/** What an archive track's `MusicRecording` is built from — only facts the archive stores. */
+export type ArchiveTrackSchemaInput = {
+  album?: { name: string; slug?: string };
+  artistSlugs?: Record<string, string>;
+  artists: string[];
+  bpm?: number;
+  discogsReleaseUrl?: string;
+  durationMs: number;
+  imageUrl?: string;
+  isrc?: string;
+  key?: string;
+  label?: { name: string; slug?: string };
+  /** Every outbound platform page the archive holds for this recording — the `sameAs` set. */
+  listenUrls: string[];
+  mbRecordingId?: string;
+  releaseDate?: string;
+  title: string;
+  trackId: string;
+};
+
+/** Fluncle → Tracks → `Artist — Title`. The `/tracks` hub is this page's real parent. */
+export function trackBreadcrumbsJsonLd(name: string): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+      { "@type": "ListItem", item: `${siteUrl}/tracks`, name: "Tracks", position: 2 },
       { "@type": "ListItem", name, position: 3 },
     ],
   };

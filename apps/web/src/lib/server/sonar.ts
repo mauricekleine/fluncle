@@ -1,5 +1,5 @@
 // THE SONAR CLIENT — the Worker's thin HTTP door to the `sonar` vector sidecar (apps/sonar),
-// plus the six DARK FLAGS that decide, per surface, whether a vector lookup goes to sonar or
+// plus the seven DARK FLAGS that decide, per surface, whether a vector lookup goes to sonar or
 // stays on the existing Turso `vector_distance_cos` scan. The architecture doc is
 // docs/vector-serving.md.
 //
@@ -61,6 +61,20 @@ export const SONAR_RECS_ENABLED_KEY = "sonar_recs_enabled";
 export const SONAR_RECS_CATALOGUE_ENABLED_KEY = "sonar_recs_catalogue_enabled";
 /** The `/mix` rail's candidate scan → sonar `tracks` index (key-pre-filtered, both registers). */
 export const SONAR_MIX_ENABLED_KEY = "sonar_mix_enabled";
+/**
+ * The `/track/<trackId>` destination's SONIC NEIGHBOURS → sonar `tracks` index (BOTH registers).
+ *
+ * A SEPARATE FLAG FROM {@link SONAR_LOG_ENABLED_KEY}, and the separation is the point rather than
+ * caution: that one routes `/log`'s "more like this", which is a question about FINDINGS and sends
+ * `certified: true`. This surface asks about MUSIC and sends no certification filter at all, so the
+ * two ask sonar for different candidate sets and must be flippable independently.
+ */
+export const SONAR_TRACK_ENABLED_KEY = "sonar_track_enabled";
+
+/** Whether the track destination's neighbours route to sonar — DEFAULT FALSE; only "true" enables it. */
+export async function isSonarTrackEnabled(): Promise<boolean> {
+  return (await getSetting(SONAR_TRACK_ENABLED_KEY)) === "true";
+}
 
 /** Whether sonic search routes to sonar — THE DARK FLAG. DEFAULT FALSE; only "true" enables it. */
 export async function isSonarSonicEnabled(): Promise<boolean> {
@@ -130,6 +144,10 @@ export async function setSonarRecsCatalogueEnabled(enabled: boolean): Promise<vo
 /** Flip the `/mix`-rail dark flag (operator). Writing anything but `true` leaves it OFF. */
 export async function setSonarMixEnabled(enabled: boolean): Promise<void> {
   await setSetting(SONAR_MIX_ENABLED_KEY, enabled ? "true" : "false");
+}
+
+export async function setSonarTrackEnabled(enabled: boolean): Promise<void> {
+  await setSetting(SONAR_TRACK_ENABLED_KEY, enabled ? "true" : "false");
 }
 
 // ── The client ────────────────────────────────────────────────────────────────────────────────
