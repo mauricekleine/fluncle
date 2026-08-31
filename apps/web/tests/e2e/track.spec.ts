@@ -26,6 +26,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { blockExternalRequests } from "./browser";
 import {
+  SEEDED_BARE_TRACK,
   SEEDED_DESTINATION_NEIGHBOUR,
   SEEDED_DESTINATION_TRACK,
   SEEDED_FINDING_LOG_IDS,
@@ -42,6 +43,7 @@ const MOBILE = { height: 844, width: 390 };
 const DESTINATION_PATH = `/track/${SEEDED_DESTINATION_TRACK.trackId}`;
 const NEIGHBOUR_PATH = `/track/${SEEDED_DESTINATION_NEIGHBOUR.trackId}`;
 const THIN_PATH = `/track/${SEEDED_THIN_TRACK.trackId}`;
+const BARE_PATH = `/track/${SEEDED_BARE_TRACK.trackId}`;
 
 /**
  * The words that would name the tier. None of them may appear on any of these pages — not as a
@@ -320,4 +322,58 @@ test("a failed cover degrades to the mark instead of a broken-image glyph", asyn
   await expect(page.getByRole("link", { name: "Listen on Spotify" })).toBeVisible();
 
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
+});
+
+test("a page with nowhere to send you promises nothing, in the markup or the snippet", async ({
+  page,
+}) => {
+  await blockExternalRequests(page);
+
+  const problems = watchForErrors(page);
+  const response = await page.request.get(BARE_PATH);
+
+  expect(response.status(), "a bare row still answers 200").toBe(200);
+
+  const raw = decoded(await response.text());
+
+  // The page is about what it HAS: a name, and the two facts every row carries.
+  expect(raw).toContain(SEEDED_BARE_TRACK.title);
+  expect(raw).toContain(SEEDED_BARE_TRACK.artist);
+  expect(raw).toContain("Length");
+
+  // NEITHER BAND RENDERS. No outbound control (nothing is stored), no preview control (no short
+  // source to resolve one from), and no neighbour band (no vector). Not an empty state — absent.
+  expect(raw).not.toContain("Listen on Spotify");
+  expect(raw).not.toContain("Listen on Apple Music");
+  expect(raw).not.toContain("Play the preview");
+  expect(raw).not.toContain("Close in sound");
+
+  // AND THE SNIPPET DOES NOT PROMISE THEM EITHER. This is the half a rendered-markup check misses:
+  // a fixed tail would front every share and every citation with two things the page has not got.
+  const description = /<meta content="([^"]*)" name="description"\/>/.exec(raw)?.[1] ?? "";
+
+  expect(description).toContain(SEEDED_BARE_TRACK.title);
+  expect(description).not.toContain("Where to hear it");
+  expect(description).not.toContain("closest to it in sound");
+
+  // It is low-evidence, so it is reachable and crawlable and deliberately not submitted.
+  expect(raw).toContain('content="noindex, follow"');
+
+  await page.goto(BARE_PATH, { waitUntil: "networkidle" });
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(SEEDED_BARE_TRACK.title);
+
+  expect(problems, `no console/page errors: ${problems.join(" | ")}`).toEqual([]);
+});
+
+test("an unknown id 404s in the catalogue register, never on a coordinate", async ({ page }) => {
+  await blockExternalRequests(page);
+  await page.goto("/track/no-such-track-id", { waitUntil: "networkidle" });
+
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("No track at this address");
+  // The control is the shared `StoriesState` button, which Base UI stamps `role="button"` on even
+  // though it renders a `<Link>` — a pre-existing wart on every 404 in the app, not this route's.
+  // Asserted on the ratified LABEL, which is what the Chrome Rule is about.
+  await expect(page.getByText("All tracks", { exact: true })).toBeVisible();
+  // The one word this whole surface exists to keep off the tier must not appear on its 404 either.
+  await expect(page.locator("main")).not.toContainText("coordinate");
 });

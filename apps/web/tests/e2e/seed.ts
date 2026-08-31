@@ -252,6 +252,20 @@ export const SEEDED_THIN_TRACK = {
   trackId: "e2e-track-thin",
 } as const;
 
+/**
+ * The BARE row: a name, and nothing else at all. No streaming presence (the crawler writes NULL
+ * `spotify_uri`/`spotify_url` for a MusicBrainz-born row), no ISRC, no embedding.
+ *
+ * It is the fixture for the hardest honesty case: a page that has nowhere to send you and nothing
+ * close in sound must render NEITHER band and must not PROMISE either in its meta description. The
+ * three rows above all carry an outbound link and a vector, so none of them can prove it.
+ */
+export const SEEDED_BARE_TRACK = {
+  artist: "Winter Aerial",
+  title: "Gravel Sky",
+  trackId: "e2e-track-bare",
+} as const;
+
 /** A unit vector on one axis — nearness is how close two axes are, so the order is deterministic. */
 function axisVector(axis: number): number[] {
   return Array.from({ length: 1024 }, (_unused, index) => (index === axis ? 1 : 0));
@@ -260,7 +274,12 @@ function axisVector(axis: number): number[] {
 async function seedDestinationFixtures(client: Client): Promise<void> {
   await seedAlbum(client, DESTINATION_ALBUM);
 
-  for (const track of [SEEDED_DESTINATION_TRACK, SEEDED_DESTINATION_NEIGHBOUR, SEEDED_THIN_TRACK]) {
+  for (const track of [
+    SEEDED_DESTINATION_TRACK,
+    SEEDED_DESTINATION_NEIGHBOUR,
+    SEEDED_THIN_TRACK,
+    SEEDED_BARE_TRACK,
+  ]) {
     await seedCatalogueTrack(client, {
       artists: [track.artist],
       label: LABEL.name,
@@ -292,8 +311,17 @@ async function seedDestinationFixtures(client: Client): Promise<void> {
     });
   }
 
+  // The BARE row loses the Spotify anchor `seedCatalogueTrack` mints for every fixture, and never
+  // gets a vector below — so its page has no outbound control and no neighbour band, which is the
+  // whole reason it exists.
+  await client.execute({
+    args: [SEEDED_BARE_TRACK.trackId],
+    sql: `update tracks set spotify_uri = null, spotify_url = null where track_id = ?`,
+  });
+
   // The vectors. The destination sits on axis 0; the neighbour on axis 1 (nearest); the thin row on
-  // axis 900 (far), so "close in sound" has a deterministic order to assert on.
+  // axis 900 (far), so "close in sound" has a deterministic order to assert on. The bare row gets
+  // none, deliberately.
   await seedEmbedding(client, SEEDED_DESTINATION_TRACK.trackId, axisVector(0));
   await seedEmbedding(client, SEEDED_DESTINATION_NEIGHBOUR.trackId, axisVector(1));
   await seedEmbedding(client, SEEDED_THIN_TRACK.trackId, axisVector(900));
@@ -467,7 +495,7 @@ async function main(): Promise<void> {
   await seedE2eData(client);
   client.close();
   console.log(
-    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 4 catalogue tracks (3 with vectors) + artist/label/albums.`,
+    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 5 catalogue tracks (3 with vectors) + artist/label/albums.`,
   );
 }
 

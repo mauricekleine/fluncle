@@ -62,7 +62,7 @@ function trackHead(loaderData: TrackPageData | undefined) {
     return {};
   }
 
-  const { track } = loaderData;
+  const { neighbours, track } = loaderData;
   const line = artistTitleLine({
     artists: track.artists.map((artist) => artist.name),
     title: track.title,
@@ -105,7 +105,22 @@ function trackHead(loaderData: TrackPageData | undefined) {
   ]
     .filter((part) => part !== undefined)
     .join(" ");
-  const withTail = `${facts} Where to hear it, and the tracks closest to it in sound.`;
+  // THE TAIL PROMISES ONLY WHAT THE PAGE HAS. Both bands it names are conditional — the listen band
+  // renders nothing when the archive holds no short source and no outbound link, the neighbour band
+  // renders nothing when the scan came back empty — so a fixed tail would front every share and
+  // every citation with two things the page does not carry. It is built from the same two facts the
+  // bands are, and dropped entirely when neither holds.
+  const hasListen = track.previewable || track.listen.length > 0;
+  const hasNeighbours = neighbours.length > 0;
+  const tail =
+    hasListen && hasNeighbours
+      ? " Where to hear it, and the tracks closest to it in sound."
+      : hasListen
+        ? " Where to hear it."
+        : hasNeighbours
+          ? " The tracks closest to it in sound."
+          : "";
+  const withTail = `${facts}${tail}`;
   const description = withTail.length <= META_DESCRIPTION_BUDGET ? withTail : facts;
   const imageUrl = albumCoverAtSize(track.albumImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
   // THE LEAD IMAGE — the cover in the masthead, this page's LCP candidate, preloaded at the exact

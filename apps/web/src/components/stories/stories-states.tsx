@@ -1,4 +1,4 @@
-import { CaretLeftIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon, type Icon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@fluncle/ui/components/button";
 
@@ -9,12 +9,20 @@ function StoriesState({
   children,
   heading,
 }: {
-  /** Where the one control goes, and what it says. Defaults to the archive. */
-  action?: { label: string; to: "/findings" | "/tracks" };
+  /**
+   * Where the one control goes, what it says, and which way its caret points. Defaults to the
+   * archive, pointing BACK — the direction is part of the control, not a constant: a caret that
+   * points left over a control leaving for a different surface reads as retreat.
+   */
+  action?: { Icon: Icon; label: string; to: "/findings" | "/tracks" };
   children: string;
   heading: string;
 }) {
-  const { label, to } = action ?? { label: "Back to the archive", to: "/findings" as const };
+  const {
+    Icon: ActionIcon,
+    label,
+    to,
+  } = action ?? { Icon: CaretLeftIcon, label: "Back to the archive", to: "/findings" as const };
 
   return (
     <main className="flex min-h-dvh items-center justify-center px-6 text-foreground">
@@ -27,7 +35,7 @@ function StoriesState({
           render={<Link to={to} />}
           variant="outline"
         >
-          <CaretLeftIcon aria-hidden="true" weight="bold" />
+          <ActionIcon aria-hidden="true" weight="bold" />
           {label}
         </Button>
       </div>
@@ -52,17 +60,19 @@ export function StoryNotFoundState() {
  * Borrowing that line would hand the unnamed tier the one piece of vocabulary the whole surface is
  * built to keep off it, and it would call the missing thing a "story", which it also is not.
  *
- * So this one stays in the catalogue register: it says plainly what is not there and where to look
- * instead, with no lore narration, and the control points at the whole list rather than at the
- * findings.
+ * So this one keeps the sibling's cadence and swaps the noun: the missing thing is named a TRACK,
+ * which is the superset noun every surface already uses for both registers, and the line says what
+ * IS there rather than how to click to it. The control reuses the ratified "All tracks" (one
+ * action, one label) and points at the whole list rather than at the findings.
  */
 export function TrackNotFoundState() {
   return (
     <StoriesState
-      action={{ label: "Browse every track", to: "/tracks" }}
+      action={{ Icon: CaretRightIcon, label: "All tracks", to: "/tracks" }}
       heading="No track at this address"
     >
-      The whole list is one click away, and search finds a track by name.
+      That track didn&apos;t make it back, or it was never out there. Fluncle still holds every
+      track that did.
     </StoriesState>
   );
 }
