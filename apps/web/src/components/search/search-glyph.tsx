@@ -5,7 +5,7 @@
 // zero state. The page reaching into the dialog for it would drag `cmdk` into a server-rendered
 // route that has no palette on it.
 
-import { MagnifyingGlassIcon, SparkleIcon, WaveformIcon } from "@phosphor-icons/react";
+import { CrosshairSimpleIcon, MagnifyingGlassIcon, WaveformIcon } from "@phosphor-icons/react";
 import { type ReactNode } from "react";
 import { type SearchExampleIcon } from "@/lib/search-results";
 
@@ -20,8 +20,8 @@ export function SearchExampleGlyph({
     return <WaveformIcon aria-hidden="true" className={className} />;
   }
 
-  if (icon === "filters") {
-    return <SparkleIcon aria-hidden="true" className={className} />;
+  if (icon === "coordinate") {
+    return <CrosshairSimpleIcon aria-hidden="true" className={className} />;
   }
 
   return <MagnifyingGlassIcon aria-hidden="true" className={className} />;

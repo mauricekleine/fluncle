@@ -200,7 +200,7 @@ describe("a child sitemap", () => {
     // The identity DOOR is listed; its per-key answers never are (they render `noindex, follow` —
     // one recording is reachable under up to three identifiers).
     expect(xml).toContain(`<loc>${siteUrl}/identity</loc>`);
-    // 19 hubs; /mix (gated on getMixChainDepth().open) and /galaxies (gated on the map being
+    // 20 hubs; /mix (gated on getMixChainDepth().open) and /galaxies (gated on the map being
     // named) are both dark here.
     expect(xml).not.toContain(`<loc>${siteUrl}/mix</loc>`);
     expect(xml.match(/<loc>/g)).toHaveLength(20);

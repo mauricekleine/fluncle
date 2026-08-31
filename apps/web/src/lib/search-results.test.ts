@@ -36,7 +36,7 @@ describe("searchPagePath — the persistent surface's URL", () => {
       "netsky",
       "004.7.2I",
       "Hospital Records",
-      "tracks in A minor above 170 bpm",
+      "004.7.2I",
       "tracks that sound like Nine Clouds",
     ]) {
       const path = searchPagePath(query);
@@ -163,16 +163,31 @@ describe("filterChips — what the language tier understood, echoed back", () =>
 });
 
 describe("SEARCH_EXAMPLES — one list, one owner", () => {
-  // The four are a lesson disguised as a shortcut: one bare name, one label, one natural-language
-  // filter, one sonic reference. Between them they walk every tier of the resolver. Pinning the
-  // SHAPE here is what stops a fifth pill, or a duplicate tier, arriving unnoticed on one surface.
+  // The four are a lesson disguised as a shortcut: a coordinate, a bare name, a label, a sonic
+  // reference. Pinning the SHAPE here is what stops a fifth pill, or a duplicate tier, arriving
+  // unnoticed on one surface.
   it("teaches each tier exactly once, in one place", () => {
     expect(SEARCH_EXAMPLES.map((example) => example.icon)).toEqual([
       "token",
       "token",
-      "filters",
+      "coordinate",
       "sonic",
     ]);
+  });
+
+  // THE CONTRACT, stated where the list lives. An example query is shown to readers as one that
+  // WORKS, and the only way to keep that promise is for every one of them to be answered by a tier
+  // that cannot vary — never the language tier, whose parse of the same sentence differs run to
+  // run (one parse returned rows, the next added a stray `text` filter and returned nothing).
+  //
+  // This asserts the DECLARATION; the two halves that assert the behaviour are
+  // `lib/server/search-examples.integration.test.ts` (answered deterministically, against a real
+  // database, with the model stubbed off) and `scripts/post-deploy-probe.ts` (non-empty against
+  // the live archive, after every deploy).
+  it("declares only deterministic tiers — never the language tier", () => {
+    for (const example of SEARCH_EXAMPLES) {
+      expect(["coordinate", "sonic", "token"]).toContain(example.icon);
+    }
   });
 
   // An example query that finds nothing teaches the opposite of what it is for, so every one has to

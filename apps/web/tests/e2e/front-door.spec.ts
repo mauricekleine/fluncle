@@ -23,7 +23,8 @@
 // null on the spot and the resolver degrades to full text without a socket ever opening (the same
 // documented degradation contract local dev runs on every day). Every example below is therefore
 // safe to follow; the spec still follows only the bare single-token one, because one is enough to
-// prove the affordance.
+// prove the affordance. (`SEARCH_EXAMPLES` itself no longer carries a tier-4 query at all — see
+// docs/search.md, "The worked examples are deterministic".)
 
 import { expect, test, type ConsoleMessage, type Locator, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";

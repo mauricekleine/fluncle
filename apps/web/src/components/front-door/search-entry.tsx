@@ -14,10 +14,11 @@
 // palette, so the fast way in is untouched.
 //
 // The four are `SEARCH_EXAMPLES` (lib/search-results.ts), imported rather than re-typed so the front
-// door can never teach a query the other two surfaces would not answer. Between them they walk every
-// tier of the resolver (a name, a label, a natural-language filter, a sonic reference) without ever
-// explaining that there are tiers. An example that finds nothing teaches the opposite of what it is
-// for, so they stay one list with one owner (docs/search.md).
+// door can never teach a query the other two surfaces would not answer. Between them they walk the
+// resolver (a coordinate, a name, a label, a sonic reference) without ever explaining that there are
+// tiers, and every one of them is answered DETERMINISTICALLY — an example that finds nothing teaches
+// the opposite of what it is for, and the language tier's parse of a sentence varies run to run. One
+// list, one owner, enforced offline and in production (docs/search.md).
 //
 // ── WHY A BUTTON AND NOT A FIELD ─────────────────────────────────────────────────────────────
 // A second text input would be a second search: its own state, its own debounce, its own results to

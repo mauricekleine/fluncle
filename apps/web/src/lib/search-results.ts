@@ -97,21 +97,41 @@ export const MIN_QUERY_LENGTH = 2;
 export const MAX_QUERY_LENGTH = 512;
 
 /** Which glyph an example carries — the tier it teaches, not a label anyone reads. */
-export type SearchExampleIcon = "filters" | "sonic" | "token";
+export type SearchExampleIcon = "coordinate" | "sonic" | "token";
 
 /**
- * The four example queries, and they are a lesson disguised as a shortcut: one bare artist name,
- * one label, one natural-language filter, and one sonic reference. Between them they walk every
- * tier of the resolver without ever explaining that there are tiers.
+ * The four example queries, and they are a lesson disguised as a shortcut: a coordinate, a bare
+ * artist name, a label, and a sonic reference. Between them they walk the resolver without ever
+ * explaining that there are tiers.
  *
- * They are REAL — each returns rows against the live archive. An example query that finds nothing
- * teaches the opposite of what it is for, so the list has ONE owner and three consumers: the
- * dialog's empty state, the front door's band, and `/search`'s zero state.
+ * ── EVERY ONE OF THEM IS DETERMINISTIC, AND THAT IS THE CONTRACT ─────────────────────────────
+ * They are REAL: each returns rows against the live archive, because an example query that finds
+ * nothing teaches the opposite of what it is for. The only way to keep that true is for every one
+ * of them to be answered by a tier that does not involve a model — a coordinate lookup, an indexed
+ * entity read, FTS5, or the anchored vector scan (docs/search.md, tiers 1–3½).
+ *
+ * The list used to carry a natural-language filter query ("tracks in A minor above 170 bpm") to
+ * teach the LLM tier. It came out because the LLM tier is NONDETERMINISTIC BY CONSTRUCTION: the
+ * same sentence parsed once to `{bpmMin, key}` and returned rows, and once to `{bpmMin, key, text:
+ * "tracks"}` — where the stray leftover word narrowed the result set to nothing. A worked example
+ * that is a coin flip is not a worked example, and this list is the one place in the product that
+ * promises otherwise. The language tier is still there and still answers; it is simply not
+ * something to advertise with a query that might come back empty.
+ *
+ * Enforced on both sides, so the promise cannot rot silently:
+ *   - OFFLINE, in the deploy gate — `search-examples.integration.test.ts` runs every query below
+ *     against a real migrated database with the model stubbed OFF, and fails any that comes back
+ *     degraded, empty, or resolved by the wrong tier.
+ *   - IN PRODUCTION, after every deploy — `scripts/post-deploy-probe.ts` derives one target per
+ *     example and fails the probe if the live archive answers any of them with nothing.
+ *
+ * ONE owner, three consumers: the palette's empty state, the front door's band, and `/search`'s
+ * zero state.
  */
 export const SEARCH_EXAMPLES = [
   { icon: "token", query: "netsky" },
   { icon: "token", query: "Hospital Records" },
-  { icon: "filters", query: "tracks in A minor above 170 bpm" },
+  { icon: "coordinate", query: "004.7.2I" },
   { icon: "sonic", query: "tracks that sound like Nine Clouds" },
 ] as const satisfies readonly { icon: SearchExampleIcon; query: string }[];
 
