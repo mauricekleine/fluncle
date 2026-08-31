@@ -16,6 +16,7 @@ import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import {
   seedAlbum,
   seedArtist,
+  seedCatalogueTrack,
   seedLabel,
   seedMixtape,
   seedTrack,
@@ -124,6 +125,86 @@ export const SEEDED_RADIO_FINDING = {
   title: RADIO_FINDING.title,
 };
 
+// ── APPENDED: the FRONT DOOR's fixtures (front-door.spec.ts) ─────────────────
+//
+// The front door (`/`) renders four bands the eight base findings alone cannot fill honestly:
+//
+//   - the EDITED LEAD is the newest finding carrying a NOTE, so at least one fixture has to
+//     carry one — otherwise the loader's fallback path is the only one a browser ever exercises;
+//   - the RELEASE band reads `tracks.release_date` inside a trailing window, and no base fixture
+//     has a release date at all, so the band would only ever speak its empty state;
+//   - that band carries BOTH registers, so it needs one UNCERTIFIED row (a `tracks` row with no
+//     `findings` row) to prove the unlit half renders unlit, coordinate-free, and unnamed;
+//   - the LEAD's cover is the page's LCP element, so one fixture needs an `album_image_url` for
+//     the preload/eager contract and the failed-cover fallback to be observable at all.
+//
+// All of it is stamped onto rows that already exist (plus the one catalogue row), so the base
+// eight and every spec asserting on them are untouched.
+
+/** The lead's note — asserted verbatim, so the spec proves the EDITED placement, not just a slot. */
+export const SEEDED_LEAD_NOTE =
+  "Came down through a green sector and the air went thick before I clocked the coordinate.";
+
+/** The finding the front door leads with: the one carrying a note (never the newest by date). */
+export const SEEDED_LEAD = {
+  artist: FINDINGS[1]?.artist ?? "",
+  logId: FINDINGS[1]?.logId ?? "",
+  title: FINDINGS[1]?.title ?? "",
+  trackId: "e2e-track-2",
+};
+
+/**
+ * The lead's cover, pointed at the absolute prod media host. `blockExternalRequests` stubs it with
+ * a real 1×1 PNG, so the happy path renders an `<img>`; the failed-cover spec overrides that one
+ * route with a 404 to drive `TrackArtwork`'s fallback. A relative URL could not do either job.
+ */
+export const SEEDED_LEAD_COVER_URL = "https://found.fluncle.com/e2e/lead-cover.jpg";
+
+/**
+ * Two NON-lead findings that also carry cover art. Without them every tile in the findings band
+ * would render the coverless fallback, and the "one eager image, everything else lazy" contract
+ * would have nothing to measure — the assertion would pass vacuously on an empty set.
+ */
+export const SEEDED_COVERED_FINDINGS = [
+  { coverUrl: "https://found.fluncle.com/e2e/cover-3.jpg", trackId: "e2e-track-3" },
+  { coverUrl: "https://found.fluncle.com/e2e/cover-4.jpg", trackId: "e2e-track-4" },
+] as const;
+
+/**
+ * The one finding carrying FOOTAGE (`findings.video_url`), which is the whole gate on the Stories
+ * affordance: `TrackRow` renders its artwork as a play link only when a row has video, and the
+ * `/findings` cover ring opens at the newest finding that does. Without a row here both paths fall
+ * back to a plain cover and a `/log` link, so the Stories route is dark in every spec — it is the
+ * one part of the incumbent archive page that has no coverage until this fixture exists.
+ *
+ * It rides `e2e-track-3`, which already carries cover art, so the play glyph sits over a real
+ * `<img>` rather than the coverless fallback.
+ */
+export const SEEDED_STORY_FINDING = {
+  logId: FINDINGS[2]?.logId ?? "",
+  title: FINDINGS[2]?.title ?? "",
+  trackId: "e2e-track-3",
+  videoUrl: "https://found.fluncle.com/e2e/story-3.mp4",
+} as const;
+
+/** The UNCERTIFIED row in the release band — no `findings` row, so no coordinate and no name. */
+export const SEEDED_CATALOGUE_RELEASE = {
+  artist: "Ashen Relay",
+  title: "Undertow Ledger",
+  trackId: "e2e-track-catalogue-1",
+};
+
+/**
+ * The release dates the front door's window reads. They are a fixed offset back from the seed's own
+ * epoch rather than from the clock, so a run is identical every time — but the WINDOW is measured
+ * from `new Date()` at request time, so they are also stamped relative to today at seed time. The
+ * two are reconciled by seeding "yesterday" and "three days ago" off the real clock: inside every
+ * window the page ever asks for, and never a future-dated pre-order (which `/fresh` drops).
+ */
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 export async function seedE2eData(client: Client): Promise<void> {
   await seedArtist(client, ARTIST);
   await seedLabel(client, LABEL);
@@ -199,6 +280,7 @@ export async function seedE2eData(client: Client): Promise<void> {
     title: MIXTAPE.title,
   });
 
+  await seedFrontDoorFixtures(client);
   await stampLabelPointers(client);
 }
 
@@ -217,6 +299,51 @@ export async function seedE2eData(client: Client): Promise<void> {
  * the rows: `certified_finding_count` reads keystone 1's `is_catalogue = 0` discriminator, exactly
  * as the write sites do.
  */
+async function seedFrontDoorFixtures(client: Client): Promise<void> {
+  // The EDITED lead: a note on the SECOND finding, so the lead is provably the noted one rather
+  // than whichever row happens to be newest. Its cover comes with it — the lead is the LCP element.
+  await client.execute({
+    args: [SEEDED_LEAD_NOTE, SEEDED_LEAD.trackId],
+    sql: `update findings set note = ? where track_id = ?`,
+  });
+  await client.execute({
+    args: [SEEDED_LEAD_COVER_URL, SEEDED_LEAD.trackId],
+    sql: `update tracks set album_image_url = ? where track_id = ?`,
+  });
+
+  for (const covered of SEEDED_COVERED_FINDINGS) {
+    await client.execute({
+      args: [covered.coverUrl, covered.trackId],
+      sql: `update tracks set album_image_url = ? where track_id = ?`,
+    });
+  }
+
+  // FOOTAGE on one finding, so the Stories affordance is reachable at all (see SEEDED_STORY_FINDING).
+  await client.execute({
+    args: [SEEDED_STORY_FINDING.videoUrl, SEEDED_STORY_FINDING.trackId],
+    sql: `update findings set video_url = ? where track_id = ?`,
+  });
+
+  // The release window: one CERTIFIED finding dated inside it, so the band's lit half has a row.
+  await client.execute({
+    args: [daysAgo(1), SEEDED_LEAD.trackId],
+    sql: `update tracks set release_date = ? where track_id = ?`,
+  });
+
+  // The UNCERTIFIED half: a `tracks` row with no `findings` row. It is the fixture that proves the
+  // release band renders both registers without ever naming the second one.
+  await seedCatalogueTrack(client, {
+    artists: [SEEDED_CATALOGUE_RELEASE.artist],
+    label: LABEL.name,
+    title: SEEDED_CATALOGUE_RELEASE.title,
+    trackId: SEEDED_CATALOGUE_RELEASE.trackId,
+  });
+  await client.execute({
+    args: [daysAgo(3), SEEDED_CATALOGUE_RELEASE.trackId],
+    sql: `update tracks set release_date = ? where track_id = ?`,
+  });
+}
+
 async function stampLabelPointers(client: Client): Promise<void> {
   await client.execute({
     args: [LABEL.id, LABEL.name],
@@ -245,7 +372,7 @@ async function main(): Promise<void> {
   await seedE2eData(client);
   client.close();
   console.log(
-    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + artist/label/album.`,
+    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 1 catalogue track + artist/label/album.`,
   );
 }
 

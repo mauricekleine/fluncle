@@ -110,6 +110,13 @@ export type NavNerd =
 // went; nothing here would be here if he had stayed home.
 const travelItems: NavItem[] = [
   {
+    blurb: "Every banger I've certified, newest first.",
+    id: "findings",
+    kind: "route",
+    label: "Findings",
+    to: "/findings",
+  },
+  {
     blurb: "Every finding, one coordinate each.",
     id: "log",
     kind: "route",
@@ -155,23 +162,38 @@ const travelItems: NavItem[] = [
 //
 // The heading names the ACT, not the shelf, and it is deliberately NOT the internal
 // word for this tier — that word never appears in public copy (docs/album-entity.md).
+//
+// Every blurb here is a SUPERSET of what its hub lists, and that is a rule rather than a style.
+// Each index carries every entity Fluncle holds, certified and catalogue alike, so a line like
+// "everyone I've found a banger from" would hang a certification claim on rows he has ruled on
+// nothing about (DESIGN.md's Unlit Rule; PRODUCT.md "The front door"). The front door prints these
+// same blurbs beside a real count, which is exactly where an over-claim would be loudest.
 const browseItems: NavItem[] = [
   {
-    blurb: "Everyone I've found a banger from.",
+    // The whole list, the shelf the other three are cut out of. It leads because it is the widest
+    // door: an artist, a record, and a label are all ways of narrowing this one.
+    blurb: "Every track I hold, the whole crate.",
+    id: "tracks",
+    kind: "route",
+    label: "Tracks",
+    to: "/tracks",
+  },
+  {
+    blurb: "Everyone who made something in here.",
     id: "artists",
     kind: "route",
     label: "Artists",
     to: "/artists",
   },
   {
-    blurb: "The records I pulled them off.",
+    blurb: "Every record a track in here came off.",
     id: "albums",
     kind: "route",
     label: "Albums",
     to: "/albums",
   },
   {
-    blurb: "The labels behind the bangers.",
+    blurb: "Every label that pressed a record in here.",
     id: "labels",
     kind: "route",
     label: "Labels",

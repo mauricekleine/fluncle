@@ -178,6 +178,34 @@
   --grain-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
+/* ————— THE SPACING SCALE —————
+
+   ONE rhythm, so a long page has a beat rather than a pile of one-off gaps. From
+   `xs` up each step is roughly 1.5× the last off the 1rem base; the three below it
+   are hand-set, because a ratio that size cannot express the small gaps cleanly. A
+   surface picks a STEP rather than inventing a number. The canon read is DESIGN.md
+   §5, "The Long Scroll"; this block is that scale in CSS.
+
+   `--space-band` is the one responsive member: the gap BETWEEN sections of a long
+   scroll. It has to breathe on a 1440px desktop and stay walkable on a 390px phone,
+   so it is a clamp between two steps of the same scale rather than a fixed value.
+
+   These are deliberately NOT in @fluncle/tokens: the token package is the
+   cross-surface contract (colors and radii, read by Remotion, Satori, the live
+   glass, the extension), and a web page's vertical rhythm is not a thing those
+   renderers have. The scale lives with the sheet that spends it. */
+:root {
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2.25rem;
+  --space-xl: 3.5rem;
+  --space-2xl: 5.25rem;
+  --space-band: clamp(var(--space-xl), 7vw, var(--space-2xl));
+}
+
 /* No rubber-band. The top bar is sticky and the colophon sits on the bottom edge, so
    an elastic overscroll peels them off the viewport and flashes bare canvas above and
    below — for the length of the bounce the page looks broken. Killing the bounce welds
@@ -197,8 +225,8 @@ html {
    Scalar's globally-leaked sheet, and when #920 correctly scoped Scalar to
    /docs/api the Fumadocs rule won for the first time and the backdrop vanished
    (2026-07-27). This unlayered rule beats every layered one deterministically; the
-   page's dark ground is html's sleeve-black above, and `tests/e2e/home.spec.ts`
-   pins the contract. */
+   page's dark ground is html's sleeve-black above, and `tests/e2e/findings.spec.ts`
+   + `tests/e2e/front-door.spec.ts` pin the contract. */
 body {
   background-color: transparent;
 }
@@ -3742,13 +3770,15 @@ a.catalogue-letter:focus-visible {
    (never a veil over text — the painting order puts a negative-z pseudo
    above the pane's background and below everything in flow). */
 .home-plate,
-.log-plate {
+.log-plate,
+.fd-plate {
   isolation: isolate;
   position: relative;
 }
 
 .home-plate::before,
-.log-plate::before {
+.log-plate::before,
+.fd-plate::before {
   background: var(--grain-tile) repeat;
   border-radius: inherit;
   content: "";
@@ -3764,7 +3794,8 @@ a.catalogue-letter:focus-visible {
    just inside the plate edge. Pure background gradients; zero DOM, zero
    requests, static by construction. */
 .home-plate::after,
-.log-plate::after {
+.log-plate::after,
+.fd-plate::after {
   --crop: color-mix(in oklch, var(--stardust) 55%, transparent);
   background:
     linear-gradient(var(--crop), var(--crop)) left 0 top 0 / 0.9rem 1px,
@@ -5277,6 +5308,15 @@ a.catalogue-letter:focus-visible {
   padding: 0.85rem 1rem;
 }
 
+/* The controls bank to the far end of the bar. On every page but the front door the search
+   glyph carries that with its own auto margin (below); the FRONT DOOR stands the glyph down
+   — its page already offers a much larger door to the same action — and has no breadcrumb
+   either, so the wordmark takes the slack instead and the crew slot stays where the eye
+   expects it rather than sliding in beside the wordmark. */
+.nav-shell[data-front-door] .nav-topbar-inner > .nav-wordmark {
+  margin-right: auto;
+}
+
 /* ── Breadcrumb (inline with the wordmark, every page but home) ─────────────── */
 .nav-breadcrumb {
   min-width: 0;
@@ -5426,6 +5466,7 @@ a.catalogue-letter:focus-visible {
   font-size: 0.82rem;
   font-weight: 600;
   gap: 0.4rem;
+  margin-left: auto;
   padding: 0.3rem 0.5rem;
   transition:
     color 150ms ease-out,
@@ -7878,4 +7919,548 @@ a.catalogue-letter:focus-visible {
 .void404-browse:hover,
 .void404-browse:focus-visible {
   color: var(--eclipse-glow);
+}
+
+/* ————— THE FRONT DOOR (`/`) —————
+
+   ONE plate, long. The page is a single recovered logbook document (DESIGN.md's The
+   Plate) with each band printed FLAT on it — never a stack of glass cards, because
+   glass does not stack on glass (The One Pane Rule) and PRODUCT.md bans the card
+   stack by name. It reuses `.home-plate`'s exact surface recipe (the translucent
+   card wash, the double rule, the pane-tooth grain, the crop marks), so the front
+   door and the archive page are visibly the same document, one long and one tall.
+
+   Rhythm is the spacing scale above and nothing else: bands are `--space-band`
+   apart, a band's header sits `--space-md` above its body, and a heading and its
+   intro sit `--space-2xs` apart. No band invents a gap.
+
+   MOTION. Everything here is a color-only or 150ms ease-out transition, and every
+   one of them is neutralized in the single reduce block at the end of this section.
+   Nothing on the front door animates uninvited, nothing gates on an interaction,
+   and nothing steps the reader through one record at a time (PRODUCT.md "The front
+   door" — the transport model this page rejects). */
+
+.fd-page {
+  margin: var(--space-md) auto;
+  max-width: 68rem;
+  padding: var(--space-sm);
+  width: 100%;
+}
+
+@media (min-width: 640px) {
+  .fd-page {
+    margin-block: var(--space-lg);
+    padding: var(--space-md);
+  }
+}
+
+/* The plate itself: the masthead and every band mount on this one document. Same
+   recipe as `.home-plate` — see the Track A block above for what each layer is. */
+.fd-plate {
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-lg);
+  outline: 1px solid color-mix(in oklch, var(--border) 45%, transparent);
+  outline-offset: 4px;
+  padding: clamp(1.1rem, 3vw, 2.25rem);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fd-plate {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--card) 52%, transparent);
+  }
+}
+
+/* ── The masthead ───────────────────────────────────────────────────────────── */
+
+.fd-masthead {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-md);
+}
+
+.fd-nameplate {
+  color: var(--starlight-cream);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1.6rem, 5vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+/* The brand line under the nameplate. Cream, never gold: the One Sun budget is spent on the
+   certification light (a finding's coordinate) and the primary action, and a tagline is neither. */
+.fd-tagline {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-top: var(--space-3xs);
+}
+
+/* The one first-person line above the fold. Sized as reading copy, not as a
+   marketing hero: there is no pitch, the archive is the page. */
+.fd-standfirst {
+  color: var(--stardust);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin-top: var(--space-2xs);
+  max-width: 42rem;
+}
+
+/* ── The section grammar ────────────────────────────────────────────────────── */
+
+.fd-section {
+  margin-top: var(--space-band);
+}
+
+.fd-section-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs) var(--space-md);
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+}
+
+/* A header carrying only an sr-only heading paints nothing, so its gap would be a hole in
+   the rhythm rather than a beat — the band's own `--space-band` already separates it. */
+.fd-section-head--quiet {
+  margin-bottom: 0;
+}
+
+.fd-section-titling {
+  max-width: 44rem;
+  min-width: 0;
+}
+
+.fd-section-title {
+  color: var(--starlight-cream);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1.15rem, 2.6vw, 1.5rem);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+.fd-section-intro {
+  color: var(--stardust);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  margin-top: var(--space-2xs);
+}
+
+/* The ONE link out of a band. A quiet control that IGNITES on hover (The Ignition
+   Rule): it heats toward the Glow and its arrow steps, it never dims. */
+.fd-section-more {
+  align-items: center;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  flex: none;
+  font-size: 0.82rem;
+  font-weight: 700;
+  gap: var(--space-3xs);
+  transition: color 150ms ease-out;
+  white-space: nowrap;
+}
+
+.fd-section-more:hover,
+.fd-section-more:focus-visible {
+  color: var(--accent-foreground);
+}
+
+.fd-section-more-icon {
+  height: 0.9rem;
+  transition: transform 150ms ease-out;
+  width: 0.9rem;
+}
+
+.fd-section-more:hover .fd-section-more-icon,
+.fd-section-more:focus-visible .fd-section-more-icon {
+  transform: translateX(2px);
+}
+
+/* ── The seeding entry ──────────────────────────────────────────────────────── */
+
+.fd-search-field {
+  align-items: center;
+  background: color-mix(in oklch, var(--tape-black) 62%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--stardust);
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-2xs);
+  min-height: 3.25rem;
+  padding: 0 var(--space-sm);
+  text-align: left;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+  width: 100%;
+}
+
+.fd-search-field:hover,
+.fd-search-field:focus-visible {
+  background: color-mix(in oklch, var(--accent) 55%, transparent);
+  border-color: color-mix(in oklch, var(--primary) 45%, transparent);
+  color: var(--accent-foreground);
+}
+
+.fd-search-field:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.fd-search-field-icon {
+  flex: none;
+  height: 1.15rem;
+  width: 1.15rem;
+}
+
+.fd-search-field-label {
+  flex: 1;
+  font-size: 1rem;
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fd-search-field-kbd {
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-sm);
+  color: var(--muted-foreground);
+  flex: none;
+  font-family: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.fd-search-hint {
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  margin-top: var(--space-md);
+}
+
+.fd-search-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  list-style: none;
+  margin: var(--space-2xs) 0 0;
+  padding: 0;
+}
+
+/* The example pills, the front door's larger sibling of `.search-example`. Same
+   quiet Dust-Veil pill, same gold heat on hover — one look, two places. */
+.fd-search-example {
+  align-items: center;
+  background: color-mix(in oklch, var(--dust-veil) 60%, transparent);
+  border: 1px solid var(--dust-line);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 600;
+  gap: var(--space-3xs);
+  min-height: 2.5rem;
+  padding: var(--space-3xs) var(--space-xs);
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.fd-search-example:hover,
+.fd-search-example:focus-visible {
+  background: var(--accent);
+  border-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  color: var(--accent-foreground);
+}
+
+.fd-search-example:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.fd-search-example-icon {
+  flex: none;
+  height: 0.9rem;
+  width: 0.9rem;
+}
+
+/* ── The edited lead ────────────────────────────────────────────────────────── */
+
+.fd-lead {
+  align-items: start;
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 640px) {
+  .fd-lead {
+    grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr);
+    gap: var(--space-lg);
+  }
+}
+
+.fd-lead-cover {
+  aspect-ratio: 1;
+  border-radius: var(--rounded-artwork);
+  height: auto;
+  object-fit: cover;
+  width: 100%;
+}
+
+.fd-lead-body {
+  min-width: 0;
+}
+
+/* The coordinate leads, in the certification light. The Tabular Rule: it is a
+   columnar number, so it is Oxanium with tabular figures. */
+.fd-lead-coordinate {
+  color: var(--accent-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.fd-lead-line {
+  color: var(--starlight-cream);
+  font-size: clamp(1.05rem, 2.4vw, 1.35rem);
+  font-weight: 800;
+  line-height: 1.2;
+  margin-top: var(--space-3xs);
+  overflow-wrap: anywhere;
+}
+
+.fd-lead-imprint {
+  color: var(--muted-foreground);
+  font-size: 0.84rem;
+  margin-top: var(--space-3xs);
+}
+
+.fd-lead-note {
+  color: var(--stardust);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  margin-top: var(--space-2xs);
+  max-width: 40rem;
+}
+
+.fd-lead-chips {
+  margin-top: var(--space-2xs);
+}
+
+.fd-lead-found {
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  margin-top: var(--space-2xs);
+}
+
+/* The lead's own action, in the outline-button register — quiet, and it heats. */
+.fd-lead-open {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--foreground);
+  display: inline-flex;
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-top: var(--space-sm);
+  min-height: 2.5rem;
+  padding: 0 var(--space-xs);
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.fd-lead-open:hover,
+.fd-lead-open:focus-visible {
+  background: var(--accent);
+  border-color: color-mix(in oklch, var(--primary) 45%, transparent);
+  color: var(--accent-foreground);
+}
+
+/* ── The findings band ──────────────────────────────────────────────────────── */
+
+.fd-finding-grid {
+  display: grid;
+  gap: var(--space-md) var(--space-sm);
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.fd-finding {
+  display: grid;
+  gap: var(--space-3xs);
+}
+
+.fd-finding-cover {
+  aspect-ratio: 1;
+  border-radius: var(--rounded-artwork);
+  height: auto;
+  object-fit: cover;
+  transition: transform 160ms ease-out;
+  width: 100%;
+}
+
+.fd-finding:hover .fd-finding-cover {
+  transform: scale(1.06);
+}
+
+.fd-finding:focus-visible {
+  border-radius: var(--rounded-md);
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+.fd-finding-coordinate {
+  color: var(--muted-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  margin-top: var(--space-2xs);
+  transition: color 150ms ease-out;
+}
+
+.fd-finding:hover .fd-finding-coordinate,
+.fd-finding:focus-visible .fd-finding-coordinate {
+  color: var(--accent-foreground);
+}
+
+.fd-finding-line {
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+/* ── The release band ───────────────────────────────────────────────────────── */
+
+/* `FreshStreamRow` brings its own `.fresh-row*` rules (one definition, shared with
+   `/fresh`); this only re-seats the list inside the plate. */
+.fd-releases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── The browse band ────────────────────────────────────────────────────────── */
+
+.fd-browse {
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* A flat printed panel on the plate, never a card with its own glass (One Pane). */
+.fd-browse-card {
+  background: color-mix(in oklch, var(--tape-black) 42%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  display: grid;
+  gap: var(--space-3xs);
+  height: 100%;
+  padding: var(--space-sm);
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.fd-browse-card:hover,
+.fd-browse-card:focus-visible {
+  background: var(--accent);
+  border-color: color-mix(in oklch, var(--primary) 40%, transparent);
+}
+
+.fd-browse-card:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.fd-browse-label {
+  color: var(--starlight-cream);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  transition: color 150ms ease-out;
+}
+
+.fd-browse-card:hover .fd-browse-label,
+.fd-browse-card:focus-visible .fd-browse-label {
+  color: var(--accent-foreground);
+}
+
+.fd-browse-count {
+  color: var(--muted-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.fd-browse-blurb {
+  color: var(--stardust);
+  font-size: 0.84rem;
+  line-height: 1.4;
+  margin-top: var(--space-3xs);
+}
+
+/* ── Empty states ───────────────────────────────────────────────────────────── */
+
+.fd-empty {
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--muted-foreground);
+  font-size: 0.88rem;
+  padding: var(--space-lg) var(--space-sm);
+  text-align: center;
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────────────── */
+
+/* Every moving thing on the front door, grounded in one place. Under `reduce` the
+   page is genuinely still: no transition, no scale, no drift. Feedback survives as
+   COLOUR ONLY — the Gold Veil wash and the Eclipse-Glow heat above are untouched,
+   because they are state changes rather than motion (DESIGN.md §5). Placed after
+   every rule it neutralizes, at equal specificity, so it wins the cascade by
+   source order. */
+@media (prefers-reduced-motion: reduce) {
+  .fd-section-more,
+  .fd-section-more-icon,
+  .fd-search-field,
+  .fd-search-example,
+  .fd-lead-open,
+  .fd-finding-cover,
+  .fd-finding-coordinate,
+  .fd-browse-card,
+  .fd-browse-label {
+    transition: none;
+  }
+
+  .fd-section-more:hover .fd-section-more-icon,
+  .fd-section-more:focus-visible .fd-section-more-icon {
+    transform: none;
+  }
+
+  .fd-finding:hover .fd-finding-cover {
+    transform: none;
+  }
 }

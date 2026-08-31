@@ -33,13 +33,13 @@ Two things are worth knowing before you change any of it. The dev worker runs un
 
 `seed.ts` holds a small, deterministic, committed dataset — invented titles and artists, no real IDs, no external media URLs. Local dev seeds from a prod snapshot (`.dev/seed.sql`, gitignored); that snapshot must never be committed and CI does not have it, so this suite seeds a fresh empty DB instead.
 
-It currently contains 8 published findings (distinct titles, artists, and Log IDs, with descending `added_at`), 1 published mixtape, and one artist / label / album — with the first finding wired into the full artist ↔ label ↔ album graph. Plus one further finding that satisfies the `/radio` ELIGIBILITY predicate (a square master, an observation, its length, a Log ID), which nothing else does, so the radio loop has exactly one thing it can ever resolve to.
+It currently contains 8 published findings (distinct titles, artists, and Log IDs, with descending `added_at`), 1 published mixtape, and one artist / label / album — with the first finding wired into the full artist ↔ label ↔ album graph. A handful of those rows carry the extras the FRONT DOOR needs and nothing else provides: an operator note (so the edited lead is provably the noted finding rather than the newest), cover art (so the "one eager image, everything else lazy" contract has rows to measure), and release dates. Beside them sits one UNCERTIFIED catalogue track — a `tracks` row with no `findings` row — so the release band can be seen rendering both registers without either being named. Plus one further finding that satisfies the `/radio` ELIGIBILITY predicate (a square master, an observation, its length, a Log ID), which nothing else does, so the radio loop has exactly one thing it can ever resolve to.
 
 Fixtures build on the `src/lib/server/integration-db.ts` factories (`seedTrack`, `seedArtist`, `seedLabel`, `seedAlbum`, `seedMixtape`, …) — the same ones the vitest integration suite uses, so fixture shapes cannot drift from the schema. Add a fixture there, not in a parallel helper.
 
 ## Adding a spec
 
-Drop a `tests/e2e/<name>.spec.ts` (only `*.spec.ts` is collected; helpers alongside are ignored) and follow `home.spec.ts`, which is the reference shape:
+Drop a `tests/e2e/<name>.spec.ts` (only `*.spec.ts` is collected; helpers alongside are ignored) and follow `findings.spec.ts`, which is the reference shape:
 
 - **Call `blockExternalRequests(page)` first** (`./browser`). It stubs every non-local request, so a spec never depends on — or hits — a live remote. It is load-bearing: some product URLs are hardcoded to the absolute prod host (a mixtape row's cover is derived from its Log ID via `mixtapeCoverUrl`) and would 404 against synthetic fixtures.
 - **Assert on identity, not counts.** Import the seeded titles from `./seed` so the check does not rot as fixtures grow.
@@ -48,6 +48,19 @@ Drop a `tests/e2e/<name>.spec.ts` (only `*.spec.ts` is collected; helpers alongs
 - **Fail on any console error or page error.** Attach the listeners before navigating and assert the collected list is empty. Do not add broad filters — the suite owns its whole environment, so an error is a real regression.
 
 If a new spec needs data the seed does not carry, extend `seed.ts` (and, if a new table is involved, add the factory to `integration-db.ts`) rather than writing rows inline in the spec — the seed stays the single description of the world every spec shares.
+
+## The front door's scroll evidence
+
+`front-door.spec.ts` writes a full-page screenshot per width — `desktop-1440x900.png` and `mobile-390x844.png` — into the gitignored `apps/web/.dev/front-door/`. They are evidence that `/` reads as one long deliberate scroll at both widths, and the assertions in that spec (every band visible with height, bands ordered down the page, `scrollHeight` past one viewport, no horizontal bleed) are what actually gate it; the images are for a human to look at.
+
+Regenerate them at any commit with:
+
+```bash
+bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts
+FRONT_DOOR_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts   # elsewhere
+```
+
+They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. `.github/workflows/e2e.yml` uploads `front-door-scroll` on every run, green or red, so each commit's evidence is retained for 90 days (GitHub's ceiling on a public repo) and downloadable from its own check without a byte entering history.
 
 ## Adding an env var
 

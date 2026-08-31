@@ -113,7 +113,7 @@ function GalaxiesPage() {
         </ul>
 
         <footer className="log-plate-footer">
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
           <Link to="/log">The full log</Link>
         </footer>
       </article>

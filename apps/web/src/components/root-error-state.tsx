@@ -23,7 +23,7 @@ const COPY = {
   // the specific verb, not the generic "something went wrong" shape.
   body: "Something came apart on my end pulling this up. Nothing you did. Give it another go, or drop back to the archive and I'll pick you up from there.",
   // The quiet second escape (a ghost link home, no gold — it never competes with
-  // the sun). Home is the archive of findings.
+  // the sun). The archive of findings is /findings; / is the front door.
   browse: "Back to the archive",
   // The heading carries the accessible meaning; kept quiet (Title register, never
   // the Oxanium masthead — the cover art stays the hero).
@@ -55,7 +55,7 @@ export function RootErrorState({ error, reset }: ErrorComponentProps): ReactNode
           <Button onClick={reset}>{COPY.retry}</Button>
           <Link
             className="text-sm font-semibold text-muted-foreground transition-colors hover:text-[var(--eclipse-glow)]"
-            to="/"
+            to="/findings"
           >
             {COPY.browse}
           </Link>

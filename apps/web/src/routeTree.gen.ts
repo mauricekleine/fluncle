@@ -21,6 +21,7 @@ import { Route as ChatRouteImport } from './routes/chat'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
+import { Route as FindingsRouteImport } from './routes/findings'
 import { Route as FreshRouteImport } from './routes/fresh'
 import { Route as FreshDotjsonRouteImport } from './routes/fresh[.]json'
 import { Route as FreshDotxmlRouteImport } from './routes/fresh[.]xml'
@@ -206,6 +207,11 @@ const DocsRoute = DocsRouteImport.update({
 const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
   id: '/feed.json',
   path: '/feed.json',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FindingsRoute = FindingsRouteImport.update({
+  id: '/findings',
+  path: '/findings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FreshRoute = FreshRouteImport.update({
@@ -879,6 +885,7 @@ export interface FileRoutesByFullPath {
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
+  '/findings': typeof FindingsRoute
   '/fresh': typeof FreshRoute
   '/fresh.json': typeof FreshDotjsonRoute
   '/fresh.xml': typeof FreshDotxmlRoute
@@ -1016,6 +1023,7 @@ export interface FileRoutesByTo {
   '/chat': typeof ChatRoute
   '/device': typeof DeviceRoute
   '/feed.json': typeof FeedDotjsonRoute
+  '/findings': typeof FindingsRoute
   '/fresh': typeof FreshRoute
   '/fresh.json': typeof FreshDotjsonRoute
   '/fresh.xml': typeof FreshDotxmlRoute
@@ -1156,6 +1164,7 @@ export interface FileRoutesById {
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
+  '/findings': typeof FindingsRoute
   '/fresh': typeof FreshRoute
   '/fresh.json': typeof FreshDotjsonRoute
   '/fresh.xml': typeof FreshDotxmlRoute
@@ -1297,6 +1306,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/docs'
     | '/feed.json'
+    | '/findings'
     | '/fresh'
     | '/fresh.json'
     | '/fresh.xml'
@@ -1434,6 +1444,7 @@ export interface FileRouteTypes {
     | '/chat'
     | '/device'
     | '/feed.json'
+    | '/findings'
     | '/fresh'
     | '/fresh.json'
     | '/fresh.xml'
@@ -1573,6 +1584,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/docs'
     | '/feed.json'
+    | '/findings'
     | '/fresh'
     | '/fresh.json'
     | '/fresh.xml'
@@ -1713,6 +1725,7 @@ export interface RootRouteChildren {
   DeviceRoute: typeof DeviceRoute
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
+  FindingsRoute: typeof FindingsRoute
   FreshRoute: typeof FreshRoute
   FreshDotjsonRoute: typeof FreshDotjsonRoute
   FreshDotxmlRoute: typeof FreshDotxmlRoute
@@ -1897,6 +1910,13 @@ declare module '@tanstack/react-router' {
       path: '/feed.json'
       fullPath: '/feed.json'
       preLoaderRoute: typeof FeedDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/findings': {
+      id: '/findings'
+      path: '/findings'
+      fullPath: '/findings'
+      preLoaderRoute: typeof FindingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/fresh': {
@@ -2883,6 +2903,7 @@ const rootRouteChildren: RootRouteChildren = {
   DeviceRoute: DeviceRoute,
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
+  FindingsRoute: FindingsRoute,
   FreshRoute: FreshRoute,
   FreshDotjsonRoute: FreshDotjsonRoute,
   FreshDotxmlRoute: FreshDotxmlRoute,

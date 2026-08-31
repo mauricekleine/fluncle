@@ -25,7 +25,8 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 
 | Surface          | Route         | Exposes                                                                                                                                                                                                                                                                              | Weight    |
 | ---------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
-| `web.home`       | `/`           | the archive — every certified finding, newest first, cover-led                                                                                                                                                                                                                       | primary   |
+| `web.home`       | `/`           | the front door — search with real example queries, one edited lead finding, the newest findings, what just came out, and the four routes into the wider archive                                                                                                                      | primary   |
+| `web.findings`   | `/findings`   | the archive — every certified finding, newest first, cover-led                                                                                                                                                                                                                       | primary   |
 | `web.log`        | `/log`        | the log index + `/log/:logId`, one finding's permanent home (the Log ID resolves here)                                                                                                                                                                                               | primary   |
 | `web.logbook`    | `/logbook`    | Fluncle's Logbook — the voyage as a first-person travelogue + `/logbook/:sector`, one sector-day written up                                                                                                                                                                          | primary   |
 | `web.mixtapes`   | `/mixtapes`   | Fluncle's own DJ mixtapes — each a checkpoint set with an F-marked Log ID                                                                                                                                                                                                            | primary   |
@@ -249,6 +250,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | Surface                       | `web`     | `ssh`     | `cli`     | `status`  |
 | ----------------------------- | --------- | --------- | --------- | --------- |
 | `web.home`                    | primary   |           |           |           |
+| `web.findings`                | primary   |           |           |           |
 | `web.log`                     | primary   | secondary |           |           |
 | `web.logbook`                 | primary   |           |           |           |
 | `web.mixtapes`                | primary   | secondary |           |           |

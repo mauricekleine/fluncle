@@ -136,8 +136,8 @@ describe("the sitemap policy", () => {
 });
 
 describe("isCacheableHubRequest", () => {
-  it("matches the six paginated hub/index pages on their canonical query-less URL", () => {
-    for (const path of ["/", "/artists", "/albums", "/labels", "/tracks", "/fresh"]) {
+  it("matches the five paginated hub/index pages on their canonical query-less URL", () => {
+    for (const path of ["/artists", "/albums", "/labels", "/tracks", "/fresh"]) {
       expect(isCacheableHubRequest(path, "")).toBe(true);
     }
 
@@ -148,6 +148,9 @@ describe("isCacheableHubRequest", () => {
   it("matches the stable public pages enrolled at the hub policy on their bare URL", () => {
     // FIX 2: the index/static/legal/docs pages that previously emitted no Cache-Control.
     for (const path of [
+      // The front door and the archive feed: bare-URL-only, so no query is ever shared-cached.
+      "/",
+      "/findings",
       "/galaxies",
       "/mixtapes",
       "/logbook",
@@ -197,7 +200,6 @@ describe("isCacheableHubRequest", () => {
     expect(isCacheableHubRequest("/tracks", "?galaxy=drift")).toBe(false);
     expect(isCacheableHubRequest("/tracks", "?sort=oldest")).toBe(false);
     expect(isCacheableHubRequest("/fresh", "?view=labels")).toBe(false);
-    expect(isCacheableHubRequest("/", "?story=2026.A.7Q")).toBe(false);
   });
 
   it("REFUSES ANY query on a bare-URL-only static/detail page — even ?page=N", () => {
@@ -209,6 +211,11 @@ describe("isCacheableHubRequest", () => {
     expect(isCacheableHubRequest("/galaxies", "?page=2")).toBe(false);
     expect(isCacheableHubRequest("/docs/api", "?v=2")).toBe(false);
     expect(isCacheableHubRequest("/newsletter", "?utm=x")).toBe(false);
+    // The front door takes no params at all, and the archive feed's `?story=` (the Stories
+    // dialog's per-reader URL) must never land in a SHARED cache entry.
+    expect(isCacheableHubRequest("/", "?page=2")).toBe(false);
+    expect(isCacheableHubRequest("/findings", "?story=2026.A.7Q")).toBe(false);
+    expect(isCacheableHubRequest("/findings", "?page=2")).toBe(false);
   });
 
   it("does NOT match a neighbouring or malformed path", () => {

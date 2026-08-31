@@ -161,22 +161,24 @@ export function isCacheableEntityRequest(pathname: string, search: string): bool
   return search === "" && ENTITY_DETAIL_PATH.test(pathname);
 }
 
-// The PAGINATED catalogue hubs: the archive front door, the four editorial indexes, and the
-// fresh-releases board. These are the SLOW pages — each is a multi-row aggregate query, and
-// `/artists` measured ~1s of server think — and they are the ones crawlers hammer, so they are
-// where an edge hit is worth the most. They accept a lone `?page=<n>` (the DOCUMENTED crawler
-// pager into the catalogue long tail — see albums.index.tsx / labels.index.tsx) folded into the
-// cache key; every richer query variant is refused. `/log` is deliberately absent: it is on the
-// page policy because the finding write paths already purge it explicitly.
+// The PAGINATED catalogue hubs: the four editorial indexes and the fresh-releases board. These
+// are the SLOW pages — each is a multi-row aggregate query, and `/artists` measured ~1s of server
+// think — and they are the ones crawlers hammer, so they are where an edge hit is worth the most.
+// They accept a lone `?page=<n>` (the DOCUMENTED crawler pager into the catalogue long tail — see
+// albums.index.tsx / labels.index.tsx) folded into the cache key; every richer query variant is
+// refused. `/log` is deliberately absent: it is on the page policy because the finding write paths
+// already purge it explicitly.
+//
+// The ROOT is deliberately absent too, and that is a change from when it WAS the paginated archive
+// feed. `/` is now the front door: it takes no `?page=`, so a `?page=2` on it would key a second
+// entry holding a byte-identical page-1 body. It rides the bare-URL-only enrolment below instead,
+// alongside `/findings` — the archive feed it handed that job to, which paginates on the CLIENT
+// through `/api/v1/tracks` and so has no cacheable page variant of its own either.
 const HUB_PATHS_BELOW_ROOT = new Set(["/albums", "/artists", "/fresh", "/labels", "/tracks"]);
 
-/** True for one of the paginated catalogue hubs (root + the five plural indexes/boards). */
+/** True for one of the paginated catalogue hubs (the five plural indexes/boards). */
 function isPaginatedHubPath(pathname: string): boolean {
-  if (pathname === "/") {
-    return true;
-  }
-
-  const trimmed = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  const trimmed = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
 
   return HUB_PATHS_BELOW_ROOT.has(trimmed);
 }
@@ -189,6 +191,12 @@ function isPaginatedHubPath(pathname: string): boolean {
 // newsletter edition). The detail pages ride the 60s window rather than an explicit purge — the
 // write is rare and the window self-heals — so no write path has to learn to purge them.
 const STATIC_HUB_EXACT = new Set([
+  // The FRONT DOOR and the archive feed it opens onto. Both are query-less canonical pages: `/`
+  // takes no params at all (a `?story=` on it 301s away before a response is ever built), and
+  // `/findings` carries only the Stories dialog's `?story=`, which must NEVER be shared-cached —
+  // a bare-URL-only enrolment refuses every query, which is exactly that guarantee.
+  "/",
+  "/findings",
   "/about",
   "/docs",
   "/galaxies",
@@ -213,7 +221,19 @@ const STATIC_HUB_DETAIL = /^\/(?:galaxies|logbook|newsletter)\/[^/]+$/;
  * path. A single trailing slash is tolerated.
  */
 function isStaticHubPath(pathname: string): boolean {
-  const trimmed = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  // The ROOT is matched in its exact form only. Trimming first would fold `//` (a doubled root, a
+  // real thing crawlers and bad links produce) onto `/` and hand it the front door's cache entry.
+  if (pathname === "/") {
+    return STATIC_HUB_EXACT.has("/");
+  }
+
+  const trimmed = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+
+  // Whatever trimming produced the root or nothing was not a path (`//`, `/`): the exact-form
+  // branch above is the only way `/` is ever a hub.
+  if (trimmed === "" || trimmed === "/") {
+    return false;
+  }
 
   if (STATIC_HUB_EXACT.has(trimmed)) {
     return true;

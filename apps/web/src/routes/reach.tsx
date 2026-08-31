@@ -768,7 +768,7 @@ function ReachPage() {
 
         <footer className="log-plate-footer">
           <Link to="/status">System status</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
         </footer>
       </article>
     </main>

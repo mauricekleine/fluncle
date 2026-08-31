@@ -1,5 +1,5 @@
 // The artist page's server-side resolution, lifted out of `artist.$slug.tsx` — the
-// `-home-data.ts` sibling-module pattern, and the same split `-album-page-data.ts` and
+// `-findings-data.ts` sibling-module pattern, and the same split `-album-page-data.ts` and
 // `-label-page-data.ts` carry. That file holds the long note on WHY: a route's loader/head
 // live in the route's critical half, so a resolver referenced there keeps its `lib/server/**`
 // imports — and the `getDb` → `@libsql/client` + `drizzle-orm` + `db/schema.ts` chain behind

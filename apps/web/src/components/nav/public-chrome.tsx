@@ -13,7 +13,7 @@ import { type ReactNode } from "react";
 import { CrewSlot } from "@/components/nav/crew-slot";
 import { NavBreadcrumb } from "@/components/nav/nav-breadcrumb";
 import { NavFooter } from "@/components/nav/nav-footer";
-import { SearchTrigger } from "@/components/search/search-command";
+import { SearchProvider, SearchTrigger } from "@/components/search/search-command";
 
 // Surfaces that render WITHOUT the public chrome:
 // - /admin: its own AdminShell workspace chrome (never touched here).
@@ -62,27 +62,46 @@ export function PublicChrome({
   }
 
   return (
-    <div className={workbench ? "nav-shell nav-shell--workbench" : "nav-shell"}>
-      <header className="nav-topbar">
-        <div className="nav-topbar-inner">
-          <Link aria-label="Fluncle home" className="nav-wordmark" to="/">
-            FLUNCLE
-          </Link>
-          <NavBreadcrumb pathname={pathname} tail={tail} />
-          {/* The two controls, banked to the far end so they never crowd the trail. Search
-              also mounts the ⌘K listener, which is why it lives in the chrome and not on a
-              page: search has to be one keystroke away from every public surface. The crew
+    // `SearchProvider` owns the ONE search dialog and the ONE ⌘K listener for every public page.
+    // It wraps the whole shell rather than sitting inside the top bar, because a page under it
+    // (the front door's seeding entry) reaches the same dialog through the context.
+    <SearchProvider>
+      <div
+        className={workbench ? "nav-shell nav-shell--workbench" : "nav-shell"}
+        // The front door stands the colophon's search glyph down (below), and carries no
+        // breadcrumb either, so the bar needs a different element to take the slack. A plain
+        // attribute rather than a class, and computed from the same pathname on both sides,
+        // so it changes no element and hydration is untouched.
+        data-front-door={pathname === "/" ? "" : undefined}
+      >
+        <header className="nav-topbar">
+          <div className="nav-topbar-inner">
+            <Link aria-label="Fluncle home" className="nav-wordmark" to="/">
+              FLUNCLE
+            </Link>
+            <NavBreadcrumb pathname={pathname} tail={tail} />
+            {/* The two controls, banked to the far end so they never crowd the trail. The
+              provider above mounts the ⌘K listener, which is why it lives in the chrome and
+              not on a page: search has to be one keystroke away from every public surface. The crew
               slot rides beside it — Join when signed out, the account door when signed in.
               `home` gates the Join glow to the page it was designed for (the ambient
-              budget: no perpetual sweep on the gold-spending deep pages). */}
-          <SearchTrigger />
-          <CrewSlot home={pathname === "/"} />
-        </div>
-      </header>
+              budget: no perpetual sweep on the gold-spending deep pages). It rides
+              `/findings`, the archive page it was drawn for, and deliberately NOT the
+              front door: `/` works fully anonymously and never sells joining as the
+              outcome of arriving (PRODUCT.md "The front door"). */}
+            {/* The colophon's glyph stands down on the FRONT DOOR, which carries a much larger
+                door to the same action; two controls answering to one name on one screen is
+                ambiguous by voice and redundant by eye. The slot still mounts the dialog, and
+                ⌘K still works there. */}
+            <SearchTrigger showTrigger={pathname !== "/"} />
+            <CrewSlot home={pathname === "/findings"} />
+          </div>
+        </header>
 
-      <div className="nav-content">{children}</div>
+        <div className="nav-content">{children}</div>
 
-      {workbench ? undefined : <NavFooter galaxiesLive={galaxiesLive} />}
-    </div>
+        {workbench ? undefined : <NavFooter galaxiesLive={galaxiesLive} />}
+      </div>
+    </SearchProvider>
   );
 }

@@ -329,7 +329,7 @@ describe("the sitemap at catalogue volume", () => {
     const { xml } = await renderSitemap();
     const locs = xml.match(/<loc>/g) ?? [];
 
-    // 18 hubs (/identity's DOOR sits in the static set beside /radio; its per-key answers are
+    // 19 hubs (/identity's DOOR sits in the static set beside /radio; its per-key answers are
     // `noindex, follow` and never sitemapped, and the /galaxy GAME is `noindex` so it is not a
     // hub here at all) + 1 finding + 2 label pages
     // (Hospital: 1 finding + 900 rows; Metalheadz: 400 rows, no finding — both clear the floor)
@@ -346,7 +346,7 @@ describe("the sitemap at catalogue volume", () => {
     expect(xml).not.toContain("Crawled");
     expect(xml).not.toContain("mb_lbl_");
     expect(xml).not.toContain("/track/");
-    expect(locs).toHaveLength(18 + 1 + 2 + 2 * CRAWLED_ARTISTS + DOCS_PAGES.length);
+    expect(locs).toHaveLength(19 + 1 + 2 + 2 * CRAWLED_ARTISTS + DOCS_PAGES.length);
   });
 
   it("LISTS the discovered label — the page exists, so the sitemap must point at it", async () => {

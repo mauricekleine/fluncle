@@ -1,81 +1,121 @@
-import { CircleNotchIcon, PlayIcon } from "@phosphor-icons/react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import {
-  Link,
-  createFileRoute,
-  useCanGoBack,
-  useLoaderData,
-  useNavigate,
-  useRouter,
-} from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useCallback, useEffect, useRef } from "react";
-import { HomeLinkHub } from "@/components/home/link-hub";
+import { useEffect } from "react";
+import { FrontDoorBrowse } from "@/components/front-door/browse";
+import { FrontDoorFindings } from "@/components/front-door/findings";
+import { FrontDoorLead } from "@/components/front-door/lead";
+import { FrontDoorReleases } from "@/components/front-door/releases";
+import { FrontDoorSearch } from "@/components/front-door/search-entry";
+import { FrontDoorSection } from "@/components/front-door/section";
 import { LiveBanner } from "@/components/home/live-banner";
-import { StoriesDialog } from "@/components/stories/stories-dialog";
-import { TrackRow } from "@/components/track-row";
-import { ScrollArea } from "@fluncle/ui/components/scroll-area";
-import { TooltipProvider } from "@fluncle/ui/components/tooltip";
 import { printConsoleGreeting } from "@/lib/console-greeting";
 import { fluncleEntityId, fluncleWebsiteId, siteUrl } from "@/lib/fluncle-links";
+import { frontDoorCount } from "@/lib/front-door";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
-import { type FeedItem } from "@/lib/mixtapes";
-import { HOME_PAGE_SIZE } from "@/lib/home";
-import { fetchTracks, type TracksResponse } from "@/lib/tracks";
+import { logPageUrl } from "@/lib/log-schema";
+import { albumCoverAtSize } from "@/lib/media";
 import { registerWebMcpTools } from "@/lib/webmcp";
 
-type HomeSearch = {
-  /** The Log ID of the story open in the dialog (masked to /log/<id>). */
-  story?: string;
-};
+// `/` — THE FRONT DOOR.
+//
+// A stranger arrives here knowing nothing and typing nothing. The page's whole job is to be legible
+// to that person in one deliberate scroll: search with real queries they can click, one finding
+// placed and written about, a few more findings, what just came out, and the four familiar routes
+// into the wider archive. Nothing on it requires an account, nothing gates behind an interaction,
+// and nothing steps the reader through one record at a time. The governing direction, its
+// refinement, and the transport model it explicitly rejects are recorded in PRODUCT.md ("The front
+// door") and DESIGN.md §5 ("The Long Scroll").
+//
+// The archive front page this route used to be is whole and unchanged at `/findings` — the cover,
+// the nameplate, the stories ring, the infinite feed. `/?story=` still resolves: it 301s to the
+// standalone `/log/<id>` page the mask always displayed, so every shared link survives.
+//
+// ── THE AREA ─────────────────────────────────────────────────────────────────────────────────
+// A LORE page (DESIGN.md's Three Areas): Fluncle is speaking, in first person, under the nameplate.
+// The catalogue material it opens onto keeps its own register inside his voice — the browse counts
+// are supersets and the release band never claims he found those records (VOICE.md's Found Rule).
+//
+// ── THE TWO REGISTERS ────────────────────────────────────────────────────────────────────────
+// The broad archive and the selective findings are unmistakably related and never conflated, and the
+// distinction is carried by PLACEMENT and LIGHT alone (DESIGN.md's Unlit Rule): findings sit high and
+// lit with their coordinates, the wider archive sits below in the unlit register and in superset
+// nouns. No band names a certification tier, and no row wears a badge.
+//
+// ── DATA ─────────────────────────────────────────────────────────────────────────────────────
+// Every section renders from a live production primitive, composed in `./-front-door-data` (a
+// testable pure function). A PUBLIC route, so it stops at loader + `useLoaderData` with no
+// react-query (AGENTS.md): nothing here is live, and nothing paginates.
 
-// The home feed's composition lives in `./-home-data` (a testable pure function); the serverFn is a
-// thin wrapper so the loader keeps its one-primitive shape.
-const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
-  const { loadHomeData } = await import("./-home-data");
-  return loadHomeData();
+const fetchFrontDoorData = createServerFn({ method: "GET" }).handler(async () => {
+  const { loadFrontDoorData } = await import("./-front-door-data");
+
+  return loadFrontDoorData();
 });
+
+/**
+ * The one search param `/` has ever carried: the Stories dialog's open Log ID, from the days when
+ * the archive feed lived here. The viewer moved to `/findings` with the feed it steps through, so
+ * this is now a REDIRECT ONLY — see `beforeLoad`.
+ */
+type FrontDoorSearch = { story?: string };
+
+/**
+ * The lead cover, at the exact rung the lead renders, for the `head()` preload. Returning the same
+ * string the element asks for is what makes the preload a hit rather than a second download.
+ */
+function leadCoverUrl(albumImageUrl: string | undefined): string | undefined {
+  return albumCoverAtSize(albumImageUrl, "large");
+}
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/")({
-  validateSearch: (search: Record<string, unknown>): HomeSearch => ({
+  validateSearch: (search: Record<string, unknown>): FrontDoorSearch => ({
     story: typeof search.story === "string" && search.story.length > 0 ? search.story : undefined,
   }),
-  loader: () => fetchHomeData(),
-  // Opening/closing the Stories dialog is a search-param change on this same
-  // route; the feed's loader must not re-run per open (a reload would remount
-  // the list and lose the scroll the dialog is supposed to preserve).
-  shouldReload: false,
+  // `/?story=<logId>` was the masked URL the Stories viewer wrote while it lived on this route; the
+  // mask DISPLAYED `/log/<logId>`, which is where a shared link already pointed. Anyone holding the
+  // raw form gets a permanent redirect to that same standalone page rather than a front door with a
+  // dialog it no longer owns. Bare `/` is untouched and still 200s.
+  beforeLoad: ({ search }) => {
+    if (search.story) {
+      throw redirect({ params: { logId: search.story }, statusCode: 301, to: "/log/$logId" });
+    }
+  },
+  loader: () => fetchFrontDoorData(),
   head: ({ loaderData }) => ({
-    // The self-referencing canonical lives on each leaf: TanStack merges the
-    // root's and the leaf's `links` without deduping by rel, so a canonical in
-    // __root.tsx would emit a duplicate on every other page.
+    // The self-referencing canonical lives on each leaf: TanStack merges the root's and the leaf's
+    // `links` without deduping by rel, so a canonical in __root.tsx would emit a duplicate on every
+    // other page.
     links: [
       { href: `${siteUrl}/`, rel: "canonical" },
-      // Preload the cover — the homepage LCP element. Without this the browser
-      // discovers it at Medium priority mid-parse; preloading at high priority
-      // lets the fetch start immediately. The WebP variant is preloaded to match
-      // the <picture> the page actually renders (the PNG stays the og: fallback).
-      {
-        as: "image",
-        fetchPriority: "high",
-        href: "/fluncle-cover.webp",
-        rel: "preload",
-        type: "image/webp",
-      },
+      // Preload the LEAD's cover — the front door's largest contentful element. Without this the
+      // browser discovers it at Medium priority mid-parse; preloading at high priority lets the
+      // fetch start immediately. The URL is the exact rung the element renders, so the two share
+      // one entry in the cache rather than racing for two.
+      ...(loaderData?.lead?.albumImageUrl
+        ? [
+            {
+              as: "image",
+              fetchPriority: "high" as const,
+              href: leadCoverUrl(loaderData.lead.albumImageUrl),
+              rel: "preload",
+            },
+          ]
+        : []),
     ],
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
-    // payload before it reaches the inline <script>'s `children` (rendered raw
-    // via dangerouslySetInnerHTML), so untrusted Spotify titles/artists/album
-    // can't break out of the <script> (stored-XSS sink, security review).
+    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload before it
+    // reaches the inline <script>'s `children` (rendered raw via dangerouslySetInnerHTML), so
+    // untrusted Spotify titles/artists can't break out of the <script> (stored-XSS sink, security
+    // review).
     scripts: [
-      // The site-level entity block (no SearchAction: there is no search results
-      // page, and schema must mirror what the page actually does). It carries the WebSite's own
-      // `@id` and is `publisher`ed BY the ONE canonical Fluncle node (`@id`, declared on /about) —
-      // the home page (highest authority, hit first) points at the same entity everything else does.
+      // The site-level entity block (no SearchAction: search is a dialog over the archive, not a
+      // results page with a URL, and schema must mirror what the page actually does). It carries
+      // the WebSite's own `@id` and is `publisher`ed BY the ONE canonical Fluncle node (`@id`,
+      // declared on /about) — the front door (highest authority, hit first) points at the same
+      // entity everything else does.
       jsonLdScript({
         "@context": "https://schema.org",
         "@id": fluncleWebsiteId,
@@ -85,157 +125,56 @@ export const Route = createFileRoute("/")({
         publisher: { "@id": fluncleEntityId },
         url: `${siteUrl}/`,
       }),
+      // What this page ACTUALLY shows: the findings it renders, as an ItemList riding a
+      // CollectionPage (the `/fresh` hub shape). It describes the lead plus the band under it and
+      // nothing else — never the whole archive, which would claim more than the page carries. The
+      // full playlist of every finding is `MusicPlaylist` on `/findings`, where the feed lives.
       jsonLdScript({
         "@context": "https://schema.org",
-        "@type": "MusicPlaylist",
-        // The mix is Fluncle's — reference the ONE canonical node rather than re-declaring the
-        // full identity graph here (the `sameAs` block lives once, on that node at /about).
-        creator: { "@id": fluncleEntityId },
+        "@type": "CollectionPage",
         description: fluncleDescription,
-        genre: "Drum and Bass",
-        image: `${siteUrl}/fluncle-cover.png`,
-        name: "Fluncle's Findings",
-        numTracks: loaderData?.totalCount,
-        track: loaderData?.tracks.flatMap((track) => {
-          if (track.type === "mixtape") {
-            return [];
-          }
-
-          return [
-            {
+        mainEntity: {
+          "@type": "ItemList",
+          itemListElement: frontDoorFindings(loaderData).map((finding, index) => ({
+            "@type": "ListItem",
+            item: {
               "@type": "MusicRecording",
-              byArtist: track.artists.map((artist) => ({
-                "@type": "MusicGroup",
-                name: artist,
-              })),
-              ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
-              name: track.title,
-              url: track.spotifyUrl,
+              byArtist: finding.artists.map((name) => ({ "@type": "MusicGroup", name })),
+              genre: "Drum and Bass",
+              name: finding.title,
+              // Only a finding is ever given a fluncle.com URL, so the structured data can never
+              // claim a certification that does not exist.
+              ...(finding.logId ? { url: logPageUrl(finding.logId) } : {}),
             },
-          ];
-        }),
+            position: index + 1,
+          })),
+          numberOfItems: frontDoorFindings(loaderData).length,
+        },
+        name: "Fluncle",
         url: `${siteUrl}/`,
       }),
     ],
   }),
-  component: HomePage,
+  component: FrontDoorPage,
 });
 
-// The cover's inner art, shared by both story-link targets below. Static, so
-// it's built once at module load rather than rebuilt on every render.
-const coverArt = (
-  <>
-    <span className="cover-story-gap">
-      {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
-      <picture>
-        <source srcSet="/fluncle-cover.webp" type="image/webp" />
-        <img
-          alt="Fluncle cover art"
-          className="aspect-square w-full object-cover"
-          // The LCP element: fetch it at high priority and never lazy-load it.
-          fetchPriority="high"
-          height="512"
-          loading="eager"
-          src="/fluncle-cover.png"
-          width="512"
-        />
-      </picture>
-    </span>
-    <span aria-hidden="true" className="cover-story-badge">
-      <PlayIcon className="size-3.5" weight="fill" />
-    </span>
-  </>
-);
+/** The shape the structured data needs off a finding — the loader's rows satisfy it structurally. */
+type SchemaFinding = { artists: string[]; logId?: string; title: string };
 
-function HomePage() {
-  const initialPage = Route.useLoaderData();
-  // The Galaxies launch gate is already resolved ONCE per request by the root loader (the nav
-  // and the colophon link the lens through it). Read that value rather than asking the database
-  // the same question a second time inside the home loader — same gate, one round-trip.
-  const { galaxiesLive } = useLoaderData({ from: "__root__" });
-  const { story } = Route.useSearch();
-  const navigate = useNavigate();
-  const router = useRouter();
-  const canGoBack = useCanGoBack();
+/** The findings the page renders, lead first — the exact set the ItemList above describes. */
+function frontDoorFindings(
+  loaderData: { findings: SchemaFinding[]; lead?: SchemaFinding } | undefined,
+): SchemaFinding[] {
+  if (!loaderData) {
+    return [];
+  }
 
-  // The feed reads through react-query so "Load more" pages stay cached. Seeded
-  // with the SSR loader's first page (instant first paint, no fetch on mount).
-  // Focus-refetch is intentionally OFF: the archive barely changes minute to
-  // minute, and refetching every loaded page on tab-back would waste bandwidth
-  // and risk a scroll jump for someone reading deep in the list.
-  //
-  // `staleTime` is what makes the SEED actually count. Without it the seeded page
-  // is stale the instant it hydrates, so every home load fired a `/api/v1/tracks`
-  // refetch for the exact ten rows SSR had just delivered — a guaranteed duplicate
-  // round-trip on the site's front door. A minute of trust matches the pill below
-  // it and the pace the archive actually moves at; a real navigation back to `/`
-  // re-runs the loader anyway.
-  const {
-    data,
-    error: loadError,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery({
-    getNextPageParam: (lastPage) => lastPage.nextCursor,
-    // The loader's first page carries an extra newestStoryLogId (read separately
-    // below); narrow it to the plain feed page the queryFn returns.
-    initialData: { pageParams: [undefined], pages: [initialPage as TracksResponse] },
-    initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => fetchTracks({ cursor: pageParam, limit: HOME_PAGE_SIZE }),
-    queryKey: ["home-feed"],
-    refetchOnWindowFocus: false,
-    staleTime: 60_000,
-  });
+  return [...(loaderData.lead ? [loaderData.lead] : []), ...loaderData.findings];
+}
 
-  const tracks = data.pages.flatMap((page) => page.tracks);
-  // Read the archive total off PAGE 1 (`pages[0]`, the always-cursor-less first page),
-  // never the newest fetched page. Only page 1 runs the `count(*)`; cursor pages skip it
-  // (see `list_findings`) and report their own row count, which would collapse the
-  // descending track-number base below. Page 1 is stable across the whole scroll — the
-  // total is invariant — so the numbering base stays anchored to the real total.
-  const totalCount = data.pages[0]?.totalCount ?? initialPage.totalCount;
-  // The last consumed cursor, for the sr-only progress note below.
-  const cursor = data.pageParams.at(-1) as string | undefined;
-  const error = loadError
-    ? loadError instanceof Error
-      ? loadError.message
-      : String(loadError)
-    : undefined;
-
-  // Close the dialog by going BACK to the feed's history entry: a fresh
-  // navigate({ to: "/" }) would mint a new entry and scroll the feed to top.
-  // The fallback covers a direct /?story= load where there is nothing behind.
-  const closeStory = useCallback(() => {
-    if (canGoBack) {
-      router.history.back();
-    } else {
-      void navigate({ replace: true, search: {}, to: "/" });
-    }
-  }, [canGoBack, navigate, router]);
-
-  // Per-flick URL sync: a masked REPLACE navigation (never a raw
-  // replaceState, which would wipe the mask's __tempLocation state and swap
-  // the screen to the standalone route). shouldReload: false on this route
-  // keeps the loader quiet, so the flick stays cheap.
-  const handleStoryChange = useCallback(
-    (logId: string) => {
-      void navigate({
-        mask: { params: { logId }, to: "/log/$logId", unmaskOnReload: true },
-        replace: true,
-        resetScroll: false,
-        search: { story: logId },
-        to: "/",
-      });
-    },
-    [navigate],
-  );
-
-  // The stories entry opens at the newest finding with footage — resolved on
-  // the server across the whole archive (above), not just this first page.
-  const newestStoryLogId = initialPage.newestStoryLogId;
-  // The live-set callout, SSR'd from the loader (offline almost always).
-  const live = initialPage.live;
+function FrontDoorPage() {
+  const { counts, findings, findingsTotal, lead, live, releaseWindowDays, releases } =
+    Route.useLoaderData();
 
   useEffect(() => {
     // The wordmark + Telegram invite Fluncle prints for anyone who opens devtools.
@@ -244,188 +183,67 @@ function HomePage() {
     registerWebMcpTools();
   }, []);
 
-  const loadMoreSentinelRef = useRef<HTMLLIElement | null>(null);
-
-  // Auto-fetch when the load-more row drifts near the viewport bottom. The row
-  // stays clickable as a manual fallback; the observer re-arms after each page
-  // settles, so a short first page keeps filling until the pane has overflow.
-  // After a fetch error, auto mode pauses until a manual click clears it, so a
-  // failing API isn't hammered in a retry loop.
-  useEffect(() => {
-    const sentinel = loadMoreSentinelRef.current;
-
-    if (!sentinel || !hasNextPage || isFetchingNextPage || error) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          void fetchNextPage();
-        }
-      },
-      {
-        root: sentinel.closest("[data-slot='scroll-area-viewport']"),
-        rootMargin: "240px",
-      },
-    );
-
-    observer.observe(sentinel);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [error, fetchNextPage, hasNextPage, isFetchingNextPage]);
-
-  const trackNumberBase = totalCount || tracks.length;
-
   return (
-    <TooltipProvider>
-      <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:flex lg:flex-col lg:p-8">
-        {/* The live-set callout — the one loud, ephemeral beat, above the plate.
-            Renders nothing unless Fluncle is on the decks (DESIGN.md "The Live
-            Exception"); it clears itself the moment the set ends. */}
-        <LiveBanner live={live} />
-        {/* A0: the page as ONE recovered logbook plate — a real masthead, the
-            cover and the list mounted flat on a single document (the silhouette
-            change; DESIGN.md). The plate sizes to its taller column: the feed
-            self-bounds to a viewport and scrolls within, the left column is its
-            natural height (no scroll). my-auto centres the plate when it fits
-            and lets the page scroll when the left column makes it taller. */}
-        <article className="home-plate mx-auto my-6 w-full max-w-7xl sm:my-8 lg:my-auto">
-          <header className="home-masthead">
-            <div>
-              <h1 className="home-nameplate">Fluncle's Findings</h1>
-              <p className="home-tagline">Drum & bass bangers from another dimension.</p>
-            </div>
-            {/* "Join the crew" moved into the global top bar (the crew slot), so it
-                reaches every public page instead of only home; the masthead keeps just
-                its nameplate and tagline. */}
-          </header>
-          <section className="grid gap-y-8 lg:min-h-0 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)] lg:gap-x-10">
-            <aside className="mx-auto flex w-full max-w-80 flex-col lg:mx-0 lg:max-w-none">
-              {/* The cover IS the stories entry: a breathing gold ring + play
-                  badge (the Instagram-story cue, Eclipse Gold only — One Sun).
-                  Opens the viewer at the newest finding with footage; when none
-                  has loaded yet it falls back to the full log, where they live. */}
-              {newestStoryLogId ? (
-                <Link
-                  aria-label="Open Fluncle stories"
-                  className="cover-story"
-                  mask={{
-                    params: { logId: newestStoryLogId },
-                    to: "/log/$logId",
-                    unmaskOnReload: true,
-                  }}
-                  search={{ story: newestStoryLogId }}
-                  to="/"
-                >
-                  {coverArt}
-                </Link>
-              ) : (
-                <Link aria-label="Open Fluncle stories" className="cover-story" to="/log">
-                  {coverArt}
-                </Link>
-              )}
-              {/* The link hub: actions, then the quiet links pushed to the
-                  bottom of the column. */}
-              <HomeLinkHub galaxiesLive={galaxiesLive} />
-            </aside>
+    <main className="fd-page">
+      {/* The live-set callout — the one loud, ephemeral beat. Renders nothing unless Fluncle is on
+          the decks (DESIGN.md's "The Live Exception"); it clears itself the moment the set ends. */}
+      <LiveBanner live={live} />
 
-            <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col lg:min-h-0">
-              <h2 className="sr-only" id="playlist-title">
-                Latest findings
-              </h2>
-              <div className="plate-field flex flex-1 flex-col border border-border rounded-md">
-                <div aria-hidden="true" className="playlist-header">
-                  <span>Log ID</span>
-                  <span aria-hidden="true" />
-                  <span>Track</span>
-                  <span aria-hidden="true" />
-                </div>
+      {/* ONE plate, long: the masthead and every band are printed FLAT on a single
+          recovered logbook document. Glass does not stack on glass (The One Pane Rule),
+          so no band carries a pane of its own. */}
+      <article className="fd-plate">
+        <header className="fd-masthead">
+          <h1 className="fd-nameplate">Fluncle&apos;s Findings</h1>
+          <p className="fd-standfirst">
+            Now and then a tune lands and my knees go before I do. That one gets logged, and it is
+            in here with everything else I brought back. Start wherever you like, fam.
+          </p>
+        </header>
 
-                {tracks.length === 0 && !error ? (
-                  <div className="empty-scanlines px-4 py-10 text-center text-muted-foreground">
-                    No findings logged yet. Quiet sector tonight.
-                  </div>
-                ) : undefined}
+        <FrontDoorSection id="fd-search" quietTitle title="Search the archive">
+          <FrontDoorSearch />
+        </FrontDoorSection>
 
-                {tracks.length === 0 && error ? (
-                  // The first page never arrived: surface it here instead of a
-                  // blank field. (Once any track has loaded, an error on a later
-                  // page is shown by the note below the field.)
-                  <div className="empty-scanlines px-4 py-10 text-center text-muted-foreground">
-                    <p>Couldn't reach the archive. The findings didn't make the trip back.</p>
-                    <p className="mt-1 text-destructive">{error}</p>
-                  </div>
-                ) : undefined}
+        {lead ? (
+          <FrontDoorSection id="fd-lead" title="What I'm on right now">
+            <FrontDoorLead lead={lead} />
+          </FrontDoorSection>
+        ) : undefined}
 
-                {tracks.length > 0 ? (
-                  // The feed sizes to its content but never taller than ~a viewport (max-height,
-                  // not a fixed height — so a short list doesn't leave empty padding below it),
-                  // scrolling internally past that. It therefore never grows the plate beyond a
-                  // viewport; the plate sizes to the taller column and the left column is simply
-                  // its natural height. On mobile the rows are wider than the screen, so it also
-                  // scrolls horizontally (see .track-row min-width).
-                  <ScrollArea className="max-h-[min(32rem,60dvh)] lg:max-h-[max(calc(100dvh-24rem),39rem)]">
-                    <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
-                      {tracks.map((track, index) => (
-                        <TrackRow
-                          key={track.type === "mixtape" ? (track.logId ?? track.id) : track.trackId}
-                          track={track}
-                          trackNumber={fallbackFindingNumber(tracks, index, trackNumberBase)}
-                        />
-                      ))}
-                      {hasNextPage ? (
-                        <li ref={loadMoreSentinelRef}>
-                          <button
-                            className="flex min-h-14 w-full cursor-pointer items-center justify-center gap-2 text-sm font-bold text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-default"
-                            disabled={isFetchingNextPage}
-                            onClick={() => void fetchNextPage()}
-                            type="button"
-                          >
-                            {isFetchingNextPage ? (
-                              <CircleNotchIcon
-                                aria-hidden="true"
-                                className="animate-spin"
-                                weight="bold"
-                              />
-                            ) : undefined}
-                            {isFetchingNextPage ? "Loading more tracks" : "Load more"}
-                          </button>
-                        </li>
-                      ) : undefined}
-                    </ol>
-                  </ScrollArea>
-                ) : undefined}
-              </div>
+        <FrontDoorSection
+          id="fd-findings"
+          intro="I rewound every one of these before I logged it. Freshest at the front, so take your pick, fam."
+          link={
+            findingsTotal > 0
+              ? {
+                  label: `All ${frontDoorCount(findingsTotal, "finding", "findings")}`,
+                  to: "/findings",
+                }
+              : { label: "The whole log", to: "/findings" }
+          }
+          title="Latest findings"
+        >
+          <FrontDoorFindings findings={findings} />
+        </FrontDoorSection>
 
-              {error && tracks.length > 0 ? (
-                <p className="mt-4 text-sm text-destructive">{error}</p>
-              ) : undefined}
+        <FrontDoorSection
+          id="fd-fresh"
+          intro={`Still warm off the press: the last ${releaseWindowDays} days of drum & bass. Get your ears on it early.`}
+          link={{ label: "All new releases", to: "/fresh" }}
+          title="Fresh"
+        >
+          <FrontDoorReleases releases={releases} windowDays={releaseWindowDays} />
+        </FrontDoorSection>
 
-              {cursor ? <span className="sr-only">Loaded through cursor {cursor}</span> : undefined}
-            </section>
-          </section>
-        </article>
-
-        <StoriesDialog
-          initialLogId={story}
-          onClose={closeStory}
-          onStoryChange={handleStoryChange}
-          open={Boolean(story)}
-        />
-      </main>
-    </TooltipProvider>
+        <FrontDoorSection
+          id="fd-browse"
+          intro="I dig through these crates most nights, hunting whatever makes my nose scrunch. They are open, have a rummage."
+          title="Dig through the crates"
+        >
+          <FrontDoorBrowse counts={counts} />
+        </FrontDoorSection>
+      </article>
+    </main>
   );
-}
-
-function fallbackFindingNumber(tracks: FeedItem[], index: number, trackNumberBase: number): number {
-  if (tracks[index]?.type === "mixtape") {
-    return trackNumberBase;
-  }
-
-  const findingsBefore = tracks.slice(0, index).filter((track) => track.type !== "mixtape").length;
-
-  return trackNumberBase - findingsBefore;
 }

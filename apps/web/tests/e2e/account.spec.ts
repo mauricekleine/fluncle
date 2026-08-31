@@ -67,7 +67,7 @@ test("a new account joins, saves a finding, sees it on /account, and loses it on
   // ── 2. HYDRATION ────────────────────────────────────────────────────────────
   // The auth form is a client-driven React island: the mode tabs only move once it
   // hydrates, and the whole journey below is worthless if a pre-hydration click
-  // silently no-ops. The gate is state-safe (the pattern from `home.spec.ts`): each
+  // silently no-ops. The gate is state-safe (the pattern from `findings.spec.ts`): each
   // attempt starts by clicking "Sign in", so every attempt reads "signup → click →
   // expect signin", and the first hydrated attempt passes. Signing in asks for
   // "Email or username", so the exact "Email" field is present ONLY in signup mode.
