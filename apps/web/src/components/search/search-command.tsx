@@ -76,10 +76,10 @@ import {
   type SearchHit,
   type SearchResponse,
   entityHref,
+  hitHref,
   searchArchiveApiPath,
   searchPagePath,
 } from "@/lib/search-results";
-import { hasTrackPageIdentity, trackPagePath } from "@/lib/track-page";
 import { cn } from "@/lib/utils";
 
 async function fetchSearch(q: string): Promise<SearchResponse> {
@@ -140,7 +140,7 @@ function TrackRow({
       <CommandShortcut className="search-row-tail">
         {hit.certified && hit.logId ? (
           <span className="search-row-coordinate">{hit.logId}</span>
-        ) : hasTrackPageIdentity(hit) ? (
+        ) : hitHref(hit)?.external === false ? (
           <CaretRightIcon aria-hidden="true" className="search-row-out" size={16} weight="bold" />
         ) : (
           <SpotifyIcon className="search-row-out" />
@@ -277,30 +277,30 @@ export function SearchDialog({
   const pickEntity = useCallback((entity: SearchEntity) => goTo(entityHref(entity)), [goTo]);
 
   /**
-   * A finding goes to its coordinate. A track with no coordinate goes to its own
-   * `/track/<trackId>` destination, which is where its record, its imprint, its tempo, and every
-   * service that carries it now live — a search result stays INSIDE the archive rather than
-   * ejecting the reader to a streaming tab mid-search. A row the destination would refuse (no
-   * title, no credit) keeps the old behaviour and opens Spotify.
+   * Where a picked row goes — resolved by the SHARED {@link hitHref}, the same function the
+   * `/search` page's rows link through, so the accelerator and the page cannot disagree about
+   * where a result leads. A finding goes to its coordinate; a track with no coordinate goes to
+   * its own `/track/<trackId>` destination, where its record, its imprint, its tempo and every
+   * service that carries it are gathered, so a result stays INSIDE the archive rather than
+   * ejecting the reader to a streaming tab mid-search. Only a row the destination refuses leaves
+   * the origin, and it opens in a new tab because it is off-site.
    */
   const pick = useCallback(
     (hit: SearchHit) => {
-      if (hit.certified && hit.logId) {
-        goTo(`/log/${hit.logId}`);
+      const destination = hitHref(hit);
 
+      if (!destination) {
         return;
       }
 
-      if (hasTrackPageIdentity(hit)) {
-        goTo(trackPagePath(hit.trackId));
-
-        return;
-      }
-
-      if (hit.spotifyUrl) {
+      if (destination.external) {
         close();
-        window.open(hit.spotifyUrl, "_blank", "noopener,noreferrer");
+        window.open(destination.href, "_blank", "noopener,noreferrer");
+
+        return;
       }
+
+      goTo(destination.href);
     },
     [close, goTo],
   );

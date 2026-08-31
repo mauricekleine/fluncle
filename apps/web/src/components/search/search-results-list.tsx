@@ -11,14 +11,15 @@
 //
 // ── THE UNLIT RULE (DESIGN.md) ───────────────────────────────────────────────────────────────
 // A finding is lit: it carries its coordinate in Oxanium and heats to Eclipse Gold on hover. A track
-// Fluncle never certified catches the Dust Veil instead, carries no coordinate, and links OUT to
-// Spotify, because there is no `/log` page for somewhere he has not been. The uncertified tier is
+// Fluncle never certified catches the Dust Veil instead, carries no coordinate, and links to its
+// own `/track/<trackId>` destination — there is still no `/log` page for somewhere he has not
+// been, and that destination is not one: it carries no coordinate. The uncertified tier is
 // never named: no heading, no badge, no noun. In a mixed list a heading may name the SUPERSET
 // ("Tracks" — true of every row under it); when the unlit rows are ALL there is, they stand bare,
 // because a heading over the only content would exist just to name the tier. The focus ring stays
 // Eclipse Gold either way: focus is an accessibility affordance, not a claim about the music.
 
-import { ArrowRightIcon, WaveformIcon } from "@phosphor-icons/react";
+import { ArrowRightIcon, CaretRightIcon, WaveformIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { SpotifyIcon } from "@/components/platform-icons";
@@ -56,9 +57,15 @@ function Cover({ src }: { src?: string }): ReactNode {
  * One track row. The `certified` bit decides everything visible about it, and nothing is labelled —
  * the difference is the register, not a badge.
  *
- * A finding is an internal `Link` to its coordinate. An uncertified track is a plain anchor OUT, with
- * `rel="noopener noreferrer"` because it leaves the origin. A row with neither destination (no
- * coordinate, no Spotify anchor yet) renders as text rather than a dead link.
+ * A finding is an internal `Link` to its coordinate; an uncertified track is an internal `Link` to
+ * its own destination. Only a row the destination would refuse leaves the origin, as a plain anchor
+ * with `rel="noopener noreferrer"`; a row with no destination at all renders as text rather than a
+ * dead link.
+ *
+ * THE TRAILING MARK NAMES WHERE THE ROW GOES. A coordinate for a finding, the Phosphor caret for a
+ * row that opens a page here, and Spotify's own mark only where the row actually opens Spotify — a
+ * platform's identity is its own (DESIGN.md §5), so a brand mark over a fluncle.com destination
+ * would promise a tab that never opens.
  */
 function TrackRow({ hit }: { hit: SearchHit }): ReactNode {
   const destination = hitHref(hit);
@@ -73,6 +80,8 @@ function TrackRow({ hit }: { hit: SearchHit }): ReactNode {
       <span className="search-row-tail">
         {hit.certified && hit.logId ? (
           <span className="search-row-coordinate">{hit.logId}</span>
+        ) : destination?.external === false ? (
+          <CaretRightIcon aria-hidden="true" className="search-row-out" size={16} weight="bold" />
         ) : (
           <SpotifyIcon className="search-row-out" />
         )}

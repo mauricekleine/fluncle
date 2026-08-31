@@ -69,23 +69,31 @@ describe("searchPagePath — the persistent surface's URL", () => {
 
 describe("the destinations", () => {
   // THE CATALOGUE RULE on the wire: a finding goes to its coordinate, a track Fluncle never
-  // certified goes OUT, and neither is labelled — the difference is the destination and the
-  // register, never a badge.
-  it("sends a finding to its coordinate and an uncertified track out to Spotify", () => {
+  // certified goes to its own destination, and neither is labelled — the difference is the
+  // destination and the register, never a badge.
+  it("sends a finding to its coordinate and an uncertified track to its own destination", () => {
     expect(hitHref(hit({ certified: true, logId: "004.7.2I" }))).toEqual({
       external: false,
       href: "/log/004.7.2I",
     });
     expect(hitHref(hit({ spotifyUrl: "https://open.spotify.com/track/x" }))).toEqual({
-      external: true,
-      href: "https://open.spotify.com/track/x",
+      external: false,
+      href: "/track/t1",
     });
   });
 
-  // A row with no coordinate AND no anchor is not a destination; a renderer must be able to tell,
+  // The off-site anchor is the fallback for a row the destination REFUSES — one the archive cannot
+  // name — not the default for every uncertified row.
+  it("falls back to the off-site anchor for a row the destination would refuse", () => {
+    expect(
+      hitHref(hit({ artists: [], spotifyUrl: "https://open.spotify.com/track/x", title: "" })),
+    ).toEqual({ external: true, href: "https://open.spotify.com/track/x" });
+  });
+
+  // A row with no destination AND no anchor is not a destination; a renderer must be able to tell,
   // so it leaves the row as text rather than painting a dead link.
   it("declines a row that has nowhere to go", () => {
-    expect(hitHref(hit({}))).toBeUndefined();
+    expect(hitHref(hit({ artists: [], title: "" }))).toBeUndefined();
   });
 
   it("takes an entity to its own page, and to its explicit url where the default is wrong", () => {
