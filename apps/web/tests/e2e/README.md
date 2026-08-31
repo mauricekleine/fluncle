@@ -60,7 +60,7 @@ bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts
 FRONT_DOOR_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts   # elsewhere
 ```
 
-They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. `.github/workflows/e2e.yml` uploads `front-door-scroll` on every run, green or red, so each commit's evidence is retained for 30 days and downloadable from its own check without a byte entering history.
+They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. `.github/workflows/e2e.yml` uploads `front-door-scroll` on every run, green or red, so each commit's evidence is retained for 90 days (GitHub's ceiling on a public repo) and downloadable from its own check without a byte entering history.
 
 ## Adding an env var
 
