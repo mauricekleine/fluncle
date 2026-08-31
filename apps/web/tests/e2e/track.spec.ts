@@ -116,7 +116,21 @@ test("the destination SSRs every fact the archive holds, and names no tier", asy
     expect(raw.toLowerCase(), `the SSR HTML must not contain "${word}"`).not.toContain(word);
   }
 
-  // (3) The rendered page agrees with the SSR, and hydration is clean.
+  // (3) THE DESCRIPTION IS BUDGETED AND CLAIMS NOTHING. Public copy uses "the archive" for the set
+  // Fluncle CERTIFIED, so the one string a stranger reads first must not put this page inside it —
+  // and it must fit the snippet a search engine actually prints rather than being truncated to
+  // whichever clause survives.
+  const description = /<meta content="([^"]*)" name="description"\/>/.exec(raw)?.[1] ?? "";
+
+  expect(description, "the page carries a description").not.toBe("");
+  expect(
+    description.length,
+    `the description fits the SERP budget: ${description}`,
+  ).toBeLessThanOrEqual(160);
+  expect(description.toLowerCase()).not.toContain("archive");
+  expect(description).toContain(SEEDED_DESTINATION_TRACK.title);
+
+  // (4) The rendered page agrees with the SSR, and hydration is clean.
   await page.goto(DESTINATION_PATH, { waitUntil: "networkidle" });
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(SEEDED_DESTINATION_TRACK.title);
   await expect(page.getByRole("link", { name: "Listen on Spotify" })).toBeVisible();

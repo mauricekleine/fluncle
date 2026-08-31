@@ -1,7 +1,7 @@
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { FrontDoorSection } from "@/components/front-door/section";
-import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { TrackNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import {
   SonicNeighbours,
@@ -50,6 +50,13 @@ const fetchTrack = createServerFn({ method: "GET" })
     return resolveTrackPageData(trackId);
   });
 
+/**
+ * The `<meta name="description">` budget. Search engines flag and truncate past roughly this, and
+ * `bioMetaDescription` already trims authored prose to 160 — this is the COMPOSED-string twin of
+ * that cap, applied to the one optional clause rather than by clipping mid-sentence.
+ */
+const META_DESCRIPTION_BUDGET = 155;
+
 function trackHead(loaderData: TrackPageData | undefined) {
   if (loaderData?.status !== "found") {
     return {};
@@ -64,10 +71,19 @@ function trackHead(loaderData: TrackPageData | undefined) {
   // Honestly-plain third-person for the machine-facing strings (VOICE.md's Narrator rule): the
   // page is DESCRIBED here, never spoken, and no faked warmth is injected.
   const title = `${line} · Fluncle`;
-  // The description is built ONLY from facts this row actually carries, in the order a reader
-  // needs them, and it never claims a certification: no Found date, no coordinate, nothing that
-  // says Fluncle stands behind the recording. It also never names the tier, so "catalogue" cannot
-  // leak into a SERP snippet.
+  // ── THE DESCRIPTION ─────────────────────────────────────────────────────────────────────────
+  // Built ONLY from facts this row actually carries, in the order a reader needs them, and it
+  // claims NOTHING about certification: no Found date, no coordinate, and not the word "archive"
+  // either — public copy uses "the archive" for the set Fluncle certified (/log's footer sends you
+  // "Back to the archive" at /findings; /about says every track in it is one he heard in full and
+  // certified), so putting this page inside it would be the exact claim the page exists not to
+  // make. It never names the tier either, so nothing about the register can leak into a snippet.
+  //
+  // IT IS BUDGETED, not merely short. Search engines truncate around 155–160, and a long
+  // `Artist — Title` credit alone can eat half of that, so the FACTS sentence is built first and
+  // the closing clause is appended only when the result still fits. A title, a year, a label and a
+  // tempo is already a complete, honest snippet; the clause that would be cut off is dropped
+  // instead of shipped half-rendered.
   const year = track.releaseDate?.slice(0, 4);
   const releaseClause = [
     year === undefined ? undefined : `a ${year} drum & bass release`,
@@ -83,13 +99,14 @@ function trackHead(loaderData: TrackPageData | undefined) {
         : track.key
           ? `in ${track.key}`
           : undefined;
-  const description = [
+  const facts = [
     releaseClause ? `${line}, ${releaseClause}.` : `${line}, a drum & bass track.`,
-    tempoClause ? `${tempoClause}.` : undefined,
-    "In Fluncle's archive, with where to hear it and what sits close to it in sound.",
+    tempoClause === undefined ? undefined : `${tempoClause}.`,
   ]
     .filter((part) => part !== undefined)
     .join(" ");
+  const withTail = `${facts} Where to hear it, and the tracks closest to it in sound.`;
+  const description = withTail.length <= META_DESCRIPTION_BUDGET ? withTail : facts;
   const imageUrl = albumCoverAtSize(track.albumImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
   // THE LEAD IMAGE — the cover in the masthead, this page's LCP candidate, preloaded at the exact
   // rung the masthead asks for so it is a cache hit rather than a second fetch (the /album and
@@ -186,7 +203,7 @@ export const Route = createFileRoute("/track/$trackId")({
   },
   head: ({ loaderData }: { loaderData?: TrackPageData }) => trackHead(loaderData),
   component: TrackPage,
-  notFoundComponent: StoryNotFoundState,
+  notFoundComponent: TrackNotFoundState,
 });
 
 function TrackPage() {

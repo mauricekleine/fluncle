@@ -3120,7 +3120,7 @@ a.catalogue-letter:focus-visible {
 }
 
 /* A finding's title heats to Eclipse Glow on hover/focus (it links to its log page); a catalogue
-   row's title is plain text and never lights. */
+   row's title links to its own destination and heats to cream, never gold. */
 .tracks-hub-row-lit .tracks-hub-row-title {
   color: var(--starlight-cream);
   font-weight: 500;
@@ -3130,9 +3130,22 @@ a.catalogue-letter:focus-visible {
   text-decoration: none;
 }
 
-.tracks-hub-row-title-link:hover,
-.tracks-hub-row-title-link:focus-visible {
+/* THE HEAT IS SCOPED TO THE LIT REGISTER, and the scoping is the Unlit Rule rather than a
+   nicety. Both registers' titles are links now — a finding's to its coordinate, an uncertified
+   row's to its own destination — so an unscoped rule would light a catalogue title Eclipse Gold
+   on hover, which is exactly the confusion the rule exists to prevent (a hovered unlit row
+   reading as a focused one, and gold implying Fluncle stands behind the row). The unlit title
+   takes the cream heat its two siblings already use (`.unlit-link:hover`,
+   `.fresh-row-unlit … .fresh-row-title`); only the focus ring below stays gold in both, because
+   focus must be legible and consistent (WCAG). */
+.tracks-hub-row-lit .tracks-hub-row-title-link:hover,
+.tracks-hub-row-lit .tracks-hub-row-title-link:focus-visible {
   color: var(--eclipse-glow);
+}
+
+.tracks-hub-row-unlit .tracks-hub-row-title-link:hover,
+.tracks-hub-row-unlit .tracks-hub-row-title-link:focus-visible {
+  color: var(--starlight-cream);
 }
 
 .tracks-hub-row-title-link:focus-visible {
@@ -7567,6 +7580,10 @@ a.catalogue-letter:focus-visible {
   border-radius: var(--rounded-sm);
   display: inline-flex;
   flex: none;
+  /* The padding IS the tap target: a 0.9rem mark alone is a ~14px hit area on a phone, and this
+     control now sits beside another one. The same padding `.unlit-out` carries, for the same
+     reason. */
+  padding: 0.55rem 0.5rem;
 }
 
 .fresh-row-out:hover .fresh-row-mark {
@@ -8493,9 +8510,13 @@ a.catalogue-letter:focus-visible {
    section grammar wholesale — this block adds only the two things that shape is missing, a
    cover-led masthead and the neighbour list. */
 
+/* A step off the documented scale, never a zero and never an invented number (DESIGN.md §5).
+   `.log-plate`'s own 1.9rem is the rhythm of a page whose bands are long; this page's first three
+   bands are a masthead, a short field list, and a row of controls that read as one block, so they
+   take the next step down. */
 .track-plate {
   display: grid;
-  gap: 0;
+  gap: var(--space-md);
 }
 
 /* Cover-led, and the cover is a fixed lane rather than a fluid column so the title's measure does
@@ -8599,6 +8620,14 @@ a.catalogue-letter:focus-visible {
   font-size: 0.84rem;
   line-height: 1.3;
   overflow-wrap: anywhere;
+}
+
+/* The lit row's title sits in Starlight Cream AT REST, as it does on every other track-shaped
+   surface (`.tracks-hub-row-lit`, `.fresh-row-lit`). That is ink, not gold: it costs nothing
+   against the One Sun budget and it is the third thing — beside the cover and the coordinate —
+   holding the two registers apart before anyone hovers anything. */
+.track-neighbour-lit .track-neighbour-line {
+  color: var(--starlight-cream);
 }
 
 .track-neighbour-caret {

@@ -300,8 +300,10 @@ export const tracks = sqliteTable(
     // Beatport's terms prohibit using site content, metadata included, for text/data mining or for
     // training or feeding AI. This column and its `*_verified_at` stamp are therefore TERMINAL: a
     // URL Fluncle points a reader at, and a date. They must NEVER enter the FTS5 index, the LLM
-    // search tier, an embedding, or any derived corpus, and nothing but the identity envelope and
-    // the /identity page may read them. The rail is also enforced by what is NOT here: the resolver
+    // search tier, an embedding, or any derived corpus. The readers are exactly the surfaces that
+    // RENDER the link as a link and nothing more: the identity envelope, the /identity page, and
+    // the /track/<trackId> destination's outbound band (where it reads "Buy on Beatport", because
+    // it opens a checkout). The rail is also enforced by what is NOT here: the resolver
     // reads Beatport's key, BPM, genre, and length off the same page object and deliberately keeps
     // NONE of them — the ISRC is compared in memory and dropped. Fluncle's own key/BPM come from
     // his own audio analysis and stay that way. Convenience is not a licence.

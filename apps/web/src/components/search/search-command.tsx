@@ -35,6 +35,7 @@ import {
 } from "@fluncle/ui/components/command";
 import {
   ArrowRightIcon,
+  CaretRightIcon,
   MagnifyingGlassIcon,
   SparkleIcon,
   WaveformIcon,
@@ -193,9 +194,16 @@ function Cover({ hit }: { hit: SearchHit }): ReactNode {
 }
 
 /**
- * One track row. The `certified` bit decides everything visible about it: a finding carries
- * its coordinate and lights gold; an uncertified track carries a Spotify mark and stays cold.
- * Neither is labelled — the difference is the register, not a badge.
+ * One track row. The `certified` bit decides everything visible about it: a finding carries its
+ * coordinate and lights gold; an uncertified track stays cold. Neither is labelled — the
+ * difference is the register, not a badge.
+ *
+ * THE TRAILING MARK NAMES WHERE THE ROW GOES, and it has to, because the two are no longer the
+ * same place. A row with enough identity now opens its own `/track/<trackId>` destination, so it
+ * carries the Phosphor caret every other in-app row uses; only the fallback rows that still open
+ * Spotify carry Spotify's own mark. A platform's identity is its own (DESIGN.md §5,
+ * Iconography): a brand mark standing over a fluncle.com destination promises a tab that never
+ * opens, which is the mirror of the rule that bans a Phosphor glyph as a brand mark.
  */
 function TrackRow({
   hit,
@@ -222,6 +230,8 @@ function TrackRow({
       <CommandShortcut className="search-row-tail">
         {hit.certified && hit.logId ? (
           <span className="search-row-coordinate">{hit.logId}</span>
+        ) : hasTrackPageIdentity(hit) ? (
+          <CaretRightIcon aria-hidden="true" className="search-row-out" size={16} weight="bold" />
         ) : (
           <SpotifyIcon className="search-row-out" />
         )}

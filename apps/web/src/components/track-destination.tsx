@@ -42,14 +42,18 @@ import {
 } from "@/lib/server/track-page";
 
 /**
- * The outbound controls, one per service the archive actually stores a link for. The labels are
- * the RATIFIED ones `/log` already uses ("Listen on Spotify", "Listen on Apple Music", "Watch on
- * YouTube") — one action, one label, across every surface (VOICE.md's Chrome Rule). Nothing here
- * is composed from a search term: a link is stored and exact, or it is absent.
+ * The outbound controls, one per service the archive actually stores a link for. Every label is the
+ * RATIFIED one the archive already uses for that action — `/log`'s "Listen on Spotify" / "Listen on
+ * Apple Music" / "Watch on YouTube", and `/identity`'s "Listen on Deezer" / "Buy on Beatport" — so
+ * one action reads the same everywhere (VOICE.md's Chrome Rule). Each names what the link ACTUALLY
+ * does: "Watch" where it opens a video, "Buy" where it opens a checkout. Nothing here is composed
+ * from a search term: a link is stored and exact, or it is absent.
  */
 const LISTEN_META: Record<ListenDestination["kind"], { icon: SimpleIcon; label: string }> = {
   apple: { icon: siApplemusic, label: "Listen on Apple Music" },
-  beatport: { icon: siBeatport, label: "Listen on Beatport" },
+  // "Buy", not "Listen" — Beatport is a STORE, not a player, and the label names what the link
+  // actually does. The ratified string is `identity-states.tsx`'s (one action, one label).
+  beatport: { icon: siBeatport, label: "Buy on Beatport" },
   deezer: { icon: siDeezer, label: "Listen on Deezer" },
   spotify: { icon: siSpotify, label: "Listen on Spotify" },
   youtube: { icon: siYoutube, label: "Watch on YouTube" },
@@ -95,7 +99,7 @@ export function TrackListenBand({ track }: { track: TrackDestination }) {
   return (
     <div className="log-actions">
       {track.previewable ? <TrackPreviewButton trackId={track.trackId} /> : undefined}
-      {track.listen.map((destination, index) => {
+      {track.listen.map((destination) => {
         const meta = LISTEN_META[destination.kind];
 
         return (
@@ -107,12 +111,13 @@ export function TrackListenBand({ track }: { track: TrackDestination }) {
           // as a button and answer to Space rather than Enter. The whole errand of this band is
           // "leave here and go hear it", and that is a link.
           <a
-            className={cn(
-              buttonVariants({
-                size: "lg",
-                variant: index === 0 && !track.previewable ? "default" : "outline",
-              }),
-            )}
+            // EVERY control on this band is `outline`, deliberately. `default` is a solid
+            // Eclipse Gold fill, and the certification light at its loudest must never land on a
+            // recording Fluncle has not ruled on — least of all decided by whether a preview clip
+            // happens to exist, which would make the same page gold or not gold on a data gap.
+            // Outline still ignites on hover (the Gold Veil and the Eclipse-Glow ring), so the
+            // Ignition Rule is satisfied without spending the One Sun budget here.
+            className={cn(buttonVariants({ size: "lg", variant: "outline" }))}
             href={destination.href}
             key={destination.kind}
             rel="noreferrer"
