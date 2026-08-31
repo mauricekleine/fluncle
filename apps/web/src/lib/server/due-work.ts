@@ -75,6 +75,9 @@ export type DueWorkRepairDefinition<WorkKind extends string> = {
   project: (
     marker: DueWorkRow<WorkKind>,
   ) => Promise<DueWorkProjection<WorkKind> | null> | DueWorkProjection<WorkKind> | null;
+  projectMany?: (
+    markers: readonly DueWorkRow<WorkKind>[],
+  ) => Promise<readonly (DueWorkProjection<WorkKind> | null)[]>;
   subjectType: DueWorkSubjectType;
   workKind: WorkKind;
 };
@@ -992,30 +995,50 @@ export async function repairDueWorkChunk<WorkKind extends string>(
   const markers = dueWorkRows<WorkKind>(result);
   const hasMore = markers.length > limit;
   const page = markers.slice(0, limit);
+  const projections: (DueWorkProjection<WorkKind> | null)[] = [];
+  if (definition.projectMany === undefined) {
+    for (const marker of page) {
+      projections.push(await definition.project(marker));
+    }
+  } else {
+    projections.push(...(await definition.projectMany(page)));
+    if (projections.length !== page.length) {
+      throw new Error("due-work bulk repair must return one projection result per marker");
+    }
+  }
+
   let deferred = 0;
   let repaired = 0;
-
-  for (const marker of page) {
-    const projection = await definition.project(marker);
+  const writes = page.map((marker, index) => {
+    const projection = projections[index] ?? null;
     const updatedAt = nowIso(options.now);
-    const write =
-      projection === null
-        ? {
-            args: [marker.workKind, marker.subjectType, marker.subjectId, marker.sourceVersion],
-            sql: `delete from due_work
+    return projection === null
+      ? {
+          args: [marker.workKind, marker.subjectType, marker.subjectId, marker.sourceVersion],
+          sql: `delete from due_work
               where work_kind = ? and subject_type = ? and subject_id = ?
                 and state = 'repair' and source_version = ?
               returning subject_id`,
-          }
-        : conditionalRepairProjectionStatement(projection, marker, updatedAt);
+        }
+      : conditionalRepairProjectionStatement(projection, marker, updatedAt);
+  });
+
+  // Keep each hosted transaction comfortably inside the established 250-statement envelope while
+  // collapsing the former per-marker read/write round trips. Every write retains its source-version
+  // guard, and each transaction advances the audit fence after its guarded repairs.
+  const writeBatchSize = 250;
+  for (let index = 0; index < writes.length; index += writeBatchSize) {
+    const chunk = writes.slice(index, index + writeBatchSize);
     const results = await client.batch(
-      [write, advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY)],
+      [...chunk, advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY)],
       "write",
     );
-    if ((results[0]?.rows.length ?? 0) > 0) {
-      repaired += 1;
-    } else {
-      deferred += 1;
+    for (const writeResult of results.slice(0, chunk.length)) {
+      if (writeResult.rows.length > 0) {
+        repaired += 1;
+      } else {
+        deferred += 1;
+      }
     }
   }
 

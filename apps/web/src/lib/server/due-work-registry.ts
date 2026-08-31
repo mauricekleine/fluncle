@@ -192,6 +192,23 @@ export async function readTrackDueWorkSource(
   return row === undefined ? undefined : trackSource(row);
 }
 
+async function readTrackDueWorkSources(
+  client: DueWorkClient,
+  trackIds: readonly string[],
+): Promise<Map<string, TrackDueWorkSource>> {
+  if (trackIds.length === 0) {
+    return new Map();
+  }
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const result = await client.execute({
+    args: [...trackIds],
+    sql: `${TRACK_SOURCE_SELECT} where t.track_id in (${placeholders})`,
+  });
+  return new Map(
+    (result.rows as TrackSourceRow[]).map(trackSource).map((source) => [source.trackId, source]),
+  );
+}
+
 type TrackWorkInventoryEntry = (typeof DUE_WORK_TRACK_WORK_KIND_INVENTORY)[number];
 
 function projectTrackSource(
@@ -476,6 +493,10 @@ type EntityRegistrySource<Kind extends DueWorkEntityKind> = DueWorkRebuildSource
   value: DueWorkSourceByKind[Kind];
 };
 type EntitySourceReader<Kind extends DueWorkEntityKind> = {
+  readMany: (
+    client: DueWorkClient,
+    subjectIds: readonly string[],
+  ) => Promise<EntityRegistrySource<Kind>[]>;
   readOne: (
     client: DueWorkClient,
     subjectId: string,
@@ -522,6 +543,17 @@ function findingReader<Kind extends Extract<DueWorkEntityKind, `finding.${string
     );
   };
   return {
+    async readMany(client, subjectIds) {
+      if (subjectIds.length === 0) {
+        return [];
+      }
+      const placeholders = subjectIds.map(() => "?").join(", ");
+      const result = await client.execute({
+        args: [...subjectIds],
+        sql: `${FINDING_SOURCE_SELECT} where track_id in (${placeholders})`,
+      });
+      return result.rows.map(wrap);
+    },
     async readOne(client, subjectId) {
       const result = await client.execute({
         args: [subjectId],
@@ -558,6 +590,17 @@ function primaryKeyReader<Kind extends DueWorkEntityKind>(
   wrap: (row: Row) => EntityRegistrySource<Kind>,
 ): EntitySourceReader<Kind> {
   return {
+    async readMany(client, subjectIds) {
+      if (subjectIds.length === 0) {
+        return [];
+      }
+      const placeholders = subjectIds.map(() => "?").join(", ");
+      const result = await client.execute({
+        args: [...subjectIds],
+        sql: `${select} where ${repairColumn} in (${placeholders})`,
+      });
+      return result.rows.map(wrap);
+    },
     async readOne(client, subjectId) {
       const result = await client.execute({
         args: [subjectId],
@@ -654,6 +697,19 @@ function entityDefinition<Kind extends DueWorkEntityKind>(
         return source === undefined
           ? null
           : repairProjection(project(source, markerContext(marker)));
+      },
+      projectMany: async (markers) => {
+        const sources = await config.readMany(
+          client,
+          markers.map((marker) => marker.subjectId),
+        );
+        const bySubjectId = new Map(sources.map((source) => [source.subjectId, source]));
+        return markers.map((marker) => {
+          const source = bySubjectId.get(marker.subjectId);
+          return source === undefined
+            ? null
+            : repairProjection(project(source, markerContext(marker)));
+        });
       },
       subjectType: config.subjectType,
       workKind: config.kind,
@@ -794,6 +850,18 @@ export function trackDueWorkRepairDefinitions(
         ? null
         : repairProjection(projectTrackSource(entry, source, markerContext(marker)));
     },
+    projectMany: async (markers) => {
+      const sources = await readTrackDueWorkSources(
+        client,
+        markers.map((marker) => marker.subjectId),
+      );
+      return markers.map((marker) => {
+        const source = sources.get(marker.subjectId);
+        return source === undefined
+          ? null
+          : repairProjection(projectTrackSource(entry, source, markerContext(marker)));
+      });
+    },
     subjectType: "track",
     workKind: entry.workKind,
   }));
@@ -808,6 +876,29 @@ export function vendorDueWorkRepairDefinitions(
       return source === undefined
         ? null
         : repairProjection(projectVendorSource(entry, source, markerContext(marker)));
+    },
+    projectMany: async (markers) => {
+      if (markers.length === 0) {
+        return [];
+      }
+      const trackIds = markers.map((marker) => marker.subjectId);
+      const placeholders = trackIds.map(() => "?").join(", ");
+      const result = await client.execute({
+        args: trackIds,
+        sql: `${VENDOR_SOURCE_SELECT} where t.track_id in (${placeholders})`,
+      });
+      const sources = new Map(
+        (await vendorSources(client, entry.workKind, result.rows)).map((source) => [
+          source.trackId,
+          source,
+        ]),
+      );
+      return markers.map((marker) => {
+        const source = sources.get(marker.subjectId);
+        return source === undefined
+          ? null
+          : repairProjection(projectVendorSource(entry, source, markerContext(marker)));
+      });
     },
     subjectType: "track",
     workKind: entry.workKind,

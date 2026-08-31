@@ -585,6 +585,61 @@ describe("due-work repair and drift", () => {
     expect((await listReadyDueWork(db, "repair-kind")).items[0]?.sourceVersion).toBe("version-b");
   });
 
+  it("bulk-projects a repair page and keeps a concurrent replacement marker", async () => {
+    for (const subjectId of ["bulk-a", "bulk-b"]) {
+      await markDueWorkRepair(
+        db,
+        { sourceVersion: "version-a", subjectId, subjectType: "track", workKind: "bulk-kind" },
+        { now: T0 },
+      );
+    }
+    let singleCalls = 0;
+    let bulkCalls = 0;
+    const result = await repairDueWorkChunk(
+      db,
+      {
+        project() {
+          singleCalls += 1;
+          return null;
+        },
+        async projectMany(markers) {
+          bulkCalls += 1;
+          const replacement = markers[1];
+          if (replacement === undefined) {
+            throw new Error("bulk repair fixture lost its replacement marker");
+          }
+          await markDueWorkRepair(db, { ...replacement, sourceVersion: "version-b" }, { now: T1 });
+          return markers.map((marker) => ({
+            nextDueAt: T0.toISOString(),
+            sortKey: marker.subjectId,
+            sourceVersion: marker.sourceVersion,
+            state: "ready" as const,
+            subjectId: marker.subjectId,
+            subjectType: marker.subjectType,
+            workKind: marker.workKind,
+          }));
+        },
+        subjectType: "track",
+        workKind: "bulk-kind",
+      },
+      { limit: 2, now: () => T1 },
+    );
+
+    expect({ bulkCalls, singleCalls }).toEqual({ bulkCalls: 1, singleCalls: 0 });
+    expect(result).toMatchObject({ deferred: 1, repaired: 1, scanned: 2 });
+    expect(
+      (
+        await db.execute(
+          `select state, source_version, subject_id from due_work
+            where work_kind = 'bulk-kind' order by subject_id`,
+        )
+      ).rows,
+    ).toEqual([
+      { source_version: "version-a", state: "ready", subject_id: "bulk-a" },
+      { source_version: "version-b", state: "repair", subject_id: "bulk-b" },
+    ]);
+  });
+
   it("reports missing, unexpected, and field-level projection drift in bounded chunks", async () => {
     await upsertDueWork(db, ready("actual-a", "01", "drift-kind"), { now: T0 });
     await upsertDueWork(db, ready("actual-b", "02", "drift-kind"), { now: T0 });
