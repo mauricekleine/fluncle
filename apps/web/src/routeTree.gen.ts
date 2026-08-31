@@ -18,6 +18,7 @@ import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
 import { Route as CalendarDoticsRouteImport } from './routes/calendar[.]ics'
 import { Route as ChatRouteImport } from './routes/chat'
+import { Route as ConceptsRouteImport } from './routes/concepts'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
@@ -66,6 +67,9 @@ import { Route as ApiChatRouteImport } from './routes/api/chat'
 import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
 import { Route as ArtistsIndexRouteImport } from './routes/artists.index'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
+import { Route as ConceptsIndexRouteImport } from './routes/concepts.index'
+import { Route as ConceptsDeskRouteImport } from './routes/concepts.desk'
+import { Route as ConceptsRunRouteImport } from './routes/concepts.run'
 import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsSplatRouteImport } from './routes/docs.$'
@@ -102,6 +106,7 @@ import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ArtistSlugFreshDotxmlRouteImport } from './routes/artist.$slug.fresh[.]xml'
+import { Route as ConceptsFrontIndexRouteImport } from './routes/concepts.front.index'
 import { Route as LabelSlugFreshDotxmlRouteImport } from './routes/label.$slug.fresh[.]xml'
 import { Route as OutSpotifyTrackIdRouteImport } from './routes/out.spotify.$trackId'
 import { Route as ApiAdminOauthHandoffRouteImport } from './routes/api/admin/oauth/handoff'
@@ -111,6 +116,7 @@ import { Route as ApiV1MeAvatarRouteImport } from './routes/api/v1/me/avatar'
 import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixtape-cover.$logId'
 import { Route as ApiV1OgLogIdRouteImport } from './routes/api/v1/og.$logId'
 import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
+import { Route as ConceptsFrontTrackLogIdRouteImport } from './routes/concepts.front.track.$logId'
 import { Route as ApiAdminInstagramAuthCallbackRouteImport } from './routes/api/admin/instagram/auth/callback'
 import { Route as ApiAdminInstagramAuthStartRouteImport } from './routes/api/admin/instagram/auth/start'
 import { Route as ApiAdminMixcloudAuthCallbackRouteImport } from './routes/api/admin/mixcloud/auth/callback'
@@ -129,6 +135,7 @@ import { Route as ApiAdminTwitchAuthStartRouteImport } from './routes/api/admin/
 import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
 import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
 import { Route as ApiV1AdminOauthHandoffRouteImport } from './routes/api/v1/admin/oauth/handoff'
+import { Route as ConceptsFrontOnKindSlugRouteImport } from './routes/concepts.front.on.$kind.$slug'
 import { Route as ApiV1AdminInstagramAuthCallbackRouteImport } from './routes/api/v1/admin/instagram/auth/callback'
 import { Route as ApiV1AdminInstagramAuthStartRouteImport } from './routes/api/v1/admin/instagram/auth/start'
 import { Route as ApiV1AdminMixcloudAuthCallbackRouteImport } from './routes/api/v1/admin/mixcloud/auth/callback'
@@ -191,6 +198,11 @@ const CalendarDoticsRoute = CalendarDoticsRouteImport.update({
 const ChatRoute = ChatRouteImport.update({
   id: '/chat',
   path: '/chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConceptsRoute = ConceptsRouteImport.update({
+  id: '/concepts',
+  path: '/concepts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeviceRoute = DeviceRouteImport.update({
@@ -433,6 +445,21 @@ const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
   path: '/cli/latest.sh',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConceptsIndexRoute = ConceptsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ConceptsRoute,
+} as any)
+const ConceptsDeskRoute = ConceptsDeskRouteImport.update({
+  id: '/desk',
+  path: '/desk',
+  getParentRoute: () => ConceptsRoute,
+} as any)
+const ConceptsRunRoute = ConceptsRunRouteImport.update({
+  id: '/run',
+  path: '/run',
+  getParentRoute: () => ConceptsRoute,
+} as any)
 const DocsDotmdSplatRoute = DocsDotmdSplatRouteImport.update({
   id: '/docs.md/$',
   path: '/docs.md/$',
@@ -613,6 +640,11 @@ const ArtistSlugFreshDotxmlRoute = ArtistSlugFreshDotxmlRouteImport.update({
   path: '/fresh.xml',
   getParentRoute: () => ArtistSlugRoute,
 } as any)
+const ConceptsFrontIndexRoute = ConceptsFrontIndexRouteImport.update({
+  id: '/front/',
+  path: '/front/',
+  getParentRoute: () => ConceptsRoute,
+} as any)
 const LabelSlugFreshDotxmlRoute = LabelSlugFreshDotxmlRouteImport.update({
   id: '/fresh.xml',
   path: '/fresh.xml',
@@ -657,6 +689,11 @@ const ApiV1PreviewIdOrLogIdRoute = ApiV1PreviewIdOrLogIdRouteImport.update({
   id: '/api/v1/preview/$idOrLogId',
   path: '/api/v1/preview/$idOrLogId',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ConceptsFrontTrackLogIdRoute = ConceptsFrontTrackLogIdRouteImport.update({
+  id: '/front/track/$logId',
+  path: '/front/track/$logId',
+  getParentRoute: () => ConceptsRoute,
 } as any)
 const ApiAdminInstagramAuthCallbackRoute =
   ApiAdminInstagramAuthCallbackRouteImport.update({
@@ -762,6 +799,11 @@ const ApiV1AdminOauthHandoffRoute = ApiV1AdminOauthHandoffRouteImport.update({
   id: '/api/v1/admin/oauth/handoff',
   path: '/api/v1/admin/oauth/handoff',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ConceptsFrontOnKindSlugRoute = ConceptsFrontOnKindSlugRouteImport.update({
+  id: '/front/on/$kind/$slug',
+  path: '/front/on/$kind/$slug',
+  getParentRoute: () => ConceptsRoute,
 } as any)
 const ApiV1AdminInstagramAuthCallbackRoute =
   ApiV1AdminInstagramAuthCallbackRouteImport.update({
@@ -876,6 +918,7 @@ export interface FileRoutesByFullPath {
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
   '/chat': typeof ChatRoute
+  '/concepts': typeof ConceptsRouteWithChildren
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
@@ -921,6 +964,8 @@ export interface FileRoutesByFullPath {
   '/api/chat': typeof ApiChatRoute
   '/artist/$slug': typeof ArtistSlugRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/concepts/desk': typeof ConceptsDeskRoute
+  '/concepts/run': typeof ConceptsRunRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
@@ -936,6 +981,7 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof AdminIndexRoute
   '/albums/': typeof AlbumsIndexRoute
   '/artists/': typeof ArtistsIndexRoute
+  '/concepts/': typeof ConceptsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/galaxies/': typeof GalaxiesIndexRoute
   '/identity/': typeof IdentityIndexRoute
@@ -962,6 +1008,7 @@ export interface FileRoutesByFullPath {
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/out/spotify/$trackId': typeof OutSpotifyTrackIdRoute
+  '/concepts/front/': typeof ConceptsFrontIndexRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
@@ -969,6 +1016,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
+  '/concepts/front/track/$logId': typeof ConceptsFrontTrackLogIdRoute
   '/api/admin/instagram/auth/callback': typeof ApiAdminInstagramAuthCallbackRoute
   '/api/admin/instagram/auth/start': typeof ApiAdminInstagramAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
@@ -987,6 +1035,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/oauth/handoff': typeof ApiV1AdminOauthHandoffRoute
+  '/concepts/front/on/$kind/$slug': typeof ConceptsFrontOnKindSlugRoute
   '/api/v1/admin/instagram/auth/callback': typeof ApiV1AdminInstagramAuthCallbackRoute
   '/api/v1/admin/instagram/auth/start': typeof ApiV1AdminInstagramAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -1058,6 +1107,8 @@ export interface FileRoutesByTo {
   '/api/chat': typeof ApiChatRoute
   '/artist/$slug': typeof ArtistSlugRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/concepts/desk': typeof ConceptsDeskRoute
+  '/concepts/run': typeof ConceptsRunRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
@@ -1073,6 +1124,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminIndexRoute
   '/albums': typeof AlbumsIndexRoute
   '/artists': typeof ArtistsIndexRoute
+  '/concepts': typeof ConceptsIndexRoute
   '/docs': typeof DocsIndexRoute
   '/galaxies': typeof GalaxiesIndexRoute
   '/identity': typeof IdentityIndexRoute
@@ -1099,6 +1151,7 @@ export interface FileRoutesByTo {
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/out/spotify/$trackId': typeof OutSpotifyTrackIdRoute
+  '/concepts/front': typeof ConceptsFrontIndexRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
@@ -1106,6 +1159,7 @@ export interface FileRoutesByTo {
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
+  '/concepts/front/track/$logId': typeof ConceptsFrontTrackLogIdRoute
   '/api/admin/instagram/auth/callback': typeof ApiAdminInstagramAuthCallbackRoute
   '/api/admin/instagram/auth/start': typeof ApiAdminInstagramAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
@@ -1124,6 +1178,7 @@ export interface FileRoutesByTo {
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/oauth/handoff': typeof ApiV1AdminOauthHandoffRoute
+  '/concepts/front/on/$kind/$slug': typeof ConceptsFrontOnKindSlugRoute
   '/api/v1/admin/instagram/auth/callback': typeof ApiV1AdminInstagramAuthCallbackRoute
   '/api/v1/admin/instagram/auth/start': typeof ApiV1AdminInstagramAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -1153,6 +1208,7 @@ export interface FileRoutesById {
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
   '/chat': typeof ChatRoute
+  '/concepts': typeof ConceptsRouteWithChildren
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
@@ -1198,6 +1254,8 @@ export interface FileRoutesById {
   '/api/chat': typeof ApiChatRoute
   '/artist/$slug': typeof ArtistSlugRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/concepts/desk': typeof ConceptsDeskRoute
+  '/concepts/run': typeof ConceptsRunRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
@@ -1213,6 +1271,7 @@ export interface FileRoutesById {
   '/admin/': typeof AdminIndexRoute
   '/albums/': typeof AlbumsIndexRoute
   '/artists/': typeof ArtistsIndexRoute
+  '/concepts/': typeof ConceptsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/galaxies/': typeof GalaxiesIndexRoute
   '/identity/': typeof IdentityIndexRoute
@@ -1239,6 +1298,7 @@ export interface FileRoutesById {
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/out/spotify/$trackId': typeof OutSpotifyTrackIdRoute
+  '/concepts/front/': typeof ConceptsFrontIndexRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
@@ -1246,6 +1306,7 @@ export interface FileRoutesById {
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
+  '/concepts/front/track/$logId': typeof ConceptsFrontTrackLogIdRoute
   '/api/admin/instagram/auth/callback': typeof ApiAdminInstagramAuthCallbackRoute
   '/api/admin/instagram/auth/start': typeof ApiAdminInstagramAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
@@ -1264,6 +1325,7 @@ export interface FileRoutesById {
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/oauth/handoff': typeof ApiV1AdminOauthHandoffRoute
+  '/concepts/front/on/$kind/$slug': typeof ConceptsFrontOnKindSlugRoute
   '/api/v1/admin/instagram/auth/callback': typeof ApiV1AdminInstagramAuthCallbackRoute
   '/api/v1/admin/instagram/auth/start': typeof ApiV1AdminInstagramAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -1294,6 +1356,7 @@ export interface FileRouteTypes {
     | '/atom.xml'
     | '/calendar.ics'
     | '/chat'
+    | '/concepts'
     | '/device'
     | '/docs'
     | '/feed.json'
@@ -1339,6 +1402,8 @@ export interface FileRouteTypes {
     | '/api/chat'
     | '/artist/$slug'
     | '/cli/latest.sh'
+    | '/concepts/desk'
+    | '/concepts/run'
     | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
@@ -1354,6 +1419,7 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/albums/'
     | '/artists/'
+    | '/concepts/'
     | '/docs/'
     | '/galaxies/'
     | '/identity/'
@@ -1380,6 +1446,7 @@ export interface FileRouteTypes {
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
     | '/out/spotify/$trackId'
+    | '/concepts/front/'
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
@@ -1387,6 +1454,7 @@ export interface FileRouteTypes {
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
+    | '/concepts/front/track/$logId'
     | '/api/admin/instagram/auth/callback'
     | '/api/admin/instagram/auth/start'
     | '/api/admin/mixcloud/auth/callback'
@@ -1405,6 +1473,7 @@ export interface FileRouteTypes {
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/oauth/handoff'
+    | '/concepts/front/on/$kind/$slug'
     | '/api/v1/admin/instagram/auth/callback'
     | '/api/v1/admin/instagram/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -1476,6 +1545,8 @@ export interface FileRouteTypes {
     | '/api/chat'
     | '/artist/$slug'
     | '/cli/latest.sh'
+    | '/concepts/desk'
+    | '/concepts/run'
     | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
@@ -1491,6 +1562,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/albums'
     | '/artists'
+    | '/concepts'
     | '/docs'
     | '/galaxies'
     | '/identity'
@@ -1517,6 +1589,7 @@ export interface FileRouteTypes {
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
     | '/out/spotify/$trackId'
+    | '/concepts/front'
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
@@ -1524,6 +1597,7 @@ export interface FileRouteTypes {
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
+    | '/concepts/front/track/$logId'
     | '/api/admin/instagram/auth/callback'
     | '/api/admin/instagram/auth/start'
     | '/api/admin/mixcloud/auth/callback'
@@ -1542,6 +1616,7 @@ export interface FileRouteTypes {
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/oauth/handoff'
+    | '/concepts/front/on/$kind/$slug'
     | '/api/v1/admin/instagram/auth/callback'
     | '/api/v1/admin/instagram/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -1570,6 +1645,7 @@ export interface FileRouteTypes {
     | '/atom.xml'
     | '/calendar.ics'
     | '/chat'
+    | '/concepts'
     | '/device'
     | '/docs'
     | '/feed.json'
@@ -1615,6 +1691,8 @@ export interface FileRouteTypes {
     | '/api/chat'
     | '/artist/$slug'
     | '/cli/latest.sh'
+    | '/concepts/desk'
+    | '/concepts/run'
     | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
@@ -1630,6 +1708,7 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/albums/'
     | '/artists/'
+    | '/concepts/'
     | '/docs/'
     | '/galaxies/'
     | '/identity/'
@@ -1656,6 +1735,7 @@ export interface FileRouteTypes {
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
     | '/out/spotify/$trackId'
+    | '/concepts/front/'
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
@@ -1663,6 +1743,7 @@ export interface FileRouteTypes {
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
+    | '/concepts/front/track/$logId'
     | '/api/admin/instagram/auth/callback'
     | '/api/admin/instagram/auth/start'
     | '/api/admin/mixcloud/auth/callback'
@@ -1681,6 +1762,7 @@ export interface FileRouteTypes {
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/oauth/handoff'
+    | '/concepts/front/on/$kind/$slug'
     | '/api/v1/admin/instagram/auth/callback'
     | '/api/v1/admin/instagram/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -1710,6 +1792,7 @@ export interface RootRouteChildren {
   AtomDotxmlRoute: typeof AtomDotxmlRoute
   CalendarDoticsRoute: typeof CalendarDoticsRoute
   ChatRoute: typeof ChatRoute
+  ConceptsRoute: typeof ConceptsRouteWithChildren
   DeviceRoute: typeof DeviceRoute
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
@@ -1876,6 +1959,13 @@ declare module '@tanstack/react-router' {
       path: '/chat'
       fullPath: '/chat'
       preLoaderRoute: typeof ChatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/concepts': {
+      id: '/concepts'
+      path: '/concepts'
+      fullPath: '/concepts'
+      preLoaderRoute: typeof ConceptsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/device': {
@@ -2214,6 +2304,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CliLatestDotshRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/concepts/': {
+      id: '/concepts/'
+      path: '/'
+      fullPath: '/concepts/'
+      preLoaderRoute: typeof ConceptsIndexRouteImport
+      parentRoute: typeof ConceptsRoute
+    }
+    '/concepts/desk': {
+      id: '/concepts/desk'
+      path: '/desk'
+      fullPath: '/concepts/desk'
+      preLoaderRoute: typeof ConceptsDeskRouteImport
+      parentRoute: typeof ConceptsRoute
+    }
+    '/concepts/run': {
+      id: '/concepts/run'
+      path: '/run'
+      fullPath: '/concepts/run'
+      preLoaderRoute: typeof ConceptsRunRouteImport
+      parentRoute: typeof ConceptsRoute
+    }
     '/docs.md/$': {
       id: '/docs.md/$'
       path: '/docs.md/$'
@@ -2466,6 +2577,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ArtistSlugFreshDotxmlRouteImport
       parentRoute: typeof ArtistSlugRoute
     }
+    '/concepts/front/': {
+      id: '/concepts/front/'
+      path: '/front'
+      fullPath: '/concepts/front/'
+      preLoaderRoute: typeof ConceptsFrontIndexRouteImport
+      parentRoute: typeof ConceptsRoute
+    }
     '/label/$slug/fresh.xml': {
       id: '/label/$slug/fresh.xml'
       path: '/fresh.xml'
@@ -2528,6 +2646,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/v1/preview/$idOrLogId'
       preLoaderRoute: typeof ApiV1PreviewIdOrLogIdRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/concepts/front/track/$logId': {
+      id: '/concepts/front/track/$logId'
+      path: '/front/track/$logId'
+      fullPath: '/concepts/front/track/$logId'
+      preLoaderRoute: typeof ConceptsFrontTrackLogIdRouteImport
+      parentRoute: typeof ConceptsRoute
     }
     '/api/admin/instagram/auth/callback': {
       id: '/api/admin/instagram/auth/callback'
@@ -2654,6 +2779,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/v1/admin/oauth/handoff'
       preLoaderRoute: typeof ApiV1AdminOauthHandoffRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/concepts/front/on/$kind/$slug': {
+      id: '/concepts/front/on/$kind/$slug'
+      path: '/front/on/$kind/$slug'
+      fullPath: '/concepts/front/on/$kind/$slug'
+      preLoaderRoute: typeof ConceptsFrontOnKindSlugRouteImport
+      parentRoute: typeof ConceptsRoute
     }
     '/api/v1/admin/instagram/auth/callback': {
       id: '/api/v1/admin/instagram/auth/callback'
@@ -2831,6 +2963,28 @@ const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
   AdminRouteRouteChildren,
 )
 
+interface ConceptsRouteChildren {
+  ConceptsDeskRoute: typeof ConceptsDeskRoute
+  ConceptsRunRoute: typeof ConceptsRunRoute
+  ConceptsIndexRoute: typeof ConceptsIndexRoute
+  ConceptsFrontIndexRoute: typeof ConceptsFrontIndexRoute
+  ConceptsFrontTrackLogIdRoute: typeof ConceptsFrontTrackLogIdRoute
+  ConceptsFrontOnKindSlugRoute: typeof ConceptsFrontOnKindSlugRoute
+}
+
+const ConceptsRouteChildren: ConceptsRouteChildren = {
+  ConceptsDeskRoute: ConceptsDeskRoute,
+  ConceptsRunRoute: ConceptsRunRoute,
+  ConceptsIndexRoute: ConceptsIndexRoute,
+  ConceptsFrontIndexRoute: ConceptsFrontIndexRoute,
+  ConceptsFrontTrackLogIdRoute: ConceptsFrontTrackLogIdRoute,
+  ConceptsFrontOnKindSlugRoute: ConceptsFrontOnKindSlugRoute,
+}
+
+const ConceptsRouteWithChildren = ConceptsRoute._addFileChildren(
+  ConceptsRouteChildren,
+)
+
 interface DocsRouteChildren {
   DocsSplatRoute: typeof DocsSplatRoute
   DocsApiRoute: typeof DocsApiRoute
@@ -2880,6 +3034,7 @@ const rootRouteChildren: RootRouteChildren = {
   AtomDotxmlRoute: AtomDotxmlRoute,
   CalendarDoticsRoute: CalendarDoticsRoute,
   ChatRoute: ChatRoute,
+  ConceptsRoute: ConceptsRouteWithChildren,
   DeviceRoute: DeviceRoute,
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,

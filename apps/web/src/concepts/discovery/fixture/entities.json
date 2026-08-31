@@ -1,0 +1,964 @@
+{
+  "artist:lexurus": {
+    "identity": {
+      "certified": true,
+      "findingCount": 2,
+      "name": "Lexurus",
+      "slug": "lexurus",
+      "spotifyUrl": "https://open.spotify.com/artist/3iEPGgJzNDexM0WPqpcvMB",
+      "trackCount": 30
+    },
+    "kind": "artist",
+    "tracks": {
+      "degraded": false,
+      "entities": [
+        {
+          "imageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/artists/lexurus.jpg?v=1783920679685",
+          "kind": "artist",
+          "name": "Lexurus",
+          "slug": "lexurus"
+        }
+      ],
+      "kind": "entity",
+      "ok": true,
+      "redirect": "/artist/lexurus",
+      "results": [
+        {
+          "album": "Get Down",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02e2b281d6237cb00e2f9d7736",
+          "artists": ["Lexurus"],
+          "bpm": 174.02,
+          "certified": true,
+          "galaxy": "Pulsar",
+          "key": "D minor",
+          "label": "Elevate Records",
+          "logId": "063.6.7Y",
+          "releaseDate": "2026-05-29",
+          "spotifyUrl": "https://open.spotify.com/track/5H9PINwCtqnGIPvs3OYW9T",
+          "title": "Get Down",
+          "trackId": "5H9PINwCtqnGIPvs3OYW9T"
+        },
+        {
+          "album": "Take Me Away (Lexurus Remix)",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02df56da439cd566c96dec47ca",
+          "artists": ["Andromedik", "Lexurus"],
+          "bpm": 174,
+          "certified": true,
+          "galaxy": "Pulsar",
+          "key": "B minor",
+          "label": "Andromedik",
+          "logId": "038.8.7K",
+          "releaseDate": "2026-04-24",
+          "spotifyUrl": "https://open.spotify.com/track/3PvpLJrCDb9eQFtTzHmzgi",
+          "title": "Take Me Away - Lexurus Remix",
+          "trackId": "3PvpLJrCDb9eQFtTzHmzgi"
+        },
+        {
+          "album": "Live the Lie",
+          "albumImageUrl": "https://coverartarchive.org/release/40269a28-3694-4b5e-8b78-c3b591c4e6f0/front-500",
+          "artists": ["Lexurus", "Diede"],
+          "bpm": 174.02,
+          "certified": false,
+          "key": "A# minor",
+          "label": "Liquicity",
+          "releaseDate": "2025-09-26",
+          "spotifyUrl": "https://open.spotify.com/track/441Bxi84bgX4XB5DhD52Hn",
+          "title": "Live the Lie",
+          "trackId": "mb_7bf561bb-22b8-47a9-b3c9-db52577c504e"
+        },
+        {
+          "album": "Liquicity Festival 2025",
+          "albumImageUrl": "https://coverartarchive.org/release/172f927d-b88a-4907-9378-e769f3880c68/front-500",
+          "artists": ["Lexurus", "Diede"],
+          "bpm": 174.02,
+          "certified": false,
+          "label": "Liquicity",
+          "releaseDate": "2025-07-18",
+          "spotifyUrl": "https://open.spotify.com/track/63cAA90fQxoVSRlqeSnKYn",
+          "title": "Heartburn",
+          "trackId": "mb_113af2a0-cd86-4dfb-bfe3-fc2b592e5000"
+        },
+        {
+          "album": "Close to You",
+          "albumImageUrl": "https://coverartarchive.org/release/050252cc-069c-4aee-afcb-f15a55abed57/front-500",
+          "artists": ["Lexurus"],
+          "bpm": 173.98,
+          "certified": false,
+          "key": "D minor",
+          "label": "UKF",
+          "releaseDate": "2025-02-06",
+          "spotifyUrl": "https://open.spotify.com/track/7Hdc15JuBOKPLIRUvwNdNm",
+          "title": "Close to You",
+          "trackId": "mb_f2b0839b-2544-45f7-8ac6-93e136afcf74"
+        },
+        {
+          "album": "Follow My Heart",
+          "albumImageUrl": "https://coverartarchive.org/release/b98d0544-8792-4c13-a8aa-df539c0b3c89/front-500",
+          "artists": ["Maduk", "Lexurus", "Crooked Bangs"],
+          "bpm": 174.02,
+          "certified": false,
+          "label": "UKF",
+          "releaseDate": "2024-07-11",
+          "spotifyUrl": "https://open.spotify.com/track/6e0TQQNlfhmUMEqjdVF8Sb",
+          "title": "Follow My Heart",
+          "trackId": "mb_bc50555b-35c0-4bdc-aa0c-acecd2a3224f"
+        },
+        {
+          "album": "Labyrinth",
+          "albumImageUrl": "https://coverartarchive.org/release/17381919-aead-4d5a-b9f0-63754ba0b1ec/front-500",
+          "artists": ["Lexurus"],
+          "certified": false,
+          "label": "Liquicity",
+          "releaseDate": "2024-06-07",
+          "title": "Labyrinth",
+          "trackId": "mb_bd872e46-a29d-4f9f-b834-019592fcf875"
+        },
+        {
+          "album": "Rise",
+          "albumImageUrl": "https://coverartarchive.org/release/098c148c-d851-43b8-bab8-140d7bf5a8db/front-500",
+          "artists": ["Andromedik", "Lexurus", "Nu‐La"],
+          "certified": false,
+          "label": "Liquicity",
+          "releaseDate": "2024-04-12",
+          "title": "Adrenaline",
+          "trackId": "mb_7aed9327-41be-4790-92df-439bb2017197"
+        },
+        {
+          "album": "Insomnia",
+          "albumImageUrl": "https://coverartarchive.org/release/67d3a656-940d-40ba-865c-efab65b50741/front-500",
+          "artists": ["Lexurus", "Rhode"],
+          "bpm": 174.02,
+          "certified": false,
+          "key": "B minor",
+          "label": "Liquicity",
+          "releaseDate": "2024-02-23",
+          "spotifyUrl": "https://open.spotify.com/track/1rl4Z4fPxVPCFYbxU9FkGO",
+          "title": "Insomnia",
+          "trackId": "mb_363647ab-188b-40f7-897e-bc7ae7b4fa3a"
+        },
+        {
+          "album": "Adrenaline",
+          "albumImageUrl": "https://coverartarchive.org/release/5ce31ab4-2afe-4b39-b519-48d1a4a47c64/front-500",
+          "artists": ["Andromedik", "Lexurus", "Nu‐La"],
+          "certified": false,
+          "label": "Liquicity",
+          "releaseDate": "2023-12-29",
+          "spotifyUrl": "https://open.spotify.com/track/5aSpF8jemKMSlUeS5Xa7uE",
+          "title": "Adrenaline",
+          "trackId": "mb_c1779abf-ed64-4d5e-a323-0f5224c13fea"
+        },
+        {
+          "album": "Liquicity Autumn 2023",
+          "albumImageUrl": "https://coverartarchive.org/release/4936203c-871c-47a6-8146-e1a728e74427/front-500",
+          "artists": ["Lexurus", "Houndeye"],
+          "bpm": 174.02,
+          "certified": false,
+          "key": "F minor",
+          "label": "Liquicity",
+          "releaseDate": "2023-11-03",
+          "spotifyUrl": "https://open.spotify.com/track/4mB4Vn0kDAJ6LVwQlwYS5j",
+          "title": "Cold Divide",
+          "trackId": "mb_a8d3b955-c54e-495e-a50a-b923789c6c48"
+        },
+        {
+          "album": "The Funk",
+          "albumImageUrl": "https://coverartarchive.org/release/999a5f0c-bcae-4f96-b881-ea62ac20b511/front-500",
+          "artists": ["Lexurus"],
+          "bpm": 173.98,
+          "certified": false,
+          "label": "UKF",
+          "releaseDate": "2023-05-04",
+          "spotifyUrl": "https://open.spotify.com/track/7ugIf3kyiU2VrLDe60oVQ2",
+          "title": "The Funk",
+          "trackId": "mb_02f7ff28-31b4-4e95-883e-cdedf40b3cc6"
+        }
+      ]
+    }
+  },
+  "artist:melinki": {
+    "identity": {
+      "certified": true,
+      "findingCount": 1,
+      "name": "Melinki",
+      "slug": "melinki",
+      "spotifyUrl": "https://open.spotify.com/artist/71BxfcyzIwRxmdx2BRYDVD",
+      "trackCount": 71
+    },
+    "kind": "artist",
+    "tracks": {
+      "degraded": false,
+      "entities": [
+        {
+          "imageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/artists/melinki.jpg?v=1784165654830",
+          "kind": "artist",
+          "name": "Melinki",
+          "slug": "melinki"
+        }
+      ],
+      "kind": "entity",
+      "ok": true,
+      "redirect": "/artist/melinki",
+      "results": [
+        {
+          "album": "Radical Sound EP",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e026f6dd96cd62f95a262f75701",
+          "artists": ["Melinki"],
+          "bpm": 171.98,
+          "certified": true,
+          "galaxy": "Solar",
+          "key": "A# minor",
+          "label": "V Recordings",
+          "logId": "086.5.9Q",
+          "releaseDate": "2024-06-14",
+          "spotifyUrl": "https://open.spotify.com/track/69XbkLuPQPwUbYMFqNXFyg",
+          "title": "Radical Sound",
+          "trackId": "69XbkLuPQPwUbYMFqNXFyg"
+        },
+        {
+          "album": "Only Way We Knew",
+          "albumImageUrl": "https://coverartarchive.org/release/d0b16ff2-c51c-45ef-854d-6268224de798/front-500",
+          "artists": ["Riya", "Melinki"],
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2025-11-21",
+          "spotifyUrl": "https://open.spotify.com/track/6FA4lPbv0g9y32v5eWI2at",
+          "title": "Only Way We Knew",
+          "trackId": "mb_d47ee9c1-e57c-43bf-9e64-dbb38261644c"
+        },
+        {
+          "album": "Timeless Liquid Essentials: 8",
+          "artists": ["Phenz", "Melinki", "Damien Soul"],
+          "certified": false,
+          "label": "Soul Deep Recordings",
+          "releaseDate": "2025-09-22",
+          "title": "Keep on Moving",
+          "trackId": "mb_6e61f4e2-2a61-4c6d-b945-4db667eec7ea"
+        },
+        {
+          "album": "Timeless Liquid Essentials: 7",
+          "artists": ["Phenz", "Melinki"],
+          "certified": false,
+          "label": "Soul Deep Recordings",
+          "releaseDate": "2025-09-18",
+          "title": "Hold Me",
+          "trackId": "mb_00daba62-b87b-423f-ae16-b9c14b514ea9"
+        },
+        {
+          "album": "Galacy Yearmix",
+          "albumImageUrl": "https://coverartarchive.org/release/b7b2136d-2262-4078-8441-c6b91b9187bf/front-500",
+          "artists": ["Melinki", "Low:r"],
+          "bpm": 172,
+          "certified": false,
+          "key": "A# minor",
+          "label": "Galacy",
+          "releaseDate": "2025-01-07",
+          "title": "Inta",
+          "trackId": "mb_39b2cb95-14fd-4516-a4bf-040a3be04e00"
+        },
+        {
+          "album": "Galacy Yearmix",
+          "albumImageUrl": "https://coverartarchive.org/release/b7b2136d-2262-4078-8441-c6b91b9187bf/front-500",
+          "artists": ["Melinki", "Low:r"],
+          "certified": false,
+          "label": "Galacy",
+          "releaseDate": "2025-01-07",
+          "title": "Gracies Song",
+          "trackId": "mb_b4eea0fa-faae-4577-9e5b-e40c41575180"
+        },
+        {
+          "album": "Radical Sound EP",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d0000b2736f6dd96cd62f95a262f75701",
+          "artists": ["Melinki"],
+          "bpm": 171.98,
+          "certified": false,
+          "key": "A# minor",
+          "label": "V Recordings",
+          "releaseDate": "2024-06-14",
+          "spotifyUrl": "https://open.spotify.com/track/69XbkLuPQPwUbYMFqNXFyg",
+          "title": "Radical Sound",
+          "trackId": "mb_5269cb62-45d4-492e-bc9d-871f9b394883"
+        },
+        {
+          "album": "Radical Sound EP",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d0000b2736f6dd96cd62f95a262f75701",
+          "artists": ["Melinki"],
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2024-06-14",
+          "spotifyUrl": "https://open.spotify.com/track/3RFXIJKujL8Mw51pt2KaZF",
+          "title": "In the Hood",
+          "trackId": "mb_a2e5735f-4f85-4e53-ad3c-67ec356fefe6"
+        },
+        {
+          "album": "Radical Sound EP",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d0000b2737d47678febd1d3ec7c610ff2",
+          "artists": ["Melinki", "pyxis", "T.R.A.C.", "Collette Warren"],
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2024-06-14",
+          "spotifyUrl": "https://open.spotify.com/track/2ZVJeNN85TDOvAbGDc57G7",
+          "title": "Go Back",
+          "trackId": "mb_a77fc38d-27a7-4901-8326-f3d56c9862b4"
+        },
+        {
+          "album": "Radical Sound EP",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d0000b2736f6dd96cd62f95a262f75701",
+          "artists": ["Melinki", "Motiv"],
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2024-06-14",
+          "spotifyUrl": "https://open.spotify.com/track/3MwLe83YKNBDbPg4lDPaNH",
+          "title": "Always",
+          "trackId": "mb_f841cc5e-9e97-4d5e-ab74-23026063d111"
+        },
+        {
+          "album": "The Time Is Right",
+          "albumImageUrl": "https://coverartarchive.org/release/e3996de1-03fe-4069-a270-fedc3653c08c/front-500",
+          "artists": ["DJ Marky", "Harry Shotta", "MC GQ", "Melinki", "D’Cypher"],
+          "bpm": 174.1,
+          "certified": false,
+          "label": "Shogun Audio",
+          "releaseDate": "2023-07-21",
+          "spotifyUrl": "https://open.spotify.com/track/6w8Y9kIJuUW9AI0svJ9ady",
+          "title": "Back & Forth",
+          "trackId": "mb_ccea65e8-3467-4cba-95ef-4f3e3f9184f4"
+        },
+        {
+          "album": "Here Comes",
+          "albumImageUrl": "https://coverartarchive.org/release/e3c3511f-d208-43ae-89ab-a0fbc17e446f/front-500",
+          "artists": ["Melinki"],
+          "certified": false,
+          "label": "Innerground Records",
+          "releaseDate": "2023-07-21",
+          "spotifyUrl": "https://open.spotify.com/track/2FlFInnKJTaP5YBMf6dax6",
+          "title": "Here Comes",
+          "trackId": "mb_d1f00fa2-a42a-4a56-a476-7d822a8aa0e3"
+        }
+      ]
+    }
+  },
+  "artist:winslow": {
+    "identity": {
+      "certified": true,
+      "findingCount": 1,
+      "name": "Winslow",
+      "slug": "winslow",
+      "spotifyUrl": "https://open.spotify.com/artist/6e00AaBHe3JcoWOsyj12KI",
+      "trackCount": 40
+    },
+    "kind": "artist",
+    "tracks": {
+      "degraded": false,
+      "entities": [
+        {
+          "imageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/artists/winslow.jpg?v=1784259274367",
+          "kind": "artist",
+          "name": "Winslow",
+          "slug": "winslow"
+        }
+      ],
+      "kind": "entity",
+      "ok": true,
+      "redirect": "/artist/winslow",
+      "results": [
+        {
+          "album": "Bob & Weave",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02f2eeb9d38b41e511e1b326e0",
+          "artists": ["Winslow"],
+          "bpm": 172,
+          "certified": true,
+          "galaxy": "Solar",
+          "label": "Hospital Records",
+          "logId": "090.6.2K",
+          "releaseDate": "2022-03-25",
+          "spotifyUrl": "https://open.spotify.com/track/200m3vyY4seap4IygWEwsq",
+          "title": "Bob & Weave",
+          "trackId": "200m3vyY4seap4IygWEwsq"
+        },
+        {
+          "album": "Forza Horizon 6: Hospital Records",
+          "albumImageUrl": "https://coverartarchive.org/release/7c366269-a0f6-48bf-836c-e3651017723a/front-500",
+          "artists": ["Winslow", "Gabriella Bongo", "Elsa Hedberg"],
+          "certified": false,
+          "label": "Hospital Records",
+          "releaseDate": "2026-07-24",
+          "title": "Pieces of Me",
+          "trackId": "mb_8608fc5e-4dcb-4be7-bc51-bbb4a7f43597"
+        },
+        {
+          "album": "Sofa King Six, Part 1",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d0000b273f45a27270f1b7f5226a15cbc",
+          "artists": ["Winslow"],
+          "bpm": 173.92,
+          "certified": false,
+          "label": "Sofa Sound Bristol",
+          "releaseDate": "2025-05-15",
+          "spotifyUrl": "https://open.spotify.com/track/6bzEeSupcMSQOPUHjwNd12",
+          "title": "Jazz Hands",
+          "trackId": "mb_2bf0f799-8ab1-4e74-94ce-46b257fe7d2a"
+        },
+        {
+          "album": "The Unswung Hero",
+          "albumImageUrl": "https://coverartarchive.org/release/44c06560-f1d1-41b0-bcef-e87c7561f333/front-500",
+          "artists": ["Winslow"],
+          "bpm": 174.02,
+          "certified": false,
+          "key": "D minor",
+          "label": "Hospital Records",
+          "releaseDate": "2024-09-12",
+          "spotifyUrl": "https://open.spotify.com/track/0zAlNVqnDqsgSUIrXAhCTI",
+          "title": "Peaced Out",
+          "trackId": "mb_1ded3759-66dd-43bc-b715-e15ceac0482e"
+        },
+        {
+          "album": "The Unswung Hero",
+          "albumImageUrl": "https://coverartarchive.org/release/1282e590-92d9-425a-8c30-dff6d5a25643/front-500",
+          "artists": ["Winslow", "Nathan Smoker", "Purple Velvet Curtains"],
+          "bpm": 174.02,
+          "certified": false,
+          "key": "D minor",
+          "label": "Hospital Records",
+          "releaseDate": "2024-09-12",
+          "spotifyUrl": "https://open.spotify.com/track/5ofDAJXLKs3FZ5APEhdLz1",
+          "title": "Fallout",
+          "trackId": "mb_4a6fa6ae-1604-45c6-9392-348ba25a8135"
+        },
+        {
+          "album": "The Unswung Hero",
+          "albumImageUrl": "https://coverartarchive.org/release/1282e590-92d9-425a-8c30-dff6d5a25643/front-500",
+          "artists": ["Winslow"],
+          "bpm": 174.02,
+          "certified": false,
+          "label": "Hospital Records",
+          "releaseDate": "2024-09-12",
+          "spotifyUrl": "https://open.spotify.com/track/5B2dKHNJarRYu0H62Xbt9h",
+          "title": "Unswung Hero",
+          "trackId": "mb_53acc84e-73cd-46c1-9783-71dd5f9121ff"
+        },
+        {
+          "album": "The Unswung Hero",
+          "albumImageUrl": "https://coverartarchive.org/release/1282e590-92d9-425a-8c30-dff6d5a25643/front-500",
+          "artists": ["Winslow"],
+          "certified": false,
+          "label": "Hospital Records",
+          "releaseDate": "2024-09-12",
+          "title": "Peaced Out",
+          "trackId": "mb_9d2df83b-9000-4caa-a7e3-5644c20cdb61"
+        },
+        {
+          "album": "Parchment, Edition 1",
+          "albumImageUrl": "https://coverartarchive.org/release/8f56ff73-fcc5-4b99-aa58-6ebcc712e189/front-500",
+          "artists": ["Winslow"],
+          "certified": false,
+          "label": "Must Make Music",
+          "releaseDate": "2024-03-01",
+          "spotifyUrl": "https://open.spotify.com/track/1BzCmJmbyx5KMGE9E6UxtG",
+          "title": "Sweet Tooth",
+          "trackId": "mb_7e1c24e8-6a0c-49a1-a905-6629932bd513"
+        },
+        {
+          "album": "Class Dismissed",
+          "albumImageUrl": "https://coverartarchive.org/release/a4ae7cad-f31c-4c37-bc55-009ee906379b/front-500",
+          "artists": ["Winslow"],
+          "bpm": 174.02,
+          "certified": false,
+          "label": "Hospital Records",
+          "releaseDate": "2023-08-04",
+          "spotifyUrl": "https://open.spotify.com/track/2Ek0VcF4EKmbNoC2Jbt1q9",
+          "title": "Class Dismissed (VIP)",
+          "trackId": "mb_16e83dce-652f-4ee5-bd08-51de5de59398"
+        },
+        {
+          "album": "Class Dismissed",
+          "albumImageUrl": "https://coverartarchive.org/release/a4ae7cad-f31c-4c37-bc55-009ee906379b/front-500",
+          "artists": ["Winslow"],
+          "certified": false,
+          "label": "Hospital Records",
+          "releaseDate": "2023-08-04",
+          "spotifyUrl": "https://open.spotify.com/track/3Scx82rdd4Id4wiktAmzAP",
+          "title": "Class Dismissed",
+          "trackId": "mb_2d818966-8bd2-4048-ae4f-556e7be966f8"
+        },
+        {
+          "album": "Hospital 500: Future Drum+Bass Operations",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d0000b2730c973b37f24f9fb0bc6185da",
+          "artists": ["Winslow"],
+          "bpm": 174,
+          "certified": false,
+          "label": "Hospital Records",
+          "releaseDate": "2023-03-30",
+          "spotifyUrl": "https://open.spotify.com/track/0YOcjCQ19K1MX6tumrufL8",
+          "title": "Spaced Out",
+          "trackId": "mb_6bc472d7-d675-40c0-9273-d8d039b802f7"
+        },
+        {
+          "album": "Thinking of You",
+          "albumImageUrl": "https://coverartarchive.org/release/89c9daf9-dd8c-460d-b6a5-8b4f961b02a2/front-500",
+          "artists": ["Winslow"],
+          "bpm": 174.02,
+          "certified": false,
+          "label": "Hospital Records",
+          "releaseDate": "2022-09-02",
+          "spotifyUrl": "https://open.spotify.com/track/53RHrHzbTXkC2RbdKOJOsv",
+          "title": "GreenGreyBlue",
+          "trackId": "mb_37a99895-faf6-4bda-a08a-79fd778b7394"
+        }
+      ]
+    }
+  },
+  "label:hospital-records": {
+    "identity": {
+      "bio": "Hospital Records is a British independent drum and bass label based in East London, founded in 1996 by Tony Colman and Chris Goss. Known for a liquid, atmospheric approach to the genre, it has operated as one of the most consistent independent labels in drum and bass for three decades.",
+      "certified": true,
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/forza-horizon-6-hospital-records.jpg?v=1784907853613",
+      "discogsLabelId": 1386,
+      "findingCount": 20,
+      "foundedLocation": "London",
+      "foundingDate": "1996-04-29",
+      "logoImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/labels/hospital-records.jpg?v=1",
+      "mbLabelId": "8562598d-60d1-4bd6-8b85-4d709e951770",
+      "name": "Hospital Records",
+      "slug": "hospital-records",
+      "subLabels": [
+        {
+          "name": "M*A*S*H",
+          "slug": "m-a-s-h"
+        },
+        {
+          "name": "Medschool",
+          "slug": "medschool"
+        }
+      ],
+      "trackCount": 5284
+    },
+    "kind": "label",
+    "tracks": {
+      "degraded": false,
+      "entities": [
+        {
+          "imageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/labels/hospital-records.jpg?v=1",
+          "kind": "label",
+          "name": "Hospital Records",
+          "slug": "hospital-records"
+        }
+      ],
+      "kind": "entity",
+      "ok": true,
+      "redirect": "/label/hospital-records",
+      "results": [
+        {
+          "album": "Earthling",
+          "albumImageUrl": "https://coverartarchive.org/release/ce2266dd-9b19-435d-b56b-9c71da29bf35/front-500",
+          "artists": ["Logistics"],
+          "bpm": 174.02,
+          "certified": true,
+          "galaxy": "Lunar",
+          "key": "F minor",
+          "label": "Hospital Records",
+          "logId": "047.1.9F",
+          "releaseDate": "2026-03-26",
+          "spotifyUrl": "https://open.spotify.com/track/1Q4d0Ou6CS7JH99H0Fek64",
+          "title": "Earthling",
+          "trackId": "mb_dc39280d-3b69-44a1-b940-e7b78f57e2d3"
+        },
+        {
+          "album": "Bob & Weave",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02f2eeb9d38b41e511e1b326e0",
+          "artists": ["Winslow"],
+          "bpm": 172,
+          "certified": true,
+          "galaxy": "Solar",
+          "label": "Hospital Records",
+          "logId": "090.6.2K",
+          "releaseDate": "2022-03-25",
+          "spotifyUrl": "https://open.spotify.com/track/200m3vyY4seap4IygWEwsq",
+          "title": "Bob & Weave",
+          "trackId": "200m3vyY4seap4IygWEwsq"
+        },
+        {
+          "album": "Second Nature",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02a3e30814b2f90aac6ed20d9a",
+          "artists": ["Netsky"],
+          "bpm": 173,
+          "certified": true,
+          "galaxy": "Lunar",
+          "key": "C minor",
+          "label": "Hospital Records",
+          "logId": "011.1.6E",
+          "releaseDate": "2020-10-30",
+          "spotifyUrl": "https://open.spotify.com/track/1rgIJkGSUqB3EgidQbEbxy",
+          "title": "I See The Future In Your Eyes",
+          "trackId": "1rgIJkGSUqB3EgidQbEbxy"
+        },
+        {
+          "album": "Mixed Emotions",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e025c074ddcd71f27a9824f145e",
+          "artists": ["Netsky", "Montell2099"],
+          "bpm": 172.02,
+          "certified": true,
+          "galaxy": "Lunar",
+          "key": "F minor",
+          "label": "Hospital Records",
+          "logId": "004.4.3L",
+          "releaseDate": "2020-10-30",
+          "spotifyUrl": "https://open.spotify.com/track/6bUlKNTAOA2EUg4CQ4PtJb",
+          "title": "Mixed Emotions",
+          "trackId": "6bUlKNTAOA2EUg4CQ4PtJb"
+        },
+        {
+          "album": "Hospitality House Party (DJ Mix)",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02fb08302cd826409e82861026",
+          "artists": ["Nu:Tone"],
+          "bpm": 174.02,
+          "certified": true,
+          "galaxy": "Solar",
+          "key": "B minor",
+          "label": "Hospital Records",
+          "logId": "046.0.8A",
+          "releaseDate": "2020-07-31",
+          "spotifyUrl": "https://open.spotify.com/track/0ppcPG7aiZEeqWpVwtfdqN",
+          "title": "Piece Of You (Mixed) - Refix",
+          "trackId": "0ppcPG7aiZEeqWpVwtfdqN"
+        },
+        {
+          "album": "7 Tunes In 7 Days",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e022decd593b0d48a4d600a681e",
+          "artists": ["Hugh Hardie"],
+          "bpm": 174,
+          "certified": true,
+          "galaxy": "Solar",
+          "key": "D minor",
+          "label": "Hospital Records",
+          "logId": "049.7.6B",
+          "releaseDate": "2020-05-24",
+          "spotifyUrl": "https://open.spotify.com/track/1QZATLmUDcCj48IxuK57zU",
+          "title": "Day 1: Back & Forth",
+          "trackId": "1QZATLmUDcCj48IxuK57zU"
+        },
+        {
+          "album": "Drifting Away",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e0225f8b3124b5f43a0b03d10a6",
+          "artists": ["BOP", "Unquote"],
+          "bpm": 169.97,
+          "certified": true,
+          "galaxy": "Lunar",
+          "key": "D minor",
+          "label": "Hospital Records",
+          "logId": "012.8.0A",
+          "releaseDate": "2020-04-03",
+          "spotifyUrl": "https://open.spotify.com/track/50hc3zkVzmQWf4MrgJiyXr",
+          "title": "Drifting Away",
+          "trackId": "50hc3zkVzmQWf4MrgJiyXr"
+        },
+        {
+          "album": "Kings Of The Rollers",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e023e0348fbca67f7723440db89",
+          "artists": ["Kings Of The Rollers"],
+          "bpm": 175.02,
+          "certified": true,
+          "galaxy": "Nebular",
+          "key": "F# minor",
+          "label": "Hospital Records",
+          "logId": "058.4.9Y",
+          "releaseDate": "2019-04-26",
+          "spotifyUrl": "https://open.spotify.com/track/1Vs4sLYvt7mxMDk5yvdzMn",
+          "title": "Mammoth",
+          "trackId": "1Vs4sLYvt7mxMDk5yvdzMn"
+        },
+        {
+          "album": "See For Miles",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02fab22307fd294d0fe8cf22b4",
+          "artists": ["Krakota"],
+          "bpm": 174.02,
+          "certified": true,
+          "galaxy": "Solar",
+          "key": "E major",
+          "label": "Hospital Records",
+          "logId": "012.2.4L",
+          "releaseDate": "2018-09-28",
+          "spotifyUrl": "https://open.spotify.com/track/2mS0Ieagqtkt2HHfl5B7dh",
+          "title": "See For Miles",
+          "trackId": "2mS0Ieagqtkt2HHfl5B7dh"
+        },
+        {
+          "album": "Hospital: We Are 21",
+          "albumImageUrl": "https://coverartarchive.org/release/64a82f88-e74a-4615-be71-f7cf36208ccd/front-500",
+          "artists": ["Reso"],
+          "bpm": 172,
+          "certified": true,
+          "galaxy": "Solar",
+          "label": "Hospital Records",
+          "logId": "066.5.2K",
+          "releaseDate": "2017-01-27",
+          "spotifyUrl": "https://open.spotify.com/track/28aJsoDKZUeAex0EvIozEg",
+          "title": "Taiga (Urbandawn remix)",
+          "trackId": "mb_eaf2db07-6ce2-4000-88cd-d1af0141e752"
+        },
+        {
+          "album": "NHS300",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02280b41da4480bd1d01915ce2",
+          "artists": ["BOP", "Urbandawn"],
+          "bpm": 169.98,
+          "certified": true,
+          "galaxy": "Solar",
+          "label": "Hospital Records",
+          "logId": "047.3.3U",
+          "releaseDate": "2016-11-18",
+          "spotifyUrl": "https://open.spotify.com/track/6Ncyhvbua87hzJktSL8wUj",
+          "title": "Red Line",
+          "trackId": "6Ncyhvbua87hzJktSL8wUj"
+        },
+        {
+          "album": "Strange System",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e0297e36cd4efa251e0ac58f43d",
+          "artists": ["Krakota"],
+          "bpm": 174.02,
+          "certified": true,
+          "galaxy": "Solar",
+          "key": "G minor",
+          "label": "Hospital Records",
+          "logId": "011.6.8K",
+          "releaseDate": "2016-07-29",
+          "spotifyUrl": "https://open.spotify.com/track/6Y44zcYp0vUkmKCBve1Epr",
+          "title": "Sea Air",
+          "trackId": "6Y44zcYp0vUkmKCBve1Epr"
+        }
+      ]
+    }
+  },
+  "label:v-recordings": {
+    "identity": {
+      "bio": "V Recordings is a drum and bass label based in the United Kingdom, founded in 1993 by Bryan Gee and Jumpin Jack Frost. Bryan Gee continues to run the label. V LEGACY, a six-month development programme for emerging jungle and drum and bass artists, operates under its umbrella.",
+      "certified": true,
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/phase-control-ep.jpg?v=1784767461215",
+      "discogsLabelId": 514,
+      "findingCount": 1,
+      "foundedLocation": "United Kingdom",
+      "foundingDate": "1993",
+      "logoImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/labels/v-recordings.jpg?v=1",
+      "mbLabelId": "6d44386b-dc7c-4bba-966b-52fe641ad4d0",
+      "name": "V Recordings",
+      "slug": "v-recordings",
+      "subLabels": [
+        {
+          "name": "Chronic",
+          "slug": "chronic"
+        },
+        {
+          "name": "Liquid V",
+          "slug": "liquid-v"
+        },
+        {
+          "name": "Philly Blunt Records",
+          "slug": "philly-blunt-records"
+        },
+        {
+          "name": "V Records",
+          "slug": "v-records"
+        }
+      ],
+      "trackCount": 1185
+    },
+    "kind": "label",
+    "tracks": {
+      "degraded": false,
+      "entities": [
+        {
+          "imageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/labels/v-recordings.jpg?v=1",
+          "kind": "label",
+          "name": "V Recordings",
+          "slug": "v-recordings"
+        }
+      ],
+      "kind": "entity",
+      "ok": true,
+      "redirect": "/label/v-recordings",
+      "results": [
+        {
+          "album": "Radical Sound EP",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e026f6dd96cd62f95a262f75701",
+          "artists": ["Melinki"],
+          "bpm": 171.98,
+          "certified": true,
+          "galaxy": "Solar",
+          "key": "A# minor",
+          "label": "V Recordings",
+          "logId": "086.5.9Q",
+          "releaseDate": "2024-06-14",
+          "spotifyUrl": "https://open.spotify.com/track/69XbkLuPQPwUbYMFqNXFyg",
+          "title": "Radical Sound",
+          "trackId": "69XbkLuPQPwUbYMFqNXFyg"
+        },
+        {
+          "album": "Phase Control EP",
+          "albumImageUrl": "https://coverartarchive.org/release/e03266c1-ff08-442f-af70-f483694b56ef/front-500",
+          "artists": ["Cloud Lord"],
+          "bpm": 174,
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2026-05-22",
+          "spotifyUrl": "https://open.spotify.com/track/2MeZIEcCO9vyIohYjCPL38",
+          "title": "Ghost Train VIP",
+          "trackId": "mb_11128eae-c8d4-45df-b473-917c9e6c21aa"
+        },
+        {
+          "album": "Phase Control EP",
+          "albumImageUrl": "https://coverartarchive.org/release/e03266c1-ff08-442f-af70-f483694b56ef/front-500",
+          "artists": ["Cloud Lord"],
+          "bpm": 169.94,
+          "certified": false,
+          "key": "D minor",
+          "label": "V Recordings",
+          "releaseDate": "2026-05-22",
+          "spotifyUrl": "https://open.spotify.com/track/20Ep07sHXSd4ZHGoQJlLko",
+          "title": "Chubby Chaser",
+          "trackId": "mb_1da35c40-3891-4400-9c84-c6866d73d38a"
+        },
+        {
+          "album": "Phase Control EP",
+          "albumImageUrl": "https://coverartarchive.org/release/e03266c1-ff08-442f-af70-f483694b56ef/front-500",
+          "artists": ["Cloud Lord"],
+          "bpm": 174.96,
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2026-05-22",
+          "spotifyUrl": "https://open.spotify.com/track/2UHE2frwlqTD5qSFNjqpUA",
+          "title": "Phase Control",
+          "trackId": "mb_3a3448df-96f4-4c65-8e1a-92492ea42180"
+        },
+        {
+          "album": "Phase Control EP",
+          "albumImageUrl": "https://coverartarchive.org/release/e03266c1-ff08-442f-af70-f483694b56ef/front-500",
+          "artists": ["Cloud Lord"],
+          "bpm": 174,
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2026-05-22",
+          "spotifyUrl": "https://open.spotify.com/track/1bXqfskTSRR0dQT2fxz3xJ",
+          "title": "Buzz",
+          "trackId": "mb_ee9a9c22-d15c-49ac-9692-89a7ac59e15b"
+        },
+        {
+          "album": "Overlook",
+          "albumImageUrl": "https://coverartarchive.org/release/2ead42c0-0efa-4ab9-8134-cb2d30fe036c/front-500",
+          "artists": ["Riya", "Crystal Clear"],
+          "bpm": 174.04,
+          "certified": false,
+          "key": "C minor",
+          "label": "V Recordings",
+          "releaseDate": "2026-01-30",
+          "title": "Overlook",
+          "trackId": "mb_0c696f22-39db-4bad-9569-c12a46e48458"
+        },
+        {
+          "album": "You Found Me EP",
+          "artists": ["A‐Audio"],
+          "certified": false,
+          "key": "A minor",
+          "label": "V Recordings",
+          "releaseDate": "2025-11-28",
+          "title": "Tribute",
+          "trackId": "mb_03310f22-0ad9-4e08-aee6-e5ac9bb33217"
+        },
+        {
+          "album": "You Found Me EP",
+          "artists": ["A‐Audio"],
+          "bpm": 173.98,
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2025-11-28",
+          "title": "Welcome Aboard",
+          "trackId": "mb_6392d2e5-4364-4384-9745-49a243e65d23"
+        },
+        {
+          "album": "You Found Me EP",
+          "artists": ["A‐Audio", "Syren Rivers"],
+          "bpm": 174.02,
+          "certified": false,
+          "key": "B minor",
+          "label": "V Recordings",
+          "releaseDate": "2025-11-28",
+          "title": "You Found Me",
+          "trackId": "mb_db6f6812-91b0-48f9-8d2b-e25ad84762fb"
+        },
+        {
+          "album": "Only Way We Knew",
+          "albumImageUrl": "https://coverartarchive.org/release/d0b16ff2-c51c-45ef-854d-6268224de798/front-500",
+          "artists": ["Riya", "Melinki"],
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2025-11-21",
+          "spotifyUrl": "https://open.spotify.com/track/6FA4lPbv0g9y32v5eWI2at",
+          "title": "Only Way We Knew",
+          "trackId": "mb_d47ee9c1-e57c-43bf-9e64-dbb38261644c"
+        },
+        {
+          "album": "Haffi Bun / Conditioned Reaction",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d0000b2732f3d0d049b7ec65368519fc8",
+          "artists": ["Business As Usual", "BR!DGE"],
+          "bpm": 174.02,
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2025-07-04",
+          "spotifyUrl": "https://open.spotify.com/track/5VoyondkMvxWrF92lciE6E",
+          "title": "Haffi Bun",
+          "trackId": "mb_31b947b2-bf5f-455e-906d-5f0fc54625db"
+        },
+        {
+          "album": "Haffi Bun / Conditioned Reaction",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d0000b2732f3d0d049b7ec65368519fc8",
+          "artists": ["Business As Usual"],
+          "bpm": 175,
+          "certified": false,
+          "label": "V Recordings",
+          "releaseDate": "2025-07-04",
+          "spotifyUrl": "https://open.spotify.com/track/6L8CRBXbxwAyryixU7cI04",
+          "title": "Conditioned Reaction",
+          "trackId": "mb_5ad9b8fb-910e-46f0-ab94-18b59da4970c"
+        }
+      ]
+    }
+  },
+  "album:bob-weave": {
+    "identity": {
+      "certified": true,
+      "coverImageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/bob-weave.jpg?v=1787925088970",
+      "findingCount": 1,
+      "name": "Bob & Weave",
+      "releaseDate": "2022-03-25",
+      "slug": "bob-weave",
+      "trackCount": 1
+    },
+    "kind": "album",
+    "tracks": {
+      "degraded": false,
+      "entities": [
+        {
+          "imageUrl": "https://i.scdn.co/image/ab67616d00001e02f2eeb9d38b41e511e1b326e0",
+          "kind": "album",
+          "name": "Bob & Weave",
+          "slug": "bob-weave"
+        }
+      ],
+      "kind": "entity",
+      "ok": true,
+      "redirect": "/album/bob-weave",
+      "results": [
+        {
+          "album": "Bob & Weave",
+          "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02f2eeb9d38b41e511e1b326e0",
+          "artists": ["Winslow"],
+          "bpm": 172,
+          "certified": true,
+          "galaxy": "Solar",
+          "label": "Hospital Records",
+          "logId": "090.6.2K",
+          "releaseDate": "2022-03-25",
+          "spotifyUrl": "https://open.spotify.com/track/200m3vyY4seap4IygWEwsq",
+          "title": "Bob & Weave",
+          "trackId": "200m3vyY4seap4IygWEwsq"
+        }
+      ]
+    }
+  }
+}

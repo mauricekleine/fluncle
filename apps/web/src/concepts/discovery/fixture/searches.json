@@ -1,0 +1,569 @@
+{
+  "174 bpm rollers": {
+    "degraded": false,
+    "entities": [],
+    "filters": {
+      "bpmMax": 174,
+      "bpmMin": 174,
+      "text": "rollers"
+    },
+    "kind": "filters",
+    "ok": true,
+    "results": [
+      {
+        "album": "Who Are You?",
+        "albumImageUrl": "https://coverartarchive.org/release/6f611839-bc70-4156-b633-94ff1185b2d7/front-500",
+        "artists": ["Omni Trio"],
+        "bpm": 174,
+        "certified": false,
+        "key": "D minor",
+        "label": "Moving Shadow",
+        "releaseDate": "2023-05-23",
+        "title": "Who Are You? (E-Z Rollers remix radio edit)",
+        "trackId": "mb_1c792990-4c56-4972-a092-136d4eb2086e"
+      },
+      {
+        "album": "Minimal Rollers",
+        "albumImageUrl": "https://coverartarchive.org/release/af51b83e-36be-4694-977f-b666136790c0/front-500",
+        "artists": ["Creatures"],
+        "bpm": 174,
+        "certified": false,
+        "key": "C minor",
+        "label": "Flexout Audio",
+        "releaseDate": "2020-11-13",
+        "title": "Instinct",
+        "trackId": "mb_e7793c11-4867-451d-986b-3658db859b5f"
+      },
+      {
+        "album": "Chronic Rollers, Vol. 4",
+        "albumImageUrl": "https://coverartarchive.org/release/04c16437-4bbe-4db2-ada0-b5b494f12d66/front-500",
+        "artists": ["Dr Meaker", "Danny Wheeler", "Spyda"],
+        "bpm": 174,
+        "certified": false,
+        "label": "Chronic",
+        "releaseDate": "2020-05-01",
+        "spotifyUrl": "https://open.spotify.com/track/0pGqkAGBnIVuyElTi4RMRv",
+        "title": "Root, Leaf & Stem",
+        "trackId": "mb_6d500666-66c7-40d7-844c-241859f9e251"
+      },
+      {
+        "album": "Chronic Rollers, Vol. 4",
+        "albumImageUrl": "https://coverartarchive.org/release/04c16437-4bbe-4db2-ada0-b5b494f12d66/front-500",
+        "artists": ["Sl8r"],
+        "bpm": 174,
+        "certified": false,
+        "label": "Chronic",
+        "releaseDate": "2020-05-01",
+        "spotifyUrl": "https://open.spotify.com/track/2bUc3Q6JCptEZuHgfX0mbJ",
+        "title": "Roundabout",
+        "trackId": "mb_b5e69c61-9587-43a6-8692-6ab21ce3a940"
+      },
+      {
+        "album": "Rave Alarm",
+        "albumImageUrl": "https://coverartarchive.org/release/2077ecf7-4f12-4734-96df-3bbd8045e167/front-500",
+        "artists": ["Kings of the Rollers"],
+        "bpm": 174,
+        "certified": false,
+        "label": "Hospital Records",
+        "releaseDate": "2018-08-10",
+        "spotifyUrl": "https://open.spotify.com/track/1rSPNRoAgFRMVUyXr0P3md",
+        "title": "Running Man",
+        "trackId": "mb_4203344f-3190-498e-83d6-6c48916954fa"
+      },
+      {
+        "album": "Chronic Rollers, Vol. 3",
+        "albumImageUrl": "https://coverartarchive.org/release/64b3a881-a4c8-40d4-bcef-ae734013615f/front-500",
+        "artists": ["Simplification", "Translate"],
+        "bpm": 174,
+        "certified": false,
+        "label": "Chronic",
+        "releaseDate": "2017-01-27",
+        "title": "Future Mission feat. MC Astro",
+        "trackId": "mb_61f2f853-e925-4e5c-b696-1252a27e31db"
+      },
+      {
+        "album": "Chronic Rollers, Vol. 3",
+        "albumImageUrl": "https://coverartarchive.org/release/64b3a881-a4c8-40d4-bcef-ae734013615f/front-500",
+        "artists": ["Need for Mirrors"],
+        "bpm": 174,
+        "certified": false,
+        "label": "Chronic",
+        "releaseDate": "2017-01-27",
+        "spotifyUrl": "https://open.spotify.com/track/4kcqq0ZALgmRXYchdyVaeL",
+        "title": "Meditate",
+        "trackId": "mb_7eac2473-578c-4067-a558-3344c337b674"
+      },
+      {
+        "album": "Flexout Presents: The Rollers",
+        "albumImageUrl": "https://coverartarchive.org/release/2df5b402-9db4-443e-b4c1-f6429b8cc935/front-500",
+        "artists": ["Bredren"],
+        "bpm": 174,
+        "certified": false,
+        "label": "Flexout Audio",
+        "releaseDate": "2016-10-28",
+        "spotifyUrl": "https://open.spotify.com/track/6yE2yotdxHatlqJx1zPrlI",
+        "title": "Fierce",
+        "trackId": "mb_76722b5a-9db0-411a-b8a4-9a80570f1225"
+      },
+      {
+        "album": "Flexout Presents: The Rollers",
+        "albumImageUrl": "https://coverartarchive.org/release/2df5b402-9db4-443e-b4c1-f6429b8cc935/front-500",
+        "artists": ["Chromatic"],
+        "bpm": 174,
+        "certified": false,
+        "label": "Flexout Audio",
+        "releaseDate": "2016-10-28",
+        "spotifyUrl": "https://open.spotify.com/track/7Iq9l0DrFhfkfYa6fiXGtp",
+        "title": "Physics of Emotion (Villem remix)",
+        "trackId": "mb_7c6d6d54-54c2-4d7f-8ca5-13a0c436a88a"
+      },
+      {
+        "album": "Chronic Rollers, Volume 02",
+        "albumImageUrl": "https://coverartarchive.org/release/8da88d6b-2cc8-4759-a29f-4af2f603e79a/front-500",
+        "artists": ["Jaybee", "Zere"],
+        "bpm": 174,
+        "certified": false,
+        "label": "Chronic",
+        "releaseDate": "2015-03-23",
+        "spotifyUrl": "https://open.spotify.com/track/2tAw3Vjeqa1w9y1mNDFWH1",
+        "title": "Delivery Service",
+        "trackId": "mb_84da7f75-25ec-4254-8c04-72e0d18428bf"
+      },
+      {
+        "album": "Bukem's Box 2",
+        "artists": ["E-Z Rollers"],
+        "bpm": 174,
+        "certified": false,
+        "key": "E minor",
+        "label": "Good Looking Records",
+        "releaseDate": "2014-03",
+        "title": "Breathless",
+        "trackId": "mb_9ea0aa4f-51bd-4a99-a36d-1e314344b802"
+      },
+      {
+        "album": "The Session (original 12\" version)",
+        "albumImageUrl": "https://coverartarchive.org/release/0892ba90-80a9-482e-9fc6-c100faade5ae/front-500",
+        "artists": ["E-Z Rollers"],
+        "bpm": 174,
+        "certified": false,
+        "key": "D minor",
+        "label": "Good Looking Records",
+        "releaseDate": "2013-04-08",
+        "title": "Hope & Inspiration",
+        "trackId": "mb_cfad7225-4932-4d87-843e-01de5be9f2bc"
+      },
+      {
+        "album": "Skeleton Keys",
+        "albumImageUrl": "https://coverartarchive.org/release/84d41e65-205c-4bff-8300-aa602c9f3ea8/front-500",
+        "artists": ["Omni Trio"],
+        "bpm": 174,
+        "certified": false,
+        "key": "D minor",
+        "label": "Moving Shadow",
+        "releaseDate": "1999-09-27",
+        "spotifyUrl": "https://open.spotify.com/track/5X81insPCSM8r8dAQmnM5W",
+        "title": "Who Are You? (E-Z Rollers remix)",
+        "trackId": "mb_3b5b6171-bf1f-4b6d-84d7-deca9f71c7e0"
+      }
+    ]
+  },
+  "jungle": {
+    "degraded": false,
+    "entities": [
+      {
+        "imageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/artists/jungle.jpg?v=1787735020735",
+        "kind": "artist",
+        "name": "Jungle",
+        "slug": "jungle"
+      }
+    ],
+    "kind": "entity",
+    "ok": true,
+    "redirect": "/artist/jungle",
+    "results": [
+      {
+        "album": "Majestic Casual - Chapter 2",
+        "albumImageUrl": "https://coverartarchive.org/release/3c212348-c42b-40ab-b17d-6e6fc82422a6/front-500",
+        "artists": ["Jungle"],
+        "certified": false,
+        "label": "AEI Music",
+        "releaseDate": "2014-07-27",
+        "spotifyUrl": "https://open.spotify.com/track/4UKLxwpHwszcIC3gQpkD1i",
+        "title": "Drops",
+        "trackId": "mb_33958c73-7a17-437c-bde3-bcdd4acf921e"
+      }
+    ]
+  },
+  "Metalheadz": {
+    "degraded": false,
+    "entities": [
+      {
+        "imageUrl": "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/labels/metalheadz.jpg?v=1",
+        "kind": "label",
+        "name": "Metalheadz",
+        "slug": "metalheadz"
+      }
+    ],
+    "kind": "entity",
+    "ok": true,
+    "redirect": "/label/metalheadz",
+    "results": [
+      {
+        "album": "Things Are Different Now EP",
+        "artists": ["Hobzee", "Response"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-08-21",
+        "title": "Things Are Different Now",
+        "trackId": "mb_2cbb07df-75c8-4b8e-beaf-39fed443a7f1"
+      },
+      {
+        "album": "Things Are Different Now EP",
+        "artists": ["Hobzee", "Justice"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-08-21",
+        "title": "Revox",
+        "trackId": "mb_3964db89-e85a-4eae-9d80-8fdafc11da77"
+      },
+      {
+        "album": "Things Are Different Now EP",
+        "artists": ["Hobzee", "Uneven"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-08-21",
+        "title": "Edge of the Sea",
+        "trackId": "mb_b5ae9bb7-1ea6-4f16-9f62-b4cd18739289"
+      },
+      {
+        "album": "Things Are Different Now EP",
+        "artists": ["Hobzee"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-08-21",
+        "title": "Is It a Dream",
+        "trackId": "mb_c6afef2b-8e2e-40f8-ac9c-7b685bbb3f43"
+      },
+      {
+        "album": "Things Are Different Now EP",
+        "artists": ["Hobzee", "Uneven"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-08-21",
+        "title": "Sound of Surprise",
+        "trackId": "mb_d6ab9999-e4c8-4ad3-a622-439451c0151a"
+      },
+      {
+        "album": "Metaphors / Workhouse",
+        "albumImageUrl": "https://coverartarchive.org/release/b0bcec74-dfbe-440e-89ba-dc0a9d6f321f/front-500",
+        "artists": ["Benny L", "Cleveland Watkiss"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-07-31",
+        "title": "Metaphors",
+        "trackId": "mb_007951e9-108d-4915-bb0e-5961975a3a1e"
+      },
+      {
+        "album": "Metaphors / Workhouse",
+        "albumImageUrl": "https://coverartarchive.org/release/b0bcec74-dfbe-440e-89ba-dc0a9d6f321f/front-500",
+        "artists": ["Benny L"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-07-31",
+        "title": "Workhouse",
+        "trackId": "mb_f1ddb35e-d5bb-4713-b86c-3925645dc3d3"
+      },
+      {
+        "album": "Right Now",
+        "albumImageUrl": "https://coverartarchive.org/release/4d5ae8a8-c599-4921-b7ef-b18eb659561e/front-500",
+        "artists": ["Kid Drama", "Goldie"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-07-24",
+        "spotifyUrl": "https://open.spotify.com/track/4Rso0nzO7gbi5a9XgwDWOj",
+        "title": "Right Now",
+        "trackId": "mb_b4a0545d-ff67-49e8-83fe-9f061dc31997"
+      },
+      {
+        "album": "Morana EP",
+        "albumImageUrl": "https://coverartarchive.org/release/f1c515a0-be93-4b01-9e43-e2a5500757f9/front-500",
+        "artists": ["Rift"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-06-26",
+        "spotifyUrl": "https://open.spotify.com/track/3AGtV6MfgapxxkSt6yKH6W",
+        "title": "Mercury",
+        "trackId": "mb_10f36b7d-0403-464a-b5b4-36ea128f7315"
+      },
+      {
+        "album": "Morana EP",
+        "albumImageUrl": "https://coverartarchive.org/release/f1c515a0-be93-4b01-9e43-e2a5500757f9/front-500",
+        "artists": ["Rift"],
+        "bpm": 174.02,
+        "certified": false,
+        "key": "C# minor",
+        "label": "Metalheadz",
+        "releaseDate": "2026-06-26",
+        "spotifyUrl": "https://open.spotify.com/track/005CReMeCRTWRRc9IaL0Hq",
+        "title": "Under the Skin",
+        "trackId": "mb_b07cd11e-8356-42a7-8448-a67e91a876c4"
+      },
+      {
+        "album": "Morana EP",
+        "albumImageUrl": "https://coverartarchive.org/release/f1c515a0-be93-4b01-9e43-e2a5500757f9/front-500",
+        "artists": ["Rift"],
+        "bpm": 169.98,
+        "certified": false,
+        "key": "A minor",
+        "label": "Metalheadz",
+        "releaseDate": "2026-06-26",
+        "spotifyUrl": "https://open.spotify.com/track/0eMvgugIfQ2vOHiTxNHsW2",
+        "title": "Morana",
+        "trackId": "mb_b2c1741f-6ed1-4ae2-82ca-1bf4cf63359d"
+      },
+      {
+        "album": "Morana EP",
+        "albumImageUrl": "https://coverartarchive.org/release/f1c515a0-be93-4b01-9e43-e2a5500757f9/front-500",
+        "artists": ["Rift"],
+        "certified": false,
+        "label": "Metalheadz",
+        "releaseDate": "2026-06-26",
+        "spotifyUrl": "https://open.spotify.com/track/3jh3HuHwiVWvLszxnqnIJ5",
+        "title": "Pandora",
+        "trackId": "mb_dd944094-3709-4632-8a5d-f49f1bdc0d99"
+      }
+    ]
+  },
+  "A minor": {
+    "degraded": false,
+    "entities": [],
+    "filters": {
+      "key": "A minor"
+    },
+    "kind": "filters",
+    "ok": true,
+    "results": [
+      {
+        "album": "Snowfall / 4 Seasons",
+        "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e028882a1f82797e0bf5f675e4d",
+        "artists": ["System & Wise"],
+        "bpm": 174,
+        "certified": true,
+        "galaxy": "Solar",
+        "key": "A minor",
+        "label": "Soul Bros. Records",
+        "logId": "007.0.0Z",
+        "releaseDate": "2018-12-14",
+        "spotifyUrl": "https://open.spotify.com/track/1rpvqMdw1209BmTrQshMrX",
+        "title": "4 Seasons",
+        "trackId": "1rpvqMdw1209BmTrQshMrX"
+      },
+      {
+        "album": "Some People",
+        "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e028f306a060ba9cff37e62352a",
+        "artists": ["Mitekiss"],
+        "bpm": 171.98,
+        "certified": true,
+        "galaxy": "Nebular",
+        "key": "A minor",
+        "label": "Shogun Audio",
+        "logId": "004.6.0Q",
+        "releaseDate": "2017-09-05",
+        "spotifyUrl": "https://open.spotify.com/track/22fQwm0C2PeIaVSlyu0QPV",
+        "title": "Some People",
+        "trackId": "22fQwm0C2PeIaVSlyu0QPV"
+      },
+      {
+        "album": "Talisman",
+        "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e0239dd0b5d82d534657904b451",
+        "artists": ["Whiney"],
+        "bpm": 175.04,
+        "certified": true,
+        "galaxy": "Solar",
+        "key": "A minor",
+        "label": "Medschool",
+        "logId": "004.0.1C",
+        "releaseDate": "2017-08-11",
+        "spotifyUrl": "https://open.spotify.com/track/515aZ5crPxZQ4PxhfSUZGg",
+        "title": "Oxford Road",
+        "trackId": "515aZ5crPxZQ4PxhfSUZGg"
+      },
+      {
+        "album": "Nightfall",
+        "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02ea475cf82ed915621379f071",
+        "artists": ["Whiney"],
+        "bpm": 175,
+        "certified": true,
+        "galaxy": "Solar",
+        "key": "A minor",
+        "label": "Medschool",
+        "logId": "011.5.9D",
+        "releaseDate": "2016-03-11",
+        "spotifyUrl": "https://open.spotify.com/track/1bxMOnFMbBkBRxHuNgWOC0",
+        "title": "Nightfall",
+        "trackId": "1bxMOnFMbBkBRxHuNgWOC0"
+      },
+      {
+        "album": "Pinnacle",
+        "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e028f85d72ba040b1f10d9e8b8f",
+        "artists": ["GLXY"],
+        "bpm": 174,
+        "certified": true,
+        "galaxy": "Nebular",
+        "key": "A minor",
+        "label": "Liquid Tones",
+        "logId": "012.1.0A",
+        "releaseDate": "2015-06-29",
+        "spotifyUrl": "https://open.spotify.com/track/5c1h0scE7Ck8gdRfLvMISZ",
+        "title": "It's Whatever",
+        "trackId": "5c1h0scE7Ck8gdRfLvMISZ"
+      },
+      {
+        "album": "Cardamom Mountains",
+        "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e02b46a425e0f8b89dc665d40af",
+        "artists": ["C41"],
+        "bpm": 174.44,
+        "certified": true,
+        "galaxy": "Lunar",
+        "key": "A minor",
+        "label": "Soulfox",
+        "logId": "019.8.6S",
+        "releaseDate": "2015-01-01",
+        "spotifyUrl": "https://open.spotify.com/track/4B2dynd6WBdVIhE3eht9b6",
+        "title": "Cardamom Mountains",
+        "trackId": "4B2dynd6WBdVIhE3eht9b6"
+      },
+      {
+        "album": "Netsky",
+        "albumImageUrl": "https://i.scdn.co/image/ab67616d00001e024802cdaa8f3d1a491abac1fd",
+        "artists": ["Netsky", "Bev Lee Harling"],
+        "bpm": 175.52,
+        "certified": true,
+        "galaxy": "Solar",
+        "key": "A minor",
+        "label": "Hospital Records",
+        "logId": "012.4.4D",
+        "releaseDate": "2010-03-27",
+        "spotifyUrl": "https://open.spotify.com/track/59DlhKbekmtU8O7AtQ8q1w",
+        "title": "Let's Leave Tomorrow",
+        "trackId": "59DlhKbekmtU8O7AtQ8q1w"
+      },
+      {
+        "album": "Lonely Road: Alternate Routes",
+        "albumImageUrl": "https://coverartarchive.org/release/fff24dca-0c7b-4d58-9bdf-71ca35a12577/front-500",
+        "artists": ["Forbidden Society"],
+        "bpm": 176.04,
+        "certified": false,
+        "key": "A minor",
+        "label": "Vision Recordings",
+        "releaseDate": "2026-07-17",
+        "spotifyUrl": "https://open.spotify.com/track/43JWUq7XFFUE7uP7gTsSsg",
+        "title": "Picture of Us (ChaseR remix)",
+        "trackId": "mb_3457b077-5480-47b2-aa30-412fc912a413"
+      },
+      {
+        "album": "Lonely Road: Alternate Routes",
+        "albumImageUrl": "https://coverartarchive.org/release/fff24dca-0c7b-4d58-9bdf-71ca35a12577/front-500",
+        "artists": ["Forbidden Society"],
+        "bpm": 175.98,
+        "certified": false,
+        "key": "A minor",
+        "label": "Vision Recordings",
+        "releaseDate": "2026-07-17",
+        "spotifyUrl": "https://open.spotify.com/track/3xXNcP8zXJV5FsRfBp6Y9j",
+        "title": "Picture of Us (Enta remix)",
+        "trackId": "mb_bc068e1a-fbf7-490f-a29c-c96396d151b7"
+      },
+      {
+        "album": "Morana EP",
+        "albumImageUrl": "https://coverartarchive.org/release/f1c515a0-be93-4b01-9e43-e2a5500757f9/front-500",
+        "artists": ["Rift"],
+        "bpm": 169.98,
+        "certified": false,
+        "key": "A minor",
+        "label": "Metalheadz",
+        "releaseDate": "2026-06-26",
+        "spotifyUrl": "https://open.spotify.com/track/0eMvgugIfQ2vOHiTxNHsW2",
+        "title": "Morana",
+        "trackId": "mb_b2c1741f-6ed1-4ae2-82ca-1bf4cf63359d"
+      },
+      {
+        "album": "Snakes & Ladders",
+        "albumImageUrl": "https://coverartarchive.org/release/ffa8f209-d00d-4c23-8079-2e5ccbf624e5/front-500",
+        "artists": ["Gardna", "Shapes"],
+        "bpm": 174,
+        "certified": false,
+        "key": "A minor",
+        "label": "Shogun Audio",
+        "releaseDate": "2026-05-15",
+        "spotifyUrl": "https://open.spotify.com/track/7pX4CIa5YbDQqyttp14Xjf",
+        "title": "Snakes & Ladders",
+        "trackId": "mb_3ec3dd49-838f-4418-b203-6433d6c2a950"
+      },
+      {
+        "album": "Tricklemore Sea",
+        "albumImageUrl": "https://coverartarchive.org/release/2e4c780f-9485-4a44-a4f9-555b6ca6e799/front-500",
+        "artists": ["Calibre"],
+        "certified": false,
+        "key": "A minor",
+        "label": "Signature Records",
+        "releaseDate": "2026-05-01",
+        "spotifyUrl": "https://open.spotify.com/track/6VWd3IriQFh2CoIY5viL46",
+        "title": "Bit Broken",
+        "trackId": "mb_3b8f5470-1633-4f5d-a690-101b22e76d1f"
+      },
+      {
+        "album": "Old Flame EP",
+        "albumImageUrl": "https://coverartarchive.org/release/9096ec55-5f10-4308-9904-878e480c82a8/front-500",
+        "artists": ["Matt View", "hannelotta"],
+        "bpm": 173.06,
+        "certified": false,
+        "key": "A minor",
+        "label": "Fokuz Recordings",
+        "releaseDate": "2026-05-01",
+        "spotifyUrl": "https://open.spotify.com/track/3ZXw49IgC3TJod0cHpcYow",
+        "title": "Lonely",
+        "trackId": "mb_40ed01be-54ed-40be-bdd8-4431c4a33ba8"
+      },
+      {
+        "album": "The Set",
+        "albumImageUrl": "https://coverartarchive.org/release/9c1254cd-7437-403c-bdf0-b72282253fc7/front-500",
+        "artists": ["Amoss", "Minor Forms"],
+        "bpm": 174,
+        "certified": false,
+        "key": "A minor",
+        "label": "Symmetry Recordings",
+        "releaseDate": "2026-05-01",
+        "spotifyUrl": "https://open.spotify.com/track/2FwTfXHknyos60ulpqnQif",
+        "title": "The Set",
+        "trackId": "mb_acf57a73-a9b9-4739-81d3-4db2549c6e89"
+      },
+      {
+        "album": "A Remedy for My Sorrow",
+        "albumImageUrl": "https://coverartarchive.org/release/ebe26680-60c8-4914-93a4-a7d1a809ce24/front-500",
+        "artists": ["[BORDERS]", "Puzzle"],
+        "bpm": 172.04,
+        "certified": false,
+        "key": "A minor",
+        "label": "Pilot.",
+        "releaseDate": "2026-04-28",
+        "spotifyUrl": "https://open.spotify.com/track/3LYuSGKE5xcv3Niap7SI0h",
+        "title": "Against All Odds",
+        "trackId": "mb_32a30bac-bb29-4e8f-b03e-cf5674ea76dd"
+      },
+      {
+        "album": "A Remedy for My Sorrow",
+        "albumImageUrl": "https://coverartarchive.org/release/ebe26680-60c8-4914-93a4-a7d1a809ce24/front-500",
+        "artists": ["[BORDERS]"],
+        "bpm": 172,
+        "certified": false,
+        "key": "A minor",
+        "label": "Pilot.",
+        "releaseDate": "2026-04-28",
+        "spotifyUrl": "https://open.spotify.com/track/4tPrYOrChwNillb4TzW0fg",
+        "title": "Anywhere but Nowhere",
+        "trackId": "mb_7c664138-685a-441e-b3a8-a0db360c6d05"
+      }
+    ]
+  }
+}

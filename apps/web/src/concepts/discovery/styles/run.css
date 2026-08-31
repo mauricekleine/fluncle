@@ -1,0 +1,488 @@
+/* Concept C — The Run. The player-shaped discovery surface.
+ *
+ * Loaded through the route's `head` with `?url`, never a bare module import
+ * (docs/client-bundle.md, rule 2). Shared paint lives in shared.css; this file
+ * owns only what the Run's own shape needs.
+ *
+ * The whole surface is a WORKSTATION (DESIGN.md, The Three Areas Rule): one stop
+ * fills the frame, the trail sits behind it, the branches sit ahead of it, and
+ * the interface carries the meaning without a paragraph of help.
+ *
+ * The One Sun budget is spent on two things and nothing else: the leading
+ * branch's Gold Veil — this surface's primary action is the transport, not the
+ * link out — and the focus ring. The outbound button is deliberately quiet here,
+ * because two gold actions in one view means one of them is wrong. The cover frame is lit from the sun
+ * side only and the entity name is cream at rest, because a graph name gold at
+ * rest turns the surface into a field of suns and the CTA stops leading
+ * (DESIGN.md, Graph Link). Every gold rule below is gated behind `.run-lit`:
+ * Eclipse Gold is the certification light, and an uncertified row catches the
+ * Dust Veil instead (The Unlit Rule). */
+
+/* The surface is a PANE. Its two siblings mount one and this one has to as well:
+   the cover-art backdrop runs bright where the sun sits, and Stardust ink on the
+   raw backdrop measured under AA there. The pane gets more opaque; the ink never
+   gets dimmer (DESIGN.md, The Legible Sky Rule). */
+.run {
+  --run-bar: 2.75rem;
+  --run-gap: clamp(0.7rem, 2vw, 1.35rem);
+  --run-thumb: 2rem;
+  display: grid;
+  gap: var(--run-gap);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  margin-inline: auto;
+  max-inline-size: 78rem;
+  min-block-size: calc(100dvh - var(--run-bar));
+  padding-block: var(--run-gap);
+  padding-inline: clamp(0.75rem, 3vw, 2rem);
+  position: relative;
+}
+
+/* One ground under the whole lane, painted behind the content rather than around
+   it, so the single-focus composition keeps its edge-to-edge frame. */
+.run::before {
+  background: color-mix(in oklch, var(--deep-field) 78%, transparent);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: -1;
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .run::before {
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    backdrop-filter: blur(10px) saturate(120%);
+    background: color-mix(in oklch, var(--deep-field) 62%, transparent);
+  }
+}
+
+/* ── the trail: where the lane has already been ───────────────────────────── */
+
+.run-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.run-back {
+  align-items: center;
+  background: color-mix(in oklch, var(--tape-black) 72%, transparent);
+  border-radius: var(--rounded-sm);
+  color: var(--stardust);
+  display: inline-flex;
+  font-size: 0.8rem;
+  gap: 0.35rem;
+  padding: 0.15rem 0.4rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.run-back:hover {
+  color: var(--starlight-cream);
+}
+
+.run-trail {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-trail-item {
+  display: block;
+  position: relative;
+}
+
+.run-trail-thumb {
+  block-size: var(--run-thumb);
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-artwork);
+  inline-size: var(--run-thumb);
+  opacity: 0.5;
+  transition:
+    opacity 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.run-trail-item:hover .run-trail-thumb {
+  opacity: 0.85;
+}
+
+/* The stop playing now closes the trail. This is the colour that carries the
+   state change when motion is off: a travelled stop is dimmed dust, the current
+   one is at full strength and edged in its own register. */
+.run-trail-now .run-trail-thumb {
+  opacity: 1;
+}
+
+.run-trail-now.run-lit .run-trail-thumb {
+  border-color: color-mix(in oklch, var(--eclipse-gold) 55%, transparent);
+}
+
+.run-trail-now.run-unlit .run-trail-thumb {
+  background: var(--dust-veil);
+  border-color: color-mix(in oklch, var(--stardust) 34%, transparent);
+}
+
+/* ── the stop: one track, filling the frame ───────────────────────────────── */
+
+.run-stop {
+  align-content: center;
+  display: grid;
+  gap: clamp(1rem, 3vw, 2rem);
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-block-size: 0;
+}
+
+.run-art {
+  display: grid;
+  justify-items: center;
+  min-block-size: 0;
+}
+
+.run-art-frame {
+  align-self: center;
+  aspect-ratio: 1;
+  display: grid;
+  inline-size: min(100%, 22rem, 34dvh);
+  position: relative;
+}
+
+.run-art-frame > * {
+  grid-area: 1 / 1;
+}
+
+/* Two stacked layers in one grid cell: the stop leaving and the stop arriving.
+   The layer carries the cross-fade; the cover inside it fills it. */
+.run-cover-ghost,
+.run-cover-live {
+  block-size: 100%;
+  display: grid;
+  inline-size: 100%;
+}
+
+.run-cover {
+  block-size: 100%;
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-artwork);
+  inline-size: 100%;
+  object-fit: cover;
+}
+
+/* Lit from the SUN SIDE, never as a ring: the frame's top and left edges catch
+   the gold and the other two stay Dust Line (DESIGN.md, Cover Frame). A uniform
+   gold ring is also the largest gold object on the surface, which is the One Sun
+   budget spent on a border instead of on the action. */
+.run-lit .run-art-frame .run-cover {
+  border-block-start-color: color-mix(in oklch, var(--eclipse-gold) 30%, transparent);
+  border-inline-start-color: color-mix(in oklch, var(--eclipse-gold) 30%, transparent);
+}
+
+.run-detail {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  min-inline-size: 0;
+}
+
+.run-entered {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.run-entered-kind {
+  color: var(--stardust);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.run-entered-name {
+  color: var(--starlight-cream);
+  font-size: 0.82rem;
+}
+
+/* Cream at rest, like every other named graph entity in the product. Gold at
+   rest here would be a second sun competing with the one action on the page
+   (DESIGN.md, Graph Link: "It is not gold at rest, and this is load-bearing"). */
+.run-entered-name.run-lit {
+  color: var(--starlight-cream);
+}
+
+/* Space Grotesk at the heaviest cut: a track title is the loudest text on the
+   surface, and Oxanium is reserved for the brand and the numbers (§3). */
+.run-title {
+  color: var(--starlight-cream);
+  font-size: clamp(1.15rem, 3.4vw, 1.75rem);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.16;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.run-unlit .run-title {
+  color: var(--stardust);
+}
+
+.run-artists {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.run-note {
+  border-inline-start: 1px solid var(--dust-line);
+  color: var(--starlight-cream);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  margin: 0;
+  max-inline-size: 44ch;
+  padding-inline-start: 0.7rem;
+}
+
+.run-transport {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-block-start: 0.2rem;
+}
+
+.run-preview {
+  border-color: var(--dust-line);
+}
+
+.run-plain {
+  color: var(--stardust);
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+/* ── the branches: what the lane can do next ──────────────────────────────── */
+
+.run-branches {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-branch {
+  align-items: center;
+  background: color-mix(in oklch, var(--tape-black) 55%, transparent);
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-md);
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.5rem 0.6rem;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+/* A branch to a record Fluncle has not been to reads as one in EVERY slot, not
+   only the lead: dust ground, dust edge, and the billing a step quieter. Two
+   tiers that share a silhouette are two tiers the reader cannot tell apart
+   (The Unlit Rule). */
+.run-branch.run-unlit {
+  background: color-mix(in oklch, var(--tape-black) 55%, var(--dust-veil));
+  border-color: color-mix(in oklch, var(--stardust) 18%, transparent);
+}
+
+.run-branch.run-unlit .run-branch-label {
+  color: var(--stardust);
+}
+
+/* The Ignition Rule: a control heats when you reach for it, and never dims — and
+   the ground it heats on keeps its opacity, because a lightening wash over the
+   cover art is how a legible pane stops being legible (The Legible Sky Rule). */
+.run-branch:hover {
+  background: color-mix(in oklch, var(--tape-black) 78%, transparent);
+  border-color: color-mix(in oklch, var(--stardust) 30%, transparent);
+}
+
+.run-branch.run-unlit:hover {
+  background: color-mix(in oklch, var(--tape-black) 78%, var(--dust-veil));
+  border-color: color-mix(in oklch, var(--stardust) 34%, transparent);
+}
+
+.run-branch-lead.run-lit {
+  background: var(--gold-veil);
+  border-color: color-mix(in oklch, var(--eclipse-gold) 34%, transparent);
+}
+
+.run-branch-lead.run-lit:hover {
+  background: color-mix(in oklch, var(--eclipse-gold) 17%, transparent);
+  border-color: color-mix(in oklch, var(--eclipse-gold) 52%, transparent);
+}
+
+.run-branch-lead.run-unlit {
+  background: color-mix(in oklch, var(--tape-black) 62%, var(--dust-veil));
+  border-color: color-mix(in oklch, var(--stardust) 26%, transparent);
+}
+
+.run-branch-lead.run-unlit:hover {
+  background: color-mix(in oklch, var(--tape-black) 82%, var(--dust-veil));
+  border-color: color-mix(in oklch, var(--stardust) 40%, transparent);
+}
+
+.run-branch-icon {
+  color: var(--stardust);
+}
+
+.run-branch-body {
+  display: grid;
+  gap: 0.15rem;
+  min-inline-size: 0;
+}
+
+.run-branch-label {
+  color: var(--starlight-cream);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.run-branch-billing {
+  color: var(--stardust);
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-branch-keys {
+  align-items: center;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.run-kbd {
+  align-items: center;
+  background: color-mix(in oklch, var(--tape-black) 72%, transparent);
+  block-size: 1.2rem;
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-sm);
+  color: var(--stardust);
+  display: inline-flex;
+  font-size: 0.66rem;
+  justify-content: center;
+  line-height: 1;
+  min-inline-size: 1.2rem;
+  padding-inline: 0.22rem;
+}
+
+/* ── the one motion moment: the stop change ───────────────────────────────── */
+
+/* Advancing the lane is the only thing on this surface that moves. Three parts
+   of one gesture, all 220ms ease-out: the outgoing cover fades out under the
+   incoming one, the trail slides one place as the new stop joins it, and the
+   readout rises into its swap.
+ *
+ * Grounded by default. `reduce` is not a downgrade path bolted on afterwards —
+ * the animations live INSIDE the no-preference gate, so a reader who asked for
+ * less motion gets a surface with none, and the arrival is carried by the colour
+ * already in the trail (a travelled thumb is dimmed dust, the current one is at
+ * full strength). DESIGN.md §5: every state change collapses to colour. */
+
+.run-cover-ghost {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-run-moved="true"] .run-cover-ghost {
+    animation: run-cover-out 220ms ease-out both;
+  }
+
+  [data-run-moved="true"] .run-cover-live {
+    animation: run-cover-in 220ms ease-out both;
+  }
+
+  [data-run-moved="true"] .run-detail {
+    animation: run-detail-in 220ms ease-out both;
+  }
+
+  [data-run-moved="true"] .run-trail {
+    animation: run-trail-slide 220ms ease-out both;
+  }
+}
+
+@keyframes run-cover-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes run-cover-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes run-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes run-trail-slide {
+  from {
+    transform: translateX(calc(var(--run-thumb) + 0.4rem));
+  }
+
+  to {
+    transform: none;
+  }
+}
+
+/* ── desktop ──────────────────────────────────────────────────────────────── */
+
+@media (min-width: 60rem) {
+  .run {
+    --run-thumb: 2.5rem;
+  }
+
+  .run-stop {
+    align-items: center;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    grid-template-rows: none;
+  }
+
+  .run-art-frame {
+    inline-size: min(100%, 26rem, 52dvh);
+  }
+
+  .run-branches {
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+  }
+
+  .run-branch {
+    padding: 0.6rem 0.75rem;
+  }
+}

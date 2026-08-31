@@ -1,0 +1,106 @@
+/* Shared paint for the three held discovery concepts.
+ *
+ * Loaded per concept route through the route's `head` with `?url`, never by a
+ * bare module import: a route-level `import "…css"` joins the shared entry sheet
+ * and becomes render-blocking on every page in the app (docs/client-bundle.md,
+ * rule 2). The exhibit costs the rest of the product nothing.
+ *
+ * Only what all three concepts must render identically lives here. Structure is
+ * each concept's own; see front.css, desk.css, run.css. */
+
+.concept-display {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* The artwork fallback comes in two registers, because a fallback is still a
+   claim about the record. A certified one takes the eclipse — gold falling to
+   re-entry red — and a record Fluncle has not been to takes the Dust Veil, the
+   cold light of a thing seen from a distance (DESIGN.md, The Unlit Rule). Grain
+   runs at full density on both: there is no text here to protect. */
+.concept-cover-fallback {
+  background-color: var(--tape-black);
+  background-image:
+    var(--grain-tile),
+    linear-gradient(
+      142deg,
+      color-mix(in oklch, var(--eclipse-gold) 30%, var(--tape-black)),
+      color-mix(in oklch, var(--reentry-red) 22%, var(--tape-black)) 58%,
+      var(--tape-black)
+    );
+  /* Soft-light, not overlay: over a warm near-black ground overlay drives the
+     tile to a grey television static and loses the eclipse underneath it. */
+  background-blend-mode: soft-light, normal;
+  background-size:
+    160px 160px,
+    cover;
+}
+
+.concept-cover-fallback--lit {
+  background-image:
+    var(--grain-tile),
+    linear-gradient(
+      142deg,
+      color-mix(in oklch, var(--eclipse-gold) 62%, var(--tape-black)),
+      color-mix(in oklch, var(--reentry-red) 48%, var(--tape-black)) 58%,
+      var(--tape-black)
+    );
+}
+
+/* The exhibit's own chrome. It is NOT part of any concept — it is the frame
+   around the pictures, and the comparison document says so. Kept out of the
+   reading column and quiet enough to ignore. */
+.concept-exhibit-bar {
+  align-items: center;
+  backdrop-filter: blur(14px) saturate(125%);
+  background: color-mix(in oklch, var(--sleeve-black) 84%, transparent);
+  border-block-end: 1px solid var(--dust-line);
+  display: flex;
+  gap: 0.75rem;
+  inset-block-start: 0;
+  padding: 0.5rem 1rem;
+  position: sticky;
+  z-index: 40;
+}
+
+/* The plate's printed edge, reused so a concept reads as a Fluncle document
+   rather than a blank canvas: a double rule, no shadow (The Through-the-Glass
+   Rule bans one outright). */
+.concept-plate {
+  background: color-mix(in oklch, var(--sleeve-black) 62%, transparent);
+  backdrop-filter: blur(18px) saturate(125%);
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-lg);
+  outline: 1px solid color-mix(in oklch, var(--dust-line) 55%, transparent);
+  outline-offset: 4px;
+  position: relative;
+}
+
+.concept-plate::before {
+  background-image: var(--grain-tile);
+  background-size: 160px 160px;
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  mix-blend-mode: overlay;
+  opacity: 0.16;
+  pointer-events: none;
+  position: absolute;
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .concept-plate,
+  .concept-exhibit-bar {
+    background: color-mix(in oklch, var(--sleeve-black) 92%, transparent);
+  }
+}
+
+/* Every concept states its focus ring the same way, because focus is an
+   accessibility affordance and not a claim about the music: gold on a certified
+   row and on an uncertified one alike (The Unlit Rule's one exception). */
+.concept-focus:focus-visible {
+  border-radius: var(--rounded-md);
+  outline: 2px solid var(--eclipse-gold);
+  outline-offset: 2px;
+}

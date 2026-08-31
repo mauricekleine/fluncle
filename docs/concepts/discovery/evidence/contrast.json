@@ -1,0 +1,170 @@
+{
+  "generatedBy": "apps/web/tests/e2e/concepts-contrast.spec.ts",
+  "lowest": 5.22,
+  "readings": [
+    {
+      "mean": 8.48,
+      "path": "/concepts",
+      "selector": "main p",
+      "worst": 5.51
+    },
+    {
+      "mean": 15.51,
+      "path": "/concepts",
+      "selector": "main dd",
+      "worst": 15.21
+    },
+    {
+      "mean": 14.94,
+      "path": "/concepts/front",
+      "selector": ".front-masthead-title",
+      "worst": 15.24
+    },
+    {
+      "mean": 8.16,
+      "path": "/concepts/front",
+      "selector": ".front-masthead p",
+      "worst": 7.93
+    },
+    {
+      "mean": 15.5,
+      "path": "/concepts/front",
+      "selector": ".front-note",
+      "worst": 15.64
+    },
+    {
+      "mean": 7.95,
+      "path": "/concepts/front",
+      "selector": ".front-entry .concept-display",
+      "worst": 5.92
+    },
+    {
+      "mean": 8.1,
+      "path": "/concepts/front",
+      "selector": ".front-band p",
+      "worst": 7.88
+    },
+    {
+      "mean": 7.65,
+      "path": "/concepts/front",
+      "selector": ".front-release p",
+      "worst": 6.89
+    },
+    {
+      "mean": 14.67,
+      "path": "/concepts/front",
+      "selector": ".front-tile h3",
+      "worst": 11.79
+    },
+    {
+      "mean": 15.51,
+      "path": "/concepts/front/track/090.6.2K",
+      "selector": ".front-lead-title",
+      "worst": 15.2
+    },
+    {
+      "mean": 15.27,
+      "path": "/concepts/front/on/label/hospital-records",
+      "selector": "header p",
+      "worst": 14.84
+    },
+    {
+      "mean": 15.1,
+      "path": "/concepts/desk",
+      "selector": "main h1",
+      "worst": 13.79
+    },
+    {
+      "mean": 14.8,
+      "path": "/concepts/desk",
+      "selector": ".desk-count",
+      "worst": 14.95
+    },
+    {
+      "mean": 14.93,
+      "path": "/concepts/desk",
+      "selector": ".desk-facet-label",
+      "worst": 14.61
+    },
+    {
+      "mean": 8.17,
+      "path": "/concepts/desk",
+      "selector": ".desk-facet-count",
+      "worst": 8.24
+    },
+    {
+      "mean": 15.38,
+      "path": "/concepts/desk",
+      "selector": ".desk-row-billing",
+      "worst": 12.96
+    },
+    {
+      "mean": 8.17,
+      "path": "/concepts/desk",
+      "selector": ".desk-row-meta",
+      "worst": 8.24
+    },
+    {
+      "mean": 8.17,
+      "path": "/concepts/desk?q=zzzzzznothing",
+      "selector": ".desk-empty",
+      "worst": 5.22
+    },
+    {
+      "mean": 16.67,
+      "path": "/concepts/run",
+      "selector": "main h1",
+      "worst": 16.58
+    },
+    {
+      "mean": 8.78,
+      "path": "/concepts/run",
+      "selector": "main p",
+      "worst": 8.73
+    },
+    {
+      "mean": 7.97,
+      "path": "/concepts/run?step=1",
+      "selector": ".run-back",
+      "worst": 6.48
+    },
+    {
+      "mean": 7.59,
+      "path": "/concepts/run",
+      "selector": ".run-kbd",
+      "worst": 6.83
+    },
+    {
+      "mean": 7.08,
+      "path": "/concepts/run",
+      "selector": ".run-branch-billing",
+      "worst": 6.4
+    },
+    {
+      "mean": 13.63,
+      "path": "/concepts/run",
+      "selector": ".run-branch-label",
+      "worst": 12.48
+    },
+    {
+      "mean": 8.78,
+      "path": "/concepts/run?anchor=090.6.2K",
+      "selector": ".run-title",
+      "worst": 8.73
+    },
+    {
+      "mean": 16.67,
+      "path": "/concepts/run?entity=label:hospital-records",
+      "selector": ".run-entered-name",
+      "worst": 16.67
+    }
+  ],
+  "reproduceWith": "bunx playwright test concepts-contrast.spec.ts (apps/web)",
+  "sampleCount": 26,
+  "samplesDeclared": 26,
+  "threshold": 4.5,
+  "viewport": {
+    "height": 900,
+    "width": 1440
+  }
+}

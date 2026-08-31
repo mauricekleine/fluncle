@@ -44,7 +44,10 @@
     "test:e2e:install": "playwright install chromium",
     "test:e2e:report": "playwright show-report",
     "typecheck": "tsc --noEmit",
-    "test": "node ../../node_modules/vitest/vitest.mjs run --coverage"
+    "test": "node ../../node_modules/vitest/vitest.mjs run --coverage",
+    "concepts:capture": "bun run scripts/capture-concept-fixture.ts",
+    "concepts:evidence": "bun tests/browser/concepts-evidence.ts",
+    "concepts:contrast": "bun tests/browser/concepts-contrast.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "catalog:",
