@@ -1262,13 +1262,43 @@ async function runSonic(filters: SearchFilters, limit: number): Promise<SearchRe
   return { anchor: anchor.hit, degraded: false, entities: [], filters, kind: "sonic", results };
 }
 
+type CentroidRow = { artist_id: string; centroid_blob: unknown; name: string };
+
+/** The projection + tiebreak both centroid RANKS share, so the two statements can never disagree. */
+const CENTROID_SELECT = `select artists.id as artist_id, artists.name as name,
+             ac.centroid_blob as centroid_blob`;
+const CENTROID_TIEBREAK = `order by length(artists.name) asc, artists.name asc limit 1`;
+
 /**
  * Resolve 1–6 artist NAMES or SLUGS to their stored `artist_centroids`, alias-tolerant — the same
  * trust the entity read uses (`kind='name'`, `status in ('auto','confirmed')`). Each input resolves
  * to at most one artist (the primary name wins a tie over an alias); a name that resolves to no
  * artist, or to an artist with no centroid yet, simply does not weigh in. Returns the RESOLVED names
  * (for the transparency echo) alongside their vectors, de-duplicated by artist so passing one artist
- * twice never double-weights it. Bounded: ≤{@link MAX_SIMILAR_ARTISTS_INPUT} indexed single-row reads.
+ * twice never double-weights it.
+ *
+ * ── WHY EACH INPUT IS TWO STATEMENTS AND NOT ONE `or` ──────────────────────────────────────────
+ * This is {@link resolveFilterArtistId}'s rewrite, applied to the read beside it, for the same
+ * reason and with the same wording: `artists` is a GROWING table (the credit sweep mints a row per
+ * unmatched MusicBrainz credit, `mintArtistByMbid`; `scripts/lib/scale-seed.ts` seeds 30,000 of
+ * them for the 150k regime), and one `where lower(name) = ? or slug = ? or exists (<alias probe>)`
+ * over it is a full scan with a correlated `artist_aliases` probe per row — `lower()` wraps the
+ * column so `artists_name_nocase_idx` cannot be seeked, and an `or` arm that is a correlated
+ * `exists` is not indexable, so SQLite cannot build a multi-index OR and falls back to the table.
+ * Once per input, up to {@link MAX_SIMILAR_ARTISTS_INPUT} of them, on every `sounds like <artists>`
+ * search. This doc block used to call that "indexed single-row reads"; it was neither.
+ *
+ * The `name_rank asc … limit 1` tiebreak was only ever "ask rank 0, then rank 1", so the two ranks
+ * are asked separately, in rank order. Rank 0 is two indexable equalities — `name = ? collate
+ * nocase` rides `artists_name_nocase_idx`, `slug = ?` rides the slug unique index. Rank 1 drives
+ * FROM `artist_aliases` and joins `artists` by primary key instead of scanning every artist to ask
+ * whether one of its aliases matches. Both ranks keep the `artist_centroids` join, so an artist
+ * with no centroid yet is passed over at the SAME rank it always was, and a lower-ranked artist
+ * that does have one still wins — the split is a plan change, not a ranking change.
+ *
+ * `name = ? collate nocase` is exactly `lower(name) = ?` for this needle, not an approximation of
+ * it: SQLite's `lower()` and its NOCASE collation both fold ASCII A–Z and nothing else, so the two
+ * agree character for character on every input (a non-ASCII capital matches under neither).
  */
 async function resolveArtistCentroids(
   inputs: string[],
@@ -1290,24 +1320,37 @@ async function resolveArtistCentroids(
   for (const input of cleaned) {
     const needle = input.toLowerCase();
     const slug = slugify(input);
-    const result = await db.execute({
-      // Binds in SQL-text order: name_rank case (name, slug), then the where (name, slug, alias).
-      args: [needle, slug, needle, slug, needle],
-      sql: `select artists.id as artist_id, artists.name as name, ac.centroid_blob as centroid_blob,
-                   case when lower(artists.name) = ? or artists.slug = ? then 0 else 1 end as name_rank
+    // Rank 0 — the artist claims the typed string as its own name or slug. Both `or` arms are plain
+    // equalities on indexed columns, so this is a seek pair rather than a scan.
+    const primary = await db.execute({
+      args: [needle, slug],
+      sql: `${CENTROID_SELECT}
             from artists
             join artist_centroids ac on ac.artist_id = artists.id
-            where lower(artists.name) = ?
-               or artists.slug = ?
-               or exists (select 1 from artist_aliases
-                          where artist_aliases.artist_id = artists.id
-                            and artist_aliases.kind = 'name'
-                            and artist_aliases.status in ('auto', 'confirmed')
-                            and lower(artist_aliases.alias) = ?)
-            order by name_rank asc, length(artists.name) asc, artists.name asc
-            limit 1`,
+            where artists.name = ? collate nocase or artists.slug = ?
+            ${CENTROID_TIEBREAK}`,
     });
-    const row = typedRow<{ artist_id: string; centroid_blob: unknown; name: string }>(result.rows);
+    let row = typedRow<CentroidRow>(primary.rows);
+
+    if (!row) {
+      // Rank 1, asked ONLY when nothing claims the name directly — a trusted AKA (`kind='name'`,
+      // `status in ('auto','confirmed')`), the same trust the entity tier resolves an alias by.
+      // Driven FROM the alias rows, so the artist and its centroid are reached by primary key
+      // rather than scanned for.
+      const alias = await db.execute({
+        args: [needle],
+        sql: `${CENTROID_SELECT}
+              from artist_aliases
+              join artists on artists.id = artist_aliases.artist_id
+              join artist_centroids ac on ac.artist_id = artists.id
+              where artist_aliases.kind = 'name'
+                and artist_aliases.status in ('auto', 'confirmed')
+                and lower(artist_aliases.alias) = ?
+              ${CENTROID_TIEBREAK}`,
+      });
+
+      row = typedRow<CentroidRow>(alias.rows);
+    }
 
     if (!row || seen.has(row.artist_id)) {
       continue;

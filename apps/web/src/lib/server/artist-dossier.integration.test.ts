@@ -6,6 +6,7 @@ import {
   seedCatalogueTrack,
   seedEmbedding,
   seedTrack,
+  syncHubCounts,
 } from "./integration-db";
 
 // THE SIMILAR-ARTISTS ENGINE, PROVEN — against the REAL schema, with vectors we control.
@@ -28,7 +29,8 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 // Imported AFTER the mock so the module's `getDb` is the mocked one.
-const { getArtistNeighbours, rankArtists } = await import("./artist-dossier");
+const { ARTIST_NEIGHBOURS_SQL, getArtistNeighbours, rankArtists } =
+  await import("./artist-dossier");
 
 const DIMS = 1024;
 const NOW = () => "2026-07-18T00:00:00.000Z";
@@ -64,12 +66,19 @@ async function seedArtist(id: string, name: string): Promise<void> {
   });
 }
 
-/** Link a track to an artist (position 1, lead). */
+/**
+ * Link a track to an artist (position 1, lead), then bring the MAINTAINED artist hub counters back
+ * into agreement with the edge — the read's `certified` tier is `artists.certified_finding_count`
+ * (keystone 2), which in production is moved as a delta by the write paths. A fixture that inserts
+ * into `track_artists` directly bypasses those writers, so without this the seeded world would hold
+ * edges with counters at the DDL default and every neighbour would read uncertified.
+ */
 async function link(trackId: string, artistId: string): Promise<void> {
   await db.execute({
     args: [trackId, artistId],
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
   });
+  await syncHubCounts(db);
 }
 
 /** The write the agent-tier `update_track` path performs: validated JSON → ranked F32_BLOB. */
@@ -176,6 +185,24 @@ describe("rankArtists — the sweep", () => {
     expect(await centroidCount()).toBe(5);
   });
 
+  // THE DRAIN SIGNAL'S TWO BRANCHES. An empty page over a POSITIVE limit proves the stale set is
+  // empty, so `remaining` is 0 without a second `group by` over `track_artists ⋈ track_embeddings`.
+  // A limit of 0 observes NO page, so it must still COUNT — otherwise an idling cron would read
+  // "drained" while artists were stale and stop looping.
+  it("counts remaining on a zero limit, and infers it on an empty positive-limit page", async () => {
+    await seedCatalogueArtist("a", axis(0));
+    await seedCatalogueArtist("b", axis(1));
+
+    const idle = await rankArtists(0, NOW);
+    expect(idle.centroidsComputed).toBe(0);
+    expect(idle.remaining).toBe(2);
+
+    await rankArtists(100, NOW);
+    const settled = await rankArtists(100, NOW);
+    expect(settled.centroidsComputed).toBe(0);
+    expect(settled.remaining).toBe(0);
+  });
+
   it("re-stales ONLY the artists whose own discography changed (per-artist staleness)", async () => {
     await seedCertifiedArtist("a", axis(0));
     await seedCertifiedArtist("b", blend(axis(0), axis(1), 0.1));
@@ -269,5 +296,27 @@ describe("getArtistNeighbours — the read", () => {
     await rankArtists(100, NOW);
 
     expect((await getArtistNeighbours("a", 2)).map((n) => n.slug)).toEqual(["b", "c"]);
+  });
+
+  // THE SHAPE, PINNED. The rail's `certified` tier is the MAINTAINED
+  // `artists.certified_finding_count` (keystone 2), so the read is a seek of one artist's stored
+  // edges plus a primary-key join — it must touch NEITHER of the tables the crawler grows. The
+  // spelling it replaced (a correlated `exists` over `track_artists ⋈ findings`) ran once per
+  // neighbour row and walked an uncertified artist's whole edge list to answer false.
+  it("answers `certified` off the stored mirror, naming no growing table in its plan", async () => {
+    await seedCertifiedArtist("a", axis(0));
+    await seedCertifiedArtist("b", blend(axis(0), axis(1), 0.1));
+    await rankArtists(100, NOW);
+
+    const plan = await db.execute({
+      args: ["a", 4],
+      sql: `explain query plan ${ARTIST_NEIGHBOURS_SQL}`,
+    });
+    const details = plan.rows
+      .map((row) => (typeof row["detail"] === "string" ? row["detail"] : ""))
+      .join("\n");
+
+    expect(details).not.toMatch(/\btrack_artists\b/);
+    expect(details).not.toMatch(/\bfindings\b/);
   });
 });

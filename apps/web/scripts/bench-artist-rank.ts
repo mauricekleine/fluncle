@@ -27,7 +27,8 @@
  *         on Turso (ratified). We do NOT pretend it is cheap: we RECORD the per-probe p50 and PROJECT
  *         the full-tick + cold-drain durations from it.
  *     (c) The PAGE read (`getArtistNeighbours`): the ordered PK-prefix walk of one artist's stored
- *         edges joined to `artists` + the `certified` EXISTS. HARD budget < 100 ms (the only shape
+ *         edges joined to `artists`, with `certified` read off the artist row's MAINTAINED
+ *         `certified_finding_count` (keystone 2). HARD budget < 100 ms (the only shape
  *         a user waits on).
  *   Plus `EXPLAIN QUERY PLAN`, so the operator SEES that (c) rides the `artist_similar` PK (never a
  *   table scan) and (b) is the single intended `artist_centroids` scan.
@@ -63,12 +64,14 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
 
 import {
+  ARTIST_NEIGHBOURS_SQL,
   ARTIST_RANK_BATCH_SIZE,
   ARTIST_RANK_CHUNK,
   ARTIST_SIMILAR_EDGES,
   meanEmbedding,
 } from "../src/lib/server/artist-dossier";
 import { EMBEDDING_DIMS, readEmbeddingBlob } from "../src/lib/server/embedding";
+import { backfillHubCounts } from "./backfill-hub-counts";
 
 /** The request-path read (c) — a HARD ceiling; it is the only shape a user waits on. */
 const READ_BUDGET_MS = 100;
@@ -172,8 +175,9 @@ async function seedArtists(): Promise<void> {
 
 /**
  * Seed `trackCount` embedded tracks: each is a `tracks` row with a `vector32()` embedding, credited
- * to one artist (round-robin). Every 3rd track is a certified FINDING (a `findings` row too), so the
- * read's `certified` EXISTS has rows to find. Vectors are the seeded RNG's, so the scan cost is real.
+ * to one artist (round-robin). Every 3rd track is a certified FINDING (a `findings` row plus
+ * `is_catalogue = 0`), so the read's `certified` mirror has something to be true about. Vectors are
+ * the seeded RNG's, so the scan cost is real.
  */
 async function seedTracks(): Promise<void> {
   const rng = makeRng(0x5f_37_59_df);
@@ -189,12 +193,18 @@ async function seedTracks(): Promise<void> {
       const artistId = `ar-${index % artistCount}`;
       const vector = JSON.stringify(randomUnitVector(rng));
 
+      // `is_catalogue` is a MAINTAINED mirror (keystone 1) and a rig is only as honest as the world
+      // it seeds — a DDL default is what production never contains (docs/db-scale-backlog
+      // § Guardrail). Every 3rd row gets a `findings` row below, so it is certified (`0`) here.
+      const isCatalogue = index % 3 === 0 ? 0 : 1;
+
       statements.push(
         {
-          args: [trackId, `Track ${index}`, `["Artist ${index % artistCount}"]`],
+          args: [trackId, `Track ${index}`, `["Artist ${index % artistCount}"]`, isCatalogue],
           sql: `insert into tracks
-            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, has_embedding)
-            values (?, ?, ?, 'spotify:track:x', 'https://open.spotify.com/track/x', 270000, 1)`,
+            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, has_embedding,
+             is_catalogue)
+            values (?, ?, ?, 'spotify:track:x', 'https://open.spotify.com/track/x', 270000, 1, ?)`,
         },
         {
           args: [trackId, vector],
@@ -222,7 +232,10 @@ async function seedTracks(): Promise<void> {
   process.stdout.write("\n");
 }
 
-// ── The shapes under test (b)/(c) — the EXACT SQL from lib/server/artist-dossier.ts ──────────
+// ── The shapes under test ─────────────────────────────────────────────────────────────────────
+// (c) is IMPORTED from lib/server/artist-dossier.ts (`ARTIST_NEIGHBOURS_SQL`), so the bench can only
+// ever measure the statement the artist page actually runs. (b) is still a copy of `EDGE_RERANK_SQL`
+// there, kept local because that constant is not exported.
 const EDGE_RERANK_SQL = `select ac.artist_id as neighbour_id,
              vector_distance_cos(
                ac.centroid_blob,
@@ -231,18 +244,6 @@ const EDGE_RERANK_SQL = `select ac.artist_id as neighbour_id,
       from artist_centroids ac
       where ac.artist_id <> ?
       order by dist asc, ac.artist_id asc
-      limit ?`;
-
-const NEIGHBOURS_READ_SQL = `select a.name as name, a.slug as slug, a.image_url as image_url,
-             exists(
-               select 1 from track_artists ta
-               join findings f on f.track_id = ta.track_id
-               where ta.artist_id = s.neighbour_artist_id
-             ) as certified
-      from artist_similar s
-      join artists a on a.id = s.neighbour_artist_id
-      where s.artist_id = ?
-      order by s.rank asc
       limit ?`;
 
 /**
@@ -369,6 +370,12 @@ async function main(): Promise<void> {
   await seedArtists();
   console.log(`Seeding ${trackCount} embedded tracks…`);
   await seedTracks();
+  // The read (c) answers `certified` off the MAINTAINED `artists.certified_finding_count`, which the
+  // delta writers move in production and a raw fixture insert bypasses. Seed it from the edges with
+  // the REAL deploy backfill, so the bench measures the shape against counters that agree with the
+  // graph rather than against a table of zeroes.
+  console.log("Seeding the maintained hub counters…");
+  await backfillHubCounts(client, { force: true });
   console.log("Computing centroids + edges (the initial full drain)…");
   await seedCentroidsAndEdges();
 
@@ -413,7 +420,7 @@ async function main(): Promise<void> {
   const readSamples: number[] = [];
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     readSamples.push(
-      await timeIt(() => client.execute({ args: [probe, 4], sql: NEIGHBOURS_READ_SQL })),
+      await timeIt(() => client.execute({ args: [probe, 4], sql: ARTIST_NEIGHBOURS_SQL })),
     );
   }
   const readP50 = percentile(readSamples, 50);
@@ -446,7 +453,7 @@ async function main(): Promise<void> {
   console.log("\n── EXPLAIN QUERY PLAN ───────────────────────────────────────────");
   const rerankPlan = await explain(EDGE_RERANK_SQL, [probe, probe, ARTIST_SIMILAR_EDGES]);
   console.log(`  (b) edge re-rank:\n      ${rerankPlan}\n`);
-  const readPlan = await explain(NEIGHBOURS_READ_SQL, [probe, 4]);
+  const readPlan = await explain(ARTIST_NEIGHBOURS_SQL, [probe, 4]);
   console.log(`  (c) neighbours read:\n      ${readPlan}`);
   // The read's primary walk must ride the artist_similar PK (a range scan), never a full table scan.
   const readRidesPk = /USING (PRIMARY KEY|INDEX)/.test(readPlan);

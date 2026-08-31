@@ -47,8 +47,13 @@ export function mixableArtistsProjectionQuery(q: string): string {
 /**
  * Read the artist-grain mix projection only after its post-deploy reconciliation fence is complete.
  * Before cutover, fall back to the exact source query: slower, but semantically closed and never an
- * incomplete all-zero answer. A true fence is cached for the life of the Worker isolate; false is
- * deliberately re-read so an already-running isolate observes activation without a redeploy.
+ * incomplete all-zero answer.
+ *
+ * The fence is re-read on EVERY call — not memoized — so an already-running isolate observes
+ * activation without a redeploy. That is one `settings` primary-key point read per call, on a table
+ * that does not grow; it is deliberately not the isolate-level memo `key-histogram.ts` uses, because
+ * caching the true answer would also cache the false one somewhere and the whole point of this read
+ * is that a flip is picked up live.
  */
 export async function readMixableArtistsProjection(
   client: Client,

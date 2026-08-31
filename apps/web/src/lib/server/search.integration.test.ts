@@ -1407,6 +1407,88 @@ describe("the compound sonic tier — sound like several artists", () => {
     spy.mockRestore();
   });
 
+  // RANK 1 — the trusted AKA. The resolve is two statements now (rank 0 = the artist's own name or
+  // slug, both indexed equalities; rank 1 = a trusted `artist_aliases` row, driven FROM the alias
+  // table), because one `or` over a correlated `exists` is a full scan of an `artists` table the
+  // crawl grows. These two cases pin that the SPLIT preserved the ranking the single statement's
+  // `name_rank asc … limit 1` expressed: an AKA still resolves, and a primary name still beats one.
+  it("resolves an artist through a trusted AKA when nothing claims the name directly", async () => {
+    await db.execute({
+      args: ["al-1", "a-koven", "Kovenn", "kovenn"],
+      sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, kind, source, status, created_at)
+            values (?, ?, ?, ?, 'name', 'musicbrainz', 'auto', '2026-07-01')`,
+    });
+    translateQuery.mockResolvedValue({ soundsLikeArtists: ["Kovenn"] });
+
+    const result = await searchArchive({ q: "artists that sound like Kovenn" });
+
+    expect(result.kind).toBe("sonic");
+    // The echo carries the artist's CANONICAL name, not the spelling that was typed.
+    expect(result.filters?.soundsLikeArtists).toEqual(["Koven"]);
+  });
+
+  it("lets a primary name beat another artist's AKA on the same spelling", async () => {
+    // Maduk carries "Koven" as a trusted AKA. Koven claims it as its own name, so rank 0 wins.
+    await db.execute({
+      args: ["al-2", "a-maduk", "Koven", "koven"],
+      sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, kind, source, status, created_at)
+            values (?, ?, ?, ?, 'name', 'musicbrainz', 'auto', '2026-07-01')`,
+    });
+    translateQuery.mockResolvedValue({ soundsLikeArtists: ["Koven"] });
+
+    const result = await searchArchive({ q: "artists that sound like Koven" });
+
+    expect(result.kind).toBe("sonic");
+    expect(result.filters?.soundsLikeArtists).toEqual(["Koven"]);
+    // Koven's own centroid (0.05) ranked it, not Maduk's (1.15) — the ordering is unchanged.
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-1991",
+      "certified-netsky",
+      "uncertified-netsky",
+      "certified-andromedik",
+    ]);
+  });
+
+  it("seeks the rank-0 name/slug instead of scanning every artist", async () => {
+    const spy = vi.spyOn(db, "execute");
+    translateQuery.mockResolvedValue({ soundsLikeArtists: ["Koven"] });
+
+    await searchArchive({ q: "artists that sound like Koven" });
+
+    const centroidReads = spy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (arg) =>
+          typeof arg === "object" &&
+          arg !== null &&
+          typeof (arg as { sql?: unknown }).sql === "string" &&
+          (arg as { sql: string }).sql.includes("ac.centroid_blob"),
+      ) as Array<{ args: unknown[]; sql: string }>;
+
+    spy.mockRestore();
+
+    // Rank 1 is asked ONLY when rank 0 finds nothing — a resolved name costs ONE statement, not two.
+    expect(centroidReads).toHaveLength(1);
+    const resolve = centroidReads[0];
+    const sql = resolve?.sql ?? "";
+
+    // The column is BARE under a NOCASE comparison, so `artists_name_nocase_idx` can be seeked —
+    // `lower(artists.name)` wrapped it and could not be. No correlated alias probe here either.
+    expect(sql).toContain("artists.name = ? collate nocase");
+    expect(sql).not.toContain("lower(artists.name)");
+    expect(sql).not.toContain("artist_aliases");
+
+    const plan = await db.execute({
+      args: (resolve?.args ?? []) as string[],
+      sql: `explain query plan ${sql}`,
+    });
+    const details = plan.rows
+      .map((row) => (typeof row["detail"] === "string" ? row["detail"] : ""))
+      .join("\n");
+
+    expect(details).not.toMatch(/SCAN artists\b/);
+  });
+
   it("DECLINES when no named artist resolves to a centroid — never invents a vibe", async () => {
     translateQuery.mockResolvedValue({ soundsLikeArtists: ["Nobody At All"] });
 
