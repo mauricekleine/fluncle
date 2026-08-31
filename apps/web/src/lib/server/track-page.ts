@@ -172,6 +172,7 @@ type DestinationRow = {
   log_id: string | null;
   mb_recording_id: string | null;
   preview_url: string | null;
+  principal_log_id: string | null;
   release_date: string | null;
   title: string;
   track_id: string;
@@ -200,6 +201,8 @@ const DESTINATION_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, 
   (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
   (select slug from labels where labels.id = tracks.label_id) as label_slug,
   ${ARTIST_SLUGS_SELECT},
+  (select log_id from findings where findings.track_id = tracks.duplicate_of_track_id)
+    as principal_log_id,
   (case when ${TRACK_PAGE_INDEXABLE_WHERE} then 1 else 0 end) as indexable`;
 
 /** Fold the artist-credit JSON into a display-name → slug map, keyed on the raw vendor spelling. */
@@ -313,7 +316,15 @@ export async function readTrackDestination(trackId: string): Promise<TrackPageRo
   }
 
   if (row.duplicate_of_track_id) {
-    return { kind: "duplicate", principalTrackId: row.duplicate_of_track_id };
+    // ONE HOP, NEVER TWO. `duplicate_of_track_id` is written only on a catalogue row and only when
+    // its ISRC exactly matches a FINDING's (schema.ts), so the principal is nearly always certified
+    // — and bouncing to `/track/<principal>` would only 301 again, to `/log`. A chained redirect
+    // costs a crawler a round trip and dilutes what it passes, so the coordinate is read in the
+    // same select and the twin lands on the real page directly. The `/track` arm below stays for
+    // the case the column's rule does not cover: a principal that carries no coordinate.
+    return row.principal_log_id
+      ? { kind: "certified", logId: row.principal_log_id }
+      : { kind: "duplicate", principalTrackId: row.duplicate_of_track_id };
   }
 
   const artistNames = parseArtistsJson(row.artists_json);

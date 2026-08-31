@@ -260,6 +260,25 @@ describe("the track with no media (shape 5, the data half)", () => {
 });
 
 describe("the operator stamps", () => {
+  it("sends a stamped duplicate of a FINDING straight to the coordinate, in one hop", async () => {
+    // The column's own rule: a duplicate stamp is written only when a catalogue row's ISRC matches
+    // a FINDING's. Bouncing through `/track/<principal>` would 301 twice for one answer.
+    await seedCatalogueTrack(db, {
+      artists: ["Nova Kestrel"],
+      title: "Synthetic Aurora",
+      trackId: DUPLICATE,
+    });
+    await db.execute({
+      args: [CERTIFIED, DUPLICATE],
+      sql: `update tracks set duplicate_of_track_id = ? where track_id = ?`,
+    });
+
+    expect(await resolveTrackPageData(DUPLICATE)).toStrictEqual({
+      logId: "701.1.0A",
+      status: "redirect",
+    });
+  });
+
   it("sends a stamped duplicate to its principal, permanently", async () => {
     await seedCatalogueTrack(db, {
       artists: ["Ashen Relay"],
