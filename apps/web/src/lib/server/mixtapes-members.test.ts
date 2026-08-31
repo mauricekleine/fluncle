@@ -9,7 +9,13 @@ import { listMixtapeMembershipsForTracks, setMixtapeMembers } from "./mixtapes";
 // answer each query by its SQL shape and capture the batch so we can assert what
 // got inserted, and where.
 
-type Insert = { mixtapeId: string; position: number; startMs: number | null; trackId: string };
+type Insert = {
+  findingId: string;
+  mixtapeId: string;
+  position: number;
+  startMs: number | null;
+  trackId: string;
+};
 
 const state = vi.hoisted(() => ({
   inserts: [] as Insert[],
@@ -40,8 +46,14 @@ const batch = vi.hoisted(() =>
   vi.fn(async (ops: { args: unknown[]; sql: string }[]) => {
     for (const op of ops) {
       if (op.sql.includes("insert into mixtape_tracks")) {
-        const [mixtapeId, trackId, position, startMs] = op.args as [string, string, number, number];
-        state.inserts.push({ mixtapeId, position, startMs: startMs ?? null, trackId });
+        const [mixtapeId, trackId, findingId, position, startMs] = op.args as [
+          string,
+          string,
+          string,
+          number,
+          number,
+        ];
+        state.inserts.push({ findingId, mixtapeId, position, startMs: startMs ?? null, trackId });
       }
     }
     return [{ rows: [] }];
@@ -75,9 +87,9 @@ describe("setMixtapeMembers — seed an unminted claim's tracklist", () => {
     await setMixtapeMembers("mix-1", { members: ["a", "b", "c"] });
 
     expect(state.inserts).toEqual([
-      { mixtapeId: "mix-1", position: 1, startMs: null, trackId: "a" },
-      { mixtapeId: "mix-1", position: 2, startMs: null, trackId: "b" },
-      { mixtapeId: "mix-1", position: 3, startMs: null, trackId: "c" },
+      { findingId: "a", mixtapeId: "mix-1", position: 1, startMs: null, trackId: "a" },
+      { findingId: "b", mixtapeId: "mix-1", position: 2, startMs: null, trackId: "b" },
+      { findingId: "c", mixtapeId: "mix-1", position: 3, startMs: null, trackId: "c" },
     ]);
     expect(batch.mock.calls[0]?.[0]?.[0]?.sql).toContain("delete from mixtape_tracks");
   });
@@ -91,8 +103,14 @@ describe("setMixtapeMembers — seed an unminted claim's tracklist", () => {
     });
 
     expect(state.inserts).toEqual([
-      { mixtapeId: "mix-1", position: 1, startMs: 0, trackId: "a" },
-      { mixtapeId: "mix-1", position: 2, startMs: 180_000, trackId: "b" },
+      { findingId: "a", mixtapeId: "mix-1", position: 1, startMs: 0, trackId: "a" },
+      {
+        findingId: "b",
+        mixtapeId: "mix-1",
+        position: 2,
+        startMs: 180_000,
+        trackId: "b",
+      },
     ]);
   });
 

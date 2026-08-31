@@ -225,8 +225,8 @@ export async function setMixtapeMembers(
     [
       { args: [id], sql: `delete from mixtape_tracks where mixtape_id = ?` },
       ...entries.map((entry, index) => ({
-        args: [id, entry.trackId, index + 1, entry.startMs],
-        sql: `insert into mixtape_tracks (mixtape_id, track_id, position, start_ms) values (?, ?, ?, ?)`,
+        args: [id, entry.trackId, entry.trackId, index + 1, entry.startMs],
+        sql: `insert into mixtape_tracks (mixtape_id, track_id, finding_id, position, start_ms) values (?, ?, ?, ?, ?)`,
       })),
       {
         args: [new Date().toISOString(), id],
