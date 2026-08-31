@@ -420,7 +420,11 @@ function ArtistsSimilarView({ names, results }: { names: string[]; results: Arti
         {results.length === 0 ? (
           <p className="log-index-empty empty-scanlines">No close matches yet.</p>
         ) : (
-          <ul aria-label="Artists that sound alike" className="artist-avatar-grid hub-grid">
+          <ul
+            aria-label="Artists that sound alike"
+            className="artist-avatar-grid hub-grid"
+            data-discovery="similar"
+          >
             {results.map((artist) => (
               <li key={artist.slug}>
                 <Link

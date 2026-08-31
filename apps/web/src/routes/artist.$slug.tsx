@@ -350,7 +350,7 @@ function ArtistPage() {
         ) : undefined}
 
         {dossier.neighbours.length > 0 ? (
-          <nav aria-label="Similar artists" className="artist-similar">
+          <nav aria-label="Similar artists" className="artist-similar" data-discovery="similar">
             <h2 className="artist-similar-label">Similar artists</h2>
             <ul className="artist-similar-list">
               {dossier.neighbours.map((neighbour) => (

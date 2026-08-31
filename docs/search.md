@@ -115,7 +115,7 @@ Two traps live in that file's header: FTS5's `MATCH` is a **query language** (a 
 - **API:** `search_archive` → `GET /api/v1/search/archive?q=…` (public, unauthenticated, rate-limited). Registered in `@fluncle/registry` as `api.search.archive`. Distinct from `search_tracks` (`GET /search`), which searches **Spotify** for submission candidates.
 - **UI:** TWO surfaces over ONE resolver — an accelerator and a destination. See _The two surfaces_ below.
 - **The example queries** are one list, `SEARCH_EXAMPLES`, owned by `apps/web/src/lib/search-results.ts` and imported by all three places that show them (the palette's empty state, the front door's band, `/search`'s zero state). Four of them — a coordinate, a name, a label, a sonic reference — and see _The worked examples are deterministic_ below for the rule that decides what may join them.
-- **Files:** `apps/web/src/lib/search-query.ts` (the pure core: the coordinate regex, the sonic regex, the FTS expression builder, the key spellings), `apps/web/src/lib/search-results.ts` (the shared client-safe half: the wire types, the grouping, the two destinations, the examples, the URL builders), `apps/web/src/lib/server/search.ts` (the resolver), `apps/web/src/lib/server/search-llm.ts` (tier 4), `apps/web/src/components/search/search-command.tsx` (the provider, the palette, the colophon trigger), `apps/web/src/routes/search.tsx` + `apps/web/src/routes/-search-page-data.ts` + `apps/web/src/lib/search-page.ts` (the page, its loader half, its URL vocabulary and head), `apps/web/src/components/front-door/search-entry.tsx` (the front door's door).
+- **Files:** `apps/web/src/lib/search-query.ts` (the pure core: the coordinate regex, the sonic regex, the FTS expression builder, the key spellings), `apps/web/src/lib/search-results.ts` (the shared client-safe half: the wire types, the grouping, the two destinations, the examples, the URL builders), `apps/web/src/lib/server/search.ts` (the resolver), `apps/web/src/lib/server/search-llm.ts` (tier 4), `apps/web/src/components/search/search-command.tsx` (the provider, the palette, the colophon trigger), `apps/web/src/routes/search.tsx` + `apps/web/src/routes/-search-page-data.ts` + `apps/web/src/lib/search-page.ts` (the page, its loader half, its URL vocabulary and head), `apps/web/src/components/front-door/search-entry.tsx` (the front door's door), `apps/web/src/lib/discovery-events.ts` (the aggregate journey events fired from these doors and the rest of public discovery).
 
 ### The two surfaces: an accelerator and a destination
 
@@ -150,6 +150,34 @@ The promise is enforced on both sides, because each side can see something the o
 Neither half is redundant. Only the live probe can see a finding retired, a label dropping below the hub gate, or an anchor losing its embedding; only the offline gate can see a query that would reach the model, since a single live roll of tier 4 may happen to come back with rows.
 
 **Testing tier 4 became possible.** The e2e stack no longer carries an `OPENROUTER_API_KEY` at all. A FAKE key was worse than none: `translateQuery` only short-circuits on "unprovisioned", so a key of any shape sent a real request to openrouter.ai from the Worker, which the browser-level request blocking cannot see. With it absent the fourth tier returns `null` on the spot, the resolver degrades to full text, and the response says so — which means the degradation contract, and a structured natural-language query, are both exercised on every e2e run without a socket opening.
+
+## Discovery journey events
+
+Search is one door onto the archive. The rest of public discovery (browse, entity pages, Close in sound, Listen on Spotify, the in-place preview) is the walk that follows. Simple Analytics already records cookieless pageviews; this layer adds six aggregate events so those walks can be counted without counting people.
+
+| Event                | Journey step                                                                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `discovery_search`   | A visitor committed an archive query (the `/search` form, or a settled palette type-ahead)                     |
+| `discovery_example`  | A visitor followed a worked example into `/search`                                                             |
+| `discovery_open`     | A visitor opened an entity destination (finding, artist, label, album, galaxy, mixtape)                        |
+| `discovery_similar`  | A visitor continued through a sonic neighbour (Close in sound, similar artists, `/artists?like=`)              |
+| `discovery_preview`  | A visitor started an in-place preview                                                                          |
+| `discovery_outbound` | A visitor left for an outbound listening service (Spotify, Apple Music, YouTube, Mixcloud, SoundCloud, Deezer) |
+
+Each name is one step. Classification is by **resolved destination**, never by the English on the control: `hitHref` / the href decide whether a row is `discovery_open` (a `/log/<id>` finding) or `discovery_outbound` (a Spotify URL). A neighbour rail opts into `discovery_similar` with `data-discovery="similar"` so the same `/artist/<slug>` chip is a continuation on that rail and an ordinary open everywhere else.
+
+### What a payload may carry
+
+Nothing that names a person, a session, a profile, a ranking, or the words typed. The only extra fields are bounded categories:
+
+| Field     | On events                      | Values                                                                 | Why it is safe                                                                                             |
+| --------- | ------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `kind`    | search, example, open, similar | search: `coordinate` / `sonic` / `token` / `other`; open: entity kind  | The resolver-tier _shape_ of a query, or the kind of page opened. Never the query string, slug, or Log ID. |
+| `service` | outbound                       | `spotify` / `apple` / `youtube` / `mixcloud` / `soundcloud` / `deezer` | Which listening service the link left for. A host allow-list, not the track URL.                           |
+
+`emitDiscoveryEvent` strips any other key. The helper never awaits, never throws, and never calls `preventDefault`. If the Simple Analytics tag is blocked, absent, or throws, the control still does its job. `apps/web/src/lib/discovery-coverage.test.ts` fails a new control of an instrumented class that ships without its event.
+
+No new vendor, script, or CSP host: events go through the `sa_event` the page already loads, which beacons `queue.simpleanalyticscdn.com` (already on `img-src` and `connect-src`).
 
 ## Operating it
 

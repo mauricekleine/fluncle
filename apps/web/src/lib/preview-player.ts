@@ -11,6 +11,7 @@
 // every previewable row.
 
 import { useCallback, useSyncExternalStore } from "react";
+import { emitDiscoveryEvent, shouldEmitDiscoveryPreview } from "./discovery-emit";
 
 function previewProxyUrl(idOrLogId: string): string {
   return `/api/preview/${encodeURIComponent(idOrLogId)}`;
@@ -113,6 +114,10 @@ function ensureAudio(): HTMLAudioElement {
 // bytes (`/api/v1/admin/tracks/:id/source-audio`) through this same singleton, so starting a
 // captured audition stops a preview and vice versa. One element, one thing playing, everywhere.
 function start(trackId: string, src?: string): void {
+  if (shouldEmitDiscoveryPreview(src)) {
+    emitDiscoveryEvent("discovery_preview");
+  }
+
   const element = ensureAudio();
 
   element.src = src ?? previewProxyUrl(trackId);

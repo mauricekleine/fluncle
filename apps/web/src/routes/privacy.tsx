@@ -114,9 +114,11 @@ function PrivacyPage() {
             <div className="log-about-definition">
               <dt>Analytics</dt>
               <dd>
-                Visitor counts use Simple Analytics, which is cookieless and collects no personal
-                information. The server also keeps standard request logs to run and protect the
-                site. There is no advertising and no cross-site tracking.
+                Visitor counts and a handful of anonymous journey events use Simple Analytics, which
+                is cookieless and collects no personal information. A journey event names the step
+                (a search started, a worked example used, a destination opened) and never the words
+                typed or who typed them. The server also keeps standard request logs to run and
+                protect the site. There is no advertising and no cross-site tracking.
               </dd>
             </div>
             <div className="log-about-definition">

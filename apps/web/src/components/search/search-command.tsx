@@ -59,6 +59,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { SpotifyIcon } from "@/components/platform-icons";
@@ -66,6 +67,11 @@ import { SearchFilterChips } from "@/components/search/search-filter-chips";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
 import { anchorCredit } from "@/components/search/search-results-list";
 import { albumCoverAtSize } from "@/lib/media";
+import {
+  classifySearchQueryKind,
+  emitDiscoveryEvent,
+  emitDiscoveryFromHref,
+} from "@/lib/discovery-events";
 import {
   EMPTY_SEARCH,
   ENTITY_GROUPS,
@@ -209,6 +215,7 @@ export function SearchDialog({
   const navigate = useNavigate();
   const [query, setQuery] = useState(seed?.query ?? "");
   const [debounced, setDebounced] = useState("");
+  const exampleClick = useRef(false);
   const seedToken = seed?.token;
   const seedQuery = seed?.query;
 
@@ -227,8 +234,23 @@ export function SearchDialog({
 
   // A keystroke is not a query. The debounce is what keeps a typed word from firing five
   // round trips (and, on the fourth tier, five model calls) on its way to being one.
+  // A worked example already emitted discovery_example; do not also fire discovery_search.
   useEffect(() => {
-    const timer = setTimeout(() => setDebounced(query.trim()), 180);
+    const timer = setTimeout(() => {
+      const next = query.trim();
+
+      setDebounced(next);
+
+      if (exampleClick.current) {
+        exampleClick.current = false;
+
+        return;
+      }
+
+      if (next.length >= MIN_QUERY_LENGTH) {
+        emitDiscoveryEvent("discovery_search", { kind: classifySearchQueryKind(next) });
+      }
+    }, 180);
 
     return () => clearTimeout(timer);
   }, [query]);
@@ -263,18 +285,28 @@ export function SearchDialog({
 
   /** An entity goes to its page — the row's own `url` when it carries one (a galaxy's plural
       segment, a mixtape's log page), else the `/<kind>/<slug>` default. */
-  const pickEntity = useCallback((entity: SearchEntity) => goTo(entityHref(entity)), [goTo]);
+  const pickEntity = useCallback(
+    (entity: SearchEntity) => {
+      const href = entityHref(entity);
+
+      emitDiscoveryFromHref(href);
+      goTo(href);
+    },
+    [goTo],
+  );
 
   /** A finding goes to its coordinate. A track with no coordinate goes OUT, to Spotify. */
   const pick = useCallback(
     (hit: SearchHit) => {
       if (hit.certified && hit.logId) {
+        emitDiscoveryFromHref(`/log/${hit.logId}`);
         goTo(`/log/${hit.logId}`);
 
         return;
       }
 
       if (hit.spotifyUrl) {
+        emitDiscoveryFromHref(hit.spotifyUrl);
         close();
         window.open(hit.spotifyUrl, "_blank", "noopener,noreferrer");
       }
@@ -332,7 +364,11 @@ export function SearchDialog({
               <button
                 className="search-example"
                 key={example.query}
-                onClick={() => setQuery(example.query)}
+                onClick={() => {
+                  exampleClick.current = true;
+                  emitDiscoveryEvent("discovery_example", { kind: example.icon });
+                  setQuery(example.query);
+                }}
                 type="button"
               >
                 <SearchExampleGlyph className="search-example-icon" icon={example.icon} />
