@@ -12,7 +12,7 @@ export function docsBaseOptions(): BaseLayoutProps {
     links: [
       {
         text: "Findings",
-        url: "/",
+        url: "/findings",
       },
     ],
     nav: {

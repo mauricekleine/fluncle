@@ -119,7 +119,7 @@ function DevicePage() {
           </div>
           <Link
             className="text-sm font-semibold text-muted-foreground hover:text-accent-foreground"
-            to="/"
+            to="/findings"
           >
             Back to findings
           </Link>
