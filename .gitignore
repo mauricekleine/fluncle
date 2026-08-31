@@ -79,6 +79,10 @@ coverage/
 # Playwright E2E output (tests/e2e) — the HTML report + per-run traces/results.
 apps/web/playwright-report/
 apps/web/test-results/
+# The same two, at the repo root: Playwright resolves its output dirs against the CWD it was
+# invoked from, so running it from the root (rather than apps/web) lands them here instead.
+playwright-report/
+test-results/
 
 # Sprite assets mirrored into the web app's public/ by apps/web/scripts/copy-sprites.ts.
 # Source of truth is the @fluncle/sprites package (packages/sprites/assets); these are
