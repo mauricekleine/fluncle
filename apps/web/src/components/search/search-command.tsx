@@ -64,6 +64,7 @@ import {
 import { SpotifyIcon } from "@/components/platform-icons";
 import { SearchFilterChips } from "@/components/search/search-filter-chips";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
+import { anchorCredit } from "@/components/search/search-results-list";
 import { albumCoverAtSize } from "@/lib/media";
 import {
   EMPTY_SEARCH,
@@ -344,8 +345,9 @@ export function SearchDialog({
         {data.anchor ? (
           <p className="search-note">
             <WaveformIcon aria-hidden="true" className="search-note-icon" />
-            Near <strong>{data.anchor.title}</strong>
-            {data.anchor.artists.length > 0 ? ` — ${data.anchor.artists.join(", ")}` : ""}
+            {/* `Artist — Title`, the one sanctioned em dash (VOICE.md §6); inverted it would be an
+                em dash in prose, which the same rule bans. Shared with `/search`'s own note. */}
+            Near <strong>{anchorCredit(data.anchor)}</strong>
           </p>
         ) : undefined}
 
@@ -392,10 +394,12 @@ export function SearchDialog({
             );
           })}
 
-          {/* The findings lead under the archive's own name — a finding is a named object, so
-              its heading is allowed. */}
+          {/* The findings lead, headed by the NAMED OBJECT rather than the collection's nameplate:
+              DESIGN.md's Unlit Rule reserves "Fluncle's Findings" for lore-area surfaces, and a
+              palette that opens over every page is not one. Same heading as `/search`, so the two
+              doors onto one resolver cannot drift. */}
           {findings.length > 0 ? (
-            <CommandGroup heading="Fluncle's Findings">
+            <CommandGroup heading="Findings">
               {findings.map((hit) => (
                 <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
               ))}

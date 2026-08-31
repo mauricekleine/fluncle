@@ -27,9 +27,13 @@ import { type SearchPageData } from "./-search-page-data";
 // So every one of the four query kinds is shareable and reload-safe by construction, and no caller
 // has to know which tier will answer.
 //
-// A CATALOGUE page in the Three Areas sense (VOICE.md §5) with the search box's own warmth kept
-// intact: the strings here are the ones the palette and the front door already use, because one
-// action takes one phrasing and a new wording for an existing action is a bug, not a variation.
+// A WORKSTATION in the Three Areas sense (VOICE.md §5), not a catalogue shelf: there is no fixed
+// enumeration here and every `?q=` view is `noindex`, so it carries no catalogue weight — the reader
+// does something and the interface carries the meaning. That decides the register. The masthead is
+// the title alone (no nameplate, no narrated helper line), the chrome is literal, and the voice
+// lives where a Workstation permits it: the one line a STATE needs — the zero state, the empty
+// state, the fault. Those lines reuse the palette's and the front door's phrasings verbatim,
+// because one action takes one wording and a new phrase for an existing action is a bug.
 //
 // A public route, so it is loader + `useLoaderData` and no react-query (AGENTS.md). Nothing about
 // this page is live — a result set is a snapshot of an archive that does not change while you read
@@ -210,10 +214,16 @@ function SearchEmpty({ coordinate, q }: { coordinate: boolean; q: string }): Rea
       <p className="log-index-empty empty-scanlines">
         {coordinate ? "No finding at that coordinate." : `Nothing out here for “${q}”.`}
       </p>
+      {/* The way onward is branch-specific: "try a different name" is wrong advice for a reader who
+          typed a coordinate, which is not a name and has no near-miss to try. */}
       <p className="search-page-way-back">
-        Try a different name, or <Link to="/tracks">dig through every track I hold</Link>.
+        {coordinate ? "Nothing logged there yet. " : "Try a different name, or "}
+        <Link to="/tracks">dig through every track I hold</Link>.
       </p>
-      <SearchExamples label="These four land every time." />
+      {/* Not a boast about queries that always work: this renders straight after the reader's own
+          search landed nothing, and scoring a point off them there is exactly what the Mosh Pit Rule
+          takes off a surface. It keeps the ratified "Try one of these" stem and adds one word. */}
+      <SearchExamples label="Try one of these instead." />
     </div>
   );
 }
@@ -232,7 +242,7 @@ function SearchFailed(): ReactNode {
   return (
     <div className="search-page-state">
       <p className="log-index-empty empty-scanlines">
-        I could not get an answer out of the archive just then.
+        Couldn&apos;t get an answer out of the archive just then.
       </p>
       <p className="search-page-way-back">
         <button
@@ -271,25 +281,41 @@ export function SearchAnswer({
 }): ReactNode {
   const answered = data.status === "answered" ? data.response : undefined;
   const total = answered ? answered.results.length + answered.entities.length : 0;
+  // What the live region says. The zero state stays silent on purpose: nothing was committed, so
+  // there is no outcome to announce, and the worked examples below are the whole content.
+  const outcome =
+    data.status === "failed"
+      ? "Search did not answer."
+      : answered
+        ? total > 0
+          ? `${matchCount(total)} for “${q ?? ""}”.`
+          : `No matches for “${q ?? ""}”.`
+        : "";
 
   return (
     <main className="log-plate-stage">
       <article className="log-plate log-index search-page">
+        {/* Title alone. A WORKSTATION masthead carries no narrated helper line (VOICE.md §5 / the
+            Three Areas Rule): the reader is here to do something, the interface carries the meaning,
+            and the mechanics already print twice below — once in the placeholder and once in the
+            zero state's hint. A third copy above them was clutter by definition. */}
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Search</h1>
-          <p className="log-index-intro">Give me a name, a coordinate, or the sound of a track.</p>
         </header>
 
         <SearchField q={q} />
 
-        {/* The count is a live region so a screen-reader user who submits without moving focus is
-            told what came back. It is also the honest header for the list under it. */}
-        {/* A native `<output>`: it carries an implicit `status` role, so the count is announced to a
-            screen-reader user who submits without moving focus, with no `role` attribute to keep in
-            step with it. `aria-live` is stated anyway, because `<output>`'s implicit politeness is
-            not honoured uniformly across the browser/AT matrix. */}
+        {/* The outcome line, and it is a LIVE REGION that speaks in every committed state rather
+            than only the ones with rows. A submit returns focus to the field (SearchField), so a
+            search that finds nothing — or a fault — would otherwise announce nothing at all and
+            leave a screen-reader user waiting on a page that had already answered. It doubles as
+            the honest header for the list under it.
+
+            A native `<output>`: it carries an implicit `status` role, so there is no `role`
+            attribute to keep in step with it. `aria-live` is stated anyway, because `<output>`'s
+            implicit politeness is not honoured uniformly across the browser/AT matrix. */}
         <output aria-live="polite" className="search-page-matchline">
-          {answered && total > 0 ? `${matchCount(total)} for “${q ?? ""}”.` : ""}
+          {outcome}
         </output>
 
         {data.status === "failed" ? <SearchFailed /> : undefined}
@@ -297,10 +323,13 @@ export function SearchAnswer({
         {data.status === "blank" ? (
           <div className="search-page-state">
             <SearchExamples
+              // The front door's hint, VERBATIM (components/front-door/search-entry.tsx) — one
+              // phrasing across the three surfaces that show these four, rather than a fourth
+              // variant. "Nothing typed yet" told the reader something they could already see.
               label={
                 (q ?? "").length > 0
-                  ? `Give me at least ${MIN_QUERY_LENGTH} characters to go on. Try one of these searches.`
-                  : "Nothing typed yet. Try one of these searches."
+                  ? `Give me at least ${MIN_QUERY_LENGTH} characters to go on. Try one of these.`
+                  : "Give me a name, a coordinate, or the sound of a track. Try one of these."
               }
             />
           </div>
@@ -314,7 +343,7 @@ export function SearchAnswer({
 
         <footer className="log-plate-footer">
           <Link to="/findings">Back to the archive</Link>
-          <Link to="/tracks">Every track</Link>
+          <Link to="/tracks">All tracks</Link>
         </footer>
       </article>
     </main>

@@ -121,7 +121,10 @@ describe("the answered surface", () => {
       "aurora",
     );
 
-    expect(html).toContain("Fluncle&#x27;s Findings");
+    // The NAMED OBJECT, never the collection's nameplate: DESIGN.md's Unlit Rule reserves
+    // "Fluncle's Findings" for lore-area surfaces, and this is not one.
+    expect(html).toContain("Findings</h2>");
+    expect(html).not.toContain("Fluncle&#x27;s Findings");
     expect(html).toContain("Tracks</h2>");
   });
 
@@ -153,8 +156,10 @@ describe("the answered surface", () => {
       "tracks that sound like Synthetic Aurora",
     );
 
-    expect(html).toContain("Synthetic Aurora");
+    // `Artist — Title`, the one sanctioned em dash (VOICE.md §6). Inverted it would be an em dash
+    // in prose, which the same rule bans.
     expect(html).toContain("Near ");
+    expect(html).toContain("Nova Kestrel — Synthetic Aurora");
   });
 });
 
@@ -162,7 +167,7 @@ describe("the states that are not an answer", () => {
   it("offers the four worked examples as real, followable links when nothing is typed", async () => {
     const html = await renderPage({ status: "blank" });
 
-    expect(html).toContain("Nothing typed yet.");
+    expect(html).toContain("Give me a name, a coordinate, or the sound of a track.");
     for (const example of SEARCH_EXAMPLES) {
       // A link, not a button: an example query is the best thing on this page for a crawler to
       // follow and for a reader to open in a new tab.
@@ -175,14 +180,19 @@ describe("the states that are not an answer", () => {
     const html = await renderPage({ status: "blank" }, "n");
 
     expect(html).toContain("characters to go on");
+    expect(html).toContain("Try one of these.");
   });
 
   it("names an empty answer with the query that produced it, and offers a way back", async () => {
     const html = await renderPage(answered({}), "zzzqqx");
 
     expect(html).toContain("Nothing out here for “zzzqqx”.");
+    expect(html).toContain("Try a different name, or ");
     expect(html).toContain("dig through every track I hold");
     expect(html).toContain('href="/tracks"');
+    // The live region speaks in every committed state, so a submit that finds nothing still
+    // announces its outcome to a reader whose focus went back to the field.
+    expect(html).toContain("No matches for “zzzqqx”.");
   });
 
   // A coordinate that names no finding is a different fact from a name the archive does not hold,
@@ -192,6 +202,9 @@ describe("the states that are not an answer", () => {
 
     expect(html).toContain("No finding at that coordinate.");
     expect(html).not.toContain("Nothing out here for");
+    // "Try a different name" is wrong advice for a reader who typed a coordinate.
+    expect(html).toContain("Nothing logged there yet.");
+    expect(html).not.toContain("Try a different name");
   });
 
   // THE THIRD STATE. "Nothing out here" would be a lie about an archive nobody managed to look
@@ -199,10 +212,11 @@ describe("the states that are not an answer", () => {
   it("names a fault as a fault, never as an empty result", async () => {
     const html = await renderPage({ status: "failed" }, "netsky");
 
-    expect(html).toContain("I could not get an answer out of the archive just then.");
+    expect(html).toContain("Couldn&#x27;t get an answer out of the archive just then.");
     expect(html).toContain("Try that search again");
     expect(html).toContain('href="/tracks"');
     expect(html).not.toContain("Nothing out here");
+    expect(html).toContain("Search did not answer.");
   });
 });
 

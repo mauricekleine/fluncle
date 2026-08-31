@@ -143,6 +143,14 @@ function ResultGroup({ children, heading }: { children: ReactNode; heading?: str
   );
 }
 
+/** The sonic anchor as a tracklist credit — `Artist — Title`, or the bare title where the row
+    carries no credit. Shared with the palette's own note so the two rooms read the same. */
+export function anchorCredit(anchor: SearchHit): string {
+  const artists = anchor.artists.join(", ");
+
+  return artists.length > 0 ? `${artists} — ${anchor.title}` : anchor.title;
+}
+
 /** The whole answer, in the order the resolver meant it: what you named, then what it holds. */
 export function SearchResultsList({ response }: { response: SearchResponse }): ReactNode {
   const { findings, unlit } = partitionHits(response.results);
@@ -155,8 +163,9 @@ export function SearchResultsList({ response }: { response: SearchResponse }): R
       {response.anchor ? (
         <p className="search-note">
           <WaveformIcon aria-hidden="true" className="search-note-icon" />
-          Near <strong>{response.anchor.title}</strong>
-          {response.anchor.artists.length > 0 ? ` — ${response.anchor.artists.join(", ")}` : ""}
+          {/* `Artist — Title` is the ONE sanctioned em dash (VOICE.md §6, tracklist convention).
+              Inverted it is an em dash in prose, which the same rule bans. */}
+          Near <strong>{anchorCredit(response.anchor)}</strong>
         </p>
       ) : undefined}
 
@@ -187,10 +196,13 @@ export function SearchResultsList({ response }: { response: SearchResponse }): R
         );
       })}
 
-      {/* The findings lead under the archive's own name — a finding is a named object, so its
-          heading is allowed. */}
+      {/* The findings lead, headed by the NAMED OBJECT and not by the collection's nameplate.
+          DESIGN.md's Unlit Rule reserves "Fluncle's Findings" for lore-area surfaces, and this is
+          not one; "Recommended by Fluncle", the catalogue-side heading, would be a different lie
+          here (these are matches, not recommendations). "Findings" is the noun itself — parallel to
+          the kind headings above it, and still the contrastive pair for "Tracks" below. */}
       {findings.length > 0 ? (
-        <ResultGroup heading="Fluncle's Findings">
+        <ResultGroup heading="Findings">
           {findings.map((hit) => (
             <TrackRow hit={hit} key={hit.trackId} />
           ))}

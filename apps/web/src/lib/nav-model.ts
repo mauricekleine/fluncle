@@ -176,7 +176,7 @@ const browseItems: NavItem[] = [
     // the nav at all: the ⌘K palette is still there and still faster, but a palette has no address
     // and nothing can link to it. The label is the familiar word, deliberately: this is the one
     // control in the app nobody should have to learn a Fluncle name for.
-    blurb: "Find a track by name, coordinate, or sound.",
+    blurb: "One box over everything I hold.",
     id: "search",
     kind: "route",
     label: "Search",

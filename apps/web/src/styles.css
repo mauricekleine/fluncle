@@ -5885,18 +5885,27 @@ a.catalogue-letter:focus-visible {
   display: none;
 }
 
+/* Taller than the canon 2.25rem button, deliberately: it is one half of a field/submit PAIR and a
+   control that stops short of the field it sits beside reads as an afterthought. The two heights
+   are stated together so they cannot drift apart. */
 .search-page-submit {
   flex: none;
   min-height: 3rem;
 }
 
-/* The count line, and it is a live region: a screen-reader user who submits without moving focus
-   is told what came back. Reserved height so the list under it does not jump when it fills. */
+/* The outcome line, and it is a live region: a screen-reader user who submits without moving focus
+   is told what came back. It collapses when it has nothing to say (the zero state), because every
+   commit here is a NAVIGATION — the line never fills in place, so there is no jump to reserve
+   against, and an empty reserve under the field just reads as a hole. */
 .search-page-matchline {
   color: var(--muted-foreground);
   font-size: 0.82rem;
   margin: var(--space-xs) 0 0;
   min-height: 1.2em;
+}
+
+.search-page-matchline:empty {
+  display: none;
 }
 
 .search-page-state {
@@ -5907,6 +5916,13 @@ a.catalogue-letter:focus-visible {
   color: var(--muted-foreground);
   font-size: 0.85rem;
   margin: var(--space-sm) 0 0;
+}
+
+/* Leading its state block, the hint takes the block's own top margin and adds none of its own —
+   otherwise the zero state (where the hint IS the first thing under the field) opens with two
+   stacked gaps and reads as a hole rather than a breath. */
+.search-page-state > .search-page-hint:first-child {
+  margin-top: 0;
 }
 
 .search-page-examples {
@@ -5961,14 +5977,17 @@ a.catalogue-letter:focus-visible {
 
 /* The group heading names a KIND, and every kind named here is a named object in Fluncle's world.
    The unlit rows' group carries no heading at all when they are the only content (the Unlit Rule
-   — a heading there would exist purely to name the tier). */
+   — a heading there would exist purely to name the tier).
+
+   The canon Label: bold and small, and NEVER uppercase-tracked (DESIGN.md §3, whose Don'ts name
+   the uppercase-tracked eyebrow explicitly). Caps here would also print running copy in caps,
+   which VOICE.md §6 reserves for a brand-mark plate. It matches the palette's own heading, which
+   is the surface this list mirrors. */
 .search-page-group-heading {
   color: var(--muted-foreground);
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
   margin: 0 0 var(--space-2xs);
-  text-transform: uppercase;
 }
 
 .search-page-rows {
@@ -5993,6 +6012,35 @@ a.catalogue-letter:focus-visible {
   outline-offset: 2px;
 }
 
+/* THE ONE SUN RULE AT PAGE SCALE. The coordinate and the jump arrow rest in GOLD in the palette,
+   and that is right there: an overlay showing a handful of rows, where the gold is the whole
+   claim. This is an unbounded page list under a gold submit button, and a gold mark on every row
+   is the field of suns the rule bans — so they rest in Dust and HEAT on hover/focus (the Ignition
+   Rule), which is what every other page-scale list in the app already does (`.track-log-id`,
+   `.fd-finding-coordinate`, `.fresh-row-coordinate`). Scoped to `.search-page-row`, so the palette
+   is untouched. */
+.search-page-row .search-row-coordinate,
+.search-page-row .search-jump-icon {
+  color: var(--muted-foreground);
+  transition: color 150ms ease-out;
+}
+
+.search-page-row:hover .search-row-coordinate,
+.search-page-row:focus-visible .search-row-coordinate,
+.search-page-row:hover .search-jump-icon,
+.search-page-row:focus-visible .search-jump-icon {
+  color: var(--eclipse-glow);
+}
+
+/* 13 — the example pill is the one control on this page whose focus was a colour change only. The
+   focus ring stays Eclipse Gold on EVERY interactive element (DESIGN.md, the Unlit Rule), and
+   without it hover and focus are indistinguishable here. */
+.search-page-examples .search-example:focus-visible {
+  border-radius: 999px;
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 /* The submit control is a Shadcn `Button`, whose own `transition-all` is not covered by the search
    block above — a surface's reduced-motion gate has to name every control ON it, not only the ones
    this file styled. */
@@ -6001,7 +6049,9 @@ a.catalogue-letter:focus-visible {
   .search-page-input,
   .search-page-submit,
   .search-page-retry,
-  .search-page-row {
+  .search-page-row,
+  .search-page-row .search-row-coordinate,
+  .search-page-row .search-jump-icon {
     transition: none;
   }
 }

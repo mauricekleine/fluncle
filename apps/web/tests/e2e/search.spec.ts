@@ -431,7 +431,7 @@ test("the zero state teaches with real, followable example queries", async ({ pa
   // (1) SSR — the examples are anchors in the server HTML, so a crawler follows them into the
   // archive. That is the whole reason they are links rather than buttons that fill a field.
   const rawHtml = await (await page.request.get("/search")).text();
-  expect(rawHtml).toContain("Nothing typed yet.");
+  expect(rawHtml).toContain("Give me a name, a coordinate, or the sound of a track.");
   expect(rawHtml).toContain('href="/search?q=netsky"');
 
   await page.goto("/search", { waitUntil: "networkidle" });
