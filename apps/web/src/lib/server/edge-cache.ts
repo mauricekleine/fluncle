@@ -221,7 +221,19 @@ const STATIC_HUB_DETAIL = /^\/(?:galaxies|logbook|newsletter)\/[^/]+$/;
  * path. A single trailing slash is tolerated.
  */
 function isStaticHubPath(pathname: string): boolean {
-  const trimmed = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  // The ROOT is matched in its exact form only. Trimming first would fold `//` (a doubled root, a
+  // real thing crawlers and bad links produce) onto `/` and hand it the front door's cache entry.
+  if (pathname === "/") {
+    return STATIC_HUB_EXACT.has("/");
+  }
+
+  const trimmed = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+
+  // Whatever trimming produced the root or nothing was not a path (`//`, `/`): the exact-form
+  // branch above is the only way `/` is ever a hub.
+  if (trimmed === "" || trimmed === "/") {
+    return false;
+  }
 
   if (STATIC_HUB_EXACT.has(trimmed)) {
     return true;

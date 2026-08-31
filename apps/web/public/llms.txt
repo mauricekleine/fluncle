@@ -18,7 +18,8 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, f
 
 - [Fluncle's Findings on Spotify](https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0): the playlist itself
 - [Fluncle on Telegram](https://t.me/fluncle): one banger per post, most nights
-- [The archive](https://www.fluncle.com/): every certified track with the date Fluncle found it
+- [The front door](https://www.fluncle.com/): where a first visit starts, with search over the whole archive, one finding written up, the newest findings, what just came out, and the four ways into the wider index
+- [The archive](https://www.fluncle.com/findings): every certified track with the date Fluncle found it
 - [The log](https://www.fluncle.com/log): every finding's coordinate page, one per Log ID (e.g. https://www.fluncle.com/log/004.7.2I)
 - [The Logbook](https://www.fluncle.com/logbook): the voyage written up as a first-person travelogue, one entry per sector-day, with that day's findings inlined. One page per day, at https://www.fluncle.com/logbook/<sector>
 - [Every track](https://www.fluncle.com/tracks): the whole list, newest release first, filterable by release year, tempo, key, and label
