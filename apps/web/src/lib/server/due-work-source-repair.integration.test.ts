@@ -23,6 +23,60 @@ afterEach(() => {
 });
 
 describe("transactionally coupled due-work source repair", () => {
+  it.each([0, 501, 1.5, Number.POSITIVE_INFINITY])(
+    "rejects invalid ordinary source limits before applying the hosted cap: %s",
+    async (limit) => {
+      await seedCatalogueTrack(db, { trackId: "invalid-ordinary-limit" });
+      await db.execute(
+        markDueWorkSourceRepairsStatement(
+          [{ subjectId: "invalid-ordinary-limit", subjectType: "track" }],
+          { markerVersion: "invalid-ordinary-v1", producer: "capture-verification" },
+        ),
+      );
+
+      await expect(
+        fanOutDueWorkSourceRepairs(db, { includeCatalogueRank: false, limit }),
+      ).rejects.toThrow("due-work limit must be an integer from 1 through 500");
+      expect(
+        (
+          await db.execute({
+            args: [DUE_WORK_SOURCE_REPAIR_KIND, "invalid-ordinary-limit"],
+            sql: `select subject_id from due_work where work_kind = ? and subject_id = ?`,
+          })
+        ).rows,
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each([0, 501, 1.5, Number.POSITIVE_INFINITY])(
+    "rejects invalid catalogue-rank limits before starting a rebuild: %s",
+    async (limit) => {
+      await db.execute(
+        markDueWorkSourceRepairsStatement(
+          [
+            {
+              subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+              subjectType: "track",
+            },
+          ],
+          { markerVersion: "invalid-rank-v1", producer: "catalogue-rank" },
+        ),
+      );
+
+      await expect(fanOutDueWorkSourceRepairs(db, { limit })).rejects.toThrow(
+        "due-work limit must be an integer from 1 through 500",
+      );
+      expect(
+        (
+          await db.execute({
+            args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+            sql: `select subject_id from due_work where work_kind = ? and subject_id = ?`,
+          })
+        ).rows,
+      ).toHaveLength(1);
+    },
+  );
+
   it("converges one track marker directly into final queue rows", async () => {
     await seedCatalogueTrack(db, { trackId: "repair-track" });
     await batchDueWorkSourceMutation(
@@ -50,8 +104,8 @@ describe("transactionally coupled due-work source repair", () => {
     ).toEqual(["repair-track"]);
   });
 
-  it("converges the full 500-source page to ready and scheduled rows without repair debt", async () => {
-    const subjects = Array.from({ length: 500 }, (_, index) => ({
+  it("caps a requested 500-source page and continues from the durable marker set", async () => {
+    const subjects = Array.from({ length: 6 }, (_, index) => ({
       subjectId: `wide-fanout-${String(index).padStart(3, "0")}`,
       subjectType: "track" as const,
     }));
@@ -92,6 +146,8 @@ describe("transactionally coupled due-work source repair", () => {
 
     let batchCalls = 0;
     let executeCalls = 0;
+    let maximumBatchArgs = 0;
+    let maximumBatchStatements = 0;
     let maximumStatementArgs = 0;
     const recordArgs = (statement: InStatement): void => {
       if (typeof statement !== "string" && Array.isArray(statement.args)) {
@@ -101,6 +157,18 @@ describe("transactionally coupled due-work source repair", () => {
     const measuredClient = {
       batch: (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
         batchCalls += 1;
+        maximumBatchStatements = Math.max(maximumBatchStatements, statements.length);
+        maximumBatchArgs = Math.max(
+          maximumBatchArgs,
+          statements.reduce(
+            (total, statement) =>
+              total +
+              (typeof statement !== "string" && Array.isArray(statement.args)
+                ? statement.args.length
+                : 0),
+            0,
+          ),
+        );
         for (const statement of statements) {
           recordArgs(statement);
         }
@@ -112,11 +180,27 @@ describe("transactionally coupled due-work source repair", () => {
         return db.execute(...args);
       },
     };
-    const result = await fanOutDueWorkSourceRepairs(measuredClient, { limit: 500 });
-    expect(result).toMatchObject({ deferred: 0, expanded: 500, scanned: 500 });
+    const first = await fanOutDueWorkSourceRepairs(measuredClient, { limit: 500 });
+    expect(first).toMatchObject({ deferred: 0, expanded: 5, hasMore: true, scanned: 5 });
     expect(executeCalls).toBeLessThanOrEqual(7);
-    expect(batchCalls).toBe(10);
-    expect(maximumStatementArgs).toBeLessThanOrEqual(20_400);
+    expect(batchCalls).toBe(1);
+    expect(maximumBatchStatements).toBeLessThanOrEqual(4);
+    expect(maximumStatementArgs).toBeLessThanOrEqual(2_040);
+    expect(maximumBatchArgs).toBeLessThanOrEqual(3_100);
+    expect(
+      Number(
+        (
+          await db.execute({
+            args: [DUE_WORK_SOURCE_REPAIR_KIND],
+            sql: `select count(*) as n from due_work where work_kind = ?`,
+          })
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(1);
+
+    const second = await fanOutDueWorkSourceRepairs(measuredClient, { limit: 500 });
+    expect(second).toMatchObject({ deferred: 0, expanded: 1, hasMore: false, scanned: 1 });
+    expect(batchCalls).toBe(2);
     expect(
       Number(
         (
@@ -149,7 +233,7 @@ describe("transactionally coupled due-work source repair", () => {
           })
         ).rows[0]?.n ?? 0,
       ),
-    ).toBe(500);
+    ).toBe(6);
     expect(
       (
         await db.execute({
@@ -283,8 +367,12 @@ describe("transactionally coupled due-work source repair", () => {
     ).toMatchObject({ source_version: "newer-projection", state: "scheduled" });
   });
 
-  it("turns a coupled catalogue-corpus marker into a resumable rank rebuild", async () => {
-    for (const trackId of ["rank-a", "rank-b", "rank-c"]) {
+  it("isolates a requested 500-row rank page before resuming ordinary marker work", async () => {
+    const trackIds = Array.from(
+      { length: 501 },
+      (_, index) => `rank-${String(index).padStart(3, "0")}`,
+    );
+    for (const trackId of trackIds) {
       await seedCatalogueTrack(db, { trackId });
     }
     await db.execute(
@@ -294,14 +382,51 @@ describe("transactionally coupled due-work source repair", () => {
             subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
             subjectType: "track",
           },
+          { subjectId: "rank-500", subjectType: "track" },
         ],
         { markerVersion: "rank-corpus-v1", producer: "catalogue-rank" },
       ),
     );
 
-    const result = await fanOutDueWorkSourceRepairs(db, { limit: 1 });
-    expect(result).toMatchObject({ expanded: 1, rankRebuildScanned: 3 });
-    expect((await listReadyDueWork(db, "catalogue-rank")).items).toHaveLength(3);
+    const first = await fanOutDueWorkSourceRepairs(db, { limit: 500 });
+    expect(first).toMatchObject({
+      deferred: 1,
+      expanded: 0,
+      hasMore: true,
+      rankRebuildScanned: 500,
+      scanned: 1,
+    });
+    expect((await listReadyDueWork(db, "catalogue-rank", { limit: 500 })).items).toHaveLength(500);
+    expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(0);
+
+    const second = await fanOutDueWorkSourceRepairs(db, { limit: 500 });
+    expect(second).toMatchObject({
+      deferred: 0,
+      expanded: 1,
+      hasMore: true,
+      rankRebuildScanned: 1,
+      scanned: 1,
+    });
+    expect(
+      Number(
+        (
+          await db.execute({
+            args: ["catalogue-rank"],
+            sql: `select count(*) as n from due_work where work_kind = ? and state = 'ready'`,
+          })
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(501);
+    expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(0);
+
+    expect(await fanOutDueWorkSourceRepairs(db, { limit: 500 })).toMatchObject({
+      deferred: 0,
+      expanded: 1,
+      hasMore: false,
+      rankRebuildScanned: 0,
+      scanned: 1,
+    });
+    expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(1);
     const sourceMarker = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
       sql: `select subject_id from due_work where work_kind = ? and subject_id = ?`,
@@ -356,7 +481,7 @@ describe("transactionally coupled due-work source repair", () => {
       execute: db.execute.bind(db),
     };
 
-    expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 1 })).toMatchObject({
+    expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 500 })).toMatchObject({
       deferred: 1,
       expanded: 0,
       hasMore: true,

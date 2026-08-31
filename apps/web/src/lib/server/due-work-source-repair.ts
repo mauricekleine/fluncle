@@ -4,6 +4,7 @@ import {
   DueWorkMaintenancePendingError,
   DUE_WORK_SOURCE_REPAIR_KIND,
   listDueWorkSourceRepairs,
+  MAX_DUE_WORK_CHUNK_SIZE,
   readDueWorkRebuild,
   repairDueWorkChunk,
   runDueWorkRebuildChunk,
@@ -22,7 +23,6 @@ import {
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
 const SOURCE_REPAIR_LIMIT = 5;
-const SOURCE_FANOUT_WRITE_BATCH_SIZE = 50;
 const PHYSICAL_REPAIR_LIMIT = 50;
 const RANK_REBUILD_LIMIT = 100;
 
@@ -262,6 +262,7 @@ async function convergeEvaluatedSourceMarkers(
 async function advanceCatalogueRankRebuild(
   client: DueWorkClient,
   marker: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>,
+  limit: number,
 ): Promise<{ complete: boolean; scanned: number }> {
   const definition = DUE_WORK_BACKFILLS.find(
     (candidate) => candidate.workKind === "catalogue-rank",
@@ -272,7 +273,7 @@ async function advanceCatalogueRankRebuild(
   const checkpoint = await readDueWorkRebuild(client, definition);
   const result = await runDueWorkRebuildChunk(client, definition, {
     generation: marker.sourceVersion,
-    limit: RANK_REBUILD_LIMIT,
+    limit,
     newGeneration: checkpoint?.generation !== marker.sourceVersion,
   });
 
@@ -305,7 +306,18 @@ export async function fanOutDueWorkSourceRepairs(
     subjectType?: DueWorkSubjectType;
   } = {},
 ): Promise<DueWorkSourceRepairResult> {
-  const limit = options.limit ?? SOURCE_REPAIR_LIMIT;
+  if (
+    options.limit !== undefined &&
+    (!Number.isSafeInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > MAX_DUE_WORK_CHUNK_SIZE)
+  ) {
+    throw new Error(`due-work limit must be an integer from 1 through ${MAX_DUE_WORK_CHUNK_SIZE}`);
+  }
+  // One track marker can project into every registered physical queue. Keep that multiplicative
+  // write shape hosted-safe even when the operator supplies the shared 500-row projection limit;
+  // callers already continue from the durable marker set while `hasMore` remains true.
+  const limit = Math.min(options.limit ?? SOURCE_REPAIR_LIMIT, SOURCE_REPAIR_LIMIT);
   const page = await listDueWorkSourceRepairs(client, {
     excludeSubjectId:
       options.includeCatalogueRank === false
@@ -314,43 +326,39 @@ export async function fanOutDueWorkSourceRepairs(
     limit,
     subjectType: options.subjectType,
   });
-  let deferred = 0;
-  let expanded = 0;
-  let rankRebuildScanned = 0;
-  const regular: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>[] = [];
-
-  for (const marker of page.items) {
-    if (
+  const rankMarker = page.items.find(
+    (marker) =>
       marker.subjectType === "track" &&
-      marker.subjectId === DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID
-    ) {
-      const result = await advanceCatalogueRankRebuild(client, marker);
-      rankRebuildScanned += result.scanned;
-      if (result.complete) {
-        expanded += 1;
-      } else {
-        deferred += 1;
-      }
-      continue;
-    }
-    regular.push(marker);
+      marker.subjectId === DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  );
+  if (rankMarker !== undefined) {
+    // Rank invalidation is already a resumable rebuild. Give it the operator's established
+    // 500-row rebuild bound, but never combine that transaction with multiplicative marker work.
+    const rankLimit = options.limit ?? RANK_REBUILD_LIMIT;
+    const result = await advanceCatalogueRankRebuild(client, rankMarker, rankLimit);
+    return {
+      cursor: rankMarker.subjectId,
+      deferred: result.complete ? 0 : 1,
+      expanded: result.complete ? 1 : 0,
+      hasMore: page.hasMore || page.items.length > 1 || !result.complete,
+      rankRebuildScanned: result.scanned,
+      repaired: result.complete ? 1 : 0,
+      scanned: 1,
+    };
   }
+
+  const regular = page.items;
   const regularOutcomes = await evaluateSourceMarkers(client, regular);
-  for (let index = 0; index < regular.length; index += SOURCE_FANOUT_WRITE_BATCH_SIZE) {
-    const chunk = regular.slice(index, index + SOURCE_FANOUT_WRITE_BATCH_SIZE);
-    const chunkMarkers = new Set(chunk);
-    const outcomes = regularOutcomes.filter((outcome) => chunkMarkers.has(outcome.marker));
-    const cleared = await convergeEvaluatedSourceMarkers(client, chunk, outcomes);
-    expanded += cleared;
-    deferred += chunk.length - cleared;
-  }
+  const cleared = await convergeEvaluatedSourceMarkers(client, regular, regularOutcomes);
+  const expanded = cleared;
+  const deferred = regular.length - cleared;
 
   return {
     cursor: page.items.at(-1)?.subjectId ?? null,
     deferred,
     expanded,
     hasMore: page.hasMore || deferred > 0,
-    rankRebuildScanned,
+    rankRebuildScanned: 0,
     repaired: expanded,
     scanned: page.items.length,
   };
