@@ -212,7 +212,7 @@ function TrackPage() {
             src={albumCoverAtSize(track.albumImageUrl, "medium")}
           />
           <div className="track-masthead-titling">
-            <h1 className="log-index-title artist-name">{track.title}</h1>
+            <h1 className="log-coordinate log-index-title artist-name">{track.title}</h1>
             <TrackArtistCredits track={track} />
           </div>
         </header>

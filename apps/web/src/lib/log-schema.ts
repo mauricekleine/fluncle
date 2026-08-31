@@ -625,16 +625,24 @@ export type GraphPageTrack = {
   logId?: string;
   /** The finding's release date → the MusicRecording's `datePublished`. Findings only. */
   releaseDate?: string;
-  /** The off-site URL for a track with no Fluncle page. Absent ⇒ the item carries no url. */
+  /** The off-site URL, the LAST resort — only for a row with no Fluncle page at all. */
   spotifyUrl?: string;
   title: string;
+  /**
+   * The row's permanent id. An uncertified row now has a page of its own at `/track/<trackId>`,
+   * so the item resolves HOME rather than straight off-site (the off-site URL stays in the
+   * destination page's own `sameAs`). Absent on a row whose identity the destination would
+   * refuse, which falls back to the off-site URL exactly as before.
+   */
+  trackId?: string;
 };
 
 // A track list as schema.org `ItemList` of `MusicRecording`s. A finding resolves to its
-// `/log/<id>` page; an uncertified row resolves to its off-site URL, or to no url at all
-// (a catalogue-only track may have no Spotify presence). `artistSlugs` stamps each credited
-// artist's `@id` where the entity is known — the same cross-page anchor `/log` and
-// `/artist` already carry.
+// `/log/<id>` page; an uncertified row resolves to its own `/track/<trackId>` destination; a row
+// with neither falls back to its off-site URL, or to no url at all. The order MIRRORS what the
+// page links to, which is the point — schema that contradicts the page gets discounted.
+// `artistSlugs` stamps each credited artist's `@id` where the entity is known — the same
+// cross-page anchor `/log` and `/artist` already carry.
 function trackItemList(
   tracks: GraphPageTrack[],
   artistSlugs: Record<string, string>,
@@ -642,7 +650,11 @@ function trackItemList(
   return {
     "@type": "ItemList",
     itemListElement: tracks.map((track, index) => {
-      const url = track.logId ? logPageUrl(track.logId) : track.spotifyUrl;
+      const url = track.logId
+        ? logPageUrl(track.logId)
+        : track.trackId
+          ? trackPageUrl(track.trackId)
+          : track.spotifyUrl;
       const contributors = remixerContributorNodes(track.title, track.artists, artistSlugs);
 
       return {

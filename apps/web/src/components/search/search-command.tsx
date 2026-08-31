@@ -53,6 +53,7 @@ import {
 import { SpotifyIcon } from "@/components/platform-icons";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
+import { hasTrackPageIdentity, trackPagePath } from "@/lib/track-page";
 import { cn } from "@/lib/utils";
 
 // ── The wire ─────────────────────────────────────────────────────────────────────────
@@ -398,11 +399,23 @@ export function SearchDialog({
     [goTo],
   );
 
-  /** A finding goes to its coordinate. A track with no coordinate goes OUT, to Spotify. */
+  /**
+   * A finding goes to its coordinate. A track with no coordinate goes to its own
+   * `/track/<trackId>` destination, which is where its record, its imprint, its tempo, and every
+   * service that carries it now live — a search result stays INSIDE the archive rather than
+   * ejecting the reader to a streaming tab mid-search. A row the destination would refuse (no
+   * title, no credit) keeps the old behaviour and opens Spotify.
+   */
   const pick = useCallback(
     (hit: SearchHit) => {
       if (hit.certified && hit.logId) {
         goTo(`/log/${hit.logId}`);
+
+        return;
+      }
+
+      if (hasTrackPageIdentity(hit)) {
+        goTo(trackPagePath(hit.trackId));
 
         return;
       }

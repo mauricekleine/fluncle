@@ -3,8 +3,8 @@ import { buildSitemapShardXml, parseShard } from "../lib/sitemap";
 import { collectSitemapBag, SITEMAP_HEADERS } from "../lib/server/sitemap-data";
 
 // `/sitemap/<kind>-<n>.xml` — one child of the sitemap index. `kind` is one per entity type:
-// pages / findings / artists / labels / albums / galaxies / logbook; `n` is 1-indexed and only
-// ever exceeds 1 once a kind outgrows SITEMAP_MAX_URLS.
+// pages / findings / tracks / artists / labels / albums / galaxies / logbook / docs; `n` is 1-indexed and only
+// ever exceeds 1 once a kind outgrows its per-kind ceiling (`sitemapMaxUrls`).
 //
 // It fetches ONLY its own bag (`collectSitemapBag(kind)`), never the other six — a labels child
 // has no business reading every finding to print a label list. The index's counts come from the
@@ -38,7 +38,10 @@ export const Route = createFileRoute("/sitemap/$shard")({
           return notFoundResponse();
         }
 
-        const bag = await collectSitemapBag(shard.kind);
+        // The PAGE is passed through, and only the `tracks` kind reads it: its bag is windowed in
+        // SQL rather than sliced by the builder, because it is the one kind big enough that
+        // reading it whole would pull a six-figure column into the isolate (sitemap-data.ts).
+        const bag = await collectSitemapBag(shard.kind, shard.page);
         const xml = buildSitemapShardXml(shard.kind, shard.page, bag);
 
         return xml ? new Response(xml, { headers: SITEMAP_HEADERS }) : notFoundResponse();
