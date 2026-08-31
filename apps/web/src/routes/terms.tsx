@@ -201,7 +201,7 @@ function TermsPage() {
         </section>
 
         <footer className="log-plate-footer">
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
           <Link to="/privacy">Privacy</Link>
           <Link to="/about">About Fluncle</Link>
         </footer>

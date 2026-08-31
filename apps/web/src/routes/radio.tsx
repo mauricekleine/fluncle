@@ -1198,7 +1198,7 @@ function RadioMessage({
           play: back to the archive or the full log. */}
       {wayBack ? (
         <div className="radio-actions">
-          <Button nativeButton={false} render={<Link to="/" />} size="sm" variant="outline">
+          <Button nativeButton={false} render={<Link to="/findings" />} size="sm" variant="outline">
             Back to the archive
           </Button>
           <Button nativeButton={false} render={<Link to="/log" />} size="sm" variant="outline">

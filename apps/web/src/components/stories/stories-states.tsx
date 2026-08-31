@@ -13,7 +13,7 @@ function StoriesState({ children, heading }: { children: string; heading: string
         <Button
           className="mx-auto mt-1"
           nativeButton={false}
-          render={<Link to="/" />}
+          render={<Link to="/findings" />}
           variant="outline"
         >
           <CaretLeftIcon aria-hidden="true" weight="bold" />

@@ -698,7 +698,7 @@ function LogPage() {
 
         <footer className="log-plate-footer">
           <Link to="/log">The full log</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
         </footer>
       </article>
     </main>
@@ -836,7 +836,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
 
         <footer className="log-plate-footer">
           <Link to="/mixtapes">Mixtapes</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
         </footer>
       </article>
     </main>

@@ -172,7 +172,7 @@ function GalaxyPage() {
 
         <footer className="log-plate-footer">
           <Link to="/galaxies">All galaxies</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
         </footer>
       </article>
     </main>

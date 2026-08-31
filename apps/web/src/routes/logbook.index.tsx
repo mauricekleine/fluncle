@@ -111,7 +111,7 @@ function LogbookIndexPage() {
         )}
 
         <footer className="log-plate-footer">
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
           <Link to="/log">The finding log</Link>
         </footer>
       </article>

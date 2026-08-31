@@ -198,7 +198,7 @@ function EditionNotFound() {
         </header>
         <footer className="log-plate-footer">
           <Link to="/newsletter">All back issues</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
         </footer>
       </article>
     </main>

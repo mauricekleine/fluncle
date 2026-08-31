@@ -278,7 +278,7 @@ function LogbookEntryPage() {
 
         <footer className="log-plate-footer">
           <Link to="/logbook">The whole logbook</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/findings">Back to the archive</Link>
         </footer>
       </article>
     </main>
