@@ -51,6 +51,42 @@ describe("transactionally coupled due-work source repair", () => {
     ).toEqual(["repair-track"]);
   });
 
+  it("fans out the full 500-source operator page in bounded set batches", async () => {
+    const subjects = Array.from({ length: 500 }, (_, index) => ({
+      subjectId: `wide-fanout-${String(index).padStart(3, "0")}`,
+      subjectType: "track" as const,
+    }));
+    await db.execute(
+      markDueWorkSourceRepairsStatement(subjects, {
+        markerVersion: "wide-fanout-v1",
+        producer: "capture-verification",
+      }),
+    );
+
+    const result = await fanOutDueWorkSourceRepairs(db, { limit: 500 });
+    expect(result).toMatchObject({ deferred: 0, expanded: 500, scanned: 500 });
+    expect(
+      Number(
+        (
+          await db.execute({
+            args: [DUE_WORK_SOURCE_REPAIR_KIND],
+            sql: `select count(*) as n from due_work where work_kind = ?`,
+          })
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(0);
+    expect(
+      Number(
+        (
+          await db.execute({
+            args: [DUE_WORK_SOURCE_REPAIR_KIND],
+            sql: `select count(*) as n from due_work where work_kind <> ? and state = 'repair'`,
+          })
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(17_000);
+  });
+
   it("maps canonical entity markers onto slug-keyed artwork projections", async () => {
     await seedAlbum(db, { id: "album-id", slug: "album-slug" });
     await db.execute(

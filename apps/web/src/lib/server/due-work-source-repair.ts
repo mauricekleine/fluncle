@@ -4,20 +4,19 @@ import {
   DueWorkMaintenancePendingError,
   DUE_WORK_SOURCE_REPAIR_KIND,
   listDueWorkSourceRepairs,
-  markDueWorkRepairStatement,
   readDueWorkRebuild,
   repairDueWorkChunk,
   runDueWorkRebuildChunk,
   type DueWorkClient,
   type DueWorkRepairResult,
   type DueWorkRow,
-  type DueWorkStatement,
   type DueWorkSubjectType,
 } from "./due-work";
 import { DUE_WORK_BACKFILLS, dueWorkRepairDefinitions } from "./due-work-registry";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
 const SOURCE_REPAIR_LIMIT = 5;
+const SOURCE_FANOUT_WRITE_BATCH_SIZE = 50;
 const PHYSICAL_REPAIR_LIMIT = 50;
 const RANK_REBUILD_LIMIT = 100;
 
@@ -26,17 +25,24 @@ export type DueWorkSourceRepairResult = DueWorkRepairResult & {
   rankRebuildScanned: number;
 };
 
-async function readEntitySlug(
+async function readEntitySlugs(
   client: DueWorkClient,
   subjectType: Exclude<DueWorkSubjectType, "track">,
-  subjectId: string,
-): Promise<string | undefined> {
+  subjectIds: readonly string[],
+): Promise<Map<string, string>> {
+  if (subjectIds.length === 0) {
+    return new Map();
+  }
+  const placeholders = subjectIds.map(() => "?").join(", ");
   const result = await client.execute({
-    args: [subjectId],
-    sql: `select slug from ${subjectType}s where id = ? limit 1`,
+    args: [...subjectIds],
+    sql: `select id, slug from ${subjectType}s where id in (${placeholders})`,
   });
-  const slug = result.rows[0]?.slug;
-  return typeof slug === "string" ? slug : undefined;
+  return new Map(
+    result.rows.flatMap((row) =>
+      typeof row.id === "string" && typeof row.slug === "string" ? [[row.id, row.slug]] : [],
+    ),
+  );
 }
 
 function usesSlugIdentity(workKind: string): boolean {
@@ -47,41 +53,100 @@ function usesSlugIdentity(workKind: string): boolean {
   );
 }
 
-async function expandSourceMarker(
+async function expandSourceMarkers(
   client: DueWorkClient,
-  marker: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>,
-): Promise<boolean> {
-  const slug =
-    marker.subjectType === "track"
-      ? undefined
-      : await readEntitySlug(client, marker.subjectType, marker.subjectId);
-  const definitions = dueWorkRepairDefinitions(client).filter(
-    (definition) => definition.subjectType === marker.subjectType,
-  );
-  const statements: DueWorkStatement[] = [];
-
-  for (const definition of definitions) {
-    const subjectId = usesSlugIdentity(definition.workKind)
-      ? (slug ?? marker.subjectId)
-      : marker.subjectId;
-    statements.push(
-      markDueWorkRepairStatement(
-        {
-          sourceVersion: marker.sourceVersion,
-          subjectId,
-          subjectType: definition.subjectType,
-          workKind: definition.workKind,
-        },
-        { generation: marker.generation, now: marker.updatedAt },
-      ),
-    );
+  markers: readonly DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>[],
+): Promise<number> {
+  if (markers.length === 0) {
+    return 0;
   }
-
-  statements.push(clearDueWorkSourceRepairStatement(marker));
-  const clearIndex = statements.length - 1;
-  statements.push(advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY));
-  const results = await client.batch(statements, "write");
-  return (results[clearIndex]?.rowsAffected ?? 0) > 0;
+  const subjectTypes = new Set(markers.map((marker) => marker.subjectType));
+  const definitions = dueWorkRepairDefinitions(client).filter((definition) =>
+    subjectTypes.has(definition.subjectType),
+  );
+  const slugs = new Map<string, string>();
+  for (const subjectType of ["album", "artist", "label"] as const) {
+    const ids = markers
+      .filter((marker) => marker.subjectType === subjectType)
+      .map((marker) => marker.subjectId);
+    for (const [id, slug] of await readEntitySlugs(client, subjectType, ids)) {
+      slugs.set(`${subjectType}\u0000${id}`, slug);
+    }
+  }
+  const markerRows = markers.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+  const definitionRows = definitions.map(() => "(?, ?, ?)").join(", ");
+  const clearRows = markers.map(() => "(?, ?, ?)").join(", ");
+  const results = await client.batch(
+    [
+      {
+        args: [
+          ...markers.flatMap((marker) => [
+            marker.subjectType,
+            marker.subjectId,
+            slugs.get(`${marker.subjectType}\u0000${marker.subjectId}`) ?? null,
+            marker.sourceVersion,
+            marker.generation,
+            marker.updatedAt,
+          ]),
+          ...definitions.flatMap((definition) => [
+            definition.workKind,
+            definition.subjectType,
+            usesSlugIdentity(definition.workKind) ? 1 : 0,
+          ]),
+        ],
+        sql: `with
+          marker(subject_type, subject_id, slug, source_version, generation, updated_at)
+            as (values ${markerRows}),
+          definition(work_kind, subject_type, uses_slug) as (values ${definitionRows})
+          insert into due_work
+          (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+           source_version, generation, updated_at)
+          select definition.work_kind, marker.subject_type,
+            case when definition.uses_slug = 1 then coalesce(marker.slug, marker.subject_id)
+              else marker.subject_id end,
+            'repair', '', marker.updated_at, marker.source_version, marker.generation,
+            marker.updated_at
+          from marker
+          join definition on definition.subject_type = marker.subject_type
+          join due_work source_marker
+            on source_marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
+            and source_marker.subject_type = marker.subject_type
+            and source_marker.subject_id = marker.subject_id
+            and source_marker.state = 'repair'
+            and source_marker.source_version = marker.source_version
+          on conflict(work_kind, subject_type, subject_id) do update set
+            state = 'repair',
+            sort_key = '',
+            next_due_at = excluded.next_due_at,
+            source_version = excluded.source_version,
+            generation = excluded.generation,
+            claim_token = null,
+            claim_expires_at = null,
+            claimed_by = null,
+            updated_at = excluded.updated_at`,
+      },
+      {
+        args: markers.flatMap((marker) => [
+          marker.subjectType,
+          marker.subjectId,
+          marker.sourceVersion,
+        ]),
+        sql: `with marker(subject_type, subject_id, source_version) as (values ${clearRows})
+          delete from due_work
+          where work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}' and state = 'repair'
+            and exists (
+              select 1 from marker
+              where marker.subject_type = due_work.subject_type
+                and marker.subject_id = due_work.subject_id
+                and marker.source_version = due_work.source_version
+            )
+          returning subject_id`,
+      },
+      advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY),
+    ],
+    "write",
+  );
+  return results[1]?.rows.length ?? 0;
 }
 
 async function advanceCatalogueRankRebuild(
@@ -139,6 +204,7 @@ export async function fanOutDueWorkSourceRepairs(
   let deferred = 0;
   let expanded = 0;
   let rankRebuildScanned = 0;
+  const regular: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>[] = [];
 
   for (const marker of page.items) {
     if (
@@ -154,12 +220,13 @@ export async function fanOutDueWorkSourceRepairs(
       }
       continue;
     }
-
-    if (await expandSourceMarker(client, marker)) {
-      expanded += 1;
-    } else {
-      deferred += 1;
-    }
+    regular.push(marker);
+  }
+  for (let index = 0; index < regular.length; index += SOURCE_FANOUT_WRITE_BATCH_SIZE) {
+    const chunk = regular.slice(index, index + SOURCE_FANOUT_WRITE_BATCH_SIZE);
+    const cleared = await expandSourceMarkers(client, chunk);
+    expanded += cleared;
+    deferred += chunk.length - cleared;
   }
 
   return {
