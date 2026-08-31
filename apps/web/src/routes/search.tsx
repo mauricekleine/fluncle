@@ -1,7 +1,7 @@
 import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
 import { SearchResultsList } from "@/components/search/search-results-list";
@@ -112,22 +112,42 @@ function SearchExamples({ label }: { label: string }): ReactNode {
  * takes over and navigates client-side to the same URL, which keeps the transition fast and the
  * history stack honest — one entry per committed query, so back and forward walk the searches a
  * reader actually made rather than every character they typed.
+ *
+ * ── WHY THE INPUT IS UNCONTROLLED, AND KEYED ON THE COMMITTED QUERY ──────────────────────────
+ * The committed query is the ONLY source of truth for what this field says, so the field is not a
+ * second copy of it living in component state. It is seeded from `q` and keyed on `q`, which means
+ * every way the query can change — a submit, a clicked example, a shared link, a back step — mounts
+ * a fresh input already reading what the URL says, with no sync effect that could drift from it and
+ * no state to reconcile. The value is read off the form at submit, so there is nothing to keep.
+ *
+ * The remount costs focus, which matters after a keyboard submit — so a submit sets a flag and the
+ * effect below returns focus to the fresh input. A cold load never sets the flag, so arriving on a
+ * shared link does not steal focus from the top of the page.
  */
 function SearchField({ q }: { q: string | undefined }): ReactNode {
   const navigate = useNavigate();
-  const [term, setTerm] = useState(q ?? "");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const submitted = useRef(false);
 
-  // The URL is the source of truth, so the field follows it: a back/forward step, a clicked example,
-  // or a fresh load all change `q`, and the field re-seeds from it. During typing `q` does not move
-  // (nothing commits until submit), so this is inert between submissions.
+  // A submit remounts the keyed input (below), which would otherwise drop focus to the body — a bad
+  // place to leave a reader who just pressed Enter. A cold load never sets the flag, so arriving on
+  // a shared link does not steal focus from the top of the page.
   useEffect(() => {
-    setTerm(q ?? "");
+    if (!submitted.current) {
+      return;
+    }
+
+    submitted.current = false;
+    inputRef.current?.focus();
   }, [q]);
 
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
 
-    const next = term.trim();
+    // `FormData.get` widens to `File | string`, which a text input can never be; narrow rather
+    // than stringify, so a `File` could never reach the URL as "[object File]".
+    const raw = new FormData(event.currentTarget).get("q");
+    const next = typeof raw === "string" ? raw.trim() : "";
 
     // A no-op guard: re-submitting the committed query would push a duplicate history entry and
     // re-run the loader for the same answer.
@@ -135,12 +155,23 @@ function SearchField({ q }: { q: string | undefined }): ReactNode {
       return;
     }
 
+    submitted.current = true;
     void navigate({ search: { q: next.length > 0 ? next : undefined }, to: "/search" });
   };
 
   return (
     <search>
-      <form action="/search" className="search-page-form" method="get" onSubmit={onSubmit}>
+      {/* `autoComplete="off"` on the FORM as well as the input: on the input it suppresses autofill,
+          on the form it is the HTML signal that the document does not want the user agent to
+          remember a control's value across a history traversal — the right statement for a search
+          box, whose value belongs to the URL. */}
+      <form
+        action="/search"
+        autoComplete="off"
+        className="search-page-form"
+        method="get"
+        onSubmit={onSubmit}
+      >
         <label className="sr-only" htmlFor="search-page-q">
           Search the archive
         </label>
@@ -149,13 +180,14 @@ function SearchField({ q }: { q: string | undefined }): ReactNode {
           <input
             autoComplete="off"
             className="search-page-input"
+            defaultValue={q ?? ""}
             id="search-page-q"
+            key={q ?? ""}
             maxLength={MAX_QUERY_LENGTH}
             name="q"
-            onChange={(event) => setTerm(event.target.value)}
             placeholder="A name, a coordinate, or the sound of it…"
+            ref={inputRef}
             type="search"
-            value={term}
           />
         </span>
         <Button className="search-page-submit" type="submit">

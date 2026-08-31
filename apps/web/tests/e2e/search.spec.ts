@@ -306,21 +306,46 @@ test("back and forward walk the searches a reader actually made", async ({ page 
 
   await page.goto("/search", { waitUntil: "networkidle" });
 
+  const field = page.locator("#search-page-q");
+
+  // GATE ON HYDRATION FIRST, and this one is load-bearing rather than boilerplate. The form is a
+  // real `<form method="get">`, so a submit BEFORE React attaches is a full-document navigation —
+  // which puts a document entry in the history and hands the back step to Chromium's classic form
+  // restoration, where the field is restored to whatever was last typed instead of the URL's query.
+  // That is the browser's own convention and not something to fight; it is simply not the path this
+  // test is about. The palette is client-only, so opening it proves React has attached, after which
+  // every submit below is a pushState and the history is the router's.
+  //
+  // The palette is located by its DIALOG, not by its placeholder: this page's own field carries the
+  // same placeholder (one action, one phrasing), so a placeholder locator matches a control that is
+  // always visible and could never report the dialog as closed.
+  const palette = page.getByRole("dialog");
+
+  await expect(async () => {
+    await page.keyboard.press("Escape");
+    await expect(palette).toBeHidden({ timeout: 2000 });
+    await page.keyboard.press("ControlOrMeta+k");
+    await expect(palette).toBeVisible({ timeout: 3000 });
+  }).toPass({ timeout: 30_000 });
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+
   // Submitting commits ONE history entry per query — the field is deliberately not
   // debounce-navigated, because a navigate per keystroke would bury the back button under the
   // letters of a word nobody meant to search for.
-  const field = page.locator("#search-page-q");
-
-  await expect(async () => {
-    await field.fill("Aurora");
-    await field.press("Enter");
-    await expect(page).toHaveURL(/q=Aurora/, { timeout: 3000 });
-  }).toPass({ timeout: 30_000 });
+  await field.fill("Aurora");
+  await field.press("Enter");
+  await expect(page).toHaveURL(/q=Aurora/);
   await expect(page.getByText(FIRST_FINDING_TITLE).first()).toBeVisible();
 
   await field.fill(SEEDED_ARTIST_NAME);
   await field.press("Enter");
-  await expect(page).toHaveURL(/q=Nova\+?%?2?0?Kestrel/);
+  await expect(page).toHaveURL(/Kestrel/);
+  // WAIT FOR THE SECOND ANSWER before stepping back, and not out of politeness: the URL commits as
+  // soon as the navigation starts, while the loader is still in flight, so a back step taken on the
+  // URL alone cancels a load that never rendered — and then "back" has nothing to undo, the field
+  // still holds what was typed, and the test measures its own race rather than the surface.
+  await expect(page.getByRole("link", { exact: true, name: SEEDED_ARTIST_NAME })).toBeVisible();
 
   // BACK returns the first search whole: the URL, the field, and the rows under it.
   await page.goBack();
@@ -331,6 +356,7 @@ test("back and forward walk the searches a reader actually made", async ({ page 
   // FORWARD returns the second one, just as whole.
   await page.goForward();
   await expect(page).toHaveURL(/Kestrel/);
+  await expect(page.getByRole("link", { exact: true, name: SEEDED_ARTIST_NAME })).toBeVisible();
   await expect(field).toHaveValue(SEEDED_ARTIST_NAME);
 
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);

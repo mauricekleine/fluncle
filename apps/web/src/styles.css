@@ -5993,8 +5993,15 @@ a.catalogue-letter:focus-visible {
   outline-offset: 2px;
 }
 
+/* The submit control is a Shadcn `Button`, whose own `transition-all` is not covered by the search
+   block above — a surface's reduced-motion gate has to name every control ON it, not only the ones
+   this file styled. */
 @media (prefers-reduced-motion: reduce) {
-  .search-page-field {
+  .search-page-field,
+  .search-page-input,
+  .search-page-submit,
+  .search-page-retry,
+  .search-page-row {
     transition: none;
   }
 }
