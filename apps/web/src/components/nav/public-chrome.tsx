@@ -66,7 +66,14 @@ export function PublicChrome({
     // It wraps the whole shell rather than sitting inside the top bar, because a page under it
     // (the front door's seeding entry) reaches the same dialog through the context.
     <SearchProvider>
-      <div className={workbench ? "nav-shell nav-shell--workbench" : "nav-shell"}>
+      <div
+        className={workbench ? "nav-shell nav-shell--workbench" : "nav-shell"}
+        // The front door stands the colophon's search glyph down (below), and carries no
+        // breadcrumb either, so the bar needs a different element to take the slack. A plain
+        // attribute rather than a class, and computed from the same pathname on both sides,
+        // so it changes no element and hydration is untouched.
+        data-front-door={pathname === "/" ? "" : undefined}
+      >
         <header className="nav-topbar">
           <div className="nav-topbar-inner">
             <Link aria-label="Fluncle home" className="nav-wordmark" to="/">
@@ -82,7 +89,11 @@ export function PublicChrome({
               `/findings`, the archive page it was drawn for, and deliberately NOT the
               front door: `/` works fully anonymously and never sells joining as the
               outcome of arriving (PRODUCT.md "The front door"). */}
-            <SearchTrigger />
+            {/* The colophon's glyph stands down on the FRONT DOOR, which carries a much larger
+                door to the same action; two controls answering to one name on one screen is
+                ambiguous by voice and redundant by eye. The slot still mounts the dialog, and
+                ⌘K still works there. */}
+            <SearchTrigger showTrigger={pathname !== "/"} />
             <CrewSlot home={pathname === "/findings"} />
           </div>
         </header>

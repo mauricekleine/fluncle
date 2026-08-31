@@ -6,7 +6,7 @@
 // on the rendered page, and the URL it points at answers 200. A cross-link that renders but
 // 404s is exactly the failure this suite exists to catch, and it is invisible to a unit test.
 //
-// The shape is `home.spec.ts`'s (see `tests/e2e/README.md`): SSR → identity → hydration →
+// The shape is `findings.spec.ts`'s (see `tests/e2e/README.md`): SSR → identity → hydration →
 // cleanliness. Identity comes from the SEEDED fixtures, never from counts or marketing copy.
 //
 // The seeded world: one finding wired into the full graph — the artist that made it, the label

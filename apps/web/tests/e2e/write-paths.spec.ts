@@ -49,7 +49,7 @@ function watchForErrors(page: Page): string[] {
 }
 
 /**
- * Open a home-page dialog whose trigger is a plain button, state-safely. The trigger
+ * Open an archive-page dialog whose trigger is a plain button, state-safely. The trigger
  * TOGGLES, so a naive click-and-check loop can alternate open/closed forever; each
  * attempt therefore resets to a known CLOSED state before clicking. Until React
  * hydrates the click is inert, which is exactly what the retry absorbs.
@@ -72,7 +72,10 @@ test("the newsletter form reaches the subscribe contract and shows its verdict",
 
   const problems = watchForErrors(page);
 
-  await page.goto("/", { waitUntil: "networkidle" });
+  // The two dialog CTAs live in the archive page's link hub (`components/home/link-hub.tsx`).
+  // The front door deliberately carries neither: it works fully anonymously and never sells
+  // joining or subscribing as the outcome of arriving (PRODUCT.md "The front door").
+  await page.goto("/findings", { waitUntil: "networkidle" });
   await openDialog(page, "Newsletter", "The weekly newsletter");
 
   // `a@b.c` is deliberate: the browser's own `type="email"` validation ACCEPTS it, so
@@ -108,7 +111,7 @@ test("the submission dialog hydrates and refuses to search on nothing", async ({
 
   const problems = watchForErrors(page);
 
-  await page.goto("/", { waitUntil: "networkidle" });
+  await page.goto("/findings", { waitUntil: "networkidle" });
   await openDialog(page, "Submit a track", "Search Spotify, pick the match");
 
   // The dialog opens on the SEARCH step and offers no way to send until a candidate

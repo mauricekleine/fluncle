@@ -3,7 +3,7 @@
 // Fluncle's search is not one surface. It is a ⌘K COMMAND DIALOG (the free-text
 // resolver, `components/search/search-command.tsx`) and the `/tracks` HUB (the
 // whole list, narrowed by filter axes that live in the URL). This spec proves
-// both, in the `home.spec.ts` shape: SSR, identity over seeded fixtures,
+// both, in the `findings.spec.ts` shape: SSR, identity over seeded fixtures,
 // hydration of a genuinely client-only control, and a clean console.
 //
 // ── THE ONE RAIL THIS SPEC IS BUILT AROUND ───────────────────────────────────
@@ -71,8 +71,11 @@ test("search dialog resolves the deterministic tiers over the seeded archive", a
 
   const problems = watchForErrors(page);
 
-  // (1) SSR — the way IN is server-rendered: the trigger sits in the public
-  // chrome on every page, so a no-JS reader still sees search exists.
+  // (1) SSR — the way IN is server-rendered, so a no-JS reader still sees search exists. On the
+  // front door that way in is the page's own seeding field (the colophon glyph stands down there,
+  // since two doors to one action on one screen answer to one name); on every other public page it
+  // is the colophon's quiet trigger. Both carry the same accessible name, so this assertion holds
+  // wherever it is pointed.
   const rawHtml = await (await page.request.get("/")).text();
   expect(rawHtml, "SSR HTML should carry the search trigger").toContain("Search the archive");
 

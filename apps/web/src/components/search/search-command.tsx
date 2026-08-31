@@ -623,45 +623,52 @@ export function useSearchController(): SearchController {
 const NO_SEARCH: SearchController = { open: () => {}, setOpen: () => {}, state: false };
 
 /**
- * The one control in the top bar. Mounted once inside `PublicChrome`, beside the provider that owns
- * the dialog and the shortcut — the trigger is a way in, not the only way in.
+ * The colophon's search slot: the quiet glyph, and the one MOUNT POINT for the dialog itself.
+ *
+ * `showTrigger` hides the GLYPH where the page already carries a larger door to the same action —
+ * the front door's seeding field. Two controls answering to one name on one screen is ambiguous to a
+ * screen reader and unusable by voice, and a second quieter door for an action already offered in
+ * full is exactly what The Quiet Surface Rule takes off a surface. The ⌘K shortcut is unaffected:
+ * its listener lives on the provider, so the keystroke works on every public page either way.
  *
  * `⌘K` on Apple, `Ctrl+K` elsewhere. The hint renders from the same check, so it never tells
  * a Windows reader to press a key their keyboard does not have.
  */
-export function SearchTrigger(): ReactNode {
+export function SearchTrigger({ showTrigger = true }: { showTrigger?: boolean }): ReactNode {
   const { open, seed, setOpen, state } = useSearchController();
   const isApple = useIsApple();
 
   return (
     <>
-      <button
-        aria-keyshortcuts={isApple ? "Meta+K" : "Control+K"}
-        aria-label="Search the archive"
-        className="search-trigger"
-        onClick={() => open()}
-        type="button"
-      >
-        <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
-        <span className="search-trigger-label">Search</span>
-        {/* The key hint is a VISUAL affordance only. Left exposed, the button's visible text reads
-            "Search ⌘K" while its accessible name is "Search the archive" — the visible label is
-            then not contained in the accessible name, which is a WCAG 2.5.3 failure (Lighthouse's
-            `label-content-name-mismatch`) and, worse, leaves a voice-control user saying a phrase
-            the button does not answer to. Hidden, the visible label is "Search", which the
-            accessible name does contain; `aria-keyshortcuts` above already tells assistive tech
-            about the shortcut, in the form it is meant to be announced. */}
-        <kbd aria-hidden="true" className="search-trigger-kbd">
-          {isApple ? "⌘K" : "Ctrl K"}
-        </kbd>
-      </button>
+      {showTrigger ? (
+        <button
+          aria-keyshortcuts={isApple ? "Meta+K" : "Control+K"}
+          aria-label="Search the archive"
+          className="search-trigger"
+          onClick={() => open()}
+          type="button"
+        >
+          <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
+          <span className="search-trigger-label">Search</span>
+          {/* The key hint is a VISUAL affordance only. Left exposed, the button's visible text reads
+              "Search ⌘K" while its accessible name is "Search the archive" — the visible label is
+              then not contained in the accessible name, which is a WCAG 2.5.3 failure (Lighthouse's
+              `label-content-name-mismatch`) and, worse, leaves a voice-control user saying a phrase
+              the button does not answer to. Hidden, the visible label is "Search", which the
+              accessible name does contain; `aria-keyshortcuts` above already tells assistive tech
+              about the shortcut, in the form it is meant to be announced. */}
+          <kbd aria-hidden="true" className="search-trigger-kbd">
+            {isApple ? "⌘K" : "Ctrl K"}
+          </kbd>
+        </button>
+      ) : undefined}
 
-      {/* THE ONE MOUNT POINT, and it sits HERE — immediately after the colophon trigger — rather
-          than beside the provider. The Command dialog server-renders its own sr-only header, so its
-          DOM position is part of the SSR tree; mounting it anywhere else moves that markup and
-          React's hydration walk finds the shell's next element where the dialog's used to be. The
-          state is the provider's, so the front door's field opens this same dialog; only the
-          rendering stays put. */}
+      {/* THE ONE MOUNT POINT, and it sits HERE — inside the colophon bar — rather than beside the
+          provider. The Command dialog server-renders its own sr-only header, so its DOM position is
+          part of the SSR tree; mounting it anywhere else moves that markup and React's hydration
+          walk finds the shell's next element where the dialog's used to be. The state is the
+          provider's, so the front door's field opens this same dialog; only the rendering stays
+          put. */}
       <SearchDialog onOpenChange={setOpen} open={state} seed={seed} />
     </>
   );

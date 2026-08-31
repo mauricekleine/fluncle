@@ -43,10 +43,12 @@ export function FrontDoorSection({
   title: string;
 }): ReactNode {
   const headingId = `${id}-heading`;
+  // A header with nothing to paint reserves no gap: the band's own separation is enough.
+  const quiet = quietTitle && intro === undefined && link === undefined;
 
   return (
     <section aria-labelledby={headingId} className="fd-section" id={id}>
-      <header className="fd-section-head">
+      <header className={quiet ? "fd-section-head fd-section-head--quiet" : "fd-section-head"}>
         <div className="fd-section-titling">
           <h2 className={quietTitle ? "sr-only" : "fd-section-title"} id={headingId}>
             {title}

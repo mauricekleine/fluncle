@@ -1,6 +1,6 @@
 // RADIO — `/radio`, the one continuous run of Fluncle's findings.
 //
-// Proven in the `home.spec.ts` shape: SSR, identity over the seeded fixture,
+// Proven in the `findings.spec.ts` shape: SSR, identity over the seeded fixture,
 // hydration of a genuinely client-only control, and a clean console.
 //
 // ── WHAT MAKES THIS SURFACE DIFFERENT ────────────────────────────────────────

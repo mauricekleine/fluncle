@@ -225,8 +225,8 @@ html {
    Scalar's globally-leaked sheet, and when #920 correctly scoped Scalar to
    /docs/api the Fumadocs rule won for the first time and the backdrop vanished
    (2026-07-27). This unlayered rule beats every layered one deterministically; the
-   page's dark ground is html's sleeve-black above, and `tests/e2e/home.spec.ts`
-   pins the contract. */
+   page's dark ground is html's sleeve-black above, and `tests/e2e/findings.spec.ts`
+   + `tests/e2e/front-door.spec.ts` pin the contract. */
 body {
   background-color: transparent;
 }
@@ -5308,6 +5308,15 @@ a.catalogue-letter:focus-visible {
   padding: 0.85rem 1rem;
 }
 
+/* The controls bank to the far end of the bar. On every page but the front door the search
+   glyph carries that with its own auto margin (below); the FRONT DOOR stands the glyph down
+   — its page already offers a much larger door to the same action — and has no breadcrumb
+   either, so the wordmark takes the slack instead and the crew slot stays where the eye
+   expects it rather than sliding in beside the wordmark. */
+.nav-shell[data-front-door] .nav-topbar-inner > .nav-wordmark {
+  margin-right: auto;
+}
+
 /* ── Breadcrumb (inline with the wordmark, every page but home) ─────────────── */
 .nav-breadcrumb {
   min-width: 0;
@@ -5457,6 +5466,7 @@ a.catalogue-letter:focus-visible {
   font-size: 0.82rem;
   font-weight: 600;
   gap: 0.4rem;
+  margin-left: auto;
   padding: 0.3rem 0.5rem;
   transition:
     color 150ms ease-out,
@@ -8012,6 +8022,12 @@ a.catalogue-letter:focus-visible {
   gap: var(--space-2xs) var(--space-md);
   justify-content: space-between;
   margin-bottom: var(--space-md);
+}
+
+/* A header carrying only an sr-only heading paints nothing, so its gap would be a hole in
+   the rhythm rather than a beat — the band's own `--space-band` already separates it. */
+.fd-section-head--quiet {
+  margin-bottom: 0;
 }
 
 .fd-section-titling {

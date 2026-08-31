@@ -2,7 +2,7 @@
 //
 // This is the single most-linked public page Fluncle has — the permanent record at a
 // coordinate, what a shared link, a crawler, and an AI agent all land on. It proves the four
-// things every public-page spec proves (see `tests/e2e/README.md` and `home.spec.ts`, the
+// things every public-page spec proves (see `tests/e2e/README.md` and `findings.spec.ts`, the
 // reference shape), plus one this page owns:
 //   1. SSR — the raw server response already carries the coordinate, the title, the artist,
 //      and the graph links (the crawler's view, before a byte of client JS runs).
