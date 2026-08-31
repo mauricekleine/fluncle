@@ -12,12 +12,17 @@ import { type EntityCacheKind, purgeEntityCachesNow } from "./edge-cache";
 // server-only callers ever pull it in.
 
 /**
- * The public entity detail pages a single track renders on — its artist(s), its album, and
- * its label, by their CURRENT stored slug. Resolved in one query (three `union` branches over
- * the same join graph the pages read: `track_artists→artists.slug`, `tracks.album_id→
- * albums.slug`, `tracks.label_id→labels.slug`). A track links to several artists, so this
- * can return several `artist` targets. Reading the real stored slug — never re-slugifying a
- * name — keeps the purge key byte-identical to the read key.
+ * The public detail pages a single track renders on — its OWN `/track/<trackId>` destination,
+ * plus its artist(s), its album, and its label by their CURRENT stored slug. The three entity
+ * branches are resolved in one query (a `union` over the same join graph the pages read:
+ * `track_artists→artists.slug`, `tracks.album_id→albums.slug`, `tracks.label_id→labels.slug`); a
+ * track links to several artists, so this can return several `artist` targets. Reading the real
+ * stored slug — never re-slugifying a name — keeps the purge key byte-identical to the read key.
+ *
+ * The track's own page needs NO query: its id is the argument, and the id IS the address (it is a
+ * primary key, so unlike a slug it cannot have moved since the write). It is prepended
+ * unconditionally, which is what makes `/track/<trackId>`'s detail-tier cache an explicitly
+ * purged one rather than one that merely waits out its 300s window.
  */
 export async function getTrackEntityPurgeTargets(
   trackId: string,
@@ -41,7 +46,7 @@ export async function getTrackEntityPurgeTargets(
            where tracks.track_id = ? and labels.slug is not null`,
   });
 
-  const targets: { kind: EntityCacheKind; slug: string }[] = [];
+  const targets: { kind: EntityCacheKind; slug: string }[] = [{ kind: "track", slug: trackId }];
 
   for (const row of typedRows<{ kind: unknown; slug: unknown }>(result.rows)) {
     const slug = typeof row.slug === "string" ? row.slug.trim() : "";
@@ -55,8 +60,9 @@ export async function getTrackEntityPurgeTargets(
 }
 
 /**
- * Purge the cached entity detail pages a track change can stale — its artist(s), album, and
- * label pages — after a write to that track/finding (a note/cover/enrichment edit, a publish).
+ * Purge the cached detail pages a track change can stale — its own destination, plus its
+ * artist(s), album, and label pages — after a write to that track/finding (a note/cover/
+ * enrichment edit, a publish).
  * Fire-and-forget: the slug resolution + purge ride a single `waitUntil`, so the write path
  * never awaits either. Mirrors `purgeLogCache` (the same write already purges `/log/<id>`),
  * covering the OTHER surfaces that render the finding. No-op on a blank trackId.

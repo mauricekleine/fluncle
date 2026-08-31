@@ -18,6 +18,8 @@
 // the dialog stays the accelerator and HANDS OFF to the page ({@link searchPagePath}) rather than
 // being replaced by it, and the page carries the whole query state in its URL.
 
+import { hasTrackPageIdentity, trackPagePath } from "./track-page";
+
 /** The five graph nodes that have a page of their own — a jump target, not a result row. */
 export type SearchEntityKind = "album" | "artist" | "galaxy" | "label" | "mixtape";
 
@@ -155,13 +157,26 @@ export function entityHref(entity: SearchEntity): string {
 }
 
 /**
- * Where a result row goes. A finding goes to its coordinate; a track Fluncle never certified goes
- * OUT to Spotify, because there is no `/log` page for somewhere he has not been. A row with
- * neither is not a destination at all, and the renderer leaves it as text.
+ * Where a result row goes, for both surfaces that render one — the palette and the `/search` page
+ * read this, so they cannot disagree about where a result leads.
+ *
+ * A finding goes to its coordinate. A track Fluncle never certified goes to its own
+ * `/track/<trackId>` destination, where its record, its imprint, its tempo, every service that
+ * carries it, and what sits close to it in sound are gathered — a result stays INSIDE the archive
+ * rather than ejecting the reader to a streaming tab mid-search. There is still no `/log` page for
+ * somewhere he has not been, and this is not one: the destination carries no coordinate and names
+ * no tier (docs/track-destination.md).
+ *
+ * A row the destination would refuse — one the archive cannot name — falls back to its off-site
+ * anchor, and a row with neither is not a destination at all, so the renderer leaves it as text.
  */
 export function hitHref(hit: SearchHit): { external: boolean; href: string } | undefined {
   if (hit.certified && hit.logId) {
     return { external: false, href: `/log/${hit.logId}` };
+  }
+
+  if (hasTrackPageIdentity(hit)) {
+    return { external: false, href: trackPagePath(hit.trackId) };
   }
 
   return hit.spotifyUrl ? { external: true, href: hit.spotifyUrl } : undefined;

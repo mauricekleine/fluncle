@@ -1,9 +1,14 @@
 // `/fresh` — the shared render primitives every variant leans on.
 //
 // The register rules live HERE, once, so no variant can break them: a lit finding leads with its
-// cover and its Log ID coordinate and may heat to gold; an unlit catalogue row stays coverless,
-// dust-inked, and sends you out to Spotify (DESIGN.md's Unlit Rule). A variant owns the LAYOUT
-// around these; it never re-decides what a finding or a catalogue row is allowed to look like.
+// cover and its Log ID coordinate and may heat to gold; an unlit catalogue row stays coverless and
+// dust-inked (DESIGN.md's Unlit Rule). A variant owns the LAYOUT around these; it never re-decides
+// what a finding or a catalogue row is allowed to look like.
+//
+// The unlit row now leads to the recording's own `/track/<trackId>` destination rather than
+// straight out to Spotify, with the Spotify mark kept beside it as the explicit way out. That is a
+// change of DESTINATION, not of register: still no cover, still no coordinate, still no gold, and
+// still never introduced or named.
 //
 // A note on dates: this is the ONE surface whose dates are RELEASE dates, not Found dates. So the
 // stamp reads "Out Jul 3", never "Found" (VOICE.md's Found Rule; lib/server/fresh.ts).
@@ -15,6 +20,7 @@ import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
 import { TrackArtwork } from "@/components/track-artwork";
 import { tracksCount } from "@/lib/format";
+import { hasTrackPageIdentity } from "@/lib/track-page";
 import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { type FreshCover, type FreshStreamEntry } from "./data";
@@ -214,7 +220,11 @@ export function FreshStreamRow({
         name={track.artists[0] ?? track.title}
         src={freshAvatarSrc(track.artistAvatarUrl)}
       />
-      {track.spotifyUrl ? (
+      {hasTrackPageIdentity(track) ? (
+        <Link className="fresh-row-main" params={{ trackId: track.trackId }} to="/track/$trackId">
+          <span className="fresh-row-title">{line}</span>
+        </Link>
+      ) : track.spotifyUrl ? (
         <a
           aria-label={`${line} on Spotify`}
           className="fresh-row-main"
@@ -230,6 +240,17 @@ export function FreshStreamRow({
           <span className="fresh-row-title">{line}</span>
         </span>
       )}
+      {hasTrackPageIdentity(track) && track.spotifyUrl ? (
+        <a
+          aria-label={`Listen to ${line} on Spotify`}
+          className="fresh-row-out"
+          href={track.spotifyUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <BrandIcon className="fresh-row-mark" icon={siSpotify} />
+        </a>
+      ) : undefined}
     </li>
   );
 }

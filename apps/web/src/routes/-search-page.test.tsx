@@ -88,9 +88,10 @@ describe("the answered surface", () => {
     expect(html).not.toContain("1 matches");
   });
 
-  // THE UNLIT RULE. An uncertified row links OUT because there is no `/log` page for somewhere
-  // Fluncle has not been, and the tier it belongs to is never given a name anywhere on the page.
-  it("links an uncertified track out, and never names the tier it belongs to", async () => {
+  // THE UNLIT RULE. An uncertified row links to its own `/track/<trackId>` destination — there is
+  // still no `/log` page for somewhere Fluncle has not been, and that destination is not one: it
+  // carries no coordinate. The tier it belongs to is never given a name anywhere on the page.
+  it("links an uncertified track to its destination, and never names the tier it belongs to", async () => {
     const html = await renderPage(
       answered({
         results: [hit({ spotifyUrl: "https://open.spotify.com/track/x", title: "Quiet Row" })],
@@ -98,8 +99,10 @@ describe("the answered surface", () => {
       "quiet",
     );
 
-    expect(html).toContain('href="https://open.spotify.com/track/x"');
-    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('href="/track/t1"');
+    // No coordinate, and no Spotify mark standing over a page that is not Spotify's.
+    expect(html).not.toContain("search-row-coordinate");
+    expect(html).not.toContain("https://open.spotify.com/track/x");
     expect(html).toContain("search-row--unlit");
     // Alone on the page, the unlit rows stand BARE: a heading over the only content would exist
     // purely to name the tier.
@@ -107,6 +110,21 @@ describe("the answered surface", () => {
     for (const forbidden of ["catalogue", "Catalogue", "uncertified", "Uncertified"]) {
       expect(html).not.toContain(forbidden);
     }
+  });
+
+  // The off-site anchor is the FALLBACK, for a row the destination refuses — one the archive
+  // cannot name — never the default for every uncertified row.
+  it("links a row the destination refuses out to its off-site anchor", async () => {
+    const html = await renderPage(
+      answered({
+        results: [hit({ artists: [], spotifyUrl: "https://open.spotify.com/track/x", title: "" })],
+      }),
+      "quiet",
+    );
+
+    expect(html).toContain('href="https://open.spotify.com/track/x"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain("search-row--unlit");
   });
 
   // The superset heading earns its place only when something NAMED renders above it.

@@ -3,10 +3,15 @@
 //
 // Both registers lead with the ALBUM COVER through the shared `TrackArtwork` (cover-led canon). A
 // LIT finding shows its real cover and links its title to `/log/<logId>`; an UNLIT catalogue row
-// shows the eclipse fallback (TrackArtwork with no src), its title is plain text — it has no detail
-// page and is never introduced as a tier (DESIGN.md's Unlit Rule; the split stays visual). Either
-// way the artist credits link to `/artist/<slug>` and the imprint to `/label/<slug>` wherever the
-// entity exists, so an uncertified row is still navigable BY ITS ENTITIES, never as a named track.
+// shows the eclipse fallback (TrackArtwork with no src) and links its title to its own
+// `/track/<trackId>` destination. Either way the artist credits link to `/artist/<slug>` and the
+// imprint to `/label/<slug>` wherever the entity exists.
+//
+// THE SPLIT STAYS VISUAL, and only visual. The unlit row is coverless, coordinate-free, and
+// dust-inked, and it is never introduced as a tier (DESIGN.md's Unlit Rule) — the fact that it now
+// has somewhere to go is not a name, a badge, or a claim, and no word on the row says which
+// register it is in. A row the destination would refuse (no title, no credit) keeps its plain
+// title text and its Spotify mark exactly as before.
 
 import { CaretRightIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
@@ -15,6 +20,7 @@ import { BrandIcon } from "@/components/brand-icon";
 import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { formatReleaseDate } from "@/lib/format";
+import { hasTrackPageIdentity } from "@/lib/track-page";
 import { albumCoverAtSize } from "@/lib/media";
 import { type TracksHubArtistLink, type TracksHubEntry } from "@/lib/server/tracks-hub";
 
@@ -117,7 +123,17 @@ export function TracksHubRow({ entry }: { entry: TracksHubEntry }) {
           row is half of what tells a catalogue row from a finding; the Unlit Rule holds). */}
       <TrackArtwork alt="" className="tracks-hub-row-cover" />
       <div className="tracks-hub-row-body">
-        <span className="tracks-hub-row-title">{track.title}</span>
+        {hasTrackPageIdentity(track) ? (
+          <Link
+            className="tracks-hub-row-title tracks-hub-row-title-link"
+            params={{ trackId: track.trackId }}
+            to="/track/$trackId"
+          >
+            {track.title}
+          </Link>
+        ) : (
+          <span className="tracks-hub-row-title">{track.title}</span>
+        )}
         <p className="tracks-hub-row-meta">
           <ArtistCredits artists={entry.artistLinks} />
           <LabelCredit label={entry.label} slug={entry.labelSlug} />

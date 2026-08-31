@@ -145,7 +145,7 @@ async function seedLogbookEntry(sector: number, generatedAt: string): Promise<vo
 
 /** Every row bag, each fetched the way its own child route fetches it. */
 async function readRowBags(): Promise<SitemapRowBags> {
-  const [albums, artists, docs, galaxies, labels, logbook, logs] = await Promise.all([
+  const [albums, artists, docs, galaxies, labels, logbook, logs, tracks] = await Promise.all([
     collectSitemapBag("albums"),
     collectSitemapBag("artists"),
     collectSitemapBag("docs"),
@@ -153,6 +153,7 @@ async function readRowBags(): Promise<SitemapRowBags> {
     collectSitemapBag("labels"),
     collectSitemapBag("logbook"),
     collectSitemapBag("findings"),
+    collectSitemapBag("tracks"),
   ]);
 
   return {
@@ -163,6 +164,7 @@ async function readRowBags(): Promise<SitemapRowBags> {
     labels: labels.labels,
     logbook: logbook.logbook,
     logs: logs.logs,
+    tracks: tracks.tracks,
   };
 }
 

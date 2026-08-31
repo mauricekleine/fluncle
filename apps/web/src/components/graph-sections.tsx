@@ -34,10 +34,12 @@
 //     level; it names the records or the artists the band belongs to, never the tier,
 //     and it is never visible.
 //   - IT CANNOT BE MISTAKEN FOR A FINDING. No coordinate (it has none), no cover-led gold,
-//     muted ink, a hairline rule above it, and it links OUT (a track with no Log ID has no
-//     page here to link to). The resting and hover states carry NO Eclipse Gold, so a lit
-//     unlit row can never read as a focused one; `:focus-visible` still gets the canonical
-//     gold ring, because focus must stay legible and consistent (WCAG).
+//     muted ink, a hairline rule above it. The resting and hover states carry NO Eclipse
+//     Gold, so a lit unlit row can never read as a focused one; `:focus-visible` still gets
+//     the canonical gold ring, because focus must stay legible and consistent (WCAG). The row
+//     now leads INTO the archive rather than straight out of it — `/track/<trackId>`, the
+//     recording's own destination — and that changes where it goes, never how it looks: a
+//     destination is not a name, and the tier is still never introduced (see UnlitTracks).
 //   - AN EMPTY SET RENDERS NOTHING AT ALL. Not an empty state, not a heading with no rows:
 //     the component returns undefined, so a page with no uncertified tracks reads as if
 //     the band had never existed.
@@ -49,6 +51,7 @@ import { BrandIcon } from "@/components/brand-icon";
 import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { artistTitleLine } from "@/lib/log-prose";
+import { hasTrackPageIdentity } from "@/lib/track-page";
 import { albumCoverAtSize } from "@/lib/media";
 import { type GraphPageTrack } from "@/lib/log-schema";
 import { type ArtistChip } from "@/lib/server/artists";
@@ -56,10 +59,13 @@ import { type CatalogueTrackItem, type TrackListItem } from "@/lib/server/tracks
 
 /**
  * Both halves of a graph page, in render order, as the JSON-LD's track list: the findings
- * first (each resolving to its `/log` coordinate), then the quieter rows (each resolving to
- * its off-site URL, or to none). Shared by the label and album heads so the structured data
- * describes exactly what the page renders — schema that contradicts the page gets
- * discounted, and only a finding is ever given a Fluncle URL.
+ * first (each resolving to its `/log` coordinate), then the quieter rows (each resolving to its
+ * own `/track/<trackId>` destination, or to its off-site URL when the destination would refuse
+ * it, or to nothing). Shared by the label and album heads so the structured data describes
+ * exactly what the page renders — schema that contradicts the page gets discounted.
+ *
+ * A FINDING'S URL IS STILL ONLY EVER ITS COORDINATE. What changed is that an uncertified row now
+ * has a Fluncle URL too; it is a different one, and neither can be mistaken for the other.
  */
 export function graphPageTracks(
   findings: TrackListItem[],
@@ -88,6 +94,10 @@ export function graphPageTracks(
       artists: track.artists,
       spotifyUrl: track.spotifyUrl,
       title: track.title,
+      // The row's own destination — the quieter rows are no longer dead ends, so the schema
+      // resolves them home the same way the rendered row does. A row the destination would refuse
+      // (no title, no credit) carries no id here and falls back to its off-site URL.
+      trackId: hasTrackPageIdentity(track) ? track.trackId : undefined,
     })),
   ];
 }
@@ -207,8 +217,19 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
  * The quieter rows. Read the file header before changing anything here: no heading, no
  * noun, nothing rendered at all when the set is empty.
  *
- * A row links out to Spotify when the track has a Spotify presence; a catalogue-only track
- * that has none renders as plain, unlinked text (there is nowhere honest to send you).
+ * ── THE ROW NOW GOES SOMEWHERE, AND THAT IS THE ONE THING THAT CHANGED ──────────────────
+ * The old note here read "it links OUT, because a track with no Log ID has no page here to link
+ * to". That premise is what `/track/<trackId>` retired: the recording has a destination of its
+ * own, so the LINE leads there — where its record, its imprint, its tempo, every service that
+ * carries it, and what sits close to it in sound all live together. The Spotify mark stays beside
+ * it as a second, explicitly-labelled control, so the one-click way out is not taken away.
+ *
+ * Nothing about the REGISTER moved. There is still no heading, no noun, no coordinate, no cover,
+ * and no gold at rest or on hover; a destination is not a name, and the tier stays unnamed.
+ *
+ * A row the destination would refuse (no title, or no artist credit — `hasTrackPageIdentity`)
+ * keeps the old behaviour exactly: out to Spotify, or plain unlinked text when it has no
+ * streaming presence either, because there is nowhere honest to send you.
  */
 export function UnlitTracks({
   label,
@@ -226,10 +247,15 @@ export function UnlitTracks({
     <ul aria-label={label} className="unlit-list">
       {tracks.map((track) => {
         const line = artistTitleLine(track);
+        const destination = hasTrackPageIdentity(track);
 
         return (
           <li className="unlit-row" key={track.trackId}>
-            {track.spotifyUrl ? (
+            {destination ? (
+              <Link className="unlit-link" params={{ trackId: track.trackId }} to="/track/$trackId">
+                <span className="unlit-line">{line}</span>
+              </Link>
+            ) : track.spotifyUrl ? (
               <a
                 aria-label={`${line} on Spotify`}
                 className="unlit-link"
@@ -243,6 +269,17 @@ export function UnlitTracks({
             ) : (
               <span className="unlit-line">{line}</span>
             )}
+            {destination && track.spotifyUrl ? (
+              <a
+                aria-label={`Listen to ${line} on Spotify`}
+                className="unlit-out"
+                href={track.spotifyUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <BrandIcon className="unlit-mark" icon={siSpotify} />
+              </a>
+            ) : undefined}
           </li>
         );
       })}

@@ -46,6 +46,7 @@ import {
 } from "@fluncle/ui/components/command";
 import {
   ArrowRightIcon,
+  CaretRightIcon,
   ListMagnifyingGlassIcon,
   MagnifyingGlassIcon,
   WaveformIcon,
@@ -75,6 +76,7 @@ import {
   type SearchHit,
   type SearchResponse,
   entityHref,
+  hitHref,
   searchArchiveApiPath,
   searchPagePath,
 } from "@/lib/search-results";
@@ -102,9 +104,16 @@ function Cover({ hit }: { hit: SearchHit }): ReactNode {
 }
 
 /**
- * One track row. The `certified` bit decides everything visible about it: a finding carries
- * its coordinate and lights gold; an uncertified track carries a Spotify mark and stays cold.
- * Neither is labelled — the difference is the register, not a badge.
+ * One track row. The `certified` bit decides everything visible about it: a finding carries its
+ * coordinate and lights gold; an uncertified track stays cold. Neither is labelled — the
+ * difference is the register, not a badge.
+ *
+ * THE TRAILING MARK NAMES WHERE THE ROW GOES, and it has to, because the two are no longer the
+ * same place. A row with enough identity now opens its own `/track/<trackId>` destination, so it
+ * carries the Phosphor caret every other in-app row uses; only the fallback rows that still open
+ * Spotify carry Spotify's own mark. A platform's identity is its own (DESIGN.md §5,
+ * Iconography): a brand mark standing over a fluncle.com destination promises a tab that never
+ * opens, which is the mirror of the rule that bans a Phosphor glyph as a brand mark.
  */
 function TrackRow({
   hit,
@@ -131,6 +140,8 @@ function TrackRow({
       <CommandShortcut className="search-row-tail">
         {hit.certified && hit.logId ? (
           <span className="search-row-coordinate">{hit.logId}</span>
+        ) : hitHref(hit)?.external === false ? (
+          <CaretRightIcon aria-hidden="true" className="search-row-out" size={16} weight="bold" />
         ) : (
           <SpotifyIcon className="search-row-out" />
         )}
@@ -265,19 +276,31 @@ export function SearchDialog({
       segment, a mixtape's log page), else the `/<kind>/<slug>` default. */
   const pickEntity = useCallback((entity: SearchEntity) => goTo(entityHref(entity)), [goTo]);
 
-  /** A finding goes to its coordinate. A track with no coordinate goes OUT, to Spotify. */
+  /**
+   * Where a picked row goes — resolved by the SHARED {@link hitHref}, the same function the
+   * `/search` page's rows link through, so the accelerator and the page cannot disagree about
+   * where a result leads. A finding goes to its coordinate; a track with no coordinate goes to
+   * its own `/track/<trackId>` destination, where its record, its imprint, its tempo and every
+   * service that carries it are gathered, so a result stays INSIDE the archive rather than
+   * ejecting the reader to a streaming tab mid-search. Only a row the destination refuses leaves
+   * the origin, and it opens in a new tab because it is off-site.
+   */
   const pick = useCallback(
     (hit: SearchHit) => {
-      if (hit.certified && hit.logId) {
-        goTo(`/log/${hit.logId}`);
+      const destination = hitHref(hit);
+
+      if (!destination) {
+        return;
+      }
+
+      if (destination.external) {
+        close();
+        window.open(destination.href, "_blank", "noopener,noreferrer");
 
         return;
       }
 
-      if (hit.spotifyUrl) {
-        close();
-        window.open(hit.spotifyUrl, "_blank", "noopener,noreferrer");
-      }
+      goTo(destination.href);
     },
     [close, goTo],
   );

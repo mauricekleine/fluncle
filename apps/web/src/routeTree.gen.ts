@@ -89,6 +89,7 @@ import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$numbe
 import { Route as SitemapShardRouteImport } from './routes/sitemap.$shard'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
+import { Route as TrackTrackIdRouteImport } from './routes/track.$trackId'
 import { Route as AdminStudioRecordingIdRouteImport } from './routes/admin/studio.$recordingId'
 import { Route as ApiAdminChatRouteImport } from './routes/api/admin/chat'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
@@ -550,6 +551,11 @@ const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
   path: '/stories/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TrackTrackIdRoute = TrackTrackIdRouteImport.update({
+  id: '/track/$trackId',
+  path: '/track/$trackId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminStudioRecordingIdRoute = AdminStudioRecordingIdRouteImport.update({
   id: '/studio/$recordingId',
   path: '/studio/$recordingId',
@@ -947,6 +953,7 @@ export interface FileRoutesByFullPath {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/sitemap/$shard': typeof SitemapShardRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/track/$trackId': typeof TrackTrackIdRoute
   '/admin/': typeof AdminIndexRoute
   '/albums/': typeof AlbumsIndexRoute
   '/artists/': typeof ArtistsIndexRoute
@@ -1086,6 +1093,7 @@ export interface FileRoutesByTo {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/sitemap/$shard': typeof SitemapShardRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/track/$trackId': typeof TrackTrackIdRoute
   '/admin': typeof AdminIndexRoute
   '/albums': typeof AlbumsIndexRoute
   '/artists': typeof ArtistsIndexRoute
@@ -1228,6 +1236,7 @@ export interface FileRoutesById {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/sitemap/$shard': typeof SitemapShardRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/track/$trackId': typeof TrackTrackIdRoute
   '/admin/': typeof AdminIndexRoute
   '/albums/': typeof AlbumsIndexRoute
   '/artists/': typeof ArtistsIndexRoute
@@ -1371,6 +1380,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/sitemap/$shard'
     | '/stories/$logId'
+    | '/track/$trackId'
     | '/admin/'
     | '/albums/'
     | '/artists/'
@@ -1510,6 +1520,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/sitemap/$shard'
     | '/stories/$logId'
+    | '/track/$trackId'
     | '/admin'
     | '/albums'
     | '/artists'
@@ -1651,6 +1662,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/sitemap/$shard'
     | '/stories/$logId'
+    | '/track/$trackId'
     | '/admin/'
     | '/albums/'
     | '/artists/'
@@ -1771,6 +1783,7 @@ export interface RootRouteChildren {
   NewsletterNumberRoute: typeof NewsletterNumberRoute
   SitemapShardRoute: typeof SitemapShardRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
+  TrackTrackIdRoute: typeof TrackTrackIdRoute
   AlbumsIndexRoute: typeof AlbumsIndexRoute
   ArtistsIndexRoute: typeof ArtistsIndexRoute
   GalaxiesIndexRoute: typeof GalaxiesIndexRoute
@@ -2401,6 +2414,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StoriesLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/track/$trackId': {
+      id: '/track/$trackId'
+      path: '/track/$trackId'
+      fullPath: '/track/$trackId'
+      preLoaderRoute: typeof TrackTrackIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/studio/$recordingId': {
       id: '/admin/studio/$recordingId'
       path: '/studio/$recordingId'
@@ -2957,6 +2977,7 @@ const rootRouteChildren: RootRouteChildren = {
   NewsletterNumberRoute: NewsletterNumberRoute,
   SitemapShardRoute: SitemapShardRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
+  TrackTrackIdRoute: TrackTrackIdRoute,
   AlbumsIndexRoute: AlbumsIndexRoute,
   ArtistsIndexRoute: ArtistsIndexRoute,
   GalaxiesIndexRoute: GalaxiesIndexRoute,

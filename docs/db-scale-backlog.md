@@ -185,7 +185,16 @@ The consumer half shipped in ONE PR because the rewrite alone is plan-neutral (a
 - impact: MEDIUM — gated behind operator opening catalogue capture.
 - fix: Keep the default-shut brake. For open-budget: drive the findings arm from `findings` (PK join) and the catalogue arm from tracks_capture_priority_track_id_idx (partial, walking capture_priority desc), filter capture_status/duration/dismissed as residuals, and INTERLEAVE the two ordered streams (findings first) in TS instead of one ORDER BY the planner must sort. This is now the ONLY live path for that shape: the denormalize alternative it used to be weighed against (a maintained `capturable` flag, the old Wave-2 item 6) was dropped on 2026-07-27, so the decision has collapsed from flag-vs-merge to build-or-don't — and it is still gated on the operator opening catalogue capture.
 
-**5. Artist-rule admin reads: the leading-wildcard typeahead + the whole-table rule fold** · **watch item, no change recommended yet**
+**5. Archive-track sitemap child: a partial index over the evidence predicate** · **watch item, no change recommended yet**
+`tier=design · tracks · T1`
+**STATUS: WATCH — bounded by construction today; re-measure when the crawl passes ~500k rows or the sitemap child shows up in origin timings.**
+
+- loc: apps/web/src/lib/server/track-page.ts (`TRACK_PAGE_INDEXABLE_WHERE`, `countIndexableTrackPages`, `listTrackSitemapRows`)
+- shape: The `/track/<trackId>` sitemap child's membership predicate is a conjunction LED by `is_catalogue = 1`, so the planner drives it off the partial `tracks_is_catalogue_idx` and the remaining four terms (`album_id`/`release_date`/`album_image_url` null tests plus the streaming-link disjunction) are residuals over that slice. Both reads are bounded — the count returns one row, the child returns at most `SITEMAP_TRACKS_MAX_URLS` (10,000) rows windowed in SQL — and `/sitemap.xml` is edge-cached, so the scan is paid per cache window rather than per crawler.
+- impact: LOW today — the slice is the whole catalogue, but the work per row is four null tests and the output is capped. The deep `offset` on a late child is the half that grows.
+- fix (when it matters): a partial btree on `(track_id)` `where <the evidence predicate>` turns both the count and the windowed read into index-only walks and collapses the deep-offset cost; alternatively the `hub-page-anchors.ts` keyset primitive, if the child count ever justifies threading a cursor through `parseShard`. Neither is worth a migration on a populated `tracks` at today's size.
+
+**6. Artist-rule admin reads: the leading-wildcard typeahead + the whole-table rule fold** · **watch item, no change recommended yet**
 `tier=design · artists, artist_rules · T2`
 **STATUS: WATCH — small by construction today; re-measure when the rule set grows past the operator's hand-authored scale.**
 

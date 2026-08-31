@@ -34,6 +34,7 @@ import { mixtapeCoverUrl } from "../mixtapes";
 import { artistTitleLine, definitionalSentences } from "../log-prose";
 import {
   EMPTY_SITEMAP_BAGS,
+  sitemapMaxUrls,
   type SitemapArtist,
   type SitemapBags,
   type SitemapDoc,
@@ -69,6 +70,7 @@ import {
   maxLabelSitemapLastmod,
 } from "./labels";
 import { SITEMAP_CACHE_POLICY } from "./edge-cache";
+import { countIndexableTrackPages, listTrackSitemapRows } from "./track-page";
 import { getMixChainDepth } from "./tracks";
 
 type TrackRow = {
@@ -335,6 +337,8 @@ async function readLogbookKindStats(): Promise<SitemapKindStats> {
 type SitemapAggregates = {
   albums: SitemapKindStats;
   artists: SitemapKindStats;
+  /** Archive-track destinations past the evidence gate. Only the SIZE — a track entry is undated. */
+  archiveTrackCount: number;
   /** Named galaxies past the thin-content floor. Only the SIZE matters; a lens page has no date. */
   galaxyCount: number;
   labels: SitemapKindStats;
@@ -366,6 +370,7 @@ async function readSitemapAggregates(): Promise<SitemapAggregates> {
     albumLastmod,
     logbook,
     galaxies,
+    archiveTrackCount,
     mixDepth,
   ] = await Promise.all([
     readLogKindStats(),
@@ -377,6 +382,10 @@ async function readSitemapAggregates(): Promise<SitemapAggregates> {
     maxAlbumSitemapLastmod(ALBUM_INDEX_MIN_TRACKS),
     readLogbookKindStats(),
     readGalaxies(),
+    // The archive-track destinations past the EVIDENCE gate. A `count(*)` whose predicate leads
+    // with `is_catalogue = 1`, so it rides the partial catalogue index rather than walking the
+    // whole growing table (lib/server/track-page.ts).
+    countIndexableTrackPages(),
     // The `/mix` gate — the SAME self-lifting verdict its route checks on every load
     // (`getMixChainDepth().open`), memoized per-isolate, so the sitemap lists the hub the day
     // the tool opens to the world and drops it the day it would close, with no deploy.
@@ -385,6 +394,7 @@ async function readSitemapAggregates(): Promise<SitemapAggregates> {
 
   return {
     albums: { count: albumCount, lastmod: albumLastmod },
+    archiveTrackCount,
     artists: { count: artistCount, lastmod: artistLastmod },
     galaxyCount: galaxies.length,
     labels: { count: labelCount, lastmod: labelLastmod },
@@ -438,6 +448,9 @@ export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
     labels: aggregates.labels,
     logbook: aggregates.logbook,
     pages: sitemapPagesStats(sitemapPagesFrom(aggregates)),
+    // Honestly undated, like `docs` and `galaxies`: `tracks` carries no content-change timestamp,
+    // and a release date is a different claim (lib/sitemap.ts § SitemapTrack).
+    tracks: { count: aggregates.archiveTrackCount },
   };
 }
 
@@ -445,8 +458,14 @@ export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
  * ONE child sitemap's bag — the rows `/sitemap/<kind>-<n>.xml` slices, and no other kind's.
  * Every other bag comes back empty, which is exactly what `buildSitemapShardXml` reads for that
  * kind, so a child serves precisely what it always did at one bag's cost instead of seven.
+ *
+ * `page` is honoured by exactly one kind. Every kind but `tracks` reads its WHOLE bag and lets the
+ * builder window it, because every one of them is bounded by the certified corpus or by how many
+ * entities exist. `tracks` is bounded by the crawl instead, so its window moves into SQL and the
+ * bag comes back already holding that page's rows and no others — which is why `tracks` is in
+ * `SITEMAP_SQL_WINDOWED_KINDS` and the builder does not slice it again.
  */
-export async function collectSitemapBag(kind: SitemapKind): Promise<SitemapBags> {
+export async function collectSitemapBag(kind: SitemapKind, page = 1): Promise<SitemapBags> {
   switch (kind) {
     case "albums":
       return { ...EMPTY_SITEMAP_BAGS, albums: await readAlbums() };
@@ -473,6 +492,15 @@ export async function collectSitemapBag(kind: SitemapKind): Promise<SitemapBags>
     // are the same aggregates the index reads.
     case "pages":
       return { ...EMPTY_SITEMAP_BAGS, pages: sitemapPagesFrom(await readSitemapAggregates()) };
+
+    case "tracks":
+      return {
+        ...EMPTY_SITEMAP_BAGS,
+        tracks: await listTrackSitemapRows(
+          sitemapMaxUrls("tracks"),
+          (page - 1) * sitemapMaxUrls("tracks"),
+        ),
+      };
   }
 }
 
