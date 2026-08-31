@@ -170,6 +170,23 @@ export const SEEDED_COVERED_FINDINGS = [
   { coverUrl: "https://found.fluncle.com/e2e/cover-4.jpg", trackId: "e2e-track-4" },
 ] as const;
 
+/**
+ * The one finding carrying FOOTAGE (`findings.video_url`), which is the whole gate on the Stories
+ * affordance: `TrackRow` renders its artwork as a play link only when a row has video, and the
+ * `/findings` cover ring opens at the newest finding that does. Without a row here both paths fall
+ * back to a plain cover and a `/log` link, so the Stories route is dark in every spec — it is the
+ * one part of the incumbent archive page that has no coverage until this fixture exists.
+ *
+ * It rides `e2e-track-3`, which already carries cover art, so the play glyph sits over a real
+ * `<img>` rather than the coverless fallback.
+ */
+export const SEEDED_STORY_FINDING = {
+  logId: FINDINGS[2]?.logId ?? "",
+  title: FINDINGS[2]?.title ?? "",
+  trackId: "e2e-track-3",
+  videoUrl: "https://found.fluncle.com/e2e/story-3.mp4",
+} as const;
+
 /** The UNCERTIFIED row in the release band — no `findings` row, so no coordinate and no name. */
 export const SEEDED_CATALOGUE_RELEASE = {
   artist: "Ashen Relay",
@@ -300,6 +317,12 @@ async function seedFrontDoorFixtures(client: Client): Promise<void> {
       sql: `update tracks set album_image_url = ? where track_id = ?`,
     });
   }
+
+  // FOOTAGE on one finding, so the Stories affordance is reachable at all (see SEEDED_STORY_FINDING).
+  await client.execute({
+    args: [SEEDED_STORY_FINDING.videoUrl, SEEDED_STORY_FINDING.trackId],
+    sql: `update findings set video_url = ? where track_id = ?`,
+  });
 
   // The release window: one CERTIFIED finding dated inside it, so the band's lit half has a row.
   await client.execute({

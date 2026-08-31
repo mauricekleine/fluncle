@@ -106,12 +106,16 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
       {storyLogId ? (
         // The artwork IS the play affordance: it opens the story over the feed
         // (the mask shows — and crawlers see — the standalone /log/<id> URL).
+        // `/findings` is the route that owns the `?story=` param and mounts the
+        // dialog, and it is this row's only consumer. `/` is the front door and
+        // takes no params: a `?story=` there is a 301 to the standalone page,
+        // which would navigate AWAY from the feed instead of opening over it.
         <Link
           aria-label={`Watch the story for ${trackLine}`}
           className="track-play"
           mask={{ params: { logId: storyLogId }, to: "/log/$logId", unmaskOnReload: true }}
           search={{ story: storyLogId }}
-          to="/"
+          to="/findings"
         >
           <TrackArtwork
             alt={`${trackLine} cover art`}

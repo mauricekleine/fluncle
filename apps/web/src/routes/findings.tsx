@@ -222,8 +222,8 @@ function FindingsPage() {
     : undefined;
 
   // Close the dialog by going BACK to the feed's history entry: a fresh
-  // navigate({ to: "/" }) would mint a new entry and scroll the feed to top.
-  // The fallback covers a direct /?story= load where there is nothing behind.
+  // navigate({ to: "/findings" }) would mint a new entry and scroll the feed to
+  // top. The fallback covers a direct /findings?story= load with nothing behind.
   const closeStory = useCallback(() => {
     if (canGoBack) {
       router.history.back();
