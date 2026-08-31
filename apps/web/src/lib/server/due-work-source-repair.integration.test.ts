@@ -8,6 +8,7 @@ import {
   listReadyDueWork,
   markDueWorkSourceRepairsStatement,
 } from "./due-work";
+import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
 import { fanOutDueWorkSourceRepairs, repairDueWorkBeforeRead } from "./due-work-source-repair";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { createIntegrationDb, seedAlbum, seedCatalogueTrack } from "./integration-db";
@@ -104,6 +105,44 @@ describe("transactionally coupled due-work source repair", () => {
     ).toEqual(["repair-track"]);
   });
 
+  it("uses the maintained rank corpus cache for ordinary track source repair", async () => {
+    await seedCatalogueTrack(db, { trackId: "cached-rank-repair" });
+    await db.batch(
+      [
+        {
+          args: [
+            CATALOGUE_RANK_STATE_KEY,
+            JSON.stringify({ corpus: "v5:0:0:0:cached", embeddedFindings: 0, findings: 0 }),
+          ],
+          sql: `insert into settings (key, value) values (?, ?)`,
+        },
+        markDueWorkSourceRepairsStatement(
+          [{ subjectId: "cached-rank-repair", subjectType: "track" }],
+          { markerVersion: "cached-rank-v1", producer: "capture-verification" },
+        ),
+      ],
+      "write",
+    );
+    const cacheOnlyClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (
+          sql.includes("from findings cross join tracks ft") ||
+          sql.includes("having sum(case when ta.role = 'remixer'")
+        ) {
+          throw new Error("ordinary repair recomputed the live rank corpus");
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
+
+    await expect(fanOutDueWorkSourceRepairs(cacheOnlyClient, { limit: 1 })).resolves.toMatchObject({
+      expanded: 1,
+      scanned: 1,
+    });
+  });
+
   it("caps a requested 500-source page and continues from the durable marker set", async () => {
     const subjects = Array.from({ length: 6 }, (_, index) => ({
       subjectId: `wide-fanout-${String(index).padStart(3, "0")}`,
@@ -182,7 +221,9 @@ describe("transactionally coupled due-work source repair", () => {
     };
     const first = await fanOutDueWorkSourceRepairs(measuredClient, { limit: 500 });
     expect(first).toMatchObject({ deferred: 0, expanded: 5, hasMore: true, scanned: 5 });
-    expect(executeCalls).toBeLessThanOrEqual(7);
+    // A missing rank-state cache pays one bounded read plus one fill before later pages become
+    // cache-only. The source page itself remains capped at five markers.
+    expect(executeCalls).toBeLessThanOrEqual(9);
     expect(batchCalls).toBe(1);
     expect(maximumBatchStatements).toBeLessThanOrEqual(4);
     expect(maximumStatementArgs).toBeLessThanOrEqual(2_040);
@@ -375,6 +416,13 @@ describe("transactionally coupled due-work source repair", () => {
     for (const trackId of trackIds) {
       await seedCatalogueTrack(db, { trackId });
     }
+    await db.execute({
+      args: [
+        CATALOGUE_RANK_STATE_KEY,
+        JSON.stringify({ corpus: "v5:stale", embeddedFindings: 0, findings: 0 }),
+      ],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
     await db.execute(
       markDueWorkSourceRepairsStatement(
         [
@@ -387,8 +435,19 @@ describe("transactionally coupled due-work source repair", () => {
         { markerVersion: "rank-corpus-v1", producer: "catalogue-rank" },
       ),
     );
+    let corpusRefreshes = 0;
+    const countedClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("from findings cross join tracks ft")) {
+          corpusRefreshes += 1;
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
 
-    const first = await fanOutDueWorkSourceRepairs(db, { limit: 500 });
+    const first = await fanOutDueWorkSourceRepairs(countedClient, { limit: 500 });
     expect(first).toMatchObject({
       deferred: 1,
       expanded: 0,
@@ -398,8 +457,17 @@ describe("transactionally coupled due-work source repair", () => {
     });
     expect((await listReadyDueWork(db, "catalogue-rank", { limit: 500 })).items).toHaveLength(500);
     expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(0);
+    const refreshedRankState = await db.execute({
+      args: [CATALOGUE_RANK_STATE_KEY],
+      sql: `select value from settings where key = ?`,
+    });
+    const refreshedValue = refreshedRankState.rows[0]?.value;
+    if (typeof refreshedValue !== "string") {
+      throw new Error("catalogue rank state cache was not persisted");
+    }
+    expect(refreshedValue).not.toContain("v5:stale");
 
-    const second = await fanOutDueWorkSourceRepairs(db, { limit: 500 });
+    const second = await fanOutDueWorkSourceRepairs(countedClient, { limit: 500 });
     expect(second).toMatchObject({
       deferred: 0,
       expanded: 1,
@@ -419,13 +487,14 @@ describe("transactionally coupled due-work source repair", () => {
     ).toBe(501);
     expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(0);
 
-    expect(await fanOutDueWorkSourceRepairs(db, { limit: 500 })).toMatchObject({
+    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 500 })).toMatchObject({
       deferred: 0,
       expanded: 1,
       hasMore: false,
       rankRebuildScanned: 0,
       scanned: 1,
     });
+    expect(corpusRefreshes).toBe(1);
     expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(1);
     const sourceMarker = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],

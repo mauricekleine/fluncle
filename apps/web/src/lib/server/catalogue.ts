@@ -705,12 +705,15 @@ export type RankCatalogueSummary = {
   scored: number;
 };
 
-type CatalogueRankState = Pick<RankCatalogueSummary, "corpus" | "embeddedFindings" | "findings">;
+export type CatalogueRankState = Pick<
+  RankCatalogueSummary,
+  "corpus" | "embeddedFindings" | "findings"
+>;
 
 /** The live rank fingerprint cached by a completed projection backfill or an active legacy tick. */
 export const CATALOGUE_RANK_STATE_KEY = "catalogue_rank_state_cache";
 
-function parseCatalogueRankState(value: string | undefined): CatalogueRankState | undefined {
+export function parseCatalogueRankState(value: string | undefined): CatalogueRankState | undefined {
   if (value === undefined) {
     return undefined;
   }

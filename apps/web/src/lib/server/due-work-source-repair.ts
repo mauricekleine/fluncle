@@ -19,6 +19,7 @@ import {
   DUE_WORK_BACKFILLS,
   dueWorkRepairDefinitions,
   projectTrackDueWorkSourceRepairs,
+  refreshDueWorkCatalogueRankCorpus,
 } from "./due-work-registry";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
@@ -271,6 +272,9 @@ async function advanceCatalogueRankRebuild(
     throw new Error("catalogue-rank due-work rebuild definition is missing");
   }
   const checkpoint = await readDueWorkRebuild(client, definition);
+  if (checkpoint?.generation !== marker.sourceVersion) {
+    await refreshDueWorkCatalogueRankCorpus(client);
+  }
   const result = await runDueWorkRebuildChunk(client, definition, {
     generation: marker.sourceVersion,
     limit,
