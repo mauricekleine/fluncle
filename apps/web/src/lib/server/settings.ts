@@ -29,7 +29,7 @@
 //      (./database-admission.ts). These cutovers are DEFAULT-DENY and only the exact literal
 //      `true` opens them; every other value and every read failure keeps the compatibility path.
 //   2. THE SIX SONAR DARK FLAGS (./sonar.ts) — `sonar_sonic_enabled`, `sonar_artists_enabled`,
-//      `sonar_log_enabled`, `sonar_recs_enabled`, `sonar_recs_catalogue_enabled`,
+//      `sonar_log_enabled`, `sonar_recs_enabled`, `sonar_recs_catalogue_enabled`, `sonar_track_enabled`,
 //      `sonar_mix_enabled`. Same shape as (1), all DEFAULT-DENY, one per surface: this is how
 //      the vector sidecar ships dark and is lit surface by surface (docs/vector-serving.md).
 //   3. BUDGETS — a non-negative integer as a string: `catalogue_capture_daily_tracks` /

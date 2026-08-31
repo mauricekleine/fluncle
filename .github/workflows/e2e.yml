@@ -114,6 +114,21 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+      # The cold-arrival journey's evidence (track.spec.ts writes a full-page shot per STEP per
+      # width into apps/web/.dev/track-journey/: arrive on a track, continue into an unfamiliar
+      # sonic neighbour, leave to an accurate outbound service). Same trade as the front door's:
+      # gitignored in a public repo, retained per commit as the run artifact instead. `always()`
+      # because a GREEN run is when the evidence is worth having.
+      - name: Upload track-journey evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: track-journey
+          path: apps/web/.dev/track-journey/
+          retention-days: 90
+          include-hidden-files: true
+          if-no-files-found: error
+
       # The SEARCH surface's own evidence, on the same terms and for the same reason: the criterion
       # it answers ("reads correctly at desktop 1440x900 and mobile 390x844, proved by retained
       # browser evidence") is a claim about how the page LOOKS, which no assertion can carry on its

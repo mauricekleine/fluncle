@@ -82,10 +82,13 @@ One `settings` key per surface, all read default-deny, all in [`sonar.ts`](../ap
 | `sonar_recs_enabled`           | The `/recommendations` draft engine's **findings slots only** (multi-probe over the seeds)                      | `tracks`    | **ON in production**  |
 | `sonar_recs_catalogue_enabled` | The `/recommendations` draft engine's **catalogue scan** (the whole `REC_ELIGIBLE_WHERE` predicate as a filter) | `tracks`    | **OFF in production** |
 | `sonar_mix_enabled`            | The `/mix` rail's candidate scan (key-pre-filtered, both registers)                                             | `tracks`    | **OFF in production** |
+| `sonar_track_enabled`          | `/track/<trackId>` "Close in sound" neighbours (BOTH registers, no certification filter)                        | `tracks`    | **OFF in production** |
 
-`sonar_recs_catalogue_enabled` and `sonar_mix_enabled` default OFF in production. Findings and catalogue recommendation scans use separate flags so each path can be commissioned independently after the running engine supports its filter contract.
+`sonar_recs_catalogue_enabled`, `sonar_mix_enabled` and `sonar_track_enabled` default OFF in production. Findings and catalogue recommendation scans use separate flags so each path can be commissioned independently after the running engine supports its filter contract.
 
-**Flipping one is a `settings` row.** `setSonarSonicEnabled` and its five siblings write `"true"`/`"false"` through the same one flag store (`settings.ts`) every other kill switch in the app uses — never a second flag mechanism, and never a deploy. **There is deliberately no `/admin` UI for these yet:** they are commissioning switches, flipped a handful of times each as a surface is proven in production, not an operating control. Add the board when the flipping becomes routine, not before.
+`sonar_track_enabled` is separate from `sonar_log_enabled` because the two ask sonar for different candidate sets: `/log` sends `certified: true` (a question about findings), the archive track destination sends no certification filter at all (a question about music), so a certified and an uncertified neighbour compete on the same terms. Off, the surface answers from the exact Turso `vector_distance_cos` scan — a single probe, bound as a raw blob, ranked in SQL, one pass — and an empty answer renders no band rather than an error.
+
+**Flipping one is a `settings` row.** `setSonarSonicEnabled` and its six siblings write `"true"`/`"false"` through the same one flag store (`settings.ts`) every other kill switch in the app uses — never a second flag mechanism, and never a deploy. **There is deliberately no `/admin` UI for these yet:** they are commissioning switches, flipped a handful of times each as a surface is proven in production, not an operating control. Add the board when the flipping becomes routine, not before.
 
 **The go-live order for `sonar_recs_catalogue_enabled`** — and for any future flag that depends on a new filter field, because merging the Worker half and running the engine half are different moments:
 

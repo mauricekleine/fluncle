@@ -35,6 +35,35 @@ import { siteUrl } from "./fluncle-links";
 export const SITEMAP_MAX_URLS = 45_000;
 
 /**
+ * The TRACKS child's own, much lower ceiling.
+ *
+ * Every other kind is bounded by what Fluncle has certified or by how many entities exist, so
+ * 45,000 is a limit those children will not reach for a long time and the cost of the ceiling is
+ * theoretical. The archive track pages are bounded by the CRAWL, which is six figures and climbing,
+ * so this ceiling is the one that actually fires — and it decides how much a single request has to
+ * build. 45,000 `<url>` elements is several megabytes of string assembled inside a 128 MB Worker
+ * isolate on every cache miss; 10,000 is a few hundred kilobytes and costs only more files, which
+ * is exactly what a sitemap INDEX is for.
+ */
+export const SITEMAP_TRACKS_MAX_URLS = 10_000;
+
+/** The per-child URL ceiling for one kind. */
+export function sitemapMaxUrls(kind: SitemapKind): number {
+  return kind === "tracks" ? SITEMAP_TRACKS_MAX_URLS : SITEMAP_MAX_URLS;
+}
+
+/**
+ * The kinds whose bag is WINDOWED IN SQL — the data layer returns exactly the requested page's
+ * rows, so {@link buildSitemapShardXml} must render the bag as-is instead of slicing it again.
+ *
+ * Only `tracks` is here, and it is here because it is the only kind big enough that reading the
+ * whole bag to emit one child would pull a six-figure column into the isolate (AGENTS.md: never
+ * pull a whole column in to rank or slice it). Every other kind reads its whole bag and lets the
+ * builder window it, which keeps their unit tests exercising the builder's own arithmetic.
+ */
+export const SITEMAP_SQL_WINDOWED_KINDS: readonly SitemapKind[] = ["tracks"];
+
+/**
  * The kinds, and the order the index lists them in. One child PER ENTITY TYPE (not a single
  * `graph` bucket) so Search Console reports indexing per type and a changed type refetches
  * alone. `pages` is the static hubs; the rest map one-to-one onto the {@link SitemapRowBags}.
@@ -42,6 +71,7 @@ export const SITEMAP_MAX_URLS = 45_000;
 export const SITEMAP_KINDS = [
   "pages",
   "findings",
+  "tracks",
   "artists",
   "labels",
   "albums",
@@ -106,6 +136,23 @@ export type SitemapEntity = {
   slug: string;
 };
 
+/**
+ * A `/track/<trackId>` archive-track destination — added ONLY for a track past the EVIDENCE gate
+ * (`TRACK_PAGE_INDEXABLE_WHERE`, `lib/server/track-page.ts`), which is the same expression the
+ * page's own `robots` directive reads. A low-evidence track still serves 200 and stays crawlable,
+ * and renders `noindex, follow`; it is simply not submitted here.
+ *
+ * It carries NO `<lastmod>`, and that is deliberate rather than missing. `tracks` has no
+ * content-change timestamp — a release date is when the record came out, not when this page's
+ * content last moved — so a track entry is honestly undated, exactly as the `docs` and `galaxies`
+ * children are, instead of inventing a stamp a crawler would treat as a claim.
+ */
+export type SitemapTrack = {
+  /** Cover art for the Google Images `<image:image>` extension. */
+  imageLoc?: string;
+  trackId: string;
+};
+
 // A `/galaxies/<slug>` sonic-galaxy page (browse-by-feel RFC) — added ONLY once the map
 // is fully named (the route feeds an empty list before the launch gate opens) AND the
 // galaxy clears the thin-content floor (≥ GALAXY_INDEX_MIN_FINDINGS members; the thin
@@ -137,6 +184,8 @@ export type SitemapRowBags = {
   logbook: SitemapLogbookEntry[];
   /** The `/log/<coordinate>` pages: findings AND published mixtapes. */
   logs: SitemapLogPage[];
+  /** The `/track/<trackId>` archive-track destinations past the evidence gate. */
+  tracks: SitemapTrack[];
 };
 
 /**
@@ -183,6 +232,7 @@ export const EMPTY_SITEMAP_ROW_BAGS: SitemapRowBags = {
   labels: [],
   logbook: [],
   logs: [],
+  tracks: [],
 };
 
 export const EMPTY_SITEMAP_BAGS: SitemapBags = {
@@ -272,6 +322,15 @@ function entityEntry(segment: "album" | "label", page: SitemapEntity): string {
   return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}${image}\n  </url>`;
 }
 
+// An archive-track entry: `<loc>` + optional cover `<image:image>`. No `<lastmod>` — see
+// SitemapTrack for why an undated entry is the honest one here.
+function trackEntry(page: SitemapTrack): string {
+  const loc = `${siteUrl}/track/${encodeURIComponent(page.trackId)}`;
+  const image = page.imageLoc ? imageTag(page.imageLoc) : "";
+
+  return `  <url>\n    <loc>${loc}</loc>${image}\n  </url>`;
+}
+
 // A logbook entry: just `<loc>` + optional `<lastmod>` (text-first, no media).
 function logbookEntry(page: SitemapLogbookEntry): string {
   const loc = `${siteUrl}/logbook/${encodeURIComponent(page.sector)}`;
@@ -339,6 +398,9 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
   switch (kind) {
     case "findings":
       return bags.logs.map((page) => findingEntry(page));
+
+    case "tracks":
+      return bags.tracks.map((page) => trackEntry(page));
 
     case "artists":
       return bags.artists.map((page) => artistEntry(page));
@@ -454,9 +516,11 @@ function kindLastmod(kind: SitemapKind, bags: SitemapBags): string | undefined {
 
     // The lens page carries no single freshest timestamp (its members date their own /log
     // entries), so a galaxies child is honestly undated — the tag is simply omitted. The docs
-    // child is undated for the same reason: the MDX front matter carries no date.
+    // child is undated for the same reason: the MDX front matter carries no date, and the tracks
+    // child for a third: `tracks` carries no content-change timestamp at all (see SitemapTrack).
     case "galaxies":
     case "docs":
+    case "tracks":
       return undefined;
 
     case "logbook":
@@ -468,13 +532,13 @@ function kindLastmod(kind: SitemapKind, bags: SitemapBags): string | undefined {
 }
 
 /** How many children a kind of `count` URLs needs. Always ≥ 1 for `pages` (the hubs are never empty). */
-export function shardCountForSize(count: number): number {
-  return Math.ceil(count / SITEMAP_MAX_URLS);
+export function shardCountForSize(count: number, kind: SitemapKind = "findings"): number {
+  return Math.ceil(count / sitemapMaxUrls(kind));
 }
 
 /** How many children one kind needs, from full bags. */
 export function shardCount(kind: SitemapKind, bags: SitemapBags): number {
-  return shardCountForSize(kindEntries(kind, bags).length);
+  return shardCountForSize(kindEntries(kind, bags).length, kind);
 }
 
 /**
@@ -510,6 +574,7 @@ export function sitemapIndexStatsFromBags(bags: SitemapBags): SitemapIndexStats 
     labels: statsFor("labels"),
     logbook: statsFor("logbook"),
     pages: statsFor("pages"),
+    tracks: statsFor("tracks"),
   };
 }
 
@@ -535,19 +600,24 @@ const URLSET_OPEN =
   '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">';
 
 /**
- * One child sitemap: the `page`-th slice of `kind`, capped at {@link SITEMAP_MAX_URLS}.
+ * One child sitemap: the `page`-th slice of `kind`, capped at {@link sitemapMaxUrls}.
  * Returns undefined for a page past the end, which the route turns into a 404 — an empty
  * `<urlset>` would tell a crawler the URLs had been REMOVED.
+ *
+ * A {@link SITEMAP_SQL_WINDOWED_KINDS} kind arrives ALREADY windowed (the data layer applied the
+ * `limit`/`offset`), so it is rendered as-is; slicing it a second time would serve page 1's rows
+ * for page 1 and nothing at all for every page after it.
  */
 export function buildSitemapShardXml(
   kind: SitemapKind,
   page: number,
   bags: SitemapBags,
 ): string | undefined {
-  const entries = kindEntries(kind, bags).slice(
-    (page - 1) * SITEMAP_MAX_URLS,
-    page * SITEMAP_MAX_URLS,
-  );
+  const all = kindEntries(kind, bags);
+  const limit = sitemapMaxUrls(kind);
+  const entries = SITEMAP_SQL_WINDOWED_KINDS.includes(kind)
+    ? all
+    : all.slice((page - 1) * limit, page * limit);
 
   if (entries.length === 0) {
     return undefined;
@@ -568,7 +638,7 @@ export function buildSitemapIndexXml(stats: SitemapIndexStats): string {
   const children = SITEMAP_KINDS.flatMap((kind) => {
     const { count, lastmod } = stats[kind];
 
-    return Array.from({ length: shardCountForSize(count) }, (_unused, index) => {
+    return Array.from({ length: shardCountForSize(count, kind) }, (_unused, index) => {
       const loc = `${siteUrl}${shardPath(kind, index + 1)}`;
 
       return `  <sitemap>\n    <loc>${loc}</loc>${lastmodTag(lastmod)}\n  </sitemap>`;

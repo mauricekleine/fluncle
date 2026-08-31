@@ -15,6 +15,7 @@ const getTrackByIdOrLogId = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/server/db", () => ({
   getDb,
+  typedRow: (rows: unknown[]) => rows[0],
   typedRows: (rows: unknown[]) => rows,
 }));
 vi.mock("../lib/server/artists", () => ({

@@ -9,6 +9,7 @@ import {
   isSonarRecsCatalogueEnabled,
   isSonarRecsEnabled,
   isSonarSonicEnabled,
+  isSonarTrackEnabled,
   SONAR_MAX_PROBES,
   SONAR_MAX_TOP_K,
   searchSonar,
@@ -208,6 +209,7 @@ describe("the dark flags — default OFF, only 'true' enables", () => {
     ["recs", isSonarRecsEnabled, "sonar_recs_enabled"],
     ["recs-catalogue", isSonarRecsCatalogueEnabled, "sonar_recs_catalogue_enabled"],
     ["mix", isSonarMixEnabled, "sonar_mix_enabled"],
+    ["track", isSonarTrackEnabled, "sonar_track_enabled"],
   ];
 
   for (const [label, read, key] of cases) {
