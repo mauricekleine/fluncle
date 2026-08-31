@@ -51,6 +51,42 @@
 
 import { siteUrl } from "./fluncle-links";
 
+/**
+ * The services an archive track's outbound band can offer. The union lives HERE, in the
+ * client-safe half, because {@link sameAsUrls} is called from the route's `head()` — which is
+ * eagerly bundled, so anything it reaches must be free of `lib/server/**` (docs/client-bundle.md
+ * rule 1). `lib/server/track-page.ts` imports the type back from here, so there is one definition.
+ */
+export type ListenKind = "apple" | "beatport" | "deezer" | "spotify" | "youtube";
+
+/**
+ * THE BEATPORT CONTAINMENT SEAM.
+ *
+ * Beatport's terms bar using its site content — metadata included — for text/data mining or for
+ * feeding AI. `tracks.beatport_url`'s §F rail in db/schema.ts therefore keeps the URL out of every
+ * derived corpus, and structured data is a derived corpus: a page's `sameAs` graph exists, in
+ * log-schema.ts's own words, "for crawlers + AI answer-engines". The certified `/log` page's
+ * `musicRecordingJsonLd` already withholds it — there is no Beatport entry in its `sameAs`, and
+ * that shipped behaviour is the specification this surface follows.
+ *
+ * So a Beatport link is RENDERED as an outbound control and is never an identity claim. This is
+ * the single seam where that is enforced: the route's `head()` builds its `sameAs` input through
+ * here rather than mapping the destinations itself, and the exclusion is keyed on the KIND rather
+ * than on a URL substring, so it survives a rename of the service or a change to its URL shape.
+ */
+export const SAME_AS_EXCLUDED_LISTEN_KINDS: readonly ListenKind[] = ["beatport"];
+
+/**
+ * The outbound URLs that may enter a page's structured-data `sameAs` graph — every listening
+ * destination except the excluded kinds above. The rendered band is untouched; only what the
+ * archive ASSERTS about the recording to a machine is narrowed.
+ */
+export function sameAsUrls(listen: { href: string; kind: ListenKind }[]): string[] {
+  return listen
+    .filter((destination) => !SAME_AS_EXCLUDED_LISTEN_KINDS.includes(destination.kind))
+    .map((destination) => destination.href);
+}
+
 /** The path of one archive track's destination. The single place the URL shape is spelled. */
 export function trackPagePath(trackId: string): string {
   return `/track/${encodeURIComponent(trackId)}`;

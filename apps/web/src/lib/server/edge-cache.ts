@@ -144,12 +144,29 @@ export function isCacheableLogPath(pathname: string): boolean {
 }
 
 // The public entity DETAIL pages we edge-cache: `/artist/<slug>`, `/album/<slug>`,
-// `/label/<slug>` (singular + a single slug segment). The plural index pages are cached too,
-// but under the separate, shorter HUB policy below — they invalidate on any member change, so
-// they ride a 60s fresh window instead of an explicit purge, whereas a detail page is purged by
-// the write paths. A trailing slash is tolerated; a nested path (`/artist/<slug>/x`) is not a
-// detail page.
-const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label)\/[^/]+\/?$/;
+// `/label/<slug>`, `/track/<trackId>` (singular + a single slug segment). The plural index pages
+// are cached too, but under the separate, shorter HUB policy below — they invalidate on any member
+// change, so they ride a 60s fresh window instead of an explicit purge, whereas a detail page is
+// purged by the write paths. A trailing slash is tolerated; a nested path (`/artist/<slug>/x`) is
+// not a detail page. `/tracks` (the plural hub) does not match: the alternation requires a `/`
+// after the segment, so the hub keeps its own HUB-policy enrolment below.
+//
+// `/track/<trackId>` EARNS THIS TIER RATHER THAN INHERITING IT, on both halves of the policy:
+//   - The FRESH window. A track destination is a detail page in exactly the sense this policy
+//     means: its content is one row's enrichment (tempo, key, cover, the outbound links) plus its
+//     neighbours, and a re-enrichment should surface inside minutes even if a purge is missed.
+//     300s is the same trade `/log/<id>` and `/album/<slug>` already make for the same reason.
+//   - The PURGE. It is not left to the window: `track` is an `EntityCacheKind`, and
+//     `getTrackEntityPurgeTargets` now returns the track's own page alongside its artist/album/
+//     label pages, so every write path that already calls `purgeTrackEntityPages` (track-update,
+//     publish) evicts this page too. That is the explicit invalidation the detail tier assumes.
+// The stale tail is the shared hour, bounded for the same build-scoped-asset reason as every other
+// HTML tier — nothing about a track page changes that argument.
+//
+// It matters more here than anywhere else in the alternation, because this is the surface with
+// ~122k crawlable URLs behind it and an uncached view pays an exact whole-corpus vector scan for
+// its neighbours (lib/server/track-page.ts). Crawler traffic is uncached-first by definition.
+const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label|track)\/[^/]+\/?$/;
 
 /**
  * True for a cacheable entity detail page — AND ONLY when it carries no query string. The
@@ -574,9 +591,13 @@ async function purgePathsNow(paths: string[]): Promise<void> {
 // exactly as a finding write drops `/log/<id>`. Same two layers, same canonical keying.
 
 /** The three cacheable entity detail kinds. */
-export type EntityCacheKind = "artist" | "album" | "label";
+export type EntityCacheKind = "artist" | "album" | "label" | "track";
 
-/** The canonical path for one entity detail page. */
+/**
+ * The canonical path for one entity detail page. `track` rides the same shape with the track's
+ * permanent id in the slug position — `/track/<trackId>`, exactly what `trackPagePath` builds and
+ * what `ENTITY_DETAIL_PATH` matches, so the purge key is byte-identical to the read key.
+ */
 function entityPath(kind: EntityCacheKind, slug: string): string {
   return `/${kind}/${encodeURIComponent(slug)}`;
 }

@@ -665,13 +665,19 @@ describe("purgeLogCache", () => {
 });
 
 describe("isCacheableEntityRequest", () => {
-  it("matches an artist/album/label DETAIL page with no query string", () => {
-    // The three singular entity detail routes, and only their canonical query-less URL.
+  it("matches an artist/album/label/track DETAIL page with no query string", () => {
+    // The four singular detail routes, and only their canonical query-less URL.
     expect(isCacheableEntityRequest("/artist/sub-focus", "")).toBe(true);
     expect(isCacheableEntityRequest("/album/all-that-jazz", "")).toBe(true);
     expect(isCacheableEntityRequest("/label/hospital-records", "")).toBe(true);
+    // The archive track destination. It matters most of the four: it has ~122k crawlable URLs
+    // behind it, and an uncached view pays an exact vector scan for its neighbours, so an
+    // uncached crawl is the expensive path this enrolment exists to collapse.
+    expect(isCacheableEntityRequest("/track/mb_2b1c4d5e", "")).toBe(true);
+    expect(isCacheableEntityRequest("/track/e2e-track-1", "")).toBe(true);
     // A trailing slash is the same canonical page.
     expect(isCacheableEntityRequest("/artist/sub-focus/", "")).toBe(true);
+    expect(isCacheableEntityRequest("/track/mb_2b1c4d5e/", "")).toBe(true);
   });
 
   it("does NOT cache a paginated/sorted variant (the cache key drops the query)", () => {
@@ -692,6 +698,11 @@ describe("isCacheableEntityRequest", () => {
     expect(isCacheableEntityRequest("/artist/sub-focus/tracks", "")).toBe(false);
     expect(isCacheableEntityRequest("/artist", "")).toBe(false);
     expect(isCacheableEntityRequest("/log/2026.A.7Q", "")).toBe(false);
+    // `/tracks` is the plural HUB and keeps its own (shorter, page-param-folding) enrolment —
+    // the alternation requires a `/` after the segment, which is what keeps them apart.
+    expect(isCacheableEntityRequest("/tracks", "")).toBe(false);
+    expect(isCacheableEntityRequest("/tracks", "?page=2")).toBe(false);
+    expect(isCacheableEntityRequest("/track", "")).toBe(false);
   });
 });
 
@@ -702,6 +713,20 @@ describe("entityPurgeUrl", () => {
     expect(entityPurgeUrl("artist", "sub-focus")).toBe(`${CANONICAL}/artist/sub-focus`);
     expect(entityPurgeUrl("album", "all-that-jazz")).toBe(`${CANONICAL}/album/all-that-jazz`);
     expect(entityPurgeUrl("label", "hospital-records")).toBe(`${CANONICAL}/label/hospital-records`);
+    // The track kind carries the track's PERMANENT id in the slug position, so the purge key is
+    // byte-identical to the read key `trackPagePath` builds.
+    expect(entityPurgeUrl("track", "mb_2b1c4d5e")).toBe(`${CANONICAL}/track/mb_2b1c4d5e`);
+  });
+
+  it("every purgeable kind's URL is one the read path would actually cache", () => {
+    // The pin that matters: a page the read path caches but the write path cannot purge goes
+    // stale for its whole SWR window. Asserted over the KIND union, so a kind added later without
+    // a matching read-path enrolment fails here.
+    for (const kind of ["artist", "album", "label", "track"] as const) {
+      const path = new URL(entityPurgeUrl(kind, "some-id")).pathname;
+
+      expect(isCacheableEntityRequest(path, ""), `${kind} must be cacheable at ${path}`).toBe(true);
+    }
   });
 
   it("URL-encodes the slug into the path segment", () => {
@@ -726,6 +751,7 @@ describe("purge targets match the cached URL shapes", () => {
       { kind: "artist", slug: "sub-focus" },
       { kind: "album", slug: "all-that-jazz" },
       { kind: "label", slug: "hospital-records" },
+      { kind: "track", slug: "mb_2b1c4d5e" },
     ] as const;
 
     for (const { kind, slug } of targets) {

@@ -985,7 +985,11 @@ export function archiveTrackJsonLd(track: ArchiveTrackSchemaInput): Record<strin
     "@type": "MusicRecording",
     byArtist: track.artists.map((artist) => byArtistNode(artist, track.artistSlugs)),
     ...(track.releaseDate ? { datePublished: track.releaseDate } : {}),
-    duration: formatIsoDuration(track.durationMs),
+    // OMITTED, never `PT0M0S`. `tracks.duration_ms` is NOT NULL and carries 0 as its "unknown"
+    // (crawl.ts), so emitting it unconditionally would assert a zero-length recording to crawlers
+    // and answer engines. The DTO already converts that sentinel to an absence; this is the half
+    // that keeps it out of the graph.
+    ...(track.durationMs ? { duration: formatIsoDuration(track.durationMs) } : {}),
     genre: "Drum and Bass",
     ...(identifier.length > 0 ? { identifier } : {}),
     ...(track.imageUrl ? { image: track.imageUrl } : {}),
@@ -1031,12 +1035,17 @@ export type ArchiveTrackSchemaInput = {
   artists: string[];
   bpm?: number;
   discogsReleaseUrl?: string;
-  durationMs: number;
+  /** Absent when the archive does not know the recording's length — see the `duration` note above. */
+  durationMs?: number;
   imageUrl?: string;
   isrc?: string;
   key?: string;
   label?: { name: string; slug?: string };
-  /** Every outbound platform page the archive holds for this recording — the `sameAs` set. */
+  /**
+   * The outbound platform pages that may enter the `sameAs` graph. Built by `sameAsUrls`, NOT by
+   * mapping the rendered destinations — Beatport is rendered and deliberately withheld here
+   * (lib/track-page.ts § the containment seam).
+   */
   listenUrls: string[];
   mbRecordingId?: string;
   releaseDate?: string;

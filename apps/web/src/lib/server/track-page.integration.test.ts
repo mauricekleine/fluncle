@@ -11,6 +11,7 @@ import {
 } from "./integration-db";
 import { EMBEDDING_DIMS } from "./embedding";
 import { listSonicNeighbours, readTrackDestination } from "./track-page";
+import { sameAsUrls } from "../track-page";
 import { resolveTrackPageData } from "../../routes/-track-page-data";
 
 // THE ARCHIVE TRACK DESTINATION, over a real schema.
@@ -384,6 +385,149 @@ describe("close in sound", () => {
     const data = await resolveTrackPageData(RICH);
 
     expect(data.status === "found" && data.neighbours.map((n) => n.trackId)).toStrictEqual([
+      SOURCELESS,
+    ]);
+  });
+});
+
+describe("the sentinels that are values, not nulls", () => {
+  it("reports NO length for a row whose duration is the crawler's 0", async () => {
+    // The crawler writes `recording.length ?? track.length ?? 0` and calls 0 "the honest
+    // 'unknown'" (crawl.ts), so the DTO must hand back an absence rather than a zero the page and
+    // the structured data would both render as a fact.
+    await db.execute({
+      args: [THIN],
+      sql: `update tracks set duration_ms = 0 where track_id = ?`,
+    });
+    const data = await resolveTrackPageData(THIN);
+
+    expect(data.status === "found" && data.track.durationMs).toBeUndefined();
+  });
+
+  it("reports NO isrc and NO recording mbid for the legacy empty string", async () => {
+    // `schema.ts`'s `has_isrc` mirror trims before testing precisely because legacy rows carry
+    // `''`. An untrimmed read prints a labelled field with no value and emits an identifier that
+    // names nothing.
+    await db.execute({
+      args: [THIN],
+      sql: `update tracks set isrc = '', mb_recording_id = '   ' where track_id = ?`,
+    });
+    const data = await resolveTrackPageData(THIN);
+
+    expect(data.status === "found" && data.track.isrc).toBeUndefined();
+    expect(data.status === "found" && data.track.mbRecordingId).toBeUndefined();
+  });
+
+  it("still reports a real length, isrc and mbid when the archive holds them", async () => {
+    await db.execute({
+      args: [RICH],
+      sql: `update tracks set mb_recording_id = '11111111-2222-3333-4444-555555555555'
+             where track_id = ?`,
+    });
+    const data = await resolveTrackPageData(RICH);
+
+    expect(data.status === "found" && data.track.durationMs).toBe(270_000);
+    expect(data.status === "found" && data.track.isrc).toBe("GBTEST2600001");
+    expect(data.status === "found" && data.track.mbRecordingId).toBe(
+      "11111111-2222-3333-4444-555555555555",
+    );
+  });
+});
+
+describe("the Beatport rail, over a real row", () => {
+  it("renders the outbound control but keeps the URL out of the sameAs graph", async () => {
+    await db.execute({
+      args: [RICH],
+      sql: `update tracks set beatport_url = 'https://www.beatport.com/track/undertow/9'
+             where track_id = ?`,
+    });
+    const data = await resolveTrackPageData(RICH);
+
+    expect(data.status).toBe("found");
+
+    if (data.status !== "found") {
+      return;
+    }
+
+    // Rendered: the control is there, pointing at the URL the archive stores.
+    expect(data.track.listen).toContainEqual({
+      href: "https://www.beatport.com/track/undertow/9",
+      kind: "beatport",
+    });
+
+    // Asserted: it is not in the graph. Built exactly as the route's head() builds it.
+    const sameAs = sameAsUrls(data.track.listen);
+
+    expect(sameAs).not.toContain("https://www.beatport.com/track/undertow/9");
+    expect(sameAs).toContain(`https://open.spotify.com/track/${RICH}`);
+  });
+});
+
+/**
+ * A vector a hair off axis 0 — STRICTLY nearer to `axisVector(0)` than any orthogonal axis is. It
+ * is what lets a tempo test prove the window rather than accidentally pass on the `track_id`
+ * tiebreak: two orthogonal candidates are equidistant, so the unfiltered scan would order them by
+ * id and the assertion would hold whether or not the filter did anything.
+ */
+function nearVector(): number[] {
+  return Array.from({ length: EMBEDDING_DIMS }, (_unused, index) =>
+    index === 0 ? 1 : index === 3 ? 0.05 : 0,
+  );
+}
+
+describe("the tempo pre-filter on close in sound", () => {
+  it("excludes a NEARER neighbour that sits outside the target's tempo window", async () => {
+    // The far row is deliberately the nearest by vector, so only the window can keep it out. RICH
+    // and CERTIFIED are both 174 (makeEvidenceRich); the far row is put at half tempo.
+    await db.execute({
+      args: [SOURCELESS],
+      sql: `update tracks set bpm = 87 where track_id = ?`,
+    });
+    await seedEmbedding(db, RICH, axisVector(0));
+    await seedEmbedding(db, SOURCELESS, nearVector());
+    await seedEmbedding(db, CERTIFIED, axisVector(2));
+
+    expect(
+      (await listSonicNeighbours(RICH, 1)).map((neighbour) => neighbour.trackId),
+      "the in-window row wins even though the out-of-window one is nearer",
+    ).toStrictEqual([CERTIFIED]);
+  });
+
+  it("widens to the unfiltered scan rather than returning a short band", async () => {
+    // Nothing else sits in the window, so the windowed scan comes back short of the limit and the
+    // wider answer is used — the band is never WORSE than it was before the pre-filter existed,
+    // and the nearest row leads it.
+    await db.execute({
+      args: [SOURCELESS],
+      sql: `update tracks set bpm = 87 where track_id = ?`,
+    });
+    await db.execute({
+      args: [CERTIFIED],
+      sql: `update tracks set bpm = 90 where track_id = ?`,
+    });
+    await seedEmbedding(db, RICH, axisVector(0));
+    await seedEmbedding(db, SOURCELESS, nearVector());
+    await seedEmbedding(db, CERTIFIED, axisVector(2));
+
+    expect((await listSonicNeighbours(RICH)).map((neighbour) => neighbour.trackId)).toStrictEqual([
+      SOURCELESS,
+      CERTIFIED,
+    ]);
+  });
+
+  it("scans unfiltered when the target has no measured tempo, exactly as before", async () => {
+    await db.execute({
+      args: [RICH],
+      sql: `update tracks set bpm = null where track_id = ?`,
+    });
+    await db.execute({
+      args: [SOURCELESS],
+      sql: `update tracks set bpm = 87 where track_id = ?`,
+    });
+    await seedEmbedding(db, RICH, axisVector(0));
+    await seedEmbedding(db, SOURCELESS, nearVector());
+
+    expect((await listSonicNeighbours(RICH)).map((neighbour) => neighbour.trackId)).toStrictEqual([
       SOURCELESS,
     ]);
   });

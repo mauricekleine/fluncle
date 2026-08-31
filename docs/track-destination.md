@@ -61,9 +61,16 @@ It could have been a weighted score, and a score would have been prettier and un
 Every band is conditional, and an empty one renders nothing at all — no heading, no empty state, no apology (the [graph-page rule](./album-entity.md), applied here).
 
 - **The masthead** — the cover, the title, the artist credits as `GraphLink`s into `/artist/<slug>` wherever the entity resolves.
-- **The facts** — released, length, BPM, key, album, label, ISRC, in the `/log` field block's shape with its ratified labels. There is no Found date and no coordinate to print, because there is no certification.
+- **The facts** — released, length, BPM, key, album, label, ISRC, in the `/log` field block's shape with its ratified labels. Every one is conditional. That matters most for the ones whose "absent" is a VALUE rather than a null: `tracks.duration_ms` is NOT NULL and the crawler writes `0` as its honest unknown, and `isrc`/`mb_recording_id` carry a legacy empty string. A sentinel that renders is the same defect as a dead control — `0:00` is a length the archive does not hold, and `"duration": "PT0M0S"` asserts a zero-length recording to a crawler on a page that can still be indexed. All three are converted to a real absence at the DTO boundary, once, so the rendered field and the structured-data key disappear together.
 - **The bounded preview** — the `/api/preview` relay, which serves only the official short clip a rights-holding service publishes (a stored Deezer URL, a fresh one by ISRC, Apple's exact-by-ISRC clip, then the keyless iTunes fallback). **Fluncle serves no full song from this page**; the captured full song is a private analysis artifact and is never a playback source. The control renders only when the archive holds a short-source anchor at all, and a relay that comes back empty returns the shared player to idle rather than erroring.
 - **The outbound destinations** — one control per service the archive actually stores an exact link for. Nothing is composed from a search term: a wrong link is worse than an absent one. YouTube rides its officialness gate. Discogs is deliberately **not** here — it is a release database, not somewhere to hear a record — and rides the structured data's `sameAs` instead.
+
+### Beatport is rendered, never asserted
+
+`tracks.beatport_url`'s §F rail in `db/schema.ts` keeps the URL out of every derived corpus, because Beatport's terms bar using its content for text/data mining or for feeding AI. **A `sameAs` graph is a derived corpus** — `log-schema.ts` says in its own words that it exists "for crawlers + AI answer-engines" — and the certified `/log` page's `musicRecordingJsonLd` already withholds it. That shipped behaviour is the specification.
+
+This page is the first surface that both renders a Beatport link _and_ composes a `sameAs` array from its outbound destinations, so it needs an explicit exclusion rather than an absence. The seam is `SAME_AS_EXCLUDED_LISTEN_KINDS` / `sameAsUrls` in [`apps/web/src/lib/track-page.ts`](../apps/web/src/lib/track-page.ts): the route's `head()` builds its `sameAs` input through it rather than mapping the destinations itself, the exclusion is keyed on the destination **kind** so it survives a rename or a URL-shape change, and `track-page.test.ts` fails if a future edit lets the kind through. The rendered control is untouched.
+
 - **"Close in sound"** — the neighbours, and the half of the page that makes the archive traversable.
 
 ## Sonic neighbours
@@ -71,6 +78,18 @@ Every band is conditional, and an empty one renders nothing at all — no headin
 `/log`'s "more like this" asks a question about **findings** and scans the certified corpus. This one asks a question about **music**, so it scans `tracks` through a LEFT join and a certified neighbour competes on exactly the same terms as an uncertified one. The register a neighbour renders in is decided by whether it carries a coordinate, never by the query.
 
 All four of [AGENTS.md](../AGENTS.md)'s database rules bind here and the scan obeys each one: the probe binds as a **raw blob**, the ranking happens **in SQL** and returns the ~8 winners rather than a column of vectors, there is exactly **one probe** so it is one pass (never `union all` branches over a CTE), and there is **no `libsql_vector_idx`** — an exact scan, which also means 100% recall.
+
+### The tempo pre-filter
+
+The exact scan carries the btree pre-filter AGENTS.md's hosted rail prescribes, the same shape `/mix`'s candidate scan already ships. **This one is on tempo, and the axis is a choice about the surface.** `key` is right for a mix (a harmonic move is defined on it) and wrong for "close in sound", because two recordings in unrelated keys can sit next to each other in the embedding space. Tempo is the opposite: a 90 BPM record is not close in sound to a 174 roller in anyone's ears, the page already prints BPM as one of its facts, and `tracks_bpm_idx` is a plain btree on the column. `galaxy` is unavailable by construction — `findings.galaxy_id` exists only on the certified half, and this band scans both registers.
+
+The window is ±8% of the target's tempo (±14 BPM at 174). A hard filter has a cost and it is stated rather than hidden: a candidate with an unmeasured tempo, or a genuinely distant one, leaves the candidate set. Two degrades keep it from ever making the band _worse_ than the unfiltered answer — a target with no measured tempo has no window to build and scans unfiltered, and a windowed scan that comes back short of the limit is re-run unfiltered and the wider answer is used. That is one extra bounded query in the sparse case, which is the cheap case, and none in the dense case, which is the one the pre-filter exists for.
+
+### The page is edge-cached
+
+`/track/<trackId>` is enrolled in the entity **detail** tier (`edge-cache.ts`), 300s fresh / 3600s stale-while-revalidate. It earns that tier on both halves rather than inheriting it: its content is one row's enrichment plus its neighbours, so a re-enrichment should surface inside minutes exactly as it should on `/log/<id>` or `/album/<slug>`; and the invalidation is explicit rather than left to the window — `track` is an `EntityCacheKind`, and `getTrackEntityPurgeTargets` returns the track's own page alongside its artist/album/label pages, so every write path that already calls `purgeTrackEntityPages` evicts it too.
+
+It matters more here than anywhere else in that tier: this is the surface with six figures of crawlable URLs behind it, an uncached view pays the exact vector scan above, and crawler traffic is uncached-first by definition.
 
 Sonar is the lever when the embedded corpus outgrows the scan, behind its own dark flag (`sonar_track_enabled`, default off — see [vector-serving.md](./vector-serving.md)). Off, unprovisioned, timed out, or answering empty, the exact Turso scan answers. A track with no embedding, an archive with nothing else embedded, and a dark sonar all arrive as an empty list, and all three degrade to the same honest thing: **no band at all**.
 

@@ -152,10 +152,16 @@ export function TrackFacts({ track }: { track: TrackDestination }) {
           </dd>
         </div>
       ) : undefined}
-      <div className="log-field">
-        <dt>Length</dt>
-        <dd>{formatDuration(track.durationMs)}</dd>
-      </div>
+      {/* CONDITIONAL like every sibling. `duration_ms` is NOT NULL and carries 0 as its "unknown"
+          (crawl.ts), so an unguarded field prints "0:00" — a measurement the archive does not
+          hold, rendered as if it did. The DTO converts that sentinel to an absence; this omits
+          the row. */}
+      {track.durationMs ? (
+        <div className="log-field">
+          <dt>Length</dt>
+          <dd>{formatDuration(track.durationMs)}</dd>
+        </div>
+      ) : undefined}
       {track.bpm ? (
         <div className="log-field">
           <dt>BPM</dt>

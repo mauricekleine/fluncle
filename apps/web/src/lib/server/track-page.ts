@@ -56,6 +56,7 @@ import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { getDb, typedRow, typedRows } from "./db";
 import { isSonarTrackEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { bestAlbumCoverUrl } from "../media";
+import { type ListenKind } from "../track-page";
 import { discogsReleaseUrl } from "./discogs";
 import { parseArtistsJson } from "./artists";
 
@@ -88,7 +89,7 @@ export const TRACK_PAGE_INDEXABLE_WHERE = `tracks.is_catalogue = 1
 export type ListenDestination = {
   href: string;
   /** The service's own name — what the control says out loud, and its icon key. */
-  kind: "apple" | "beatport" | "deezer" | "spotify" | "youtube";
+  kind: ListenKind;
 };
 
 /** A graph node this recording hangs off, when the archive has resolved one. */
@@ -113,14 +114,25 @@ export type TrackDestination = {
   albumImageUrl: string | undefined;
   artists: TrackGraphLink[];
   bpm: number | undefined;
-  durationMs: number;
+  /** The Discogs release page — structured-data `sameAs` only, never a listening control. */
+  discogsReleaseUrl: string | undefined;
+  /**
+   * The recording's length, or UNDEFINED when the archive does not know it.
+   *
+   * `tracks.duration_ms` is NOT NULL, so its "unknown" is a VALUE rather than a null: the crawler
+   * writes `recording.length ?? track.length ?? 0` and its own comment calls 0 "the honest
+   * 'unknown' — never a guess" (crawl.ts). A sentinel that renders as content is the whole defect
+   * — 0 prints "0:00" on the page and `"duration": "PT0M0S"` in the structured data, which asserts
+   * a zero-length recording to crawlers and answer engines on a row that can still be indexed. So
+   * the sentinel becomes a real absence HERE, at the DTO boundary, once, and every consumer
+   * inherits it.
+   */
+  durationMs: number | undefined;
   /**
    * The DATABASE's verdict on {@link TRACK_PAGE_INDEXABLE_WHERE} for this row — never recomputed
    * here. The page turns it into `robots`; the sitemap turns the same expression into membership.
    */
   indexable: boolean;
-  /** The Discogs release page — structured-data `sameAs` only, never a listening control. */
-  discogsReleaseUrl: string | undefined;
   isrc: string | undefined;
   key: string | undefined;
   label: TrackGraphLink | undefined;
@@ -354,13 +366,17 @@ export async function readTrackDestination(trackId: string): Promise<TrackPageRo
       bpm: row.bpm ?? undefined,
       discogsReleaseUrl:
         row.in_release_id === null ? undefined : discogsReleaseUrl(row.in_release_id),
-      durationMs: row.duration_ms,
+      durationMs: row.duration_ms > 0 ? row.duration_ms : undefined,
       indexable: row.indexable === 1,
-      isrc: row.isrc ?? undefined,
-      key: row.key ?? undefined,
+      // TRIMMED TO ABSENT for the same reason `duration_ms` is: these two carry an EMPTY STRING as
+      // a legacy "unknown" (schema.ts's `has_isrc` mirror trims before testing, precisely because
+      // legacy rows hold `''`). An empty ISRC would print a labelled field with no value, and an
+      // empty MBID would emit an identifier naming nothing.
+      isrc: row.isrc?.trim() ? row.isrc.trim() : undefined,
+      key: row.key?.trim() ? row.key : undefined,
       label: graphLink(row.label, row.label_slug),
       listen: listenDestinations(row, row.spotify_url),
-      mbRecordingId: row.mb_recording_id ?? undefined,
+      mbRecordingId: row.mb_recording_id?.trim() ? row.mb_recording_id.trim() : undefined,
       // A stored clip, or an ISRC the relay's own rungs can resolve one from. Both are the same
       // bounded short-source media every other Fluncle surface previews; neither is a full song.
       previewable: Boolean(row.preview_url ?? row.isrc),
@@ -450,13 +466,18 @@ export async function listSonicNeighbours(
   }
 
   const db = await getDb();
+  // The target's vector AND its measured tempo, in one read: the tempo is what builds the btree
+  // pre-filter below, and fetching it separately would be a second round trip for one number.
   const targetResult = await db.execute({
     args: [trackId],
-    sql: `select emb.embedding_blob from track_embeddings emb where emb.track_id = ? limit 1`,
+    sql: `select emb.embedding_blob, tracks.bpm
+          from track_embeddings emb
+          join tracks on tracks.track_id = emb.track_id
+          where emb.track_id = ?
+          limit 1`,
   });
-  const target = readEmbeddingBlob(
-    typedRow<{ embedding_blob: unknown }>(targetResult.rows)?.embedding_blob,
-  );
+  const targetRow = typedRow<{ bpm: number | null; embedding_blob: unknown }>(targetResult.rows);
+  const target = readEmbeddingBlob(targetRow?.embedding_blob);
 
   if (!target) {
     return [];
@@ -480,19 +501,85 @@ export async function listSonicNeighbours(
     }
   }
 
+  // THE BTREE PRE-FILTER, ahead of the exact scan — the shape AGENTS.md's hosted-Turso rail
+  // prescribes (`vector_distance_cos` with a btree pre-filter on key/BPM or galaxy) and the shape
+  // `/mix`'s candidate scan already ships, there on `tracks.key in (…)`.
+  //
+  // THIS ONE IS ON TEMPO, and the choice is the surface rather than convenience. `key` is the
+  // right axis for a MIX (a harmonic move is defined on it); it is the wrong axis for "close in
+  // sound", because two recordings in unrelated keys can sit next to each other in the embedding
+  // space and a key filter would cut them apart for a reason a listener does not hear. Tempo is
+  // the opposite: a 90 BPM record is not close in sound to a 174 roller in anyone's ears, the page
+  // already prints BPM as one of its facts, and `tracks_bpm_idx` is a plain btree on the column.
+  // `galaxy` is unavailable by construction — `findings.galaxy_id` exists only on the certified
+  // half, and this band scans BOTH registers.
+  //
+  // WHAT IT COSTS, stated rather than hidden. A window is a hard filter, so a candidate whose
+  // tempo is unmeasured (`bpm is null` fails a `between`) or genuinely distant leaves the
+  // candidate set, and where the window is full the band can differ from the unfiltered answer.
+  // Two degrades keep that from ever making the band WORSE than it was:
+  //   - a target with no measured tempo has no window to build, so it scans unfiltered, exactly as
+  //     before;
+  //   - a windowed scan that comes back short of `limit` is re-run unfiltered and the wider answer
+  //     is used. That is one extra bounded query in the SPARSE case — which is the cheap case —
+  //     and none in the dense case, which is the one the pre-filter exists for.
+  //
+  // The other three rails are untouched: the probe still binds as a RAW BLOB (`toVectorProbe`), the
+  // ranking still happens IN SQL and returns the ~8 winners rather than a column of vectors, and it
+  // is still ONE probe in ONE pass — never `union all` branches over a CTE.
+  const targetBpm = targetRow?.bpm ?? undefined;
+  const probe = toVectorProbe(target);
+  const windowed = targetBpm
+    ? await scanNeighbours(db, probe, trackId, limit, [
+        targetBpm * (1 - NEIGHBOUR_BPM_TOLERANCE),
+        targetBpm * (1 + NEIGHBOUR_BPM_TOLERANCE),
+      ])
+    : undefined;
+
+  if (windowed && windowed.length >= limit) {
+    return windowed.map((row) => toNeighbour(row));
+  }
+
+  const widened = await scanNeighbours(db, probe, trackId, limit, undefined);
+
+  return widened.map((row) => toNeighbour(row));
+}
+
+/**
+ * How far either side of the target's tempo a candidate may sit and still be a neighbour. Eight
+ * percent is a band a listener hears as "the same tempo" (±14 BPM at 174), wide enough that it
+ * never cuts a genuine neighbour on a rounding difference and narrow enough to exclude music at a
+ * different tempo entirely.
+ */
+const NEIGHBOUR_BPM_TOLERANCE = 0.08;
+
+/**
+ * One exact scan, optionally pre-filtered to a tempo window. The window is a `between` on
+ * `tracks.bpm`, which is what puts the read on `tracks_bpm_idx` instead of walking the embedded
+ * corpus; everything else about the query is identical either way, so the two paths cannot drift.
+ */
+async function scanNeighbours(
+  db: Awaited<ReturnType<typeof getDb>>,
+  probe: Uint8Array,
+  trackId: string,
+  limit: number,
+  bpmWindow: [number, number] | undefined,
+): Promise<NeighbourRow[]> {
+  // Args bind in SQL-TEXT order: the probe, the excluded target, the window bounds, the limit.
   const result = await db.execute({
-    args: [toVectorProbe(target), trackId, limit],
+    args: bpmWindow ? [probe, trackId, bpmWindow[0], bpmWindow[1], limit] : [probe, trackId, limit],
     sql: `select ${NEIGHBOUR_SELECT},
                  vector_distance_cos(emb.embedding_blob, ?) as dist
           from tracks
           left join findings on findings.track_id = tracks.track_id
           join track_embeddings emb on emb.track_id = tracks.track_id
           where tracks.track_id != ? and ${NEIGHBOUR_WHERE}
+                ${bpmWindow ? "and tracks.bpm between ? and ?" : ""}
           order by dist asc, tracks.track_id asc
           limit ?`,
   });
 
-  return typedRows<NeighbourRow>(result.rows).map((row) => toNeighbour(row));
+  return typedRows<NeighbourRow>(result.rows);
 }
 
 /** Hydrate sonar's ranked ids IN SONAR'S ORDER, re-asserting the candidate rule it cannot express. */

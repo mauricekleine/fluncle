@@ -14,7 +14,7 @@ import { archiveTrackJsonLd, trackBreadcrumbsJsonLd } from "@/lib/log-schema";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize } from "@/lib/media";
 import { siteUrl } from "@/lib/fluncle-links";
-import { trackPageUrl } from "@/lib/track-page";
+import { sameAsUrls, trackPageUrl } from "@/lib/track-page";
 import { type TrackPageData } from "./-track-page-data";
 
 // `/track/<trackId>` — THE ARCHIVE TRACK DESTINATION.
@@ -172,7 +172,10 @@ function trackHead(loaderData: TrackPageData | undefined) {
           isrc: track.isrc,
           key: track.key,
           label: track.label ? { name: track.label.name, slug: track.label.slug } : undefined,
-          listenUrls: track.listen.map((destination) => destination.href),
+          // THROUGH THE SEAM, never a bare map: `sameAsUrls` withholds the kinds that may be
+          // rendered as a control but must not become a structured-data identity claim
+          // (lib/track-page.ts). Keyed on the destination KIND, so it survives a rename.
+          listenUrls: sameAsUrls(track.listen),
           mbRecordingId: track.mbRecordingId,
           releaseDate: track.releaseDate,
           title: track.title,
