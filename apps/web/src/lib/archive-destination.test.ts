@@ -505,7 +505,9 @@ describe("every public findings/archive navigation control goes to the archive",
     expect(names).toContain("lib/docs-layout.shared.tsx:Findings");
     expect(names).toContain("routes/device.tsx:Back to findings");
     expect(names).toContain("routes/mix.tsx:See the findings");
-    expect(names.filter((name) => name.endsWith(":Back to the archive"))).toHaveLength(17);
+    // 18 with `/search`, the persistent search surface, whose plate footer carries the same way
+    // home every other plate does.
+    expect(names.filter((name) => name.endsWith(":Back to the archive"))).toHaveLength(18);
   });
 
   it("uses each control's own destination, rejecting wrong and unresolved expressions", () => {

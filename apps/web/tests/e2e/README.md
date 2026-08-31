@@ -62,6 +62,19 @@ FRONT_DOOR_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/fron
 
 They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. `.github/workflows/e2e.yml` uploads `front-door-scroll` on every run, green or red, so each commit's evidence is retained for 90 days (GitHub's ceiling on a public repo) and downloadable from its own check without a byte entering history.
 
+## The search surface's viewport evidence
+
+`search.spec.ts` does the same for `/search`, into the gitignored `apps/web/.dev/search/`: `desktop-1440x900.png` and `mobile-390x844.png` answering a query, plus `mobile-390x844-zero.png` for the zero state (the first thing a stranger sees). Same terms as the front door's — the assertions in the spec are what gate it, the images are for a human, and `.github/workflows/e2e.yml` uploads them as the always-on `search-surface` artifact rather than committing binaries to a public repo.
+
+```bash
+bun run --cwd apps/web test:e2e -- tests/e2e/search.spec.ts
+SEARCH_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/search.spec.ts   # elsewhere
+```
+
+## The tier-4 rail: no OpenRouter key, on purpose
+
+`.dev.vars.e2e.tpl` deliberately carries NO `OPENROUTER_API_KEY`, and that absence is a rail rather than an omission. A FAKE key is worse than none: `translateQuery` only short-circuits on "unprovisioned", so a key of any shape makes search's fourth tier issue a real request to openrouter.ai **from the Worker** — which `blockExternalRequests` cannot see, because it stubs the browser's requests and never the server's. With the key absent, tier 4 returns `null` immediately and the resolver degrades to full text, which is the documented degradation contract (`docs/search.md`) and the local-dev steady state. Search still answers, deterministically, and nothing leaves the machine — which is what makes a natural-language query testable here at all rather than something specs have to route around.
+
 ## Adding an env var
 
 If a new code path reads an env key on a public route, add a plainly-fake value of the right shape to `.dev.vars.e2e.tpl`. Never a real credential, hostname, or `op://` path — this repo is public, and a test run must not be able to reach anything real.

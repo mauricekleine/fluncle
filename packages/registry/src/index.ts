@@ -458,6 +458,21 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
+      "/search — the persistent, linkable search surface: one `?q=` carries a coordinate, an entity name, a natural-language filter, or a sonic reference, and the answer is server-rendered from the URL",
+      "/search?q=<query> — a shareable, reload-safe result set over the whole archive (findings and the wider catalogue)",
+    ],
+    kind: "web_route",
+    name: "web.search",
+    operatorNotes:
+      "The PERSISTENT half of search — the addressable counterpart to the ⌘K palette, which stays the accelerator and hands off here (components/search/search-command.tsx). It calls the SAME primitive, `searchArchive` (lib/server/search.ts), through a serverFn, so all four resolution tiers, the certified-first ranking, the catalogue rule, and the degradation contract are the ones docs/search.md already specifies; nothing is re-resolved. THE WHOLE QUERY STATE IS ONE PARAM, because the resolver takes one string — a coordinate, a name, a sentence, and a sonic reference all arrive as `q`. A coordinate/entity `redirect` is deliberately NOT followed here (the palette may; a persistent URL that bounced would be un-shareable and a back-button trap): the resolved row is rendered as the first result instead. The field commits on SUBMIT, never per keystroke, so history holds one entry per real query. It is a real `<form method=get action=/search>`, so search works with no JS. The BARE surface is indexable, in the sitemap, and carries the WebSite SearchAction; ANY `?q=` view is noindex, follow with its canonical collapsed onto the bare page (the /tracks filtered-view rule, and the standard posture for an internal results page). The INDEX is always-200, so it is HTTP-probeable.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/search",
+    url: `${SITE}/search`,
+    weights: { web: "primary" },
+  },
+  {
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
       "/tracks — the whole list: every track Fluncle holds (certified findings + the wider catalogue), newest release first, filterable by release year, tempo, key, label, and galaxy",
     ],
     kind: "web_route",

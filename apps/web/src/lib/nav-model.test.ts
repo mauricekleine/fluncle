@@ -18,6 +18,7 @@ describe("nav model completeness", () => {
     const paths = navRoutePaths();
 
     for (const expected of [
+      "/search",
       "/log",
       "/artists",
       "/labels",
@@ -48,6 +49,7 @@ describe("nav model completeness", () => {
     expect(publicItems(travel ?? { id: "travel", items: [], label: "" }).map((item) => item.id)) //
       .toEqual(["findings", "log", "logbook", "galaxies", "mixtapes"]);
     expect(browse?.items.map((item) => item.id)).toEqual([
+      "search",
       "tracks",
       "artists",
       "albums",

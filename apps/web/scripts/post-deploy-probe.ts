@@ -41,6 +41,10 @@
  */
 import { contract } from "@fluncle/contracts/orpc";
 import { liveSurfaces, statusProbes, type Surface } from "@fluncle/registry";
+// The worked search examples, imported from their ONE owner rather than re-listed here — the same
+// anti-drift rule the registry and the contract get. A pure, dependency-free module (it is shared
+// with the browser), so a standalone Bun script can read it.
+import { SEARCH_EXAMPLES } from "../src/lib/search-results";
 
 // The canonical production origin — the ONE piece of topology this probe hardcodes,
 // and it is fully public (this repo is open source). `--base-url` retargets it for a
@@ -88,7 +92,15 @@ type ContentKind = "html" | "json" | "text" | "xml";
 type Expectation =
   | { kind: "served"; content: ContentKind } // 2xx (+content); 400 = served-with-input-required.
   | { kind: "auth-gate" } // 401/403 unauthenticated; a 2xx here is a CRITICAL leak.
-  | { kind: "dark-or-served"; content: ContentKind; darkStatus: number; darkCode: string };
+  | { kind: "dark-or-served"; content: ContentKind; darkStatus: number; darkCode: string }
+  | { kind: "search-example" }; // 2xx + a NON-EMPTY, undegraded answer (see below).
+// search-example: the one place this probe asserts on CONTENT rather than liveness, and it is the
+// only assertion that can hold the worked examples' promise. `SEARCH_EXAMPLES` is shown to readers
+// in three places as a set of queries that WORK; an example that finds nothing teaches the
+// opposite of what it is for. Whether a query still returns rows depends on the LIVE ARCHIVE — a
+// certified finding retired, a label pruned, an anchor un-embedded — so no offline test can know
+// it, and only a probe against production can. The offline half (that each is answered by a
+// deterministic tier, never the model) is `lib/server/search-examples.integration.test.ts`.
 // dark-or-served: an op that legitimately SHIPS DARK until the operator wires its env
 // (see DARK_CAPABLE_OPERATIONS). Its typed dark fault still PROVES the route resolves —
 // the handler answered with its documented shape — so it passes; the wrong status, or the
@@ -365,6 +377,22 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
     });
   }
 
+  // ── The worked search examples ─────────────────────────────────────────────
+  // Derived from `SEARCH_EXAMPLES`, so a fifth example is probed the day it ships and a retired
+  // one stops being probed — the same live-derivation rule as the registry and the contract above.
+  // Read-only GETs against the public, unauthenticated `search_archive` op, like every other
+  // target here; the difference is only what counts as a pass (see the `search-example`
+  // expectation).
+  for (const example of SEARCH_EXAMPLES) {
+    targets.push({
+      className: "api-public",
+      expect: { kind: "search-example" },
+      name: `search example · ${example.query}`,
+      rewritable: true,
+      url: `${PROD_BASE_URL}${API_PREFIX}/search/archive?q=${encodeURIComponent(example.query)}`,
+    });
+  }
+
   return { skipped, targets };
 }
 
@@ -470,6 +498,41 @@ export function checkContent(
   }
 }
 
+/**
+ * A worked example's answer, judged on what it actually holds.
+ *
+ * Two ways to fail, and they are different regressions. EMPTY means the archive no longer answers
+ * a query the product advertises — the finding behind it moved, the label fell below the hub gate,
+ * the anchor lost its embedding. DEGRADED means the deterministic tiers all declined and the query
+ * fell through to the language tier, whose answer varies run to run; an example that is a coin
+ * flip is not a worked example, whether or not this particular roll came back with rows.
+ */
+export function judgeSearchExample(body: string): { verdict: Verdict; detail: string } {
+  let payload: { degraded?: unknown; entities?: unknown; results?: unknown };
+
+  try {
+    payload = JSON.parse(body) as typeof payload;
+  } catch {
+    return { detail: "200 but unparseable JSON", verdict: "FAIL" };
+  }
+
+  const results = Array.isArray(payload.results) ? payload.results.length : 0;
+  const entities = Array.isArray(payload.entities) ? payload.entities.length : 0;
+
+  if (results + entities === 0) {
+    return { detail: "200 but NO results — a worked example must find something", verdict: "FAIL" };
+  }
+
+  if (payload.degraded === true) {
+    return {
+      detail: `200 with ${results + entities} but DEGRADED — it reached the language tier`,
+      verdict: "FAIL",
+    };
+  }
+
+  return { detail: `200 ok (${results + entities})`, verdict: "PASS" };
+}
+
 /** Turn a response (status + body) into a verdict for a target's expectation. */
 export function judge(
   expect: Expectation,
@@ -510,6 +573,14 @@ export function judge(
           detail: `${status} without ${expect.darkCode} (expected the typed dark fault)`,
           verdict: "FAIL",
         };
+  }
+
+  if (expect.kind === "search-example") {
+    if (status < 200 || status >= 300) {
+      return { detail: `${status} (expected 2xx)`, verdict: "FAIL" };
+    }
+
+    return judgeSearchExample(body);
   }
 
   if (status >= 200 && status < 300) {

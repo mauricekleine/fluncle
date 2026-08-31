@@ -42,6 +42,7 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 | `web.albums`     | `/albums`     | one alphabetical index of every drum & bass album Fluncle holds + `/album/:slug` — one record: its findings, its artists, and the label it came out on                                                                                                                               | secondary |
 | `web.fresh`      | `/fresh`      | what just came out — every drum & bass track released in the trailing 30-day window, freshest first; findings in full voice, the rest in the unlit register (release-dated, never found-dated)                                                                                       | secondary |
 | `web.tracks`     | `/tracks`     | the whole list — every track (findings + catalogue), newest release first, filterable by year, tempo, key, label, galaxy; bare hub indexable, any filter `noindex`                                                                                                                   | secondary |
+| `web.search`     | `/search`     | search the archive — one `?q=` carries a coordinate, an entity name, a natural-language filter, or a sonic reference; the answer is server-rendered from the URL, so a result set is shareable and reload-safe; bare surface indexable, any `?q=` `noindex`                          | primary   |
 | `web.galaxies`   | `/galaxies`   | the browse-by-feel lens — the archive grouped into operator-named sonic galaxies + `/galaxies/:slug`; dark until the operator names the whole map                                                                                                                                    | secondary |
 | `web.account`    | `/account`    | the signed-in account door — a listener's Galaxy progress, saved findings and sets, submissions, and settings (a workstation; `noindex`, so it is not in the sitemap)                                                                                                                | secondary |
 | `web.identity`   | `/identity`   | the identity lookup door + `/identity/:key` — one recording's identifiers and platform links, each saying whether Fluncle found it, looked and found nothing, will not look, or hands out no such link (the door is indexable + sitemapped; the keyed answers are `noindex, follow`) | tertiary  |
@@ -266,6 +267,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `web.albums`                  | secondary |           |           |           |
 | `web.fresh`                   | secondary |           |           |           |
 | `web.tracks`                  | secondary |           |           |           |
+| `web.search`                  | primary   |           |           |           |
 | `web.galaxies`                | secondary | secondary |           |           |
 | `web.account`                 | secondary |           |           |           |
 | `web.identity`                | tertiary  |           |           |           |

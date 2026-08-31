@@ -170,8 +170,21 @@ const travelItems: NavItem[] = [
 // same blurbs beside a real count, which is exactly where an over-claim would be loudest.
 const browseItems: NavItem[] = [
   {
-    // The whole list, the shelf the other three are cut out of. It leads because it is the widest
-    // door: an artist, a record, and a label are all ways of narrowing this one.
+    // Search leads the section because it is the one door that reaches ANY of the shelves under it
+    // — a name, a coordinate, or the sound of a track, resolved against the whole archive. It is a
+    // real page (`/search`, whose whole query state lives in the URL), which is why it belongs in
+    // the nav at all: the ⌘K palette is still there and still faster, but a palette has no address
+    // and nothing can link to it. The label is the familiar word, deliberately: this is the one
+    // control in the app nobody should have to learn a Fluncle name for.
+    blurb: "One box over everything I hold.",
+    id: "search",
+    kind: "route",
+    label: "Search",
+    to: "/search",
+  },
+  {
+    // The whole list, the shelf the other three are cut out of. The widest BROWSE door: an artist,
+    // a record, and a label are all ways of narrowing this one.
     blurb: "Every track I hold, the whole crate.",
     id: "tracks",
     kind: "route",

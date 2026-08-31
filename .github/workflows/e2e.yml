@@ -114,6 +114,21 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+      # The SEARCH surface's own evidence, on the same terms and for the same reason: the criterion
+      # it answers ("reads correctly at desktop 1440x900 and mobile 390x844, proved by retained
+      # browser evidence") is a claim about how the page LOOKS, which no assertion can carry on its
+      # own. The spec writes three full-page shots (both widths answering a query, plus the zero
+      # state at the narrow width, which is the first thing a stranger sees).
+      - name: Upload search surface evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: search-surface
+          path: apps/web/.dev/search/
+          retention-days: 90
+          include-hidden-files: true
+          if-no-files-found: error
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
