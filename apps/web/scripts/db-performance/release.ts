@@ -1475,19 +1475,18 @@ export async function captureChild(
     subprocess.stderr.on("data", (chunk: Uint8Array) => {
       stderr = append(stderr, chunk);
     });
-    const exited = new Promise<void>((resolve) => {
+    const closed = new Promise<void>((resolve) => {
       subprocess.once("error", (error) => {
         spawnError = errorMessage(error);
-        resolve();
       });
-      subprocess.once("exit", (code) => {
+      subprocess.once("close", (code) => {
         observedExitCode = code;
         resolve();
       });
     });
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = await Promise.race([
-      exited.then(() => false),
+      closed.then(() => false),
       new Promise<true>((resolve) => {
         deadlineTimer = setTimeout(() => resolve(true), definition.timeoutMs);
       }),
@@ -1508,7 +1507,7 @@ export async function captureChild(
         }
       }
       await Promise.race([
-        exited,
+        closed,
         new Promise<void>((resolve) => setTimeout(resolve, PROCESS_STOP_GRACE_MS)),
       ]);
       if (pid !== undefined && signalProcessGroup(pid, 0)) {
@@ -1520,7 +1519,7 @@ export async function captureChild(
           }
         }
         await Promise.race([
-          exited,
+          closed,
           new Promise<void>((resolve) => setTimeout(resolve, PROCESS_STOP_GRACE_MS)),
         ]);
         if (!(await waitForProcessGroupExit(pid, PROCESS_STOP_GRACE_MS))) {
