@@ -93,11 +93,26 @@ describe("mixable artist projection cutover", () => {
       { imageUrl: undefined, name: "Alpha", slug: "alpha", trackCount: 2 },
     ]);
 
-    // Every deploy reconciles from the first artist even from COMPLETE, so a predeploy source
-    // repair cannot be hidden behind yesterday's readiness fence.
-    await db.execute(`update artists set rankable_track_count = 99 where id = 'art-a'`);
+    // Ordinary deploys do not re-walk a transactionally maintained, complete projection.
     const repeated = await backfillMixableArtistsProjection(db, { activate: true });
-    expect(repeated).toMatchObject({ artists: 6, pages: 2, passes: 2, skipped: false });
+    expect(repeated).toEqual({ artists: 0, pages: 0, passes: 0, skipped: true });
+    expect(await readMixableArtistsProjection(db, { limit: 1, q: "" })).toEqual([
+      { imageUrl: undefined, name: "Alpha", slug: "alpha", trackCount: 2 },
+    ]);
+
+    // Out-of-band source repair marks the fence dirty and still receives a complete reconciliation.
+    await db.batch(
+      [
+        `update artists set rankable_track_count = 99 where id = 'art-a'`,
+        {
+          args: ["dirty:test", MIXABLE_ARTISTS_PROJECTION_STATE_KEY],
+          sql: `update settings set value = ? where key = ?`,
+        },
+      ],
+      "write",
+    );
+    const dirty = await backfillMixableArtistsProjection(db, { activate: true });
+    expect(dirty).toMatchObject({ artists: 6, pages: 2, passes: 2, skipped: false });
     expect(await readMixableArtistsProjection(db, { limit: 1, q: "" })).toEqual([
       { imageUrl: undefined, name: "Alpha", slug: "alpha", trackCount: 2 },
     ]);
