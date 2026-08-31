@@ -905,7 +905,7 @@ describe("fluncle CLI parsing and JSON output", () => {
       },
     );
 
-    expect(requests).toEqual([{ action: "audit", limit: 17 }]);
+    expect(requests).toEqual([{ action: "audit", includeStatus: false, limit: 17 }]);
   });
 
   test("projection advance includes aggregate totals in human output", async () => {
@@ -958,9 +958,9 @@ describe("fluncle CLI parsing and JSON output", () => {
     let active = 0;
     let overlapped = false;
     const responses = [
-      { complete: false, processed: 2, scheduled: 3, status: { phase: "first" } },
-      { complete: false, processed: 5, scheduled: 7, status: { phase: "middle" } },
-      { complete: false, processed: 11, scheduled: 13, status: { phase: "final" } },
+      { complete: false, processed: 2, scheduled: 3 },
+      { complete: false, processed: 5, scheduled: 7 },
+      { complete: false, processed: 11, scheduled: 13 },
     ];
 
     await withStubApi(
@@ -991,6 +991,10 @@ describe("fluncle CLI parsing and JSON output", () => {
             ok: true,
             target: "track_due_work",
           });
+        }
+
+        if (req.method === "GET" && url.pathname === "/api/v1/admin/projections/status") {
+          return Response.json({ ok: true, status: { phase: "final" } });
         }
 
         return Response.json(
@@ -1034,9 +1038,9 @@ describe("fluncle CLI parsing and JSON output", () => {
 
     expect(overlapped).toBe(false);
     expect(requests).toEqual([
-      { action: "rebuild", limit: 100 },
-      { action: "rebuild", limit: 100 },
-      { action: "rebuild", limit: 100 },
+      { action: "rebuild", includeStatus: false, limit: 100 },
+      { action: "rebuild", includeStatus: false, limit: 100 },
+      { action: "rebuild", includeStatus: false, limit: 100 },
     ]);
   });
 
@@ -1141,8 +1145,8 @@ describe("fluncle CLI parsing and JSON output", () => {
     );
 
     expect(requests).toEqual([
-      { action: "repair", limit: 100 },
-      { action: "repair", limit: 100 },
+      { action: "repair", includeStatus: false, limit: 100 },
+      { action: "repair", includeStatus: false, limit: 100 },
     ]);
   });
 });

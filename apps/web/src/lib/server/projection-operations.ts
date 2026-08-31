@@ -203,6 +203,91 @@ async function hasPublicProjectionRepairDebt(
   return result.rows.length > 0;
 }
 
+async function publicProjectionEpochMatched(
+  client: ProjectionClient,
+  projection: PublicProjectionName,
+): Promise<boolean> {
+  const result =
+    projection === "public_aggregates"
+      ? await client.execute(`select 1 from public_aggregate_state
+          where scope = 'tracks' and state = 'complete' and aggregate_epoch = source_epoch limit 1`)
+      : await client.execute(`select 1 from artist_qualification_state
+          where scope = 'artists' and state = 'complete' and projection_epoch = source_epoch limit 1`);
+  return result.rows.length > 0;
+}
+
+async function assertProjectionAuditReady(
+  client: ProjectionClient,
+  target: ProjectionTarget,
+): Promise<void> {
+  const cutoverKey =
+    target === "track_due_work"
+      ? TRACK_WORK_DUE_CUTOVER_ENABLED_KEY
+      : target === "crawl_due_work"
+        ? CRAWL_DUE_CUTOVER_ENABLED_KEY
+        : PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY;
+  const statements: InStatement[] = [
+    {
+      args: [cutoverKey],
+      sql: `select value from settings where key = ? limit 1`,
+    },
+  ];
+  if (target === "track_due_work") {
+    statements.push(
+      { args: [], sql: `select state from due_work_rebuilds` },
+      {
+        args: [],
+        sql: `select 1 from due_work indexed by due_work_repair_idx
+          where state = 'repair' limit 1`,
+      },
+    );
+  } else if (target === "crawl_due_work") {
+    statements.push(
+      {
+        args: [],
+        sql: `select state from crawl_due_work_rebuilds where scope = 'frontier' limit 1`,
+      },
+      {
+        args: [],
+        sql: `select 1 from crawl_due_work indexed by crawl_due_work_repair_idx
+          where state = 'repair' limit 1`,
+      },
+      {
+        args: [],
+        sql: `select 1 from crawl_projection_repairs indexed by crawl_projection_repairs_order_idx
+          order by source_epoch, source_type, source_id limit 1`,
+      },
+    );
+  } else {
+    const stateTable =
+      target === "public_aggregates" ? "public_aggregate_state" : "artist_qualification_state";
+    const scope = target === "public_aggregates" ? "tracks" : "artists";
+    statements.push(
+      {
+        args: [],
+        sql: `select state from ${stateTable} where scope = '${scope}' limit 1`,
+      },
+      {
+        args: [target],
+        sql: `select 1 from projection_repairs indexed by projection_repairs_order_idx
+          where projection = ? order by projection, source_epoch, subject_type, subject_id limit 1`,
+      },
+    );
+  }
+  const results = await client.batch(statements);
+  const cutoverOpen = results[0]?.rows[0]?.value === "true";
+  const rebuildRows = results[1]?.rows ?? [];
+  const rebuildComplete =
+    target === "track_due_work"
+      ? rebuildRows.length === DUE_WORK_BACKFILLS.length &&
+        rebuildRows.every((row) => row.state === "complete")
+      : rebuildRows[0]?.state === "complete";
+  const repairDebt = results.slice(2).some((result) => result.rows.length > 0);
+  if (cutoverOpen || !rebuildComplete || repairDebt) {
+    throw new Error("projection audit requires a dark, rebuilt target with no repair debt");
+  }
+}
+
 function trackFamilyStatus(
   results: readonly ResultSet[],
   audit: ProjectionAuditEvidence | undefined,
@@ -310,7 +395,7 @@ function crawlFamilyStatus(
   };
 }
 
-/** Read bounded operational metadata only; no source rows or identifiers leave this function. */
+/** Read aggregate operational metadata only; no source rows or identifiers leave this function. */
 export async function getProjectionStatusFor(client: ProjectionClient): Promise<ProjectionStatus> {
   const [trackAudit, crawlAudit, aggregateAudit, artistAudit] = await Promise.all([
     readProjectionAuditEvidence(client, "track_due_work"),
@@ -577,6 +662,44 @@ type AnchorProjectionState = {
   orderEpoch: number;
   total: number;
 };
+
+async function currentAnchorDocumentMatches(
+  client: ProjectionClient,
+  projection: AnchorProjectionState,
+): Promise<boolean> {
+  const document = await readCurrentProjectedTrackHubAnchors(
+    client,
+    TRACKS_HUB_ANCHOR_ADDRESS,
+    TRACKS_HUB_PAGE_SIZE,
+  );
+  if (document === undefined) {
+    return false;
+  }
+  const current = await client.execute({
+    args: [
+      TRACKS_HUB_ANCHOR_ADDRESS.hub,
+      TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+      PUBLIC_ANCHOR_FORMAT_VERSION,
+      projection.generation,
+      projection.orderEpoch,
+      projection.total,
+    ],
+    sql: `select 1 from public_aggregate_state aggregate
+      join hub_page_anchor_validity validity
+        on validity.hub = ? and validity.clause_hash = ?
+       and validity.anchor_format_version = ?
+       and validity.generation = aggregate.generation
+       and validity.order_epoch = aggregate.release_hub_order_epoch
+      where aggregate.scope = 'tracks' and aggregate.state = 'complete'
+        and aggregate.aggregate_epoch = aggregate.source_epoch
+        and aggregate.generation = ? and aggregate.release_hub_order_epoch = ?
+        and aggregate.default_track_total = ?
+        and not exists (select 1 from projection_repairs
+          indexed by projection_repairs_order_idx where projection = 'public_aggregates')
+      limit 1`,
+  });
+  return current.rows.length > 0;
+}
 
 function anchorProjectionState(row: unknown): AnchorProjectionState | undefined {
   if (row === undefined) {
@@ -931,7 +1054,10 @@ export async function advancePublicAnchors(
   const cleanupValue = cleanupResult.rows[0]?.value;
   const cleanup = anchorCleanupState(cleanupValue, generation, rollbackResult.rows[0]?.value);
   if (cleanup?.currentGeneration === generation) {
-    return advanceAnchorGenerationCleanup(client, cleanup, limit);
+    const result = await advanceAnchorGenerationCleanup(client, cleanup, limit);
+    return result.complete
+      ? { ...result, complete: await currentAnchorDocumentMatches(client, projectionState) }
+      : result;
   }
   const published = publishedResult.rows[0] as
     | { anchor_format_version: number; generation: string; order_epoch: number }
@@ -946,12 +1072,7 @@ export async function advancePublicAnchors(
         saved.processed > total))
   ) {
     if (publishedCurrent) {
-      const usable = await readCurrentProjectedTrackHubAnchors(
-        client,
-        TRACKS_HUB_ANCHOR_ADDRESS,
-        TRACKS_HUB_PAGE_SIZE,
-      );
-      if (usable === undefined) {
+      if (!(await currentAnchorDocumentMatches(client, projectionState))) {
         throw new Error("malformed published anchor state requires a fresh aggregate generation");
       }
       await client.execute({
@@ -969,12 +1090,7 @@ export async function advancePublicAnchors(
     });
   }
   if (saved === undefined && publishedCurrent) {
-    const usable = await readCurrentProjectedTrackHubAnchors(
-      client,
-      TRACKS_HUB_ANCHOR_ADDRESS,
-      TRACKS_HUB_PAGE_SIZE,
-    );
-    if (usable !== undefined) {
+    if (await currentAnchorDocumentMatches(client, projectionState)) {
       return { complete: true, processed: 0 };
     }
   }
@@ -1135,11 +1251,41 @@ export async function advancePublicAnchors(
   };
 }
 
+type ProjectionAdvanceInput = {
+  action: ProjectionStepAction;
+  includeStatus?: boolean;
+  limit: number;
+  target: ProjectionTarget;
+};
+
+type ProjectionAdvanceOutcome = {
+  complete: boolean;
+  processed: number;
+  scheduled: number;
+};
+
 /** One request advances one fixed target through one explicitly bounded mutation page. */
+export function advanceProjectionFor(
+  client: ProjectionClient,
+  input: ProjectionAdvanceInput & { includeStatus: false },
+): Promise<ProjectionAdvanceOutcome & { status: undefined }>;
+export function advanceProjectionFor(
+  client: ProjectionClient,
+  input: ProjectionAdvanceInput & { includeStatus?: true },
+): Promise<ProjectionAdvanceOutcome & { status: ProjectionStatus }>;
+export function advanceProjectionFor(
+  client: ProjectionClient,
+  input: ProjectionAdvanceInput,
+): Promise<ProjectionAdvanceOutcome & { status: ProjectionStatus | undefined }>;
 export async function advanceProjectionFor(
   client: ProjectionClient,
-  input: { action: ProjectionStepAction; limit: number; target: ProjectionTarget },
-) {
+  input: ProjectionAdvanceInput,
+): Promise<
+  ProjectionAdvanceOutcome & {
+    status: ProjectionStatus | undefined;
+  }
+> {
+  const includeStatus = input.includeStatus !== false;
   const previousAudit =
     input.action === "rebuild"
       ? await readProjectionAuditEvidence(client, input.target)
@@ -1149,24 +1295,7 @@ export async function advanceProjectionFor(
   }
   let outcome: { complete: boolean; processed: number; scheduled: number };
   if (input.action === "audit") {
-    const before = await getProjectionStatusFor(client);
-    const family =
-      input.target === "track_due_work"
-        ? before.projections.trackDueWork
-        : input.target === "crawl_due_work"
-          ? before.projections.crawlDueWork
-          : input.target === "public_aggregates"
-            ? before.projections.publicAggregates
-            : before.projections.artistQualification;
-    const cutoverOpen =
-      input.target === "track_due_work"
-        ? before.cutovers.trackDueWork
-        : input.target === "crawl_due_work"
-          ? before.cutovers.crawlDueWork
-          : before.cutovers.publicProjections;
-    if (cutoverOpen || !family.rebuild.complete || family.repairs.total.count > 0) {
-      throw new Error("projection audit requires a dark, rebuilt target with no repair debt");
-    }
+    await assertProjectionAuditReady(client, input.target);
     const audit = await advanceProjectionAudit(client, input.target, input.limit);
     if (audit.complete && !audit.matched) {
       throw new Error("projection audit completed with a digest mismatch; run a rebuild");
@@ -1176,8 +1305,10 @@ export async function advanceProjectionFor(
       processed: audit.processed,
       scheduled: 0,
     };
-    const status = await getProjectionStatusFor(client);
-    return { ...outcome, status };
+    return {
+      ...outcome,
+      status: includeStatus ? await getProjectionStatusFor(client) : undefined,
+    };
   }
   if (input.target === "track_due_work") {
     outcome =
@@ -1228,36 +1359,37 @@ export async function advanceProjectionFor(
         };
       }
     } else {
-      const result = await repairPublicProjectionChunk(client, {
+      const repair = await repairPublicProjectionChunk(client, {
         limit: input.limit,
         projection,
       });
       const remainingDebt = await hasPublicProjectionRepairDebt(client, projection);
-      const repairProcessed = result.fanout + result.repaired;
+      const repairProcessed = repair.fanout + repair.repaired;
       const anchors =
         projection === "public_aggregates" && !remainingDebt && repairProcessed === 0
           ? await advancePublicAnchors(client, Math.min(input.limit, 100))
           : { complete: projection !== "public_aggregates", processed: 0 };
-      const status = await getProjectionStatusFor(client);
-      const family =
-        projection === "public_aggregates"
-          ? status.projections.publicAggregates
-          : status.projections.artistQualification;
+      const epochMatched =
+        !remainingDebt && (await publicProjectionEpochMatched(client, projection));
+      const status = includeStatus ? await getProjectionStatusFor(client) : undefined;
       const complete =
         !remainingDebt &&
-        family.convergence.epochMatched === true &&
+        epochMatched &&
         (projection !== "public_aggregates" ||
-          (anchors.complete && status.projections.publicAggregates.anchorsReady));
-      return {
+          (anchors.complete &&
+            (status === undefined || status.projections.publicAggregates.anchorsReady)));
+      const response = {
         complete,
         processed: repairProcessed + anchors.processed,
-        scheduled: result.fanout,
-        status,
+        scheduled: repair.fanout,
       };
+      return { ...response, status };
     }
   }
-  const status = await getProjectionStatusFor(client);
-  return { ...outcome, status };
+  return {
+    ...outcome,
+    status: includeStatus ? await getProjectionStatusFor(client) : undefined,
+  };
 }
 
 const CUTOVER_KEYS: Record<ProjectionCutover, string> = {

@@ -44,6 +44,15 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function readPid(path: string): Promise<number | null> {
+  try {
+    const pid = Number.parseInt(await readFile(path, "utf8"), 10);
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
 describe("local libSQL sidecar supervisor", () => {
   it.skipIf(process.platform === "win32")(
     "kills the sidecar and removes its database artifacts when the benchmark owner is killed",
@@ -94,11 +103,10 @@ describe("local libSQL sidecar supervisor", () => {
       let sidecarPid: number | null = null;
 
       try {
-        await waitFor(() => pathExists(sidecarPidPath));
-        sidecarPid = Number.parseInt(await readFile(sidecarPidPath, "utf8"), 10);
-        if (!Number.isSafeInteger(sidecarPid)) {
-          throw new Error("supervisor did not record the sidecar PID");
-        }
+        await waitFor(async () => {
+          sidecarPid = await readPid(sidecarPidPath);
+          return sidecarPid !== null;
+        });
         expect(supervisor.exitCode).toBeNull();
         expect(supervisor.signalCode).toBeNull();
 
@@ -188,11 +196,10 @@ describe("local libSQL sidecar supervisor", () => {
       let sidecarPid: number | null = null;
 
       try {
-        await waitFor(() => pathExists(sidecarPidPath));
-        sidecarPid = Number.parseInt(await readFile(sidecarPidPath, "utf8"), 10);
-        if (!Number.isSafeInteger(sidecarPid)) {
-          throw new Error("supervisor did not record the sidecar PID");
-        }
+        await waitFor(async () => {
+          sidecarPid = await readPid(sidecarPidPath);
+          return sidecarPid !== null;
+        });
 
         // Closing the read ends reproduces the window where a SIGKILLed owner can no longer
         // receive supervisor diagnostics. The supervisor must still observe owner death itself.

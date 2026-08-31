@@ -63,14 +63,19 @@ export type ProjectionStatus = {
 };
 
 export type ProjectionStatusResponse = { ok: true; status: ProjectionStatus };
-export type ProjectionStepResponse = ProjectionStatusResponse & {
+export type ProjectionStepResponse = {
   action: ProjectionAction;
   complete: boolean;
+  ok: true;
   processed: number;
   scheduled: number;
+  status?: ProjectionStatus;
   target: ProjectionTarget;
 };
-export type ProjectionAdvanceResponse = ProjectionStepResponse & { steps: number };
+export type ProjectionAdvanceResponse = Omit<ProjectionStepResponse, "status"> & {
+  status: ProjectionStatus;
+  steps: number;
+};
 
 export async function getProjectionStatusCommand(): Promise<ProjectionStatusResponse> {
   return adminApiGet<ProjectionStatusResponse>("/api/v1/admin/projections/status");
@@ -83,9 +88,10 @@ export async function advanceProjectionCommand(input: {
   target: ProjectionTarget;
 }): Promise<ProjectionAdvanceResponse> {
   const { maxSteps = 1, target, ...body } = input;
+  const stepBody = maxSteps > 1 ? { ...body, includeStatus: false } : body;
   let response = await adminApiPost<ProjectionStepResponse>(
     `/api/v1/admin/projections/${target}/advance`,
-    body,
+    stepBody,
   );
   let steps = 1;
   let processed = response.processed;
@@ -94,14 +100,15 @@ export async function advanceProjectionCommand(input: {
   while (!response.complete && steps < maxSteps) {
     response = await adminApiPost<ProjectionStepResponse>(
       `/api/v1/admin/projections/${target}/advance`,
-      body,
+      stepBody,
     );
     steps += 1;
     processed += response.processed;
     scheduled += response.scheduled;
   }
 
-  return { ...response, processed, scheduled, steps };
+  const status = response.status ?? (await getProjectionStatusCommand()).status;
+  return { ...response, processed, scheduled, status, steps };
 }
 
 export async function setProjectionCutoverCommand(input: {

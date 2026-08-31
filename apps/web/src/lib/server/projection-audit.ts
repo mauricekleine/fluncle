@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 
 import { type Client } from "@libsql/client";
 
+import { CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
 import { readCrawlDueAuditChunk } from "./crawl-due-work";
+import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   readPublicProjectionAuditChunk,
@@ -13,6 +15,7 @@ import {
   readProjectionFence,
   TRACK_DUE_AUDIT_FENCE_KEY,
 } from "./projection-fences";
+import { PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY } from "./public-projection-cutover";
 
 export type ProjectionAuditTarget =
   | "artist_qualification"
@@ -64,6 +67,13 @@ export const PROJECTION_AUDIT_SETTING_KEYS: Record<ProjectionAuditTarget, string
   crawl_due_work: "projection_audit_crawl_due_work_v1",
   public_aggregates: "projection_audit_public_aggregates_v1",
   track_due_work: "projection_audit_track_due_work_v1",
+};
+
+const PROJECTION_AUDIT_CUTOVER_KEYS: Record<ProjectionAuditTarget, string> = {
+  artist_qualification: PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
+  crawl_due_work: CRAWL_DUE_CUTOVER_ENABLED_KEY,
+  public_aggregates: PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
+  track_due_work: TRACK_WORK_DUE_CUTOVER_ENABLED_KEY,
 };
 
 const PUBLIC_LANES: Record<
@@ -166,6 +176,24 @@ async function writeState(client: ProjectionAuditClient, state: AuditState): Pro
     sql: `insert into settings (key, value) values (?, ?)
       on conflict(key) do update set value = excluded.value`,
   });
+}
+
+async function beginState(client: ProjectionAuditClient, state: AuditState): Promise<void> {
+  const result = await client.execute({
+    args: [
+      PROJECTION_AUDIT_SETTING_KEYS[state.target],
+      JSON.stringify(state),
+      PROJECTION_AUDIT_CUTOVER_KEYS[state.target],
+    ],
+    sql: `insert into settings (key, value)
+      select ?, ? where not exists (
+        select 1 from settings where key = ? and value = 'true'
+      )
+      on conflict(key) do update set value = excluded.value`,
+  });
+  if (result.rowsAffected !== 1) {
+    throw new Error("projection audit requires a dark target");
+  }
 }
 
 async function currentSourceEpoch(
@@ -494,6 +522,7 @@ export async function advanceProjectionAudit(
   const fence = await currentAuditFence(client, target);
   if (state === undefined || !sameAuditFence(state, fence)) {
     state = newState(target, fence);
+    await beginState(client, state);
   }
   if (state.complete) {
     return { complete: true, matched: state.matched, processed: 0 };

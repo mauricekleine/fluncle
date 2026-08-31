@@ -163,4 +163,67 @@ describe("projection operator authorization stays complete", () => {
     expect(response?.status).toBe(200);
     expect(setProjectionCutoverFor).toHaveBeenCalledOnce();
   });
+
+  it("lets bounded multi-step callers defer the status snapshot", async () => {
+    advanceProjectionFor.mockResolvedValueOnce({
+      complete: false,
+      processed: 5,
+      scheduled: 5,
+      status: undefined,
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/projections/track_due_work/advance", "POST", OPERATOR_TOKEN, {
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).not.toHaveProperty("status");
+    expect(advanceProjectionFor).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+        target: "track_due_work",
+      }),
+    );
+  });
+
+  it("defaults an omitted status preference to a status-bearing response", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/projections/track_due_work/advance", "POST", OPERATOR_TOKEN, {
+        action: "repair",
+        limit: 500,
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toHaveProperty("status", STATUS);
+    expect(advanceProjectionFor).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ includeStatus: true }),
+    );
+  });
+
+  it("returns a conflict when a cutover wins the audit-initialization race", async () => {
+    advanceProjectionFor.mockRejectedValueOnce(
+      new Error("projection audit requires a dark target"),
+    );
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/projections/track_due_work/advance", "POST", OPERATOR_TOKEN, {
+        action: "audit",
+        includeStatus: false,
+        limit: 500,
+      }),
+    );
+
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toMatchObject({ code: "projection_step_conflict" });
+  });
 });

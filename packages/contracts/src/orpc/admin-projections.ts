@@ -102,6 +102,7 @@ export const advanceProjection = oc
   .input(
     z.object({
       action: ProjectionStepActionSchema,
+      includeStatus: z.boolean().default(true),
       limit: z.number().int().min(1).max(PROJECTION_STEP_LIMIT_MAX),
       target: ProjectionTargetSchema,
     }),
@@ -113,7 +114,7 @@ export const advanceProjection = oc
       ok: z.literal(true),
       processed: CountSchema,
       scheduled: CountSchema,
-      status: ProjectionStatusSchema,
+      status: ProjectionStatusSchema.optional(),
       target: ProjectionTargetSchema,
     }),
   );

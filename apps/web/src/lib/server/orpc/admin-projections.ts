@@ -33,7 +33,12 @@ export function adminProjectionHandlers(os: Implementer) {
           throw new ApiError("forbidden", "This action requires the operator role", 403);
         }
         const result = await advanceProjectionFor(await getDb(), input);
-        return { ...input, ...result, ok: true as const };
+        return {
+          action: input.action,
+          ...result,
+          ok: true as const,
+          target: input.target,
+        };
       } catch (error) {
         if (
           error instanceof Error &&

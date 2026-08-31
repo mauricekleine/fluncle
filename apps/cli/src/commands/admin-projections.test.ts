@@ -152,7 +152,6 @@ describe("projection operator commands", () => {
         ok: true,
         processed: 4,
         scheduled: 0,
-        status,
         target: "public_aggregates",
       },
       {
@@ -176,14 +175,18 @@ describe("projection operator commands", () => {
     expect(result.steps).toBe(1);
     expect(result.processed).toBe(4);
     expect(result.scheduled).toBe(0);
-    expect(calls).toHaveLength(1);
+    expect(result.status).toBe(status);
+    expect(calls).toEqual([
+      {
+        body: { action: "audit", includeStatus: false, limit: 50 },
+        method: "POST",
+        path: "/api/v1/admin/projections/public_aggregates/advance",
+      },
+      { method: "GET", path: "/api/v1/admin/projections/status" },
+    ]);
   });
 
   test("aggregates exhausted steps and preserves the final payload", async () => {
-    const finalStatus = {
-      ...status,
-      readyToOpen: { ...status.readyToOpen, publicProjections: false },
-    };
     postResponses.push(
       {
         action: "rebuild",
@@ -191,7 +194,6 @@ describe("projection operator commands", () => {
         ok: true,
         processed: 2,
         scheduled: 3,
-        status,
         target: "track_due_work",
       },
       {
@@ -200,7 +202,6 @@ describe("projection operator commands", () => {
         ok: true,
         processed: 5,
         scheduled: 7,
-        status,
         target: "track_due_work",
       },
       {
@@ -209,7 +210,6 @@ describe("projection operator commands", () => {
         ok: true,
         processed: 11,
         scheduled: 13,
-        status: finalStatus,
         target: "track_due_work",
       },
     );
@@ -227,16 +227,18 @@ describe("projection operator commands", () => {
       ok: true,
       processed: 18,
       scheduled: 23,
-      status: finalStatus,
+      status,
       steps: 3,
       target: "track_due_work",
     });
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
     expect(calls.map((call) => call.body)).toEqual([
-      { action: "rebuild", limit: 100 },
-      { action: "rebuild", limit: 100 },
-      { action: "rebuild", limit: 100 },
+      { action: "rebuild", includeStatus: false, limit: 100 },
+      { action: "rebuild", includeStatus: false, limit: 100 },
+      { action: "rebuild", includeStatus: false, limit: 100 },
+      undefined,
     ]);
+    expect(calls[3]).toEqual({ method: "GET", path: "/api/v1/admin/projections/status" });
   });
 
   test("stops at the first API error without retrying", async () => {

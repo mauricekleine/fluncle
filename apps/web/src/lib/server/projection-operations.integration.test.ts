@@ -52,13 +52,18 @@ describe("projection production operations", () => {
         where state = 'leased';
       create table due_work_rebuilds (
         work_kind text not null, subject_type text not null, state text not null,
-        scanned_count integer not null, projected_count integer not null
+        scanned_count integer not null, projected_count integer not null,
+        generation text not null default 'complete', cursor text,
+        started_at text not null default '', updated_at text not null default '', completed_at text,
+        primary key (work_kind, subject_type)
       );
       create table crawl_due_work (
         node_id text primary key, state text not null, hop integer not null default 0,
         demand_rank integer not null default 0, created_at text not null default '',
         next_due_at text, claim_expires_at text, generation text not null default '',
-        updated_at text not null default ''
+        updated_at text not null default '', claim_position integer, claim_token text,
+        claimed_by text, label_slug text, node_kind text not null default 'release',
+        parent_id text, source_version text not null default '', storable_rank integer not null default 0
       );
       create index crawl_due_work_ready_idx
         on crawl_due_work(state, hop, demand_rank, created_at, node_id) where state = 'ready';
@@ -70,13 +75,16 @@ describe("projection production operations", () => {
         on crawl_due_work(state, claim_expires_at, node_id) where state = 'leased';
       create table crawl_projection_repairs (
         source_epoch integer not null default 0, source_type text not null default '',
-        source_id text not null
+        source_id text not null, source_version text not null default '',
+        created_at text not null default '', updated_at text not null default ''
       );
       create index crawl_projection_repairs_order_idx
         on crawl_projection_repairs(source_epoch, source_type, source_id);
       create table crawl_due_work_rebuilds (
         scope text primary key, state text not null, scanned_count integer not null,
-        projected_count integer not null, source_digest text, projected_digest text
+        projected_count integer not null, source_digest text, projected_digest text,
+        generation text not null default 'complete', cursor text,
+        started_at text not null default '', updated_at text not null default '', completed_at text
       );
       create table projection_repairs (
         projection text not null, source_epoch integer not null default 0,
@@ -121,12 +129,18 @@ describe("projection production operations", () => {
         projected_entry_count integer not null, source_digest text, projected_digest text,
         source_epoch integer not null, aggregate_epoch integer not null,
         default_track_total integer not null, release_hub_order_epoch integer not null,
-        generation text not null
+        generation text not null, cursor text, source_entry_count integer not null default 0,
+        rebuild_start_epoch integer not null default 0, started_at text not null default '',
+        updated_at text not null default '', completed_at text
       );
       create table artist_qualification_state (
         scope text primary key, state text not null, scanned_count integer not null,
         projected_qualified_count integer not null, source_digest text, projected_digest text,
-        source_epoch integer not null, projection_epoch integer not null
+        source_epoch integer not null, projection_epoch integer not null,
+        generation text not null default 'complete', cursor text,
+        source_qualified_count integer not null default 0,
+        rebuild_start_epoch integer not null default 0, started_at text not null default '',
+        updated_at text not null default '', completed_at text
       );
       create table hub_page_anchor_validity (
         hub text not null, clause_hash text not null, anchor_format_version integer not null,
@@ -305,6 +319,225 @@ describe("projection production operations", () => {
       expect(detail).not.toContain("USE TEMP B-TREE");
     }
   });
+
+  it.each([
+    ["track_due_work", "repair"],
+    ["crawl_due_work", "repair"],
+    ["public_aggregates", "repair"],
+    ["artist_qualification", "repair"],
+    ["track_due_work", "rebuild"],
+    ["crawl_due_work", "rebuild"],
+    ["public_aggregates", "rebuild"],
+    ["artist_qualification", "rebuild"],
+    ["track_due_work", "audit"],
+    ["crawl_due_work", "audit"],
+    ["public_aggregates", "audit"],
+    ["artist_qualification", "audit"],
+  ] as const)(
+    "omits the global status suite for a statusless %s %s advance",
+    async (target, action) => {
+      if (action === "rebuild") {
+        await db.execute({
+          args: [PROJECTION_AUDIT_SETTING_KEYS[target]],
+          sql: `delete from settings where key = ?`,
+        });
+      }
+      let statusBatches = 0;
+      const traced = {
+        batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+          if (
+            statements.some((statement) => {
+              const sql = typeof statement === "string" ? statement : statement.sql;
+              return sql.includes("select key, value from settings where key in");
+            })
+          ) {
+            statusBatches += 1;
+          }
+          return db.batch(statements, mode);
+        },
+        execute: db.execute.bind(db),
+      };
+
+      const result = await advanceProjectionFor(traced, {
+        action,
+        includeStatus: false,
+        limit: 10,
+        target,
+      });
+
+      expect(result.status).toBeUndefined();
+      expect(statusBatches).toBe(0);
+    },
+  );
+
+  it.each([
+    ["track_due_work", "track_work_due_cutover_enabled", "track_due_work"],
+    ["crawl_due_work", "crawl_due_cutover_enabled", "crawl_due_work"],
+    ["public_aggregates", "public_projection_cutover_enabled", "public_projections"],
+    ["artist_qualification", "public_projection_cutover_enabled", "public_projections"],
+  ] as const)(
+    "blocks the %s cutover after atomically beginning an audit",
+    async (target, _cutoverKey, cutover) => {
+      await db.execute({
+        args: [PROJECTION_AUDIT_SETTING_KEYS[target]],
+        sql: `delete from settings where key = ?`,
+      });
+
+      const auditClient = {
+        batch: db.batch.bind(db),
+        execute: async (statement: InStatement | string) => {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          if (
+            (target === "track_due_work" && sql.includes("from tracks t")) ||
+            (target === "crawl_due_work" && sql.includes("from crawl_frontier cf"))
+          ) {
+            return db.execute(`select 1 where 0`);
+          }
+          return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+        },
+      };
+      const audit = await advanceProjectionAudit(auditClient, target, 1);
+      expect(audit.complete).toBe(false);
+      const saved = await db.execute({
+        args: [PROJECTION_AUDIT_SETTING_KEYS[target]],
+        sql: `select value from settings where key = ?`,
+      });
+      const savedValue = saved.rows[0]?.value;
+      expect(typeof savedValue).toBe("string");
+      if (typeof savedValue !== "string") {
+        throw new Error("projection audit state was not stored as JSON text");
+      }
+      expect(JSON.parse(savedValue)).toMatchObject({ complete: false, target });
+      await expect(setProjectionCutoverFor(db, { enabled: true, target: cutover })).rejects.toThrow(
+        /not converged/,
+      );
+    },
+  );
+
+  it.each([
+    ["track_due_work", "track_work_due_cutover_enabled"],
+    ["crawl_due_work", "crawl_due_cutover_enabled"],
+    ["public_aggregates", "public_projection_cutover_enabled"],
+    ["artist_qualification", "public_projection_cutover_enabled"],
+  ] as const)(
+    "does not read a %s audit page when the cutover opens before initialization",
+    async (target, cutoverKey) => {
+      await db.execute({
+        args: [PROJECTION_AUDIT_SETTING_KEYS[target]],
+        sql: `delete from settings where key = ?`,
+      });
+      await db.execute({
+        args: [cutoverKey],
+        sql: `insert into settings (key, value) values (?, 'true')`,
+      });
+      let conditionalSeen = false;
+      let callsAfterConditional = 0;
+      const traced = {
+        batch: db.batch.bind(db),
+        execute: async (statement: InStatement | string) => {
+          if (conditionalSeen) {
+            callsAfterConditional += 1;
+          }
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          const result =
+            typeof statement === "string"
+              ? await db.execute(statement)
+              : await db.execute(statement);
+          if (sql.includes("select ?, ? where not exists")) {
+            conditionalSeen = true;
+          }
+          return result;
+        },
+      };
+
+      await expect(advanceProjectionAudit(traced, target, 1)).rejects.toThrow(
+        /projection audit requires a dark target/,
+      );
+      expect(conditionalSeen).toBe(true);
+      expect(callsAfterConditional).toBe(0);
+      expect(
+        (
+          await db.execute({
+            args: [PROJECTION_AUDIT_SETTING_KEYS[target]],
+            sql: `select value from settings where key = ?`,
+          })
+        ).rows,
+      ).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    "track_due_work",
+    "crawl_due_work",
+    "public_aggregates",
+    "artist_qualification",
+  ] as const)(
+    "rejects a %s audit when its target-local repair debt is non-empty",
+    async (target) => {
+      if (target === "track_due_work") {
+        await db.execute(`insert into due_work (work_kind, subject_type, state)
+        values ('finding.note', 'track', 'repair')`);
+      } else if (target === "crawl_due_work") {
+        await db.execute(`insert into crawl_due_work (node_id, state) values ('repair', 'repair')`);
+      } else {
+        await db.execute({
+          args: [target],
+          sql: `insert into projection_repairs
+          (projection, subject_type, subject_id, source_epoch, source_version)
+          values (?, 'track', 'repair', 0, 'repair')`,
+        });
+      }
+
+      await expect(
+        advanceProjectionFor(db, {
+          action: "audit",
+          includeStatus: false,
+          limit: 10,
+          target,
+        }),
+      ).rejects.toThrow(/dark, rebuilt target with no repair debt/);
+    },
+  );
+
+  it.each(["repair", "rebuild"] as const)(
+    "does not report public aggregate %s completion from a raced anchor generation",
+    async (action) => {
+      if (action === "rebuild") {
+        await db.execute({
+          args: [PROJECTION_AUDIT_SETTING_KEYS.public_aggregates],
+          sql: `delete from settings where key = ?`,
+        });
+      }
+      let raced = false;
+      const racingClient = {
+        batch: db.batch.bind(db),
+        execute: async (statement: InStatement | string) => {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          if (!raced && sql.includes("select anchors_json, clause_hash from hub_page_anchors")) {
+            raced = true;
+            await db.execute(`update public_aggregate_state
+              set generation = generation || '-raced',
+                  release_hub_order_epoch = release_hub_order_epoch + 1
+              where scope = 'tracks'`);
+          }
+          return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+        },
+      };
+      let result: Awaited<ReturnType<typeof advanceProjectionFor>> | undefined;
+      const attempts = 1;
+      for (let attempt = 0; attempt < attempts && !raced; attempt += 1) {
+        result = await advanceProjectionFor(racingClient, {
+          action,
+          includeStatus: false,
+          limit: 10,
+          target: "public_aggregates",
+        });
+      }
+
+      expect(raced).toBe(true);
+      expect(result).toMatchObject({ complete: false, status: undefined });
+    },
+  );
 
   it("refuses an open with repair debt but always permits the rollback close", async () => {
     await db.execute(`insert into due_work (work_kind, subject_type, state)
