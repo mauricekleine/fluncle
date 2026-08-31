@@ -429,6 +429,75 @@ export function shouldReuseSquare(currentHash: string, cachedHash: string | null
   return cachedHash === null || cachedHash === currentHash;
 }
 
+type ShipRenderManifest = {
+  compositionId?: string;
+  compositionSource?: string;
+  grain?: string;
+  model?: string;
+  plateSubject?: string;
+  props?: string;
+  reasoning?: string;
+  register?: string;
+  vehicle?: string;
+};
+
+function readShipRenderManifest(
+  trackId: string,
+  log: (message: string) => void,
+): ShipRenderManifest {
+  const manifestPath = path.join(OUT_DIR, `${trackId}.render.json`);
+  if (!existsSync(manifestPath)) {
+    return {};
+  }
+  try {
+    return JSON.parse(readFileSync(manifestPath, "utf8")) as ShipRenderManifest;
+  } catch (error) {
+    log(`render.json ignored: ${error instanceof Error ? error.message : String(error)}`);
+    return {};
+  }
+}
+
+function renderPoster(
+  paths: ReturnType<typeof resolveBundlePaths>,
+  log: (message: string) => void,
+): boolean {
+  const durProbe = spawnSync("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "csv=p=0",
+    paths.footage,
+  ]);
+  const duration = Number.parseFloat(durProbe.stdout.toString().trim()) || 20;
+  const posterResult = spawnSync(
+    "ffmpeg",
+    [
+      "-y",
+      "-ss",
+      String(duration * 0.8),
+      "-i",
+      paths.footage,
+      "-frames:v",
+      "1",
+      "-q:v",
+      "3",
+      paths.poster,
+    ],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  if (posterResult.status === 0 && existsSync(paths.poster)) {
+    return false;
+  }
+  const stderr = posterResult.stderr?.toString().trim();
+  const reason = posterResult.error
+    ? posterResult.error.message
+    : `ffmpeg exited ${posterResult.status ?? "unknown"}${stderr ? `\n${stderr.slice(-1000)}` : ""}`;
+  log(`WARNING: poster.jpg render FAILED — the bundle ships without a poster. ${reason}`);
+  return true;
+}
+
 async function main(argv: string[]): Promise<void> {
   const flags = parseShipArgs(argv);
   const log = (message: string) => console.error(`[ship] ${message}`);
@@ -463,28 +532,7 @@ async function main(argv: string[]): Promise<void> {
   // The render manifest (composition id + the props the portrait master rendered
   // from) is read up front: the square crop source re-renders that same
   // composition + props with aspect=square, hideOverlay=true.
-  const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);
-  let renderManifest: {
-    compositionId?: string;
-    compositionSource?: string;
-    grain?: string;
-    model?: string;
-    plateSubject?: string;
-    props?: string;
-    reasoning?: string;
-    register?: string;
-    vehicle?: string;
-  } = {};
-
-  if (existsSync(renderManifestPath)) {
-    try {
-      renderManifest = JSON.parse(
-        readFileSync(renderManifestPath, "utf8"),
-      ) as typeof renderManifest;
-    } catch (error) {
-      log(`render.json ignored: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
+  const renderManifest = readShipRenderManifest(track.trackId, log);
 
   // footage.social.mp4 — the portrait, text, audio social cut: exactly today's
   // review render (out/<trackId>.mp4). It is the playable cut for Stories, YouTube,
@@ -579,46 +627,13 @@ async function main(argv: string[]): Promise<void> {
 
   let posterMissing = false;
   log("poster.jpg (~80% in)");
-  const durProbe = spawnSync("ffprobe", [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "csv=p=0",
-    paths.footage,
-  ]);
-  const duration = Number.parseFloat(durProbe.stdout.toString().trim()) || 20;
   // Capture stderr so a failing render is a DIAGNOSIS, not silence. poster.jpg is
   // not in the re-render contract (it's a derived thumbnail the diversity/calibrate
   // gates read from the public host), so — like cover.jpg, intent.json, and scene.json
   // below — a failure WARNS and is surfaced in the ship summary rather than failing
   // the ship. Previously this ran with stdio all-ignored and no status check, so a
   // silent ffmpeg failure shipped a posterless bundle that read as "ready".
-  const posterResult = spawnSync(
-    "ffmpeg",
-    [
-      "-y",
-      "-ss",
-      String(duration * 0.8),
-      "-i",
-      paths.footage,
-      "-frames:v",
-      "1",
-      "-q:v",
-      "3",
-      paths.poster,
-    ],
-    { stdio: ["ignore", "ignore", "pipe"] },
-  );
-  if (posterResult.status !== 0 || !existsSync(paths.poster)) {
-    const stderr = posterResult.stderr?.toString().trim();
-    const reason = posterResult.error
-      ? posterResult.error.message
-      : `ffmpeg exited ${posterResult.status ?? "unknown"}${stderr ? `\n${stderr.slice(-1000)}` : ""}`;
-    log(`WARNING: poster.jpg render FAILED — the bundle ships without a poster. ${reason}`);
-    posterMissing = true;
-  }
+  posterMissing = renderPoster(paths, log);
 
   log("note.txt");
   // Prefer the stored release_date (from `tracks get`); fall back to Deezer for any

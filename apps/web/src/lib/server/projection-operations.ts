@@ -1012,13 +1012,32 @@ async function restartMalformedAnchorBuild(
   return { complete: false, processed: 0 };
 }
 
+function assertPublicAnchorLimit(limit: number): void {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("public anchor rebuild limit must be from 1 through 100");
+  }
+}
+
+async function advanceCurrentAnchorCleanup(
+  client: ProjectionClient,
+  cleanup: AnchorCleanupState | undefined,
+  limit: number,
+  projectionState: AnchorProjectionState,
+): Promise<{ complete: boolean; processed: number } | undefined> {
+  if (cleanup?.currentGeneration !== projectionState.generation) {
+    return undefined;
+  }
+  const result = await advanceAnchorGenerationCleanup(client, cleanup, limit);
+  return result.complete
+    ? { ...result, complete: await currentAnchorDocumentMatches(client, projectionState) }
+    : result;
+}
+
 export async function advancePublicAnchors(
   client: ProjectionClient,
   limit: number,
 ): Promise<{ complete: boolean; processed: number }> {
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-    throw new Error("public anchor rebuild limit must be from 1 through 100");
-  }
+  assertPublicAnchorLimit(limit);
   const [projection, persisted, cleanupResult, publishedResult, rollbackResult] = await Promise.all(
     [
       client.execute(`select default_track_total, generation, release_hub_order_epoch
@@ -1053,11 +1072,9 @@ export async function advancePublicAnchors(
   const { generation, orderEpoch, total } = projectionState;
   const cleanupValue = cleanupResult.rows[0]?.value;
   const cleanup = anchorCleanupState(cleanupValue, generation, rollbackResult.rows[0]?.value);
-  if (cleanup?.currentGeneration === generation) {
-    const result = await advanceAnchorGenerationCleanup(client, cleanup, limit);
-    return result.complete
-      ? { ...result, complete: await currentAnchorDocumentMatches(client, projectionState) }
-      : result;
+  const cleanupAdvance = await advanceCurrentAnchorCleanup(client, cleanup, limit, projectionState);
+  if (cleanupAdvance !== undefined) {
+    return cleanupAdvance;
   }
   const published = publishedResult.rows[0] as
     | { anchor_format_version: number; generation: string; order_epoch: number }
