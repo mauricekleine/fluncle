@@ -5592,6 +5592,10 @@ a.catalogue-letter:focus-visible {
   font-weight: 600;
   gap: 0.35rem;
   padding: 0.28rem 0.6rem;
+  /* A pill is a BUTTON in the palette (it fills a field) and an ANCHOR on `/search` (it IS a
+     destination). One look either way, so the anchor drops the underline the rest of the app's
+     links wear. */
+  text-decoration: none;
   transition:
     color 150ms ease-out,
     background-color 150ms ease-out,
@@ -5789,6 +5793,208 @@ a.catalogue-letter:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .search-trigger,
   .search-example {
+    transition: none;
+  }
+}
+
+/* ── Search: the handoff, and `/search` ────────────────────────────────────── */
+/* The last row of every palette answer: the door to the persistent surface, carrying the query
+   already typed. Styled as a row (it sits in the list and the keyboard drives it) but with the
+   cover slot swapped for a glyph, because it is a destination rather than a thing found. */
+.search-handoff-icon {
+  color: var(--muted-foreground);
+  flex: none;
+  height: 1.25rem;
+  margin: 0 0.5rem;
+  width: 1.25rem;
+}
+
+.search-handoff[data-selected="true"] .search-handoff-icon,
+.search-handoff:hover .search-handoff-icon {
+  color: var(--eclipse-glow);
+}
+
+/* The empty line, lifted out of `CommandEmpty` so the handoff row below it cannot suppress it. */
+.search-note--empty {
+  color: var(--stardust);
+}
+
+/* THE PAGE. `/search` borrows the log plate's chassis (log-plate-stage / log-plate log-index), so
+   everything here is the surface's OWN parts: the field, the count, the groups, and the states.
+   No gold at rest anywhere but the focus ring and a finding's coordinate (DESIGN.md's One Sun
+   Rule); the rows themselves reuse the palette's `.search-row` vocabulary, which already carries
+   the Unlit Rule, so the two surfaces cannot drift on what a certified row looks like. */
+.search-page-form {
+  align-items: center;
+  display: flex;
+  gap: var(--space-xs);
+  margin-top: var(--space-md);
+}
+
+.search-page-field {
+  align-items: center;
+  background: color-mix(in oklch, var(--tape-black) 62%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--stardust);
+  display: flex;
+  flex: 1;
+  gap: var(--space-2xs);
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0 var(--space-sm);
+  transition: border-color 150ms ease-out;
+}
+
+/* The focus affordance surrounds the whole control a reader sees, rather than a rectangle inside
+   it: the input's own ring is suppressed below and the wrapper wears the canon Eclipse-Gold one. */
+.search-page-field:focus-within {
+  border-color: color-mix(in oklch, var(--primary) 45%, transparent);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.search-page-field-icon {
+  color: var(--muted-foreground);
+  flex: none;
+  height: 1.15rem;
+  width: 1.15rem;
+}
+
+.search-page-input {
+  background: transparent;
+  border: 0;
+  color: var(--starlight-cream);
+  flex: 1;
+  font-size: 1rem;
+  min-width: 0;
+  padding: 0;
+}
+
+.search-page-input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.search-page-input:focus {
+  outline: none;
+}
+
+/* The webkit clear glyph is a second, unlabelled control inside the field; the form's own submit
+   and an empty field do the job, so it comes off rather than sitting there unnamed. */
+.search-page-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.search-page-submit {
+  flex: none;
+  min-height: 3rem;
+}
+
+/* The count line, and it is a live region: a screen-reader user who submits without moving focus
+   is told what came back. Reserved height so the list under it does not jump when it fills. */
+.search-page-matchline {
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  margin: var(--space-xs) 0 0;
+  min-height: 1.2em;
+}
+
+.search-page-state {
+  margin-top: var(--space-sm);
+}
+
+.search-page-hint {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  margin: var(--space-sm) 0 0;
+}
+
+.search-page-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  list-style: none;
+  margin: var(--space-2xs) 0 0;
+  padding: 0;
+}
+
+/* A page pill is a touch target, not a palette chip — 2.5rem is the floor a thumb needs. */
+.search-page-examples .search-example {
+  font-size: 0.82rem;
+  min-height: 2.5rem;
+  padding: var(--space-3xs) var(--space-xs);
+}
+
+.search-page-way-back {
+  color: var(--muted-foreground);
+  font-size: 0.88rem;
+  margin: var(--space-xs) 0 0;
+}
+
+/* "Try again" is a BUTTON (it re-runs the loader), dressed as the link beside it so the two ways
+   onward read as one sentence. It keeps a real focus ring. */
+.search-page-retry {
+  background: none;
+  border: 0;
+  color: var(--starlight-cream);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.search-page-retry:hover,
+.search-page-retry:focus-visible {
+  color: var(--eclipse-glow);
+}
+
+.search-page-retry:focus-visible {
+  border-radius: var(--rounded-sm);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.search-page-group {
+  margin-top: var(--space-md);
+}
+
+/* The group heading names a KIND, and every kind named here is a named object in Fluncle's world.
+   The unlit rows' group carries no heading at all when they are the only content (the Unlit Rule
+   — a heading there would exist purely to name the tier). */
+.search-page-group-heading {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0 0 var(--space-2xs);
+  text-transform: uppercase;
+}
+
+.search-page-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* A row is an anchor here, not a `CommandItem`, so it owns the affordances the primitive gave the
+   palette for free: the pointer, the radius, and its own focus ring. */
+.search-page-row {
+  border-radius: var(--rounded-sm);
+  color: inherit;
+  text-decoration: none;
+}
+
+.search-page-row:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-page-field {
     transition: none;
   }
 }
@@ -8170,6 +8376,9 @@ a.catalogue-letter:focus-visible {
   gap: var(--space-3xs);
   min-height: 2.5rem;
   padding: var(--space-3xs) var(--space-xs);
+  /* An anchor to `/search?q=…` now, so the underline every other link wears comes off — the pill
+     shape is the affordance, and the gold heat below is the interaction. */
+  text-decoration: none;
   transition:
     background-color 150ms ease-out,
     border-color 150ms ease-out,

@@ -254,6 +254,16 @@ describe("edgeCachePolicyFor", () => {
     expect(edgeCachePolicyFor("/artists", "?page=3")).toBe(HUB_CACHE_POLICY);
   });
 
+  // `/search` is deliberately enrolled NOWHERE. A `?q=` view's key space is unbounded and its body
+  // is per-query, so a shared cache would either fragment without limit or (worse, if the key
+  // dropped the query the way the hub key drops `?utm=`) serve one reader's results to another.
+  // The bare surface is free to render, so there is nothing to buy by caching it either.
+  it("never shared-caches the search surface, bare or with a query", () => {
+    expect(edgeCachePolicyFor("/search", "")).toBeUndefined();
+    expect(edgeCachePolicyFor("/search", "?q=netsky")).toBeUndefined();
+    expect(edgeCachePolicyFor("/search/", "?q=netsky")).toBeUndefined();
+  });
+
   it("routes the sitemap documents to the sitemap policy, index and children alike", () => {
     expect(edgeCachePolicyFor("/sitemap.xml", "")).toBe(SITEMAP_CACHE_POLICY);
 

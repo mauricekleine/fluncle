@@ -47,6 +47,7 @@ const SEGMENTS: Record<string, { index?: string; label: string }> = {
   newsletter: { label: "Newsletter" },
   privacy: { label: "Privacy" },
   recommendations: { label: "Recommendations" },
+  search: { label: "Search" },
   status: { label: "Status" },
   stories: { label: "Stories" },
   terms: { label: "Terms" },

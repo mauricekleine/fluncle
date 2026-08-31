@@ -17,10 +17,12 @@ import {
   seedAlbum,
   seedArtist,
   seedCatalogueTrack,
+  seedEmbedding,
   seedLabel,
   seedMixtape,
   seedTrack,
 } from "../../src/lib/server/integration-db";
+import { EMBEDDING_DIMS } from "../../src/lib/server/embedding";
 import { LIBSQL_URL } from "./stack";
 
 // One graph entity of each kind, so the `/artist`, `/label`, `/album`, and
@@ -205,6 +207,41 @@ function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+// ── The sonic tier's fixtures ────────────────────────────────────────────────
+// `sounds like <a real track>` is the one resolver tier that answers out of the VECTOR space, and
+// it is deliberately anchored on a row that exists: `resolveAnchor` resolves the reference through
+// FTS joined INNER to `track_embeddings`, so a seed with no embeddings can only ever prove the
+// tier DECLINING. These give it something real to answer with.
+//
+// The vectors are unit vectors at a known angle in one plane of the MuQ space (the integration
+// suite's `angleVector` shape), so cosine distance between any two is exactly `1 − cos(a − b)` and
+// the expected neighbour ORDER is arithmetic rather than a guess. The anchor is the first finding
+// — the one already wired into the whole artist ↔ label ↔ album graph — and the neighbour sits one
+// small step away from it, so it is the nearest row every time.
+
+/** A unit vector at `angle` radians in the (0,1) plane. Cosine similarity is exactly cos(a − b). */
+function angleVector(angle: number): number[] {
+  const vector: number[] = Array.from({ length: EMBEDDING_DIMS }, () => 0);
+
+  vector[0] = Math.cos(angle);
+  vector[1] = Math.sin(angle);
+
+  return vector;
+}
+
+/** The track a `sounds like` query resolves its anchor to — the first finding. */
+export const SEEDED_SONIC_ANCHOR = { title: FINDINGS[0]?.title ?? "", trackId: "e2e-track-1" };
+/** The nearest embedded row to that anchor, so the tier has a deterministic first result. */
+export const SEEDED_SONIC_NEIGHBOUR = { title: FINDINGS[1]?.title ?? "", trackId: "e2e-track-2" };
+
+/** Anchor first, then three neighbours fanning away from it in a fixed, arithmetic order. */
+const EMBEDDED_TRACKS: { angle: number; trackId: string }[] = [
+  { angle: 0, trackId: SEEDED_SONIC_ANCHOR.trackId },
+  { angle: 0.1, trackId: SEEDED_SONIC_NEIGHBOUR.trackId },
+  { angle: 0.6, trackId: "e2e-track-3" },
+  { angle: 1.2, trackId: "e2e-track-4" },
+];
+
 export async function seedE2eData(client: Client): Promise<void> {
   await seedArtist(client, ARTIST);
   await seedLabel(client, LABEL);
@@ -279,6 +316,10 @@ export async function seedE2eData(client: Client): Promise<void> {
     logId: MIXTAPE.logId,
     title: MIXTAPE.title,
   });
+
+  for (const embedded of EMBEDDED_TRACKS) {
+    await seedEmbedding(client, embedded.trackId, angleVector(embedded.angle));
+  }
 
   await seedFrontDoorFixtures(client);
   await stampLabelPointers(client);
@@ -372,7 +413,7 @@ async function main(): Promise<void> {
   await seedE2eData(client);
   client.close();
   console.log(
-    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 1 catalogue track + artist/label/album.`,
+    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 1 catalogue track + artist/label/album + ${EMBEDDED_TRACKS.length} embeddings.`,
   );
 }
 

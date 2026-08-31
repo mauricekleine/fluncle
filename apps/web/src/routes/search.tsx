@@ -1,0 +1,290 @@
+import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { Button } from "@fluncle/ui/components/button";
+import { SearchExampleGlyph } from "@/components/search/search-glyph";
+import { SearchResultsList } from "@/components/search/search-results-list";
+import {
+  MAX_QUERY_LENGTH,
+  MIN_QUERY_LENGTH,
+  SEARCH_EXAMPLES,
+  searchPagePath,
+} from "@/lib/search-results";
+import { type SearchPageSearch, parseSearchPageSearch, searchPageHead } from "@/lib/search-page";
+import { type SearchPageData } from "./-search-page-data";
+
+// `/search` — THE PERSISTENT SEARCH SURFACE.
+//
+// Fluncle's search was a ⌘K palette and nothing else, which made it the fastest way to reach one
+// known thing and the only surface in the app you could not link to. A palette has no URL, so a
+// result set could not be shared, could not survive a reload, and could not be walked back to. This
+// page is the other half: the WHOLE query state lives in `?q=`, the answer is server-rendered from
+// that URL, and the palette hands off to it rather than being replaced by it.
+//
+// One param carries everything because the resolver takes one string: a coordinate, a name, a
+// sentence, and a sonic reference all arrive as `q` and are told apart by the tiers (docs/search.md).
+// So every one of the four query kinds is shareable and reload-safe by construction, and no caller
+// has to know which tier will answer.
+//
+// A CATALOGUE page in the Three Areas sense (VOICE.md §5) with the search box's own warmth kept
+// intact: the strings here are the ones the palette and the front door already use, because one
+// action takes one phrasing and a new wording for an existing action is a bug, not a variation.
+//
+// A public route, so it is loader + `useLoaderData` and no react-query (AGENTS.md). Nothing about
+// this page is live — a result set is a snapshot of an archive that does not change while you read
+// it — and the field commits by SUBMIT rather than by keystroke, deliberately: a debounced
+// navigate-per-character would write a history entry per character and make the back button
+// unusable, which is the very thing this surface exists to provide.
+//
+// The bare `/search` is indexable and carries the `SearchAction`; any `?q=` view is `noindex,
+// follow` (lib/search-page.ts).
+
+/** The resolver arrives by a DYNAMIC import inside the handler, and its types by `import type`, so
+    this route module never statically references `lib/server/**` (docs/client-bundle.md, Rule 1). */
+const fetchSearchPage = createServerFn({ method: "GET" })
+  .validator((data: { q?: string }) => ({
+    q: typeof data.q === "string" ? data.q.slice(0, MAX_QUERY_LENGTH) : undefined,
+  }))
+  .handler(async ({ data }): Promise<SearchPageData> => {
+    const { resolveSearchPageData } = await import("./-search-page-data");
+
+    return resolveSearchPageData(data.q);
+  });
+
+/** What the component reads: the answer, and the query it answered, so both come off one object. */
+type SearchLoaderData = { data: SearchPageData; q: string | undefined };
+
+// TanStack canonical option order (validateSearch → loaderDeps → loader → head → component); each
+// step feeds the next's type inference, so the order isn't alphabetical and sort-keys is off here.
+// oxlint-disable-next-line sort-keys
+export const Route = createFileRoute("/search")({
+  validateSearch: (search: Record<string, unknown>): SearchPageSearch =>
+    parseSearchPageSearch(search),
+  loaderDeps: ({ search }: { search: SearchPageSearch }) => ({ q: search.q }),
+  loader: async ({ deps }: { deps: { q: string | undefined } }): Promise<SearchLoaderData> => ({
+    data: await fetchSearchPage({ data: { q: deps.q } }),
+    q: deps.q,
+  }),
+  head: ({ loaderData }: { loaderData?: SearchLoaderData }) => searchPageHead(loaderData?.q),
+  component: SearchPage,
+});
+
+const matchFormatter = new Intl.NumberFormat("en-US");
+
+/** "1 match" / "312 matches" — the count of destinations this query brought back. */
+function matchCount(count: number): string {
+  return `${matchFormatter.format(count)} ${count === 1 ? "match" : "matches"}`;
+}
+
+/**
+ * The four worked example queries, as real links to the surface they answer on.
+ *
+ * They are ANCHORS, not buttons that fill a field: each one IS a destination, so it can be opened
+ * in a new tab, shared out of the page, and followed by a crawler with no JS — which is the whole
+ * argument for this surface, applied to its own front step. `SEARCH_EXAMPLES` has one owner
+ * (lib/search-results.ts) and each query returns rows against the live archive, because an example
+ * that finds nothing teaches the opposite of what it is for.
+ */
+function SearchExamples({ label }: { label: string }): ReactNode {
+  return (
+    <>
+      <p className="search-page-hint" id="search-page-examples-hint">
+        {label}
+      </p>
+      <ul aria-labelledby="search-page-examples-hint" className="search-page-examples">
+        {SEARCH_EXAMPLES.map((example) => (
+          <li key={example.query}>
+            <Link className="search-example" to={searchPagePath(example.query) as never}>
+              <SearchExampleGlyph className="search-example-icon" icon={example.icon} />
+              {example.query}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+/**
+ * The field. A REAL `<form method="get" action="/search">`, so a reader with no JS still searches:
+ * the browser's own submit builds exactly the URL this route reads. With JS, the submit handler
+ * takes over and navigates client-side to the same URL, which keeps the transition fast and the
+ * history stack honest — one entry per committed query, so back and forward walk the searches a
+ * reader actually made rather than every character they typed.
+ */
+function SearchField({ q }: { q: string | undefined }): ReactNode {
+  const navigate = useNavigate();
+  const [term, setTerm] = useState(q ?? "");
+
+  // The URL is the source of truth, so the field follows it: a back/forward step, a clicked example,
+  // or a fresh load all change `q`, and the field re-seeds from it. During typing `q` does not move
+  // (nothing commits until submit), so this is inert between submissions.
+  useEffect(() => {
+    setTerm(q ?? "");
+  }, [q]);
+
+  const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+
+    const next = term.trim();
+
+    // A no-op guard: re-submitting the committed query would push a duplicate history entry and
+    // re-run the loader for the same answer.
+    if (next === (q ?? "")) {
+      return;
+    }
+
+    void navigate({ search: { q: next.length > 0 ? next : undefined }, to: "/search" });
+  };
+
+  return (
+    <search>
+      <form action="/search" className="search-page-form" method="get" onSubmit={onSubmit}>
+        <label className="sr-only" htmlFor="search-page-q">
+          Search the archive
+        </label>
+        <span className="search-page-field">
+          <MagnifyingGlassIcon aria-hidden="true" className="search-page-field-icon" />
+          <input
+            autoComplete="off"
+            className="search-page-input"
+            id="search-page-q"
+            maxLength={MAX_QUERY_LENGTH}
+            name="q"
+            onChange={(event) => setTerm(event.target.value)}
+            placeholder="A name, a coordinate, or the sound of it…"
+            type="search"
+            value={term}
+          />
+        </span>
+        <Button className="search-page-submit" type="submit">
+          Search
+        </Button>
+      </form>
+    </search>
+  );
+}
+
+/**
+ * Nothing came back, and the page says which KIND of nothing it is. A coordinate that names no
+ * finding is a different fact from a name the archive does not hold, and collapsing the two would
+ * lose the only useful thing the resolver learned. Either way there is a way onward: the whole list,
+ * and the four worked examples.
+ */
+function SearchEmpty({ coordinate, q }: { coordinate: boolean; q: string }): ReactNode {
+  return (
+    <div className="search-page-state">
+      <p className="log-index-empty empty-scanlines">
+        {coordinate ? "No finding at that coordinate." : `Nothing out here for “${q}”.`}
+      </p>
+      <p className="search-page-way-back">
+        Try a different name, or <Link to="/tracks">dig through every track I hold</Link>.
+      </p>
+      <SearchExamples label="These four land every time." />
+    </div>
+  );
+}
+
+/**
+ * The resolver could not answer — a database that would not respond, a scan past its ceiling. Named
+ * as what it is rather than dressed up as an empty result, because "nothing out here" would be a lie
+ * about an archive nobody managed to look inside.
+ *
+ * "Try again" re-runs the loader for the SAME URL (`router.invalidate`), which is what a reader means
+ * by it; a `Link` to the current URL would navigate nowhere and refetch nothing.
+ */
+function SearchFailed(): ReactNode {
+  const router = useRouter();
+
+  return (
+    <div className="search-page-state">
+      <p className="log-index-empty empty-scanlines">
+        I could not get an answer out of the archive just then.
+      </p>
+      <p className="search-page-way-back">
+        <button
+          className="search-page-retry"
+          onClick={() => void router.invalidate()}
+          type="button"
+        >
+          Try that search again
+        </button>
+        , or <Link to="/tracks">dig through every track I hold</Link>.
+      </p>
+    </div>
+  );
+}
+
+function SearchPage(): ReactNode {
+  const { data, q } = Route.useLoaderData();
+
+  return <SearchAnswer data={data} q={q} />;
+}
+
+/**
+ * The whole surface, as a function of the loader's answer and the query that produced it.
+ *
+ * Split out of the route component (the `IdentityAnswer` precedent) so every state — zero, answered,
+ * empty, coordinate-miss, failed — is renderable in a test through a memory router, against the real
+ * server HTML rather than a claim about it. The route component is then the one-line adapter that
+ * hands it `useLoaderData`.
+ */
+export function SearchAnswer({
+  data,
+  q,
+}: {
+  data: SearchPageData;
+  q: string | undefined;
+}): ReactNode {
+  const answered = data.status === "answered" ? data.response : undefined;
+  const total = answered ? answered.results.length + answered.entities.length : 0;
+
+  return (
+    <main className="log-plate-stage">
+      <article className="log-plate log-index search-page">
+        <header className="log-masthead">
+          <h1 className="log-coordinate log-index-title">Search</h1>
+          <p className="log-index-intro">Give me a name, a coordinate, or the sound of a track.</p>
+        </header>
+
+        <SearchField q={q} />
+
+        {/* The count is a live region so a screen-reader user who submits without moving focus is
+            told what came back. It is also the honest header for the list under it. */}
+        {/* A native `<output>`: it carries an implicit `status` role, so the count is announced to a
+            screen-reader user who submits without moving focus, with no `role` attribute to keep in
+            step with it. `aria-live` is stated anyway, because `<output>`'s implicit politeness is
+            not honoured uniformly across the browser/AT matrix. */}
+        <output aria-live="polite" className="search-page-matchline">
+          {answered && total > 0 ? `${matchCount(total)} for “${q ?? ""}”.` : ""}
+        </output>
+
+        {data.status === "failed" ? <SearchFailed /> : undefined}
+
+        {data.status === "blank" ? (
+          <div className="search-page-state">
+            <SearchExamples
+              label={
+                (q ?? "").length > 0
+                  ? `Give me at least ${MIN_QUERY_LENGTH} characters to go on. Try one of these searches.`
+                  : "Nothing typed yet. Try one of these searches."
+              }
+            />
+          </div>
+        ) : undefined}
+
+        {answered && total === 0 ? (
+          <SearchEmpty coordinate={answered.kind === "coordinate"} q={q ?? ""} />
+        ) : undefined}
+
+        {answered && total > 0 ? <SearchResultsList response={answered} /> : undefined}
+
+        <footer className="log-plate-footer">
+          <Link to="/findings">Back to the archive</Link>
+          <Link to="/tracks">Every track</Link>
+        </footer>
+      </article>
+    </main>
+  );
+}

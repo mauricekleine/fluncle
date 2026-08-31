@@ -17,12 +17,13 @@
 // to the standalone log page, and `/findings` still serves the whole archive.
 //
 // ── THE TIER-4 RAIL ──────────────────────────────────────────────────────────────────────────
-// Same rail as `search.spec.ts`: the search resolver's fourth tier calls a real model, and
-// `blockExternalRequests` stubs the BROWSER's requests, never the Worker's. Every query this spec
-// causes must therefore be answered by a tier that returns unconditionally. The front door's
-// example pills include one filter query and one sonic query, so this spec CLICKS ONLY the bare
-// single-token example (`netsky`, tier 3, which returns even with zero rows) and asserts the others
-// are present without firing them.
+// The search resolver's fourth tier calls a real model, and `blockExternalRequests` stubs the
+// BROWSER's requests, never the Worker's. The rail is now held by the ENVIRONMENT rather than by
+// query choice: `.dev.vars.e2e.tpl` carries NO `OPENROUTER_API_KEY`, so `translateQuery` returns
+// null on the spot and the resolver degrades to full text without a socket ever opening (the same
+// documented degradation contract local dev runs on every day). Every example below is therefore
+// safe to follow; the spec still follows only the bare single-token one, because one is enough to
+// prove the affordance.
 
 import { expect, test, type ConsoleMessage, type Locator, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
@@ -146,32 +147,34 @@ test("the front door SSRs every band from real data, hydrates its search, and lo
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
 });
 
-test("an example query is real: clicking one opens the dialog already answering", async ({
-  page,
-}) => {
+test("an example query is real, and it is a LINK to the persistent surface", async ({ page }) => {
   await blockExternalRequests(page);
 
   const problems = watchForErrors(page);
 
+  // (1) SSR — the pills are anchors with real hrefs in the initial HTML, which is the point of the
+  // change: an example query is the best thing on this page for a crawler to follow into the
+  // archive, and a dialog that fills a field is invisible to one.
+  const rawHtml = await (await page.request.get("/")).text();
+  expect(rawHtml, "the examples should SSR as links into /search").toContain(
+    `href="/search?q=${SAFE_EXAMPLE}"`,
+  );
+
   await page.goto("/", { waitUntil: "networkidle" });
 
   // All four examples render — they are the resolver's own list, one per tier.
-  const examples = page.locator(".fd-search-example");
+  const examples = page.locator("a.fd-search-example");
   await expect(examples).toHaveCount(4);
 
-  // Only the bare single-token one is CLICKED (the tier-4 rail in this file's header). It seeds
-  // the dialog, and the seed is the proof: the field opens carrying the query, not empty.
-  const input = page.getByPlaceholder("A name, a coordinate, or the sound of it…");
-  const safeExample = page.locator(".fd-search-example", { hasText: SAFE_EXAMPLE });
+  // Following one lands on the persistent surface, already carrying the query in the URL. That URL
+  // is the whole contract: it can be shared, reloaded, and walked back from.
+  await examples.filter({ hasText: SAFE_EXAMPLE }).click();
+  await expect(page).toHaveURL(new RegExp(`/search\\?q=${SAFE_EXAMPLE}$`));
+  await expect(page.locator("#search-page-q")).toHaveValue(SAFE_EXAMPLE);
 
-  await expect(async () => {
-    await page.keyboard.press("Escape");
-    await expect(input).toBeHidden({ timeout: 2000 });
-    await safeExample.click();
-    await expect(input).toHaveValue(SAFE_EXAMPLE, { timeout: 3000 });
-  }).toPass({ timeout: 30_000 });
-
-  await page.keyboard.press("Escape");
+  // And back returns to the front door — the pill is a navigation, not a trap.
+  await page.goBack({ waitUntil: "networkidle" });
+  await expect(page).toHaveURL(/\/$/);
 
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
 });
