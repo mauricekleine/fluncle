@@ -15,6 +15,7 @@ import {
   listReadyDueWork,
   MAX_DUE_WORK_CHUNK_SIZE,
   markDueWorkRepair,
+  markDueWorkRepairStatement,
   markDueWorkSourceMaintenanceFromSelectStatements,
   markDueWorkSourceRepairsStatement,
   readDueWorkProjectionChunk,
@@ -638,6 +639,62 @@ describe("due-work repair and drift", () => {
       { source_version: "version-a", state: "ready", subject_id: "bulk-a" },
       { source_version: "version-b", state: "repair", subject_id: "bulk-b" },
     ]);
+  });
+
+  it("repairs the full 500-marker page with set-based guarded writes", async () => {
+    const subjectIds = Array.from(
+      { length: MAX_DUE_WORK_CHUNK_SIZE },
+      (_, index) => `set-${String(index).padStart(3, "0")}`,
+    );
+    await db.batch(
+      subjectIds.map((subjectId) =>
+        markDueWorkRepairStatement(
+          {
+            sourceVersion: "set-version",
+            subjectId,
+            subjectType: "track",
+            workKind: "set-kind",
+          },
+          { now: T0 },
+        ),
+      ),
+      "write",
+    );
+
+    const result = await repairDueWorkChunk(
+      db,
+      {
+        project() {
+          throw new Error("the full page must use bulk projection");
+        },
+        async projectMany(markers) {
+          return markers.map((marker) => ({
+            nextDueAt: T0.toISOString(),
+            sortKey: marker.subjectId,
+            sourceVersion: marker.sourceVersion,
+            state: "ready" as const,
+            subjectId: marker.subjectId,
+            subjectType: marker.subjectType,
+            workKind: marker.workKind,
+          }));
+        },
+        subjectType: "track",
+        workKind: "set-kind",
+      },
+      { limit: MAX_DUE_WORK_CHUNK_SIZE, now: () => T1 },
+    );
+
+    expect(result).toMatchObject({ deferred: 0, repaired: 500, scanned: 500 });
+    expect(
+      Number(
+        (
+          await db.execute(
+            `select count(*) as n from due_work
+              where work_kind = 'set-kind' and state = 'ready'`,
+          )
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(500);
   });
 
   it("reports missing, unexpected, and field-level projection drift in bounded chunks", async () => {

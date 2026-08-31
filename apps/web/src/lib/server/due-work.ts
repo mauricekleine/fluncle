@@ -946,37 +946,6 @@ export async function rescheduleDueWorkClaim<WorkKind extends string>(
   return result.rowsAffected > 0;
 }
 
-function conditionalRepairProjectionStatement<WorkKind extends string>(
-  projection: DueWorkProjection<WorkKind>,
-  marker: DueWorkRow<WorkKind>,
-  updatedAt: string,
-): InStatement {
-  const values = projectionValues(projection, updatedAt);
-  return {
-    args: [...values, marker.sourceVersion],
-    sql: `insert into due_work
-      (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
-       source_version, generation, updated_at)
-      select ?, ?, ?, ?, ?, ?, ?, ?, ?
-      where exists (
-        select 1 from due_work
-        where work_kind = ?1 and subject_type = ?2 and subject_id = ?3
-          and state = 'repair' and source_version = ?10
-      )
-      on conflict(work_kind, subject_type, subject_id) do update set
-        state = excluded.state,
-        sort_key = excluded.sort_key,
-        next_due_at = excluded.next_due_at,
-        source_version = excluded.source_version,
-        generation = excluded.generation,
-        claim_token = null,
-        claim_expires_at = null,
-        claimed_by = null,
-        updated_at = excluded.updated_at
-      returning subject_id`,
-  };
-}
-
 export async function repairDueWorkChunk<WorkKind extends string>(
   client: DueWorkClient,
   definition: DueWorkRepairDefinition<WorkKind>,
@@ -1007,40 +976,84 @@ export async function repairDueWorkChunk<WorkKind extends string>(
     }
   }
 
-  let deferred = 0;
-  let repaired = 0;
-  const writes = page.map((marker, index) => {
+  const updatedAt = nowIso(options.now);
+  const projected = page.flatMap((marker, index) => {
     const projection = projections[index] ?? null;
-    const updatedAt = nowIso(options.now);
-    return projection === null
-      ? {
-          args: [marker.workKind, marker.subjectType, marker.subjectId, marker.sourceVersion],
-          sql: `delete from due_work
-              where work_kind = ? and subject_type = ? and subject_id = ?
-                and state = 'repair' and source_version = ?
-              returning subject_id`,
-        }
-      : conditionalRepairProjectionStatement(projection, marker, updatedAt);
+    return projection === null ? [] : [{ marker, projection }];
   });
-
-  // Keep each hosted transaction comfortably inside the established 250-statement envelope while
-  // collapsing the former per-marker read/write round trips. Every write retains its source-version
-  // guard, and each transaction advances the audit fence after its guarded repairs.
-  const writeBatchSize = 250;
-  for (let index = 0; index < writes.length; index += writeBatchSize) {
-    const chunk = writes.slice(index, index + writeBatchSize);
-    const results = await client.batch(
-      [...chunk, advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY)],
-      "write",
-    );
-    for (const writeResult of results.slice(0, chunk.length)) {
-      if (writeResult.rows.length > 0) {
-        repaired += 1;
-      } else {
-        deferred += 1;
-      }
-    }
+  const removed = page.filter((_, index) => (projections[index] ?? null) === null);
+  const writes: InStatement[] = [];
+  if (projected.length > 0) {
+    const rows = projected.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    writes.push({
+      args: projected.flatMap(({ marker, projection }) => [
+        ...projectionValues(projection, updatedAt),
+        marker.sourceVersion,
+      ]),
+      sql: `with candidate
+        (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+         source_version, generation, updated_at, marker_source_version) as (values ${rows})
+        insert into due_work
+        (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+         source_version, generation, updated_at)
+        select candidate.work_kind, candidate.subject_type, candidate.subject_id,
+          candidate.state, candidate.sort_key, candidate.next_due_at, candidate.source_version,
+          candidate.generation, candidate.updated_at
+        from candidate
+        where exists (
+          select 1 from due_work marker
+          where marker.work_kind = candidate.work_kind
+            and marker.subject_type = candidate.subject_type
+            and marker.subject_id = candidate.subject_id
+            and marker.state = 'repair'
+            and marker.source_version = candidate.marker_source_version
+        )
+        on conflict(work_kind, subject_type, subject_id) do update set
+          state = excluded.state,
+          sort_key = excluded.sort_key,
+          next_due_at = excluded.next_due_at,
+          source_version = excluded.source_version,
+          generation = excluded.generation,
+          claim_token = null,
+          claim_expires_at = null,
+          claimed_by = null,
+          updated_at = excluded.updated_at
+        returning subject_id`,
+    });
   }
+  if (removed.length > 0) {
+    const rows = removed.map(() => "(?, ?, ?, ?)").join(", ");
+    writes.push({
+      args: removed.flatMap((marker) => [
+        marker.workKind,
+        marker.subjectType,
+        marker.subjectId,
+        marker.sourceVersion,
+      ]),
+      sql: `with candidate
+        (work_kind, subject_type, subject_id, marker_source_version) as (values ${rows})
+        delete from due_work
+        where state = 'repair' and exists (
+          select 1 from candidate
+          where candidate.work_kind = due_work.work_kind
+            and candidate.subject_type = due_work.subject_type
+            and candidate.subject_id = due_work.subject_id
+            and candidate.marker_source_version = due_work.source_version
+        )
+        returning subject_id`,
+    });
+  }
+  const results =
+    writes.length === 0
+      ? []
+      : await client.batch(
+          [...writes, advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY)],
+          "write",
+        );
+  const repaired = results
+    .slice(0, writes.length)
+    .reduce((count, writeResult) => count + writeResult.rows.length, 0);
+  const deferred = page.length - repaired;
 
   return {
     cursor: page[page.length - 1]?.subjectId ?? null,
