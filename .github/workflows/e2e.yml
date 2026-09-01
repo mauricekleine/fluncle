@@ -144,6 +144,16 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+      - name: Upload discovery-journey event evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: discovery-events
+          path: apps/web/.dev/discovery-events/
+          retention-days: 90
+          include-hidden-files: true
+          if-no-files-found: error
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

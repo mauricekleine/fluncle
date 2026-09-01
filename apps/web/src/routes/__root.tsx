@@ -14,6 +14,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode, useEffect, useState } from "react";
 import { NotFoundBlackHole } from "@/components/not-found-black-hole";
 import { RootErrorState } from "@/components/root-error-state";
+import { DiscoveryListener } from "@/components/discovery-listener";
 import { PublicChrome } from "@/components/nav/public-chrome";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { isStaleBuildError, recoverFromStaleBuild } from "@/lib/stale-build-recovery";
@@ -272,6 +273,9 @@ function RootLayout(): ReactNode {
             ignition; breath gated to no-preference in CSS). */}
         <div aria-hidden="true" className="sun-bloom" />
         <QueryClientProvider client={queryClient}>
+          {/* One capture-phase listener for public discovery anchors. Chromeless surfaces
+              (radio, galaxy) still emit; /admin is skipped inside the handler. */}
+          <DiscoveryListener />
           {/* The single mount point for the public navigation (the logbook colophon):
               the wordmark + breadcrumb top bar, and the liner-notes footer that
               carries the whole nav. Skips /admin + the full-bleed surfaces. */}

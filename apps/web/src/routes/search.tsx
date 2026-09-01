@@ -5,6 +5,7 @@ import { type FormEvent, type ReactNode, useEffect, useRef } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
 import { SearchResultsList } from "@/components/search/search-results-list";
+import { classifySearchQueryKind, emitDiscoveryEvent } from "@/lib/discovery-events";
 import {
   MAX_QUERY_LENGTH,
   MIN_QUERY_LENGTH,
@@ -160,6 +161,11 @@ function SearchField({ q }: { q: string | undefined }): ReactNode {
     }
 
     submitted.current = true;
+
+    if (next.length > 0) {
+      emitDiscoveryEvent("discovery_search", { kind: classifySearchQueryKind(next) });
+    }
+
     void navigate({ search: { q: next.length > 0 ? next : undefined }, to: "/search" });
   };
 

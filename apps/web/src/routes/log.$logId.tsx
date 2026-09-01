@@ -593,7 +593,7 @@ function LogPage() {
         </section>
 
         {similar.length > 0 ? (
-          <section aria-label="Close in sound" className="log-similar">
+          <section aria-label="Close in sound" className="log-similar" data-discovery="similar">
             <h2>Close in sound</h2>
             <ul className="log-similar-list">
               {similar.map((finding) =>

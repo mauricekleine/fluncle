@@ -79,7 +79,7 @@ function PreviewArtwork({ logId, track }: { logId: string; track: MixTrack }) {
     if (isCurrent) {
       pauseResume();
     } else {
-      start(logId);
+      start(logId, { publicPreview: true });
     }
   }, [isCurrent, logId, pauseResume, start]);
 

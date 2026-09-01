@@ -26,7 +26,8 @@
 // A finding is lit: it carries its coordinate in Oxanium and heats to Eclipse Gold on hover
 // (the Gold Veil), because Eclipse Gold is the CERTIFICATION light. A track Fluncle never
 // certified catches the Dust Veil instead — the cold light of a thing seen from a distance —
-// carries no coordinate, and links OUT to Spotify, because there is no `/log` page to go to.
+// carries no coordinate, and opens its own `/track/<trackId>` destination when it has enough
+// identity. Only a row that destination refuses falls back OUT to Spotify.
 // The uncertified TIER is never named: no badge, no introduction, no noun of its own. In a
 // mixed list a heading may name the SUPERSET ("Tracks" — true of every row under it, the
 // mix-builder precedent), and the findings group carries the archive's own name ("Fluncle's
@@ -60,6 +61,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { SpotifyIcon } from "@/components/platform-icons";
@@ -67,6 +69,11 @@ import { SearchFilterChips } from "@/components/search/search-filter-chips";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
 import { anchorCredit } from "@/components/search/search-results-list";
 import { albumCoverAtSize } from "@/lib/media";
+import {
+  classifySearchQueryKind,
+  emitDiscoveryEvent,
+  emitDiscoveryFromHref,
+} from "@/lib/discovery-events";
 import {
   EMPTY_SEARCH,
   ENTITY_GROUPS,
@@ -220,6 +227,7 @@ export function SearchDialog({
   const navigate = useNavigate();
   const [query, setQuery] = useState(seed?.query ?? "");
   const [debounced, setDebounced] = useState("");
+  const exampleClick = useRef(false);
   const seedToken = seed?.token;
   const seedQuery = seed?.query;
 
@@ -238,8 +246,23 @@ export function SearchDialog({
 
   // A keystroke is not a query. The debounce is what keeps a typed word from firing five
   // round trips (and, on the fourth tier, five model calls) on its way to being one.
+  // A worked example already emitted discovery_example; do not also fire discovery_search.
   useEffect(() => {
-    const timer = setTimeout(() => setDebounced(query.trim()), 180);
+    const timer = setTimeout(() => {
+      const next = query.trim();
+
+      setDebounced(next);
+
+      if (exampleClick.current) {
+        exampleClick.current = false;
+
+        return;
+      }
+
+      if (next.length >= MIN_QUERY_LENGTH) {
+        emitDiscoveryEvent("discovery_search", { kind: classifySearchQueryKind(next) });
+      }
+    }, 180);
 
     return () => clearTimeout(timer);
   }, [query]);
@@ -274,7 +297,15 @@ export function SearchDialog({
 
   /** An entity goes to its page — the row's own `url` when it carries one (a galaxy's plural
       segment, a mixtape's log page), else the `/<kind>/<slug>` default. */
-  const pickEntity = useCallback((entity: SearchEntity) => goTo(entityHref(entity)), [goTo]);
+  const pickEntity = useCallback(
+    (entity: SearchEntity) => {
+      const href = entityHref(entity);
+
+      emitDiscoveryFromHref(href);
+      goTo(href);
+    },
+    [goTo],
+  );
 
   /**
    * Where a picked row goes — resolved by the SHARED {@link hitHref}, the same function the
@@ -292,6 +323,8 @@ export function SearchDialog({
       if (!destination) {
         return;
       }
+
+      emitDiscoveryFromHref(destination.href);
 
       if (destination.external) {
         close();
@@ -355,7 +388,11 @@ export function SearchDialog({
               <button
                 className="search-example"
                 key={example.query}
-                onClick={() => setQuery(example.query)}
+                onClick={() => {
+                  exampleClick.current = true;
+                  emitDiscoveryEvent("discovery_example", { kind: example.icon });
+                  setQuery(example.query);
+                }}
                 type="button"
               >
                 <SearchExampleGlyph className="search-example-icon" icon={example.icon} />

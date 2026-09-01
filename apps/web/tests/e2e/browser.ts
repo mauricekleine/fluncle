@@ -42,3 +42,65 @@ export async function blockExternalRequests(page: Page): Promise<void> {
     await route.fulfill({ body: "", status: 200 });
   });
 }
+
+export type ObservedDiscoveryEvent = {
+  event: string;
+  kind?: string;
+  service?: string;
+  url: string;
+};
+
+/**
+ * Stub `sa_event` so a spec can OBSERVE the beacons discovery controls would send, without
+ * talking to Simple Analytics. Each call sendBeacons a `queue.simpleanalyticscdn.com` URL
+ * that `blockExternalRequests` fulfils; the spec records those request URLs as evidence.
+ */
+export async function installDiscoveryEventProbe(page: Page): Promise<{
+  events: ObservedDiscoveryEvent[];
+}> {
+  const events: ObservedDiscoveryEvent[] = [];
+
+  await page.addInitScript(() => {
+    const recorded = ((window as Window & { __discoveryEvents?: unknown[] }).__discoveryEvents =
+      []);
+
+    (
+      window as Window & { sa_event?: (name: string, metadata?: Record<string, string>) => void }
+    ).sa_event = (name: string, metadata?: Record<string, string>) => {
+      recorded.push({ event: name, metadata });
+
+      const url = new URL("https://queue.simpleanalyticscdn.com/simple.gif");
+
+      url.searchParams.set("event", name);
+
+      if (metadata) {
+        for (const [key, value] of Object.entries(metadata)) {
+          url.searchParams.set(key, String(value));
+        }
+      }
+
+      navigator.sendBeacon(url.toString());
+    };
+  });
+
+  page.on("request", (request) => {
+    const url = request.url();
+
+    if (!url.includes("queue.simpleanalyticscdn.com")) {
+      return;
+    }
+
+    const parsed = new URL(url);
+    const kind = parsed.searchParams.get("kind") ?? undefined;
+    const service = parsed.searchParams.get("service") ?? undefined;
+
+    events.push({
+      event: parsed.searchParams.get("event") ?? "",
+      ...(kind ? { kind } : {}),
+      ...(service ? { service } : {}),
+      url,
+    });
+  });
+
+  return { events };
+}

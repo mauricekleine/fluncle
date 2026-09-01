@@ -75,6 +75,17 @@ TRACK_JOURNEY_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/t
 
 Same trade as the front door's scroll evidence, for the same reasons: never committed, uploaded by `.github/workflows/e2e.yml` as the always-on `track-journey` artifact, retained 90 days per commit.
 
+## Discovery-journey event evidence
+
+`discovery-journeys.spec.ts` walks the three public discovery journeys at desktop 1440×900 and mobile 390×844, and writes the observed Simple Analytics event requests (name, bounded `kind`/`service`, request URL) into the gitignored `apps/web/.dev/discovery-events/`. Same terms as the front door's shots: the assertions gate the journeys, the JSON is for a human, and `.github/workflows/e2e.yml` uploads them as the always-on `discovery-events` artifact.
+
+```bash
+bun run --cwd apps/web test:e2e -- tests/e2e/discovery-journeys.spec.ts
+DISCOVERY_EVENT_DIR=/tmp/discovery-events bun run --cwd apps/web test:e2e -- tests/e2e/discovery-journeys.spec.ts
+```
+
+The same spec proves the actions still complete when the Simple Analytics tag is absent or `sa_event` throws: navigation, outbound listen, `/search` form submit, and in-place preview start.
+
 ## The search surface's viewport evidence
 
 `search.spec.ts` does the same for `/search`, into the gitignored `apps/web/.dev/search/`: `desktop-1440x900.png` and `mobile-390x844.png` answering a query, plus `mobile-390x844-zero.png` for the zero state (the first thing a stranger sees). Same terms as the front door's — the assertions in the spec are what gate it, the images are for a human, and `.github/workflows/e2e.yml` uploads them as the always-on `search-surface` artifact rather than committing binaries to a public repo.

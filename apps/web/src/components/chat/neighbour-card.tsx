@@ -42,7 +42,7 @@ export function NeighbourList({
       <p className="px-1 text-xs text-muted-foreground">
         {anchorName ? `Artists like ${anchorName}` : "Similar artists"}
       </p>
-      <ul className="artist-similar-list">
+      <ul className="artist-similar-list" data-discovery="similar">
         {neighbours.map((neighbour) => (
           <li key={neighbour.slug}>
             {/* A neighbour Fluncle never certified renders UNLIT (the Unlit Rule): the chip stays

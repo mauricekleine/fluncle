@@ -71,7 +71,7 @@ const LISTEN_META: Record<ListenDestination["kind"], { icon: SimpleIcon; label: 
  * is otherwise untouched.
  */
 export function TrackPreviewButton({ trackId }: { trackId: string }) {
-  const preview = usePreviewPlayer(trackId);
+  const preview = usePreviewPlayer(trackId, { publicPreview: true });
 
   return (
     <Button aria-pressed={preview.isActive} onClick={preview.toggle} size="lg" variant="outline">
@@ -251,7 +251,7 @@ export function SonicNeighbours({ neighbours }: { neighbours: SonicNeighbour[] }
   }
 
   return (
-    <ul className="track-neighbours">
+    <ul className="track-neighbours" data-discovery="similar">
       {neighbours.map((neighbour) => {
         const line = artistTitleLine(neighbour);
 
