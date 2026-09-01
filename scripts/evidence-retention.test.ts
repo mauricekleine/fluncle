@@ -2,27 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-// The retained-evidence CONTRACT: every browser-evidence directory a spec or the discovery walk
-// writes under the gitignored `apps/web/.dev/` is uploaded by a workflow as a run artifact for
-// the 90-day ceiling a public repo allows, on every run (green or red), and an empty directory
-// fails the upload. The directories are gitignored on purpose (apps/web/tests/e2e/README.md), so
-// the artifact IS the durable home — a workflow edit that drops one, shortens its retention, or
-// makes it green-only would silently turn evidence into a claim with nothing behind it.
+// The retained-evidence CONTRACT: selected deterministic E2E retains named evidence for shipped
+// main commits for 30 days, while the separately scheduled discovery walk retains its record for
+// the public-repository ceiling of 90 days. The directories are gitignored on purpose
+// (apps/web/tests/e2e/README.md), so a missing artifact must fail instead of silently turning
+// evidence into a claim with nothing behind it.
 
 const root = join(import.meta.dir, "..");
 const workflowDir = join(root, ".github", "workflows");
 
-/** The evidence directories and the workflow that must retain each. */
-const EVIDENCE = [
-  ["apps/web/.dev/front-door/", "e2e.yml"],
-  ["apps/web/.dev/track-journey/", "e2e.yml"],
-  ["apps/web/.dev/search/", "e2e.yml"],
-  ["apps/web/.dev/discovery-events/", "e2e.yml"],
-  ["apps/web/.dev/discovery-walk/", "discovery-walk.yml"],
+const SHIPPED_EVIDENCE = [
+  "apps/web/.dev/front-door/",
+  "apps/web/.dev/track-journey/",
+  "apps/web/.dev/search/",
+  "apps/web/.dev/discovery-events/",
 ] as const;
 
 type Upload = {
   always: boolean;
+  condition?: string;
   ifNoFiles?: string;
   name?: string;
   path?: string;
@@ -37,7 +35,8 @@ function uploads(file: string): Upload[] {
   return steps
     .filter((step) => step.includes("actions/upload-artifact@"))
     .map((step) => ({
-      always: /^\s*if:\s*always\(\)\s*$/m.test(step),
+      always: /^\s*if:\s*always\(\)/m.test(step),
+      condition: /^\s*if:\s*(.+)$/m.exec(step)?.[1],
       ifNoFiles: /^\s*if-no-files-found:\s*(\S+)/m.exec(step)?.[1],
       name: /^\s*name:\s*(\S+)/m.exec(step)?.[1],
       path: /^\s*path:\s*(\S+)/m.exec(step)?.[1],
@@ -46,25 +45,43 @@ function uploads(file: string): Upload[] {
 }
 
 describe("retained browser evidence", () => {
-  test.each(EVIDENCE)(
-    "%s is uploaded by %s for 90 days on every run, and never empty",
-    (path, file) => {
+  test.each(SHIPPED_EVIDENCE)(
+    "%s is retained for selected shipped-main runs and never empty",
+    (path) => {
+      const file = "quality-checks.yml";
       const upload = uploads(file).find((candidate) => candidate.path === path);
 
-      expect(upload, `${file} uploads ${path}`).toBeDefined();
-      expect(upload?.retention).toBe(90);
+      expect(upload, `${file} uploads ${String(path)}`).toBeDefined();
+      expect(upload?.retention).toBe(30);
       expect(upload?.always).toBe(true);
+      expect(upload?.condition).toContain("github.event_name == 'push'");
+      expect(upload?.condition).toContain("github.ref == 'refs/heads/main'");
+      expect(upload?.condition).toContain("steps.classify.outputs.e2e == 'true'");
       expect(upload?.ifNoFiles).toBe("error");
     },
   );
 
-  test("the discovery walk runs the committed script against the served product on PRs and after a deploy", () => {
+  test("the discovery walk is retained for 90 days on every run and never empty", () => {
+    const upload = uploads("discovery-walk.yml").find(
+      (candidate) => candidate.path === "apps/web/.dev/discovery-walk/",
+    );
+
+    expect(upload).toBeDefined();
+    expect(upload?.retention).toBe(90);
+    expect(upload?.always).toBe(true);
+    expect(upload?.ifNoFiles).toBe("error");
+  });
+
+  test("the discovery walk records only deployed or operator-selected products", () => {
     const text = readFileSync(join(workflowDir, "discovery-walk.yml"), "utf8");
 
     expect(text).toContain("run: bun run walk:discovery");
-    expect(text).toMatch(/^\s*pull_request:/m);
+    expect(text).not.toMatch(/^\s*pull_request:/m);
     expect(text).toMatch(/workflows:\s*\["Post-deploy Probe"\]/);
+    expect(text).toMatch(/^\s*workflow_dispatch:/m);
     expect(text).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(text).toContain("github.event.workflow_run.head_sha || github.sha");
+    expect(text).not.toContain("~/.bun/install/cache");
     // The summary lands on the run page even when a journey failed.
     expect(text).toContain('summary.md >> "$GITHUB_STEP_SUMMARY"');
   });

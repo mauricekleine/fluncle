@@ -13,9 +13,9 @@
  * `<viewport>--<journey>--<nn>-<step>.png`, one `<viewport>.json` index (which records the commit
  * `/api/v1/health` reported, so the evidence names what it walked), and `summary.md`, the
  * journey-organised table of every step (`discovery-walk-summary.ts`). The DURABLE home is the
- * `discovery-walk` CI artifact: `.github/workflows/discovery-walk.yml` runs this on every pull
- * request and after every successful post-deploy probe, uploads the directory for 90 days, and
- * prints `summary.md` into the job summary — so a verifier reads the destinations without a
+ * `discovery-walk` CI artifact: `.github/workflows/discovery-walk.yml` runs this after every
+ * successful deploy probe (or an explicit operator dispatch), uploads the directory for 90 days,
+ * and prints `summary.md` into the job summary — so a verifier reads the destinations without a
  * download and opens the screenshots without a checkout. The journeys:
  *
  *   1-zero-input-browse  front door → the lead finding's log entry → a sonic neighbour → Listen

@@ -2,7 +2,7 @@
 # fluncle-sonar-freshen — the rave-01 box's self-deploy for the sonar vector engine.
 #
 # Watches the rolling `sonar-latest` GitHub Release (published by
-# .github/workflows/sonar-release.yml on every merge to main that touches
+# .github/workflows/cli-release.yml after exact-SHA Quality validation for every merge that touches
 # apps/sonar/**), and when it carries a commit the box has not deployed yet:
 # downloads the static musl binary, VERIFIES its checksum, pre-smokes it in
 # ISOLATION on a throwaway loopback port BEFORE the live one is touched, swaps it

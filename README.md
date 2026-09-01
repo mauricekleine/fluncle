@@ -342,7 +342,7 @@ Approval fetches the submission, runs `fluncle admin tracks publish "<spotify-ur
 
 ## CLI Releases
 
-Standalone CLI release binaries are built by `.github/workflows/cli-release.yml` when CLI changes are pushed to `main`. The first automated release uses `v0.1.0`; later CLI releases bump the minor version, for example `v0.2.0`, `v0.3.0`. The workflow uses Bun compile targets for macOS arm64/x64 and Linux arm64/x64, bakes the release version into the binary, creates the GitHub Release, and uploads the binaries as release assets. The hosted installer at `https://www.fluncle.com/cli/latest.sh` selects the right asset and installs it to `~/.local/bin/fluncle` by default.
+Standalone CLI release binaries are built by `.github/workflows/cli-release.yml` after Quality Checks has passed for the exact pushed `main` SHA and the selector finds CLI shipping-source changes since the latest CLI tag. The first automated release uses `v0.1.0`; later CLI releases bump the minor version, for example `v0.2.0`, `v0.3.0`. The workflow uses Bun compile targets for macOS arm64/x64 and Linux arm64/x64, bakes the release version into the binary, creates the GitHub Release, and uploads the binaries as release assets. The hosted installer at `https://www.fluncle.com/cli/latest.sh` selects the right asset and installs it to `~/.local/bin/fluncle` by default.
 
 The CLI reports its bundled version with `fluncle version`. `fluncle version --check` compares that version against the latest GitHub Release tag.
 

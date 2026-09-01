@@ -154,6 +154,15 @@ test("a finding with footage opens its story OVER the feed, never navigating awa
 
   await page.goto("/findings", { waitUntil: "networkidle" });
 
+  // TrackRow is progressively enhanced: before React hydrates, its masked Link is
+  // a real `/log/<id>` anchor. Clicking it early therefore leaves this route and
+  // cannot be retried safely. DiscoveryListener sets this root marker in an effect,
+  // after the router's delegated click handler has been committed.
+  await expect(
+    page.locator("html[data-discovery-listening]"),
+    "root hydration should attach the router handler before the story link is clicked",
+  ).toBeAttached({ timeout: 30_000 });
+
   // The fixture reaches the component: the row's artwork really is a play link.
   const play = page.locator("a.track-play");
   await expect(play, "the seeded finding with footage should render a play link").toHaveCount(1);
@@ -161,14 +170,8 @@ test("a finding with footage opens its story OVER the feed, never navigating awa
   const dialog = page.locator('[role="dialog"][aria-label="Stories"]');
   const feed = page.locator("a.cover-story");
 
-  // State-safe retry: the opener is inert until hydration, and Escape returns the
-  // page to a known CLOSED state before each attempt.
-  await expect(async () => {
-    await page.keyboard.press("Escape");
-    await expect(dialog).toBeHidden({ timeout: 2000 });
-    await play.click();
-    await expect(dialog).toBeVisible({ timeout: 5000 });
-  }).toPass({ timeout: 30_000 });
+  await play.click();
+  await expect(dialog).toBeVisible();
 
   // OVER the feed, not instead of it: the archive page is still mounted behind the
   // dialog. An opener pointed at `/` would have redirected to the standalone log

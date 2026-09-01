@@ -24,6 +24,9 @@ const MAINTENANCE_HELPERS = new Set([
 ]);
 type MaintenanceCall = { file: string; producer: string };
 type ProductionSource = { file: string; path: string };
+type ProductionSourceText = { file: string; sourceText: string };
+let productionSourcesPromise: Promise<ProductionSource[]> | null = null;
+let productionSourceTextsPromise: Promise<ProductionSourceText[]> | null = null;
 
 async function sourceFiles(directory: string, prefix: string): Promise<ProductionSource[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -51,10 +54,20 @@ async function sourceFiles(directory: string, prefix: string): Promise<Productio
 }
 
 async function productionSources(): Promise<ProductionSource[]> {
-  return [
-    ...(await sourceFiles(SERVER_DIRECTORY, "")),
-    ...(await sourceFiles(SCRIPTS_DIRECTORY, "scripts")),
-  ];
+  productionSourcesPromise ??= Promise.all([
+    sourceFiles(SERVER_DIRECTORY, ""),
+    sourceFiles(SCRIPTS_DIRECTORY, "scripts"),
+  ]).then(([server, scripts]) => [...server, ...scripts]);
+  return productionSourcesPromise;
+}
+
+async function productionSourceTexts(): Promise<ProductionSourceText[]> {
+  productionSourceTextsPromise ??= productionSources().then((sources) =>
+    Promise.all(
+      sources.map(async ({ file, path }) => ({ file, sourceText: await readFile(path, "utf8") })),
+    ),
+  );
+  return productionSourceTextsPromise;
 }
 
 function maintenanceCalls(file: string, sourceText: string): MaintenanceCall[] {
@@ -180,14 +193,10 @@ describe("due-work producer maintenance inventory", () => {
   });
 
   it("requires Goal D maintenance beside every inventoried source-table producer", async () => {
-    const productionFiles = await productionSources();
-    const sites = (
-      await Promise.all(
-        productionFiles.map(async ({ file, path }) =>
-          auditDueWorkMutationSites(file, await readFile(path, "utf8")),
-        ),
-      )
-    ).flat();
+    const sources = await productionSourceTexts();
+    const sites = sources.flatMap(({ file, sourceText }) =>
+      auditDueWorkMutationSites(file, sourceText),
+    );
     const projectionTables = new Set(["findings", "labels", "track_artists", "tracks"]);
 
     expect(
@@ -201,14 +210,10 @@ describe("due-work producer maintenance inventory", () => {
   });
 
   it("inventories every Goal D source writer beside atomic projection maintenance", async () => {
-    const productionFiles = await productionSources();
-    const sites = (
-      await Promise.all(
-        productionFiles.map(async ({ file, path }) =>
-          auditGoalDMutationSites(file, await readFile(path, "utf8")),
-        ),
-      )
-    ).flat();
+    const sources = await productionSourceTexts();
+    const sites = sources.flatMap(({ file, sourceText }) =>
+      auditGoalDMutationSites(file, sourceText),
+    );
 
     const reviewed = new Set<string>();
     for (const entry of GOAL_D_REVIEWED_NONPROJECTION_WRITERS) {
@@ -235,14 +240,8 @@ describe("due-work producer maintenance inventory", () => {
     const expected = DUE_WORK_PRODUCER_INVENTORY.flatMap((entry) =>
       entry.producers.map((producer) => `${entry.file}:${producer}`),
     ).sort();
-    const productionFiles = await productionSources();
-    const calls = (
-      await Promise.all(
-        productionFiles.map(async ({ file, path }) =>
-          maintenanceCalls(file, await readFile(path, "utf8")),
-        ),
-      )
-    ).flat();
+    const sources = await productionSourceTexts();
+    const calls = sources.flatMap(({ file, sourceText }) => maintenanceCalls(file, sourceText));
     const actual = [...new Set(calls.map((call) => `${call.file}:${call.producer}`))].sort();
 
     expect(actual).toEqual(expected);
@@ -255,13 +254,7 @@ describe("due-work producer maintenance inventory", () => {
   });
 
   it("forces every eligibility-table mutation site into its own atomic or reviewed disposition", async () => {
-    const productionFiles = await productionSources();
-    const sources = await Promise.all(
-      productionFiles.map(async ({ file, path }) => ({
-        file,
-        sourceText: await readFile(path, "utf8"),
-      })),
-    );
+    const sources = await productionSourceTexts();
     const sites = sources.flatMap(({ file, sourceText }) =>
       auditDueWorkMutationSites(file, sourceText),
     );
@@ -269,6 +262,14 @@ describe("due-work producer maintenance inventory", () => {
       DUE_WORK_PRODUCER_INVENTORY.map((entry) => entry.file),
     );
     const reviewedSites = new Set<string>();
+    const delegateNames = new Set(
+      DUE_WORK_REVIEWED_NONPRODUCER_WRITERS.flatMap((entry) =>
+        entry.disposition === "delegated-atomicity" ? entry.delegates : [],
+      ),
+    );
+    const delegatedCalls = sources.flatMap(({ file, sourceText }) =>
+      auditDueWorkDelegatedCallSites(file, sourceText, delegateNames),
+    );
     for (const entry of DUE_WORK_REVIEWED_NONPRODUCER_WRITERS) {
       expect(entry.sites.length).toBeGreaterThan(0);
       for (const site of entry.sites) {
@@ -279,13 +280,11 @@ describe("due-work producer maintenance inventory", () => {
       expect(entry.rationale.trim()).not.toBe("");
 
       if (entry.disposition === "delegated-atomicity") {
-        const delegateNames = new Set<string>(entry.delegates);
-        const calls = sources.flatMap(({ file, sourceText }) =>
-          auditDueWorkDelegatedCallSites(file, sourceText, delegateNames),
-        );
-        expect(new Set(calls.map((call) => call.name))).toEqual(delegateNames);
+        const entryDelegateNames = new Set<string>(entry.delegates);
+        const calls = delegatedCalls.filter((call) => entryDelegateNames.has(call.name));
+        expect(new Set(calls.map((call) => call.name))).toEqual(entryDelegateNames);
         const callsByName = new Map(
-          [...delegateNames].map((name) => [name, calls.filter((call) => call.name === name)]),
+          [...entryDelegateNames].map((name) => [name, calls.filter((call) => call.name === name)]),
         );
         function safelyDelegated(name: string, visiting: ReadonlySet<string>): boolean {
           if (visiting.has(name)) {
@@ -299,12 +298,14 @@ describe("due-work producer maintenance inventory", () => {
               (call) =>
                 call.coupling !== null ||
                 (call.owner !== null &&
-                  delegateNames.has(call.owner) &&
+                  entryDelegateNames.has(call.owner) &&
                   safelyDelegated(call.owner, nextVisiting)),
             )
           );
         }
-        expect([...delegateNames].filter((name) => !safelyDelegated(name, new Set()))).toEqual([]);
+        expect([...entryDelegateNames].filter((name) => !safelyDelegated(name, new Set()))).toEqual(
+          [],
+        );
       }
     }
 

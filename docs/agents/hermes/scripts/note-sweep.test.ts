@@ -470,7 +470,7 @@ describe("the transport/model failure never spends an attempt", () => {
     // …so it still gets its FULL budget once the token is fixed.
     verdict("pass");
     expect((await tick("t-1")).outcome).toBe("noted");
-  });
+  }, 10_000); // Seven subprocess cycles assert semantics, not wall-clock latency.
 
   test("a failing `claude -p` leaves the budget untouched, however many ticks it fails for", async () => {
     verdict("pass");
@@ -529,7 +529,7 @@ describe("an exhausted finding does not block the cap-1 queue behind it", () => 
     expect(result.outcome).toBe("noted");
     expect(authorings()).toBe(spentAuthorings + 1);
     expect(stores()).toHaveLength(1);
-  });
+  }, 10_000); // Four subprocess cycles assert queue progress, not wall-clock latency.
 });
 
 // ── THE STRAIN VOCABULARY ──────────────────────────────────────────────────────────────

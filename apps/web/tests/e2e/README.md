@@ -44,7 +44,7 @@ Drop a `tests/e2e/<name>.spec.ts` (only `*.spec.ts` is collected; helpers alongs
 - **Call `blockExternalRequests(page)` first** (`./browser`). It stubs every non-local request, so a spec never depends on — or hits — a live remote. It is load-bearing: some product URLs are hardcoded to the absolute prod host (a mixtape row's cover is derived from its Log ID via `mixtapeCoverUrl`) and would 404 against synthetic fixtures.
 - **Assert on identity, not counts.** Import the seeded titles from `./seed` so the check does not rot as fixtures grow.
 - **Check SSR separately from the rendered page.** `page.request.get(path)` returns the server HTML with no client JS — the crawler's view.
-- **Gate on hydration with a state-safe retry.** Navigate with `waitUntil: "networkidle"` (this is a Vite dev server; the client bundle compiles on demand, so hydration lands seconds after `load`), then reset to a known state before each click attempt. A dropdown trigger toggles, so a naive click-and-check loop can alternate open/closed forever.
+- **Gate interactions on hydration.** Navigate with `waitUntil: "networkidle"` (this is a Vite dev server; the client bundle compiles on demand, so hydration lands seconds after `load`), then wait for `html[data-discovery-listening]`, the root effect that proves React's delegated handlers are attached. A progressively enhanced anchor can navigate before hydration, so click it once only after that marker appears. A state-safe retry is reserved for inert controls, and must reset toggles to a known state before each attempt.
 - **Fail on any console error or page error.** Attach the listeners before navigating and assert the collected list is empty. Do not add broad filters — the suite owns its whole environment, so an error is a real regression.
 
 If a new spec needs data the seed does not carry, extend `seed.ts` (and, if a new table is involved, add the factory to `integration-db.ts`) rather than writing rows inline in the spec — the seed stays the single description of the world every spec shares.
@@ -60,7 +60,7 @@ bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts
 FRONT_DOOR_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts   # elsewhere
 ```
 
-They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. `.github/workflows/e2e.yml` uploads `front-door-scroll` on every run, green or red, so each commit's evidence is retained for 90 days (GitHub's ceiling on a public repo) and downloadable from its own check without a byte entering history.
+They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. The selected E2E job in `.github/workflows/quality-checks.yml` uploads `front-door-scroll` for shipped `main` commits and retains it for 30 days; failed selected runs retain the complete Playwright diagnostics for seven days without a byte entering history.
 
 ## The cold-arrival journey's evidence
 
@@ -73,11 +73,11 @@ bun run --cwd apps/web test:e2e -- tests/e2e/track.spec.ts
 TRACK_JOURNEY_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/track.spec.ts   # elsewhere
 ```
 
-Same trade as the front door's scroll evidence, for the same reasons: never committed, uploaded by `.github/workflows/e2e.yml` as the always-on `track-journey` artifact, retained 90 days per commit.
+Same trade as the front door's scroll evidence, for the same reasons: never committed, uploaded by the selected E2E job as `track-journey` for shipped `main` commits, and retained for 30 days.
 
 ## Discovery-journey event evidence
 
-`discovery-journeys.spec.ts` walks the three public discovery journeys at desktop 1440×900 and mobile 390×844, and writes the observed Simple Analytics event requests (name, bounded `kind`/`service`, request URL) into the gitignored `apps/web/.dev/discovery-events/`. Same terms as the front door's shots: the assertions gate the journeys, the JSON is for a human, and `.github/workflows/e2e.yml` uploads them as the always-on `discovery-events` artifact.
+`discovery-journeys.spec.ts` walks the three public discovery journeys at desktop 1440×900 and mobile 390×844, and writes the observed Simple Analytics event requests (name, bounded `kind`/`service`, request URL) into the gitignored `apps/web/.dev/discovery-events/`. Same terms as the front door's shots: the assertions gate the journeys, the JSON is for a human, and the selected E2E job in `.github/workflows/quality-checks.yml` uploads `discovery-events` for shipped `main` commits and retains it for 30 days.
 
 ```bash
 bun run --cwd apps/web test:e2e -- tests/e2e/discovery-journeys.spec.ts
@@ -90,11 +90,11 @@ The same spec proves the actions still complete when the Simple Analytics tag is
 
 `bun run --cwd apps/web walk:discovery` (`scripts/discovery-walk.ts`) walks the same three journeys as a stranger against a LIVE deployment — prod by default, `WALK_BASE=http://127.0.0.1:3000` for a local stack — at both widths, with real current data, and retains per step a full-page screenshot, the observed destination, the canonical + robots directive, the outbound listening target, every Simple Analytics request sent, and any console error, into the gitignored `apps/web/.dev/discovery-walk/`: one `<viewport>.json` index (recording the commit `/api/v1/health` reported, so the evidence names what it walked), the PNGs, and `summary.md`, the journey-organized table of every step (`scripts/discovery-walk-summary.ts`). It asserts nothing: the hermetic specs above are the gate, and the walk is the record of what the integrated product did, for a reader who has no repository. The browser never leaves the site (an outbound popup is recorded and closed).
 
-Its durable home is the same as every other evidence directory here: `.github/workflows/discovery-walk.yml` runs the walk on every pull request (against what production serves at review time) and after every successful Post-deploy Probe (so the record attributes to exactly that deploy), prints `summary.md` into the job summary, and uploads the directory as the always-on `discovery-walk` artifact, retained 90 days. `scripts/evidence-retention.test.ts` at the repo root pins that contract for every evidence directory: 90 days, green or red, never empty.
+Its durable home is the same as every other evidence directory here: `.github/workflows/discovery-walk.yml` runs the walk after every successful Post-deploy Probe (or an explicit operator dispatch), pins the workflow harness to the triggering deploy SHA, prints `summary.md` into the job summary, and uploads the directory as the always-on `discovery-walk` artifact, retained 90 days. Pull requests use the selected hermetic suite above; a walk of current production cannot prove candidate code. `scripts/evidence-retention.test.ts` at the repo root pins the live-record contract: 90 days, green or red, never empty.
 
 ## The search surface's viewport evidence
 
-`search.spec.ts` does the same for `/search`, into the gitignored `apps/web/.dev/search/`: `desktop-1440x900.png` and `mobile-390x844.png` answering a query, plus `mobile-390x844-zero.png` for the zero state (the first thing a stranger sees). Same terms as the front door's — the assertions in the spec are what gate it, the images are for a human, and `.github/workflows/e2e.yml` uploads them as the always-on `search-surface` artifact rather than committing binaries to a public repo.
+`search.spec.ts` does the same for `/search`, into the gitignored `apps/web/.dev/search/`: `desktop-1440x900.png` and `mobile-390x844.png` answering a query, plus `mobile-390x844-zero.png` for the zero state (the first thing a stranger sees). Same terms as the front door's — the assertions in the spec are what gate it, the images are for a human, and the selected E2E job uploads them as the `search-surface` artifact for shipped `main` commits rather than committing binaries to a public repo.
 
 ```bash
 bun run --cwd apps/web test:e2e -- tests/e2e/search.spec.ts
