@@ -1439,6 +1439,49 @@ async function remainingCatalogueRankWork(options: {
  * computations per tick; a full re-rank of a 10k catalogue is 40 ticks and 600k — done once,
  * off the request path, instead of once per page load.
  */
+function nearWrongAudioRows(
+  vectored: CandidateRow[],
+  winners: ReadonlyMap<string, WinnerRow>,
+): CandidateRow[] {
+  return vectored.filter((row) => {
+    const winner = winners.get(row.track_id);
+    return (
+      row.capture_status !== QUARANTINE_CLEARED &&
+      winner !== undefined &&
+      1 - Number(winner.dist) >= WRONG_AUDIO_QUARANTINE
+    );
+  });
+}
+
+function preAudioTrackIdsFor(unvectored: CandidateRow[], nearWrongAudio: CandidateRow[]): string[] {
+  return unvectored.length > 0 || nearWrongAudio.length > 0
+    ? [...unvectored, ...nearWrongAudio].map((row) => row.track_id)
+    : [];
+}
+
+function splitCandidateVectors(candidates: CandidateRow[]): {
+  unvectored: CandidateRow[];
+  vectored: CandidateRow[];
+} {
+  return {
+    unvectored: candidates.filter((row) => Number(row.has_vector) !== 1),
+    vectored: candidates.filter((row) => Number(row.has_vector) === 1),
+  };
+}
+
+function wrongAudioWinner(
+  candidate: CandidateRow,
+  winner: WinnerRow | undefined,
+  score: number | null,
+): WinnerRow | undefined {
+  return winner !== undefined &&
+    score !== null &&
+    score >= WRONG_AUDIO_QUARANTINE &&
+    candidate.capture_status !== QUARANTINE_CLEARED
+    ? winner
+    : undefined;
+}
+
 export async function rankCatalogue(
   limit = RANK_BATCH_SIZE,
   countRemaining = false,
@@ -1518,8 +1561,7 @@ export async function rankCatalogue(
     });
   }
 
-  const vectored = candidates.filter((row) => Number(row.has_vector) === 1);
-  const unvectored = candidates.filter((row) => Number(row.has_vector) !== 1);
+  const { unvectored, vectored } = splitCandidateVectors(candidates);
   const now = new Date().toISOString();
   const writes: InStatement[] = [];
   const rankableRepairs: InStatement[] = [];
@@ -1592,21 +1634,11 @@ export async function rankCatalogue(
   // ALSO when a vectored row has to be QUARANTINED (rewound to the pre-audio ladder). The
   // finding→key identity map is needed only to ADJUDICATE a near-1.0 vectored row — the common
   // tick has none, so those finding-bounded reads stay off the hot path until a row earns them.
-  const nearWrongAudio = vectored.filter((row) => {
-    const winner = winners.get(row.track_id);
-
-    return (
-      row.capture_status !== QUARANTINE_CLEARED &&
-      winner !== undefined &&
-      1 - Number(winner.dist) >= WRONG_AUDIO_QUARANTINE
-    );
-  });
-  const needsPreAudio = unvectored.length > 0 || nearWrongAudio.length > 0;
+  const nearWrongAudio = nearWrongAudioRows(vectored, winners);
+  const preAudioTrackIds = preAudioTrackIdsFor(unvectored, nearWrongAudio);
+  const needsPreAudio = preAudioTrackIds.length > 0;
   // The graph edges for every row that will run the pre-audio ladder (an unvectored row, or a
   // vectored row about to be QUARANTINED back to it) — ONE batched read for the whole tick.
-  const preAudioTrackIds = needsPreAudio
-    ? [...unvectored, ...nearWrongAudio].map((row) => row.track_id)
-    : [];
   const [artistIdsByTrack, archive, findingIsrcs, findingIdentity, catalogueIdentity] =
     await Promise.all([
       readTrackArtistIds(preAudioTrackIds),
@@ -1640,12 +1672,9 @@ export async function rankCatalogue(
 
     // THE ADJUDICATION. A cosine of six-plus nines is the SAME MASTER, not a similar track. So a
     // near-1.0 row is one of two things, and the folded title+artist `matchKey` tells them apart:
-    if (
-      winner &&
-      score !== null &&
-      score >= WRONG_AUDIO_QUARANTINE &&
-      candidate.capture_status !== QUARANTINE_CLEARED
-    ) {
+    const adjudicatedWinner = wrongAudioWinner(candidate, winner, score);
+    if (adjudicatedWinner) {
+      const winner = adjudicatedWinner;
       const rowKey = matchKey(parseArtistsJson(candidate.artists_json), candidate.title);
       const findingKey = findingIdentity.byTrack.get(winner.fid);
       const sameTitle = findingKey !== undefined && findingKey === rowKey;

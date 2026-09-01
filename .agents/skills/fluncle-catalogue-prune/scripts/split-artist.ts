@@ -185,13 +185,43 @@ const listArg = (argv: string[], name: string): string[] =>
     .map((s) => s.trim())
     .filter(Boolean);
 
+const splitMode = (argv: string[]): SplitMode => (argv.includes("--strip") ? "strip" : "split");
+
+async function reportStripPlan(
+  db: Client,
+  impostorSet: Set<string>,
+  albumIds: string[],
+): Promise<boolean> {
+  const tripped = await entanglementHits(db, impostorSet);
+
+  for (const { hits, table } of tripped) {
+    console.log(`  ⚠ ENTANGLEMENT: ${table} has ${hits} of the deletable tracks`);
+  }
+
+  if (tripped.length > 0) {
+    console.log(
+      `\nABORTED — a deletable track is entangled in a real object (mixtape/save/post/edition).`,
+    );
+    return false;
+  }
+
+  console.log(`\nentanglement guard: clean`);
+
+  for (const table of CASCADE_TRACK_TABLES) {
+    console.log(`  cascade ${table}: ${await countTrackRefs(db, table, impostorSet)} rows`);
+  }
+
+  console.log(`albums orphaned by the strip: ${albumIds.length}`);
+  return true;
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   load: () => Promise<Catalogue> = loadCatalogue,
   newId: () => string = () => crypto.randomUUID(),
 ): Promise<number> {
   const confirm = argv.includes("--confirm");
-  const mode: SplitMode = argv.includes("--strip") ? "strip" : "split";
+  const mode = splitMode(argv);
   const out = process.env.PRUNE_OUT_DIR ?? ".";
   const slug = flag(argv, "--artist");
   const labelSlugs = new Set(listArg(argv, "--labels").map((s) => slugify(s)));
@@ -289,27 +319,9 @@ export async function main(
   }
 
   if (mode === "strip") {
-    const tripped = await entanglementHits(db, impostorSet);
-
-    for (const { hits, table } of tripped) {
-      console.log(`  ⚠ ENTANGLEMENT: ${table} has ${hits} of the deletable tracks`);
-    }
-
-    if (tripped.length > 0) {
-      console.log(
-        `\nABORTED — a deletable track is entangled in a real object (mixtape/save/post/edition).`,
-      );
-
+    if (!(await reportStripPlan(db, impostorSet, plan.albumIds))) {
       return 1;
     }
-
-    console.log(`\nentanglement guard: clean`);
-
-    for (const table of CASCADE_TRACK_TABLES) {
-      console.log(`  cascade ${table}: ${await countTrackRefs(db, table, impostorSet)} rows`);
-    }
-
-    console.log(`albums orphaned by the strip: ${plan.albumIds.length}`);
   } else {
     const taken = new Set(cat.artists.map((a) => a.slug));
     console.log(`\nnew artist row: "${intoName}" → slug ${mintSlug(intoName ?? "", taken)}`);

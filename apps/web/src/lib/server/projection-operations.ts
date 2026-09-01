@@ -723,6 +723,67 @@ function anchorProjectionState(row: unknown): AnchorProjectionState | undefined 
   return { generation, orderEpoch, total };
 }
 
+function hasValidAnchorIdentity(state: Record<string, unknown>): boolean {
+  const generation = state["generation"];
+  const orderEpoch = state["orderEpoch"];
+  const phase = state["phase"];
+  return (
+    state["version"] === 2 &&
+    typeof generation === "string" &&
+    generation.length > 0 &&
+    !generation.includes(":") &&
+    typeof orderEpoch === "number" &&
+    Number.isSafeInteger(orderEpoch) &&
+    orderEpoch >= 0 &&
+    (phase === "non_null" || phase === "null")
+  );
+}
+
+function hasValidAnchorProgress(state: Record<string, unknown>): boolean {
+  const processed = state["processed"];
+  const shard = state["shard"];
+  return (
+    typeof processed === "number" &&
+    Number.isSafeInteger(processed) &&
+    processed >= 0 &&
+    typeof shard === "number" &&
+    Number.isSafeInteger(shard) &&
+    shard >= 0 &&
+    shard <= processed
+  );
+}
+
+function hasValidAnchorCursor(state: Record<string, unknown>): boolean {
+  const cursorId = state["cursorId"];
+  const cursorKey = state["cursorKey"];
+  const firstId = state["firstId"];
+  return (
+    (cursorId === null || (typeof cursorId === "string" && cursorId.length > 0)) &&
+    (cursorKey === null || typeof cursorKey === "string") &&
+    (firstId === null || (typeof firstId === "string" && firstId.length > 0))
+  );
+}
+
+function hasConsistentAnchorCursor(state: Record<string, unknown>): boolean {
+  const { cursorId, cursorKey, firstId, phase, processed, shard } = state;
+  if (processed === 0) {
+    return (
+      cursorId === null &&
+      cursorKey === null &&
+      firstId === null &&
+      phase === "non_null" &&
+      shard === 0
+    );
+  }
+  return (
+    cursorId !== null &&
+    firstId !== null &&
+    shard !== 0 &&
+    (phase !== "non_null" || typeof cursorKey === "string") &&
+    (phase !== "null" || cursorKey === null)
+  );
+}
+
 function parseAnchorState(value: unknown): AnchorRebuildState | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -739,59 +800,15 @@ function parseAnchorState(value: unknown): AnchorRebuildState | undefined {
     ) {
       return undefined;
     }
-    const cursorId = state["cursorId"];
-    const cursorKey = state["cursorKey"];
-    const firstId = state["firstId"];
-    const generation = state["generation"];
-    const orderEpoch = state["orderEpoch"];
-    const phase = state["phase"];
-    const processed = state["processed"];
-    const shard = state["shard"];
     if (
-      state["version"] !== 2 ||
-      (cursorId !== null && (typeof cursorId !== "string" || cursorId.length === 0)) ||
-      (cursorKey !== null && typeof cursorKey !== "string") ||
-      (firstId !== null && (typeof firstId !== "string" || firstId.length === 0)) ||
-      typeof generation !== "string" ||
-      generation.length === 0 ||
-      generation.includes(":") ||
-      typeof orderEpoch !== "number" ||
-      !Number.isSafeInteger(orderEpoch) ||
-      orderEpoch < 0 ||
-      (phase !== "non_null" && phase !== "null") ||
-      typeof processed !== "number" ||
-      !Number.isSafeInteger(processed) ||
-      processed < 0 ||
-      typeof shard !== "number" ||
-      !Number.isSafeInteger(shard) ||
-      shard < 0 ||
-      shard > processed ||
-      (processed === 0 &&
-        (cursorId !== null ||
-          cursorKey !== null ||
-          firstId !== null ||
-          phase !== "non_null" ||
-          shard !== 0)) ||
-      (processed > 0 &&
-        (cursorId === null ||
-          firstId === null ||
-          shard === 0 ||
-          (phase === "non_null" && typeof cursorKey !== "string") ||
-          (phase === "null" && cursorKey !== null)))
+      !hasValidAnchorIdentity(state) ||
+      !hasValidAnchorProgress(state) ||
+      !hasValidAnchorCursor(state) ||
+      !hasConsistentAnchorCursor(state)
     ) {
       return undefined;
     }
-    return {
-      cursorId,
-      cursorKey,
-      firstId,
-      generation,
-      orderEpoch,
-      phase,
-      processed,
-      shard,
-      version: 2,
-    };
+    return state as AnchorRebuildState;
   } catch {
     return undefined;
   }
@@ -1033,6 +1050,29 @@ async function advanceCurrentAnchorCleanup(
     : result;
 }
 
+function rollbackGenerationFor(
+  previousGeneration: unknown,
+  savedRollback: unknown,
+  generation: string,
+): null | string {
+  if (
+    typeof previousGeneration === "string" &&
+    previousGeneration.length > 0 &&
+    previousGeneration !== generation &&
+    !previousGeneration.includes(":")
+  ) {
+    return previousGeneration;
+  }
+  if (
+    typeof savedRollback === "string" &&
+    savedRollback.length > 0 &&
+    !savedRollback.includes(":")
+  ) {
+    return savedRollback;
+  }
+  return null;
+}
+
 export async function advancePublicAnchors(
   client: ProjectionClient,
   limit: number,
@@ -1198,17 +1238,7 @@ export async function advancePublicAnchors(
   }
   const previousGeneration = published?.generation;
   const savedRollback = rollbackResult.rows[0]?.value;
-  const rollbackGeneration =
-    typeof previousGeneration === "string" &&
-    previousGeneration.length > 0 &&
-    previousGeneration !== generation &&
-    !previousGeneration.includes(":")
-      ? previousGeneration
-      : typeof savedRollback === "string" &&
-          savedRollback.length > 0 &&
-          !savedRollback.includes(":")
-        ? savedRollback
-        : null;
+  const rollbackGeneration = rollbackGenerationFor(previousGeneration, savedRollback, generation);
   if (rollbackGeneration !== null) {
     statements.push({
       args: [PUBLIC_ANCHOR_ROLLBACK_KEY, rollbackGeneration],

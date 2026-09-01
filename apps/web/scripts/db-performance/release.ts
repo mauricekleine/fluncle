@@ -775,6 +775,70 @@ function validateFixtureCensus(options: {
   }
 }
 
+function validateProfileHeader(
+  parsed: Record<string, unknown>,
+  profile: ScaleProfile,
+  errors: string[],
+  malformedReport: (message: string) => void,
+): void {
+  if (parsed.schemaVersion !== PERFORMANCE_REPORT_SCHEMA_VERSION) {
+    malformedReport(
+      `profile ${profile} report schemaVersion is not ${PERFORMANCE_REPORT_SCHEMA_VERSION}`,
+    );
+  }
+  if (parsed.environment !== "local") {
+    malformedReport(`profile ${profile} report environment is not local`);
+  }
+  if (!isRecord(parsed.clientBounds)) {
+    malformedReport(`profile ${profile} report has no clientBounds object`);
+  }
+  errors.push(...validateExactLocalDatabaseEvidence(parsed.database, profile, malformedReport));
+  if (!isRecord(parsed.indexAudit)) {
+    malformedReport(`profile ${profile} report has malformed indexAudit evidence`);
+  } else if (parsed.indexAudit.passed !== true) {
+    errors.push(`profile ${profile} indexAudit.passed is not true`);
+  }
+}
+
+function validateProfileFixture(
+  parsed: Record<string, unknown>,
+  profile: ScaleProfile,
+  errors: string[],
+  malformedReport: (message: string) => void,
+): { exactProfileCardinality: boolean | null; observedCardinality: Record<string, number> | null } {
+  const fixture = isRecord(parsed.fixture) ? parsed.fixture : null;
+  if (fixture === null) {
+    malformedReport(`profile ${profile} report has no fixture object`);
+  }
+  const exactProfileCardinality =
+    fixture !== null && typeof fixture.exactProfileCardinality === "boolean"
+      ? fixture.exactProfileCardinality
+      : null;
+  const observedCardinality = readNumericRecord(fixture?.counts);
+
+  if (fixture?.profile !== profile) {
+    malformedReport(`profile ${profile} fixture profile does not match`);
+  }
+  if (exactProfileCardinality === null) {
+    malformedReport(`profile ${profile} exactProfileCardinality is malformed`);
+  } else if (!exactProfileCardinality) {
+    errors.push(`profile ${profile} exactProfileCardinality is not true`);
+  }
+  if (observedCardinality === null) {
+    malformedReport(`profile ${profile} fixture counts are malformed`);
+  } else if (!sameCardinality(observedCardinality, getScaleManifest(profile).counts)) {
+    errors.push(`profile ${profile} fixture counts do not match the exact manifest cardinality`);
+  }
+  if (!isNonNegativeFiniteNumber(fixture?.writeDurationMs)) {
+    malformedReport(`profile ${profile} fixture writeDurationMs is malformed`);
+  }
+  if (readNumericRecord(fixture?.written) === null) {
+    malformedReport(`profile ${profile} fixture written counts are missing`);
+  }
+  validateFixtureCensus({ errors, malformedReport, profile, value: fixture?.census });
+  return { exactProfileCardinality, observedCardinality };
+}
+
 export function validateProfileReport(rawJson: string, profile: ScaleProfile): ProfileValidation {
   const errors: string[] = [];
   let malformed = false;
@@ -810,54 +874,13 @@ export function validateProfileReport(rawJson: string, profile: ScaleProfile): P
     };
   }
 
-  if (parsed.schemaVersion !== PERFORMANCE_REPORT_SCHEMA_VERSION) {
-    malformedReport(
-      `profile ${profile} report schemaVersion is not ${PERFORMANCE_REPORT_SCHEMA_VERSION}`,
-    );
-  }
-  if (parsed.environment !== "local") {
-    malformedReport(`profile ${profile} report environment is not local`);
-  }
-  if (!isRecord(parsed.clientBounds)) {
-    malformedReport(`profile ${profile} report has no clientBounds object`);
-  }
-  errors.push(...validateExactLocalDatabaseEvidence(parsed.database, profile, malformedReport));
-  if (!isRecord(parsed.indexAudit)) {
-    malformedReport(`profile ${profile} report has malformed indexAudit evidence`);
-  } else if (parsed.indexAudit.passed !== true) {
-    errors.push(`profile ${profile} indexAudit.passed is not true`);
-  }
-
-  const fixture = isRecord(parsed.fixture) ? parsed.fixture : null;
-  if (fixture === null) {
-    malformedReport(`profile ${profile} report has no fixture object`);
-  }
-  const exactProfileCardinality =
-    fixture !== null && typeof fixture.exactProfileCardinality === "boolean"
-      ? fixture.exactProfileCardinality
-      : null;
-  const observedCardinality = readNumericRecord(fixture?.counts);
-
-  if (fixture?.profile !== profile) {
-    malformedReport(`profile ${profile} fixture profile does not match`);
-  }
-  if (exactProfileCardinality === null) {
-    malformedReport(`profile ${profile} exactProfileCardinality is malformed`);
-  } else if (!exactProfileCardinality) {
-    errors.push(`profile ${profile} exactProfileCardinality is not true`);
-  }
-  if (observedCardinality === null) {
-    malformedReport(`profile ${profile} fixture counts are malformed`);
-  } else if (!sameCardinality(observedCardinality, getScaleManifest(profile).counts)) {
-    errors.push(`profile ${profile} fixture counts do not match the exact manifest cardinality`);
-  }
-  if (!isNonNegativeFiniteNumber(fixture?.writeDurationMs)) {
-    malformedReport(`profile ${profile} fixture writeDurationMs is malformed`);
-  }
-  if (readNumericRecord(fixture?.written) === null) {
-    malformedReport(`profile ${profile} fixture written counts are missing`);
-  }
-  validateFixtureCensus({ errors, malformedReport, profile, value: fixture?.census });
+  validateProfileHeader(parsed, profile, errors, malformedReport);
+  const { exactProfileCardinality, observedCardinality } = validateProfileFixture(
+    parsed,
+    profile,
+    errors,
+    malformedReport,
+  );
 
   const report = isRecord(parsed.report) ? parsed.report : null;
   if (report === null) {
