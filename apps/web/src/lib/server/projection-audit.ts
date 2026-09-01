@@ -62,12 +62,20 @@ export type ProjectionAuditEvidence = Pick<
 >;
 
 const ZERO_DIGEST = "0".repeat(64);
+const DUE_NOW_SENTINEL = null;
 
 export const PROJECTION_AUDIT_SETTING_KEYS: Record<ProjectionAuditTarget, string> = {
   artist_qualification: "projection_audit_artist_qualification_v1",
   crawl_due_work: "projection_audit_crawl_due_work_v1",
   public_aggregates: "projection_audit_public_aggregates_v1",
   track_due_work: "projection_audit_track_due_work_v1",
+};
+
+export const PROJECTION_AUDIT_VERSIONS: Record<ProjectionAuditTarget, AuditState["version"]> = {
+  artist_qualification: 5,
+  crawl_due_work: 3,
+  public_aggregates: 3,
+  track_due_work: 4,
 };
 
 const PROJECTION_AUDIT_CUTOVER_KEYS: Record<ProjectionAuditTarget, string> = {
@@ -142,7 +150,7 @@ function newState(
     sourceFence: fence.sourceFence,
     startedAt: new Date().toISOString(),
     target,
-    version: target === "artist_qualification" ? 5 : 3,
+    version: PROJECTION_AUDIT_VERSIONS[target],
   };
 }
 
@@ -152,8 +160,7 @@ function parseState(value: unknown, target: ProjectionAuditTarget): AuditState |
   }
   try {
     const state = JSON.parse(value) as Partial<AuditState>;
-    const versionMatches =
-      target === "artist_qualification" ? state.version === 5 : state.version === 3;
+    const versionMatches = state.version === PROJECTION_AUDIT_VERSIONS[target];
     return versionMatches && state.target === target ? (state as AuditState) : undefined;
   } catch {
     return undefined;
@@ -311,7 +318,8 @@ export async function clearProjectionAuditEvidence(
   });
 }
 
-function canonicalDueProjection(
+/** The exact due-work audit tuple, with wall-clock-ready rows made time-stable. */
+export function canonicalDueProjection(
   row: {
     nextDueAt: string;
     sortKey: string;
@@ -319,9 +327,16 @@ function canonicalDueProjection(
     state: string;
     subjectId: string;
   },
-  state = row.state,
+  auditStartedAt: string,
 ): unknown[] {
-  return [row.subjectId, state, row.sortKey, row.nextDueAt, row.sourceVersion];
+  const due = row.nextDueAt <= auditStartedAt;
+  return [
+    row.subjectId,
+    due ? "ready" : "scheduled",
+    row.sortKey,
+    due ? DUE_NOW_SENTINEL : row.nextDueAt,
+    row.sourceVersion,
+  ];
 }
 
 async function advanceTrackAudit(
@@ -337,13 +352,14 @@ async function advanceTrackAudit(
     return 0;
   }
   if (state.lane === "source") {
-    const sources = await definition.readSourceChunk({ after: state.cursor, client, limit });
+    const readSourceChunk = definition.readAuditSourceChunk ?? definition.readSourceChunk;
+    const sources = await readSourceChunk({ after: state.cursor, client, limit });
     const rows = sources.flatMap((source) => {
       const projected = definition.project(source, {
         generation: "audit",
         now: state.startedAt,
       });
-      return projected === null ? [] : [canonicalDueProjection(projected)];
+      return projected === null ? [] : [canonicalDueProjection(projected, state.startedAt)];
     });
     state.sourceDigest = chainDigest(state.sourceDigest, rows);
     state.sourceCount += rows.length;
@@ -377,7 +393,7 @@ async function advanceTrackAudit(
         state: row.state,
         subjectId: row.subject_id,
       },
-      row.state === "leased" ? "ready" : row.state,
+      state.startedAt,
     ),
   );
   state.projectedDigest = chainDigest(state.projectedDigest, rows);

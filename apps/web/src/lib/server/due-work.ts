@@ -117,6 +117,11 @@ export type DueWorkRebuildDefinition<
     source: Source,
     context: { generation: string; now: string },
   ) => DueWorkProjection<WorkKind> | null;
+  readAuditSourceChunk?: (context: {
+    after: null | string;
+    client: DueWorkClient;
+    limit: number;
+  }) => Promise<Source[]>;
   readSourceChunk: (context: {
     after: null | string;
     client: DueWorkClient;

@@ -7,6 +7,8 @@ import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   advanceProjectionAudit,
   PROJECTION_AUDIT_SETTING_KEYS,
+  PROJECTION_AUDIT_VERSIONS,
+  readProjectionAuditEvidence,
   type ProjectionAuditTarget,
 } from "./projection-audit";
 import { readCurrentProjectedTrackHubAnchors } from "./public-projection-cutover";
@@ -217,7 +219,7 @@ describe("projection production operations", () => {
             sourceFence: 0,
             startedAt: "2026-01-01T00:00:00.000Z",
             target,
-            version: target === "artist_qualification" ? 5 : 3,
+            version: PROJECTION_AUDIT_VERSIONS[target],
           }),
         ],
         sql: `insert into settings (key, value) values (?, ?)`,
@@ -254,6 +256,44 @@ describe("projection production operations", () => {
       target: "public_projections",
     });
     expect(publicStatus.cutovers.publicProjections).toBe(true);
+  });
+
+  it("invalidates track audit evidence from the prior tuple definition", async () => {
+    await db.execute({
+      args: [PROJECTION_AUDIT_SETTING_KEYS.track_due_work],
+      sql: `update settings set value = json_set(value, '$.version', 3) where key = ?`,
+    });
+
+    expect(await readProjectionAuditEvidence(db, "track_due_work")).toBeUndefined();
+    expect((await getProjectionStatusFor(db)).readyToOpen.trackDueWork).toBe(false);
+    await expect(
+      setProjectionCutoverFor(db, { enabled: true, target: "track_due_work" }),
+    ).rejects.toThrow(/not converged/);
+
+    const auditClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        return sql.includes("from tracks t")
+          ? db.execute(`select 1 where 0`)
+          : db.execute(statement);
+      },
+    };
+    expect(await advanceProjectionAudit(auditClient, "track_due_work", 100)).toMatchObject({
+      complete: false,
+    });
+    const restarted = await db.execute({
+      args: [PROJECTION_AUDIT_SETTING_KEYS.track_due_work],
+      sql: `select value from settings where key = ?`,
+    });
+    const restartedValue = restarted.rows[0]?.value;
+    if (typeof restartedValue !== "string") {
+      throw new Error("fresh track audit evidence was not persisted as JSON text");
+    }
+    expect(JSON.parse(restartedValue)).toMatchObject({
+      complete: false,
+      version: PROJECTION_AUDIT_VERSIONS.track_due_work,
+    });
   });
 
   it("caps growing-table probes, reports truncation, and keeps every probe on its fixed index", async () => {
