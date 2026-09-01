@@ -163,6 +163,14 @@ function mixtapeStateOf(row: BoardRow): MixState {
   return row.plans.length > 0 ? "plan" : "open";
 }
 
+function matchesMixFilter(row: BoardRow, activeMix: MixFilter): boolean {
+  return activeMix === "all" || mixtapeStateOf(row) === activeMix;
+}
+
+function matchesWorklistFilter(blockedOn: BlockedOn, worklist: WorklistDef): boolean {
+  return worklist.key === "all" || blockedOn === worklist.blockedOn;
+}
+
 // Every admin server function re-checks the grant — the page guard only protects
 // the render, not the RPC behind a server function.
 const fetchBoard = createServerFn({ method: "GET" })
@@ -455,6 +463,73 @@ export const Route = createFileRoute("/admin/findings")({
   component: AdminBoardPage,
 });
 
+function BoardContent({
+  actions,
+  entries,
+  hasNextPage,
+  isFetchingNextPage,
+  onFetchNext,
+  onToggleAdvance,
+  paused,
+  pendingAdvance,
+  rows,
+  sentinelRef,
+  visible,
+}: {
+  actions: BoardActions;
+  entries: BoardEntry[];
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  onFetchNext: () => void;
+  onToggleAdvance: (paused: boolean) => void;
+  paused: boolean;
+  pendingAdvance: boolean;
+  rows: BoardRow[];
+  sentinelRef: { current: HTMLDivElement | null };
+  visible: unknown[];
+}) {
+  if (rows.length === 0) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyTitle>No findings yet</EmptyTitle>
+          <EmptyDescription>Logged bangers will show up here.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+  if (visible.length === 0) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyTitle>Nothing in this view</EmptyTitle>
+          <EmptyDescription>
+            No loaded findings match these filters — widen the worklist or the mixtape lens.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+  return (
+    <>
+      <div className="border-b border-border p-3 sm:p-4">
+        <AutoPublishSwitch onToggle={onToggleAdvance} paused={paused} pending={pendingAdvance} />
+      </div>
+      <PipelineBoard actions={actions} entries={entries} />
+      {hasNextPage ? (
+        <div className="border-t border-border p-3 text-center sm:p-4" ref={sentinelRef}>
+          <Button disabled={isFetchingNextPage} onClick={onFetchNext} size="sm" variant="outline">
+            {isFetchingNextPage ? (
+              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            ) : undefined}
+            {isFetchingNextPage ? "Loading…" : "Load more"}
+          </Button>
+        </div>
+      ) : undefined}
+    </>
+  );
+}
+
 function AdminBoardPage() {
   const { advance: initialAdvance, board: initial } = Route.useLoaderData();
   const {
@@ -694,8 +769,8 @@ function AdminBoardPage() {
     () =>
       staged.filter(
         (entry) =>
-          (worklistDef.key === "all" || entry.blockedOn === worklistDef.blockedOn) &&
-          (activeMix === "all" || mixtapeStateOf(entry.row) === activeMix),
+          matchesWorklistFilter(entry.blockedOn, worklistDef) &&
+          matchesMixFilter(entry.row, activeMix),
       ),
     [activeMix, staged, worklistDef],
   );
@@ -718,14 +793,11 @@ function AdminBoardPage() {
   // number is exactly how many rows you'd see if you clicked it. Worklist counts are
   // taken over the mixtape-filtered set; mix counts over the worklist-filtered set.
   const byMix = useMemo(
-    () => staged.filter((entry) => activeMix === "all" || mixtapeStateOf(entry.row) === activeMix),
+    () => staged.filter((entry) => matchesMixFilter(entry.row, activeMix)),
     [activeMix, staged],
   );
   const byWorklist = useMemo(
-    () =>
-      staged.filter(
-        (entry) => worklistDef.key === "all" || entry.blockedOn === worklistDef.blockedOn,
-      ),
+    () => staged.filter((entry) => matchesWorklistFilter(entry.blockedOn, worklistDef)),
     [staged, worklistDef],
   );
 
@@ -1112,52 +1184,19 @@ function AdminBoardPage() {
 
   return (
     <AdminShell headerActions={headerActions} subheader={subheader} title="Findings">
-      {rows.length === 0 ? (
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>No findings yet</EmptyTitle>
-            <EmptyDescription>Logged bangers will show up here.</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : visible.length === 0 ? (
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>Nothing in this view</EmptyTitle>
-            <EmptyDescription>
-              No loaded findings match these filters — widen the worklist or the mixtape lens.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <>
-          {/* The kill switch over everything the Publish column does on its own. One flip
-              stops (or starts) every future auto-publish — no deploy, effective within one
-              box tick. */}
-          <div className="border-b border-border p-3 sm:p-4">
-            <AutoPublishSwitch
-              onToggle={(paused) => setAdvancePaused.mutate(paused)}
-              paused={advance.paused}
-              pending={setAdvancePaused.isPending}
-            />
-          </div>
-          <PipelineBoard actions={actions} entries={entries} />
-          {hasNextPage ? (
-            <div className="border-t border-border p-3 text-center sm:p-4" ref={sentinelRef}>
-              <Button
-                disabled={isFetchingNextPage}
-                onClick={() => void fetchNextPage()}
-                size="sm"
-                variant="outline"
-              >
-                {isFetchingNextPage ? (
-                  <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-                ) : undefined}
-                {isFetchingNextPage ? "Loading…" : "Load more"}
-              </Button>
-            </div>
-          ) : undefined}
-        </>
-      )}
+      <BoardContent
+        actions={actions}
+        entries={entries}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        onFetchNext={() => void fetchNextPage()}
+        onToggleAdvance={(paused) => setAdvancePaused.mutate(paused)}
+        paused={advance.paused}
+        pendingAdvance={setAdvancePaused.isPending}
+        rows={rows}
+        sentinelRef={sentinelRef}
+        visible={visible}
+      />
 
       <AddFindingDialog onAdded={onFindingAdded} onOpenChange={setAddOpen} open={addOpen} />
 

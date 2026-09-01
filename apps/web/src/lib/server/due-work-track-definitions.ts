@@ -355,6 +355,32 @@ function canCapture(source: DueWorkTrackSource): boolean {
   );
 }
 
+function isIsrcRecoveryEligible(source: DueWorkTrackSource): boolean {
+  return (
+    source.spotifyUri === null &&
+    !source.hasIsrc &&
+    source.spotifyAnchorAttemptedAt === null &&
+    source.durationMs !== null &&
+    source.durationMs > 0 &&
+    source.dismissedAt === null &&
+    source.duplicateOfTrackId === null &&
+    isEnabledForLabelSpend(source)
+  );
+}
+
+function isAnchorEligible(source: DueWorkTrackSource): boolean {
+  return (
+    source.spotifyUri === null &&
+    source.durationMs !== null &&
+    source.durationMs > 0 &&
+    source.dismissedAt === null &&
+    source.duplicateOfTrackId === null &&
+    (source.spotifyAnchorAttempts ?? 0) < ANCHOR_MAX_ATTEMPTS &&
+    isAnchorableArtist(source) &&
+    isEnabledForLabelSpend(source)
+  );
+}
+
 function eligibleAt(
   kind: DueWorkKind,
   source: DueWorkTrackSource,
@@ -399,16 +425,7 @@ function eligibleAt(
     return source.youtubeVideoId !== null && source.youtubeVideoOfficial !== true ? now : undefined;
   }
   if (!source.certified && kind === "isrc-recovery") {
-    if (
-      source.spotifyUri !== null ||
-      source.hasIsrc ||
-      source.spotifyAnchorAttemptedAt !== null ||
-      source.durationMs === null ||
-      source.durationMs <= 0 ||
-      source.dismissedAt !== null ||
-      source.duplicateOfTrackId !== null ||
-      !isEnabledForLabelSpend(source)
-    ) {
+    if (!isIsrcRecoveryEligible(source)) {
       return undefined;
     }
     return scheduledAt(
@@ -418,16 +435,7 @@ function eligibleAt(
     );
   }
   if (!source.certified && kind === "anchor") {
-    if (
-      source.spotifyUri !== null ||
-      source.durationMs === null ||
-      source.durationMs <= 0 ||
-      source.dismissedAt !== null ||
-      source.duplicateOfTrackId !== null ||
-      (source.spotifyAnchorAttempts ?? 0) >= ANCHOR_MAX_ATTEMPTS ||
-      !isAnchorableArtist(source) ||
-      !isEnabledForLabelSpend(source)
-    ) {
+    if (!isAnchorEligible(source)) {
       return undefined;
     }
     return scheduledAt(source.spotifyAnchorAttemptedAt, ANCHOR_REASK_AFTER_DAYS * 86_400_000, now);

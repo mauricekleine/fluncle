@@ -856,6 +856,36 @@ type QueueRowProps = {
   state: RowState;
 };
 
+function queueRowState(
+  item: AttentionItem,
+  now: number,
+  state: RowState,
+  pushBusy: Record<string, boolean>,
+) {
+  const deadline = item.deadlineAt ? deadlineReadout(item.deadlineAt, now) : undefined;
+  const pushPlatform: Platform | undefined =
+    item.source === "post-youtube"
+      ? "youtube"
+      : item.source === "post-tiktok"
+        ? "tiktok"
+        : undefined;
+  const pushing =
+    pushPlatform && item.trackId
+      ? Boolean(pushBusy[`${item.trackId}:${pushPlatform}:draft`])
+      : false;
+  const candidate = item.source === "anchor-review" ? item.candidate : undefined;
+  const bioEntity = item.source === "bio-review" ? item.entity : undefined;
+  return {
+    bioEntity,
+    bioViolations: bioEntity ? (item.violations ?? []) : [],
+    candidate,
+    deadline,
+    parked: state === "snoozed" || state === "dismissed",
+    pushPlatform,
+    pushing,
+  };
+}
+
 function QueueRow({
   busy,
   copied,
@@ -887,31 +917,22 @@ function QueueRow({
 }: QueueRowProps) {
   const SourceIcon = SOURCE_ICONS[item.source];
   const primary = primaryFor(item, now);
-  const deadline = item.deadlineAt ? deadlineReadout(item.deadlineAt, now) : undefined;
   // A fresh post row's primary pushes one platform; reflect that platform's in-flight state.
-  const pushPlatform: Platform | undefined =
-    item.source === "post-youtube"
-      ? "youtube"
-      : item.source === "post-tiktok"
-        ? "tiktok"
-        : undefined;
-  const pushing =
-    pushPlatform && item.trackId
-      ? Boolean(pushBusy[`${item.trackId}:${pushPlatform}:draft`])
-      : false;
   // A pushed TikTok draft is finished in-app, then marked posted here (copy the cover, paste
   // the live URL). Only tiktok-draft rows carry that panel.
   const canFinish = item.source === "tiktok-draft";
   // A suspected version mismatch carries a second ruling ("Not a match") beside the primary, plus
   // the MusicBrainz link when the primary is not already it — the ruling is a two-way decision, and
   // the upstream fix is the part that helps every other consumer of the open graph.
-  const candidate = item.source === "anchor-review" ? item.candidate : undefined;
   // A bio that landed past the voice gate carries the same two-way inline ruling: the entity it
   // belongs to is the ruling's target, and the gate's own reasons are the evidence he rules on —
   // without them the row would be "a bio is wrong somewhere", which is not a decision.
-  const bioEntity = item.source === "bio-review" ? item.entity : undefined;
-  const bioViolations = bioEntity ? (item.violations ?? []) : [];
-  const parked = state === "snoozed" || state === "dismissed";
+  const { bioEntity, bioViolations, candidate, deadline, parked, pushing } = queueRowState(
+    item,
+    now,
+    state,
+    pushBusy,
+  );
 
   return (
     // The click only moves the queue's cursor — the same thing j/k and the arrows do in the

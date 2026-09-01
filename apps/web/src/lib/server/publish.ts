@@ -130,6 +130,21 @@ ${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}
   );
 }
 
+function deezerLinkFor(
+  searchTrackId: string | undefined,
+  searchVia: "search" | "search-subset" | undefined,
+  isrcTrackId: string | undefined,
+): { trackId: string; via: "isrc" | "search" | "search-subset" } | undefined {
+  if (searchTrackId && searchVia) {
+    return { trackId: searchTrackId, via: searchVia };
+  }
+  return isrcTrackId ? { trackId: isrcTrackId, via: "isrc" } : undefined;
+}
+
+function hasDiscogsReference(releaseId: number | undefined, masterId: number | undefined): boolean {
+  return releaseId !== undefined || masterId !== undefined;
+}
+
 export async function publishTrack(
   spotifyUrl: string,
   options: AddOptions,
@@ -242,11 +257,11 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
         },
       ])
     : undefined;
-  const deezerLink = deezerByNameVerified?.candidate.deezerTrackId
-    ? { trackId: deezerByNameVerified.candidate.deezerTrackId, via: deezerByNameVerified.via }
-    : deezer.deezerTrackId
-      ? { trackId: deezer.deezerTrackId, via: "isrc" as const }
-      : undefined;
+  const deezerLink = deezerLinkFor(
+    deezerByNameVerified?.candidate.deezerTrackId,
+    deezerByNameVerified?.via,
+    deezer.deezerTrackId,
+  );
 
   // Read-only Discogs release-ID enrichment (best-effort, alongside the Deezer
   // label/preview it most resembles — both cheap HTTP, Worker-safe). A scored
@@ -272,7 +287,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // sweep. An empty result with no throttle is a real answer — "Discogs has no release we can
   // confidently bind" — and stamps `attempted_at` with `done_at` left null. Failures stay 0: a
   // mint-time look either concludes or is deferred, so there is no streak to back off from.
-  const discogsResolved = discogs.releaseId !== undefined || discogs.masterId !== undefined;
+  const discogsResolved = hasDiscogsReference(discogs.releaseId, discogs.masterId);
   const discogsAttemptedAt = discogsResolved || !discogs.rateLimited ? nowIso : null;
   const artistsJson = JSON.stringify(track.artists);
 

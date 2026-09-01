@@ -139,6 +139,10 @@ function parseTriStateBool(value: string | undefined): boolean | undefined {
   return undefined;
 }
 
+function normalizedVideoField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 120) : undefined;
+}
+
 function parseEnrichmentStatus(value: string | undefined): EnrichmentStatusFilter | undefined {
   return value && (ENRICHMENT_STATUS_FILTERS as readonly string[]).includes(value)
     ? (value as EnrichmentStatusFilter)
@@ -1094,38 +1098,14 @@ export function adminTracksHandlers(os: Implementer) {
         });
       }
 
-      const bodyVehicle =
-        typeof body.videoVehicle === "string" && body.videoVehicle.trim()
-          ? body.videoVehicle.trim().slice(0, 120)
-          : undefined;
-      const bodyGrain =
-        typeof body.videoGrain === "string" && body.videoGrain.trim()
-          ? body.videoGrain.trim().slice(0, 120)
-          : undefined;
-      const bodyRegister =
-        typeof body.videoRegister === "string" && body.videoRegister.trim()
-          ? body.videoRegister.trim().slice(0, 120)
-          : undefined;
-      const bodyPalette =
-        typeof body.videoPalette === "string" && body.videoPalette.trim()
-          ? body.videoPalette.trim().slice(0, 120)
-          : undefined;
-      const bodyPlateSubject =
-        typeof body.videoPlateSubject === "string" && body.videoPlateSubject.trim()
-          ? body.videoPlateSubject.trim().slice(0, 120)
-          : undefined;
-      const bodyStructure =
-        typeof body.videoStructure === "string" && body.videoStructure.trim()
-          ? body.videoStructure.trim().slice(0, 120)
-          : undefined;
-      const bodyModel =
-        typeof body.videoModel === "string" && body.videoModel.trim()
-          ? body.videoModel.trim().slice(0, 120)
-          : undefined;
-      const bodyReasoning =
-        typeof body.videoModelReasoning === "string" && body.videoModelReasoning.trim()
-          ? body.videoModelReasoning.trim().slice(0, 120)
-          : undefined;
+      const bodyVehicle = normalizedVideoField(body.videoVehicle);
+      const bodyGrain = normalizedVideoField(body.videoGrain);
+      const bodyRegister = normalizedVideoField(body.videoRegister);
+      const bodyPalette = normalizedVideoField(body.videoPalette);
+      const bodyPlateSubject = normalizedVideoField(body.videoPlateSubject);
+      const bodyStructure = normalizedVideoField(body.videoStructure);
+      const bodyModel = normalizedVideoField(body.videoModel);
+      const bodyReasoning = normalizedVideoField(body.videoModelReasoning);
 
       // THE TRANSPORT-PROOF STAMP FALLBACK (the 044.1.3L lesson): when the body
       // leaves any diversity-ledger stamp out — a crashed CLI's salvage ship, a
