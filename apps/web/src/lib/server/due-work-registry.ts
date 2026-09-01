@@ -522,6 +522,10 @@ type EntityRegistrySource<Kind extends DueWorkEntityKind> = DueWorkRebuildSource
   value: DueWorkSourceByKind[Kind];
 };
 type EntitySourceReader<Kind extends DueWorkEntityKind> = {
+  readAuditSourceChunk?: (
+    client: DueWorkClient,
+    options: { after: null | string; limit: number },
+  ) => Promise<EntityRegistrySource<Kind>[]>;
   readMany: (
     client: DueWorkClient,
     subjectIds: readonly string[],
@@ -615,10 +619,17 @@ function entityBioReader<Kind extends "album.bio" | "artist.bio" | "label.bio">(
 
 function primaryKeyReader<Kind extends DueWorkEntityKind>(
   select: string,
-  repairColumn: "id" | "slug",
+  subjectIdColumn: "id" | "slug",
   wrap: (row: Row) => EntityRegistrySource<Kind>,
 ): EntitySourceReader<Kind> {
   return {
+    async readAuditSourceChunk(client, options) {
+      const result = await client.execute({
+        args: [options.after ?? "", options.limit],
+        sql: `${select} where ${subjectIdColumn} > ? order by ${subjectIdColumn} limit ?`,
+      });
+      return result.rows.map(wrap).map((source) => ({ ...source, cursor: source.subjectId }));
+    },
     async readMany(client, subjectIds) {
       if (subjectIds.length === 0) {
         return [];
@@ -626,14 +637,14 @@ function primaryKeyReader<Kind extends DueWorkEntityKind>(
       const placeholders = subjectIds.map(() => "?").join(", ");
       const result = await client.execute({
         args: [...subjectIds],
-        sql: `${select} where ${repairColumn} in (${placeholders})`,
+        sql: `${select} where ${subjectIdColumn} in (${placeholders})`,
       });
       return result.rows.map(wrap);
     },
     async readOne(client, subjectId) {
       const result = await client.execute({
         args: [subjectId],
-        sql: `${select} where ${repairColumn} = ? limit 1`,
+        sql: `${select} where ${subjectIdColumn} = ? limit 1`,
       });
       const row = result.rows[0];
       return row === undefined ? undefined : wrap(row);
@@ -694,6 +705,7 @@ function entityDefinition<Kind extends DueWorkEntityKind>(
   backfill: DueWorkRebuildDefinition<string, EntityRegistrySource<Kind>>;
   repair: (client: DueWorkClient) => DueWorkRepairDefinition<string>;
 } {
+  const readAuditSourceChunk = config.readAuditSourceChunk;
   const project = (
     source: EntityRegistrySource<Kind>,
     context: { generation: string; now: string },
@@ -715,6 +727,12 @@ function entityDefinition<Kind extends DueWorkEntityKind>(
   return {
     backfill: {
       project,
+      ...(readAuditSourceChunk === undefined
+        ? {}
+        : {
+            readAuditSourceChunk: ({ after, client, limit }) =>
+              readAuditSourceChunk(client, { after, limit }),
+          }),
       readSourceChunk: ({ after, client, limit }) =>
         config.readSourceChunk(client, { after, limit }),
       subjectType: config.subjectType,
@@ -1078,6 +1096,9 @@ function registeredDefinition<Source extends DueWorkRebuildSource>(
 ): DueWorkRebuildDefinition<string, DueWorkRebuildSource> {
   return {
     project: (source, context) => definition.project(source as Source, context),
+    ...(definition.readAuditSourceChunk === undefined
+      ? {}
+      : { readAuditSourceChunk: definition.readAuditSourceChunk }),
     readSourceChunk: definition.readSourceChunk,
     subjectType: definition.subjectType,
     workKind: definition.workKind,

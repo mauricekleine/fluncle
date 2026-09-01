@@ -21,6 +21,7 @@ import {
   advanceProjectionAudit,
   clearProjectionAuditEvidence,
   PROJECTION_AUDIT_SETTING_KEYS,
+  PROJECTION_AUDIT_VERSIONS,
   readProjectionAuditEvidence,
   type ProjectionAuditEvidence,
   type ProjectionAuditTarget,
@@ -1485,7 +1486,7 @@ const CUTOVER_KEYS: Record<ProjectionCutover, string> = {
 };
 
 function matchingAuditSql(alias: string, target: ProjectionAuditTarget): string {
-  const auditVersion = target === "artist_qualification" ? 5 : 3;
+  const auditVersion = PROJECTION_AUDIT_VERSIONS[target];
   const sourceFence =
     target === "track_due_work" || target === "crawl_due_work"
       ? `and json_extract(${alias}.value, '$.sourceFence') = coalesce((select cast(fence.value as integer)

@@ -179,6 +179,26 @@ async function allSources(
   }
 }
 
+async function allAuditSources(
+  definition: DueWorkRebuildDefinition<string, DueWorkRebuildSource>,
+): Promise<DueWorkRebuildSource[]> {
+  const reader = definition.readAuditSourceChunk ?? definition.readSourceChunk;
+  const sources: DueWorkRebuildSource[] = [];
+  let after: null | string = null;
+  for (;;) {
+    const chunk = await reader({ after, client: db, limit: 2 });
+    sources.push(...chunk);
+    if (chunk.length < 2) {
+      return sources;
+    }
+    const cursor = chunk.at(-1)?.cursor;
+    if (cursor === undefined) {
+      throw new Error("registry audit source chunk lost its cursor");
+    }
+    after = cursor;
+  }
+}
+
 async function expectedProjection(
   definition: DueWorkRebuildDefinition<string, DueWorkRebuildSource>,
   generation: string,
@@ -275,6 +295,74 @@ describe("due-work registry", () => {
         projected: 0,
         scanned: 0,
       });
+    }
+  });
+
+  it("pages slug-keyed definitions in canonical projected-subject order", async () => {
+    await db.batch(
+      [
+        {
+          args: ["zz-artist", "https://example.test/artist-1.jpg", "artist-1"],
+          sql: `update artists set slug = ?, image_url = ? where id = ?`,
+        },
+        {
+          args: ["aa-artist", "https://example.test/artist-2.jpg", "artist-2"],
+          sql: `update artists set slug = ?, image_url = ? where id = ?`,
+        },
+        {
+          args: ["zz-album", "album-1"],
+          sql: `update albums set slug = ? where id = ?`,
+        },
+        {
+          args: ["aa-album", "album-2"],
+          sql: `update albums set slug = ? where id = ?`,
+        },
+        {
+          args: ["zz-label", "label-1"],
+          sql: `update labels set slug = ? where id = ?`,
+        },
+        {
+          args: ["aa-label", "label-2"],
+          sql: `update labels set slug = ? where id = ?`,
+        },
+      ],
+      "write",
+    );
+
+    for (const [workKind, expectedSubjectIds] of [
+      ["artist.cover-master", ["aa-artist", "zz-artist"]],
+      ["album.cover-master", ["aa-album", "zz-album"]],
+      ["label.image", ["aa-label", "zz-label"]],
+    ] as const) {
+      const definition = DUE_WORK_BACKFILLS.find((candidate) => candidate.workKind === workKind);
+      if (definition === undefined) {
+        throw new Error(`missing slug-keyed definition for ${workKind}`);
+      }
+
+      const sources = await allAuditSources(definition);
+      expect(
+        sources.map((source) => source.cursor),
+        identity(definition),
+      ).toEqual(expectedSubjectIds);
+      expect(
+        sources.map((source) => source.subjectId),
+        identity(definition),
+      ).toEqual(expectedSubjectIds);
+
+      await runDueWorkRebuildToCompletion(db, definition, {
+        generation: GENERATION_ONE,
+        limit: 1,
+        newGeneration: true,
+        now: () => NOW,
+      });
+      const actual = await readDueWorkProjectionChunk(db, definition, {
+        generation: GENERATION_ONE,
+        limit: 500,
+      });
+      expect(
+        actual.items.map((row) => row.subjectId),
+        identity(definition),
+      ).toEqual(expectedSubjectIds);
     }
   });
 
