@@ -1908,6 +1908,15 @@ async function writeText(path: string, contents: string): Promise<void> {
   await Bun.write(path, contents);
 }
 
+function selectReleaseCandidate(
+  requestedCommit: string | null,
+  invocationCommit: string | null,
+): { candidateCommit: string | null; candidateSelection: "current-head" | "explicit" } {
+  return requestedCommit === null
+    ? { candidateCommit: invocationCommit, candidateSelection: "current-head" }
+    : { candidateCommit: requestedCommit, candidateSelection: "explicit" };
+}
+
 async function runRelease(
   options: ReleaseOptions,
 ): Promise<{ manifest: JsonRecord; passed: boolean }> {
@@ -1916,8 +1925,10 @@ async function runRelease(
   const definitions = releaseCommands();
   const outputDirectory = await prepareOutputDirectory(options.outputDirectory, startedAt);
   const invocationSource = await readRepositorySnapshot(REPOSITORY_ROOT);
-  const candidateSelection = options.candidateCommit === null ? "current-head" : "explicit";
-  const candidateCommit = options.candidateCommit ?? invocationSource.commit;
+  const { candidateCommit, candidateSelection } = selectReleaseCandidate(
+    options.candidateCommit,
+    invocationSource.commit,
+  );
   const commandResults: ReleaseCommandResult[] = [];
   const profileEvidence: ProfileEvidence[] = [];
   const sourceCheckpoints: ReleaseSourceCheckpoint[] = [];

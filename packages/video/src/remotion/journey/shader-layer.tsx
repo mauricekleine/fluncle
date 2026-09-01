@@ -617,6 +617,28 @@ const ERROR_STYLE: React.CSSProperties = {
   wordBreak: "break-word",
 };
 
+function prepareBloomResources(
+  gl: WebGLRenderingContext,
+  canvas: HTMLCanvasElement,
+  enabled: ShaderLayerProps["bloom"],
+  bloomRef: { current: BloomGl | null },
+  setError: (message: string) => void,
+): BloomGl | null {
+  if (!enabled) {
+    return null;
+  }
+  const bloomKey = `${canvas.width}x${canvas.height}`;
+  let bloomGl = bloomRef.current;
+  if (!bloomGl || bloomGl.key !== bloomKey) {
+    bloomGl = buildBloomGl(gl, canvas.width, canvas.height);
+    bloomRef.current = bloomGl;
+    if (!bloomGl) {
+      setError("Bloom setup failed (framebuffer or helper shader).");
+    }
+  }
+  return bloomGl;
+}
+
 export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   fragmentShader,
   palette,
@@ -838,18 +860,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
 
     // Build bloom resources first (once per size, cached) so the scene-program
     // vertex/uniform state set below is the last thing bound before we draw.
-    let bloomGl: BloomGl | null = null;
-    if (bloom) {
-      const bloomKey = `${canvas.width}x${canvas.height}`;
-      bloomGl = bloomGlRef.current;
-      if (!bloomGl || bloomGl.key !== bloomKey) {
-        bloomGl = buildBloomGl(gl, canvas.width, canvas.height);
-        bloomGlRef.current = bloomGl;
-        if (!bloomGl) {
-          setError("Bloom setup failed (framebuffer or helper shader).");
-        }
-      }
-    }
+    const bloomGl = prepareBloomResources(gl, canvas, bloom, bloomGlRef, setError);
 
     gl.useProgram(program);
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);

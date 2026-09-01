@@ -208,6 +208,22 @@ async function main(): Promise<void> {
   const decoder = new TextDecoder();
   let buffer = "";
 
+  const dumpIdentityKeys = (
+    rels: { "target-type"?: string; url?: { resource?: string } }[],
+  ): { qid: null | string; spotify: null | string } => {
+    let spotify: string | null = null;
+    let qid: string | null = null;
+    for (const rel of rels) {
+      const resource = rel["target-type"] === "url" ? rel.url?.resource : undefined;
+      if (!resource) {
+        continue;
+      }
+      spotify ??= SPOTIFY_RE.exec(resource)?.[1] ?? null;
+      qid ??= QID_RE.exec(resource)?.[1] ?? null;
+    }
+    return { qid, spotify };
+  };
+
   const handleLine = async (line: string) => {
     if (!line) {
       return;
@@ -225,20 +241,7 @@ async function main(): Promise<void> {
     }
 
     // cheap keying pass — skip the expensive classify/normalize on the ~99.8% that don't match
-    let dumpSpotify: string | null = null;
-    let dumpQid: string | null = null;
-    for (const rel of rels as { "target-type"?: string; url?: { resource?: string } }[]) {
-      const resource = rel["target-type"] === "url" ? rel.url?.resource : undefined;
-      if (!resource) {
-        continue;
-      }
-      if (!dumpSpotify) {
-        dumpSpotify = SPOTIFY_RE.exec(resource)?.[1] ?? null;
-      }
-      if (!dumpQid) {
-        dumpQid = QID_RE.exec(resource)?.[1] ?? null;
-      }
-    }
+    const { qid: dumpQid, spotify: dumpSpotify } = dumpIdentityKeys(rels);
     const viaSpotify = dumpSpotify ? bySpotify.get(dumpSpotify) : undefined;
     const viaMbid = byMbid.get(record_.id);
     const viaQid = dumpQid ? byQid.get(dumpQid) : undefined;

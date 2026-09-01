@@ -1243,6 +1243,89 @@ export async function stampRemixerRoles(trackIds: string[]): Promise<number> {
 // rows — and the track's certification once, then diffs. `connectAnchorArtists` (anchor.ts) calls
 // this on tracks that are ALREADY certified, which is exactly the case the certified half has to
 // catch. See lib/server/hub-counts.ts.
+async function resolveTrackArtist(
+  db: Awaited<ReturnType<typeof getDb>>,
+  name: string,
+  spotifyArtistId: string | undefined,
+  nowIso: string,
+): Promise<string> {
+  if (spotifyArtistId) {
+    const existing = await db.execute({
+      args: [spotifyArtistId],
+      sql: `select id from artists where spotify_artist_id = ? limit 1`,
+    });
+    const id = (existing.rows[0] as Record<string, unknown> | undefined)?.["id"];
+    if (typeof id === "string") {
+      await db.execute({
+        args: [name, nowIso, id],
+        sql: `update artists set name = ?, updated_at = ? where id = ?`,
+      });
+      return id;
+    }
+  }
+
+  const byName = await db.execute({
+    args: [name],
+    sql: `select id from artists where name = ? limit 1`,
+  });
+  const id = (byName.rows[0] as Record<string, unknown> | undefined)?.["id"];
+  if (typeof id === "string") {
+    if (spotifyArtistId) {
+      await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [spotifyArtistId, nowIso, id],
+            sql: `update artists set spotify_artist_id = ?, updated_at = ? where id = ? and spotify_artist_id is null`,
+          },
+        ],
+        [{ subjectId: id, subjectType: "artist" }],
+        { onlyIfLastSourceStatementChanged: true, producer: "artist-spotify-adopt" },
+      );
+    }
+    return id;
+  }
+
+  const newId = randomUUID();
+  const slug = await mintArtistSlug(newId, name);
+  const spotifyUrl = spotifyArtistId ? `https://open.spotify.com/artist/${spotifyArtistId}` : null;
+  await db.batch(
+    [
+      {
+        args: [newId, spotifyArtistId ?? null, name, slug, spotifyUrl, nowIso, nowIso],
+        sql: `insert into artists (id, spotify_artist_id, name, slug, spotify_url, created_at, updated_at)
+              values (?, ?, ?, ?, ?, ?, ?)
+              on conflict(spotify_artist_id) do update set
+                name = excluded.name,
+                updated_at = excluded.updated_at`,
+      },
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "artist",
+        spotifyArtistId
+          ? {
+              args: [spotifyArtistId],
+              sql: `select id as subject_id from artists where spotify_artist_id = ? limit 1`,
+            }
+          : {
+              args: [newId],
+              sql: `select id as subject_id from artists where id = ? limit 1`,
+            },
+        { producer: "artist-mint" },
+      ),
+    ],
+    "write",
+  );
+
+  const fresh = await db.execute({
+    args: spotifyArtistId ? [spotifyArtistId] : [name],
+    sql: spotifyArtistId
+      ? `select id from artists where spotify_artist_id = ? limit 1`
+      : `select id from artists where name = ? limit 1`,
+  });
+  const freshId = (fresh.rows[0] as Record<string, unknown> | undefined)?.["id"];
+  return typeof freshId === "string" ? freshId : newId;
+}
+
 export async function upsertTrackArtists(
   trackId: string,
   artistNames: string[],
@@ -1296,107 +1379,7 @@ export async function upsertTrackArtists(
       continue;
     }
 
-    // --- Resolve or mint the artist row ---
-    let artistId: string | undefined;
-
-    if (spotifyArtistId) {
-      // Look up by Spotify artist ID first (the most reliable key).
-      const existing = await db.execute({
-        args: [spotifyArtistId],
-        sql: `select id from artists where spotify_artist_id = ? limit 1`,
-      });
-
-      if (existing.rows.length > 0) {
-        const row = existing.rows[0] as Record<string, unknown>;
-        const id = row["id"];
-        artistId = typeof id === "string" ? id : undefined;
-
-        if (artistId) {
-          // Update name + timestamp in case the canonical name drifted on Spotify.
-          await db.execute({
-            args: [name, nowIso, artistId],
-            sql: `update artists set name = ?, updated_at = ? where id = ?`,
-          });
-        }
-      }
-    }
-
-    if (!artistId) {
-      // Not found by Spotify ID — check by name as a secondary key.
-      const byName = await db.execute({
-        args: [name],
-        sql: `select id from artists where name = ? limit 1`,
-      });
-
-      if (byName.rows.length > 0) {
-        const row = byName.rows[0] as Record<string, unknown>;
-        const id = row["id"];
-        artistId = typeof id === "string" ? id : undefined;
-
-        if (artistId && spotifyArtistId) {
-          // Fill in the Spotify ID now that we have it.
-          await batchDueWorkSourceMutation(
-            db,
-            [
-              {
-                args: [spotifyArtistId, nowIso, artistId],
-                sql: `update artists set spotify_artist_id = ?, updated_at = ? where id = ? and spotify_artist_id is null`,
-              },
-            ],
-            [{ subjectId: artistId, subjectType: "artist" }],
-            { onlyIfLastSourceStatementChanged: true, producer: "artist-spotify-adopt" },
-          );
-        }
-      }
-    }
-
-    if (!artistId) {
-      // Brand new artist — mint a surrogate id + slug and insert the row.
-      const newId = randomUUID();
-      const slug = await mintArtistSlug(newId, name);
-      const spotifyUrl = spotifyArtistId
-        ? `https://open.spotify.com/artist/${spotifyArtistId}`
-        : null;
-
-      await db.batch(
-        [
-          {
-            args: [newId, spotifyArtistId ?? null, name, slug, spotifyUrl, nowIso, nowIso],
-            sql: `insert into artists (id, spotify_artist_id, name, slug, spotify_url, created_at, updated_at)
-                  values (?, ?, ?, ?, ?, ?, ?)
-                  on conflict(spotify_artist_id) do update set
-                    name = excluded.name,
-                    updated_at = excluded.updated_at`,
-          },
-          ...markDueWorkSourceMaintenanceFromSelectStatements(
-            "artist",
-            spotifyArtistId
-              ? {
-                  args: [spotifyArtistId],
-                  sql: `select id as subject_id from artists where spotify_artist_id = ? limit 1`,
-                }
-              : {
-                  args: [newId],
-                  sql: `select id as subject_id from artists where id = ? limit 1`,
-                },
-            { producer: "artist-mint" },
-          ),
-        ],
-        "write",
-      );
-
-      // Re-fetch the id in case of a concurrent insert that triggered the ON CONFLICT.
-      const fresh = await db.execute({
-        args: spotifyArtistId ? [spotifyArtistId] : [name],
-        sql: spotifyArtistId
-          ? `select id from artists where spotify_artist_id = ? limit 1`
-          : `select id from artists where name = ? limit 1`,
-      });
-
-      const freshRow = fresh.rows[0] as Record<string, unknown> | undefined;
-      const freshId = freshRow?.["id"];
-      artistId = typeof freshId === "string" ? freshId : newId;
-    }
+    const artistId = await resolveTrackArtist(db, name, spotifyArtistId, nowIso);
 
     // --- Upsert track_artists (+ the hub-count delta, when the edge is genuinely new) ---
     const isNewEdge = !held.has(artistId);

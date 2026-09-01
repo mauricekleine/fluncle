@@ -254,6 +254,23 @@ export function dueWorkVendorSourceVersion(
   return `dw1-${hash.toString(16).padStart(16, "0")}`;
 }
 
+function catalogueRankDueAt(
+  source: DueWorkVendorSource,
+  now: string,
+  rankCorpus: string | undefined,
+): string | undefined {
+  if (rankCorpus === undefined) {
+    throw new RangeError("catalogue-rank evaluation requires rankCorpus");
+  }
+  return !source.isCatalogue ||
+    source.dismissedAt !== null ||
+    (source.catalogueRankCorpus !== null &&
+      source.catalogueRankCorpus === rankCorpus &&
+      !(source.hasEmbedding && source.capturePriority !== null && source.capturePriority >= 0))
+    ? undefined
+    : now;
+}
+
 function dueAt(
   kind: DueWorkVendorKind,
   source: DueWorkVendorSource,
@@ -262,16 +279,7 @@ function dueAt(
 ): string | undefined {
   switch (kind) {
     case "catalogue-rank":
-      if (rankCorpus === undefined) {
-        throw new RangeError("catalogue-rank evaluation requires rankCorpus");
-      }
-      return !source.isCatalogue ||
-        source.dismissedAt !== null ||
-        (source.catalogueRankCorpus !== null &&
-          source.catalogueRankCorpus === rankCorpus &&
-          !(source.hasEmbedding && source.capturePriority !== null && source.capturePriority >= 0))
-        ? undefined
-        : now;
+      return catalogueRankDueAt(source, now, rankCorpus);
     case "capture-verification":
       return source.sourceAudioKey !== null &&
         source.captureVerification === null &&
@@ -326,6 +334,23 @@ function dueAt(
   }
 }
 
+function appleDueAt(
+  kind: "apple-catalogue" | "apple-finding",
+  source: DueWorkVendorSource,
+  now: string,
+): string | undefined {
+  const inScope =
+    kind === "apple-finding" ? isPublishedFinding(source) : source.isCatalogue && !source.certified;
+  return inScope && source.appleMusicUrl === null && hasIsrc(source)
+    ? reliabilityDueAt(
+        source.appleMusicAttemptedAt,
+        source.appleMusicDoneAt,
+        source.appleMusicFailures,
+        now,
+      )
+    : undefined;
+}
+
 function remainingDueAt(
   kind: DueWorkVendorKind,
   source: DueWorkVendorSource,
@@ -333,26 +358,8 @@ function remainingDueAt(
 ): string | undefined {
   switch (kind) {
     case "apple-finding":
-      return isPublishedFinding(source) && source.appleMusicUrl === null && hasIsrc(source)
-        ? reliabilityDueAt(
-            source.appleMusicAttemptedAt,
-            source.appleMusicDoneAt,
-            source.appleMusicFailures,
-            now,
-          )
-        : undefined;
     case "apple-catalogue":
-      return source.isCatalogue &&
-        !source.certified &&
-        source.appleMusicUrl === null &&
-        hasIsrc(source)
-        ? reliabilityDueAt(
-            source.appleMusicAttemptedAt,
-            source.appleMusicDoneAt,
-            source.appleMusicFailures,
-            now,
-          )
-        : undefined;
+      return appleDueAt(kind, source, now);
     case "beatport-finding":
       return isPublishedFinding(source) && hasIsrc(source)
         ? reliabilityDueAt(

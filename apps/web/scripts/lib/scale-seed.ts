@@ -284,30 +284,37 @@ function catalogueIsEmbedded(index: number): boolean {
   return index % 5 < 2 && index % 2 === 0;
 }
 
+function catalogueCaptureStatus(index: number, captured: boolean): string {
+  if (index % 500 === 0) {
+    return "wrong-audio";
+  }
+  if (index % 500 === 1) {
+    return "unmatched";
+  }
+  if (index % 500 === 2) {
+    return "failed";
+  }
+  return captured ? "done" : "pending";
+}
+
+function catalogueNearestScore(index: number, hasEmbedding: boolean): null | number {
+  if (!hasEmbedding) {
+    return null;
+  }
+  return index % 74 === 0 ? 0.995 + (index % 5) * 0.001 : 0.3 + (index % 65) / 100;
+}
+
 function catalogueTrackArgs(index: number, nowMs: number, opts: Resolved): SeedValue[] {
   const trackId = `cat-${index}`;
   const captured = index % 5 < 2;
   const hasEmbedding = catalogueIsEmbedded(index);
   const albumId = `album-${index % opts.albums}`;
 
-  const captureStatus =
-    index % 500 === 0
-      ? "wrong-audio"
-      : index % 500 === 1
-        ? "unmatched"
-        : index % 500 === 2
-          ? "failed"
-          : captured
-            ? "done"
-            : "pending";
+  const captureStatus = catalogueCaptureStatus(index, captured);
   const isTerminal =
     captureStatus === "wrong-audio" || captureStatus === "unmatched" || captureStatus === "failed";
 
-  const nearestScore = hasEmbedding
-    ? index % 74 === 0
-      ? 0.995 + (index % 5) * 0.001
-      : 0.3 + (index % 65) / 100
-    : null;
+  const nearestScore = catalogueNearestScore(index, hasEmbedding);
   const duplicateOf = hasEmbedding && index % 74 === 0 ? `find-${index % opts.findings}` : null;
   const nearestFinding = hasEmbedding ? `find-${index % opts.findings}` : null;
   const rankedAt = hasEmbedding || isTerminal ? isoDaysBefore(nowMs, 1 + (index % 200)) : null;

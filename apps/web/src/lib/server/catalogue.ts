@@ -1574,9 +1574,26 @@ async function nearestFindingWinners(
   return winners;
 }
 
-export async function rankCatalogue(
-  limit = RANK_BATCH_SIZE,
-  countRemaining = false,
+async function readArchiveAffinityWhenNeeded(needsPreAudio: boolean) {
+  return needsPreAudio ? readArchiveAffinity() : undefined;
+}
+
+async function readFindingIsrcsWhenNeeded(needsPreAudio: boolean) {
+  return needsPreAudio ? readFindingIsrcs() : undefined;
+}
+
+function preAudioPlan(unvectored: CandidateRow[], nearWrongAudio: CandidateRow[]) {
+  const trackIds = preAudioTrackIdsFor(unvectored, nearWrongAudio);
+  return { needed: trackIds.length > 0, trackIds };
+}
+
+function nearestFindingScore(winner: WinnerRow | undefined): null | number {
+  return winner ? 1 - Number(winner.dist) : null;
+}
+
+async function rankCatalogueBatch(
+  limit: number,
+  countRemaining: boolean,
 ): Promise<RankCatalogueSummary> {
   const db = await getDb();
   const dueWorkCutoverEnabled = await isDueWorkCutoverEnabled();
@@ -1662,15 +1679,17 @@ export async function rankCatalogue(
   // finding→key identity map is needed only to ADJUDICATE a near-1.0 vectored row — the common
   // tick has none, so those finding-bounded reads stay off the hot path until a row earns them.
   const nearWrongAudio = nearWrongAudioRows(vectored, winners);
-  const preAudioTrackIds = preAudioTrackIdsFor(unvectored, nearWrongAudio);
-  const needsPreAudio = preAudioTrackIds.length > 0;
+  const { needed: needsPreAudio, trackIds: preAudioTrackIds } = preAudioPlan(
+    unvectored,
+    nearWrongAudio,
+  );
   // The graph edges for every row that will run the pre-audio ladder (an unvectored row, or a
   // vectored row about to be QUARANTINED back to it) — ONE batched read for the whole tick.
   const [artistIdsByTrack, archive, findingIsrcs, findingIdentity, catalogueIdentity] =
     await Promise.all([
       readTrackArtistIds(preAudioTrackIds),
-      needsPreAudio ? readArchiveAffinity() : undefined,
-      needsPreAudio ? readFindingIsrcs() : undefined,
+      readArchiveAffinityWhenNeeded(needsPreAudio),
+      readFindingIsrcsWhenNeeded(needsPreAudio),
       // The finding identity, folded BOTH ways off ONE read. The inverted half (matchKey →
       // finding) is needed on EVERY tick with candidates, because a matchKey twin of a logged
       // finding (the "Drifting Away" ruling) can hide at ANY score, not just the near-1.0 band: an
@@ -1695,7 +1714,7 @@ export async function rankCatalogue(
     // `vector_distance_cos` returns 1 − cos, so the similarity is 1 − distance: higher is
     // nearer, and the column sorts DESC. A candidate with no winner (nothing embedded yet, or
     // a malformed stored vector) is stamped with a null score rather than left stale.
-    const score = winner ? 1 - Number(winner.dist) : null;
+    const score = nearestFindingScore(winner);
 
     // THE ADJUDICATION. A cosine of six-plus nines is the SAME MASTER, not a similar track. So a
     // near-1.0 row is one of two things, and the folded title+artist `matchKey` tells them apart:
@@ -2008,6 +2027,13 @@ export async function rankCatalogue(
     // duplicate KEEPS its score (it reads "already in the archive"), so it stays a `scored` row.
     scored: vectored.length - quarantined,
   };
+}
+
+export function rankCatalogue(
+  limit = RANK_BATCH_SIZE,
+  countRemaining = false,
+): Promise<RankCatalogueSummary> {
+  return rankCatalogueBatch(limit, countRemaining);
 }
 
 /** How much of the catalogue is still stale after a tick — the cron's "run me again" signal. */

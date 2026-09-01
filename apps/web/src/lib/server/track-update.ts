@@ -477,14 +477,36 @@ function applySourceHierarchy(
   return false;
 }
 
-export async function updateTrack(
+function assertCertificationUpdateAllowed(
+  trackId: string,
+  certified: boolean,
+  update: TrackUpdate,
+): void {
+  if (certified) {
+    return;
+  }
+  const refused = (Object.keys(update) as Array<keyof TrackUpdate>)
+    .filter((field) => CERTIFICATION_FIELDS.has(field))
+    .sort();
+  if (refused.length > 0) {
+    throw new ApiError(
+      "uncertified",
+      `${trackId} is a catalogue track (no finding), so it cannot take the certification field${
+        refused.length > 1 ? "s" : ""
+      } ${refused.join(", ")}. Analysis fields (bpm, key, features, embedding, capture) are allowed; certifying a track is publish_track's job.`,
+      409,
+    );
+  }
+}
+
+async function updateTrackWithOptions(
   trackId: string,
   update: TrackUpdate,
   // The AUTHENTICATED caller's tier, lifted from the oRPC context by the handler —
   // NEVER read from the request body. Absent (internal server writes that never
   // touch bpm/key) leaves the provenance guard inert. `agent` writes are dropped on
   // a protected row; `operator` writes always win (and stamp their own source).
-  options: { writer?: AdminRole } = {},
+  options: { writer?: AdminRole },
 ): Promise<TrackUpdateResult> {
   const db = await getDb();
   // Resolve from `tracks` with an OUTER join onto the certification, NOT through the
@@ -522,21 +544,7 @@ export async function updateTrack(
   // reports success.
   const certified = Number(existing.certified) === 1;
 
-  if (!certified) {
-    const refused = (Object.keys(update) as Array<keyof TrackUpdate>)
-      .filter((field) => CERTIFICATION_FIELDS.has(field))
-      .sort();
-
-    if (refused.length > 0) {
-      throw new ApiError(
-        "uncertified",
-        `${trackId} is a catalogue track (no finding), so it cannot take the certification field${
-          refused.length > 1 ? "s" : ""
-        } ${refused.join(", ")}. Analysis fields (bpm, key, features, embedding, capture) are allowed; certifying a track is publish_track's job.`,
-        409,
-      );
-    }
-  }
+  assertCertificationUpdateAllowed(trackId, certified, update);
 
   // Apply the source hierarchy before building the write (see PROTECTED_SOURCES).
   // The guard mutates the caller's fresh-per-request `update` object in place: it
@@ -1282,6 +1290,14 @@ export async function updateTrack(
     ),
     trackId,
   };
+}
+
+export function updateTrack(
+  trackId: string,
+  update: TrackUpdate,
+  options: { writer?: AdminRole } = {},
+): Promise<TrackUpdateResult> {
+  return updateTrackWithOptions(trackId, update, options);
 }
 
 // THE FILL-EMPTY-ONLY GUARD, as a DB predicate — the race-safe note write. The

@@ -9,7 +9,7 @@ import { recoverIsrcViaDeezer, verifySearchCandidate } from "./anchor";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { postToBluesky } from "./bluesky";
 import { getDb, typedRow } from "./db";
-import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
+import { type DeezerIsrcCandidate, enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { discogsResolveRelease } from "./discogs";
 import { batchDueWorkSourceMutation, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID } from "./due-work";
 import { purgeLogCache } from "./edge-cache";
@@ -52,6 +52,56 @@ type TrackRow = {
   added_to_spotify: number;
   posted_to_telegram: number;
 };
+
+function dryRunPublishResult(
+  track: TrackMetadata,
+  artistLine: string,
+  logId: string,
+  note: string | undefined,
+): PublishTrackResult {
+  const message = `Dry run
+
+${artistLine}
+Log ID: fluncle://${logId}
+Album: ${track.album ?? "Unknown"}
+Duration: ${formatDuration(track.durationMs)}
+Spotify: ${track.spotifyUrl}
+
+Telegram message:
+
+${formatTelegramMessage(track, note, logId)}
+
+No database, Spotify, or Telegram changes were made. Enrichment (label, preview) runs on publish.`;
+
+  return buildAddResult(
+    track,
+    message,
+    { addedToSpotify: false, dryRun: true, postedToTelegram: false },
+    { logId },
+  );
+}
+
+function verifiedDeezerLink(
+  track: TrackMetadata,
+  byName: DeezerIsrcCandidate | undefined,
+  byIsrcTrackId: string | undefined,
+) {
+  const verified = byName
+    ? verifySearchCandidate(track.artists, track.title, track.durationMs, [
+        {
+          artists: [byName.artistName],
+          deezerTrackId: byName.deezerTrackId,
+          durationMs: byName.durationMs,
+          title: byName.title,
+        },
+      ])
+    : undefined;
+  return deezerLinkFor(verified?.candidate.deezerTrackId, verified?.via, byIsrcTrackId);
+}
+
+function isPublishedFlag(value: number | null): boolean {
+  return Number(value ?? 0) === 1;
+}
 
 /**
  * What a certify-in-place does to an already-linked entity's maintained hub counts (keystone 2):
@@ -285,30 +335,7 @@ export async function publishTrack(
   });
 
   if (options.dryRun) {
-    const message = `Dry run
-
-${artistLine}
-Log ID: fluncle://${logId}
-Album: ${track.album ?? "Unknown"}
-Duration: ${formatDuration(track.durationMs)}
-Spotify: ${track.spotifyUrl}
-
-Telegram message:
-
-${formatTelegramMessage(track, options.note, logId)}
-
-No database, Spotify, or Telegram changes were made. Enrichment (label, preview) runs on publish.`;
-
-    return buildAddResult(
-      track,
-      message,
-      {
-        addedToSpotify: false,
-        dryRun: true,
-        postedToTelegram: false,
-      },
-      { logId },
-    );
+    return dryRunPublishResult(track, artistLine, logId, options.note);
   }
 
   // Sync enrichment: HTTP-only and best-effort (label + preview from Deezer), so
@@ -342,23 +369,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // any of those would turn an outage or a skipped read into a claim that Deezer does not carry the
   // recording. So a publish-born row keeps reading "Not checked yet" until the anchor rung (anchor.ts
   // § recoverIsrcViaDeezer, the ledger's one writer) concludes a real look over it.
-  const deezerByNameVerified = deezerByName
-    ? verifySearchCandidate(track.artists, track.title, track.durationMs, [
-        {
-          // Deezer's BILLED artist string, folded into a set by the gate's `matchKey` — the same
-          // mapping the ISRC-recovery rung does with the same hits.
-          artists: [deezerByName.artistName],
-          deezerTrackId: deezerByName.deezerTrackId,
-          durationMs: deezerByName.durationMs,
-          title: deezerByName.title,
-        },
-      ])
-    : undefined;
-  const deezerLink = deezerLinkFor(
-    deezerByNameVerified?.candidate.deezerTrackId,
-    deezerByNameVerified?.via,
-    deezer.deezerTrackId,
-  );
+  const deezerLink = verifiedDeezerLink(track, deezerByName, deezer.deezerTrackId);
 
   // Read-only Discogs release-ID enrichment (best-effort, alongside the Deezer
   // label/preview it most resembles — both cheap HTTP, Worker-safe). A scored
@@ -633,9 +644,9 @@ Posted to Telegram`;
  * enrichment chain, so the operator lands on the finding's admin surface with the pipeline moving.
  * Guards: the row must EXIST (404). Graph links + cache purge + IndexNow stay best-effort.
  */
-export async function certifyExistingTrack(
+async function certifyExistingTrackWithOptions(
   trackId: string,
-  options: { note?: string } = {},
+  options: { note?: string },
 ): Promise<{ logId: string }> {
   const db = await getDb();
   const row = typedRow<{
@@ -682,8 +693,8 @@ export async function certifyExistingTrack(
 
   const artists = parseArtistsJson(row.artists_json);
   const line = `${artists.join(", ")} — ${row.title}`;
-  const alreadySpotify = Number(row.added_to_spotify ?? 0) === 1;
-  const alreadyTelegram = Number(row.posted_to_telegram ?? 0) === 1;
+  const alreadySpotify = isPublishedFlag(row.added_to_spotify);
+  const alreadyTelegram = isPublishedFlag(row.posted_to_telegram);
 
   if (row.finding_id && alreadySpotify && alreadyTelegram) {
     throw new ApiError("already_certified", `Already logged: ${line}`, 409);
@@ -927,6 +938,13 @@ export async function certifyExistingTrack(
   }
 
   return { logId };
+}
+
+export function certifyExistingTrack(
+  trackId: string,
+  options: { note?: string } = {},
+): Promise<{ logId: string }> {
+  return certifyExistingTrackWithOptions(trackId, options);
 }
 
 function buildAddResult(

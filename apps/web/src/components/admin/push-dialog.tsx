@@ -91,6 +91,19 @@ function tiktokDraftAge(
   };
 }
 
+function pushDescription(platform: PlatformConfig): string {
+  return platform.directPost
+    ? "Posts a public Short directly. Prep the caption + cover, push, then record the watch URL."
+    : "Sends a silent draft to your TikTok inbox. Prep the caption + cover, push, finish in the app, then paste the live URL back here.";
+}
+
+function pushButtonLabel(platform: PlatformConfig, pushed: boolean): string {
+  if (pushed) {
+    return platform.directPost ? "Re-post" : "Re-push draft";
+  }
+  return platform.directPost ? `Post to ${platform.label}` : "Push draft to inbox";
+}
+
 function PushDialogBody({
   busy,
   copied,
@@ -129,11 +142,7 @@ function PushDialogBody({
           <platform.Icon aria-hidden="true" className="size-4" weight="fill" />
           {platform.label} — {row.title}
         </DialogTitle>
-        <DialogDescription>
-          {platform.directPost
-            ? "Posts a public Short directly. Prep the caption + cover, push, then record the watch URL."
-            : "Sends a silent draft to your TikTok inbox. Prep the caption + cover, push, finish in the app, then paste the live URL back here."}
-        </DialogDescription>
+        <DialogDescription>{pushDescription(platform)}</DialogDescription>
       </DialogHeader>
 
       {/* 1. PREP — the two things you paste into the app. */}
@@ -199,13 +208,7 @@ function PushDialogBody({
           ) : (
             <PaperPlaneTiltIcon aria-hidden="true" weight="fill" />
           )}
-          {pushed
-            ? platform.directPost
-              ? "Re-post"
-              : "Re-push draft"
-            : platform.directPost
-              ? `Post to ${platform.label}`
-              : "Push draft to inbox"}
+          {pushButtonLabel(platform, pushed)}
         </Button>
         {!row.videoUrl ? (
           <p className="text-xs text-muted-foreground">No video yet — render + upload it first.</p>

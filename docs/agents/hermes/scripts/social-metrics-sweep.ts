@@ -125,6 +125,21 @@ function armCount(
   return arm?.configured === false && arm.failed === 0 ? 0 : null;
 }
 
+function sumKnownCounts(...counts: Array<null | number>): null | number {
+  return counts.every((count) => count !== null)
+    ? counts.reduce<number>((total, count) => total + (count ?? 0), 0)
+    : null;
+}
+
+function totalSocialMetricFailures(
+  summary: SocialMetricsSummary,
+  postizFailed: null | number,
+): null | number {
+  return postizFailed !== null && summary.tiktokFailed !== null && summary.youtubeFailed !== null
+    ? postizFailed + summary.tiktokFailed + summary.youtubeFailed
+    : null;
+}
+
 function applySocialMetricsResponse(
   summary: SocialMetricsSummary,
   response: RecordSocialMetricsResponse,
@@ -139,10 +154,7 @@ function applySocialMetricsResponse(
     typeof response.youtube?.configured === "boolean" ? response.youtube.configured : null;
   summary.youtubeFailed = responseCount(response.youtube?.failed);
   const postizFailed = responseCount(response.failed);
-  summary.failed =
-    postizFailed !== null && summary.tiktokFailed !== null && summary.youtubeFailed !== null
-      ? postizFailed + summary.tiktokFailed + summary.youtubeFailed
-      : null;
+  summary.failed = totalSocialMetricFailures(summary, postizFailed);
   summary.inserted = typeof response.inserted === "number" ? response.inserted : null;
   summary.missing = typeof response.missing === "number" ? response.missing : null;
   summary.polled = typeof response.polled === "number" ? response.polled : null;
@@ -158,14 +170,8 @@ function applySocialMetricsResponse(
   const youtubeChecked = armCount(response.youtube, response.youtube?.fetched);
   const tiktokProduced = armCount(response.tiktok, response.tiktok?.inserted);
   const youtubeProduced = armCount(response.youtube, response.youtube?.inserted);
-  summary.checked =
-    summary.polled !== null && tiktokChecked !== null && youtubeChecked !== null
-      ? summary.polled + tiktokChecked + youtubeChecked
-      : null;
-  summary.produced =
-    summary.inserted !== null && tiktokProduced !== null && youtubeProduced !== null
-      ? summary.inserted + tiktokProduced + youtubeProduced
-      : null;
+  summary.checked = sumKnownCounts(summary.polled, tiktokChecked, youtubeChecked);
+  summary.produced = sumKnownCounts(summary.inserted, tiktokProduced, youtubeProduced);
 }
 
 // ── One tick, with injected effects ──────────────────────────────────────────

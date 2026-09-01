@@ -273,6 +273,21 @@ function detectOrganicFamilies(body: string): {
 }
 
 /** Detect flow and geometric families after the ridge evidence has been established. */
+function hasGridRepeat(
+  body: string,
+  minDistLoop: boolean,
+  ridgePresent: boolean,
+  causticCalls: number,
+): boolean {
+  return (
+    /\bmod\s*\(/.test(body) &&
+    /\bstep\s*\(/.test(body) &&
+    !minDistLoop &&
+    !ridgePresent &&
+    causticCalls === 0
+  );
+}
+
 function detectGeometricFamilies(
   body: string,
   ridge: { present: boolean; field: string | null },
@@ -319,12 +334,7 @@ function detectGeometricFamilies(
 
   // ── lattice (regular grid / dot screen) ──────────────────────────────────
   const dotCalls = callCount("dotField", body);
-  const gridRepeat =
-    /\bmod\s*\(/.test(body) &&
-    /\bstep\s*\(/.test(body) &&
-    !minDistLoop &&
-    !ridge.present &&
-    causticCalls === 0;
+  const gridRepeat = hasGridRepeat(body, minDistLoop, ridge.present, causticCalls);
   const latticeAlgo = dotCalls > 0 || gridRepeat;
   {
     let score = 0;
