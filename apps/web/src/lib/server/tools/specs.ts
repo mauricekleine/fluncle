@@ -132,14 +132,15 @@ export const listFindingsSpec = defineSpec({
  * The reborn `list_tracks` — the whole-archive browse ENUMERATOR (the machine twin of the web
  * `/tracks` page), distinct from the found-order `list_findings` feed above. Every track Fluncle
  * holds, newest RELEASE first, one numbered page at a time, with a tri-state `certified` filter. Its
- * rows are the LEAN certified-tagged shape (title, artists, `certified`, a `logId` coordinate on the
- * certified ones, `spotifyUrl`, album/label/release info) — flat for every transport, so the model
+ * rows are the LEAN certified-tagged shape (title, artists, `certified`, `trackId`, the row's own page
+ * `url`, a `logId` coordinate on the certified ones, `spotifyUrl`, album/label/release info) — flat for
+ * every transport, so the model
  * reads a browse list, never a lore card. `tier: "catalogue"` (it returns the catalogue register).
  */
 export const listTracksSpec = defineSpec({
   access: "public",
   description:
-    "List every track in Fluncle's drum & bass archive, newest RELEASE first, one page at a time. Ordered by when each track came OUT, not by when Fluncle found it, so do not say Fluncle found them. Set certified to true for only the certified findings (which carry a Log ID coordinate), false for only the quieter uncertified rows, or leave it off for both.",
+    "List every track in Fluncle's drum & bass archive, newest RELEASE first, one page at a time. Ordered by when each track came OUT, not by when Fluncle found it, so do not say Fluncle found them. Set certified to true for only the certified findings (which carry a Log ID coordinate), false for only the quieter uncertified rows, or leave it off for both. Every row carries its trackId and, when it has a page, the url of that page on fluncle.com.",
   effect: "read",
   input: z.object({
     certified: z

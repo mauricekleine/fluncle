@@ -86,6 +86,12 @@ DISCOVERY_EVENT_DIR=/tmp/discovery-events bun run --cwd apps/web test:e2e -- tes
 
 The same spec proves the actions still complete when the Simple Analytics tag is absent or `sa_event` throws: navigation, outbound listen, `/search` form submit, and in-place preview start.
 
+## The live discovery walk (not a spec)
+
+`bun run --cwd apps/web walk:discovery` (`scripts/discovery-walk.ts`) walks the same three journeys as a stranger against a LIVE deployment — prod by default, `WALK_BASE=http://127.0.0.1:3000` for a local stack — at both widths, with real current data, and retains per step a full-page screenshot, the observed destination, the canonical + robots directive, the outbound listening target, every Simple Analytics request sent, and any console error, into the gitignored `apps/web/.dev/discovery-walk/`: one `<viewport>.json` index (recording the commit `/api/v1/health` reported, so the evidence names what it walked), the PNGs, and `summary.md`, the journey-organized table of every step (`scripts/discovery-walk-summary.ts`). It asserts nothing: the hermetic specs above are the gate, and the walk is the record of what the integrated product did, for a reader who has no repository. The browser never leaves the site (an outbound popup is recorded and closed).
+
+Its durable home is the same as every other evidence directory here: `.github/workflows/discovery-walk.yml` runs the walk on every pull request (against what production serves at review time) and after every successful Post-deploy Probe (so the record attributes to exactly that deploy), prints `summary.md` into the job summary, and uploads the directory as the always-on `discovery-walk` artifact, retained 90 days. `scripts/evidence-retention.test.ts` at the repo root pins that contract for every evidence directory: 90 days, green or red, never empty.
+
 ## The search surface's viewport evidence
 
 `search.spec.ts` does the same for `/search`, into the gitignored `apps/web/.dev/search/`: `desktop-1440x900.png` and `mobile-390x844.png` answering a query, plus `mobile-390x844-zero.png` for the zero state (the first thing a stranger sees). Same terms as the front door's — the assertions in the spec are what gate it, the images are for a human, and `.github/workflows/e2e.yml` uploads them as the always-on `search-surface` artifact rather than committing binaries to a public repo.

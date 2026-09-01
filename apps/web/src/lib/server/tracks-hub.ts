@@ -99,6 +99,8 @@ import {
   resolveFilterEntities,
   type ResolvedFilterEntities,
 } from "./search";
+import { logPageUrl } from "../fluncle-links";
+import { hasTrackPageIdentity, trackPageUrl } from "../track-page";
 import { fold } from "./track-match";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
 
@@ -462,9 +464,11 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
 
 /**
  * Flatten one hub entry into the lean `list_tracks` API row (`CatalogueTrackListItem`) — the machine
- * twin of what the web row renders. A finding carries its `logId` coordinate, cover, and record +
- * imprint edges; an uncertified row carries neither coordinate nor cover (the Unlit Rule holds by
- * construction, since the finding-only fields are read only in the `finding` arm). The heavy DTO
+ * twin of what the web row renders. Every row carries its `trackId` and the `url` of the page the
+ * hub row links to (a finding's `/log` page, a catalogue row's `/track` destination). A finding
+ * carries its `logId` coordinate, cover, and record + imprint edges; an uncertified row carries
+ * neither coordinate nor cover (the Unlit Rule holds by construction, since the finding-only fields
+ * are read only in the `finding` arm). The heavy DTO
  * (note/video/features) never crosses this boundary — a browse enumerator wants the identity, not the
  * lore.
  */
@@ -484,9 +488,15 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
       releaseDate: (finding.releaseDate ?? entry.releaseDate) || undefined,
       spotifyUrl: finding.spotifyUrl,
       title: finding.title,
+      trackId: finding.trackId,
+      // The finding's one URL — its `/log` page, built off the coordinate the row carries.
+      ...(finding.logId ? { url: logPageUrl(finding.logId) } : {}),
     };
   }
 
+  // The catalogue row's `url` is the SAME decision the web hub row makes before it links
+  // (`hasTrackPageIdentity`, the client-side twin of the destination's identity predicate): a row
+  // the destination would refuse never gets a link, on either surface.
   return {
     artists: entry.track.artists,
     certified: false,
@@ -495,6 +505,8 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
     releaseDate: entry.releaseDate || undefined,
     spotifyUrl: entry.track.spotifyUrl,
     title: entry.track.title,
+    trackId: entry.track.trackId,
+    ...(hasTrackPageIdentity(entry.track) ? { url: trackPageUrl(entry.track.trackId) } : {}),
   };
 }
 

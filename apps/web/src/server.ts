@@ -132,6 +132,29 @@ async function dispatch(request: Request): Promise<Response> {
   const cachePolicy = edgeCachePolicyFor(url.pathname, url.search);
   const acceptsHtml = request.headers.get("accept")?.includes("text/html") ?? false;
 
+  // Content negotiation on the public PAGE tiers is answered here, not by the router. TanStack's
+  // SSR handler refuses a request whose `Accept` admits neither `text/html` nor `*/*` with a
+  // 500 — which tells an API client or a crawler that asked a /log, /track, or hub URL for JSON
+  // that the archive FAULTED, when nothing did. The honest answer is 406: the page exists, it is
+  // served as HTML, and the JSON twin of every fact on it lives under /api/v1. `Vary: Accept`
+  // keeps the two answers apart in any cache. Only the HTML cache tiers (the public read
+  // surfaces) are negotiated; server functions, assets, feeds, and the API never carry an HTML
+  // policy and flow on untouched. `text/markdown` on the homepage was already answered above.
+  if (
+    cachePolicy?.contentType === "text/html" &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    !acceptHeaderAdmitsHtml(request.headers.get("accept"))
+  ) {
+    return Response.json(
+      {
+        code: "not_acceptable",
+        message: "This page is served as HTML. The same archive answers as JSON under /api/v1.",
+        ok: false,
+      },
+      { headers: { Vary: "Accept" }, status: 406 },
+    );
+  }
+
   if (
     cachePolicy &&
     request.method === "GET" &&
@@ -155,6 +178,24 @@ async function dispatch(request: Request): Promise<Response> {
   const located = appendOnionLocation(response, url);
 
   return url.pathname === "/" ? appendAgentLinkHeaders(located) : located;
+}
+
+/**
+ * Whether an `Accept` header admits an HTML document: absent (a bare `curl`, a link fetcher),
+ * `text/html`, `text/*`, or the bare wildcard range — the same media ranges TanStack's SSR guard
+ * honours, plus `text/*`, which it does not but which plainly admits HTML. Parameters (`;q=`) are ignored: a
+ * client that lists HTML at any weight can take it.
+ */
+export function acceptHeaderAdmitsHtml(accept: string | null): boolean {
+  if (accept === null || accept.trim() === "") {
+    return true;
+  }
+
+  return accept.split(",").some((part) => {
+    const range = part.trim().split(";")[0]?.trim() ?? "";
+
+    return range === "*/*" || range === "text/*" || range === "text/html";
+  });
 }
 
 // Sentry's `withSentry` wraps a Cloudflare `ExportedHandler`, but TanStack's
