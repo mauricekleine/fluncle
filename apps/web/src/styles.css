@@ -602,7 +602,7 @@ body::before {
 }
 
 .track-chip-numeric {
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }
@@ -610,7 +610,7 @@ body::before {
 .track-log-id {
   align-self: center;
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.92rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -843,7 +843,7 @@ body::before {
 
 .story-log-id {
   color: var(--eclipse-gold);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.92rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -1022,7 +1022,7 @@ body::before {
 
 .log-nameplate {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.8rem;
   font-weight: 800;
   letter-spacing: -0.01em;
@@ -1030,7 +1030,7 @@ body::before {
 
 .log-coordinate {
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(1.9rem, 6vw, 2.6rem);
   font-variant-numeric: tabular-nums;
   font-weight: 800;
@@ -1040,7 +1040,7 @@ body::before {
 
 .log-coordinate-uri {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.92rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -1106,6 +1106,29 @@ body::before {
     -webkit-backdrop-filter: blur(18px) saturate(125%);
     backdrop-filter: blur(18px) saturate(125%);
     background: color-mix(in oklch, var(--card) 48%, transparent);
+  }
+}
+
+/* THE SCRIM MATCHES THE DIALOG'S (DESIGN.md §5, The Behind-the-Scenes Drawer: "on a public
+   surface its scrim matches the dialog's overlay weight"). The generated sheet ships a 10%
+   backdrop, which is the wrong weight for a drawer whose own pane is 48% translucent glass:
+   the cosmos and the sun-bloom stay all but unmuted right behind the reading text, which is
+   what The Legible Sky Rule asks a pane to dim. Same values as the generated dialog backdrop
+   (`packages/ui/src/components/dialog.tsx`) so the app has ONE modal scrim rather than two —
+   60%, thinned to 40% where a backdrop blur can carry part of the separation.
+
+   Keyed on the slot and unlayered, for the reason `.graph-card` and `[data-slot="sidebar-inner"]`
+   are: an override that lives in this sheet survives a `shadcn add sheet` regeneration, where one
+   hand-edited into the generated component would be silently dropped. */
+[data-slot="sheet-overlay"] {
+  background: rgb(0 0 0 / 0.6);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-slot="sheet-overlay"] {
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    background: rgb(0 0 0 / 0.4);
   }
 }
 
@@ -1252,7 +1275,7 @@ body::before {
 .mixtape-player-time {
   color: var(--stardust);
   flex: none;
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -1376,7 +1399,7 @@ body::before {
   background: color-mix(in oklch, var(--deep-field) 70%, transparent);
   border-radius: var(--rounded-sm);
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.68rem;
   font-variant-numeric: tabular-nums;
   left: 0.35rem;
@@ -1388,7 +1411,7 @@ body::before {
 
 .studio-time {
   color: var(--stardust);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -1508,7 +1531,7 @@ body::before {
 /* Oxanium tabular numerals for the cue rail (positions + times), matching the studio
    time readout — the DESIGN.md numeral convention. */
 .studio-numeral {
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }
@@ -1782,7 +1805,7 @@ body::before {
 
 .log-decode-part {
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }
@@ -1829,7 +1852,7 @@ body::before {
 .log-related-coordinate {
   color: var(--accent-foreground);
   flex-shrink: 0;
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -1854,7 +1877,7 @@ body::before {
 .log-mixtape-cue {
   color: var(--muted-foreground);
   flex-shrink: 0;
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   margin-left: auto;
@@ -2832,7 +2855,7 @@ a.catalogue-letter:focus-visible {
 
 .galaxy-pane-count {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
 }
@@ -2880,7 +2903,7 @@ a.catalogue-letter:focus-visible {
 
 .galaxy-adjacent-count {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
 }
@@ -3073,11 +3096,16 @@ a.catalogue-letter:focus-visible {
 /* The release date — the date column, Oxanium tabular like every other number (the Tabular Rule).
    Left-aligned and wide enough for the short-month archival date ("Sep 22, 2026"); the cover and body
    flow after it. A partial-precision or undated row prints just the year (or an em dash), which sits
-   comfortably inside the same column. */
+   comfortably inside the same column.
+
+   The face comes from `--font-display`, the theme token on `:root`. A page-scoped alias reaches
+   nothing outside the page that declares it: this rule lives on `/tracks` (`.log-plate-stage`) and
+   the alias it used to read was declared on `/fresh`'s own `.fresh-page`, so the custom property
+   never resolved here and the column quietly inherited the body face. One token, defined once. */
 .tracks-hub-row-date {
   color: var(--muted-foreground);
   flex: none;
-  font-family: var(--fresh-oxanium);
+  font-family: var(--font-display);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
@@ -3398,7 +3426,7 @@ a.catalogue-letter:focus-visible {
 
 .log-index-id {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.92rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -3569,7 +3597,7 @@ a.catalogue-letter:focus-visible {
    quiet. */
 .log-newsletter-signoff {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.95rem;
   letter-spacing: -0.01em;
   margin: 0;
@@ -3723,7 +3751,7 @@ a.catalogue-letter:focus-visible {
 }
 
 .identity-value {
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
@@ -3875,7 +3903,7 @@ a.catalogue-letter:focus-visible {
 
 .home-nameplate {
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(1.45rem, 4vw, 2.05rem);
   font-weight: 800;
   letter-spacing: 0.05em;
@@ -4027,7 +4055,7 @@ a.catalogue-letter:focus-visible {
 
 .account-kicker {
   color: var(--eclipse-gold);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-weight: 800;
 }
 
@@ -4162,7 +4190,7 @@ a.catalogue-letter:focus-visible {
 .account-collection-thumb {
   background: var(--tape-black);
   border: 1px solid var(--dust-line);
-  border-radius: var(--artwork-radius, 6px);
+  border-radius: var(--rounded-artwork);
   display: block;
   flex-shrink: 0;
   height: 40px;
@@ -4191,7 +4219,7 @@ a.catalogue-letter:focus-visible {
 /* The coordinate reads in Oxanium tabular like every other number on the site
    (the One Voice Rule — mono speaks only for the machine). */
 .account-collection-logid {
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.76rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -4242,7 +4270,7 @@ a.catalogue-letter:focus-visible {
    never shifts the words around it (DESIGN.md, The Tabular Rule). Cream, never gold —
    a tally is not certified music. */
 .account-voyage-num {
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -4286,7 +4314,7 @@ a.catalogue-letter:focus-visible {
 .account-kit-section {
   border-left: 1px solid color-mix(in oklch, var(--stardust) 45%, transparent);
   border-top: 1px solid color-mix(in oklch, var(--stardust) 45%, transparent);
-  border-top-left-radius: var(--artwork-radius, 6px);
+  border-top-left-radius: var(--rounded-artwork);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -4630,8 +4658,43 @@ a.catalogue-letter:focus-visible {
     transform: none !important;
   }
 
+  /* The alert dialog is the same object as the dialog and grounds with it: its content
+     carries the same `zoom-in-95`, so leaving it out would scale a confirmation open in
+     front of a reader who asked for no scale. It reaches a public surface too — the
+     account door's saves confirmation, not admin alone. */
+  [data-slot="alert-dialog-content"],
+  [data-slot="alert-dialog-overlay"],
   [data-slot="dialog-content"],
   [data-slot="dialog-overlay"] {
+    animation-duration: 1ms !important;
+  }
+
+  /* The sheet grounds the same way, and it needs its own rule because it moves by
+     TRANSITION rather than by animation: the generated content slides 2.5rem in from its
+     side over 200ms and the backdrop fades over 150ms, neither of which the dialog rule
+     above reaches. Only the behind-the-scenes drawer carried a gate, on its own element;
+     the admin submissions tray slid at full travel under `reduce`. 1ms rather than `none`,
+     the dialog's own precedent — the popup still fires the transition lifecycle Base UI
+     unmounts on, it just has nowhere to travel. */
+  [data-slot="sheet-content"],
+  [data-slot="sheet-overlay"] {
+    transition-duration: 1ms !important;
+  }
+
+  /* Every other floating popup grounds with them. The generated Shadcn surfaces open on
+     `animate-in fade-in-0 zoom-in-95` plus a `slide-in-from-<side>-2` — a scale AND a drift,
+     the two things §5 names when it says a reduced-motion reader gets "no scale, no drift".
+     Three surfaces already grounded one at a time (the dialog above, the sheet above, and
+     `.graph-card`'s hover card, which DESIGN.md §5 spells out: "the card appears without the
+     fade/zoom"); these are the same rule, and there is no reason a select or a tooltip is a
+     different case from a hover card. The colour-only feedback inside them is untouched. */
+  [data-slot="combobox-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="hover-card-content"],
+  [data-slot="popover-content"],
+  [data-slot="select-content"],
+  [data-slot="tooltip-content"] {
     animation-duration: 1ms !important;
   }
 
@@ -4808,7 +4871,7 @@ a.catalogue-letter:focus-visible {
 
 .radio-log-id {
   color: var(--eclipse-gold);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.92rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -5157,7 +5220,7 @@ a.catalogue-letter:focus-visible {
    rail (leaving just the brand chip) and shows in the expanded flex row. */
 .admin-wordmark {
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.05em;
@@ -5271,7 +5334,7 @@ a.catalogue-letter:focus-visible {
 .nav-wordmark {
   color: var(--starlight-cream);
   flex: none;
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 1.05rem;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -5476,7 +5539,7 @@ a.catalogue-letter:focus-visible {
   border-radius: 0.3rem;
   color: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
   display: none;
-  font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-size: 0.68rem;
   font-weight: 600;
   padding: 0.05rem 0.3rem;
@@ -5770,7 +5833,7 @@ a.catalogue-letter:focus-visible {
    because it IS the certification. */
 .search-row-coordinate {
   color: var(--eclipse-gold);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
@@ -6456,7 +6519,7 @@ a.catalogue-letter:focus-visible {
    sentence. Sized to the surrounding prose, never .track-log-id's fixed 0.92rem, so the line
    rhythm holds. */
 .chat-coordinate {
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.95em;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -6748,7 +6811,7 @@ a.catalogue-letter:focus-visible {
 /* The 64px square: the .cover-frame class paints the lit border colors + the warm
    eclipse-gradient mat (the empty-state placeholder); this sets the box. */
 .account-portrait {
-  border-radius: var(--artwork-radius, 6px);
+  border-radius: var(--rounded-artwork);
   border-style: solid;
   border-width: 1px;
   flex-shrink: 0;
@@ -6945,7 +7008,7 @@ a.catalogue-letter:focus-visible {
 
 .rec-playlist-name {
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(1.45rem, 3.4vw, 2rem);
   font-weight: 800;
   letter-spacing: 0.03em;
@@ -6998,7 +7061,7 @@ a.catalogue-letter:focus-visible {
 
 .rec-picks-count {
   color: var(--stardust);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -7051,7 +7114,7 @@ a.catalogue-letter:focus-visible {
 
 .rec-pick-index {
   color: var(--stardust);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -7275,7 +7338,7 @@ a.catalogue-letter:focus-visible {
 
 .rec-candidate-logid {
   color: var(--eclipse-gold);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
@@ -7451,7 +7514,7 @@ a.catalogue-letter:focus-visible {
   color: var(--eclipse-gold);
   display: inline-flex;
   flex: none;
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
@@ -7562,7 +7625,6 @@ a.catalogue-letter:focus-visible {
 
 .fresh-page {
   --fresh-max: 72rem;
-  --fresh-oxanium: "Oxanium", ui-sans-serif, system-ui, sans-serif;
   isolation: isolate;
   min-height: 100vh;
   padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 5vw, 3rem) 7rem;
@@ -7606,7 +7668,7 @@ a.catalogue-letter:focus-visible {
 
 .fresh-title {
   color: var(--starlight-cream);
-  font-family: var(--fresh-oxanium);
+  font-family: var(--font-display);
   font-size: clamp(3.25rem, 13vw, 7.5rem);
   font-weight: 800;
   letter-spacing: -0.03em;
@@ -7702,7 +7764,7 @@ a.catalogue-letter:focus-visible {
 
 .fresh-cover-date {
   color: var(--muted-foreground);
-  font-family: var(--fresh-oxanium);
+  font-family: var(--font-display);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
@@ -7739,7 +7801,7 @@ a.catalogue-letter:focus-visible {
 .fresh-row-date {
   color: var(--muted-foreground);
   flex: none;
-  font-family: var(--fresh-oxanium);
+  font-family: var(--font-display);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
@@ -7778,7 +7840,7 @@ a.catalogue-letter:focus-visible {
 .fresh-row-coordinate {
   color: var(--muted-foreground);
   flex: none;
-  font-family: var(--fresh-oxanium);
+  font-family: var(--font-display);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
@@ -7948,7 +8010,7 @@ a.catalogue-letter:focus-visible {
   color: var(--muted-foreground);
   display: flex;
   flex: none;
-  font-family: var(--fresh-oxanium);
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   gap: 0.3rem;
   width: 4rem;
@@ -8315,7 +8377,7 @@ a.catalogue-letter:focus-visible {
 
 .fd-nameplate {
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(1.6rem, 5vw, 2.6rem);
   font-weight: 800;
   letter-spacing: 0.05em;
@@ -8370,7 +8432,7 @@ a.catalogue-letter:focus-visible {
 
 .fd-section-title {
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(1.15rem, 2.6vw, 1.5rem);
   font-weight: 800;
   letter-spacing: -0.01em;
@@ -8562,7 +8624,7 @@ a.catalogue-letter:focus-visible {
    columnar number, so it is Oxanium with tabular figures. */
 .fd-lead-coordinate {
   color: var(--accent-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.9rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
@@ -8664,7 +8726,7 @@ a.catalogue-letter:focus-visible {
 
 .fd-finding-coordinate {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.76rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
@@ -8733,7 +8795,7 @@ a.catalogue-letter:focus-visible {
 
 .fd-browse-label {
   color: var(--starlight-cream);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 1.05rem;
   font-weight: 800;
   letter-spacing: 0.01em;
@@ -8747,7 +8809,7 @@ a.catalogue-letter:focus-visible {
 
 .fd-browse-count {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
 }
@@ -8876,7 +8938,7 @@ a.catalogue-letter:focus-visible {
 
 .track-neighbour-coordinate {
   color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
