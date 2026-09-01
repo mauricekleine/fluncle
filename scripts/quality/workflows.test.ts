@@ -134,6 +134,17 @@ describe("security, release, and deploy topology", () => {
     );
   });
 
+  test("post-deploy keeps every pushed SHA while deduplicating one dispatched build", () => {
+    const deploy = workflow("post-deploy-probe.yml");
+    const concurrencyGroup = at(deploy, "concurrency", "group");
+
+    expect(at(deploy, "concurrency", "cancel-in-progress")).toBe(true);
+    expect(concurrencyGroup).toBe(
+      "post-deploy-${{ github.event_name == 'push' && github.sha || github.event.client_payload.build_uuid || inputs.build_uuid || github.run_id }}",
+    );
+    expect(concurrencyGroup).not.toContain("github.event_name == 'push' && 'fallback'");
+  });
+
   test("an intentionally skipped deploy cannot launch the expensive discovery walk", () => {
     const discovery = workflow("discovery-walk.yml");
     const discoverySource = source("discovery-walk.yml");

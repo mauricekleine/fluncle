@@ -26,8 +26,10 @@ on:
         type: choice
 
 concurrency:
+  # Preserve one fallback per pushed commit: a later push (including an excluded one) must not
+  # cancel an earlier commit's deploy correlation. Event/manual retries still converge by build UUID.
   cancel-in-progress: true
-  group: post-deploy-${{ github.event_name == 'push' && 'fallback' || github.event.client_payload.build_uuid || inputs.build_uuid || github.run_id }}
+  group: post-deploy-${{ github.event_name == 'push' && github.sha || github.event.client_payload.build_uuid || inputs.build_uuid || github.run_id }}
 
 permissions:
   contents: read
