@@ -325,6 +325,36 @@ async function r2Get(key: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+function findingUpdateArgs(parsed: AnalyzeOutput, analyzedFrom: "full" | "preview"): string[] {
+  const updateArgs: string[] = [];
+
+  if (parsed.bpm !== null && parsed.bpm !== undefined) {
+    updateArgs.push("--bpm", String(parsed.bpm));
+    if (parsed.bpmSource) {
+      updateArgs.push("--bpm-source", parsed.bpmSource);
+    }
+    if (parsed.bpmConfidence !== null && parsed.bpmConfidence !== undefined) {
+      updateArgs.push("--bpm-confidence", String(parsed.bpmConfidence));
+    }
+  }
+
+  if (parsed.key !== null && parsed.key !== undefined) {
+    updateArgs.push("--key", parsed.key);
+    if (parsed.keySource) {
+      updateArgs.push("--key-source", parsed.keySource);
+    }
+    if (parsed.keyConfidence !== null && parsed.keyConfidence !== undefined) {
+      updateArgs.push("--key-confidence", String(parsed.keyConfidence));
+    }
+  }
+
+  updateArgs.push("--features", JSON.stringify(parsed.features ?? {}));
+  updateArgs.push("--analyzed-from", analyzedFrom);
+  updateArgs.push("--analyzed-at", new Date().toISOString());
+  updateArgs.push("--status", "done");
+  return updateArgs;
+}
+
 // ---------------------------------------------------------------------------
 // Per-finding: get → analyze → write back.
 // ---------------------------------------------------------------------------
@@ -438,39 +468,8 @@ async function enrichOne(finding: QueueFinding): Promise<EnrichResult> {
     // The bpm/key SOURCE + CONFIDENCE ride along only when the matching value was written
     // (the sweep writes --bpm/--key only when non-null), so provenance never claims a
     // source for a value the row didn't get.
-    const updateArgs = ["admin", "tracks", "update", trackId];
     const analyzedFrom = audioFilePath ? "full" : "preview";
-
-    if (parsed.bpm !== null && parsed.bpm !== undefined) {
-      updateArgs.push("--bpm", String(parsed.bpm));
-
-      if (parsed.bpmSource) {
-        updateArgs.push("--bpm-source", parsed.bpmSource);
-      }
-
-      if (parsed.bpmConfidence !== null && parsed.bpmConfidence !== undefined) {
-        updateArgs.push("--bpm-confidence", String(parsed.bpmConfidence));
-      }
-    }
-
-    if (parsed.key !== null && parsed.key !== undefined) {
-      updateArgs.push("--key", parsed.key);
-
-      if (parsed.keySource) {
-        updateArgs.push("--key-source", parsed.keySource);
-      }
-
-      if (parsed.keyConfidence !== null && parsed.keyConfidence !== undefined) {
-        updateArgs.push("--key-confidence", String(parsed.keyConfidence));
-      }
-    }
-
-    updateArgs.push("--features", JSON.stringify(parsed.features ?? {}));
-    updateArgs.push("--analyzed-from", analyzedFrom);
-    updateArgs.push("--analyzed-at", new Date().toISOString());
-    updateArgs.push("--status", "done");
-
-    fluncleJson(updateArgs);
+    fluncleJson(["admin", "tracks", "update", trackId, ...findingUpdateArgs(parsed, analyzedFrom)]);
     // Surface the BPM provenance so a fallback BPM is distinguishable in cron logs (e.g.
     // `via audio-file` for the captured full song, or `via acousticbrainz` when the preview
     // was beatless and the structured ISRC fallback supplied the tempo).

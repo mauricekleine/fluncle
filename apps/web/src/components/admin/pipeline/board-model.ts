@@ -243,6 +243,83 @@ function socialsStep(
   };
 }
 
+type BoardStepPartial = Pick<BoardStep, "state" | "statusLabel" | "hint" | "actionable" | "gated">;
+
+function discogsBoardStep(row: BoardRow): BoardStepPartial {
+  const linked = Boolean(row.discogsReleaseUrl);
+  return {
+    actionable: linked,
+    gated: false,
+    hint: linked
+      ? "Open the Discogs release"
+      : row.discogsRan
+        ? "Checked — no Discogs release found"
+        : "Discogs lookup hasn't run yet",
+    state: linked || row.discogsRan ? "done" : "open",
+    statusLabel: linked ? "Linked" : row.discogsRan ? "Checked — no release" : "Pending",
+  };
+}
+
+function enrichBoardStep(row: BoardRow): BoardStepPartial {
+  const done = row.enrichmentStatus === "done";
+  const running = row.enrichmentStatus === "processing";
+  return {
+    actionable: true,
+    gated: false,
+    hint: "Audio analysis by the on-box enrichment cron",
+    state: done ? "done" : running ? "running" : "open",
+    statusLabel: done ? "Enriched" : running ? "Enriching…" : "Enrich",
+  };
+}
+
+function mixtapeBoardStep(onTape: boolean, inPlan: boolean): BoardStepPartial {
+  return {
+    actionable: true,
+    gated: false,
+    hint: onTape ? "On a mixtape: open the plan picker" : "Add to a plan",
+    state: onTape ? "done" : inPlan ? "partial" : "open",
+    statusLabel: onTape ? "On a tape" : inPlan ? "In a plan" : "Add",
+  };
+}
+
+function noteBoardStep(note: string | undefined, noteRan: boolean): BoardStepPartial {
+  return {
+    actionable: true,
+    gated: false,
+    hint: note
+      ? "The finding's note — shows on its log page"
+      : noteRan
+        ? "Auto-note ran — no note yet; write one"
+        : "No note yet — write one, or the auto-note cron will",
+    state: note ? "done" : "open",
+    statusLabel: note ? "Noted" : noteRan ? "Checked — no note" : "Note",
+  };
+}
+
+function observationBoardStep(rendered: boolean, hasContextNote: boolean): BoardStepPartial {
+  return {
+    actionable: true,
+    gated: false,
+    hint: rendered
+      ? "Play the spoken observation"
+      : hasContextNote
+        ? "Context gathered — not voiced yet"
+        : "No observation rendered yet",
+    state: rendered ? "done" : hasContextNote ? "partial" : "open",
+    statusLabel: rendered ? "Heard" : hasContextNote ? "Ready to voice" : "No clip",
+  };
+}
+
+function videoBoardStep(videoUrl: string | undefined): BoardStepPartial {
+  return {
+    actionable: Boolean(videoUrl),
+    gated: false,
+    hint: videoUrl ? "Preview the clip" : "No clip rendered yet",
+    state: videoUrl ? "done" : "open",
+    statusLabel: videoUrl ? "Filmed" : "No clip",
+  };
+}
+
 /**
  * Derive every step for one finding. Pure over the row + an injected clock (`now`,
  * defaulting to the wall clock): the only time dependence is the TikTok stale-draft
@@ -257,10 +334,7 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
   const onTape = row.mixtapes.length > 0;
   const inPlan = !onTape && row.plans.length > 0;
 
-  const partials: Record<
-    StepKey,
-    Pick<BoardStep, "state" | "statusLabel" | "hint" | "actionable" | "gated">
-  > = {
+  const partials: Record<StepKey, BoardStepPartial> = {
     context: {
       actionable: true,
       gated: false,
@@ -268,32 +342,7 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
       state: row.hasContextNote ? "done" : "open",
       statusLabel: row.hasContextNote ? "Context" : "No context",
     },
-    discogs: {
-      // The board is a WORKFLOW tracker, not a data-existence tracker. The cell
-      // closes `done` once the lookup has resolved a release OR ran without finding
-      // one — both are a SUCCESS (the workflow checked). A release can be linked by
-      // EITHER path: the on-add resolve (publishTrack writes `in_release_id` directly,
-      // without ever stamping `backfill_discogs_attempted_at`) or the backfill sweep
-      // (which stamps `discogsRan`, then SKIPS already-linked findings forever). So a
-      // finding resolved on add carries `discogsReleaseUrl` but NOT `discogsRan` — it
-      // must still read `done`, or a linked release renders as an un-filled "Pending"
-      // cell. Hence: linked (either path) OR ran ⇒ done. Grey/`open` means ONE thing:
-      // never resolved AND never swept. No manual trigger — the agent resolves the
-      // release; clicking opens the link (only actionable when there's one to open).
-      actionable: Boolean(row.discogsReleaseUrl),
-      gated: false,
-      hint: row.discogsReleaseUrl
-        ? "Open the Discogs release"
-        : row.discogsRan
-          ? "Checked — no Discogs release found"
-          : "Discogs lookup hasn't run yet",
-      state: row.discogsReleaseUrl || row.discogsRan ? "done" : "open",
-      statusLabel: row.discogsReleaseUrl
-        ? "Linked"
-        : row.discogsRan
-          ? "Checked — no release"
-          : "Pending",
-    },
+    discogs: discogsBoardStep(row),
     embedding: {
       // A read-only presence tracker, like Last.fm/Discogs — no operator action. The
       // on-box `fluncle-embed` cron drains the `has_embedding = 0` queue over the
@@ -308,69 +357,13 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
       state: row.hasEmbedding ? "done" : "open",
       statusLabel: row.hasEmbedding ? "Embedded" : "Pending",
     },
-    enrich: {
-      actionable: true,
-      gated: false,
-      hint: "Audio analysis by the on-box enrichment cron",
-      state:
-        row.enrichmentStatus === "done"
-          ? "done"
-          : row.enrichmentStatus === "processing"
-            ? "running"
-            : "open",
-      statusLabel:
-        row.enrichmentStatus === "done"
-          ? "Enriched"
-          : row.enrichmentStatus === "processing"
-            ? "Enriching…"
-            : "Enrich",
-    },
-    mixtape: {
-      actionable: true,
-      gated: false,
-      hint: onTape ? "On a mixtape: open the plan picker" : "Add to a plan",
-      state: onTape ? "done" : inPlan ? "partial" : "open",
-      statusLabel: onTape ? "On a tape" : inPlan ? "In a plan" : "Add",
-    },
-    note: {
-      // An `auto` step (the auto-note cron authors it) that stays `actionable` so the
-      // operator can still hand-write or override. `done` = a note exists (the
-      // deliverable — auto-authored OR operator-typed); `noteRan`
-      // (`backfill_note_attempted_at`) refines the grey state so a finding the cron
-      // visited but couldn't fill reads "Checked — no note" rather than a bare "Note".
-      // The operator override always wins: note_track fills an EMPTY note only.
-      actionable: true,
-      gated: false,
-      hint: note
-        ? "The finding's note — shows on its log page"
-        : row.noteRan
-          ? "Auto-note ran — no note yet; write one"
-          : "No note yet — write one, or the auto-note cron will",
-      state: note ? "done" : "open",
-      statusLabel: note ? "Noted" : row.noteRan ? "Checked — no note" : "Note",
-    },
-    observation: {
-      actionable: true,
-      gated: false,
-      hint: rendered
-        ? "Play the spoken observation"
-        : row.hasContextNote
-          ? "Context gathered — not voiced yet"
-          : "No observation rendered yet",
-      // Context-in-hand-but-unvoiced is the real in-between.
-      state: rendered ? "done" : row.hasContextNote ? "partial" : "open",
-      statusLabel: rendered ? "Heard" : row.hasContextNote ? "Ready to voice" : "No clip",
-    },
+    enrich: enrichBoardStep(row),
+    mixtape: mixtapeBoardStep(onTape, inPlan),
+    note: noteBoardStep(note, row.noteRan),
+    observation: observationBoardStep(rendered, row.hasContextNote),
     socials: socialsStep(row),
     tiktok: publishStep(row, "tiktok", now),
-    video: {
-      // Agent-rendered; clicking previews when there's a clip, otherwise it waits.
-      actionable: Boolean(row.videoUrl),
-      gated: false,
-      hint: row.videoUrl ? "Preview the clip" : "No clip rendered yet",
-      state: row.videoUrl ? "done" : "open",
-      statusLabel: row.videoUrl ? "Filmed" : "No clip",
-    },
+    video: videoBoardStep(row.videoUrl),
     youtube: publishStep(row, "youtube", now),
   };
 

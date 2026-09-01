@@ -511,6 +511,28 @@ type GlBundle = {
 /** The loaded texture images + a content key that changes only when the set does. */
 type LoadedTextures = { images: Record<string, HTMLImageElement>; key: string };
 
+function applyCustomUniforms(
+  gl: WebGLRenderingContext,
+  uniformLocation: (name: string) => WebGLUniformLocation | null,
+  uniforms: ShaderLayerProps["uniforms"],
+): void {
+  for (const [name, value] of Object.entries(uniforms ?? {})) {
+    const location = uniformLocation(name);
+    if (location === null) {
+      continue;
+    }
+    if (typeof value === "number") {
+      gl.uniform1f(location, value);
+    } else if (typeof value === "boolean") {
+      gl.uniform1f(location, value ? 1 : 0);
+    } else if (value.length === 2) {
+      gl.uniform2f(location, value[0], value[1]);
+    } else {
+      gl.uniform3f(location, value[0], value[1], value[2]);
+    }
+  }
+}
+
 /**
  * Load every `textures` entry once as an HTMLImageElement (crossOrigin), gated by
  * Remotion's delayRender so no frame is captured before the pixels are ready; a
@@ -865,23 +887,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     const flatPalette = new Float32Array(stops.flatMap((hex) => toVec3(hex)));
     gl.uniform3fv(u("u_palette[0]"), flatPalette);
 
-    if (uniforms) {
-      for (const [name, value] of Object.entries(uniforms)) {
-        const l = u(name);
-        if (l === null) {
-          continue;
-        }
-        if (typeof value === "number") {
-          gl.uniform1f(l, value);
-        } else if (typeof value === "boolean") {
-          gl.uniform1f(l, value ? 1 : 0);
-        } else if (value.length === 2) {
-          gl.uniform2f(l, value[0], value[1]);
-        } else {
-          gl.uniform3f(l, value[0], value[1], value[2]);
-        }
-      }
-    }
+    applyCustomUniforms(gl, u, uniforms);
 
     // Textures: (re)upload for this context/image-set, then bind each to its
     // deterministic unit and set the sampler + <name>AspectRatio uniforms. Done

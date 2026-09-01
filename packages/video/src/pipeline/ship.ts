@@ -498,6 +498,68 @@ function renderPoster(
   return true;
 }
 
+async function packageOptionalAssets(
+  track: ReturnType<typeof resolveTrack>,
+  logId: string,
+  paths: ReturnType<typeof resolveBundlePaths>,
+  renderManifest: ReturnType<typeof readShipRenderManifest>,
+  log: (message: string) => void,
+): Promise<Partial<Record<ExtraVariantMasterFlag, boolean>>> {
+  const propsPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
+  if (existsSync(propsPath)) {
+    log("props.json (analyzed audio + palette)");
+    copyFileSync(propsPath, paths.propsOutPath);
+  }
+
+  const intentPath = path.join(OUT_DIR, `${track.trackId}.intent.json`);
+  if (existsSync(intentPath)) {
+    log("intent.json (render-intent spine)");
+    copyFileSync(intentPath, paths.intentOutPath);
+  } else {
+    log("intent.json MISSING — shipping a generated stub (the author declared no intent)");
+    writeFileSync(
+      paths.intentOutPath,
+      JSON.stringify(generateIntentStub(track.trackId, logId), null, 2),
+    );
+  }
+
+  if (existsSync(paths.propsOutPath)) {
+    log("cover.jpg (profile-grid cover)");
+    try {
+      await renderCover([paths.bundle]);
+    } catch (error) {
+      log(`cover.jpg skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const sourcePath =
+    typeof renderManifest.compositionSource === "string"
+      ? path.resolve(PACKAGE_ROOT, renderManifest.compositionSource)
+      : undefined;
+  if (sourcePath && existsSync(sourcePath)) {
+    if (path.resolve(sourcePath) === path.resolve(paths.compositionPath)) {
+      log("composition.tsx already bundled");
+    } else {
+      log("composition.tsx (render source)");
+      copyFileSync(sourcePath, paths.compositionPath);
+    }
+  } else {
+    log("composition.tsx skipped (no render manifest/source found)");
+  }
+
+  const extraMasters: Partial<Record<ExtraVariantMasterFlag, boolean>> = {};
+  for (const source of EXTRA_VARIANT_SOURCES) {
+    const src = path.join(OUT_DIR, `${track.trackId}${source.suffix}.mp4`);
+    if (existsSync(src)) {
+      const dest = paths[source.pathKey];
+      log(`${path.basename(dest)} (extra variant — packaging ${path.basename(src)})`);
+      copyFileSync(src, dest);
+      extraMasters[source.masterFlag] = true;
+    }
+  }
+  return extraMasters;
+}
+
 async function main(argv: string[]): Promise<void> {
   const flags = parseShipArgs(argv);
   const log = (message: string) => console.error(`[ship] ${message}`);
@@ -642,69 +704,17 @@ async function main(argv: string[]): Promise<void> {
   const note = buildNoteText(track, year);
   writeFileSync(paths.notePath, note);
 
-  const propsPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
-  if (existsSync(propsPath)) {
-    log("props.json (analyzed audio + palette)");
-    copyFileSync(propsPath, paths.propsOutPath);
-  }
-
   // intent.json — the render-intent spine. The author writes out/<trackId>.intent.json
   // at concept time; copy it into the bundle. v1 warn-and-stub: a missing intent is a
   // WARNING, not a ship blocker — write a generated stub so the bundle always carries
   // one and the metrics/judge never hit a missing-file path.
-  const intentPath = path.join(OUT_DIR, `${track.trackId}.intent.json`);
-  if (existsSync(intentPath)) {
-    log("intent.json (render-intent spine)");
-    copyFileSync(intentPath, paths.intentOutPath);
-  } else {
-    log("intent.json MISSING — shipping a generated stub (the author declared no intent)");
-    writeFileSync(
-      paths.intentOutPath,
-      JSON.stringify(generateIntentStub(track.trackId, track.logId), null, 2),
-    );
-  }
-
   // cover.jpg — the profile-grid cover (loud, centered identity over a clean late
   // frame). Needs props.json in the bundle; the operator AirDrops it to Photos and
   // sets it as the post's cover. Render failure is non-fatal — the rest of the
   // bundle still ships.
-  if (existsSync(paths.propsOutPath)) {
-    log("cover.jpg (profile-grid cover)");
-    try {
-      await renderCover([paths.bundle]);
-    } catch (error) {
-      log(`cover.jpg skipped: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  const sourcePath =
-    typeof renderManifest.compositionSource === "string"
-      ? path.resolve(PACKAGE_ROOT, renderManifest.compositionSource)
-      : undefined;
-
-  if (sourcePath && existsSync(sourcePath)) {
-    if (path.resolve(sourcePath) === path.resolve(paths.compositionPath)) {
-      log("composition.tsx already bundled");
-    } else {
-      log("composition.tsx (render source)");
-      copyFileSync(sourcePath, paths.compositionPath);
-    }
-  } else {
-    log("composition.tsx skipped (no render manifest/source found)");
-  }
-
   // Extra variants: package whichever landscape/notext cuts a prior social-preview
   // run produced (see EXTRA_VARIANT_SOURCES). Never fabricated — only what's on disk.
-  const extraMasters: Partial<Record<ExtraVariantMasterFlag, boolean>> = {};
-  for (const source of EXTRA_VARIANT_SOURCES) {
-    const src = path.join(OUT_DIR, `${track.trackId}${source.suffix}.mp4`);
-    if (existsSync(src)) {
-      const dest = paths[source.pathKey];
-      log(`${path.basename(dest)} (extra variant — packaging ${path.basename(src)})`);
-      copyFileSync(src, dest);
-      extraMasters[source.masterFlag] = true;
-    }
-  }
+  const extraMasters = await packageOptionalAssets(track, logId, paths, renderManifest, log);
 
   const register = flags.register ?? (renderManifest.register as ShipRegister | undefined) ?? null;
   if (!register) {

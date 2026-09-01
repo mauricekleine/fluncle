@@ -442,6 +442,20 @@ type LeanTrackRow = Omit<
   "features_json" | "observation_alignment_json" | "video_model_reasoning"
 >;
 
+function leanVideoFields(row: LeanTrackRow) {
+  return {
+    videoGrain: row.video_grain ?? undefined,
+    videoModel: row.video_model ?? undefined,
+    videoPalette: row.video_palette ?? undefined,
+    videoPlateSubject: row.video_plate_subject ?? undefined,
+    videoRegister: row.video_register ?? undefined,
+    videoSquaredAt: row.video_squared_at ?? undefined,
+    videoStructure: row.video_structure ?? undefined,
+    videoUrl: row.video_url ?? undefined,
+    videoVehicle: row.video_vehicle ?? undefined,
+  };
+}
+
 /**
  * The lean list DTO (Finding B4): every `TrackListItem` field EXCEPT the three heavy ones
  * (`features`, `observationAlignment`, `videoModelReasoning`). Backs the public list
@@ -450,6 +464,7 @@ type LeanTrackRow = Omit<
  */
 export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
   return {
+    ...leanVideoFields(row),
     addedAt: row.added_at,
     addedToSpotify: Boolean(row.added_to_spotify),
     album: row.album ?? undefined,
@@ -540,15 +555,6 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     trackId: row.track_id,
     type: "finding",
     updatedAt: row.updated_at ?? undefined,
-    videoGrain: row.video_grain ?? undefined,
-    videoModel: row.video_model ?? undefined,
-    videoPalette: row.video_palette ?? undefined,
-    videoPlateSubject: row.video_plate_subject ?? undefined,
-    videoRegister: row.video_register ?? undefined,
-    videoSquaredAt: row.video_squared_at ?? undefined,
-    videoStructure: row.video_structure ?? undefined,
-    videoUrl: row.video_url ?? undefined,
-    videoVehicle: row.video_vehicle ?? undefined,
     youtubeUrl: row.youtube_url ?? undefined,
   };
 }
@@ -2783,32 +2789,24 @@ type FindingDueWorkSelector = Pick<
  * Match only the exact recurring finding queues represented by the due-work projection.
  * Every other list shape stays on the generic source selector.
  */
-function selectFindingDueWorkKind({
-  captureQueue,
-  hasContext,
-  hasEmbedding,
-  hasKey,
-  hasNote,
-  hasObservation,
-  hasVideo,
-  includeMixtapes,
-  order,
-  retryEmptyContext,
-  since,
-  status,
-  until,
-}: FindingDueWorkSelector): FindingDueWorkKind | undefined {
-  if (
-    order !== "asc" ||
-    captureQueue ||
-    includeMixtapes ||
-    since !== undefined ||
-    until !== undefined ||
-    hasEmbedding !== undefined ||
-    hasKey !== undefined
-  ) {
+function isUnsupportedFindingDueWorkShape(options: FindingDueWorkSelector): boolean {
+  return (
+    options.order !== "asc" ||
+    options.captureQueue ||
+    options.includeMixtapes ||
+    options.since !== undefined ||
+    options.until !== undefined ||
+    options.hasEmbedding !== undefined ||
+    options.hasKey !== undefined
+  );
+}
+
+function selectFindingDueWorkKind(options: FindingDueWorkSelector): FindingDueWorkKind | undefined {
+  if (isUnsupportedFindingDueWorkShape(options)) {
     return undefined;
   }
+
+  const { hasContext, hasNote, hasObservation, hasVideo, retryEmptyContext, status } = options;
 
   if (
     status === "queue" &&
@@ -2987,6 +2985,68 @@ function buildTrackListFilters({
   return { filterArgs, filterClauses };
 }
 
+async function listProjectedTracks(
+  db: Awaited<ReturnType<typeof getDb>>,
+  kind: FindingDueWorkKind,
+  options: {
+    countTotal: boolean;
+    cursor: TrackCursor | undefined;
+    limit: number;
+    mapRow: (row: TrackRow) => TrackListItem;
+    trackSelect: string;
+  },
+): Promise<TrackListPage | undefined> {
+  if (!(await isDueWorkCutoverEnabled())) {
+    return undefined;
+  }
+
+  const continuation = options.cursor
+    ? {
+        sortKey: encodeDueWorkOrder([
+          { direction: "asc", kind: "timestamp", nulls: "first", value: options.cursor.addedAt },
+          { direction: "asc", kind: "text", value: options.cursor.trackId },
+        ]),
+        subjectId: options.cursor.trackId,
+      }
+    : undefined;
+  const page = await readPromotedDueWorkPage(db, kind, {
+    continuation,
+    limit: options.limit,
+  });
+
+  if (page.subjectIds.length === 0) {
+    return { nextCursor: undefined, totalCount: 0, tracks: [] };
+  }
+
+  const placeholders = page.subjectIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: page.subjectIds,
+    sql: `select ${options.trackSelect}
+          from ${FINDINGS_FROM}
+          where tracks.track_id in (${placeholders})`,
+  });
+  const hydratedById = new Map(
+    typedRows<TrackRow>(result.rows).map((row) => [row.track_id, row] as const),
+  );
+  const hydratedRows = page.subjectIds.flatMap((subjectId) => {
+    const row = hydratedById.get(subjectId);
+    return row ? [row] : [];
+  });
+  const lastVisibleRow = hydratedRows.at(-1);
+
+  return {
+    nextCursor:
+      page.hasMore && lastVisibleRow
+        ? encodeTrackCursor({
+            addedAt: lastVisibleRow.added_at,
+            trackId: lastVisibleRow.track_id,
+          })
+        : undefined,
+    totalCount: options.countTotal ? await countDueWorkNow(db, kind) : hydratedRows.length,
+    tracks: hydratedRows.map(options.mapRow),
+  };
+}
+
 export function listTracks(
   options: ListTracksOptions & { includeMixtapes: true },
 ): Promise<FeedListPage>;
@@ -3044,54 +3104,17 @@ export async function listTracks({
     until,
   });
 
-  if (projectedDueWorkKind && (await isDueWorkCutoverEnabled())) {
-    const continuation = cursor
-      ? {
-          sortKey: encodeDueWorkOrder([
-            { direction: "asc", kind: "timestamp", nulls: "first", value: cursor.addedAt },
-            { direction: "asc", kind: "text", value: cursor.trackId },
-          ]),
-          subjectId: cursor.trackId,
-        }
-      : undefined;
-    const page = await readPromotedDueWorkPage(db, projectedDueWorkKind, {
-      continuation,
-      limit,
-    });
-
-    if (page.subjectIds.length === 0) {
-      return { nextCursor: undefined, totalCount: 0, tracks: [] };
-    }
-
-    const placeholders = page.subjectIds.map(() => "?").join(", ");
-    const result = await db.execute({
-      args: page.subjectIds,
-      sql: `select ${trackSelect}
-            from ${FINDINGS_FROM}
-            where tracks.track_id in (${placeholders})`,
-    });
-    const hydratedById = new Map(
-      typedRows<TrackRow>(result.rows).map((row) => [row.track_id, row] as const),
-    );
-    const hydratedRows = page.subjectIds.flatMap((subjectId) => {
-      const row = hydratedById.get(subjectId);
-      return row ? [row] : [];
-    });
-    const lastVisibleRow = hydratedRows.at(-1);
-
-    return {
-      nextCursor:
-        page.hasMore && lastVisibleRow
-          ? encodeTrackCursor({
-              addedAt: lastVisibleRow.added_at,
-              trackId: lastVisibleRow.track_id,
-            })
-          : undefined,
-      totalCount: countTotal
-        ? await countDueWorkNow(db, projectedDueWorkKind)
-        : hydratedRows.length,
-      tracks: hydratedRows.map(mapRow),
-    };
+  const projectedPage = projectedDueWorkKind
+    ? await listProjectedTracks(db, projectedDueWorkKind, {
+        countTotal,
+        cursor,
+        limit,
+        mapRow,
+        trackSelect,
+      })
+    : undefined;
+  if (projectedPage) {
+    return projectedPage;
   }
 
   // GOAL H: keep this generic legacy selector intact until the default-off cutover is proven.

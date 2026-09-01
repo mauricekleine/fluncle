@@ -104,6 +104,83 @@ function seedState(cat: Catalogue, label: string): string {
   return cat.disabledSlugs.has(slug) ? "disabled" : "undecided / unruled";
 }
 
+async function reportNamedPurge(
+  cat: Catalogue,
+  resolved: ReturnType<typeof resolveNamedArtists>,
+  named: Set<string>,
+  plan: PurgeArtistsPlan,
+): Promise<boolean> {
+  const { albumIds, artistIds, survivors, trackIds } = plan;
+  const deletable = new Set(trackIds);
+  console.log(
+    `artists ${artistIds.length} · tracks ${trackIds.length} · albums ${albumIds.length}`,
+  );
+
+  const artistLabels = labelsByArtist(cat, named);
+  const perArtistTracks = new Map<string, number>();
+  for (const edge of cat.edges) {
+    if (deletable.has(edge.track_id) && named.has(edge.artist_id)) {
+      perArtistTracks.set(edge.artist_id, (perArtistTracks.get(edge.artist_id) ?? 0) + 1);
+    }
+  }
+  console.log(`\nartists that would be deleted (every one must be the WRONG namesake):`);
+  for (const artist of resolved.found) {
+    const labels = [...(artistLabels.get(artist.id) ?? [])].slice(0, 6).join(", ") || "(no label)";
+    console.log(
+      `  ${artist.name}  (${artist.slug})  ·  ${perArtistTracks.get(artist.id) ?? 0} tracks`,
+    );
+    console.log(`      labels: ${labels}`);
+  }
+
+  const labelCounts = new Map<string, number>();
+  for (const id of trackIds) {
+    const label = cat.trackById.get(id)?.label ?? "(no label)";
+    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  }
+  console.log(`\nlabels the deleted tracks sit on:`);
+  for (const [label, count] of [...labelCounts].sort((left, right) => right[1] - left[1])) {
+    console.log(`  ${String(count).padStart(5)} · ${label}  [${seedState(cat, label)}]`);
+  }
+
+  console.log(`\ntracks that SURVIVE (shared credit with an artist you did not name):`);
+  if (survivors.size === 0) {
+    console.log(`  (none — every track of every named artist is credited to named artists only)`);
+  }
+  const index = trackArtistIndex(cat);
+  for (const artist of resolved.found) {
+    const kept = survivors.get(artist.id) ?? [];
+    if (kept.length === 0) {
+      continue;
+    }
+    console.log(`  ${artist.name} keeps ${kept.length}:`);
+    for (const id of kept) {
+      const title = cat.trackById.get(id)?.title ?? "(untitled)";
+      const others = [...(index.get(id) ?? [])]
+        .filter((other) => !named.has(other))
+        .map((other) => cat.artistById.get(other)?.name ?? other)
+        .join(", ");
+      console.log(`      "${title}"  ·  also credited to ${others || "(nobody)"}`);
+    }
+  }
+
+  const tripped = await entanglementHits(cat.db, deletable);
+  for (const { hits, table } of tripped) {
+    console.log(`  ⚠ ENTANGLEMENT: ${table} has ${hits} of the deletable tracks`);
+  }
+  if (tripped.length > 0) {
+    console.log(
+      `\nABORTED — a deletable track is entangled in a real object (mixtape/save/post/edition).`,
+    );
+    console.log(`Investigate those track_ids by hand; do not purge until resolved.`);
+    return false;
+  }
+  console.log(`\nentanglement guard: clean (nothing in mixtapes / saves / posts / editions)`);
+  for (const table of CASCADE_TRACK_TABLES) {
+    console.log(`  cascade ${table}: ${await countTrackRefs(cat.db, table, deletable)} rows`);
+  }
+  return true;
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   load: () => Promise<Catalogue> = loadCatalogue,
@@ -158,79 +235,11 @@ export async function main(
 
   const named = new Set(resolved.found.map((a) => a.id));
   const plan = planNamedArtistPurge(cat, named);
-  const { albumIds, artistIds, survivors, trackIds } = plan;
-  const deletable = new Set(trackIds);
-  console.log(
-    `artists ${artistIds.length} · tracks ${trackIds.length} · albums ${albumIds.length}`,
-  );
-
-  // ── EYEBALL 1: who goes, with their labels. Same contract as purge.ts's dry-run. ─────────────
-  const artistLabels = labelsByArtist(cat, named);
-  const perArtistTracks = new Map<string, number>();
-  for (const e of cat.edges) {
-    if (deletable.has(e.track_id) && named.has(e.artist_id)) {
-      perArtistTracks.set(e.artist_id, (perArtistTracks.get(e.artist_id) ?? 0) + 1);
-    }
-  }
-  console.log(`\nartists that would be deleted (every one must be the WRONG namesake):`);
-  for (const a of resolved.found) {
-    const labels = [...(artistLabels.get(a.id) ?? [])].slice(0, 6).join(", ") || "(no label)";
-    console.log(`  ${a.name}  (${a.slug})  ·  ${perArtistTracks.get(a.id) ?? 0} tracks`);
-    console.log(`      labels: ${labels}`);
-  }
-
-  // ── EYEBALL 2: the labels the deleted tracks sit on, with their seed state. In the namesake
-  // case these are ENABLED seeds — that is expected, and seeing it is the whole check. ─────────
-  const labelCounts = new Map<string, number>();
-  for (const id of trackIds) {
-    const label = cat.trackById.get(id)?.label ?? "(no label)";
-    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
-  }
-  console.log(`\nlabels the deleted tracks sit on:`);
-  for (const [label, n] of [...labelCounts].sort((a, b) => b[1] - a[1])) {
-    console.log(`  ${String(n).padStart(5)} · ${label}  [${seedState(cat, label)}]`);
-  }
-
-  // ── EYEBALL 3: what STAYS. A track shared with an artist the operator did not name survives,
-  // so the named artist's row disappears while the track keeps its other credit. ───────────────
-  console.log(`\ntracks that SURVIVE (shared credit with an artist you did not name):`);
-  if (survivors.size === 0) {
-    console.log(`  (none — every track of every named artist is credited to named artists only)`);
-  }
-  const index = trackArtistIndex(cat);
-  for (const a of resolved.found) {
-    const kept = survivors.get(a.id) ?? [];
-    if (kept.length === 0) {
-      continue;
-    }
-    console.log(`  ${a.name} keeps ${kept.length}:`);
-    for (const id of kept) {
-      const title = cat.trackById.get(id)?.title ?? "(untitled)";
-      const others = [...(index.get(id) ?? [])]
-        .filter((other) => !named.has(other))
-        .map((other) => cat.artistById.get(other)?.name ?? other)
-        .join(", ");
-      console.log(`      "${title}"  ·  also credited to ${others || "(nobody)"}`);
-    }
-  }
-
-  // ── entanglement guard ────────────────────────────────────────────────────────────────────
-  const tripped = await entanglementHits(db, deletable);
-  for (const { hits, table } of tripped) {
-    console.log(`  ⚠ ENTANGLEMENT: ${table} has ${hits} of the deletable tracks`);
-  }
-  if (tripped.length > 0) {
-    console.log(
-      `\nABORTED — a deletable track is entangled in a real object (mixtape/save/post/edition).`,
-    );
-    console.log(`Investigate those track_ids by hand; do not purge until resolved.`);
-
+  if (!(await reportNamedPurge(cat, resolved, named, plan))) {
     return 1;
   }
-  console.log(`\nentanglement guard: clean (nothing in mixtapes / saves / posts / editions)`);
-  for (const t of CASCADE_TRACK_TABLES) {
-    console.log(`  cascade ${t}: ${await countTrackRefs(db, t, deletable)} rows`);
-  }
+
+  const { albumIds, artistIds, trackIds } = plan;
 
   if (!confirm) {
     console.log(`\nDRY RUN — nothing written. Take a fresh backup, then re-run with --confirm.`);

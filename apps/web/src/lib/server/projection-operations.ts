@@ -1073,6 +1073,58 @@ function rollbackGenerationFor(
   return null;
 }
 
+async function recoverPublicAnchorState(
+  client: ProjectionClient,
+  options: {
+    generation: string;
+    limit: number;
+    persistedValue: unknown;
+    projectionState: AnchorProjectionState;
+    publishedCurrent: boolean;
+    saved: ReturnType<typeof parseAnchorState>;
+  },
+): Promise<{ complete: boolean; processed: number } | undefined> {
+  const { generation, limit, persistedValue, projectionState, publishedCurrent, saved } = options;
+  const malformed =
+    persistedValue !== undefined &&
+    (saved === undefined ||
+      (saved.generation === generation &&
+        saved.orderEpoch === projectionState.orderEpoch &&
+        saved.processed > projectionState.total));
+
+  if (malformed) {
+    if (publishedCurrent) {
+      if (!(await currentAnchorDocumentMatches(client, projectionState))) {
+        throw new Error("malformed published anchor state requires a fresh aggregate generation");
+      }
+      await client.execute({
+        args: [PUBLIC_ANCHOR_REBUILD_KEY],
+        sql: `delete from settings where key = ?`,
+      });
+      return { complete: true, processed: 0 };
+    }
+    return restartMalformedAnchorBuild(client, generation, limit);
+  }
+
+  if (
+    saved !== undefined &&
+    (saved.generation !== generation || saved.orderEpoch !== projectionState.orderEpoch)
+  ) {
+    await client.execute({
+      args: [PUBLIC_ANCHOR_REBUILD_KEY],
+      sql: `delete from settings where key = ?`,
+    });
+  }
+  if (
+    saved === undefined &&
+    publishedCurrent &&
+    (await currentAnchorDocumentMatches(client, projectionState))
+  ) {
+    return { complete: true, processed: 0 };
+  }
+  return undefined;
+}
+
 export async function advancePublicAnchors(
   client: ProjectionClient,
   limit: number,
@@ -1120,36 +1172,18 @@ export async function advancePublicAnchors(
     | { anchor_format_version: number; generation: string; order_epoch: number }
     | undefined;
   const publishedCurrent = publishedAnchorIsCurrent(published, projectionState);
-  const saved = parseAnchorState(persisted.rows[0]?.value);
-  if (
-    persisted.rows[0]?.value !== undefined &&
-    (saved === undefined ||
-      (saved.generation === generation &&
-        saved.orderEpoch === orderEpoch &&
-        saved.processed > total))
-  ) {
-    if (publishedCurrent) {
-      if (!(await currentAnchorDocumentMatches(client, projectionState))) {
-        throw new Error("malformed published anchor state requires a fresh aggregate generation");
-      }
-      await client.execute({
-        args: [PUBLIC_ANCHOR_REBUILD_KEY],
-        sql: `delete from settings where key = ?`,
-      });
-      return { complete: true, processed: 0 };
-    }
-    return restartMalformedAnchorBuild(client, generation, limit);
-  }
-  if (saved !== undefined && (saved.generation !== generation || saved.orderEpoch !== orderEpoch)) {
-    await client.execute({
-      args: [PUBLIC_ANCHOR_REBUILD_KEY],
-      sql: `delete from settings where key = ?`,
-    });
-  }
-  if (saved === undefined && publishedCurrent) {
-    if (await currentAnchorDocumentMatches(client, projectionState)) {
-      return { complete: true, processed: 0 };
-    }
+  const persistedValue = persisted.rows[0]?.value;
+  const saved = parseAnchorState(persistedValue);
+  const recovered = await recoverPublicAnchorState(client, {
+    generation,
+    limit,
+    persistedValue,
+    projectionState,
+    publishedCurrent,
+    saved,
+  });
+  if (recovered !== undefined) {
+    return recovered;
   }
   const state = anchorBuildState(saved, projectionState);
   const page = await readTrackAnchorSourcePage(

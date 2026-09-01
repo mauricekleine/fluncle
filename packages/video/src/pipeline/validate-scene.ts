@@ -78,6 +78,43 @@ function validateGlsl(
   });
 }
 
+function validateReactivity(
+  raw: Record<string, unknown>,
+  err: (path: string, message: string) => void,
+): void {
+  if (raw.reactivity === undefined) {
+    return;
+  }
+  if (!isRecord(raw.reactivity)) {
+    err("reactivity", "when present, must be an object { drop, swellBeatWeight }");
+    return;
+  }
+  if (!isRecord(raw.reactivity.drop)) {
+    err("reactivity.drop", "must be an object { riseMs, holdMs, fallMs }");
+  } else {
+    for (const key of ["riseMs", "holdMs", "fallMs"] as const) {
+      if (
+        typeof raw.reactivity.drop[key] !== "number" ||
+        !Number.isFinite(raw.reactivity.drop[key])
+      ) {
+        err(`reactivity.drop.${key}`, "must be a finite number");
+      }
+    }
+    if ("peakTimeMs" in raw.reactivity.drop) {
+      err(
+        "reactivity.peakTimeMs",
+        "must be ABSENT — live detects the peak, offline injects it per render",
+      );
+    }
+  }
+  if (
+    typeof raw.reactivity.swellBeatWeight !== "number" ||
+    !Number.isFinite(raw.reactivity.swellBeatWeight)
+  ) {
+    err("reactivity.swellBeatWeight", "must be a finite number");
+  }
+}
+
 /** Strict, error-collecting validation of an already-parsed value. */
 export function validateSceneStrict(raw: unknown): ValidateSceneResult {
   const errors: SceneError[] = [];
@@ -141,37 +178,7 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
     }
   }
 
-  // reactivity (optional)
-  if (raw.reactivity !== undefined) {
-    if (!isRecord(raw.reactivity)) {
-      err("reactivity", "when present, must be an object { drop, swellBeatWeight }");
-    } else {
-      if (!isRecord(raw.reactivity.drop)) {
-        err("reactivity.drop", "must be an object { riseMs, holdMs, fallMs }");
-      } else {
-        for (const k of ["riseMs", "holdMs", "fallMs"] as const) {
-          if (
-            typeof raw.reactivity.drop[k] !== "number" ||
-            !Number.isFinite(raw.reactivity.drop[k])
-          ) {
-            err(`reactivity.drop.${k}`, "must be a finite number");
-          }
-        }
-        if ("peakTimeMs" in raw.reactivity.drop) {
-          err(
-            "reactivity.peakTimeMs",
-            "must be ABSENT — live detects the peak, offline injects it per render",
-          );
-        }
-      }
-      if (
-        typeof raw.reactivity.swellBeatWeight !== "number" ||
-        !Number.isFinite(raw.reactivity.swellBeatWeight)
-      ) {
-        err("reactivity.swellBeatWeight", "must be a finite number");
-      }
-    }
-  }
+  validateReactivity(raw, err);
 
   // cleared
   if (!isRecord(raw.cleared)) {

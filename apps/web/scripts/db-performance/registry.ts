@@ -597,6 +597,96 @@ function prepareResourceSampling(
   };
 }
 
+function buildContractReport(
+  contract: PerformanceContract,
+  observations: ContractExecution[],
+  validationFailures: string[],
+  profile: ScaleProfile,
+): ContractReport {
+  const durations = distribution(observations.map((observation) => observation.durationMs ?? 0));
+  const queueValues = observations.flatMap((observation) =>
+    observation.queueMs === undefined ? [] : [observation.queueMs],
+  );
+  const affectedRowCounts = observations.flatMap((observation) =>
+    observation.affectedRowCount === undefined ? [] : [observation.affectedRowCount],
+  );
+  const batchCounts = observations.flatMap((observation) =>
+    observation.batchCount === undefined || observation.batchCount === null
+      ? []
+      : [observation.batchCount],
+  );
+  const resultCounts = distribution(observations.map((observation) => observation.resultRowCount));
+  const metadata = observations
+    .flatMap((observation) => (observation.metadata ? [observation.metadata] : []))
+    .filter(
+      (entry, index, entries) =>
+        entries.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(entry)) ===
+        index,
+    );
+  const invariantTotals: Record<string, number> = {};
+
+  for (const observation of observations) {
+    for (const [field, value] of Object.entries(observation.invariants ?? {})) {
+      invariantTotals[field] = (invariantTotals[field] ?? 0) + (value ?? 0);
+    }
+    if (
+      observation.convergence?.converged === false &&
+      observation.invariants?.convergenceFailures === undefined
+    ) {
+      invariantTotals.convergenceFailures = (invariantTotals.convergenceFailures ?? 0) + 1;
+    }
+  }
+
+  const definition = PERFORMANCE_BUDGETS[contract.workClass];
+  const required = definition.requiredProfiles.includes(profile);
+  const measurementProblems: string[] = [];
+
+  for (const measurement of definition.measurements) {
+    const actual = metricValue(measurement.metric, durations);
+    if (actual > measurement.thresholdMs) {
+      measurementProblems.push(
+        `${measurement.metric} ${actual}ms exceeds ${measurement.thresholdMs}ms`,
+      );
+    }
+  }
+
+  const invariantProblems: string[] = [];
+  for (const invariant of definition.invariants) {
+    const actual = invariantTotals[invariant.field] ?? 0;
+    if (actual > invariant.maximum) {
+      invariantProblems.push(`${invariant.field} ${actual} exceeds ${invariant.maximum}`);
+    }
+  }
+
+  const failures = [...invariantProblems, ...(required ? measurementProblems : [])];
+  const warnings = required ? [] : measurementProblems;
+
+  return {
+    affectedRowCount: affectedRowCounts.length > 0 ? distribution(affectedRowCounts) : null,
+    batchCount: batchCounts.length > 0 ? distribution(batchCounts) : null,
+    budget: {
+      description: definition.description,
+      failures,
+      required,
+      warnings,
+    },
+    contractId: contract.id,
+    convergence: convergenceReport(observations),
+    criterionCategories: criterionCategoriesForContract(contract),
+    description: contract.description,
+    durationMs: durations,
+    invariantTotals,
+    iterations: observations.length,
+    metadata,
+    passed: failures.length === 0 && validationFailures.length === 0,
+    plan: null,
+    queueMs: queueValues.length > 0 ? distribution(queueValues) : null,
+    resultRowCount: resultCounts,
+    validationFailures,
+    workClass: contract.workClass,
+  };
+}
+
 export async function runPerformanceContracts(options: {
   client: PerformanceClient;
   contracts: readonly PerformanceContract[];
@@ -670,90 +760,7 @@ export async function runPerformanceContracts(options: {
       }
     }
 
-    const durations = distribution(observations.map((observation) => observation.durationMs ?? 0));
-    const queueValues = observations.flatMap((observation) =>
-      observation.queueMs === undefined ? [] : [observation.queueMs],
-    );
-    const affectedRowCounts = observations.flatMap((observation) =>
-      observation.affectedRowCount === undefined ? [] : [observation.affectedRowCount],
-    );
-    const batchCounts = observations.flatMap((observation) =>
-      observation.batchCount === undefined || observation.batchCount === null
-        ? []
-        : [observation.batchCount],
-    );
-    const resultCounts = distribution(
-      observations.map((observation) => observation.resultRowCount),
-    );
-    const metadata = observations
-      .flatMap((observation) => (observation.metadata ? [observation.metadata] : []))
-      .filter(
-        (entry, index, entries) =>
-          entries.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(entry)) ===
-          index,
-      );
-    const invariantTotals: Record<string, number> = {};
-
-    for (const observation of observations) {
-      for (const [field, value] of Object.entries(observation.invariants ?? {})) {
-        invariantTotals[field] = (invariantTotals[field] ?? 0) + (value ?? 0);
-      }
-      if (
-        observation.convergence?.converged === false &&
-        observation.invariants?.convergenceFailures === undefined
-      ) {
-        invariantTotals.convergenceFailures = (invariantTotals.convergenceFailures ?? 0) + 1;
-      }
-    }
-
-    const definition = PERFORMANCE_BUDGETS[contract.workClass];
-    const required = definition.requiredProfiles.includes(options.profile);
-    const measurementProblems: string[] = [];
-
-    for (const measurement of definition.measurements) {
-      const actual = metricValue(measurement.metric, durations);
-      if (actual > measurement.thresholdMs) {
-        measurementProblems.push(
-          `${measurement.metric} ${actual}ms exceeds ${measurement.thresholdMs}ms`,
-        );
-      }
-    }
-
-    const invariantProblems: string[] = [];
-    for (const invariant of definition.invariants) {
-      const actual = invariantTotals[invariant.field] ?? 0;
-      if (actual > invariant.maximum) {
-        invariantProblems.push(`${invariant.field} ${actual} exceeds ${invariant.maximum}`);
-      }
-    }
-
-    const failures = [...invariantProblems, ...(required ? measurementProblems : [])];
-    const warnings = required ? [] : measurementProblems;
-
-    reports.push({
-      affectedRowCount: affectedRowCounts.length > 0 ? distribution(affectedRowCounts) : null,
-      batchCount: batchCounts.length > 0 ? distribution(batchCounts) : null,
-      budget: {
-        description: definition.description,
-        failures,
-        required,
-        warnings,
-      },
-      contractId: contract.id,
-      convergence: convergenceReport(observations),
-      criterionCategories: criterionCategoriesForContract(contract),
-      description: contract.description,
-      durationMs: durations,
-      invariantTotals,
-      iterations: observations.length,
-      metadata,
-      passed: failures.length === 0 && validationFailures.length === 0,
-      plan: null,
-      queueMs: queueValues.length > 0 ? distribution(queueValues) : null,
-      resultRowCount: resultCounts,
-      validationFailures,
-      workClass: contract.workClass,
-    });
+    reports.push(buildContractReport(contract, observations, validationFailures, options.profile));
   }
 
   await attachTerminalContractEvidence({

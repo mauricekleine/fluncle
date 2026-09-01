@@ -340,6 +340,38 @@ function expressionText(tokens: Token[], start: number, end: number): string {
     .join("");
 }
 
+function addNamedBindings(
+  clause: Token[],
+  braceStart: number,
+  braceEnd: number,
+  allocationNames: Set<string>,
+  removalNames: Set<string>,
+): void {
+  let specifierStart = braceStart + 1;
+  for (let tokenIndex = braceStart + 1; tokenIndex <= braceEnd; tokenIndex += 1) {
+    const isEnd = tokenIndex === braceEnd || clause[tokenIndex]?.text === ",";
+    if (!isEnd) {
+      continue;
+    }
+
+    const specifier = clause.slice(specifierStart, tokenIndex);
+    const imported = specifier.find(
+      (token) => isIdentifier(token.text) && token.text !== "type",
+    )?.text;
+    const asIndex = specifier.findIndex((token) => token.text === "as");
+    const local = asIndex === -1 ? imported : specifier[asIndex + 1]?.text;
+
+    if ((imported === "mkdtemp" || imported === "mkdtempSync") && isIdentifier(local)) {
+      allocationNames.add(local);
+    }
+    if ((imported === "rm" || imported === "rmSync") && isIdentifier(local)) {
+      removalNames.add(local);
+    }
+
+    specifierStart = tokenIndex + 1;
+  }
+}
+
 function bindingsFor(tokens: Token[]): Bindings {
   const allocationNames = new Set(["mkdtemp", "mkdtempSync"]);
   const allocationNamespaces = new Set<string>();
@@ -377,33 +409,7 @@ function bindingsFor(tokens: Token[]): Bindings {
     );
 
     if (braceStart !== -1 && braceEnd !== -1) {
-      let specifierStart = braceStart + 1;
-      for (let tokenIndex = braceStart + 1; tokenIndex <= braceEnd; tokenIndex += 1) {
-        const isEnd = tokenIndex === braceEnd || clause[tokenIndex]?.text === ",";
-        if (!isEnd) {
-          continue;
-        }
-
-        const specifier = clause.slice(specifierStart, tokenIndex);
-        const imported = specifier.find(
-          (token) => isIdentifier(token.text) && token.text !== "type",
-        )?.text;
-        const asIndex = specifier.findIndex((token) => token.text === "as");
-        const local = asIndex === -1 ? imported : specifier[asIndex + 1]?.text;
-
-        if (imported === "mkdtemp" || imported === "mkdtempSync") {
-          if (isIdentifier(local)) {
-            allocationNames.add(local);
-          }
-        }
-        if (imported === "rm" || imported === "rmSync") {
-          if (isIdentifier(local)) {
-            removalNames.add(local);
-          }
-        }
-
-        specifierStart = tokenIndex + 1;
-      }
+      addNamedBindings(clause, braceStart, braceEnd, allocationNames, removalNames);
     }
 
     const namespaceStar = clause.findIndex((token) => token.text === "*");

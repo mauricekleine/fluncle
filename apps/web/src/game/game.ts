@@ -350,6 +350,37 @@ export function createGame(container: HTMLElement): Game {
     }
   }
 
+  function advanceFlight(dt: number): void {
+    if (phase !== "play" || !sim || paused || atlasOpen) {
+      return;
+    }
+
+    accumulator += dt;
+    let steps = 0;
+    while (accumulator >= SIM_STEP && steps < MAX_STEPS_PER_FRAME) {
+      stepSim(sim, input.state(), SIM_STEP);
+      steps += 1;
+      accumulator -= SIM_STEP;
+    }
+    if (steps === MAX_STEPS_PER_FRAME) {
+      accumulator = 0;
+    }
+
+    for (const event of drainEvents(sim)) {
+      handleEvent(event, sim);
+    }
+    audio.update(sim);
+
+    const orbiting = sim.phase === "orbiting";
+    if (orbiting && !wasOrbiting) {
+      orbitEnteredAt = nowS;
+    }
+    if (!orbiting && wasOrbiting && card) {
+      card.shownAt = nowS;
+    }
+    wasOrbiting = orbiting;
+  }
+
   function frame(timestampMs: number): void {
     if (destroyed) {
       return;
@@ -401,41 +432,7 @@ export function createGame(container: HTMLElement): Game {
     }
 
     // The atlas freezes the flight too: a chart read never burns fuel.
-    if (phase === "play" && sim && !paused && !atlasOpen) {
-      accumulator += dt;
-
-      let steps = 0;
-
-      while (accumulator >= SIM_STEP && steps < MAX_STEPS_PER_FRAME) {
-        stepSim(sim, input.state(), SIM_STEP);
-        steps += 1;
-        accumulator -= SIM_STEP;
-      }
-
-      if (steps === MAX_STEPS_PER_FRAME) {
-        accumulator = 0;
-      }
-
-      for (const event of drainEvents(sim)) {
-        handleEvent(event, sim);
-      }
-
-      audio.update(sim);
-
-      const orbiting = sim.phase === "orbiting";
-
-      if (orbiting && !wasOrbiting) {
-        orbitEnteredAt = nowS;
-      }
-
-      // Departing resets the card's clock so it lingers a beat after a long
-      // listen instead of vanishing the moment you fly on.
-      if (!orbiting && wasOrbiting && card) {
-        card.shownAt = nowS;
-      }
-
-      wasOrbiting = orbiting;
-    }
+    advanceFlight(dt);
 
     while (telemetry[0] !== undefined && telemetry[0].until < nowS) {
       telemetry.shift();
