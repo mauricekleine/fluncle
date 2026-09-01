@@ -325,12 +325,8 @@ async function r2Get(key: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-function findingUpdateArgs(
-  trackId: string,
-  parsed: AnalyzeOutput,
-  analyzedFrom: "full" | "preview",
-): string[] {
-  const updateArgs = ["admin", "tracks", "update", trackId];
+function findingUpdateArgs(parsed: AnalyzeOutput, analyzedFrom: "full" | "preview"): string[] {
+  const updateArgs: string[] = [];
 
   if (parsed.bpm !== null && parsed.bpm !== undefined) {
     updateArgs.push("--bpm", String(parsed.bpm));
@@ -473,7 +469,7 @@ async function enrichOne(finding: QueueFinding): Promise<EnrichResult> {
     // (the sweep writes --bpm/--key only when non-null), so provenance never claims a
     // source for a value the row didn't get.
     const analyzedFrom = audioFilePath ? "full" : "preview";
-    fluncleJson(findingUpdateArgs(trackId, parsed, analyzedFrom));
+    fluncleJson(["admin", "tracks", "update", trackId, ...findingUpdateArgs(parsed, analyzedFrom)]);
     // Surface the BPM provenance so a fallback BPM is distinguishable in cron logs (e.g.
     // `via audio-file` for the captured full song, or `via acousticbrainz` when the preview
     // was beatless and the structured ISRC fallback supplied the tempo).
