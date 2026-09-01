@@ -84,7 +84,7 @@
       "computedHash": "4fdd2926f1e942435b0137088bad23102b829bf0e6b01d986723341d14b01fdf"
     },
     "fluncle-rfc-writer": {
-      "source": "packages/skills/fluncle-rfc-writer",
+      "source": "/home/maurice/projects/.worktrees/fluncle/complexity-40/packages/skills/fluncle-rfc-writer",
       "sourceType": "local",
       "computedHash": "ed3d06e1751592de822017cac39a8c08fa83319c51a4e58bf31cc1739c32ca4e"
     },
