@@ -530,6 +530,24 @@ function BoardContent({
   );
 }
 
+function queryErrorMessage(queryError: unknown): string | undefined {
+  if (queryError instanceof Error) {
+    return queryError.message;
+  }
+  if (typeof queryError === "string") {
+    return queryError;
+  }
+  return queryError ? "Board load failed" : undefined;
+}
+
+function platformForPush(push: { platformKey: string } | undefined) {
+  return push ? (PLATFORMS.find((platform) => platform.key === push.platformKey) ?? null) : null;
+}
+
+function firstBoardRow(...rows: Array<BoardRow | undefined>): BoardRow | undefined {
+  return rows.find((row) => row !== undefined);
+}
+
 function AdminBoardPage() {
   const { advance: initialAdvance, board: initial } = Route.useLoaderData();
   const {
@@ -741,21 +759,15 @@ function AdminBoardPage() {
     queryKey: [...BOARD_ROW_KEY, noteId],
     staleTime: Number.POSITIVE_INFINITY,
   });
-  const noteRow = boardNoteRow ?? fetchedNoteRow ?? undefined;
+  const noteRow = firstBoardRow(boardNoteRow, fetchedNoteRow);
   const contextRow = rowFor(contextId);
   const observationRow = rowFor(observationId);
   const pushRow = rowFor(push?.trackId);
-  const pushPlatform = push
-    ? (PLATFORMS.find((platform) => platform.key === push.platformKey) ?? null)
-    : null;
+  const pushPlatform = platformForPush(push);
 
   // A failed load-more shouldn't be swallowed; surface it next to mutation errors
   // and use it to pause the infinite-scroll observer until a manual retry.
-  const loadError = queryError
-    ? queryError instanceof Error
-      ? queryError.message
-      : String(queryError)
-    : undefined;
+  const loadError = queryErrorMessage(queryError);
   const shownError = error ?? loadError;
 
   // Each row carries its derived stage so the worklist filter reads the same

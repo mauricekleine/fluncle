@@ -64,10 +64,7 @@ function findCompositionSource(compositionId: string): string | undefined {
   return undefined;
 }
 
-async function main(): Promise<void> {
-  // Flag parsing swapped to the shared args.ts parser (also used by ship.ts) so
-  // `--flag <value>` handling can't drift between the two entrypoints. Same
-  // flags, same semantics as before.
+function socialPreviewOptions() {
   const { flags, positionals } = parseArgs(process.argv.slice(2), {
     aspect: "string",
     composition: "string",
@@ -78,30 +75,6 @@ async function main(): Promise<void> {
     "no-overlay": "boolean",
     "skip-render": "boolean",
   });
-  const skipRender = flags["skip-render"];
-  // --draft renders a fast, half-res, NON-SHIPPABLE proof (out/<trackId>.draft.mp4)
-  // for checking direction + motion + reactivity (and running the beat-pull gate)
-  // before the slow ship render. See render.ts.
-  const draft = flags.draft;
-  // --composition <Id> selects a registered composition. The video agent authors
-  // a temporary per-track composition and renders it through this flag.
-  const compositionId = flags.composition;
-  // --composition-source <file> records the exact source used for the render so
-  // ship can package it as out/<log-id>/composition.tsx and upload it to R2.
-  const compositionSource = flags["composition-source"];
-  // --duration-ms lets the agent pick the clip length from the waveform (end on
-  // a drop or just before a transition); 20s default, clamped to the contract.
-  const durationMs = flags["duration-ms"];
-  // --no-overlay renders the text-free cut (radio.fluncle.com): the scene shader
-  // with NO baked-in TypePlate/CloseCard, so a host UI can draw its own metadata
-  // over clean footage. Threaded as props.hideOverlay (gated inside the
-  // primitives via getInputProps, so no composition edit is needed).
-  const hideOverlay = flags["no-overlay"];
-  // --aspect <portrait|landscape|square> (or the --landscape shorthand) selects
-  // the output dimensions. Portrait (1080×1920) stays the default; landscape
-  // (1920×1080) is the radio full-screen cut; square (1920×1920) is the clean
-  // source master MT crops to either orientation on the fly — the 9:16 shaders
-  // reflow under landscape/square.
   const aspectArg = flags.aspect;
   const aspect: CosmosAspect =
     flags.landscape || aspectArg === "landscape"
@@ -109,13 +82,11 @@ async function main(): Promise<void> {
       : aspectArg === "square"
         ? "square"
         : "portrait";
+  const durationMs = flags["duration-ms"];
   const trackId = positionals[0];
   if (
     !trackId ||
-    (aspectArg !== undefined &&
-      aspectArg !== "portrait" &&
-      aspectArg !== "landscape" &&
-      aspectArg !== "square") ||
+    (aspectArg !== undefined && !["portrait", "landscape", "square"].includes(aspectArg)) ||
     (durationMs !== undefined &&
       (!Number.isFinite(durationMs) || durationMs < 10_000 || durationMs > 30_000))
   ) {
@@ -124,6 +95,50 @@ async function main(): Promise<void> {
     );
   }
 
+  return {
+    aspect,
+    compositionId: flags.composition,
+    compositionSource: flags["composition-source"],
+    draft: flags.draft,
+    durationMs,
+    hideOverlay: flags["no-overlay"],
+    skipRender: flags["skip-render"],
+    trackId,
+  };
+}
+
+async function main(): Promise<void> {
+  // Flag parsing swapped to the shared args.ts parser (also used by ship.ts) so
+  // `--flag <value>` handling can't drift between the two entrypoints. Same
+  // flags, same semantics as before.
+  const {
+    aspect,
+    compositionId,
+    compositionSource,
+    draft,
+    durationMs,
+    hideOverlay,
+    skipRender,
+    trackId,
+  } = socialPreviewOptions();
+  // --draft renders a fast, half-res, NON-SHIPPABLE proof (out/<trackId>.draft.mp4)
+  // for checking direction + motion + reactivity (and running the beat-pull gate)
+  // before the slow ship render. See render.ts.
+  // --composition <Id> selects a registered composition. The video agent authors
+  // a temporary per-track composition and renders it through this flag.
+  // --composition-source <file> records the exact source used for the render so
+  // ship can package it as out/<log-id>/composition.tsx and upload it to R2.
+  // --duration-ms lets the agent pick the clip length from the waveform (end on
+  // a drop or just before a transition); 20s default, clamped to the contract.
+  // --no-overlay renders the text-free cut (radio.fluncle.com): the scene shader
+  // with NO baked-in TypePlate/CloseCard, so a host UI can draw its own metadata
+  // over clean footage. Threaded as props.hideOverlay (gated inside the
+  // primitives via getInputProps, so no composition edit is needed).
+  // --aspect <portrait|landscape|square> (or the --landscape shorthand) selects
+  // the output dimensions. Portrait (1080×1920) stays the default; landscape
+  // (1920×1080) is the radio full-screen cut; square (1920×1920) is the clean
+  // source master MT crops to either orientation on the fly — the 9:16 shaders
+  // reflow under landscape/square.
   if (!skipRender && !compositionId) {
     throw new Error(
       "[social-preview] rendering now requires --composition <Id>; generated compositions are shipped as output artifacts, not kept in the codebase",
