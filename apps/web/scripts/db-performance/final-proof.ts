@@ -171,6 +171,10 @@ function countAdmissionFifoViolations(
   return violations;
 }
 
+function uncontendedAdmissionViolations(waitMs: number): number {
+  return Number.isFinite(waitMs) && waitMs <= 250 ? 0 : 1;
+}
+
 /** Discrete-event proof of the durable two-resource FIFO and fencing rules. */
 export function simulateFencedAdmission(
   requests: readonly AdmissionRequest[] = DEFAULT_ADMISSION_REQUESTS,
@@ -280,11 +284,7 @@ export function simulateFencedAdmission(
       : 0;
   const uncontended = events.find((event) => event.id === "writer-uncontended");
   const uncontendedAcquisitionMs = uncontended?.waitMs ?? Number.POSITIVE_INFINITY;
-  const uncontendedAcquisitionViolations = Number.isFinite(uncontendedAcquisitionMs)
-    ? uncontendedAcquisitionMs > 250
-      ? 1
-      : 0
-    : 1;
+  const uncontendedAcquisitionViolations = uncontendedAdmissionViolations(uncontendedAcquisitionMs);
   const maxWaitMs = events.reduce((maximum, event) => Math.max(maximum, event.waitMs), 0);
   const convergenceFailures =
     pending.length === 0 && active.length === 0 && events.length === requests.length ? 0 : 1;

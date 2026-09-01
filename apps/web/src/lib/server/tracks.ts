@@ -422,6 +422,10 @@ function galaxyOf(
   return name && slug ? { name, slug } : undefined;
 }
 
+function analyzedFromOf(value: string | null): "full" | "preview" | undefined {
+  return value === "full" || value === "preview" ? value : undefined;
+}
+
 // The three heavy per-row fields the lean list projection omits — the DTO mirror of
 // `LEAN_LIST_OMITTED_COLUMNS`. A `LeanTrackListItem` is assignable to `TrackListItem`
 // (all three are OPTIONAL on the contract), so a lean item flows into any
@@ -472,10 +476,7 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     // strips it before any public read. `null` legacy rows surface undefined ("assume
     // preview-grade"). The capture sweep's re-derive predicate reads it.
     analyzedAt: row.analyzed_at ?? undefined,
-    analyzedFrom:
-      row.analyzed_from === "full" || row.analyzed_from === "preview"
-        ? row.analyzed_from
-        : undefined,
+    analyzedFrom: analyzedFromOf(row.analyzed_from),
     // The Apple Music listen link — a PUBLIC field (the Spotify twin), so it is NOT in
     // PRIVATE_TRACK_FIELDS and survives to the public DTO. Absent until the ISRC resolves.
     appleMusicUrl: row.apple_music_url ?? undefined,

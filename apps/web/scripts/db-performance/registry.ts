@@ -562,6 +562,41 @@ async function attachTerminalContractEvidence(options: {
   }
 }
 
+type PerformanceResourceOptions = {
+  initial?: PerformanceResourceSample;
+  sample?: () => PerformanceResourceSample;
+  sampleSource?: PerformanceResourceSampleSource;
+  startedAtMs?: number;
+  wallDurationWarning?: boolean;
+};
+
+function prepareResourceSampling(
+  resource: PerformanceResourceOptions | undefined,
+  now: () => number,
+): {
+  hasResourceSampling: boolean;
+  peak: PerformanceResourceSample | null;
+  resourceSample: () => PerformanceResourceSample;
+  wallStartedAt: number;
+} {
+  const resourceSample = () =>
+    validatePerformanceResourceSample((resource?.sample ?? readPerformanceResourceSample)());
+  const hasResourceSampling = resource !== undefined;
+  const initial = resource?.initial;
+  const peak = hasResourceSampling
+    ? maxPerformanceResourceSample(
+        initial === undefined ? resourceSample() : validatePerformanceResourceSample(initial),
+        resourceSample(),
+      )
+    : null;
+  return {
+    hasResourceSampling,
+    peak,
+    resourceSample,
+    wallStartedAt: resource?.startedAtMs ?? now(),
+  };
+}
+
 export async function runPerformanceContracts(options: {
   client: PerformanceClient;
   contracts: readonly PerformanceContract[];
@@ -570,29 +605,12 @@ export async function runPerformanceContracts(options: {
   now?: () => number;
   onProgress?: (progress: PerformanceExecutionProgress) => void;
   profile: ScaleProfile;
-  resource?: {
-    initial?: PerformanceResourceSample;
-    sample?: () => PerformanceResourceSample;
-    sampleSource?: PerformanceResourceSampleSource;
-    startedAtMs?: number;
-    wallDurationWarning?: boolean;
-  };
+  resource?: PerformanceResourceOptions;
 }): Promise<PerformanceRunReport> {
   const now = options.now ?? performance.now.bind(performance);
-  const hasResourceSampling = options.resource !== undefined;
-  const resourceSample = () =>
-    validatePerformanceResourceSample(
-      (options.resource?.sample ?? readPerformanceResourceSample)(),
-    );
-  const wallStartedAt = options.resource?.startedAtMs ?? now();
-  let peak = hasResourceSampling
-    ? maxPerformanceResourceSample(
-        options.resource?.initial === undefined
-          ? resourceSample()
-          : validatePerformanceResourceSample(options.resource.initial),
-        resourceSample(),
-      )
-    : null;
+  const sampling = prepareResourceSampling(options.resource, now);
+  const { hasResourceSampling, resourceSample, wallStartedAt } = sampling;
+  let { peak } = sampling;
   const reports: ContractReport[] = [];
 
   for (const contract of options.contracts) {

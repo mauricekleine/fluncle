@@ -686,6 +686,105 @@ export function spotifyAskDeferral(
 
 // ── One tick, with injected effects ──────────────────────────────────────────
 
+async function fetchAnchorWorkRows(
+  limit: number,
+  deps: AnchorDeps,
+  summary: AnchorSummary,
+): Promise<AnchorWorkItem[] | undefined> {
+  try {
+    const fetched = await deps.fetchQueue(limit);
+    const queue = Array.isArray(fetched) ? fetched : fetched.rows;
+    summary.queueDepth = Array.isArray(fetched) ? fetched.length : fetched.queueDepth;
+    summary.checked = queue.length;
+    return queue;
+  } catch (error) {
+    summary.ok = false;
+    recordRunError(summary, error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+}
+
+function actionableAnchorRows(queue: AnchorWorkItem[]): {
+  invalidRows: number;
+  rows: (AnchorWorkItem & { anchorQuery: string; trackId: string })[];
+} {
+  const rows = queue.filter(
+    (row): row is AnchorWorkItem & { anchorQuery: string; trackId: string } =>
+      Boolean(row.trackId) && Boolean(row.anchorQuery),
+  );
+  return { invalidRows: queue.length - rows.length, rows };
+}
+
+function settleDisabledApify(
+  apifyEnabled: boolean,
+  apifyRows: readonly { anchorQuery: string; trackId: string }[],
+  freeRungThrew: number,
+  summary: AnchorSummary,
+): boolean {
+  if (apifyEnabled) {
+    return false;
+  }
+  const settledMisses = apifyRows.length - freeRungThrew;
+  summary.missed += settledMisses;
+  summary.skipped += freeRungThrew;
+  for (let index = 0; index < settledMisses; index += 1) {
+    settleQueueRow(summary);
+  }
+  return true;
+}
+
+async function runApifyFallback(
+  apifyRows: readonly { anchorQuery: string; trackId: string }[],
+  actorChunkSize: number,
+  deps: AnchorDeps,
+  summary: AnchorSummary,
+): Promise<void> {
+  for (const batch of chunk(apifyRows, actorChunkSize)) {
+    let byTarget: Map<string, AnchorCandidatePayload[]>;
+
+    try {
+      byTarget = groupCandidatesByTarget(await deps.runActor(batch.map((row) => row.anchorQuery)));
+    } catch (error) {
+      deps.log(`actor run failed: ${error instanceof Error ? error.message : String(error)}`);
+      summary.ok = false;
+      summary.apifyActorErrors += 1;
+      recordRunError(summary, error instanceof Error ? error.message : String(error));
+      summary.skipped += batch.length;
+      continue;
+    }
+
+    for (const row of batch) {
+      const candidates = byTarget.get(row.anchorQuery) ?? [];
+      if (!byTarget.has(row.anchorQuery)) {
+        summary.apifyTargetOmitted += 1;
+      }
+      summary.apifyDurationMsOmitted += candidates.filter(
+        (candidate) => typeof candidate.durationMs !== "number",
+      ).length;
+
+      try {
+        const verdict = await deps.report(row.trackId, candidates);
+        if (verdict.anchored && verdict.verifiedBy === "isrc") {
+          summary.anchoredByIsrc += 1;
+          summary.produced += 1;
+          settleQueueRow(summary);
+        } else if (verdict.anchored) {
+          summary.anchoredBySearch += 1;
+          summary.produced += 1;
+          settleQueueRow(summary);
+        } else {
+          summary.missed += 1;
+          settleQueueRow(summary);
+        }
+      } catch (error) {
+        deps.log(`${row.trackId}: ${error instanceof Error ? error.message : String(error)}`);
+        summary.skipped += 1;
+        recordFailure(summary);
+      }
+    }
+  }
+}
+
 export async function runAnchorTick(
   limit: number,
   deps: AnchorDeps,
@@ -730,26 +829,13 @@ export async function runAnchorTick(
     spotifyIsrcAsks: 0,
   };
 
-  let queue: AnchorWorkItem[];
-
-  try {
-    const fetched = await deps.fetchQueue(limit);
-    queue = Array.isArray(fetched) ? fetched : fetched.rows;
-    summary.queueDepth = Array.isArray(fetched) ? fetched.length : fetched.queueDepth;
-    summary.checked = queue.length;
-  } catch (error) {
-    summary.ok = false;
-    recordRunError(summary, error instanceof Error ? error.message : String(error));
-
+  const queue = await fetchAnchorWorkRows(limit, deps, summary);
+  if (queue === undefined) {
     return summary;
   }
 
   // Only rows with both a trackId and a query are actionable; the rest are counted skipped.
-  const rows = queue.filter(
-    (row): row is AnchorWorkItem & { anchorQuery: string; trackId: string } =>
-      Boolean(row.trackId) && Boolean(row.anchorQuery),
-  );
-  const invalidRows = queue.length - rows.length;
+  const { invalidRows, rows } = actionableAnchorRows(queue);
   summary.skipped += invalidRows;
   summary.failed += invalidRows;
 
@@ -910,79 +996,13 @@ export async function runAnchorTick(
   // genuinely-exhausted full miss. So we skip the whole actor loop — ZERO wasted 403s — and count those
   // stamped misses HONESTLY as `missed` (terminal, backed off), not skipped-for-retry. Rows whose free
   // rung THREW got no verdict and no stamp, so they stay `skipped` (they retry next tick).
-  if (!apifyEnabled) {
-    const settledMisses = apifyRows.length - freeRungThrew;
-    summary.missed += settledMisses;
-    summary.skipped += freeRungThrew;
-
-    for (let index = 0; index < settledMisses; index += 1) {
-      settleQueueRow(summary);
-    }
-
+  if (settleDisabledApify(apifyEnabled, apifyRows, freeRungThrew, summary)) {
     return summary;
   }
 
   // ── RUNG 2: THE APIFY FALLBACK, over the free-rung misses only. Run the actor in bounded chunks so
   // a big `--limit` burn never one-shots a giant run-sync call.
-  for (const batch of chunk(apifyRows, actorChunkSize)) {
-    let byTarget: Map<string, AnchorCandidatePayload[]>;
-
-    try {
-      byTarget = groupCandidatesByTarget(await deps.runActor(batch.map((row) => row.anchorQuery)));
-    } catch (error) {
-      // A whole actor run failing is a chunk-level miss, not a tick abort — the next tick retries
-      // (the worklist is derived + the un-attempted rows carry no stamp, so nothing is lost).
-      deps.log(`actor run failed: ${error instanceof Error ? error.message : String(error)}`);
-      summary.ok = false;
-      summary.apifyActorErrors += 1;
-      recordRunError(summary, error instanceof Error ? error.message : String(error));
-      summary.skipped += batch.length;
-      continue;
-    }
-
-    for (const row of batch) {
-      const candidates = byTarget.get(row.anchorQuery) ?? [];
-
-      // THE BLACKOUT TELL. The actor run SUCCEEDED but its dataset carried no item for this row's
-      // query at all — as opposed to items that carried no usable Spotify track. Both reach the
-      // Worker as an empty candidate list and stamp an identical clean miss, so nothing downstream
-      // can tell "Spotify has nothing" from "the actor never answered". Counting is all this slice
-      // does: the stamping is deliberately unchanged until the class has a measured size.
-      if (!byTarget.has(row.anchorQuery)) {
-        summary.apifyTargetOmitted += 1;
-      }
-
-      // THE DURATIONLESS TELL. A candidate with no numeric duration can never clear the Worker's
-      // verified-search gate (it hard-requires one), so for an ISRC-less row it is a guaranteed
-      // drop that reads as an ordinary miss. Counted per candidate; the candidates are still
-      // POSTed unchanged and the Worker's gates keep rejecting them — this measures, it does not act.
-      summary.apifyDurationMsOmitted += candidates.filter(
-        (candidate) => typeof candidate.durationMs !== "number",
-      ).length;
-
-      try {
-        const verdict = await deps.report(row.trackId, candidates);
-
-        if (verdict.anchored && verdict.verifiedBy === "isrc") {
-          summary.anchoredByIsrc += 1;
-          summary.produced += 1;
-          settleQueueRow(summary);
-        } else if (verdict.anchored) {
-          summary.anchoredBySearch += 1;
-          summary.produced += 1;
-          settleQueueRow(summary);
-        } else {
-          summary.missed += 1;
-          settleQueueRow(summary);
-        }
-      } catch (error) {
-        // One row's anchor POST failing never aborts the tick (the capture-sweep discipline).
-        deps.log(`${row.trackId}: ${error instanceof Error ? error.message : String(error)}`);
-        summary.skipped += 1;
-        recordFailure(summary);
-      }
-    }
-  }
+  await runApifyFallback(apifyRows, actorChunkSize, deps, summary);
 
   return summary;
 }
