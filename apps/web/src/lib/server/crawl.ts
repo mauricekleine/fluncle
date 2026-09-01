@@ -1752,6 +1752,27 @@ function artistScopeVerdict(
   return "default";
 }
 
+function discogsIdsForRelease(release: MbReleaseDetail): {
+  inMasterId: null | number;
+  inReleaseId: null | number;
+} {
+  let inReleaseId: null | number = null;
+  let inMasterId: null | number = null;
+
+  for (const relation of release.relations ?? []) {
+    const resource = relation.url?.resource;
+    const parsed = relation.type === "discogs" && resource ? parseDiscogsUrl(resource) : undefined;
+
+    if (parsed?.kind === "release") {
+      inReleaseId = parsed.id;
+    } else if (parsed?.kind === "master") {
+      inMasterId = parsed.id;
+    }
+  }
+
+  return { inMasterId, inReleaseId };
+}
+
 /**
  * A release node → THE WRITE. One request brings the whole release: its tracks, their
  * recordings (with MBIDs and ISRCs), the artist credits, the label, and — for free, in
@@ -1774,19 +1795,7 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   }
 
   // The Discogs ids, straight off MusicBrainz's curated relation. Never guessed.
-  let inReleaseId: null | number = null;
-  let inMasterId: null | number = null;
-
-  for (const relation of release.relations ?? []) {
-    const resource = relation.url?.resource;
-    const parsed = relation.type === "discogs" && resource ? parseDiscogsUrl(resource) : undefined;
-
-    if (parsed?.kind === "release") {
-      inReleaseId = parsed.id;
-    } else if (parsed?.kind === "master") {
-      inMasterId = parsed.id;
-    }
-  }
+  const { inMasterId, inReleaseId } = discogsIdsForRelease(release);
 
   // The label edge, taken from the SAME `label-info` entry so the name and the MBID belong to
   // one label. The MBID (`label.id`) is MusicBrainz's stable label identity — the discovered

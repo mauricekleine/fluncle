@@ -103,6 +103,12 @@ const formatDiscovered = (iso: string): string => {
   return `Found ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
 };
 
+function formatTrackLine(track: FloatingTypeProps["track"]): string {
+  const artists = track?.artists?.join(", ") ?? "";
+  const title = track?.title ?? "";
+  return artists && title ? `${artists} — ${title}` : artists || title;
+}
+
 /**
  * Typography primitive for the four sanctioned roles, with a gentle float.
  *
@@ -173,10 +179,7 @@ export const FloatingType: React.FC<FloatingTypeProps> = ({
   } else if (variant === "trackLine") {
     size = fontSize ?? 40;
     heavy = true;
-    const artists = track?.artists?.join(", ") ?? "";
-    const title = track?.title ?? "";
     // The only sanctioned em dash in the system (VOICE.md mechanics).
-    const line = artists && title ? `${artists} — ${title}` : artists || title;
     glyph = {
       color: color ?? colors.starlightCream,
       fontFamily: SPACE_GROTESK_STACK,
@@ -186,7 +189,7 @@ export const FloatingType: React.FC<FloatingTypeProps> = ({
       letterSpacing: "-0.01em",
       lineHeight: 1.18,
     };
-    content = line;
+    content = formatTrackLine(track);
   } else if (variant === "meta") {
     size = fontSize ?? 26;
     glyph = {

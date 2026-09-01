@@ -634,6 +634,58 @@ async function repairPublicAggregateTrackProjection(
   return options.marker === undefined || (results.at(-2)?.rowsAffected ?? 0) > 0;
 }
 
+function appendAggregateSourceStatements(
+  writes: PublicProjectionStatement[],
+  source: TrackProjectionSource,
+  options: { generation: string; now: string },
+  guard?: ProjectionWriteGuard,
+): void {
+  writes.push({
+    args: [
+      source.trackId,
+      source.releaseDateBucket,
+      source.keyBucket,
+      options.generation,
+      source.sourceVersion,
+      options.now,
+      ...(guard?.args ?? []),
+    ],
+    sql: `insert into public_aggregate_membership
+      (track_id, release_date_bucket, key_bucket, generation, source_version, updated_at)
+      select ?, ?, ?, ?, ?, ? ${guard ? `where ${guard.sql}` : ""}
+      on conflict(track_id) do update set
+        release_date_bucket = excluded.release_date_bucket,
+        key_bucket = excluded.key_bucket,
+        generation = excluded.generation,
+        source_version = excluded.source_version,
+        updated_at = excluded.updated_at`,
+  });
+  if (source.releaseDateBucket !== null) {
+    writes.push(
+      incrementAggregateBucketStatement(
+        "release_date_bucket",
+        source.releaseDateBucket,
+        options.generation,
+        source.sourceVersion,
+        options.now,
+        guard,
+      ),
+    );
+  }
+  if (source.keyBucket !== null) {
+    writes.push(
+      incrementAggregateBucketStatement(
+        "key",
+        source.keyBucket,
+        options.generation,
+        source.sourceVersion,
+        options.now,
+        guard,
+      ),
+    );
+  }
+}
+
 function publicAggregateTrackProjectionStatements(
   trackId: string,
   source: TrackProjectionSource | undefined,
@@ -677,50 +729,7 @@ function publicAggregateTrackProjectionStatements(
   });
 
   if (source !== undefined) {
-    writes.push({
-      args: [
-        source.trackId,
-        source.releaseDateBucket,
-        source.keyBucket,
-        options.generation,
-        source.sourceVersion,
-        options.now,
-        ...(guard?.args ?? []),
-      ],
-      sql: `insert into public_aggregate_membership
-        (track_id, release_date_bucket, key_bucket, generation, source_version, updated_at)
-        select ?, ?, ?, ?, ?, ? ${guard ? `where ${guard.sql}` : ""}
-        on conflict(track_id) do update set
-          release_date_bucket = excluded.release_date_bucket,
-          key_bucket = excluded.key_bucket,
-          generation = excluded.generation,
-          source_version = excluded.source_version,
-          updated_at = excluded.updated_at`,
-    });
-    if (source.releaseDateBucket !== null) {
-      writes.push(
-        incrementAggregateBucketStatement(
-          "release_date_bucket",
-          source.releaseDateBucket,
-          options.generation,
-          source.sourceVersion,
-          options.now,
-          guard,
-        ),
-      );
-    }
-    if (source.keyBucket !== null) {
-      writes.push(
-        incrementAggregateBucketStatement(
-          "key",
-          source.keyBucket,
-          options.generation,
-          source.sourceVersion,
-          options.now,
-          guard,
-        ),
-      );
-    }
+    appendAggregateSourceStatements(writes, source, options, guard);
   }
 
   const oldReleaseDate = old === undefined ? null : releaseDateFromSourceVersion(old.sourceVersion);

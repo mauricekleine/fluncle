@@ -2789,32 +2789,24 @@ type FindingDueWorkSelector = Pick<
  * Match only the exact recurring finding queues represented by the due-work projection.
  * Every other list shape stays on the generic source selector.
  */
-function selectFindingDueWorkKind({
-  captureQueue,
-  hasContext,
-  hasEmbedding,
-  hasKey,
-  hasNote,
-  hasObservation,
-  hasVideo,
-  includeMixtapes,
-  order,
-  retryEmptyContext,
-  since,
-  status,
-  until,
-}: FindingDueWorkSelector): FindingDueWorkKind | undefined {
-  if (
-    order !== "asc" ||
-    captureQueue ||
-    includeMixtapes ||
-    since !== undefined ||
-    until !== undefined ||
-    hasEmbedding !== undefined ||
-    hasKey !== undefined
-  ) {
+function isUnsupportedFindingDueWorkShape(options: FindingDueWorkSelector): boolean {
+  return (
+    options.order !== "asc" ||
+    options.captureQueue ||
+    options.includeMixtapes ||
+    options.since !== undefined ||
+    options.until !== undefined ||
+    options.hasEmbedding !== undefined ||
+    options.hasKey !== undefined
+  );
+}
+
+function selectFindingDueWorkKind(options: FindingDueWorkSelector): FindingDueWorkKind | undefined {
+  if (isUnsupportedFindingDueWorkShape(options)) {
     return undefined;
   }
+
+  const { hasContext, hasNote, hasObservation, hasVideo, retryEmptyContext, status } = options;
 
   if (
     status === "queue" &&

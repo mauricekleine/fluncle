@@ -78,6 +78,19 @@ export function PushDialog({ onOpenChange, platform, row, ...rest }: PushDialogP
   );
 }
 
+function tiktokDraftAge(
+  post: BoardRow["posts"][number] | undefined,
+  now: number,
+): {
+  staleDraft: boolean;
+  staleHours: number;
+} {
+  return {
+    staleDraft: Boolean(post && isStaleTikTokDraft(post, now)),
+    staleHours: post ? (tikTokDraftAgeHours(post, now) ?? 0) : 0,
+  };
+}
+
 function PushDialogBody({
   busy,
   copied,
@@ -107,8 +120,7 @@ function PushDialogBody({
   // 6th+ pending draft silently). It stays `pushed`, so the button already reads
   // "Re-push draft"; this just names WHY the re-push is needed.
   const now = Date.now();
-  const staleDraft = Boolean(post && isStaleTikTokDraft(post, now));
-  const staleHours = post ? (tikTokDraftAgeHours(post, now) ?? 0) : 0;
+  const { staleDraft, staleHours } = tiktokDraftAge(post, now);
 
   return (
     <>

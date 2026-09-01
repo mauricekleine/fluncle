@@ -1,5 +1,5 @@
 import { CassetteTapeIcon, CircleNotchIcon, PlusIcon, TrayIcon } from "@phosphor-icons/react";
-import { isStaleTikTokDraft } from "@fluncle/contracts/util";
+import { formatError, isStaleTikTokDraft } from "@fluncle/contracts/util";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -531,21 +531,15 @@ function BoardContent({
 }
 
 function queryErrorMessage(queryError: unknown): string | undefined {
-  if (queryError instanceof Error) {
-    return queryError.message;
-  }
-  if (typeof queryError === "string") {
-    return queryError;
-  }
-  return queryError ? "Board load failed" : undefined;
+  return queryError ? formatError(queryError) : undefined;
 }
 
 function platformForPush(push: { platformKey: string } | undefined) {
   return push ? (PLATFORMS.find((platform) => platform.key === push.platformKey) ?? null) : null;
 }
 
-function firstBoardRow(...rows: Array<BoardRow | undefined>): BoardRow | undefined {
-  return rows.find((row) => row !== undefined);
+function firstBoardRow(...rows: Array<BoardRow | null | undefined>): BoardRow | undefined {
+  return rows.find((row): row is BoardRow => row !== null && row !== undefined);
 }
 
 function AdminBoardPage() {
