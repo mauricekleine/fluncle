@@ -4658,6 +4658,12 @@ a.catalogue-letter:focus-visible {
     transform: none !important;
   }
 
+  /* The alert dialog is the same object as the dialog and grounds with it: its content
+     carries the same `zoom-in-95`, so leaving it out would scale a confirmation open in
+     front of a reader who asked for no scale. It reaches a public surface too — the
+     account door's saves confirmation, not admin alone. */
+  [data-slot="alert-dialog-content"],
+  [data-slot="alert-dialog-overlay"],
   [data-slot="dialog-content"],
   [data-slot="dialog-overlay"] {
     animation-duration: 1ms !important;
