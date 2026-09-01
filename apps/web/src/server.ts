@@ -148,7 +148,7 @@ async function dispatch(request: Request): Promise<Response> {
     return Response.json(
       {
         code: "not_acceptable",
-        message: "This address answers in HTML. The same archive answers in JSON under /api/v1.",
+        message: "This page is served as HTML. The same archive answers as JSON under /api/v1.",
         ok: false,
       },
       { headers: { Vary: "Accept" }, status: 406 },
