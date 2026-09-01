@@ -125,6 +125,49 @@ function armCount(
   return arm?.configured === false && arm.failed === 0 ? 0 : null;
 }
 
+function applySocialMetricsResponse(
+  summary: SocialMetricsSummary,
+  response: RecordSocialMetricsResponse,
+): void {
+  summary.configured = typeof response.configured === "boolean" ? response.configured : null;
+  summary.day = response.day ?? null;
+  summary.eligible = typeof response.eligible === "number" ? response.eligible : null;
+  summary.tiktokConfigured =
+    typeof response.tiktok?.configured === "boolean" ? response.tiktok.configured : null;
+  summary.tiktokFailed = responseCount(response.tiktok?.failed);
+  summary.youtubeConfigured =
+    typeof response.youtube?.configured === "boolean" ? response.youtube.configured : null;
+  summary.youtubeFailed = responseCount(response.youtube?.failed);
+  const postizFailed = responseCount(response.failed);
+  summary.failed =
+    postizFailed !== null && summary.tiktokFailed !== null && summary.youtubeFailed !== null
+      ? postizFailed + summary.tiktokFailed + summary.youtubeFailed
+      : null;
+  summary.inserted = typeof response.inserted === "number" ? response.inserted : null;
+  summary.missing = typeof response.missing === "number" ? response.missing : null;
+  summary.polled = typeof response.polled === "number" ? response.polled : null;
+  summary.referralArrivals =
+    typeof response.referrals?.total === "number" ? response.referrals.total : null;
+  summary.tiktokFetched = responseCount(response.tiktok?.fetched);
+  summary.tiktokInserted = responseCount(response.tiktok?.inserted);
+  summary.tiktokMatched = responseCount(response.tiktok?.matched);
+  summary.youtubeFetched = responseCount(response.youtube?.fetched);
+  summary.youtubeInserted = responseCount(response.youtube?.inserted);
+  summary.youtubeMatched = responseCount(response.youtube?.matched);
+  const tiktokChecked = armCount(response.tiktok, response.tiktok?.fetched);
+  const youtubeChecked = armCount(response.youtube, response.youtube?.fetched);
+  const tiktokProduced = armCount(response.tiktok, response.tiktok?.inserted);
+  const youtubeProduced = armCount(response.youtube, response.youtube?.inserted);
+  summary.checked =
+    summary.polled !== null && tiktokChecked !== null && youtubeChecked !== null
+      ? summary.polled + tiktokChecked + youtubeChecked
+      : null;
+  summary.produced =
+    summary.inserted !== null && tiktokProduced !== null && youtubeProduced !== null
+      ? summary.inserted + tiktokProduced + youtubeProduced
+      : null;
+}
+
 // ── One tick, with injected effects ──────────────────────────────────────────
 
 export async function runSocialMetricsTick(deps: SocialMetricsDeps): Promise<SocialMetricsSummary> {
@@ -157,43 +200,7 @@ export async function runSocialMetricsTick(deps: SocialMetricsDeps): Promise<Soc
   try {
     const response = await deps.record();
 
-    summary.configured = typeof response.configured === "boolean" ? response.configured : null;
-    summary.day = response.day ?? null;
-    summary.eligible = typeof response.eligible === "number" ? response.eligible : null;
-    summary.tiktokConfigured =
-      typeof response.tiktok?.configured === "boolean" ? response.tiktok.configured : null;
-    summary.tiktokFailed = responseCount(response.tiktok?.failed);
-    summary.youtubeConfigured =
-      typeof response.youtube?.configured === "boolean" ? response.youtube.configured : null;
-    summary.youtubeFailed = responseCount(response.youtube?.failed);
-    const postizFailed = responseCount(response.failed);
-    summary.failed =
-      postizFailed !== null && summary.tiktokFailed !== null && summary.youtubeFailed !== null
-        ? postizFailed + summary.tiktokFailed + summary.youtubeFailed
-        : null;
-    summary.inserted = typeof response.inserted === "number" ? response.inserted : null;
-    summary.missing = typeof response.missing === "number" ? response.missing : null;
-    summary.polled = typeof response.polled === "number" ? response.polled : null;
-    summary.referralArrivals =
-      typeof response.referrals?.total === "number" ? response.referrals.total : null;
-    summary.tiktokFetched = responseCount(response.tiktok?.fetched);
-    summary.tiktokInserted = responseCount(response.tiktok?.inserted);
-    summary.tiktokMatched = responseCount(response.tiktok?.matched);
-    summary.youtubeFetched = responseCount(response.youtube?.fetched);
-    summary.youtubeInserted = responseCount(response.youtube?.inserted);
-    summary.youtubeMatched = responseCount(response.youtube?.matched);
-    const tiktokChecked = armCount(response.tiktok, response.tiktok?.fetched);
-    const youtubeChecked = armCount(response.youtube, response.youtube?.fetched);
-    const tiktokProduced = armCount(response.tiktok, response.tiktok?.inserted);
-    const youtubeProduced = armCount(response.youtube, response.youtube?.inserted);
-    summary.checked =
-      summary.polled !== null && tiktokChecked !== null && youtubeChecked !== null
-        ? summary.polled + tiktokChecked + youtubeChecked
-        : null;
-    summary.produced =
-      summary.inserted !== null && tiktokProduced !== null && youtubeProduced !== null
-        ? summary.inserted + tiktokProduced + youtubeProduced
-        : null;
+    applySocialMetricsResponse(summary, response);
 
     if (response.ok !== true) {
       summary.ok = false;
