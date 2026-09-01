@@ -10,7 +10,7 @@
     "copywriting-fluncle": {
       "source": "packages/skills/copywriting-fluncle",
       "sourceType": "local",
-      "computedHash": "de13386c98aafc763d3ca39bdbaa69822763f13fcff6ce26b54e3aa336909853"
+      "computedHash": "e8a71bd4036d2e9fb031534e9e1a6657dc3b21ffa6110fdc654292bd98bc02d1"
     },
     "email-best-practices": {
       "source": "resend/resend-skills",

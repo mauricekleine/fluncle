@@ -1,8 +1,10 @@
 # Product
 
-## Register
+<!-- impeccable:product-schema 1 -->
 
-brand
+## Platform
+
+web
 
 ## Users
 
@@ -18,13 +20,23 @@ Alongside findings, Fluncle publishes his own **mixtapes**: a selector mixing hi
 
 ## The front door
 
-`/` is a **discovery front door**: a lore page in the Three Areas sense, and never a marketing hero. It exists for one reader: a stranger who arrives knowing nothing about Fluncle and types nothing. Everything the page does is answerable from that person's position — a prominent search entry with clickable, real example queries; one finding placed and written about; a few more findings; what just came out; and four direct, familiar routes into the wider archive (Tracks, Artists, Albums, Labels) each carrying its real size. It stays a lore page because it speaks: the nameplate stands over it, the lead finding is introduced in Fluncle's own words, and the catalogue material it opens onto is framed in his voice rather than presented as a shelf. It works fully anonymously: no section requires an account, and joining, saved music, recommendations, the playlist, and radio all stay reachable and functional without ever being sold as the outcome of arriving. The cover-led archive page `/` used to be is whole at `/findings`, in the nav, in the sitemap, and reachable from the front door by name.
+`/` is a **discovery front door** (`apps/web/src/routes/index.tsx`): a lore page in the Three Areas sense, and never a marketing hero. It exists for one reader: a stranger who arrives knowing nothing about Fluncle and types nothing. Everything the page does is answerable from that person's position — a prominent search entry with clickable, real example queries; one finding placed and written about; a few more findings; what just came out; and four direct, familiar routes into the wider archive (Tracks, Artists, Albums, Labels) each carrying its real size. It stays a lore page because it speaks: the nameplate stands over it, the lead finding is introduced in Fluncle's own words, and the catalogue material it opens onto is framed in his voice rather than presented as a shelf. It works fully anonymously: no section requires an account, and joining, saved music, recommendations, the playlist, and radio all stay reachable and functional without ever being sold as the outcome of arriving. The cover-led archive page `/` used to be is whole at `/findings` (`apps/web/src/routes/findings.tsx`), in the nav, in the sitemap, and reachable from the front door by name.
 
 **The refinement: one long deliberate scroll, not a stack of panels.** The page is long on purpose, and its length is rhythm rather than volume — one plate, bands separated by a documented spacing scale, each band the same shape (a heading, at most one line of intro, at most one link out, then the content). Every section renders from a live production primitive, so what a reader sees is the archive itself and never a mock of it. Motion supports the scroll and never gates it; under `prefers-reduced-motion: reduce` the page is genuinely still. The visual half of this direction is DESIGN.md §5, "The Long Scroll".
 
 **Archive and Findings are related and never conflated.** The broad archive is everything Fluncle holds and is charting; the Findings are the selective set he certified. The front door carries both, and the distinction is carried by **placement and light alone** — findings sit high and lit with their coordinates, the wider archive sits below in the unlit register and under superset nouns ("tracks", "artists"). No surface names a certification tier, attaches a badge, or hangs a noun on a row that would imply Fluncle stands behind every indexed track (DESIGN.md's Unlit Rule; VOICE.md's unnamed tier).
 
 **The transport model is rejected.** An earlier direction framed the front door as a vehicle you pilot: a console that carries the reader through the archive one record at a time, advancing on an interaction before the next thing is reachable. It is rejected, and it stays rejected. Three reasons, in order of weight. It makes a stranger _earn_ the archive one step at a time when the whole job of a front door is to make the shape of the thing legible at a glance. It hides breadth behind sequence, so the reader can never see how much is here or leave in the direction they actually want. And it puts the interface between the reader and the music, which is the one thing every other rule in this document is trying to prevent — the tracklist is the page, and a transport is a page about itself. A stepper is still allowed where it is genuinely the content and never the only way through (the Stories viewer on `/findings`); it is never the front door's spine.
+
+## The discovery funnel
+
+The front door opens onto a funnel a stranger can walk end to end, and every step of it is a shipped surface rather than an intention:
+
+- **Search is a linkable place, with the palette as its accelerator.** `/search` is the persistent search surface: the whole query state lives in `?q=`, the answer is server-rendered from that URL, and a result set can be shared, reloaded, and walked back to (`apps/web/src/routes/search.tsx`). The ⌘K / Ctrl+K palette stays one keystroke from every public page and hands off to `/search` rather than being replaced by it (`apps/web/src/components/search/search-command.tsx`). The resolver behind both is the four-tier design in [docs/search.md](./docs/search.md).
+- **Every archive recording has its own destination, and a finding keeps its one URL.** `/track/<trackId>` is the archive track page, keyed by the row's permanent primary key (`apps/web/src/routes/track.$trackId.tsx`). The certified rail holds: a `/track` URL for a certified row is a permanent 301 to its `/log/<coordinate>` page, so a finding never grows a second URL ([docs/track-destination.md](./docs/track-destination.md)).
+- **Previews are bounded; listening concludes outbound.** In-place playback is a short official preview through the `/api/preview` proxy and one shared player (`apps/web/src/lib/preview-player.ts`), never the full song. The terminal music action is an outbound link to a listening service: the track page's listen band (`apps/web/src/components/track-destination.tsx`), the log entry's Listen buttons (`apps/web/src/routes/log.$logId.tsx`), and the `/out/spotify/<trackId>` hop (`apps/web/src/routes/out.spotify.$trackId.ts`). Fluncle points at the music; he never hosts the full song.
+- **Anonymous is first-class.** No step of the funnel asks for an account: the front door, search, the track and log pages, and the previews all work signed out ("The front door", above). The operator-ratified law behind it: an account never gates a feature; signing in only syncs.
+- **The archive watches the funnel in aggregate only.** Public discovery emits a small named set of journey events as cookieless aggregate beacons: payloads are bounded categories, never the words a visitor typed and never a person, and analytics is progressive enhancement that never sits on the action path (`apps/web/src/lib/discovery-events.ts`).
 
 ## Brand Personality
 
