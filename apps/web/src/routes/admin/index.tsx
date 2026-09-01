@@ -886,6 +886,26 @@ function queueRowState(
   };
 }
 
+function visibleWaitingCount(item: AttentionItem): number | undefined {
+  return item.waiting !== undefined && item.waiting > 1 ? item.waiting : undefined;
+}
+
+function candidateArtistsSuffix(artists: string[]): string {
+  return artists.length > 0 ? ` — ${artists.join(", ")}` : "";
+}
+
+function queueRowSelectionClass(selected: boolean): string {
+  return selected ? "bg-primary/10" : "hover:bg-primary/5";
+}
+
+function bioViolationSummary(violations: string[]): string {
+  return violations.length > 0 ? violations.join("; ") : "no reasons recorded";
+}
+
+function candidateDescriptorLabel(descriptor: string): string {
+  return descriptor || "no version";
+}
+
 function QueueRow({
   busy,
   copied,
@@ -933,6 +953,7 @@ function QueueRow({
     state,
     pushBusy,
   );
+  const waitingCount = visibleWaitingCount(item);
 
   return (
     // The click only moves the queue's cursor — the same thing j/k and the arrows do in the
@@ -943,7 +964,7 @@ function QueueRow({
     <li
       className={cn(
         "flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/70 px-3 py-2.5 transition-[opacity,background-color] duration-200 ease-out last:border-0 sm:px-4",
-        selected ? "bg-primary/10" : "hover:bg-primary/5",
+        queueRowSelectionClass(selected),
         flash && "bg-primary/15",
         // 75%, not lower: the 11px Stardust meta must hold WCAG AA on the plate
         // (The Legible Sky Rule) — the row still carries a live Restore control.
@@ -999,9 +1020,9 @@ function QueueRow({
               {formatAge(item.anchorAt, now)}
             </span>
           )}
-          {item.waiting !== undefined && item.waiting > 1 ? (
+          {waitingCount ? (
             <span className="font-display tracking-[-0.01em] tabular-nums" suppressHydrationWarning>
-              {item.waiting} waiting
+              {waitingCount} waiting
             </span>
           ) : undefined}
           {item.source === "drip-empty" ? (
@@ -1063,13 +1084,13 @@ function QueueRow({
           <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="truncate">
               Candidate: {candidate.title}
-              {candidate.artists.length > 0 ? ` — ${candidate.artists.join(", ")}` : ""}
+              {candidateArtistsSuffix(candidate.artists)}
             </span>
             <Badge
               className="shrink-0 px-1 py-0 font-display text-[10px] text-muted-foreground"
               variant="outline"
             >
-              {candidate.descriptor || "no version"}
+              {candidateDescriptorLabel(candidate.descriptor)}
             </Badge>
           </p>
         ) : undefined}
@@ -1079,10 +1100,7 @@ function QueueRow({
             still raises the row — it says so rather than disappearing. */}
         {bioEntity ? (
           <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className="truncate">
-              Gate said:{" "}
-              {bioViolations.length > 0 ? bioViolations.join("; ") : "no reasons recorded"}
-            </span>
+            <span className="truncate">Gate said: {bioViolationSummary(bioViolations)}</span>
             <Button
               className="h-auto shrink-0 px-1 py-0 text-[11px]"
               nativeButton={false}

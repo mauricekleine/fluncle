@@ -3047,6 +3047,38 @@ async function listProjectedTracks(
   };
 }
 
+function trackListProjection(
+  board: boolean,
+  lean: boolean,
+): {
+  mapRow: (row: TrackRow) => TrackListItem;
+  trackSelect: string;
+} {
+  if (board) {
+    return { mapRow: toBoardTrackListItem, trackSelect: BOARD_TRACK_SELECT };
+  }
+  if (lean) {
+    return { mapRow: toLeanTrackListItem, trackSelect: LEAN_TRACK_SELECT };
+  }
+  return { mapRow: toTrackListItem, trackSelect: TRACK_SELECT };
+}
+
+function includesPublishedMixtapeFeed(options: {
+  hasVideo: boolean | undefined;
+  includeMixtapes: boolean;
+  since: string | undefined;
+  status: string | undefined;
+  until: string | undefined;
+}): boolean {
+  return (
+    options.includeMixtapes &&
+    !options.since &&
+    !options.until &&
+    options.hasVideo === undefined &&
+    options.status === undefined
+  );
+}
+
 export function listTracks(
   options: ListTracksOptions & { includeMixtapes: true },
 ): Promise<FeedListPage>;
@@ -3054,6 +3086,7 @@ export function listTracks(
   options: ListTracksOptions & { board: true },
 ): Promise<BoardTrackListPage>;
 export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
+
 export async function listTracks({
   board = false,
   captureQueue,
@@ -3081,12 +3114,7 @@ export async function listTracks({
   // graph/discovery correlated subqueries the admin boards never render. Both mappers return
   // items assignable to `TrackListItem`, so the merge/return types are unchanged; `board`
   // wins over `lean` when both are set.
-  const trackSelect = board ? BOARD_TRACK_SELECT : lean ? LEAN_TRACK_SELECT : TRACK_SELECT;
-  const mapRow: (row: TrackRow) => TrackListItem = board
-    ? toBoardTrackListItem
-    : lean
-      ? toLeanTrackListItem
-      : toTrackListItem;
+  const { mapRow, trackSelect } = trackListProjection(board, lean);
 
   const projectedDueWorkKind = selectFindingDueWorkKind({
     captureQueue,
@@ -3176,17 +3204,16 @@ export async function listTracks({
       : undefined,
   ]);
   const rows = typedRows<TrackRow>(result.rows);
-  const feedRows =
-    includeMixtapes && !since && !until && hasVideo === undefined && status === undefined
-      ? await listPublishedMixtapeFeedRows(
-          db,
-          cursor,
-          mixtapeCursorComparator,
-          cursorArgs,
-          dir,
-          limit,
-        )
-      : undefined;
+  const feedRows = includesPublishedMixtapeFeed({ hasVideo, includeMixtapes, since, status, until })
+    ? await listPublishedMixtapeFeedRows(
+        db,
+        cursor,
+        mixtapeCursorComparator,
+        cursorArgs,
+        dir,
+        limit,
+      )
+    : undefined;
   // When the count query was skipped (`countTotal: false`), fall back to the returned
   // row count — the boards don't render the total, and the renders queue reads its "N+"
   // overflow off `nextCursor` (the list read's own limit+1 over-fetch), not this number.

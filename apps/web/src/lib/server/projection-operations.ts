@@ -1345,6 +1345,24 @@ type ProjectionAdvanceOutcome = {
   scheduled: number;
 };
 
+async function advanceAuditProjection(
+  client: ProjectionClient,
+  input: ProjectionAdvanceInput,
+  includeStatus: boolean,
+): Promise<ProjectionAdvanceOutcome & { status: ProjectionStatus | undefined }> {
+  await assertProjectionAuditReady(client, input.target);
+  const audit = await advanceProjectionAudit(client, input.target, input.limit);
+  if (audit.complete && !audit.matched) {
+    throw new Error("projection audit completed with a digest mismatch; run a rebuild");
+  }
+  return {
+    complete: audit.complete && audit.matched,
+    processed: audit.processed,
+    scheduled: 0,
+    status: includeStatus ? await getProjectionStatusFor(client) : undefined,
+  };
+}
+
 /** One request advances one fixed target through one explicitly bounded mutation page. */
 export function advanceProjectionFor(
   client: ProjectionClient,
@@ -1376,20 +1394,7 @@ export async function advanceProjectionFor(
   }
   let outcome: { complete: boolean; processed: number; scheduled: number };
   if (input.action === "audit") {
-    await assertProjectionAuditReady(client, input.target);
-    const audit = await advanceProjectionAudit(client, input.target, input.limit);
-    if (audit.complete && !audit.matched) {
-      throw new Error("projection audit completed with a digest mismatch; run a rebuild");
-    }
-    outcome = {
-      complete: audit.complete && audit.matched,
-      processed: audit.processed,
-      scheduled: 0,
-    };
-    return {
-      ...outcome,
-      status: includeStatus ? await getProjectionStatusFor(client) : undefined,
-    };
+    return advanceAuditProjection(client, input, includeStatus);
   }
   if (input.target === "track_due_work") {
     outcome =

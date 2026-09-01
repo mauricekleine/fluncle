@@ -1096,6 +1096,15 @@ export async function* generateFixture(
              renderable_track_count) values (?, ?, ?, ?, ?, ?, ?, ?)`,
   }));
 
+  const captureVerificationForIndex = (index: number) => {
+    if (index % 97 === 0) {
+      return { at: syntheticTimestamp(index, 2), status: "mismatch" };
+    }
+    return index % 2 === 0
+      ? { at: syntheticTimestamp(index, 2), status: "preview-match" }
+      : { at: null, status: null };
+  };
+
   yield* generatedChunks("perf_tracks", counts.tracks, chunkSize, (index) => {
     const isCatalogue = selected(index, counts.tracks, counts.findings) ? 0 : 1;
     const hasEmbedding = selected(index, counts.tracks, counts.trackEmbeddings) ? 1 : 0;
@@ -1108,6 +1117,7 @@ export async function* generateFixture(
       isCatalogue === 1 && index % 5 === 0 ? 0.5 + (index % 500) / 1_000 : null;
     const capturePriority = isCatalogue === 1 && index % 6 !== 0 ? index % 4 : null;
 
+    const captureVerification = captureVerificationForIndex(index);
     return {
       args: [
         `synthetic-track-${padded(index)}`,
@@ -1129,8 +1139,8 @@ export async function* generateFixture(
         index % 11 === 0 ? null : syntheticTimestamp(index, 1),
         150 + (index % 80),
         capturePriority,
-        index % 97 === 0 ? "mismatch" : index % 2 === 0 ? "preview-match" : null,
-        index % 97 === 0 || index % 2 === 0 ? syntheticTimestamp(index, 2) : null,
+        captureVerification.status,
+        captureVerification.at,
         index % 3 === 0 ? null : `synthetic-deezer-${padded(index)}`,
         index % 127 === 0 ? index % 17 : null,
         index % 101 === 0 ? syntheticTimestamp(index, 3) : null,

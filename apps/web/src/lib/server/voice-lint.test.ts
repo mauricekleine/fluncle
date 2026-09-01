@@ -237,6 +237,52 @@ function collectFiles(root: string, files: string[]): void {
  * carries whether it sits in a COPY position — under a copy-shaped key, inside a
  * `…Copy` object, or in a copy module — which waives the word floor in `isProse`.
  */
+function sourceLineAt(lineStarts: number[], offset: number): number {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if ((lineStarts[middle] ?? 0) <= offset) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return low + 1;
+}
+
+function sourceLineStarts(source: string): number[] {
+  const starts = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\n") {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
+}
+
+function literalFromRecord(
+  record: Record<string, unknown>,
+  line: number,
+  isCopy: boolean,
+  inCopyModule: boolean,
+): Literal | undefined {
+  if (record.type === "JSXText" && typeof record.value === "string") {
+    const text = record.value.replace(/\s+/g, " ").trim();
+    return text.length > 0 ? { isCopy: true, isJsxText: true, line, text } : undefined;
+  }
+  if (record.type === "Literal" && typeof record.value === "string") {
+    return { isCopy: isCopy || inCopyModule, isJsxText: false, line, text: record.value };
+  }
+  if (record.type !== "TemplateElement") {
+    return undefined;
+  }
+  const cooked = (record.value as { cooked?: unknown } | undefined)?.cooked;
+  return typeof cooked === "string" && cooked.trim().length > 0
+    ? { isCopy: isCopy || inCopyModule, isJsxText: false, line, text: cooked }
+    : undefined;
+}
+
 function collectLiterals(file: string, source: string): Literal[] {
   const parsed = parseSync(file, source);
 
@@ -246,26 +292,7 @@ function collectLiterals(file: string, source: string): Literal[] {
     );
   }
 
-  const lineStarts = [0];
-  for (let index = 0; index < source.length; index += 1) {
-    if (source[index] === "\n") {
-      lineStarts.push(index + 1);
-    }
-  }
-
-  const lineOf = (offset: number): number => {
-    let low = 0;
-    let high = lineStarts.length - 1;
-    while (low < high) {
-      const middle = Math.ceil((low + high) / 2);
-      if ((lineStarts[middle] ?? 0) <= offset) {
-        low = middle;
-      } else {
-        high = middle - 1;
-      }
-    }
-    return low + 1;
-  };
+  const lineStarts = sourceLineStarts(source);
 
   const inCopyModule = COPY_MODULE.test(file);
   const literals: Literal[] = [];
@@ -283,20 +310,11 @@ function collectLiterals(file: string, source: string): Literal[] {
     }
 
     const record = node as Record<string, unknown>;
-    const line = lineOf(typeof record.start === "number" ? record.start : 0);
+    const line = sourceLineAt(lineStarts, typeof record.start === "number" ? record.start : 0);
 
-    if (record.type === "JSXText" && typeof record.value === "string") {
-      const text = record.value.replace(/\s+/g, " ").trim();
-      if (text.length > 0) {
-        literals.push({ isCopy: true, isJsxText: true, line, text });
-      }
-    } else if (record.type === "Literal" && typeof record.value === "string") {
-      literals.push({ isCopy: isCopy || inCopyModule, isJsxText: false, line, text: record.value });
-    } else if (record.type === "TemplateElement") {
-      const cooked = (record.value as { cooked?: unknown } | undefined)?.cooked;
-      if (typeof cooked === "string" && cooked.trim().length > 0) {
-        literals.push({ isCopy: isCopy || inCopyModule, isJsxText: false, line, text: cooked });
-      }
+    const literal = literalFromRecord(record, line, isCopy, inCopyModule);
+    if (literal) {
+      literals.push(literal);
     }
 
     // `const feedCopy = { … }` — every string inside is copy, whatever its key.

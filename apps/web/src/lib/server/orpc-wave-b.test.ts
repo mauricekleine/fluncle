@@ -689,6 +689,14 @@ describe("oRPC /me — the bare /api alias is retired", () => {
 
 // ── OpenAPI doc emits all thirteen operationIds ──────────────────────────────
 
+function operationId(
+  paths: Record<string, Record<string, { operationId?: string }>>,
+  path: string,
+  method: string,
+): string | undefined {
+  return paths[path]?.[method]?.operationId;
+}
+
 describe("oRPC OpenAPI generation — Wave B operationIds", () => {
   it("emits all thirteen /me operations", async () => {
     const { generateOpenApiDocument } = await import("./orpc");
@@ -696,33 +704,37 @@ describe("oRPC OpenAPI generation — Wave B operationIds", () => {
       paths: Record<string, Record<string, { operationId?: string }>>;
     };
 
-    expect(document.paths["/me"]?.get?.operationId).toBe("getCurrentPrivateUser");
-    expect(document.paths["/me/csrf"]?.get?.operationId).toBe("getPrivateMutationToken");
-    expect(document.paths["/me/saved-findings"]?.get?.operationId).toBe("listPrivateSavedFindings");
-    expect(document.paths["/me/saved-findings"]?.post?.operationId).toBe("savePrivateFinding");
-    expect(document.paths["/me/saved-findings/{trackId}"]?.delete?.operationId).toBe(
+    expect(operationId(document.paths, "/me", "get")).toBe("getCurrentPrivateUser");
+    expect(operationId(document.paths, "/me/csrf", "get")).toBe("getPrivateMutationToken");
+    expect(operationId(document.paths, "/me/saved-findings", "get")).toBe(
+      "listPrivateSavedFindings",
+    );
+    expect(operationId(document.paths, "/me/saved-findings", "post")).toBe("savePrivateFinding");
+    expect(operationId(document.paths, "/me/saved-findings/{trackId}", "delete")).toBe(
       "unsavePrivateFinding",
     );
-    expect(document.paths["/me/galaxy-progress"]?.get?.operationId).toBe(
+    expect(operationId(document.paths, "/me/galaxy-progress", "get")).toBe(
       "getPrivateGalaxyProgress",
     );
-    expect(document.paths["/me/galaxy-progress"]?.put?.operationId).toBe(
+    expect(operationId(document.paths, "/me/galaxy-progress", "put")).toBe(
       "mergePrivateGalaxyProgress",
     );
-    expect(document.paths["/me/galaxy-progress/logs"]?.post?.operationId).toBe(
+    expect(operationId(document.paths, "/me/galaxy-progress/logs", "post")).toBe(
       "collectPrivateGalaxyLog",
     );
-    expect(document.paths["/me/profile"]?.patch?.operationId).toBe("updatePrivateProfile");
-    expect(document.paths["/me/delete"]?.post?.operationId).toBe("deletePrivateAccount");
-    expect(document.paths["/me/export"]?.post?.operationId).toBe("exportPrivateAccountData");
-    expect(document.paths["/me/export/{exportId}"]?.get?.operationId).toBe(
+    expect(operationId(document.paths, "/me/profile", "patch")).toBe("updatePrivateProfile");
+    expect(operationId(document.paths, "/me/delete", "post")).toBe("deletePrivateAccount");
+    expect(operationId(document.paths, "/me/export", "post")).toBe("exportPrivateAccountData");
+    expect(operationId(document.paths, "/me/export/{exportId}", "get")).toBe(
       "getPrivateAccountExport",
     );
-    expect(document.paths["/me/submissions"]?.get?.operationId).toBe("listPrivateSubmissions");
-    expect(document.paths["/me/saved-sets"]?.get?.operationId).toBe("listPrivateSavedSets");
-    expect(document.paths["/me/saved-sets"]?.post?.operationId).toBe("savePrivateSet");
-    expect(document.paths["/me/saved-sets/{id}"]?.patch?.operationId).toBe("updatePrivateSavedSet");
-    expect(document.paths["/me/saved-sets/{id}"]?.delete?.operationId).toBe(
+    expect(operationId(document.paths, "/me/submissions", "get")).toBe("listPrivateSubmissions");
+    expect(operationId(document.paths, "/me/saved-sets", "get")).toBe("listPrivateSavedSets");
+    expect(operationId(document.paths, "/me/saved-sets", "post")).toBe("savePrivateSet");
+    expect(operationId(document.paths, "/me/saved-sets/{id}", "patch")).toBe(
+      "updatePrivateSavedSet",
+    );
+    expect(operationId(document.paths, "/me/saved-sets/{id}", "delete")).toBe(
       "deletePrivateSavedSet",
     );
   });
