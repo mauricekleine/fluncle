@@ -89,27 +89,27 @@
       "computedHash": "ed3d06e1751592de822017cac39a8c08fa83319c51a4e58bf31cc1739c32ca4e"
     },
     "fluncle-smoke": {
-      "source": "packages/skills/fluncle-smoke",
+      "source": "/home/maurice/projects/.worktrees/fluncle/complexity-40/packages/skills/fluncle-smoke",
       "sourceType": "local",
       "computedHash": "1b0213f00baff44dd62f5e9cf29ea4c19b8d8653c21c6c113828b2829cc761d8"
     },
     "fluncle-sprites": {
-      "source": "packages/skills/fluncle-sprites",
+      "source": "/home/maurice/projects/.worktrees/fluncle/complexity-40/packages/skills/fluncle-sprites",
       "sourceType": "local",
       "computedHash": "b49a680f531e07584a84555ddd3efc8a6b9551abbcc7ab209f8f36ee8e08f380"
     },
     "fluncle-surfaces": {
-      "source": "packages/skills/fluncle-surfaces",
+      "source": "/home/maurice/projects/.worktrees/fluncle/complexity-40/packages/skills/fluncle-surfaces",
       "sourceType": "local",
       "computedHash": "ac567bfae77972f7277ad6d7996dc860023f0f3237d9957745b6821ffa2a4a1e"
     },
     "fluncle-track-enrichment": {
-      "source": "packages/skills/fluncle-track-enrichment",
+      "source": "/home/maurice/projects/.worktrees/fluncle/complexity-40/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
       "computedHash": "b03a88197b8fdbaa13f9a06bb2b8bb8565a4a4b45910b6260f16741f7de4df3f"
     },
     "fluncle-video": {
-      "source": "packages/skills/fluncle-video",
+      "source": "/home/maurice/projects/.worktrees/fluncle/complexity-40/packages/skills/fluncle-video",
       "sourceType": "local",
       "computedHash": "fc4679fa04c9dd87bf6dbdb77914fa6d01168d130f825c6b7aa04c9a98b944dd"
     },
