@@ -36,7 +36,7 @@ jobs:
       - name: Classify dependency closure
         id: classify
         run: |
-          args=(--base "$QUALITY_BASE" --head "$QUALITY_HEAD" --output .quality-plan.json --github-output "$GITHUB_OUTPUT")
+          args=(--base "$QUALITY_BASE" --head "$QUALITY_HEAD" --output "$RUNNER_TEMP/quality-plan.json" --github-output "$GITHUB_OUTPUT")
           if [ "$QUALITY_FORCE_FULL" = "true" ]; then
             args+=(--force-full --full-reason "scheduled or operator-requested full backstop")
           fi
@@ -78,7 +78,7 @@ jobs:
             turbo-v2-${{ runner.os }}-
 
       - name: Run static policy
-        run: node scripts/quality/measure.mjs --lane static --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane static
+        run: node scripts/quality/measure.mjs --lane static --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane static
 
       - name: Migrations are append-only
         if: steps.classify.outputs.migrations == 'true'
@@ -95,15 +95,15 @@ jobs:
 
       - name: Run affected TypeScript build, typecheck, and tests
         if: steps.classify.outputs.turbo == 'true'
-        run: node scripts/quality/measure.mjs --lane packages --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane packages
+        run: node scripts/quality/measure.mjs --lane packages --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane packages
 
       - name: Run standalone script tests
         if: steps.classify.outputs.scripts == 'true'
-        run: node scripts/quality/measure.mjs --lane scripts --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane scripts
+        run: node scripts/quality/measure.mjs --lane scripts --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane scripts
 
       - name: Verify committed skill copies
         if: steps.classify.outputs.skills == 'true'
-        run: node scripts/quality/measure.mjs --lane skills --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane skills
+        run: node scripts/quality/measure.mjs --lane skills --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane skills
 
       - name: Setup Go
         if: steps.classify.outputs.go_ssh == 'true' || steps.classify.outputs.go_dns == 'true'
@@ -119,11 +119,11 @@ jobs:
 
       - name: Check Go SSH once
         if: steps.classify.outputs.go_ssh == 'true'
-        run: node scripts/quality/measure.mjs --lane go-ssh --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane go-ssh
+        run: node scripts/quality/measure.mjs --lane go-ssh --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane go-ssh
 
       - name: Check Go DNS once
         if: steps.classify.outputs.go_dns == 'true'
-        run: node scripts/quality/measure.mjs --lane go-dns --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane go-dns
+        run: node scripts/quality/measure.mjs --lane go-dns --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane go-dns
 
       - name: Setup Rust
         if: steps.classify.outputs.sonar == 'true'
@@ -148,11 +148,11 @@ jobs:
 
       - name: Check Rust Sonar
         if: steps.classify.outputs.sonar == 'true'
-        run: node scripts/quality/measure.mjs --lane sonar --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane sonar
+        run: node scripts/quality/measure.mjs --lane sonar --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane sonar
 
       - name: Validate workflow syntax and topology
         if: steps.classify.outputs.workflows == 'true'
-        run: node scripts/quality/measure.mjs --lane workflows --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane workflows
+        run: node scripts/quality/measure.mjs --lane workflows --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane workflows
 
       # Only trusted main writes. A weekly key is immutable for one bounded epoch, restores the
       # newest prior snapshot by prefix, and replaces one-archive-per-SHA growth with about one
@@ -178,7 +178,7 @@ jobs:
         if: always()
         env:
           CACHE_HIT: ${{ steps.turbo_cache.outputs.cache-hit || 'not-selected' }}
-        run: node scripts/quality/report-run.mjs --plan .quality-plan.json --metrics .quality-metrics.jsonl --job core --cache-hit "$CACHE_HIT"
+        run: node scripts/quality/report-run.mjs --plan "$RUNNER_TEMP/quality-plan.json" --metrics "$RUNNER_TEMP/quality-metrics.jsonl" --job core --cache-hit "$CACHE_HIT"
 
   e2e:
     name: Public flows when selected
@@ -199,7 +199,7 @@ jobs:
       - name: Classify dependency closure
         id: classify
         run: |
-          args=(--base "$QUALITY_BASE" --head "$QUALITY_HEAD" --output .quality-plan.json --github-output "$GITHUB_OUTPUT")
+          args=(--base "$QUALITY_BASE" --head "$QUALITY_HEAD" --output "$RUNNER_TEMP/quality-plan.json" --github-output "$GITHUB_OUTPUT")
           if [ "$QUALITY_FORCE_FULL" = "true" ]; then
             args+=(--force-full --full-reason "scheduled or operator-requested full backstop")
           fi
@@ -252,7 +252,7 @@ jobs:
 
       - name: Run the full deterministic public-web contract
         if: steps.classify.outputs.e2e == 'true'
-        run: node scripts/quality/measure.mjs --lane e2e --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane e2e
+        run: node scripts/quality/measure.mjs --lane e2e --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane e2e
 
       - name: Save Playwright browsers from main
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true' && steps.playwright_cache.outputs.cache-hit != 'true'
@@ -317,7 +317,7 @@ jobs:
 
       - name: Report E2E duration and projection
         if: always() && steps.classify.outputs.e2e == 'true'
-        run: node scripts/quality/report-run.mjs --plan .quality-plan.json --metrics .quality-metrics.jsonl --job e2e --cache-hit "${{ steps.playwright_cache.outputs.cache-hit || 'miss' }}"
+        run: node scripts/quality/report-run.mjs --plan "$RUNNER_TEMP/quality-plan.json" --metrics "$RUNNER_TEMP/quality-metrics.jsonl" --job e2e --cache-hit "${{ steps.playwright_cache.outputs.cache-hit || 'miss' }}"
 
   gate:
     name: Lint, Format, and Typecheck
