@@ -1,0 +1,118 @@
+name: Discovery Walk
+
+# The live walk of the three public discovery journeys (apps/web/scripts/discovery-walk.ts):
+# a stranger at desktop 1440×900 and mobile 390×844 against the SERVED product, retaining per
+# step a full-page screenshot, the observed destination, canonical + robots, the outbound
+# listening target, every analytics request, and any console error. The hermetic e2e suite
+# (e2e.yml) is the GATE for these journeys; this is the RECORD of what the integrated product
+# actually did with real current data, kept where a verifier can reach it without a checkout.
+#
+# Two triggers, one artifact:
+#   - pull_request: walks whatever production serves at review time, so a PR that claims the
+#     funnel is coherent carries the evidence on its own checks page.
+#   - workflow_run (Post-deploy Probe succeeded): production now serves the pushed commit, so
+#     this walk attributes to exactly that deploy. The probe's `paths-ignore` already skips the
+#     pushes that never deploy, and a failed probe skips the walk (there is nothing coherent
+#     to record). `workflow_run` fires only for the default branch, by GitHub's own rule.
+#
+# No secrets: public GETs and clicks only; the browser never leaves the site (an outbound
+# popup is recorded and closed). The walk exits non-zero if a journey cannot complete, and
+# that IS the signal — a step that stopped resolving on the live product.
+#
+# The evidence directory is gitignored on purpose (a public repo must not accumulate binary
+# screenshots that go stale the moment a style moves; see apps/web/tests/e2e/README.md), so
+# the durable home is the run artifact: `discovery-walk`, retained 90 days (the ceiling on a
+# public repo), uploaded green or red, with `summary.md` printed into the job summary so the
+# destinations read on the run page itself.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_run:
+    workflows: ["Post-deploy Probe"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Deployment to walk (origin, no trailing slash)"
+        default: "https://www.fluncle.com"
+        required: false
+        type: string
+
+concurrency:
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  walk:
+    name: Walk the public discovery journeys (chromium)
+    # A workflow_run only counts when the probe it follows went green.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
+
+      - name: Cache Bun packages
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright chromium
+        working-directory: apps/web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Walk the journeys
+        working-directory: apps/web
+        env:
+          WALK_BASE: ${{ inputs.base || 'https://www.fluncle.com' }}
+        run: bun run walk:discovery
+
+      # The journey table on the run page itself, before anyone downloads a byte. `always()`
+      # because a failed walk's partial record is exactly what the reader needs then.
+      - name: Print the journey summary
+        if: always()
+        run: |
+          if [ -f apps/web/.dev/discovery-walk/summary.md ]; then
+            cat apps/web/.dev/discovery-walk/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The walk produced no summary (it did not reach its first step)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Same terms as e2e.yml's evidence artifacts: never committed, kept per run for the 90-day
+      # ceiling a public repo allows, uploaded green or red, and an EMPTY directory is a failure
+      # (evidence that does not exist is not evidence).
+      - name: Upload discovery-walk evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: discovery-walk
+          path: apps/web/.dev/discovery-walk/
+          retention-days: 90
+          include-hidden-files: true
+          if-no-files-found: error

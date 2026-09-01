@@ -10,7 +10,13 @@
  *   WALK_BASE=http://127.0.0.1:3000 bun run walk:discovery # a local stack
  *
  * Output lands in the gitignored `apps/web/.dev/discovery-walk/`: one PNG per step, named
- * `<viewport>--<journey>--<nn>-<step>.png`, plus one `<viewport>.json` index. The journeys:
+ * `<viewport>--<journey>--<nn>-<step>.png`, one `<viewport>.json` index (which records the commit
+ * `/api/v1/health` reported, so the evidence names what it walked), and `summary.md`, the
+ * journey-organised table of every step (`discovery-walk-summary.ts`). The DURABLE home is the
+ * `discovery-walk` CI artifact: `.github/workflows/discovery-walk.yml` runs this on every pull
+ * request and after every successful post-deploy probe, uploads the directory for 90 days, and
+ * prints `summary.md` into the job summary — so a verifier reads the destinations without a
+ * download and opens the screenshots without a checkout. The journeys:
  *
  *   1-zero-input-browse  front door → the lead finding's log entry → a sonic neighbour → Listen
  *   2-known-seed-sonic   ⌘K palette → /search (typed) → a clickable sonic example → a result → Listen
@@ -25,6 +31,8 @@
 import { type Browser, chromium, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { renderWalkSummary, type WalkIndex, type WalkStep } from "./discovery-walk-summary";
 
 const BASE = (process.env.WALK_BASE ?? "https://www.fluncle.com").replace(/\/$/, "");
 const OUT = process.env.WALK_OUT ?? join(import.meta.dirname, "../.dev/discovery-walk");
@@ -52,18 +60,7 @@ const HUBS = [
   ["log index", "/log"],
 ] as const;
 
-type Step = {
-  beacons: string[];
-  canonical: string | null;
-  errors: string[];
-  outbound: string | null;
-  robots: string | null;
-  screenshot: string;
-  status: number | null;
-  step: string;
-  title: string;
-  url: string;
-};
+type Step = WalkStep;
 
 const HYDRATED = "html[data-discovery-listening]";
 
@@ -75,7 +72,23 @@ function readHead(page: Page): Promise<Pick<Step, "canonical" | "robots" | "titl
   }));
 }
 
-async function walk(browser: Browser, viewport: (typeof VIEWPORTS)[number]): Promise<void> {
+/** The commit the deployment reports, so the retained evidence names what it walked. */
+async function servedCommit(): Promise<string | null> {
+  try {
+    const response = await fetch(`${BASE}/api/v1/health`);
+    const body = (await response.json()) as { sha?: unknown };
+
+    return typeof body.sha === "string" ? body.sha : null;
+  } catch {
+    return null;
+  }
+}
+
+async function walk(
+  browser: Browser,
+  viewport: (typeof VIEWPORTS)[number],
+  served: string | null,
+): Promise<WalkIndex> {
   const mobile = viewport.width < 600;
   const context = await browser.newContext({
     hasTouch: mobile,
@@ -252,21 +265,26 @@ async function walk(browser: Browser, viewport: (typeof VIEWPORTS)[number]): Pro
     await open("4-hubs", name, path);
   }
 
-  writeFileSync(
-    join(OUT, `${viewport.name}.json`),
-    `${JSON.stringify({ base: BASE, journeys, viewport }, null, 2)}\n`,
-  );
+  const index: WalkIndex = { base: BASE, journeys, served, viewport };
+
+  writeFileSync(join(OUT, `${viewport.name}.json`), `${JSON.stringify(index, null, 2)}\n`);
   await context.close();
+
+  return index;
 }
 
 mkdirSync(OUT, { recursive: true });
 
 const browser = await chromium.launch();
+const served = await servedCommit();
+const indexes: WalkIndex[] = [];
 let failed = false;
+
+console.log(`discovery walk: ${BASE} serving commit ${served ?? "unknown"}`);
 
 for (const viewport of VIEWPORTS) {
   try {
-    await walk(browser, viewport);
+    indexes.push(await walk(browser, viewport, served));
   } catch (error) {
     failed = true;
     console.error(`${viewport.name} FAILED:`, error);
@@ -274,5 +292,6 @@ for (const viewport of VIEWPORTS) {
 }
 
 await browser.close();
+writeFileSync(join(OUT, "summary.md"), renderWalkSummary(indexes));
 console.log(`DISCOVERY WALK: ${failed ? "FAILED" : "COMPLETE"} → ${OUT}`);
 process.exit(failed ? 1 : 0);
