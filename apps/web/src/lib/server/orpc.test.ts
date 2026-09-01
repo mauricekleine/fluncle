@@ -346,10 +346,71 @@ describe("oRPC public read — GET /tracks (list_tracks, the reborn enumerator)"
     expect(body.tracks[0]?.certified).toBe(true);
     expect(body.tracks[0]?.title).toBe(TRACK.title);
     expect(body.tracks[0]?.logId).toBe("012.8.0A");
+    // The row is REACHABLE: it names the recording's permanent id and the page the web hub row
+    // links to — a finding's is its /log page, never a second URL (docs/track-destination.md).
+    expect(body.tracks[0]?.trackId).toBe(TRACK.trackId);
+    expect(body.tracks[0]?.url).toBe("https://www.fluncle.com/log/012.8.0A");
     expect(body.tracks[0]).not.toHaveProperty("note");
     expect(body.tracks[0]).not.toHaveProperty("sourceAudioKey");
     // Page 1, no certified filter (both registers).
     expect(listTracksHubPage).toHaveBeenCalledWith({ certified: undefined }, 1);
+  });
+
+  it("gives an uncertified row its trackId + /track destination url, and no coordinate or cover", async () => {
+    listTracksHubPage.mockResolvedValueOnce({
+      items: [
+        {
+          artistLinks: [{ name: "Quiet Artist" }],
+          kind: "catalogue" as const,
+          label: "Quiet Label",
+          releaseDate: "2025-05-05",
+          track: {
+            artistAvatarUrl: undefined,
+            artists: ["Quiet Artist"],
+            releaseDate: "2025-05-05",
+            spotifyUrl: undefined,
+            title: "Quiet Tune",
+            trackId: "mb_quiet",
+          },
+        },
+        // No artist credit: the destination would refuse this row, so the row carries no url —
+        // the same `hasTrackPageIdentity` decision the web hub row makes before linking.
+        {
+          artistLinks: [],
+          kind: "catalogue" as const,
+          releaseDate: "",
+          track: {
+            artistAvatarUrl: undefined,
+            artists: [],
+            releaseDate: "",
+            spotifyUrl: undefined,
+            title: "Nameless",
+            trackId: "mb_nameless",
+          },
+        },
+      ],
+      page: 1,
+      pageCount: 1,
+      total: 2,
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks"));
+
+    expect(response?.status).toBe(200);
+    const body = (await readJson(response)) as { tracks: Array<Record<string, unknown>> };
+
+    expect(body.tracks[0]).toMatchObject({
+      certified: false,
+      title: "Quiet Tune",
+      trackId: "mb_quiet",
+      url: "https://www.fluncle.com/track/mb_quiet",
+    });
+    // The Unlit Rule holds in the row: no coordinate, no cover.
+    expect(body.tracks[0]).not.toHaveProperty("logId");
+    expect(body.tracks[0]).not.toHaveProperty("coverImageUrl");
+    expect(body.tracks[1]).toMatchObject({ certified: false, trackId: "mb_nameless" });
+    expect(body.tracks[1]).not.toHaveProperty("url");
   });
 
   it("folds the tri-state certified param into the hub filter", async () => {

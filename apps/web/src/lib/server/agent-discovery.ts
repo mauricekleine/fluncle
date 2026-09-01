@@ -15,8 +15,10 @@ import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } f
 // Agent-facing discovery surfaces served ahead of the TanStack router:
 // the RFC 9727 API catalog, the Agent Skills Discovery index, a text/markdown
 // rendering of the homepage for Accept-negotiating agents (the router's SSR
-// handler otherwise 500s on non-HTML Accept headers), and llms-full.txt — the
-// entire archive as one ingestible document.
+// handler refuses a non-HTML Accept header; server.ts turns that refusal into a
+// 406 on the public page tiers, and this markdown twin answers the homepage
+// before it gets there), and llms-full.txt — the entire archive as one
+// ingestible document.
 
 const markdownTracksLimit = 25;
 

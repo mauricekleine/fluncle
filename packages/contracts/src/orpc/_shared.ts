@@ -260,12 +260,15 @@ export const FreshTrackSchema = z
 /**
  * One row of the whole-archive `/tracks` enumerator (`list_tracks`) — every track Fluncle holds,
  * newest RELEASE first, findings and the quieter rows together. A DELIBERATELY LEAN row that mirrors
- * the web `/tracks` hub: a track has no page of its own, so it carries no slug — a certified finding
- * carries its `logId` coordinate + its `coverImageUrl`, an uncertified row carries NEITHER (present ⇔
- * `certified`, so a consumer physically cannot render an uncertified row as a named finding — the
- * Unlit Rule). `album`/`albumSlug` and `label`/`labelSlug` carry the record + imprint graph edges
- * (the slug present only when that entity has a page); `releaseDate` is the day the tune came OUT,
- * never the day Fluncle found it (the Found Rule).
+ * the web `/tracks` hub row for row: every row carries the archive's permanent `trackId` and, when
+ * the row has a page, the `url` of that page — a certified finding's is its `/log/<logId>` page and
+ * an uncertified row's is its `/track/<trackId>` destination (docs/track-destination.md), exactly
+ * where the hub row links. A certified finding carries its `logId` coordinate + its `coverImageUrl`,
+ * an uncertified row carries NEITHER (present ⇔ `certified`, so a consumer physically cannot render
+ * an uncertified row as a named finding — the Unlit Rule; a destination is not a name).
+ * `album`/`albumSlug` and `label`/`labelSlug` carry the record + imprint graph edges (the slug
+ * present only when that entity has a page); `releaseDate` is the day the tune came OUT, never the
+ * day Fluncle found it (the Found Rule).
  */
 export const CatalogueTrackListItemSchema = z
   .object({
@@ -285,6 +288,15 @@ export const CatalogueTrackListItemSchema = z
     releaseDate: z.string().optional(),
     spotifyUrl: z.string().optional(),
     title: z.string(),
+    /** The archive's permanent primary key for the recording — the identifier `/track/<trackId>` is keyed on. */
+    trackId: z.string(),
+    /**
+     * The row's own page on fluncle.com, the same place the web `/tracks` hub links: a certified
+     * finding's `/log/<logId>` page, an uncertified row's `/track/<trackId>` destination. Absent only
+     * when the archive cannot yet name the recording (no title or no artist credit), which is the
+     * one case the destination itself refuses to serve.
+     */
+    url: z.string().optional(),
   })
   .meta({ id: "CatalogueTrackListItem" });
 

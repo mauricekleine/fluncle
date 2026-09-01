@@ -158,6 +158,62 @@ describe("server.ts dispatch spine", () => {
     expect(await response.text()).toBe("router-sentinel");
   });
 
+  it("answers 406 (not the router's 500) when a public page is asked for in a shape it cannot take", async () => {
+    // An API client or crawler asking a /log, /track, or hub URL for JSON: the router's SSR guard
+    // would call that a 500. The archive did not fault, so the spine answers 406 and never
+    // renders — and the JSON reply names where the same facts live.
+    for (const path of ["/log/abc123", "/track/mb_abc", "/artist/netsky", "/tracks", "/"]) {
+      const response = await dispatch(`https://www.fluncle.com${path}`, {
+        accept: "application/json",
+      });
+
+      expect(response.status, path).toBe(406);
+      expect(response.headers.get("vary"), path).toBe("Accept");
+      expect((await response.json()) as { code: string }, path).toMatchObject({
+        code: "not_acceptable",
+        ok: false,
+      });
+    }
+
+    expect(hoisted.routerFetch).not.toHaveBeenCalled();
+  });
+
+  it("still renders a public page for every Accept that admits HTML — including none at all", async () => {
+    for (const accept of [
+      undefined,
+      "*/*",
+      "text/*",
+      "text/html;q=0.9, application/json",
+      "application/json, */*;q=0.1",
+    ]) {
+      hoisted.routerFetch.mockClear();
+
+      const response = await dispatch(
+        "https://www.fluncle.com/log/abc123",
+        accept === undefined ? {} : { accept },
+      );
+
+      expect(response.status, String(accept)).toBe(200);
+      expect(await response.text(), String(accept)).toBe("router-sentinel");
+      expect(hoisted.routerFetch, String(accept)).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("never negotiates a non-page path: the API, a feed, and a server function flow on untouched", async () => {
+    // `/api/v1/tracks` is a real contract op (JSON is exactly what it answers); a feed and a server
+    // function carry no HTML cache policy, so a JSON-only Accept reaches the router as before.
+    for (const path of ["/rss.xml", "/_serverFn/abc", "/api/preview/x"]) {
+      hoisted.routerFetch.mockClear();
+
+      const response = await dispatch(`https://www.fluncle.com${path}`, {
+        accept: "application/json",
+      });
+
+      expect(response.status, path).not.toBe(406);
+      expect(hoisted.routerFetch, path).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("takes the edge-cache branch for a cacheable /log GET and still lands on the router (no oRPC/MCP capture)", async () => {
     // A public log path with an HTML Accept and no admin cookie is edge-cacheable;
     // outside the Workers runtime the cache no-ops straight to the router `render`,
