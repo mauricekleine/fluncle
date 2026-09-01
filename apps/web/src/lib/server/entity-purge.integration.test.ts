@@ -69,7 +69,7 @@ beforeEach(async () => {
 });
 
 describe("getTrackEntityPurgeTargets", () => {
-  it("resolves the artist, album, AND label pages a track renders on", async () => {
+  it("resolves the track's OWN destination, plus its artist, album and label pages", async () => {
     await seedCatalogueTrack(db, { title: "Roller", trackId: "t1" });
     await seedArtist("a1", "sub-focus");
     await linkArtist("t1", "a1", 0);
@@ -80,12 +80,15 @@ describe("getTrackEntityPurgeTargets", () => {
 
     expect(targets).toEqual(
       expect.arrayContaining([
+        // The track's own `/track/<trackId>` destination, so its detail-tier cache is explicitly
+        // purged on every write rather than merely waiting out its fresh window.
+        { kind: "track", slug: "t1" },
         { kind: "artist", slug: "sub-focus" },
         { kind: "album", slug: "all-that-jazz" },
         { kind: "label", slug: "hospital-records" },
       ]),
     );
-    expect(targets).toHaveLength(3);
+    expect(targets).toHaveLength(4);
   });
 
   it("returns EVERY artist a track features (a track links several)", async () => {
@@ -99,18 +102,20 @@ describe("getTrackEntityPurgeTargets", () => {
 
     expect(targets).toEqual(
       expect.arrayContaining([
+        { kind: "track", slug: "t2" },
         { kind: "artist", slug: "sub-focus" },
         { kind: "artist", slug: "id" },
       ]),
     );
-    expect(targets).toHaveLength(2);
+    expect(targets).toHaveLength(3);
   });
 
-  it("returns nothing for a track with no linked entities", async () => {
-    // A bare catalogue track with no artist join, album_id, or label_id renders on no
-    // entity page — so it must purge none (never a spurious global purge).
+  it("returns ONLY the track's own destination when it links to no entity", async () => {
+    // A bare catalogue track with no artist join, album_id, or label_id renders on no ENTITY page,
+    // so it purges none of them (never a spurious global purge) — but it still has a destination
+    // of its own, and that page is exactly what the write just staled.
     await seedCatalogueTrack(db, { trackId: "t3" });
 
-    expect(await getTrackEntityPurgeTargets("t3")).toEqual([]);
+    expect(await getTrackEntityPurgeTargets("t3")).toEqual([{ kind: "track", slug: "t3" }]);
   });
 });

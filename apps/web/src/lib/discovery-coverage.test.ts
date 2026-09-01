@@ -107,7 +107,7 @@ describe("public discovery event coverage", () => {
     expect(palette?.source).toContain("window.open");
   });
 
-  it("covers palette window.open (uncertified row → Spotify) with an outbound emit beside it", () => {
+  it("classifies the palette's resolved destination before any fallback window.open", () => {
     const palette = sources.find((file) => file.rel === "components/search/search-command.tsx");
     const source = palette?.source ?? "";
     const openAt = source.indexOf("window.open");
@@ -152,6 +152,7 @@ describe("public discovery event coverage", () => {
 
     expect(marked.map((file) => file.rel).sort()).toEqual([
       "components/chat/neighbour-card.tsx",
+      "components/track-destination.tsx",
       "routes/artist.$slug.tsx",
       "routes/artists.index.tsx",
       "routes/log.$logId.tsx",
@@ -243,6 +244,7 @@ describe("preview call sites state public intent", () => {
       "components/chat/finding-card.tsx",
       "components/log/log-footage.tsx",
       "components/recommendations/recommended-panel.tsx",
+      "components/track-destination.tsx",
     ]);
     expect(adminSites.map((file) => file.rel).sort()).toEqual(["components/admin/note-dialog.tsx"]);
 

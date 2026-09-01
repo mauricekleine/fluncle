@@ -33,7 +33,7 @@ Two things are worth knowing before you change any of it. The dev worker runs un
 
 `seed.ts` holds a small, deterministic, committed dataset — invented titles and artists, no real IDs, no external media URLs. Local dev seeds from a prod snapshot (`.dev/seed.sql`, gitignored); that snapshot must never be committed and CI does not have it, so this suite seeds a fresh empty DB instead.
 
-It currently contains 8 published findings (distinct titles, artists, and Log IDs, with descending `added_at`), 1 published mixtape, and one artist / label / album — with the first finding wired into the full artist ↔ label ↔ album graph. A handful of those rows carry the extras the FRONT DOOR needs and nothing else provides: an operator note (so the edited lead is provably the noted finding rather than the newest), cover art (so the "one eager image, everything else lazy" contract has rows to measure), and release dates. Beside them sits one UNCERTIFIED catalogue track — a `tracks` row with no `findings` row — so the release band can be seen rendering both registers without either being named. Plus one further finding that satisfies the `/radio` ELIGIBILITY predicate (a square master, an observation, its length, a Log ID), which nothing else does, so the radio loop has exactly one thing it can ever resolve to.
+It currently contains 8 published findings (distinct titles, artists, and Log IDs, with descending `added_at`), 1 published mixtape, and one artist / label / albums — with the first finding wired into the full artist ↔ label ↔ album graph. A handful of those rows carry the extras the FRONT DOOR needs and nothing else provides: an operator note (so the edited lead is provably the noted finding rather than the newest), cover art (so the "one eager image, everything else lazy" contract has rows to measure), and release dates. Beside them sits one UNCERTIFIED catalogue track — a `tracks` row with no `findings` row — so the release band can be seen rendering both registers without either being named. Three more uncertified rows carry the ARCHIVE TRACK DESTINATION's world (`track.spec.ts`): an evidence-rich one (a record, a release date, a cover, and two outbound services — the indexed half of the evidence gate), an evidence-rich NEIGHBOUR for the journey to continue into, and a thin one (a name and nothing else — the `noindex` half). All three carry MuQ embeddings, because "close in sound" is a vector scan and without vectors the band correctly renders nothing. Plus one further finding that satisfies the `/radio` ELIGIBILITY predicate (a square master, an observation, its length, a Log ID), which nothing else does, so the radio loop has exactly one thing it can ever resolve to.
 
 Fixtures build on the `src/lib/server/integration-db.ts` factories (`seedTrack`, `seedArtist`, `seedLabel`, `seedAlbum`, `seedMixtape`, …) — the same ones the vitest integration suite uses, so fixture shapes cannot drift from the schema. Add a fixture there, not in a parallel helper.
 
@@ -61,6 +61,19 @@ FRONT_DOOR_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/fron
 ```
 
 They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. `.github/workflows/e2e.yml` uploads `front-door-scroll` on every run, green or red, so each commit's evidence is retained for 90 days (GitHub's ceiling on a public repo) and downloadable from its own check without a byte entering history.
+
+## The cold-arrival journey's evidence
+
+`track.spec.ts` writes a full-page screenshot per STEP per width into the gitignored `apps/web/.dev/track-journey/` — `<width>-1-arrive.png`, `-2-neighbour.png`, `-3-leave.png` at both 1440×900 and 390×844. They are evidence that a stranger can land on an archive track, continue into an unfamiliar sonic neighbour, and leave to an accurate outbound listening service, with no account, at both widths. The assertions in that spec are what actually gate it; the images are for a human to look at.
+
+Regenerate them at any commit with:
+
+```bash
+bun run --cwd apps/web test:e2e -- tests/e2e/track.spec.ts
+TRACK_JOURNEY_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/track.spec.ts   # elsewhere
+```
+
+Same trade as the front door's scroll evidence, for the same reasons: never committed, uploaded by `.github/workflows/e2e.yml` as the always-on `track-journey` artifact, retained 90 days per commit.
 
 ## Discovery-journey event evidence
 

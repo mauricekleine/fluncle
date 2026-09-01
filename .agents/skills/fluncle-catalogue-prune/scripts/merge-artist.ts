@@ -318,6 +318,48 @@ function runHeading(repointOnly: boolean, confirm: boolean): string {
   return `\n===== ${repointOnly ? "IDENTITY REPOINT (no merge)" : "DUPLICATE-ROW MERGE"} (${confirm ? "WRITE" : "DRY RUN"}) =====`;
 }
 
+function validateMergeArguments(
+  canonicalSlug: string | undefined,
+  duplicateSlug: string | undefined,
+  setMbid: string | undefined,
+): 0 | 1 | undefined {
+  if (!canonicalSlug || (!duplicateSlug && !setMbid)) {
+    console.log(
+      `Nothing to do. Pass --canonical <slug> --duplicate <slug>` +
+        ` [--set-mbid <mbid>] [--drop-duplicate-socials] [--confirm],` +
+        ` or --canonical <slug> --set-mbid <mbid> alone to repoint an identity without a merge.`,
+    );
+    return 0;
+  }
+  if (canonicalSlug === duplicateSlug) {
+    console.log(`\nABORTED — --canonical and --duplicate are the same slug ("${canonicalSlug}").`);
+    return 1;
+  }
+  return undefined;
+}
+
+function validateResolvedArtists(
+  canonical: Catalogue["artists"][number] | undefined,
+  canonicalSlug: string,
+  duplicate: Catalogue["artists"][number] | undefined,
+  duplicateSlug: string | undefined,
+  repointOnly: boolean,
+): boolean {
+  if (!canonical) {
+    console.log(`\nABORTED — no artists row for --canonical "${canonicalSlug}".`);
+    return false;
+  }
+  if (!repointOnly && !duplicate) {
+    console.log(`\nABORTED — no artists row for --duplicate "${duplicateSlug}".`);
+    return false;
+  }
+  if (duplicate && canonical.id === duplicate.id) {
+    console.log(`\nABORTED — both slugs resolve to the same artists row (${canonical.id}).`);
+    return false;
+  }
+  return true;
+}
+
 /** `select *` of one reference's rows for the artist — the rollback + the report read this. */
 async function selectRefRows(
   db: Client,
@@ -345,14 +387,9 @@ export async function main(
   const duplicateSlug = flag(argv, "--duplicate");
   const setMbid = flag(argv, "--set-mbid");
 
-  if (!canonicalSlug || (!duplicateSlug && !setMbid)) {
-    console.log(
-      `Nothing to do. Pass --canonical <slug> --duplicate <slug>` +
-        ` [--set-mbid <mbid>] [--drop-duplicate-socials] [--confirm],` +
-        ` or --canonical <slug> --set-mbid <mbid> alone to repoint an identity without a merge.`,
-    );
-
-    return 0;
+  const argumentExit = validateMergeArguments(canonicalSlug, duplicateSlug, setMbid);
+  if (argumentExit !== undefined) {
+    return argumentExit;
   }
 
   // THE SECOND SHAPE. A duplicate pair usually leaves the survivor wearing an MBID that belongs to
@@ -365,33 +402,14 @@ export async function main(
 
   console.log(runHeading(repointOnly, confirm));
 
-  // Cheapest rail first — it needs no catalogue at all.
-  if (canonicalSlug === duplicateSlug) {
-    console.log(`\nABORTED — --canonical and --duplicate are the same slug ("${canonicalSlug}").`);
-
-    return 1;
-  }
-
   const cat = await load();
   const db = cat.db;
   const canonical = cat.artists.find((a) => a.slug === canonicalSlug);
   const duplicate = duplicateSlug ? cat.artists.find((a) => a.slug === duplicateSlug) : undefined;
 
-  if (!canonical) {
-    console.log(`\nABORTED — no artists row for --canonical "${canonicalSlug}".`);
-
-    return 1;
-  }
-
-  if (!repointOnly && !duplicate) {
-    console.log(`\nABORTED — no artists row for --duplicate "${duplicateSlug}".`);
-
-    return 1;
-  }
-
-  if (duplicate && canonical.id === duplicate.id) {
-    console.log(`\nABORTED — both slugs resolve to the same artists row (${canonical.id}).`);
-
+  if (
+    !validateResolvedArtists(canonical, canonicalSlug ?? "", duplicate, duplicateSlug, repointOnly)
+  ) {
     return 1;
   }
 

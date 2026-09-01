@@ -103,7 +103,7 @@
 /* The brand nameplate in the nav: Oxanium, like everywhere else (DESIGN: The
    One Voice Rule — Oxanium speaks for the brand). */
 .font-display {
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
 }
 
 /* Sidebar links: quiet Stardust, igniting to the Glow on hover/active — the
@@ -120,7 +120,7 @@
    stay on the quiet sans so the manual reads instantly (The One Voice Rule). */
 #nd-page h1,
 #nd-docs-layout article h1 {
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-weight: 800;
   letter-spacing: -0.02em;
 }

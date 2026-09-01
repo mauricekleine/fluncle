@@ -10,14 +10,15 @@
 // Vocabulary (one name, one step):
 //   discovery_search   — committed an archive query (the /search form, or a palette type-ahead)
 //   discovery_example  — followed a worked example into /search
-//   discovery_open     — opened an entity destination (finding, artist, label, album, galaxy, mixtape)
+//   discovery_open     — opened an entity destination (finding, track, artist, label, album, galaxy, mixtape)
 //   discovery_similar  — continued through a sonic neighbour (Close in sound, similar artists)
 //   discovery_preview  — started an in-place preview
 //   discovery_outbound — left for an outbound listening service
 //
 // Classification is by RESOLVED destination (the href, or hitHref / entityHref), never by the
 // English on the control. A catalogue row and a finding can share a component: certified + Log ID
-// opens `/log/<id>` (discovery_open); uncertified with a Spotify URL leaves the origin
+// opens `/log/<id>` (discovery_open/finding); an identified uncertified row opens
+// `/track/<trackId>` (discovery_open/track); only the fallback Spotify URL leaves the origin
 // (discovery_outbound). See docs/search.md, "Discovery journey events".
 
 import { isBareToken, parseCoordinate, parseSonicPhrase } from "./search-query";
@@ -115,6 +116,10 @@ function openKindFromPath(pathname: string): DiscoveryOpenKind | undefined {
     return "finding";
   }
 
+  if (/^\/track\/[^/]+$/.test(pathname)) {
+    return "track";
+  }
+
   if (/^\/artist\/[^/]+$/.test(pathname)) {
     return "artist";
   }
@@ -169,7 +174,10 @@ export function classifyDiscoveryHref(
 
   const openKind = openKindFromPath(pathname);
 
-  if (options.similar && (openKind === "artist" || openKind === "finding")) {
+  if (
+    options.similar &&
+    (openKind === "artist" || openKind === "finding" || openKind === "track")
+  ) {
     return { event: "discovery_similar", metadata: { kind: openKind } };
   }
 

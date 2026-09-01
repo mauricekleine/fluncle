@@ -96,7 +96,7 @@ All three are from [docs/local-database.md](./local-database.md), all three are 
 
 `tracks` is the universal music object; `findings` is the certification, 1:1 and present only for a track Fluncle certified ([docs/track-lifecycle.md](./track-lifecycle.md)). Search is the **one** public surface that reads through a `LEFT JOIN` rather than the `FINDINGS_FROM` inner join every finding surface drives through — because the depth behind the findings is the whole product.
 
-A track with no `findings` row comes back with `certified: false`, **no coordinate**, and a Spotify URL. It renders in DESIGN.md's **Unlit Rule** register: no gold, no coordinate, the Dust Veil on hover, and a link OUT (there is no `/log` page for a track Fluncle has not been to).
+A track with no `findings` row comes back with `certified: false`, **no coordinate**, and a Spotify URL. It renders in DESIGN.md's **Unlit Rule** register: no gold, no coordinate, and the Dust Veil on hover. When the row has sufficient identity it links to its own `/track/<trackId>` archive destination; only a row that destination refuses falls back out to Spotify. There is still no `/log` page for a track Fluncle has not been to.
 
 **It is never named.** No heading over those rows, no badge on them, no noun anywhere. The tier is not a concept the reader is asked to learn. _"Finding" stays the only named object in Fluncle's world._
 
@@ -159,21 +159,21 @@ Search is one door onto the archive. The rest of public discovery (browse, entit
 | -------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `discovery_search`   | A visitor committed an archive query (the `/search` form, or a settled palette type-ahead)                     |
 | `discovery_example`  | A visitor followed a worked example into `/search`                                                             |
-| `discovery_open`     | A visitor opened an entity destination (finding, artist, label, album, galaxy, mixtape)                        |
+| `discovery_open`     | A visitor opened an entity destination (finding, track, artist, label, album, galaxy, mixtape)                 |
 | `discovery_similar`  | A visitor continued through a sonic neighbour (Close in sound, similar artists, `/artists?like=`)              |
 | `discovery_preview`  | A visitor started an in-place preview                                                                          |
 | `discovery_outbound` | A visitor left for an outbound listening service (Spotify, Apple Music, YouTube, Mixcloud, SoundCloud, Deezer) |
 
-Each name is one step. Classification is by **resolved destination**, never by the English on the control: `hitHref` / the href decide whether a row is `discovery_open` (a `/log/<id>` finding) or `discovery_outbound` (a Spotify URL). A neighbour rail opts into `discovery_similar` with `data-discovery="similar"` so the same `/artist/<slug>` chip is a continuation on that rail and an ordinary open everywhere else.
+Each name is one step. Classification is by **resolved destination**, never by the English on the control: `hitHref` / the href decide whether a row is `discovery_open` (a `/log/<id>` finding or `/track/<trackId>` archive recording) or `discovery_outbound` (the fallback Spotify URL). A neighbour rail opts into `discovery_similar` with `data-discovery="similar"` so the same `/artist/<slug>` chip is a continuation on that rail and an ordinary open everywhere else.
 
 ### What a payload may carry
 
 Nothing that names a person, a session, a profile, a ranking, or the words typed. The only extra fields are bounded categories:
 
-| Field     | On events                      | Values                                                                 | Why it is safe                                                                                             |
-| --------- | ------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `kind`    | search, example, open, similar | search: `coordinate` / `sonic` / `token` / `other`; open: entity kind  | The resolver-tier _shape_ of a query, or the kind of page opened. Never the query string, slug, or Log ID. |
-| `service` | outbound                       | `spotify` / `apple` / `youtube` / `mixcloud` / `soundcloud` / `deezer` | Which listening service the link left for. A host allow-list, not the track URL.                           |
+| Field     | On events                      | Values                                                                           | Why it is safe                                                                                                       |
+| --------- | ------------------------------ | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `kind`    | search, example, open, similar | search: `coordinate` / `sonic` / `token` / `other`; open or similar: entity kind | The resolver-tier _shape_ of a query, or the kind of page opened. Never the query string, track ID, slug, or Log ID. |
+| `service` | outbound                       | `spotify` / `apple` / `youtube` / `mixcloud` / `soundcloud` / `deezer`           | Which listening service the link left for. A host allow-list, not the track URL.                                     |
 
 `emitDiscoveryEvent` strips any other key. The helper never awaits, never throws, and never calls `preventDefault`. If the Simple Analytics tag is blocked, absent, or throws, the control still does its job. `discovery_preview` fires only when a public control opts in (`publicPreview: true`) and playback actually starts; admin auditions and failed or aborted starts stay silent. `apps/web/src/lib/discovery-coverage.test.ts` fails a new control of an instrumented class that ships without its event.
 

@@ -110,6 +110,26 @@ function findingInsertStatement(input: {
   };
 }
 
+function throwForExistingPublishedTrack(existing: TrackRow | undefined): void {
+  if (!existing) {
+    return;
+  }
+  const existingLine = `${parseArtistsJson(existing.artists_json).join(", ")} — ${existing.title}`;
+  if (existing.added_to_spotify && existing.posted_to_telegram) {
+    throw new ApiError("duplicate", `Already published: ${existingLine}`, 409);
+  }
+  throw new ApiError(
+    "incomplete_duplicate",
+    `Already attempted but incomplete:
+
+${existingLine}
+
+${existing.added_to_spotify ? "Added to Spotify" : "Not added to Spotify"}
+${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}`,
+    409,
+  );
+}
+
 export async function publishTrack(
   spotifyUrl: string,
   options: AddOptions,
@@ -126,25 +146,7 @@ export async function publishTrack(
   });
   const existing = typedRow<TrackRow>(existingResult.rows);
 
-  if (existing) {
-    const existingArtists = parseArtistsJson(existing.artists_json);
-    const existingLine = `${existingArtists.join(", ")} — ${existing.title}`;
-
-    if (existing.added_to_spotify && existing.posted_to_telegram) {
-      throw new ApiError("duplicate", `Already published: ${existingLine}`, 409);
-    }
-
-    throw new ApiError(
-      "incomplete_duplicate",
-      `Already attempted but incomplete:
-
-${existingLine}
-
-${existing.added_to_spotify ? "Added to Spotify" : "Not added to Spotify"}
-${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}`,
-      409,
-    );
-  }
+  throwForExistingPublishedTrack(existing);
 
   const track = await fetchTrackMetadata(trackId);
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;

@@ -55,10 +55,14 @@ describe("classifyDiscoveryHref — resolved destination, not the English on the
     });
   });
 
-  it("opens a certified finding at its coordinate and a catalogue listen as outbound", () => {
+  it("opens finding and track destinations, and classifies a fallback listen as outbound", () => {
     expect(classifyDiscoveryHref("/log/701.1.0A")).toEqual({
       event: "discovery_open",
       metadata: { kind: "finding" },
+    });
+    expect(classifyDiscoveryHref("/track/mb_2b1c4d5e")).toEqual({
+      event: "discovery_open",
+      metadata: { kind: "track" },
     });
     expect(classifyDiscoveryHref("https://open.spotify.com/track/abc")).toEqual({
       event: "discovery_outbound",
@@ -85,6 +89,10 @@ describe("classifyDiscoveryHref — resolved destination, not the English on the
     expect(classifyDiscoveryHref("/artist/cobalt-mirage", { similar: true })).toEqual({
       event: "discovery_similar",
       metadata: { kind: "artist" },
+    });
+    expect(classifyDiscoveryHref("/track/mb_2b1c4d5e", { similar: true })).toEqual({
+      event: "discovery_similar",
+      metadata: { kind: "track" },
     });
   });
 

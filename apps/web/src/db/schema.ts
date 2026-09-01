@@ -300,8 +300,19 @@ export const tracks = sqliteTable(
     // Beatport's terms prohibit using site content, metadata included, for text/data mining or for
     // training or feeding AI. This column and its `*_verified_at` stamp are therefore TERMINAL: a
     // URL Fluncle points a reader at, and a date. They must NEVER enter the FTS5 index, the LLM
-    // search tier, an embedding, or any derived corpus, and nothing but the identity envelope and
-    // the /identity page may read them. The rail is also enforced by what is NOT here: the resolver
+    // search tier, an embedding, or any derived corpus — and STRUCTURED DATA IS A DERIVED CORPUS:
+    // a page's schema.org `sameAs` graph exists, in log-schema.ts's own words, "for crawlers + AI
+    // answer-engines", so a URL emitted there is fed to exactly the consumption this bars. The
+    // certified /log page's `musicRecordingJsonLd` therefore has no Beatport entry in its `sameAs`,
+    // and that shipped behaviour is the specification.
+    //
+    // The readers are exactly the surfaces that RENDER the link as a link: the identity envelope,
+    // the /identity page, and the /track/<trackId> destination's outbound band (where it reads
+    // "Buy on Beatport", because it opens a checkout). That last one composes a `sameAs` array from
+    // its outbound destinations, so it needs an explicit exclusion rather than an absence — the
+    // seam is `SAME_AS_EXCLUDED_LISTEN_KINDS` / `sameAsUrls` in lib/track-page.ts, keyed on the
+    // destination KIND so it survives a rename, and `track-page.test.ts` fails if a future edit
+    // lets the kind through. The rail is also enforced by what is NOT here: the resolver
     // reads Beatport's key, BPM, genre, and length off the same page object and deliberately keeps
     // NONE of them — the ISRC is compared in memory and dropped. Fluncle's own key/BPM come from
     // his own audio analysis and stay that way. Convenience is not a licence.

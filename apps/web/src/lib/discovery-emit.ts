@@ -26,10 +26,11 @@ export const DISCOVERY_OPEN_KINDS = [
   "galaxy",
   "label",
   "mixtape",
+  "track",
 ] as const;
 export type DiscoveryOpenKind = (typeof DISCOVERY_OPEN_KINDS)[number];
 
-export const DISCOVERY_SIMILAR_KINDS = ["artist", "finding"] as const;
+export const DISCOVERY_SIMILAR_KINDS = ["artist", "finding", "track"] as const;
 export type DiscoverySimilarKind = (typeof DISCOVERY_SIMILAR_KINDS)[number];
 
 export const DISCOVERY_SERVICES = [
