@@ -442,6 +442,20 @@ type LeanTrackRow = Omit<
   "features_json" | "observation_alignment_json" | "video_model_reasoning"
 >;
 
+function leanVideoFields(row: LeanTrackRow) {
+  return {
+    videoGrain: row.video_grain ?? undefined,
+    videoModel: row.video_model ?? undefined,
+    videoPalette: row.video_palette ?? undefined,
+    videoPlateSubject: row.video_plate_subject ?? undefined,
+    videoRegister: row.video_register ?? undefined,
+    videoSquaredAt: row.video_squared_at ?? undefined,
+    videoStructure: row.video_structure ?? undefined,
+    videoUrl: row.video_url ?? undefined,
+    videoVehicle: row.video_vehicle ?? undefined,
+  };
+}
+
 /**
  * The lean list DTO (Finding B4): every `TrackListItem` field EXCEPT the three heavy ones
  * (`features`, `observationAlignment`, `videoModelReasoning`). Backs the public list
@@ -450,6 +464,7 @@ type LeanTrackRow = Omit<
  */
 export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
   return {
+    ...leanVideoFields(row),
     addedAt: row.added_at,
     addedToSpotify: Boolean(row.added_to_spotify),
     album: row.album ?? undefined,
@@ -540,15 +555,6 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     trackId: row.track_id,
     type: "finding",
     updatedAt: row.updated_at ?? undefined,
-    videoGrain: row.video_grain ?? undefined,
-    videoModel: row.video_model ?? undefined,
-    videoPalette: row.video_palette ?? undefined,
-    videoPlateSubject: row.video_plate_subject ?? undefined,
-    videoRegister: row.video_register ?? undefined,
-    videoSquaredAt: row.video_squared_at ?? undefined,
-    videoStructure: row.video_structure ?? undefined,
-    videoUrl: row.video_url ?? undefined,
-    videoVehicle: row.video_vehicle ?? undefined,
     youtubeUrl: row.youtube_url ?? undefined,
   };
 }

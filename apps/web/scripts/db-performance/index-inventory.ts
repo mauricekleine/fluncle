@@ -109,6 +109,75 @@ export function allIndexInventoryEntries(
   return [...inventory.tracksIndexes, ...inventory.databaseScaleIndexes];
 }
 
+function validateInventoryEntry(
+  entry: IndexInventoryEntry,
+  state: {
+    approvedDrops: Set<string>;
+    contractIds: Set<string>;
+    decisions: Record<IndexDecision, number>;
+    failures: string[];
+    names: Set<string>;
+  },
+): void {
+  if (state.names.has(entry.name)) {
+    state.failures.push(`duplicate index inventory entry: ${entry.name}`);
+  }
+  state.names.add(entry.name);
+  state.decisions[entry.decision] += 1;
+
+  if (entry.columns.length === 0) {
+    state.failures.push(`${entry.name} has no indexed columns`);
+  }
+  if (entry.finalConsumer.coordinates.length === 0 || entry.finalConsumer.query.length === 0) {
+    state.failures.push(`${entry.name} is missing its final consumer or query`);
+  }
+  if (
+    entry.finalConsumer.coordinates.some(
+      (coordinate) => coordinate.file.length === 0 || coordinate.marker.length === 0,
+    )
+  ) {
+    state.failures.push(`${entry.name} has an empty final consumer coordinate`);
+  }
+  if (
+    /no production|not located|schema test|keep conservatively/i.test(entry.finalConsumer.query)
+  ) {
+    state.failures.push(`${entry.name} does not name a verified production consumer`);
+  }
+  if (entry.structuralRationale.length === 0) {
+    state.failures.push(`${entry.name} is missing its structural rationale`);
+  }
+  if (entry.performanceContracts.length === 0) {
+    state.failures.push(`${entry.name} has no plan-evidence contract`);
+  }
+
+  for (const contract of entry.performanceContracts) {
+    if (state.contractIds.has(contract.id)) {
+      state.failures.push(`duplicate index plan contract: ${contract.id}`);
+    }
+    state.contractIds.add(contract.id);
+    if (contract.requiredProfiles.join(",") !== INDEX_AUDIT_PROFILES.join(",")) {
+      state.failures.push(`${entry.name} contract ${contract.id} is missing a required profile`);
+    }
+    if (
+      contract.consumer.length === 0 ||
+      contract.consumer.some(
+        (coordinate) => coordinate.file.length === 0 || coordinate.marker.length === 0,
+      )
+    ) {
+      state.failures.push(
+        `${entry.name} contract ${contract.id} is missing its consumer coordinate`,
+      );
+    }
+  }
+
+  if (entry.decision === "drop" && !state.approvedDrops.has(entry.name)) {
+    state.failures.push(`unapproved dropped index: ${entry.name}`);
+  }
+  if (entry.decision === "add") {
+    state.failures.push(`unexpected added index: ${entry.name}`);
+  }
+}
+
 export function validateIndexInventory(
   inventory: IndexInventoryDocument = FINAL_INDEX_INVENTORY,
 ): string[] {
@@ -142,61 +211,7 @@ export function validateIndexInventory(
   }
 
   for (const entry of entries) {
-    if (names.has(entry.name)) {
-      failures.push(`duplicate index inventory entry: ${entry.name}`);
-    }
-    names.add(entry.name);
-    decisions[entry.decision] += 1;
-
-    if (entry.columns.length === 0) {
-      failures.push(`${entry.name} has no indexed columns`);
-    }
-    if (entry.finalConsumer.coordinates.length === 0 || entry.finalConsumer.query.length === 0) {
-      failures.push(`${entry.name} is missing its final consumer or query`);
-    }
-    if (
-      entry.finalConsumer.coordinates.some(
-        (coordinate) => coordinate.file.length === 0 || coordinate.marker.length === 0,
-      )
-    ) {
-      failures.push(`${entry.name} has an empty final consumer coordinate`);
-    }
-    if (
-      /no production|not located|schema test|keep conservatively/i.test(entry.finalConsumer.query)
-    ) {
-      failures.push(`${entry.name} does not name a verified production consumer`);
-    }
-    if (entry.structuralRationale.length === 0) {
-      failures.push(`${entry.name} is missing its structural rationale`);
-    }
-    if (entry.performanceContracts.length === 0) {
-      failures.push(`${entry.name} has no plan-evidence contract`);
-    }
-
-    for (const contract of entry.performanceContracts) {
-      if (contractIds.has(contract.id)) {
-        failures.push(`duplicate index plan contract: ${contract.id}`);
-      }
-      contractIds.add(contract.id);
-      if (contract.requiredProfiles.join(",") !== INDEX_AUDIT_PROFILES.join(",")) {
-        failures.push(`${entry.name} contract ${contract.id} is missing a required profile`);
-      }
-      if (
-        contract.consumer.length === 0 ||
-        contract.consumer.some(
-          (coordinate) => coordinate.file.length === 0 || coordinate.marker.length === 0,
-        )
-      ) {
-        failures.push(`${entry.name} contract ${contract.id} is missing its consumer coordinate`);
-      }
-    }
-
-    if (entry.decision === "drop" && !approvedDrops.has(entry.name)) {
-      failures.push(`unapproved dropped index: ${entry.name}`);
-    }
-    if (entry.decision === "add") {
-      failures.push(`unexpected added index: ${entry.name}`);
-    }
+    validateInventoryEntry(entry, { approvedDrops, contractIds, decisions, failures, names });
   }
 
   if (decisions.keep !== 56 || decisions.drop !== 6 || decisions.add !== 0) {

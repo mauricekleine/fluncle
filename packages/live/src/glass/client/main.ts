@@ -546,25 +546,21 @@ let fpsAcc = 0;
 let fpsT = performance.now();
 let renderFrame = 0;
 
-function frame(): void {
-  const now = (performance.now() - t0) / 1000;
-  const nowMs = performance.now();
-  renderFrame++;
-  const a = dsp.update();
-
-  // auto-morph on a long dip -> surge (a demoted HINT; arrivals own morphs)
-  if (autoMorph && a.swell >= 0.08) {
-    if (a.energy < a.swell * 0.45 && !dipped) {
-      dipped = true;
-      dipT = now;
-    }
-    if (dipped && a.energy > a.swell * 1.15 && now - dipT > 2) {
-      dipped = false;
-      sceneTarget = (sceneTarget + 1) % 3;
-    }
+function updateAutomaticScene(a: ReturnType<typeof dsp.update>, now: number): void {
+  if (!autoMorph || a.swell < 0.08) {
+    return;
   }
+  if (a.energy < a.swell * 0.45 && !dipped) {
+    dipped = true;
+    dipT = now;
+  }
+  if (dipped && a.energy > a.swell * 1.15 && now - dipT > 2) {
+    dipped = false;
+    sceneTarget = (sceneTarget + 1) % 3;
+  }
+}
 
-  // silence -> holding
+function updateSilenceHold(a: ReturnType<typeof dsp.update>, nowMs: number): void {
   if (a.energy < 0.03 && a.swell < 0.03) {
     if (!silentSince) {
       silentSince = nowMs;
@@ -572,10 +568,39 @@ function frame(): void {
     if (nowMs - silentSince > 5000) {
       silenceHold = true;
     }
-  } else {
-    silentSince = 0;
-    silenceHold = false;
+    return;
   }
+  silentSince = 0;
+  silenceHold = false;
+}
+
+function updateOutputMonitor(nowMs: number): void {
+  const mean = pipeline.pollReadback();
+  if (mean) {
+    const measurement = monitor.push(nowMs, mean[0], mean[1], mean[2]);
+    if (measurement.tripped) {
+      outputTripCooldown = 90;
+      console.warn(
+        `[flash] output-side trip at ${nowMs.toFixed(0)}ms (general ${measurement.general}, red ${measurement.red}) → holding`,
+      );
+    }
+  }
+  if (outputTripCooldown > 0) {
+    outputTripCooldown--;
+  }
+}
+
+function frame(): void {
+  const now = (performance.now() - t0) / 1000;
+  const nowMs = performance.now();
+  renderFrame++;
+  const a = dsp.update();
+
+  // auto-morph on a long dip -> surge (a demoted HINT; arrivals own morphs)
+  updateAutomaticScene(a, now);
+
+  // silence -> holding
+  updateSilenceHold(a, nowMs);
 
   // ---- the CROWN: source-side flash limiter ----
   // Intended global luminance drive (the reactive brightness); red proxy from the
@@ -593,19 +618,7 @@ function frame(): void {
   const cl = (x: number): number => Math.min(x * rg, 1.15);
 
   // ---- output-side monitor: read the LAST frame's mean colour, trip -> holding ----
-  const mean = pipeline.pollReadback();
-  if (mean) {
-    const m = monitor.push(nowMs, mean[0], mean[1], mean[2]);
-    if (m.tripped) {
-      outputTripCooldown = 90; // ~1.5s of forced holding
-      console.warn(
-        `[flash] output-side trip at ${nowMs.toFixed(0)}ms (general ${m.general}, red ${m.red}) → holding`,
-      );
-    }
-  }
-  if (outputTripCooldown > 0) {
-    outputTripCooldown--;
-  }
+  updateOutputMonitor(nowMs);
 
   // holding target
   const holdTarget = blackoutEngaged || manualHold || silenceHold || outputTripCooldown > 0 ? 1 : 0;

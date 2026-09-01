@@ -468,6 +468,113 @@ async function markMissed(trackId: string): Promise<void> {
   );
 }
 
+async function resolveIsrcRows(
+  rows: IsrcWorkRow[],
+  dryRun: boolean,
+): Promise<{
+  failed: Array<{ error: string; trackId: string }>;
+  missed: string[];
+  rateLimited: boolean;
+  resolved: string[];
+}> {
+  const resolved: string[] = [];
+  const missed: string[] = [];
+  const failed: Array<{ error: string; trackId: string }> = [];
+  let rateLimited = false;
+
+  if (dryRun) {
+    return { failed, missed, rateLimited, resolved: rows.map((row) => row.track_id) };
+  }
+
+  for (const row of rows) {
+    let outcome: ResolveOutcome;
+    try {
+      const { mbid, rateLimited: throttled } = await resolveRecordingMbidByIsrc(row.isrc);
+      outcome = throttled
+        ? { kind: "rate-limited" }
+        : mbid
+          ? { kind: "resolved", mbid }
+          : { kind: "missed" };
+    } catch (error) {
+      outcome = { error: error instanceof Error ? error.message : String(error), kind: "failed" };
+    }
+
+    if (outcome.kind === "rate-limited") {
+      rateLimited = true;
+      break;
+    }
+    if (outcome.kind === "resolved") {
+      await markResolved(row.track_id, outcome.mbid);
+      logEvent("info", "recording-mbids.resolved", { mbid: outcome.mbid, trackId: row.track_id });
+      resolved.push(row.track_id);
+      continue;
+    }
+    if (outcome.kind === "missed") {
+      await markMissed(row.track_id);
+      missed.push(row.track_id);
+      continue;
+    }
+    failed.push({ error: outcome.error, trackId: row.track_id });
+  }
+
+  return { failed, missed, rateLimited, resolved };
+}
+
+async function refreshIsrcRows(
+  rows: IsrcRefreshRow[],
+  enabled: boolean,
+  dryRun: boolean,
+): Promise<{
+  failed: Array<{ error: string; trackId: string }>;
+  isrcRefreshMissed: string[];
+  isrcRefreshed: string[];
+  rateLimited: boolean;
+}> {
+  const failed: Array<{ error: string; trackId: string }> = [];
+  const isrcRefreshMissed: string[] = [];
+  const isrcRefreshed: string[] = [];
+  let rateLimited = false;
+
+  if (!enabled) {
+    return { failed, isrcRefreshMissed, isrcRefreshed, rateLimited };
+  }
+  if (dryRun) {
+    return {
+      failed,
+      isrcRefreshMissed,
+      isrcRefreshed: rows.map((row) => row.track_id),
+      rateLimited,
+    };
+  }
+
+  for (const row of rows) {
+    try {
+      const { isrc, rateLimited: throttled } = await refreshIsrcByRecordingMbid(
+        row.mb_recording_id,
+      );
+      if (throttled) {
+        rateLimited = true;
+        break;
+      }
+
+      await markIsrcRefreshed(row.track_id, isrc);
+      if (isrc) {
+        logEvent("info", "recording-mbids.isrc-refreshed", { isrc, trackId: row.track_id });
+        isrcRefreshed.push(row.track_id);
+      } else {
+        isrcRefreshMissed.push(row.track_id);
+      }
+    } catch (error) {
+      failed.push({
+        error: error instanceof Error ? error.message : String(error),
+        trackId: row.track_id,
+      });
+    }
+  }
+
+  return { failed, isrcRefreshMissed, isrcRefreshed, rateLimited };
+}
+
 // ── The pass ───────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -530,55 +637,10 @@ export async function resolveRecordingMbids(
     rows = await listIsrcWork(batchLimit, cursor);
   }
 
-  const resolved: string[] = [];
-  const missed: string[] = [];
-  const failed: Array<{ error: string; trackId: string }> = [];
-  let rateLimited = false;
-
-  if (dryRun) {
-    for (const row of rows) {
-      resolved.push(row.track_id);
-    }
-  } else {
-    for (const row of rows) {
-      let outcome: ResolveOutcome;
-
-      try {
-        const { mbid, rateLimited: throttled } = await resolveRecordingMbidByIsrc(row.isrc);
-        outcome = throttled
-          ? { kind: "rate-limited" }
-          : mbid
-            ? { kind: "resolved", mbid }
-            : { kind: "missed" };
-      } catch (error) {
-        outcome = { error: error instanceof Error ? error.message : String(error), kind: "failed" };
-      }
-
-      if (outcome.kind === "rate-limited") {
-        // Circuit breaker: MusicBrainz is actively throttling. Stop; do NOT stamp this row (it was
-        // throttled, not un-resolvable) — the next tick retries it fresh.
-        rateLimited = true;
-        break;
-      }
-
-      if (outcome.kind === "resolved") {
-        await markResolved(row.track_id, outcome.mbid);
-        logEvent("info", "recording-mbids.resolved", { mbid: outcome.mbid, trackId: row.track_id });
-        resolved.push(row.track_id);
-        continue;
-      }
-
-      if (outcome.kind === "missed") {
-        await markMissed(row.track_id);
-        missed.push(row.track_id);
-        continue;
-      }
-
-      // failed — an unexpected error (a DB write, not the MB call, which never throws). Leave the
-      // row un-stamped so it retries next tick, and surface it.
-      failed.push({ error: outcome.error, trackId: row.track_id });
-    }
-  }
+  const resolvedRows = await resolveIsrcRows(rows, dryRun);
+  const { missed, resolved } = resolvedRows;
+  const failed = [...resolvedRows.failed];
+  let { rateLimited } = resolvedRows;
 
   // ── 3. The ISRC REFRESH (path d) — the return trip: MBID → ISRC.
   //
@@ -592,8 +654,6 @@ export async function resolveRecordingMbids(
   // FIRST PAGE ONLY (`!cursor`), the prefix strip's rule: the CLI loops the drain's cursor, and this
   // leg has no cursor of its own (its stamps are what advance it), so re-running it per iteration
   // would just re-ask the same 25 rows.
-  const isrcRefreshed: string[] = [];
-  const isrcRefreshMissed: string[] = [];
   const refreshIdle =
     !cursor &&
     !rateLimited &&
@@ -614,42 +674,10 @@ export async function resolveRecordingMbids(
     refreshRows = await listIsrcRefreshWork(refreshLimit, refreshCutoff);
   }
 
-  if (refreshIdle && dryRun) {
-    // The drain's own dry-run convention: report the rows it WOULD visit, by id, with no vendor call
-    // and no write. Same worklist read, so the dry run proves the real query.
-    for (const row of refreshRows) {
-      isrcRefreshed.push(row.track_id);
-    }
-  } else if (refreshIdle) {
-    for (const row of refreshRows) {
-      try {
-        const { isrc, rateLimited: throttled } = await refreshIsrcByRecordingMbid(
-          row.mb_recording_id,
-        );
-
-        if (throttled) {
-          // The same circuit breaker the drain uses: stop, stamp nothing, resume next tick.
-          rateLimited = true;
-          break;
-        }
-
-        await markIsrcRefreshed(row.track_id, isrc);
-
-        if (isrc) {
-          logEvent("info", "recording-mbids.isrc-refreshed", { isrc, trackId: row.track_id });
-          isrcRefreshed.push(row.track_id);
-        } else {
-          isrcRefreshMissed.push(row.track_id);
-        }
-      } catch (error) {
-        // A DB write faulting (the MB call never throws). Un-stamped, so it retries next tick.
-        failed.push({
-          error: error instanceof Error ? error.message : String(error),
-          trackId: row.track_id,
-        });
-      }
-    }
-  }
+  const refreshedRows = await refreshIsrcRows(refreshRows, refreshIdle, dryRun);
+  const { isrcRefreshMissed, isrcRefreshed } = refreshedRows;
+  failed.push(...refreshedRows.failed);
+  rateLimited ||= refreshedRows.rateLimited;
 
   // Drained when the page came back short. On a throttle-stop, null the cursor so the CLI stops
   // looping this tick (the next tick resumes from the top; the attempt stamps re-skip filled rows).

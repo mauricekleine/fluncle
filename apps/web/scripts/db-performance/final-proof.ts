@@ -175,26 +175,10 @@ function uncontendedAdmissionViolations(waitMs: number): number {
   return Number.isFinite(waitMs) && waitMs <= 250 ? 0 : 1;
 }
 
-/** Discrete-event proof of the durable two-resource FIFO and fencing rules. */
-export function simulateFencedAdmission(
-  requests: readonly AdmissionRequest[] = DEFAULT_ADMISSION_REQUESTS,
-): AdmissionSimulation {
-  const violations = admissionRequestViolations(requests);
-
-  if (violations.length > 0) {
-    return {
-      convergenceFailures: 1,
-      events: [],
-      fencingViolations: 1,
-      fifoViolations: 1,
-      maxWaitMs: 0,
-      staleFenceRejected: false,
-      uncontendedAcquisitionMs: 0,
-      uncontendedAcquisitionViolations: 1,
-      violations,
-    };
-  }
-
+function runAdmissionSchedule(
+  requests: readonly AdmissionRequest[],
+  violations: string[],
+): { active: AdmissionEvent[]; events: AdmissionEvent[]; pending: AdmissionRequest[] } {
   const pending = [...requests].sort(compareAdmissionRequests);
   const active: AdmissionEvent[] = [];
   const events: AdmissionEvent[] = [];
@@ -216,11 +200,9 @@ export function simulateFencedAdmission(
       if (candidate.enqueuedAtMs > clock) {
         return false;
       }
-
       if (active.some((held) => requestsConflict(candidate, held))) {
         return false;
       }
-
       return !pending.some(
         (earlier) =>
           earlier !== candidate &&
@@ -235,7 +217,6 @@ export function simulateFencedAdmission(
         violations.push("admission scheduler lost a candidate");
         break;
       }
-
       const acquiredAtMs = Math.max(clock, candidate.enqueuedAtMs);
       const event: AdmissionEvent = {
         ...candidate,
@@ -266,6 +247,31 @@ export function simulateFencedAdmission(
     }
     clock = nextClock;
   }
+
+  return { active, events, pending };
+}
+
+/** Discrete-event proof of the durable two-resource FIFO and fencing rules. */
+export function simulateFencedAdmission(
+  requests: readonly AdmissionRequest[] = DEFAULT_ADMISSION_REQUESTS,
+): AdmissionSimulation {
+  const violations = admissionRequestViolations(requests);
+
+  if (violations.length > 0) {
+    return {
+      convergenceFailures: 1,
+      events: [],
+      fencingViolations: 1,
+      fifoViolations: 1,
+      maxWaitMs: 0,
+      staleFenceRejected: false,
+      uncontendedAcquisitionMs: 0,
+      uncontendedAcquisitionViolations: 1,
+      violations,
+    };
+  }
+
+  const { active, events, pending } = runAdmissionSchedule(requests, violations);
 
   const sortedEvents = [...events].sort((left, right) => left.acquiredAtMs - right.acquiredAtMs);
   const fifoViolations = countAdmissionFifoViolations(requests, events);
