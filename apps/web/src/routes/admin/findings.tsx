@@ -542,6 +542,16 @@ function firstBoardRow(...rows: Array<BoardRow | null | undefined>): BoardRow | 
   return rows.find((row): row is BoardRow => row !== null && row !== undefined);
 }
 
+function selectedPushTrackId(
+  push: { platformKey: string; trackId: string } | undefined,
+): string | undefined {
+  return push?.trackId;
+}
+
+function boardError(publishError: string | undefined, loadError: string | undefined) {
+  return publishError ?? loadError;
+}
+
 function AdminBoardPage() {
   const { advance: initialAdvance, board: initial } = Route.useLoaderData();
   const {
@@ -756,13 +766,13 @@ function AdminBoardPage() {
   const noteRow = firstBoardRow(boardNoteRow, fetchedNoteRow);
   const contextRow = rowFor(contextId);
   const observationRow = rowFor(observationId);
-  const pushRow = rowFor(push?.trackId);
+  const pushRow = rowFor(selectedPushTrackId(push));
   const pushPlatform = platformForPush(push);
 
   // A failed load-more shouldn't be swallowed; surface it next to mutation errors
   // and use it to pause the infinite-scroll observer until a manual retry.
   const loadError = queryErrorMessage(queryError);
-  const shownError = error ?? loadError;
+  const shownError = boardError(error, loadError);
 
   // Each row carries its derived stage so the worklist filter reads the same
   // source as the lifecycle model. In-memory filtering is fine at current scale.

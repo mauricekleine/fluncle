@@ -391,16 +391,11 @@ function appendClipAttentionItems(items: AttentionItem[], clips: ClipInput[]): v
  * TikTok inbox draft is a deadline row racing its 24h bounce (finish it / re-push it), so an
  * in-flight draft is never hidden behind the one-clip-at-a-time queue.
  */
-export function deriveAttentionItems(inputs: AttentionInputs, now: number): AttentionItem[] {
-  const items: AttentionItem[] = [];
-
-  // Every pending TikTok inbox draft races the 24h bounce — the one true deadline. ALL are
-  // shown (urgency), regardless of the one-clip-at-a-time gate on fresh pushes below.
-  appendClipAttentionItems(items, inputs.clips);
-
-  // A recorded take with no cue tracklist — nothing downstream (chapters, clips,
-  // promote) works without cues. Derivation runs against Rekordbox on the M2.
-  for (const recording of inputs.recordings) {
+function appendRecordingAttentionItems(
+  items: AttentionItem[],
+  recordings: AttentionInputs["recordings"],
+): void {
+  for (const recording of recordings) {
     if (!recording.hasVideo || recording.tracklistLength > 0 || recording.mixtapeId) {
       continue;
     }
@@ -413,10 +408,14 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       title: recording.title,
     });
   }
+}
 
-  // A minted mixtape still mid-distribution — its missing legs (YouTube video,
-  // Mixcloud audio) move multi-GB masters, so the action is M5-bound.
-  for (const mixtape of inputs.mixtapes) {
+function appendMixtapeAttentionItems(
+  items: AttentionItem[],
+  mixtapes: AttentionInputs["mixtapes"],
+  now: number,
+): void {
+  for (const mixtape of mixtapes) {
     if (mixtape.status !== "distributing") {
       continue;
     }
@@ -441,6 +440,22 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       title: mixtape.title,
     });
   }
+}
+
+export function deriveAttentionItems(inputs: AttentionInputs, now: number): AttentionItem[] {
+  const items: AttentionItem[] = [];
+
+  // Every pending TikTok inbox draft races the 24h bounce — the one true deadline. ALL are
+  // shown (urgency), regardless of the one-clip-at-a-time gate on fresh pushes below.
+  appendClipAttentionItems(items, inputs.clips);
+
+  // A recorded take with no cue tracklist — nothing downstream (chapters, clips,
+  // promote) works without cues. Derivation runs against Rekordbox on the M2.
+  appendRecordingAttentionItems(items, inputs.recordings);
+
+  // A minted mixtape still mid-distribution — its missing legs (YouTube video,
+  // Mixcloud audio) move multi-GB masters, so the action is M5-bound.
+  appendMixtapeAttentionItems(items, inputs.mixtapes, now);
 
   // The Instagram drip has nothing left to post — one singleton row, anchored to
   // the last slot that fired so it ages like everything else.

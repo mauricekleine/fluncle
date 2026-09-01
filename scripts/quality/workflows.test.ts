@@ -90,6 +90,14 @@ describe("quality topology", () => {
     expect(at(setupGo, "with", "cache")).toBe(false);
   });
 
+  test("generated quality artifacts stay outside the checkout", () => {
+    expect(qualitySource).not.toMatch(/(?:--output|--plan) \.quality-plan\.json/);
+    expect(qualitySource).not.toContain("--metrics .quality-metrics.jsonl");
+    expect(qualitySource.match(/--output "\$RUNNER_TEMP\/quality-plan\.json"/g)).toHaveLength(2);
+    expect(qualitySource).toContain('--metrics "$RUNNER_TEMP/quality-metrics.jsonl"');
+    expect(qualitySource).toContain('--plan "$RUNNER_TEMP/quality-plan.json"');
+  });
+
   test("skills drift and native contracts retain explicit owners", () => {
     expect(qualitySource).toContain("--lane skills");
     expect(qualitySource).toContain("--lane go-ssh");

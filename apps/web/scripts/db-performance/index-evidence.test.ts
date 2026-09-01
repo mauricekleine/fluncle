@@ -502,27 +502,31 @@ describe("final index plan evidence", () => {
               })),
           ),
         ).toBe(true);
-        expect(report.indexAudit?.passed).toBe(true);
-        expect(report.indexAudit?.totals).toEqual({
+        const audit = report.indexAudit;
+        if (!audit) {
+          throw new Error("performance report omitted its index audit");
+        }
+        expect(audit.passed).toBe(true);
+        expect(audit.totals).toEqual({
           databaseScaleIndexes: 30,
           evidenceContracts: 67,
           indexes: 62,
           tracksIndexes: 32,
         });
-        expect(report.indexAudit?.decisions.counts).toEqual({ add: 0, drop: 6, keep: 56 });
-        expect(report.indexAudit?.productionInventory).toEqual({
+        expect(audit.decisions.counts).toEqual({ add: 0, drop: 6, keep: 56 });
+        expect(audit.productionInventory).toEqual({
           currentFinalSchemaBeforeContraction: { indexes: 178, tracksIndexes: 32 },
           finalSchemaAfterContraction: { indexes: 172, tracksIndexes: 30 },
         });
-        expect(report.indexAudit?.missingConsumers).toEqual([]);
-        expect(report.indexAudit?.missingPlanEvidence).toEqual([]);
-        expect(report.indexAudit?.missingProfileEvidence).toEqual([]);
-        expect(report.indexAudit?.profileEvidence[profile]).toEqual({
+        expect(audit.missingConsumers).toEqual([]);
+        expect(audit.missingPlanEvidence).toEqual([]);
+        expect(audit.missingProfileEvidence).toEqual([]);
+        expect(audit.profileEvidence[profile]).toEqual({
           declaredContracts: 67,
           observedContracts: 67,
         });
 
-        const auditEntries = report.indexAudit?.entries ?? [];
+        const auditEntries = audit.entries;
         const evidence = auditEntries.flatMap((entry) => entry.contracts);
         expect(auditEntries).toHaveLength(62);
         expect(evidence).toHaveLength(67);

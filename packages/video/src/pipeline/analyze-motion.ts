@@ -2120,6 +2120,22 @@ function deriveTrackId(target: string, video: string): string {
   return target;
 }
 
+function rollupFlashSafety(
+  flashSafety: FlashSafetyResult,
+  allowFlash: boolean,
+  blockingFailures: string[],
+  advisories: string[],
+): void {
+  if (flashSafety.unsafe && !allowFlash) {
+    blockingFailures.push("flashSafety");
+  } else if (flashSafety.unsafe) {
+    advisories.push("flashSafety.overridden(--allow-flash)");
+  }
+  if (flashSafety.aaaStricterFlag) {
+    advisories.push("flashSafety.aaaStricterFlag");
+  }
+}
+
 function rollupMotionGate(input: {
   allowFlash: boolean;
   arc: ArcResult;
@@ -2135,14 +2151,7 @@ function rollupMotionGate(input: {
   const blockingFailures: string[] = [];
   const advisories: string[] = [];
 
-  if (input.flashSafety.unsafe && !input.allowFlash) {
-    blockingFailures.push("flashSafety");
-  } else if (input.flashSafety.unsafe) {
-    advisories.push("flashSafety.overridden(--allow-flash)");
-  }
-  if (input.flashSafety.aaaStricterFlag) {
-    advisories.push("flashSafety.aaaStricterFlag");
-  }
+  rollupFlashSafety(input.flashSafety, input.allowFlash, blockingFailures, advisories);
   if (input.beatPull.beatLocked) {
     blockingFailures.push("beatPull");
   } else if (input.beatPull.inconclusive) {

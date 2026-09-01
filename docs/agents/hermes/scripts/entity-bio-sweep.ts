@@ -1019,12 +1019,12 @@ function logExhausted(kind: EntityKind, slug: string): void {
 // Exported so the unit test can drive the REAL loop against stub `fluncle`/`claude` binaries
 // (FLUNCLE_BIN / CLAUDE_BIN) rather than re-implementing the budget arithmetic beside it — the
 // "authored at most three times, ever" guarantee is only worth as much as the code that runs it.
-export async function describeOne(
+async function describeOneWithOptions(
   kind: EntityKind,
   row: QueueRow,
-  options: { dryRun?: boolean; ledger?: AttemptLedger; ledgerPath?: string } = {},
+  options: { dryRun: boolean; ledger?: AttemptLedger; ledgerPath?: string },
 ): Promise<DescribeResult> {
-  const { dryRun = false, ledger, ledgerPath } = options;
+  const { dryRun, ledger, ledgerPath } = options;
   const slug = row.slug;
 
   if (!slug) {
@@ -1174,6 +1174,14 @@ export async function describeOne(
     gateBypassed: delivery.gateBypassed,
     outcome,
   };
+}
+
+export function describeOne(
+  kind: EntityKind,
+  row: QueueRow,
+  options: { dryRun?: boolean; ledger?: AttemptLedger; ledgerPath?: string } = {},
+): Promise<DescribeResult> {
+  return describeOneWithOptions(kind, row, { ...options, dryRun: options.dryRun ?? false });
 }
 
 // ---------------------------------------------------------------------------

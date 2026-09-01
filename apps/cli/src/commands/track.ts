@@ -244,23 +244,11 @@ export type TrackVideoCommandOptions = {
   allowPartial?: boolean;
 };
 
-// Uploads a track's video bundle DIRECTLY to R2 via short-lived presigned PUT
-// URLs the Worker signs. The bytes go straight to R2's S3 endpoint, not through
-// the Worker, so they bypass Cloudflare's ~100MB edge body limit (a crf-20 cut
-// is ~99MB and the bundle ships two of them). Three phases: presign → PUT each
-// file → finalize (links the footage cut as video_url + stores the vehicle).
-//
-// Before any of that, the bundle-completeness guard: a footage upload MUST carry the
-// re-render contract (composition + props + render), or the R2 bundle desyncs from
-// the DB ledger. Missing contract files hard-error (naming them) unless --allow-partial.
-//
-// onProgress is called per file so the caller can print clear progress.
-export async function trackVideoCommand(
-  idOrLogId: string,
+function validateBundleCompleteness(
   files: TrackVideoOptions,
-  onProgress?: (message: string) => void,
-  options: TrackVideoCommandOptions = {},
-): Promise<TrackVideoResult> {
+  onProgress: ((message: string) => void) | undefined,
+  options: TrackVideoCommandOptions,
+): void {
   const completeness = checkBundleCompleteness(files);
   if (
     completeness.uploadingFootage &&
@@ -287,6 +275,26 @@ export async function trackVideoCommand(
   for (const warning of completeness.plateWarnings) {
     onProgress?.(`warning: ${warning}`);
   }
+}
+
+// Uploads a track's video bundle DIRECTLY to R2 via short-lived presigned PUT
+// URLs the Worker signs. The bytes go straight to R2's S3 endpoint, not through
+// the Worker, so they bypass Cloudflare's ~100MB edge body limit (a crf-20 cut
+// is ~99MB and the bundle ships two of them). Three phases: presign → PUT each
+// file → finalize (links the footage cut as video_url + stores the vehicle).
+//
+// Before any of that, the bundle-completeness guard: a footage upload MUST carry the
+// re-render contract (composition + props + render), or the R2 bundle desyncs from
+// the DB ledger. Missing contract files hard-error (naming them) unless --allow-partial.
+//
+// onProgress is called per file so the caller can print clear progress.
+export async function trackVideoCommand(
+  idOrLogId: string,
+  files: TrackVideoOptions,
+  onProgress?: (message: string) => void,
+  options: TrackVideoCommandOptions = {},
+): Promise<TrackVideoResult> {
+  validateBundleCompleteness(files, onProgress, options);
 
   const present = VIDEO_FIELDS.map((spec) => ({
     field: spec.field,

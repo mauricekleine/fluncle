@@ -2454,6 +2454,23 @@ async function getLabelMergeRow(slug: string): Promise<LabelMergeRow | undefined
   return typedRows<LabelMergeRow>(result.rows)[0];
 }
 
+function mergeLabelRuling(
+  loser: LabelMergeRow,
+  canonical: LabelMergeRow,
+  losingSlug: string,
+  canonicalSlug: string,
+): { ruledAt: null | string; seedState: LabelSeedState } {
+  if (loser.ruled_at && canonical.ruled_at && loser.seed_state !== canonical.seed_state) {
+    throw new LabelMergeConflictError(
+      `Both labels carry an operator ruling and they disagree: ${canonicalSlug} is ${canonical.seed_state} (ruled ${canonical.ruled_at}) and ${losingSlug} is ${loser.seed_state} (ruled ${loser.ruled_at}). Re-rule one to match, then merge.`,
+    );
+  }
+  if (loser.ruled_at && (!canonical.ruled_at || loser.ruled_at > canonical.ruled_at)) {
+    return { ruledAt: loser.ruled_at, seedState: loser.seed_state };
+  }
+  return { ruledAt: canonical.ruled_at, seedState: canonical.seed_state };
+}
+
 /**
  * Merge the LOSING label (`losingSlug`) into the CANONICAL one (`canonicalSlug`) atomically.
  *
@@ -2505,20 +2522,7 @@ export async function mergeLabel(
   }
 
   // ── seed_state by ruled_at precedence; refuse an operator-vs-operator disagreement ──
-  if (loser.ruled_at && canonical.ruled_at && loser.seed_state !== canonical.seed_state) {
-    throw new LabelMergeConflictError(
-      `Both labels carry an operator ruling and they disagree: ${canonicalSlug} is ${canonical.seed_state} (ruled ${canonical.ruled_at}) and ${losingSlug} is ${loser.seed_state} (ruled ${loser.ruled_at}). Re-rule one to match, then merge.`,
-    );
-  }
-
-  let seedState = canonical.seed_state;
-  let ruledAt = canonical.ruled_at;
-
-  if (loser.ruled_at && (!canonical.ruled_at || loser.ruled_at > canonical.ruled_at)) {
-    // The loser's ruling is the more recent (or the only) one — it wins.
-    seedState = loser.seed_state;
-    ruledAt = loser.ruled_at;
-  }
+  const { ruledAt, seedState } = mergeLabelRuling(loser, canonical, losingSlug, canonicalSlug);
 
   // A scope watermark is an event cursor, not an identity fact. Preserve the latest timestamp
   // across both rows so a merge can never move the crawler's re-arm boundary backwards.

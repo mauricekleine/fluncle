@@ -41,6 +41,22 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function validateClimax(climax: unknown, err: (path: string, message: string) => void): void {
+  if (!isRecord(climax)) {
+    err("climax", "must be an object { form, colour, atMs }");
+    return;
+  }
+  if (typeof climax.form !== "string") {
+    err("climax.form", "must be a string");
+  }
+  if (typeof climax.colour !== "string") {
+    err("climax.colour", "must be a string");
+  }
+  if (typeof climax.atMs !== "number" || !Number.isFinite(climax.atMs)) {
+    err("climax.atMs", "must be a finite number");
+  }
+}
+
 /** Strict, error-collecting validation of an already-parsed value. */
 export function validateIntentStrict(raw: unknown): ValidateIntentResult {
   const errors: IntentError[] = [];
@@ -92,19 +108,7 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
   }
 
   // climax
-  if (!isRecord(raw.climax)) {
-    err("climax", "must be an object { form, colour, atMs }");
-  } else {
-    if (typeof raw.climax.form !== "string") {
-      err("climax.form", "must be a string");
-    }
-    if (typeof raw.climax.colour !== "string") {
-      err("climax.colour", "must be a string");
-    }
-    if (typeof raw.climax.atMs !== "number" || !Number.isFinite(raw.climax.atMs)) {
-      err("climax.atMs", "must be a finite number");
-    }
-  }
+  validateClimax(raw.climax, err);
 
   // bindings
   if (!Array.isArray(raw.bindings)) {

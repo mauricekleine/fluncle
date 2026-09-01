@@ -189,6 +189,31 @@ function folderNameForPath(path: string): string {
   return first.replace(/^\{(.+)\}$/, "$1") || "root";
 }
 
+function postmanParameters(operation: JsonObject): {
+  query: NonNullable<PostmanUrl["query"]>;
+  variable: NonNullable<PostmanUrl["variable"]>;
+} {
+  const parameters = Array.isArray(operation.parameters) ? operation.parameters : [];
+  const query: NonNullable<PostmanUrl["query"]> = [];
+  const variable: NonNullable<PostmanUrl["variable"]> = [];
+  for (const rawParam of parameters) {
+    if (!isObject(rawParam)) {
+      continue;
+    }
+    const key = typeof rawParam.name === "string" ? rawParam.name : "";
+    if (!key) {
+      continue;
+    }
+    const description = typeof rawParam.description === "string" ? rawParam.description : undefined;
+    if (rawParam.in === "query") {
+      query.push({ description, disabled: rawParam.required !== true, key, value: "" });
+    } else if (rawParam.in === "path") {
+      variable.push({ description, key, value: "" });
+    }
+  }
+  return { query, variable };
+}
+
 export function openApiToPostman(input: unknown): PostmanCollection {
   const spec = (isObject(input) ? input : {}) as OpenApiSpec;
   const serverUrl = spec.servers?.[0]?.url ?? "/";
@@ -209,31 +234,7 @@ export function openApiToPostman(input: unknown): PostmanCollection {
       }
 
       const segments = pathSegments(path);
-      const parameters = Array.isArray(operation.parameters) ? operation.parameters : [];
-
-      const query: NonNullable<PostmanUrl["query"]> = [];
-      const variable: NonNullable<PostmanUrl["variable"]> = [];
-      for (const rawParam of parameters) {
-        if (!isObject(rawParam)) {
-          continue;
-        }
-        const key = typeof rawParam.name === "string" ? rawParam.name : "";
-        if (!key) {
-          continue;
-        }
-        const description =
-          typeof rawParam.description === "string" ? rawParam.description : undefined;
-        if (rawParam.in === "query") {
-          query.push({
-            description,
-            disabled: rawParam.required !== true,
-            key,
-            value: "",
-          });
-        } else if (rawParam.in === "path") {
-          variable.push({ description, key, value: "" });
-        }
-      }
+      const { query, variable } = postmanParameters(operation);
 
       const rawUrl = `{{baseUrl}}/${segments.join("/")}`;
       const url: PostmanUrl = {

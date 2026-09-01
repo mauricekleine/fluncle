@@ -686,6 +686,17 @@ function appendAggregateSourceStatements(
   }
 }
 
+function preservesNewerAggregateWrite(
+  old: AggregateMembership | undefined,
+  preserveAfter: string | undefined,
+): boolean {
+  return (
+    preserveAfter !== undefined &&
+    old?.generation === PUBLIC_PROJECTION_LIVE_GENERATION &&
+    old.updatedAt >= preserveAfter
+  );
+}
+
 function publicAggregateTrackProjectionStatements(
   trackId: string,
   source: TrackProjectionSource | undefined,
@@ -699,11 +710,7 @@ function publicAggregateTrackProjectionStatements(
     preserveAfter?: string;
   },
 ): PublicProjectionStatement[] | undefined {
-  if (
-    options.preserveAfter !== undefined &&
-    old?.generation === PUBLIC_PROJECTION_LIVE_GENERATION &&
-    old.updatedAt >= options.preserveAfter
-  ) {
+  if (preservesNewerAggregateWrite(old, options.preserveAfter)) {
     return undefined;
   }
   // The snapshot check above avoids unnecessary work. This SQL guard is the correctness boundary:
@@ -1846,6 +1853,29 @@ type PublicCleanupState = {
   phase: "contributions" | "membership" | "qualification";
 };
 
+async function readAggregateSourceAnchorAuditChunk(
+  client: PublicProjectionClient,
+  options: { cursor: null | string; limit: number },
+): Promise<{ complete?: boolean; cursor: null | string; rows: unknown[][]; scanned: number }> {
+  const after = anchorSourceCursor(options.cursor);
+  const page = await readTrackAnchorSourcePage(client, after, options.limit);
+  const rows = page.rows;
+  const boundaries = rows.flatMap((row, index) => {
+    const position = after.position + index + 1;
+    return position % TRACKS_HUB_PAGE_SIZE === 0
+      ? [["anchor", row.track_id, row.release_date, position / TRACKS_HUB_PAGE_SIZE + 1]]
+      : [];
+  });
+  return {
+    complete: page.complete,
+    cursor: page.complete
+      ? null
+      : JSON.stringify({ ...page.cursor, position: after.position + rows.length }),
+    rows: boundaries,
+    scanned: rows.length,
+  };
+}
+
 function parsePublicCleanupState(
   value: unknown,
   projection: PublicProjectionName,
@@ -1879,23 +1909,7 @@ export async function readPublicProjectionAuditChunk(
 ): Promise<{ complete?: boolean; cursor: null | string; rows: unknown[][]; scanned: number }> {
   assertLimit(options.limit);
   if (lane === "aggregate_source_anchors") {
-    const after = anchorSourceCursor(options.cursor);
-    const page = await readTrackAnchorSourcePage(client, after, options.limit);
-    const rows = page.rows;
-    const boundaries = rows.flatMap((row, index) => {
-      const position = after.position + index + 1;
-      return position % TRACKS_HUB_PAGE_SIZE === 0
-        ? [["anchor", row.track_id, row.release_date, position / TRACKS_HUB_PAGE_SIZE + 1]]
-        : [];
-    });
-    return {
-      complete: page.complete,
-      cursor: page.complete
-        ? null
-        : JSON.stringify({ ...page.cursor, position: after.position + rows.length }),
-      rows: boundaries,
-      scanned: rows.length,
-    };
+    return readAggregateSourceAnchorAuditChunk(client, options);
   }
   if (lane === "aggregate_projected_anchors") {
     const [clauseHash, itemIndex] = pairCursor(options.cursor);
@@ -2337,18 +2351,33 @@ async function rebuildArtistQualificationPage(
   }
 }
 
-export async function runPublicProjectionRebuildChunk(
+type PublicProjectionRebuildChunkOptions = {
+  boundedCleanup?: boolean;
+  generation?: string;
+  limit?: number;
+  newGeneration?: boolean;
+  now?: () => Date;
+};
+
+function publicProjectionRebuildLimit(options: PublicProjectionRebuildChunkOptions): number {
+  return options.limit ?? 100;
+}
+
+function projectionStateIdentity(projection: PublicProjectionName): {
+  scope: "artists" | "tracks";
+  stateTable: "artist_qualification_state" | "public_aggregate_state";
+} {
+  return projection === "public_aggregates"
+    ? { scope: "tracks", stateTable: "public_aggregate_state" }
+    : { scope: "artists", stateTable: "artist_qualification_state" };
+}
+
+async function runPublicProjectionRebuildChunkWithOptions(
   client: PublicProjectionClient,
   projection: PublicProjectionName,
-  options: {
-    boundedCleanup?: boolean;
-    generation?: string;
-    limit?: number;
-    newGeneration?: boolean;
-    now?: () => Date;
-  } = {},
+  options: PublicProjectionRebuildChunkOptions,
 ): Promise<{ checkpoint: PublicProjectionRebuildCheckpoint; complete: boolean; scanned: number }> {
-  const limit = options.limit ?? 100;
+  const limit = publicProjectionRebuildLimit(options);
   assertLimit(limit);
   const checkpoint = await startPublicProjectionRebuild(client, projection, options);
   if (checkpoint.state === "complete") {
@@ -2586,9 +2615,7 @@ export async function runPublicProjectionRebuildChunk(
     });
   }
   const nextCursor = trackIds.at(-1) ?? checkpoint.cursor;
-  const stateTable =
-    projection === "public_aggregates" ? "public_aggregate_state" : "artist_qualification_state";
-  const scope = projection === "public_aggregates" ? "tracks" : "artists";
+  const { scope, stateTable } = projectionStateIdentity(projection);
   const cursorAdvance = await client.execute({
     args: [
       nextCursor,
@@ -2616,6 +2643,14 @@ export async function runPublicProjectionRebuildChunk(
     throw new Error(`${projection} rebuild state disappeared`);
   }
   return { checkpoint: current, complete: current.state === "complete", scanned: trackIds.length };
+}
+
+export function runPublicProjectionRebuildChunk(
+  client: PublicProjectionClient,
+  projection: PublicProjectionName,
+  options: PublicProjectionRebuildChunkOptions = {},
+): Promise<{ checkpoint: PublicProjectionRebuildCheckpoint; complete: boolean; scanned: number }> {
+  return runPublicProjectionRebuildChunkWithOptions(client, projection, options);
 }
 
 export async function rebuildPublicProjection(
@@ -2746,11 +2781,7 @@ async function enqueueAuditArtistRepair(
   );
 }
 
-export async function auditPublicProjections(
-  client: PublicProjectionClient,
-  options: { now?: () => Date; repairLimit?: number } = {},
-): Promise<PublicProjectionAudit> {
-  const repairLimit = options.repairLimit ?? 0;
+function assertPublicProjectionAuditRepairLimit(repairLimit: number): void {
   if (
     !Number.isSafeInteger(repairLimit) ||
     repairLimit < 0 ||
@@ -2760,13 +2791,20 @@ export async function auditPublicProjections(
       `public audit repair limit must be from 0 through ${MAX_PUBLIC_PROJECTION_CHUNK_SIZE}`,
     );
   }
+}
+
+async function auditPublicProjectionState(
+  client: PublicProjectionClient,
+  repairLimit: number,
+  now: string,
+): Promise<PublicProjectionAudit> {
+  assertPublicProjectionAuditRepairLimit(repairLimit);
   const [aggregates, artists] = await Promise.all([
     aggregateDigests(client),
     artistDigests(client),
   ]);
   const scheduledTrackRepairs: string[] = [];
   const scheduledArtistRepairs: string[] = [];
-  const now = nowIso(options.now);
 
   if (aggregates.sourceDigest !== aggregates.projectedDigest && repairLimit > 0) {
     const mismatches = await client.execute({
@@ -3008,6 +3046,13 @@ export async function auditPublicProjections(
     scheduledArtistRepairs,
     scheduledTrackRepairs: [...new Set(scheduledTrackRepairs)],
   };
+}
+
+export function auditPublicProjections(
+  client: PublicProjectionClient,
+  options: { now?: () => Date; repairLimit?: number } = {},
+): Promise<PublicProjectionAudit> {
+  return auditPublicProjectionState(client, options.repairLimit ?? 0, nowIso(options.now));
 }
 
 export async function shadowPublicProjections(client: PublicProjectionClient): Promise<{

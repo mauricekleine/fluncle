@@ -877,9 +877,9 @@ function settleBudget(
  * `budget` is absent on a DRY RUN: a pre-flight stores nothing, so it must not consume a finding's
  * real attempts.
  */
-export async function noteOne(
+async function noteOneWithMode(
   queued: QueueFinding,
-  dryRun = false,
+  dryRun: boolean,
   budget?: Budget,
 ): Promise<NoteResult> {
   const id = queued.trackId ?? queued.logId;
@@ -1025,6 +1025,14 @@ export async function noteOne(
   }
 
   return { cost, outcome };
+}
+
+export function noteOne(
+  queued: QueueFinding,
+  dryRun = false,
+  budget?: Budget,
+): Promise<NoteResult> {
+  return noteOneWithMode(queued, dryRun, budget);
 }
 
 // ---------------------------------------------------------------------------
