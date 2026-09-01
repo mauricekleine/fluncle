@@ -215,6 +215,88 @@ async function reportStripPlan(
   return true;
 }
 
+async function reportSplitDetails(
+  cat: Catalogue,
+  plan: ReturnType<typeof planSplit>,
+  mode: SplitMode,
+  intoName: string | undefined,
+  intoMbid: string | null,
+): Promise<boolean> {
+  console.log(`\nimpostor-side tracks (each must belong to the OTHER act):`);
+
+  for (const id of plan.impostorTrackIds.slice(0, 25)) {
+    const track = cat.trackById.get(id);
+    console.log(`  "${track?.title ?? "(untitled)"}"  ·  ${track?.label ?? "(no label)"}`);
+  }
+
+  if (plan.impostorTrackIds.length > 25) {
+    console.log(`  … and ${plan.impostorTrackIds.length - 25} more`);
+  }
+
+  console.log(`\ntracks the artist KEEPS (${plan.keptTrackIds.length}):`);
+
+  for (const id of plan.keptTrackIds.slice(0, 15)) {
+    const track = cat.trackById.get(id);
+    console.log(`  "${track?.title ?? "(untitled)"}"  ·  ${track?.label ?? "(no label)"}`);
+  }
+
+  if (plan.sharedTrackIds.length > 0) {
+    console.log(`\nHELD BACK — shared credit with an artist outside this repair:`);
+
+    for (const id of plan.sharedTrackIds) {
+      console.log(`  "${cat.trackById.get(id)?.title ?? "(untitled)"}"`);
+    }
+  }
+
+  if (mode === "strip") {
+    return reportStripPlan(cat.db, new Set(plan.impostorTrackIds), plan.albumIds);
+  }
+
+  const taken = new Set(cat.artists.map((artist) => artist.slug));
+  console.log(`\nnew artist row: "${intoName}" → slug ${mintSlug(intoName ?? "", taken)}`);
+  console.log(`  mbid: ${intoMbid ?? "(none — pass --into-mbid to make it identity-true)"}`);
+  return true;
+}
+
+async function applySplitPlan(
+  cat: Catalogue,
+  artist: Catalogue["artists"][number],
+  plan: ReturnType<typeof planSplit>,
+  mode: SplitMode,
+  intoName: string | undefined,
+  intoMbid: string | null,
+  newId: () => string,
+): Promise<void> {
+  if (mode === "strip") {
+    const removed = await deleteTracksWithEdges(cat.db, plan.impostorTrackIds);
+    console.log(`  deleted track_artists.track_id: ${removed.edges}`);
+    console.log(`  deleted tracks.track_id: ${removed.tracks}`);
+
+    for (const ids of chunk(plan.albumIds)) {
+      const result = await cat.db.execute({
+        args: ids,
+        sql: `delete from albums where id in (${ids.map(() => "?").join(",")})`,
+      });
+      console.log(`  deleted albums: ${Number(result.rowsAffected)}`);
+    }
+    return;
+  }
+
+  const taken = new Set(cat.artists.map((candidate) => candidate.slug));
+  const moved = await applySplit(
+    cat.db,
+    {
+      id: newId(),
+      mbid: intoMbid,
+      name: intoName ?? "",
+      slug: mintSlug(intoName ?? "", taken),
+    },
+    artist.id,
+    plan.impostorTrackIds,
+  );
+  console.log(`  moved track_artists edges: ${moved}`);
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   load: () => Promise<Catalogue> = loadCatalogue,
@@ -283,7 +365,6 @@ export async function main(
     return 1;
   }
 
-  const impostorSet = new Set(plan.impostorTrackIds);
   const findings = plan.impostorTrackIds.filter((id) => cat.findingTrackIds.has(id));
 
   if (findings.length > 0) {
@@ -292,40 +373,8 @@ export async function main(
     return 1;
   }
 
-  console.log(`\nimpostor-side tracks (each must belong to the OTHER act):`);
-
-  for (const id of plan.impostorTrackIds.slice(0, 25)) {
-    const track = cat.trackById.get(id);
-    console.log(`  "${track?.title ?? "(untitled)"}"  ·  ${track?.label ?? "(no label)"}`);
-  }
-
-  if (plan.impostorTrackIds.length > 25) {
-    console.log(`  … and ${plan.impostorTrackIds.length - 25} more`);
-  }
-
-  console.log(`\ntracks the artist KEEPS (${plan.keptTrackIds.length}):`);
-
-  for (const id of plan.keptTrackIds.slice(0, 15)) {
-    const track = cat.trackById.get(id);
-    console.log(`  "${track?.title ?? "(untitled)"}"  ·  ${track?.label ?? "(no label)"}`);
-  }
-
-  if (plan.sharedTrackIds.length > 0) {
-    console.log(`\nHELD BACK — shared credit with an artist outside this repair:`);
-
-    for (const id of plan.sharedTrackIds) {
-      console.log(`  "${cat.trackById.get(id)?.title ?? "(untitled)"}"`);
-    }
-  }
-
-  if (mode === "strip") {
-    if (!(await reportStripPlan(db, impostorSet, plan.albumIds))) {
-      return 1;
-    }
-  } else {
-    const taken = new Set(cat.artists.map((a) => a.slug));
-    console.log(`\nnew artist row: "${intoName}" → slug ${mintSlug(intoName ?? "", taken)}`);
-    console.log(`  mbid: ${intoMbid ?? "(none — pass --into-mbid to make it identity-true)"}`);
+  if (!(await reportSplitDetails(cat, plan, mode, intoName, intoMbid))) {
+    return 1;
   }
 
   if (!confirm) {
@@ -345,33 +394,7 @@ export async function main(
   writeFileSync(path, JSON.stringify({ ...rollback, mode }, null, 2));
   console.log(`\nrollback → ${path}`);
 
-  if (mode === "strip") {
-    const removed = await deleteTracksWithEdges(db, plan.impostorTrackIds);
-    console.log(`  deleted track_artists.track_id: ${removed.edges}`);
-    console.log(`  deleted tracks.track_id: ${removed.tracks}`);
-
-    for (const c of chunk(plan.albumIds)) {
-      const result = await db.execute({
-        args: c,
-        sql: `delete from albums where id in (${c.map(() => "?").join(",")})`,
-      });
-      console.log(`  deleted albums: ${Number(result.rowsAffected)}`);
-    }
-  } else {
-    const taken = new Set(cat.artists.map((a) => a.slug));
-    const moved = await applySplit(
-      db,
-      {
-        id: newId(),
-        mbid: intoMbid,
-        name: intoName ?? "",
-        slug: mintSlug(intoName ?? "", taken),
-      },
-      artist.id,
-      plan.impostorTrackIds,
-    );
-    console.log(`  moved track_artists edges: ${moved}`);
-  }
+  await applySplitPlan(cat, artist, plan, mode, intoName, intoMbid, newId);
 
   console.log(`\nDONE. Rollback: ${path}`);
   // HUB COUNTS lag exactly as they do after either purge — the nightly `reconcile_hub_counts` sweep

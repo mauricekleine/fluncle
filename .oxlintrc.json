@@ -47,7 +47,7 @@
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-widen-then-assert": "error",
     "curly": "error",
-    "complexity": ["error", { "max": 40, "variant": "modified" }],
+    "complexity": ["error", { "max": 39, "variant": "modified" }],
     // Code comments may carry deliberate invisible separators when documenting token sequences;
     // runtime syntax, strings, templates, and JSX remain checked.
     "eslint/no-irregular-whitespace": ["warn", { "skipComments": true }],

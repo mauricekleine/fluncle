@@ -2987,6 +2987,68 @@ function buildTrackListFilters({
   return { filterArgs, filterClauses };
 }
 
+async function listProjectedTracks(
+  db: Awaited<ReturnType<typeof getDb>>,
+  kind: FindingDueWorkKind,
+  options: {
+    countTotal: boolean;
+    cursor: TrackCursor | undefined;
+    limit: number;
+    mapRow: (row: TrackRow) => TrackListItem;
+    trackSelect: string;
+  },
+): Promise<TrackListPage | undefined> {
+  if (!(await isDueWorkCutoverEnabled())) {
+    return undefined;
+  }
+
+  const continuation = options.cursor
+    ? {
+        sortKey: encodeDueWorkOrder([
+          { direction: "asc", kind: "timestamp", nulls: "first", value: options.cursor.addedAt },
+          { direction: "asc", kind: "text", value: options.cursor.trackId },
+        ]),
+        subjectId: options.cursor.trackId,
+      }
+    : undefined;
+  const page = await readPromotedDueWorkPage(db, kind, {
+    continuation,
+    limit: options.limit,
+  });
+
+  if (page.subjectIds.length === 0) {
+    return { nextCursor: undefined, totalCount: 0, tracks: [] };
+  }
+
+  const placeholders = page.subjectIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: page.subjectIds,
+    sql: `select ${options.trackSelect}
+          from ${FINDINGS_FROM}
+          where tracks.track_id in (${placeholders})`,
+  });
+  const hydratedById = new Map(
+    typedRows<TrackRow>(result.rows).map((row) => [row.track_id, row] as const),
+  );
+  const hydratedRows = page.subjectIds.flatMap((subjectId) => {
+    const row = hydratedById.get(subjectId);
+    return row ? [row] : [];
+  });
+  const lastVisibleRow = hydratedRows.at(-1);
+
+  return {
+    nextCursor:
+      page.hasMore && lastVisibleRow
+        ? encodeTrackCursor({
+            addedAt: lastVisibleRow.added_at,
+            trackId: lastVisibleRow.track_id,
+          })
+        : undefined,
+    totalCount: options.countTotal ? await countDueWorkNow(db, kind) : hydratedRows.length,
+    tracks: hydratedRows.map(options.mapRow),
+  };
+}
+
 export function listTracks(
   options: ListTracksOptions & { includeMixtapes: true },
 ): Promise<FeedListPage>;
@@ -3044,54 +3106,17 @@ export async function listTracks({
     until,
   });
 
-  if (projectedDueWorkKind && (await isDueWorkCutoverEnabled())) {
-    const continuation = cursor
-      ? {
-          sortKey: encodeDueWorkOrder([
-            { direction: "asc", kind: "timestamp", nulls: "first", value: cursor.addedAt },
-            { direction: "asc", kind: "text", value: cursor.trackId },
-          ]),
-          subjectId: cursor.trackId,
-        }
-      : undefined;
-    const page = await readPromotedDueWorkPage(db, projectedDueWorkKind, {
-      continuation,
-      limit,
-    });
-
-    if (page.subjectIds.length === 0) {
-      return { nextCursor: undefined, totalCount: 0, tracks: [] };
-    }
-
-    const placeholders = page.subjectIds.map(() => "?").join(", ");
-    const result = await db.execute({
-      args: page.subjectIds,
-      sql: `select ${trackSelect}
-            from ${FINDINGS_FROM}
-            where tracks.track_id in (${placeholders})`,
-    });
-    const hydratedById = new Map(
-      typedRows<TrackRow>(result.rows).map((row) => [row.track_id, row] as const),
-    );
-    const hydratedRows = page.subjectIds.flatMap((subjectId) => {
-      const row = hydratedById.get(subjectId);
-      return row ? [row] : [];
-    });
-    const lastVisibleRow = hydratedRows.at(-1);
-
-    return {
-      nextCursor:
-        page.hasMore && lastVisibleRow
-          ? encodeTrackCursor({
-              addedAt: lastVisibleRow.added_at,
-              trackId: lastVisibleRow.track_id,
-            })
-          : undefined,
-      totalCount: countTotal
-        ? await countDueWorkNow(db, projectedDueWorkKind)
-        : hydratedRows.length,
-      tracks: hydratedRows.map(mapRow),
-    };
+  const projectedPage = projectedDueWorkKind
+    ? await listProjectedTracks(db, projectedDueWorkKind, {
+        countTotal,
+        cursor,
+        limit,
+        mapRow,
+        trackSelect,
+      })
+    : undefined;
+  if (projectedPage) {
+    return projectedPage;
   }
 
   // GOAL H: keep this generic legacy selector intact until the default-off cutover is proven.

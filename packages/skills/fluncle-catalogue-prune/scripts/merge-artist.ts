@@ -463,6 +463,42 @@ function mergePlanFor(
       };
 }
 
+function reportReconciledIdentity(
+  canonRow: ArtistRow,
+  dupRow: ArtistRow,
+  dupSocials: unknown[],
+  dropSocials: boolean,
+  setMbid: string | undefined,
+): ReturnType<typeof reconcile> {
+  if (!dropSocials && dupSocials.length > 0 && dupRow.mbid !== canonRow.mbid) {
+    console.log(
+      `\n  ⚠ the duplicate's MBID (${String(dupRow.mbid)}) differs from the canonical's` +
+        ` (${String(canonRow.mbid)}), so those ${dupSocials.length} channel(s) were resolved for a` +
+        ` DIFFERENT identity. Pass --drop-duplicate-socials to delete them instead of moving them.`,
+    );
+  }
+
+  const reconciled = reconcile(canonRow, dupRow, setMbid);
+  console.log(`\nidentity on the surviving row:`);
+  console.log(`  mbid: ${String(canonRow.mbid)} → ${String(reconciled.set.mbid ?? canonRow.mbid)}`);
+  console.log(
+    `  filled from the duplicate: ${reconciled.filled.length > 0 ? reconciled.filled.join(", ") : "(nothing)"}`,
+  );
+
+  if ("resolved_at" in reconciled.set && reconciled.set.resolved_at === null) {
+    console.log(`  resolved_at CLEARED — the resolver re-walks the new identity.`);
+  }
+
+  if (setMbid && canonRow.bio && canonRow.mbid !== setMbid) {
+    console.log(
+      `  ⚠ the canonical carries a stored bio authored under the OLD identity. Review it after` +
+        ` the merge — the bio sweep will NOT overwrite a non-empty bio.`,
+    );
+  }
+
+  return reconciled;
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   load: () => Promise<Catalogue> = loadCatalogue,
@@ -560,32 +596,13 @@ export async function main(
     return 1;
   }
 
-  if (!dropSocials && dupSocials.length > 0 && dupRow.mbid !== canonRow.mbid) {
-    console.log(
-      `\n  ⚠ the duplicate's MBID (${String(dupRow.mbid)}) differs from the canonical's` +
-        ` (${String(canonRow.mbid)}), so those ${dupSocials.length} channel(s) were resolved for a` +
-        ` DIFFERENT identity. Pass --drop-duplicate-socials to delete them instead of moving them.`,
-    );
-  }
-
-  const { filled, set } = reconcile(canonRow, dupRow, setMbid);
-
-  console.log(`\nidentity on the surviving row:`);
-  console.log(`  mbid: ${String(canonRow.mbid)} → ${String(set.mbid ?? canonRow.mbid)}`);
-  console.log(
-    `  filled from the duplicate: ${filled.length > 0 ? filled.join(", ") : "(nothing)"}`,
+  const { filled, set } = reportReconciledIdentity(
+    canonRow,
+    dupRow,
+    dupSocials,
+    dropSocials,
+    setMbid,
   );
-
-  if ("resolved_at" in set && set.resolved_at === null) {
-    console.log(`  resolved_at CLEARED — the resolver re-walks the new identity.`);
-  }
-
-  if (setMbid && canonRow.bio && canonRow.mbid !== setMbid) {
-    console.log(
-      `  ⚠ the canonical carries a stored bio authored under the OLD identity. Review it after` +
-        ` the merge — the bio sweep will NOT overwrite a non-empty bio.`,
-    );
-  }
 
   if (duplicate) {
     console.log(

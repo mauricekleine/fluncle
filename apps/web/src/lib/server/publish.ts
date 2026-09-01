@@ -145,6 +145,103 @@ function hasDiscogsReference(releaseId: number | undefined, masterId: number | u
   return releaseId !== undefined || masterId !== undefined;
 }
 
+async function announcePublishedTrack(
+  db: Awaited<ReturnType<typeof getDb>>,
+  track: Awaited<ReturnType<typeof fetchTrackMetadata>>,
+  note: string | undefined,
+  logId: string,
+): Promise<void> {
+  try {
+    await withRetries("Spotify playlist add", () => addTrackToPlaylist(track));
+  } catch (error) {
+    const message = formatError(error);
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [message, new Date().toISOString(), track.trackId],
+          sql: `update findings set spotify_error = ?, updated_at = ? where track_id = ?`,
+        },
+      ],
+      [{ subjectId: track.trackId, subjectType: "track" }],
+      { producer: "publish-spotify-error" },
+    );
+
+    if (error instanceof ApiError && error.code === SPOTIFY_REAUTH_REQUIRED) {
+      throw error;
+    }
+
+    throw new ApiError("spotify_failed", `Spotify failed. Telegram was not posted.\n${message}`);
+  }
+
+  try {
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
+          sql: `update findings
+            set added_to_spotify = 1,
+              added_to_spotify_at = ?,
+              spotify_error = null,
+              updated_at = ?
+            where track_id = ?`,
+        },
+      ],
+      [{ subjectId: track.trackId, subjectType: "track" }],
+      { producer: "publish-spotify-success" },
+    );
+  } catch (error) {
+    throw new ApiError(
+      "db_update_failed",
+      `Spotify succeeded, but the database update failed. Telegram was not posted.\n${formatError(error)}`,
+    );
+  }
+
+  try {
+    await withRetries("Telegram post", () => postToTelegram(track, note, logId));
+  } catch (error) {
+    const message = formatError(error);
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [message, new Date().toISOString(), track.trackId],
+          sql: `update findings set telegram_error = ?, updated_at = ? where track_id = ?`,
+        },
+      ],
+      [{ subjectId: track.trackId, subjectType: "track" }],
+      { producer: "publish-telegram-error" },
+    );
+
+    throw new ApiError("telegram_failed", `Spotify succeeded, but Telegram failed.\n${message}`);
+  }
+
+  try {
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
+          sql: `update findings
+            set posted_to_telegram = 1,
+              posted_to_telegram_at = ?,
+              telegram_error = null,
+              updated_at = ?
+            where track_id = ?`,
+        },
+      ],
+      [{ subjectId: track.trackId, subjectType: "track" }],
+      { producer: "publish-telegram-success" },
+    );
+  } catch (error) {
+    throw new ApiError(
+      "db_update_failed",
+      `Telegram posted, but the database update failed.\n${formatError(error)}`,
+    );
+  }
+}
+
 export async function publishTrack(
   spotifyUrl: string,
   options: AddOptions,
@@ -448,97 +545,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     });
   }
 
-  try {
-    await withRetries("Spotify playlist add", () => addTrackToPlaylist(track));
-  } catch (error) {
-    const message = formatError(error);
-    await batchDueWorkSourceMutation(
-      db,
-      [
-        {
-          args: [message, new Date().toISOString(), track.trackId],
-          sql: `update findings set spotify_error = ?, updated_at = ? where track_id = ?`,
-        },
-      ],
-      [{ subjectId: track.trackId, subjectType: "track" }],
-      { producer: "publish-spotify-error" },
-    );
-
-    // An expired Spotify authorization is an actionable "reconnect", not a generic
-    // failure — pass it through verbatim so the operator sees the reconnect path.
-    if (error instanceof ApiError && error.code === SPOTIFY_REAUTH_REQUIRED) {
-      throw error;
-    }
-
-    throw new ApiError("spotify_failed", `Spotify failed. Telegram was not posted.\n${message}`);
-  }
-
-  try {
-    await batchDueWorkSourceMutation(
-      db,
-      [
-        {
-          args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
-          sql: `update findings
-            set added_to_spotify = 1,
-              added_to_spotify_at = ?,
-              spotify_error = null,
-              updated_at = ?
-            where track_id = ?`,
-        },
-      ],
-      [{ subjectId: track.trackId, subjectType: "track" }],
-      { producer: "publish-spotify-success" },
-    );
-  } catch (error) {
-    throw new ApiError(
-      "db_update_failed",
-      `Spotify succeeded, but the database update failed. Telegram was not posted.\n${formatError(error)}`,
-    );
-  }
-
-  try {
-    await withRetries("Telegram post", () => postToTelegram(track, options.note, logId));
-  } catch (error) {
-    const message = formatError(error);
-    await batchDueWorkSourceMutation(
-      db,
-      [
-        {
-          args: [message, new Date().toISOString(), track.trackId],
-          sql: `update findings set telegram_error = ?, updated_at = ? where track_id = ?`,
-        },
-      ],
-      [{ subjectId: track.trackId, subjectType: "track" }],
-      { producer: "publish-telegram-error" },
-    );
-
-    throw new ApiError("telegram_failed", `Spotify succeeded, but Telegram failed.\n${message}`);
-  }
-
-  try {
-    await batchDueWorkSourceMutation(
-      db,
-      [
-        {
-          args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
-          sql: `update findings
-            set posted_to_telegram = 1,
-              posted_to_telegram_at = ?,
-              telegram_error = null,
-              updated_at = ?
-            where track_id = ?`,
-        },
-      ],
-      [{ subjectId: track.trackId, subjectType: "track" }],
-      { producer: "publish-telegram-success" },
-    );
-  } catch (error) {
-    throw new ApiError(
-      "db_update_failed",
-      `Telegram posted, but the database update failed.\n${formatError(error)}`,
-    );
-  }
+  await announcePublishedTrack(db, track, options.note, logId);
 
   // A new finding now sits at the top of the `/log` index (and owns its own
   // coordinate page), and joins the artist/album/label grids: drop all of those from

@@ -1482,6 +1482,98 @@ function wrongAudioWinner(
     : undefined;
 }
 
+async function projectedRankBatch(
+  db: Awaited<ReturnType<typeof getDb>>,
+  dueWorkCutoverEnabled: boolean,
+  limit: number,
+): Promise<Awaited<ReturnType<typeof readProjectedCatalogueRankBatch>>> {
+  if (!dueWorkCutoverEnabled) {
+    return { candidates: [], hasMore: false };
+  }
+  return readProjectedCatalogueRankBatch(db, Math.max(0, limit));
+}
+
+async function legacyRankCandidates(
+  db: Awaited<ReturnType<typeof getDb>>,
+  dueWorkCutoverEnabled: boolean,
+  projectedCandidates: CandidateRow[],
+  corpus: string,
+  limit: number,
+): Promise<CandidateRow[]> {
+  if (dueWorkCutoverEnabled) {
+    return projectedCandidates;
+  }
+
+  const candidateResult = await db.execute({
+    args: [corpus, Math.max(0, limit)],
+    sql: `select ct.track_id as track_id,
+               ct.title as title,
+               ct.artists_json as artists_json,
+               ct.label as label,
+               ct.isrc as isrc,
+               ct.capture_status as capture_status,
+               ct.source_audio_key as source_audio_key,
+               ct.source_audio_rejected as source_audio_rejected,
+               ct.has_embedding as has_vector
+        from tracks ct
+        where ct.is_catalogue = 1
+          and ct.dismissed_at is null
+          and (ct.catalogue_rank_corpus is null
+               or ct.catalogue_rank_corpus <> ?
+               or (ct.has_embedding = 1
+                   and ct.capture_priority is not null
+                   and ct.capture_priority >= 0))
+        order by ct.track_id asc
+        limit ?`,
+  });
+  return typedRows<CandidateRow>(candidateResult.rows);
+}
+
+async function nearestFindingWinners(
+  db: Awaited<ReturnType<typeof getDb>>,
+  vectored: CandidateRow[],
+  embeddedFindings: number,
+): Promise<Map<string, WinnerRow>> {
+  const winners = new Map<string, WinnerRow>();
+  if (vectored.length === 0 || embeddedFindings === 0) {
+    return winners;
+  }
+
+  const ids = vectored.map((row) => row.track_id);
+  const placeholders = ids.map(() => "?").join(", ");
+  const rankedResult = await db.execute({
+    args: ids,
+    sql: `with finding_vec as materialized (
+            select fe.track_id as fid, fe.embedding_blob as fvec
+            from findings
+            cross join track_embeddings fe on fe.track_id = findings.track_id
+          ),
+          candidate_vec as materialized (
+            select ce.track_id as cid, ce.embedding_blob as cvec
+            from track_embeddings ce
+            where ce.track_id in (${placeholders})
+          ),
+          pair as (
+            select candidate_vec.cid as cid,
+                   finding_vec.fid as fid,
+                   vector_distance_cos(candidate_vec.cvec, finding_vec.fvec) as dist
+            from candidate_vec
+            join finding_vec
+          )
+          select cid, fid, dist from (
+            select cid, fid, dist,
+                   row_number() over (partition by cid order by dist asc, fid asc) as rn
+            from pair
+          )
+          where rn = 1`,
+  });
+
+  for (const row of typedRows<WinnerRow>(rankedResult.rows)) {
+    winners.set(row.cid, row);
+  }
+  return winners;
+}
+
 export async function rankCatalogue(
   limit = RANK_BATCH_SIZE,
   countRemaining = false,
@@ -1501,13 +1593,7 @@ export async function rankCatalogue(
   // operator's actions) is excluded here so the sweep never spends cosine work re-ranking a row
   // the operator has taken out of the telescope; on restore it re-enters this candidate set and
   // re-ranks if its fingerprint has drifted.
-  let projectedBatch: Awaited<ReturnType<typeof readProjectedCatalogueRankBatch>> = {
-    candidates: [],
-    hasMore: false,
-  };
-  if (dueWorkCutoverEnabled) {
-    projectedBatch = await readProjectedCatalogueRankBatch(db, Math.max(0, limit));
-  }
+  const projectedBatch = await projectedRankBatch(db, dueWorkCutoverEnabled, limit);
   let candidates = projectedBatch.candidates;
   const projectionHasMore = projectedBatch.hasMore;
 
@@ -1517,32 +1603,8 @@ export async function rankCatalogue(
   const rankState = await readRankStateForCandidates(dueWorkCutoverEnabled, candidates);
   const { corpus, embeddedFindings, findings } = rankState;
 
-  if (!dueWorkCutoverEnabled) {
-    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
-    const candidateResult = await db.execute({
-      args: [corpus, Math.max(0, limit)],
-      sql: `select ct.track_id as track_id,
-                 ct.title as title,
-                 ct.artists_json as artists_json,
-                 ct.label as label,
-                 ct.isrc as isrc,
-                 ct.capture_status as capture_status,
-                 ct.source_audio_key as source_audio_key,
-                 ct.source_audio_rejected as source_audio_rejected,
-                 ct.has_embedding as has_vector
-          from tracks ct
-          where ct.is_catalogue = 1
-            and ct.dismissed_at is null
-            and (ct.catalogue_rank_corpus is null
-                 or ct.catalogue_rank_corpus <> ?
-                 or (ct.has_embedding = 1
-                     and ct.capture_priority is not null
-                     and ct.capture_priority >= 0))
-          order by ct.track_id asc
-          limit ?`,
-    });
-    candidates = typedRows<CandidateRow>(candidateResult.rows);
-  }
+  // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
+  candidates = await legacyRankCandidates(db, dueWorkCutoverEnabled, candidates, corpus, limit);
 
   if (candidates.length === 0) {
     // `remaining` on an empty batch: with a POSITIVE `limit` the stale set is genuinely drained (an
@@ -1592,42 +1654,7 @@ export async function rankCatalogue(
   // presence guards: a row EXISTS in the satellite exactly when it has a vector, so the join
   // IS the old `embedding_blob is not null` filter and the worst plan the heuristic can pick
   // is a scan of the embedded subset rather than of the whole crawler-swollen catalogue.
-  const winners = new Map<string, WinnerRow>();
-
-  if (vectored.length > 0 && embeddedFindings > 0) {
-    const ids = vectored.map((row) => row.track_id);
-    const placeholders = ids.map(() => "?").join(", ");
-    const rankedResult = await db.execute({
-      args: ids,
-      sql: `with finding_vec as materialized (
-              select fe.track_id as fid, fe.embedding_blob as fvec
-              from findings
-              cross join track_embeddings fe on fe.track_id = findings.track_id
-            ),
-            candidate_vec as materialized (
-              select ce.track_id as cid, ce.embedding_blob as cvec
-              from track_embeddings ce
-              where ce.track_id in (${placeholders})
-            ),
-            pair as (
-              select candidate_vec.cid as cid,
-                     finding_vec.fid as fid,
-                     vector_distance_cos(candidate_vec.cvec, finding_vec.fvec) as dist
-              from candidate_vec
-              join finding_vec
-            )
-            select cid, fid, dist from (
-              select cid, fid, dist,
-                     row_number() over (partition by cid order by dist asc, fid asc) as rn
-              from pair
-            )
-            where rn = 1`,
-    });
-
-    for (const row of typedRows<WinnerRow>(rankedResult.rows)) {
-      winners.set(row.cid, row);
-    }
-  }
+  const winners = await nearestFindingWinners(db, vectored, embeddedFindings);
 
   // ── The corpora the write half needs ───────────────────────────────────────────────
   // The pre-audio ladder (affinity + ISRC map) is needed whenever an UNVECTORED row exists, and
