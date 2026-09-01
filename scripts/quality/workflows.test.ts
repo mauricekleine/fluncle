@@ -85,6 +85,9 @@ describe("quality topology", () => {
     expect(qualitySource).toContain("actions/cache/save@");
     expect(qualitySource).toContain("github.event_name == 'push'");
     expect(qualitySource).toContain("github.ref == 'refs/heads/main'");
+    const coreSteps = at(quality, "jobs", "core", "steps") as Array<Record<string, unknown>>;
+    const setupGo = coreSteps.find((step) => step.name === "Setup Go");
+    expect(at(setupGo, "with", "cache")).toBe(false);
   });
 
   test("skills drift and native contracts retain explicit owners", () => {
@@ -126,5 +129,15 @@ describe("security, release, and deploy topology", () => {
     expect(deploySource).toContain("resolve-deploy.mjs");
     expect(deploySource).toContain("deadline=1200");
     expect(deploySource).toContain("deadline=180");
+    expect(deploySource.indexOf("Resolve event and deploy watch-path decision")).toBeLessThan(
+      deploySource.indexOf("Checkout correlated deploy code"),
+    );
+  });
+
+  test("an intentionally skipped deploy cannot launch the expensive discovery walk", () => {
+    const discoverySource = source("discovery-walk.yml");
+    expect(discoverySource).toContain("actions/runs/${TRIGGER_RUN_ID}/jobs");
+    expect(discoverySource).toContain("steps.deploy_trigger.outputs.enabled == 'true'");
+    expect(discoverySource).toContain("Sweep public surfaces");
   });
 });

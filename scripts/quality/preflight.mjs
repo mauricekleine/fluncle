@@ -9,9 +9,11 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -85,6 +87,71 @@ function readJson(path) {
     return JSON.parse(readFileSync(path, "utf8"));
   } catch {
     return null;
+  }
+}
+
+function launchLockPath(directory) {
+  return join(directory, "launch.lock");
+}
+
+export function acquireLaunchLock(
+  directory,
+  { now = () => Date.now(), staleAfterMs = 30_000 } = {},
+) {
+  mkdirSync(directory, { recursive: true });
+  const path = launchLockPath(directory);
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const token = randomUUID();
+    let descriptor;
+    try {
+      descriptor = openSync(path, "wx");
+      writeFileSync(descriptor, `${JSON.stringify({ startedAt: now(), token })}\n`);
+      closeSync(descriptor);
+      return token;
+    } catch (error) {
+      if (descriptor !== undefined) {
+        closeSync(descriptor);
+      }
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") {
+        throw error;
+      }
+
+      const owner = readJson(path);
+      let createdAt = typeof owner?.startedAt === "number" ? owner.startedAt : null;
+      if (createdAt === null) {
+        try {
+          createdAt = statSync(path).mtimeMs;
+        } catch {
+          continue;
+        }
+      }
+      if (now() - createdAt <= staleAfterMs) {
+        return null;
+      }
+      try {
+        unlinkSync(path);
+      } catch {
+        // Another hook recovered the same abandoned lock first; retry the atomic claim once.
+      }
+    }
+  }
+
+  return null;
+}
+
+export function releaseLaunchLock(directory, token) {
+  if (!token) {
+    return;
+  }
+  const path = launchLockPath(directory);
+  if (readJson(path)?.token !== token) {
+    return;
+  }
+  try {
+    unlinkSync(path);
+  } catch {
+    // A vanished lock is already released.
   }
 }
 
@@ -186,8 +253,22 @@ function requestStart(root, quiet = false) {
     return fingerprint;
   }
 
-  const worker = readJson(join(directory, "worker.json"));
-  const pid = workerIsActive(worker) ? worker.pid : launchWorker(root, directory);
+  let worker = readJson(join(directory, "worker.json"));
+  let pid = workerIsActive(worker) ? worker.pid : null;
+  if (pid === null) {
+    const token = acquireLaunchLock(directory);
+    if (token) {
+      try {
+        worker = readJson(join(directory, "worker.json"));
+        pid = workerIsActive(worker) ? worker.pid : launchWorker(root, directory);
+      } finally {
+        releaseLaunchLock(directory, token);
+      }
+    } else {
+      worker = readJson(join(directory, "worker.json"));
+      pid = workerIsActive(worker) ? worker.pid : "starting";
+    }
+  }
   if (!quiet) {
     process.stdout.write(
       `quality preflight: ${fingerprint.fingerprint.slice(0, 12)} queued (worker ${pid})\n`,

@@ -4,13 +4,24 @@ import relay, { dispatchBuildEvent, normalizeBuildEvent, type NormalizedBuildEve
 const SHA = "a".repeat(40);
 
 function cloudflareEvent(status: "canceled" | "failed" | "succeeded" = "succeeded") {
+  const payloadStatus = status === "succeeded" ? "success" : status;
+  const buildOutcome =
+    status === "succeeded" ? "success" : status === "failed" ? "failure" : status;
   return {
     metadata: { eventTimestamp: "2026-09-01T10:00:00.000Z" },
     payload: {
-      buildTriggerMetadata: { branch: "main", commitHash: SHA },
+      buildOutcome,
+      buildTriggerMetadata: {
+        branch: "main",
+        buildTriggerSource: "push_event",
+        commitHash: SHA,
+        providerType: "github",
+        repoName: "fluncle",
+      },
       buildUuid: "build-123",
+      status: payloadStatus,
     },
-    source: { workerName: "fluncle-web" },
+    source: { type: "workersBuilds.worker", workerName: "fluncle-web" },
     type: `cf.workersBuilds.worker.build.${status}`,
   };
 }
@@ -28,6 +39,7 @@ describe("Cloudflare Workers Builds event relay", () => {
       expect(
         normalizeBuildEvent(cloudflareEvent(status), {
           branch: "main",
+          repository: "mauricekleine/fluncle",
           workerName: "fluncle-web",
         }),
       ).toEqual({
@@ -40,8 +52,12 @@ describe("Cloudflare Workers Builds event relay", () => {
     }
   });
 
-  test("rejects the wrong branch, worker, incomplete SHA, and started events", () => {
-    const expected = { branch: "main", workerName: "fluncle-web" };
+  test("rejects malformed or non-push build events before dispatch", () => {
+    const expected = {
+      branch: "main",
+      repository: "mauricekleine/fluncle",
+      workerName: "fluncle-web",
+    };
     expect(
       normalizeBuildEvent(
         { ...cloudflareEvent(), type: "cf.workersBuilds.worker.build.started" },
@@ -70,6 +86,36 @@ describe("Cloudflare Workers Builds event relay", () => {
           payload: {
             ...cloudflareEvent().payload,
             buildTriggerMetadata: { branch: "main", commitHash: "abc123" },
+          },
+        },
+        expected,
+      ),
+    ).toBeNull();
+    expect(
+      normalizeBuildEvent(
+        { ...cloudflareEvent(), type: "untrusted.worker.build.succeeded" },
+        expected,
+      ),
+    ).toBeNull();
+    expect(
+      normalizeBuildEvent(
+        {
+          ...cloudflareEvent(),
+          payload: { ...cloudflareEvent().payload, buildUuid: "build-123\ninjected=true" },
+        },
+        expected,
+      ),
+    ).toBeNull();
+    expect(
+      normalizeBuildEvent(
+        {
+          ...cloudflareEvent(),
+          payload: {
+            ...cloudflareEvent().payload,
+            buildTriggerMetadata: {
+              ...cloudflareEvent().payload.buildTriggerMetadata,
+              buildTriggerSource: "manual",
+            },
           },
         },
         expected,
@@ -114,7 +160,7 @@ describe("Cloudflare Workers Builds event relay", () => {
     ).toBe(false);
   });
 
-  test("acknowledges irrelevant events and retries a terminal event until dispatch succeeds", async () => {
+  test("acknowledges irrelevant events and retries malformed or undispatchable terminal events", async () => {
     const outcomes: string[] = [];
     const message = (id: string, body: unknown) =>
       ({
@@ -139,6 +185,10 @@ describe("Cloudflare Workers Builds event relay", () => {
             ...cloudflareEvent(),
             type: "cf.workersBuilds.worker.build.started",
           }),
+          message("malformed-terminal", {
+            ...cloudflareEvent(),
+            payload: { ...cloudflareEvent().payload, buildUuid: "unsafe\nvalue" },
+          }),
           message("terminal", cloudflareEvent()),
         ],
         metadata: { metrics: { backlogBytes: 0, backlogCount: 2 } },
@@ -148,6 +198,6 @@ describe("Cloudflare Workers Builds event relay", () => {
       missingToken,
     );
 
-    expect(outcomes).toEqual(["irrelevant:ack", "terminal:retry"]);
+    expect(outcomes).toEqual(["irrelevant:ack", "malformed-terminal:retry", "terminal:retry"]);
   });
 });

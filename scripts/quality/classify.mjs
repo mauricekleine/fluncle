@@ -70,6 +70,7 @@ function changedFiles(options) {
   const base = resolveBase(options.base, head);
   options.base = base;
   options.head = head;
+  options.commitCount = Number(git("rev-list", "--count", `${base}..${head}`));
   const output = git("diff", "--name-only", "--diff-filter=ACDMRTUXB", base, head, "--");
   return output ? output.split("\n") : [];
 }

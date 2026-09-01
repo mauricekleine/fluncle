@@ -64,7 +64,9 @@ describe("dependency-closure classifier", () => {
   test("script and generated-skill surfaces select their dedicated checks", () => {
     expect(classifyPaths(["docs/agents/hermes/scripts/crawl-sweep.ts"]).lanes.scripts).toBe(true);
     expect(classifyPaths([".agents/skills/example/SKILL.md"]).lanes.skills).toBe(true);
-    expect(classifyPaths(["scripts/install-skills.ts"]).lanes.scripts).toBe(true);
+    const installer = classifyPaths(["scripts/install-skills.ts"]);
+    expect(installer.lanes.scripts).toBe(true);
+    expect(installer.lanes.skills).toBe(true);
   });
 
   test("workflow, lockfile, root config, harness, and unknown paths fail closed", () => {
@@ -112,5 +114,14 @@ describe("Cloudflare deploy watch paths", () => {
     expect(triggersWorkerBuild("apps/web/src/routes/index.tsx")).toBe(true);
     expect(triggersWorkerBuild("packages/contracts/src/orpc/tracks.ts")).toBe(true);
     expect(triggersWorkerBuild("packages/new-shared/src/index.ts")).toBe(true);
+  });
+
+  test("Cloudflare bypasses watch paths for empty, 3000-file, and 20-commit pushes", () => {
+    expect(classifyPaths([]).deploy).toBe(true);
+    expect(
+      classifyPaths(Array.from({ length: 3_000 }, (_, index) => `docs/${index}.md`)).deploy,
+    ).toBe(true);
+    expect(classifyPaths(["docs/only.md"], { commitCount: 20 }).deploy).toBe(true);
+    expect(classifyPaths(["docs/only.md"], { commitCount: 19 }).deploy).toBe(false);
   });
 });

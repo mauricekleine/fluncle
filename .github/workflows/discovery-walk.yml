@@ -3,17 +3,17 @@ name: Discovery Walk
 # The live walk of the three public discovery journeys (apps/web/scripts/discovery-walk.ts):
 # a stranger at desktop 1440×900 and mobile 390×844 against the SERVED product, retaining per
 # step a full-page screenshot, the observed destination, canonical + robots, the outbound
-# listening target, every analytics request, and any console error. The hermetic e2e suite
-# (e2e.yml) is the GATE for these journeys; this is the RECORD of what the integrated product
-# actually did with real current data, kept where a verifier can reach it without a checkout.
+# listening target, every analytics request, and any console error. Quality Checks' selected,
+# hermetic E2E job is the GATE for these journeys; this is the RECORD of what the integrated
+# product actually did with real current data, kept where a verifier can reach it without a checkout.
 #
 # Two triggers, one artifact:
 #   - pull_request: walks whatever production serves at review time, so a PR that claims the
 #     funnel is coherent carries the evidence on its own checks page.
 #   - workflow_run (Post-deploy Probe succeeded): production now serves the pushed commit, so
-#     this walk attributes to exactly that deploy. The probe's `paths-ignore` already skips the
-#     pushes that never deploy, and a failed probe skips the walk (there is nothing coherent
-#     to record). `workflow_run` fires only for the default branch, by GitHub's own rule.
+#     this walk attributes to exactly that deploy. Post-deploy always reports, including a cheap
+#     intentional skip; this job inspects the triggering run and proceeds only when its public
+#     surface sweep actually passed. `workflow_run` fires only for the default branch.
 #
 # No secrets: public GETs and clicks only; the browser never leaves the site (an outbound
 # popup is recorded and closed). The walk exits non-zero if a journey cannot complete, and
@@ -44,6 +44,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.ref }}
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -54,17 +55,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Confirm the triggering run completed a deploy sweep
+        id: deploy_trigger
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          swept="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${TRIGGER_RUN_ID}/jobs?per_page=100" --jq '[.jobs[].steps[]? | select(.name == "Sweep public surfaces" and .conclusion == "success")] | length')"
+          if [ "$swept" -gt 0 ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "The triggering Post-deploy Probe intentionally skipped deployment; skipping the live walk."
+          fi
+
       - name: Checkout code
+        if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
       - name: Setup Bun
+        if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
 
       - name: Cache Bun packages
+        if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.bun/install/cache
@@ -73,9 +92,11 @@ jobs:
             bun-${{ runner.os }}-
 
       - name: Install dependencies
+        if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
         run: bun install --frozen-lockfile
 
       - name: Cache Playwright browsers
+        if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cache/ms-playwright
@@ -84,10 +105,12 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Playwright chromium
+        if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
         working-directory: apps/web
         run: bunx playwright install --with-deps chromium
 
       - name: Walk the journeys
+        if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
         working-directory: apps/web
         env:
           WALK_BASE: ${{ inputs.base || 'https://www.fluncle.com' }}
@@ -96,7 +119,7 @@ jobs:
       # The journey table on the run page itself, before anyone downloads a byte. `always()`
       # because a failed walk's partial record is exactly what the reader needs then.
       - name: Print the journey summary
-        if: always()
+        if: always() && (github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true')
         run: |
           if [ -f apps/web/.dev/discovery-walk/summary.md ]; then
             cat apps/web/.dev/discovery-walk/summary.md >> "$GITHUB_STEP_SUMMARY"
@@ -104,11 +127,11 @@ jobs:
             echo "The walk produced no summary (it did not reach its first step)." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # Same terms as e2e.yml's evidence artifacts: never committed, kept per run for the 90-day
+      # Same terms as the Quality Checks evidence artifacts: never committed, kept per run for the 90-day
       # ceiling a public repo allows, uploaded green or red, and an EMPTY directory is a failure
       # (evidence that does not exist is not evidence).
       - name: Upload discovery-walk evidence
-        if: always()
+        if: always() && (github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: discovery-walk

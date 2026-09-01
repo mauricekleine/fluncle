@@ -43,6 +43,7 @@ const WORKFLOW_DIRECTORIES = [".github/"];
 const SCRIPT_DIRECTORIES = ["scripts/", ".husky/", ".claude/hooks/", ".codex/hooks/"];
 const QUALITY_HARNESS_DIRECTORIES = ["scripts/quality/"];
 const SKILL_DIRECTORIES = ["packages/skills/", ".agents/skills/", ".claude/skills/"];
+const SKILL_FILES = new Set(["scripts/install-skills.ts", "skills-lock.json"]);
 
 function normalizePath(path) {
   return path.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -142,6 +143,10 @@ export function triggersWorkerBuild(path) {
   return !WATCH_PATHS.excludedDirectories.some((directory) => isWithin(normalized, directory));
 }
 
+export function cloudflareBypassesWatchPaths(changedFileCount, commitCount = 0) {
+  return changedFileCount === 0 || changedFileCount >= 3_000 || commitCount >= 20;
+}
+
 function allTypeScriptPackages(packages) {
   return [...packages.keys()].filter((name) => name !== "@fluncle/dns" && name !== "@fluncle/ssh");
 }
@@ -156,6 +161,106 @@ function isGlobalConfiguration(path) {
 
 function isDocument(path) {
   return DOCUMENT_FILES.has(path) || path.startsWith("docs/") || path.startsWith(".impeccable/");
+}
+
+function classifyPath(
+  path,
+  { changedPackageNames, lanes, packages, reasons, release, unknownFiles },
+) {
+  let matched = false;
+  let forceFull = false;
+
+  if (isGlobalConfiguration(path)) {
+    forceFull = true;
+    reasons.add(`global configuration: ${path}`);
+    matched = true;
+  }
+
+  if (QUALITY_HARNESS_DIRECTORIES.some((directory) => path.startsWith(directory))) {
+    forceFull = true;
+    reasons.add(`quality harness: ${path}`);
+    matched = true;
+  }
+
+  if (WORKFLOW_DIRECTORIES.some((directory) => path.startsWith(directory))) {
+    forceFull = true;
+    lanes.workflows = true;
+    reasons.add(`workflow topology: ${path}`);
+    matched = true;
+  }
+
+  if (isDocument(path)) {
+    lanes.docs = true;
+    matched = true;
+  }
+
+  if (
+    SCRIPT_DIRECTORIES.some((directory) => path.startsWith(directory)) ||
+    path.startsWith("docs/agents/hermes/scripts/")
+  ) {
+    lanes.scripts = true;
+    matched = true;
+  }
+
+  if (SKILL_DIRECTORIES.some((directory) => path.startsWith(directory)) || SKILL_FILES.has(path)) {
+    lanes.skills = true;
+    matched = true;
+  }
+
+  if (path === ".gitleaks.toml") {
+    matched = true;
+  }
+
+  if (isWithin(path, "apps/ssh")) {
+    lanes.goSsh = true;
+    matched = true;
+  }
+
+  if (isWithin(path, "apps/dns")) {
+    lanes.goDns = true;
+    matched = true;
+  }
+
+  if (isWithin(path, "apps/sonar")) {
+    lanes.sonar = true;
+    release.sonar = true;
+    matched = true;
+  }
+
+  if (isWithin(path, "apps/cli")) {
+    release.cli =
+      release.cli ||
+      path === "apps/cli/package.json" ||
+      (path.startsWith("apps/cli/src/") && !path.endsWith(".test.ts"));
+  }
+
+  if (path.startsWith("apps/web/drizzle/")) {
+    lanes.migrations = true;
+  }
+
+  const packageMatch = packageForPath(path, packages);
+  if (packageMatch) {
+    if (packageMatch.name !== "@fluncle/dns" && packageMatch.name !== "@fluncle/ssh") {
+      changedPackageNames.add(packageMatch.name);
+    }
+    matched = true;
+  }
+
+  if (path.startsWith("apps/") || path.startsWith("packages/")) {
+    matched = matched || packageMatch !== undefined;
+  }
+
+  if (path.startsWith(".agents/") || path.startsWith(".claude/") || path.startsWith(".codex/")) {
+    matched = true;
+  }
+
+  if (!matched) {
+    unknownFiles.push(path);
+    forceFull = true;
+    reasons.add(`unknown path: ${path}`);
+  }
+
+  return forceFull;
 }
 
 export function classifyPaths(paths, options = {}) {
@@ -185,99 +290,16 @@ export function classifyPaths(paths, options = {}) {
   }
 
   for (const path of changedFiles) {
-    let matched = false;
-
-    if (isGlobalConfiguration(path)) {
+    const forceFull = classifyPath(path, {
+      changedPackageNames,
+      lanes,
+      packages,
+      reasons,
+      release,
+      unknownFiles,
+    });
+    if (forceFull) {
       full = true;
-      reasons.add(`global configuration: ${path}`);
-      matched = true;
-    }
-
-    if (QUALITY_HARNESS_DIRECTORIES.some((directory) => path.startsWith(directory))) {
-      full = true;
-      reasons.add(`quality harness: ${path}`);
-      matched = true;
-    }
-
-    if (WORKFLOW_DIRECTORIES.some((directory) => path.startsWith(directory))) {
-      full = true;
-      lanes.workflows = true;
-      reasons.add(`workflow topology: ${path}`);
-      matched = true;
-    }
-
-    if (isDocument(path)) {
-      lanes.docs = true;
-      matched = true;
-    }
-
-    if (
-      SCRIPT_DIRECTORIES.some((directory) => path.startsWith(directory)) ||
-      path.startsWith("docs/agents/hermes/scripts/")
-    ) {
-      lanes.scripts = true;
-      matched = true;
-    }
-
-    if (
-      SKILL_DIRECTORIES.some((directory) => path.startsWith(directory)) ||
-      path === "skills-lock.json"
-    ) {
-      lanes.skills = true;
-      matched = true;
-    }
-
-    if (path === ".gitleaks.toml") {
-      matched = true;
-    }
-
-    if (isWithin(path, "apps/ssh")) {
-      lanes.goSsh = true;
-      matched = true;
-    }
-
-    if (isWithin(path, "apps/dns")) {
-      lanes.goDns = true;
-      matched = true;
-    }
-
-    if (isWithin(path, "apps/sonar")) {
-      lanes.sonar = true;
-      release.sonar = true;
-      matched = true;
-    }
-
-    if (isWithin(path, "apps/cli")) {
-      release.cli =
-        release.cli ||
-        path === "apps/cli/package.json" ||
-        (path.startsWith("apps/cli/src/") && !path.endsWith(".test.ts"));
-    }
-
-    if (path.startsWith("apps/web/drizzle/")) {
-      lanes.migrations = true;
-    }
-
-    const packageMatch = packageForPath(path, packages);
-    if (packageMatch) {
-      if (packageMatch.name !== "@fluncle/dns" && packageMatch.name !== "@fluncle/ssh") {
-        changedPackageNames.add(packageMatch.name);
-      }
-      matched = true;
-    }
-
-    if (path.startsWith("apps/") || path.startsWith("packages/")) {
-      matched = matched || packageMatch !== undefined;
-    }
-
-    if (path.startsWith(".agents/") || path.startsWith(".claude/") || path.startsWith(".codex/")) {
-      matched = true;
-    }
-
-    if (!matched) {
-      unknownFiles.push(path);
-      full = true;
-      reasons.add(`unknown path: ${path}`);
     }
   }
 
@@ -318,7 +340,14 @@ export function classifyPaths(paths, options = {}) {
     });
   }
 
-  const deploy = changedFiles.some(triggersWorkerBuild);
+  const deployBypass = cloudflareBypassesWatchPaths(changedFiles.length, options.commitCount);
+  if (deployBypass && changedFiles.length >= 3_000) {
+    reasons.add(`Cloudflare watch-path bypass: ${changedFiles.length} changed files`);
+  }
+  if (deployBypass && options.commitCount >= 20) {
+    reasons.add(`Cloudflare watch-path bypass: ${options.commitCount} commits`);
+  }
+  const deploy = deployBypass || changedFiles.some(triggersWorkerBuild);
   const plan = {
     base: options.base ?? null,
     changedFiles,

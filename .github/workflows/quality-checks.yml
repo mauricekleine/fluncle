@@ -109,6 +109,9 @@ jobs:
         if: steps.classify.outputs.go_ssh == 'true' || steps.classify.outputs.go_dns == 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
+          # setup-go's implicit post-job save also writes from pull-request merge refs. Native Go
+          # checks are fast enough to stay uncached; every retained cache writer remains trusted.
+          cache: false
           cache-dependency-path: |
             apps/ssh/go.sum
             apps/dns/go.sum
@@ -264,7 +267,7 @@ jobs:
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          if-no-files-found: warn
+          if-no-files-found: error
           include-hidden-files: true
           name: front-door-scroll
           path: apps/web/.dev/front-door/
@@ -274,7 +277,7 @@ jobs:
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          if-no-files-found: warn
+          if-no-files-found: error
           include-hidden-files: true
           name: track-journey
           path: apps/web/.dev/track-journey/
@@ -284,7 +287,7 @@ jobs:
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          if-no-files-found: warn
+          if-no-files-found: error
           include-hidden-files: true
           name: search-surface
           path: apps/web/.dev/search/
@@ -294,7 +297,7 @@ jobs:
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          if-no-files-found: warn
+          if-no-files-found: error
           include-hidden-files: true
           name: discovery-events
           path: apps/web/.dev/discovery-events/

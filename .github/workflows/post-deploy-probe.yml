@@ -38,12 +38,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout code and full history
+      # Event payloads are data, not checkout authority. Resolve them with code from pushed main,
+      # validate the exact SHA against origin/main, and only then execute that commit's probe.
+      - name: Checkout trusted workflow code and full history
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.client_payload.sha || inputs.sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || 'refs/heads/main' }}
 
       - name: Resolve event and deploy watch-path decision
         id: deploy
@@ -62,6 +64,14 @@ jobs:
         run: |
           echo "::error::Cloudflare Workers Build $BUILD_UUID ended $BUILD_STATUS for $TARGET_SHA. A retry produces a new terminal event and a new correlated run."
           exit 1
+
+      - name: Checkout correlated deploy code
+        if: steps.deploy.outputs.enabled == 'true' && steps.deploy.outputs.status == 'succeeded'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ steps.deploy.outputs.sha }}
 
       - name: Setup Bun
         if: steps.deploy.outputs.enabled == 'true' && steps.deploy.outputs.status == 'succeeded'

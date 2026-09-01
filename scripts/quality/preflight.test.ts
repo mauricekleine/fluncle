@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  acquireLaunchLock,
   executionWaves,
   fingerprintWorktree,
+  releaseLaunchLock,
   resultIsReusable,
   withoutGitEnvironment,
   workerIsActive,
@@ -92,5 +94,24 @@ describe("preflight scheduling", () => {
     });
 
     expect(environment).toEqual({ PATH: "/usr/bin" });
+  });
+
+  test("concurrent hooks elect one launcher and can recover an abandoned lock", () => {
+    const directory = join(tmpdir(), `fluncle-preflight-lock-${crypto.randomUUID()}`);
+    mkdirSync(directory, { recursive: true });
+    const clock = Date.now();
+
+    const first = acquireLaunchLock(directory, { now: () => clock });
+    expect(first).toBeString();
+    expect(acquireLaunchLock(directory, { now: () => clock + 1 })).toBeNull();
+
+    const recovered = acquireLaunchLock(directory, { now: () => clock + 31_000 });
+    expect(recovered).toBeString();
+    releaseLaunchLock(directory, first);
+    expect(acquireLaunchLock(directory, { now: () => clock + 31_001 })).toBeNull();
+    releaseLaunchLock(directory, recovered);
+    expect(acquireLaunchLock(directory, { now: () => clock + 31_002 })).toBeString();
+
+    rmSync(directory, { force: true, recursive: true });
   });
 });

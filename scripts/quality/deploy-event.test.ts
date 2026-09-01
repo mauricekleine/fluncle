@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveDeployInput } from "./resolve-deploy.mjs";
+import { resolveDeployInput, validateDeployTarget } from "./resolve-deploy.mjs";
 import {
   correlatesCommit,
   correlatesWithOriginMain,
@@ -26,6 +26,7 @@ describe("post-deploy event handling", () => {
       { build_uuid: "build-1", sha: "short", status: "succeeded" },
       { build_uuid: "build-1", sha: SHA, status: "running" },
       { build_uuid: "", sha: SHA, status: "failed" },
+      { build_uuid: "build-1\ninjected=true", sha: SHA, status: "succeeded" },
     ]) {
       expect(() =>
         resolveDeployInput({
@@ -34,6 +35,28 @@ describe("post-deploy event handling", () => {
         }),
       ).toThrow();
     }
+  });
+
+  test("validates an event target against pushed main before its code can run", () => {
+    const calls: string[] = [];
+    const acceptedGit = (...args: string[]) => {
+      calls.push(args.join(" "));
+      return { output: "", status: 0 };
+    };
+
+    expect(() => validateDeployTarget(SHA, acceptedGit)).not.toThrow();
+    expect(calls).toEqual([
+      "fetch --quiet origin main",
+      `cat-file -e ${SHA}^{commit}`,
+      `merge-base --is-ancestor ${SHA} origin/main`,
+    ]);
+
+    expect(() =>
+      validateDeployTarget(SHA, (...args: string[]) => ({
+        output: "",
+        status: args[0] === "merge-base" ? 1 : 0,
+      })),
+    ).toThrow("not on pushed origin/main");
   });
 
   test("accepts an exact or coalesced descendant deployment only", () => {

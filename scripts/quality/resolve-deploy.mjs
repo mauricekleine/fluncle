@@ -15,6 +15,26 @@ function git(...args) {
   return result.stdout.trim();
 }
 
+function gitResult(...args) {
+  const result = spawnSync("git", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  return { output: result.stdout.trim(), status: result.status ?? 1 };
+}
+
+export function validateDeployTarget(sha, gitImpl = gitResult) {
+  const fetched = gitImpl("fetch", "--quiet", "origin", "main");
+  if (fetched.status !== 0) {
+    throw new Error(
+      `could not refresh origin/main before validating deploy target: ${fetched.output}`,
+    );
+  }
+  if (gitImpl("cat-file", "-e", `${sha}^{commit}`).status !== 0) {
+    throw new Error(`deploy event target is not a repository commit: ${sha}`);
+  }
+  if (gitImpl("merge-base", "--is-ancestor", sha, "origin/main").status !== 0) {
+    throw new Error(`deploy event target is not on pushed origin/main: ${sha}`);
+  }
+}
+
 function changedFiles(base, head) {
   const output = git("diff", "--name-only", "--diff-filter=ACDMRTUXB", base, head, "--");
   return output ? output.split("\n") : [];
@@ -24,7 +44,8 @@ export function resolveDeployInput({ event, eventName }) {
   if (eventName === "push") {
     const head = event.after;
     const base = event.before && !/^0+$/.test(event.before) ? event.before : `${head}^`;
-    const plan = classifyPaths(changedFiles(base, head), { base, head });
+    const commitCount = Number(git("rev-list", "--count", `${base}..${head}`));
+    const plan = classifyPaths(changedFiles(base, head), { base, commitCount, head });
     return {
       buildUuid: `fallback-${head}`,
       enabled: plan.deploy,
@@ -44,8 +65,8 @@ export function resolveDeployInput({ event, eventName }) {
   if (typeof status !== "string" || !TERMINAL_STATUSES.has(status)) {
     throw new Error(`deploy event status must be one of: ${[...TERMINAL_STATUSES].join(", ")}`);
   }
-  if (typeof buildUuid !== "string" || buildUuid.length < 3) {
-    throw new Error("deploy event requires a build_uuid");
+  if (typeof buildUuid !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/.test(buildUuid)) {
+    throw new Error("deploy event requires a safe 3-128 character build_uuid");
   }
   return { buildUuid, enabled: true, mode: "event", sha, status };
 }
@@ -76,6 +97,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     const options = parseArguments(process.argv.slice(2));
     const event = JSON.parse(readFileSync(options.eventPath, "utf8"));
     const resolved = resolveDeployInput({ event, eventName: options.eventName });
+    if (resolved.enabled) {
+      validateDeployTarget(resolved.sha);
+    }
     if (options.output) {
       writeFileSync(options.output, `${JSON.stringify(resolved, null, 2)}\n`);
     }

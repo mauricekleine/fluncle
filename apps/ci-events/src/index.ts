@@ -1,5 +1,26 @@
 type TerminalStatus = "canceled" | "failed" | "succeeded";
 
+const TERMINAL_EVENTS = {
+  "cf.workersBuilds.worker.build.canceled": {
+    buildOutcome: "canceled",
+    payloadStatus: "canceled",
+    status: "canceled",
+  },
+  "cf.workersBuilds.worker.build.failed": {
+    buildOutcome: "failure",
+    payloadStatus: "failed",
+    status: "failed",
+  },
+  "cf.workersBuilds.worker.build.succeeded": {
+    buildOutcome: "success",
+    payloadStatus: "success",
+    status: "succeeded",
+  },
+} as const satisfies Record<
+  string,
+  { buildOutcome: string; payloadStatus: string; status: TerminalStatus }
+>;
+
 export type NormalizedBuildEvent = {
   buildUuid: string;
   eventTimestamp: string;
@@ -22,27 +43,25 @@ function stringField(value: Record<string, unknown> | null, key: string): string
   return typeof field === "string" ? field : null;
 }
 
-function terminalStatus(type: string): TerminalStatus | null {
-  if (type.endsWith(".build.succeeded")) {
-    return "succeeded";
-  }
-  if (type.endsWith(".build.failed")) {
-    return "failed";
-  }
-  if (type.endsWith(".build.canceled")) {
-    return "canceled";
-  }
-  return null;
+function terminalEvent(type: string) {
+  return Object.hasOwn(TERMINAL_EVENTS, type)
+    ? TERMINAL_EVENTS[type as keyof typeof TERMINAL_EVENTS]
+    : null;
+}
+
+function terminalEventInput(input: unknown) {
+  const type = stringField(record(input), "type");
+  return type ? terminalEvent(type) : null;
 }
 
 export function normalizeBuildEvent(
   input: unknown,
-  expected: { branch: string; workerName: string },
+  expected: { branch: string; repository: string; workerName: string },
 ): NormalizedBuildEvent | null {
   const event = record(input);
   const type = stringField(event, "type");
-  const status = type ? terminalStatus(type) : null;
-  if (!status) {
+  const terminal = type ? terminalEvent(type) : null;
+  if (!terminal) {
     return null;
   }
 
@@ -50,24 +69,40 @@ export function normalizeBuildEvent(
   const payload = record(event?.payload);
   const metadata = record(event?.metadata);
   const trigger = record(payload?.buildTriggerMetadata);
+  const sourceType = stringField(source, "type");
   const workerName = stringField(source, "workerName");
   const branch = stringField(trigger, "branch");
   const sha = stringField(trigger, "commitHash");
+  const triggerSource = stringField(trigger, "buildTriggerSource");
+  const providerType = stringField(trigger, "providerType");
+  const repoName = stringField(trigger, "repoName");
   const buildUuid = stringField(payload, "buildUuid");
+  const payloadStatus = stringField(payload, "status");
+  const buildOutcome = stringField(payload, "buildOutcome");
   const eventTimestamp = stringField(metadata, "eventTimestamp");
+  const expectedRepoName = expected.repository.slice(expected.repository.lastIndexOf("/") + 1);
 
   if (
+    sourceType !== "workersBuilds.worker" ||
     workerName !== expected.workerName ||
     branch !== expected.branch ||
+    triggerSource !== "push_event" ||
+    providerType !== "github" ||
+    repoName !== expectedRepoName ||
+    payloadStatus !== terminal.payloadStatus ||
+    buildOutcome !== terminal.buildOutcome ||
     !sha ||
     !/^[0-9a-f]{40}$/.test(sha) ||
     !buildUuid ||
-    !eventTimestamp
+    !/^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/.test(buildUuid) ||
+    !eventTimestamp ||
+    eventTimestamp.length > 64 ||
+    Number.isNaN(Date.parse(eventTimestamp))
   ) {
     return null;
   }
 
-  return { buildUuid, eventTimestamp, sha, status, workerName };
+  return { buildUuid, eventTimestamp, sha, status: terminal.status, workerName };
 }
 
 function secret(env: Env, name: "GITHUB_DISPATCH_TOKEN"): string | null {
@@ -107,6 +142,7 @@ export async function dispatchBuildEvent(
         "X-GitHub-Api-Version": "2022-11-28",
       },
       method: "POST",
+      signal: AbortSignal.timeout(15_000),
     },
   );
 
@@ -130,12 +166,24 @@ export default {
     for (const message of batch.messages) {
       const event = normalizeBuildEvent(message.body, {
         branch: env.EXPECTED_BRANCH,
+        repository: env.GITHUB_REPOSITORY,
         workerName: env.EXPECTED_WORKER,
       });
 
       if (!event) {
-        console.log(JSON.stringify({ messageId: message.id, outcome: "ignored" }));
-        message.ack();
+        const terminal = terminalEventInput(message.body);
+        console.log(
+          JSON.stringify({
+            attempts: message.attempts,
+            messageId: message.id,
+            outcome: terminal ? "invalid-terminal-retry" : "ignored",
+          }),
+        );
+        if (terminal) {
+          message.retry();
+        } else {
+          message.ack();
+        }
         continue;
       }
 
