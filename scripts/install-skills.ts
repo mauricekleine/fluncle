@@ -3,7 +3,7 @@
  * Install every local Fluncle skill under packages/skills into the agent
  * toolchains, per AGENTS.md → "Agent Skills":
  *
- *   npx skills add ./packages/skills/<skill-path> -y -a claude-code -a codex
+ *   bunx skills add ./packages/skills/<skill-path> -y -a claude-code -a codex
  *
  * A directory counts as a skill when it contains a SKILL.md. Installs run
  * sequentially because `skills add` mutates the shared skills-lock.json, and
@@ -13,6 +13,7 @@
  *   bun run skills:install               # install all local skills, then reconcile
  *   bun run skills:install --dry-run     # print the commands without running them
  *   bun run skills:install --check-only  # reconcile only (no install; seconds, not minutes)
+ *   bun run skills:install --verify      # reconcile and compare source with installed copies
  */
 import {
   existsSync,
@@ -33,9 +34,9 @@ const agentsSkillsDir = join(repoRoot, ".agents", "skills");
 const claudeSkillsDir = join(repoRoot, ".claude", "skills");
 const agents = ["claude-code", "codex"];
 // Pin the `skills` CLI version. The lockfile stores a per-skill `computedHash` the CLI
-// produces, so an unpinned `npx skills` lets CI resolve a newer version than a dev ran
-// locally — a changed hash then makes the skills-sync drift guard (.github/workflows/
-// skills-sync.yml) fail non-deterministically. Pinning makes `skills:install`
+// produces, so an unpinned `bunx skills` lets CI resolve a newer version than a dev ran
+// locally — a changed hash then makes the selected Skills quality lane fail
+// non-deterministically. Pinning makes `skills:install`
 // byte-identical everywhere (local, CI, every agent). Bump deliberately.
 const skillsCli = "skills@1.5.15";
 
@@ -118,14 +119,14 @@ export function findSkillPlumbingProblems({
   for (const name of lockNames) {
     if (!installed.has(name)) {
       problems.push(
-        `"${name}" is in skills-lock.json but has no copy at .agents/skills/${name} — no agent can read it. Install it (\`npx skills add <source>\`) or drop the lock entry.`,
+        `"${name}" is in skills-lock.json but has no copy at .agents/skills/${name} — no agent can read it. Install it (\`bunx skills add <source>\`) or drop the lock entry.`,
       );
     }
   }
   for (const name of [...installed].sort()) {
     if (!(name in lockSkills)) {
       problems.push(
-        `.agents/skills/${name} has no skills-lock.json entry — its source is untraceable. Reinstall it through \`npx skills add\` so the lock records where it came from.`,
+        `.agents/skills/${name} has no skills-lock.json entry — its source is untraceable. Reinstall it through \`bunx skills add\` so the lock records where it came from.`,
       );
     }
   }
@@ -201,6 +202,25 @@ function assertSkillPlumbingReconciles(): void {
   process.exit(1);
 }
 
+function assertInstalledContentMatches(): void {
+  const failures: string[] = [];
+  for (const name of findPackageSkills()) {
+    const result = spawnSync(
+      "diff",
+      ["--recursive", "--brief", join(skillsDir, name), join(agentsSkillsDir, name)],
+      { encoding: "utf8" },
+    );
+    if (result.status !== 0) {
+      failures.push(result.stdout.trim() || result.stderr.trim() || name);
+    }
+  }
+  if (failures.length > 0) {
+    console.error(`Installed skill content differs from canonical source:\n${failures.join("\n")}`);
+    process.exit(1);
+  }
+  console.log("Installed skill content matches every canonical package source.");
+}
+
 /**
  * Strip run artifacts (Python bytecode, macOS Finder files) from the skill
  * sources before installing. The skills CLI hashes the whole directory into the
@@ -236,6 +256,7 @@ function main(): void {
   const dryRun = process.argv.includes("--dry-run");
   const normalizeOnly = process.argv.includes("--normalize-only");
   const checkOnly = process.argv.includes("--check-only");
+  const verify = process.argv.includes("--verify");
 
   if (normalizeOnly) {
     normalizeLockSources();
@@ -244,6 +265,12 @@ function main(): void {
 
   if (checkOnly) {
     assertSkillPlumbingReconciles();
+    return;
+  }
+
+  if (verify) {
+    assertSkillPlumbingReconciles();
+    assertInstalledContentMatches();
     return;
   }
 
@@ -268,12 +295,12 @@ function main(): void {
     const skillPath = `./${relative(repoRoot, join(skillsDir, name))}`;
     const args = [skillsCli, "add", skillPath, "-y", ...agents.flatMap((agent) => ["-a", agent])];
 
-    console.log(`[${index + 1}/${skillDirs.length}] npx ${args.join(" ")}`);
+    console.log(`[${index + 1}/${skillDirs.length}] bunx ${args.join(" ")}`);
     if (dryRun) {
       continue;
     }
 
-    const result = spawnSync("npx", args, { cwd: repoRoot, stdio: "inherit" });
+    const result = spawnSync("bunx", args, { cwd: repoRoot, stdio: "inherit" });
     if (result.status !== 0) {
       failures.push(name);
       console.error(`  ✗ failed to install "${name}" (exit ${result.status ?? "signal"})`);

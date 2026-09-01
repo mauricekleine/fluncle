@@ -1,0 +1,21 @@
+{
+  "current": {
+    "e2eP50Seconds": 381,
+    "e2eP90Seconds": 602,
+    "qualityP50Seconds": 530,
+    "qualityP90Seconds": 591
+  },
+  "new": {
+    "coreBaseSeconds": 31,
+    "e2eP50Seconds": 348,
+    "e2eP90Seconds": 569,
+    "fullPackageSeconds": 221,
+    "gateSeconds": 5,
+    "goDnsSeconds": 3,
+    "goSshSeconds": 13,
+    "scriptsSeconds": 36,
+    "skillsSeconds": 60,
+    "sonarSeconds": 99,
+    "workflowSeconds": 2
+  }
+}

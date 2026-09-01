@@ -1,58 +1,122 @@
-name: CLI Release
+name: Releases
 
-# Every run of this workflow MINTS A PUBLIC VERSION — an npm publish, a git tag, a GitHub
-# release, and a Homebrew formula bump. So the trigger is the shipped surface only: the CLI
-# source, its manifest, and this workflow. A README tweak, a test-only change, or a docs
-# edit under apps/cli no longer burns a version number as a build counter. `paths` is
-# ordered positives-then-negations (a later pattern wins), so the test files sitting inside
-# `src/` are carved back out. Anything else that should ship a version: add it here, or run
-# the workflow by hand via workflow_dispatch.
+# Publishing begins only after the generic Quality Checks run for the exact main SHA succeeds.
+# The selector compares that SHA with each surface's last release tag, so it preserves path-scoped
+# releases without calling the full validation workflow a second time. Manual releases must name a
+# SHA whose push-triggered Quality Checks run already passed.
 on:
-  push:
+  workflow_run:
+    workflows: [Quality Checks]
+    types: [completed]
     branches: [main]
-    paths:
-      - .github/workflows/cli-release.yml
-      - apps/cli/package.json
-      - apps/cli/src/**
-      - "!apps/cli/src/**/*.test.ts"
   workflow_dispatch:
+    inputs:
+      release:
+        description: Release surface
+        options: [auto, cli, sonar, all]
+        required: true
+        type: choice
+        default: auto
+      sha:
+        description: Exact validated main commit
+        required: true
+        type: string
 
 concurrency:
   cancel-in-progress: false
-  group: cli-release-main
+  group: releases-main
 
-# Default read-only; the build job elevates exactly what it needs.
 permissions:
+  actions: read
+  checks: read
   contents: read
 
 jobs:
-  quality:
-    name: Quality Checks
-    uses: ./.github/workflows/quality-checks.yml
-    with:
-      checkout-ref: ${{ github.sha }}
-
-  build:
-    name: Tag, release, and build standalone CLI binaries
+  select:
+    name: Reuse exact-SHA validation and select releases
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    needs: [quality]
-    timeout-minutes: 20
-    permissions:
-      contents: write
-      id-token: write # OIDC trusted publishing to npm
+    timeout-minutes: 5
+    outputs:
+      cli: ${{ steps.release.outputs.cli }}
+      sha: ${{ steps.release.outputs.sha }}
+      sonar: ${{ steps.release.outputs.sonar }}
     steps:
-      - name: Checkout code
+      - name: Resolve exact validated SHA
+        id: validated
+        env:
+          DISPATCH_SHA: ${{ inputs.sha }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            sha="$WORKFLOW_SHA"
+          else
+            sha="$DISPATCH_SHA"
+          fi
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::Release SHA must be a full 40-character commit hash."
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the validated commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-          # Everything that writes authenticates explicitly (gh via GH_TOKEN, the tap
-          # clone via its own token URL) — the checkout token has no business persisting.
           persist-credentials: false
+          ref: ${{ steps.validated.outputs.sha }}
+
+      - name: Verify manual SHA has a successful Quality run
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.validated.outputs.sha }}
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$SHA is not on pushed origin/main."
+            exit 1
+          fi
+
+          count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality-checks.yml/runs?head_sha=${SHA}&event=push&status=success&per_page=10" --jq ".workflow_runs | map(select(.head_sha == \"${SHA}\" and .conclusion == \"success\")) | length")"
+          if [ "$count" -lt 1 ]; then
+            echo "::error::No successful push-triggered Quality Checks run exists for exact SHA $SHA."
+            exit 1
+          fi
+
+      - name: Select release surfaces since their last artifacts
+        id: release
+        env:
+          RELEASE_CHOICE: ${{ inputs.release || 'auto' }}
+          SHA: ${{ steps.validated.outputs.sha }}
+        run: node scripts/quality/release-select.mjs --sha "$SHA" --force "$RELEASE_CHOICE" --github-output "$GITHUB_OUTPUT"
+
+  cli:
+    name: Tag, release, and build standalone CLI binaries
+    if: needs.select.outputs.cli == 'true'
+    needs: [select]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout validated code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.select.outputs.sha }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -60,10 +124,7 @@ jobs:
       - name: Calculate next CLI version
         id: version
         run: |
-          set -euo pipefail
-
           latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
-
           if [ -z "$latest_tag" ]; then
             next_version="0.1.0"
           else
@@ -72,7 +133,6 @@ jobs:
             minor="$(printf '%s' "$version" | cut -d. -f2)"
             next_version="${major}.$((minor + 1)).0"
           fi
-
           echo "version=$next_version" >> "$GITHUB_OUTPUT"
           echo "tag=v$next_version" >> "$GITHUB_OUTPUT"
 
@@ -80,14 +140,13 @@ jobs:
         env:
           FLUNCLE_CLI_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -euo pipefail
-
           define="FLUNCLE_CLI_VERSION=\"${FLUNCLE_CLI_VERSION}\""
-
           bun build ./apps/cli/src/cli.ts --compile --target=bun-darwin-arm64 --define "$define" --outfile ./apps/cli/dist/fluncle-darwin-arm64
           bun build ./apps/cli/src/cli.ts --compile --target=bun-darwin-x64 --define "$define" --outfile ./apps/cli/dist/fluncle-darwin-x64
           bun build ./apps/cli/src/cli.ts --compile --target=bun-linux-arm64 --define "$define" --outfile ./apps/cli/dist/fluncle-linux-arm64
           bun build ./apps/cli/src/cli.ts --compile --target=bun-linux-x64 --define "$define" --outfile ./apps/cli/dist/fluncle-linux-x64
+          test "$(find apps/cli/dist -maxdepth 1 -type f -name 'fluncle-*' | wc -l)" -eq 4
+          file apps/cli/dist/fluncle-*
 
       - name: Create GitHub Release
         env:
@@ -95,28 +154,21 @@ jobs:
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
             apps/cli/dist/fluncle-* \
-            --target "${{ github.sha }}" \
+            --target "${{ needs.select.outputs.sha }}" \
             --title "${{ steps.version.outputs.tag }}" \
-            --notes "Automated CLI release for ${{ github.sha }}."
+            --notes "Automated CLI release for ${{ needs.select.outputs.sha }}."
 
-      # One source of truth (the release version above) -> npm + Homebrew, the
-      # same version as the GitHub Release. npm publishes via OIDC trusted
-      # publishing (no token; the publisher is configured for this repo). The tap
-      # step no-ops until its secret exists.
       - name: Set up Node for npm publish
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
+          registry-url: https://registry.npmjs.org
 
-      - name: Publish to npm (fluncle, OIDC trusted publishing)
-        # No token: OIDC. The `fluncle` package's trusted publisher is configured
-        # for this repo + workflow (see apps/cli/packaging/README.md).
+      - name: Publish to npm
         env:
           FLUNCLE_CLI_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -euo pipefail
-          npm install -g npm@11 # stable 11.x (>= 11.5.1 for OIDC); avoids the broken pre-release npm 12.0.0-pre.2 that @latest pulled (missing sigstore, npm/cli#9722)
+          npm install -g npm@11
           bun run --cwd apps/cli build:npm
           cd apps/cli/dist-npm
           npm publish --provenance --access public
@@ -126,15 +178,14 @@ jobs:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -euo pipefail
           if [ -z "${TAP_TOKEN:-}" ]; then
             echo "No HOMEBREW_TAP_TOKEN secret - skipping tap bump. Add it + create the tap to enable."
             exit 0
           fi
-          sha_da=$(shasum -a 256 apps/cli/dist/fluncle-darwin-arm64 | cut -d' ' -f1)
-          sha_dx=$(shasum -a 256 apps/cli/dist/fluncle-darwin-x64  | cut -d' ' -f1)
-          sha_la=$(shasum -a 256 apps/cli/dist/fluncle-linux-arm64 | cut -d' ' -f1)
-          sha_lx=$(shasum -a 256 apps/cli/dist/fluncle-linux-x64   | cut -d' ' -f1)
+          sha_da="$(shasum -a 256 apps/cli/dist/fluncle-darwin-arm64 | cut -d' ' -f1)"
+          sha_dx="$(shasum -a 256 apps/cli/dist/fluncle-darwin-x64 | cut -d' ' -f1)"
+          sha_la="$(shasum -a 256 apps/cli/dist/fluncle-linux-arm64 | cut -d' ' -f1)"
+          sha_lx="$(shasum -a 256 apps/cli/dist/fluncle-linux-x64 | cut -d' ' -f1)"
           git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/mauricekleine/homebrew-fluncle.git" tap
           mkdir -p tap/Formula
           sed -e "s/^  version \".*\"/  version \"${VERSION}\"/" \
@@ -149,3 +200,99 @@ jobs:
           git add Formula/fluncle.rb
           git commit -m "fluncle ${VERSION}" || { echo "no formula change"; exit 0; }
           git push
+
+  sonar:
+    name: Build and publish the static musl Sonar binary
+    if: needs.select.outputs.sonar == 'true'
+    needs: [select]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: sonar-latest
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - name: Checkout validated code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.select.outputs.sha }}
+
+      - name: Setup Rust with musl target
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+          toolchain: stable
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Calculate rotating cache epoch
+        id: cache_epoch
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore bounded musl Cargo snapshot
+        id: cargo_cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/sonar/target
+          key: cargo-musl-v2-${{ runner.os }}-${{ hashFiles('apps/sonar/Cargo.lock') }}-${{ steps.cache_epoch.outputs.week }}
+          restore-keys: |
+            cargo-musl-v2-${{ runner.os }}-${{ hashFiles('apps/sonar/Cargo.lock') }}-
+            cargo-musl-v2-${{ runner.os }}-
+
+      - name: Build the static musl release binary
+        env:
+          GIT_SHA: ${{ needs.select.outputs.sha }}
+          RUSTFLAGS: -C target-cpu=x86-64-v3 -C strip=symbols
+        run: cargo build --release --locked --manifest-path apps/sonar/Cargo.toml --target "$TARGET"
+
+      - name: Prove and stage release assets
+        run: |
+          mkdir -p dist
+          cp "apps/sonar/target/$TARGET/release/sonar" dist/sonar
+          chmod +x dist/sonar
+          file dist/sonar | tee dist/sonar.file
+          grep -Eq 'statically linked|static-pie linked' dist/sonar.file
+          if ldd dist/sonar > dist/sonar.ldd 2>&1; then
+            echo "::error::The musl release unexpectedly has dynamic dependencies."
+            cat dist/sonar.ldd
+            exit 1
+          fi
+          (cd dist && sha256sum sonar > sonar.sha256)
+          printf '%s\n' "${{ needs.select.outputs.sha }}" > dist/sonar.commit
+
+      - name: Save bounded musl Cargo snapshot
+        if: success() && steps.cargo_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/sonar/target
+
+      - name: Publish to the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f "$RELEASE_TAG" "${{ needs.select.outputs.sha }}"
+          git push -f origin "refs/tags/$RELEASE_TAG"
+
+          notes="Rolling pre-release: the static musl \`sonar\` binary for rave-01, built from ${{ needs.select.outputs.sha }}.
+
+          Pulled automatically by the box-side self-deploy (\`apps/sonar/deploy/fluncle-sonar-freshen.sh\`), which verifies \`sonar.sha256\` before it goes anywhere near the live service. Not a versioned release — it is overwritten on every merge that touches \`apps/sonar/**\`."
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --notes "$notes" --prerelease
+          else
+            gh release create "$RELEASE_TAG" --target "${{ needs.select.outputs.sha }}" --title "sonar (latest build)" --notes "$notes" --prerelease
+          fi
+          gh release upload "$RELEASE_TAG" dist/sonar dist/sonar.sha256 dist/sonar.commit --clobber

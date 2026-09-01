@@ -1,153 +1,92 @@
 name: Post-deploy Probe
 
-# After a push to main deploys, wait until production is serving the pushed commit,
-# then sweep every public surface and go red if anything stopped resolving. This is the
-# RESOLUTION half of monitoring — the automated form of the `fluncle-smoke` skill —
-# complementing Sentry (errors) and the 10-minute up/down prober (service health).
-#
-# No secrets: the probe issues public GETs only (strictly read-only, side-effect-free).
-# A red check IS the alert — per repo doctrine the operator watches Actions after a push.
-#
-# `paths-ignore` MIRRORS the Cloudflare "Build watch paths" EXCLUDES (Workers Builds →
-# Settings → Build watch paths). A push touching only those paths does not rebuild
-# apps/web, so prod keeps serving the previous commit and this probe's wait step would
-# hard-fail with "Deploy never landed" after 20 minutes. The filter keeps the probe
-# silent on exactly the pushes that never deploy.
-#
-# TWO TRAPS when editing this list:
-#   1. The glob dialects DIFFER. Cloudflare's `*` matches path separators, so its
-#      exclude reads `docs/*`. GitHub Actions' `*` does NOT match `/` — the equivalent
-#      here is `docs/**`. Copying CF's patterns verbatim silently under-matches.
-#   2. The two lists live in different places (dashboard vs this file) and NOTHING
-#      tests that they agree. Drift shows up as a red probe (build skipped, probe ran)
-#      or an unprobed deploy (build ran, probe skipped). Change them together.
-# The test gates are deliberately NOT filtered: quality-checks.yml and e2e.yml still run
-# on every push to main, so a skipped deploy never means skipped tests.
-
+# Cloudflare Workers Builds terminal events are the fast path. Until their external Queue,
+# subscription, relay Worker, and GitHub dispatch have been proven live, every deployable push also
+# starts the bounded polling fallback. Excluded pushes still enter this workflow, classify in a few
+# seconds from the same watch-path source as Cloudflare, and skip all setup and probing.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - ".github/**"
-      - "apps/cli/**"
-      - "apps/dns/**"
-      - "apps/extension/**"
-      - "apps/mobile/**"
-      - "apps/raycast/**"
-      - "apps/sonar/**"
-      - "apps/ssh/**"
-      - "docs/**"
-      - "packages/live/**"
-      - "packages/media/**"
-      - "packages/skills/**"
-      - "packages/video/**"
-      # The agent-harness directories and the skills lockfile. NOTHING under .agents/ or
-      # .claude/ is imported by the Worker — they hold the generated skill copies that
-      # `bun run skills:install` writes, the agent definitions, and (transiently) agent
-      # worktrees. Without these, every skill edit paid a full ~15-minute build to deploy
-      # a byte-identical Worker (measured 2026-07-31 on ed9dbdbe and 8997d498, both of
-      # which built successfully and changed not one line the Worker runs).
-      #
-      # These MIRROR `.agents/*` and `.claude/*` on the Cloudflare side. The dialects
-      # differ as the header says — CF's `*` crosses `/`, so its `.claude/*` is this
-      # file's `.claude/**`. Written narrower here than there, a push touching
-      # .claude/agents/**  would skip the build while this probe still ran, and the probe
-      # would hard-fail after 20 minutes waiting for a deploy that never comes.
-      - ".agents/**"
-      - ".claude/**"
-      - "skills-lock.json"
-      # The root canon/instruction docs. NOT `*.md` — on the Cloudflare side that
-      # wildcard matches path separators and would swallow apps/web/content/docs/**,
-      # silently freezing the public /docs site. Both lists name these one by one.
-      - "AGENTS.md"
-      - "CLAUDE.md"
-      - "DESIGN.md"
-      - "LORE.md"
-      - "PRODUCT.md"
-      - "README.md"
-      - "VOICE.md"
+  repository_dispatch:
+    types: [cloudflare-workers-build]
+  workflow_dispatch:
+    inputs:
+      build_uuid:
+        description: Cloudflare build UUID for rollout testing
+        required: true
+        type: string
+      sha:
+        description: Exact commit Cloudflare built
+        required: true
+        type: string
+      status:
+        description: Terminal Cloudflare build status
+        options: [succeeded, failed, canceled]
+        required: true
+        type: choice
 
 concurrency:
-  # A newer push supersedes an older one's probe (its deploy is coalesced/superseded
-  # anyway); no need to run both to completion.
   cancel-in-progress: true
-  group: post-deploy-probe
+  group: post-deploy-${{ github.event_name == 'push' && 'fallback' || github.event.client_payload.build_uuid || inputs.build_uuid || github.run_id }}
 
 permissions:
   contents: read
 
 jobs:
   probe:
-    name: Wait for deploy, then sweep surfaces
+    name: Correlate deploy, then sweep surfaces
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout code
+      - name: Checkout code and full history
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          persist-credentials: false
-          # Full history so `git merge-base --is-ancestor` can resolve a coalesced,
-          # ahead-of-us deployed commit (see the wait step).
           fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.client_payload.sha || inputs.sha || github.sha }}
+
+      - name: Resolve event and deploy watch-path decision
+        id: deploy
+        run: node scripts/quality/resolve-deploy.mjs --event "$GITHUB_EVENT_PATH" --event-name "$GITHUB_EVENT_NAME" --output .deploy-event.json --github-output "$GITHUB_OUTPUT"
+
+      - name: Skip a configured non-deploy change
+        if: steps.deploy.outputs.enabled != 'true'
+        run: echo "The canonical Cloudflare watch-path contract excludes every changed path."
+
+      - name: Surface failed or canceled Workers Build
+        if: steps.deploy.outputs.enabled == 'true' && steps.deploy.outputs.status != 'succeeded'
+        env:
+          BUILD_STATUS: ${{ steps.deploy.outputs.status }}
+          BUILD_UUID: ${{ steps.deploy.outputs.build_uuid }}
+          TARGET_SHA: ${{ steps.deploy.outputs.sha }}
+        run: |
+          echo "::error::Cloudflare Workers Build $BUILD_UUID ended $BUILD_STATUS for $TARGET_SHA. A retry produces a new terminal event and a new correlated run."
+          exit 1
 
       - name: Setup Bun
+        if: steps.deploy.outputs.enabled == 'true' && steps.deploy.outputs.status == 'succeeded'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
-
-      - name: Cache Bun packages
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
+          bun-version-file: package.json
 
       - name: Install dependencies
+        if: steps.deploy.outputs.enabled == 'true' && steps.deploy.outputs.status == 'succeeded'
         run: bun install --frozen-lockfile
 
-      - name: Wait for production to serve this commit
+      - name: Wait for exact or coalesced deployment
+        if: steps.deploy.outputs.enabled == 'true' && steps.deploy.outputs.status == 'succeeded'
         env:
-          # The commit this workflow run is for.
-          TARGET_SHA: ${{ github.sha }}
+          MODE: ${{ steps.deploy.outputs.mode }}
+          TARGET_SHA: ${{ steps.deploy.outputs.sha }}
         run: |
-          set -euo pipefail
-          HEALTH_URL="https://www.fluncle.com/api/v1/health"
-          DEADLINE=$(( $(date +%s) + 20 * 60 ))  # ~20 min
-          echo "Waiting for $HEALTH_URL to report sha=$TARGET_SHA (or a descendant of it)…"
-
-          while :; do
-            SERVED="$(curl -fsS --max-time 10 "$HEALTH_URL" | jq -r '.sha // empty' || true)"
-
-            if [ -n "$SERVED" ]; then
-              if [ "$SERVED" = "$TARGET_SHA" ]; then
-                echo "Production is serving $TARGET_SHA — proceeding to the sweep."
-                exit 0
-              fi
-
-              # Build coalescing: rapid pushes coalesce in Cloudflare Workers Builds,
-              # so the DEPLOYED commit can be AHEAD of this run's commit. If the served
-              # commit has our commit as an ancestor, our change did ship — treat the
-              # wait as satisfied and still run the sweep.
-              git fetch --quiet origin main || true
-              if git cat-file -e "${SERVED}^{commit}" 2>/dev/null && \
-                 git merge-base --is-ancestor "$TARGET_SHA" "$SERVED"; then
-                echo "Production is serving $SERVED, a descendant of $TARGET_SHA (coalesced) — proceeding."
-                exit 0
-              fi
-
-              echo "  prod serves $SERVED, still waiting for $TARGET_SHA (or a descendant)…"
-            else
-              echo "  /api/v1/health has no sha yet, waiting…"
-            fi
-
-            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-              echo "::error::Deploy never landed: production served '${SERVED:-<none>}' after 20m, expected $TARGET_SHA (or a descendant). The build likely failed or is still running — check the Cloudflare Workers Build. (This is NOT a probe failure.)"
-              exit 1
-            fi
-
-            sleep 15
-          done
+          deadline=180
+          if [ "$MODE" = "poll-fallback" ]; then deadline=1200; fi
+          node scripts/quality/measure.mjs --lane deploy-wait --metrics .post-deploy-metrics.jsonl -- node scripts/quality/wait-for-deploy.mjs --target "$TARGET_SHA" --deadline "$deadline"
 
       - name: Sweep public surfaces
-        run: bun run --cwd apps/web scripts/post-deploy-probe.ts
+        if: steps.deploy.outputs.enabled == 'true' && steps.deploy.outputs.status == 'succeeded'
+        run: node scripts/quality/measure.mjs --lane surface-probe --metrics .post-deploy-metrics.jsonl -- bun run --cwd apps/web scripts/post-deploy-probe.ts
+
+      - name: Report wait versus probe time
+        if: always() && steps.deploy.outputs.enabled == 'true'
+        run: node scripts/quality/post-deploy-report.mjs .post-deploy-metrics.jsonl

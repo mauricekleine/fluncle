@@ -60,7 +60,7 @@ bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts
 FRONT_DOOR_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/front-door.spec.ts   # elsewhere
 ```
 
-They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. `.github/workflows/e2e.yml` uploads `front-door-scroll` on every run, green or red, so each commit's evidence is retained for 90 days (GitHub's ceiling on a public repo) and downloadable from its own check without a byte entering history.
+They are not committed, and that is the deliberate trade: this repo is public, a pair of full-page PNGs is several megabytes of binary that git keeps forever, and a committed screenshot goes stale the moment a style moves — which turns evidence into a stale claim. The durable home is the CI artifact instead. The selected E2E job in `.github/workflows/quality-checks.yml` uploads `front-door-scroll` for shipped `main` commits and retains it for 30 days; failed selected runs retain the complete Playwright diagnostics for seven days without a byte entering history.
 
 ## The cold-arrival journey's evidence
 
@@ -73,11 +73,11 @@ bun run --cwd apps/web test:e2e -- tests/e2e/track.spec.ts
 TRACK_JOURNEY_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/track.spec.ts   # elsewhere
 ```
 
-Same trade as the front door's scroll evidence, for the same reasons: never committed, uploaded by `.github/workflows/e2e.yml` as the always-on `track-journey` artifact, retained 90 days per commit.
+Same trade as the front door's scroll evidence, for the same reasons: never committed, uploaded by the selected E2E job as `track-journey` for shipped `main` commits, and retained for 30 days.
 
 ## Discovery-journey event evidence
 
-`discovery-journeys.spec.ts` walks the three public discovery journeys at desktop 1440×900 and mobile 390×844, and writes the observed Simple Analytics event requests (name, bounded `kind`/`service`, request URL) into the gitignored `apps/web/.dev/discovery-events/`. Same terms as the front door's shots: the assertions gate the journeys, the JSON is for a human, and `.github/workflows/e2e.yml` uploads them as the always-on `discovery-events` artifact.
+`discovery-journeys.spec.ts` walks the three public discovery journeys at desktop 1440×900 and mobile 390×844, and writes the observed Simple Analytics event requests (name, bounded `kind`/`service`, request URL) into the gitignored `apps/web/.dev/discovery-events/`. Same terms as the front door's shots: the assertions gate the journeys, the JSON is for a human, and the selected E2E job in `.github/workflows/quality-checks.yml` uploads `discovery-events` for shipped `main` commits and retains it for 30 days.
 
 ```bash
 bun run --cwd apps/web test:e2e -- tests/e2e/discovery-journeys.spec.ts
@@ -94,7 +94,7 @@ Its durable home is the same as every other evidence directory here: `.github/wo
 
 ## The search surface's viewport evidence
 
-`search.spec.ts` does the same for `/search`, into the gitignored `apps/web/.dev/search/`: `desktop-1440x900.png` and `mobile-390x844.png` answering a query, plus `mobile-390x844-zero.png` for the zero state (the first thing a stranger sees). Same terms as the front door's — the assertions in the spec are what gate it, the images are for a human, and `.github/workflows/e2e.yml` uploads them as the always-on `search-surface` artifact rather than committing binaries to a public repo.
+`search.spec.ts` does the same for `/search`, into the gitignored `apps/web/.dev/search/`: `desktop-1440x900.png` and `mobile-390x844.png` answering a query, plus `mobile-390x844-zero.png` for the zero state (the first thing a stranger sees). Same terms as the front door's — the assertions in the spec are what gate it, the images are for a human, and the selected E2E job uploads them as the `search-surface` artifact for shipped `main` commits rather than committing binaries to a public repo.
 
 ```bash
 bun run --cwd apps/web test:e2e -- tests/e2e/search.spec.ts

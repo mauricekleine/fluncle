@@ -20,7 +20,7 @@ fi
 #      `git add` of the three output paths is the reliable way to fold them in.
 #   2. Running after lint-staged keeps the generated copies byte-identical to what
 #      `skills:install` produces — lint-staged never gets a chance to reformat them —
-#      so the CI drift guard (.github/workflows/skills-sync.yml) stays green.
+#      so the selected Skills lane in Quality Checks stays green.
 # It is a no-op (no npx, no cost) unless a packages/skills/** file is actually staged,
 # so a normal commit pays nothing.
 # Caveat: this regenerates from the WORKING TREE, so a partially-staged skill edit can
@@ -34,4 +34,15 @@ if git diff --cached --name-only | grep -q '^packages/skills/'; then
     exit 1
   }
   git add .agents/skills .claude/skills skills-lock.json
+fi
+
+# Edit hooks start affected leaves in the background. A commit is the explicit join point: the
+# fingerprinted result must match the complete worktree, so an edit made while checks were running
+# cannot accidentally reuse a stale pass.
+if [ -x "node_modules/.bin/oxlint" ]; then
+  # Husky/lint-staged may prepend the relative `node_modules/.bin`. The shell-integrity
+  # guard deliberately rejects relative PATH entries, so make that known entry absolute
+  # before the join (and avoid `bun run`, which would add it again).
+  preflight_path="$(printf '%s' "$PATH" | sed "s#^node_modules/.bin:#$(pwd -P)/node_modules/.bin:#; s#:node_modules/.bin:#:$(pwd -P)/node_modules/.bin:#g; s#:node_modules/.bin\$#:$(pwd -P)/node_modules/.bin#")"
+  PATH="$preflight_path" node scripts/quality/preflight.mjs join
 fi

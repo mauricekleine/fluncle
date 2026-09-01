@@ -328,7 +328,7 @@ describe("observeOne (the bounded re-author, across ticks)", () => {
 
     verdict("pass");
     expect((await tick("t-1")).outcome).toBe("rendered");
-  });
+  }, 10_000); // Seven subprocess cycles assert semantics, not wall-clock latency.
 
   test("a transport/model failure never spends an attempt", async () => {
     verdict("pass");
@@ -362,5 +362,5 @@ describe("observeOne (the bounded re-author, across ticks)", () => {
     const result = await observeOne(work[0] ?? {}, { ledger, ledgerPath: ledgerPath() });
 
     expect(result.outcome).toBe("rendered");
-  });
+  }, 10_000); // Four subprocess cycles assert queue progress, not wall-clock latency.
 });

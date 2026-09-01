@@ -1,15 +1,13 @@
 name: Quality Checks
 
 on:
-  workflow_call:
-    inputs:
-      checkout-ref:
-        required: false
-        type: string
   pull_request:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: "23 4 * * 0"
+  workflow_dispatch:
 
 concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -18,154 +16,320 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  QUALITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+  QUALITY_FORCE_FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+  QUALITY_HEAD: ${{ github.sha }}
+
 jobs:
-  check:
-    name: Lint, Format, and Typecheck
+  core:
+    name: Selected quality lanes
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # the web build below allocates a 6 GB heap and needs headroom
+    timeout-minutes: 30
     steps:
-      - name: Checkout code
+      - name: Checkout code and history
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           persist-credentials: false
-          ref: ${{ inputs.checkout-ref || github.sha }}
 
-      # Migrations are APPEND-ONLY: a merge must never delete a migration file that exists on
-      # main. This is the parallel-migration collision guard — a PR generated when main held
-      # migration N, merged after another session landed a different N, silently clobbers that
-      # migration (the JSON journal auto-merges without conflict; it happened live 2026-07-27
-      # and main had to be reset). A red check here is what prose could not be.
-      - name: Migrations are append-only
+      - name: Classify dependency closure
+        id: classify
         run: |
-          # The triple-dot diff needs a MERGE BASE, which two depth-1 histories cannot
-          # contain — a stale branch (every overnight Renovate branch) then dies with
-          # "no merge base" instead of being checked. Fetch main fully and deepen the
-          # shallow PR-side history until the fork point is reachable.
-          git fetch origin main
-          tries=0
-          until git merge-base origin/main HEAD >/dev/null 2>&1; do
-            tries=$((tries + 1))
-            if [ "$tries" -gt 20 ]; then
-              echo "::error::Could not reach a merge base with origin/main after deepening — fetch the branch history manually."
-              exit 1
-            fi
-            git fetch --deepen=200 origin || break
-          done
-          deleted="$(git diff --diff-filter=D --name-only origin/main...HEAD -- apps/web/drizzle/)"
-          if [ -n "$deleted" ]; then
-            echo "::error::This branch DELETES migration files that exist on main — a parallel-migration collision. Rebase onto main, drop your drizzle artifacts, and re-run db:generate so your migration takes the next free number."
-            echo "$deleted"
-            exit 1
+          args=(--base "$QUALITY_BASE" --head "$QUALITY_HEAD" --output .quality-plan.json --github-output "$GITHUB_OUTPUT")
+          if [ "$QUALITY_FORCE_FULL" = "true" ]; then
+            args+=(--force-full --full-reason "scheduled or operator-requested full backstop")
           fi
+          node scripts/quality/classify.mjs "${args[@]}"
+
+      - name: Start quality report
+        run: |
+          {
+            echo "## Evidence-directed quality"
+            echo
+            echo "| Lane | Outcome | Duration |"
+            echo "| --- | --- | ---: |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
+          bun-version-file: package.json
 
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: apps/ssh/go.mod
-          cache-dependency-path: |
-            apps/ssh/go.sum
-            apps/dns/go.sum
-
-      - name: Cache Bun packages
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
-
+      # The package cache is deliberately absent. A 27-step hosted sample had restore p50/p90 of
+      # 53/64 seconds and frozen-install p50/p90 of 5/7 seconds, so restore delayed every job.
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Cache Turbo
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Calculate rotating cache epoch
+        id: cache_epoch
+        if: steps.classify.outputs.turbo == 'true' || steps.classify.outputs.sonar == 'true'
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore bounded Turbo snapshot
+        id: turbo_cache
+        if: steps.classify.outputs.turbo == 'true'
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .turbo/cache
-          key: turbo-${{ runner.os }}-${{ github.sha }}
+          key: turbo-v2-${{ runner.os }}-${{ hashFiles('bun.lock', 'turbo.json') }}-${{ steps.cache_epoch.outputs.week }}
           restore-keys: |
-            turbo-${{ runner.os }}-
+            turbo-v2-${{ runner.os }}-${{ hashFiles('bun.lock', 'turbo.json') }}-
+            turbo-v2-${{ runner.os }}-
 
-      - name: Run Oxlint
-        run: bun run lint
+      - name: Run static policy
+        run: node scripts/quality/measure.mjs --lane static --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane static
 
-      - name: Run Format Check
-        run: bun run format:check
+      - name: Migrations are append-only
+        if: steps.classify.outputs.migrations == 'true'
+        env:
+          BASE_SHA: ${{ steps.classify.outputs.base }}
+          HEAD_SHA: ${{ steps.classify.outputs.head }}
+        run: |
+          deleted="$(git diff --diff-filter=D --name-only "$BASE_SHA" "$HEAD_SHA" -- apps/web/drizzle/)"
+          if [ -n "$deleted" ]; then
+            echo "::error::This change deletes append-only migration artifacts. Rebase, regenerate, and preserve every migration already on main."
+            echo "$deleted"
+            exit 1
+          fi
 
-      - name: Run Typecheck
-        run: bun run typecheck
+      - name: Run affected TypeScript build, typecheck, and tests
+        if: steps.classify.outputs.turbo == 'true'
+        run: node scripts/quality/measure.mjs --lane packages --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane packages
 
-      - name: Run Tests
-        run: bun run test
+      - name: Run standalone script tests
+        if: steps.classify.outputs.scripts == 'true'
+        run: node scripts/quality/measure.mjs --lane scripts --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane scripts
 
-      # The Hermes sweep + track-enrichment scripts live outside the workspaces, so
-      # `turbo run test` never sees them — ~400 tests, including the proof that their
-      # no-network rail is armed, went unrun until this step existed.
-      - name: Run Script Tests
-        run: bun run test:scripts
+      - name: Verify committed skill copies
+        if: steps.classify.outputs.skills == 'true'
+        run: node scripts/quality/measure.mjs --lane skills --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane skills
 
-      # The build is a gate, not just an artifact: apps/web's vite build enforces the
-      # eager-chunk-purity rule (docs/client-bundle.md) and surfaces any build error that
-      # would otherwise appear for the first time INSIDE the Cloudflare Workers Build —
-      # i.e. as a failed production deploy after the merge instead of a red PR check.
-      - name: Build
-        run: bun run build
+      - name: Setup Go
+        if: steps.classify.outputs.go_ssh == 'true' || steps.classify.outputs.go_dns == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          cache-dependency-path: |
+            apps/ssh/go.sum
+            apps/dns/go.sum
+          go-version-file: apps/ssh/go.mod
 
-      - name: Build Go (apps/ssh)
-        run: go build -C apps/ssh ./...
+      - name: Check Go SSH once
+        if: steps.classify.outputs.go_ssh == 'true'
+        run: node scripts/quality/measure.mjs --lane go-ssh --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane go-ssh
 
-      - name: Vet Go (apps/ssh)
-        run: go vet -C apps/ssh ./...
+      - name: Check Go DNS once
+        if: steps.classify.outputs.go_dns == 'true'
+        run: node scripts/quality/measure.mjs --lane go-dns --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane go-dns
 
-      - name: Test Go (apps/ssh)
-        run: go test -C apps/ssh ./...
-
-      - name: Check Go formatting (apps/ssh)
-        run: test -z "$(gofmt -l apps/ssh)"
-
-      - name: Build Go (apps/dns)
-        run: go build -C apps/dns ./...
-
-      - name: Vet Go (apps/dns)
-        run: go vet -C apps/dns ./...
-
-      - name: Test Go (apps/dns)
-        run: go test -C apps/dns ./...
-
-      - name: Check Go formatting (apps/dns)
-        run: test -z "$(gofmt -l apps/dns)"
-
-      # apps/sonar — Fluncle's first Rust app (the in-memory vector sidecar).
-      # Same "non-TS app in apps/" pattern as apps/ssh and apps/dns above.
       - name: Setup Rust
+        if: steps.classify.outputs.sonar == 'true'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          toolchain: stable
           components: clippy, rustfmt
+          toolchain: stable
 
-      - name: Cache Cargo (apps/sonar)
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Restore bounded Cargo snapshot
+        id: cargo_cache
+        if: steps.classify.outputs.sonar == 'true'
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             apps/sonar/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('apps/sonar/Cargo.lock') }}
+          key: cargo-quality-v2-${{ runner.os }}-${{ hashFiles('apps/sonar/Cargo.lock') }}-${{ steps.cache_epoch.outputs.week }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-quality-v2-${{ runner.os }}-${{ hashFiles('apps/sonar/Cargo.lock') }}-
+            cargo-quality-v2-${{ runner.os }}-
 
-      - name: Check Rust formatting (apps/sonar)
-        run: cargo fmt --manifest-path apps/sonar/Cargo.toml --check
+      - name: Check Rust Sonar
+        if: steps.classify.outputs.sonar == 'true'
+        run: node scripts/quality/measure.mjs --lane sonar --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane sonar
 
-      - name: Lint Rust (apps/sonar)
-        run: cargo clippy --manifest-path apps/sonar/Cargo.toml --all-targets -- -D warnings
+      - name: Validate workflow syntax and topology
+        if: steps.classify.outputs.workflows == 'true'
+        run: node scripts/quality/measure.mjs --lane workflows --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane workflows
 
-      - name: Build Rust (apps/sonar)
-        run: cargo build --release --manifest-path apps/sonar/Cargo.toml
+      # Only trusted main writes. A weekly key is immutable for one bounded epoch, restores the
+      # newest prior snapshot by prefix, and replaces one-archive-per-SHA growth with about one
+      # snapshot per active week. Pull-request merge refs are read-only.
+      - name: Save bounded Turbo snapshot from main
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.turbo == 'true' && steps.turbo_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          key: ${{ steps.turbo_cache.outputs.cache-primary-key }}
+          path: .turbo/cache
 
-      - name: Test Rust (apps/sonar)
-        run: cargo test --manifest-path apps/sonar/Cargo.toml
+      - name: Save bounded Cargo snapshot from main
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.sonar == 'true' && steps.cargo_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/sonar/target
+
+      - name: Report selected closure and cost projection
+        if: always()
+        env:
+          CACHE_HIT: ${{ steps.turbo_cache.outputs.cache-hit || 'not-selected' }}
+        run: node scripts/quality/report-run.mjs --plan .quality-plan.json --metrics .quality-metrics.jsonl --job core --cache-hit "$CACHE_HIT"
+
+  e2e:
+    name: Public flows when selected
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQLD_SHA256: edc6e17188d7f2e7c6a76eb7ea21f57f4f90fd49578f16a3884fe433e9ecbd84
+      SQLD_VERSION: v0.24.31
+      TURSO_CLI_SHA256: 0ddecc55970fa9c7a237555095ca069fb9b0deec5ab82fe2ec5726f684e65e6d
+      TURSO_CLI_VERSION: v1.0.30
+    steps:
+      - name: Checkout code and history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify dependency closure
+        id: classify
+        run: |
+          args=(--base "$QUALITY_BASE" --head "$QUALITY_HEAD" --output .quality-plan.json --github-output "$GITHUB_OUTPUT")
+          if [ "$QUALITY_FORCE_FULL" = "true" ]; then
+            args+=(--force-full --full-reason "scheduled or operator-requested full backstop")
+          fi
+          node scripts/quality/classify.mjs "${args[@]}"
+
+      - name: Skip non-web changes
+        if: steps.classify.outputs.e2e != 'true'
+        run: echo "Public-web E2E is outside this dependency closure."
+
+      - name: Setup Bun
+        if: steps.classify.outputs.e2e == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        if: steps.classify.outputs.e2e == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Install Turso CLI
+        if: steps.classify.outputs.e2e == 'true'
+        run: |
+          curl -sSfL -o /tmp/turso-cli.tar.gz "https://github.com/tursodatabase/turso-cli/releases/download/${TURSO_CLI_VERSION}/turso-cli_Linux_x86_64.tar.gz"
+          echo "${TURSO_CLI_SHA256}  /tmp/turso-cli.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/turso-cli.tar.gz -C /tmp turso
+          sudo install -m 0755 /tmp/turso /usr/local/bin/turso
+
+      - name: Install sqld
+        if: steps.classify.outputs.e2e == 'true'
+        run: |
+          curl -sSfL -o /tmp/sqld.tar.xz "https://github.com/tursodatabase/libsql/releases/download/libsql-server-${SQLD_VERSION}/libsql-server-x86_64-unknown-linux-gnu.tar.xz"
+          echo "${SQLD_SHA256}  /tmp/sqld.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sqld.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/libsql-server-x86_64-unknown-linux-gnu/sqld /usr/local/bin/sqld
+
+      - name: Restore Playwright browsers
+        id: playwright_cache
+        if: steps.classify.outputs.e2e == 'true'
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          path: ~/.cache/ms-playwright
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        if: steps.classify.outputs.e2e == 'true'
+        working-directory: apps/web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run the full deterministic public-web contract
+        if: steps.classify.outputs.e2e == 'true'
+        run: node scripts/quality/measure.mjs --lane e2e --metrics .quality-metrics.jsonl -- node scripts/quality/run-lane.mjs --plan .quality-plan.json --lane e2e
+
+      - name: Save Playwright browsers from main
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true' && steps.playwright_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
+          path: ~/.cache/ms-playwright
+
+      # Successful screenshots are shipped-commit evidence, not PR scratch output. Keep the named
+      # journeys on main for 30 days; failed PRs retain the richer diagnostic report below.
+      - name: Upload front-door journey evidence
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          if-no-files-found: warn
+          include-hidden-files: true
+          name: front-door-scroll
+          path: apps/web/.dev/front-door/
+          retention-days: 30
+
+      - name: Upload track journey evidence
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          if-no-files-found: warn
+          include-hidden-files: true
+          name: track-journey
+          path: apps/web/.dev/track-journey/
+          retention-days: 30
+
+      - name: Upload search journey evidence
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          if-no-files-found: warn
+          include-hidden-files: true
+          name: search-surface
+          path: apps/web/.dev/search/
+          retention-days: 30
+
+      - name: Upload discovery event evidence
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          if-no-files-found: warn
+          include-hidden-files: true
+          name: discovery-events
+          path: apps/web/.dev/discovery-events/
+          retention-days: 30
+
+      - name: Upload failure diagnostics
+        if: failure() && steps.classify.outputs.e2e == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          include-hidden-files: true
+          name: playwright-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+            apps/web/.dev/e2e-turso.log
+          retention-days: 7
+
+      - name: Report E2E duration and projection
+        if: always() && steps.classify.outputs.e2e == 'true'
+        run: node scripts/quality/report-run.mjs --plan .quality-plan.json --metrics .quality-metrics.jsonl --job e2e --cache-hit "${{ steps.playwright_cache.outputs.cache-hit || 'miss' }}"
+
+  gate:
+    name: Lint, Format, and Typecheck
+    if: always()
+    needs: [core, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hold the stable protected result
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          if [ "$CORE_RESULT" != "success" ] || [ "$E2E_RESULT" != "success" ]; then
+            echo "::error::Selected quality closure failed: core=$CORE_RESULT e2e=$E2E_RESULT"
+            exit 1
+          fi
+          echo "Selected quality closure passed: core=$CORE_RESULT e2e=$E2E_RESULT"

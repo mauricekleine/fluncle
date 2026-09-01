@@ -20,6 +20,11 @@
             "type": "command",
             "command": ".codex/hooks/format-on-edit.sh",
             "statusMessage": "Formatting with oxfmt"
+          },
+          {
+            "type": "command",
+            "command": "bun run quality:preflight -- start --quiet",
+            "statusMessage": "Starting affected quality lanes"
           }
         ]
       }

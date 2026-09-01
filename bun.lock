@@ -16,6 +16,16 @@
         "react-doctor": "~0.9.12",
         "turbo": "~2.10.11",
         "typescript": "catalog:",
+        "yaml": "~2.9.0",
+      },
+    },
+    "apps/ci-events": {
+      "name": "@fluncle/ci-events",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+        "wrangler": "~4.125.0",
       },
     },
     "apps/cli": {
@@ -795,6 +805,8 @@
     "@floating-ui/utils": ["@floating-ui/utils@0.2.12", "", {}, "sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww=="],
 
     "@floating-ui/vue": ["@floating-ui/vue@1.1.9", "", { "dependencies": { "@floating-ui/dom": "^1.7.4", "@floating-ui/utils": "^0.2.10", "vue-demi": ">=0.13.0" } }, "sha512-BfNqNW6KA83Nexspgb9DZuz578R7HT8MZw1CfK9I6Ah4QReNWEJsXWHN+SdmOVLNGmTPDi+fDT535Df5PzMLbQ=="],
+
+    "@fluncle/ci-events": ["@fluncle/ci-events@workspace:apps/ci-events"],
 
     "@fluncle/cli": ["@fluncle/cli@workspace:apps/cli"],
 

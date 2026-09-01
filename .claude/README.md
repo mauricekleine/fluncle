@@ -5,6 +5,7 @@ Checked-in Claude Code config for this repo. Personal overrides go in `settings.
 ## Hooks (`settings.json` → `hooks/`)
 
 - **`format-on-edit.sh`** — PostToolUse(Edit|Write). Formats the touched file with `oxfmt` (JS/TS) or `gofmt` (Go) and runs `oxlint --fix`. Best-effort; never blocks an edit.
+- **Affected preflight** — PostToolUse(Edit|Write). Queues the fingerprinted dependency closure in the background; `bun run quality:preflight -- join` is the explicit commit/handoff gate.
 - **`guard-protected-files.sh`** — PreToolUse(Edit|Write). Blocks hand-edits to generated Drizzle migrations under `apps/web/drizzle/` (use `bun run --cwd apps/web db:generate`) and to `.env`/secret files.
 
 ## Subagents (`agents/`)
@@ -24,4 +25,4 @@ export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_...   # least-privilege scopes; never co
 
 ## Codex
 
-The same two hooks are mirrored for Codex in `../.codex/` (`hooks.json` + `hooks/`), adapted to Codex's `apply_patch` edit tool and allow/deny model. See `../.codex/README.md`.
+The same guard, formatter, and affected-preflight hooks are mirrored for Codex in `../.codex/` (`hooks.json` + `hooks/`), adapted to Codex's `apply_patch` edit tool and allow/deny model. See `../.codex/README.md`.

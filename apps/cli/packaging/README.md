@@ -80,7 +80,7 @@ brew install fluncle
 
 ### Bumping on each release — automated
 
-The `CLI Release` workflow (`.github/workflows/cli-release.yml`) now does this on
+The CLI job in the `Releases` workflow (`.github/workflows/cli-release.yml`) does this after exact-SHA Quality validation on
 every release: it computes the four binary checksums, fills `version` + the
 `sha256` lines from this canonical formula, and pushes `Formula/fluncle.rb` to the
 tap repo — at the **same version** as the GitHub Release and the npm publish. No

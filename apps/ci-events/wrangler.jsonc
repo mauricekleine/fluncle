@@ -1,0 +1,29 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "fluncle-ci-events-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": true },
+    "traces": { "enabled": false },
+  },
+  "vars": {
+    "EXPECTED_BRANCH": "main",
+    "EXPECTED_WORKER": "fluncle-web",
+    "GITHUB_REPOSITORY": "mauricekleine/fluncle",
+  },
+  "queues": {
+    "consumers": [
+      {
+        "queue": "fluncle-workers-build-events",
+        "dead_letter_queue": "fluncle-workers-build-events-dead",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "retry_delay": 30,
+      },
+    ],
+  },
+}

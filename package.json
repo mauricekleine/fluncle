@@ -60,6 +60,11 @@
     "go:check": "turbo run lint format:check --filter=@fluncle/ssh --filter=@fluncle/dns",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "quality:classify": "node scripts/quality/classify.mjs",
+    "quality:history": "node scripts/quality/history-report.mjs",
+    "quality:preflight": "node scripts/quality/preflight.mjs",
+    "quality:preflight:start": "node scripts/quality/preflight.mjs start",
+    "quality:workflows": "bun test scripts/quality/workflows.test.ts",
     "skills:install": "bun run scripts/install-skills.ts",
     "stories:build": "bun scripts/build-user-story-matrix.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
@@ -80,7 +85,8 @@
     "oxlint-tsgolint": "~7.0.2001",
     "react-doctor": "~0.9.12",
     "turbo": "~2.10.11",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "yaml": "~2.9.0"
   },
   "overrides": {
     "nanoid@^3.0.0": "3.3.18",
