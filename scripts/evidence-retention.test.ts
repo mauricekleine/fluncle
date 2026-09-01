@@ -72,13 +72,16 @@ describe("retained browser evidence", () => {
     expect(upload?.ifNoFiles).toBe("error");
   });
 
-  test("the discovery walk runs the committed script against the served product on PRs and after a deploy", () => {
+  test("the discovery walk records only deployed or operator-selected products", () => {
     const text = readFileSync(join(workflowDir, "discovery-walk.yml"), "utf8");
 
     expect(text).toContain("run: bun run walk:discovery");
-    expect(text).toMatch(/^\s*pull_request:/m);
+    expect(text).not.toMatch(/^\s*pull_request:/m);
     expect(text).toMatch(/workflows:\s*\["Post-deploy Probe"\]/);
+    expect(text).toMatch(/^\s*workflow_dispatch:/m);
     expect(text).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(text).toContain("github.event.workflow_run.head_sha || github.sha");
+    expect(text).not.toContain("~/.bun/install/cache");
     // The summary lands on the run page even when a journey failed.
     expect(text).toContain('summary.md >> "$GITHUB_STEP_SUMMARY"');
   });

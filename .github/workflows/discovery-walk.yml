@@ -7,13 +7,16 @@ name: Discovery Walk
 # hermetic E2E job is the GATE for these journeys; this is the RECORD of what the integrated
 # product actually did with real current data, kept where a verifier can reach it without a checkout.
 #
-# Two triggers, one artifact:
-#   - pull_request: walks whatever production serves at review time, so a PR that claims the
-#     funnel is coherent carries the evidence on its own checks page.
+# Two explicit triggers, one artifact:
 #   - workflow_run (Post-deploy Probe succeeded): production now serves the pushed commit, so
 #     this walk attributes to exactly that deploy. Post-deploy always reports, including a cheap
 #     intentional skip; this job inspects the triggering run and proceeds only when its public
 #     surface sweep actually passed. `workflow_run` fires only for the default branch.
+#   - workflow_dispatch: an operator can record another deployment deliberately.
+#
+# Pull requests are deliberately absent. Quality Checks' selected hermetic E2E suite is the PR
+# gate; walking current production cannot prove candidate code and used to add a full browser run
+# to every docs, CLI, and other non-web PR outside the selected dependency closure.
 #
 # No secrets: public GETs and clicks only; the browser never leaves the site (an outbound
 # popup is recorded and closed). The walk exits non-zero if a journey cannot complete, and
@@ -26,8 +29,6 @@ name: Discovery Walk
 # destinations read on the run page itself.
 
 on:
-  pull_request:
-    branches: [main]
   workflow_run:
     workflows: ["Post-deploy Probe"]
     types: [completed]
@@ -40,8 +41,8 @@ on:
         type: string
 
 concurrency:
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.ref }}
 
 permissions:
   actions: read
@@ -75,21 +76,15 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          # workflow_run otherwise checks out the latest default branch, which can move beyond the
+          # deploy being recorded. Bind the harness to the exact triggering main commit.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Bun
         if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
-
-      - name: Cache Bun packages
-        if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
 
       - name: Install dependencies
         if: github.event_name != 'workflow_run' || steps.deploy_trigger.outputs.enabled == 'true'
