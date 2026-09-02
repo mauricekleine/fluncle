@@ -572,13 +572,13 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
       summary.failed += summary.beatport.failed + summary.beatport.catalogueFailed;
 
       if (beatport.ok === false) {
+        summary.ok = false;
         // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
         // some resolved, some failed — distinct from the catch below.
         log(`beatport backfill partial: ${summary.beatport.failed} finding(s) failed this tick`);
       }
     } catch (error) {
-      // Preserve the pre-existing exit/`ok` behaviour for this slice: this bug is reported
-      // separately. The canonical run-failure counter still exposes the failed whole leg.
+      summary.ok = false;
       summary.errors += 1;
       summary.beatport.error = error instanceof Error ? error.message : String(error);
       log(`beatport backfill failed: ${summary.beatport.error}`);
@@ -663,6 +663,7 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
       summary.failed += summary.deezer.failed;
 
       if (deezer.ok === false) {
+        summary.ok = false;
         // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
         // some resolved, some failed — distinct from the catch below, which is the whole leg erroring.
         log(`deezer backfill partial: ${summary.deezer.failed} row(s) failed this tick`);
@@ -672,6 +673,7 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
         log("deezer backfill yielded: Deezer answered its quota limit, nothing was stamped");
       }
     } catch (error) {
+      summary.ok = false;
       summary.errors += 1;
       summary.deezer.error = error instanceof Error ? error.message : String(error);
       log(`deezer backfill failed: ${summary.deezer.error}`);

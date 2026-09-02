@@ -75,6 +75,7 @@ case "$1" in
         case "$mode" in
           unconfigured) printf '{"ok":true,"configured":false,"resolvedCount":0,"unresolvedCount":0,"failedCount":0,"skippedCount":0,"catalogueResolvedCount":0,"catalogueUnresolvedCount":0,"catalogueFailedCount":0}\\n' ;;
           crash) printf 'beatport boom\\n' >&2; exit 1 ;;
+          partial) printf '{"ok":false,"configured":true,"resolvedCount":3,"unresolvedCount":4,"failedCount":5,"skippedCount":6,"catalogueResolvedCount":7,"catalogueUnresolvedCount":8,"catalogueFailedCount":9}\\n'; exit 1 ;;
           *) printf '{"ok":true,"configured":true,"resolvedCount":13,"unresolvedCount":14,"failedCount":15,"skippedCount":16,"catalogueResolvedCount":20,"catalogueUnresolvedCount":21,"catalogueFailedCount":22}\\n' ;;
         esac
         ;;
@@ -84,6 +85,7 @@ case "$1" in
         case "$mode" in
           throttled) printf '{"ok":true,"resolvedCount":0,"unresolvedCount":0,"unvouchableCount":0,"failedCount":0,"rateLimited":true}\\n' ;;
           crash) printf 'deezer boom\\n' >&2; exit 1 ;;
+          partial) printf '{"ok":false,"resolvedCount":2,"unresolvedCount":3,"unvouchableCount":4,"failedCount":5,"rateLimited":false}\\n'; exit 1 ;;
           *) printf '{"ok":true,"resolvedCount":23,"unresolvedCount":24,"unvouchableCount":25,"failedCount":26,"rateLimited":false}\\n' ;;
         esac
         ;;
@@ -439,6 +441,7 @@ describe("the tick's legs", () => {
       skipped: 16,
       unresolved: 14,
     });
+    expect(summary.ok).toBe(true);
   });
 
   test("the Beatport CATALOGUE tier is tallied apart from the certified one", async () => {
@@ -520,11 +523,30 @@ describe("the tick's legs", () => {
     expect((summary["apple-catalogue"] as { resolved: number }).resolved).toBe(9);
     expect((summary.discogs as { resolved: number }).resolved).toBe(1);
     expect(summary.errors).toBe(1);
-    // Known pre-existing behaviour: Beatport's catch does not flip `ok`, so the process
-    // still exits zero. The new canonical counter makes the run failure visible without
-    // changing that behaviour in this observability-only slice.
-    expect(summary.ok).toBe(true);
-    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(0);
+    expect(summary.ok).toBe(false);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
+  });
+
+  test("a Beatport partial response preserves its counts and makes the tick fail", async () => {
+    writeFileSync(beatportModeFile, "partial");
+
+    const summary = await runBackfillSweep();
+
+    expect(summary.beatport).toEqual({
+      catalogueFailed: 9,
+      catalogueResolved: 7,
+      catalogueUnresolved: 8,
+      configured: true,
+      error: null,
+      failed: 5,
+      resolved: 3,
+      skipped: 6,
+      unresolved: 4,
+    });
+    expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
+    expect(summary.failed).toBe(51);
+    expect(summary.ok).toBe(false);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
   });
 
   test("the Discogs-facts leg runs AFTER the Discogs one and asks for its own small batch", async () => {
@@ -607,6 +629,7 @@ describe("the tick's legs", () => {
       unresolved: 24,
       unvouchable: 25,
     });
+    expect(summary.ok).toBe(true);
   });
 
   test("a throttled Deezer leg reads as THROTTLED, not as a silent zero", async () => {
@@ -639,5 +662,27 @@ describe("the tick's legs", () => {
     expect((summary.beatport as { resolved: number }).resolved).toBe(13);
     expect((summary["discogs-facts"] as { resolved: number }).resolved).toBe(17);
     expect(summary.errors).toBe(1);
+    expect(summary.ok).toBe(false);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
+  });
+
+  test("a Deezer partial response preserves its counts and makes the tick fail", async () => {
+    writeFileSync(deezerModeFile, "partial");
+
+    const summary = await runBackfillSweep();
+
+    expect(summary.deezer).toEqual({
+      error: null,
+      failed: 5,
+      resolved: 2,
+      throttled: false,
+      unresolved: 3,
+      unvouchable: 4,
+    });
+    expect((summary.beatport as { resolved: number }).resolved).toBe(13);
+    expect((summary["discogs-facts"] as { resolved: number }).resolved).toBe(17);
+    expect(summary.failed).toBe(53);
+    expect(summary.ok).toBe(false);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
   });
 });
