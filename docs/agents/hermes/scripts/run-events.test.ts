@@ -1129,6 +1129,10 @@ type SonarFixture = {
   locked?: boolean;
   /** Point the asset base at a dead port. */
   unreachable?: boolean;
+  /** Exercise the predecessor's remote-query environment during an upgrade. */
+  runtimeContract?: "current" | "legacy";
+  /** Omit the current contract's durable state to exercise the first bootstrap bridge. */
+  stateInitialized?: boolean;
 };
 
 const SHA_A = "a".repeat(40);
@@ -1145,7 +1149,13 @@ async function runSonar(
   fixture: SonarFixture,
   base: string | undefined,
   args: string[] = [],
-): Promise<{ code: number; stdout: string; summary: Summary }> {
+): Promise<{
+  assetRequests: string[];
+  code: number;
+  stderr: string;
+  stdout: string;
+  summary: Summary;
+}> {
   const root = mkdtempSync(join(tmpdir(), "fluncle-sonar-freshen-"));
   temporaryDirectories.push(root);
   const bin = join(root, "bin");
@@ -1162,9 +1172,11 @@ async function runSonar(
   writeStub(bin, "systemctl", "exit 0");
 
   const digest = new Bun.CryptoHasher("sha256").update(SONAR_STUB).digest("hex");
+  const assetRequests: string[] = [];
   const server = Bun.serve({
     fetch(request) {
       const { pathname } = new URL(request.url);
+      assetRequests.push(pathname);
 
       if (pathname.endsWith("/sonar.commit")) {
         return fixture.commit === undefined
@@ -1188,17 +1200,28 @@ async function runSonar(
   const live = Bun.serve({ fetch: () => new Response('{"ok":true}'), port: 0 });
   const serviceEnv = join(root, "sonar.env");
 
-  writeFileSync(
-    serviceEnv,
-    [
-      "TURSO_DATABASE_URL=libsql://stub",
-      "TURSO_AUTH_TOKEN=stub",
-      `SONAR_STATE_PATH=${join(root, "sonar-state.db")}`,
-      "SONAR_SECRET=stub",
-      `SONAR_PORT=${live.port}`,
-    ].join("\n"),
-    "utf8",
-  );
+  const statePath = join(root, "sonar-state.db");
+  const replicaPath = join(root, "sonar-replica.db");
+  const legacyContract = fixture.runtimeContract === "legacy";
+  const serviceEnvironment = [
+    "TURSO_DATABASE_URL=libsql://stub",
+    "TURSO_AUTH_TOKEN=stub",
+    "SONAR_SECRET=stub",
+    `SONAR_PORT=${live.port}`,
+    ...(legacyContract
+      ? ["SONAR_REFRESH_SECS=300"]
+      : [
+          "FLUNCLE_API_BASE_URL=http://127.0.0.1:1",
+          "FLUNCLE_API_TOKEN=stub",
+          "SONAR_CONSUMER_ID=sonar.test",
+          `SONAR_REPLICA_PATH=${replicaPath}`,
+          `SONAR_STATE_PATH=${statePath}`,
+        ]),
+  ];
+  writeFileSync(serviceEnv, serviceEnvironment.join("\n"), "utf8");
+  if (!legacyContract && fixture.stateInitialized !== false) {
+    writeFileSync(statePath, "fixture", "utf8");
+  }
 
   if (fixture.deployed) {
     mkdirSync(join(root, "state"), { recursive: true });
@@ -1229,7 +1252,13 @@ async function runSonar(
       args,
     );
 
-    return { code: run.code, stdout: run.stdout, summary: lastJsonLine(run.stdout) };
+    return {
+      assetRequests,
+      code: run.code,
+      stderr: run.stderr,
+      stdout: run.stdout,
+      summary: lastJsonLine(run.stdout),
+    };
   } finally {
     await server.stop(true);
     await live.stop(true);
@@ -1320,6 +1349,57 @@ describe("sonar-freshen reports a run", () => {
     expect(posted.unit).toBe("fluncle-sonar-freshen");
     expect(posted.exit_code).toBe(0);
   }, 60_000);
+
+  test("a legacy runtime contract refuses before downloading or touching the live service", async () => {
+    const { assetRequests, code, stderr, summary } = await runSonar(
+      { commit: SHA_B, deployed: SHA_A, runtimeContract: "legacy" },
+      undefined,
+    );
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("legacy remote-query runtime contract");
+    expect(assetRequests).toEqual(["/download/sonar.commit"]);
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
+    expect(derivedOk(code, summary.errors)).toBe(false);
+  });
+
+  test("a complete current contract may bootstrap once through the guarded swap", async () => {
+    const { assetRequests, code, stderr, summary } = await runSonar(
+      { commit: SHA_B, deployed: SHA_A, stateInitialized: false },
+      undefined,
+    );
+
+    expect(code).toBe(0);
+    expect(stderr).toContain("deferring the one-time bootstrap to the guarded service swap");
+    expect(stderr).toContain("post-swap smoke passed");
+    expect(assetRequests).toEqual([
+      "/download/sonar.commit",
+      "/download/sonar",
+      "/download/sonar.sha256",
+    ]);
+    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
+    expect(derivedOk(code, summary.errors)).toBe(true);
+  });
+
+  test("a dry run never bootstraps missing durable state", async () => {
+    const { assetRequests, code, stderr, summary } = await runSonar(
+      { commit: SHA_B, deployed: SHA_A, stateInitialized: false },
+      undefined,
+      ["--dry-run"],
+    );
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("dry-run cannot perform the first guarded bootstrap");
+    expect(assetRequests).toEqual(["/download/sonar.commit"]);
+    expect(summary).toMatchObject({
+      checked: 1,
+      errors: 1,
+      gateState: "dry-run",
+      produced: 0,
+      queueDepth: 1,
+    });
+    expect(derivedOk(code, summary.errors)).toBe(false);
+  });
 
   // The ledger's alarm conjunction on this unit: a build is published, the box did not take
   // it. `--dry-run` produces the same counters on purpose, and carries a `gateState` so an

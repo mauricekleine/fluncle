@@ -366,6 +366,51 @@ env_value() {
     | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
 }
 
+# The local-replica runtime is an atomic contract: validate-only needs the durable state,
+# while the post-swap service needs every replica + artifact-consumer input below. An older
+# remote-query deployment has only TURSO_* + SONAR_SECRET, so letting it reach the download
+# and pre-smoke would spend bandwidth before failing; letting a partially migrated contract
+# reach the swap would be worse. Detect both states before the candidate binary is downloaded.
+# Variable NAMES are public configuration; values are read only into the candidate's
+# environment and are never logged.
+require_local_runtime_contract() {
+  local key value missing=()
+  local required=(
+    TURSO_DATABASE_URL
+    TURSO_AUTH_TOKEN
+    FLUNCLE_API_BASE_URL
+    FLUNCLE_API_TOKEN
+    SONAR_CONSUMER_ID
+    SONAR_REPLICA_PATH
+    SONAR_STATE_PATH
+    SONAR_SECRET
+  )
+
+  [ -r "$SERVICE_ENV" ] || runtime_contract_fail "the live service EnvironmentFile is unreadable"
+
+  for key in "${required[@]}"; do
+    value="$(env_value "$key")"
+    [ -n "$value" ] || missing+=("$key")
+  done
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    if [ -n "$(env_value SONAR_REFRESH_SECS)" ] && [ -z "$(env_value SONAR_STATE_PATH)" ]; then
+      runtime_contract_fail "the live service still has the legacy remote-query runtime contract; provision the current local-replica environment and durable state before retrying"
+    fi
+    runtime_contract_fail "the live service local-replica contract is incomplete (missing: ${missing[*]})"
+  fi
+
+  SMOKE_STATE_PATH="$(env_value SONAR_STATE_PATH)"
+  SMOKE_SECRET="$(env_value SONAR_SECRET)"
+  if [ -r "$SMOKE_STATE_PATH" ]; then
+    SMOKE_STATE_READY=1
+  else
+    SMOKE_STATE_READY=0
+    [ "$MODE" != "--dry-run" ] \
+      || runtime_contract_fail "the configured durable state is not initialized; dry-run cannot perform the first guarded bootstrap"
+  fi
+}
+
 # ── 1. what does the rolling release say was built? ───────────────────────────
 # `sonar.commit` is the full commit SHA the published binary was built from — the
 # artifact's identity, and the only thing that decides whether there is work to do.
@@ -436,6 +481,20 @@ fi
 SF_QUEUE=1
 log "${OLD_SHA:-<none>} -> $NEW_SHA | $reason"
 
+runtime_contract_fail() {
+  SF_ERRORS=$((SF_ERRORS + 1))
+  alert "🛰️ sonar-freshen: RUNTIME CONTRACT NOT READY for ${NEW_SHA:0:12} on rave-01 — box untouched, staying on the current sonar binary"
+  post_health degraded "a sonar update is waiting for its local runtime contract; the live engine is untouched"
+  die "$1"
+}
+
+# A release may be newer while the host still carries the predecessor's remote-query
+# configuration. Refuse before fetching/executing the candidate; this is a provisioning
+# boundary, not something a binary updater may silently invent or mutate. A COMPLETE current
+# contract with no state file is different: the guarded swap below may perform Sonar's own
+# first bootstrap under systemd and roll back the binary if that bootstrap does not go healthy.
+require_local_runtime_contract
+
 # ── 3. download + VERIFY (the trust boundary) ─────────────────────────────────
 # The box did not build this binary, so the checksum IS the trust boundary that
 # replaces "we compiled it ourselves". A mismatch means the artifact is corrupt or
@@ -489,6 +548,15 @@ log "checksum verified for ${NEW_SHA:0:12}"
 # MEMORY: for the duration of this smoke the box holds TWO full copies of the index —
 # the live one and the smoke's. Headroom must exceed 2x the index (see the README).
 # Validate-only starts no consumer loop; the process is reaped when the smoke resolves.
+#
+# ONE-TIME COMPATIBILITY BRIDGE: the predecessor remote-query runtime has no durable state to
+# validate. Once the operator has installed the current unit + COMPLETE current environment,
+# a real deploy (never --dry-run) may skip this isolated validation exactly while the configured
+# state file is absent. The ordinary guarded swap then starts the candidate as the service user;
+# Sonar performs its own bounded local bootstrap, and the existing post-smoke/rollback rail owns
+# the verdict. This avoids the impossible demand that the old binary create the new binary's
+# state, without teaching the updater to invent paths, copy credentials, or mutate the protocol
+# itself. Every later deploy sees the state and returns to validate-only before swap.
 presmoke_fail() {
   SF_ERRORS=$((SF_ERRORS + 1))
   alert "🛰️ sonar-freshen: PRE-SMOKE FAILED ($1) for ${NEW_SHA:0:12} on rave-01 — box untouched, staying on the current sonar binary"
@@ -496,48 +564,47 @@ presmoke_fail() {
   die "pre-smoke failed: $1"
 }
 
-SMOKE_STATE_PATH="$(env_value SONAR_STATE_PATH)"
-SMOKE_SECRET="$(env_value SONAR_SECRET)"
-[ -n "$SMOKE_STATE_PATH" ] && [ -n "$SMOKE_SECRET" ] \
-  || presmoke_fail "could not read the local-state contract from the live service env"
+if [ "$SMOKE_STATE_READY" = "1" ]; then
+  # Pick a free high loopback port (bash /dev/tcp probe; no external tool needed).
+  port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+  SMOKE_PORT=""
+  for p in 42480 42481 42482 42483 42484; do
+    if port_free "$p"; then SMOKE_PORT="$p"; break; fi
+  done
+  [ -n "$SMOKE_PORT" ] || presmoke_fail "no free loopback port for the isolated boot"
 
-# Pick a free high loopback port (bash /dev/tcp probe; no external tool needed).
-port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-SMOKE_PORT=""
-for p in 42480 42481 42482 42483 42484; do
-  if port_free "$p"; then SMOKE_PORT="$p"; break; fi
-done
-[ -n "$SMOKE_PORT" ] || presmoke_fail "no free loopback port for the isolated boot"
+  SMOKE_LOG="$WORK_DIR/boot.log"
+  SONAR_STATE_PATH="$SMOKE_STATE_PATH" \
+    SONAR_VALIDATE_ONLY=true \
+    SONAR_SECRET="$SMOKE_SECRET" SONAR_BIND=127.0.0.1 SONAR_PORT="$SMOKE_PORT" \
+    SONAR_TLS_CERT='' SONAR_TLS_KEY='' \
+    "$NEW_BIN" >"$SMOKE_LOG" 2>&1 &
+  SMOKE_PID=$!
+  # Always reap the throwaway server — it holds a second full copy of the index in RAM.
+  cleanup_smoke() { kill "$SMOKE_PID" >/dev/null 2>&1 || true; wait "$SMOKE_PID" 2>/dev/null || true; }
+  _cleanup() { cleanup_smoke; rm -rf "$WORK_DIR"; }
 
-SMOKE_LOG="$WORK_DIR/boot.log"
-SONAR_STATE_PATH="$SMOKE_STATE_PATH" \
-  SONAR_VALIDATE_ONLY=true \
-  SONAR_SECRET="$SMOKE_SECRET" SONAR_BIND=127.0.0.1 SONAR_PORT="$SMOKE_PORT" \
-  SONAR_TLS_CERT='' SONAR_TLS_KEY='' \
-  "$NEW_BIN" >"$SMOKE_LOG" 2>&1 &
-SMOKE_PID=$!
-# Always reap the throwaway server — it holds a second full copy of the index in RAM.
-cleanup_smoke() { kill "$SMOKE_PID" >/dev/null 2>&1 || true; wait "$SMOKE_PID" 2>/dev/null || true; }
-_cleanup() { cleanup_smoke; rm -rf "$WORK_DIR"; }
+  # sonar's /health serialises `"ok":true` with no spaces (serde), so one grep is the
+  # whole assertion: the process is up AND its indexes are built AND it answers HTTP.
+  smoke_healthy() { curl -fsS -m 10 "http://127.0.0.1:$SMOKE_PORT/health" 2>/dev/null | grep -q '"ok":true'; }
 
-# sonar's /health serialises `"ok":true` with no spaces (serde), so one grep is the
-# whole assertion: the process is up AND its indexes are built AND it answers HTTP.
-smoke_healthy() { curl -fsS -m 10 "http://127.0.0.1:$SMOKE_PORT/health" 2>/dev/null | grep -q '"ok":true'; }
-
-smoked=0
-for _ in $(seq 1 "$BOOT_TIMEOUT_SECS"); do
-  if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
-    # Include only the tail of the boot log: it is sonar's own tracing output (config
-    # summary + counts), never a secret value.
-    presmoke_fail "the new binary exited during boot ($(tr '\n' ' ' <"$SMOKE_LOG" | tail -c 200))"
-  fi
-  if smoke_healthy; then smoked=1; break; fi
-  sleep 1
-done
-[ "$smoked" = "1" ] || presmoke_fail "the new binary did not serve a healthy /health within ${BOOT_TIMEOUT_SECS}s"
-cleanup_smoke
-_cleanup() { rm -rf "$WORK_DIR"; }
-log "pre-smoke passed"
+  smoked=0
+  for _ in $(seq 1 "$BOOT_TIMEOUT_SECS"); do
+    if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
+      # Include only the tail of the boot log: it is sonar's own tracing output (config
+      # summary + counts), never a secret value.
+      presmoke_fail "the new binary exited during boot ($(tr '\n' ' ' <"$SMOKE_LOG" | tail -c 200))"
+    fi
+    if smoke_healthy; then smoked=1; break; fi
+    sleep 1
+  done
+  [ "$smoked" = "1" ] || presmoke_fail "the new binary did not serve a healthy /health within ${BOOT_TIMEOUT_SECS}s"
+  cleanup_smoke
+  _cleanup() { rm -rf "$WORK_DIR"; }
+  log "pre-smoke passed"
+else
+  log "durable state is not initialized; deferring the one-time bootstrap to the guarded service swap"
+fi
 
 if [ "$MODE" = "--dry-run" ]; then
   log "dry-run: ${NEW_SHA:0:12} downloaded, verified and pre-smoked; leaving the live service untouched"
