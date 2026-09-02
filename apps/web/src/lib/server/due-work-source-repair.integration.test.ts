@@ -6,12 +6,14 @@ import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   DUE_WORK_SOURCE_REPAIR_KIND,
   listReadyDueWork,
+  markDueWorkRepair,
   markDueWorkSourceRepairsStatement,
 } from "./due-work";
 import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
 import { fanOutDueWorkSourceRepairs, repairDueWorkBeforeRead } from "./due-work-source-repair";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { createIntegrationDb, seedAlbum, seedCatalogueTrack } from "./integration-db";
+import { advanceProjectionFor } from "./projection-operations";
 
 let db: Client;
 
@@ -816,5 +818,106 @@ describe("transactionally coupled due-work source repair", () => {
     );
     await expect(repairDueWorkBeforeRead(db, "artist-edges")).resolves.toBeUndefined();
     expect((await listReadyDueWork(db, "artist-edges")).items).toHaveLength(6);
+  });
+
+  it("keeps a serial maintenance pass open across physical kinds and a concurrent marker", async () => {
+    await seedCatalogueTrack(db, { trackId: "maintenance-edges" });
+    await seedCatalogueTrack(db, { trackId: "maintenance-embed" });
+    await db.execute({
+      args: ["maintenance-embed/audio.webm", "maintenance-embed"],
+      sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
+    });
+    await markDueWorkRepair(db, {
+      sourceVersion: "edges-v1",
+      subjectId: "maintenance-edges",
+      subjectType: "track",
+      workKind: "artist-edges",
+    });
+
+    let addedConcurrentMarker = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const results = await db.batch(statements, mode);
+        if (!addedConcurrentMarker) {
+          addedConcurrentMarker = true;
+          await markDueWorkRepair(db, {
+            sourceVersion: "embed-v1",
+            subjectId: "maintenance-embed",
+            subjectType: "track",
+            workKind: "embed-catalogue",
+          });
+        }
+        return results;
+      },
+      execute: db.execute.bind(db),
+    };
+
+    const first = await advanceProjectionFor(racingClient, {
+      action: "repair",
+      includeStatus: false,
+      limit: 500,
+      target: "track_due_work",
+    });
+    expect(first).toMatchObject({ complete: false, processed: 1, status: undefined });
+    expect(addedConcurrentMarker).toBe(true);
+
+    const second = await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 500,
+      target: "track_due_work",
+    });
+    expect(second).toMatchObject({ complete: true, processed: 1, status: undefined });
+    expect(
+      (
+        await db.execute(`select work_kind from due_work where state = 'repair'
+          order by work_kind`)
+      ).rows,
+    ).toEqual([]);
+    expect((await listReadyDueWork(db, "artist-edges")).items).toHaveLength(1);
+    expect((await listReadyDueWork(db, "embed-catalogue")).items).toHaveLength(1);
+  });
+
+  it("observes a source marker produced after the pass begins with no initial debt", async () => {
+    await seedCatalogueTrack(db, { trackId: "maintenance-late-source" });
+    let addedSourceMarker = false;
+    const racingClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (
+          !addedSourceMarker &&
+          typeof statement !== "string" &&
+          sql.includes("select 1 from due_work where work_kind = ?")
+        ) {
+          addedSourceMarker = true;
+          await db.execute(
+            markDueWorkSourceRepairsStatement(
+              [{ subjectId: "maintenance-late-source", subjectType: "track" }],
+              { markerVersion: "late-source-v1", producer: "capture-verification" },
+            ),
+          );
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
+
+    const first = await advanceProjectionFor(racingClient, {
+      action: "repair",
+      includeStatus: false,
+      limit: 500,
+      target: "track_due_work",
+    });
+    expect(first).toMatchObject({ complete: false, processed: 0, status: undefined });
+    expect(addedSourceMarker).toBe(true);
+
+    const second = await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 500,
+      target: "track_due_work",
+    });
+    expect(second).toMatchObject({ complete: true, processed: 1, status: undefined });
+    expect((await listReadyDueWork(db, "artist-edges")).items).toHaveLength(1);
   });
 });

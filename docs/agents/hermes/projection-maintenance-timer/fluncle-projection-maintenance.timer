@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-projection-maintenance timer — repair open public projections every 5m
+Description=fluncle-projection-maintenance timer — repair open runtime projections every 5m
 
 [Timer]
 RandomizedDelaySec=90

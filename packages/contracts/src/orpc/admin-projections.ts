@@ -90,7 +90,7 @@ export const getProjectionStatus = oc
   })
   .output(z.object({ ok: z.literal(true), status: ProjectionStatusSchema }));
 
-/** Run one bounded step; agent authority is handler-limited to public-family repair. */
+/** Run one bounded step; agent authority is handler-limited to runtime-family repair. */
 export const advanceProjection = oc
   .route({
     method: "POST",

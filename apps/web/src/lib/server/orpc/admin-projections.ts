@@ -1,5 +1,5 @@
 // Projection control plane. Admin reads return aggregate operational evidence only. Operators own
-// every control; the agent has one narrow exception for bounded repair of the two public families.
+// every control; the agent has one narrow exception for bounded repair of the four runtime families.
 // Writes are fixed-target steps and never accept SQL, table names, or database coordinates.
 
 import { getDb } from "../db";
@@ -11,6 +11,13 @@ import {
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { ApiError } from "../spotify";
 import { type Implementer, toFault } from "./_shared";
+
+const AGENT_REPAIR_TARGETS = new Set([
+  "artist_qualification",
+  "crawl_due_work",
+  "public_aggregates",
+  "track_due_work",
+]);
 
 export function adminProjectionHandlers(os: Implementer) {
   const getProjectionStatusHandler = os.get_projection_status.use(adminAuth).handler(async () => {
@@ -27,8 +34,7 @@ export function adminProjectionHandlers(os: Implementer) {
       try {
         if (
           context.role !== "operator" &&
-          (input.action !== "repair" ||
-            (input.target !== "public_aggregates" && input.target !== "artist_qualification"))
+          (input.action !== "repair" || !AGENT_REPAIR_TARGETS.has(input.target))
         ) {
           throw new ApiError("forbidden", "This action requires the operator role", 403);
         }

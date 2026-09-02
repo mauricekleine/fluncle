@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-projection-maintenance — bounded public projection repair after cutover
+Description=fluncle-projection-maintenance — bounded runtime projection repair after cutover
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/projection-maintenance-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
@@ -9,9 +9,10 @@ OnFailure=fluncle-sweep-failure@%n.service
 Type=oneshot
 EnvironmentFile=-/etc/fluncle/database-admission.env
 ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-projection-maintenance -- bash /opt/hermes-scripts/projection-maintenance-sweep.sh
-# Admission may wait for 120s. The payload then has one status read and at most eight bounded
-# repair requests (four per family); the next timer firing resumes any honest incomplete result.
-TimeoutStartSec=610
+# Admission may wait for 120s. The payload has at most five serial CLI processes (one status and
+# one bounded advance per family), each with a 120s deadline. Ten seconds cover process overhead;
+# the next timer firing resumes every honest timeout or incomplete result from durable markers.
+TimeoutStartSec=730
 NoNewPrivileges=true
 ProtectControlGroups=true
 ProtectKernelTunables=true

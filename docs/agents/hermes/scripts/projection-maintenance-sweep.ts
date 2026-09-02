@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Keep the two public projection families converged after their shared cutover opens.
+// Keep the four runtime projection families converged after their cutovers open.
 // The Worker owns every mutation; this box process only reads bounded status and invokes the
 // fixed repair action with a fixed per-tick request budget. Rebuild, audit, and cutover remain
 // attended operator operations.
@@ -7,9 +7,14 @@
 import { spawnSync } from "node:child_process";
 
 const REPAIR_LIMIT = 500;
-const MAX_STEPS = 4;
+const DUE_WORK_MAX_STEPS = 20;
+const PUBLIC_MAX_STEPS = 4;
 
-export type FamilyName = "artist_qualification" | "public_aggregates";
+export type FamilyName =
+  | "artist_qualification"
+  | "crawl_due_work"
+  | "public_aggregates"
+  | "track_due_work";
 
 type BoundedCount = { count: number; truncated: boolean };
 type FamilyStatus = {
@@ -19,10 +24,16 @@ type FamilyStatus = {
 type ProjectionStatusResponse = {
   ok: true;
   status: {
-    cutovers: { publicProjections: boolean };
+    cutovers: {
+      crawlDueWork: boolean;
+      publicProjections: boolean;
+      trackDueWork: boolean;
+    };
     projections: {
       artistQualification: FamilyStatus;
+      crawlDueWork: FamilyStatus;
       publicAggregates: FamilyStatus & { anchorsReady: boolean };
+      trackDueWork: FamilyStatus;
     };
   };
 };
@@ -48,12 +59,14 @@ export type FamilySummary = {
 export type ProjectionMaintenanceSummary = {
   artistQualification: FamilySummary;
   checked: number | null;
+  crawlDueWork: FamilySummary;
   errors: number;
   gateState: "active" | "disabled" | null;
   ok: boolean;
   produced: number | null;
   publicAggregates: FamilySummary;
   reason: string | null;
+  trackDueWork: FamilySummary;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -93,18 +106,22 @@ function parseStatus(value: unknown): ProjectionStatusResponse {
   const projections = value["status"]["projections"];
   if (
     !isObject(cutovers) ||
+    typeof cutovers["crawlDueWork"] !== "boolean" ||
     typeof cutovers["publicProjections"] !== "boolean" ||
+    typeof cutovers["trackDueWork"] !== "boolean" ||
     !isObject(projections) ||
     !isFamilyStatus(projections["artistQualification"]) ||
+    !isFamilyStatus(projections["crawlDueWork"]) ||
     !isFamilyStatus(projections["publicAggregates"]) ||
-    typeof projections["publicAggregates"]["anchorsReady"] !== "boolean"
+    typeof projections["publicAggregates"]["anchorsReady"] !== "boolean" ||
+    !isFamilyStatus(projections["trackDueWork"])
   ) {
     throw new Error("projection status response is malformed");
   }
   return value as ProjectionStatusResponse;
 }
 
-function parseAdvance(value: unknown, target: FamilyName): AdvanceResponse {
+function parseAdvance(value: unknown, target: FamilyName, maxSteps: number): AdvanceResponse {
   if (
     !isObject(value) ||
     value["ok"] !== true ||
@@ -115,7 +132,7 @@ function parseAdvance(value: unknown, target: FamilyName): AdvanceResponse {
     !isNonnegativeInteger(value["scheduled"]) ||
     !isNonnegativeInteger(value["steps"]) ||
     value["steps"] < 1 ||
-    value["steps"] > MAX_STEPS
+    value["steps"] > maxSteps
   ) {
     throw new Error(`${target} repair response is malformed`);
   }
@@ -164,7 +181,11 @@ function needsRepair(family: FamilyStatus): boolean {
   return family.repairs.total.count > 0 || family.convergence.epochMatched !== true;
 }
 
-function advanceFamily(run: RunCommand, target: FamilyName): FamilySummary {
+function hasRepairDebt(family: FamilyStatus): boolean {
+  return family.repairs.total.count > 0;
+}
+
+function advanceFamily(run: RunCommand, target: FamilyName, maxSteps: number): FamilySummary {
   try {
     const response = parseAdvance(
       run([
@@ -178,9 +199,10 @@ function advanceFamily(run: RunCommand, target: FamilyName): FamilySummary {
         "--limit",
         String(REPAIR_LIMIT),
         "--max-steps",
-        String(MAX_STEPS),
+        String(maxSteps),
       ]),
       target,
+      maxSteps,
     );
     return {
       attempted: true,
@@ -202,19 +224,37 @@ function advanceFamily(run: RunCommand, target: FamilyName): FamilySummary {
   }
 }
 
-/** Run one status-gated tick. The two family failures are isolated deliberately. */
+function maintainFamily(
+  run: RunCommand,
+  target: FamilyName,
+  enabled: boolean,
+  repairNeeded: boolean,
+  maxSteps: number,
+): FamilySummary {
+  if (!enabled) {
+    return emptyFamily();
+  }
+  if (!repairNeeded) {
+    return { ...emptyFamily(), complete: true };
+  }
+  return advanceFamily(run, target, maxSteps);
+}
+
+/** Run one status-gated tick. The four family failures are isolated deliberately. */
 export function runProjectionMaintenanceTick(
   run: RunCommand = fluncleJson,
 ): ProjectionMaintenanceSummary {
   const summary: ProjectionMaintenanceSummary = {
     artistQualification: emptyFamily(),
     checked: null,
+    crawlDueWork: emptyFamily(),
     errors: 0,
     gateState: null,
     ok: true,
     produced: null,
     publicAggregates: emptyFamily(),
     reason: null,
+    trackDueWork: emptyFamily(),
   };
   let status: ProjectionStatusResponse;
   try {
@@ -226,37 +266,64 @@ export function runProjectionMaintenanceTick(
     return summary;
   }
 
-  if (!status.status.cutovers.publicProjections) {
+  const cutovers = status.status.cutovers;
+  const activeFamilies =
+    Number(cutovers.trackDueWork) +
+    Number(cutovers.crawlDueWork) +
+    (cutovers.publicProjections ? 2 : 0);
+  if (activeFamilies === 0) {
     summary.checked = 0;
     summary.gateState = "disabled";
     summary.produced = 0;
-    summary.reason = "public_projection_cutover_disabled";
+    summary.reason = "projection_cutovers_disabled";
     return summary;
   }
 
-  summary.checked = 2;
+  summary.checked = activeFamilies;
   summary.gateState = "active";
+  summary.trackDueWork = maintainFamily(
+    run,
+    "track_due_work",
+    cutovers.trackDueWork,
+    hasRepairDebt(status.status.projections.trackDueWork),
+    DUE_WORK_MAX_STEPS,
+  );
+  summary.crawlDueWork = maintainFamily(
+    run,
+    "crawl_due_work",
+    cutovers.crawlDueWork,
+    hasRepairDebt(status.status.projections.crawlDueWork),
+    DUE_WORK_MAX_STEPS,
+  );
   const aggregates = status.status.projections.publicAggregates;
-  if (needsRepair(aggregates) || !aggregates.anchorsReady) {
-    summary.publicAggregates = advanceFamily(run, "public_aggregates");
-  } else {
-    summary.publicAggregates.complete = true;
-  }
+  summary.publicAggregates = maintainFamily(
+    run,
+    "public_aggregates",
+    cutovers.publicProjections,
+    needsRepair(aggregates) || !aggregates.anchorsReady,
+    PUBLIC_MAX_STEPS,
+  );
 
   const artists = status.status.projections.artistQualification;
-  if (needsRepair(artists)) {
-    summary.artistQualification = advanceFamily(run, "artist_qualification");
-  } else {
-    summary.artistQualification.complete = true;
-  }
+  summary.artistQualification = maintainFamily(
+    run,
+    "artist_qualification",
+    cutovers.publicProjections,
+    needsRepair(artists),
+    PUBLIC_MAX_STEPS,
+  );
 
-  summary.errors = [summary.publicAggregates, summary.artistQualification].filter(
-    (family) => family.error !== null,
-  ).length;
+  const families = [
+    summary.trackDueWork,
+    summary.crawlDueWork,
+    summary.publicAggregates,
+    summary.artistQualification,
+  ];
+  summary.errors = families.filter((family) => family.error !== null).length;
   summary.ok = summary.errors === 0;
   summary.produced =
     summary.errors === 0
-      ? (summary.publicAggregates.processed ?? 0) + (summary.artistQualification.processed ?? 0)
+      ? families.reduce((total, family) => total + (family.processed ?? 0), 0)
       : null;
   return summary;
 }

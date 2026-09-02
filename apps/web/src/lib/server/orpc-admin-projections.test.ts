@@ -68,34 +68,34 @@ describe("projection agent authorization", () => {
     expect(getProjectionStatusFor).toHaveBeenCalledOnce();
   });
 
-  it.each(["public_aggregates", "artist_qualification"] as const)(
-    "lets the agent repair only %s",
-    async (target) => {
-      const { handleOrpc } = await import("./orpc");
-      const response = await handleOrpc(
-        req(`/admin/projections/${target}/advance`, "POST", AGENT_TOKEN, {
-          action: "repair",
-          limit: 500,
-        }),
-      );
+  it.each([
+    "public_aggregates",
+    "artist_qualification",
+    "track_due_work",
+    "crawl_due_work",
+  ] as const)("lets the agent repair only %s", async (target) => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/projections/${target}/advance`, "POST", AGENT_TOKEN, {
+        action: "repair",
+        limit: 500,
+      }),
+    );
 
-      expect(response?.status).toBe(200);
-      expect(advanceProjectionFor).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ action: "repair", limit: 500, target }),
-      );
-    },
-  );
+    expect(response?.status).toBe(200);
+    expect(advanceProjectionFor).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "repair", limit: 500, target }),
+    );
+  });
 
   it.each([
     ["public_aggregates", "rebuild"],
     ["public_aggregates", "audit"],
     ["artist_qualification", "rebuild"],
     ["artist_qualification", "audit"],
-    ["track_due_work", "repair"],
     ["track_due_work", "rebuild"],
     ["track_due_work", "audit"],
-    ["crawl_due_work", "repair"],
     ["crawl_due_work", "rebuild"],
     ["crawl_due_work", "audit"],
   ] as const)("403s agent %s/%s before database work", async (target, action) => {
@@ -110,6 +110,22 @@ describe("projection agent authorization", () => {
     expect(response?.status).toBe(403);
     expect(advanceProjectionFor).not.toHaveBeenCalled();
   });
+
+  it.each(["track_due_work", "crawl_due_work"] as const)(
+    "rejects an unbounded agent repair for %s before database work",
+    async (target) => {
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        req(`/admin/projections/${target}/advance`, "POST", AGENT_TOKEN, {
+          action: "repair",
+          limit: 501,
+        }),
+      );
+
+      expect(response?.status).toBe(400);
+      expect(advanceProjectionFor).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["crawl_due_work", "public_projections", "track_due_work"] as const)(
     "keeps agent cutover mutation forbidden for %s",

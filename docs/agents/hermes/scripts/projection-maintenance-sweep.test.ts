@@ -19,24 +19,42 @@ const family = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const status = (open: boolean, aggregate = family(), artists = family()) => ({
+const status = (
+  cutovers: {
+    crawlDueWork?: boolean;
+    publicProjections?: boolean;
+    trackDueWork?: boolean;
+  },
+  projectionOverrides: {
+    aggregate?: ReturnType<typeof family>;
+    artists?: ReturnType<typeof family>;
+    crawl?: ReturnType<typeof family>;
+    track?: ReturnType<typeof family>;
+  } = {},
+) => ({
   ok: true,
   status: {
-    cutovers: { publicProjections: open },
+    cutovers: {
+      crawlDueWork: cutovers.crawlDueWork ?? false,
+      publicProjections: cutovers.publicProjections ?? false,
+      trackDueWork: cutovers.trackDueWork ?? false,
+    },
     projections: {
-      artistQualification: artists,
-      publicAggregates: { anchorsReady: true, ...aggregate },
+      artistQualification: projectionOverrides.artists ?? family(),
+      crawlDueWork: projectionOverrides.crawl ?? family(),
+      publicAggregates: { anchorsReady: true, ...(projectionOverrides.aggregate ?? family()) },
+      trackDueWork: projectionOverrides.track ?? family(),
     },
   },
 });
 
-const advance = (target: FamilyName, complete = true, processed = 1) => ({
+const advance = (target: FamilyName, complete = true, processed = 1, steps = 1) => ({
   action: "repair",
   complete,
   ok: true,
   processed,
   scheduled: 0,
-  steps: complete ? 1 : 4,
+  steps,
   target,
 });
 
@@ -45,7 +63,7 @@ describe("projection maintenance status gate", () => {
     const calls: string[][] = [];
     const summary = runProjectionMaintenanceTick((args) => {
       calls.push(args);
-      return status(false);
+      return status({});
     });
 
     expect(calls).toEqual([["admin", "projections", "get"]]);
@@ -55,26 +73,28 @@ describe("projection maintenance status gate", () => {
       gateState: "disabled",
       ok: true,
       produced: 0,
-      reason: "public_projection_cutover_disabled",
+      reason: "projection_cutovers_disabled",
     });
   });
 
-  test("an open idle cutover makes no mutation call", () => {
+  test("open idle cutovers prove zero debt without a mutation call", () => {
     const calls: string[][] = [];
     const summary = runProjectionMaintenanceTick((args) => {
       calls.push(args);
-      return status(true);
+      return status({ crawlDueWork: true, publicProjections: true, trackDueWork: true });
     });
 
     expect(calls).toEqual([["admin", "projections", "get"]]);
-    expect(summary).toMatchObject({ checked: 2, errors: 0, gateState: "active", produced: 0 });
+    expect(summary).toMatchObject({ checked: 4, errors: 0, gateState: "active", produced: 0 });
+    expect(summary.trackDueWork).toMatchObject({ attempted: false, complete: true });
+    expect(summary.crawlDueWork).toMatchObject({ attempted: false, complete: true });
     expect(summary.publicAggregates).toMatchObject({ attempted: false, complete: true });
     expect(summary.artistQualification).toMatchObject({ attempted: false, complete: true });
   });
 });
 
 describe("projection maintenance bounded family repair", () => {
-  test("runs both exact bounded repair commands in one tick", () => {
+  test("runs all exact bounded repair commands serially in one tick", () => {
     const calls: string[][] = [];
     const debt = family({
       repairs: {
@@ -86,14 +106,24 @@ describe("projection maintenance bounded family repair", () => {
     const summary = runProjectionMaintenanceTick((args) => {
       calls.push(args);
       if (args[2] === "get") {
-        return status(true, debt, debt);
+        return status(
+          { crawlDueWork: true, publicProjections: true, trackDueWork: true },
+          { aggregate: debt, artists: debt, crawl: debt, track: debt },
+        );
       }
       const target = args[args.indexOf("--target") + 1] as FamilyName;
-      return advance(target, false, target === "public_aggregates" ? 9 : 4);
+      return advance(target, false, target === "public_aggregates" ? 9 : 4, 4);
     });
 
     expect(calls.slice(1)).toEqual(
-      (["public_aggregates", "artist_qualification"] as const).map((target) => [
+      (
+        [
+          ["track_due_work", "20"],
+          ["crawl_due_work", "20"],
+          ["public_aggregates", "4"],
+          ["artist_qualification", "4"],
+        ] as const
+      ).map(([target, maxSteps]) => [
         "admin",
         "projections",
         "advance",
@@ -104,10 +134,12 @@ describe("projection maintenance bounded family repair", () => {
         "--limit",
         "500",
         "--max-steps",
-        "4",
+        maxSteps,
       ]),
     );
-    expect(summary).toMatchObject({ checked: 2, errors: 0, ok: true, produced: 13 });
+    expect(summary).toMatchObject({ checked: 4, errors: 0, ok: true, produced: 21 });
+    expect(summary.trackDueWork).toMatchObject({ complete: false, steps: 4 });
+    expect(summary.crawlDueWork).toMatchObject({ complete: false, steps: 4 });
     expect(summary.publicAggregates).toMatchObject({ complete: false, steps: 4 });
     expect(summary.artistQualification).toMatchObject({ complete: false, steps: 4 });
     expect(summary).not.toHaveProperty("queue_depth");
@@ -141,7 +173,7 @@ describe("projection maintenance bounded family repair", () => {
     runProjectionMaintenanceTick((args) => {
       calls.push(args);
       if (args[2] === "get") {
-        const response = status(true);
+        const response = status({ publicProjections: true });
         response.status.projections.publicAggregates.anchorsReady = false;
         return response;
       }
@@ -152,31 +184,81 @@ describe("projection maintenance bounded family repair", () => {
     expect(calls[1]).toContain("public_aggregates");
   });
 
-  test("one family failure does not starve the other", () => {
+  test("one family failure does not starve later families", () => {
     const calls: string[][] = [];
     const behind = family({ convergence: { epochMatched: false } });
+    const directDebt = family({
+      repairs: {
+        direct: { count: 2, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 2, truncated: false },
+      },
+    });
     const summary = runProjectionMaintenanceTick((args) => {
       calls.push(args);
       if (args[2] === "get") {
-        return status(true, behind, behind);
+        return status(
+          { crawlDueWork: true, publicProjections: true, trackDueWork: true },
+          { aggregate: behind, artists: behind, crawl: directDebt, track: directDebt },
+        );
       }
       const target = args[args.indexOf("--target") + 1];
-      if (target === "public_aggregates") {
-        throw new Error("aggregate fault");
+      if (target === "track_due_work") {
+        throw new Error("track fault");
       }
-      return advance("artist_qualification", true, 3);
+      return advance(target as FamilyName, true, target === "artist_qualification" ? 3 : 1);
     });
 
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(5);
     expect(summary).toMatchObject({ errors: 1, ok: false, produced: null });
-    expect(summary.publicAggregates).toMatchObject({
+    expect(summary.trackDueWork).toMatchObject({
       complete: false,
-      error: "aggregate fault",
+      error: "track fault",
       processed: null,
       scheduled: null,
       steps: null,
     });
+    expect(summary.crawlDueWork).toMatchObject({ complete: true, processed: 1 });
+    expect(summary.publicAggregates).toMatchObject({ complete: true, processed: 1 });
     expect(summary.artistQualification).toMatchObject({ complete: true, processed: 3 });
+  });
+
+  test("spends one bounded budget per tick and resumes durable new debt on the next tick", () => {
+    const debt = family({
+      repairs: {
+        direct: { count: 0, truncated: false },
+        fanout: { count: 6, truncated: false },
+        total: { count: 6, truncated: false },
+      },
+    });
+    const calls: string[][] = [];
+    let tick = 0;
+    const run = (args: string[]) => {
+      calls.push(args);
+      if (args[2] === "get") {
+        tick += 1;
+        return status({ trackDueWork: true }, { track: debt });
+      }
+      return advance("track_due_work", tick > 1, tick > 1 ? 1 : 100, tick > 1 ? 1 : 20);
+    };
+
+    const incomplete = runProjectionMaintenanceTick(run);
+    expect(incomplete.trackDueWork).toMatchObject({
+      attempted: true,
+      complete: false,
+      processed: 100,
+      steps: 20,
+    });
+    expect(calls).toHaveLength(2);
+
+    const resumed = runProjectionMaintenanceTick(run);
+    expect(resumed.trackDueWork).toMatchObject({
+      attempted: true,
+      complete: true,
+      processed: 1,
+      steps: 1,
+    });
+    expect(calls).toHaveLength(4);
   });
 
   test("malformed status fails before mutation and malformed advances fail their family", () => {
@@ -190,7 +272,7 @@ describe("projection maintenance bounded family repair", () => {
 
     const behind = family({ convergence: { epochMatched: false } });
     const badAdvance = runProjectionMaintenanceTick((args) =>
-      args[2] === "get" ? status(true, behind) : { ok: true },
+      args[2] === "get" ? status({ publicProjections: true }, { aggregate: behind }) : { ok: true },
     );
     expect(badAdvance).toMatchObject({ errors: 1, ok: false });
     expect(badAdvance.publicAggregates.error).toMatch(/malformed/);

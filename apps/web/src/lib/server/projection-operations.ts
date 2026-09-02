@@ -609,6 +609,13 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
 }
 
 async function advanceTrackRepair(client: ProjectionClient, limit: number) {
+  const hasRepairDebt = async (): Promise<boolean> => {
+    const result = await client.execute(
+      `select 1 from due_work indexed by due_work_repair_idx
+        where state = 'repair' limit 1`,
+    );
+    return result.rows.length > 0;
+  };
   const sourceCount = await client.execute(
     `select 1 from due_work
       where work_kind = 'source-repair' and state = 'repair' limit 1`,
@@ -616,7 +623,7 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
   if (sourceCount.rows.length > 0) {
     const result = await fanOutDueWorkSourceRepairs(client, { limit });
     return {
-      complete: !result.hasMore && result.expanded === 0,
+      complete: !(await hasRepairDebt()),
       processed: result.scanned,
       scheduled: result.expanded,
     };
@@ -630,9 +637,9 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
       continue;
     }
     const result = await repairDueWorkChunk(client, definition, { limit });
-    return { complete: !result.hasMore, processed: result.scanned, scheduled: 0 };
+    return { complete: !(await hasRepairDebt()), processed: result.scanned, scheduled: 0 };
   }
-  return { complete: true, processed: 0, scheduled: 0 };
+  return { complete: !(await hasRepairDebt()), processed: 0, scheduled: 0 };
 }
 
 const PUBLIC_ANCHOR_REBUILD_KEY = "projection_rebuild_public_anchors_v1";

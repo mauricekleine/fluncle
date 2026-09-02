@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Entry point for the bounded public-projection maintenance timer. The agent token can invoke
-# only repair for public_aggregates and artist_qualification; every other projection control
-# remains server-side forbidden. The TypeScript driver reads status once, stays dark with the
-# shared cutover, and gives each family its own four-call budget.
+# Entry point for the bounded runtime-projection maintenance timer. The agent token can invoke
+# only repair for the four runtime families; every rebuild, audit, and cutover control remains
+# server-side forbidden. The TypeScript driver reads status once, stays dark with each family's
+# cutover, and advances the enabled families serially under fixed request budgets.
 set -euo pipefail
 
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
