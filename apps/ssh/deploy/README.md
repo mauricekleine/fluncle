@@ -12,7 +12,7 @@ The `fluncle-ssh` service can't cleanly rebuild and replace _its own_ running bi
 
 It puts **no token on the box** for its core job and reads nothing from `op`:
 
-- **Build context:** the Fluncle repo is public, so the clone at `/opt/fluncle-ssh-build` needs no key.
+- **Build context:** the Fluncle repo is public, so the clone at `/opt/fluncle-ssh-build` needs no key. If GitHub's anonymous smart-HTTP path is challenged as though it needed a username, the script falls back to GitHub's unauthenticated ref API and the codeload archive for the exact returned commit. It validates the full commit SHA and the archive's commit-bearing root before using the source. No credential prompt, helper, token, or SSH key participates in either path.
 - **The swap only replaces the binary.** It writes `/opt/fluncle-ssh/fluncle-ssh` and restarts the service; the systemd unit and `/etc/fluncle-ssh.env` (the service contract the deploy script established) are **left untouched**, so the reused runtime env is exactly what the operator already placed. Nothing is captured, nothing is read from `op`.
 
 The only optional inputs — the Discord webhook and the agent-scoped API token used for the best-effort **alert** + **/status** visibility — come from an operator-placed `EnvironmentFile` (`/etc/fluncle/ssh-freshen.env`, `-`-optional in the unit) kept **out of the repo**. Unset any of them and that visibility is simply skipped; the self-deploy still runs. (The token is the same agent-scoped token the [watchdog](../watchdog) already uses for its `record_health` POST — you can point this at the same values.)
@@ -28,8 +28,8 @@ The one cost is the trade-off to know: rave-01 is the deliberately-minimal publi
 Default `--if-changed` (the timer); `--force` rebuilds unconditionally (the operator pilot); `--dry-run` builds + pre-smokes then stops (never swaps).
 
 1. **Single-flight** (flock) — never two runs at once.
-2. **Sync** the public repo into `/opt/fluncle-ssh-build` (clone or fetch + hard-reset to `origin/main`). Full history (not shallow) so the change-detection diff can reach the last-deployed commit.
-3. **Decide whether to rebuild.** Compare the recorded deployed SHA (`/opt/fluncle-ssh-freshen/deployed-sha`) to `HEAD`. Rebuild when `--force`, on the first run (no baseline), if the baseline is unreachable (history rewrite → safe re-baseline), or when `git diff <deployed>..HEAD -- apps/ssh` touches a **compiled source** (`*.go`, `go.mod`, `go.sum`). A docs-only, unit-only (`apps/ssh/deploy`, `apps/ssh/watchdog`, `*.md`), or web-only merge changes no compiled source → **no rebuild, no restart**.
+2. **Sync** the public repo into `/opt/fluncle-ssh-build` (clone or fetch + hard-reset to `origin/main`) with prompts and credential helpers disabled. If anonymous Git transport fails, resolve `main` with a bounded public API request and download the exact commit archive with a bounded codeload request into `/opt/fluncle-ssh-freshen/source`.
+3. **Decide whether to rebuild.** Compare the recorded deployed SHA (`/opt/fluncle-ssh-freshen/deployed-sha`) to the resolved commit. The Git path uses the exact history diff. The archive path compares a deterministic manifest of `*.go`, `go.mod`, and `go.sum` against the manifest recorded only after the last successful swap. Rebuild when `--force`, on the first run, if the baseline or manifest is unavailable (safe re-baseline), or when those compiled inputs changed. A docs-only, unit-only (`apps/ssh/deploy`, `apps/ssh/watchdog`, `*.md`), or web-only merge changes no compiled source → **no rebuild, no restart**.
 4. **Build** the new binary on-box (`CGO_ENABLED=0 go build`) into a throwaway dir.
 5. **Pre-smoke the NEW binary in ISOLATION — before the live service is touched:** boot it on a free loopback port + temp data dir (no GeoIP), then prove it completes a real **SSH key exchange** (`ssh-keyscan` returns the freshly-generated host key). This is the exact failure a bad crypto/wish bump would cause — the server not speaking SSH — caught with the live service untouched. A boot-then-handshake smoke needs no network (the app only calls the API per-session, not at boot). Any failure → abort, alert, **the live service is never touched**.
 6. **Swap** (the only moment the live service changes): snapshot the current binary to `fluncle-ssh.prev` (the rollback target), atomically rename the new binary into place, `systemctl restart fluncle-ssh`. Replacing the on-disk file under the running process is safe on Linux (the old process holds its inode until the restart). The restart briefly drops active SSH sessions — the same momentary blip the manual `deploy-ssh-app-service.sh` restart causes today.
@@ -74,6 +74,8 @@ systemctl list-timers fluncle-ssh-freshen.timer
 ```
 
 Preview without touching the live service any time with `sudo /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh --dry-run` (builds + pre-smokes the current `main`, then stops). The script is idempotent and a no-op when current, so the timer is safe to run as often as you like.
+
+The public-source fallback can be redirected for a mirror or test fixture with `SSHFRESHEN_PUBLIC_REF_URL` (a JSON Git ref whose `sha` is a full commit) and `SSHFRESHEN_PUBLIC_ARCHIVE_BASE` (the base whose `/<sha>` response is a GitHub-shaped tarball). `SSHFRESHEN_GIT_TIMEOUT_SECS` bounds the preferred Git attempt (60 seconds by default), and `SSHFRESHEN_SOURCE_MANIFEST_FILE` overrides the successful-deploy manifest path. All remain read-only inputs; none accepts or needs a credential.
 
 ## The service contract it must match
 

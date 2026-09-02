@@ -35,7 +35,15 @@ REPO_URL="${SSHFRESHEN_REPO_URL:-https://github.com/mauricekleine/fluncle.git}"
 REPO_DIR="${SSHFRESHEN_REPO_DIR:-/opt/fluncle-ssh-build}"
 STATE_DIR="${SSHFRESHEN_STATE_DIR:-/opt/fluncle-ssh-freshen}"
 SHA_FILE="${SSHFRESHEN_SHA_FILE:-$STATE_DIR/deployed-sha}"
+SOURCE_MANIFEST_FILE="${SSHFRESHEN_SOURCE_MANIFEST_FILE:-$STATE_DIR/deployed-source-manifest.sha256}"
 LOCK="${SSHFRESHEN_LOCK:-/run/lock/fluncle-ssh-freshen.lock}"
+
+# GitHub's anonymous smart-HTTP POST can occasionally be challenged as though a public
+# repository needed credentials. The read-only API + codeload archive are a second,
+# independently configurable public path: no token, credential helper, or SSH key.
+PUBLIC_REF_URL="${SSHFRESHEN_PUBLIC_REF_URL:-https://api.github.com/repos/mauricekleine/fluncle/git/ref/heads/main}"
+PUBLIC_ARCHIVE_BASE="${SSHFRESHEN_PUBLIC_ARCHIVE_BASE:-https://codeload.github.com/mauricekleine/fluncle/tar.gz}"
+GIT_TIMEOUT_SECS="${SSHFRESHEN_GIT_TIMEOUT_SECS:-60}"
 
 # The live service contract (must match deploy-ssh-app-service.sh + the .service unit).
 SERVICE="${SSHFRESHEN_SERVICE:-fluncle-ssh}"
@@ -58,12 +66,14 @@ esac
 
 log() { printf '[ssh-freshen] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
+case "$GIT_TIMEOUT_SECS" in
+  '' | *[!0-9]* | 0) die "SSHFRESHEN_GIT_TIMEOUT_SECS must be a positive integer" ;;
+esac
 
 # ── single-flight ─────────────────────────────────────────────────────────────
 exec 9>"$LOCK"
 flock -n 9 || { log "another run holds the lock; exiting"; exit 0; }
 
-command -v git >/dev/null || die "git not found"
 command -v go  >/dev/null || die "go toolchain not found — install it (the one provisioning pre-req; see apps/ssh/deploy/README.md)"
 
 # ── Discord alert (best-effort; webhook from the operator EnvironmentFile). Never throws. ──
@@ -131,20 +141,125 @@ post_health() {
 }
 
 # ── 1. sync the build context (public repo, no credential) ────────────────────
-# NOT a shallow clone: the change-detection diff below needs the previously-deployed
-# commit reachable, so we keep full history (the repo is small).
-if [ -d "$REPO_DIR/.git" ]; then
-  git -C "$REPO_DIR" fetch origin main -q
-else
-  log "cloning the public repo into $REPO_DIR"
-  rm -rf "$REPO_DIR"
-  git clone "$REPO_URL" "$REPO_DIR" -q
-fi
-git -C "$REPO_DIR" checkout -q -B main origin/main
-git -C "$REPO_DIR" reset --hard -q origin/main
+# Prefer the existing full checkout because it gives exact path-level change detection.
+# Git is explicitly non-interactive: a public-host auth challenge is a transport failure,
+# never a reason for this root service to discover or prompt for credentials. When smart
+# HTTP fails, resolve `main` through GitHub's public API and fetch the archive for that EXACT
+# 40-character commit. Codeload's root directory repeats that SHA; reject any mismatch before
+# using the bytes as source.
+mkdir -p "$STATE_DIR"
+SOURCE_DIR="$REPO_DIR"
+SYNC_KIND="git"
+public_git() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --foreground "${GIT_TIMEOUT_SECS}s" env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false \
+      git -c credential.helper= "$@"
+  else
+    env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false git -c credential.helper= "$@"
+  fi
+}
+git_sync() {
+  local clone_dir
+  if [ -d "$REPO_DIR/.git" ]; then
+    if ! public_git -C "$REPO_DIR" fetch origin main -q; then
+      return 1
+    fi
+  else
+    clone_dir="${REPO_DIR}.next.$$"
+    rm -rf "$clone_dir"
+    if ! public_git clone "$REPO_URL" "$clone_dir" -q; then
+      rm -rf "$clone_dir"
+      return 1
+    fi
+    rm -rf "$REPO_DIR"
+    mv "$clone_dir" "$REPO_DIR"
+  fi
+  git -C "$REPO_DIR" checkout -q -B main origin/main || return 1
+  git -C "$REPO_DIR" reset --hard -q origin/main || return 1
+}
 
-NEW_SHA="$(git -C "$REPO_DIR" rev-parse HEAD)"
+if command -v git >/dev/null 2>&1 && git_sync; then
+  NEW_SHA="$(git -C "$REPO_DIR" rev-parse HEAD)"
+else
+  log "anonymous git sync failed; falling back to the public commit archive"
+  command -v curl >/dev/null 2>&1 || die "curl not found for public archive fallback"
+  command -v tar >/dev/null 2>&1 || die "tar not found for public archive fallback"
+  ARCHIVE_WORK="$(mktemp -d "${TMPDIR:-/tmp}/ssh-source.XXXXXX")"
+  REF_JSON="$ARCHIVE_WORK/ref.json"
+  ARCHIVE="$ARCHIVE_WORK/source.tar.gz"
+  ARCHIVE_LIST="$ARCHIVE_WORK/source.list"
+  if ! curl -fsSL --retry 2 --retry-all-errors --retry-delay 2 \
+      --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' \
+      -o "$REF_JSON" "$PUBLIC_REF_URL"; then
+    rm -rf "$ARCHIVE_WORK"
+    die "could not resolve the public main commit"
+  fi
+  NEW_SHA="$(sed -n 's/^[[:space:]]*"sha":[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$REF_JSON" | sed -n '1p')"
+  if ! printf '%s' "$NEW_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+    rm -rf "$ARCHIVE_WORK"
+    die "the public main ref did not resolve to a commit SHA"
+  fi
+  if ! curl -fsSL --retry 2 --retry-all-errors --retry-delay 2 \
+      --connect-timeout 10 --max-time 90 -o "$ARCHIVE" \
+      "$PUBLIC_ARCHIVE_BASE/$NEW_SHA"; then
+    rm -rf "$ARCHIVE_WORK"
+    die "could not fetch the public source archive for ${NEW_SHA:0:12}"
+  fi
+  if ! tar -tzf "$ARCHIVE" >"$ARCHIVE_LIST"; then
+    rm -rf "$ARCHIVE_WORK"
+    die "public source archive is not a readable tarball"
+  fi
+  ARCHIVE_ROOT="$(sed -n '1p' "$ARCHIVE_LIST")"
+  case "$ARCHIVE_ROOT" in
+    *-"$NEW_SHA"/) ;;
+    *) rm -rf "$ARCHIVE_WORK"; die "public source archive identity did not match ${NEW_SHA:0:12}" ;;
+  esac
+  if grep -Eq '(^/|(^|/)\.\.(/|$))' "$ARCHIVE_LIST"; then
+    rm -rf "$ARCHIVE_WORK"
+    die "public source archive contains an unsafe path"
+  fi
+  ARCHIVE_SOURCE="$STATE_DIR/source.next.$$"
+  rm -rf "$ARCHIVE_SOURCE"
+  mkdir -p "$ARCHIVE_SOURCE"
+  if ! tar -xzf "$ARCHIVE" --strip-components=1 -C "$ARCHIVE_SOURCE"; then
+    rm -rf "$ARCHIVE_SOURCE" "$ARCHIVE_WORK"
+    die "could not unpack the public source archive"
+  fi
+  rm -rf "$ARCHIVE_WORK"
+  [ -f "$ARCHIVE_SOURCE/$APP_SRC/go.mod" ] || {
+    rm -rf "$ARCHIVE_SOURCE"
+    die "public source archive is missing the SSH build context"
+  }
+  rm -rf "$STATE_DIR/source"
+  mv "$ARCHIVE_SOURCE" "$STATE_DIR/source"
+  SOURCE_DIR="$STATE_DIR/source"
+  SYNC_KIND="archive"
+fi
+
+printf '%s' "$NEW_SHA" | grep -Eq '^[0-9a-f]{40}$' || die "synced source has no full commit SHA"
 OLD_SHA="$(cat "$SHA_FILE" 2>/dev/null || true)"
+
+# A persisted manifest keeps archive-mode change detection as precise as `git diff`: only
+# Go sources and module locks affect the binary. It is written only after a successful swap,
+# beside the deployed SHA, so rollback never advances either identity.
+compiled_manifest() {
+  local root="$1" file digest
+  (
+    cd "$root"
+    while IFS= read -r -d '' file; do
+      if command -v sha256sum >/dev/null 2>&1; then
+        digest="$(sha256sum "$file" | awk '{print $1}')"
+      else
+        digest="$(shasum -a 256 "$file" | awk '{print $1}')"
+      fi
+      printf '%s  %s\n' "$digest" "$file"
+    done < <(find "$APP_SRC" -type f \( -name '*.go' -o -name go.mod -o -name go.sum \) -print0 | sort -z)
+  )
+}
+command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+  || die "sha256sum/shasum not found for source identity"
+NEW_MANIFEST="$(compiled_manifest "$SOURCE_DIR")"
+[ -n "$NEW_MANIFEST" ] || die "synced source contains no compiled SSH inputs"
 
 # ── 2. decide whether to rebuild ──────────────────────────────────────────────
 # Rebuild when: --force; OR no recorded baseline (first run); OR the recorded SHA is
@@ -158,11 +273,11 @@ if [ "$MODE" = "--force" ]; then
   should_build=1; reason="forced"
 elif [ -z "$OLD_SHA" ]; then
   should_build=1; reason="no baseline (first run)"
-elif ! git -C "$REPO_DIR" cat-file -e "${OLD_SHA}^{commit}" 2>/dev/null; then
+elif [ "$SYNC_KIND" = "git" ] && ! git -C "$REPO_DIR" cat-file -e "${OLD_SHA}^{commit}" 2>/dev/null; then
   should_build=1; reason="recorded baseline $OLD_SHA unreachable — re-baselining"
 elif [ "$OLD_SHA" = "$NEW_SHA" ]; then
   should_build=0; reason="already at $NEW_SHA"
-else
+elif [ "$SYNC_KIND" = "git" ]; then
   changed="$(git -C "$REPO_DIR" diff --name-only "$OLD_SHA" "$NEW_SHA" -- "$APP_SRC" \
     | grep -E '\.go$|/go\.(mod|sum)$' || true)"
   if [ -n "$changed" ]; then
@@ -170,6 +285,12 @@ else
   else
     should_build=0; reason="no compiled-source change in $OLD_SHA..$NEW_SHA"
   fi
+elif [ ! -f "$SOURCE_MANIFEST_FILE" ]; then
+  should_build=1; reason="no deployed source manifest — safely re-baselining from the public archive"
+elif [ "$(cat "$SOURCE_MANIFEST_FILE")" = "$NEW_MANIFEST" ]; then
+  should_build=0; reason="no compiled-source change in $OLD_SHA..$NEW_SHA"
+else
+  should_build=1; reason="apps/ssh compiled sources changed in $OLD_SHA..$NEW_SHA"
 fi
 
 log "$OLD_SHA -> $NEW_SHA | $reason"
@@ -191,8 +312,8 @@ NEW_BIN="$BUILD_OUT/fluncle-ssh"
 # the build cache — with $HOME unset, GOCACHE would otherwise resolve under a missing home.
 GO_CACHE_ROOT="${SSHFRESHEN_GO_CACHE:-$STATE_DIR/go}"
 mkdir -p "$GO_CACHE_ROOT/path" "$GO_CACHE_ROOT/build"
-log "building $NEW_BIN from $REPO_DIR/$APP_SRC (commit ${NEW_SHA:0:12})"
-if ! ( cd "$REPO_DIR/$APP_SRC" \
+log "building $NEW_BIN from $SOURCE_DIR/$APP_SRC (commit ${NEW_SHA:0:12})"
+if ! ( cd "$SOURCE_DIR/$APP_SRC" \
     && CGO_ENABLED=0 GOPATH="$GO_CACHE_ROOT/path" GOCACHE="$GO_CACHE_ROOT/build" \
        go build -o "$NEW_BIN" . ); then
   alert "🛰️ ssh-freshen: BUILD FAILED for ${NEW_SHA:0:12} on rave-01 — box untouched, staying on the current SSH binary"
@@ -297,6 +418,7 @@ service_healthy() {
 if service_healthy; then
   log "post-swap smoke passed — deployed ${NEW_SHA:0:12}"
   printf '%s\n' "$NEW_SHA" >"$SHA_FILE"
+  printf '%s\n' "$NEW_MANIFEST" >"$SOURCE_MANIFEST_FILE"
   rm -f "$PREV_BIN"
   alert "🚀 ssh-freshen: deployed ${NEW_SHA:0:12} to fluncle-ssh on rave-01 (apps/ssh rebuilt + swapped)"
   post_health ok "rebuilt the SSH terminal from the latest apps/ssh"
