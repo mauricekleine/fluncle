@@ -95,6 +95,10 @@ impl StateStore {
              ) without rowid;
              create table if not exists sonar_centroids (
                id text primary key, vector blob not null, value_digest text not null
+             ) without rowid;
+             create table if not exists sonar_activation_proof (
+               id integer primary key check(id=1), checkpoint integer not null,
+               artifact_digest text not null
              ) without rowid;",
         ).await.context("initialising sonar consumer state schema")?;
         Ok(Self {
@@ -425,6 +429,47 @@ impl StateStore {
         if affected != 1 {
             bail!("pending acknowledgement changed before finalization");
         }
+        Ok(())
+    }
+
+    pub async fn activation_proves(&self, manifest: &Manifest) -> Result<bool> {
+        if manifest.pending.is_some() {
+            return Ok(false);
+        }
+        let mut rows = self
+            .connection()?
+            .query(
+                "select 1 from sonar_activation_proof where id=1 and checkpoint=? and artifact_digest=?",
+                params![to_i64(manifest.checkpoint)?, manifest.artifact_digest.clone()],
+            )
+            .await?;
+        Ok(rows.next().await?.is_some())
+    }
+
+    pub async fn mark_activated(&self, manifest: &Manifest) -> Result<()> {
+        if manifest.pending.is_some() {
+            bail!("cannot prove an activation while acknowledgement is pending");
+        }
+        let affected = self
+            .connection()?
+            .execute(
+                "insert into sonar_activation_proof(id,checkpoint,artifact_digest) \
+                 select 1,checkpoint,artifact_digest from sonar_manifest \
+                 where id=1 and checkpoint=? and artifact_digest=? and pending_through is null \
+                 on conflict(id) do update set checkpoint=excluded.checkpoint,artifact_digest=excluded.artifact_digest",
+                params![to_i64(manifest.checkpoint)?, manifest.artifact_digest.clone()],
+            )
+            .await?;
+        if affected != 1 {
+            bail!("local generation changed before activation proof was recorded");
+        }
+        Ok(())
+    }
+
+    pub async fn clear_activation_proof(&self) -> Result<()> {
+        self.connection()?
+            .execute("delete from sonar_activation_proof where id=1", ())
+            .await?;
         Ok(())
     }
 }
@@ -916,6 +961,37 @@ mod tests {
             seq,
             subject_id: id.into(),
         }
+    }
+
+    #[tokio::test]
+    async fn activation_proof_never_authorizes_a_pending_manifest() {
+        let dir = tempdir().unwrap();
+        let store = StateStore::open(dir.path().join("state.db")).await.unwrap();
+        let stored = store
+            .replace_from_replica(
+                &[track("a", 1, 1.0)],
+                &[SourceRevision {
+                    id: "a".into(),
+                    revision: 1,
+                }],
+                &[],
+                10,
+                10,
+                1,
+            )
+            .await
+            .unwrap();
+        store.mark_activated(&stored.manifest).await.unwrap();
+        assert!(store.activation_proves(&stored.manifest).await.unwrap());
+
+        let mut pending = stored.manifest.clone();
+        pending.pending = Some(PendingAck {
+            batch_digest: "a".repeat(64),
+            event_count: 1,
+            from_seq: 9,
+            through_seq: 10,
+        });
+        assert!(!store.activation_proves(&pending).await.unwrap());
     }
 
     #[tokio::test]

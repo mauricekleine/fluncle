@@ -91,13 +91,27 @@ impl Consumer {
         &self,
         stored: StoredSnapshot,
     ) -> Result<Option<StoredSnapshot>> {
-        let status = self.api.status().await?;
+        let status = match self.api.status().await {
+            Ok(status) => status,
+            Err(error) if self.state.activation_proves(&stored.manifest).await? => {
+                warn!(
+                    cause = "artifact_api_unavailable",
+                    error = %format!("{error:#}"),
+                    checkpoint = stored.manifest.checkpoint,
+                    "serving a durably activated local sonar generation"
+                );
+                return Ok(Some(stored));
+            }
+            Err(error) => return Err(error).context("confirming startup artifact activation"),
+        };
         validate_contract(&status)?;
         if let Some(pending) = stored.manifest.pending.as_ref() {
             match pending_action(&status, pending) {
                 PendingAction::Finalize => {
                     self.state.clear_pending(pending.through_seq).await?;
-                    return self.state.load().await.map(Some);
+                    let stored = self.state.load().await?;
+                    self.state.mark_activated(&stored.manifest).await?;
+                    return Ok(Some(stored));
                 }
                 PendingAction::Retry => {
                     let acknowledged = self
@@ -116,17 +130,31 @@ impl Consumer {
                         bail!("artifact acknowledgement returned the wrong startup checkpoint");
                     }
                     self.state.clear_pending(pending.through_seq).await?;
-                    return self.state.load().await.map(Some);
+                    let stored = self.state.load().await?;
+                    self.state.mark_activated(&stored.manifest).await?;
+                    return Ok(Some(stored));
                 }
-                PendingAction::Rebuild => return Ok(None),
+                PendingAction::Rebuild => {
+                    self.state.clear_activation_proof().await?;
+                    return Ok(None);
+                }
             }
         }
-        Ok((status.state == "active"
-            && status.applied_through_seq == Some(stored.manifest.checkpoint))
-        .then_some(stored))
+        if status.state == "active"
+            && status.applied_through_seq == Some(stored.manifest.checkpoint)
+        {
+            self.state.mark_activated(&stored.manifest).await?;
+            return Ok(Some(stored));
+        }
+        self.state.clear_activation_proof().await?;
+        Ok(None)
     }
 
     async fn prepare_bootstrap(&self) -> Result<(StoredSnapshot, u64, SyncStats)> {
+        // Registration moves the remote consumer out of its prior active
+        // checkpoint. Revoke any proof for that generation before the first
+        // remote mutation so a crash cannot later authorize stale fallback.
+        self.state.clear_activation_proof().await?;
         let registered = self
             .api
             .register()
@@ -164,6 +192,11 @@ impl Consumer {
         if active.state != "active" || active.applied_through_seq != Some(snapshot_seq) {
             bail!("artifact consumer activation checkpoint mismatch");
         }
+        let manifest = self.state.manifest().await?;
+        if manifest.checkpoint != snapshot_seq {
+            bail!("local generation changed before activation completed");
+        }
+        self.state.mark_activated(&manifest).await?;
         Ok(())
     }
 
@@ -375,6 +408,8 @@ impl Consumer {
         match pending_action(&status, &pending) {
             PendingAction::Finalize => {
                 self.state.clear_pending(pending.through_seq).await?;
+                let manifest = self.state.manifest().await?;
+                self.state.mark_activated(&manifest).await?;
                 app.record_pending_ack(false);
                 Ok(())
             }
@@ -423,6 +458,8 @@ impl Consumer {
             }
         }
         self.state.clear_pending(through).await?;
+        let manifest = self.state.manifest().await?;
+        self.state.mark_activated(&manifest).await?;
         app.record_pending_ack(false);
         Ok(())
     }
@@ -514,7 +551,7 @@ pub fn manifest_is_pending(manifest: &Manifest) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifact::Contract;
+    use crate::artifact::{Contract, ValidatedBatch, ValidatedEvent, ValidatedOperation};
     use crate::decode::BLOB_LEN;
     use crate::index::TrackMeta;
     use crate::replica::{SourceRevision, SourceTrack};
@@ -783,6 +820,22 @@ mod tests {
         )
     }
 
+    async fn fixed_status_api(status: Value) -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new().route(
+            "/api/v1/admin/artifacts/consumers/sonar-test",
+            get(move || {
+                let status = status.clone();
+                async move { Json(json!({"consumer": status, "ok": true})) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}"), task)
+    }
+
     fn status(checkpoint: Option<u64>, earliest: Option<u64>, head: u64) -> ConsumerStatus {
         ConsumerStatus {
             applied_through_seq: checkpoint,
@@ -990,6 +1043,259 @@ mod tests {
         assert_eq!(registrations.load(Ordering::SeqCst), 2);
         assert_eq!(activations.load(Ordering::SeqCst), 1);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn proved_generation_serves_when_startup_status_is_unavailable() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("proved", 3, 8.5);
+        let store = StateStore::open(&state_path).await.unwrap();
+        let stored = store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                3,
+                3,
+                1,
+            )
+            .await
+            .unwrap();
+        store.mark_activated(&stored.manifest).await.unwrap();
+        let consumer = Consumer::new(
+            ArtifactClient::new("http://127.0.0.1:1".into(), "test", "sonar-test".into()).unwrap(),
+            local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        let (loaded, activation, _, _) = consumer.initial_snapshot().await.unwrap();
+        assert_eq!(
+            loaded.manifest.artifact_digest,
+            stored.manifest.artifact_digest
+        );
+        assert_eq!(activation, None);
+    }
+
+    #[tokio::test]
+    async fn unproved_generation_fails_closed_when_startup_status_is_unavailable() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("unproved", 3, 8.5);
+        let store = StateStore::open(&state_path).await.unwrap();
+        store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                3,
+                3,
+                1,
+            )
+            .await
+            .unwrap();
+        let consumer = Consumer::new(
+            ArtifactClient::new("http://127.0.0.1:1".into(), "test", "sonar-test".into()).unwrap(),
+            local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        let error = consumer.initial_snapshot().await.err().unwrap();
+        assert!(format!("{error:#}").contains("confirming startup artifact activation"));
+    }
+
+    #[tokio::test]
+    async fn divergent_remote_checkpoint_revokes_a_matching_local_proof() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("diverged", 3, 8.5);
+        let store = StateStore::open(&state_path).await.unwrap();
+        let stored = store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                3,
+                3,
+                1,
+            )
+            .await
+            .unwrap();
+        store.mark_activated(&stored.manifest).await.unwrap();
+        let (base_url, server) =
+            fixed_status_api(response_status("active", Some(2), None, 3, Vec::new())).await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        assert!(consumer
+            .reconcile_startup_state(stored)
+            .await
+            .unwrap()
+            .is_none());
+        let manifest = consumer.state.manifest().await.unwrap();
+        assert!(!consumer.state.activation_proves(&manifest).await.unwrap());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn finalized_pending_recovery_remains_available_during_the_next_status_outage() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("pending", 1, 8.5);
+        let replica = local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await;
+        let store = StateStore::open(&state_path).await.unwrap();
+        store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                2,
+                2,
+                1,
+            )
+            .await
+            .unwrap();
+        let candidate = store
+            .apply_batch(
+                &ValidatedBatch {
+                    batch_digest: "a".repeat(64),
+                    events: vec![ValidatedEvent {
+                        operation: ValidatedOperation::Delete,
+                        payload_digest: "b".repeat(64),
+                        revision: 2,
+                        seq: 3,
+                        subject_id: track.id.clone(),
+                    }],
+                    from_seq: 2,
+                    head_seq: 3,
+                    through_seq: 3,
+                },
+                2,
+            )
+            .await
+            .unwrap();
+        let app = AppState::from_snapshot(published(&candidate), "secret".into());
+        let (base_url, server) =
+            fixed_status_api(response_status("active", Some(3), None, 3, Vec::new())).await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            replica,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+        consumer.recover_pending(&app, candidate).await.unwrap();
+        let finalized = consumer.state.manifest().await.unwrap();
+        assert!(finalized.pending.is_none());
+        assert!(consumer.state.activation_proves(&finalized).await.unwrap());
+        server.abort();
+        drop(consumer);
+
+        let restart = Consumer::new(
+            ArtifactClient::new("http://127.0.0.1:1".into(), "test", "sonar-test".into()).unwrap(),
+            Replica::open_local_test_source(&replica_path)
+                .await
+                .unwrap(),
+            StateStore::open(&state_path).await.unwrap(),
+            10,
+            10,
+        )
+        .unwrap();
+        let (loaded, activation, _, _) = restart.initial_snapshot().await.unwrap();
+        assert_eq!(loaded.manifest.checkpoint, 3);
+        assert_eq!(activation, None);
+    }
+
+    #[tokio::test]
+    async fn failed_bootstrap_after_registration_revokes_the_old_generation_proof() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("old-generation", 1, 8.5);
+        let replica = local_replica(&replica_path, std::slice::from_ref(&track), 2, false).await;
+        let store = StateStore::open(&state_path).await.unwrap();
+        let stored = store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                2,
+                2,
+                1,
+            )
+            .await
+            .unwrap();
+        store.mark_activated(&stored.manifest).await.unwrap();
+        let app = AppState::from_snapshot(published(&stored), "secret".into());
+        let (base_url, registrations, _activations, server) = pre_activation_api().await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            replica,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        let error = consumer
+            .full_local_rebuild(&app, RebuildCause::CheckpointDivergence)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("stopped before artifact snapshot fence"),
+            "{error:#}"
+        );
+        assert_eq!(registrations.load(Ordering::SeqCst), 1);
+        let unchanged = consumer.state.manifest().await.unwrap();
+        assert_eq!(unchanged.checkpoint, 2);
+        assert!(!consumer.state.activation_proves(&unchanged).await.unwrap());
+        server.abort();
+        drop(consumer);
+
+        let restart = Consumer::new(
+            ArtifactClient::new("http://127.0.0.1:1".into(), "test", "sonar-test".into()).unwrap(),
+            Replica::open_local_test_source(&replica_path)
+                .await
+                .unwrap(),
+            StateStore::open(&state_path).await.unwrap(),
+            10,
+            10,
+        )
+        .unwrap();
+        let restart_error = restart.initial_snapshot().await.err().unwrap();
+        assert!(format!("{restart_error:#}").contains("confirming startup artifact activation"));
     }
 
     #[test]
