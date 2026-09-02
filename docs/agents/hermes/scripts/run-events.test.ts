@@ -267,7 +267,7 @@ describe("the summary line states facts, never a verdict", () => {
     ).toBe(true);
   });
 
-  test("every gate value a script can emit is one of the ledger's six words", () => {
+  test("every gate value a script can emit is in the ledger's closed vocabulary", () => {
     const emitted = emittedGateStates(EMITTERS.map(([, path]) => path));
 
     // Non-empty, or this proves nothing: the extractor has to be finding the assignments.
@@ -278,7 +278,7 @@ describe("the summary line states facts, never a verdict", () => {
     }
   });
 
-  // MEMBERSHIP IS NOT ENOUGH, and this is the failure the six-word vocabulary actually cost.
+  // MEMBERSHIP IS NOT ENOUGH, and this is the failure the closed vocabulary actually cost.
   // `paused` and `dry-run` are both legal words, so the assertion above is green either way —
   // but the Worker nulls a `paused` run's work counters and keeps a `dry-run`'s, so a script
   // that reaches for the wrong legal word silently destroys its own `checked`. The rule is the
@@ -1328,7 +1328,7 @@ describe("sonar-freshen reports a run", () => {
   // AND THE WORD IS `dry-run`, NOT `paused` — the two are both legal and they are not
   // interchangeable. `paused` is one of the Worker's never-looked gates, so it would null the
   // `checked: 1` asserted here: the reading that proves this tick really read the release feed
-  // before declining to deploy. That is the whole reason the ledger's vocabulary is six words.
+  // before declining to deploy. That is why these gate words have distinct semantics.
   test("GATED: a dry run leaves the backlog standing but flags itself", async () => {
     const { code, summary } = await runSonar({ commit: SHA_B, deployed: SHA_A }, undefined, [
       "--dry-run",
