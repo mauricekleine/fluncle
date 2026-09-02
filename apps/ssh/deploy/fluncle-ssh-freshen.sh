@@ -194,7 +194,47 @@ else
     rm -rf "$ARCHIVE_WORK"
     die "could not resolve the public main commit"
   fi
-  NEW_SHA="$(sed -n 's/^[[:space:]]*"sha":[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$REF_JSON" | sed -n '1p')"
+  REF_PARSER="$ARCHIVE_WORK/parse-ref.go"
+  cat >"$REF_PARSER" <<'GO'
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+)
+
+func main() {
+	if len(os.Args) != 2 {
+		os.Exit(1)
+	}
+	input, err := os.Open(os.Args[1])
+	if err != nil {
+		os.Exit(1)
+	}
+	defer input.Close()
+	var ref struct {
+		Object struct {
+			SHA  string `json:"sha"`
+			Type string `json:"type"`
+		} `json:"object"`
+	}
+	decoder := json.NewDecoder(input)
+	if err := decoder.Decode(&ref); err != nil {
+		os.Exit(1)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		os.Exit(1)
+	}
+	if ref.Object.Type != "commit" {
+		os.Exit(1)
+	}
+	fmt.Print(ref.Object.SHA)
+}
+GO
+  NEW_SHA="$(go run "$REF_PARSER" "$REF_JSON" 2>/dev/null || true)"
   if ! printf '%s' "$NEW_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
     rm -rf "$ARCHIVE_WORK"
     die "the public main ref did not resolve to a commit SHA"

@@ -16,7 +16,13 @@ afterEach(() => {
   }
 });
 
-function fixture(options: { archiveSha?: string } = {}) {
+function fixture(
+  options: {
+    archiveSha?: string;
+    minifiedRef?: boolean;
+    objectType?: string;
+  } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "fluncle-ssh-freshen-"));
   roots.push(root);
   const sha = "1234567890abcdef1234567890abcdef12345678";
@@ -34,10 +40,11 @@ function fixture(options: { archiveSha?: string } = {}) {
   mkdirSync(archiveDir, { recursive: true });
   writeFileSync(join(tree, "apps/ssh/go.mod"), "module example.invalid/ssh\n");
   writeFileSync(join(tree, "apps/ssh/main.go"), "package main\nfunc main() {}\n");
-  writeFileSync(
-    join(root, "ref.json"),
-    `{\n  "ref": "refs/heads/main",\n  "object": {\n    "sha": "${sha}"\n  }\n}\n`,
-  );
+  const ref = {
+    object: { sha, type: options.objectType ?? "commit" },
+    ref: "refs/heads/main",
+  };
+  writeFileSync(join(root, "ref.json"), JSON.stringify(ref, null, options.minifiedRef ? 0 : 2));
   const archive = join(archiveDir, sha);
   const tar = spawnSync("tar", ["-czf", archive, "-C", root, `fluncle-${archiveSha}`], {
     encoding: "utf8",
@@ -97,6 +104,27 @@ describe("SSH freshen public-source fallback", () => {
     expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).text()).toContain(
       "package main",
     );
+  });
+
+  it("accepts a minified GitHub commit-ref response", async () => {
+    const box = fixture({ minifiedRef: true });
+    writeFileSync(join(box.stateDir, "deployed-sha"), `${box.sha}\n`);
+
+    const result = run(box.env);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain(`already at ${box.sha}`);
+    expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).exists()).toBe(true);
+  });
+
+  it("rejects a ref whose object is not a commit", async () => {
+    const box = fixture({ minifiedRef: true, objectType: "tag" });
+
+    const result = run(box.env);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("public main ref did not resolve to a commit SHA");
+    expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).exists()).toBe(false);
   });
 
   it("keeps docs-only archive advances as a no-op using the successful-deploy manifest", () => {

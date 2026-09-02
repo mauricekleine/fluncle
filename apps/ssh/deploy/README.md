@@ -75,7 +75,7 @@ systemctl list-timers fluncle-ssh-freshen.timer
 
 Preview without touching the live service any time with `sudo /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh --dry-run` (builds + pre-smokes the current `main`, then stops). The script is idempotent and a no-op when current, so the timer is safe to run as often as you like.
 
-The public-source fallback can be redirected for a mirror or test fixture with `SSHFRESHEN_PUBLIC_REF_URL` (a JSON Git ref whose `sha` is a full commit) and `SSHFRESHEN_PUBLIC_ARCHIVE_BASE` (the base whose `/<sha>` response is a GitHub-shaped tarball). `SSHFRESHEN_GIT_TIMEOUT_SECS` bounds the preferred Git attempt (60 seconds by default), and `SSHFRESHEN_SOURCE_MANIFEST_FILE` overrides the successful-deploy manifest path. All remain read-only inputs; none accepts or needs a credential.
+The public-source fallback can be redirected for a mirror or test fixture with `SSHFRESHEN_PUBLIC_REF_URL` (a GitHub-shaped JSON ref whose `object.type` is `commit` and whose `object.sha` is the full commit) and `SSHFRESHEN_PUBLIC_ARCHIVE_BASE` (the base whose `/<sha>` response is a GitHub-shaped tarball). `SSHFRESHEN_GIT_TIMEOUT_SECS` bounds the preferred Git attempt (60 seconds by default), and `SSHFRESHEN_SOURCE_MANIFEST_FILE` overrides the successful-deploy manifest path. All remain read-only inputs; none accepts or needs a credential.
 
 ## The service contract it must match
 
