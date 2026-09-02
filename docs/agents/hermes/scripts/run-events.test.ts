@@ -1133,7 +1133,7 @@ type SonarFixture = {
   runtimeContract?: "current" | "legacy";
   /** Omit the current contract's durable state to exercise the first bootstrap bridge. */
   stateInitialized?: boolean;
-  /** Fail once after creating partial state, then retry without deleting that state. */
+  /** Fail once after creating partial state, then retry after rollback restores the absent state. */
   retryAfterBootstrapFailure?: boolean;
   /** Pretend a prior post-swap acceptance recorded the authoritative marker. */
   bootstrapMarked?: boolean;
@@ -1149,6 +1149,10 @@ type SonarFixture = {
   artifactHealthBody?: string;
   /** Override the commit returned by the restarted live service. */
   liveCommit?: string;
+  /** Mutate durable state in the candidate, fail, and require rollback bytes before old health. */
+  mutateStateThenFail?: boolean;
+  /** Fail only the post-rollback backup cleanup sync after old health is established. */
+  rollbackCleanupFails?: boolean;
 };
 
 const SHA_A = "a".repeat(40);
@@ -1186,6 +1190,7 @@ async function runSonar(
   const replicaPath = join(root, "sonar-replica.db");
   const restartFailed = join(root, "restart-failed");
   const restartInterrupted = join(root, "restart-interrupted");
+  const stateMutationFailed = join(root, "state-mutation-failed");
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(appDir, { recursive: true });
@@ -1195,7 +1200,11 @@ async function runSonar(
   // `flock` is util-linux — it does not exist on macOS at all, so without this stub EVERY run
   // here would take the lock-held branch and quietly test nothing.
   writeStub(bin, "flock", '[ "${SF_LOCKED:-0}" = "1" ] && exit 1\nexit 0');
-  writeStub(bin, "sync", "exit 0");
+  writeStub(
+    bin,
+    "sync",
+    '[ "${SF_ROLLBACK_CLEANUP_FAILS:-0}" = "1" ] && [ -e "$SF_STATE_MUTATION_FAILED" ] && [ ! -e "$SF_ROLLBACK_INTENT" ] && [ "${2:-}" = "$SF_APP_DIR" ] && exit 1\nexit 0',
+  );
   // A systemctl that normally reports the service up. The retry fixture makes the first
   // candidate start create incomplete state and fail; rollback succeeds on the recognisable
   // old binary, then the next candidate start completes that same state in place.
@@ -1212,15 +1221,28 @@ async function runSonar(
       "  fi",
       '  printf "complete\n" >"$SF_STATE_PATH"',
       "fi",
+      'if [ "$1" = "restart" ] && [ "${SF_MUTATE_STATE_THEN_FAIL:-0}" = "1" ]; then',
+      '  if grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null; then',
+      '    grep -qx "fixture" "$SF_STATE_PATH" 2>/dev/null || exit 1',
+      '  elif [ ! -f "$SF_STATE_MUTATION_FAILED" ]; then',
+      '    printf "candidate-state\n" >"$SF_STATE_PATH"',
+      '    : >"$SF_STATE_MUTATION_FAILED"',
+      "    exit 1",
+      "  fi",
+      "fi",
       'if [ "$1" = "restart" ] && [ "${SF_INTERRUPT_AFTER_SWAP:-0}" = "1" ] && ! grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null && [ ! -f "$SF_RESTART_INTERRUPTED" ]; then',
       '  : >"$SF_RESTART_INTERRUPTED"',
       '  kill -TERM "$PPID"',
       "  sleep 1",
       "fi",
       'if [ "$1" = "restart" ] && [ "${SF_CRASH_AFTER_SWAP:-0}" = "1" ] && ! grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null && [ ! -f "$SF_RESTART_INTERRUPTED" ]; then',
+      '  printf "candidate-state\n" >"$SF_STATE_PATH"',
       '  : >"$SF_RESTART_INTERRUPTED"',
       '  kill -KILL "$PPID"',
       "  sleep 1",
+      "fi",
+      'if [ "$1" = "restart" ] && [ "${SF_CRASH_AFTER_SWAP:-0}" = "1" ] && grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null; then',
+      '  grep -qx "fixture" "$SF_STATE_PATH" 2>/dev/null || exit 1',
       "fi",
       "exit 0",
     ].join("\n"),
@@ -1254,7 +1276,11 @@ async function runSonar(
   // The "already restarted" live service the post-swap smoke curls.
   const liveCommit = fixture.liveCommit ?? fixture.commit ?? SHA_B;
   const live = Bun.serve({
-    fetch: () => new Response(JSON.stringify({ commit: liveCommit, ok: true })),
+    fetch: () => {
+      const runningOld = readFileSync(join(appDir, "sonar"), "utf8").includes("old-sonar");
+      const commit = runningOld ? (fixture.deployed ?? SHA_A) : liveCommit;
+      return new Response(JSON.stringify({ commit, ok: true }));
+    },
     port: 0,
   });
   const serviceEnv = join(root, "sonar.env");
@@ -1298,12 +1324,17 @@ async function runSonar(
       HOME: root,
       PATH: `${bin}:/usr/bin:/bin`,
       SF_APP_BIN: join(appDir, "sonar"),
+      SF_APP_DIR: appDir,
       SF_CRASH_AFTER_SWAP: fixture.crashAfterSwap ? "1" : "0",
       SF_INTERRUPT_AFTER_SWAP: fixture.interruptAfterSwap ? "1" : "0",
       SF_LOCKED: fixture.locked ? "1" : "0",
+      SF_MUTATE_STATE_THEN_FAIL: fixture.mutateStateThenFail ? "1" : "0",
       SF_RESTART_FAILED: restartFailed,
       SF_RESTART_FAIL_ONCE: fixture.retryAfterBootstrapFailure ? "1" : "0",
       SF_RESTART_INTERRUPTED: restartInterrupted,
+      SF_ROLLBACK_CLEANUP_FAILS: fixture.rollbackCleanupFails ? "1" : "0",
+      SF_ROLLBACK_INTENT: join(root, "state/swap-in-progress"),
+      SF_STATE_MUTATION_FAILED: stateMutationFailed,
       SF_STATE_PATH: statePath,
       SONARFRESHEN_APP_DIR: appDir,
       SONARFRESHEN_ASSET_BASE: assetBase,
@@ -1347,6 +1378,24 @@ async function runSonar(
 }
 
 describe("sonar-freshen reports a run", () => {
+  test("state rollback preserves the service user's file metadata", () => {
+    const freshener = readFileSync(SONAR_FRESHEN, "utf8");
+
+    expect(freshener).toContain('cp -pf "$source_file" "$backup_file"');
+    expect(freshener).toContain('cp -pf "$source_file" "$target_file"');
+  });
+
+  test("candidate acceptance disarms the trap before deleting durable rollback intent", () => {
+    const freshener = readFileSync(SONAR_FRESHEN, "utf8");
+    const acceptance = freshener.indexOf('if service_healthy "$NEW_SHA" && mark_bootstrap_ready');
+    const disarm = freshener.indexOf("ROLLBACK_ARMED=0", acceptance);
+    const intentRemoval = freshener.indexOf('rm -f "$ROLLBACK_INTENT_FILE"', acceptance);
+
+    expect(acceptance).toBeGreaterThan(-1);
+    expect(disarm).toBeGreaterThan(acceptance);
+    expect(intentRemoval).toBeGreaterThan(disarm);
+  });
+
   test("the common tick: checked, nothing to do, nothing done", async () => {
     const { code, summary } = await runSonar({ commit: SHA_A, deployed: SHA_A }, undefined);
 
@@ -1444,12 +1493,44 @@ describe("sonar-freshen reports a run", () => {
     expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
   }, 60_000);
 
-  test("a hard-killed swap is recovered from disk before an already-current no-op", async () => {
-    const { appContents, attempts, code, previousExists, stderr, summary } = await runSonar(
-      { commit: SHA_B, crashAfterSwap: true, deployed: SHA_B },
+  test("rollback restores durable state before the previous binary may report healthy", async () => {
+    const { appContents, code, previousExists, stateContents, stderr, summary } = await runSonar(
+      { commit: SHA_B, deployed: SHA_A, mutateStateThenFail: true },
       undefined,
-      ["--force"],
     );
+
+    expect(code).toBe(1);
+    expect(appContents).toContain("old-sonar");
+    expect(stateContents).toBe("fixture");
+    expect(previousExists).toBe(false);
+    expect(stderr).toContain("rollback restored the previous healthy sonar binary");
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
+  }, 60_000);
+
+  test("post-health rollback cleanup debt never reports the healthy service down", async () => {
+    const { appContents, code, stateContents, stderr } = await runSonar(
+      {
+        commit: SHA_B,
+        deployed: SHA_A,
+        mutateStateThenFail: true,
+        rollbackCleanupFails: true,
+      },
+      undefined,
+    );
+
+    expect(code).toBe(1);
+    expect(appContents).toContain("old-sonar");
+    expect(stateContents).toBe("fixture");
+    expect(stderr).toContain("rollback is healthy and durable, but stale rollback files");
+    expect(stderr).toContain("rollback restored the previous healthy sonar binary");
+    expect(stderr).not.toContain("ROLLBACK ALSO FAILED");
+  }, 60_000);
+
+  test("a hard-killed swap is recovered from disk before an already-current no-op", async () => {
+    const { appContents, attempts, code, previousExists, stateContents, stderr, summary } =
+      await runSonar({ commit: SHA_B, crashAfterSwap: true, deployed: SHA_B }, undefined, [
+        "--force",
+      ]);
 
     expect(attempts[0]?.code).not.toBe(0);
     expect(code).toBe(0);
@@ -1458,6 +1539,7 @@ describe("sonar-freshen reports a run", () => {
     );
     expect(stderr).toContain("already current — no-op");
     expect(appContents).toContain("old-sonar");
+    expect(stateContents).toBe("fixture");
     expect(previousExists).toBe(false);
     expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 0 });
   }, 60_000);
@@ -1527,7 +1609,7 @@ describe("sonar-freshen reports a run", () => {
     expect(derivedOk(code, summary.errors)).toBe(true);
   });
 
-  test("a failed bootstrap retries partial state without manual deletion", async () => {
+  test("a failed bootstrap retries after rollback removes its partial state", async () => {
     const { attempts, bootstrapReady, code, stateContents, stderr, summary } = await runSonar(
       {
         commit: SHA_B,
@@ -1545,8 +1627,9 @@ describe("sonar-freshen reports a run", () => {
     expect(first.code).toBe(1);
     expect(lastJsonLine(first.stdout)).toMatchObject({ errors: 1, produced: 0, queueDepth: 1 });
     expect(code).toBe(0);
+    expect(attempts.at(0)?.stderr).toContain("rollback restored the previous healthy sonar binary");
     expect(stderr).toContain(
-      "unmarked durable state did not validate; retrying the incomplete bootstrap",
+      "durable state is not initialized; deferring the one-time bootstrap to the guarded service swap",
     );
     expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
     expect(stateContents).toBe("complete\n");

@@ -71,6 +71,7 @@ STATE_DIR="${SONARFRESHEN_STATE_DIR:-/opt/sonar-freshen}"
 SHA_FILE="${SONARFRESHEN_SHA_FILE:-$STATE_DIR/deployed-sha}"
 BOOTSTRAP_READY_FILE="${SONARFRESHEN_BOOTSTRAP_READY_FILE:-$STATE_DIR/local-state-ready}"
 ROLLBACK_INTENT_FILE="${SONARFRESHEN_ROLLBACK_INTENT_FILE:-$STATE_DIR/swap-in-progress}"
+STATE_ROLLBACK_FILE="${SONARFRESHEN_STATE_ROLLBACK_FILE:-$STATE_DIR/local-state.rollback}"
 LOCK="${SONARFRESHEN_LOCK:-/run/lock/fluncle-sonar-freshen.lock}"
 
 # The live service contract (must match apps/sonar/deploy/sonar.service).
@@ -461,6 +462,57 @@ durable_sync_file() {
 
 durable_sync_dir() { sync -f "$1"; }
 
+intent_value() {
+  sed -n "s/^$1=//p" "$ROLLBACK_INTENT_FILE" 2>/dev/null | head -n 1
+}
+
+write_rollback_intent() {
+  local state_ready="$1" state_present="$2" intent_tmp="${ROLLBACK_INTENT_FILE}.tmp.$$"
+  if ! printf 'candidate=%s\nbootstrap_ready=%s\nprior_commit=%s\nstate_ready=%s\nstate_present=%s\n' \
+    "$NEW_SHA" "$BOOTSTRAP_READY" "$OLD_SHA" "$state_ready" "$state_present" >"$intent_tmp" \
+    || ! durable_sync_file "$intent_tmp" \
+    || ! mv -f "$intent_tmp" "$ROLLBACK_INTENT_FILE" \
+    || ! durable_sync_file "$ROLLBACK_INTENT_FILE"; then
+    rm -f "$intent_tmp"
+    return 1
+  fi
+}
+
+snapshot_local_state() {
+  local source="$SMOKE_STATE_PATH" suffix source_file backup_file state_present=0
+  rm -f "$STATE_ROLLBACK_FILE" "${STATE_ROLLBACK_FILE}-wal" "${STATE_ROLLBACK_FILE}-shm"
+  durable_sync_dir "$STATE_DIR" || return 1
+  if [ -e "$source" ]; then state_present=1; fi
+  for suffix in '' '-wal' '-shm'; do
+    source_file="${source}${suffix}"
+    backup_file="${STATE_ROLLBACK_FILE}${suffix}"
+    [ -e "$source_file" ] || continue
+    # The freshener runs as root while sonar.service runs as User=sonar. Preserve
+    # ownership and mode so a rollback never restores correct bytes the service cannot open.
+    cp -pf "$source_file" "$backup_file" || return 1
+    durable_sync_file "$backup_file" || return 1
+  done
+  write_rollback_intent 1 "$state_present"
+}
+
+restore_local_state() {
+  [ "$(intent_value state_ready)" = "1" ] || return 0
+  local target suffix source_file target_file
+  target="$(env_value SONAR_STATE_PATH)"
+  [ -n "$target" ] || return 1
+  rm -f "$target" "${target}-wal" "${target}-shm"
+  if [ "$(intent_value state_present)" = "1" ]; then
+    for suffix in '' '-wal' '-shm'; do
+      source_file="${STATE_ROLLBACK_FILE}${suffix}"
+      target_file="${target}${suffix}"
+      [ -e "$source_file" ] || continue
+      cp -pf "$source_file" "$target_file" || return 1
+      durable_sync_file "$target_file" || return 1
+    done
+  fi
+  durable_sync_dir "$(dirname "$target")"
+}
+
 service_healthy() {
   local expected_commit="${1:-}"
   systemctl restart "$SERVICE" || return 1
@@ -475,15 +527,25 @@ service_healthy() {
 
 restore_previous_binary() {
   [ -f "$PREV_BIN" ] || return 1
+  systemctl stop "$SERVICE" || return 1
+  restore_local_state || return 1
   install -m 0755 "$PREV_BIN" "$APP_BIN.rb" || return 1
   durable_sync_file "$APP_BIN.rb" || return 1
   mv -f "$APP_BIN.rb" "$APP_BIN" || return 1
   durable_sync_file "$APP_BIN" || return 1
-  service_healthy || return 1
+  service_healthy "$(intent_value prior_commit)" || return 1
   rm -f "$ROLLBACK_INTENT_FILE" || return 1
   durable_sync_dir "$STATE_DIR" || return 1
-  rm -f "$PREV_BIN"
-  durable_sync_dir "$APP_DIR"
+  local cleanup_failed=0
+  rm -f "$PREV_BIN" || cleanup_failed=1
+  durable_sync_dir "$APP_DIR" || cleanup_failed=1
+  rm -f "$STATE_ROLLBACK_FILE" "${STATE_ROLLBACK_FILE}-wal" "${STATE_ROLLBACK_FILE}-shm" \
+    || cleanup_failed=1
+  durable_sync_dir "$STATE_DIR" || cleanup_failed=1
+  if [ "$cleanup_failed" = "1" ]; then
+    log "rollback is healthy and durable, but stale rollback files need cleanup"
+  fi
+  return 0
 }
 
 recover_interrupted_swap() {
@@ -538,6 +600,7 @@ fi
 SF_CHECKED=1
 
 OLD_SHA="$(cat "$SHA_FILE" 2>/dev/null || true)"
+if ! printf '%s' "$OLD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then OLD_SHA=''; fi
 
 # ── 2. decide whether to deploy ───────────────────────────────────────────────
 # Deploy when: --force; OR there is no recorded baseline (first run); OR the published
@@ -784,12 +847,7 @@ if [ -f "$APP_BIN" ]; then
     die "could not make the rollback binary durable"
   }
 fi
-intent_tmp="${ROLLBACK_INTENT_FILE}.tmp.$$"
-if ! printf 'candidate=%s\nbootstrap_ready=%s\n' "$NEW_SHA" "$BOOTSTRAP_READY" >"$intent_tmp" \
-  || ! durable_sync_file "$intent_tmp" \
-  || ! mv -f "$intent_tmp" "$ROLLBACK_INTENT_FILE" \
-  || ! durable_sync_file "$ROLLBACK_INTENT_FILE"; then
-  rm -f "$intent_tmp"
+if ! write_rollback_intent 0 0; then
   SF_ERRORS=$((SF_ERRORS + 1))
   die "could not persist rollback intent before swapping the candidate"
 fi
@@ -797,6 +855,9 @@ fi
 # set -e failures—must restore the snapshotted binary. The one process-wide EXIT
 # trap owns rollback so later cleanup hooks cannot accidentally replace it.
 ROLLBACK_ARMED=1
+if ! systemctl stop "$SERVICE" || ! snapshot_local_state; then
+  die "could not capture a durable local-state rollback snapshot"
+fi
 install -m 0755 "$NEW_BIN" "$APP_BIN.new"
 durable_sync_file "$APP_BIN.new"
 mv -f "$APP_BIN.new" "$APP_BIN"
@@ -808,9 +869,11 @@ log "swapping $SERVICE to ${NEW_SHA:0:12} and restarting"
 if service_healthy "$NEW_SHA" && mark_bootstrap_ready; then
   # Health plus the durable bootstrap marker is the acceptance boundary. Only
   # now may EXIT stop restoring the snapshotted binary.
+  ROLLBACK_ARMED=0
   rm -f "$ROLLBACK_INTENT_FILE"
   durable_sync_dir "$STATE_DIR"
-  ROLLBACK_ARMED=0
+  rm -f "$STATE_ROLLBACK_FILE" "${STATE_ROLLBACK_FILE}-wal" "${STATE_ROLLBACK_FILE}-shm"
+  durable_sync_dir "$STATE_DIR"
   # The one place a swap is real: the backlog is cleared and the work is written.
   SF_PRODUCED=1
   SF_QUEUE=0
