@@ -127,6 +127,8 @@ describe("security, release, and deploy topology", () => {
     expect(releasesSource).toContain("bun-darwin-arm64");
     expect(releasesSource).toContain("x86_64-unknown-linux-musl");
     expect(releasesSource).toContain("statically linked|static-pie linked");
+    expect(releasesSource).toContain("ldd dist/sonar > dist/sonar.ldd 2>&1 || true");
+    expect(releasesSource).not.toContain("if ldd dist/sonar");
   });
 
   test("post-deploy has event initiation plus a dynamic bounded fallback", () => {

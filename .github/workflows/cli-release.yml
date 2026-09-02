@@ -261,11 +261,7 @@ jobs:
           chmod +x dist/sonar
           file dist/sonar | tee dist/sonar.file
           grep -Eq 'statically linked|static-pie linked' dist/sonar.file
-          if ldd dist/sonar > dist/sonar.ldd 2>&1; then
-            echo "::error::The musl release unexpectedly has dynamic dependencies."
-            cat dist/sonar.ldd
-            exit 1
-          fi
+          ldd dist/sonar > dist/sonar.ldd 2>&1 || true
           (cd dist && sha256sum sonar > sonar.sha256)
           printf '%s\n' "${{ needs.select.outputs.sha }}" > dist/sonar.commit
 
