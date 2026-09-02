@@ -51,7 +51,17 @@ impl Consumer {
     ) -> Result<(StoredSnapshot, Option<u64>, bool, Option<SyncStats>)> {
         let corrupt = match self.state.has_manifest().await {
             Ok(true) => match self.state.load().await {
-                Ok(stored) => return Ok((stored, None, false, None)),
+                Ok(stored) => {
+                    if let Some(stored) = self.reconcile_startup_state(stored).await? {
+                        return Ok((stored, None, false, None));
+                    }
+                    warn!(
+                        cause = "checkpoint_divergence",
+                        "durable sonar state is not confirmed active remotely; rebuilding before serving"
+                    );
+                    let (stored, activation_seq, sync) = self.prepare_bootstrap().await?;
+                    return Ok((stored, Some(activation_seq), false, Some(sync)));
+                }
                 Err(error) => {
                     warn!(cause = "state_corrupt", error = %format!("{error:#}"), "durable sonar state is corrupt; quarantining it before a full local rebuild");
                     true
@@ -71,6 +81,49 @@ impl Consumer {
         }
         let (stored, activation_seq, sync) = self.prepare_bootstrap().await?;
         Ok((stored, Some(activation_seq), corrupt, Some(sync)))
+    }
+
+    /// Confirm a durable local generation against the authoritative remote
+    /// consumer checkpoint before the HTTP server can expose it as healthy.
+    /// A local manifest can be complete even when a prior process died before
+    /// activation, so file validity alone is not a startup-ready signal.
+    async fn reconcile_startup_state(
+        &self,
+        stored: StoredSnapshot,
+    ) -> Result<Option<StoredSnapshot>> {
+        let status = self.api.status().await?;
+        validate_contract(&status)?;
+        if let Some(pending) = stored.manifest.pending.as_ref() {
+            match pending_action(&status, pending) {
+                PendingAction::Finalize => {
+                    self.state.clear_pending(pending.through_seq).await?;
+                    return self.state.load().await.map(Some);
+                }
+                PendingAction::Retry => {
+                    let acknowledged = self
+                        .api
+                        .acknowledge_exact(
+                            &pending.batch_digest,
+                            pending.event_count,
+                            pending.from_seq,
+                            pending.through_seq,
+                        )
+                        .await?;
+                    validate_contract(&acknowledged)?;
+                    if acknowledged.state != "active"
+                        || acknowledged.applied_through_seq != Some(pending.through_seq)
+                    {
+                        bail!("artifact acknowledgement returned the wrong startup checkpoint");
+                    }
+                    self.state.clear_pending(pending.through_seq).await?;
+                    return self.state.load().await.map(Some);
+                }
+                PendingAction::Rebuild => return Ok(None),
+            }
+        }
+        Ok((status.state == "active"
+            && status.applied_through_seq == Some(stored.manifest.checkpoint))
+        .then_some(stored))
     }
 
     async fn prepare_bootstrap(&self) -> Result<(StoredSnapshot, u64, SyncStats)> {
@@ -659,6 +712,77 @@ mod tests {
         (format!("http://{address}"), task)
     }
 
+    async fn pre_activation_api() -> (
+        String,
+        Arc<AtomicUsize>,
+        Arc<AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let registrations = Arc::new(AtomicUsize::new(0));
+        let activations = Arc::new(AtomicUsize::new(0));
+        let register_calls = Arc::clone(&registrations);
+        let activation_calls = Arc::clone(&activations);
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test",
+                get(|| async {
+                    Json(json!({
+                        "consumer": response_status(
+                            "rebuilding",
+                            None,
+                            None,
+                            3,
+                            vec![complete_rebuild()]
+                        ),
+                        "ok": true
+                    }))
+                }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers",
+                post(move || {
+                    let calls = Arc::clone(&register_calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Json(json!({
+                            "consumer": response_status(
+                                "rebuilding",
+                                None,
+                                None,
+                                3,
+                                vec![complete_rebuild()]
+                            ),
+                            "ok": true
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test/activate",
+                post(move || {
+                    let calls = Arc::clone(&activation_calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Json(json!({
+                            "consumer": response_status("active", Some(3), None, 3, Vec::new()),
+                            "ok": true
+                        }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (
+            format!("http://{address}"),
+            registrations,
+            activations,
+            task,
+        )
+    }
+
     fn status(checkpoint: Option<u64>, earliest: Option<u64>, head: u64) -> ConsumerStatus {
         ConsumerStatus {
             applied_through_seq: checkpoint,
@@ -808,6 +932,64 @@ mod tests {
         assert_eq!(current.baseline_seq, 3);
         assert_eq!(current.tracks.id_at(0), "after-compaction");
         assert_eq!(app.rebuild_cause.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn valid_manifest_before_activation_retries_bootstrap_before_serving() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("bootstrap", 3, 8.5);
+        let seed = StateStore::open(&state_path).await.unwrap();
+        seed.replace_from_replica(
+            std::slice::from_ref(&track),
+            &[SourceRevision {
+                id: track.id.clone(),
+                revision: track.revision,
+            }],
+            &[],
+            3,
+            3,
+            1,
+        )
+        .await
+        .unwrap();
+        drop(seed);
+        let (base_url, registrations, activations, server) = pre_activation_api().await;
+
+        let first = Consumer::new(
+            ArtifactClient::new(base_url.clone(), "test", "sonar-test".into()).unwrap(),
+            local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await,
+            StateStore::open(&state_path).await.unwrap(),
+            10,
+            10,
+        )
+        .unwrap();
+        let (_, first_activation, _, _) = first.initial_snapshot().await.unwrap();
+        assert_eq!(first_activation, Some(3));
+        assert_eq!(activations.load(Ordering::SeqCst), 0);
+        drop(first);
+
+        let retry = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            Replica::open_local_test_source(&replica_path)
+                .await
+                .unwrap(),
+            StateStore::open(&state_path).await.unwrap(),
+            10,
+            10,
+        )
+        .unwrap();
+        let (_, retry_activation, _, _) = retry.initial_snapshot().await.unwrap();
+        assert_eq!(retry_activation, Some(3));
+        retry
+            .activate_prepared(retry_activation.unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(registrations.load(Ordering::SeqCst), 2);
+        assert_eq!(activations.load(Ordering::SeqCst), 1);
+        server.abort();
     }
 
     #[test]
