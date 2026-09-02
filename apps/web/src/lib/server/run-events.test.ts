@@ -348,6 +348,31 @@ describe("normalizeRunSummary — a page cap never becomes a backlog", () => {
 });
 
 describe("normalizeRunSummary — the third state", () => {
+  it("keeps an admission-skipped firing visibly distinct from either payload success or failure", () => {
+    const result = normalizeRunSummary(
+      '{"admissionOutcome":"wait-expired","admissionWaitMs":120000,"admissionYieldReason":"queue","checked":null,"errors":0,"expectedIntervalMs":null,"gateState":"admission-skipped","payloadStarted":false,"produced":null,"queueDepth":null}',
+    );
+
+    expect(result).toMatchObject({
+      checked: null,
+      errors: 0,
+      gateState: "admission-skipped",
+      missingFields: [],
+      produced: null,
+      queueDepth: null,
+      unrecognisedFields: [],
+    });
+    expect(deriveRunOk(0, result.errors)).toBe(true);
+  });
+
+  it("rejects an admission-skipped claim that could conceal a payload run", () => {
+    expect(() =>
+      normalizeRunSummary(
+        '{"admissionOutcome":"wait-expired","admissionWaitMs":12,"admissionYieldReason":"queue","errors":0,"gateState":"admission-skipped","payloadStarted":true}',
+      ),
+    ).toThrow(/payloadStarted:false/);
+  });
+
   it("reads `paused: true` as a gate and NULLS the work counters", () => {
     // Rule 5: 0 means "I tried and found nothing"; a paused sweep did not try. Storing its
     // reported zeros would fire `produced == 0 AND queue_depth > 0` on a sweep that is

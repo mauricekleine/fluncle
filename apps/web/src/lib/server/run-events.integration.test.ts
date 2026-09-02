@@ -470,6 +470,30 @@ describe("run failure vocabulary — acceptance", () => {
 });
 
 describe("insertRunEvent — a gated run stores NULL, never 0", () => {
+  it("stores an admission skip as a clean no-op with its runner facts preserved", async () => {
+    await insertRunEvent(
+      envelope({
+        summary_raw:
+          '{"admissionOutcome":"wait-expired","admissionWaitMs":120000,"admissionYieldReason":"queue","checked":null,"errors":0,"expectedIntervalMs":null,"gateState":"admission-skipped","payloadStarted":false,"produced":null,"queueDepth":null}',
+      }),
+    );
+
+    const row = await onlyRow();
+
+    expect(row).toMatchObject({
+      checked: null,
+      errors: 0,
+      gate_state: "admission-skipped",
+      ok: 1,
+      produced: null,
+      queue_depth: null,
+      summary_status: "parsed",
+      unrecognised_fields: "[]",
+    });
+    expect(row.summary_raw).toContain('"payloadStarted":false');
+    expect(row.summary_raw).toContain('"admissionOutcome":"wait-expired"');
+  });
+
   it("writes NULL work counters so the alarm conjunction cannot fire on a paused sweep", async () => {
     await insertRunEvent(
       envelope({ summary_raw: '{"checked":0,"paused":true,"produced":0,"queueDepth":40}' }),

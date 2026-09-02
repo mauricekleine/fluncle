@@ -80,12 +80,12 @@ import { ApiError } from "./spotify";
 /**
  * The closed gate vocabulary, mirroring the `run_events.gate_state` enum.
  *
- * SIX STATES, and the extra three are deliberate SLACK rather than dead weight.
+ * SEVEN STATES, and the extra four are deliberate SLACK rather than dead weight.
  * `active`/`paused`/`disabled` are a sweep's own kill switch, and the fleet's emitters
  * currently spell every gated tick `paused`. `locked` (a tick that found the single-flight
  * lock held), `forced`, and `dry-run` are the three more precise words an emitter reaches
- * for naturally — the sonar freshen's own comments describe its ticks in exactly those
- * terms — so they are accepted here.
+ * for naturally. `admission-skipped` is the runner's distinct no-payload fact. Together
+ * they keep every known no-op legible without accepting an arbitrary string.
  *
  * WHY ACCEPT A WORD NOBODY SENDS YET: the vocabulary is fail-OPEN on purpose. A gate value
  * the Worker does not know is a 400, a 400 leaves NO ROW, and a missing row reads as a
@@ -93,7 +93,14 @@ import { ApiError } from "./spotify";
  * an unused one is nothing. The enum stays CLOSED (an arbitrary string is still rejected);
  * it is just closed around the words a real emitter would plausibly choose.
  */
-export type RunGateState = "active" | "disabled" | "dry-run" | "forced" | "locked" | "paused";
+export type RunGateState =
+  | "active"
+  | "admission-skipped"
+  | "disabled"
+  | "dry-run"
+  | "forced"
+  | "locked"
+  | "paused";
 
 /** Why the summary yielded what it yielded — mirrors `run_events.summary_status`. */
 export type RunSummaryStatus = "absent" | "malformed" | "not_object" | "parsed";
@@ -139,7 +146,12 @@ const GATE_SUPPRESSED_FIELDS = new Set<string>(["checked", "produced", "queue_de
  * measured number at write time. An emitter that wants the suppression keeps saying
  * `paused`, which is what the fleet says today.
  */
-const GATE_STATES_THAT_NEVER_LOOKED = new Set<string>(["disabled", "locked", "paused"]);
+const GATE_STATES_THAT_NEVER_LOOKED = new Set<string>([
+  "admission-skipped",
+  "disabled",
+  "locked",
+  "paused",
+]);
 
 /**
  * The recognised counters and the spellings that reach each one. Two spellings are
@@ -169,12 +181,49 @@ const PAUSED_SPELLINGS = ["paused"];
 const OK_SPELLINGS = ["ok"];
 const GATE_STATES = new Set<string>([
   "active",
+  "admission-skipped",
   "disabled",
   "dry-run",
   "forced",
   "locked",
   "paused",
 ]);
+
+const ADMISSION_SKIP_OUTCOMES = new Set<string>([
+  "acquisition-unavailable",
+  "containment-unavailable",
+  "enforcement-not-active",
+  "invalid-grant",
+  "wait-expired",
+]);
+
+/** Validate the runner-only facts that distinguish a deliberate admission yield from a payload run. */
+function validateAdmissionSkip(
+  summary: Record<string, unknown>,
+  gateState: null | RunGateState,
+): void {
+  if (gateState !== "admission-skipped") {
+    return;
+  }
+
+  const outcome = summary.admissionOutcome;
+  if (typeof outcome !== "string" || !ADMISSION_SKIP_OUTCOMES.has(outcome)) {
+    reject("an admission-skipped run must carry a recognized admissionOutcome");
+  }
+
+  if (summary.payloadStarted !== false) {
+    reject("an admission-skipped run must carry payloadStarted:false");
+  }
+
+  requireCount("admissionWaitMs", summary.admissionWaitMs);
+
+  if (
+    typeof summary.admissionYieldReason !== "string" ||
+    summary.admissionYieldReason.length === 0
+  ) {
+    reject("an admission-skipped run must carry a non-empty admissionYieldReason");
+  }
+}
 
 /** Every summary key the Worker recognises — anything else is `unrecognised_fields`. */
 const RECOGNISED_KEYS = new Set<string>([
@@ -185,6 +234,10 @@ const RECOGNISED_KEYS = new Set<string>([
   ...GATE_STATE_SPELLINGS,
   ...PAUSED_SPELLINGS,
   ...OK_SPELLINGS,
+  "admissionOutcome",
+  "admissionWaitMs",
+  "admissionYieldReason",
+  "payloadStarted",
 ]);
 
 /**
@@ -486,6 +539,7 @@ export function normalizeRunSummary(summaryRaw: null | string | undefined): Norm
   // is never obeyed, and it never costs the sweep its row.
   const { selfAssertedOk, unreadableKey } = readSelfAssertedOk(summary);
   const gateState = readGateState(summary);
+  validateAdmissionSkip(summary, gateState);
   // A sweep behind a closed gate never looked, so it owes no work counters and must not
   // report 0 for them (rule 5). `errors` and `expected_interval_ms` stay owing: one is a
   // failure signal, the other describes the schedule rather than the run.

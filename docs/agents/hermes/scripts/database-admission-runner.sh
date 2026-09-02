@@ -16,6 +16,8 @@ if [ -z "$owner" ] || [ "$#" -eq 0 ]; then
 fi
 case "$owner" in *[!a-z0-9.-]* | '') echo "invalid database admission owner" >&2; exit 2 ;; esac
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # Container sweeps normally load this themselves, but admission happens before their entrypoint.
 # Host services instead receive the same token through their committed EnvironmentFile.
 if [ -r "${HOME:-/nonexistent}/.fluncle-secrets.env" ]; then
@@ -79,6 +81,41 @@ yield_reason=""
 recovered=false
 payload_pid=""
 terminal_action_started=0
+
+# An enforced firing that deliberately yields has no payload wrapper to write the ordinary
+# marker/ledger evidence. Container units have the same stable `fluncle-<token>` owner and
+# marker token, so hand the skip to the existing wrapper instead of creating another output or
+# telemetry path. Host units deliberately do not enter this handoff: their marker ownership is
+# not derivable from an admission owner and they have their own direct emitters where needed.
+emit_admission_skip() {
+  local outcome="$1" skip_yield_reason="$2" summary job
+  case "$owner" in
+    fluncle-*) job="${owner#fluncle-}" ;;
+    *) return 0 ;;
+  esac
+  skip_yield_reason="$(safe_admission_yield_reason "$skip_yield_reason")"
+
+  summary="$(printf '{"admissionOutcome":"%s","admissionWaitMs":%s,"admissionYieldReason":"%s","checked":null,"errors":0,"expectedIntervalMs":null,"gateState":"admission-skipped","payloadStarted":false,"produced":null,"queueDepth":null}' \
+    "$outcome" "$wait_ms" "$skip_yield_reason")"
+  # cron-output's rebake guard can `exit` while it is sourced. Keep it in a subshell: the
+  # admission owner must still release/cancel its lease when a concurrent rebake owns the tick.
+  (
+    # shellcheck source=./cron-output.sh
+    . "${SCRIPT_DIR}/cron-output.sh"
+    emit_cron_output "$job" -- bash -c 'printf "%s\\n" "$1"' database-admission-skip "$summary"
+  ) || true
+}
+
+# Coordinator responses are external input. Keep the marker/ledger's structured fact in the
+# same bounded vocabulary as admission itself rather than letting a malformed string change JSON.
+safe_admission_yield_reason() {
+  case "$1" in
+    containment-unavailable | coordinator-unavailable | database-health | direct-read-latency | enforcement-not-active | invalid-grant | public-latency | queue)
+      printf '%s' "$1"
+      ;;
+    *) printf '%s' 'queue' ;;
+  esac
+}
 
 json_field() {
   local json="$1" field="$2"
@@ -203,6 +240,7 @@ while :; do
     terminal_admission
     yield_reason="coordinator-unavailable"
     emit_admission_event acquisition-unavailable 0
+    emit_admission_skip acquisition-unavailable "$yield_reason"
     exit 0
   fi
 
@@ -227,6 +265,7 @@ while :; do
       yield_reason="enforcement-not-active"
       terminal_admission
       emit_admission_event enforcement-not-active 0
+      emit_admission_skip enforcement-not-active "$yield_reason"
       exit 0
     fi
     emit_admission_event shadow 0
@@ -241,12 +280,14 @@ while :; do
     if [ -z "$fencing_token" ] || [ -z "$heartbeat_after_ms" ]; then
       terminal_admission
       emit_admission_event invalid-grant 0
+      emit_admission_skip invalid-grant "invalid-grant"
       exit 0
     fi
     if [ "$(current_time_ms)" -ge "$acquisition_deadline_ms" ]; then
       terminal_admission
       yield_reason="queue"
       emit_admission_event wait-expired 0
+      emit_admission_skip wait-expired "$yield_reason"
       exit 0
     fi
     break
@@ -254,8 +295,10 @@ while :; do
 
   remaining_ms=$((acquisition_deadline_ms - $(current_time_ms)))
   if [ "$remaining_ms" -le 0 ]; then
+    yield_reason="${yield_reason:-queue}"
     terminal_admission
     emit_admission_event wait-expired 0
+    emit_admission_skip wait-expired "$yield_reason"
     exit 0
   fi
   poll_ms=$((ADMISSION_POLL_SECS * 1000))
@@ -274,6 +317,7 @@ if ! command -v setsid >/dev/null 2>&1; then
   terminal_admission
   yield_reason="containment-unavailable"
   emit_admission_event containment-unavailable 0
+  emit_admission_skip containment-unavailable "$yield_reason"
   exit 0
 fi
 pdeathsig_available=false

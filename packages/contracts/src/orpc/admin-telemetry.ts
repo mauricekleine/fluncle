@@ -195,7 +195,9 @@ export const RunLedgerRowSchema = z.object({
   errors: z.number().int().nullable(),
   exitCode: z.number().int(),
   expectedIntervalMs: z.number().int().nullable(),
-  gateState: z.enum(["active", "disabled", "dry-run", "forced", "locked", "paused"]).nullable(),
+  gateState: z
+    .enum(["active", "admission-skipped", "disabled", "dry-run", "forced", "locked", "paused"])
+    .nullable(),
   id: z.string(),
   missingFields: z.array(z.string()),
   occurredAt: z.string(),

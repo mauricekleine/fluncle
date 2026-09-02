@@ -104,7 +104,7 @@ fluncle admin telemetry read --since 24h --limit 100 --json \
            | "\(.unit)\t\(.occurredAt)\tproduced=0 queue=\(.queueDepth)"'
 ```
 
-The `gateState` filter is load-bearing. A `paused`/`disabled`/`locked` tick already has its work counters nulled server-side, but `forced` and `dry-run` ticks LOOKED and kept their real numbers — excluding them here is the reader's job, and the server deliberately leaves it that way rather than laundering a measured number at write time.
+The `gateState` filter is load-bearing. An `admission-skipped`/`paused`/`disabled`/`locked` tick already has its work counters nulled server-side, but `forced` and `dry-run` ticks LOOKED and kept their real numbers — excluding them here is the reader's job, and the server deliberately leaves it that way rather than laundering a measured number at write time.
 
 **Then check the gauge can move, before you report it.**
 
@@ -184,7 +184,7 @@ Standing ruling: the command selects evidence and computes factual rollups and r
 
 **`summaryStatus`** — `parsed` (a JSON object the Worker read), `absent` (the tick printed nothing: a crash before output), `malformed` (present but not JSON), `not_object` (JSON, but an array or a scalar).
 
-**`gateState`** — `active` and `null` mean the tick looked. `paused`, `disabled` and `locked` mean it never looked, and the Worker has already nulled its work counters. `forced` and `dry-run` LOOKED, so their counters are real readings and it is the reader's job to exclude them from the `produced == 0` conjunction.
+**`gateState`** — `active` and `null` mean the tick looked. `admission-skipped`, `paused`, `disabled` and `locked` mean it never looked, and the Worker has already nulled its work counters. An `admission-skipped` row is an intentional runner no-op, not a payload success or failure; its exact admission outcome, wait, yield reason, and `payloadStarted: false` remain in `summaryRaw`. `forced` and `dry-run` LOOKED, so their counters are real readings and it is the reader's job to exclude them from the `produced == 0` conjunction.
 
 **Null is not zero.** `0` is a measured answer; `null` says the emitter cannot know; absence means it never reported the counter at all, and only absence lands on `missingFields`.
 

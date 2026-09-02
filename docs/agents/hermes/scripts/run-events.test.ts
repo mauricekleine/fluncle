@@ -209,7 +209,7 @@ describe("every path a box script hardcodes is a path the Worker serves", () => 
 // Same failure class as the endpoint, one field in: the summary is bash's half of a contract the
 // Worker owns, and a value only bash knows about is REJECTED at the edge — leaving no row, which
 // reads as a missed run. Two vocabularies are pinned here: `ok` (which the emitter must not
-// state at all) and `gateState` (which must be one of the ledger's six words).
+// state at all) and `gateState` (which must be one of the ledger's seven words).
 // ---------------------------------------------------------------------------
 
 const EMITTERS: [string, string][] = [

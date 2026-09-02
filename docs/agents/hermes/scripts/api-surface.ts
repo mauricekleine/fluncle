@@ -87,14 +87,15 @@ export const PENDING_WORKSPACE_PATHS = new Map<string, string>([
  * script's own invention is rejected at the edge, and a rejected POST leaves NO ROW: the
  * silent-empty-ledger failure again, one field further in.
  *
- * SIX WORDS, and the three beyond `active`/`disabled`/`paused` are not decoration — they are
+ * SEVEN WORDS, and the four beyond `active`/`disabled`/`paused` are not decoration — they are
  * the difference between a suppressed counter and a kept one. The Worker nulls a gated run's
- * work counters only for the gates that NEVER LOOKED (`disabled`/`locked`/`paused`); `forced`
+ * work counters only for the gates that NEVER LOOKED (`admission-skipped`/`disabled`/`locked`/`paused`); `forced`
  * and `dry-run` both LOOKED, so their `checked` survives. Spelling a `--dry-run` tick `paused`
  * therefore erases the very reading that makes it legible.
  */
 export const LEDGER_GATE_STATES = [
   "active",
+  "admission-skipped",
   "disabled",
   "dry-run",
   "forced",
@@ -131,7 +132,7 @@ export function workspaceGateStates(): null | string[] {
  * The Worker's `GATE_STATES_THAT_NEVER_LOOKED` — the subset whose work counters it suppresses to
  * NULL — or `null` when the server half is not here yet.
  *
- * Membership in `GATE_STATES` is not the whole contract. Every one of the six words is accepted,
+ * Membership in `GATE_STATES` is not the whole contract. Every one of the seven words is accepted,
  * so a script that gates a tick with the WRONG legal word passes every path/vocabulary check and
  * still has its `checked` erased at the edge. This is the half of the Worker's rule that says
  * which word costs a reading, read from the Worker rather than re-derived here.

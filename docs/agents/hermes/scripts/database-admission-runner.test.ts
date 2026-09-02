@@ -14,6 +14,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const RUNNER = resolve(import.meta.dirname, "database-admission-runner.sh");
+const CRON_OUTPUT = resolve(import.meta.dirname, "cron-output.sh");
 let directory: string;
 let binDirectory: string;
 let curlLog: string;
@@ -94,9 +95,28 @@ function runnerEnvironment(
     DATABASE_ADMISSION_POLL_SECS: "0",
     FLUNCLE_API_BASE_URL: "https://admission.invalid",
     FLUNCLE_API_TOKEN: options.token === undefined ? "test-token" : options.token,
+    HEALTHCHECK_CRON_OUTPUT_DIR: join(directory, "cron-output"),
     HOME: directory,
     PATH: `${binDirectory}:${inheritedPath}`,
   };
+}
+
+function markerSummary(): Record<string, unknown> {
+  const markerDirectory = join(directory, "cron-output", "fluncle-enrich");
+  const marker = readdirSync(markerDirectory)
+    .filter((entry) => entry.endsWith(".md"))
+    .sort()
+    .at(-1);
+
+  expect(marker).toBeTruthy();
+  const body = readFileSync(join(markerDirectory, marker ?? ""), "utf8");
+  const summary = body
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .at(-1);
+
+  expect(summary).toBeTruthy();
+  return JSON.parse(summary ?? "{}") as Record<string, unknown>;
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
@@ -172,6 +192,7 @@ function processGroupHasExecutingMembers(groupPid: number): boolean {
 const SHADOW_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":false,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"shadow-acquire","queueAgeMs":0,"recovered":false,"waitMs":0,"yieldReason":null}'`;
 const ACQUIRED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":7,"heavyRead":false,"heartbeatAfterMs":1,"holdMs":0,"lane":"write","leaseExpiresAtMs":91000,"operationId":"track.enrich","outcome":"acquired","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":null}'`;
 const QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue"}'`;
+const MALFORMED_YIELD_QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue\\\\malformed"}'`;
 
 describe("database admission unit runner", () => {
   it("preserves old execution when shadow mode or the dark endpoint is unavailable", () => {
@@ -186,15 +207,33 @@ describe("database admission unit runner", () => {
   });
 
   it("fails closed before payload start when the locally armed coordinator is unavailable", () => {
+    fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"acquire"'; then
+  exit 1
+fi
+printf '{}'
+`);
     const payloadMarker = join(directory, "payload-started");
-    const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
-      failClosed: true,
-      token: "",
-    });
+    const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], { failClosed: true });
 
     expect(result.status).toBe(0);
     expect(existsSync(payloadMarker)).toBe(false);
     expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
+    expect(markerSummary()).toEqual({
+      admissionOutcome: "acquisition-unavailable",
+      admissionWaitMs: 0,
+      admissionYieldReason: "coordinator-unavailable",
+      checked: null,
+      errors: 0,
+      expectedIntervalMs: null,
+      gateState: "admission-skipped",
+      payloadStarted: false,
+      produced: null,
+      queueDepth: null,
+    });
+    // The same wrapper POSTs the marker's summary to the ledger; the fake coordinator lets
+    // that separate endpoint succeed, so this firing is evidence rather than journald-only.
+    expect(readFileSync(curlLog, "utf8")).toContain('"summary_raw"');
   });
 
   it("cancels once when signals race an in-flight acquisition", async () => {
@@ -280,6 +319,34 @@ fi
     expect(existsSync(payloadMarker)).toBe(false);
     expect(readFileSync(curlLog, "utf8")).toContain('"action":"cancel"');
     expect(result.stderr).toContain('"outcome":"wait-expired"');
+    expect(markerSummary()).toEqual({
+      admissionOutcome: "wait-expired",
+      admissionWaitMs: 12,
+      admissionYieldReason: "queue",
+      checked: null,
+      errors: 0,
+      expectedIntervalMs: null,
+      gateState: "admission-skipped",
+      payloadStarted: false,
+      produced: null,
+      queueDepth: null,
+    });
+  });
+
+  it("keeps a malformed coordinator yield reason out of the marker JSON", () => {
+    fakeCurl(MALFORMED_YIELD_QUEUED_RESPONSE);
+    const payloadMarker = join(directory, "payload-started");
+    const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      maxWaitSecs: 0,
+    });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(payloadMarker)).toBe(false);
+    expect(markerSummary()).toMatchObject({
+      admissionOutcome: "wait-expired",
+      admissionYieldReason: "queue",
+      payloadStarted: false,
+    });
   });
 
   it("releases a grant that arrives after the absolute acquisition deadline", () => {
@@ -317,6 +384,22 @@ ${ACQUIRED_RESPONSE}`);
     expect(result.stderr).toContain('"enforced":true');
     expect(result.stderr).toContain('"operation_id":"track.enrich"');
     expect(result.stderr).toContain('"run_id":"');
+  });
+
+  it("leaves an acquired payload's own success evidence intact", () => {
+    fakeCurl(ACQUIRED_RESPONSE);
+    const result = run([
+      "bash",
+      "-c",
+      'source "$1"; emit_cron_output enrich -- bash -c \'printf "{\\\"checked\\\":1,\\\"errors\\\":0,\\\"produced\\\":1,\\\"queueDepth\\\":0}\\n"\'',
+      "payload",
+      CRON_OUTPUT,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(markerSummary()).toEqual({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
+    expect(result.stdout).toContain('"produced":1');
+    expect(result.stderr).toContain('"outcome":"released"');
   });
 
   it("uses the in-group owner watcher when parent-death signaling is unavailable", () => {
