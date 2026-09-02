@@ -43,9 +43,12 @@
 //      changed → no ping (no spam). PLUS: a service that stays down long enough
 //      escalates on a doubling ladder (see ESCALATE_AFTER_TICKS) so a sustained
 //      outage keeps speaking instead of going quiet after its one edge-triggered ping.
-//   4. POST the snapshot to ${HEALTHCHECK_WORKER_URL}/api/v1/admin/health (record_health,
-//      Authorization: Bearer ${FLUNCLE_API_TOKEN}). Best-effort: the alert already
-//      fired, so a failed POST is logged, never thrown.
+//   4. PING the external dead-man's-switch beacon. It follows the essential probes,
+//      transition state, and alerts, but precedes optional database telemetry so a
+//      primary-database outage can never suppress the completed-tick signal.
+//   5. POST the snapshot to ${HEALTHCHECK_WORKER_URL}/api/v1/admin/health (record_health,
+//      Authorization: Bearer ${FLUNCLE_API_TOKEN}). Best-effort: the alert and beacon
+//      already fired, so a failed POST is logged, never thrown.
 //
 // stdout: ONE JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -82,7 +85,7 @@ const FLUNCLE_API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 const BEACON_URL = process.env.HEALTHCHECK_BEACON_URL ?? "";
 
 // Per-probe network timeout. Short on purpose: a hung target degrades to a clean
-// "down" well inside the ~120s runner kill rather than starving the budget.
+// "down" well inside the unit timeout rather than starving the tick budget.
 const PROBE_TIMEOUT_MS = Number.parseInt(process.env.HEALTHCHECK_TIMEOUT_MS ?? "", 10) || 4000;
 
 // The snapshot POST is a Turso WRITE through the Worker, not a cheap probe GET, so it
@@ -1949,7 +1952,7 @@ function pingDiscord(content: string): void {
 // since a dead prober can't alert about itself. Provider-agnostic (just a URL),
 // OPTIONAL (unset ⇒ skipped), and strictly best-effort: a short --max-time curl
 // that never throws and only logs to stderr on failure. A failed beacon must never
-// affect the tick's exit status (the snapshot + Discord alert have already fired).
+// affect the tick's exit status. The snapshot write deliberately follows this ping.
 // ---------------------------------------------------------------------------
 
 function pingBeacon(): void {
@@ -2376,13 +2379,15 @@ async function main(): Promise<void> {
     pingDiscord(strainAlert);
   }
 
-  // Persist the snapshot to the page (best-effort).
-  const posted = await postSnapshot(at, withTransition);
-
-  // Reaching here means the tick completed — ping the external dead-man's-switch
+  // The essential probe/transition/alert payload completed — ping the external dead-man's-switch
   // beacon so an outside service can alert if THIS box (the prober) ever stops
-  // ticking. Best-effort + optional; never affects the run's exit status.
+  // ticking. This deliberately precedes the optional primary-database write so an admission or
+  // database outage cannot suppress liveness. Best-effort + optional; never affects exit status.
   pingBeacon();
+
+  // Persist the snapshot to the page (best-effort). This is receipt-backed control-plane
+  // telemetry, not a prerequisite for the probes, alerts, or dead-man's-switch signal above.
+  const posted = await postSnapshot(at, withTransition);
 
   // One JSON summary line — the cron run output. `ok` reflects the PROBE run, not the
   // services' health (the snapshot carries that); a down service is a normal,

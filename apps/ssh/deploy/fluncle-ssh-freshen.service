@@ -9,16 +9,17 @@ Type=oneshot
 # Runs as root: it owns the build clone at /opt/fluncle-ssh-build, swaps the binary at
 # /opt/fluncle-ssh/fluncle-ssh, and drives `systemctl restart fluncle-ssh`. Credential-free
 # — it clones a public repo and reuses the live service's env; it reads nothing from `op`.
-ExecStart=/opt/fluncle-database-admission/database-admission-runner.sh fluncle-ssh-freshen -- /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh
+# Self-deploy is database-independent control-plane work and must not wait for admission.
+ExecStart=/opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh
 
 # Optional alert/status inputs (Discord webhook + the agent-scoped API token for the
 # /status `self-deploy-ssh` row). Operator-placed, kept OUT of the repo; the `-` prefix
 # makes it optional, so the self-deploy still runs (silently) when the file is absent.
-# Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN, DATABASE_ADMISSION_FAIL_CLOSED.
+# Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN.
 EnvironmentFile=-/etc/fluncle/ssh-freshen.env
 
 # A clean tick is seconds; a full `go build` of the SSH app is well under a minute. Give room.
-TimeoutStartSec=730
+TimeoutStartSec=610
 
 # Modest hardening for a root oneshot that builds + swaps a binary and restarts a unit.
 NoNewPrivileges=true

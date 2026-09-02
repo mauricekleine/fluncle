@@ -10,7 +10,6 @@ OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot
-EnvironmentFile=-/etc/fluncle/database-admission.env
 # The host unit runs as root (to drive the Docker daemon); `docker exec -u hermes` runs the
 # probe WORK unprivileged inside the container — matching every other fluncle-* sweep timer,
 # so no host cron execs as container-root. The probe WORK is BAKED into the image (the .sh/.ts
@@ -19,13 +18,15 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # is no longer starved by — the Hermes cron gateway it is meant to monitor. (The prober
 # self-emits its own /status row, so — unlike the work sweeps — its .sh writes no cron-output
 # marker: a self-read would be circular.)
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-healthcheck -- bash /opt/hermes-scripts/fluncle-healthcheck.sh
+# Probes and the dead-man beacon are database-independent control-plane work; the optional
+# receipt-backed snapshot must never put the whole prober behind admission.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/fluncle-healthcheck.sh
 # A clean tick runs ~5s. The old 120s ceiling could false-kill the prober when it overlapped a
 # pin-watch docker image build (~4 min of heavy CPU contention on this 4-vCPU box) — and a
 # killed prober fires an OnFailure Discord alert, i.e. contention would masquerade as an
 # outage. 300s clears the build window while staying well under the 10-min cadence and short
 # enough that a genuinely hung probe still surfaces promptly.
-TimeoutStartSec=430
+TimeoutStartSec=310
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

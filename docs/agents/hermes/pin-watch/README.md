@@ -76,19 +76,14 @@ Discord alerts (deploy / rollback / failure) use the `DISCORD_ALERT_WEBHOOK` alr
 
 Every run also reports a **`self-deploy` health check** to the public [`/status`](https://www.fluncle.com/status) board (POST `/api/v1/admin/health`, agent tier) so the self-maintenance loop is visible alongside the other services: `ok` when current or freshly deployed, `degraded` when a bump failed to build / pre-smoke or was rolled back (box healthy on the prior tools, a human should look), `down` if a rollback itself failed. It reuses the **agent token already in the container's env** (the same one the pre-smoke read uses) — no token on disk, none from `op` — and the message is public-safe and deliberately vague (no host, no tool VERSIONS — those are internal — and no raw error; the version detail rides only the operator-only Discord alerts). If the timer ever stops, the row simply goes stale on `/status`, which is itself the signal that the box may be silently drifting.
 
+The host unit executes the self-deploy directly rather than entering primary-database admission. Rebuild, smoke, rollback, and timer restoration are control-plane work that must continue during a database outage; the small receipt-backed `/status` post is optional telemetry and never authorizes suppressing that payload.
+
 ## Deploy (on rave-02, one time)
 
 ```bash
 # 1. Drop the script (0755) at its deployed path.
 sudo install -D -m 0755 docs/agents/hermes/pin-watch/rebuild-hermes.sh \
   /opt/fluncle-pin-watch/rebuild-hermes.sh
-sudo install -D -m 0755 docs/agents/hermes/scripts/database-admission-runner.sh \
-  /opt/fluncle-database-admission/database-admission-runner.sh
-
-# The shared runner reads FLUNCLE_API_TOKEN and the default-off
-# DATABASE_ADMISSION_FAIL_CLOSED readiness gate from the root-owned 0600
-# /etc/fluncle/database-admission.env operator file. The concrete render/install recipe stays in
-# the private companion; this public repository contains neither its value nor secret-manager map.
 
 # 2. Clear any accumulated debt + validate the recipe end to end (the pilot).
 sudo /opt/fluncle-pin-watch/rebuild-hermes.sh --force

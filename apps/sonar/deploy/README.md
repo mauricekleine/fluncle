@@ -88,6 +88,8 @@ Installing or activating the unit is an operator action, never part of a reposit
 
 Discord alerts (deploy / rollback / failure) use `DISCORD_ALERT_WEBHOOK` from the optional env file. Every run also reports a **`self-deploy-sonar`** health check to the public [`/status`](https://www.fluncle.com/status) board (POST `/api/v1/admin/health`, agent tier) — beside `self-deploy-ssh` from the same box: `ok` when current or freshly deployed, `degraded` when a download/verify/pre-smoke failed or a swap was rolled back (the engine is healthy on the prior binary, a human should look), `down` if a rollback itself failed. Both the alert and the status post are best-effort and public-safe (no host, no raw error). The shared status read synthesizes `never reported` when this expected writer has no row, and degrades an existing row after three missed hourly reports, so a missing token or stopped timer cannot leave the automation absent or green.
 
+The host unit executes the freshen directly rather than entering primary-database admission. Fetch, verify, smoke, swap, and rollback are control-plane work that must continue during a database outage; the small receipt-backed `/status` post is optional telemetry and never authorizes suppressing that payload.
+
 ## Memory: the pre-smoke holds a SECOND index
 
 sonar's whole point is that the corpus lives in RAM, and for the length of the pre-smoke there are **two** of them: the live service's and the throwaway one. **Box headroom must exceed 2× the index.** Today (~15k embedded tracks × 1024-dim f32 ≈ 4KB/vector ⇒ roughly 60MB of vectors per copy) that is comfortable. As the corpus grows toward catalogue scale (~150k tracks ⇒ ~600MB per copy, ~1.2GB for the pair before process overhead) it stops being free — re-check it then, and note that the unit's `MemoryMax=2G` caps the **live** service only, not the freshen's throwaway child, so the box's own free RAM is the real ceiling. When the pair no longer fits, the fix is to move the pre-smoke off the hot path (smoke on a scratch host, or accept a stop-then-start window), not to drop it.
@@ -106,11 +108,9 @@ sudo install -m 0644 apps/sonar/deploy/sonar.service /etc/systemd/system/
 # 2. The self-deploy script at its deployed path.
 sudo install -D -m 0755 apps/sonar/deploy/fluncle-sonar-freshen.sh \
   /opt/sonar-freshen/fluncle-sonar-freshen.sh
-sudo install -D -m 0755 docs/agents/hermes/scripts/database-admission-runner.sh \
-  /opt/fluncle-database-admission/database-admission-runner.sh
 
 # 3. (Optional) The 0600 operator env file for the Discord alert + /status post.
-#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN, DATABASE_ADMISSION_FAIL_CLOSED
+#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN
 #    (values in the ops runbook note —
 #    the same pair the ssh freshen and the watchdog use). Skip this and the self-deploy
 #    still runs, just without Discord/status visibility.
@@ -156,7 +156,7 @@ Everything is overridable via the environment; the defaults are the canonical de
 | `SONARFRESHEN_BOOT_TIMEOUT_SECS` | `180`                      | How long an index load may take, pre-smoke and post-swap alike.                                          |
 | `SONARFRESHEN_WORKER_URL`        | `https://www.fluncle.com`  | Where the `/status` health post goes.                                                                    |
 
-Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`, `DATABASE_ADMISSION_FAIL_CLOSED`. The admission gate is inert unless its value is exactly `true`; follow [the global cutover order](../../../docs/database-performance.md#mutation-laws).
+Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`.
 
 ## The CI half
 

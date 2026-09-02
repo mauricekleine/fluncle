@@ -8,11 +8,11 @@ After=network-online.target docker.service
 Type=oneshot
 # Runs as root: it drives the Docker daemon (build + swap the hermes container)
 # and owns the build clone at /opt/fluncle-build. The payload remains credential-free and clones
-# a public repo; only the admission wrapper reads the agent-scoped API token from its env file.
-ExecStart=/opt/fluncle-database-admission/database-admission-runner.sh pin-watch -- /opt/fluncle-pin-watch/rebuild-hermes.sh
-EnvironmentFile=-/etc/fluncle/database-admission.env
+# a public repo. Its optional /status telemetry reuses the live container's agent-scoped token.
+# Self-deploy is database-independent control-plane work and must not wait for admission.
+ExecStart=/opt/fluncle-pin-watch/rebuild-hermes.sh
 # A full image rebuild (~6 GB base) can take several minutes; give it room.
-TimeoutStartSec=1930
+TimeoutStartSec=1810
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

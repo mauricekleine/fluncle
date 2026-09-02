@@ -55,13 +55,10 @@ The script's deployed path is `/opt/fluncle-rave-watchdog/fluncle-rave-watchdog.
 # 1. Drop the script (0755) at its deployed path.
 sudo install -D -m 0755 apps/ssh/watchdog/fluncle-rave-watchdog.sh \
   /opt/fluncle-rave-watchdog/fluncle-rave-watchdog.sh
-sudo install -D -m 0755 docs/agents/hermes/scripts/database-admission-runner.sh \
-  /opt/fluncle-database-admission/database-admission-runner.sh
 
 # 2. Place the 0600 operator env file (values from the ops runbook note in 1Password).
 #    Keys: RAVE01_BEACON_URL, WATCH_STATUS_URL, WATCH_STALE_MINUTES, DISCORD_ALERT_WEBHOOK,
-#    + (job 3 / onion and admission) WATCH_ONION_URL, WATCH_WORKER_URL, FLUNCLE_API_TOKEN,
-#    DATABASE_ADMISSION_FAIL_CLOSED. The admission gate is inert unless exactly true.
+#    + (job 3 / onion) WATCH_ONION_URL, WATCH_WORKER_URL, FLUNCLE_API_TOKEN.
 sudo install -d -m 0755 /etc/fluncle
 sudo install -m 0600 /dev/null /etc/fluncle/rave-watchdog.env
 sudo "$EDITOR" /etc/fluncle/rave-watchdog.env   # paste the listed keys
@@ -79,6 +76,8 @@ systemctl list-timers fluncle-rave-watchdog.timer
 ```
 
 The `.service` is `Type=oneshot` (the timer drives the cadence) and hardened to mirror `apps/dns/fluncle-dns.service`: `DynamicUser=yes` (no real account to manage), a persistent `StateDirectory=fluncle-rave-watchdog` (survives across runs and works with `DynamicUser`), `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, an empty `CapabilityBoundingSet`, and a `@system-service` syscall filter. The only thing it needs at runtime is `curl` and outbound network.
+
+The unit deliberately does not enter primary-database admission. Its beacon, cross-ping, Tor probe, and transition alerts are control-plane payloads that must still run during a database outage. The optional receipt-backed `record_health` POST happens last and remains best-effort, so database availability cannot suppress either beacon or either probe.
 
 ## External beacon setup (provider-agnostic)
 

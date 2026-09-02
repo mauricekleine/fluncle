@@ -109,6 +109,13 @@ const EXPECTED_INCIDENT_FUNCTION_NAMES = [
   "stripCrawlerPrefixes",
 ] as const;
 const EXPECTED_RECEIPT_BACKED_OPERATION_IDS = ["health.snapshot"] as const;
+const EXPECTED_CONTROL_PLANE_ADMISSION_EXEMPTIONS = [
+  "health.snapshot",
+  "ops.pin-watch",
+  "ops.rave-watchdog",
+  "ops.sonar-freshen",
+  "ops.ssh-freshen",
+] as const;
 const EXPECTED_DELIBERATELY_NON_REPLAYABLE_OPERATION_IDS = [
   "clips.studio",
   "frontier.refresh",
@@ -532,7 +539,7 @@ describe("database operation registry", () => {
     }
   });
 
-  it("routes every classified writer and heavy reader through the one admission runner", () => {
+  it("routes every admitted writer and heavy reader through the one admission runner", () => {
     const runnerSource = join(HERMES_ROOT, "scripts/database-admission-runner.sh");
     expect(existsSync(runnerSource)).toBe(true);
     const runner = readFileSync(runnerSource, "utf8");
@@ -544,10 +551,13 @@ describe("database operation registry", () => {
     for (const operation of DATABASE_OPERATION_REGISTRY) {
       const service = readFileSync(join(REPO_ROOT, operation.serviceSource), "utf8");
       const execStart = unitValue(service, "ExecStart") ?? "";
-      const requiresAdmission =
-        operation.accessClass === "write" || operation.accessClass === "heavy-read";
+      const requiresAdmission = operation.admissionMode === "required";
 
       if (requiresAdmission) {
+        expect(
+          operation.accessClass === "write" || operation.accessClass === "heavy-read",
+          operation.operationId,
+        ).toBe(true);
         expect(execStart, operation.owner.service).toContain("database-admission-runner.sh");
         const tokens = execStart.split(/\s+/);
         const runnerIndex = tokens.findIndex((token) =>
@@ -570,13 +580,69 @@ describe("database operation registry", () => {
         const timeoutSec = Number(unitValue(service, "TimeoutStartSec"));
         expect(Number.isFinite(timeoutSec), operation.owner.service).toBe(true);
         expect(timeoutSec, operation.owner.service).toBeGreaterThanOrEqual(maxWaitSec + 10);
-        if (operation.operationId === "ops.rave-watchdog") {
-          expect(timeoutSec, operation.owner.service).toBeGreaterThanOrEqual(maxWaitSec + 180);
-        }
       } else {
         expect(execStart, operation.owner.service).not.toContain("database-admission-runner.sh");
+        if (operation.admissionMode === "not-applicable") {
+          expect(
+            operation.accessClass === "write" || operation.accessClass === "heavy-read",
+            operation.operationId,
+          ).toBe(false);
+        }
       }
     }
+  });
+
+  it("keeps the database-independent control plane as one closed admission exemption set", () => {
+    const exempt = DATABASE_OPERATION_REGISTRY.filter(
+      (operation) => operation.admissionMode === "control-plane-exempt",
+    );
+
+    expect(sorted(exempt.map((operation) => operation.operationId))).toEqual(
+      sorted(EXPECTED_CONTROL_PLANE_ADMISSION_EXEMPTIONS),
+    );
+
+    for (const operation of exempt) {
+      expect(operation.accessClass, operation.operationId).toBe("write");
+      expect(operation.mutationTarget, operation.operationId).toBe("primary");
+      expect(
+        operation.triggers.some((trigger) => trigger.operationId === "health.snapshot"),
+        operation.operationId,
+      ).toBe(true);
+      expect(
+        operation.triggers.some((trigger) => trigger.mutationTarget === null),
+        operation.operationId,
+      ).toBe(true);
+
+      const service = readFileSync(join(REPO_ROOT, operation.serviceSource), "utf8");
+      const execStart = unitValue(service, "ExecStart") ?? "";
+      expect(execStart, operation.owner.service).not.toContain("database-admission-runner.sh");
+      expect(execStart, operation.owner.service).toContain(basename(operation.wrapperSource));
+    }
+  });
+
+  it("runs both dead-man beacons before optional primary-database telemetry", () => {
+    const healthcheck = readFileSync(join(REPO_ROOT, `${SCRIPTS}/fluncle-healthcheck.ts`), "utf8");
+    const healthcheckMain = healthcheck.slice(healthcheck.indexOf("async function main()"));
+    const healthcheckProbe = healthcheckMain.indexOf("await Promise.all([");
+    const healthcheckBeacon = healthcheckMain.indexOf("pingBeacon();");
+    const healthcheckSnapshot = healthcheckMain.indexOf("await postSnapshot(");
+
+    expect(healthcheckProbe).toBeGreaterThanOrEqual(0);
+    expect(healthcheckBeacon).toBeGreaterThan(healthcheckProbe);
+    expect(healthcheckSnapshot).toBeGreaterThan(healthcheckBeacon);
+
+    const watchdog = readFileSync(
+      join(REPO_ROOT, "apps/ssh/watchdog/fluncle-rave-watchdog.sh"),
+      "utf8",
+    );
+    const watchdogRun = watchdog.slice(watchdog.lastIndexOf("# --- Run"));
+    const watchdogBeacon = watchdogRun.indexOf("ping_beacon\n");
+    const watchdogCrossPing = watchdogRun.indexOf("cross_ping\n");
+    const watchdogSnapshot = watchdogRun.indexOf("probe_and_post_onion\n");
+
+    expect(watchdogBeacon).toBeGreaterThanOrEqual(0);
+    expect(watchdogCrossPing).toBeGreaterThan(watchdogBeacon);
+    expect(watchdogSnapshot).toBeGreaterThan(watchdogCrossPing);
   });
 
   it("keeps run and step IDs bounded, stable, public-safe, and resolvable by unit", () => {
@@ -885,6 +951,17 @@ describe("database operation registry", () => {
     }
     expect(health?.mutationDisposition.kind).toBe("receipt-backed");
     expect(health?.compatibility?.mutationDisposition.kind).toBe("deliberately-non-replayable");
+  });
+
+  it("pins the projection repair sweep's two serial command budgets", () => {
+    const repairTargets = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.triggers)
+      .filter((trigger) => trigger.operationId === "projections.repair")
+      .map((trigger) => trigger.target);
+
+    expect(repairTargets).toEqual([
+      "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --json",
+      "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --json",
+    ]);
   });
 
   it("separates device mirror primary reads from its derived remote mutation", () => {

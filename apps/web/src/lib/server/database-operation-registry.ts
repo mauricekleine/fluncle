@@ -21,6 +21,8 @@ export type OperationTriggerKind = "cli" | "direct-database" | "no-database" | "
 
 export type DatabaseMutationTarget = "derived-local" | "derived-remote" | "primary";
 
+export type DatabaseAdmissionMode = "control-plane-exempt" | "not-applicable" | "required";
+
 export type OperationDatabaseProfile = Readonly<{
   /** Access against the primary application database, independent of any derived target. */
   accessClass: DatabaseAccessClass | null;
@@ -64,6 +66,8 @@ export type IncidentOperation = Readonly<{
 
 export type RecurringDatabaseOperation = OperationDatabaseProfile &
   Readonly<{
+    /** Whether the whole unit is subject to database admission. */
+    admissionMode: DatabaseAdmissionMode;
     /** Stable run-level ID used by spans and fleet telemetry. */
     operationId: string;
     cadence: OperationCadence;
@@ -91,6 +95,7 @@ type DatabaseProfileDefinition = Readonly<{
 
 type OperationDefinition = Omit<
   RecurringDatabaseOperation,
+  | "admissionMode"
   | "cadenceSource"
   | "compatibility"
   | "incidents"
@@ -100,6 +105,12 @@ type OperationDefinition = Omit<
   | "serviceSource"
   | "timerSource"
 > & {
+  /**
+   * Monitoring and self-deploy control-plane payloads must run when the primary database is
+   * unavailable. Their optional health snapshot is receipt-backed telemetry, not authority to
+   * suppress the payload.
+   */
+  admissionMode?: "control-plane-exempt";
   cadenceSource?: string;
   compatibility?: DatabaseProfileDefinition;
   directory?: string;
@@ -680,9 +691,19 @@ function defineOperation(definition: OperationDefinition): RecurringDatabaseOper
         definition.operationId as MutationPolicyId,
       )
     : undefined;
+  const requiresAdmission =
+    definition.accessClass === "write" || definition.accessClass === "heavy-read";
+  if (definition.admissionMode === "control-plane-exempt" && !requiresAdmission) {
+    throw new Error(
+      `control-plane admission exemption ${definition.operationId} has no admitted access class`,
+    );
+  }
+  const admissionMode =
+    definition.admissionMode ?? (requiresAdmission ? "required" : "not-applicable");
 
   return {
     ...operationProfile,
+    admissionMode,
     cadence: definition.cadence,
     cadenceSource,
     ...(compatibility ? { compatibility } : {}),
@@ -1534,6 +1555,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
+    admissionMode: "control-plane-exempt",
     cadence: every("2min", "10min"),
     compatibility: {
       accessClass: "write",
@@ -1891,6 +1913,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
+    admissionMode: "control-plane-exempt",
     cadence: every("10min", "1h", "90", true),
     directory: "pin-watch",
     heavy: false,
@@ -1900,6 +1923,13 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     telemetryUnit: "pin-watch",
     timer: "pin-watch.timer",
     triggers: [
+      noDatabase(
+        "ops.pin-watch",
+        null,
+        "rebuild, verify, and swap the Hermes image",
+        `${HERMES_ROOT}/pin-watch/rebuild-hermes.sh`,
+        { mutationTarget: null },
+      ),
       endpoint(
         "health.snapshot",
         "write",
@@ -1977,6 +2007,17 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "fluncle admin projections get --json",
         `${SCRIPTS}/projection-maintenance-sweep.ts`,
         { mutationTarget: null },
+      ),
+      cli(
+        "projections.repair",
+        "write",
+        ["admin", "projections", "advance"],
+        "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --json",
+        `${SCRIPTS}/projection-maintenance-sweep.ts`,
+        {
+          compatibility: { accessClass: "read", mutationTarget: null },
+          mutationTarget: "primary",
+        },
       ),
       cli(
         "projections.repair",
@@ -2341,6 +2382,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
+    admissionMode: "control-plane-exempt",
     cadence: every("11min", "1h", "420"),
     heavy: false,
     mutationTarget: "primary",
@@ -2374,6 +2416,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
+    admissionMode: "control-plane-exempt",
     cadence: every("5min", "1h"),
     heavy: false,
     mutationTarget: "primary",
@@ -2407,6 +2450,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
+    admissionMode: "control-plane-exempt",
     cadence: every("2min", "10min", "30"),
     heavy: false,
     mutationTarget: "primary",

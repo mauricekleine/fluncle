@@ -38,6 +38,8 @@ Default `--if-changed` (the timer); `--force` rebuilds unconditionally (the oper
 
 Discord alerts (deploy / rollback / failure) use `DISCORD_ALERT_WEBHOOK` from the optional env file. Every run also reports a **`self-deploy-ssh`** health check to the public [`/status`](https://www.fluncle.com/status) board (POST `/api/v1/admin/health`, agent tier) — the rave-01 parallel to pin-watch's `self-deploy` row — so this loop is visible alongside the rest: `ok` when current or freshly deployed, `degraded` when a build/pre-smoke failed or a swap was rolled back (service healthy on the prior binary, a human should look), `down` if a rollback itself failed. Both the alert and the status post are best-effort and public-safe (no host, no raw error); if the timer ever stops, the `/status` row simply goes stale — itself the signal that the terminal may be silently drifting.
 
+The host unit executes the freshen directly rather than entering primary-database admission. Fetch, build, smoke, swap, and rollback are control-plane work that must continue during a database outage; the small receipt-backed `/status` post is optional telemetry and never authorizes suppressing that payload.
+
 ## Deploy (on rave-01, one time)
 
 > **Pre-req — the Go toolchain.** rave-01 is the minimal public edge, so Go is not there by default. Install it once (the app targets the `go` version in [`apps/ssh/go.mod`](../go.mod)); e.g. via the distro package (`sudo apt-get install -y golang-go`) or the official tarball to `/usr/local/go` with `/usr/local/go/bin` on `PATH` for the unit. This is the single irreducible operator pre-req. The initial binary is still bootstrapped by [`deploy-ssh-app-service.sh`](../../../packages/skills/hetzner-devbox/scripts/deploy-ssh-app-service.sh) (which also creates the `fluncle-ssh` user/service, `/opt/fluncle-ssh`, and `/etc/fluncle-ssh.env`); the freshen takes over every update after that.
@@ -46,11 +48,9 @@ Discord alerts (deploy / rollback / failure) use `DISCORD_ALERT_WEBHOOK` from th
 # 1. Drop the script (0755) at its deployed path (sibling to the other box binaries).
 sudo install -D -m 0755 apps/ssh/deploy/fluncle-ssh-freshen.sh \
   /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh
-sudo install -D -m 0755 docs/agents/hermes/scripts/database-admission-runner.sh \
-  /opt/fluncle-database-admission/database-admission-runner.sh
 
 # 2. (Optional) Place the 0600 operator env file for the Discord alert + /status post.
-#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN, DATABASE_ADMISSION_FAIL_CLOSED
+#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN
 #    (values in the ops runbook note in
 #    1Password — the same pair the watchdog uses). Skip this and the self-deploy still
 #    runs, just without Discord/status visibility.
