@@ -2103,6 +2103,7 @@ describe("oRPC publish_track (POST /admin/tracks)", () => {
     );
 
     expect(response?.status).toBe(403);
+    expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
     expect(publishTrack).not.toHaveBeenCalled();
   });
 

@@ -74,11 +74,12 @@
 # the mandatory ones the summary did not carry as `missing_fields` — which is the upgrade queue
 # that gets sweeps improved one at a time. Bash stays dumb, so no sweep needed changing for v1.
 #
-# KNOWN GAP, deliberate: the rebake guard above `exit`s at SOURCE time, before this wrapper
-# ever learns the job token, so a tick skipped for a container swap posts nothing and reads as
-# a missed run. That is the designed degradation (absence is the alarm), and inferring the
-# token from the sourcing script's filename would be wrong for `verify-captures` /
-# `reconcile-hub-counts` / `fluncle-live` / `clip-sweep` (job `studio-clip`) alike.
+# An already-decided admission skip is the narrow exception: the admission runner knows the
+# registry owner and therefore the marker token before it sources this file. It opts into the
+# marker-only entrypoint below, which cannot run a payload and still writes the normal marker and
+# ledger row while a live rebake lock holds. Ordinary sweeps never set that opt-in and keep the
+# source-time skip below; inferring a token from their script filename would still be wrong for
+# `verify-captures` / `reconcile-hub-counts` / `fluncle-live` / `clip-sweep` (job `studio-clip`).
 
 # ── THE REBAKE GUARD (runs at source time, before any sweep work) ──────────────
 # A pin-watch rebuild+swap TERMs every in-flight `docker exec` when the container swaps —
@@ -92,10 +93,13 @@
 # EXIT trap could strand the lock; a lock older than 45 min (a rebuild runs ~10–20) is
 # ignored and cleared, so the roster can never be wedged by a dead rebake.
 _REBAKE_LOCK="$(dirname -- "${HOME:-/opt/data/home}")/rebake.lock"
+_CRON_OUTPUT_REBAKE_ACTIVE=false
 if [ -f "$_REBAKE_LOCK" ]; then
   if [ -n "$(find "$_REBAKE_LOCK" -mmin +45 2>/dev/null)" ]; then
     echo "stale rebake lock (>45 min) at ${_REBAKE_LOCK} — clearing and proceeding" >&2
     rm -f "$_REBAKE_LOCK" 2>/dev/null || true
+  elif [ "${CRON_OUTPUT_REBAKE_MARKER_ONLY:-false}" = "true" ]; then
+    _CRON_OUTPUT_REBAKE_ACTIVE=true
   else
     echo "rebake in progress (${_REBAKE_LOCK}) — skipping this tick; the next schedule reruns it"
     exit 0
@@ -221,10 +225,29 @@ run_event_now() {
 # <<< END MIRRORED BLOCK: record_run_event <<<
 
 emit_cron_output() {
-  local job="$1"
-  shift
-  if [ "${1:-}" = "--" ]; then
+  local admission_skip=false job summary=""
+  if [ "${1:-}" = "--admission-skip" ]; then
+    admission_skip=true
     shift
+    job="${1:-}"
+    summary="${2:-}"
+    shift 2
+    if [ -z "$job" ] || [ -z "$summary" ] || [ "$#" -ne 0 ]; then
+      echo 'usage: emit_cron_output --admission-skip <job> <summary>' >&2
+      return 2
+    fi
+  else
+    job="$1"
+    shift
+    if [ "${1:-}" = "--" ]; then
+      shift
+    fi
+  fi
+
+  # The opt-in that lets an already-decided admission skip report during a rebake must never
+  # become a way to start a payload while the rebake lock is held.
+  if [ "$_CRON_OUTPUT_REBAKE_ACTIVE" = true ] && [ "$admission_skip" != true ]; then
+    return 0
   fi
 
   local base marker tmp tmp_err tmp_rc rc=0
@@ -246,7 +269,13 @@ emit_cron_output() {
   # otherwise abandon the subshell the moment the payload failed — skipping the very line that
   # records the exit code, and silently turning every failed sweep into rc=0.
   started_at="$(run_event_now)"
-  { set +e; "$@" >"$tmp"; printf '%s' "$?" >"$tmp_rc"; } 2>&1 | tee "$tmp_err" >&2
+  if [ "$admission_skip" = true ]; then
+    printf '%s\n' "$summary" >"$tmp"
+    : >"$tmp_err"
+    printf '0' >"$tmp_rc"
+  else
+    { set +e; "$@" >"$tmp"; printf '%s' "$?" >"$tmp_rc"; } 2>&1 | tee "$tmp_err" >&2
+  fi
   ended_at="$(run_event_now)"
 
   rc="$(cat "$tmp_rc" 2>/dev/null || printf 0)"
@@ -287,4 +316,15 @@ emit_cron_output() {
   done; } || true
 
   return "$rc"
+}
+
+# The only rebake-bypass caller is the admission runner after it has decided that no payload may
+# start. It supplies a fixed summary; this entrypoint has no command argument by construction.
+emit_admission_skip_output() {
+  local job="$1" summary="$2"
+  if [ "${CRON_OUTPUT_REBAKE_MARKER_ONLY:-false}" != "true" ]; then
+    echo 'admission skip marker mode is not enabled' >&2
+    return 2
+  fi
+  emit_cron_output --admission-skip "$job" "$summary"
 }

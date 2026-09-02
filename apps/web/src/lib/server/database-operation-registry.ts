@@ -351,7 +351,7 @@ export const DATABASE_MUTATION_POLICIES = {
     rationale:
       "Fixed-target repair consumes epoch-fenced markers and resumes aggregate anchors from durable cursors.",
     reconciliation:
-      "Read bounded projection status, then repeat repair only for the still-incomplete public family.",
+      "Read bounded projection status, then repeat repair only for each still-incomplete runtime family.",
   },
   "reach.collect": {
     evidenceSource: "apps/web/src/lib/server/platform-stats.ts",
@@ -2012,7 +2012,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "projections.repair",
         "write",
         ["admin", "projections", "advance"],
-        "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --json",
+        "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --no-terminal-status --json",
         `${SCRIPTS}/projection-maintenance-sweep.ts`,
         {
           compatibility: { accessClass: "read", mutationTarget: null },
@@ -2023,7 +2023,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "projections.repair",
         "write",
         ["admin", "projections", "advance"],
-        "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --json",
+        "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --no-terminal-status --json",
         `${SCRIPTS}/projection-maintenance-sweep.ts`,
         {
           compatibility: { accessClass: "read", mutationTarget: null },

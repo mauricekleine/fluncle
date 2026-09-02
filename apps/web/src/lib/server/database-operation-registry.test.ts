@@ -959,8 +959,8 @@ describe("database operation registry", () => {
       .map((trigger) => trigger.target);
 
     expect(repairTargets).toEqual([
-      "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --json",
-      "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --json",
+      "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --no-terminal-status --json",
+      "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --no-terminal-status --json",
     ]);
   });
 

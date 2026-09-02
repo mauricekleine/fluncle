@@ -205,6 +205,18 @@ async function runBackfillSweep(): Promise<Record<string, unknown>> {
         });
       }
 
+      if (mode === "prepared-partial" && init?.body === undefined) {
+        return Response.json({
+          configured: true,
+          discogsWork: [],
+          failedCount: 5,
+          noneCount: 4,
+          ok: true,
+          rateLimited: false,
+          resolvedCount: 3,
+        });
+      }
+
       if (init?.body === undefined) {
         return Response.json({
           configured: true,
@@ -217,10 +229,22 @@ async function runBackfillSweep(): Promise<Record<string, unknown>> {
         });
       }
 
+      if (mode === "decided-partial") {
+        return Response.json({
+          configured: true,
+          discogsWork: [],
+          failedCount: 5,
+          noneCount: 4,
+          ok: true,
+          rateLimited: false,
+          resolvedCount: 3,
+        });
+      }
+
       return Response.json({
         configured: true,
         discogsWork: [],
-        failedCount: 19,
+        failedCount: 0,
         noneCount: 18,
         ok: true,
         rateLimited: true,
@@ -403,7 +427,7 @@ describe("the tick's legs", () => {
       throttled: false,
       unresolved: 0,
     });
-    // The tick as a whole stays honest — the earlier legs still reported.
+    // The unconfigured Apple leg is a no-op, while the remaining healthy legs still report.
     expect(summary.ok).toBe(true);
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
   });
@@ -466,14 +490,17 @@ describe("the tick's legs", () => {
     //   Apple findings 6 resolved + 7 unresolved + 0 failed
     //   Apple catalogue 9 resolved + 10 unresolved + 11 failed
     //   Beatport 13 resolved + 14 unresolved + 15 failed, PLUS its catalogue tier's 20 + 21 + 22
+    //   Discogs facts 17 resolved + 18 concluded-none
     //   Deezer 23 resolved + 24 unresolved + 26 failed
     // The 3 + 5 + 8 + 16 reliability skips are deliberately excluded, and so are Deezer's 25
     // UNVOUCHABLE rows: Deezer answered, but nothing was concluded and nothing was stamped, so
     // counting them as checked would overstate the tick's real work.
-    expect(summary.checked).toBe(228);
-    expect(summary.produced).toBe(76);
+    expect(summary.checked).toBe(263);
+    expect(summary.produced).toBe(93);
     expect(summary.failed).toBe(74);
     expect(summary.errors).toBe(0);
+    expect(summary.ok).toBe(true);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(0);
     expect(summary).not.toHaveProperty("queue_depth");
   });
 
@@ -485,9 +512,10 @@ describe("the tick's legs", () => {
 
     // The configured legs still did measured work, while the two unconfigured legs contribute real
     // zeroes rather than unknown/null values. Deezer has no key to be unconfigured BY, so it keeps
-    // reporting: 3 + 4 + 13 from the first three legs, plus its own 23 + 24 + 26.
-    expect(summary.checked).toBe(93);
-    expect(summary.produced).toBe(34);
+    // reporting: 3 + 4 + 13 from the first three legs, the facts leg's 17 + 18, plus its own
+    // 23 + 24 + 26.
+    expect(summary.checked).toBe(128);
+    expect(summary.produced).toBe(51);
     expect(summary.errors).toBe(0);
   });
 
@@ -570,11 +598,53 @@ describe("the tick's legs", () => {
     expect(summary["discogs-facts"]).toEqual({
       configured: true,
       error: null,
-      failed: 19,
+      failed: 0,
       none: 18,
       resolved: 17,
       throttled: true,
     });
+  });
+
+  test("a prepared Discogs-facts partial preserves every count and fails the tick", async () => {
+    writeFileSync(discogsFactsModeFile, "prepared-partial");
+
+    const summary = await runBackfillSweep();
+
+    expect(summary["discogs-facts"]).toEqual({
+      configured: true,
+      error: null,
+      failed: 5,
+      none: 4,
+      resolved: 3,
+      throttled: false,
+    });
+    expect(summary.checked).toBe(240);
+    expect(summary.produced).toBe(79);
+    expect(summary.failed).toBe(79);
+    expect(summary.errors).toBe(0);
+    expect(summary.ok).toBe(false);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
+  });
+
+  test("a decided Discogs-facts partial preserves every count and fails the tick", async () => {
+    writeFileSync(discogsFactsModeFile, "decided-partial");
+
+    const summary = await runBackfillSweep();
+
+    expect(summary["discogs-facts"]).toEqual({
+      configured: true,
+      error: null,
+      failed: 5,
+      none: 4,
+      resolved: 3,
+      throttled: false,
+    });
+    expect(summary.checked).toBe(240);
+    expect(summary.produced).toBe(79);
+    expect(summary.failed).toBe(79);
+    expect(summary.errors).toBe(0);
+    expect(summary.ok).toBe(false);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
   });
 
   test("an unconfigured Discogs-facts leg is a recorded no-op, not a failed tick", async () => {

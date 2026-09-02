@@ -100,9 +100,11 @@ emit_admission_skip() {
   # cron-output's rebake guard can `exit` while it is sourced. Keep it in a subshell: the
   # admission owner must still release/cancel its lease when a concurrent rebake owns the tick.
   (
+    CRON_OUTPUT_REBAKE_MARKER_ONLY=true
+    export CRON_OUTPUT_REBAKE_MARKER_ONLY
     # shellcheck source=./cron-output.sh
     . "${SCRIPT_DIR}/cron-output.sh"
-    emit_cron_output "$job" -- bash -c 'printf "%s\\n" "$1"' database-admission-skip "$summary"
+    emit_admission_skip_output "$job" "$summary"
   ) || true
 }
 

@@ -1044,6 +1044,120 @@ describe("fluncle CLI parsing and JSON output", () => {
     ]);
   });
 
+  test("the four scheduled repair commands make no terminal status requests", async () => {
+    const requests: Array<{ body?: unknown; method: string; path: string }> = [];
+    const scheduledRepairs = [
+      ["track_due_work", "20"],
+      ["crawl_due_work", "20"],
+      ["public_aggregates", "4"],
+      ["artist_qualification", "4"],
+    ] as const;
+
+    await withStubApi(
+      async (req, url) => {
+        const body = req.method === "POST" ? await req.json() : undefined;
+        requests.push({ body, method: req.method, path: url.pathname });
+        if (req.method === "GET" && url.pathname === "/api/v1/admin/projections/status") {
+          return Response.json({ ok: true, status: { phase: "initial" } });
+        }
+        const target = scheduledRepairs.find(([candidate]) =>
+          url.pathname.endsWith(`/projections/${candidate}/advance`),
+        )?.[0];
+        if (req.method === "POST" && target !== undefined) {
+          return Response.json({
+            action: "repair",
+            complete: true,
+            ok: true,
+            processed: 1,
+            scheduled: 0,
+            target,
+          });
+        }
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const env = { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" };
+        const initial = await runCli(["admin", "projections", "get", "--json"], env);
+        expect(initial.exitCode).toBe(0);
+
+        for (const [target, maxSteps] of scheduledRepairs) {
+          const result = await runCli(
+            [
+              "admin",
+              "projections",
+              "advance",
+              "--target",
+              target,
+              "--action",
+              "repair",
+              "--limit",
+              "500",
+              "--max-steps",
+              maxSteps,
+              "--no-terminal-status",
+              "--json",
+            ],
+            env,
+          );
+          expect(result.exitCode).toBe(0);
+          expect(result.stderr).toBe("");
+          expect(JSON.parse(result.stdout)).toEqual({
+            action: "repair",
+            complete: true,
+            ok: true,
+            processed: 1,
+            scheduled: 0,
+            steps: 1,
+            target,
+          });
+        }
+      },
+    );
+
+    expect(requests).toEqual([
+      { body: undefined, method: "GET", path: "/api/v1/admin/projections/status" },
+      ...scheduledRepairs.map(([target]) => ({
+        body: { action: "repair", includeStatus: false, limit: 500 },
+        method: "POST",
+        path: `/api/v1/admin/projections/${target}/advance`,
+      })),
+    ]);
+  });
+
+  test("terminal-status omission accepts only JSON repair automation", async () => {
+    const rebuild = await runCli([
+      "admin",
+      "projections",
+      "advance",
+      "--target",
+      "track_due_work",
+      "--action",
+      "rebuild",
+      "--no-terminal-status",
+      "--json",
+    ]);
+    const humanRepair = await runCli([
+      "admin",
+      "projections",
+      "advance",
+      "--target",
+      "track_due_work",
+      "--action",
+      "repair",
+      "--no-terminal-status",
+    ]);
+
+    for (const result of [rebuild, humanRepair]) {
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        "--no-terminal-status requires --action repair and --json",
+      );
+    }
+  });
+
   test("rejects invalid max-steps values before transport", async () => {
     let requests = 0;
     const invalidValues = ["0", "1.5", "101", "9007199254740992"];

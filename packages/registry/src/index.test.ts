@@ -154,6 +154,31 @@ for (const cron of crons) {
   );
 }
 
+const projectionMaintenance = SURFACES.find(
+  (surface) => surface.name === "cron.projection-maintenance",
+);
+assert.ok(projectionMaintenance, "projection maintenance is registered");
+assert.equal(
+  projectionMaintenance.command,
+  "fluncle admin projections get --json; fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --no-terminal-status --json; fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --no-terminal-status --json",
+  "projection maintenance pins the one-read due/public repair budgets",
+);
+assert.match(
+  projectionMaintenance.exposedContent.join(" "),
+  /all four runtime projection families/,
+  "projection maintenance exposes all four runtime families",
+);
+assert.match(
+  projectionMaintenance.operatorNotes ?? "",
+  /track, crawl, and public cutovers gate their own families independently/,
+  "projection maintenance keeps independent cutover gates",
+);
+assert.match(
+  projectionMaintenance.operatorNotes ?? "",
+  /track and crawl get at most twenty pages of 500.*public aggregates and artist qualification get at most four pages of 500/,
+  "projection maintenance pins the 20-step and 4-step serial budgets",
+);
+
 // Sanity anchors — the load-bearing surfaces a consumer is sure to want.
 assert.ok(
   SURFACES.some((surface) => surface.name === "discovery.llms"),

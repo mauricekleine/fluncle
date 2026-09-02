@@ -241,6 +241,64 @@ describe("projection operator commands", () => {
     expect(calls[3]).toEqual({ method: "GET", path: "/api/v1/admin/projections/status" });
   });
 
+  test("lets repair automation omit the terminal global status read", async () => {
+    postResponses.push({
+      action: "repair",
+      complete: true,
+      ok: true,
+      processed: 3,
+      scheduled: 2,
+      status,
+      target: "track_due_work",
+    });
+
+    const result = await projections.advanceProjectionCommand({
+      action: "repair",
+      includeTerminalStatus: false,
+      limit: 500,
+      maxSteps: 20,
+      target: "track_due_work",
+    });
+
+    expect(result).toEqual({
+      action: "repair",
+      complete: true,
+      ok: true,
+      processed: 3,
+      scheduled: 2,
+      steps: 1,
+      target: "track_due_work",
+    });
+    expect(calls).toEqual([
+      {
+        body: { action: "repair", includeStatus: false, limit: 500 },
+        method: "POST",
+        path: "/api/v1/admin/projections/track_due_work/advance",
+      },
+    ]);
+  });
+
+  test("keeps terminal-status omission scoped to repair automation", async () => {
+    let thrown: unknown;
+    try {
+      await projections.advanceProjectionCommand({
+        action: "rebuild",
+        includeTerminalStatus: false,
+        limit: 500,
+        maxSteps: 20,
+        target: "track_due_work",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error("expected repair automation guard to throw an Error");
+    }
+    expect(thrown.message).toMatch(/only for repair automation/);
+    expect(calls).toEqual([]);
+  });
+
   test("stops at the first API error without retrying", async () => {
     const firstError = new Error("projection API failed");
     postResponses.push(

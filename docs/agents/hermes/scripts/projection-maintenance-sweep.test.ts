@@ -135,6 +135,7 @@ describe("projection maintenance bounded family repair", () => {
         "500",
         "--max-steps",
         maxSteps,
+        "--no-terminal-status",
       ]),
     );
     expect(summary).toMatchObject({ checked: 4, errors: 0, ok: true, produced: 21 });

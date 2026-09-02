@@ -72,23 +72,44 @@ export type ProjectionStepResponse = {
   status?: ProjectionStatus;
   target: ProjectionTarget;
 };
-export type ProjectionAdvanceResponse = Omit<ProjectionStepResponse, "status"> & {
-  status: ProjectionStatus;
+type ProjectionAdvanceSummary = Omit<ProjectionStepResponse, "status"> & {
   steps: number;
+};
+export type ProjectionAdvanceResponse = ProjectionAdvanceSummary & {
+  status: ProjectionStatus;
+};
+export type ProjectionAdvanceWithoutStatusResponse = ProjectionAdvanceSummary & { status?: never };
+
+type ProjectionAdvanceInput = {
+  action: ProjectionAction;
+  includeTerminalStatus?: boolean;
+  limit: number;
+  maxSteps?: number;
+  target: ProjectionTarget;
 };
 
 export async function getProjectionStatusCommand(): Promise<ProjectionStatusResponse> {
   return adminApiGet<ProjectionStatusResponse>("/api/v1/admin/projections/status");
 }
 
-export async function advanceProjectionCommand(input: {
-  action: ProjectionAction;
-  limit: number;
-  maxSteps?: number;
-  target: ProjectionTarget;
-}): Promise<ProjectionAdvanceResponse> {
-  const { maxSteps = 1, target, ...body } = input;
-  const stepBody = maxSteps > 1 ? { ...body, includeStatus: false } : body;
+export function advanceProjectionCommand(
+  input: ProjectionAdvanceInput & { includeTerminalStatus: false },
+): Promise<ProjectionAdvanceWithoutStatusResponse>;
+export function advanceProjectionCommand(
+  input: ProjectionAdvanceInput & { includeTerminalStatus?: true },
+): Promise<ProjectionAdvanceResponse>;
+export function advanceProjectionCommand(
+  input: ProjectionAdvanceInput,
+): Promise<ProjectionAdvanceResponse | ProjectionAdvanceWithoutStatusResponse>;
+export async function advanceProjectionCommand(
+  input: ProjectionAdvanceInput,
+): Promise<ProjectionAdvanceResponse | ProjectionAdvanceWithoutStatusResponse> {
+  const { includeTerminalStatus = true, maxSteps = 1, target, ...body } = input;
+  if (!includeTerminalStatus && input.action !== "repair") {
+    throw new Error("terminal status may be omitted only for repair automation");
+  }
+  const stepBody =
+    maxSteps > 1 || !includeTerminalStatus ? { ...body, includeStatus: false } : body;
   let response = await adminApiPost<ProjectionStepResponse>(
     `/api/v1/admin/projections/${target}/advance`,
     stepBody,
@@ -107,6 +128,10 @@ export async function advanceProjectionCommand(input: {
     scheduled += response.scheduled;
   }
 
+  if (!includeTerminalStatus) {
+    const { status: _status, ...withoutStatus } = response;
+    return { ...withoutStatus, processed, scheduled, steps };
+  }
   const status = response.status ?? (await getProjectionStatusCommand()).status;
   return { ...response, processed, scheduled, status, steps };
 }

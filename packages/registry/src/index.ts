@@ -1955,20 +1955,20 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command:
-      "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4",
+      "fluncle admin projections get --json; fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --no-terminal-status --json; fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --no-terminal-status --json",
     exposedContent: [
-      "keep the two public projection families converged after cutover with status-gated, bounded repair (--no-agent)",
+      "keep all four runtime projection families converged after their cutovers with one-read, serial, bounded repair (--no-agent)",
     ],
     kind: "cron",
     name: "cron.projection-maintenance",
     operatorNotes:
-      "every 5m with per-firing jitter, run by a rave-02 host systemd timer (docs/agents/hermes/projection-maintenance-timer/). Reads bounded projection status first. A dark shared cutover issues zero repair calls; an open idle cutover also writes nothing. Each affected public family gets at most four sequential repair pages of 500 subjects, with independent failure handling. Public aggregate repair also advances the bounded anchor cursor after marker debt drains. Rebuild, audit, track/crawl repair, and every cutover mutation remain operator-only. Zero LLM tokens; no new secret.",
+      "every 5m with per-firing jitter, run by a rave-02 host systemd timer (docs/agents/hermes/projection-maintenance-timer/). Reads bounded projection status exactly once; the track, crawl, and public cutovers gate their own families independently. Open indebted families run strictly serially: track and crawl get at most twenty pages of 500, then public aggregates and artist qualification get at most four pages of 500. Repair responses omit terminal status so those four commands cannot repeat the global status suite. Public aggregate repair also advances the bounded anchor cursor after marker debt drains. The agent may repair only these four fixed targets; rebuild, audit, and every cutover mutation remain operator-only. Zero LLM tokens; no new secret.",
     probeConfig: {
       cadenceMs: 5 * MINUTE_MS,
       cronName: "fluncle-projection-maintenance",
       kind: "cron",
     },
-    statusDescription: "keeps the public catalogue projections caught up",
+    statusDescription: "keeps runtime projections caught up",
     title: "Projection upkeep",
     weights: { status: "hidden" },
   },

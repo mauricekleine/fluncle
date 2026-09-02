@@ -175,7 +175,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // spoken sibling of the note-rejections ledger.
   "GET /admin/observation-rejections": "list_observation_rejections",
   // The projection control plane is contract-only. Status is an agent-allowed bounded read;
-  // advance adds a handler-level agent allowlist for public-family repair only.
+  // advance adds a handler-level agent allowlist for runtime-family repair only.
   "GET /admin/projections/status": "get_projection_status",
   // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
   // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is

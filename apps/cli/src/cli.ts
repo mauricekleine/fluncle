@@ -65,6 +65,7 @@ type AdminProjectionStepOptions = JsonOptions & {
   limit: string;
   maxSteps?: string;
   target: string;
+  terminalStatus: boolean;
 };
 
 type AdminProjectionCutoverOptions = JsonOptions & {
@@ -995,11 +996,20 @@ JSON field reference:
     .requiredOption("--action <action>", "rebuild, repair, or audit")
     .option("--limit <limit>", "Maximum rows or repairs in this request (1-500)", "100")
     .option("--max-steps <steps>", "Maximum sequential advance calls (1-100)")
-    .option("--json", "Print the aggregate result and current readiness as JSON", false)
+    .option(
+      "--no-terminal-status",
+      "Omit the terminal readiness snapshot (JSON repair automation only)",
+    )
+    .option("--json", "Print the aggregate result and default readiness as JSON", false)
     .action(async (options: AdminProjectionStepOptions) => {
       const projections = await import("./commands/admin-projections");
+      const action = projections.parseProjectionAction(options.action);
+      if (!options.terminalStatus && (!options.json || action !== "repair")) {
+        throw new Error("--no-terminal-status requires --action repair and --json");
+      }
       const result = await projections.advanceProjectionCommand({
-        action: projections.parseProjectionAction(options.action),
+        action,
+        includeTerminalStatus: options.terminalStatus,
         limit: projections.parseProjectionLimit(options.limit),
         maxSteps:
           options.maxSteps === undefined

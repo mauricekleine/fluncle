@@ -74,7 +74,7 @@ ${body}
 
 function run(
   command: string[],
-  options: { failClosed?: boolean; maxWaitSecs?: number; token?: string } = {},
+  options: { failClosed?: boolean; home?: string; maxWaitSecs?: number; token?: string } = {},
 ): ReturnType<typeof spawnSync> {
   return spawnSync("bash", [RUNNER, "fluncle-enrich", "--", ...command], {
     encoding: "utf8",
@@ -84,9 +84,10 @@ function run(
 }
 
 function runnerEnvironment(
-  options: { failClosed?: boolean; maxWaitSecs?: number; token?: string } = {},
+  options: { failClosed?: boolean; home?: string; maxWaitSecs?: number; token?: string } = {},
 ): NodeJS.ProcessEnv {
   const inheritedPath = process.env.PATH ?? "/usr/bin:/bin";
+  const home = options.home ?? directory;
   return {
     DATABASE_ADMISSION_FAIL_CLOSED: options.failClosed === true ? "true" : "false",
     DATABASE_ADMISSION_HTTP_TIMEOUT_SECS: "1",
@@ -96,9 +97,16 @@ function runnerEnvironment(
     FLUNCLE_API_BASE_URL: "https://admission.invalid",
     FLUNCLE_API_TOKEN: options.token === undefined ? "test-token" : options.token,
     HEALTHCHECK_CRON_OUTPUT_DIR: join(directory, "cron-output"),
-    HOME: directory,
+    HOME: home,
     PATH: `${binDirectory}:${inheritedPath}`,
   };
+}
+
+function liveRebakeHome(): string {
+  const home = join(directory, "home");
+  mkdirSync(home);
+  writeFileSync(join(directory, "rebake.lock"), "live rebake\n");
+  return home;
 }
 
 function markerSummary(): Record<string, unknown> {
@@ -331,6 +339,49 @@ fi
       produced: null,
       queueDepth: null,
     });
+  });
+
+  it("reports one admission skip through a live rebake lock and cancels its queued lease", () => {
+    fakeCurl(QUEUED_RESPONSE);
+    const payloadMarker = join(directory, "payload-started");
+    const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      home: liveRebakeHome(),
+      maxWaitSecs: 0,
+    });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(payloadMarker)).toBe(false);
+    expect(markerSummary()).toMatchObject({
+      admissionOutcome: "wait-expired",
+      gateState: "admission-skipped",
+      payloadStarted: false,
+    });
+    expect(readdirSync(join(directory, "cron-output", "fluncle-enrich"))).toHaveLength(1);
+    const calls = readFileSync(curlLog, "utf8");
+    expect(calls.match(/"action":"cancel"/g)?.length ?? 0).toBe(1);
+    expect(calls.match(/"summary_raw"/g)?.length ?? 0).toBe(1);
+  });
+
+  it("reports one admission skip through a live rebake lock and releases a late grant", () => {
+    fakeCurl(`sleep 0.01
+${ACQUIRED_RESPONSE}`);
+    const payloadMarker = join(directory, "payload-started");
+    const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      home: liveRebakeHome(),
+      maxWaitSecs: 0,
+    });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(payloadMarker)).toBe(false);
+    expect(markerSummary()).toMatchObject({
+      admissionOutcome: "wait-expired",
+      gateState: "admission-skipped",
+      payloadStarted: false,
+    });
+    expect(readdirSync(join(directory, "cron-output", "fluncle-enrich"))).toHaveLength(1);
+    const calls = readFileSync(curlLog, "utf8");
+    expect(calls.match(/"action":"release"/g)?.length ?? 0).toBe(1);
+    expect(calls.match(/"summary_raw"/g)?.length ?? 0).toBe(1);
   });
 
   it("keeps a malformed coordinator yield reason out of the marker JSON", () => {

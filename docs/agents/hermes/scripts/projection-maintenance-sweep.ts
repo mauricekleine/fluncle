@@ -200,6 +200,7 @@ function advanceFamily(run: RunCommand, target: FamilyName, maxSteps: number): F
         String(REPAIR_LIMIT),
         "--max-steps",
         String(maxSteps),
+        "--no-terminal-status",
       ]),
       target,
       maxSteps,

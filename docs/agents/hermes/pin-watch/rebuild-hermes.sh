@@ -296,7 +296,7 @@ WEBHOOK="$(docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println 
 
 # Self-deploy health → the public /status board (the `self-deploy` row). Reuses
 # the agent token already in the LIVE container's env (the same token the
-# pre-smoke read uses) — nothing is written to disk, nothing is read from `op`.
+# pre-smoke role-boundary probe uses) — nothing is written to disk, nothing is read from `op`.
 # Best-effort, never throws; the message is public-safe and deliberately vague
 # (no host, no tool VERSIONS — those are internal — and no raw error). The Discord
 # alerts below DO carry versions; they go to the operator, not the public board.
@@ -447,6 +447,19 @@ docker build --build-arg FLUNCLE_BAKED_FP="$WANT_FP" -f "$REPO_DIR/$DOCKERFILE" 
 
 # ── 5. PRE-SMOKE the new image in throwaway containers (live box untouched) ────
 presmoke_fail() { alert "🛠️ pin-watch: PRE-SMOKE FAILED ($1) for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; post_health degraded "a tool update failed validation; box untouched on the current tools"; die "pre-smoke failed: $1"; }
+verify_agent_role_boundary() {
+  local response
+  # This operator-tier rejection happens in auth middleware before the publish handler opens the
+  # primary database. Requiring the exact `forbidden` code proves the captured token authenticated
+  # as the agent role; an invalid token (`unauthorized`), a malformed response, or accidental
+  # operator authority fails the image. No agent-allowed database read belongs in this control-plane
+  # pre-smoke: a database outage must not suppress rebuild, verification, or swap.
+  if response="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin tracks publish 'https://open.spotify.com/track/0000000000000000pinwatch' --json 2>/dev/null)"; then
+    presmoke_fail "publish-class command was NOT refused (role boundary regression)"
+  fi
+  printf '%s' "$response" | grep -Eq '"code"[[:space:]]*:[[:space:]]*"forbidden"' \
+    || presmoke_fail "agent token did not receive the exact forbidden role-boundary response"
+}
 GOT_FLUNCLE="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint fluncle "$NEW_IMAGE" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 [ "$GOT_FLUNCLE" = "$WANT_FLUNCLE" ] || presmoke_fail "fluncle version $GOT_FLUNCLE != $WANT_FLUNCLE"
 GOT_CLAUDE="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint claude "$NEW_IMAGE" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
@@ -454,12 +467,7 @@ GOT_CLAUDE="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint claud
 # gh (the nightly-audit agents' PR driver) must be present + runnable in the new image. It's a
 # manual-watch pin (not auto-bumped), so this just guards that a rebuild never ships a broken gh.
 docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint gh "$NEW_IMAGE" --version >/dev/null 2>&1 || presmoke_fail "gh --version failed (audit PR driver missing)"
-# agent-allowed read with the agent token + live API (expect ok:true)
-docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin tracks enrich --queue --json --limit 1 2>/dev/null | grep -Eq '"ok" *: *true' || presmoke_fail "agent read did not return ok:true"
-# the server boundary: a publish-class command with the agent token MUST be refused
-if docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin add 'https://open.spotify.com/track/0000000000000000pinwatch' >/dev/null 2>&1; then
-  presmoke_fail "publish-class command was NOT refused (role boundary regression)"
-fi
+verify_agent_role_boundary
 # Gateway startup without the live env or data mount: state lands on a scratch tmpfs and no
 # platform token exists, so no Discord connection can open. No config is mounted on purpose —
 # the s6 bootstrap SEEDS a default config into an empty HERMES_HOME (and Hermes rewrites its

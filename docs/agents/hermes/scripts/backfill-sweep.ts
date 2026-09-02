@@ -591,11 +591,26 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
   const runDiscogsFacts = async (): Promise<void> => {
     try {
       const addFactsPass = (pass: DiscogsFactsSummary): void => {
+        const resolved = pass.resolvedCount ?? 0;
+        const none = pass.noneCount ?? 0;
+        const failed = pass.failedCount ?? 0;
+
         summary["discogs-facts"].configured ||= pass.configured ?? false;
-        summary["discogs-facts"].resolved += pass.resolvedCount ?? 0;
-        summary["discogs-facts"].none += pass.noneCount ?? 0;
-        summary["discogs-facts"].failed += pass.failedCount ?? 0;
+        summary["discogs-facts"].resolved += resolved;
+        summary["discogs-facts"].none += none;
+        summary["discogs-facts"].failed += failed;
         summary["discogs-facts"].throttled ||= pass.rateLimited ?? false;
+
+        // Both the prepare and verdict calls can stamp an outcome. Their counts therefore belong
+        // in the canonical sweep totals here, rather than only in the leg-local diagnostic.
+        summary.checked += resolved + none + failed;
+        summary.produced += resolved;
+        summary.failed += failed;
+
+        // The Worker currently reports successful transport for a partial facts pass, so its
+        // `ok` flag is not sufficient evidence that every row succeeded. A failed row is a failed
+        // tick, while a fetch or transport failure remains an `errors` event in the branch below.
+        summary.ok &&= pass.ok !== false && failed === 0;
       };
       const common = {
         baseUrl: agentBaseUrl,

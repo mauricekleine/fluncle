@@ -89,6 +89,35 @@ describe("projection agent authorization", () => {
     );
   });
 
+  it("lets agent repair automation omit the response status snapshot", async () => {
+    advanceProjectionFor.mockResolvedValueOnce({
+      complete: false,
+      processed: 5,
+      scheduled: 5,
+      status: undefined,
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/projections/track_due_work/advance", "POST", AGENT_TOKEN, {
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).not.toHaveProperty("status");
+    expect(advanceProjectionFor).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+        target: "track_due_work",
+      }),
+    );
+  });
+
   it.each([
     ["public_aggregates", "rebuild"],
     ["public_aggregates", "audit"],

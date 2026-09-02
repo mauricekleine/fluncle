@@ -26,7 +26,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { RUN_EVENT_ENDPOINT } from "./api-surface";
 import {
@@ -154,6 +154,24 @@ const REAL_ERROR_LINE =
 const REAL_BENIGN_LINE = "[embed-sweep] mb_<id>: embedded + written";
 
 describe("emit_cron_output — the marker's shape", () => {
+  test("a live rebake still skips an ordinary payload before it can write a marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "fluncle-cron-rebake-"));
+    temporaryDirectories.push(root);
+    const payloadMarker = join(root, "payload-started");
+    const { outputDir, script } = writeRunner(
+      "backup",
+      `printf started > ${JSON.stringify(payloadMarker)}`,
+      { sharedRoot: root },
+    );
+
+    writeFileSync(join(dirname(outputDir), "rebake.lock"), "live rebake\n");
+    const run = spawnSync("bash", [script], { encoding: "utf8" });
+
+    expect(run.status).toBe(0);
+    expect(existsSync(payloadMarker)).toBe(false);
+    expect(existsSync(join(outputDir, "fluncle-backup"))).toBe(false);
+  });
+
   test("captures the sweep's stdout summary, as it always did", () => {
     const { marker } = emit("backup", `echo '{"ok":true,"tableCount":74}'`);
 
