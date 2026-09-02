@@ -10,6 +10,15 @@ export const fluncleAsciiLogo = `███████╗██╗     ██╗
 ██║     ███████╗╚██████╔╝██║ ╚████║╚██████╗███████╗███████╗
 ╚═╝     ╚══════╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝╚══════╝╚══════╝`;
 
+/**
+ * The TAGLINE — the shortest form of the entity, and the line both identity strings
+ * below open with. It is spelled out by hand on twenty-odd surfaces that cannot all
+ * import it (a Go terminal, a Homebrew formula, three static assets, four escaped-HTML
+ * renders), so the constant is the NAME of the string rather than its only copy:
+ * `identity.test.ts` scans the repo for it and pins every site to this spelling.
+ */
+export const fluncleTagline = "Drum & bass bangers from another dimension";
+
 export const fluncleDescription =
   "Drum & bass bangers from another dimension. Fluncle discovers and certifies every track, logs each as a finding, and keeps the full archive across the Galaxy, from the web to the rave terminal. fluncle.com is home base.";
 

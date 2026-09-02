@@ -64,10 +64,17 @@
 //     it is a code one.
 //   - `apps/ssh/main.go` — Go, so oxc cannot parse it. Its em dashes are
 //     `Artist — Title` separators today; a Go-side scan is its own slice.
-//   - `apps/web/public/*.txt` — `llms.txt` and `humans.txt` are hand-written,
-//     voice-governed prose and DO belong under these rails; they are skipped only
-//     because oxc parses JavaScript, not plain text. A text-file scanner is a
-//     separate, worthwhile slice.
+//   - NON-JAVASCRIPT ASSETS, the whole class, because oxc parses JavaScript and
+//     nothing else. `apps/web/public/*.txt` (`llms.txt` and `humans.txt`) is the
+//     half this comment named first, but it is not the only half: `apps/extension`
+//     ships its Chrome Web Store listing in `manifest.json` and both of its screens
+//     as static `.html`, so the copy a stranger meets BEFORE any script runs is the
+//     copy no rail reaches. All of it is hand-written, voice-governed prose that DOES
+//     belong under these rails. Drift between those assets and `apps/extension/src/copy.ts`
+//     is pinned separately (`apps/extension/src/copy.test.ts`, the shape
+//     `apps/web/src/lib/identity.test.ts` uses for llms.txt), which keeps the copies
+//     honest to each other but still runs no rail over what they say. A scanner for
+//     plain text, HTML, and JSON is a separate, worthwhile slice.
 //   - `packages/**` as a SOURCE SCAN — a deliberate boundary, not an empty one: a
 //     literal in a package is never re-typed in the app, so e.g. `packages/registry`
 //     surface titles render on `/status`, the SSH menu, and MCP unchecked, and that

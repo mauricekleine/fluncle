@@ -41,7 +41,13 @@ export const linkGroups: LinkGroup[] = [
     heading: "The mothership",
     links: [
       { label: "Web: the archive", url: "https://www.fluncle.com" },
-      { label: "Newsletter", url: "Fresh bangers, every Friday. Sign up at www.fluncle.com" },
+      // The mothership's canonical descriptor, verbatim (VOICE.md §3), and the canon verb
+      // for joining it: you BOARD the mothership. The SSH About screen says the same thing
+      // the same way (apps/ssh/main.go, aboutContent).
+      {
+        label: "Newsletter",
+        url: "Fresh bangers, every Friday, from Fluncle. Board it at www.fluncle.com",
+      },
       { label: "RSS: the feed", url: "https://www.fluncle.com/rss.xml" },
     ],
   },
