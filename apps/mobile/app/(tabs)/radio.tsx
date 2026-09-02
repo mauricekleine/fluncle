@@ -13,7 +13,7 @@
 // in the background — so a backgrounded run plays the current observation and, on
 // return to the foreground, resyncs to the live slot (an AppState listener). The
 // UIBackgroundModes entitlement that makes this work is added by the expo-audio config
-// plugin (app.config.ts) and needs a NATIVE REBUILD, not a JS reload.
+// plugin (app.config.js) and needs a NATIVE REBUILD, not a JS reload.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, StyleSheet, Text, View } from "react-native";
 import Animated, {

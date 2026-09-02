@@ -380,7 +380,7 @@ const AdaptiveForegroundVariant: React.FC = () => <Traveler heightFrac={0.58} />
 // ── Production asset: the splash mark ─────────────────────────────────────────
 // The picked icon's splash sibling, in variant F's family: the traveler small
 // over the quiet starfield. Rendered on a TRANSPARENT ground so the native
-// splash backgroundColor (Deep Field, already in app.config.ts) supplies the
+// splash backgroundColor (Deep Field, already in app.config.js) supplies the
 // ground — and the stars FADE OUT toward the edges, so the composited square
 // dissolves into the native ground with no visible seam. The figure sits at
 // 46% of frame height: small, drifting, the fluncle-small.jpg composition

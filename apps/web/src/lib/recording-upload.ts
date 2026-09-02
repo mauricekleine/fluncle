@@ -22,6 +22,7 @@ import {
   type MultipartPlanPart,
   planMultipart,
 } from "@fluncle/contracts/util/multipart";
+import { readError } from "./read-error";
 
 // Attempts per part before giving up — mirrors the CLI's `MAX_PART_ATTEMPTS`. R2 PUTs drop
 // the socket intermittently on a home uplink, so a transient drop/5xx is retried with
@@ -82,7 +83,7 @@ export async function presignRecordingUpload(
   );
 
   if (!response.ok) {
-    throw new Error(await readApiError(response));
+    throw new Error(await readError(response));
   }
 
   return (await response.json()) as RecordingPresign;
@@ -291,20 +292,4 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
     signal?.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-export async function readApiError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-
-  const text = await response.text().catch(() => "");
-
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

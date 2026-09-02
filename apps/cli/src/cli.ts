@@ -1301,7 +1301,7 @@ JSON field reference:
     adminTracks.outputHelp();
   });
 
-  // `add_track` → `admin tracks publish` (canonical).
+  // `publish_track` → `admin tracks publish` (canonical).
   adminTracks
     .command("publish")
     .description("Publish a Spotify track")

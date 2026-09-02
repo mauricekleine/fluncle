@@ -53,7 +53,7 @@ function primeCorpus(
   artists: Array<{ id: string; mbid: string | null; name: string }>,
   aliases: Array<{ alias: string; artist_id: string }> = [],
 ): void {
-  execute.mockResolvedValueOnce({ rows: artists }); // loadArtistCorpus
+  execute.mockResolvedValueOnce({ rows: artists }); // loadArtists
   execute.mockResolvedValueOnce({ rows: aliases }); // loadAliases
 }
 
