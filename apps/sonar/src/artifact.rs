@@ -7,6 +7,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 
 use crate::decode::BLOB_LEN;
 use crate::index::TrackMeta;
@@ -16,6 +17,8 @@ pub const STREAM_VERSION: u32 = 1;
 pub const FORMAT_VERSION: u32 = 1;
 pub const CONTRACT: &str = "sonar.track@1/1";
 pub const EMPTY_DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -409,6 +412,22 @@ pub struct ArtifactClient {
 
 impl ArtifactClient {
     pub fn new(base_url: String, token: &str, consumer_id: String) -> Result<Self> {
+        Self::with_timeouts(
+            base_url,
+            token,
+            consumer_id,
+            CONNECT_TIMEOUT,
+            REQUEST_TIMEOUT,
+        )
+    }
+
+    fn with_timeouts(
+        base_url: String,
+        token: &str,
+        consumer_id: String,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+    ) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -417,6 +436,8 @@ impl ArtifactClient {
         );
         let client = reqwest::Client::builder()
             .default_headers(headers)
+            .connect_timeout(connect_timeout)
+            .timeout(request_timeout)
             .build()?;
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -642,6 +663,7 @@ pub fn parse_cursor(cursor: Option<&str>) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     fn event(
         seq: u64,
@@ -768,5 +790,39 @@ mod tests {
             batch.events[0].operation,
             ValidatedOperation::Skip
         ));
+    }
+
+    #[test]
+    fn artifact_transport_deadlines_fit_inside_the_service_boot_budget() {
+        assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(30));
+        assert!(CONNECT_TIMEOUT < REQUEST_TIMEOUT);
+        assert!(REQUEST_TIMEOUT < Duration::from_secs(180));
+    }
+
+    #[tokio::test]
+    async fn artifact_request_times_out_when_an_accepted_peer_never_responds() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let stalled_peer = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let client = ArtifactClient::with_timeouts(
+            format!("http://{address}"),
+            "test",
+            "sonar-test".into(),
+            Duration::from_millis(50),
+            Duration::from_millis(100),
+        )
+        .unwrap();
+
+        let started = Instant::now();
+        let error = client.status().await.unwrap_err();
+        assert!(error.chain().any(|cause| cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        stalled_peer.abort();
     }
 }
