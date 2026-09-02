@@ -129,6 +129,12 @@ describe("security, release, and deploy topology", () => {
     expect(releasesSource).toContain("statically linked|static-pie linked");
     expect(releasesSource).toContain("ldd dist/sonar > dist/sonar.ldd 2>&1 || true");
     expect(releasesSource).not.toContain("if ldd dist/sonar");
+    expect(releasesSource).toContain(
+      'gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}"',
+    );
+    expect(releasesSource).toContain('gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs"');
+    expect(releasesSource).toContain("-F force=true");
+    expect(releasesSource).not.toContain('git push -f origin "refs/tags/$RELEASE_TAG"');
   });
 
   test("post-deploy has event initiation plus a dynamic bounded fallback", () => {

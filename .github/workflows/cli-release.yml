@@ -278,9 +278,20 @@ jobs:
       - name: Publish to the rolling release
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.select.outputs.sha }}
         run: |
-          git tag -f "$RELEASE_TAG" "${{ needs.select.outputs.sha }}"
-          git push -f origin "refs/tags/$RELEASE_TAG"
+          if gh api --silent "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" 2>/dev/null; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" \
+              -f sha="$SHA" \
+              -F force=true \
+              --silent
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${RELEASE_TAG}" \
+              -f sha="$SHA" \
+              --silent
+          fi
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .object.sha)" = "$SHA"
 
           notes="Rolling pre-release: the static musl \`sonar\` binary for rave-01, built from ${{ needs.select.outputs.sha }}.
 
