@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // The retained-evidence CONTRACT: selected deterministic E2E retains named evidence for shipped
-// main commits for 30 days, while the separately scheduled discovery walk retains its record for
-// the public-repository ceiling of 90 days. The directories are gitignored on purpose
+// main commits for 30 days. The directories are gitignored on purpose
 // (apps/web/tests/e2e/README.md), so a missing artifact must fail instead of silently turning
 // evidence into a claim with nothing behind it.
 
@@ -60,40 +59,4 @@ describe("retained browser evidence", () => {
       expect(upload?.ifNoFiles).toBe("error");
     },
   );
-
-  test("the discovery walk is retained for 90 days on every run and never empty", () => {
-    const upload = uploads("discovery-walk.yml").find(
-      (candidate) => candidate.path === "apps/web/.dev/discovery-walk/",
-    );
-
-    expect(upload).toBeDefined();
-    expect(upload?.retention).toBe(90);
-    expect(upload?.always).toBe(true);
-    expect(upload?.ifNoFiles).toBe("error");
-  });
-
-  test("the discovery walk records only deployed or operator-selected products", () => {
-    const text = readFileSync(join(workflowDir, "discovery-walk.yml"), "utf8");
-
-    expect(text).toContain("run: bun run walk:discovery");
-    expect(text).not.toMatch(/^\s*pull_request:/m);
-    expect(text).toMatch(/workflows:\s*\["Post-deploy Probe"\]/);
-    expect(text).toMatch(/^\s*workflow_dispatch:/m);
-    expect(text).toContain("github.event.workflow_run.conclusion == 'success'");
-    expect(text).toContain("github.event.workflow_run.head_sha || github.sha");
-    expect(text).not.toContain("~/.bun/install/cache");
-    // The summary lands on the run page even when a journey failed.
-    expect(text).toContain('summary.md >> "$GITHUB_STEP_SUMMARY"');
-  });
-
-  test("the walk script and its summary renderer are what the package alias runs", () => {
-    const pkg = JSON.parse(readFileSync(join(root, "apps/web/package.json"), "utf8")) as {
-      scripts: Record<string, string>;
-    };
-
-    expect(pkg.scripts["walk:discovery"]).toBe("bun run scripts/discovery-walk.ts");
-    expect(readdirSync(join(root, "apps/web/scripts"))).toEqual(
-      expect.arrayContaining(["discovery-walk.ts", "discovery-walk-summary.ts"]),
-    );
-  });
 });

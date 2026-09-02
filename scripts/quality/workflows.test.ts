@@ -152,22 +152,4 @@ describe("security, release, and deploy topology", () => {
     );
     expect(concurrencyGroup).not.toContain("github.event_name == 'push' && 'fallback'");
   });
-
-  test("an intentionally skipped deploy cannot launch the expensive discovery walk", () => {
-    const discovery = workflow("discovery-walk.yml");
-    const discoverySource = source("discovery-walk.yml");
-    const walkSteps = at(discovery, "jobs", "walk", "steps") as Array<Record<string, unknown>>;
-    const checkout = walkSteps.find((step) => step.name === "Checkout code");
-    expect(at(discovery, "on", "pull_request")).toBeUndefined();
-    expect(at(discovery, "on", "workflow_dispatch")).toBeDefined();
-    expect(at(discovery, "on", "workflow_run", "workflows")).toEqual(["Post-deploy Probe"]);
-    expect(at(checkout, "with", "ref")).toBe(
-      "${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}",
-    );
-    expect(walkSteps.some((step) => step.name === "Cache Bun packages")).toBe(false);
-    expect(discoverySource).toContain("actions/runs/${TRIGGER_RUN_ID}/jobs");
-    expect(discoverySource).toContain("steps.deploy_trigger.outputs.enabled == 'true'");
-    expect(discoverySource).toContain("Sweep public surfaces");
-    expect(discoverySource).not.toContain("~/.bun/install/cache");
-  });
 });

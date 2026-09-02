@@ -51,7 +51,7 @@ The 2026-09-01 baseline replay selected E2E for 77 of 120 commits and the fail-c
 
 ## Cache ownership
 
-The Bun package cache is intentionally absent from every quality and live-evidence workflow. In the 27-step hosted sample produced by the live history report, restore p50/p90 was 53/64 seconds while frozen-install p50/p90 was 5/7 seconds, so it increased latency before any validation began. The first hosted Discovery Walk under this redesign confirmed the same result directly: Bun cache restore plus post-save took 71 seconds while the frozen install took 8 seconds.
+The Bun package cache is intentionally absent from every quality and live-evidence workflow. In the 27-step hosted sample produced by the live history report, restore p50/p90 was 53/64 seconds while frozen-install p50/p90 was 5/7 seconds, so it increased latency before any validation began.
 
 Turbo and Cargo use explicit restore/save actions. Pull-request merge refs restore only and never write. `setup-go`'s implicit cache is disabled so it cannot create a second, PR-writable cache owner; the selected Go checks run directly without a retained cache. Trusted `main` writes at most one immutable snapshot per dependency hash and UTC week, with prefix restore from the newest prior epoch. This is a bounded rotating design rather than an invalid stable immutable key: it changes the former approximately one Turbo archive per SHA trajectory to at most one active archive per week per dependency lineage. GitHub's normal eviction bounds older snapshots; deleting existing caches is an operator action and is not part of repository rollout.
 
