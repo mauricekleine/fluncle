@@ -58,10 +58,10 @@ Default `--if-changed` (the timer); `--force` redeploys unconditionally (the ope
 
 1. **Single-flight** (flock) — never two runs at once.
 2. **Ask what is published.** `GET` the release's `sonar.commit` asset and compare it to the recorded deployed SHA (`/opt/sonar-freshen/deployed-sha`). Equal → no-op, `/status` gets an `ok`, done. (`--dry-run` skips this short-circuit on purpose — it never touches the live service, so previewing the current release stays useful on an up-to-date box.) An unreachable or malformed release feed (CI hasn't published yet, GitHub is having a moment, an HTML error page came back instead of a SHA) is logged, posted as `degraded`, and **exits cleanly** — a broken release feed never becomes a broken box.
-3. **Require the current runtime contract.** Before downloading a candidate, verify that the live service environment has the complete local-replica + artifact-consumer configuration. A predecessor still using the remote-query contract or a partially provisioned environment fails loudly with the live service untouched. The binary updater never invents paths, copies credentials, or performs this provisioning migration. There is one explicit transition case: when the current contract is complete but its state file does not exist yet, a real deploy may continue to step 6 so Sonar can bootstrap its own derived local state under the committed service; `--dry-run` still refuses because it promises no mutation.
+3. **Require the current runtime contract.** Before downloading a candidate, verify that the live service environment has the complete local-replica + artifact-consumer configuration. A predecessor still using the remote-query contract or a partially provisioned environment fails loudly with the live service untouched. The binary updater never invents paths, copies credentials, or performs this provisioning migration. There is one explicit transition case: until the freshener has recorded a successful local-state bootstrap, a real deploy may continue to step 6 so Sonar can bootstrap or retry its own derived local state under the committed service. A readable SQLite file is not readiness because a failed bootstrap can create it before committing a manifest. An unmarked readable state therefore gets a validate-only attempt: success proves it complete; failure retries the guarded bootstrap. `--dry-run` refuses an absent or invalid state because it promises no mutation.
 4. **Download + VERIFY.** Fetch `sonar` + `sonar.sha256` into a throwaway dir and check the digest (see the trust boundary above). Abort loudly on any mismatch.
-5. **Pre-smoke the new binary in isolation before touching the live service.** When durable state exists, boot the candidate on a free high loopback port with TLS disabled and `SONAR_VALIDATE_ONLY=true`, using the live environment's consumer-state path and search secret. Then poll `/health` until it reports `ok`. This proves the binary runs on the CPU, opens the embedded state, validates the durable manifest and raw vectors, builds both indexes, and serves HTTP. It does not open/sync the replica or contact/mutate the artifact consumer. Any failure leaves the live service untouched. The throwaway process is always reaped because it holds a second full copy of the index in RAM. On the one-time transition with a complete current contract and no state file, this isolated validation is impossible; the script defers bootstrap to the guarded service swap instead.
-6. **Swap** (the only moment the live service changes): snapshot the current binary to `sonar.prev` (the rollback target), atomically rename the new one into place, `systemctl restart sonar`. Replacing the on-disk file under the running process is safe on Linux (the old process holds its inode until restart). The systemd unit and `/etc/sonar.env` are **left untouched** — same contract as the ssh sibling: reuse the already-provisioned env, read nothing from `op`. On the first local-replica deployment, this start performs Sonar's bounded registration, local-replica sync, snapshot attestation, durable build, and activation; any failure enters the same binary rollback rail as an ordinary restart.
+5. **Pre-smoke the new binary in isolation before touching the live service.** When durable state exists, boot the candidate on a free high loopback port with TLS disabled and `SONAR_VALIDATE_ONLY=true`, using the live environment's consumer-state path and search secret. Then poll `/health` until it reports `ok`. This proves the binary runs on the CPU, opens the embedded state, validates the durable manifest and raw vectors, builds both indexes, and serves HTTP. It does not open/sync the replica or contact/mutate the artifact consumer. Any failure after the completed-bootstrap marker exists leaves the live service untouched and fails the deploy. Before that marker exists, an invalid partial state follows the retry bridge into step 6. The throwaway process is always reaped because it holds a second full copy of the index in RAM.
+6. **Swap** (the only moment the live service changes): snapshot the current binary to `sonar.prev` (the rollback target), atomically rename the new one into place, `systemctl restart sonar`. Replacing the on-disk file under the running process is safe on Linux (the old process holds its inode until restart). The systemd unit and `/etc/sonar.env` are **left untouched** — same contract as the ssh sibling: reuse the already-provisioned env, read nothing from `op`. On the first local-replica deployment, this start performs Sonar's bounded registration, local-replica sync, snapshot attestation, durable build, and activation; any failure enters the same binary rollback rail as an ordinary restart. Only a healthy post-swap service atomically writes the freshener's `local-state-ready` marker, so a crash or rollback before acceptance remains retryable without deleting local files.
 7. **Post-swap smoke:** the service is `active` and the live port answers `/health` with `"ok":true`, polled for the same timeout. A normal restart validates the durable last-good state before serving, then resumes replica reconciliation and bounded deltas. The loopback TLS probe ignores hostname validation because the origin certificate names the public host, not `127.0.0.1`.
 8. **On any post-swap failure → ROLLBACK:** restore `sonar.prev`, restart, confirm healthy, alert loudly. If the rollback itself fails, fire the loudest alert, post `down`, and stop for a human. **The box is never left broken.**
 
@@ -145,8 +145,9 @@ sudo install -d -m 0755 /etc/fluncle
 sudo install -m 0600 /dev/null /etc/fluncle/sonar-freshen.env
 sudo "$EDITOR" /etc/fluncle/sonar-freshen.env
 
-# 4. Rehearse it first — downloads, verifies, pre-smokes, and STOPS. The live engine
-#    is not touched. Watch for "checksum verified" then "pre-smoke passed".
+# 4. When completed durable state already exists, rehearse first: download, verify,
+#    pre-smoke, and STOP. A first local-state bootstrap intentionally skips this step;
+#    follow the attended upgrade order above and run --dry-run after the real pilot.
 sudo /opt/sonar-freshen/fluncle-sonar-freshen.sh --dry-run
 
 # 5. The real pilot: deploy the published build and prove the swap + post-smoke.
@@ -165,23 +166,24 @@ journalctl -u fluncle-sonar-freshen.service -n 60 --no-pager
 systemctl list-timers fluncle-sonar-freshen.timer
 ```
 
-Re-run `--dry-run` any time to preview without touching the live service. The script is idempotent and a no-op when current, so the timer is safe to run as often as you like.
+After the first successful bootstrap, re-run `--dry-run` any time to preview without touching the live service. The script is idempotent and a no-op when current, so the timer is safe to run as often as you like.
 
 ## Knobs
 
 Everything is overridable via the environment; the defaults are the canonical deploy paths.
 
-| Env var                          | Default                    | Meaning                                                                                                  |
-| -------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `SONARFRESHEN_RELEASE_REPO`      | `mauricekleine/fluncle`    | The public repo carrying the release.                                                                    |
-| `SONARFRESHEN_RELEASE_TAG`       | `sonar-latest`             | The rolling pre-release tag CI publishes to.                                                             |
-| `SONARFRESHEN_ASSET_BASE`        | derived from the two above | Full asset download base (point this at a mirror if ever needed).                                        |
-| `SONARFRESHEN_STATE_DIR`         | `/opt/sonar-freshen`       | Holds `deployed-sha`.                                                                                    |
-| `SONARFRESHEN_SERVICE`           | `sonar`                    | The systemd unit to restart.                                                                             |
-| `SONARFRESHEN_APP_BIN`           | `/opt/sonar/sonar`         | The binary to swap.                                                                                      |
-| `SONARFRESHEN_SERVICE_ENV`       | `/etc/sonar.env`           | Read-only source of local-state paths, replica open credentials, search secret, and live port/TLS shape. |
-| `SONARFRESHEN_BOOT_TIMEOUT_SECS` | `180`                      | How long an index load may take, pre-smoke and post-swap alike.                                          |
-| `SONARFRESHEN_WORKER_URL`        | `https://www.fluncle.com`  | Where the `/status` health post goes.                                                                    |
+| Env var                             | Default                    | Meaning                                                                                                  |
+| ----------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `SONARFRESHEN_RELEASE_REPO`         | `mauricekleine/fluncle`    | The public repo carrying the release.                                                                    |
+| `SONARFRESHEN_RELEASE_TAG`          | `sonar-latest`             | The rolling pre-release tag CI publishes to.                                                             |
+| `SONARFRESHEN_ASSET_BASE`           | derived from the two above | Full asset download base (point this at a mirror if ever needed).                                        |
+| `SONARFRESHEN_STATE_DIR`            | `/opt/sonar-freshen`       | Holds `deployed-sha`.                                                                                    |
+| `SONARFRESHEN_BOOTSTRAP_READY_FILE` | derived from state dir     | Marker written only after a healthy post-swap local-state bootstrap; override for tests/provisioning.    |
+| `SONARFRESHEN_SERVICE`              | `sonar`                    | The systemd unit to restart.                                                                             |
+| `SONARFRESHEN_APP_BIN`              | `/opt/sonar/sonar`         | The binary to swap.                                                                                      |
+| `SONARFRESHEN_SERVICE_ENV`          | `/etc/sonar.env`           | Read-only source of local-state paths, replica open credentials, search secret, and live port/TLS shape. |
+| `SONARFRESHEN_BOOT_TIMEOUT_SECS`    | `180`                      | How long an index load may take, pre-smoke and post-swap alike.                                          |
+| `SONARFRESHEN_WORKER_URL`           | `https://www.fluncle.com`  | Where the `/status` health post goes.                                                                    |
 
 Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`.
 

@@ -1133,6 +1133,12 @@ type SonarFixture = {
   runtimeContract?: "current" | "legacy";
   /** Omit the current contract's durable state to exercise the first bootstrap bridge. */
   stateInitialized?: boolean;
+  /** Fail once after creating partial state, then retry without deleting that state. */
+  retryAfterBootstrapFailure?: boolean;
+  /** Pretend a prior post-swap acceptance recorded the authoritative marker. */
+  bootstrapMarked?: boolean;
+  /** Override the durable-state fixture body. */
+  stateContents?: string;
 };
 
 const SHA_A = "a".repeat(40);
@@ -1141,6 +1147,7 @@ const SHA_B = "b".repeat(40);
 /** A stand-in `sonar` binary: boots on SONAR_PORT and serves the one thing the smoke reads. */
 const SONAR_STUB = [
   "#!/usr/bin/env bash",
+  'if [ "${SONAR_VALIDATE_ONLY:-}" = "true" ] && grep -q "^partial$" "$SONAR_STATE_PATH" 2>/dev/null; then echo "state has no completed manifest" >&2; exit 2; fi',
   'exec "$SONAR_TEST_BUN" -e "Bun.serve({fetch: () => new Response(String.raw\\`{\\"ok\\":true}\\`), port: Number(process.env.SONAR_PORT)}); await new Promise(() => {});"',
   "",
 ].join("\n");
@@ -1151,7 +1158,10 @@ async function runSonar(
   args: string[] = [],
 ): Promise<{
   assetRequests: string[];
+  attempts: Array<{ code: number; stderr: string; stdout: string }>;
+  bootstrapReady: boolean;
   code: number;
+  stateContents: string | null;
   stderr: string;
   stdout: string;
   summary: Summary;
@@ -1160,16 +1170,37 @@ async function runSonar(
   temporaryDirectories.push(root);
   const bin = join(root, "bin");
   const appDir = join(root, "app");
+  const statePath = join(root, "sonar-state.db");
+  const replicaPath = join(root, "sonar-replica.db");
+  const restartFailed = join(root, "restart-failed");
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(appDir, { recursive: true });
+  writeFileSync(join(appDir, "sonar"), "#!/usr/bin/env bash\n# old-sonar\nexit 0\n", "utf8");
+  chmodSync(join(appDir, "sonar"), 0o755);
 
   // `flock` is util-linux — it does not exist on macOS at all, so without this stub EVERY run
   // here would take the lock-held branch and quietly test nothing.
   writeStub(bin, "flock", '[ "${SF_LOCKED:-0}" = "1" ] && exit 1\nexit 0');
-  // A systemctl that restarts nothing and reports the service up, so the swap path is real
-  // right up to the boundary of the box.
-  writeStub(bin, "systemctl", "exit 0");
+  // A systemctl that normally reports the service up. The retry fixture makes the first
+  // candidate start create incomplete state and fail; rollback succeeds on the recognisable
+  // old binary, then the next candidate start completes that same state in place.
+  writeStub(
+    bin,
+    "systemctl",
+    [
+      'if [ "$1" = "restart" ] && [ "${SF_RESTART_FAIL_ONCE:-0}" = "1" ]; then',
+      '  if grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null; then exit 0; fi',
+      '  if [ ! -f "$SF_RESTART_FAILED" ]; then',
+      '    printf "partial\n" >"$SF_STATE_PATH"',
+      '    : >"$SF_RESTART_FAILED"',
+      "    exit 1",
+      "  fi",
+      '  printf "complete\n" >"$SF_STATE_PATH"',
+      "fi",
+      "exit 0",
+    ].join("\n"),
+  );
 
   const digest = new Bun.CryptoHasher("sha256").update(SONAR_STUB).digest("hex");
   const assetRequests: string[] = [];
@@ -1200,8 +1231,6 @@ async function runSonar(
   const live = Bun.serve({ fetch: () => new Response('{"ok":true}'), port: 0 });
   const serviceEnv = join(root, "sonar.env");
 
-  const statePath = join(root, "sonar-state.db");
-  const replicaPath = join(root, "sonar-replica.db");
   const legacyContract = fixture.runtimeContract === "legacy";
   const serviceEnvironment = [
     "TURSO_DATABASE_URL=libsql://stub",
@@ -1220,12 +1249,16 @@ async function runSonar(
   ];
   writeFileSync(serviceEnv, serviceEnvironment.join("\n"), "utf8");
   if (!legacyContract && fixture.stateInitialized !== false) {
-    writeFileSync(statePath, "fixture", "utf8");
+    writeFileSync(statePath, fixture.stateContents ?? "fixture", "utf8");
   }
 
   if (fixture.deployed) {
     mkdirSync(join(root, "state"), { recursive: true });
     writeFileSync(join(root, "state/deployed-sha"), `${fixture.deployed}\n`, "utf8");
+  }
+  if (fixture.bootstrapMarked) {
+    mkdirSync(join(root, "state"), { recursive: true });
+    writeFileSync(join(root, "state/local-state-ready"), `${fixture.deployed ?? SHA_A}\n`, "utf8");
   }
 
   const assetBase = fixture.unreachable
@@ -1233,28 +1266,39 @@ async function runSonar(
     : `http://127.0.0.1:${server.port}/download`;
 
   try {
-    const run = await runScript(
-      SONAR_FRESHEN,
-      {
-        HOME: root,
-        PATH: `${bin}:/usr/bin:/bin`,
-        SF_LOCKED: fixture.locked ? "1" : "0",
-        SONARFRESHEN_APP_DIR: appDir,
-        SONARFRESHEN_ASSET_BASE: assetBase,
-        SONARFRESHEN_BOOT_TIMEOUT_SECS: "25",
-        SONARFRESHEN_LOCK: join(root, "lock"),
-        SONARFRESHEN_SERVICE_ENV: serviceEnv,
-        SONARFRESHEN_STATE_DIR: join(root, "state"),
-        SONARFRESHEN_WORKER_URL: base ?? "http://127.0.0.1:1",
-        SONAR_TEST_BUN: process.execPath,
-        ...(base === undefined ? {} : { FLUNCLE_API_TOKEN: "sonar-agent-token" }),
-      },
-      args,
-    );
+    const scriptEnvironment = {
+      HOME: root,
+      PATH: `${bin}:/usr/bin:/bin`,
+      SF_APP_BIN: join(appDir, "sonar"),
+      SF_LOCKED: fixture.locked ? "1" : "0",
+      SF_RESTART_FAILED: restartFailed,
+      SF_RESTART_FAIL_ONCE: fixture.retryAfterBootstrapFailure ? "1" : "0",
+      SF_STATE_PATH: statePath,
+      SONARFRESHEN_APP_DIR: appDir,
+      SONARFRESHEN_ASSET_BASE: assetBase,
+      SONARFRESHEN_BOOT_TIMEOUT_SECS: "25",
+      SONARFRESHEN_LOCK: join(root, "lock"),
+      SONARFRESHEN_SERVICE_ENV: serviceEnv,
+      SONARFRESHEN_STATE_DIR: join(root, "state"),
+      SONARFRESHEN_WORKER_URL: base ?? "http://127.0.0.1:1",
+      SONAR_TEST_BUN: process.execPath,
+      ...(base === undefined ? {} : { FLUNCLE_API_TOKEN: "sonar-agent-token" }),
+    };
+    const attempts = [await runScript(SONAR_FRESHEN, scriptEnvironment, args)];
+    if (fixture.retryAfterBootstrapFailure) {
+      attempts.push(await runScript(SONAR_FRESHEN, scriptEnvironment, args));
+    }
+    const run = attempts.at(-1);
+    if (!run) {
+      throw new Error("sonar freshen fixture produced no attempts");
+    }
 
     return {
       assetRequests,
+      attempts,
+      bootstrapReady: existsSync(join(root, "state/local-state-ready")),
       code: run.code,
+      stateContents: existsSync(statePath) ? readFileSync(statePath, "utf8") : null,
       stderr: run.stderr,
       stdout: run.stdout,
       summary: lastJsonLine(run.stdout),
@@ -1379,6 +1423,50 @@ describe("sonar-freshen reports a run", () => {
     ]);
     expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
     expect(derivedOk(code, summary.errors)).toBe(true);
+  });
+
+  test("a failed bootstrap retries partial state without manual deletion", async () => {
+    const { attempts, bootstrapReady, code, stateContents, stderr, summary } = await runSonar(
+      {
+        commit: SHA_B,
+        deployed: SHA_A,
+        retryAfterBootstrapFailure: true,
+        stateInitialized: false,
+      },
+      undefined,
+    );
+    const first = attempts.at(0);
+    if (!first) {
+      throw new Error("bootstrap retry fixture produced no first attempt");
+    }
+
+    expect(first.code).toBe(1);
+    expect(lastJsonLine(first.stdout)).toMatchObject({ errors: 1, produced: 0, queueDepth: 1 });
+    expect(code).toBe(0);
+    expect(stderr).toContain(
+      "unmarked durable state did not validate; retrying the incomplete bootstrap",
+    );
+    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
+    expect(stateContents).toBe("complete\n");
+    expect(bootstrapReady).toBe(true);
+  });
+
+  test("a marked bootstrap never downgrades a validation failure into a retry", async () => {
+    const { bootstrapReady, code, stderr, summary } = await runSonar(
+      {
+        bootstrapMarked: true,
+        commit: SHA_B,
+        deployed: SHA_A,
+        stateContents: "partial\n",
+      },
+      undefined,
+    );
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("pre-smoke failed: the new binary exited during boot");
+    expect(stderr).not.toContain("retrying the incomplete bootstrap");
+    expect(summary).toMatchObject({ errors: 1, produced: 0, queueDepth: 1 });
+    expect(bootstrapReady).toBe(true);
   });
 
   test("a dry run never bootstraps missing durable state", async () => {

@@ -69,6 +69,7 @@ ASSET_BASE="${SONARFRESHEN_ASSET_BASE:-https://github.com/${RELEASE_REPO}/releas
 
 STATE_DIR="${SONARFRESHEN_STATE_DIR:-/opt/sonar-freshen}"
 SHA_FILE="${SONARFRESHEN_SHA_FILE:-$STATE_DIR/deployed-sha}"
+BOOTSTRAP_READY_FILE="${SONARFRESHEN_BOOTSTRAP_READY_FILE:-$STATE_DIR/local-state-ready}"
 LOCK="${SONARFRESHEN_LOCK:-/run/lock/fluncle-sonar-freshen.lock}"
 
 # The live service contract (must match apps/sonar/deploy/sonar.service).
@@ -402,12 +403,16 @@ require_local_runtime_contract() {
 
   SMOKE_STATE_PATH="$(env_value SONAR_STATE_PATH)"
   SMOKE_SECRET="$(env_value SONAR_SECRET)"
-  if [ -r "$SMOKE_STATE_PATH" ]; then
-    SMOKE_STATE_READY=1
-  else
-    SMOKE_STATE_READY=0
-    [ "$MODE" != "--dry-run" ] \
-      || runtime_contract_fail "the configured durable state is not initialized; dry-run cannot perform the first guarded bootstrap"
+  SMOKE_STATE_PRESENT=0
+  [ -r "$SMOKE_STATE_PATH" ] && SMOKE_STATE_PRESENT=1
+  BOOTSTRAP_READY=0
+  [ -f "$BOOTSTRAP_READY_FILE" ] && BOOTSTRAP_READY=1
+
+  if [ "$BOOTSTRAP_READY" = "1" ] && [ "$SMOKE_STATE_PRESENT" != "1" ]; then
+    runtime_contract_fail "the completed-bootstrap marker exists but its durable state is unreadable"
+  fi
+  if [ "$SMOKE_STATE_PRESENT" != "1" ] && [ "$MODE" = "--dry-run" ]; then
+    runtime_contract_fail "the configured durable state is not initialized; dry-run cannot perform the first guarded bootstrap"
   fi
 }
 
@@ -549,14 +554,16 @@ log "checksum verified for ${NEW_SHA:0:12}"
 # the live one and the smoke's. Headroom must exceed 2x the index (see the README).
 # Validate-only starts no consumer loop; the process is reaped when the smoke resolves.
 #
-# ONE-TIME COMPATIBILITY BRIDGE: the predecessor remote-query runtime has no durable state to
-# validate. Once the operator has installed the current unit + COMPLETE current environment,
-# a real deploy (never --dry-run) may skip this isolated validation exactly while the configured
-# state file is absent. The ordinary guarded swap then starts the candidate as the service user;
-# Sonar performs its own bounded local bootstrap, and the existing post-smoke/rollback rail owns
-# the verdict. This avoids the impossible demand that the old binary create the new binary's
-# state, without teaching the updater to invent paths, copy credentials, or mutate the protocol
-# itself. Every later deploy sees the state and returns to validate-only before swap.
+# ONE-TIME COMPATIBILITY BRIDGE: the predecessor remote-query runtime has no completed state to
+# validate. Once the operator has installed the current unit + COMPLETE current environment, a
+# real deploy (never --dry-run) may defer isolated validation to the guarded service swap. Sonar
+# performs its own bounded local bootstrap, and the existing post-smoke/rollback rail owns the
+# verdict. A failed bootstrap can leave a readable SQLite file before its manifest is complete,
+# so FILE EXISTENCE IS NEVER READINESS. The freshener writes BOOTSTRAP_READY_FILE only after the
+# post-swap service is healthy. Before that marker exists, a readable state gets one validate-only
+# attempt: success proves a prior bootstrap completed despite a crash before the marker; failure
+# is treated as retryable partial bootstrap and returns to the guarded swap. Once marked ready,
+# any validation failure is an ordinary hard pre-smoke failure.
 presmoke_fail() {
   SF_ERRORS=$((SF_ERRORS + 1))
   alert "🛰️ sonar-freshen: PRE-SMOKE FAILED ($1) for ${NEW_SHA:0:12} on rave-01 — box untouched, staying on the current sonar binary"
@@ -564,7 +571,7 @@ presmoke_fail() {
   die "pre-smoke failed: $1"
 }
 
-if [ "$SMOKE_STATE_READY" = "1" ]; then
+if [ "$SMOKE_STATE_PRESENT" = "1" ]; then
   # Pick a free high loopback port (bash /dev/tcp probe; no external tool needed).
   port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
   SMOKE_PORT=""
@@ -589,19 +596,31 @@ if [ "$SMOKE_STATE_READY" = "1" ]; then
   smoke_healthy() { curl -fsS -m 10 "http://127.0.0.1:$SMOKE_PORT/health" 2>/dev/null | grep -q '"ok":true'; }
 
   smoked=0
+  smoke_failure=""
   for _ in $(seq 1 "$BOOT_TIMEOUT_SECS"); do
     if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
       # Include only the tail of the boot log: it is sonar's own tracing output (config
       # summary + counts), never a secret value.
-      presmoke_fail "the new binary exited during boot ($(tr '\n' ' ' <"$SMOKE_LOG" | tail -c 200))"
+      smoke_failure="the new binary exited during boot ($(tr '\n' ' ' <"$SMOKE_LOG" | tail -c 200))"
+      break
     fi
     if smoke_healthy; then smoked=1; break; fi
     sleep 1
   done
-  [ "$smoked" = "1" ] || presmoke_fail "the new binary did not serve a healthy /health within ${BOOT_TIMEOUT_SECS}s"
   cleanup_smoke
   _cleanup() { rm -rf "$WORK_DIR"; }
-  log "pre-smoke passed"
+  if [ "$smoked" = "1" ]; then
+    log "pre-smoke passed"
+  else
+    [ -n "$smoke_failure" ] \
+      || smoke_failure="the new binary did not serve a healthy /health within ${BOOT_TIMEOUT_SECS}s"
+    if [ "$BOOTSTRAP_READY" = "1" ]; then
+      presmoke_fail "$smoke_failure"
+    fi
+    [ "$MODE" != "--dry-run" ] \
+      || runtime_contract_fail "the unmarked durable state did not validate; dry-run cannot retry its bootstrap"
+    log "unmarked durable state did not validate; retrying the incomplete bootstrap through the guarded service swap"
+  fi
 else
   log "durable state is not initialized; deferring the one-time bootstrap to the guarded service swap"
 fi
@@ -660,8 +679,18 @@ service_healthy() {
   return 1
 }
 
+mark_bootstrap_ready() {
+  local marker_tmp="${BOOTSTRAP_READY_FILE}.tmp.$$"
+  if ! printf '%s\n' "$NEW_SHA" >"$marker_tmp" || ! mv -f "$marker_tmp" "$BOOTSTRAP_READY_FILE"; then
+    rm -f "$marker_tmp"
+    log "could not record the completed local-state bootstrap marker"
+    return 1
+  fi
+  return 0
+}
+
 # ── 6. post-swap smoke (the `if` keeps set -e from bare-exiting) ──────────────
-if service_healthy; then
+if service_healthy && mark_bootstrap_ready; then
   # The one place a swap is real: the backlog is cleared and the work is written.
   SF_PRODUCED=1
   SF_QUEUE=0
@@ -675,7 +704,7 @@ fi
 
 # ── 7. ROLLBACK — the box is never left broken ────────────────────────────────
 SF_ERRORS=$((SF_ERRORS + 1))
-log "the new binary did not come up healthy — rolling back"
+log "the new binary did not satisfy the post-swap acceptance contract — rolling back"
 if [ -f "$PREV_BIN" ]; then
   install -m 0755 "$PREV_BIN" "$APP_BIN.rb"
   mv -f "$APP_BIN.rb" "$APP_BIN"
