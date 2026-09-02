@@ -1139,6 +1139,8 @@ type SonarFixture = {
   bootstrapMarked?: boolean;
   /** Override the durable-state fixture body. */
   stateContents?: string;
+  /** Terminate the deploy shell during the first candidate restart. */
+  interruptAfterSwap?: boolean;
 };
 
 const SHA_A = "a".repeat(40);
@@ -1159,8 +1161,10 @@ async function runSonar(
 ): Promise<{
   assetRequests: string[];
   attempts: Array<{ code: number; stderr: string; stdout: string }>;
+  appContents: string;
   bootstrapReady: boolean;
   code: number;
+  previousExists: boolean;
   stateContents: string | null;
   stderr: string;
   stdout: string;
@@ -1173,6 +1177,7 @@ async function runSonar(
   const statePath = join(root, "sonar-state.db");
   const replicaPath = join(root, "sonar-replica.db");
   const restartFailed = join(root, "restart-failed");
+  const restartInterrupted = join(root, "restart-interrupted");
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(appDir, { recursive: true });
@@ -1197,6 +1202,11 @@ async function runSonar(
       "    exit 1",
       "  fi",
       '  printf "complete\n" >"$SF_STATE_PATH"',
+      "fi",
+      'if [ "$1" = "restart" ] && [ "${SF_INTERRUPT_AFTER_SWAP:-0}" = "1" ] && ! grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null && [ ! -f "$SF_RESTART_INTERRUPTED" ]; then',
+      '  : >"$SF_RESTART_INTERRUPTED"',
+      '  kill -TERM "$PPID"',
+      "  sleep 1",
       "fi",
       "exit 0",
     ].join("\n"),
@@ -1270,9 +1280,11 @@ async function runSonar(
       HOME: root,
       PATH: `${bin}:/usr/bin:/bin`,
       SF_APP_BIN: join(appDir, "sonar"),
+      SF_INTERRUPT_AFTER_SWAP: fixture.interruptAfterSwap ? "1" : "0",
       SF_LOCKED: fixture.locked ? "1" : "0",
       SF_RESTART_FAILED: restartFailed,
       SF_RESTART_FAIL_ONCE: fixture.retryAfterBootstrapFailure ? "1" : "0",
+      SF_RESTART_INTERRUPTED: restartInterrupted,
       SF_STATE_PATH: statePath,
       SONARFRESHEN_APP_DIR: appDir,
       SONARFRESHEN_ASSET_BASE: assetBase,
@@ -1294,10 +1306,12 @@ async function runSonar(
     }
 
     return {
+      appContents: readFileSync(join(appDir, "sonar"), "utf8"),
       assetRequests,
       attempts,
       bootstrapReady: existsSync(join(root, "state/local-state-ready")),
       code: run.code,
+      previousExists: existsSync(join(appDir, "sonar.prev")),
       stateContents: existsSync(statePath) ? readFileSync(statePath, "utf8") : null,
       stderr: run.stderr,
       stdout: run.stdout,
@@ -1392,6 +1406,19 @@ describe("sonar-freshen reports a run", () => {
 
     expect(posted.unit).toBe("fluncle-sonar-freshen");
     expect(posted.exit_code).toBe(0);
+  }, 60_000);
+
+  test("an interrupted candidate restart restores the previous binary through the EXIT trap", async () => {
+    const { appContents, code, previousExists, stderr, summary } = await runSonar(
+      { commit: SHA_B, deployed: SHA_A, interruptAfterSwap: true },
+      undefined,
+    );
+
+    expect(code).not.toBe(0);
+    expect(appContents).toContain("old-sonar");
+    expect(previousExists).toBe(false);
+    expect(stderr).toContain("rollback restored the previous healthy sonar binary");
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
   }, 60_000);
 
   test("a legacy runtime contract refuses before downloading or touching the live service", async () => {

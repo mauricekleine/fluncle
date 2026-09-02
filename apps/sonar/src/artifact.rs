@@ -462,6 +462,29 @@ impl ArtifactClient {
         )
     }
 
+    async fn consumer_response(
+        &self,
+        response: reqwest::Response,
+        operation: &str,
+    ) -> Result<ConsumerStatus> {
+        let decoded: ConsumerResponse = response.json().await?;
+        if !decoded.ok {
+            bail!("artifact {operation} response was not ok");
+        }
+        if decoded.consumer.consumer_id != self.consumer_id {
+            bail!("artifact {operation} response belongs to the wrong consumer");
+        }
+        Ok(decoded.consumer)
+    }
+
+    pub fn is_transport_failure(error: &anyhow::Error) -> bool {
+        error.chain().any(|cause| {
+            cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+                error.is_connect() || error.is_timeout() || error.is_request() || error.is_body()
+            })
+        })
+    }
+
     pub async fn status(&self) -> Result<ConsumerStatus> {
         let response = Self::checked(
             self.client
@@ -470,11 +493,7 @@ impl ArtifactClient {
                 .await?,
         )
         .await?;
-        let decoded: ConsumerResponse = response.json().await?;
-        if !decoded.ok {
-            bail!("artifact status response was not ok");
-        }
-        Ok(decoded.consumer)
+        self.consumer_response(response, "status").await
     }
 
     pub async fn register(&self) -> Result<ConsumerStatus> {
@@ -482,11 +501,7 @@ impl ArtifactClient {
             "consumerId": self.consumer_id,
             "contracts": [{"stream": STREAM, "streamVersion": STREAM_VERSION, "formatVersion": FORMAT_VERSION}],
         })).send().await?).await?;
-        let decoded: ConsumerResponse = response.json().await?;
-        if !decoded.ok {
-            bail!("artifact registration response was not ok");
-        }
-        Ok(decoded.consumer)
+        self.consumer_response(response, "registration").await
     }
 
     pub async fn checkpoint_rebuild(
@@ -536,11 +551,7 @@ impl ArtifactClient {
                 .await?,
         )
         .await?;
-        let decoded: ConsumerResponse = response.json().await?;
-        if !decoded.ok {
-            bail!("artifact activation response was not ok");
-        }
-        Ok(decoded.consumer)
+        self.consumer_response(response, "activation").await
     }
 
     pub async fn changes(&self, limit: usize) -> Result<ChangePage> {
@@ -595,11 +606,7 @@ impl ArtifactClient {
                 .await?,
         )
         .await?;
-        let decoded: ConsumerResponse = response.json().await?;
-        if !decoded.ok {
-            bail!("artifact acknowledgement response was not ok");
-        }
-        Ok(decoded.consumer)
+        self.consumer_response(response, "acknowledgement").await
     }
 }
 
@@ -663,7 +670,30 @@ pub fn parse_cursor(cursor: Option<&str>) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
     use std::time::Instant;
+
+    fn wrong_consumer_response() -> Value {
+        json!({
+            "consumer": {
+                "appliedThroughSeq": 3,
+                "checkpointedAt": null,
+                "compactionBarrier": 2,
+                "consumerId": "another-consumer",
+                "contracts": [{"formatVersion": 1, "stream": STREAM, "streamVersion": 1}],
+                "earliestSeq": null,
+                "headSeq": 3,
+                "rebuilds": [],
+                "registeredAt": "2030-01-01T00:00:00.000Z",
+                "snapshotSeq": 3,
+                "state": "active",
+                "stateChangedAt": "2030-01-01T00:00:00.000Z",
+                "updatedAt": "2030-01-01T00:00:00.000Z"
+            },
+            "ok": true
+        })
+    }
 
     fn event(
         seq: u64,
@@ -824,5 +854,66 @@ mod tests {
             .is_some_and(reqwest::Error::is_timeout)));
         assert!(started.elapsed() < Duration::from_secs(1));
         stalled_peer.abort();
+    }
+
+    #[tokio::test]
+    async fn every_consumer_status_response_rejects_the_wrong_identity() {
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test",
+                get(|| async { Json(wrong_consumer_response()) }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers",
+                post(|| async { Json(wrong_consumer_response()) }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test/activate",
+                post(|| async { Json(wrong_consumer_response()) }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test/checkpoint",
+                post(|| async { Json(wrong_consumer_response()) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client =
+            ArtifactClient::new(format!("http://{address}"), "test", "sonar-test".into()).unwrap();
+
+        let errors = [
+            client.status().await.unwrap_err(),
+            client.register().await.unwrap_err(),
+            client.activate().await.unwrap_err(),
+            client
+                .acknowledge_exact(&"a".repeat(64), 1, 2, 3)
+                .await
+                .unwrap_err(),
+        ];
+        assert!(errors
+            .iter()
+            .all(|error| format!("{error:#}").contains("wrong consumer")));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn malformed_success_response_is_not_classified_as_transport_unavailability() {
+        let app = Router::new().route(
+            "/api/v1/admin/artifacts/consumers/sonar-test",
+            get(|| async { "{" }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client =
+            ArtifactClient::new(format!("http://{address}"), "test", "sonar-test".into()).unwrap();
+
+        let error = client.status().await.unwrap_err();
+        assert!(!ArtifactClient::is_transport_failure(&error));
+        server.abort();
     }
 }

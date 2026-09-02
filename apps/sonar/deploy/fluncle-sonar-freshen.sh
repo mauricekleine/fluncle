@@ -125,6 +125,8 @@ SF_ERRORS=0
 SF_GATE="null" # `"locked"` or `"dry-run"` once this tick has decided not to deploy
 SF_SUMMARY_EMITTED=0
 SF_STARTED_AT=""
+ROLLBACK_ARMED=0
+BOOTSTRAP_MARKER_CREATED=0
 
 # >>> BEGIN MIRRORED BLOCK: record_run_event — keep BYTE-IDENTICAL across all four copies >>>
 # The run-ledger emitter. FOUR scripts carry this block verbatim, because they run on two
@@ -260,8 +262,12 @@ emit_run_summary() {
 _cleanup() { :; }
 on_exit() {
   local rc=$?
+  if [ "$ROLLBACK_ARMED" = "1" ]; then
+    if ! rollback_unaccepted_swap; then rc=1; fi
+  fi
   emit_run_summary "$rc" || true
   _cleanup || true
+  return "$rc"
 }
 SF_STARTED_AT="$(run_event_now)"
 trap 'on_exit' EXIT
@@ -656,16 +662,6 @@ fi
 LIVE_CURL+=("$LIVE_SCHEME://127.0.0.1:$LIVE_PORT/health")
 live_healthy() { "${LIVE_CURL[@]}" 2>/dev/null | grep -q '"ok":true'; }
 
-if [ -f "$APP_BIN" ]; then
-  cp -f "$APP_BIN" "$PREV_BIN" || {
-    SF_ERRORS=$((SF_ERRORS + 1))
-    die "could not snapshot the current binary to $PREV_BIN"
-  }
-fi
-install -m 0755 "$NEW_BIN" "$APP_BIN.new"
-mv -f "$APP_BIN.new" "$APP_BIN"
-
-log "swapping $SERVICE to ${NEW_SHA:0:12} and restarting"
 service_healthy() {
   systemctl restart "$SERVICE" || return 1
   # A restart validates and rebuilds the durable local corpus before /health answers,
@@ -686,11 +682,55 @@ mark_bootstrap_ready() {
     log "could not record the completed local-state bootstrap marker"
     return 1
   fi
+  if [ "$BOOTSTRAP_READY" = "0" ]; then BOOTSTRAP_MARKER_CREATED=1; fi
   return 0
 }
 
+rollback_unaccepted_swap() {
+  # Disarm before doing work so an error or signal inside rollback never recurses
+  # through the same candidate restore.
+  ROLLBACK_ARMED=0
+  SF_ERRORS=$((SF_ERRORS + 1))
+  log "the candidate did not complete acceptance — rolling back"
+  if [ "$BOOTSTRAP_MARKER_CREATED" = "1" ]; then
+    rm -f "$BOOTSTRAP_READY_FILE"
+    BOOTSTRAP_MARKER_CREATED=0
+  fi
+  if [ -f "$PREV_BIN" ]; then
+    if install -m 0755 "$PREV_BIN" "$APP_BIN.rb" && mv -f "$APP_BIN.rb" "$APP_BIN" && service_healthy; then
+      rm -f "$PREV_BIN"
+      alert "↩️ sonar-freshen: candidate failed acceptance — ROLLED BACK to the previous sonar binary (running). A human should look."
+      post_health degraded "rolled back an unaccepted sonar update; healthy on the previous binary"
+      log "rollback restored the previous healthy sonar binary"
+      return 0
+    fi
+  fi
+  alert "🔴 sonar-freshen: ROLLBACK ALSO FAILED — sonar is DOWN. Operator needed NOW."
+  post_health down "the sonar engine is down after a failed update — operator needed"
+  log "FATAL: rollback failed — sonar is down"
+  return 1
+}
+
+if [ -f "$APP_BIN" ]; then
+  cp -f "$APP_BIN" "$PREV_BIN" || {
+    SF_ERRORS=$((SF_ERRORS + 1))
+    die "could not snapshot the current binary to $PREV_BIN"
+  }
+fi
+# From this point until post-swap acceptance, every exit path—including TERM and
+# set -e failures—must restore the snapshotted binary. The one process-wide EXIT
+# trap owns rollback so later cleanup hooks cannot accidentally replace it.
+ROLLBACK_ARMED=1
+install -m 0755 "$NEW_BIN" "$APP_BIN.new"
+mv -f "$APP_BIN.new" "$APP_BIN"
+
+log "swapping $SERVICE to ${NEW_SHA:0:12} and restarting"
+
 # ── 6. post-swap smoke (the `if` keeps set -e from bare-exiting) ──────────────
 if service_healthy && mark_bootstrap_ready; then
+  # Health plus the durable bootstrap marker is the acceptance boundary. Only
+  # now may EXIT stop restoring the snapshotted binary.
+  ROLLBACK_ARMED=0
   # The one place a swap is real: the backlog is cleared and the work is written.
   SF_PRODUCED=1
   SF_QUEUE=0
@@ -703,18 +743,4 @@ if service_healthy && mark_bootstrap_ready; then
 fi
 
 # ── 7. ROLLBACK — the box is never left broken ────────────────────────────────
-SF_ERRORS=$((SF_ERRORS + 1))
-log "the new binary did not satisfy the post-swap acceptance contract — rolling back"
-if [ -f "$PREV_BIN" ]; then
-  install -m 0755 "$PREV_BIN" "$APP_BIN.rb"
-  mv -f "$APP_BIN.rb" "$APP_BIN"
-  if service_healthy; then
-    rm -f "$PREV_BIN"
-    alert "↩️ sonar-freshen: ${NEW_SHA:0:12} failed smoke on rave-01 — ROLLED BACK to the previous sonar binary (running). A human should look."
-    post_health degraded "rolled back a failed sonar update; healthy on the previous binary"
-    die "rolled back after a failed deploy"
-  fi
-fi
-alert "🔴 sonar-freshen: ROLLBACK ALSO FAILED on rave-01 — sonar is DOWN. Operator needed NOW."
-post_health down "the sonar engine is down after a failed update — operator needed"
-die "rollback failed — sonar is down"
+die "the new binary did not satisfy the post-swap acceptance contract"

@@ -93,7 +93,10 @@ impl Consumer {
     ) -> Result<Option<StoredSnapshot>> {
         let status = match self.api.status().await {
             Ok(status) => status,
-            Err(error) if self.state.activation_proves(&stored.manifest).await? => {
+            Err(error)
+                if ArtifactClient::is_transport_failure(&error)
+                    && self.state.activation_proves(&stored.manifest).await? =>
+            {
                 warn!(
                     cause = "artifact_api_unavailable",
                     error = %format!("{error:#}"),
@@ -102,9 +105,15 @@ impl Consumer {
                 );
                 return Ok(Some(stored));
             }
-            Err(error) => return Err(error).context("confirming startup artifact activation"),
+            Err(error) => {
+                self.state.clear_activation_proof().await?;
+                return Err(error).context("confirming startup artifact activation");
+            }
         };
-        validate_contract(&status)?;
+        if let Err(error) = validate_contract(&status) {
+            self.state.clear_activation_proof().await?;
+            return Err(error).context("validating startup artifact consumer contract");
+        }
         if let Some(pending) = stored.manifest.pending.as_ref() {
             match pending_action(&status, pending) {
                 PendingAction::Finalize => {
@@ -114,21 +123,19 @@ impl Consumer {
                     return Ok(Some(stored));
                 }
                 PendingAction::Retry => {
-                    let acknowledged = self
-                        .api
-                        .acknowledge_exact(
-                            &pending.batch_digest,
-                            pending.event_count,
-                            pending.from_seq,
-                            pending.through_seq,
-                        )
-                        .await?;
-                    validate_contract(&acknowledged)?;
-                    if acknowledged.state != "active"
-                        || acknowledged.applied_through_seq != Some(pending.through_seq)
-                    {
-                        bail!("artifact acknowledgement returned the wrong startup checkpoint");
-                    }
+                    self.confirm_active_checkpoint(
+                        self.api
+                            .acknowledge_exact(
+                                &pending.batch_digest,
+                                pending.event_count,
+                                pending.from_seq,
+                                pending.through_seq,
+                            )
+                            .await,
+                        pending.through_seq,
+                        "acknowledgement",
+                    )
+                    .await?;
                     self.state.clear_pending(pending.through_seq).await?;
                     let stored = self.state.load().await?;
                     self.state.mark_activated(&stored.manifest).await?;
@@ -183,21 +190,43 @@ impl Consumer {
     }
 
     pub async fn activate_prepared(&self, snapshot_seq: u64) -> Result<()> {
-        let active = self
-            .api
-            .activate()
-            .await
-            .context("activating artifact consumer")?;
-        validate_contract(&active)?;
-        if active.state != "active" || active.applied_through_seq != Some(snapshot_seq) {
-            bail!("artifact consumer activation checkpoint mismatch");
-        }
+        self.confirm_active_checkpoint(self.api.activate().await, snapshot_seq, "activation")
+            .await?;
         let manifest = self.state.manifest().await?;
         if manifest.checkpoint != snapshot_seq {
             bail!("local generation changed before activation completed");
         }
         self.state.mark_activated(&manifest).await?;
         Ok(())
+    }
+
+    async fn confirm_active_checkpoint(
+        &self,
+        attempted: Result<ConsumerStatus>,
+        expected: u64,
+        operation: &str,
+    ) -> Result<()> {
+        let (status, ambiguous_error) = match attempted {
+            Ok(status) => (status, None),
+            Err(error) => match self.api.status().await {
+                Ok(status) => (status, Some(error)),
+                Err(status_error) => {
+                    return Err(error).context(format!(
+                        "artifact {operation} was ambiguous and status reconciliation failed: {status_error:#}"
+                    ));
+                }
+            },
+        };
+        validate_contract(&status)?;
+        if status.state == "active" && status.applied_through_seq == Some(expected) {
+            return Ok(());
+        }
+        if let Some(error) = ambiguous_error {
+            return Err(error).context(format!(
+                "ambiguous artifact {operation} did not commit at checkpoint {expected}"
+            ));
+        }
+        bail!("artifact {operation} returned the wrong active checkpoint");
     }
 
     async fn sync_through(&self, fence: u64) -> Result<()> {
@@ -438,25 +467,14 @@ impl Consumer {
         from: u64,
         through: u64,
     ) -> Result<()> {
-        match self
-            .api
-            .acknowledge_exact(digest, count, from, through)
-            .await
-        {
-            Ok(status) => {
-                validate_contract(&status)?;
-                if status.state != "active" || status.applied_through_seq != Some(through) {
-                    bail!("artifact acknowledgement returned the wrong checkpoint");
-                }
-            }
-            Err(error) => {
-                let status = self.api.status().await?;
-                validate_contract(&status)?;
-                if status.state != "active" || status.applied_through_seq != Some(through) {
-                    return Err(error).context("ambiguous artifact acknowledgement did not commit");
-                }
-            }
-        }
+        self.confirm_active_checkpoint(
+            self.api
+                .acknowledge_exact(digest, count, from, through)
+                .await,
+            through,
+            "acknowledgement",
+        )
+        .await?;
         self.state.clear_pending(through).await?;
         let manifest = self.state.manifest().await?;
         self.state.mark_activated(&manifest).await?;
@@ -828,6 +846,68 @@ mod tests {
                 async move { Json(json!({"consumer": status, "ok": true})) }
             }),
         );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}"), task)
+    }
+
+    async fn ambiguous_activation_api() -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test",
+                get(|| async {
+                    Json(json!({
+                        "consumer": response_status("active", Some(3), None, 3, Vec::new()),
+                        "ok": true
+                    }))
+                }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test/activate",
+                post(|| async { "{" }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}"), task)
+    }
+
+    async fn ambiguous_startup_ack_api() -> (String, tokio::task::JoinHandle<()>) {
+        let status_calls = Arc::new(AtomicUsize::new(0));
+        let get_calls = Arc::clone(&status_calls);
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test",
+                get(move || {
+                    let calls = Arc::clone(&get_calls);
+                    async move {
+                        let checkpoint = if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                            2
+                        } else {
+                            3
+                        };
+                        Json(json!({
+                            "consumer": response_status(
+                                "active",
+                                Some(checkpoint),
+                                None,
+                                3,
+                                Vec::new()
+                            ),
+                            "ok": true
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test/checkpoint",
+                post(|| async { "{" }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
@@ -1296,6 +1376,199 @@ mod tests {
         .unwrap();
         let restart_error = restart.initial_snapshot().await.err().unwrap();
         assert!(format!("{restart_error:#}").contains("confirming startup artifact activation"));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_activation_uses_exact_status_as_its_receipt() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("activated", 3, 8.5);
+        let store = StateStore::open(&state_path).await.unwrap();
+        store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                3,
+                3,
+                1,
+            )
+            .await
+            .unwrap();
+        let (base_url, server) = ambiguous_activation_api().await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        consumer.activate_prepared(3).await.unwrap();
+        let manifest = consumer.state.manifest().await.unwrap();
+        assert!(consumer.state.activation_proves(&manifest).await.unwrap());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn ambiguous_startup_ack_uses_exact_status_as_its_receipt() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("acknowledged", 1, 8.5);
+        let store = StateStore::open(&state_path).await.unwrap();
+        store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                2,
+                2,
+                1,
+            )
+            .await
+            .unwrap();
+        store
+            .apply_batch(
+                &ValidatedBatch {
+                    batch_digest: "a".repeat(64),
+                    events: vec![ValidatedEvent {
+                        operation: ValidatedOperation::Delete,
+                        payload_digest: "b".repeat(64),
+                        revision: 2,
+                        seq: 3,
+                        subject_id: track.id.clone(),
+                    }],
+                    from_seq: 2,
+                    head_seq: 3,
+                    through_seq: 3,
+                },
+                2,
+            )
+            .await
+            .unwrap();
+        let (base_url, server) = ambiguous_startup_ack_api().await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        let (loaded, activation, _, _) = consumer.initial_snapshot().await.unwrap();
+        assert!(loaded.manifest.pending.is_none());
+        assert_eq!(activation, None);
+        assert!(consumer
+            .state
+            .activation_proves(&loaded.manifest)
+            .await
+            .unwrap());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn wrong_consumer_identity_revokes_proof_instead_of_becoming_outage_fallback() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("identity", 3, 8.5);
+        let store = StateStore::open(&state_path).await.unwrap();
+        let stored = store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                3,
+                3,
+                1,
+            )
+            .await
+            .unwrap();
+        store.mark_activated(&stored.manifest).await.unwrap();
+        let mut wrong = response_status("active", Some(3), None, 3, Vec::new());
+        wrong["consumerId"] = json!("another-consumer");
+        let (base_url, server) = fixed_status_api(wrong).await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        let error = consumer.initial_snapshot().await.err().unwrap();
+        assert!(format!("{error:#}").contains("wrong consumer"));
+        let manifest = consumer.state.manifest().await.unwrap();
+        assert!(!consumer.state.activation_proves(&manifest).await.unwrap());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn authoritative_contract_mismatch_revokes_proof_before_a_later_outage() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let track = test_track("contract", 3, 8.5);
+        let store = StateStore::open(&state_path).await.unwrap();
+        let stored = store
+            .replace_from_replica(
+                std::slice::from_ref(&track),
+                &[SourceRevision {
+                    id: track.id.clone(),
+                    revision: track.revision,
+                }],
+                &[],
+                3,
+                3,
+                1,
+            )
+            .await
+            .unwrap();
+        store.mark_activated(&stored.manifest).await.unwrap();
+        let mut incompatible = response_status("active", Some(3), None, 3, Vec::new());
+        incompatible["contracts"][0]["formatVersion"] = json!(2);
+        let (base_url, server) = fixed_status_api(incompatible).await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            local_replica(&replica_path, std::slice::from_ref(&track), 3, false).await,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        let error = consumer.initial_snapshot().await.err().unwrap();
+        assert!(format!("{error:#}").contains("validating startup artifact consumer contract"));
+        let manifest = consumer.state.manifest().await.unwrap();
+        assert!(!consumer.state.activation_proves(&manifest).await.unwrap());
+        server.abort();
+        drop(consumer);
+
+        let restart = Consumer::new(
+            ArtifactClient::new("http://127.0.0.1:1".into(), "test", "sonar-test".into()).unwrap(),
+            Replica::open_local_test_source(&replica_path)
+                .await
+                .unwrap(),
+            StateStore::open(&state_path).await.unwrap(),
+            10,
+            10,
+        )
+        .unwrap();
+        assert!(restart.initial_snapshot().await.is_err());
     }
 
     #[test]
