@@ -111,21 +111,23 @@ describe("projection agent authorization", () => {
     expect(advanceProjectionFor).not.toHaveBeenCalled();
   });
 
-  it.each(["track_due_work", "crawl_due_work"] as const)(
-    "rejects an unbounded agent repair for %s before database work",
-    async (target) => {
-      const { handleOrpc } = await import("./orpc");
-      const response = await handleOrpc(
-        req(`/admin/projections/${target}/advance`, "POST", AGENT_TOKEN, {
-          action: "repair",
-          limit: 501,
-        }),
-      );
+  it.each([
+    "public_aggregates",
+    "artist_qualification",
+    "track_due_work",
+    "crawl_due_work",
+  ] as const)("rejects an unbounded agent repair for %s before database work", async (target) => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/projections/${target}/advance`, "POST", AGENT_TOKEN, {
+        action: "repair",
+        limit: 501,
+      }),
+    );
 
-      expect(response?.status).toBe(400);
-      expect(advanceProjectionFor).not.toHaveBeenCalled();
-    },
-  );
+    expect(response?.status).toBe(400);
+    expect(advanceProjectionFor).not.toHaveBeenCalled();
+  });
 
   it.each(["crawl_due_work", "public_projections", "track_due_work"] as const)(
     "keeps agent cutover mutation forbidden for %s",

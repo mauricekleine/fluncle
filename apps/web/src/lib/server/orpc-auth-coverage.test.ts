@@ -202,8 +202,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The `/admin/artists` follow queue's inline add (Unit 5, Epic B) — operator tier: an
   // operator-entered social lands confirmed + public at once.
   add_artist_social: "operator",
-  // The handler narrows the agent further to repair on the two public families only. Rebuild,
-  // audit, and track/crawl repair still 403 there; the operator retains the full matrix.
+  // The handler narrows the agent further to bounded repair on the four runtime projection families. Rebuild and audit still 403 there; the operator retains the full matrix.
   advance_projection: "admin",
   // The render → publish AUTO-ADVANCE tick — ADMIN tier (adminAuth only, no
   // operatorGuard): the on-box `fluncle-publish-advance` cron drives it with the agent
