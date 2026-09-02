@@ -129,6 +129,7 @@ SF_SUMMARY_EMITTED=0
 SF_STARTED_AT=""
 ROLLBACK_ARMED=0
 BOOTSTRAP_MARKER_CREATED=0
+PRIOR_LIVE_SHA=""
 
 # >>> BEGIN MIRRORED BLOCK: record_run_event — keep BYTE-IDENTICAL across all four copies >>>
 # The run-ledger emitter. FOUR scripts carry this block verbatim, because they run on two
@@ -456,20 +457,46 @@ live_healthy() {
   printf '%s' "$body" | health_matches "$expected_commit"
 }
 
+live_commit() {
+  local body
+  body="$("${LIVE_CURL[@]}" 2>/dev/null)" || return 1
+  printf '%s' "$body" | python3 -c 'import json,re,sys
+try:
+    body=json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+commit=body.get("commit") if isinstance(body,dict) and body.get("ok") is True else None
+if not isinstance(commit,str) or re.fullmatch(r"[0-9a-f]{40}",commit) is None:
+    raise SystemExit(1)
+print(commit)'
+}
+
 durable_sync_file() {
   sync -f "$1" && sync -f "$(dirname "$1")"
 }
 
 durable_sync_dir() { sync -f "$1"; }
 
+write_deployed_sha() {
+  local commit="$1" sha_tmp="${SHA_FILE}.tmp.$$"
+  printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$' || return 1
+  if ! printf '%s\n' "$commit" >"$sha_tmp" \
+    || ! durable_sync_file "$sha_tmp" \
+    || ! mv -f "$sha_tmp" "$SHA_FILE" \
+    || ! durable_sync_file "$SHA_FILE"; then
+    rm -f "$sha_tmp" || true
+    return 1
+  fi
+}
+
 intent_value() {
   sed -n "s/^$1=//p" "$ROLLBACK_INTENT_FILE" 2>/dev/null | head -n 1
 }
 
 write_rollback_intent() {
-  local state_ready="$1" state_present="$2" intent_tmp="${ROLLBACK_INTENT_FILE}.tmp.$$"
-  if ! printf 'candidate=%s\nbootstrap_ready=%s\nprior_commit=%s\nstate_ready=%s\nstate_present=%s\n' \
-    "$NEW_SHA" "$BOOTSTRAP_READY" "$OLD_SHA" "$state_ready" "$state_present" >"$intent_tmp" \
+  local state_ready="$1" state_present="$2" accepted="$3" intent_tmp="${ROLLBACK_INTENT_FILE}.tmp.$$"
+  if ! printf 'candidate=%s\nbootstrap_ready=%s\nprior_commit=%s\nstate_ready=%s\nstate_present=%s\naccepted=%s\n' \
+    "$NEW_SHA" "$BOOTSTRAP_READY" "$PRIOR_LIVE_SHA" "$state_ready" "$state_present" "$accepted" >"$intent_tmp" \
     || ! durable_sync_file "$intent_tmp" \
     || ! mv -f "$intent_tmp" "$ROLLBACK_INTENT_FILE" \
     || ! durable_sync_file "$ROLLBACK_INTENT_FILE"; then
@@ -480,7 +507,8 @@ write_rollback_intent() {
 
 snapshot_local_state() {
   local source="$SMOKE_STATE_PATH" suffix source_file backup_file state_present=0
-  rm -f "$STATE_ROLLBACK_FILE" "${STATE_ROLLBACK_FILE}-wal" "${STATE_ROLLBACK_FILE}-shm"
+  rm -f "$STATE_ROLLBACK_FILE" "${STATE_ROLLBACK_FILE}-wal" "${STATE_ROLLBACK_FILE}-shm" \
+    || return 1
   durable_sync_dir "$STATE_DIR" || return 1
   if [ -e "$source" ]; then state_present=1; fi
   for suffix in '' '-wal' '-shm'; do
@@ -492,7 +520,11 @@ snapshot_local_state() {
     cp -pf "$source_file" "$backup_file" || return 1
     durable_sync_file "$backup_file" || return 1
   done
-  write_rollback_intent 1 "$state_present"
+  write_rollback_intent 1 "$state_present" 0
+}
+
+mark_rollback_intent_accepted() {
+  write_rollback_intent "$(intent_value state_ready)" "$(intent_value state_present)" 1
 }
 
 restore_local_state() {
@@ -500,7 +532,7 @@ restore_local_state() {
   local target suffix source_file target_file
   target="$(env_value SONAR_STATE_PATH)"
   [ -n "$target" ] || return 1
-  rm -f "$target" "${target}-wal" "${target}-shm"
+  rm -f "$target" "${target}-wal" "${target}-shm" || return 1
   if [ "$(intent_value state_present)" = "1" ]; then
     for suffix in '' '-wal' '-shm'; do
       source_file="${STATE_ROLLBACK_FILE}${suffix}"
@@ -511,6 +543,29 @@ restore_local_state() {
     done
   fi
   durable_sync_dir "$(dirname "$target")"
+}
+
+clear_rollback_intent() {
+  rm -f "$ROLLBACK_INTENT_FILE" || return 1
+  durable_sync_dir "$STATE_DIR"
+}
+
+cleanup_rollback_artifacts() {
+  local cleanup_failed=0
+  rm -f "$PREV_BIN" || cleanup_failed=1
+  durable_sync_dir "$APP_DIR" || cleanup_failed=1
+  rm -f "$STATE_ROLLBACK_FILE" "${STATE_ROLLBACK_FILE}-wal" "${STATE_ROLLBACK_FILE}-shm" \
+    || cleanup_failed=1
+  durable_sync_dir "$STATE_DIR" || cleanup_failed=1
+  [ "$cleanup_failed" = "0" ]
+}
+
+cleanup_accepted_swap() {
+  if ! clear_rollback_intent; then return 1; fi
+  if ! cleanup_rollback_artifacts; then
+    log "accepted sonar is healthy, but stale rollback files need cleanup"
+  fi
+  return 0
 }
 
 service_healthy() {
@@ -533,16 +588,23 @@ restore_previous_binary() {
   durable_sync_file "$APP_BIN.rb" || return 1
   mv -f "$APP_BIN.rb" "$APP_BIN" || return 1
   durable_sync_file "$APP_BIN" || return 1
-  service_healthy "$(intent_value prior_commit)" || return 1
-  rm -f "$ROLLBACK_INTENT_FILE" || return 1
-  durable_sync_dir "$STATE_DIR" || return 1
-  local cleanup_failed=0
-  rm -f "$PREV_BIN" || cleanup_failed=1
-  durable_sync_dir "$APP_DIR" || cleanup_failed=1
-  rm -f "$STATE_ROLLBACK_FILE" "${STATE_ROLLBACK_FILE}-wal" "${STATE_ROLLBACK_FILE}-shm" \
-    || cleanup_failed=1
-  durable_sync_dir "$STATE_DIR" || cleanup_failed=1
-  if [ "$cleanup_failed" = "1" ]; then
+  local prior_commit
+  prior_commit="$(intent_value prior_commit)"
+  service_healthy "$prior_commit" || return 1
+  if [ -n "$prior_commit" ]; then
+    write_deployed_sha "$prior_commit" || return 1
+  else
+    rm -f "$SHA_FILE" || return 1
+    durable_sync_dir "$STATE_DIR" || return 1
+  fi
+  if grep -qx 'bootstrap_ready=0' "$ROLLBACK_INTENT_FILE" 2>/dev/null; then
+    if ! rm -f "$BOOTSTRAP_READY_FILE" || ! durable_sync_dir "$STATE_DIR"; then
+      log "rollback is healthy and durable, but bootstrap-marker cleanup is pending"
+      return 0
+    fi
+  fi
+  clear_rollback_intent || return 1
+  if ! cleanup_rollback_artifacts; then
     log "rollback is healthy and durable, but stale rollback files need cleanup"
   fi
   return 0
@@ -550,11 +612,22 @@ restore_previous_binary() {
 
 recover_interrupted_swap() {
   [ -f "$ROLLBACK_INTENT_FILE" ] || return 0
+  local candidate recorded
+  candidate="$(intent_value candidate)"
+  recorded="$(cat "$SHA_FILE" 2>/dev/null || true)"
+  if [ "$(intent_value accepted)" = "1" ] \
+    && printf '%s' "$candidate" | grep -Eq '^[0-9a-f]{40}$' \
+    && [ "$recorded" = "$candidate" ] \
+    && live_healthy "$candidate"; then
+    log "finishing cleanup for an accepted sonar swap"
+    if ! cleanup_accepted_swap; then
+      SF_ERRORS=$((SF_ERRORS + 1))
+      die "accepted sonar is healthy, but its rollback intent could not be cleared"
+    fi
+    return 0
+  fi
   SF_ERRORS=$((SF_ERRORS + 1))
   log "recovering an interrupted unaccepted swap before checking the release"
-  if grep -qx 'bootstrap_ready=0' "$ROLLBACK_INTENT_FILE" 2>/dev/null; then
-    rm -f "$BOOTSTRAP_READY_FILE"
-  fi
   if ! command -v systemctl >/dev/null || ! restore_previous_binary; then
     alert "🔴 sonar-freshen: interrupted-swap recovery failed — sonar may be DOWN. Operator needed NOW."
     post_health down "sonar interrupted-swap recovery failed — operator needed"
@@ -573,6 +646,13 @@ mkdir -p "$STATE_DIR"
 command -v python3 >/dev/null 2>&1 || die "python3 not found — cannot validate sonar health identity"
 command -v sync >/dev/null 2>&1 || die "sync not found — cannot make sonar rollback state durable"
 recover_interrupted_swap
+if [ -f "$ROLLBACK_INTENT_FILE" ]; then
+  log "rollback cleanup remains pending; deferring the release check"
+  exit 1
+fi
+if ! cleanup_rollback_artifacts; then
+  log "stale rollback files remain after cleanup; the live service is untouched"
+fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sonar-freshen.XXXXXX")"
 _cleanup() { rm -rf "$WORK_DIR"; }
 
@@ -821,11 +901,8 @@ rollback_unaccepted_swap() {
   ROLLBACK_ARMED=0
   SF_ERRORS=$((SF_ERRORS + 1))
   log "the candidate did not complete acceptance — rolling back"
-  if [ "$BOOTSTRAP_MARKER_CREATED" = "1" ]; then
-    rm -f "$BOOTSTRAP_READY_FILE"
-    BOOTSTRAP_MARKER_CREATED=0
-  fi
   if restore_previous_binary; then
+    BOOTSTRAP_MARKER_CREATED=0
     alert "↩️ sonar-freshen: candidate failed acceptance — ROLLED BACK to the previous sonar binary (running). A human should look."
     post_health degraded "rolled back an unaccepted sonar update; healthy on the previous binary"
     log "rollback restored the previous healthy sonar binary"
@@ -838,6 +915,10 @@ rollback_unaccepted_swap() {
 }
 
 if [ -f "$APP_BIN" ]; then
+  PRIOR_LIVE_SHA="$(live_commit 2>/dev/null || true)"
+  if ! printf '%s' "$PRIOR_LIVE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+    PRIOR_LIVE_SHA="$OLD_SHA"
+  fi
   cp -f "$APP_BIN" "$PREV_BIN" || {
     SF_ERRORS=$((SF_ERRORS + 1))
     die "could not snapshot the current binary to $PREV_BIN"
@@ -847,7 +928,7 @@ if [ -f "$APP_BIN" ]; then
     die "could not make the rollback binary durable"
   }
 fi
-if ! write_rollback_intent 0 0; then
+if ! write_rollback_intent 0 0 0; then
   SF_ERRORS=$((SF_ERRORS + 1))
   die "could not persist rollback intent before swapping the candidate"
 fi
@@ -868,20 +949,17 @@ log "swapping $SERVICE to ${NEW_SHA:0:12} and restarting"
 # ── 6. post-swap smoke (the `if` keeps set -e from bare-exiting) ──────────────
 if service_healthy "$NEW_SHA" && mark_bootstrap_ready; then
   # Health plus the durable bootstrap marker is the acceptance boundary. Only
-  # now may EXIT stop restoring the snapshotted binary.
+  # after the candidate identity is durable may EXIT stop restoring the prior generation.
+  write_deployed_sha "$NEW_SHA" || die "could not persist the accepted sonar commit"
+  mark_rollback_intent_accepted || die "could not persist the accepted sonar swap marker"
   ROLLBACK_ARMED=0
-  rm -f "$ROLLBACK_INTENT_FILE"
-  durable_sync_dir "$STATE_DIR"
-  rm -f "$STATE_ROLLBACK_FILE" "${STATE_ROLLBACK_FILE}-wal" "${STATE_ROLLBACK_FILE}-shm"
-  durable_sync_dir "$STATE_DIR"
   # The one place a swap is real: the backlog is cleared and the work is written.
   SF_PRODUCED=1
   SF_QUEUE=0
   log "post-swap smoke passed — deployed ${NEW_SHA:0:12}"
-  printf '%s\n' "$NEW_SHA" >"$SHA_FILE"
-  durable_sync_file "$SHA_FILE"
-  rm -f "$PREV_BIN"
-  durable_sync_dir "$APP_DIR"
+  if ! cleanup_accepted_swap; then
+    log "accepted sonar is healthy, but stale rollback files need cleanup"
+  fi
   alert "🚀 sonar-freshen: deployed ${NEW_SHA:0:12} to sonar on rave-01 (CI artifact verified + swapped)"
   post_health ok "swapped sonar to the latest published build"
   exit 0

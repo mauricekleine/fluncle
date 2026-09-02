@@ -1149,10 +1149,26 @@ type SonarFixture = {
   artifactHealthBody?: string;
   /** Override the commit returned by the restarted live service. */
   liveCommit?: string;
+  /** Override the commit served by the pre-swap binary independently of deployed-sha. */
+  priorLiveCommit?: string;
   /** Mutate durable state in the candidate, fail, and require rollback bytes before old health. */
   mutateStateThenFail?: boolean;
   /** Fail only the post-rollback backup cleanup sync after old health is established. */
   rollbackCleanupFails?: boolean;
+  /** Leave an old rollback WAL that the next snapshot must remove. */
+  staleRollbackWal?: boolean;
+  /** Refuse removal of candidate state during rollback. */
+  rollbackStateRemovalFails?: boolean;
+  /** Hard-kill immediately after accepted intent removal. */
+  crashAfterAcceptanceIntentRemoval?: boolean;
+  /** Fail accepted rollback-file cleanup once, then retry on the next no-op. */
+  acceptanceCleanupFails?: boolean;
+  /** Fail the first accepted SHA durability sync after the bootstrap marker exists. */
+  acceptedShaWriteFails?: boolean;
+  /** Fail bootstrap-marker unlink once while rollback is already healthy. */
+  bootstrapMarkerRemovalFails?: boolean;
+  /** Keep refusing bootstrap-marker unlink across the recovery tick. */
+  bootstrapMarkerRemovalPersists?: boolean;
 };
 
 const SHA_A = "a".repeat(40);
@@ -1166,6 +1182,36 @@ const SONAR_STUB = [
   "",
 ].join("\n");
 
+function readOptionalFile(path: string): string | null {
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+function retriesSonarFixture(fixture: SonarFixture): boolean {
+  return Boolean(
+    fixture.retryAfterBootstrapFailure ||
+    fixture.crashAfterSwap ||
+    fixture.crashAfterAcceptanceIntentRemoval ||
+    fixture.acceptanceCleanupFails ||
+    fixture.acceptedShaWriteFails ||
+    fixture.bootstrapMarkerRemovalPersists,
+  );
+}
+
+function sonarRetryArgs(fixture: SonarFixture, args: string[]): string[] {
+  return fixture.crashAfterSwap ? [] : args;
+}
+
+function fixtureLiveCommit(fixture: SonarFixture, runningOld: boolean): string {
+  if (runningOld) {
+    return fixture.priorLiveCommit ?? fixture.deployed ?? SHA_A;
+  }
+  return fixture.liveCommit ?? fixture.commit ?? SHA_B;
+}
+
+function shellFlag(value: boolean | undefined): string {
+  return value ? "1" : "0";
+}
+
 async function runSonar(
   fixture: SonarFixture,
   base: string | undefined,
@@ -1176,8 +1222,13 @@ async function runSonar(
   appContents: string;
   bootstrapReady: boolean;
   code: number;
+  deployedSha: string | null;
+  intentExists: boolean;
   previousExists: boolean;
+  rollbackStateExists: boolean;
+  rollbackWalExists: boolean;
   stateContents: string | null;
+  stateWalContents: string | null;
   stderr: string;
   stdout: string;
   summary: Summary;
@@ -1191,6 +1242,12 @@ async function runSonar(
   const restartFailed = join(root, "restart-failed");
   const restartInterrupted = join(root, "restart-interrupted");
   const stateMutationFailed = join(root, "state-mutation-failed");
+  const cleanupFailed = join(root, "cleanup-failed");
+  const acceptedShaFailed = join(root, "accepted-sha-failed");
+  const bootstrapUnlinkFailed = join(root, "bootstrap-unlink-failed");
+  const stateDir = join(root, "state");
+  const rollbackIntent = join(stateDir, "swap-in-progress");
+  const rollbackState = join(stateDir, "local-state.rollback");
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(appDir, { recursive: true });
@@ -1203,7 +1260,39 @@ async function runSonar(
   writeStub(
     bin,
     "sync",
-    '[ "${SF_ROLLBACK_CLEANUP_FAILS:-0}" = "1" ] && [ -e "$SF_STATE_MUTATION_FAILED" ] && [ ! -e "$SF_ROLLBACK_INTENT" ] && [ "${2:-}" = "$SF_APP_DIR" ] && exit 1\nexit 0',
+    [
+      '[ "${SF_ACCEPTED_SHA_WRITE_FAILS:-0}" = "1" ] && [ "${2:-}" = "$SF_SHA_FILE" ] && grep -qx "$SF_NEW_SHA" "$SF_SHA_FILE" 2>/dev/null && [ ! -e "$SF_ACCEPTED_SHA_FAILED" ] && { : >"$SF_ACCEPTED_SHA_FAILED"; exit 1; }',
+      '[ "${SF_ROLLBACK_CLEANUP_FAILS:-0}" = "1" ] && [ -e "$SF_STATE_MUTATION_FAILED" ] && [ ! -e "$SF_ROLLBACK_INTENT" ] && [ "${2:-}" = "$SF_APP_DIR" ] && exit 1',
+      "exit 0",
+    ].join("\n"),
+  );
+  writeStub(
+    bin,
+    "rm",
+    [
+      'if [ "${SF_ROLLBACK_STATE_REMOVAL_FAILS:-0}" = "1" ] && [ -e "$SF_STATE_MUTATION_FAILED" ]; then',
+      '  for arg in "$@"; do [ "$arg" = "$SF_STATE_PATH-wal" ] && exit 1; done',
+      "fi",
+      'if [ "${SF_BOOTSTRAP_MARKER_REMOVAL_FAILS:-0}" = "1" ] && [ -e "$SF_ACCEPTED_SHA_FAILED" ] && [ ! -e "$SF_BOOTSTRAP_UNLINK_FAILED" ]; then',
+      '  for arg in "$@"; do',
+      '    if [ "$arg" = "$SF_BOOTSTRAP_READY" ]; then : >"$SF_BOOTSTRAP_UNLINK_FAILED"; exit 1; fi',
+      "  done",
+      "fi",
+      'if [ "${SF_BOOTSTRAP_MARKER_REMOVAL_PERSISTS:-0}" = "1" ] && [ -e "$SF_ACCEPTED_SHA_FAILED" ]; then',
+      '  for arg in "$@"; do [ "$arg" = "$SF_BOOTSTRAP_READY" ] && exit 1; done',
+      "fi",
+      'if [ "${SF_CRASH_AFTER_ACCEPTANCE_INTENT_REMOVAL:-0}" = "1" ] && [ -e "$SF_BOOTSTRAP_READY" ]; then',
+      '  for arg in "$@"; do',
+      '    if [ "$arg" = "$SF_ROLLBACK_INTENT" ]; then /bin/rm "$@"; kill -KILL "$PPID"; sleep 1; fi',
+      "  done",
+      "fi",
+      'if [ "${SF_ACCEPTANCE_CLEANUP_FAILS:-0}" = "1" ] && [ -e "$SF_BOOTSTRAP_READY" ] && [ ! -e "$SF_ROLLBACK_INTENT" ] && [ ! -e "$SF_CLEANUP_FAILED" ]; then',
+      '  for arg in "$@"; do',
+      '    if [ "$arg" = "$SF_STATE_ROLLBACK" ]; then : >"$SF_CLEANUP_FAILED"; exit 1; fi',
+      "  done",
+      "fi",
+      'exec /bin/rm "$@"',
+    ].join("\n"),
   );
   // A systemctl that normally reports the service up. The retry fixture makes the first
   // candidate start create incomplete state and fail; rollback succeeds on the recognisable
@@ -1226,9 +1315,11 @@ async function runSonar(
       '    grep -qx "fixture" "$SF_STATE_PATH" 2>/dev/null || exit 1',
       '  elif [ ! -f "$SF_STATE_MUTATION_FAILED" ]; then',
       '    printf "candidate-state\n" >"$SF_STATE_PATH"',
+      '    printf "candidate-wal\n" >"$SF_STATE_PATH-wal"',
       '    : >"$SF_STATE_MUTATION_FAILED"',
       "    exit 1",
       "  fi",
+      '  [ ! -e "$SF_STATE_PATH-wal" ] || exit 1',
       "fi",
       'if [ "$1" = "restart" ] && [ "${SF_INTERRUPT_AFTER_SWAP:-0}" = "1" ] && ! grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null && [ ! -f "$SF_RESTART_INTERRUPTED" ]; then',
       '  : >"$SF_RESTART_INTERRUPTED"',
@@ -1274,12 +1365,12 @@ async function runSonar(
     port: 0,
   });
   // The "already restarted" live service the post-swap smoke curls.
-  const liveCommit = fixture.liveCommit ?? fixture.commit ?? SHA_B;
   const live = Bun.serve({
     fetch: () => {
       const runningOld = readFileSync(join(appDir, "sonar"), "utf8").includes("old-sonar");
-      const commit = runningOld ? (fixture.deployed ?? SHA_A) : liveCommit;
-      return new Response(JSON.stringify({ commit, ok: true }));
+      return new Response(
+        JSON.stringify({ commit: fixtureLiveCommit(fixture, runningOld), ok: true }),
+      );
     },
     port: 0,
   });
@@ -1307,12 +1398,16 @@ async function runSonar(
   }
 
   if (fixture.deployed) {
-    mkdirSync(join(root, "state"), { recursive: true });
-    writeFileSync(join(root, "state/deployed-sha"), `${fixture.deployed}\n`, "utf8");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "deployed-sha"), `${fixture.deployed}\n`, "utf8");
   }
   if (fixture.bootstrapMarked) {
-    mkdirSync(join(root, "state"), { recursive: true });
-    writeFileSync(join(root, "state/local-state-ready"), `${fixture.deployed ?? SHA_A}\n`, "utf8");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "local-state-ready"), `${fixture.deployed ?? SHA_A}\n`, "utf8");
+  }
+  if (fixture.staleRollbackWal) {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(`${rollbackState}-wal`, "stale-rollback-wal", "utf8");
   }
 
   const assetBase = fixture.unreachable
@@ -1323,25 +1418,40 @@ async function runSonar(
     const scriptEnvironment = {
       HOME: root,
       PATH: `${bin}:/usr/bin:/bin`,
+      SF_ACCEPTANCE_CLEANUP_FAILS: fixture.acceptanceCleanupFails ? "1" : "0",
+      SF_ACCEPTED_SHA_FAILED: acceptedShaFailed,
+      SF_ACCEPTED_SHA_WRITE_FAILS: shellFlag(fixture.acceptedShaWriteFails),
       SF_APP_BIN: join(appDir, "sonar"),
       SF_APP_DIR: appDir,
+      SF_BOOTSTRAP_MARKER_REMOVAL_FAILS: shellFlag(fixture.bootstrapMarkerRemovalFails),
+      SF_BOOTSTRAP_MARKER_REMOVAL_PERSISTS: shellFlag(fixture.bootstrapMarkerRemovalPersists),
+      SF_BOOTSTRAP_READY: join(stateDir, "local-state-ready"),
+      SF_BOOTSTRAP_UNLINK_FAILED: bootstrapUnlinkFailed,
+      SF_CLEANUP_FAILED: cleanupFailed,
+      SF_CRASH_AFTER_ACCEPTANCE_INTENT_REMOVAL: fixture.crashAfterAcceptanceIntentRemoval
+        ? "1"
+        : "0",
       SF_CRASH_AFTER_SWAP: fixture.crashAfterSwap ? "1" : "0",
       SF_INTERRUPT_AFTER_SWAP: fixture.interruptAfterSwap ? "1" : "0",
       SF_LOCKED: fixture.locked ? "1" : "0",
       SF_MUTATE_STATE_THEN_FAIL: fixture.mutateStateThenFail ? "1" : "0",
+      SF_NEW_SHA: fixture.commit ?? SHA_B,
       SF_RESTART_FAILED: restartFailed,
       SF_RESTART_FAIL_ONCE: fixture.retryAfterBootstrapFailure ? "1" : "0",
       SF_RESTART_INTERRUPTED: restartInterrupted,
       SF_ROLLBACK_CLEANUP_FAILS: fixture.rollbackCleanupFails ? "1" : "0",
-      SF_ROLLBACK_INTENT: join(root, "state/swap-in-progress"),
+      SF_ROLLBACK_INTENT: rollbackIntent,
+      SF_ROLLBACK_STATE_REMOVAL_FAILS: fixture.rollbackStateRemovalFails ? "1" : "0",
+      SF_SHA_FILE: join(stateDir, "deployed-sha"),
       SF_STATE_MUTATION_FAILED: stateMutationFailed,
       SF_STATE_PATH: statePath,
+      SF_STATE_ROLLBACK: rollbackState,
       SONARFRESHEN_APP_DIR: appDir,
       SONARFRESHEN_ASSET_BASE: assetBase,
       SONARFRESHEN_BOOT_TIMEOUT_SECS: "25",
       SONARFRESHEN_LOCK: join(root, "lock"),
       SONARFRESHEN_SERVICE_ENV: serviceEnv,
-      SONARFRESHEN_STATE_DIR: join(root, "state"),
+      SONARFRESHEN_STATE_DIR: stateDir,
       SONARFRESHEN_WORKER_URL: base ?? "http://127.0.0.1:1",
       SONAR_TEST_BUN: process.execPath,
       SONAR_TEST_COMMIT: fixture.artifactCommit ?? fixture.commit ?? SHA_B,
@@ -1349,9 +1459,9 @@ async function runSonar(
       ...(base === undefined ? {} : { FLUNCLE_API_TOKEN: "sonar-agent-token" }),
     };
     const attempts = [await runScript(SONAR_FRESHEN, scriptEnvironment, args)];
-    if (fixture.retryAfterBootstrapFailure || fixture.crashAfterSwap) {
+    if (retriesSonarFixture(fixture)) {
       attempts.push(
-        await runScript(SONAR_FRESHEN, scriptEnvironment, fixture.crashAfterSwap ? [] : args),
+        await runScript(SONAR_FRESHEN, scriptEnvironment, sonarRetryArgs(fixture, args)),
       );
     }
     const run = attempts.at(-1);
@@ -1365,8 +1475,13 @@ async function runSonar(
       attempts,
       bootstrapReady: existsSync(join(root, "state/local-state-ready")),
       code: run.code,
+      deployedSha: readOptionalFile(join(stateDir, "deployed-sha"))?.trim() ?? null,
+      intentExists: existsSync(rollbackIntent),
       previousExists: existsSync(join(appDir, "sonar.prev")),
-      stateContents: existsSync(statePath) ? readFileSync(statePath, "utf8") : null,
+      rollbackStateExists: existsSync(rollbackState),
+      rollbackWalExists: existsSync(`${rollbackState}-wal`),
+      stateContents: readOptionalFile(statePath),
+      stateWalContents: readOptionalFile(`${statePath}-wal`),
       stderr: run.stderr,
       stdout: run.stdout,
       summary: lastJsonLine(run.stdout),
@@ -1385,15 +1500,17 @@ describe("sonar-freshen reports a run", () => {
     expect(freshener).toContain('cp -pf "$source_file" "$target_file"');
   });
 
-  test("candidate acceptance disarms the trap before deleting durable rollback intent", () => {
+  test("candidate acceptance persists identity before disarming and cleaning intent", () => {
     const freshener = readFileSync(SONAR_FRESHEN, "utf8");
     const acceptance = freshener.indexOf('if service_healthy "$NEW_SHA" && mark_bootstrap_ready');
+    const persistIdentity = freshener.indexOf('write_deployed_sha "$NEW_SHA"', acceptance);
     const disarm = freshener.indexOf("ROLLBACK_ARMED=0", acceptance);
-    const intentRemoval = freshener.indexOf('rm -f "$ROLLBACK_INTENT_FILE"', acceptance);
+    const cleanup = freshener.indexOf("cleanup_accepted_swap", acceptance);
 
     expect(acceptance).toBeGreaterThan(-1);
-    expect(disarm).toBeGreaterThan(acceptance);
-    expect(intentRemoval).toBeGreaterThan(disarm);
+    expect(persistIdentity).toBeGreaterThan(acceptance);
+    expect(disarm).toBeGreaterThan(persistIdentity);
+    expect(cleanup).toBeGreaterThan(disarm);
   });
 
   test("the common tick: checked, nothing to do, nothing done", async () => {
@@ -1507,6 +1624,45 @@ describe("sonar-freshen reports a run", () => {
     expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
   }, 60_000);
 
+  test("rollback removes candidate WAL instead of restoring a stale backup sidecar", async () => {
+    const { code, rollbackWalExists, stateContents, stateWalContents, stderr } = await runSonar(
+      {
+        commit: SHA_B,
+        deployed: SHA_A,
+        mutateStateThenFail: true,
+        staleRollbackWal: true,
+      },
+      undefined,
+    );
+
+    expect(code).toBe(1);
+    expect(stateContents).toBe("fixture");
+    expect(stateWalContents).toBeNull();
+    expect(rollbackWalExists).toBe(false);
+    expect(stderr).toContain("rollback restored the previous healthy sonar binary");
+  }, 60_000);
+
+  test("a failed state removal aborts rollback before claiming the old generation healthy", async () => {
+    const { appContents, code, intentExists, previousExists, stateWalContents, stderr } =
+      await runSonar(
+        {
+          commit: SHA_B,
+          deployed: SHA_A,
+          mutateStateThenFail: true,
+          rollbackStateRemovalFails: true,
+        },
+        undefined,
+      );
+
+    expect(code).toBe(1);
+    expect(appContents).not.toContain("old-sonar");
+    expect(stateWalContents).toBe("candidate-wal\n");
+    expect(intentExists).toBe(true);
+    expect(previousExists).toBe(true);
+    expect(stderr).toContain("FATAL: rollback failed — sonar is down");
+    expect(stderr).not.toContain("rollback restored the previous healthy sonar binary");
+  }, 60_000);
+
   test("post-health rollback cleanup debt never reports the healthy service down", async () => {
     const { appContents, code, stateContents, stderr } = await runSonar(
       {
@@ -1542,6 +1698,132 @@ describe("sonar-freshen reports a run", () => {
     expect(stateContents).toBe("fixture");
     expect(previousExists).toBe(false);
     expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 0 });
+  }, 60_000);
+
+  test("a hard kill after intent removal keeps accepted identity crash-consistent", async () => {
+    const {
+      appContents,
+      attempts,
+      code,
+      deployedSha,
+      intentExists,
+      previousExists,
+      rollbackStateExists,
+      stderr,
+      summary,
+    } = await runSonar(
+      {
+        commit: SHA_B,
+        crashAfterAcceptanceIntentRemoval: true,
+        deployed: SHA_A,
+        priorLiveCommit: SHA_B,
+      },
+      undefined,
+    );
+
+    expect(attempts[0]?.code).not.toBe(0);
+    expect(code).toBe(0);
+    expect(appContents).not.toContain("old-sonar");
+    expect(deployedSha).toBe(SHA_B);
+    expect(intentExists).toBe(false);
+    expect(previousExists).toBe(false);
+    expect(rollbackStateExists).toBe(false);
+    expect(stderr).toContain("already current — no-op");
+    expect(stderr).not.toContain("interrupted-swap recovery restored");
+    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 0, queueDepth: 0 });
+  }, 60_000);
+
+  test("accepted cleanup debt preserves success and is removed by the next no-op", async () => {
+    const {
+      attempts,
+      code,
+      deployedSha,
+      previousExists,
+      rollbackStateExists,
+      rollbackWalExists,
+      stderr,
+      summary,
+    } = await runSonar({ acceptanceCleanupFails: true, commit: SHA_B, deployed: SHA_A }, undefined);
+    const accepted = attempts.at(0);
+    if (!accepted) {
+      throw new Error("accepted cleanup fixture produced no first attempt");
+    }
+
+    expect(accepted.code).toBe(0);
+    expect(lastJsonLine(accepted.stdout)).toMatchObject({ errors: 0, produced: 1, queueDepth: 0 });
+    expect(accepted.stderr).toContain("accepted sonar is healthy, but stale rollback files");
+    expect(code).toBe(0);
+    expect(deployedSha).toBe(SHA_B);
+    expect(previousExists).toBe(false);
+    expect(rollbackStateExists).toBe(false);
+    expect(rollbackWalExists).toBe(false);
+    expect(stderr).toContain("already current — no-op");
+    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 0, queueDepth: 0 });
+  }, 60_000);
+
+  test("bootstrap-marker unlink failure leaves durable recovery intent and still restores", async () => {
+    const { attempts, bootstrapReady, code, deployedSha, intentExists, stderr, summary } =
+      await runSonar(
+        {
+          acceptedShaWriteFails: true,
+          bootstrapMarkerRemovalFails: true,
+          commit: SHA_B,
+          deployed: SHA_A,
+        },
+        undefined,
+      );
+    const failed = attempts.at(0);
+    if (!failed) {
+      throw new Error("bootstrap-marker cleanup fixture produced no first attempt");
+    }
+
+    expect(failed.code).toBe(1);
+    expect(failed.stderr).toContain(
+      "rollback is healthy and durable, but bootstrap-marker cleanup is pending",
+    );
+    expect(failed.stderr).toContain("rollback restored the previous healthy sonar binary");
+    expect(failed.stderr).not.toContain("rollback failed — sonar is down");
+    expect(code).toBe(0);
+    expect(deployedSha).toBe(SHA_B);
+    expect(intentExists).toBe(false);
+    expect(bootstrapReady).toBe(true);
+    expect(stderr).toContain(
+      "interrupted-swap recovery restored the previous healthy sonar binary",
+    );
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 1, queueDepth: 0 });
+  }, 60_000);
+
+  test("persistent marker cleanup debt retains intent and every rollback artifact", async () => {
+    const {
+      appContents,
+      bootstrapReady,
+      code,
+      deployedSha,
+      intentExists,
+      previousExists,
+      rollbackStateExists,
+      stderr,
+      summary,
+    } = await runSonar(
+      {
+        acceptedShaWriteFails: true,
+        bootstrapMarkerRemovalPersists: true,
+        commit: SHA_B,
+        deployed: SHA_A,
+      },
+      undefined,
+    );
+
+    expect(code).toBe(1);
+    expect(appContents).toContain("old-sonar");
+    expect(deployedSha).toBe(SHA_A);
+    expect(intentExists).toBe(true);
+    expect(previousExists).toBe(true);
+    expect(rollbackStateExists).toBe(true);
+    expect(bootstrapReady).toBe(true);
+    expect(stderr).toContain("rollback cleanup remains pending; deferring the release check");
+    expect(stderr).not.toContain("a newer sonar build is published");
+    expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0, queueDepth: 0 });
   }, 60_000);
 
   test("pre-smoke rejects a self-consistent artifact built from a different commit", async () => {
