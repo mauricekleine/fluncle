@@ -1141,6 +1141,14 @@ type SonarFixture = {
   stateContents?: string;
   /** Terminate the deploy shell during the first candidate restart. */
   interruptAfterSwap?: boolean;
+  /** Hard-kill the deploy shell after swap so EXIT cannot run. */
+  crashAfterSwap?: boolean;
+  /** Override the commit baked into the downloaded artifact's health response. */
+  artifactCommit?: string;
+  /** Override the complete health body served by the downloaded artifact. */
+  artifactHealthBody?: string;
+  /** Override the commit returned by the restarted live service. */
+  liveCommit?: string;
 };
 
 const SHA_A = "a".repeat(40);
@@ -1150,7 +1158,7 @@ const SHA_B = "b".repeat(40);
 const SONAR_STUB = [
   "#!/usr/bin/env bash",
   'if [ "${SONAR_VALIDATE_ONLY:-}" = "true" ] && grep -q "^partial$" "$SONAR_STATE_PATH" 2>/dev/null; then echo "state has no completed manifest" >&2; exit 2; fi',
-  'exec "$SONAR_TEST_BUN" -e "Bun.serve({fetch: () => new Response(String.raw\\`{\\"ok\\":true}\\`), port: Number(process.env.SONAR_PORT)}); await new Promise(() => {});"',
+  'exec "$SONAR_TEST_BUN" -e "Bun.serve({fetch: () => new Response(process.env.SONAR_TEST_HEALTH_BODY || JSON.stringify({ok:true,commit:process.env.SONAR_TEST_COMMIT})), port: Number(process.env.SONAR_PORT)}); await new Promise(() => {});"',
   "",
 ].join("\n");
 
@@ -1187,6 +1195,7 @@ async function runSonar(
   // `flock` is util-linux — it does not exist on macOS at all, so without this stub EVERY run
   // here would take the lock-held branch and quietly test nothing.
   writeStub(bin, "flock", '[ "${SF_LOCKED:-0}" = "1" ] && exit 1\nexit 0');
+  writeStub(bin, "sync", "exit 0");
   // A systemctl that normally reports the service up. The retry fixture makes the first
   // candidate start create incomplete state and fail; rollback succeeds on the recognisable
   // old binary, then the next candidate start completes that same state in place.
@@ -1206,6 +1215,11 @@ async function runSonar(
       'if [ "$1" = "restart" ] && [ "${SF_INTERRUPT_AFTER_SWAP:-0}" = "1" ] && ! grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null && [ ! -f "$SF_RESTART_INTERRUPTED" ]; then',
       '  : >"$SF_RESTART_INTERRUPTED"',
       '  kill -TERM "$PPID"',
+      "  sleep 1",
+      "fi",
+      'if [ "$1" = "restart" ] && [ "${SF_CRASH_AFTER_SWAP:-0}" = "1" ] && ! grep -q "old-sonar" "$SF_APP_BIN" 2>/dev/null && [ ! -f "$SF_RESTART_INTERRUPTED" ]; then',
+      '  : >"$SF_RESTART_INTERRUPTED"',
+      '  kill -KILL "$PPID"',
       "  sleep 1",
       "fi",
       "exit 0",
@@ -1238,7 +1252,11 @@ async function runSonar(
     port: 0,
   });
   // The "already restarted" live service the post-swap smoke curls.
-  const live = Bun.serve({ fetch: () => new Response('{"ok":true}'), port: 0 });
+  const liveCommit = fixture.liveCommit ?? fixture.commit ?? SHA_B;
+  const live = Bun.serve({
+    fetch: () => new Response(JSON.stringify({ commit: liveCommit, ok: true })),
+    port: 0,
+  });
   const serviceEnv = join(root, "sonar.env");
 
   const legacyContract = fixture.runtimeContract === "legacy";
@@ -1280,6 +1298,7 @@ async function runSonar(
       HOME: root,
       PATH: `${bin}:/usr/bin:/bin`,
       SF_APP_BIN: join(appDir, "sonar"),
+      SF_CRASH_AFTER_SWAP: fixture.crashAfterSwap ? "1" : "0",
       SF_INTERRUPT_AFTER_SWAP: fixture.interruptAfterSwap ? "1" : "0",
       SF_LOCKED: fixture.locked ? "1" : "0",
       SF_RESTART_FAILED: restartFailed,
@@ -1294,11 +1313,15 @@ async function runSonar(
       SONARFRESHEN_STATE_DIR: join(root, "state"),
       SONARFRESHEN_WORKER_URL: base ?? "http://127.0.0.1:1",
       SONAR_TEST_BUN: process.execPath,
+      SONAR_TEST_COMMIT: fixture.artifactCommit ?? fixture.commit ?? SHA_B,
+      SONAR_TEST_HEALTH_BODY: fixture.artifactHealthBody ?? "",
       ...(base === undefined ? {} : { FLUNCLE_API_TOKEN: "sonar-agent-token" }),
     };
     const attempts = [await runScript(SONAR_FRESHEN, scriptEnvironment, args)];
-    if (fixture.retryAfterBootstrapFailure) {
-      attempts.push(await runScript(SONAR_FRESHEN, scriptEnvironment, args));
+    if (fixture.retryAfterBootstrapFailure || fixture.crashAfterSwap) {
+      attempts.push(
+        await runScript(SONAR_FRESHEN, scriptEnvironment, fixture.crashAfterSwap ? [] : args),
+      );
     }
     const run = attempts.at(-1);
     if (!run) {
@@ -1418,6 +1441,58 @@ describe("sonar-freshen reports a run", () => {
     expect(appContents).toContain("old-sonar");
     expect(previousExists).toBe(false);
     expect(stderr).toContain("rollback restored the previous healthy sonar binary");
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
+  }, 60_000);
+
+  test("a hard-killed swap is recovered from disk before an already-current no-op", async () => {
+    const { appContents, attempts, code, previousExists, stderr, summary } = await runSonar(
+      { commit: SHA_B, crashAfterSwap: true, deployed: SHA_B },
+      undefined,
+      ["--force"],
+    );
+
+    expect(attempts[0]?.code).not.toBe(0);
+    expect(code).toBe(0);
+    expect(stderr).toContain(
+      "interrupted-swap recovery restored the previous healthy sonar binary",
+    );
+    expect(stderr).toContain("already current — no-op");
+    expect(appContents).toContain("old-sonar");
+    expect(previousExists).toBe(false);
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 0 });
+  }, 60_000);
+
+  test("pre-smoke rejects a self-consistent artifact built from a different commit", async () => {
+    const { appContents, code, previousExists, stderr, summary } = await runSonar(
+      {
+        artifactHealthBody: JSON.stringify({
+          commit: SHA_A,
+          detail: `"commit":"${SHA_B}"`,
+          ok: true,
+        }),
+        commit: SHA_B,
+        deployed: SHA_A,
+      },
+      undefined,
+    );
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("pre-smoke failed");
+    expect(appContents).toContain("old-sonar");
+    expect(previousExists).toBe(false);
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
+  }, 60_000);
+
+  test("post-smoke rolls back when the live listener reports a different commit", async () => {
+    const { appContents, code, previousExists, stderr, summary } = await runSonar(
+      { commit: SHA_B, deployed: SHA_A, liveCommit: SHA_A },
+      undefined,
+    );
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("rollback restored the previous healthy sonar binary");
+    expect(appContents).toContain("old-sonar");
+    expect(previousExists).toBe(false);
     expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
   }, 60_000);
 

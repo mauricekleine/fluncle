@@ -70,6 +70,7 @@ ASSET_BASE="${SONARFRESHEN_ASSET_BASE:-https://github.com/${RELEASE_REPO}/releas
 STATE_DIR="${SONARFRESHEN_STATE_DIR:-/opt/sonar-freshen}"
 SHA_FILE="${SONARFRESHEN_SHA_FILE:-$STATE_DIR/deployed-sha}"
 BOOTSTRAP_READY_FILE="${SONARFRESHEN_BOOTSTRAP_READY_FILE:-$STATE_DIR/local-state-ready}"
+ROLLBACK_INTENT_FILE="${SONARFRESHEN_ROLLBACK_INTENT_FILE:-$STATE_DIR/swap-in-progress}"
 LOCK="${SONARFRESHEN_LOCK:-/run/lock/fluncle-sonar-freshen.lock}"
 
 # The live service contract (must match apps/sonar/deploy/sonar.service).
@@ -422,12 +423,94 @@ require_local_runtime_contract() {
   fi
 }
 
+# Rollback recovery must exist before the release feed is read: a hard kill or
+# reboot cannot run EXIT, and the next tick must restore the snapshotted binary
+# before an already-current no-op or a new snapshot can overwrite that evidence.
+LIVE_PORT="$(env_value SONAR_PORT)"
+LIVE_PORT="${LIVE_PORT:-443}"
+LIVE_CURL=(curl -fsS -m 10)
+LIVE_SCHEME="http"
+if [ -n "$(env_value SONAR_TLS_CERT)" ]; then
+  LIVE_SCHEME="https"
+  # The origin certificate names the public host, not loopback. This probe proves
+  # process health after restart; Cloudflare owns the public PKI check.
+  LIVE_CURL+=(-k)
+fi
+LIVE_CURL+=("$LIVE_SCHEME://127.0.0.1:$LIVE_PORT/health")
+health_matches() {
+  local expected_commit="${1:-}"
+  python3 -c 'import json,sys
+expected=sys.argv[1]
+try:
+    body=json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+if not isinstance(body,dict) or body.get("ok") is not True:
+    raise SystemExit(1)
+raise SystemExit(0 if not expected or body.get("commit") == expected else 2)' "$expected_commit"
+}
+live_healthy() {
+  local expected_commit="${1:-}" body
+  body="$("${LIVE_CURL[@]}" 2>/dev/null)" || return 1
+  printf '%s' "$body" | health_matches "$expected_commit"
+}
+
+durable_sync_file() {
+  sync -f "$1" && sync -f "$(dirname "$1")"
+}
+
+durable_sync_dir() { sync -f "$1"; }
+
+service_healthy() {
+  local expected_commit="${1:-}"
+  systemctl restart "$SERVICE" || return 1
+  local i
+  for ((i = 0; i < BOOT_TIMEOUT_SECS; i++)); do
+    if ! systemctl is-active --quiet "$SERVICE"; then return 1; fi
+    if live_healthy "$expected_commit"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+restore_previous_binary() {
+  [ -f "$PREV_BIN" ] || return 1
+  install -m 0755 "$PREV_BIN" "$APP_BIN.rb" || return 1
+  durable_sync_file "$APP_BIN.rb" || return 1
+  mv -f "$APP_BIN.rb" "$APP_BIN" || return 1
+  durable_sync_file "$APP_BIN" || return 1
+  service_healthy || return 1
+  rm -f "$ROLLBACK_INTENT_FILE" || return 1
+  durable_sync_dir "$STATE_DIR" || return 1
+  rm -f "$PREV_BIN"
+  durable_sync_dir "$APP_DIR"
+}
+
+recover_interrupted_swap() {
+  [ -f "$ROLLBACK_INTENT_FILE" ] || return 0
+  SF_ERRORS=$((SF_ERRORS + 1))
+  log "recovering an interrupted unaccepted swap before checking the release"
+  if grep -qx 'bootstrap_ready=0' "$ROLLBACK_INTENT_FILE" 2>/dev/null; then
+    rm -f "$BOOTSTRAP_READY_FILE"
+  fi
+  if ! command -v systemctl >/dev/null || ! restore_previous_binary; then
+    alert "🔴 sonar-freshen: interrupted-swap recovery failed — sonar may be DOWN. Operator needed NOW."
+    post_health down "sonar interrupted-swap recovery failed — operator needed"
+    die "could not restore the previous binary from interrupted-swap intent"
+  fi
+  post_health degraded "recovered an interrupted sonar update; healthy on the previous binary"
+  log "interrupted-swap recovery restored the previous healthy sonar binary"
+}
+
 # ── 1. what does the rolling release say was built? ───────────────────────────
 # `sonar.commit` is the full commit SHA the published binary was built from — the
 # artifact's identity, and the only thing that decides whether there is work to do.
 # A missing/unreachable release is a NORMAL state (CI has not published yet, or
 # GitHub is having a moment): log it, mark degraded, and leave the box alone.
 mkdir -p "$STATE_DIR"
+command -v python3 >/dev/null 2>&1 || die "python3 not found — cannot validate sonar health identity"
+command -v sync >/dev/null 2>&1 || die "sync not found — cannot make sonar rollback state durable"
+recover_interrupted_swap
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sonar-freshen.XXXXXX")"
 _cleanup() { rm -rf "$WORK_DIR"; }
 
@@ -599,9 +682,19 @@ if [ "$SMOKE_STATE_PRESENT" = "1" ]; then
 
   # sonar's /health serialises `"ok":true` with no spaces (serde), so one grep is the
   # whole assertion: the process is up AND its indexes are built AND it answers HTTP.
-  smoke_healthy() { curl -fsS -m 10 "http://127.0.0.1:$SMOKE_PORT/health" 2>/dev/null | grep -q '"ok":true'; }
+  smoke_healthy() {
+    local body health_rc=0
+    body="$(curl -fsS -m 10 "http://127.0.0.1:$SMOKE_PORT/health" 2>/dev/null)" || return 1
+    printf '%s' "$body" | health_matches "$NEW_SHA" || health_rc=$?
+    if [ "$health_rc" -eq 2 ]; then
+      SMOKE_IDENTITY_MISMATCH=1
+      return 1
+    fi
+    [ "$health_rc" -eq 0 ]
+  }
 
   smoked=0
+  SMOKE_IDENTITY_MISMATCH=0
   smoke_failure=""
   for _ in $(seq 1 "$BOOT_TIMEOUT_SECS"); do
     if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
@@ -611,10 +704,13 @@ if [ "$SMOKE_STATE_PRESENT" = "1" ]; then
       break
     fi
     if smoke_healthy; then smoked=1; break; fi
+    if [ "$SMOKE_IDENTITY_MISMATCH" = "1" ]; then break; fi
     sleep 1
   done
   cleanup_smoke
   _cleanup() { rm -rf "$WORK_DIR"; }
+  [ "$SMOKE_IDENTITY_MISMATCH" = "0" ] \
+    || presmoke_fail "the downloaded binary reports a different baked commit than sonar.commit"
   if [ "$smoked" = "1" ]; then
     log "pre-smoke passed"
   else
@@ -645,36 +741,6 @@ command -v systemctl >/dev/null || {
   die "systemctl not found — cannot manage $SERVICE"
 }
 
-# The live listener, read from the service env. Cloudflare proxies to this origin on
-# 443 with an Origin Certificate, so TLS is normally on; a cert path in the env is what
-# decides http vs https for the smoke below.
-LIVE_PORT="$(env_value SONAR_PORT)"
-LIVE_PORT="${LIVE_PORT:-443}"
-LIVE_CURL=(curl -fsS -m 10)
-LIVE_SCHEME="http"
-if [ -n "$(env_value SONAR_TLS_CERT)" ]; then
-  LIVE_SCHEME="https"
-  # `-k` is CORRECT here, not a shortcut: the Origin Certificate's SAN is the public
-  # hostname, so a loopback request legitimately mismatches the name. We are proving
-  # the service answers, not validating Cloudflare's PKI. Do not "fix" this away.
-  LIVE_CURL+=(-k)
-fi
-LIVE_CURL+=("$LIVE_SCHEME://127.0.0.1:$LIVE_PORT/health")
-live_healthy() { "${LIVE_CURL[@]}" 2>/dev/null | grep -q '"ok":true'; }
-
-service_healthy() {
-  systemctl restart "$SERVICE" || return 1
-  # A restart validates and rebuilds the durable local corpus before /health answers,
-  # so poll rather than sleeping a fixed beat.
-  local i
-  for ((i = 0; i < BOOT_TIMEOUT_SECS; i++)); do
-    if ! systemctl is-active --quiet "$SERVICE"; then return 1; fi
-    if live_healthy; then return 0; fi
-    sleep 1
-  done
-  return 1
-}
-
 mark_bootstrap_ready() {
   local marker_tmp="${BOOTSTRAP_READY_FILE}.tmp.$$"
   if ! printf '%s\n' "$NEW_SHA" >"$marker_tmp" || ! mv -f "$marker_tmp" "$BOOTSTRAP_READY_FILE"; then
@@ -696,14 +762,11 @@ rollback_unaccepted_swap() {
     rm -f "$BOOTSTRAP_READY_FILE"
     BOOTSTRAP_MARKER_CREATED=0
   fi
-  if [ -f "$PREV_BIN" ]; then
-    if install -m 0755 "$PREV_BIN" "$APP_BIN.rb" && mv -f "$APP_BIN.rb" "$APP_BIN" && service_healthy; then
-      rm -f "$PREV_BIN"
-      alert "↩️ sonar-freshen: candidate failed acceptance — ROLLED BACK to the previous sonar binary (running). A human should look."
-      post_health degraded "rolled back an unaccepted sonar update; healthy on the previous binary"
-      log "rollback restored the previous healthy sonar binary"
-      return 0
-    fi
+  if restore_previous_binary; then
+    alert "↩️ sonar-freshen: candidate failed acceptance — ROLLED BACK to the previous sonar binary (running). A human should look."
+    post_health degraded "rolled back an unaccepted sonar update; healthy on the previous binary"
+    log "rollback restored the previous healthy sonar binary"
+    return 0
   fi
   alert "🔴 sonar-freshen: ROLLBACK ALSO FAILED — sonar is DOWN. Operator needed NOW."
   post_health down "the sonar engine is down after a failed update — operator needed"
@@ -716,27 +779,46 @@ if [ -f "$APP_BIN" ]; then
     SF_ERRORS=$((SF_ERRORS + 1))
     die "could not snapshot the current binary to $PREV_BIN"
   }
+  durable_sync_file "$PREV_BIN" || {
+    SF_ERRORS=$((SF_ERRORS + 1))
+    die "could not make the rollback binary durable"
+  }
+fi
+intent_tmp="${ROLLBACK_INTENT_FILE}.tmp.$$"
+if ! printf 'candidate=%s\nbootstrap_ready=%s\n' "$NEW_SHA" "$BOOTSTRAP_READY" >"$intent_tmp" \
+  || ! durable_sync_file "$intent_tmp" \
+  || ! mv -f "$intent_tmp" "$ROLLBACK_INTENT_FILE" \
+  || ! durable_sync_file "$ROLLBACK_INTENT_FILE"; then
+  rm -f "$intent_tmp"
+  SF_ERRORS=$((SF_ERRORS + 1))
+  die "could not persist rollback intent before swapping the candidate"
 fi
 # From this point until post-swap acceptance, every exit path—including TERM and
 # set -e failures—must restore the snapshotted binary. The one process-wide EXIT
 # trap owns rollback so later cleanup hooks cannot accidentally replace it.
 ROLLBACK_ARMED=1
 install -m 0755 "$NEW_BIN" "$APP_BIN.new"
+durable_sync_file "$APP_BIN.new"
 mv -f "$APP_BIN.new" "$APP_BIN"
+durable_sync_file "$APP_BIN"
 
 log "swapping $SERVICE to ${NEW_SHA:0:12} and restarting"
 
 # ── 6. post-swap smoke (the `if` keeps set -e from bare-exiting) ──────────────
-if service_healthy && mark_bootstrap_ready; then
+if service_healthy "$NEW_SHA" && mark_bootstrap_ready; then
   # Health plus the durable bootstrap marker is the acceptance boundary. Only
   # now may EXIT stop restoring the snapshotted binary.
+  rm -f "$ROLLBACK_INTENT_FILE"
+  durable_sync_dir "$STATE_DIR"
   ROLLBACK_ARMED=0
   # The one place a swap is real: the backlog is cleared and the work is written.
   SF_PRODUCED=1
   SF_QUEUE=0
   log "post-swap smoke passed — deployed ${NEW_SHA:0:12}"
   printf '%s\n' "$NEW_SHA" >"$SHA_FILE"
+  durable_sync_file "$SHA_FILE"
   rm -f "$PREV_BIN"
+  durable_sync_dir "$APP_DIR"
   alert "🚀 sonar-freshen: deployed ${NEW_SHA:0:12} to sonar on rave-01 (CI artifact verified + swapped)"
   post_health ok "swapped sonar to the latest published build"
   exit 0

@@ -7,6 +7,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::fmt;
 use std::time::Duration;
 
 use crate::decode::BLOB_LEN;
@@ -19,6 +20,24 @@ pub const CONTRACT: &str = "sonar.track@1/1";
 pub const EMPTY_DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug)]
+struct ArtifactHttpStatusError {
+    body: String,
+    status: reqwest::StatusCode,
+}
+
+impl fmt::Display for ArtifactHttpStatusError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "artifact API returned {}: {}",
+            self.status, self.body
+        )
+    }
+}
+
+impl std::error::Error for ArtifactHttpStatusError {}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -456,10 +475,11 @@ impl ArtifactClient {
             return Ok(response);
         }
         let body = response.text().await.unwrap_or_default();
-        bail!(
-            "artifact API returned {status}: {}",
-            body.chars().take(240).collect::<String>()
-        )
+        Err(ArtifactHttpStatusError {
+            body: body.chars().take(240).collect(),
+            status,
+        }
+        .into())
     }
 
     async fn consumer_response(
@@ -479,9 +499,18 @@ impl ArtifactClient {
 
     pub fn is_transport_failure(error: &anyhow::Error) -> bool {
         error.chain().any(|cause| {
-            cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
-                error.is_connect() || error.is_timeout() || error.is_request() || error.is_body()
-            })
+            cause
+                .downcast_ref::<ArtifactHttpStatusError>()
+                .is_some_and(|error| {
+                    error.status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                        || error.status.is_server_error()
+                })
+                || cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+                    error.is_connect()
+                        || error.is_timeout()
+                        || error.is_request()
+                        || error.is_body()
+                })
         })
     }
 
@@ -828,6 +857,33 @@ mod tests {
         assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(30));
         assert!(CONNECT_TIMEOUT < REQUEST_TIMEOUT);
         assert!(REQUEST_TIMEOUT < Duration::from_secs(180));
+    }
+
+    #[test]
+    fn only_rate_limits_and_server_failures_are_transient_http_unavailability() {
+        for status in [
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            reqwest::StatusCode::from_u16(524).unwrap(),
+        ] {
+            let error = anyhow::Error::new(ArtifactHttpStatusError {
+                body: "unavailable".into(),
+                status,
+            });
+            assert!(ArtifactClient::is_transport_failure(&error), "{status}");
+        }
+        for status in [
+            reqwest::StatusCode::BAD_REQUEST,
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::NOT_FOUND,
+        ] {
+            let error = anyhow::Error::new(ArtifactHttpStatusError {
+                body: "semantic rejection".into(),
+                status,
+            });
+            assert!(!ArtifactClient::is_transport_failure(&error), "{status}");
+        }
     }
 
     #[tokio::test]

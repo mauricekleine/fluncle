@@ -99,7 +99,12 @@ impl StateStore {
              create table if not exists sonar_activation_proof (
                id integer primary key check(id=1), checkpoint integer not null,
                artifact_digest text not null
-             ) without rowid;",
+             ) without rowid;
+             create table if not exists sonar_staged_manifest as select * from sonar_manifest where 0;
+             create table if not exists sonar_staged_tracks as select * from sonar_tracks where 0;
+             create table if not exists sonar_staged_revisions as select * from sonar_revisions where 0;
+             create table if not exists sonar_staged_centroids as select * from sonar_centroids where 0;
+             create table if not exists sonar_staged_activation_proof as select * from sonar_activation_proof where 0;",
         ).await.context("initialising sonar consumer state schema")?;
         Ok(Self {
             conn: RwLock::new(conn),
@@ -420,7 +425,8 @@ impl StateStore {
         ))
     }
 
-    pub async fn clear_pending(&self, through_seq: u64) -> Result<()> {
+    #[cfg(test)]
+    async fn clear_pending(&self, through_seq: u64) -> Result<()> {
         let affected = self.connection()?.execute(
             "update sonar_manifest set pending_from=null,pending_through=null,pending_count=null,pending_digest=null \
              where id=1 and checkpoint=? and pending_through=?",
@@ -429,6 +435,169 @@ impl StateStore {
         if affected != 1 {
             bail!("pending acknowledgement changed before finalization");
         }
+        Ok(())
+    }
+
+    /// Finalize a remotely acknowledged generation and record its activation
+    /// proof in one transaction. Splitting these writes creates a crash window
+    /// where the pending receipt is gone but the exact generation has no proof.
+    pub async fn finalize_pending_activated(&self, through_seq: u64) -> Result<()> {
+        let conn = self.connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        let affected = tx
+            .execute(
+                "update sonar_manifest set pending_from=null,pending_through=null,pending_count=null,pending_digest=null \
+                 where id=1 and checkpoint=? and pending_through=?",
+                params![to_i64(through_seq)?, to_i64(through_seq)?],
+            )
+            .await?;
+        if affected != 1 {
+            bail!("pending acknowledgement changed before finalization");
+        }
+        let proved = tx
+            .execute(
+                "insert into sonar_activation_proof(id,checkpoint,artifact_digest) \
+                 select 1,checkpoint,artifact_digest from sonar_manifest \
+                 where id=1 and checkpoint=? and pending_through is null \
+                 on conflict(id) do update set checkpoint=excluded.checkpoint,artifact_digest=excluded.artifact_digest",
+                [to_i64(through_seq)?],
+            )
+            .await?;
+        if proved != 1 {
+            bail!("local generation changed before pending activation was finalized");
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Snapshot the currently proved generation inside the same durable
+    /// database before a remote registration invalidates it. The staged copy
+    /// is retained until activation is accepted or an authoritative status
+    /// proves that the prior checkpoint is active again.
+    pub async fn stage_activated_generation(&self) -> Result<bool> {
+        let conn = self.connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        let mut rows = tx
+            .query(
+                "select 1 from sonar_manifest m join sonar_activation_proof p \
+                 on p.id=1 and p.checkpoint=m.checkpoint and p.artifact_digest=m.artifact_digest \
+                 where m.id=1 and m.pending_through is null",
+                (),
+            )
+            .await?;
+        if rows.next().await?.is_none() {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        for table in [
+            "sonar_staged_manifest",
+            "sonar_staged_tracks",
+            "sonar_staged_revisions",
+            "sonar_staged_centroids",
+            "sonar_staged_activation_proof",
+        ] {
+            tx.execute(&format!("delete from {table}"), ()).await?;
+        }
+        tx.execute(
+            "insert into sonar_staged_manifest select * from sonar_manifest",
+            (),
+        )
+        .await?;
+        tx.execute(
+            "insert into sonar_staged_tracks select * from sonar_tracks",
+            (),
+        )
+        .await?;
+        tx.execute(
+            "insert into sonar_staged_revisions select * from sonar_revisions",
+            (),
+        )
+        .await?;
+        tx.execute(
+            "insert into sonar_staged_centroids select * from sonar_centroids",
+            (),
+        )
+        .await?;
+        tx.execute(
+            "insert into sonar_staged_activation_proof select * from sonar_activation_proof",
+            (),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn staged_manifest(&self) -> Result<Option<Manifest>> {
+        let conn = self.connection()?;
+        let mut rows = conn
+            .query(
+                "select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,\
+                 pending_from,pending_through,pending_count,pending_digest from sonar_staged_manifest where id=1",
+                (),
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(manifest_from_row(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn restore_staged_generation(&self, restore_proof: bool) -> Result<bool> {
+        if self.staged_manifest().await?.is_none() {
+            return Ok(false);
+        }
+        let conn = self.connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        tx.execute("delete from sonar_tracks", ()).await?;
+        tx.execute("delete from sonar_revisions", ()).await?;
+        tx.execute("delete from sonar_centroids", ()).await?;
+        tx.execute("delete from sonar_manifest", ()).await?;
+        tx.execute("delete from sonar_activation_proof", ()).await?;
+        tx.execute(
+            "insert into sonar_tracks select * from sonar_staged_tracks",
+            (),
+        )
+        .await?;
+        tx.execute(
+            "insert into sonar_revisions select * from sonar_staged_revisions",
+            (),
+        )
+        .await?;
+        tx.execute(
+            "insert into sonar_centroids select * from sonar_staged_centroids",
+            (),
+        )
+        .await?;
+        tx.execute(
+            "insert into sonar_manifest select * from sonar_staged_manifest",
+            (),
+        )
+        .await?;
+        if restore_proof {
+            tx.execute(
+                "insert into sonar_activation_proof select * from sonar_staged_activation_proof",
+                (),
+            )
+            .await?;
+        }
+        clear_staged(&tx).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn discard_staged_generation(&self) -> Result<()> {
+        let conn = self.connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        clear_staged(&tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -695,6 +864,10 @@ async fn read_manifest(conn: &impl Queryable) -> Result<Manifest> {
         .next()
         .await?
         .context("sonar consumer state has no manifest")?;
+    manifest_from_row(&row)
+}
+
+fn manifest_from_row(row: &libsql::Row) -> Result<Manifest> {
     let schema = required_i64(&row.get_value(0)?, "schema version")?;
     if schema != SCHEMA_VERSION {
         bail!("unsupported sonar state schema version {schema}");
@@ -738,6 +911,19 @@ async fn read_manifest(conn: &impl Queryable) -> Result<Manifest> {
         track_rows: usize::try_from(required_u64(&row.get_value(4)?, "track count")?)?,
         validated_at: required_i64(&row.get_value(7)?, "validation time")?,
     })
+}
+
+async fn clear_staged(tx: &Transaction) -> Result<()> {
+    for table in [
+        "sonar_staged_manifest",
+        "sonar_staged_tracks",
+        "sonar_staged_revisions",
+        "sonar_staged_centroids",
+        "sonar_staged_activation_proof",
+    ] {
+        tx.execute(&format!("delete from {table}"), ()).await?;
+    }
+    Ok(())
 }
 
 async fn read_revision(conn: &Transaction, id: &str) -> Result<Option<(u64, bool, String)>> {
@@ -995,6 +1181,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn staged_generation_restores_exact_bytes_and_proof_across_reopen() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let store = StateStore::open(&path).await.unwrap();
+        let original = store
+            .replace_from_replica(
+                &[track("old", 1, 1.0)],
+                &[SourceRevision {
+                    id: "old".into(),
+                    revision: 1,
+                }],
+                &[],
+                1,
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+        store.mark_activated(&original.manifest).await.unwrap();
+        assert!(store.stage_activated_generation().await.unwrap());
+        store
+            .replace_from_replica(
+                &[track("candidate", 2, 2.0)],
+                &[SourceRevision {
+                    id: "candidate".into(),
+                    revision: 2,
+                }],
+                &[],
+                2,
+                2,
+                2,
+            )
+            .await
+            .unwrap();
+        drop(store);
+
+        let reopened = StateStore::open(&path).await.unwrap();
+        assert_eq!(
+            reopened
+                .staged_manifest()
+                .await
+                .unwrap()
+                .unwrap()
+                .checkpoint,
+            1
+        );
+        assert!(reopened.restore_staged_generation(true).await.unwrap());
+        let restored = reopened.load().await.unwrap();
+        assert_eq!(restored.tracks.id_at(0), "old");
+        assert_eq!(
+            restored.manifest.artifact_digest,
+            original.manifest.artifact_digest
+        );
+        assert!(reopened
+            .activation_proves(&restored.manifest)
+            .await
+            .unwrap());
+        assert!(reopened.staged_manifest().await.unwrap().is_none());
+
+        assert!(reopened.stage_activated_generation().await.unwrap());
+        reopened.discard_staged_generation().await.unwrap();
+        assert!(reopened.staged_manifest().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn commit_pending_restart_and_finalize_boundaries_are_durable() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("state.db");
@@ -1025,8 +1276,56 @@ mod tests {
         let recovered = reopened.load().await.unwrap();
         assert_eq!(recovered.tracks.len(), 2);
         assert!(recovered.manifest.pending.is_some());
-        reopened.clear_pending(11).await.unwrap();
-        assert!(reopened.load().await.unwrap().manifest.pending.is_none());
+        reopened.finalize_pending_activated(11).await.unwrap();
+        let finalized = reopened.load().await.unwrap();
+        assert!(finalized.manifest.pending.is_none());
+        assert!(reopened
+            .activation_proves(&finalized.manifest)
+            .await
+            .unwrap());
+        drop(reopened);
+        let proved = StateStore::open(&path).await.unwrap();
+        let finalized = proved.load().await.unwrap();
+        assert!(proved.activation_proves(&finalized.manifest).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn pending_finalization_rolls_back_if_proof_cannot_be_recorded() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let store = StateStore::open(&path).await.unwrap();
+        store
+            .replace_from_replica(
+                &[track("a", 1, 1.0)],
+                &[SourceRevision {
+                    id: "a".into(),
+                    revision: 1,
+                }],
+                &[],
+                10,
+                10,
+                1,
+            )
+            .await
+            .unwrap();
+        store
+            .apply_batch(&batch(10, vec![upsert(11, 2, "b", 2.0)]), 2)
+            .await
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "create trigger reject_activation_proof before insert on sonar_activation_proof \
+                 begin select raise(abort, 'injected proof failure'); end;",
+            )
+            .await
+            .unwrap();
+
+        assert!(store.finalize_pending_activated(11).await.is_err());
+        drop(store);
+        let reopened = StateStore::open(&path).await.unwrap();
+        assert!(reopened.load().await.unwrap().manifest.pending.is_some());
     }
 
     #[tokio::test]
