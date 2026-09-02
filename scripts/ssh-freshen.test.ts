@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 
 const REPO = resolve(import.meta.dir, "..");
 const SCRIPT = join(REPO, "apps/ssh/deploy/fluncle-ssh-freshen.sh");
+const PROCESS_TEST_TIMEOUT_MS = 20_000;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -90,54 +91,73 @@ function manifest(tree: string) {
 }
 
 describe("SSH freshen public-source fallback", () => {
-  it("falls back without credentials when anonymous git prompts and verifies the exact archive commit", async () => {
-    const box = fixture();
-    writeFileSync(join(box.stateDir, "deployed-sha"), `${box.sha}\n`);
+  it(
+    "falls back without credentials when anonymous git prompts and verifies the exact archive commit",
+    async () => {
+      const box = fixture();
+      writeFileSync(join(box.stateDir, "deployed-sha"), `${box.sha}\n`);
 
-    const result = run(box.env);
+      const result = run(box.env);
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain("anonymous git sync failed; falling back");
-    expect(result.stderr).toContain(`already at ${box.sha}`);
-    expect(await Bun.file(box.gitLog).text()).toContain("prompt=0 askpass=/bin/false");
-    expect(await Bun.file(box.gitLog).text()).toContain("credential.helper=");
-    expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).text()).toContain(
-      "package main",
-    );
-  });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("anonymous git sync failed; falling back");
+      expect(result.stderr).toContain(`already at ${box.sha}`);
+      expect(await Bun.file(box.gitLog).text()).toContain("prompt=0 askpass=/bin/false");
+      expect(await Bun.file(box.gitLog).text()).toContain("credential.helper=");
+      expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).text()).toContain(
+        "package main",
+      );
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  it("accepts a minified GitHub commit-ref response", async () => {
-    const box = fixture({ minifiedRef: true });
-    writeFileSync(join(box.stateDir, "deployed-sha"), `${box.sha}\n`);
+  it(
+    "accepts a minified GitHub commit-ref response",
+    async () => {
+      const box = fixture({ minifiedRef: true });
+      writeFileSync(join(box.stateDir, "deployed-sha"), `${box.sha}\n`);
 
-    const result = run(box.env);
+      const result = run(box.env);
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain(`already at ${box.sha}`);
-    expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).exists()).toBe(true);
-  });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain(`already at ${box.sha}`);
+      expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).exists()).toBe(true);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  it("rejects a ref whose object is not a commit", async () => {
-    const box = fixture({ minifiedRef: true, objectType: "tag" });
+  it(
+    "rejects a ref whose object is not a commit",
+    async () => {
+      const box = fixture({ minifiedRef: true, objectType: "tag" });
 
-    const result = run(box.env);
+      const result = run(box.env);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("public main ref did not resolve to a commit SHA");
-    expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).exists()).toBe(false);
-  });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("public main ref did not resolve to a commit SHA");
+      expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).exists()).toBe(false);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  it("keeps docs-only archive advances as a no-op using the successful-deploy manifest", () => {
-    const box = fixture();
-    writeFileSync(join(box.stateDir, "deployed-sha"), `${"0".repeat(40)}\n`);
-    writeFileSync(join(box.stateDir, "deployed-source-manifest.sha256"), `${manifest(box.tree)}\n`);
+  it(
+    "keeps docs-only archive advances as a no-op using the successful-deploy manifest",
+    () => {
+      const box = fixture();
+      writeFileSync(join(box.stateDir, "deployed-sha"), `${"0".repeat(40)}\n`);
+      writeFileSync(
+        join(box.stateDir, "deployed-source-manifest.sha256"),
+        `${manifest(box.tree)}\n`,
+      );
 
-    const result = run(box.env);
+      const result = run(box.env);
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain("no compiled-source change");
-    expect(result.stderr).toContain("no rebuild needed");
-  });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("no compiled-source change");
+      expect(result.stderr).toContain("no rebuild needed");
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
   it("advances the source manifest only inside the successful post-swap branch", () => {
     const script = readFileSync(SCRIPT, "utf8");
@@ -151,13 +171,17 @@ describe("SSH freshen public-source fallback", () => {
     expect(script.match(/>"\$SOURCE_MANIFEST_FILE"/g)).toHaveLength(1);
   });
 
-  it("refuses an archive whose root does not carry the resolved commit", async () => {
-    const box = fixture({ archiveSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
+  it(
+    "refuses an archive whose root does not carry the resolved commit",
+    async () => {
+      const box = fixture({ archiveSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
 
-    const result = run(box.env);
+      const result = run(box.env);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("public source archive identity did not match");
-    expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).exists()).toBe(false);
-  });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("public source archive identity did not match");
+      expect(await Bun.file(join(box.stateDir, "source/apps/ssh/main.go")).exists()).toBe(false);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 });
