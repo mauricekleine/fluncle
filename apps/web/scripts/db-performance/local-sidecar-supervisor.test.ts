@@ -111,7 +111,7 @@ describe("local libSQL sidecar supervisor", () => {
         expect(supervisor.signalCode).toBeNull();
 
         const supervisorExited = new Promise<void>((resolve) =>
-          supervisor.once("exit", () => resolve()),
+          supervisor.once("close", () => resolve()),
         );
         owner.kill("SIGKILL");
         await new Promise<void>((resolve) => owner.once("exit", () => resolve()));
@@ -206,7 +206,7 @@ describe("local libSQL sidecar supervisor", () => {
         supervisor.stdout.destroy();
         supervisor.stderr.destroy();
         const supervisorExited = new Promise<void>((resolve) =>
-          supervisor.once("exit", () => resolve()),
+          supervisor.once("close", () => resolve()),
         );
         owner.kill("SIGKILL");
         await new Promise<void>((resolve) => owner.once("exit", () => resolve()));
@@ -240,5 +240,110 @@ describe("local libSQL sidecar supervisor", () => {
       }
     },
     10_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "captures diagnostics written by a descendant before the sidecar pipes close",
+    async () => {
+      const testDirectory = await mkdtemp("/tmp/db-performance-sidecar-diagnostic-");
+      const scratchDirectory = join(testDirectory, "scratch");
+      const marker = "descendant-diagnostic-marker\n";
+      const descendantProgram = `setTimeout(() => process.stderr.write(${JSON.stringify(marker)}), 100);`;
+      const sidecarProgram = `const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantProgram)}], { stdio: ["ignore", "inherit", "inherit"] }); child.unref();`;
+      const supervisor = spawn(
+        "bun",
+        [
+          SUPERVISOR_PATH,
+          "--owner-pid",
+          String(process.pid),
+          "--scratch-dir",
+          scratchDirectory,
+          "--",
+          process.execPath,
+          "-e",
+          sidecarProgram,
+        ],
+        {
+          stdio: ["ignore", "pipe", "pipe", "ipc"],
+        },
+      );
+      supervisor.stdout.resume();
+      let supervisorStderr = "";
+      supervisor.stderr.on("data", (chunk: Uint8Array) => {
+        supervisorStderr += Buffer.from(chunk).toString("utf8");
+      });
+      const supervisorPid = supervisor.pid;
+
+      try {
+        const exitCode = await new Promise<number | null>((resolve, reject) => {
+          supervisor.once("error", reject);
+          supervisor.once("close", resolve);
+        });
+
+        expect(exitCode).toBe(1);
+        expect(supervisorStderr).toContain(marker.trim());
+      } finally {
+        if (supervisorPid !== undefined && processExists(supervisorPid)) {
+          try {
+            process.kill(supervisorPid, "SIGKILL");
+          } catch {
+            // The supervisor exited between the liveness check and signal.
+          }
+        }
+        await rm(testDirectory, { force: true, recursive: true });
+      }
+    },
+    5_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "completes a spawn failure without grace-period delay",
+    async () => {
+      const testDirectory = await mkdtemp("/tmp/db-performance-sidecar-spawn-failure-");
+      const scratchDirectory = join(testDirectory, "scratch");
+      const supervisor = spawn(
+        "bun",
+        [
+          SUPERVISOR_PATH,
+          "--owner-pid",
+          String(process.pid),
+          "--scratch-dir",
+          scratchDirectory,
+          "--",
+          `definitely-not-a-real-fluncle-sidecar-${process.pid}`,
+        ],
+        {
+          stdio: ["ignore", "pipe", "pipe", "ipc"],
+        },
+      );
+      supervisor.stdout.resume();
+      let supervisorStderr = "";
+      supervisor.stderr.on("data", (chunk: Uint8Array) => {
+        supervisorStderr += Buffer.from(chunk).toString("utf8");
+      });
+      const supervisorPid = supervisor.pid;
+      const startedAt = Date.now();
+
+      try {
+        const exitCode = await new Promise<number | null>((resolve, reject) => {
+          supervisor.once("error", reject);
+          supervisor.once("close", resolve);
+        });
+
+        expect(Date.now() - startedAt).toBeLessThan(2_000);
+        expect(exitCode).toBe(1);
+        expect(supervisorStderr).toContain("sidecar spawn failed:");
+      } finally {
+        if (supervisorPid !== undefined && processExists(supervisorPid)) {
+          try {
+            process.kill(supervisorPid, "SIGKILL");
+          } catch {
+            // The supervisor exited between the liveness check and signal.
+          }
+        }
+        await rm(testDirectory, { force: true, recursive: true });
+      }
+    },
+    8_000,
   );
 });
