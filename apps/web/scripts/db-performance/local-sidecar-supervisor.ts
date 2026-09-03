@@ -13,6 +13,25 @@ function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
+async function waitForSettledOrTimeout(
+  settledPromise: Promise<void>,
+  durationMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      settledPromise,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, durationMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function appendTail(current: string, chunk: Uint8Array): string {
   const combined = current + Buffer.from(chunk).toString("utf8");
   return combined.slice(-LOG_TAIL_CHARACTER_LIMIT);
@@ -111,7 +130,19 @@ async function main(): Promise<void> {
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const sidecarExited = new Promise<void>((resolve) => sidecar.once("exit", () => resolve()));
+  // A spawn failure emits close without ever populating exitCode or signalCode, so the shutdown
+  // escalation checks need close state tracked separately to stay off the kill ladder.
+  let sidecarClosed = false;
+  // The ladder only needs the process to be dead, which is exit; the diagnostic read below needs
+  // the pipes drained, which is close. Settling on whichever lands first keeps a descendant that
+  // inherited the pipes from holding the ladder open for a grace period after the sidecar is gone.
+  const sidecarSettled = new Promise<void>((resolve) => {
+    sidecar.once("exit", () => resolve());
+    sidecar.once("close", () => {
+      sidecarClosed = true;
+      resolve();
+    });
+  });
   let stdoutTail = "";
   let stderrTail = "";
   // The supervisor owns its child's pipes. It retains only bounded diagnostics instead of
@@ -135,13 +166,13 @@ async function main(): Promise<void> {
         clearInterval(ownerMonitor);
         ownerMonitor = null;
       }
-      if (sidecar.exitCode === null && sidecar.signalCode === null) {
+      if (!sidecarClosed && sidecar.exitCode === null && sidecar.signalCode === null) {
         sidecar.kill("SIGTERM");
-        await Promise.race([sidecarExited, sleep(PROCESS_STOP_GRACE_MS)]);
+        await waitForSettledOrTimeout(sidecarSettled, PROCESS_STOP_GRACE_MS);
       }
-      if (sidecar.exitCode === null && sidecar.signalCode === null) {
+      if (!sidecarClosed && sidecar.exitCode === null && sidecar.signalCode === null) {
         sidecar.kill("SIGKILL");
-        await Promise.race([sidecarExited, sleep(PROCESS_STOP_GRACE_MS)]);
+        await waitForSettledOrTimeout(sidecarSettled, PROCESS_STOP_GRACE_MS);
       }
 
       try {
@@ -195,7 +226,7 @@ async function main(): Promise<void> {
     safeWrite(process.stderr, `sidecar spawn failed: ${errorMessage(error)}\n`);
     void shutdown("sidecar spawn failure", 1);
   });
-  sidecar.once("exit", (code, signal) => {
+  sidecar.once("close", (code, signal) => {
     if (shutdownPromise === null) {
       const tails = [stdoutTail.trim(), stderrTail.trim()].filter((value) => value.length > 0);
       safeWrite(
