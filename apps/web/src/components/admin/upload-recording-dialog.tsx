@@ -19,10 +19,10 @@ import {
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import { Progress, ProgressLabel, ProgressValue } from "@fluncle/ui/components/progress";
+import { readError } from "@/lib/read-error";
 import {
   isAbortError,
   presignRecordingUpload,
-  readApiError,
   type UploadProgress,
   uploadFileToPresign,
 } from "@/lib/recording-upload";
@@ -358,7 +358,7 @@ async function createRecording(
   });
 
   if (!response.ok) {
-    throw new Error(await readApiError(response));
+    throw new Error(await readError(response));
   }
 
   const body = (await response.json()) as { recording?: { id?: string; title?: string } };

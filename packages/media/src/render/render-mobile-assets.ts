@@ -5,7 +5,7 @@
 //   bun src/render/render-mobile-assets.ts     (or: bun run render:mobile-assets)
 //
 // These are NOT built at deploy time — like the /galaxy OG card they are
-// checked-in static assets, referenced by apps/mobile/app.config.ts. Run this
+// checked-in static assets, referenced by apps/mobile/app.config.js. Run this
 // script whenever the icon design changes, then commit the regenerated files
 // under apps/mobile/assets/. NOTE: icon + splash are NATIVE assets — a change
 // needs a native rebuild (`expo run:ios` / a new EAS build), not a JS reload.

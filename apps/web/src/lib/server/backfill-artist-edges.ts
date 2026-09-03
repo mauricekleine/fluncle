@@ -360,8 +360,10 @@ async function countWork(db: Awaited<ReturnType<typeof getDb>>): Promise<number>
   return Number(row?.queued ?? 0);
 }
 
-/** Load the full `artists` name corpus (id + canonical name) for the fold map — one bounded read. */
-async function loadArtists(
+/** Load the full `artists` name corpus (id + canonical name + mbid) for the fold map — one bounded
+ *  read. Shared with the credits sweep (backfill-artist-credits.ts), which folds against the same
+ *  corpus and additionally reads `mbid` for its ADOPT/exact-mbid rungs. */
+export async function loadArtists(
   db: Awaited<ReturnType<typeof getDb>>,
 ): Promise<Array<{ id: string; mbid: null | string; name: string }>> {
   // `mbid` rides along for the spelling rail (`buildIdentityClaimedNames`) — same one bounded read.
@@ -371,8 +373,9 @@ async function loadArtists(
 }
 
 /** Load the TRUSTED alias corpus — real-name AKAs only (`kind='name'`, `status in
- *  ('auto','confirmed')`), the search resolver's alias semantics. One bounded read. */
-async function loadAliases(
+ *  ('auto','confirmed')`), the search resolver's alias semantics. One bounded read. Shared with the
+ *  credits sweep (backfill-artist-credits.ts) so the two sweeps cannot drift on alias trust. */
+export async function loadAliases(
   db: Awaited<ReturnType<typeof getDb>>,
 ): Promise<Array<{ alias: string; artist_id: string }>> {
   const result = await db.execute({

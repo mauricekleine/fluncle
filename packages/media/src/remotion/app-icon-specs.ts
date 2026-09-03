@@ -96,7 +96,7 @@ export type MobileAssetSpec = {
 
 // The production mobile assets — the operator's pick (variant "traveler",
 // 2026-07-12) plus its Expo siblings. render-mobile-assets.ts renders these to
-// apps/mobile/assets/, which app.config.ts references; they are COMMITTED
+// apps/mobile/assets/, which app.config.js references; they are COMMITTED
 // files (like the OG card), regenerated + re-committed when the design changes.
 export const MOBILE_ASSET_SPECS: readonly MobileAssetSpec[] = [
   {

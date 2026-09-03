@@ -59,7 +59,7 @@ import {
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
 import { adoptArtistMbid, mintArtistByMbid } from "./artists";
-import { buildArtistFoldMap } from "./backfill-artist-edges";
+import { buildArtistFoldMap, loadAliases, loadArtists } from "./backfill-artist-edges";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { hubCountArtistEdgeStatements } from "./hub-counts";
 import { fold } from "./track-match";
@@ -254,30 +254,6 @@ type WorkRow = {
   mb_recording_id: string | null;
   track_id: string;
 };
-
-/** Load the whole `artists` corpus (id + canonical name + mbid) for the per-pass resolver — one
- *  bounded read, the slice-0 `loadArtists` shape plus the `mbid` the ADOPT/exact-mbid rungs need. */
-async function loadArtistCorpus(
-  db: Awaited<ReturnType<typeof getDb>>,
-): Promise<Array<{ id: string; mbid: string | null; name: string }>> {
-  const result = await db.execute({ args: [], sql: `select id, name, mbid from artists` });
-
-  return typedRows<{ id: string; mbid: string | null; name: string }>(result.rows);
-}
-
-/** Load the TRUSTED alias corpus — real-name AKAs only (`kind='name'`, `status in ('auto',
- *  'confirmed')`), the slice-0 / search-resolver alias semantics, reused verbatim. One bounded read. */
-async function loadAliases(
-  db: Awaited<ReturnType<typeof getDb>>,
-): Promise<Array<{ alias: string; artist_id: string }>> {
-  const result = await db.execute({
-    args: [],
-    sql: `select artist_id, alias from artist_aliases
-          where kind = 'name' and status in ('auto', 'confirmed')`,
-  });
-
-  return typedRows<{ alias: string; artist_id: string }>(result.rows);
-}
 
 /**
  * One bounded page of the worklist: slice 0's ZERO-MATCHED residual not yet visited by THIS sweep —
@@ -494,7 +470,7 @@ export async function resolveArtistCredits(
 
   // Build the per-pass credit resolver ONCE from the whole artist + trusted-alias corpus (the slice-0
   // set-based discipline — the fold map is not rebuilt per credit).
-  const [corpus, aliases] = await Promise.all([loadArtistCorpus(db), loadAliases(db)]);
+  const [corpus, aliases] = await Promise.all([loadArtists(db), loadAliases(db)]);
   const resolve = createCreditResolver(corpus, aliases);
 
   for (const row of rows) {
