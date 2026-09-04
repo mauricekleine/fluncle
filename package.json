@@ -103,7 +103,7 @@
   "engines": {
     "bun": ">=1.4.0"
   },
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.1",
   "// overrides": {
     "nanoid@^3.0.0": "Drop when every parent chain resolves to nanoid 3.3.18 or newer on its own.",
     "undici": "Drop when Miniflare's exact undici dependency is 7.29.0 or newer."
