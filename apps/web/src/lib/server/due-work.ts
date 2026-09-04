@@ -1174,6 +1174,71 @@ function guardedRebuildProjectionStatement<WorkKind extends string>(
   };
 }
 
+/** Seek only rows a running rebuild may remove; current-generation rows never enter the page. */
+export function dueWorkCleanupPageStatement<WorkKind extends string>(
+  checkpoint: DueWorkRebuildCheckpoint<WorkKind>,
+  savedCursor: unknown,
+  limit: number,
+): DueWorkStatement {
+  assertLimit(limit);
+  const after = typeof savedCursor === "string" ? savedCursor : "";
+  const lowerGeneration =
+    checkpoint.generation < DUE_WORK_LIVE_GENERATION
+      ? checkpoint.generation
+      : DUE_WORK_LIVE_GENERATION;
+  const upperGeneration =
+    checkpoint.generation < DUE_WORK_LIVE_GENERATION
+      ? DUE_WORK_LIVE_GENERATION
+      : checkpoint.generation;
+  return {
+    args: [
+      checkpoint.workKind,
+      checkpoint.subjectType,
+      lowerGeneration,
+      after,
+      checkpoint.workKind,
+      checkpoint.subjectType,
+      lowerGeneration,
+      upperGeneration,
+      after,
+      checkpoint.workKind,
+      checkpoint.subjectType,
+      upperGeneration,
+      after,
+      checkpoint.workKind,
+      checkpoint.subjectType,
+      checkpoint.startedAt,
+      after,
+      limit,
+    ],
+    sql: `select generation, subject_id, updated_at from (
+      select generation, subject_id, updated_at
+      from due_work indexed by due_work_cleanup_idx
+      where work_kind = ? and subject_type = ? and state <> 'repair'
+        and generation < ?
+        and subject_id > ?
+      union all
+      select generation, subject_id, updated_at
+      from due_work indexed by due_work_cleanup_idx
+      where work_kind = ? and subject_type = ? and state <> 'repair'
+        and generation > ? and generation < ?
+        and subject_id > ?
+      union all
+      select generation, subject_id, updated_at
+      from due_work indexed by due_work_cleanup_idx
+      where work_kind = ? and subject_type = ? and state <> 'repair'
+        and generation > ?
+        and subject_id > ?
+      union all
+      select generation, subject_id, updated_at
+      from due_work indexed by due_work_cleanup_idx
+      where work_kind = ? and subject_type = ? and state <> 'repair'
+        and generation = '${DUE_WORK_LIVE_GENERATION}' and updated_at < ?
+        and subject_id > ?
+    ) order by generation, updated_at, subject_id limit ?`,
+  };
+}
+
 async function finishRebuild<WorkKind extends string>(
   client: DueWorkClient,
   checkpoint: DueWorkRebuildCheckpoint<WorkKind>,
@@ -1227,36 +1292,24 @@ async function finishRebuildBounded<WorkKind extends string>(
     args: [cleanupKey],
     sql: `select value from settings where key = ? limit 1`,
   });
-  const after = typeof saved.rows[0]?.value === "string" ? saved.rows[0].value : "";
-  const page = await client.execute({
-    args: [checkpoint.workKind, checkpoint.subjectType, after, limit],
-    sql: `select generation, state, subject_id, updated_at from due_work
-      where work_kind = ? and subject_type = ? and subject_id > ?
-      order by subject_id limit ?`,
-  });
+  const savedCursor = saved.rows[0]?.value;
+  const page = await client.execute(dueWorkCleanupPageStatement(checkpoint, savedCursor, limit));
   const rows = page.rows as unknown as {
     generation: string;
-    state: string;
     subject_id: string;
     updated_at: string;
   }[];
-  const subjectIds = rows
-    .filter(
-      (row) =>
-        row.generation !== checkpoint.generation &&
-        row.state !== "repair" &&
-        (row.generation !== DUE_WORK_LIVE_GENERATION || row.updated_at < checkpoint.startedAt),
-    )
-    .map((row) => row.subject_id);
+  const subjectIds = rows.map((row) => row.subject_id);
   const guard = checkpointGuard(
     checkpoint.workKind,
     checkpoint.subjectType,
     checkpoint.generation,
     checkpoint.cursor,
   );
+  const writes: DueWorkStatement[] = [];
   if (subjectIds.length > 0) {
     const placeholders = subjectIds.map(() => "?").join(", ");
-    await client.execute({
+    writes.push({
       args: [
         checkpoint.workKind,
         checkpoint.subjectType,
@@ -1267,27 +1320,23 @@ async function finishRebuildBounded<WorkKind extends string>(
       ],
       sql: `delete from due_work
         where work_kind = ? and subject_type = ? and subject_id in (${placeholders})
-          and generation <> ? and state <> 'repair' and (generation <> 'live' or updated_at < ?)
+          and generation <> ? and state <> 'repair'
+          and (generation <> '${DUE_WORK_LIVE_GENERATION}' or updated_at < ?)
           and exists (select 1 from due_work_rebuilds where ${guard.sql})`,
     });
   }
-  const terminal = rows.at(-1)?.subject_id;
-  if (terminal !== undefined) {
-    await client.execute({
-      args: [cleanupKey, terminal],
-      sql: `insert into settings (key, value) values (?, ?)
-        on conflict(key) do update set value = excluded.value`,
-    });
-  } else {
-    await client.execute({
-      args: [cleanupKey],
-      sql: `delete from settings where key = ?`,
-    });
-    await client.execute({
-      args: [updatedAt, updatedAt, ...guard.args],
-      sql: `update due_work_rebuilds set state = 'complete', completed_at = ?, updated_at = ?
-        where ${guard.sql}`,
-    });
+  if (rows.length < limit) {
+    writes.push(
+      { args: [cleanupKey], sql: `delete from settings where key = ?` },
+      {
+        args: [updatedAt, updatedAt, ...guard.args],
+        sql: `update due_work_rebuilds set state = 'complete', completed_at = ?, updated_at = ?
+          where ${guard.sql}`,
+      },
+    );
+  }
+  if (writes.length > 0) {
+    await client.batch(writes, "write");
   }
   const current = await readDueWorkRebuild(client, checkpoint);
   if (current === undefined) {

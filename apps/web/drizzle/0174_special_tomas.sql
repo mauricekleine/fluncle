@@ -1,0 +1,1 @@
+CREATE INDEX `due_work_cleanup_idx` ON `due_work` (`work_kind`,`subject_type`,`generation`,`updated_at`,`subject_id`) WHERE "due_work"."state" <> 'repair';
