@@ -281,6 +281,7 @@ async function advanceCatalogueRankRebuild(
     await refreshDueWorkCatalogueRankCorpus(client);
   }
   const result = await runDueWorkRebuildChunk(client, definition, {
+    boundedCleanup: true,
     generation,
     limit,
     newGeneration,

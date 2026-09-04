@@ -1498,6 +1498,9 @@ export const dueWork = sqliteTable(
         table.subjectId,
       )
       .where(sql`${table.state} = 'leased'`),
+    index("due_work_cleanup_idx")
+      .on(table.workKind, table.subjectType, table.generation, table.updatedAt, table.subjectId)
+      .where(sql`${table.state} <> 'repair'`),
   ],
 );
 

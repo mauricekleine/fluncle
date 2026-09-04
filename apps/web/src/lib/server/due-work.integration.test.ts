@@ -11,6 +11,7 @@ import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   DUE_WORK_LIVE_GENERATION,
   DUE_WORK_SOURCE_REPAIR_KIND,
+  dueWorkCleanupPageStatement,
   hasReadyDueWork,
   listReadyDueWork,
   MAX_DUE_WORK_CHUNK_SIZE,
@@ -763,6 +764,186 @@ function sampleDefinition(): DueWorkRebuildDefinition<"sample-rebuild", SampleSo
 }
 
 describe("due-work rebuild", () => {
+  it("pages only removable generations and resumes bounded cleanup without advancing the rollback cursor", async () => {
+    const definition: DueWorkRebuildDefinition<"candidate-cleanup", SampleSource> = {
+      project: () => null,
+      readSourceChunk: async () => [],
+      subjectType: "track",
+      workKind: "candidate-cleanup",
+    };
+    const checkpoint = await startDueWorkRebuild(db, definition, {
+      generation: "generation-current",
+      newGeneration: true,
+      now: () => T2,
+    });
+
+    for (let index = 0; index < 100; index += 1) {
+      const subjectId = `current-${String(index).padStart(3, "0")}`;
+      await upsertDueWork(
+        db,
+        { ...ready(subjectId, subjectId, definition.workKind), generation: checkpoint.generation },
+        { now: T0 },
+      );
+    }
+    for (const [generation, subjectId] of [
+      ["generation-a", "stale-a"],
+      ["generation-a", "stale-b"],
+      ["generation-z", "stale-c"],
+      ["generation-z", "stale-d"],
+    ] as const) {
+      await upsertDueWork(
+        db,
+        { ...ready(subjectId, subjectId, definition.workKind), generation },
+        { now: T0 },
+      );
+    }
+    await upsertDueWork(
+      db,
+      {
+        ...ready("old-live", "old-live", definition.workKind),
+        generation: DUE_WORK_LIVE_GENERATION,
+      },
+      { now: T0 },
+    );
+    await upsertDueWork(
+      db,
+      {
+        ...ready("fresh-live", "fresh-live", definition.workKind),
+        generation: DUE_WORK_LIVE_GENERATION,
+      },
+      { now: T3 },
+    );
+    await markDueWorkRepair(
+      db,
+      {
+        sourceVersion: "repair-v1",
+        subjectId: "repair-marker",
+        subjectType: "track",
+        workKind: definition.workKind,
+      },
+      { now: T0 },
+    );
+
+    const firstCandidates = await db.execute(dueWorkCleanupPageStatement(checkpoint, null, 2));
+    expect(firstCandidates.rows.map((row) => row.subject_id)).toEqual(["stale-a", "stale-b"]);
+
+    const first = await runDueWorkRebuildChunk(db, definition, {
+      boundedCleanup: true,
+      limit: 2,
+      now: () => T4,
+    });
+    expect(first).toMatchObject({ complete: false, projected: 0, scanned: 2 });
+    const cleanupKey = `projection_cleanup_due_work_v1:${definition.workKind}:track:${checkpoint.generation}`;
+    const saved = await db.execute({
+      args: [cleanupKey],
+      sql: "select value from settings where key = ?",
+    });
+    expect(saved.rows).toEqual([]);
+
+    const resumed = await runDueWorkRebuildChunk(db, definition, {
+      boundedCleanup: true,
+      limit: 2,
+      now: () => T4,
+    });
+    expect(resumed).toMatchObject({ complete: false, projected: 0, scanned: 2 });
+    let complete = false;
+    for (let attempt = 0; attempt < 3 && !complete; attempt += 1) {
+      complete = (
+        await runDueWorkRebuildChunk(db, definition, {
+          boundedCleanup: true,
+          limit: 2,
+          now: () => T4,
+        })
+      ).complete;
+    }
+    expect(complete).toBe(true);
+
+    const remaining = await db.execute({
+      args: [definition.workKind],
+      sql: `select generation, state, subject_id from due_work
+        where work_kind = ? order by subject_id`,
+    });
+    expect(remaining.rows).toHaveLength(102);
+    expect(
+      remaining.rows.some(
+        (row) => typeof row.subject_id === "string" && row.subject_id.startsWith("stale-"),
+      ),
+    ).toBe(false);
+    expect(remaining.rows).toContainEqual(
+      expect.objectContaining({
+        generation: DUE_WORK_LIVE_GENERATION,
+        subject_id: "fresh-live",
+      }),
+    );
+    expect(remaining.rows).toContainEqual(
+      expect.objectContaining({ state: "repair", subject_id: "repair-marker" }),
+    );
+  });
+
+  it("restarts candidate cleanup safely when the persisted cursor uses the legacy scalar shape", async () => {
+    const definition: DueWorkRebuildDefinition<"legacy-cleanup", SampleSource> = {
+      project: () => null,
+      readSourceChunk: async () => [],
+      subjectType: "track",
+      workKind: "legacy-cleanup",
+    };
+    const checkpoint = await startDueWorkRebuild(db, definition, {
+      generation: "generation-current",
+      newGeneration: true,
+      now: () => T2,
+    });
+    await upsertDueWork(
+      db,
+      {
+        ...ready("z-after-legacy-cursor", "01", definition.workKind),
+        generation: "generation-old",
+      },
+      { now: T0 },
+    );
+    const cleanupKey = `projection_cleanup_due_work_v1:${definition.workKind}:track:${checkpoint.generation}`;
+    await db.execute({
+      args: [cleanupKey, "middle-legacy-subject-cursor"],
+      sql: "insert into settings (key, value) values (?, ?)",
+    });
+
+    const first = await runDueWorkRebuildChunk(db, definition, {
+      boundedCleanup: true,
+      limit: 1,
+      now: () => T4,
+    });
+    expect(first).toMatchObject({ complete: false, scanned: 1 });
+    expect(
+      (
+        await db.execute({
+          args: [cleanupKey],
+          sql: "select value from settings where key = ?",
+        })
+      ).rows[0]?.value,
+    ).toBe("middle-legacy-subject-cursor");
+    const complete = await runDueWorkRebuildChunk(db, definition, {
+      boundedCleanup: true,
+      limit: 1,
+      now: () => T4,
+    });
+    expect(complete.complete).toBe(true);
+    expect(
+      (
+        await db.execute({
+          args: [definition.workKind],
+          sql: "select subject_id from due_work where work_kind = ?",
+        })
+      ).rows,
+    ).toEqual([]);
+    expect(
+      (
+        await db.execute({
+          args: [cleanupKey],
+          sql: "select value from settings where key = ?",
+        })
+      ).rows,
+    ).toEqual([]);
+  });
+
   it("resumes zero, midpoint, and complete interruptions and converges a new generation", async () => {
     await db.execute(
       "create table sample_due_source (id text primary key, version text not null, due integer not null, sort_key text not null)",

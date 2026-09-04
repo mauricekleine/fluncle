@@ -2,6 +2,7 @@ import { type Client, type InStatement, type InValue } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
+import { dueWorkCleanupPageStatement } from "./due-work";
 import {
   type PublicProjectionClient,
   readPublicProjectionAuditChunk,
@@ -19,12 +20,6 @@ describe("bounded projection cleanup plans", () => {
 
   it("seeks each cleanup phase through its persisted ordered coordinate", async () => {
     const pages: { args: InValue[]; sql: string }[] = [
-      {
-        args: ["finding.note", "track", "", 10],
-        sql: `select generation, state, subject_id, updated_at from due_work
-          where work_kind = ? and subject_type = ? and subject_id > ?
-          order by subject_id limit ?`,
-      },
       {
         args: ["", 10],
         sql: `select generation, node_id, state, updated_at from crawl_due_work
@@ -76,6 +71,34 @@ describe("bounded projection cleanup plans", () => {
       expect(detail).not.toContain("SCAN ");
       expect(detail).not.toContain("USE TEMP B-TREE");
     }
+  });
+
+  it("seeks due-work cleanup through the candidate-only generation index", async () => {
+    const query = dueWorkCleanupPageStatement(
+      {
+        completedAt: null,
+        cursor: "source-cursor",
+        generation: "generation-current",
+        projectedCount: 10,
+        scannedCount: 10,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        state: "running",
+        subjectType: "track",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        workKind: "finding.note",
+      },
+      "subject-a",
+      10,
+    );
+    const detail = (
+      await db.execute({ args: query.args, sql: `explain query plan ${query.sql}` })
+    ).rows
+      .flatMap((row) => (typeof row.detail === "string" ? [row.detail] : []))
+      .join("\n");
+
+    expect(detail.match(/due_work_cleanup_idx/g)).toHaveLength(4);
+    expect(detail).not.toMatch(/SCAN due_work(?:\s|$)/);
+    expect(detail).not.toContain("USE TEMP B-TREE");
   });
 
   it("uses an indexed SEARCH for every initial and resumed anchor source phase", async () => {
