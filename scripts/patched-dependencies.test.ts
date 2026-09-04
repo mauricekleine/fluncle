@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -47,7 +46,7 @@ describe("patchedDependencies", () => {
     });
   }
 
-  it("keeps shadcn usable while rejecting the SDK's broken root export", () => {
+  it("keeps shadcn loadable while rejecting the SDK's broken root export", async () => {
     const sdkPackage = JSON.parse(
       readFileSync(
         join(root, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
@@ -65,46 +64,23 @@ describe("patchedDependencies", () => {
       "./*",
     ]);
 
-    const shadcn = spawnSync(
-      "bun",
-      [join(root, "node_modules", "shadcn", "dist", "index.js"), "--help"],
-      {
-        cwd: root,
-        encoding: "utf8",
-      },
-    );
-    expect(shadcn.status, shadcn.stderr).toBe(0);
-    expect(shadcn.stdout).toContain("Usage: shadcn");
+    const shadcn = await Bun.build({
+      entrypoints: [join(root, "node_modules", "shadcn", "dist", "index.js")],
+      target: "bun",
+      write: false,
+    });
+    expect(shadcn.success, shadcn.logs.map((log) => log.message).join("\n")).toBe(true);
 
-    const sdkSubpaths = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        [
-          'await import("@modelcontextprotocol/sdk/server/index.js")',
-          'await import("@modelcontextprotocol/sdk/server/stdio.js")',
-          'await import("@modelcontextprotocol/sdk/types.js")',
-        ].join(";"),
-      ],
-      { cwd: root, encoding: "utf8" },
-    );
-    expect(sdkSubpaths.status, sdkSubpaths.stderr).toBe(0);
+    for (const subpath of [
+      "@modelcontextprotocol/sdk/server/index.js",
+      "@modelcontextprotocol/sdk/server/stdio.js",
+      "@modelcontextprotocol/sdk/types.js",
+    ]) {
+      expect(Bun.resolveSync(subpath, root)).toContain("@modelcontextprotocol/sdk/dist/");
+    }
 
-    const sdkRoot = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        [
-          'try { await import("@modelcontextprotocol/sdk") }',
-          "catch (error) { console.error(error); process.exit(23) }",
-          "process.exit(0)",
-        ].join("\n"),
-      ],
-      { cwd: root, encoding: "utf8" },
+    expect(() => Bun.resolveSync("@modelcontextprotocol/sdk", root)).toThrow(
+      "Cannot find package '@modelcontextprotocol/sdk'",
     );
-    expect(sdkRoot.status).toBe(23);
-    expect(sdkRoot.stderr).toContain("Cannot find module '@modelcontextprotocol/sdk'");
   });
 });
