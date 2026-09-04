@@ -191,12 +191,29 @@ function agentCard() {
     protocolVersion: a2aProtocolVersion,
     provider: { organization: "Fluncle", url: siteUrl },
     skills: [
+      // The archive's OWN search leads the list: it is the read an agent actually wants,
+      // and the registry weights it `web: primary` alongside the findings feed and the
+      // track enumerator. Its Spotify-candidate sibling below is a SUBMIT step, not an
+      // archive read; the two descriptions say which is which so a caller cannot confuse
+      // them. The wording mirrors the `search_archive` MCP spec (tools/specs.ts), the
+      // stated source of truth for what a skill maps onto — the sonic tier included.
       {
         description:
-          "Search Spotify for track candidates by name or Spotify track URL. Use a result to submit a track for Fluncle to review.",
+          "Search Fluncle's drum & bass archive by Log ID coordinate, artist, label, album, a bare word, a plain-language question, or 'sounds like <a real track>'. Findings come first, and an empty answer means nothing in the archive matched. This searches the archive; search-tracks searches Spotify for something to submit.",
+        examples: [
+          "Search the archive for rollers above 170 bpm",
+          "Look up the finding at 004.7.2I",
+        ],
+        id: "search-archive",
+        name: "Search the archive",
+        tags: ["drum-and-bass", "archive", "search"],
+      },
+      {
+        description:
+          "Search Spotify for track candidates by name or Spotify track URL. Use a result to submit a track for Fluncle to review. This searches Spotify, not Fluncle's archive; search-archive searches the archive.",
         examples: ["Search for a Camo & Krooked track", "Find candidates for a Spotify track URL"],
         id: "search-tracks",
-        name: "Search tracks",
+        name: "Search Spotify for candidates",
         tags: ["drum-and-bass", "search", "spotify"],
       },
       {
@@ -266,7 +283,7 @@ async function skillsIndexResponse(): Promise<Response> {
     skills: [
       {
         description:
-          "Read and contribute to Fluncle's drum & bass archive over the public HTTP API: list certified tracks, pull a random one, search Spotify candidates, and submit tracks for Fluncle to review.",
+          "Read and contribute to Fluncle's drum & bass archive over the public HTTP API: list certified tracks, pull a random one, search the archive, search Spotify candidates, and submit tracks for Fluncle to review.",
         digest: await skillDigest(),
         name: "fluncle-api",
         type: "skill-md",
@@ -347,6 +364,7 @@ ${tracks.join("\n")}
 - [Tracks API](${siteUrl}/api/v1/tracks): every track, newest release first, numbered pages (page); certified=true narrows to findings, certified=false to the rest
 - [Fresh API](${siteUrl}/api/v1/tracks/fresh): what just came out, the newest releases over a 30-day window, as JSON; accepts limit (max 100)
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
+- [Archive search API](${siteUrl}/api/v1/search/archive): search the archive by coordinate, artist, label, album, a bare word, or a plain-language question, as JSON. This searches the archive itself; the Spotify candidate search under Submit is a different endpoint
 - [Identity](${siteUrl}/identity): look a recording up by ISRC, MusicBrainz recording id, or Log ID and get its identifiers and platform links, one page each at ${siteUrl}/identity/{key}. Every link says how Fluncle came to trust it and when he last checked, and every gap is named: he looked and found nothing, he will not look, or he hands out no such link. Same answer as JSON at ${siteUrl}/api/v1/tracks/-?isrc={isrc} or ?mbid={mbid}. Metered at 30 requests a minute and 1,000 a day per caller; free, no key
 - [Artists API](${siteUrl}/api/v1/artists): every artist Fluncle holds, A to Z, paginated, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Labels API](${siteUrl}/api/v1/labels): every label Fluncle holds, A to Z, paginated, as JSON; /api/v1/labels/{slug} for one label's identity, imprint lineage, and counts. Each resolves to a page at ${siteUrl}/label/{slug}
@@ -355,6 +373,7 @@ ${tracks.join("\n")}
 - [The artists](${siteUrl}/artists): every artist in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings and their verified identity links
 - [The labels](${siteUrl}/labels): every label in the archive, A to Z, the ones Fluncle has certified a finding on marked in gold. Each resolves to a page at ${siteUrl}/label/{slug}: that label's findings, the artists on it, and the rest of its catalogue
 - [The albums](${siteUrl}/albums): every record in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold. Each resolves to a page at ${siteUrl}/album/{slug}: that record's findings, its artists, and the label it came out on
+- [The tracks](${siteUrl}/tracks): every recording Fluncle holds, newest release first, filterable by release year, tempo, key, and label. Each one the archive can name resolves to a page at ${siteUrl}/track/{trackId}: that recording's artists, the record it is from, the label, the release date, tempo and key, the services the archive holds a link to, and what sits closest to it in sound. A recording Fluncle has certified is a finding, so its track URL redirects to its /log coordinate page
 - [What just came out](${siteUrl}/fresh): the newest drum & bass across the whole archive, freshest first. Every release from the last 30 days, ordered by when it came out (not by when Fluncle found it)
 
 ## Submit
@@ -425,6 +444,7 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 - The playlist: ${spotifyPlaylistUrl}
 - The Telegram feed: ${telegramUrl}
 - The JSON API: ${siteUrl}/api/v1/findings
+- The archive search: ${siteUrl}/api/v1/search/archive
 - The artists: ${siteUrl}/artists
 - The labels: ${siteUrl}/labels
 - The albums: ${siteUrl}/albums
@@ -549,7 +569,7 @@ async function llmsFullResponse(): Promise<Response> {
 // constant so the index digest above always matches the served bytes.
 const skillMarkdown = `---
 name: fluncle-api
-description: Read and contribute to Fluncle's drum & bass archive over the public HTTP API. List certified tracks, pull a random one, search Spotify candidates, and submit tracks for Fluncle to review.
+description: Read and contribute to Fluncle's drum & bass archive over the public HTTP API. List certified tracks, pull a random one, search the archive, search Spotify candidates, and submit tracks for Fluncle to review.
 ---
 
 # Fluncle API
@@ -562,7 +582,11 @@ Base URL: \`${siteUrl}\`. Everything below returns JSON. Errors look like \`{"ok
 
 - \`GET /api/v1/findings\` lists certified tracks, newest found first. Query params: \`limit\` (1 to 48, default 16), \`cursor\` (opaque, from \`nextCursor\`), \`since\` and \`until\` (ISO 8601 bounds on the date found). Response: \`{"tracks": [...], "totalCount": n, "nextCursor": "..."}\`. Page until \`nextCursor\` disappears.
 - \`GET /api/v1/tracks\` lists every track Fluncle holds, newest release first. Query params: \`page\` (1-based), \`certified\` (\`true\` for findings only, \`false\` for the rest).
+- \`GET /api/v1/tracks/{idOrLogId}\` reads one finding or mixtape in full, by its Log ID coordinate (\`004.7.2I\`) or its Spotify track id.
 - \`GET /api/v1/tracks/random\` returns one pick from the archive: \`{"ok": true, "track": {...}}\`.
+- \`GET /api/v1/search/archive\` searches the archive itself by coordinate, artist, label, album, a bare word, or a plain-language question. Query param: \`q\`. An empty result means nothing in the archive matched. This is the archive search; the Spotify candidate search under "Submit a track" is a different endpoint.
+
+Every recording the archive can name has a page at \`${siteUrl}/track/{trackId}\`, keyed on \`trackId\`; a certified one redirects to its coordinate page at \`${siteUrl}/log/{logId}\`.
 
 Track objects carry \`trackId\`, \`title\`, \`artists\`, \`album\`, \`albumImageUrl\`, \`note\`, \`spotifyUrl\`, \`addedAt\` (the timestamp it was found), \`addedToSpotify\`, and \`postedToTelegram\`. The \`note\` is Fluncle's own line about the tune; quote it as his.
 
