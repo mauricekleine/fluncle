@@ -201,9 +201,9 @@ export function validateIndexInventory(
   if (inventory.tracksIndexes.length !== 32) {
     failures.push(`expected 32 tracks indexes, found ${inventory.tracksIndexes.length}`);
   }
-  if (inventory.databaseScaleIndexes.length !== 30) {
+  if (inventory.databaseScaleIndexes.length !== 32) {
     failures.push(
-      `expected 30 database-scale indexes, found ${inventory.databaseScaleIndexes.length}`,
+      `expected 32 database-scale indexes, found ${inventory.databaseScaleIndexes.length}`,
     );
   }
   if (inventory.requiredProfiles.join(",") !== INDEX_AUDIT_PROFILES.join(",")) {
@@ -214,7 +214,7 @@ export function validateIndexInventory(
     validateInventoryEntry(entry, { approvedDrops, contractIds, decisions, failures, names });
   }
 
-  if (decisions.keep !== 56 || decisions.drop !== 6 || decisions.add !== 0) {
+  if (decisions.keep !== 58 || decisions.drop !== 6 || decisions.add !== 0) {
     failures.push(
       `final decisions are keep=${decisions.keep}, drop=${decisions.drop}, add=${decisions.add}`,
     );
@@ -243,14 +243,14 @@ export function validateIndexInventory(
   if (inventory.summary.missingConsumers !== 0 || inventory.summary.missingProfileEvidence !== 0) {
     failures.push("inventory summary reports missing consumer or profile evidence");
   }
-  if (inventory.productionInventory.currentFinalSchemaBeforeContraction.indexes !== 178) {
-    failures.push("current final schema inventory count must be 178 indexes");
+  if (inventory.productionInventory.currentFinalSchemaBeforeContraction.indexes !== 180) {
+    failures.push("current final schema inventory count must be 180 indexes");
   }
   if (inventory.productionInventory.currentFinalSchemaBeforeContraction.tracksIndexes !== 32) {
     failures.push("current final schema track index count must be 32");
   }
-  if (inventory.productionInventory.finalSchemaAfterContraction.indexes !== 172) {
-    failures.push("final contracted schema inventory count must be 172 indexes");
+  if (inventory.productionInventory.finalSchemaAfterContraction.indexes !== 174) {
+    failures.push("final contracted schema inventory count must be 174 indexes");
   }
   if (inventory.productionInventory.finalSchemaAfterContraction.tracksIndexes !== 30) {
     failures.push("final contracted schema track index count must be 30");

@@ -22,6 +22,7 @@ const INDEX_EVIDENCE_WARMUP_ITERATIONS = 1;
 /** Inventory indexes whose production consumer deliberately carries an `INDEXED BY` lock. */
 export const INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES = [
   "artist_qualification_qualified_idx",
+  "crawl_due_work_cleanup_idx",
   "crawl_due_work_claim_position_idx",
   "crawl_due_work_label_slug_node_id_idx",
   "crawl_due_work_lease_idx",
@@ -82,6 +83,9 @@ function tableForIndex(indexName: string): string {
   if (indexName === "artist_qualification_contributions_artist_track_idx") {
     return "perf_artist_qualification_contributions";
   }
+  if (indexName.startsWith("artist_rules_")) {
+    return "perf_artist_rules";
+  }
   if (indexName.startsWith("crawl_due_work_")) {
     return "perf_crawl_due_work";
   }
@@ -113,7 +117,7 @@ function indexPlanStatement(
   mode: IndexPlanStatementMode = "unforced",
 ): PerformanceStatement {
   const fixtureIndex = fixtureIndexName(indexName);
-  const indexedSql = sql.replace("__INDEX__", fixtureIndex);
+  const indexedSql = sql.replaceAll("__INDEX__", fixtureIndex);
 
   return statement(
     mode === "production-lock" || mode === "supplemental-force"
@@ -349,9 +353,41 @@ function genericDatabaseScalePlan(indexName: string): IndexPlanSpec {
       "select artist_id from perf_artist_qualification indexed by __INDEX__ where is_qualified = 1 and artist_id >= 'synthetic-artist-000000000' order by is_qualified, artist_id limit 25",
       "production-lock",
     ),
+    artist_rules_crawl_lookup_idx: indexPlanStatement(
+      indexName,
+      `select artist_mbid
+         from perf_artist_rules indexed by __INDEX__
+        where artist_mbid = substr('musicbrainz:artist:synthetic-artist-000000000',
+                                   length('musicbrainz:artist:') + 1)
+          and verdict = 'allow'
+        limit 25`,
+    ),
     crawl_due_work_claim_position_idx: indexPlanStatement(
       indexName,
       "select claimed_by, claim_token, claim_position from perf_crawl_due_work indexed by __INDEX__ where state = 'leased' and claimed_by = 'synthetic-crawl-worker' and claim_token = 'synthetic-crawl-claim-000000002' order by claimed_by, claim_token, claim_position limit 25",
+      "production-lock",
+    ),
+    crawl_due_work_cleanup_idx: indexPlanStatement(
+      indexName,
+      `select generation, node_id, updated_at from (
+        select generation, node_id, updated_at
+          from perf_crawl_due_work indexed by __INDEX__
+         where state <> 'repair' and generation < 'live' and node_id > ''
+        union all
+        select generation, node_id, updated_at
+          from perf_crawl_due_work indexed by __INDEX__
+         where state <> 'repair' and generation > 'live'
+           and generation < 'synthetic-contract-z' and node_id > ''
+        union all
+        select generation, node_id, updated_at
+          from perf_crawl_due_work indexed by __INDEX__
+         where state <> 'repair' and generation > 'synthetic-contract-z' and node_id > ''
+        union all
+        select generation, node_id, updated_at
+          from perf_crawl_due_work indexed by __INDEX__
+         where state <> 'repair' and generation = 'live'
+           and updated_at < '2027-01-01T00:00:00.000Z' and node_id > ''
+      ) order by generation, updated_at, node_id limit 25`,
       "production-lock",
     ),
     crawl_due_work_label_slug_node_id_idx: indexPlanStatement(

@@ -69,6 +69,7 @@ describe("synthetic database performance fixture", () => {
     expect(counts).toEqual({
       due_work: SMALL_COUNTS.youtubeProvenanceBacklog + SMALL_COUNTS.musicbrainzIsrcBacklog,
       perf_albums: SMALL_COUNTS.albums,
+      perf_artist_rules: SMALL_COUNTS.artists,
       perf_artists: SMALL_COUNTS.artists,
       perf_crawl_frontier: SMALL_COUNTS.crawlFrontier,
       perf_findings: SMALL_COUNTS.findings,
@@ -239,6 +240,9 @@ describe("synthetic database performance fixture", () => {
       expect(await scalar(client, "select count(*) as n from perf_crawl_due_work")).toBe(
         projectionFixtureCardinalities(SMALL_COUNTS).perf_crawl_due_work,
       );
+      expect(
+        await scalar(client, "select count(*) as n from perf_artist_rules where verdict = 'allow'"),
+      ).toBe(3);
       expect(await scalar(client, "select count(*) as n from perf_artist_qualification")).toBe(11);
       expect(
         await scalar(client, "select count(*) as n from perf_artist_qualification_contributions"),
@@ -460,7 +464,7 @@ describe("synthetic database performance fixture", () => {
           boundedFixtureCensusRequestCount(getScaleManifest(profile).counts),
         ]),
       ),
-    ).toEqual({ "1x": 90, "2x": 124, "4x": 202 });
+    ).toEqual({ "1x": 92, "2x": 126, "4x": 205 });
   });
 
   it("maps exact 1x request 17 to a covering embedding-index count", async () => {

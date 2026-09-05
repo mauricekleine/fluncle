@@ -57,9 +57,13 @@ describe("final index plan evidence", () => {
         throw new Error(`generic index evidence contract is missing its plan: ${contract.id}`);
       }
 
-      expect(plan.statement.sql.match(/\bINDEXED\s+BY\b/gi)?.length ?? 0).toBe(
-        runtimeLockedIndexes.has(inventoryName) ? 1 : 0,
-      );
+      const expectedLockCount =
+        inventoryName === "crawl_due_work_cleanup_idx"
+          ? 4
+          : runtimeLockedIndexes.has(inventoryName)
+            ? 1
+            : 0;
+      expect(plan.statement.sql.match(/\bINDEXED\s+BY\b/gi)?.length ?? 0).toBe(expectedLockCount);
 
       const expectedPolicyFragment =
         expectedPolicyFragments[requiredIndex] ?? `perf_${requiredIndex}`;
@@ -418,6 +422,28 @@ describe("final index plan evidence", () => {
     );
   });
 
+  it("locks every bounded cleanup branch and leaves the artist-rule lookup sargable", () => {
+    const cleanup = indexEvidenceContracts().find(
+      (candidate) => candidate.id === "index.crawl-due-work-cleanup",
+    );
+    const artistRule = indexEvidenceContracts().find(
+      (candidate) => candidate.id === "index.artist-rules-crawl-lookup",
+    );
+    if (!cleanup?.plan || !artistRule?.plan) {
+      throw new Error("crawl cleanup evidence contracts are incomplete");
+    }
+
+    expect(INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES).toContain("crawl_due_work_cleanup_idx");
+    expect(
+      cleanup.plan.statement.sql.match(/\bINDEXED\s+BY\s+perf_crawl_due_work_cleanup_idx\b/gi),
+    ).toHaveLength(4);
+    expect(cleanup.plan.statement.sql).not.toMatch(/\bnot\s+indexed\b/i);
+    expect(artistRule.plan.statement.sql).not.toMatch(/\bINDEXED\s+BY\b/i);
+    expect(artistRule.plan.statement.sql).toContain(
+      "artist_mbid = substr('musicbrainz:artist:synthetic-artist-000000000'",
+    );
+  });
+
   it("rejects missing consumers, plan contracts, and required profile declarations", () => {
     const missingConsumer = cloneInventory();
     const firstConsumer = missingConsumer.tracksIndexes[0];
@@ -468,7 +494,7 @@ describe("final index plan evidence", () => {
 
     expect(audit).not.toBeNull();
     expect(audit?.missingConsumers).toEqual([]);
-    expect(audit?.missingPlanEvidence).toHaveLength(67);
+    expect(audit?.missingPlanEvidence).toHaveLength(69);
     expect(audit?.missingProfileEvidence).toEqual([]);
     expect(audit?.passed).toBe(false);
   });
@@ -476,7 +502,7 @@ describe("final index plan evidence", () => {
   it("runs all declared evidence at every local profile and retains the proven singleton", async () => {
     const contracts = indexEvidenceContracts();
 
-    expect(contracts).toHaveLength(67);
+    expect(contracts).toHaveLength(69);
     expect(
       contracts.every((contract) => contract.indexEvidence?.inventoryEntry.finalConsumer.query),
     ).toBe(true);
@@ -508,28 +534,28 @@ describe("final index plan evidence", () => {
         }
         expect(audit.passed).toBe(true);
         expect(audit.totals).toEqual({
-          databaseScaleIndexes: 30,
-          evidenceContracts: 67,
-          indexes: 62,
+          databaseScaleIndexes: 32,
+          evidenceContracts: 69,
+          indexes: 64,
           tracksIndexes: 32,
         });
-        expect(audit.decisions.counts).toEqual({ add: 0, drop: 6, keep: 56 });
+        expect(audit.decisions.counts).toEqual({ add: 0, drop: 6, keep: 58 });
         expect(audit.productionInventory).toEqual({
-          currentFinalSchemaBeforeContraction: { indexes: 178, tracksIndexes: 32 },
-          finalSchemaAfterContraction: { indexes: 172, tracksIndexes: 30 },
+          currentFinalSchemaBeforeContraction: { indexes: 180, tracksIndexes: 32 },
+          finalSchemaAfterContraction: { indexes: 174, tracksIndexes: 30 },
         });
         expect(audit.missingConsumers).toEqual([]);
         expect(audit.missingPlanEvidence).toEqual([]);
         expect(audit.missingProfileEvidence).toEqual([]);
         expect(audit.profileEvidence[profile]).toEqual({
-          declaredContracts: 67,
-          observedContracts: 67,
+          declaredContracts: 69,
+          observedContracts: 69,
         });
 
         const auditEntries = audit.entries;
         const evidence = auditEntries.flatMap((entry) => entry.contracts);
-        expect(auditEntries).toHaveLength(62);
-        expect(evidence).toHaveLength(67);
+        expect(auditEntries).toHaveLength(64);
+        expect(evidence).toHaveLength(69);
         expect(
           evidence.every(
             (contractEvidence) =>

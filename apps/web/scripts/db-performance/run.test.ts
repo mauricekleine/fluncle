@@ -69,9 +69,9 @@ describe("database performance runner bootstrap", () => {
 
   it("adds a scale-matched hosted bootstrap allowance without changing local caps", () => {
     for (const [profile, exactProfileDeadlineMs, censusRequests] of [
-      ["1x", 5 * 60_000, 90],
-      ["2x", 8 * 60_000, 124],
-      ["4x", 12 * 60_000, 202],
+      ["1x", 5 * 60_000, 92],
+      ["2x", 8 * 60_000, 126],
+      ["4x", 12 * 60_000, 205],
     ] as const) {
       expect(performanceProcessDeadlineMs({ fullFixture: false, hosted: false, profile })).toBe(
         2 * 60_000,

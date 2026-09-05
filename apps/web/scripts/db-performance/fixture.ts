@@ -39,6 +39,7 @@ export const FIXTURE_TABLES = [
   "perf_artifact_change_revisions",
   "perf_operation_receipts",
   "perf_database_admission_contenders",
+  "perf_artist_rules",
 ] as const;
 
 export type FixtureTable = (typeof FIXTURE_TABLES)[number];
@@ -232,6 +233,7 @@ export function expectedFixtureTableCardinalities(
     perf_artist_qualification_contributions:
       projectionCounts.perf_artist_qualification_contributions,
     perf_artist_qualification_state: projectionCounts.perf_artist_qualification_state,
+    perf_artist_rules: counts.artists,
     perf_artists: counts.artists,
     perf_crawl_due_work: projectionCounts.perf_crawl_due_work,
     perf_crawl_frontier: counts.crawlFrontier,
@@ -545,6 +547,13 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     on perf_crawl_frontier(state, id)`,
   `create index if not exists perf_tracks_label_scope_id_idx
     on perf_tracks(label_scope, id)`,
+  `create table if not exists perf_artist_rules (
+    artist_mbid text not null,
+    rearmed_at text,
+    verdict text not null
+  )`,
+  `create index if not exists perf_artist_rules_crawl_lookup_idx
+    on perf_artist_rules(artist_mbid, verdict, rearmed_at)`,
   `create table if not exists perf_crawl_due_work (
     claim_expires_at text,
     claim_position integer,
@@ -586,6 +595,9 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     on perf_crawl_due_work(label_slug, node_id)`,
   `create index if not exists perf_crawl_due_work_parent_id_node_id_idx
     on perf_crawl_due_work(parent_id, node_id)`,
+  `create index if not exists perf_crawl_due_work_cleanup_idx
+    on perf_crawl_due_work(generation, updated_at, node_id)
+    where state <> 'repair'`,
   `create table if not exists perf_crawl_projection_repairs (
     created_at text not null,
     source_epoch integer not null,
@@ -1395,6 +1407,16 @@ export async function* generateFixture(
         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     };
   });
+
+  yield* generatedChunks("perf_artist_rules", counts.artists, chunkSize, (index) => ({
+    args: [
+      `synthetic-artist-${padded(index)}`,
+      index % 3 === 0 ? null : syntheticTimestamp(index, 1),
+      index % 5 === 0 ? "allow" : "block",
+    ],
+    sql: `insert into perf_artist_rules (artist_mbid, rearmed_at, verdict)
+      values (?, ?, ?)`,
+  }));
 
   yield* generatedChunks(
     "perf_crawl_due_work",

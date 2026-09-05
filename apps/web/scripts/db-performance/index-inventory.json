@@ -4,11 +4,11 @@
   "requiredProfiles": ["1x", "2x", "4x"],
   "productionInventory": {
     "currentFinalSchemaBeforeContraction": {
-      "indexes": 178,
+      "indexes": 180,
       "tracksIndexes": 32
     },
     "finalSchemaAfterContraction": {
-      "indexes": 172,
+      "indexes": 174,
       "tracksIndexes": 30
     }
   },
@@ -1353,6 +1353,35 @@
       ]
     },
     {
+      "migration": "0175_huge_kabuki.sql",
+      "name": "artist_rules_crawl_lookup_idx",
+      "columns": ["artist_mbid", "verdict", "rearmed_at"],
+      "partialPredicate": null,
+      "decision": "keep",
+      "finalConsumer": {
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "CRAWL_SOURCE_COLUMNS"
+          }
+        ],
+        "query": "Crawl source projection probes parent, self, and outstanding allow rules by bare artist_mbid equality before verdict and rearmed_at filtering."
+      },
+      "structuralRationale": "Keeps each correlated crawl eligibility probe on one covering artist-rule key instead of rescanning the growing rule table.",
+      "performanceContracts": [
+        {
+          "id": "index.artist-rules-crawl-lookup",
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "CRAWL_SOURCE_COLUMNS"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "migration": "0163_adorable_gladiator.sql",
       "name": "crawl_due_work_release_ready_idx",
       "columns": ["state", "storable_rank", "hop", "demand_rank", "created_at", "node_id"],
@@ -1439,6 +1468,35 @@
             {
               "file": "apps/web/src/lib/server/crawl-due-work.ts",
               "marker": "promoteCrawlDueWork"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "migration": "0175_huge_kabuki.sql",
+      "name": "crawl_due_work_cleanup_idx",
+      "columns": ["generation", "updated_at", "node_id"],
+      "partialPredicate": "state <> 'repair'",
+      "decision": "keep",
+      "finalConsumer": {
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "crawlDueCleanupPageStatement"
+          }
+        ],
+        "query": "Terminal rebuild cleanup explicitly INDEXED BY this partial index in every bounded generation/updated_at/node_id candidate branch."
+      },
+      "structuralRationale": "Bounds terminal cleanup to stale candidates and preserves the generation, timestamp, and node ordering without walking the full projection table.",
+      "performanceContracts": [
+        {
+          "id": "index.crawl-due-work-cleanup",
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "crawlDueCleanupPageStatement"
             }
           ]
         }
@@ -1919,15 +1977,15 @@
     }
   ],
   "summary": {
-    "totalIndexes": 62,
+    "totalIndexes": 64,
     "tracksIndexes": 32,
-    "databaseScaleIndexes": 30,
+    "databaseScaleIndexes": 32,
     "decisions": {
-      "keep": 56,
+      "keep": 58,
       "drop": 6,
       "add": 0
     },
-    "planContractCount": 67,
+    "planContractCount": 69,
     "missingConsumers": 0,
     "missingProfileEvidence": 0
   }
