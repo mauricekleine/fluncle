@@ -213,7 +213,7 @@ function agentCard() {
           "Search Spotify for track candidates by name or Spotify track URL. Use a result to submit a track for Fluncle to review. This searches Spotify, not Fluncle's archive; search-archive searches the archive.",
         examples: ["Search for a Camo & Krooked track", "Find candidates for a Spotify track URL"],
         id: "search-tracks",
-        name: "Search Spotify for candidates",
+        name: "Search tracks",
         tags: ["drum-and-bass", "search", "spotify"],
       },
       {

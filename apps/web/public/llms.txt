@@ -30,7 +30,7 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, f
 - [The newsletter archive](https://www.fluncle.com/newsletter): every edition Fluncle has sent, one page each at https://www.fluncle.com/newsletter/<number>
 - [About Fluncle](https://www.fluncle.com/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
-## Artists, labels, and albums
+## Artists, labels, albums, and tracks
 
 Fluncle's archive is a graph: every finding links to the artists who made it, the label it came out on, and the record it is from. Each of those is its own page, and so is every recording the archive can name.
 
