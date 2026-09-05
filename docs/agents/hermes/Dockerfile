@@ -131,7 +131,7 @@ RUN "${MUQ_VENV}/bin/pip" install --no-cache-dir \
   && "${MUQ_VENV}/bin/python" -c "import sklearn, scipy; print(sklearn.__version__, scipy.__version__)" \
   && chmod -R a+rX "${MUQ_VENV}"
 
-# Bun — pinned to the repo's toolchain (packageManager bun@1.4.1) so the box runs
+# Bun — pinned to the repo's toolchain (packageManager bun@1.4.2) so the box runs
 # the same interpreter the skill is authored against. The official installer drops
 # the binary in /root/.bun (root's HOME, mode 700). The `--no-agent` cron runner
 # execs as a NON-root user that can't traverse /root, so a symlink there fails
@@ -141,7 +141,7 @@ RUN "${MUQ_VENV}/bin/pip" install --no-cache-dir \
 # only bun needs this cp-out-of-/root dance.
 ENV BUN_INSTALL=/root/.bun
 ENV PATH=/usr/local/bin:$PATH
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.1" \
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2" \
   && cp /root/.bun/bin/bun /usr/local/bin/bun \
   && chmod 755 /usr/local/bin/bun
 
