@@ -6,9 +6,13 @@ import {
   auditCrawlDueWork,
   claimCrawlDueWork,
   completeCrawlDueClaim,
+  crawlDueCleanupPageStatement,
   crawlClaimStatement,
   crawlGeneralReadyQuery,
+  CRAWL_REBUILD_MAX_STATEMENT_ARGS,
+  CRAWL_REBUILD_WRITE_SUBPAGE_SIZE,
   crawlReleaseReadyQuery,
+  crawlSourceChunkStatement,
   fanOutCrawlProjectionRepairs,
   markCrawlNodeRepairStatement,
   markCrawlNodeRepairsByUpdatedAtStatement,
@@ -19,6 +23,8 @@ import {
   repairCrawlDueNodes,
   runCrawlDueRebuildChunk,
   shadowCrawlDueWork,
+  startCrawlDueRebuild,
+  upsertCrawlDueProjectionStatement,
 } from "./crawl-due-work";
 import { CRAWL_DUE_AUDIT_FENCE_KEY, readProjectionFence } from "./projection-fences";
 
@@ -26,6 +32,7 @@ const NOW = new Date("2026-01-10T12:00:00.000Z");
 const OLD = "2026-01-01T00:00:00.000Z";
 
 let db: Client;
+type BatchStatement = Parameters<Client["batch"]>[0][number];
 
 beforeEach(async () => {
   db = await createIntegrationDb();
@@ -98,6 +105,25 @@ async function node(options: {
 
 function planDetails(rows: readonly Record<string, unknown>[]): string[] {
   return rows.map((row) => String(row["detail"]));
+}
+
+function statementSql(statement: BatchStatement): string {
+  return typeof statement === "string"
+    ? statement
+    : Array.isArray(statement)
+      ? statement[0]
+      : statement.sql;
+}
+
+function statementArgumentCount(statement: BatchStatement): number {
+  if (typeof statement === "string") {
+    return 0;
+  }
+  const args = Array.isArray(statement) ? statement[1] : statement.args;
+  if (args === undefined) {
+    return 0;
+  }
+  return Array.isArray(args) ? args.length : Object.keys(args).length;
 }
 
 describe("crawl due-work shadow runtime", () => {
@@ -850,5 +876,255 @@ describe("crawl due-work shadow runtime", () => {
     }
     expect(complete).toBe(true);
     expect((await auditCrawlDueWork(db)).matched).toBe(true);
+  });
+
+  it("resumes without rewriting the rebuild checkpoint before the atomic page commit", async () => {
+    for (let index = 0; index < 3; index += 1) {
+      await node({
+        externalId: `resume-${index}`,
+        hop: 0,
+        id: `resume-${index}`,
+        kind: "artist",
+      });
+    }
+    await runCrawlDueRebuildChunk(db, {
+      generation: "resume-read-first",
+      limit: 1,
+      newGeneration: true,
+      now: () => NOW,
+    });
+
+    const batches: string[][] = [];
+    const client = {
+      batch: async (...args: Parameters<Client["batch"]>) => {
+        batches.push(args[0].map(statementSql));
+        return db.batch(...args);
+      },
+      execute: db.execute.bind(db),
+    };
+    const resumed = await runCrawlDueRebuildChunk(client, { limit: 1, now: () => NOW });
+
+    expect(resumed).toMatchObject({ projected: 1, scanned: 1 });
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.some((sql) => sql.includes("insert into crawl_due_work_rebuilds"))).toBe(
+      false,
+    );
+    expect(batches[0]?.at(-1)).toContain("update crawl_due_work_rebuilds");
+  });
+
+  it("packs a full rebuild page into bounded candidate statements and advances atomically", async () => {
+    const statements: InStatement[] = Array.from({ length: 500 }, (_, index) => {
+      const id = `packed-${String(index).padStart(3, "0")}`;
+      return {
+        args: [id, id, OLD, OLD],
+        sql: `insert into crawl_frontier
+          (id, kind, source, external_id, hop, state, created_at, updated_at)
+          values (?, 'artist', 'musicbrainz', ?, 0, 'pending', ?, ?)`,
+      };
+    });
+    await db.batch(statements, "write");
+
+    const batches: { argumentCounts: number[]; sql: string[] }[] = [];
+    const client = {
+      batch: async (...args: Parameters<Client["batch"]>) => {
+        batches.push({
+          argumentCounts: args[0].map(statementArgumentCount),
+          sql: args[0].map(statementSql),
+        });
+        return db.batch(...args);
+      },
+      execute: db.execute.bind(db),
+    };
+    const first = await runCrawlDueRebuildChunk(client, {
+      boundedCleanup: true,
+      generation: "packed-rebuild",
+      limit: 500,
+      newGeneration: true,
+      now: () => NOW,
+    });
+    const pageBatch = batches.find((batch) =>
+      batch.sql.some((sql) => sql.includes("set cursor = ?")),
+    );
+
+    expect(first).toMatchObject({ complete: false, projected: 500, scanned: 500 });
+    expect(pageBatch?.sql).toHaveLength(500 / CRAWL_REBUILD_WRITE_SUBPAGE_SIZE + 1);
+    expect(pageBatch?.sql.filter((sql) => sql.includes("with candidate"))).toHaveLength(10);
+    expect(Math.max(...(pageBatch?.argumentCounts ?? []))).toBe(CRAWL_REBUILD_MAX_STATEMENT_ARGS);
+    const completed = await runCrawlDueRebuildChunk(db, {
+      boundedCleanup: true,
+      limit: 500,
+      now: () => NOW,
+    });
+    expect(completed.complete).toBe(true);
+    expect((await auditCrawlDueWork(db)).matched).toBe(true);
+  });
+
+  it("rolls back packed writes with the checkpoint when any candidate subpage fails", async () => {
+    const statements: InStatement[] = Array.from({ length: 60 }, (_, index) => {
+      const id = `atomic-${String(index).padStart(3, "0")}`;
+      return {
+        args: [id, id, OLD, OLD],
+        sql: `insert into crawl_frontier
+          (id, kind, source, external_id, hop, state, created_at, updated_at)
+          values (?, 'artist', 'musicbrainz', ?, 0, 'pending', ?, ?)`,
+      };
+    });
+    await db.batch(statements, "write");
+    await db.execute(`create trigger reject_packed_crawl_rebuild before insert on crawl_due_work
+      when new.node_id = 'atomic-050'
+      begin
+        select raise(abort, 'packed crawl rebuild rejected');
+      end`);
+
+    await expect(
+      runCrawlDueRebuildChunk(db, {
+        boundedCleanup: true,
+        generation: "atomic-rebuild",
+        limit: 60,
+        newGeneration: true,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow("packed crawl rebuild rejected");
+    expect(
+      Number(
+        (
+          await db.execute(
+            `select count(*) as n from crawl_due_work where generation = 'atomic-rebuild'`,
+          )
+        ).rows[0]?.n,
+      ),
+    ).toBe(0);
+    expect(await readCrawlDueRebuild(db)).toMatchObject({
+      cursor: null,
+      projectedCount: 0,
+      scannedCount: 0,
+    });
+  });
+
+  it("reports no processed rows when a competing checkpoint advance wins the page race", async () => {
+    for (let index = 0; index < 2; index += 1) {
+      await node({
+        externalId: `race-${index}`,
+        hop: 0,
+        id: `checkpoint-race-${index}`,
+        kind: "artist",
+      });
+    }
+    await runCrawlDueRebuildChunk(db, {
+      generation: "checkpoint-race",
+      limit: 1,
+      newGeneration: true,
+      now: () => NOW,
+    });
+    let raced = false;
+    const client = {
+      batch: async (...args: Parameters<Client["batch"]>) => {
+        if (!raced) {
+          raced = true;
+          await db.execute(`update crawl_due_work_rebuilds
+            set cursor = 'checkpoint-race-winner' where scope = 'frontier'`);
+        }
+        return db.batch(...args);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    const result = await runCrawlDueRebuildChunk(client, { limit: 1, now: () => NOW });
+    expect(result).toMatchObject({ projected: 0, scanned: 0 });
+    expect(result.checkpoint.cursor).toBe("checkpoint-race-winner");
+    expect(
+      (await db.execute(`select node_id from crawl_due_work where node_id = 'checkpoint-race-1'`))
+        .rows,
+    ).toEqual([]);
+  });
+
+  it("uses covering source lookups and candidate-only cleanup without skipping mixed generations", async () => {
+    const sourcePlan = await db.execute({
+      args: crawlSourceChunkStatement({ limit: 10 }).args,
+      sql: `explain query plan ${crawlSourceChunkStatement({ limit: 10 }).sql}`,
+    });
+    const sourceDetails = planDetails(sourcePlan.rows);
+    expect(
+      sourceDetails.filter((detail) => detail.includes("artist_rules_crawl_lookup_idx")),
+    ).toHaveLength(3);
+    expect(
+      sourceDetails.some((detail) =>
+        /SCAN (?:parent_rule|self_rule|outstanding_rule)/.test(detail),
+      ),
+    ).toBe(false);
+
+    const checkpoint = await startCrawlDueRebuild(db, {
+      generation: "cleanup-current",
+      newGeneration: true,
+      now: () => NOW,
+    });
+    const projection = {
+      createdAt: OLD,
+      demandRank: 0,
+      hop: 0,
+      labelSlug: null,
+      nextDueAt: null,
+      nodeKind: "artist" as const,
+      parentId: null,
+      sourceVersion: "cleanup",
+      state: "ready" as const,
+      storableRank: null,
+    };
+    for (const [generation, nodeId, updatedAt] of [
+      ["generation-a", "z-last-id", OLD],
+      ["generation-z", "a-first-id", OLD],
+      ["generation-b", "n-middle-id", OLD],
+      ["live", "y-old-live", OLD],
+      ["live", "b-fresh-live", "2026-01-11T00:00:00.000Z"],
+    ] as const) {
+      await db.execute(
+        upsertCrawlDueProjectionStatement(
+          { ...projection, generation, nodeId },
+          { generation, now: updatedAt },
+        ),
+      );
+    }
+    await db.execute(
+      upsertCrawlDueProjectionStatement(
+        { ...projection, nodeId: "repair-preserved" },
+        { generation: "generation-old", now: OLD },
+      ),
+    );
+    await db.execute(markCrawlNodeRepairStatement("repair-preserved", "repair", { now: OLD }));
+    const cleanupKey = `projection_cleanup_crawl_due_work_v1:${checkpoint.generation}`;
+    await db.execute({
+      args: [cleanupKey, "m-legacy-node-cursor"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+    const cleanupPlan = await db.execute({
+      args: crawlDueCleanupPageStatement(checkpoint, null, 2).args,
+      sql: `explain query plan ${crawlDueCleanupPageStatement(checkpoint, null, 2).sql}`,
+    });
+    const cleanupDetails = planDetails(cleanupPlan.rows);
+    expect(
+      cleanupDetails.filter((detail) => detail.includes("crawl_due_work_cleanup_idx")).length,
+    ).toBeGreaterThanOrEqual(4);
+    expect(cleanupDetails.some((detail) => /SCAN crawl_due_work\b/.test(detail))).toBe(false);
+    expect(cleanupDetails.some((detail) => detail.includes("USE TEMP B-TREE"))).toBe(false);
+
+    let complete = false;
+    for (let attempt = 0; attempt < 10 && !complete; attempt += 1) {
+      complete = (
+        await runCrawlDueRebuildChunk(db, {
+          boundedCleanup: true,
+          limit: 2,
+          now: () => NOW,
+        })
+      ).complete;
+    }
+    expect(complete).toBe(true);
+    expect(
+      (await db.execute(`select generation, node_id, state from crawl_due_work order by node_id`))
+        .rows,
+    ).toEqual([
+      { generation: "live", node_id: "b-fresh-live", state: "ready" },
+      { generation: "live", node_id: "repair-preserved", state: "repair" },
+    ]);
+    expect((await readCrawlDueRebuild(db))?.cursor).toBeNull();
   });
 });

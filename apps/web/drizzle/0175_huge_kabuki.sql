@@ -1,0 +1,2 @@
+CREATE INDEX `artist_rules_crawl_lookup_idx` ON `artist_rules` (`artist_mbid`,`verdict`,`rearmed_at`);--> statement-breakpoint
+CREATE INDEX `crawl_due_work_cleanup_idx` ON `crawl_due_work` (`generation`,`updated_at`,`node_id`) WHERE "crawl_due_work"."state" <> 'repair';

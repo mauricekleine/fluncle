@@ -1611,6 +1611,9 @@ export const crawlDueWork = sqliteTable(
       .where(sql`${table.state} = 'leased'`),
     index("crawl_due_work_label_slug_node_id_idx").on(table.labelSlug, table.nodeId),
     index("crawl_due_work_parent_id_node_id_idx").on(table.parentId, table.nodeId),
+    index("crawl_due_work_cleanup_idx")
+      .on(table.generation, table.updatedAt, table.nodeId)
+      .where(sql`${table.state} <> 'repair'`),
     uniqueIndex("crawl_due_work_claim_position_idx")
       .on(table.claimedBy, table.claimToken, table.claimPosition)
       .where(sql`${table.state} = 'leased'`),
@@ -4739,6 +4742,7 @@ export const artistRules = sqliteTable(
       .on(table.artistMbid)
       .where(sql`${table.labelId} is null`),
     index("artist_rules_label_id_idx").on(table.labelId),
+    index("artist_rules_crawl_lookup_idx").on(table.artistMbid, table.verdict, table.rearmedAt),
   ],
 );
 

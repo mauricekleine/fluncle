@@ -14,6 +14,8 @@ const RETRY_MAX_MS = 24 * 60 * 60 * 1000;
 const STALE_ALLOWED_ARTIST_MS = 24 * 60 * 60 * 1000;
 const CRAWL_REPAIR_WRITE_SUBPAGE_SIZE = 50;
 const CRAWL_REPAIR_MAX_STATEMENT_ARGS = CRAWL_REPAIR_WRITE_SUBPAGE_SIZE * 14;
+export const CRAWL_REBUILD_WRITE_SUBPAGE_SIZE = 50;
+export const CRAWL_REBUILD_MAX_STATEMENT_ARGS = CRAWL_REBUILD_WRITE_SUBPAGE_SIZE * 13 + 3;
 
 export type CrawlDueClient = Pick<Client, "batch" | "execute">;
 export type CrawlDueStatement = Exclude<InStatement, string>;
@@ -137,7 +139,8 @@ const CRAWL_SOURCE_COLUMNS = `cf.attempted_at, cf.created_at, cf.demand_rank, cf
   case when provenance_label.seed_state = 'enabled' then 1 else 0 end as label_enabled,
   exists (
     select 1 from artist_rules parent_rule
-    where cf.parent_id = 'musicbrainz:artist:' || parent_rule.artist_mbid
+    where substr(cf.parent_id, 1, length('musicbrainz:artist:')) = 'musicbrainz:artist:'
+      and parent_rule.artist_mbid = substr(cf.parent_id, length('musicbrainz:artist:') + 1)
       and parent_rule.verdict = 'allow'
   ) as parent_allowed,
   exists (
@@ -526,11 +529,12 @@ export function markCrawlNodeRepairsByUpdatedAtStatement(
   };
 }
 
-async function readCrawlSourceChunk(
-  client: CrawlDueClient,
-  options: { after?: string; limit: number },
-): Promise<CrawlSourceSqlRow[]> {
-  const result = await client.execute({
+export function crawlSourceChunkStatement(options: {
+  after?: string;
+  limit: number;
+}): CrawlDueStatement {
+  assertLimit(options.limit);
+  return {
     args: [options.after ?? "", options.limit],
     sql: `select ${CRAWL_SOURCE_COLUMNS}
       from crawl_frontier cf
@@ -538,7 +542,14 @@ async function readCrawlSourceChunk(
       where cf.id > ?
       order by cf.id
       limit ?`,
-  });
+  };
+}
+
+async function readCrawlSourceChunk(
+  client: CrawlDueClient,
+  options: { after?: string; limit: number },
+): Promise<CrawlSourceSqlRow[]> {
+  const result = await client.execute(crawlSourceChunkStatement(options));
   return result.rows as unknown as CrawlSourceSqlRow[];
 }
 
@@ -1353,6 +1364,123 @@ export async function startCrawlDueRebuild(
   return rebuildRow(row);
 }
 
+async function resumeOrStartCrawlDueRebuild(
+  client: CrawlDueClient,
+  options: { generation?: string; newGeneration?: boolean; now?: () => Date },
+): Promise<CrawlDueRebuildCheckpoint> {
+  if (options.generation === CRAWL_DUE_LIVE_GENERATION) {
+    throw new Error("crawl rebuild generation 'live' is reserved for transactional repair");
+  }
+  if (options.newGeneration === true) {
+    return startCrawlDueRebuild(client, options);
+  }
+  return (await readCrawlDueRebuild(client)) ?? startCrawlDueRebuild(client, options);
+}
+
+/** Seek only rows a running rebuild may remove; current-generation rows never enter the page. */
+export function crawlDueCleanupPageStatement(
+  checkpoint: CrawlDueRebuildCheckpoint,
+  savedCursor: unknown,
+  limit: number,
+): CrawlDueStatement {
+  assertLimit(limit);
+  const after = typeof savedCursor === "string" ? savedCursor : "";
+  const lowerGeneration =
+    checkpoint.generation < CRAWL_DUE_LIVE_GENERATION
+      ? checkpoint.generation
+      : CRAWL_DUE_LIVE_GENERATION;
+  const upperGeneration =
+    checkpoint.generation < CRAWL_DUE_LIVE_GENERATION
+      ? CRAWL_DUE_LIVE_GENERATION
+      : checkpoint.generation;
+  return {
+    args: [
+      lowerGeneration,
+      after,
+      lowerGeneration,
+      upperGeneration,
+      after,
+      upperGeneration,
+      after,
+      checkpoint.startedAt,
+      after,
+      limit,
+    ],
+    sql: `select generation, node_id, updated_at from (
+      select generation, node_id, updated_at
+      from crawl_due_work indexed by crawl_due_work_cleanup_idx
+      where state <> 'repair' and generation < ? and node_id > ?
+      union all
+      select generation, node_id, updated_at
+      from crawl_due_work indexed by crawl_due_work_cleanup_idx
+      where state <> 'repair' and generation > ? and generation < ? and node_id > ?
+      union all
+      select generation, node_id, updated_at
+      from crawl_due_work indexed by crawl_due_work_cleanup_idx
+      where state <> 'repair' and generation > ? and node_id > ?
+      union all
+      select generation, node_id, updated_at
+      from crawl_due_work indexed by crawl_due_work_cleanup_idx
+      where state <> 'repair' and generation = '${CRAWL_DUE_LIVE_GENERATION}'
+        and updated_at < ? and node_id > ?
+    ) order by generation, updated_at, node_id limit ?`,
+  };
+}
+
+function guardedCrawlRebuildSubpageStatement(
+  projections: readonly CrawlDueProjection[],
+  checkpoint: CrawlDueRebuildCheckpoint,
+  updatedAt: string,
+): CrawlDueStatement {
+  if (projections.length < 1 || projections.length > CRAWL_REBUILD_WRITE_SUBPAGE_SIZE) {
+    throw new Error(
+      `crawl rebuild write subpage must contain 1 through ${CRAWL_REBUILD_WRITE_SUBPAGE_SIZE} rows`,
+    );
+  }
+  const rows = projections.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+  const args = [
+    ...projections.flatMap((projection) =>
+      projectionArgs(projection, checkpoint.generation, updatedAt),
+    ),
+    checkpoint.generation,
+    checkpoint.cursor,
+    checkpoint.startedAt,
+  ];
+  if (args.length > CRAWL_REBUILD_MAX_STATEMENT_ARGS) {
+    throw new Error(
+      `crawl rebuild mutation may contain at most ${CRAWL_REBUILD_MAX_STATEMENT_ARGS} arguments`,
+    );
+  }
+  return {
+    args,
+    sql: `with candidate
+      (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
+       label_slug, parent_id, generation, source_version, updated_at)
+      as (values ${rows})
+      insert into crawl_due_work
+      (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
+       label_slug, parent_id, generation, source_version, updated_at)
+      select candidate.node_id, candidate.node_kind, candidate.state, candidate.hop,
+        candidate.demand_rank, candidate.created_at, candidate.storable_rank,
+        candidate.next_due_at, candidate.label_slug, candidate.parent_id,
+        candidate.generation, candidate.source_version, candidate.updated_at
+      from candidate
+      where exists (select 1 from crawl_due_work_rebuilds
+        where scope = 'frontier' and generation = ? and state = 'running' and cursor is ?)
+      on conflict(node_id) do update set
+        node_kind = excluded.node_kind, state = excluded.state, hop = excluded.hop,
+        demand_rank = excluded.demand_rank, created_at = excluded.created_at,
+        storable_rank = excluded.storable_rank, next_due_at = excluded.next_due_at,
+        label_slug = excluded.label_slug, parent_id = excluded.parent_id,
+        generation = excluded.generation, source_version = excluded.source_version,
+        claim_expires_at = null, claim_position = null, claim_token = null,
+        claimed_by = null, updated_at = excluded.updated_at
+      where crawl_due_work.state <> 'repair'
+        and (crawl_due_work.generation <> '${CRAWL_DUE_LIVE_GENERATION}'
+          or crawl_due_work.updated_at < ?)`,
+  };
+}
+
 function canonicalCrawlProjection(row: CrawlDueProjection | CrawlDueRow): unknown[] {
   return [
     row.nodeId,
@@ -1560,7 +1688,7 @@ export async function runCrawlDueRebuildChunk(
 }> {
   const limit = options.limit ?? 100;
   assertLimit(limit);
-  const checkpoint = await startCrawlDueRebuild(client, options);
+  const checkpoint = await resumeOrStartCrawlDueRebuild(client, options);
   if (checkpoint.state === "complete") {
     return { checkpoint, complete: true, projected: 0, scanned: 0 };
   }
@@ -1572,29 +1700,20 @@ export async function runCrawlDueRebuildChunk(
       args: [cleanupKey],
       sql: `select value from settings where key = ? limit 1`,
     });
-    const after = typeof saved.rows[0]?.value === "string" ? saved.rows[0].value : "";
-    const page = await client.execute({
-      args: [after, limit],
-      sql: `select generation, node_id, state, updated_at from crawl_due_work
-        where node_id > ? order by node_id limit ?`,
-    });
+    const savedCursor = saved.rows[0]?.value;
+    const page = await client.execute(crawlDueCleanupPageStatement(checkpoint, savedCursor, limit));
     const pageRows = page.rows as unknown as {
       generation: string;
       node_id: string;
-      state: string;
       updated_at: string;
     }[];
-    const nodeIds = pageRows
-      .filter(
-        (row) =>
-          row.generation !== checkpoint.generation &&
-          row.state !== "repair" &&
-          (row.generation !== CRAWL_DUE_LIVE_GENERATION || row.updated_at < checkpoint.startedAt),
-      )
-      .map((row) => row.node_id);
+    const nodeIds = pageRows.map((row) => row.node_id);
+    const writes: CrawlDueStatement[] = [];
+    let cleanupWriteIndex: number | undefined;
     if (nodeIds.length > 0) {
       const placeholders = nodeIds.map(() => "?").join(", ");
-      await client.execute({
+      cleanupWriteIndex = writes.length;
+      writes.push({
         args: [
           ...nodeIds,
           checkpoint.generation,
@@ -1609,30 +1728,32 @@ export async function runCrawlDueRebuildChunk(
             where scope = 'frontier' and generation = ? and state = 'running' and cursor is ?)`,
       });
     }
-    const terminal = pageRows.at(-1)?.node_id;
-    if (terminal !== undefined) {
-      await client.execute({
-        args: [cleanupKey, terminal],
-        sql: `insert into settings (key, value) values (?, ?)
-          on conflict(key) do update set value = excluded.value`,
-      });
-    } else {
-      await client.execute({ args: [cleanupKey], sql: `delete from settings where key = ?` });
-      await client.execute({
-        args: [
-          updatedAt,
-          updatedAt,
-          "0".repeat(64),
-          "0".repeat(64),
-          checkpoint.generation,
-          checkpoint.cursor,
-        ],
-        sql: `update crawl_due_work_rebuilds
+    const hasLegacyCursor = typeof savedCursor === "string" && savedCursor.length > 0;
+    if (pageRows.length < limit) {
+      writes.push({ args: [cleanupKey], sql: `delete from settings where key = ?` });
+      if (!hasLegacyCursor) {
+        writes.push({
+          args: [
+            updatedAt,
+            updatedAt,
+            "0".repeat(64),
+            "0".repeat(64),
+            checkpoint.generation,
+            checkpoint.cursor,
+          ],
+          sql: `update crawl_due_work_rebuilds
           set state = 'complete', completed_at = ?, updated_at = ?,
               source_digest = ?, projected_digest = ?
           where scope = 'frontier' and generation = ? and state = 'running' and cursor is ?`,
-      });
+        });
+      }
     }
+    if (writes.length === 0) {
+      throw new Error("crawl due-work bounded cleanup made no progress");
+    }
+    const results = await client.batch(writes, "write");
+    const removed =
+      cleanupWriteIndex === undefined ? 0 : (results[cleanupWriteIndex]?.rowsAffected ?? 0);
     const current = await readCrawlDueRebuild(client);
     if (current === undefined) {
       throw new Error("crawl due-work rebuild checkpoint disappeared");
@@ -1641,7 +1762,7 @@ export async function runCrawlDueRebuildChunk(
       checkpoint: current,
       complete: current.state === "complete",
       projected: 0,
-      scanned: pageRows.length,
+      scanned: removed,
     };
   }
   const projections = rows.flatMap((row) => {
@@ -1651,29 +1772,17 @@ export async function runCrawlDueRebuildChunk(
   const nextCursor = rows.at(-1)?.id ?? checkpoint.cursor;
   const guardArgs = [checkpoint.generation, checkpoint.cursor];
   const guard = `scope = 'frontier' and generation = ? and state = 'running' and cursor is ?`;
-  const writes: CrawlDueStatement[] = projections.map((projection) => ({
-    args: [
-      ...projectionArgs(projection, checkpoint.generation, updatedAt),
-      ...guardArgs,
-      checkpoint.startedAt,
-    ],
-    sql: `insert into crawl_due_work
-      (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
-       label_slug, parent_id, generation, source_version, updated_at)
-      select ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-      where exists (select 1 from crawl_due_work_rebuilds where ${guard})
-      on conflict(node_id) do update set
-        node_kind = excluded.node_kind, state = excluded.state, hop = excluded.hop,
-        demand_rank = excluded.demand_rank, created_at = excluded.created_at,
-        storable_rank = excluded.storable_rank, next_due_at = excluded.next_due_at,
-        label_slug = excluded.label_slug, parent_id = excluded.parent_id,
-        generation = excluded.generation, source_version = excluded.source_version,
-        claim_expires_at = null, claim_position = null, claim_token = null,
-        claimed_by = null, updated_at = excluded.updated_at
-      where crawl_due_work.state <> 'repair'
-        and (crawl_due_work.generation <> '${CRAWL_DUE_LIVE_GENERATION}'
-          or crawl_due_work.updated_at < ?)`,
-  }));
+  const writes: CrawlDueStatement[] = [];
+  for (let index = 0; index < projections.length; index += CRAWL_REBUILD_WRITE_SUBPAGE_SIZE) {
+    writes.push(
+      guardedCrawlRebuildSubpageStatement(
+        projections.slice(index, index + CRAWL_REBUILD_WRITE_SUBPAGE_SIZE),
+        checkpoint,
+        updatedAt,
+      ),
+    );
+  }
+  const checkpointWriteIndex = writes.length;
   writes.push({
     args: [nextCursor, rows.length, projections.length, updatedAt, ...guardArgs],
     sql: `update crawl_due_work_rebuilds
@@ -1681,9 +1790,10 @@ export async function runCrawlDueRebuildChunk(
           projected_count = projected_count + ?, updated_at = ?
       where ${guard}`,
   });
-  await client.batch(writes, "write");
+  const results = await client.batch(writes, "write");
+  const checkpointAdvanced = (results[checkpointWriteIndex]?.rowsAffected ?? 0) > 0;
 
-  if (rows.length < limit && options.boundedCleanup !== true) {
+  if (checkpointAdvanced && rows.length < limit && options.boundedCleanup !== true) {
     await client.execute({
       args: [checkpoint.generation, checkpoint.startedAt],
       sql: `delete from crawl_due_work
@@ -1713,8 +1823,8 @@ export async function runCrawlDueRebuildChunk(
   return {
     checkpoint: current,
     complete: current.state === "complete",
-    projected: projections.length,
-    scanned: rows.length,
+    projected: checkpointAdvanced ? projections.length : 0,
+    scanned: checkpointAdvanced ? rows.length : 0,
   };
 }
 

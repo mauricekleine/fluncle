@@ -19,6 +19,7 @@ describe("materialized projection schema laws", () => {
 
     expect(indexes.rows.map((row) => row.name)).toEqual([
       "crawl_due_work_claim_position_idx",
+      "crawl_due_work_cleanup_idx",
       "crawl_due_work_label_slug_node_id_idx",
       "crawl_due_work_lease_idx",
       "crawl_due_work_parent_id_node_id_idx",
@@ -37,6 +38,9 @@ describe("materialized projection schema laws", () => {
     expect(
       indexes.rows.find((row) => row.name === "crawl_due_work_parent_id_node_id_idx")?.sql,
     ).toContain("`parent_id`,`node_id`");
+    expect(indexes.rows.find((row) => row.name === "crawl_due_work_cleanup_idx")?.sql).toContain(
+      "`generation`,`updated_at`,`node_id`",
+    );
 
     await db.execute(`insert into crawl_due_work
       (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank,
