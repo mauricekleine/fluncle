@@ -30,15 +30,16 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, f
 - [The newsletter archive](https://www.fluncle.com/newsletter): every edition Fluncle has sent, one page each at https://www.fluncle.com/newsletter/<number>
 - [About Fluncle](https://www.fluncle.com/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
-## Artists, labels, and albums
+## Artists, labels, albums, and tracks
 
-Fluncle's archive is a graph: every finding links to the artists who made it, the label it came out on, and the record it is from. Each of those is its own page.
+Fluncle's archive is a graph: every finding links to the artists who made it, the label it came out on, and the record it is from. Each of those is its own page, and so is every recording the archive can name.
 
 - Artists: https://www.fluncle.com/artist/<slug> (slug is real-name kebab-case, e.g. `/artist/dbridge`)
 - Labels: https://www.fluncle.com/label/<slug>
 - Albums: https://www.fluncle.com/album/<slug>
+- Tracks: https://www.fluncle.com/track/<trackId> (one recording: its artists, the record it is from, the label, the release date, tempo and key, a short preview, the services the archive holds a link to, and what sits closest to it in sound). A recording Fluncle has certified is a finding, so its track URL redirects to its /log coordinate page
 
-Each page leads with the findings Fluncle has logged there. An artist, label, or record Fluncle has come across while charting the wider archive but has not yet certified a finding from still gets a page: an honest record of what they put out, findings first, the rest of the tracks below. A page with too little on it stays reachable but out of the index. The `/artists`, `/labels`, and `/albums` indexes list every artist, label, and album in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold.
+Each artist, label, and album page leads with the findings Fluncle has logged there. An artist, label, or record Fluncle has come across while charting the wider archive but has not yet certified a finding from still gets a page: an honest record of what they put out, findings first, the rest of the tracks below. A page with too little on it stays reachable but out of the index. The `/artists`, `/labels`, and `/albums` indexes list every artist, label, and album in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold.
 
 - [Artists API](https://www.fluncle.com/api/v1/artists): every artist in the archive, alphabetical and paginated, as JSON
 - [Artist by slug](https://www.fluncle.com/api/v1/artists/{slug}): one artist's identity, finding count, and track count, as JSON
@@ -60,7 +61,7 @@ Each page leads with the findings Fluncle has logged there. An artist, label, or
 - [Identity](https://www.fluncle.com/identity): look a recording up by ISRC, MusicBrainz recording id, or Log ID and get its identifiers and platform links, one page each at https://www.fluncle.com/identity/<key>. Every link comes with how Fluncle came to trust it and when he last checked, and every gap is named: where he looked and found nothing, where he will not look and why, and where he hands out no link at all. The same answer as JSON at https://www.fluncle.com/api/v1/tracks/-?isrc={isrc} or ?mbid={mbid}, and on any track at /api/v1/tracks/{idOrLogId}?identity=1. Metered at 30 requests a minute and 1,000 a day per caller; free, no key
 - [Mixtapes API](https://www.fluncle.com/api/v1/mixtapes): published mixtapes as JSON
 - [Random track](https://www.fluncle.com/api/v1/tracks/random): one pick from the archive, as JSON
-- [Archive search API](https://www.fluncle.com/api/v1/search/archive): search the archive by coordinate, artist, label, album, a bare word, or a plain-language question, as JSON
+- [Archive search API](https://www.fluncle.com/api/v1/search/archive): search the archive by coordinate, artist, label, album, a bare word, or a plain-language question, as JSON. This searches the archive itself; the Spotify candidate search under Submit is a different endpoint
 
 ## Submit
 

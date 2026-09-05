@@ -210,9 +210,14 @@ describe("handleAgentDiscovery — the A2A agent card", () => {
     const card = await fetchCard("/.well-known/agent-card.json");
 
     // Each skill maps 1:1 to a real op the public API + MCP server expose (the MCP tool
-    // list is the source of truth): search, the findings feed, the track enumerator,
-    // read one, submit, subscribe.
+    // list is the source of truth): the archive search, the Spotify candidate search,
+    // the findings feed, the track enumerator, read one, submit, subscribe.
+    //
+    // The two SEARCHES are both listed and both named for what they search, because an
+    // agent that reads only this card is otherwise told Fluncle can be searched against
+    // Spotify and never told the archive itself is queryable.
     expect(card.skills.map((skill: { id: string }) => skill.id)).toEqual([
+      "search-archive",
       "search-tracks",
       "list-findings",
       "list-tracks",

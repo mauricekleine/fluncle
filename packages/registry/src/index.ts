@@ -474,7 +474,7 @@ export const SURFACES: readonly Surface[] = [
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
       "/tracks — the whole list: every track Fluncle holds (certified findings + the wider catalogue), newest release first, filterable by release year, tempo, key, label, and galaxy",
-      "/track/:trackId — one archive recording: its artists, record, imprint, release date, tempo and key, a bounded preview, every service that carries it, and what sits close to it in sound",
+      "/track/:trackId — one archive recording: its artists, record, label, release date, tempo and key, a bounded preview, the services the archive holds a link to, and what sits close to it in sound",
     ],
     kind: "web_route",
     name: "web.tracks",
