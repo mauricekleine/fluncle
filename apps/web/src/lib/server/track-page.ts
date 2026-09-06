@@ -567,21 +567,45 @@ async function scanNeighbours(
   limit: number,
   bpmWindow: [number, number] | undefined,
 ): Promise<NeighbourRow[]> {
-  // Args bind in SQL-TEXT order: the probe, the excluded target, the window bounds, the limit.
-  const result = await db.execute({
-    args: bpmWindow ? [probe, trackId, bpmWindow[0], bpmWindow[1], limit] : [probe, trackId, limit],
-    sql: `select ${NEIGHBOUR_SELECT},
-                 vector_distance_cos(emb.embedding_blob, ?) as dist
-          from tracks
-          left join findings on findings.track_id = tracks.track_id
-          join track_embeddings emb on emb.track_id = tracks.track_id
-          where tracks.track_id != ? and ${NEIGHBOUR_WHERE}
-                ${bpmWindow ? "and tracks.bpm between ? and ?" : ""}
-          order by dist asc, tracks.track_id asc
-          limit ?`,
-  });
+  const result = await db.execute(sonicNeighbourScanStatement(probe, trackId, limit, bpmWindow));
 
   return typedRows<NeighbourRow>(result.rows);
+}
+
+/**
+ * Rank the exact vector candidates into a narrow bounded relation, then hydrate only its winners.
+ *
+ * `MATERIALIZED` is a correctness property of the work shape: without the fence SQLite may flatten
+ * the CTE and carry the findings join plus all three album lookups through the growing candidate
+ * sort. `CROSS JOIN` pins the bounded winners as the outer loop of hydration; each winner then gets
+ * one primary-key track lookup and its metadata. The exact scan itself remains linear in the
+ * filtered embedded corpus — this removes pre-limit hydration, not vector scoring.
+ */
+export function sonicNeighbourScanStatement(
+  probe: Uint8Array,
+  trackId: string,
+  limit: number,
+  bpmWindow: [number, number] | undefined,
+) {
+  // Args bind in SQL-TEXT order: the probe, the excluded target, the window bounds, the limit.
+  return {
+    args: bpmWindow ? [probe, trackId, bpmWindow[0], bpmWindow[1], limit] : [probe, trackId, limit],
+    sql: `with winners(track_id, dist) as materialized (
+            select tracks.track_id,
+                   vector_distance_cos(emb.embedding_blob, ?) as dist
+            from tracks${bpmWindow ? " indexed by tracks_bpm_idx" : ""}
+            join track_embeddings emb on emb.track_id = tracks.track_id
+            where tracks.track_id != ? and ${NEIGHBOUR_WHERE}
+                  ${bpmWindow ? "and tracks.bpm between ? and ?" : ""}
+            order by dist asc, tracks.track_id asc
+            limit ?
+          )
+          select ${NEIGHBOUR_SELECT}
+          from winners
+          cross join tracks on tracks.track_id = winners.track_id
+          left join findings on findings.track_id = tracks.track_id
+          order by winners.dist asc, winners.track_id asc`,
+  };
 }
 
 /** Hydrate sonar's ranked ids IN SONAR'S ORDER, re-asserting the candidate rule it cannot express. */

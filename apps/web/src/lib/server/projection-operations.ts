@@ -671,6 +671,12 @@ type AnchorProjectionState = {
   total: number;
 };
 
+type PublishedAnchorState = {
+  anchor_format_version: number;
+  generation: string;
+  order_epoch: number;
+};
+
 async function currentAnchorDocumentMatches(
   client: ProjectionClient,
   projection: AnchorProjectionState,
@@ -895,7 +901,7 @@ function anchorCleanupState(
 }
 
 function publishedAnchorIsCurrent(
-  published: { anchor_format_version: number; generation: string; order_epoch: number } | undefined,
+  published: PublishedAnchorState | undefined,
   projection: AnchorProjectionState,
 ): boolean {
   return (
@@ -985,6 +991,7 @@ async function restartMalformedAnchorBuild(
   client: ProjectionClient,
   generation: string,
   limit: number,
+  invalidPublication?: PublishedAnchorState,
 ): Promise<{ complete: boolean; processed: number }> {
   const restartKey = `${PUBLIC_ANCHOR_RESTART_PREFIX}${generation}`;
   const saved = await client.execute({
@@ -1027,13 +1034,25 @@ async function restartMalformedAnchorBuild(
     );
     return { complete: false, processed: clauseHashes.length };
   }
-  await client.batch(
-    [
-      { args: [PUBLIC_ANCHOR_REBUILD_KEY], sql: `delete from settings where key = ?` },
-      { args: [restartKey], sql: `delete from settings where key = ?` },
-    ],
-    "write",
-  );
+  const terminalStatements: InStatement[] = [
+    { args: [PUBLIC_ANCHOR_REBUILD_KEY], sql: `delete from settings where key = ?` },
+    { args: [restartKey], sql: `delete from settings where key = ?` },
+  ];
+  if (invalidPublication !== undefined) {
+    terminalStatements.push({
+      args: [
+        TRACKS_HUB_ANCHOR_ADDRESS.hub,
+        TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+        invalidPublication.anchor_format_version,
+        invalidPublication.order_epoch,
+        invalidPublication.generation,
+      ],
+      sql: `delete from hub_page_anchor_validity
+        where hub = ? and clause_hash = ? and anchor_format_version = ?
+          and order_epoch = ? and generation = ?`,
+    });
+  }
+  await client.batch(terminalStatements, "write");
   return { complete: false, processed: 0 };
 }
 
@@ -1088,11 +1107,13 @@ async function recoverPublicAnchorState(
     limit: number;
     persistedValue: unknown;
     projectionState: AnchorProjectionState;
+    published: PublishedAnchorState | undefined;
     publishedCurrent: boolean;
     saved: ReturnType<typeof parseAnchorState>;
   },
 ): Promise<{ complete: boolean; processed: number } | undefined> {
-  const { generation, limit, persistedValue, projectionState, publishedCurrent, saved } = options;
+  const { generation, limit, persistedValue, projectionState, published, publishedCurrent, saved } =
+    options;
   const malformed =
     persistedValue !== undefined &&
     (saved === undefined ||
@@ -1114,6 +1135,19 @@ async function recoverPublicAnchorState(
     return restartMalformedAnchorBuild(client, generation, limit);
   }
 
+  const interruptedOrderChange =
+    saved?.generation === generation && saved.orderEpoch !== projectionState.orderEpoch;
+  const invalidSameGenerationPublication =
+    published?.generation === generation && !publishedCurrent;
+  if (!publishedCurrent && (interruptedOrderChange || invalidSameGenerationPublication)) {
+    return restartMalformedAnchorBuild(
+      client,
+      generation,
+      limit,
+      invalidSameGenerationPublication ? published : undefined,
+    );
+  }
+
   if (
     saved !== undefined &&
     (saved.generation !== generation || saved.orderEpoch !== projectionState.orderEpoch)
@@ -1123,12 +1157,13 @@ async function recoverPublicAnchorState(
       sql: `delete from settings where key = ?`,
     });
   }
-  if (
-    saved === undefined &&
-    publishedCurrent &&
-    (await currentAnchorDocumentMatches(client, projectionState))
-  ) {
-    return { complete: true, processed: 0 };
+  if (saved === undefined && publishedCurrent) {
+    if (await currentAnchorDocumentMatches(client, projectionState)) {
+      return { complete: true, processed: 0 };
+    }
+    // A validity row cannot make leftover or malformed shards usable. Clear the rejected
+    // document in bounded pages before another build can publish into the same namespace.
+    return restartMalformedAnchorBuild(client, generation, limit, published);
   }
   return undefined;
 }
@@ -1176,9 +1211,7 @@ export async function advancePublicAnchors(
   if (cleanupAdvance !== undefined) {
     return cleanupAdvance;
   }
-  const published = publishedResult.rows[0] as
-    | { anchor_format_version: number; generation: string; order_epoch: number }
-    | undefined;
+  const published = publishedResult.rows[0] as PublishedAnchorState | undefined;
   const publishedCurrent = publishedAnchorIsCurrent(published, projectionState);
   const persistedValue = persisted.rows[0]?.value;
   const saved = parseAnchorState(persistedValue);
@@ -1187,6 +1220,7 @@ export async function advancePublicAnchors(
     limit,
     persistedValue,
     projectionState,
+    published,
     publishedCurrent,
     saved,
   });

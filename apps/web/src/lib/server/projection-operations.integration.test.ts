@@ -1296,6 +1296,159 @@ describe("projection production operations", () => {
     );
   });
 
+  it("cleans same-generation shards before publishing a smaller anchor document", async () => {
+    for (let index = 0; index < 250; index += 1) {
+      await db.execute({
+        args: [`shrink-${String(index).padStart(3, "0")}`, "2026-01-01"],
+        sql: `insert into tracks (track_id, release_date) values (?, ?)`,
+      });
+    }
+    await db.execute(`update public_aggregate_state
+      set default_track_total = 250, projected_entry_count = 250,
+          generation = 'same-generation', release_hub_order_epoch = 1
+      where scope = 'tracks'`);
+
+    let complete = false;
+    for (let step = 0; step < 10 && !complete; step += 1) {
+      const result = await advancePublicAnchors(db, 100);
+      expect(result.processed).toBeLessThanOrEqual(100);
+      complete = result.complete;
+    }
+    expect(complete).toBe(true);
+
+    await db.execute(`delete from tracks where track_id >= 'shrink-199'`);
+    await db.execute(`update public_aggregate_state
+      set default_track_total = 199, projected_entry_count = 199,
+          release_hub_order_epoch = 2
+      where scope = 'tracks'`);
+
+    complete = false;
+    for (let step = 0; step < 20 && !complete; step += 1) {
+      const result = await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+        target: "public_aggregates",
+      });
+      expect(result.processed).toBeLessThanOrEqual(100);
+      complete = result.complete;
+    }
+    expect(complete).toBe(true);
+    const published = await readCurrentProjectedTrackHubAnchors(
+      db,
+      TRACKS_HUB_ANCHOR_ADDRESS,
+      TRACKS_HUB_PAGE_SIZE,
+    );
+    expect(published).toMatchObject({ total: 199 });
+    expect(published?.anchors.map((anchor) => anchor.page)).toEqual(
+      Array.from({ length: Math.floor(199 / TRACKS_HUB_PAGE_SIZE) }, (_, index) => index + 2),
+    );
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as total from hub_page_anchors
+            where clause_hash like '%:same-generation:%'`)
+        ).rows[0]?.total ?? -1,
+      ),
+    ).toBe(2);
+    expect(
+      (
+        await db.execute(`select value from settings
+          where key = 'projection_public_anchor_rollback_generation_v1'`)
+      ).rows[0]?.value,
+    ).toBe("agg");
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as total from hub_page_anchors
+            where clause_hash like '%:agg:%'`)
+        ).rows[0]?.total ?? 0,
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it("cleans interrupted same-generation shards when a new order epoch has an empty corpus", async () => {
+    for (let index = 0; index < 250; index += 1) {
+      await db.execute({
+        args: [`empty-${String(index).padStart(3, "0")}`, "2026-01-01"],
+        sql: `insert into tracks (track_id, release_date) values (?, ?)`,
+      });
+    }
+    await db.execute(`update public_aggregate_state
+      set default_track_total = 250, projected_entry_count = 250,
+          generation = 'interrupted', release_hub_order_epoch = 1
+      where scope = 'tracks'`);
+
+    expect(await advancePublicAnchors(db, 100)).toEqual({ complete: false, processed: 100 });
+    expect(await advancePublicAnchors(db, 100)).toEqual({ complete: false, processed: 100 });
+
+    await db.execute(`delete from tracks`);
+    await db.execute(`update public_aggregate_state
+      set default_track_total = 0, projected_entry_count = 0,
+          release_hub_order_epoch = 2
+      where scope = 'tracks'`);
+
+    let complete = false;
+    for (let step = 0; step < 10 && !complete; step += 1) {
+      const result = await advancePublicAnchors(db, 100);
+      expect(result.processed).toBeLessThanOrEqual(100);
+      complete = result.complete;
+    }
+    expect(complete).toBe(true);
+    expect(
+      await readCurrentProjectedTrackHubAnchors(
+        db,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+      ),
+    ).toMatchObject({ anchors: [], total: 0 });
+  });
+
+  it("recovers invalid shards even when publication already names the current order epoch", async () => {
+    for (let index = 0; index < 250; index += 1) {
+      await db.execute({
+        args: [`published-shrink-${String(index).padStart(3, "0")}`, "2026-01-01"],
+        sql: `insert into tracks (track_id, release_date) values (?, ?)`,
+      });
+    }
+    await db.execute(`update public_aggregate_state
+      set default_track_total = 250, projected_entry_count = 250,
+          generation = 'published-shrink', release_hub_order_epoch = 1
+      where scope = 'tracks'`);
+    let complete = false;
+    for (let step = 0; step < 10 && !complete; step += 1) {
+      complete = (await advancePublicAnchors(db, 100)).complete;
+    }
+    expect(complete).toBe(true);
+    await db.execute(`delete from tracks where track_id >= 'published-shrink-199'`);
+    await db.execute(`update public_aggregate_state
+      set default_track_total = 199, projected_entry_count = 199,
+          release_hub_order_epoch = 2 where scope = 'tracks'`);
+    await db.execute(`update hub_page_anchor_validity set order_epoch = 2
+      where generation = 'published-shrink'`);
+    expect(
+      await readCurrentProjectedTrackHubAnchors(
+        db,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+      ),
+    ).toBeUndefined();
+    complete = false;
+    for (let step = 0; step < 20 && !complete; step += 1) {
+      const result = await advancePublicAnchors(db, 100);
+      expect(result.processed).toBeLessThanOrEqual(100);
+      complete = result.complete;
+    }
+    expect(complete).toBe(true);
+    expect(
+      await readCurrentProjectedTrackHubAnchors(
+        db,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+      ),
+    ).toMatchObject({ total: 199 });
+  });
+
   it("rejects every malformed anchor-build field and restarts partial shards in bounded pages", async () => {
     await db.execute(`delete from hub_page_anchor_validity`);
     await db.execute(`delete from hub_page_anchors`);

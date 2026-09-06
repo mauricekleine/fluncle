@@ -75,9 +75,11 @@ This page is the first surface that both renders a Beatport link _and_ composes 
 
 ## Sonic neighbours
 
-`/log`'s "more like this" asks a question about **findings** and scans the certified corpus. This one asks a question about **music**, so it scans `tracks` through a LEFT join and a certified neighbour competes on exactly the same terms as an uncertified one. The register a neighbour renders in is decided by whether it carries a coordinate, never by the query.
+`/log`'s "more like this" asks a question about **findings** and scans the certified corpus. This one asks a question about **music**, so it ranks `tracks` without a findings predicate and LEFT-joins findings only after the winners are bounded; a certified neighbour competes on exactly the same terms as an uncertified one. The register a neighbour renders in is decided by whether it carries a coordinate, never by the query.
 
 All four of [AGENTS.md](../AGENTS.md)'s database rules bind here and the scan obeys each one: the probe binds as a **raw blob**, the ranking happens **in SQL** and returns the ~8 winners rather than a column of vectors, there is exactly **one probe** so it is one pass (never `union all` branches over a CTE), and there is **no `libsql_vector_idx`** — an exact scan, which also means 100% recall.
+
+The scan ranks into a two-column `(track_id, distance)` `MATERIALIZED` winner relation before it reads findings or album metadata. The materialization fence prevents SQLite from flattening those lookups back into the candidate sort, and winner-first primary-key hydration bounds all three album lookups to the final limit. This changes the cost of metadata hydration only: exact vector scoring still visits the filtered embedded corpus and remains linear in that candidate count.
 
 ### The tempo pre-filter
 
