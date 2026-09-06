@@ -10,9 +10,14 @@ import {
   seedTrack,
 } from "./integration-db";
 import { EMBEDDING_DIMS } from "./embedding";
-import { listSonicNeighbours, readTrackDestination } from "./track-page";
+import {
+  listSonicNeighbours,
+  readTrackDestination,
+  sonicNeighbourScanStatement,
+} from "./track-page";
 import { sameAsUrls } from "../track-page";
 import { resolveTrackPageData } from "../../routes/-track-page-data";
+import { bestAlbumCoverUrl } from "../media";
 
 // THE ARCHIVE TRACK DESTINATION, over a real schema.
 //
@@ -364,6 +369,75 @@ describe("close in sound", () => {
     expect(neighbours[1]?.logId).toBeUndefined();
   });
 
+  it("preserves ranked DTOs and the owned-cover preference after winner hydration", async () => {
+    const imageKey = "albums/signal-bloom.jpg";
+    const imageUpdatedAt = "2026-05-03T12:00:00.000Z";
+
+    await db.execute({
+      args: [imageKey, imageUpdatedAt],
+      sql: `update albums
+               set image_key = ?, image_state = 'resolved', image_updated_at = ?
+             where id = 'album-signal'`,
+    });
+    await seedEmbedding(db, RICH, axisVector(0));
+    await seedEmbedding(db, CERTIFIED, axisVector(1));
+    await seedEmbedding(db, THIN, axisVector(500));
+
+    expect(await listSonicNeighbours(RICH, 2)).toStrictEqual([
+      {
+        albumImageUrl: bestAlbumCoverUrl({
+          imageKey,
+          imageState: "resolved",
+          imageUpdatedAt,
+          spotifyUrl: "https://i.scdn.co/image/rich-cover",
+        }),
+        artists: ["Nova Kestrel"],
+        logId: "701.1.0A",
+        title: "Synthetic Aurora",
+        trackId: CERTIFIED,
+      },
+      {
+        albumImageUrl: undefined,
+        artists: ["Quiet Cartel"],
+        logId: undefined,
+        title: "Ferrite Bloom",
+        trackId: THIN,
+      },
+    ]);
+  });
+
+  it("materializes bounded ids before winner-first metadata hydration", async () => {
+    const statement = sonicNeighbourScanStatement(
+      new Uint8Array(EMBEDDING_DIMS * Float32Array.BYTES_PER_ELEMENT),
+      RICH,
+      8,
+      undefined,
+    );
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    const details = plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
+    const joined = details.join("\n");
+
+    expect(joined).toContain("MATERIALIZE winners");
+    expect(joined).toContain("SCAN winners");
+    expect(joined).toMatch(
+      /SEARCH tracks USING (?:INDEX )?sqlite_autoindex_tracks_1 \(track_id=\?\)/,
+    );
+    expect(details.filter((detail) => detail.includes("CORRELATED SCALAR SUBQUERY"))).toHaveLength(
+      3,
+    );
+
+    const winnersSql = statement.sql.slice(
+      statement.sql.indexOf("with winners"),
+      statement.sql.indexOf(")\n          select"),
+    );
+    expect(winnersSql).not.toContain("findings");
+    expect(winnersSql).not.toContain("albums");
+    expect(winnersSql).not.toContain("album_image");
+  });
+
   it("drops a dismissed or stamped-duplicate neighbour, so every row goes somewhere real", async () => {
     await seedEmbedding(db, RICH, axisVector(0));
     await seedEmbedding(db, CERTIFIED, axisVector(1));
@@ -496,6 +570,25 @@ function nearVector(): number[] {
 }
 
 describe("the tempo pre-filter on close in sound", () => {
+  it("keeps the selective window on the BPM btree inside the winner scan", async () => {
+    const statement = sonicNeighbourScanStatement(
+      new Uint8Array(EMBEDDING_DIMS * Float32Array.BYTES_PER_ELEMENT),
+      RICH,
+      8,
+      [160, 188],
+    );
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    const details = plan.rows
+      .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+      .join("\n");
+
+    expect(details).toContain("MATERIALIZE winners");
+    expect(details).toMatch(/SEARCH tracks USING INDEX tracks_bpm_idx \(bpm>\? AND bpm<\?\)/);
+  });
+
   it("excludes a NEARER neighbour that sits outside the target's tempo window", async () => {
     // The far row is deliberately the nearest by vector, so only the window can keep it out. RICH
     // and CERTIFIED are both 174 (makeEvidenceRich); the far row is put at half tempo.
