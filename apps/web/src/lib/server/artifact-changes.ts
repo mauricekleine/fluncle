@@ -943,10 +943,10 @@ async function latestArtifactRevisionInTransaction(
     ],
     sql: `select max(revision) as revision
       from (
-        select revision from artifact_change_revisions
+        select max(revision) as revision from artifact_change_revisions
         where stream = ? and stream_version = ? and subject_type = ? and subject_id = ?
         union all
-        select revision from artifact_changes
+        select max(revision) as revision from artifact_changes
         where stream = ? and stream_version = ? and subject_type = ? and subject_id = ?
       )`,
   });
