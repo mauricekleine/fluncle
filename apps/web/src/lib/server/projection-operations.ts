@@ -644,6 +644,7 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
 
 const PUBLIC_ANCHOR_REBUILD_KEY = "projection_rebuild_public_anchors_v1";
 const PUBLIC_ANCHOR_CLEANUP_KEY = "projection_cleanup_public_anchor_generations_v1";
+const PUBLIC_ANCHOR_PUBLICATION_KEY = "projection_public_anchor_publication_v1";
 const PUBLIC_ANCHOR_ROLLBACK_KEY = "projection_public_anchor_rollback_generation_v1";
 const PUBLIC_ANCHOR_RESTART_PREFIX = "projection_restart_public_anchors_v1:";
 const PUBLIC_ANCHOR_SOURCE_READY_SQL = `exists (select 1 from public_aggregate_state aggregate
@@ -651,7 +652,8 @@ const PUBLIC_ANCHOR_SOURCE_READY_SQL = `exists (select 1 from public_aggregate_s
     and aggregate.generation = ? and aggregate.release_hub_order_epoch = ?
     and aggregate.aggregate_epoch = aggregate.source_epoch
     and not exists (select 1 from projection_repairs
-      indexed by projection_repairs_order_idx where projection = 'public_aggregates'))`;
+      indexed by projection_repairs_order_idx where projection = 'public_aggregates'))
+  and not exists (select 1 from settings where key = ?)`;
 
 type AnchorRebuildState = {
   cursorId: null | string;
@@ -661,8 +663,9 @@ type AnchorRebuildState = {
   orderEpoch: number;
   phase: "non_null" | "null";
   processed: number;
+  revision: string;
   shard: number;
-  version: 2;
+  version: 3;
 };
 
 type AnchorProjectionState = {
@@ -675,6 +678,7 @@ type PublishedAnchorState = {
   anchor_format_version: number;
   generation: string;
   order_epoch: number;
+  publication_revision: null | string;
 };
 
 async function currentAnchorDocumentMatches(
@@ -741,14 +745,17 @@ function hasValidAnchorIdentity(state: Record<string, unknown>): boolean {
   const generation = state["generation"];
   const orderEpoch = state["orderEpoch"];
   const phase = state["phase"];
+  const revision = state["revision"];
   return (
-    state["version"] === 2 &&
+    state["version"] === 3 &&
     typeof generation === "string" &&
     generation.length > 0 &&
     !generation.includes(":") &&
     typeof orderEpoch === "number" &&
     Number.isSafeInteger(orderEpoch) &&
     orderEpoch >= 0 &&
+    typeof revision === "string" &&
+    revision.length > 0 &&
     (phase === "non_null" || phase === "null")
   );
 }
@@ -810,7 +817,7 @@ function parseAnchorState(value: unknown): AnchorRebuildState | undefined {
     const state = parsed as Record<string, unknown>;
     if (
       Object.keys(state).sort().join(",") !==
-      "cursorId,cursorKey,firstId,generation,orderEpoch,phase,processed,shard,version"
+      "cursorId,cursorKey,firstId,generation,orderEpoch,phase,processed,revision,shard,version"
     ) {
       return undefined;
     }
@@ -930,8 +937,9 @@ function anchorBuildState(
     orderEpoch: projection.orderEpoch,
     phase: "non_null",
     processed: 0,
+    revision: crypto.randomUUID(),
     shard: 0,
-    version: 2,
+    version: 3,
   };
 }
 
@@ -987,24 +995,148 @@ async function advanceAnchorGenerationCleanup(
   return { complete: true, processed: 0 };
 }
 
+type AnchorRestartState = {
+  cursor: null | string;
+  revision: string;
+  version: 1;
+};
+
+type AnchorRestartSourceGuard = {
+  args: (null | number | string)[];
+  sql: string;
+};
+
+function anchorRestartSourceGuard(
+  invalidPublication: PublishedAnchorState | undefined,
+  persistedValue: unknown,
+): AnchorRestartSourceGuard | undefined {
+  if (invalidPublication !== undefined) {
+    const identityArgs = [
+      TRACKS_HUB_ANCHOR_ADDRESS.hub,
+      TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+      invalidPublication.anchor_format_version,
+      invalidPublication.order_epoch,
+      invalidPublication.generation,
+    ];
+    return invalidPublication.publication_revision === null
+      ? {
+          args: [...identityArgs, PUBLIC_ANCHOR_PUBLICATION_KEY],
+          sql: `exists (select 1 from hub_page_anchor_validity
+              where hub = ? and clause_hash = ? and anchor_format_version = ?
+                and order_epoch = ? and generation = ?)
+            and not exists (select 1 from settings where key = ?)`,
+        }
+      : {
+          args: [
+            ...identityArgs,
+            PUBLIC_ANCHOR_PUBLICATION_KEY,
+            invalidPublication.publication_revision,
+          ],
+          sql: `exists (select 1 from hub_page_anchor_validity
+              where hub = ? and clause_hash = ? and anchor_format_version = ?
+                and order_epoch = ? and generation = ?)
+            and exists (select 1 from settings where key = ? and value = ?)`,
+        };
+  }
+  return typeof persistedValue === "string"
+    ? {
+        args: [PUBLIC_ANCHOR_REBUILD_KEY, persistedValue],
+        sql: `exists (select 1 from settings where key = ? and value = ?)`,
+      }
+    : undefined;
+}
+
+function parseAnchorRestartState(value: unknown, prefix: string): AnchorRestartState | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const state = parsed as Record<string, unknown>;
+    const cursor = state["cursor"];
+    const revision = state["revision"];
+    return Object.keys(state).sort().join(",") === "cursor,revision,version" &&
+      (cursor === null ||
+        (typeof cursor === "string" && cursor >= prefix && cursor < `${prefix}\uffff`)) &&
+      typeof revision === "string" &&
+      revision.length > 0 &&
+      state["version"] === 1
+      ? { cursor, revision, version: 1 }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function acquireAnchorRestartState(
+  client: ProjectionClient,
+  restartKey: string,
+  prefix: string,
+  sourceGuard: AnchorRestartSourceGuard,
+): Promise<AnchorRestartState | undefined> {
+  const saved = await client.execute({
+    args: [restartKey],
+    sql: `select value from settings where key = ? limit 1`,
+  });
+  const savedValue = saved.rows[0]?.value;
+  const parsed = parseAnchorRestartState(savedValue, prefix);
+  if (parsed !== undefined) {
+    const current = await client.execute({
+      args: sourceGuard.args,
+      sql: `select 1 where ${sourceGuard.sql}`,
+    });
+    return current.rows.length > 0 ? parsed : undefined;
+  }
+  const candidate = JSON.stringify({
+    cursor: null,
+    revision: crypto.randomUUID(),
+    version: 1,
+  } satisfies AnchorRestartState);
+  if (savedValue === undefined) {
+    await client.execute({
+      args: [restartKey, candidate, ...sourceGuard.args],
+      sql: `insert into settings (key, value)
+        select ?, ? where ${sourceGuard.sql}
+        on conflict(key) do nothing`,
+    });
+  } else if (typeof savedValue === "string") {
+    await client.execute({
+      args: [candidate, restartKey, savedValue, ...sourceGuard.args],
+      sql: `update settings set value = ? where key = ? and value = ?
+        and ${sourceGuard.sql}`,
+    });
+  }
+  const acquired = await client.execute({
+    args: [restartKey],
+    sql: `select value from settings where key = ? limit 1`,
+  });
+  const state = parseAnchorRestartState(acquired.rows[0]?.value, prefix);
+  return state;
+}
+
 async function restartMalformedAnchorBuild(
   client: ProjectionClient,
   generation: string,
   limit: number,
   invalidPublication?: PublishedAnchorState,
+  persistedValue?: unknown,
 ): Promise<{ complete: boolean; processed: number }> {
   const restartKey = `${PUBLIC_ANCHOR_RESTART_PREFIX}${generation}`;
-  const saved = await client.execute({
-    args: [restartKey],
-    sql: `select value from settings where key = ? limit 1`,
-  });
   const prefix = anchorGenerationPrefix(generation);
   const upper = `${prefix}\uffff`;
-  const savedCursor = saved.rows[0]?.value;
-  const cursor =
-    typeof savedCursor === "string" && savedCursor >= prefix && savedCursor < upper
-      ? savedCursor
-      : "";
+  const sourceGuard = anchorRestartSourceGuard(invalidPublication, persistedValue);
+  if (sourceGuard === undefined) {
+    return { complete: false, processed: 0 };
+  }
+  const restart = await acquireAnchorRestartState(client, restartKey, prefix, sourceGuard);
+  if (restart === undefined) {
+    return { complete: false, processed: 0 };
+  }
+  const serializedRestart = JSON.stringify(restart);
+  const cursor = restart.cursor ?? "";
   const page = await client.execute({
     args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, prefix, upper, cursor, limit],
     sql: `select clause_hash from hub_page_anchors
@@ -1017,17 +1149,26 @@ async function restartMalformedAnchorBuild(
   if (clauseHashes.length > 0) {
     const placeholders = clauseHashes.map(() => "?").join(", ");
     const terminal = clauseHashes.at(-1) ?? cursor;
+    const nextRestart = JSON.stringify({ ...restart, cursor: terminal });
     await client.batch(
       [
         {
-          args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, ...clauseHashes],
+          args: [
+            TRACKS_HUB_ANCHOR_ADDRESS.hub,
+            ...clauseHashes,
+            restartKey,
+            serializedRestart,
+            ...sourceGuard.args,
+          ],
           sql: `delete from hub_page_anchors where hub = ?
-            and clause_hash in (${placeholders})`,
+            and clause_hash in (${placeholders})
+            and exists (select 1 from settings where key = ? and value = ?)
+            and ${sourceGuard.sql}`,
         },
         {
-          args: [restartKey, terminal],
-          sql: `insert into settings (key, value) values (?, ?)
-            on conflict(key) do update set value = excluded.value`,
+          args: [nextRestart, restartKey, serializedRestart, ...sourceGuard.args],
+          sql: `update settings set value = ? where key = ? and value = ?
+            and ${sourceGuard.sql}`,
         },
       ],
       "write",
@@ -1035,8 +1176,16 @@ async function restartMalformedAnchorBuild(
     return { complete: false, processed: clauseHashes.length };
   }
   const terminalStatements: InStatement[] = [
-    { args: [PUBLIC_ANCHOR_REBUILD_KEY], sql: `delete from settings where key = ?` },
-    { args: [restartKey], sql: `delete from settings where key = ?` },
+    {
+      args: [restartKey, serializedRestart, ...sourceGuard.args],
+      sql: `delete from settings where key = ? and value = ? and ${sourceGuard.sql}`,
+    },
+    {
+      args: [PUBLIC_ANCHOR_REBUILD_KEY, restartKey, ...sourceGuard.args],
+      sql: `delete from settings where key = ?
+        and not exists (select 1 from settings where key = ?)
+        and ${sourceGuard.sql}`,
+    },
   ];
   if (invalidPublication !== undefined) {
     terminalStatements.push({
@@ -1046,11 +1195,22 @@ async function restartMalformedAnchorBuild(
         invalidPublication.anchor_format_version,
         invalidPublication.order_epoch,
         invalidPublication.generation,
+        restartKey,
+        ...sourceGuard.args,
       ],
       sql: `delete from hub_page_anchor_validity
         where hub = ? and clause_hash = ? and anchor_format_version = ?
-          and order_epoch = ? and generation = ?`,
+          and order_epoch = ? and generation = ?
+          and not exists (select 1 from settings where key = ?)
+          and ${sourceGuard.sql}`,
     });
+    if (invalidPublication.publication_revision !== null) {
+      terminalStatements.push({
+        args: [PUBLIC_ANCHOR_PUBLICATION_KEY, invalidPublication.publication_revision, restartKey],
+        sql: `delete from settings where key = ? and value = ?
+          and not exists (select 1 from settings where key = ?)`,
+      });
+    }
   }
   await client.batch(terminalStatements, "write");
   return { complete: false, processed: 0 };
@@ -1132,7 +1292,7 @@ async function recoverPublicAnchorState(
       });
       return { complete: true, processed: 0 };
     }
-    return restartMalformedAnchorBuild(client, generation, limit);
+    return restartMalformedAnchorBuild(client, generation, limit, published, persistedValue);
   }
 
   const interruptedOrderChange =
@@ -1145,6 +1305,7 @@ async function recoverPublicAnchorState(
       generation,
       limit,
       invalidSameGenerationPublication ? published : undefined,
+      persistedValue,
     );
   }
 
@@ -1163,7 +1324,7 @@ async function recoverPublicAnchorState(
     }
     // A validity row cannot make leftover or malformed shards usable. Clear the rejected
     // document in bounded pages before another build can publish into the same namespace.
-    return restartMalformedAnchorBuild(client, generation, limit, published);
+    return restartMalformedAnchorBuild(client, generation, limit, published, persistedValue);
   }
   return undefined;
 }
@@ -1190,8 +1351,13 @@ export async function advancePublicAnchors(
         sql: `select value from settings where key = ? limit 1`,
       }),
       client.execute({
-        args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
-        sql: `select anchor_format_version, generation, order_epoch
+        args: [
+          PUBLIC_ANCHOR_PUBLICATION_KEY,
+          TRACKS_HUB_ANCHOR_ADDRESS.hub,
+          TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+        ],
+        sql: `select anchor_format_version, generation, order_epoch,
+          (select value from settings where key = ?) as publication_revision
         from hub_page_anchor_validity where hub = ? and clause_hash = ? limit 1`,
       }),
       client.execute({
@@ -1205,6 +1371,7 @@ export async function advancePublicAnchors(
     return { complete: false, processed: 0 };
   }
   const { generation, orderEpoch, total } = projectionState;
+  const restartKey = `${PUBLIC_ANCHOR_RESTART_PREFIX}${generation}`;
   const cleanupValue = cleanupResult.rows[0]?.value;
   const cleanup = anchorCleanupState(cleanupValue, generation, rollbackResult.rows[0]?.value);
   const cleanupAdvance = await advanceCurrentAnchorCleanup(client, cleanup, limit, projectionState);
@@ -1284,6 +1451,7 @@ export async function advancePublicAnchors(
       now,
       generation,
       orderEpoch,
+      restartKey,
     ],
     sql: `insert into hub_page_anchors
       (hub, clause_hash, anchors_json, fingerprint, computed_at)
@@ -1294,7 +1462,7 @@ export async function advancePublicAnchors(
   if (!page.complete) {
     state.shard += 1;
     const stateStatement = {
-      args: [PUBLIC_ANCHOR_REBUILD_KEY, JSON.stringify(state), generation, orderEpoch],
+      args: [PUBLIC_ANCHOR_REBUILD_KEY, JSON.stringify(state), generation, orderEpoch, restartKey],
       sql: `insert into settings (key, value)
         select ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
         on conflict(key) do update set value = excluded.value`,
@@ -1317,11 +1485,19 @@ export async function advancePublicAnchors(
   const rollbackGeneration = rollbackGenerationFor(previousGeneration, savedRollback, generation);
   if (rollbackGeneration !== null) {
     statements.push({
-      args: [PUBLIC_ANCHOR_ROLLBACK_KEY, rollbackGeneration],
-      sql: `insert into settings (key, value) values (?, ?)
+      args: [PUBLIC_ANCHOR_ROLLBACK_KEY, rollbackGeneration, generation, orderEpoch, restartKey],
+      sql: `insert into settings (key, value)
+        select ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
         on conflict(key) do update set value = excluded.value`,
     });
   }
+  const publicationRevision = crypto.randomUUID();
+  statements.push({
+    args: [PUBLIC_ANCHOR_PUBLICATION_KEY, publicationRevision, generation, orderEpoch, restartKey],
+    sql: `insert into settings (key, value)
+      select ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
+      on conflict(key) do update set value = excluded.value`,
+  });
   const validityIndex = statements.length;
   statements.push(
     {
@@ -1334,6 +1510,7 @@ export async function advancePublicAnchors(
         now,
         generation,
         orderEpoch,
+        restartKey,
       ],
       sql: `insert into hub_page_anchor_validity
           (hub, clause_hash, anchor_format_version, order_epoch, generation, published_at)
@@ -1356,13 +1533,38 @@ export async function advancePublicAnchors(
         TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
         generation,
         orderEpoch,
+        PUBLIC_ANCHOR_PUBLICATION_KEY,
+        publicationRevision,
+        generation,
+        orderEpoch,
+        restartKey,
       ],
       sql: `insert into settings (key, value)
         select ?, ? where exists (select 1 from hub_page_anchor_validity
           where hub = ? and clause_hash = ? and generation = ? and order_epoch = ?)
+        and exists (select 1 from settings where key = ? and value = ?)
+        and ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
         on conflict(key) do update set value = excluded.value`,
     },
-    { args: [PUBLIC_ANCHOR_REBUILD_KEY], sql: `delete from settings where key = ?` },
+    {
+      args: [
+        PUBLIC_ANCHOR_REBUILD_KEY,
+        TRACKS_HUB_ANCHOR_ADDRESS.hub,
+        TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+        generation,
+        orderEpoch,
+        PUBLIC_ANCHOR_PUBLICATION_KEY,
+        publicationRevision,
+        generation,
+        orderEpoch,
+        restartKey,
+      ],
+      sql: `delete from settings where key = ?
+        and exists (select 1 from hub_page_anchor_validity
+          where hub = ? and clause_hash = ? and generation = ? and order_epoch = ?)
+        and exists (select 1 from settings where key = ? and value = ?)
+        and ${PUBLIC_ANCHOR_SOURCE_READY_SQL}`,
+    },
   );
   const results = await client.batch(statements, "write");
   if ((results[validityIndex]?.rowsAffected ?? 0) === 0) {
