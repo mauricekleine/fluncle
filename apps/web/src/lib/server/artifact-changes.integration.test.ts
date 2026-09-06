@@ -1,9 +1,9 @@
 import { ARTIFACT_SUPPORTED_CONTRACTS } from "@fluncle/contracts/orpc";
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   acknowledgeArtifactChanges,
@@ -90,6 +90,56 @@ function sonarChange(
     subjectType: "track",
     ...overrides,
   };
+}
+
+async function insertRawArtifactChangeRow(input: {
+  revision: number;
+  stream: string;
+  streamVersion: number;
+  subjectId: string;
+  subjectType: string;
+}): Promise<void> {
+  await db.execute({
+    args: [
+      "2026-03-01T00:00:00.000Z",
+      input.revision,
+      input.stream,
+      input.streamVersion,
+      input.subjectId,
+      input.subjectType,
+    ],
+    sql: `insert into artifact_changes
+      (created_at, format_version, operation, payload_blob, payload_json, producer, revision,
+       stream, stream_version, subject_id, subject_type)
+      values (?, 1, 'upsert', null, '{}', 'artifact-test-fixture', ?, ?, ?, ?, ?)`,
+  });
+}
+
+async function insertRawArtifactRevisionReceipt(input: {
+  eventSeq: number;
+  revision: number;
+  stream: string;
+  streamVersion: number;
+  subjectId: string;
+  subjectType: string;
+}): Promise<void> {
+  await db.execute({
+    args: [
+      `fixture-digest-${input.eventSeq}`,
+      "2026-03-01T00:00:00.000Z",
+      input.eventSeq,
+      "artifact-test-fixture",
+      input.revision,
+      input.stream,
+      input.streamVersion,
+      input.subjectId,
+      input.subjectType,
+    ],
+    sql: `insert into artifact_change_revisions
+      (content_digest, created_at, event_seq, producer, revision, stream, stream_version,
+       subject_id, subject_type)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  });
 }
 
 async function finishSnapshot(
@@ -254,6 +304,110 @@ describe("artifact producer registry and immutable sequence", () => {
     expect(artifactBytesToBase64(blob as ArrayBuffer | ArrayBufferView)).toBe(
       artifactBytesToBase64(vectorBytes(1)),
     );
+  });
+
+  it("bounds latest revision lookup to one indexed maximum per history table", async () => {
+    const transaction = await db.transaction("write");
+    const execute = vi.spyOn(transaction, "execute");
+
+    try {
+      await insertArtifactChangeInTransaction(transaction, sonarChange(1));
+      await transaction.commit();
+    } finally {
+      transaction.close();
+    }
+
+    const latestStatement = execute.mock.calls
+      .map(([statement]) => statement)
+      .find(
+        (statement): statement is Extract<InStatement, { sql: string }> =>
+          typeof statement !== "string" &&
+          statement !== undefined &&
+          statement.sql.includes("select max(revision) as revision") &&
+          statement.sql.includes("from artifact_change_revisions"),
+      );
+
+    expect(latestStatement).toBeDefined();
+    expect(latestStatement?.args).toEqual([
+      "sonar.track",
+      1,
+      "track",
+      "track:a",
+      "sonar.track",
+      1,
+      "track",
+      "track:a",
+    ]);
+    expect(latestStatement?.sql.match(/select max\(revision\) as revision/g)).toHaveLength(3);
+    const plan = await db.execute({
+      args: latestStatement?.args ?? [],
+      sql: `explain ${latestStatement?.sql ?? ""}`,
+    });
+    const opcodes = plan.rows.map((row) =>
+      typeof row.opcode === "string" ? row.opcode : (JSON.stringify(row.opcode) ?? ""),
+    );
+    const branchMaxima = plan.rows.flatMap((row, index) => {
+      const next = plan.rows[index + 1];
+      const target = plan.rows.find((candidate) => candidate.addr === next?.p2);
+
+      return row.opcode === "AggStep" && next?.opcode === "Goto" && target?.opcode === "AggFinal"
+        ? [{ next, target }]
+        : [];
+    });
+    expect(opcodes).toContain("SeekLE");
+    expect(opcodes).toContain("IdxLT");
+    expect(opcodes.filter((opcode) => opcode === "AggStep")).toHaveLength(3);
+    expect(branchMaxima).toHaveLength(2);
+    expect(branchMaxima.every(({ next, target }) => next.p2 === target.addr)).toBe(true);
+  });
+
+  it("allocates across empty, live-only, split, and isolated revision histories", async () => {
+    const empty = await insertArtifactChange(db, sonarChange(1, { subjectId: "track:empty" }));
+    expect(empty).toMatchObject({ event: { revision: 1 }, inserted: true });
+
+    await db.execute(
+      buildArtifactChangeInsertStatement(sonarChange(4, { subjectId: "track:live-only" })),
+    );
+    const liveOnly = await insertArtifactChange(
+      db,
+      sonarChange(5, { subjectId: "track:live-only" }),
+    );
+    expect(liveOnly).toMatchObject({ event: { revision: 5 }, inserted: true });
+
+    await insertArtifactChange(db, sonarChange(2, { subjectId: "track:split" }));
+    await db.execute(
+      buildArtifactChangeInsertStatement(sonarChange(7, { subjectId: "track:split" })),
+    );
+    const split = await insertArtifactChange(db, sonarChange(8, { subjectId: "track:split" }));
+    expect(split).toMatchObject({ event: { revision: 8 }, inserted: true });
+
+    await insertRawArtifactChangeRow({
+      revision: 90,
+      stream: "device.track",
+      streamVersion: 99,
+      subjectId: "track:isolated",
+      subjectType: "track",
+    });
+    await insertRawArtifactRevisionReceipt({
+      eventSeq: 9_001,
+      revision: 91,
+      stream: "sonar.track",
+      streamVersion: 99,
+      subjectId: "track:isolated",
+      subjectType: "track",
+    });
+    await insertRawArtifactChangeRow({
+      revision: 92,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:other",
+      subjectType: "track",
+    });
+    const isolated = await insertArtifactChange(
+      db,
+      sonarChange(1, { subjectId: "track:isolated" }),
+    );
+    expect(isolated).toMatchObject({ event: { revision: 1 }, inserted: true });
   });
 
   it("can append beside its source write and safely retries after transaction rollback", async () => {
@@ -716,6 +870,38 @@ describe("artifact compaction", () => {
     });
     await inactivateArtifactConsumer(db, "inactive-only");
     expect((await compactArtifactChanges(db)).reason).toBe("no_safe_barrier");
+  });
+
+  it("continues from a durable revision receipt after every body is compacted", async () => {
+    await bootstrapConsumer("receipt-reader");
+    await insertArtifactChange(db, sonarChange(1, { subjectId: "track:compacted" }));
+    await insertArtifactChange(db, sonarChange(2, { subjectId: "track:compacted" }));
+    await ackPage("receipt-reader");
+
+    expect(await compactArtifactChanges(db)).toMatchObject({
+      barrier: 2,
+      deletedCount: 2,
+      reason: "compacted",
+    });
+    expect(
+      (
+        await db.execute({
+          args: ["track:compacted"],
+          sql: "select count(*) as count from artifact_changes where subject_id = ?",
+        })
+      ).rows[0]?.count,
+    ).toBe(0);
+    expect(
+      (
+        await db.execute({
+          args: ["track:compacted"],
+          sql: "select count(*) as count from artifact_change_revisions where subject_id = ?",
+        })
+      ).rows[0]?.count,
+    ).toBe(2);
+
+    const next = await insertArtifactChange(db, sonarChange(3, { subjectId: "track:compacted" }));
+    expect(next).toMatchObject({ event: { revision: 3 }, inserted: true });
   });
 
   it("never deletes past the slowest active consumer and preserves later tombstones", async () => {
