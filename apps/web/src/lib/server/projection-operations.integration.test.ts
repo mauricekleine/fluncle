@@ -1296,6 +1296,176 @@ describe("projection production operations", () => {
     );
   });
 
+  it("does not let a stale generation cleanup delete a new publication or overwrite its cursor", async () => {
+    await db.execute(`update public_aggregate_state
+      set generation = 'cleanup-g1', release_hub_order_epoch = 1 where scope = 'tracks'`);
+    expect(await advancePublicAnchors(db, 100)).toEqual({ complete: false, processed: 0 });
+
+    let publishedG2 = false;
+    let cleanupG2: unknown;
+    const staleCleanupClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (!publishedG2 && sql.includes("select clause_hash from hub_page_anchors")) {
+          publishedG2 = true;
+          await db.execute(`update public_aggregate_state
+            set generation = 'cleanup-g2', release_hub_order_epoch = 2 where scope = 'tracks'`);
+          expect(await advancePublicAnchors(db, 100)).toEqual({ complete: false, processed: 0 });
+          cleanupG2 = (
+            await db.execute(`select value from settings
+              where key = 'projection_cleanup_public_anchor_generations_v1'`)
+          ).rows[0]?.value;
+          expect(cleanupG2).toBeTypeOf("string");
+        }
+        return db.execute(statement);
+      },
+    };
+
+    const staleResult = await advancePublicAnchors(staleCleanupClient, 100);
+    expect(staleResult.complete).toBe(false);
+    expect(staleResult.processed).toBeGreaterThan(0);
+    expect(publishedG2).toBe(true);
+    expect(
+      (
+        await db.execute(`select value from settings
+          where key = 'projection_cleanup_public_anchor_generations_v1'`)
+      ).rows[0]?.value,
+    ).toBe(cleanupG2);
+    for (const generation of ["cleanup-g1", "cleanup-g2"]) {
+      expect(
+        (
+          await db.execute({
+            args: [
+              TRACKS_HUB_ANCHOR_ADDRESS.hub,
+              `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:${generation}:%`,
+            ],
+            sql: `select 1 from hub_page_anchors where hub = ? and clause_hash like ?`,
+          })
+        ).rows,
+      ).toHaveLength(1);
+    }
+    expect(
+      await readCurrentProjectedTrackHubAnchors(
+        db,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+      ),
+    ).toMatchObject({ anchors: [], total: 0 });
+  });
+
+  it("does not let stale terminal cleanup remove a newer generation cleanup cursor", async () => {
+    await db.execute(`update public_aggregate_state
+      set generation = 'terminal-g1', release_hub_order_epoch = 1 where scope = 'tracks'`);
+    expect(await advancePublicAnchors(db, 100)).toEqual({ complete: false, processed: 0 });
+    const terminalCleanup = JSON.stringify({
+      currentGeneration: "terminal-g1",
+      cursor: `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:\ufffe`,
+      rollbackGeneration: "agg",
+      version: 1,
+    });
+    await db.execute({
+      args: [terminalCleanup],
+      sql: `update settings set value = ?
+        where key = 'projection_cleanup_public_anchor_generations_v1'`,
+    });
+
+    let publishedG2 = false;
+    let cleanupG2: unknown;
+    const staleCleanupClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        const firstArg =
+          typeof statement === "string" || !Array.isArray(statement.args)
+            ? undefined
+            : statement.args[0];
+        if (
+          !publishedG2 &&
+          firstArg === "projection_cleanup_public_anchor_generations_v1" &&
+          sql.includes("delete from settings where key = ? and value = ?")
+        ) {
+          publishedG2 = true;
+          await db.execute(`update public_aggregate_state
+            set generation = 'terminal-g2', release_hub_order_epoch = 2 where scope = 'tracks'`);
+          expect(await advancePublicAnchors(db, 100)).toEqual({ complete: false, processed: 0 });
+          cleanupG2 = (
+            await db.execute(`select value from settings
+              where key = 'projection_cleanup_public_anchor_generations_v1'`)
+          ).rows[0]?.value;
+          expect(cleanupG2).toBeTypeOf("string");
+        }
+        return db.execute(statement);
+      },
+    };
+
+    expect(await advancePublicAnchors(staleCleanupClient, 100)).toEqual({
+      complete: false,
+      processed: 0,
+    });
+    expect(publishedG2).toBe(true);
+    expect(
+      (
+        await db.execute(`select value from settings
+          where key = 'projection_cleanup_public_anchor_generations_v1'`)
+      ).rows[0]?.value,
+    ).toBe(cleanupG2);
+    for (const generation of ["terminal-g1", "terminal-g2"]) {
+      expect(
+        (
+          await db.execute({
+            args: [
+              TRACKS_HUB_ANCHOR_ADDRESS.hub,
+              `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:${generation}:%`,
+            ],
+            sql: `select 1 from hub_page_anchors where hub = ? and clause_hash like ?`,
+          })
+        ).rows,
+      ).toHaveLength(1);
+    }
+  });
+
+  it("does not let a malformed cleanup reset overwrite a concurrently replaced cursor", async () => {
+    await db.execute(`update public_aggregate_state
+      set generation = 'malformed-cleanup', release_hub_order_epoch = 1 where scope = 'tracks'`);
+    expect(await advancePublicAnchors(db, 100)).toEqual({ complete: false, processed: 0 });
+    await db.execute(`update settings set value = 'malformed'
+      where key = 'projection_cleanup_public_anchor_generations_v1'`);
+    const replacement = JSON.stringify({
+      currentGeneration: "malformed-cleanup",
+      cursor: `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:replacement`,
+      rollbackGeneration: "agg",
+      version: 1,
+    });
+    let replaced = false;
+    const staleCleanupClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (!replaced && sql.includes("select clause_hash from hub_page_anchors")) {
+          replaced = true;
+          await db.execute({
+            args: [replacement],
+            sql: `update settings set value = ?
+              where key = 'projection_cleanup_public_anchor_generations_v1'`,
+          });
+        }
+        return db.execute(statement);
+      },
+    };
+
+    const result = await advancePublicAnchors(staleCleanupClient, 100);
+    expect(result.complete).toBe(false);
+    expect(result.processed).toBeGreaterThan(0);
+    expect(replaced).toBe(true);
+    expect(
+      (
+        await db.execute(`select value from settings
+          where key = 'projection_cleanup_public_anchor_generations_v1'`)
+      ).rows[0]?.value,
+    ).toBe(replacement);
+  });
+
   it("cleans same-generation shards before publishing a smaller anchor document", async () => {
     for (let index = 0; index < 250; index += 1) {
       await db.execute({

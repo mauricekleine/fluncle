@@ -947,7 +947,22 @@ async function advanceAnchorGenerationCleanup(
   client: ProjectionClient,
   state: AnchorCleanupState,
   limit: number,
+  expectedCleanupValue: string,
+  projection: AnchorProjectionState,
+  published: PublishedAnchorState,
 ): Promise<{ complete: boolean; processed: number }> {
+  const publicationGuard = anchorRestartSourceGuard(published, undefined);
+  if (publicationGuard === undefined) {
+    return { complete: false, processed: 0 };
+  }
+  const restartKey = `${PUBLIC_ANCHOR_RESTART_PREFIX}${projection.generation}`;
+  const currentGuardArgs = [
+    ...publicationGuard.args,
+    projection.generation,
+    projection.orderEpoch,
+    restartKey,
+  ];
+  const currentGuardSql = `(${publicationGuard.sql}) and ${PUBLIC_ANCHOR_SOURCE_READY_SQL}`;
   const basePrefix = `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:`;
   const page = await client.execute({
     args: [
@@ -972,27 +987,43 @@ async function advanceAnchorGenerationCleanup(
       !clauseHash.startsWith(currentPrefix) &&
       (rollbackPrefix === null || !clauseHash.startsWith(rollbackPrefix)),
   );
-  if (stale.length > 0) {
-    const placeholders = stale.map(() => "?").join(", ");
-    await client.execute({
-      args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, ...stale],
-      sql: `delete from hub_page_anchors where hub = ? and clause_hash in (${placeholders})`,
-    });
-  }
   const terminal = clauseHashes.at(-1);
   if (terminal !== undefined) {
-    await client.execute({
-      args: [PUBLIC_ANCHOR_CLEANUP_KEY, JSON.stringify({ ...state, cursor: terminal })],
-      sql: `insert into settings (key, value) values (?, ?)
-        on conflict(key) do update set value = excluded.value`,
+    const statements: InStatement[] = [];
+    if (stale.length > 0) {
+      const placeholders = stale.map(() => "?").join(", ");
+      statements.push({
+        args: [
+          TRACKS_HUB_ANCHOR_ADDRESS.hub,
+          ...stale,
+          PUBLIC_ANCHOR_CLEANUP_KEY,
+          expectedCleanupValue,
+          ...currentGuardArgs,
+        ],
+        sql: `delete from hub_page_anchors where hub = ?
+          and clause_hash in (${placeholders})
+          and exists (select 1 from settings where key = ? and value = ?)
+          and ${currentGuardSql}`,
+      });
+    }
+    statements.push({
+      args: [
+        JSON.stringify({ ...state, cursor: terminal }),
+        PUBLIC_ANCHOR_CLEANUP_KEY,
+        expectedCleanupValue,
+        ...currentGuardArgs,
+      ],
+      sql: `update settings set value = ? where key = ? and value = ?
+        and ${currentGuardSql}`,
     });
+    await client.batch(statements, "write");
     return { complete: false, processed: clauseHashes.length };
   }
-  await client.execute({
-    args: [PUBLIC_ANCHOR_CLEANUP_KEY],
-    sql: `delete from settings where key = ?`,
+  const result = await client.execute({
+    args: [PUBLIC_ANCHOR_CLEANUP_KEY, expectedCleanupValue, ...currentGuardArgs],
+    sql: `delete from settings where key = ? and value = ? and ${currentGuardSql}`,
   });
-  return { complete: true, processed: 0 };
+  return { complete: result.rowsAffected > 0, processed: 0 };
 }
 
 type AnchorRestartState = {
@@ -1225,13 +1256,27 @@ function assertPublicAnchorLimit(limit: number): void {
 async function advanceCurrentAnchorCleanup(
   client: ProjectionClient,
   cleanup: AnchorCleanupState | undefined,
+  cleanupValue: unknown,
   limit: number,
   projectionState: AnchorProjectionState,
+  published: PublishedAnchorState | undefined,
 ): Promise<{ complete: boolean; processed: number } | undefined> {
-  if (cleanup?.currentGeneration !== projectionState.generation) {
+  if (
+    cleanup?.currentGeneration !== projectionState.generation ||
+    typeof cleanupValue !== "string" ||
+    !publishedAnchorIsCurrent(published, projectionState) ||
+    published === undefined
+  ) {
     return undefined;
   }
-  const result = await advanceAnchorGenerationCleanup(client, cleanup, limit);
+  const result = await advanceAnchorGenerationCleanup(
+    client,
+    cleanup,
+    limit,
+    cleanupValue,
+    projectionState,
+    published,
+  );
   return result.complete
     ? { ...result, complete: await currentAnchorDocumentMatches(client, projectionState) }
     : result;
@@ -1374,11 +1419,18 @@ export async function advancePublicAnchors(
   const restartKey = `${PUBLIC_ANCHOR_RESTART_PREFIX}${generation}`;
   const cleanupValue = cleanupResult.rows[0]?.value;
   const cleanup = anchorCleanupState(cleanupValue, generation, rollbackResult.rows[0]?.value);
-  const cleanupAdvance = await advanceCurrentAnchorCleanup(client, cleanup, limit, projectionState);
+  const published = publishedResult.rows[0] as PublishedAnchorState | undefined;
+  const cleanupAdvance = await advanceCurrentAnchorCleanup(
+    client,
+    cleanup,
+    cleanupValue,
+    limit,
+    projectionState,
+    published,
+  );
   if (cleanupAdvance !== undefined) {
     return cleanupAdvance;
   }
-  const published = publishedResult.rows[0] as PublishedAnchorState | undefined;
   const publishedCurrent = publishedAnchorIsCurrent(published, projectionState);
   const persistedValue = persisted.rows[0]?.value;
   const saved = parseAnchorState(persistedValue);
