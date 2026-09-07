@@ -41,7 +41,8 @@ describe("database performance contracts", () => {
       (contract) =>
         contract.terminalProof !== undefined &&
         contract.plan !== undefined &&
-        contract.indexEvidence === undefined,
+        contract.indexEvidence === undefined &&
+        contract.productionLockEvidence === undefined,
     );
 
     expect(comparisons).toHaveLength(11);

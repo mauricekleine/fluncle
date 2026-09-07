@@ -381,6 +381,7 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create table if not exists perf_artists (
     id text primary key,
     name text not null,
+    slug text not null,
     mbid text,
     image_url text,
     image_key text,
@@ -391,9 +392,9 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   )`,
   `create index if not exists perf_artists_mbid_idx on perf_artists(mbid)`,
   `create index if not exists perf_artists_name_nocase_idx
-    on perf_artists(name collate nocase)`,
+    on perf_artists(name collate nocase, slug)`,
   `create index if not exists perf_artists_mixable_order_idx
-    on perf_artists(-rankable_track_count, name, id)
+    on perf_artists(-rankable_track_count, name, slug)
     where rankable_track_count > 0`,
   `create table if not exists perf_labels (
     id text primary key,
@@ -789,6 +790,9 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create index if not exists perf_due_work_claim_idx
     on perf_due_work(work_kind, state, claimed_by, claim_token, sort_key, subject_id)
     where state = 'leased'`,
+  `create index if not exists perf_due_work_cleanup_idx
+    on perf_due_work(work_kind, subject_type, generation, updated_at, subject_id)
+    where state <> 'repair'`,
   `create table if not exists perf_artifact_change_checkpoints (
     consumer_id text not null,
     phase text not null,
@@ -948,7 +952,11 @@ function syntheticTrackCredits(index: number, artistCount: number): string[] {
     return ["Synthetic Identity"];
   }
 
-  if (index === 1 || index === 2) {
+  if (index === 1) {
+    return ["synthetic collision"];
+  }
+
+  if (index === 2) {
     return ["Synthetic Collision"];
   }
 
@@ -1110,6 +1118,7 @@ export async function* generateFixture(
       args: [
         `synthetic-artist-${padded(index)}`,
         artist.name,
+        `synthetic-artist-${padded(index)}`,
         artist.mbid,
         `synthetic-artist-image-${padded(index)}`,
         `synthetic-artist-image-key-${padded(index)}`,
@@ -1119,8 +1128,8 @@ export async function* generateFixture(
         (index % 8) + 1,
       ],
       sql: `insert or ignore into perf_artists
-              (id, name, mbid, image_url, image_key, image_state, image_updated_at,
-               renderable_track_count, rankable_track_count) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (id, name, slug, mbid, image_url, image_key, image_state, image_updated_at,
+               renderable_track_count, rankable_track_count) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     };
   });
 
@@ -1239,13 +1248,23 @@ export async function* generateFixture(
     const subjectId = `synthetic-due-subject-${padded(index)}`;
     const workKind = index % 2 === 0 ? "youtube-provenance-findings" : "mbid-isrc-lookup";
     const isLeased = state === "leased";
+    const generation = [
+      "earlier-synthetic-generation",
+      "live",
+      "synthetic-generation-prior",
+      "synthetic-superseding-generation",
+    ][Math.floor(index / 4) % 4];
+
+    if (generation === undefined) {
+      throw new Error("due-work fixture generation is missing");
+    }
 
     return {
       args: [
         isLeased ? index + 10_000 : null,
         isLeased ? `synthetic-claim-${padded(index)}` : null,
         isLeased ? `synthetic-owner-${padded(index)}` : null,
-        "synthetic-index-evidence",
+        generation,
         syntheticTimestamp(index),
         padded(index),
         JSON.stringify([subjectId, workKind]),

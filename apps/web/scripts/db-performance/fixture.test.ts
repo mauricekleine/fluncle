@@ -193,13 +193,19 @@ describe("synthetic database performance fixture", () => {
       ]);
       const collisionTracks = await client.execute(
         `select id, artists_json, is_catalogue from perf_tracks
-         where id in ('synthetic-track-000000000', 'synthetic-track-000000003',
+         where id in ('synthetic-track-000000000', 'synthetic-track-000000001',
+                      'synthetic-track-000000003',
                       'synthetic-track-000000004') order by id`,
       );
       expect(collisionTracks.rows).toEqual([
         {
           artists_json: '["Synthetic Identity"]',
           id: "synthetic-track-000000000",
+          is_catalogue: 1,
+        },
+        {
+          artists_json: '["synthetic collision"]',
+          id: "synthetic-track-000000001",
           is_catalogue: 1,
         },
         {
@@ -273,6 +279,36 @@ describe("synthetic database performance fixture", () => {
       expect(await scalar(client, "select count(*) as n from due_work where state = 'ready'")).toBe(
         30,
       );
+      expect(
+        await scalar(
+          client,
+          `select count(distinct generation) as n from perf_due_work
+            where work_kind = 'youtube-provenance-findings' and state <> 'repair'`,
+        ),
+      ).toBe(4);
+      expect(
+        await scalar(
+          client,
+          `select count(*) as n from perf_due_work
+            where generation = 'live' and state <> 'repair'`,
+        ),
+      ).toBeGreaterThan(0);
+      const fixtureIndexes = await client.execute(
+        `select name, sql from sqlite_master where type = 'index'
+          and name in ('perf_artists_name_nocase_idx', 'perf_due_work_cleanup_idx') order by name`,
+      );
+      expect(fixtureIndexes.rows).toEqual([
+        {
+          name: "perf_artists_name_nocase_idx",
+          sql: expect.stringMatching(/on perf_artists\(name collate nocase, slug\)/i),
+        },
+        {
+          name: "perf_due_work_cleanup_idx",
+          sql: expect.stringMatching(
+            /on perf_due_work\(work_kind, subject_type, generation, updated_at, subject_id\)[\s\S]*where state <> 'repair'/i,
+          ),
+        },
+      ]);
     } finally {
       client.close();
     }
@@ -555,8 +591,8 @@ describe("synthetic database performance fixture", () => {
       await writeFixture(client, "1x", { counts: SMALL_COUNTS });
       await client.execute("delete from perf_artists where rowid = 1");
       await client.execute(
-        `insert into perf_artists (rowid, id, name, renderable_track_count, rankable_track_count)
-         values (12, 'synthetic-extra-artist', 'Synthetic Extra', 0, 0)`,
+        `insert into perf_artists (rowid, id, name, slug, renderable_track_count, rankable_track_count)
+         values (12, 'synthetic-extra-artist', 'Synthetic Extra', 'synthetic-extra-artist', 0, 0)`,
       );
       await client.execute(
         `insert into perf_galaxies (rowid, id, name) values
