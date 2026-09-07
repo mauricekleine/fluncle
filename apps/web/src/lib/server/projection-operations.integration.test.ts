@@ -368,6 +368,106 @@ describe("projection production operations", () => {
     }
   });
 
+  it("reports the oldest observed marker age and explains unavailable track marker time", async () => {
+    const createdAt = {
+      artist: "2025-01-01T00:00:00.000Z",
+      crawlDirect: "2025-01-01T03:00:00.000Z",
+      crawlFanout: "2025-01-01T02:00:00.000Z",
+      publicAggregate: "2025-01-01T01:00:00.000Z",
+    };
+    await db.batch([
+      {
+        args: ["track-with-unknown-age", "2020-01-01T00:00:00.000Z"],
+        sql: `insert into due_work
+          (work_kind, subject_type, subject_id, state, updated_at)
+          values ('source-repair', 'track', ?, 'repair', ?)`,
+      },
+      {
+        args: ["crawl-direct", createdAt.crawlDirect],
+        sql: `insert into crawl_due_work (node_id, state, created_at)
+          values (?, 'repair', ?)`,
+      },
+      {
+        args: [1, "crawl-fanout", createdAt.crawlFanout],
+        sql: `insert into crawl_projection_repairs (source_epoch, source_id, created_at)
+          values (?, ?, ?)`,
+      },
+      {
+        args: [1, "aggregate-oldest", createdAt.publicAggregate],
+        sql: `insert into projection_repairs
+          (projection, source_epoch, subject_type, subject_id, created_at)
+          values ('public_aggregates', ?, 'track', ?, ?)`,
+      },
+      {
+        args: [2, "aggregate-newer", "2025-01-01T04:00:00.000Z"],
+        sql: `insert into projection_repairs
+          (projection, source_epoch, subject_type, subject_id, created_at)
+          values ('public_aggregates', ?, 'track', ?, ?)`,
+      },
+      {
+        args: [1, "artist-oldest", createdAt.artist],
+        sql: `insert into projection_repairs
+          (projection, source_epoch, subject_type, subject_id, created_at)
+          values ('artist_qualification', ?, 'artist', ?, ?)`,
+      },
+    ]);
+
+    const readStartedAt = Date.now();
+    const status = await getProjectionStatusFor(db);
+    const readEndedAt = Date.now();
+    const expectExactAge = (ageMs: number | null, timestamp: string) => {
+      const markerTime = Date.parse(timestamp);
+      expect(ageMs).toBeGreaterThanOrEqual(readStartedAt - markerTime);
+      expect(ageMs).toBeLessThanOrEqual(readEndedAt - markerTime);
+    };
+
+    expectExactAge(
+      status.projections.crawlDueWork.oldestOutstandingMarkerAge.ageMs,
+      createdAt.crawlFanout,
+    );
+    expectExactAge(
+      status.projections.publicAggregates.oldestOutstandingMarkerAge.ageMs,
+      createdAt.publicAggregate,
+    );
+    expectExactAge(
+      status.projections.artistQualification.oldestOutstandingMarkerAge.ageMs,
+      createdAt.artist,
+    );
+    expect(status.projections.trackDueWork.oldestOutstandingMarkerAge).toEqual({
+      ageMs: null,
+      reason: "marker_timestamp_unavailable",
+      truncated: false,
+    });
+  });
+
+  it("marks an age truncated when the bounded epoch-ordered window cannot see every marker", async () => {
+    const observedTimestamp = "2025-01-01T00:00:00.000Z";
+    const unseenTimestamp = "2020-01-01T00:00:00.000Z";
+    await db.batch(
+      Array.from({ length: 102 }, (_, index) => ({
+        args: [
+          index + 1,
+          `aggregate-${index + 1}`,
+          index === 101 ? unseenTimestamp : observedTimestamp,
+        ],
+        sql: `insert into projection_repairs
+          (projection, source_epoch, subject_type, subject_id, created_at)
+          values ('public_aggregates', ?, 'track', ?, ?)`,
+      })),
+    );
+
+    const readStartedAt = Date.now();
+    const status = await getProjectionStatusFor(db);
+    const readEndedAt = Date.now();
+    const age = status.projections.publicAggregates.oldestOutstandingMarkerAge;
+
+    expect(age.truncated).toBe(true);
+    expect(age.reason).toBeNull();
+    expect(age.ageMs).toBeGreaterThanOrEqual(readStartedAt - Date.parse(observedTimestamp));
+    expect(age.ageMs).toBeLessThanOrEqual(readEndedAt - Date.parse(observedTimestamp));
+    expect(age.ageMs).toBeLessThan(readStartedAt - Date.parse(unseenTimestamp));
+  });
+
   it.each([
     ["track_due_work", "repair"],
     ["crawl_due_work", "repair"],

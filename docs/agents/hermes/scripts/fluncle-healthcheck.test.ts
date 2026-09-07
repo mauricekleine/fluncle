@@ -49,6 +49,7 @@ import {
   normalizeStrain,
   probeSweepStrain,
   postSnapshot,
+  readProjectionMaintenanceOutcome,
   serializeState,
   type ServiceState,
   STDERR_DELIMITER,
@@ -260,6 +261,24 @@ describe("judgeCron — the marker's body", () => {
 
     expect(judgeCron(CRON, dir)).toBe("fresh-ok");
     expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
+  });
+
+  test("the projection-maintenance row carries its low-cardinality outcome", () => {
+    const cron: CronDef = {
+      cadenceMs: 5 * 60_000,
+      match: "projection-maintenance",
+      service: "cron.projection-maintenance",
+    };
+    const dir = markerDir([
+      { ageMs: 60_000, body: marker('{"ok":true,"outcome":"partial_progress"}\n') },
+    ]);
+    const outcome = readProjectionMaintenanceOutcome(dir);
+
+    expect(outcome).toBe("partial_progress");
+    expect(cronCheck(cron, judgeCron(cron, dir), outcome)).toMatchObject({
+      message: "fresh; partial_progress",
+      status: "ok",
+    });
   });
 
   test("a summary followed by trailing log lines is still ok", () => {

@@ -237,6 +237,7 @@ const RECOGNISED_KEYS = new Set<string>([
   "admissionOutcome",
   "admissionWaitMs",
   "admissionYieldReason",
+  "outcome",
   "payloadStarted",
 ]);
 

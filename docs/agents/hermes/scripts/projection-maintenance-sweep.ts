@@ -17,8 +17,18 @@ export type FamilyName =
   | "track_due_work";
 
 type BoundedCount = { count: number; truncated: boolean };
+type OldestOutstandingMarkerAge = {
+  ageMs: number | null;
+  reason:
+    | "marker_timestamp_invalid"
+    | "marker_timestamp_unavailable"
+    | "status_field_unavailable"
+    | null;
+  truncated: boolean;
+};
 type FamilyStatus = {
   convergence: { epochMatched: boolean | null };
+  oldestOutstandingMarkerAge?: OldestOutstandingMarkerAge;
   repairs: { direct: BoundedCount; fanout: BoundedCount; total: BoundedCount };
 };
 type ProjectionStatusResponse = {
@@ -51,10 +61,18 @@ export type FamilySummary = {
   attempted: boolean;
   complete: boolean | null;
   error: string | null;
+  oldestOutstandingMarkerAge: OldestOutstandingMarkerAge | null;
+  outcome: ProjectionMaintenanceOutcome | null;
   processed: number | null;
   scheduled: number | null;
   steps: number | null;
 };
+
+export type ProjectionMaintenanceOutcome =
+  | "no_debt"
+  | "no_progress"
+  | "partial_progress"
+  | "useful_completion";
 
 export type ProjectionMaintenanceSummary = {
   artistQualification: FamilySummary;
@@ -63,6 +81,7 @@ export type ProjectionMaintenanceSummary = {
   errors: number;
   gateState: "active" | "disabled" | null;
   ok: boolean;
+  outcome: ProjectionMaintenanceOutcome | null;
   produced: number | null;
   publicAggregates: FamilySummary;
   reason: string | null;
@@ -85,6 +104,18 @@ function isBoundedCount(value: unknown): value is BoundedCount {
   );
 }
 
+function isOldestOutstandingMarkerAge(value: unknown): value is OldestOutstandingMarkerAge {
+  return (
+    isObject(value) &&
+    (value["ageMs"] === null || isNonnegativeInteger(value["ageMs"])) &&
+    (value["reason"] === null ||
+      value["reason"] === "marker_timestamp_invalid" ||
+      value["reason"] === "marker_timestamp_unavailable" ||
+      value["reason"] === "status_field_unavailable") &&
+    typeof value["truncated"] === "boolean"
+  );
+}
+
 function isFamilyStatus(value: unknown): value is FamilyStatus {
   if (!isObject(value) || !isObject(value["convergence"]) || !isObject(value["repairs"])) {
     return false;
@@ -92,6 +123,8 @@ function isFamilyStatus(value: unknown): value is FamilyStatus {
   const epochMatched = value["convergence"]["epochMatched"];
   return (
     (typeof epochMatched === "boolean" || epochMatched === null) &&
+    (value["oldestOutstandingMarkerAge"] === undefined ||
+      isOldestOutstandingMarkerAge(value["oldestOutstandingMarkerAge"])) &&
     isBoundedCount(value["repairs"]["direct"]) &&
     isBoundedCount(value["repairs"]["fanout"]) &&
     isBoundedCount(value["repairs"]["total"])
@@ -174,7 +207,26 @@ export function fluncleJson(args: string[]): unknown {
 }
 
 function emptyFamily(): FamilySummary {
-  return { attempted: false, complete: null, error: null, processed: 0, scheduled: 0, steps: 0 };
+  return {
+    attempted: false,
+    complete: null,
+    error: null,
+    oldestOutstandingMarkerAge: null,
+    outcome: null,
+    processed: 0,
+    scheduled: 0,
+    steps: 0,
+  };
+}
+
+function markerAge(family: FamilyStatus): OldestOutstandingMarkerAge {
+  return (
+    family.oldestOutstandingMarkerAge ?? {
+      ageMs: null,
+      reason: "status_field_unavailable",
+      truncated: false,
+    }
+  );
 }
 
 function needsRepair(family: FamilyStatus): boolean {
@@ -185,7 +237,12 @@ function hasRepairDebt(family: FamilyStatus): boolean {
   return family.repairs.total.count > 0;
 }
 
-function advanceFamily(run: RunCommand, target: FamilyName, maxSteps: number): FamilySummary {
+function advanceFamily(
+  run: RunCommand,
+  target: FamilyName,
+  maxSteps: number,
+  oldestOutstandingMarkerAge: OldestOutstandingMarkerAge,
+): FamilySummary {
   try {
     const response = parseAdvance(
       run([
@@ -209,6 +266,12 @@ function advanceFamily(run: RunCommand, target: FamilyName, maxSteps: number): F
       attempted: true,
       complete: response.complete,
       error: null,
+      oldestOutstandingMarkerAge,
+      outcome: response.complete
+        ? "useful_completion"
+        : response.processed > 0
+          ? "partial_progress"
+          : "no_progress",
       processed: response.processed,
       scheduled: response.scheduled,
       steps: response.steps,
@@ -218,6 +281,8 @@ function advanceFamily(run: RunCommand, target: FamilyName, maxSteps: number): F
       attempted: true,
       complete: false,
       error: error instanceof Error ? error.message : String(error),
+      oldestOutstandingMarkerAge,
+      outcome: "no_progress",
       processed: null,
       scheduled: null,
       steps: null,
@@ -231,14 +296,37 @@ function maintainFamily(
   enabled: boolean,
   repairNeeded: boolean,
   maxSteps: number,
+  oldestOutstandingMarkerAge: OldestOutstandingMarkerAge,
 ): FamilySummary {
   if (!enabled) {
-    return emptyFamily();
+    return { ...emptyFamily(), oldestOutstandingMarkerAge };
   }
   if (!repairNeeded) {
-    return { ...emptyFamily(), complete: true };
+    return {
+      ...emptyFamily(),
+      complete: true,
+      oldestOutstandingMarkerAge,
+      outcome: "no_debt",
+    };
   }
-  return advanceFamily(run, target, maxSteps);
+  return advanceFamily(run, target, maxSteps, oldestOutstandingMarkerAge);
+}
+
+function worstOutcome(families: readonly FamilySummary[]): ProjectionMaintenanceOutcome | null {
+  // No progress is worst because the tick left debt untouched; partial progress remains healthy
+  // but incomplete, useful completion drained known debt, and no debt needed no work.
+  const severity: Record<ProjectionMaintenanceOutcome, number> = {
+    no_debt: 0,
+    no_progress: 3,
+    partial_progress: 2,
+    useful_completion: 1,
+  };
+  return families.reduce<ProjectionMaintenanceOutcome | null>((worst, family) => {
+    if (family.outcome === null) {
+      return worst;
+    }
+    return worst === null || severity[family.outcome] > severity[worst] ? family.outcome : worst;
+  }, null);
 }
 
 /** Run one status-gated tick. The four family failures are isolated deliberately. */
@@ -252,6 +340,7 @@ export function runProjectionMaintenanceTick(
     errors: 0,
     gateState: null,
     ok: true,
+    outcome: null,
     produced: null,
     publicAggregates: emptyFamily(),
     reason: null,
@@ -263,6 +352,7 @@ export function runProjectionMaintenanceTick(
   } catch (error) {
     summary.ok = false;
     summary.errors = 1;
+    summary.outcome = "no_progress";
     summary.reason = error instanceof Error ? error.message : String(error);
     return summary;
   }
@@ -288,6 +378,7 @@ export function runProjectionMaintenanceTick(
     cutovers.trackDueWork,
     hasRepairDebt(status.status.projections.trackDueWork),
     DUE_WORK_MAX_STEPS,
+    markerAge(status.status.projections.trackDueWork),
   );
   summary.crawlDueWork = maintainFamily(
     run,
@@ -295,6 +386,7 @@ export function runProjectionMaintenanceTick(
     cutovers.crawlDueWork,
     hasRepairDebt(status.status.projections.crawlDueWork),
     DUE_WORK_MAX_STEPS,
+    markerAge(status.status.projections.crawlDueWork),
   );
   const aggregates = status.status.projections.publicAggregates;
   summary.publicAggregates = maintainFamily(
@@ -303,6 +395,7 @@ export function runProjectionMaintenanceTick(
     cutovers.publicProjections,
     needsRepair(aggregates) || !aggregates.anchorsReady,
     PUBLIC_MAX_STEPS,
+    markerAge(aggregates),
   );
 
   const artists = status.status.projections.artistQualification;
@@ -312,6 +405,7 @@ export function runProjectionMaintenanceTick(
     cutovers.publicProjections,
     needsRepair(artists),
     PUBLIC_MAX_STEPS,
+    markerAge(artists),
   );
 
   const families = [
@@ -320,12 +414,12 @@ export function runProjectionMaintenanceTick(
     summary.publicAggregates,
     summary.artistQualification,
   ];
-  summary.errors = families.filter((family) => family.error !== null).length;
+  summary.outcome = worstOutcome(families);
+  summary.errors = families.filter((family) => family.outcome === "no_progress").length;
   summary.ok = summary.errors === 0;
-  summary.produced =
-    summary.errors === 0
-      ? families.reduce((total, family) => total + (family.processed ?? 0), 0)
-      : null;
+  summary.produced = families.some((family) => family.processed === null)
+    ? null
+    : families.reduce((total, family) => total + (family.processed ?? 0), 0);
   return summary;
 }
 

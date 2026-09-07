@@ -27,6 +27,11 @@ type FamilyStatus = {
     sourceDigest: null | string;
     sourceEpoch: null | number;
   };
+  oldestOutstandingMarkerAge: {
+    ageMs: number | null;
+    reason: "marker_timestamp_invalid" | "marker_timestamp_unavailable" | null;
+    truncated: boolean;
+  };
   ready: boolean;
   rebuild: {
     complete: boolean;

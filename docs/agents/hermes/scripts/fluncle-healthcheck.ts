@@ -722,6 +722,19 @@ export type CronVerdict =
   | "no-data"
   | "no-summary";
 
+type ProjectionMaintenanceOutcome =
+  | "no_debt"
+  | "no_progress"
+  | "partial_progress"
+  | "useful_completion";
+
+const PROJECTION_MAINTENANCE_OUTCOMES = new Set<unknown>([
+  "no_debt",
+  "no_progress",
+  "partial_progress",
+  "useful_completion",
+]);
+
 /**
  * The cron NAME a given output dir belongs to (from the newest run-file's
  * `# Cron Job: <name>` header, e.g. `fluncle-enrich`), plus that file's mtime. The
@@ -852,6 +865,31 @@ export function findJsonSummary(body: string): Record<string, unknown> | null {
   return null;
 }
 
+/** Read the projection sweep's low-cardinality result for its public status-row message. */
+export function readProjectionMaintenanceOutcome(
+  dir: string | undefined,
+): ProjectionMaintenanceOutcome | null {
+  if (!dir) {
+    return null;
+  }
+  try {
+    const newest = readdirSync(dir)
+      .filter((entry) => entry.endsWith(".md"))
+      .map((entry) => join(dir, entry))
+      .map((path) => ({ mtimeMs: statSync(path).mtimeMs, path }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+    if (!newest) {
+      return null;
+    }
+    const outcome = findJsonSummary(readFileSync(newest.path, "utf8"))?.outcome;
+    return PROJECTION_MAINTENANCE_OUTCOMES.has(outcome)
+      ? (outcome as ProjectionMaintenanceOutcome)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * How long this box has been up, in ms — or null where that can't be known (no procfs).
  * Used to age a never-ran cron out of "no runs yet": on a box that has been up for days, a
@@ -978,37 +1016,47 @@ function runFailed(path: string | undefined): boolean {
 }
 
 /** Map one cron's verdict to its public Check (status + a short, public-safe note). */
-export function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
+export function cronCheck(
+  cron: CronDef,
+  verdict: CronVerdict,
+  outcome: ProjectionMaintenanceOutcome | null = null,
+): Check {
   const base = { latencyMs: null, service: cron.service };
+  const outcomeMessage = (message: string) =>
+    msg(outcome === null ? message : `${message}; ${outcome}`);
 
   if (verdict === "no-summary") {
     // The marker exists but the sweep never emitted its summary — it was killed mid-run.
     // Down on the first sighting: a process that died is not a job "watching its retry".
-    return { ...base, message: msg("last run died mid-flight"), status: "down" };
+    return { ...base, message: outcomeMessage("last run died mid-flight"), status: "down" };
   }
 
   if (verdict === "failed") {
     // Two consecutive failed runs — the job is stuck, not unlucky. A real outage.
-    return { ...base, message: msg("last runs failed"), status: "down" };
+    return { ...base, message: outcomeMessage("last runs failed"), status: "down" };
   }
 
   if (verdict === "failed-once") {
     // A single failed run with a healthy one before it — the sweep's own retry is the
     // remediation, so this surfaces as degraded and resolves (or escalates) on the next tick.
-    return { ...base, message: msg("last run failed; watching the retry"), status: "degraded" };
+    return {
+      ...base,
+      message: outcomeMessage("last run failed; watching the retry"),
+      status: "degraded",
+    };
   }
 
   if (verdict === "lagging") {
     // Healthy-looking output, but stale beyond 3× the cadence — the job is behind.
-    return { ...base, message: msg("behind schedule"), status: "degraded" };
+    return { ...base, message: outcomeMessage("behind schedule"), status: "degraded" };
   }
 
   if (verdict === "no-data") {
     // No output dir / no runs yet — a freshly-rebuilt box, not a fault. ok-unknown.
-    return { ...base, message: msg("no runs yet"), status: "ok" };
+    return { ...base, message: outcomeMessage("no runs yet"), status: "ok" };
   }
 
-  return { ...base, message: msg("fresh"), status: "ok" };
+  return { ...base, message: outcomeMessage("fresh"), status: "ok" };
 }
 
 /**
@@ -1021,9 +1069,12 @@ export function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
 function probeCrons(claimed: Map<string, string>): Check[] {
   const uptimeMs = boxUptimeMs();
 
-  return AUTOMATION_CRONS.map((cron) =>
-    cronCheck(cron, judgeCron(cron, claimed.get(cron.service), uptimeMs)),
-  );
+  return AUTOMATION_CRONS.map((cron) => {
+    const dir = claimed.get(cron.service);
+    const outcome =
+      cron.service === "cron.projection-maintenance" ? readProjectionMaintenanceOutcome(dir) : null;
+    return cronCheck(cron, judgeCron(cron, dir, uptimeMs), outcome);
+  });
 }
 
 // ---------------------------------------------------------------------------
