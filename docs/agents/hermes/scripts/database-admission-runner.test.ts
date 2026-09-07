@@ -10,16 +10,19 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const RUNNER = resolve(import.meta.dirname, "database-admission-runner.sh");
 const CRON_OUTPUT = resolve(import.meta.dirname, "cron-output.sh");
-const PROCESS_TEST_TIMEOUT_MS = 20_000;
-const SYNC_RUN_TIMEOUT_MS = 10_000;
-const PROCESS_STATE_TIMEOUT_MS = 5_000;
-const PROCESS_EXIT_TIMEOUT_MS = 5_000;
-const PROCESS_CLEANUP_TIMEOUT_MS = 3_000;
+// Shell startup and marker emission are integration work, not a five-second performance SLA.
+// Keep the inner deadlines below the outer test budget so failures retain their diagnostics
+// and cleanup can finish before the test runner abandons the fixture.
+const PROCESS_TEST_TIMEOUT_MS = 40_000;
+const RUN_TIMEOUT_MS = 20_000;
+const PROCESS_STATE_TIMEOUT_MS = 15_000;
+const PROCESS_EXIT_TIMEOUT_MS = 15_000;
+const PROCESS_CLEANUP_TIMEOUT_MS = 5_000;
 const PROCESS_TEST_OPTIONS = { timeout: PROCESS_TEST_TIMEOUT_MS };
 let directory: string;
 let binDirectory: string;
@@ -78,15 +81,52 @@ ${body}
   chmodSync(path, 0o755);
 }
 
-function run(
+async function run(
   command: string[],
   options: { failClosed?: boolean; home?: string; maxWaitSecs?: number; token?: string } = {},
-): ReturnType<typeof spawnSync> {
-  return spawnSync("bash", [RUNNER, "fluncle-enrich", "--", ...command], {
-    encoding: "utf8",
+  timeoutMs = RUN_TIMEOUT_MS,
+): Promise<{
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = spawn("bash", [RUNNER, "fluncle-enrich", "--", ...command], {
+    detached: true,
     env: runnerEnvironment(options),
-    timeout: SYNC_RUN_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdout = (stdout + chunk.toString()).slice(-65_536);
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-65_536);
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // Wait for pipe closure too: a surviving fixture descendant must not hold up the suite.
+    const outcome = await new Promise<ProcessOutcome>((resolvePromise, rejectPromise) => {
+      child.once("error", rejectPromise);
+      child.once("close", (code, signal) => resolvePromise({ code, signal }));
+      timer = setTimeout(() => rejectPromise(new Error("process deadline exceeded")), timeoutMs);
+    });
+    return { signal: outcome.signal, status: outcome.code, stderr, stdout };
+  } catch (error) {
+    // TERM is handled by the runner and can wait on the fake coordinator. Kill the isolated
+    // fixture group, including any coordinator child still holding stdout/stderr open.
+    if (child.pid !== undefined) {
+      await stopProcessGroup(child.pid);
+    }
+    await stopSpawnedProcess(child);
+    throw new Error(
+      `admission fixture failed; deadline=${timeoutMs}ms status=${child.exitCode} signal=${child.signalCode}; stdout=${stdout}; stderr=${stderr}`,
+      { cause: error },
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function runnerEnvironment(
@@ -268,15 +308,37 @@ const MALFORMED_YIELD_QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:ru
 
 describe("database admission unit runner", () => {
   it(
+    "hard-stops a hung fixture instead of waiting for its TERM handler",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      await expect(
+        run(["bash", "-c", 'trap "" TERM; exec sleep 30'], { token: "" }, 250),
+      ).rejects.toThrow(/deadline=250ms.*signal=SIGKILL/);
+    },
+  );
+
+  it(
+    "allows a slow fixture response without weakening the shadow behavior assertion",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(`sleep 5.1\n${SHADOW_RESPONSE}`);
+      const result = await run(["bash", "-c", "printf shadow"]);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("shadow");
+      expect(result.stderr).toContain('"outcome":"shadow"');
+    },
+  );
+
+  it(
     "preserves old execution when shadow mode or the dark endpoint is unavailable",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(SHADOW_RESPONSE);
-      const shadow = run(["bash", "-c", "printf shadow"]);
+      const shadow = await run(["bash", "-c", "printf shadow"]);
       expect(shadow.status).toBe(0);
       expect(shadow.stdout).toBe("shadow");
 
-      const unavailable = run(["bash", "-c", "printf fallback"], { token: "" });
+      const unavailable = await run(["bash", "-c", "printf fallback"], { token: "" });
       expect(unavailable.status).toBe(0);
       expect(unavailable.stdout).toBe("fallback");
     },
@@ -285,7 +347,7 @@ describe("database admission unit runner", () => {
   it(
     "fails closed before payload start when the locally armed coordinator is unavailable",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"acquire"'; then
   exit 1
@@ -293,7 +355,7 @@ fi
 printf '{}'
 `);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         failClosed: true,
       });
 
@@ -335,9 +397,13 @@ echo '{}'
       [RUNNER, "fluncle-enrich", "--", "bash", "-c", `printf started > "${payloadMarker}"`],
       {
         env: runnerEnvironment({ failClosed: true }),
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "pipe"],
       },
     );
+    let stderr = "";
+    runner.stderr?.on("data", (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(-8_192);
+    });
 
     try {
       await waitUntil(() => existsSync(acquireStarted), undefined, "acquisition handshake");
@@ -355,6 +421,14 @@ echo '{}'
       expect(existsSync(payloadMarker)).toBe(false);
       const calls = readFileSync(curlLog, "utf8");
       expect(calls.match(/"action":"cancel"/g)?.length ?? 0).toBe(1);
+    } catch (error) {
+      const calls = existsSync(curlLog) ? readFileSync(curlLog, "utf8") : "no coordinator calls";
+      throw new Error(
+        `acquisition signal fixture: ${String(error)}; calls=${calls}; stderr=${stderr}`,
+        {
+          cause: error,
+        },
+      );
     } finally {
       writeFileSync(finishAcquire, "finish\n");
       await stopSpawnedProcess(runner);
@@ -364,10 +438,10 @@ echo '{}'
   it(
     "fails closed before payload start while a locally armed unit still sees shadow mode",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(SHADOW_RESPONSE);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         failClosed: true,
       });
 
@@ -380,14 +454,14 @@ echo '{}'
   it(
     "loads fail-closed readiness from the container secrets file before deriving config",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       writeFileSync(
         join(directory, ".fluncle-secrets.env"),
         "DATABASE_ADMISSION_FAIL_CLOSED=true\n",
       );
       fakeCurl(SHADOW_RESPONSE);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`]);
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`]);
 
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(false);
@@ -398,7 +472,7 @@ echo '{}'
   it(
     "keeps enforcement sticky when a queued firing later receives a shadow response",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(`
 if [ "$(wc -l < "${curlLog}")" -eq 1 ]; then
   ${QUEUED_RESPONSE}
@@ -407,7 +481,7 @@ else
 fi
 `);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`]);
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`]);
 
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(false);
@@ -419,10 +493,10 @@ fi
   it(
     "cancels a bounded queued acquisition without starting the payload",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(QUEUED_RESPONSE);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         maxWaitSecs: 0,
       });
 
@@ -448,10 +522,10 @@ fi
   it(
     "reports one admission skip through a live rebake lock and cancels its queued lease",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(QUEUED_RESPONSE);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         home: liveRebakeHome(),
         maxWaitSecs: 0,
       });
@@ -473,11 +547,11 @@ fi
   it(
     "reports one admission skip through a live rebake lock and releases a late grant",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(`sleep 0.01
 ${ACQUIRED_RESPONSE}`);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         home: liveRebakeHome(),
         maxWaitSecs: 0,
       });
@@ -499,10 +573,10 @@ ${ACQUIRED_RESPONSE}`);
   it(
     "keeps a malformed coordinator yield reason out of the marker JSON",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(MALFORMED_YIELD_QUEUED_RESPONSE);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         maxWaitSecs: 0,
       });
 
@@ -519,11 +593,11 @@ ${ACQUIRED_RESPONSE}`);
   it(
     "releases a grant that arrives after the absolute acquisition deadline",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(`sleep 0.01
 ${ACQUIRED_RESPONSE}`);
       const payloadMarker = join(directory, "payload-started");
-      const result = run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         maxWaitSecs: 0,
       });
 
@@ -537,33 +611,37 @@ ${ACQUIRED_RESPONSE}`);
   it(
     "rejects acquisition waits longer than the committed service budget",
     PROCESS_TEST_OPTIONS,
-    () => {
-      const result = run(["bash", "-c", "exit 0"], { maxWaitSecs: 121 });
+    async () => {
+      const result = await run(["bash", "-c", "exit 0"], { maxWaitSecs: 121 });
 
       expect(result.status).toBe(2);
       expect(result.stderr).toContain("DATABASE_ADMISSION_MAX_WAIT_SECS must be between 0 and 120");
     },
   );
 
-  it("releases a completed payload with the exact fencing token", PROCESS_TEST_OPTIONS, () => {
-    fakeCurl(ACQUIRED_RESPONSE);
-    const result = run(["bash", "-c", "printf complete"]);
+  it(
+    "releases a completed payload with the exact fencing token",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(ACQUIRED_RESPONSE);
+      const result = await run(["bash", "-c", "printf complete"]);
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("complete");
-    const calls = readFileSync(curlLog, "utf8");
-    expect(calls).toContain('"action":"acquire"');
-    expect(calls).toContain('"action":"release"');
-    expect(calls).toContain('"fencingToken":7');
-    expect(result.stderr).toContain('"outcome":"released"');
-    expect(result.stderr).toContain('"enforced":true');
-    expect(result.stderr).toContain('"operation_id":"track.enrich"');
-    expect(result.stderr).toContain('"run_id":"');
-  });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("complete");
+      const calls = readFileSync(curlLog, "utf8");
+      expect(calls).toContain('"action":"acquire"');
+      expect(calls).toContain('"action":"release"');
+      expect(calls).toContain('"fencingToken":7');
+      expect(result.stderr).toContain('"outcome":"released"');
+      expect(result.stderr).toContain('"enforced":true');
+      expect(result.stderr).toContain('"operation_id":"track.enrich"');
+      expect(result.stderr).toContain('"run_id":"');
+    },
+  );
 
-  it("leaves an acquired payload's own success evidence intact", PROCESS_TEST_OPTIONS, () => {
+  it("leaves an acquired payload's own success evidence intact", PROCESS_TEST_OPTIONS, async () => {
     fakeCurl(ACQUIRED_RESPONSE);
-    const result = run([
+    const result = await run([
       "bash",
       "-c",
       'source "$1"; emit_cron_output enrich -- bash -c \'printf "{\\\"checked\\\":1,\\\"errors\\\":0,\\\"produced\\\":1,\\\"queueDepth\\\":0}\\n"\'',
@@ -580,10 +658,10 @@ ${ACQUIRED_RESPONSE}`);
   it(
     "uses the in-group owner watcher when parent-death signaling is unavailable",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeExecutable("setpriv", "exit 1");
       fakeCurl(ACQUIRED_RESPONSE);
-      const result = run(["bash", "-c", "printf fallback"]);
+      const result = await run(["bash", "-c", "printf fallback"]);
 
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("fallback");
@@ -595,7 +673,7 @@ ${ACQUIRED_RESPONSE}`);
   it(
     "kills an in-session descendant before releasing a completed payload",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       const descendantMarker = join(directory, "residual-descendant");
       const releaseObservation = join(directory, "release-observation");
       fakeCurl(`
@@ -609,7 +687,7 @@ if printf '%s' "$*" | grep -q '"action":"release"'; then
 fi
 ${ACQUIRED_RESPONSE}
 `);
-      const result = run([
+      const result = await run([
         "bash",
         "-c",
         `(
@@ -632,7 +710,7 @@ ${ACQUIRED_RESPONSE}
   it(
     "kills residual group work and releases once when the supervisor dies",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       const descendantMarker = join(directory, "orphaned-descendant");
       const releaseObservation = join(directory, "orphan-release-observation");
       fakeCurl(`
@@ -646,7 +724,7 @@ if printf '%s' "$*" | grep -q '"action":"release"'; then
 fi
 ${ACQUIRED_RESPONSE}
 `);
-      const result = run([
+      const result = await run([
         "bash",
         "-c",
         `(
@@ -671,14 +749,14 @@ ${ACQUIRED_RESPONSE}
   it(
     "kills the payload process group and fails fenced when a heartbeat is partitioned",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
   exit 1
 fi
 ${ACQUIRED_RESPONSE}
 `);
-      const result = run(["bash", "-c", "while :; do sleep 1; done"]);
+      const result = await run(["bash", "-c", "while :; do sleep 1; done"]);
       expect(result.status).toBe(75);
       expect(result.signal).toBeNull();
       expect(result.stderr).toContain('"outcome":"fenced"');
@@ -793,7 +871,7 @@ exec "$@"`,
   it(
     "fences a running payload when an enforced heartbeat downgrades to shadow",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
   ${SHADOW_RESPONSE}
@@ -801,7 +879,7 @@ if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
 fi
 ${ACQUIRED_RESPONSE}
 `);
-      const result = run(["bash", "-c", "while :; do sleep 1; done"]);
+      const result = await run(["bash", "-c", "while :; do sleep 1; done"]);
       expect(result.status).toBe(75);
       expect(result.stderr).toContain('"yield_reason":"enforcement-not-active"');
     },
@@ -810,9 +888,9 @@ ${ACQUIRED_RESPONSE}
   it(
     "releases the exact fencing token when a running unit is cancelled",
     PROCESS_TEST_OPTIONS,
-    () => {
+    async () => {
       fakeCurl(ACQUIRED_RESPONSE);
-      const result = run([
+      const result = await run([
         "bash",
         "-c",
         'kill -TERM "$FLUNCLE_ADMISSION_RUNNER_PID"; kill -INT "$FLUNCLE_ADMISSION_RUNNER_PID" 2>/dev/null || true; kill -HUP "$FLUNCLE_ADMISSION_RUNNER_PID" 2>/dev/null || true; while :; do sleep 1; done',
