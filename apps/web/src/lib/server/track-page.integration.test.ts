@@ -10,6 +10,7 @@ import {
   seedTrack,
 } from "./integration-db";
 import { EMBEDDING_DIMS } from "./embedding";
+import { vectorFallbackCandidateLimitSql } from "./vector-fallback";
 import {
   listSonicNeighbours,
   readTrackDestination,
@@ -58,6 +59,9 @@ const RICH = "mb_rich-uncertified-1";
 const THIN = "mb_thin-uncertified-1";
 const SOURCELESS = "mb_sourceless-1";
 const DUPLICATE = "mb_duplicate-twin-1";
+const NON_EMBEDDED_EARLY = "aa-non-embedded-neighbour";
+const EMBEDDED_EARLY = "bb-embedded-neighbour";
+const EMBEDDED_NEXT = "cc-embedded-neighbour";
 
 /** Stamp the four evidence columns onto a row — the shape the enrichment sweeps eventually reach. */
 async function makeEvidenceRich(trackId: string): Promise<void> {
@@ -420,6 +424,7 @@ describe("close in sound", () => {
     const details = plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
     const joined = details.join("\n");
 
+    expect(joined).toContain("MATERIALIZE candidates");
     expect(joined).toContain("MATERIALIZE winners");
     expect(joined).toContain("SCAN winners");
     expect(joined).toMatch(
@@ -429,13 +434,42 @@ describe("close in sound", () => {
       3,
     );
 
+    const candidatesSql = statement.sql.slice(
+      statement.sql.indexOf("with candidates"),
+      statement.sql.indexOf("), winners"),
+    );
+    expect(candidatesSql).not.toContain("embedding_blob");
+
     const winnersSql = statement.sql.slice(
-      statement.sql.indexOf("with winners"),
+      statement.sql.indexOf("), winners"),
       statement.sql.indexOf(")\n          select"),
     );
     expect(winnersSql).not.toContain("findings");
     expect(winnersSql).not.toContain("albums");
     expect(winnersSql).not.toContain("album_image");
+  });
+
+  it("keeps embedded membership ahead of the actual sonic statement's candidate cap", async () => {
+    for (const trackId of [NON_EMBEDDED_EARLY, EMBEDDED_EARLY, EMBEDDED_NEXT]) {
+      await seedCatalogueTrack(db, { artists: ["Candidate Fixture"], title: trackId, trackId });
+      await makeEvidenceRich(trackId);
+    }
+    await seedEmbedding(db, EMBEDDED_EARLY, axisVector(0));
+    await seedEmbedding(db, EMBEDDED_NEXT, axisVector(1));
+
+    const statement = sonicNeighbourScanStatement(
+      new Uint8Array(EMBEDDING_DIMS * Float32Array.BYTES_PER_ELEMENT),
+      RICH,
+      8,
+      undefined,
+    );
+    const sql = statement.sql.replace(
+      vectorFallbackCandidateLimitSql(),
+      vectorFallbackCandidateLimitSql(2),
+    );
+    const result = await db.execute({ args: statement.args, sql });
+
+    expect(result.rows.map((row) => row.track_id)).toStrictEqual([EMBEDDED_EARLY, EMBEDDED_NEXT]);
   });
 
   it("drops a dismissed or stamped-duplicate neighbour, so every row goes somewhere real", async () => {

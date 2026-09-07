@@ -780,20 +780,20 @@ export async function listSimilarArtistNeighbours(
   }
 
   const idPlaceholders = selectedIds.map(() => "?").join(", ");
-  // Bind order follows the `?` order in the SQL: the probe BLOB (in the select list) leads, then the
-  // excluded ids, then the limit.
+  // Bind order follows the candidate CTE: excluded ids lead, then the probe BLOB and limit.
   const result = await executeVectorFallback(db, "sonar.fallback.artists", {
-    args: [toVectorProbe(probe), ...selectedIds, Math.max(0, limit)],
-    sql: `with winners(artist_id, dist) as materialized (
-            select artist_id, vector_distance_cos(centroid_blob, ?) as dist
-            from (
-              select ac.artist_id, ac.centroid_blob
+    args: [...selectedIds, toVectorProbe(probe), Math.max(0, limit)],
+    sql: `with candidates(artist_id) as materialized (
+              select ac.artist_id
               from artist_centroids ac
               where ac.artist_id not in (${idPlaceholders})
               order by ac.artist_id
               ${vectorFallbackCandidateLimitSql()}
-            )
-            order by dist asc, artist_id asc
+            ), winners(artist_id, dist) as materialized (
+            select candidates.artist_id, vector_distance_cos(ac.centroid_blob, ?) as dist
+            from candidates
+            join artist_centroids ac on ac.artist_id = candidates.artist_id
+            order by dist asc, candidates.artist_id asc
             limit ?
           )
           select a.id as artist_id, a.slug as slug, a.name as name, a.image_url as image_url,

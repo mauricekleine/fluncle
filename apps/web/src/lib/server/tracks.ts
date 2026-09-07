@@ -1566,21 +1566,22 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   // no-embedding guard; `vector_distance_cos` throws on a NULL probe). The join to
   // `track_embeddings` is INNER, which IS the old `embedding_blob is not null` filter: a
   // candidate with no vector never reaches the cosine, it simply is not in the satellite.
-  // Args bind in SQL-TEXT order: probe, then the excluded target, then the result limit.
+  // Args bind in SQL-TEXT order: excluded target, then probe and result limit.
   const rankedResult = await executeVectorFallback(db, "sonar.fallback.log", {
-    args: [probe, targetRow.track_id, limit],
-    sql: `with winners(track_id, dist) as materialized (
-            select track_id, vector_distance_cos(embedding_blob, ?) as dist
-            from (
-              select tracks.track_id, emb.embedding_blob
+    args: [targetRow.track_id, probe, limit],
+    sql: `with candidates(track_id) as materialized (
+              select tracks.track_id
               from ${FINDINGS_FROM}
               join track_embeddings emb on emb.track_id = tracks.track_id
               where findings.log_id is not null
                 and tracks.track_id != ?
               order by tracks.track_id
               ${vectorFallbackCandidateLimitSql()}
-            )
-            order by dist asc, track_id asc
+            ), winners(track_id, dist) as materialized (
+            select candidates.track_id, vector_distance_cos(emb.embedding_blob, ?) as dist
+            from candidates
+            join track_embeddings emb on emb.track_id = candidates.track_id
+            order by dist asc, candidates.track_id asc
             limit ?
           )
           select ${TRACK_SELECT}
@@ -1947,39 +1948,39 @@ export async function getMixableTracks(
       ? `and tracks.track_id not in (${excludedTrackIds.map(() => "?").join(", ")})`
       : "";
 
-  const distanceSql = probe ? `vector_distance_cos(vec, ?)` : `null`;
+  const distanceSql = probe ? `vector_distance_cos(emb.embedding_blob, ?)` : `null`;
   const candidateStatement = {
-    // SQL-TEXT order decides the bind order, and the probe's `?` is in the OUTER select —
-    // which is textually BEFORE the inner subquery — so the probe binds FIRST, then the
-    // inner WHERE's keys, target, and exclusions in the order they appear. (Getting this
-    // backwards binds a key string into `vector_distance_cos`, a SQLITE_ERROR hosted and a
-    // silent wrong answer locally.)
+    // SQL-TEXT order decides the bind order: the ID-only candidate CTE's keys, target and
+    // exclusions lead; the post-cap vector calculation receives the probe last.
     args: [
-      ...(probe ? [probe] : []),
       ...keys,
       targetRow.track_id,
       ...excludedLogIds,
       ...excludedTrackIds,
+      ...(probe ? [probe] : []),
     ],
-    // `vec` is the satellite's native `embedding_blob` — the whole-archive candidate scan reads
-    // it directly and the DB ranks the cosine in SQL. The satellite joins LEFT, deliberately:
+    // The vector satellite joins after the ID-only candidate cap. The DB still ranks the cosine
+    // in SQL. The satellite joins LEFT, deliberately:
     // an unembedded candidate still belongs on the rail (it mixes on key + BPM), it just gets a
     // null `vec` and a null sonic term. `has_embedding` is read off the `tracks` row the scan
     // already has rather than off the join, so the coverage gate costs nothing extra.
-    sql: `select track_id, log_id, key, bpm, features_json, has_embedding,
-                 case when vec is null then null else ${distanceSql} end as sonic_dist
-          from (
-            select tracks.track_id as track_id, findings.log_id as log_id, tracks.key as key,
-                   tracks.bpm as bpm, tracks.features_json as features_json,
-                   tracks.has_embedding as has_embedding,
-                   emb.embedding_blob as vec
+    sql: `with candidates(track_id) as materialized (
+            select tracks.track_id
             from ${MIX_FROM}
-            left join track_embeddings emb on emb.track_id = tracks.track_id
             where tracks.key in (${keyClause})
               and tracks.track_id != ? ${logIdClause} ${trackIdClause}
             order by tracks.rowid
             ${vectorFallbackCandidateLimitSql()}
-          )`,
+          )
+          select tracks.track_id as track_id, findings.log_id as log_id, tracks.key as key,
+                 tracks.bpm as bpm, tracks.features_json as features_json,
+                 tracks.has_embedding as has_embedding,
+                 case when emb.embedding_blob is null then null else ${distanceSql} end as sonic_dist
+          from candidates
+          join tracks on tracks.track_id = candidates.track_id
+          left join findings on findings.track_id = tracks.track_id
+          left join track_embeddings emb on emb.track_id = tracks.track_id
+          order by tracks.rowid`,
   };
   const candidateResult = probe
     ? await executeVectorFallback(db, "sonar.fallback.mix", candidateStatement)
