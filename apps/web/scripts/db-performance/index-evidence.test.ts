@@ -296,9 +296,9 @@ describe("final index plan evidence", () => {
     expect(execution.metadata?.productionPlanViolations).toBe(0);
   });
 
-  it("keeps forced release-date variants supplemental to the unforced production plan", async () => {
+  it("keeps the locked release-date hub cursor shapes and records their unforced counterparts", async () => {
     const contract = indexEvidenceContracts().find(
-      (candidate) => candidate.id === "index.tracks-release-date-default-hub",
+      (candidate) => candidate.id === "index.tracks-release-date-track-id",
     );
     if (!contract?.plan || !contract.terminalProof) {
       throw new Error("default hub release-date comparison contract has no plan");
@@ -326,15 +326,42 @@ describe("final index plan evidence", () => {
       (sql) => !/^EXPLAIN QUERY PLAN/i.test(sql) && !/sqlite_master/i.test(sql),
     );
 
-    expect(contract.plan.statement.sql).not.toMatch(/\bINDEXED\s+BY\b/i);
+    expect(contract.plan.statement.sql).toMatch(
+      /\bINDEXED\s+BY\s+perf_tracks_release_date_track_id_idx\b/i,
+    );
     expect(execution.metadata?.outputsEquivalent).toBe(true);
-    expect(dataSql).toHaveLength(4);
-    expect(dataSql.slice(0, 2).every((sql) => !/\bINDEXED\s+BY\b/i.test(sql))).toBe(true);
+    expect(dataSql).toHaveLength(8);
     expect(
       dataSql
-        .slice(2)
+        .slice(0, 4)
         .every((sql) => /\bINDEXED\s+BY\s+perf_tracks_release_date_track_id_idx\b/i.test(sql)),
     ).toBe(true);
+    expect(dataSql.slice(4).every((sql) => !/\bINDEXED\s+BY\b/i.test(sql))).toBe(true);
+    expect(dataSql[0]).toMatch(
+      /from perf_tracks indexed by perf_tracks_release_date_track_id_idx\s+order by/i,
+    );
+    expect(dataSql[2]).toMatch(/release_date is null and id < /i);
+  });
+
+  it("mirrors the six reviewed locked consumers and records an unforced same-shape plan", () => {
+    const contracts = new Map(indexEvidenceContracts().map((contract) => [contract.id, contract]));
+    const reviewed = [
+      ["index.tracks-anchor-queue", /count\(\*\)[\s\S]*not exists/i],
+      ["index.tracks-label-id", /exists \(select 1 from perf_track_artists/i],
+      ["index.tracks-mb-recording-id-queue", /substr\(id, 1, 3\) != 'mb_'/i],
+      ["index.artist-qualification-qualified", /perf_artist_qualification_state/i],
+      ["index.tracks-anchor-order", /left join perf_findings/i],
+      ["index.projection-repairs-order", /source_version/i],
+    ] as const;
+
+    for (const [id, shape] of reviewed) {
+      const contract = contracts.get(id);
+      if (!contract?.plan || !contract.terminalProof) {
+        throw new Error(`reviewed consumer contract is missing: ${id}`);
+      }
+      expect(contract.plan.statement.sql).toMatch(/\bINDEXED\s+BY\b/i);
+      expect(contract.plan.statement.sql).toMatch(shape);
+    }
   });
 
   it("excludes structural drop proof latency from a single final consumer statement", async () => {
@@ -412,7 +439,7 @@ describe("final index plan evidence", () => {
 
   it("budgets a multi-consumer proof by its slowest final statement", async () => {
     const contract = indexEvidenceContracts().find(
-      (candidate) => candidate.id === "index.tracks-release-date-default-hub",
+      (candidate) => candidate.id === "index.tracks-release-date-track-id",
     );
     if (!contract) {
       throw new Error("default hub release-date comparison contract is missing");
@@ -453,16 +480,16 @@ describe("final index plan evidence", () => {
     });
     const evidence = report.contracts[0];
 
-    expect(evidence?.durationMs).toEqual({ max: 300, p50: 300, p95: 300, p99: 300 });
+    expect(evidence?.durationMs).toEqual({ max: 900, p50: 900, p95: 900, p99: 900 });
     expect(evidence?.metadata[0]).toMatchObject({
-      finalStatementRequestCount: 2,
-      measuredRequestCount: 6,
+      finalStatementRequestCount: 4,
+      measuredRequestCount: 12,
       terminalPlanRequestCount: 1,
-      terminalProofRequestCount: 6,
+      terminalProofRequestCount: 16,
       timingScope: "worst-single-final-statement",
-      totalRequestCount: 13,
+      totalRequestCount: 29,
     });
-    expect(evidence?.budget.failures).toEqual(["p95 300ms exceeds 250ms"]);
+    expect(evidence?.budget.failures).toEqual(["p95 900ms exceeds 250ms"]);
     expect(evidence?.validationFailures).toEqual([]);
   });
 

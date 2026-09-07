@@ -51,6 +51,7 @@ type IndexPlanSpec = {
 type ComparisonSpec = IndexPlanSpec & {
   productionPlanPolicies: ExplainPlanPolicy[];
   references: PerformanceStatement[];
+  /** Supplemental same-shape statements, normally the planner-unforced counterpart. */
   supplementalPlanPolicies?: ExplainPlanPolicy[];
   supplementalStatements: PerformanceStatement[];
 };
@@ -679,6 +680,54 @@ const DEFAULT_HUB_NULL_SUPPLEMENTAL = indexPlanStatement(
     limit 48`,
   "supplemental-force",
 );
+const DEFAULT_HUB_NON_NULL_UNFORCED = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id, release_date as rd
+     from perf_tracks indexed by __INDEX__
+    where (release_date, id) < ('2026', 'synthetic-track-000000464')
+    order by release_date desc, id desc
+    limit 48`,
+);
+const DEFAULT_HUB_NULL_UNFORCED = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id, release_date as rd
+     from perf_tracks indexed by __INDEX__
+    where release_date is null
+    order by release_date desc, id desc
+    limit 48`,
+);
+const DEFAULT_HUB_PAGE_ONE_PRODUCTION_LOCK = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id
+     from perf_tracks indexed by __INDEX__
+    order by release_date desc, id desc
+    limit 48`,
+  "production-lock",
+);
+const DEFAULT_HUB_NULL_ANCHOR_PRODUCTION_LOCK = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id
+     from perf_tracks indexed by __INDEX__
+    where release_date is null and id < 'synthetic-track-000100000'
+    order by release_date desc, id desc
+    limit 48`,
+  "production-lock",
+);
+const DEFAULT_HUB_PAGE_ONE_SUPPLEMENTAL = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id
+     from perf_tracks indexed by __INDEX__
+    order by release_date desc, id desc
+    limit 48`,
+);
+const DEFAULT_HUB_NULL_ANCHOR_SUPPLEMENTAL = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id
+     from perf_tracks indexed by __INDEX__
+    where release_date is null and id < 'synthetic-track-000100000'
+    order by release_date desc, id desc
+    limit 48`,
+);
 
 function releaseDateComparison(
   references: PerformanceStatement[],
@@ -697,21 +746,35 @@ function releaseDateComparison(
 
 function defaultHubComparison(productionLocked = false): ComparisonSpec {
   const policy: ExplainPlanPolicy = {
+    allowFullScanOf: productionLocked ? ["perf_tracks"] : undefined,
     forbidTempSort: true,
     growingTables: ["perf_tracks"],
     requiredDetails: [/perf_tracks_release_date_track_id_idx/i],
   };
   const references = productionLocked
-    ? [DEFAULT_HUB_NON_NULL_PRODUCTION_LOCK, DEFAULT_HUB_NULL_PRODUCTION_LOCK]
+    ? [
+        DEFAULT_HUB_PAGE_ONE_PRODUCTION_LOCK,
+        DEFAULT_HUB_NON_NULL_PRODUCTION_LOCK,
+        DEFAULT_HUB_NULL_ANCHOR_PRODUCTION_LOCK,
+        DEFAULT_HUB_NULL_PRODUCTION_LOCK,
+      ]
     : [DEFAULT_HUB_NON_NULL_REFERENCE, DEFAULT_HUB_NULL_REFERENCE];
 
   return {
-    maxRows: 96,
+    maxRows: productionLocked ? 192 : 96,
     minRows: 1,
-    productionPlanPolicies: [policy, policy],
+    productionPlanPolicies: productionLocked ? [policy, policy, policy, policy] : [policy, policy],
     references,
     statement: references[0] ?? DEFAULT_HUB_NON_NULL_REFERENCE,
-    supplementalStatements: [DEFAULT_HUB_NON_NULL_SUPPLEMENTAL, DEFAULT_HUB_NULL_SUPPLEMENTAL],
+    supplementalPlanPolicies: productionLocked ? [policy, policy, policy, policy] : undefined,
+    supplementalStatements: productionLocked
+      ? [
+          DEFAULT_HUB_PAGE_ONE_SUPPLEMENTAL,
+          DEFAULT_HUB_NON_NULL_UNFORCED,
+          DEFAULT_HUB_NULL_ANCHOR_SUPPLEMENTAL,
+          DEFAULT_HUB_NULL_UNFORCED,
+        ]
+      : [DEFAULT_HUB_NON_NULL_SUPPLEMENTAL, DEFAULT_HUB_NULL_SUPPLEMENTAL],
   };
 }
 
@@ -864,10 +927,13 @@ function validateComparisonProof(
     failures.push("reference and replacement-index cardinalities differ");
   }
   if (metadata.productionPlanViolations !== 0) {
-    failures.push("a production plan violated its exact consumer policy");
+    failures.push("a production consumer plan violated its exact consumer policy");
   }
-  if (metadata.supplementalPlanViolations !== 0) {
-    failures.push("a supplemental plan violated its exact consumer policy");
+  if (
+    metadata.supplementalPlanViolations !== undefined &&
+    metadata.supplementalPlanViolations !== 0
+  ) {
+    failures.push("a supplemental same-shape plan violated its consumer policy");
   }
 
   return failures;
@@ -1020,6 +1086,35 @@ function reviewedCrawlComparison(entry: IndexInventoryEntry): ComparisonSpec | u
   };
 }
 
+function lockedAndUnforcedConsumerComparison(
+  locked: PerformanceStatement,
+  unforced: PerformanceStatement,
+  policy: ExplainPlanPolicy,
+  bounds: Pick<IndexPlanSpec, "maxRows" | "minRows">,
+  supplementalPolicyOverrides: Partial<ExplainPlanPolicy> = {},
+): ComparisonSpec {
+  const { requiredDetails: _requiredDetails, ...unforcedPolicy } = policy;
+  return {
+    ...bounds,
+    productionPlanPolicies: [policy],
+    references: [locked],
+    statement: locked,
+    supplementalPlanPolicies: [{ ...unforcedPolicy, ...supplementalPolicyOverrides }],
+    supplementalStatements: [unforced],
+  };
+}
+
+function lockedTrackConsumerStatement(
+  indexName: string,
+  sql: string,
+  args: PerformanceStatement["args"],
+): { locked: PerformanceStatement; unforced: PerformanceStatement } {
+  return {
+    locked: statement(indexPlanStatement(indexName, sql, "production-lock").sql, args),
+    unforced: statement(indexPlanStatement(indexName, sql).sql, args),
+  };
+}
+
 function planSpecFor(
   entry: IndexInventoryEntry,
   contractId: string,
@@ -1027,6 +1122,197 @@ function planSpecFor(
   const reviewedCrawl = reviewedCrawlComparison(entry);
   if (reviewedCrawl !== undefined) {
     return reviewedCrawl;
+  }
+
+  if (entry.name === "tracks_anchor_queue_idx") {
+    const consumer = lockedTrackConsumerStatement(
+      entry.name,
+      `select count(*) as n
+         from perf_tracks indexed by __INDEX__
+        where isrc is not null and spotify_uri is null
+          and not exists (
+            select 1 from perf_findings where perf_findings.track_id = perf_tracks.id
+          )`,
+      [],
+    );
+    return lockedAndUnforcedConsumerComparison(
+      consumer.locked,
+      consumer.unforced,
+      {
+        forbidTempSort: true,
+        growingTables: ["perf_tracks", "perf_findings"],
+        requiredDetails: [/perf_tracks_anchor_queue_idx/i, /perf_findings/i],
+      },
+      { maxRows: 1, minRows: 1 },
+    );
+  }
+
+  if (entry.name === "tracks_label_id_idx") {
+    const consumer = lockedTrackConsumerStatement(
+      entry.name,
+      `select t.id as track_id
+         from perf_tracks t indexed by __INDEX__
+        where t.label_id = ?
+          and exists (select 1 from perf_track_artists ta where ta.track_id = t.id)
+          and not exists (
+            select 1 from perf_projection_repairs pr
+             where pr.projection = 'artist_qualification' and pr.subject_type = 'track'
+               and pr.subject_id = t.id and pr.source_epoch >= ?
+          )
+        limit ?`,
+      ["synthetic-label-000000000", 2, INDEX_EVIDENCE_LIMIT],
+    );
+    return lockedAndUnforcedConsumerComparison(
+      consumer.locked,
+      consumer.unforced,
+      {
+        forbidTempSort: true,
+        growingTables: ["perf_tracks", "perf_track_artists", "perf_projection_repairs"],
+        requiredDetails: [
+          /perf_tracks_label_id_idx/i,
+          /perf_track_artists/i,
+          /perf_projection_repairs/i,
+        ],
+      },
+      { maxRows: INDEX_EVIDENCE_LIMIT, minRows: 1 },
+      { forbidTempSort: false },
+    );
+  }
+
+  if (entry.name === "tracks_mb_recording_id_queue_idx") {
+    const consumer = lockedTrackConsumerStatement(
+      entry.name,
+      `select id as track_id, isrc
+         from perf_tracks indexed by __INDEX__
+        where mb_recording_id is null
+          and mb_recording_id_attempted_at is null
+          and isrc is not null and isrc != ''
+          and substr(id, 1, 3) != 'mb_'
+          and id > ?
+        order by id asc
+        limit ?`,
+      ["synthetic-track-000000000", INDEX_EVIDENCE_LIMIT],
+    );
+    return lockedAndUnforcedConsumerComparison(
+      consumer.locked,
+      consumer.unforced,
+      {
+        forbidTempSort: true,
+        growingTables: ["perf_tracks"],
+        requiredDetails: [/perf_tracks_mb_recording_id_queue_idx/i],
+      },
+      { maxRows: INDEX_EVIDENCE_LIMIT, minRows: 1 },
+      { forbidTempSort: false },
+    );
+  }
+
+  if (entry.name === "artist_qualification_qualified_idx") {
+    const locked = statement(
+      indexPlanStatement(
+        entry.name,
+        `select qualification.artist_id
+         from perf_artist_qualification_state as artist_state
+         left join perf_artist_qualification as qualification
+           indexed by __INDEX__ on qualification.is_qualified = 1
+        where artist_state.scope = 'artists'
+          and artist_state.state = 'complete'
+          and artist_state.projection_epoch = artist_state.source_epoch
+          and not exists (
+            select 1 from perf_projection_repairs where projection = 'artist_qualification'
+          )
+        order by qualification.artist_id`,
+        "production-lock",
+      ).sql,
+      [],
+    );
+    const unforced = statement(indexPlanStatement(entry.name, locked.sql).sql, locked.args);
+    return lockedAndUnforcedConsumerComparison(
+      locked,
+      unforced,
+      {
+        forbidTempSort: true,
+        growingTables: [
+          "perf_artist_qualification",
+          "perf_artist_qualification_state",
+          "perf_projection_repairs",
+        ],
+        requiredDetails: [/perf_artist_qualification_qualified_idx/i, /perf_projection_repairs/i],
+      },
+      { maxRows: INDEX_EVIDENCE_LIMIT, minRows: 0 },
+    );
+  }
+
+  if (entry.name === "tracks_anchor_order_idx") {
+    const consumer = lockedTrackConsumerStatement(
+      entry.name,
+      `select t.id as track_id, t.title, t.artists_json, t.isrc, t.label, t.duration_ms,
+              t.source_audio_key, t.source_audio_rejected, t.capture_priority, t.bpm,
+              t.analyzed_from, t.source_audio_failures, f.log_id as log_id,
+              (f.track_id is not null) as certified
+         from perf_tracks t indexed by __INDEX__
+         left join perf_findings f on f.track_id = t.id
+        where f.track_id is null
+          and t.spotify_uri is null
+          and (t.spotify_anchor_attempted_at is null or t.spotify_anchor_attempted_at < ?)
+          and (t.label_id is null or t.label_id not in (
+            select id from perf_labels where seed_state = 'disabled'
+          ))
+          and t.duration_ms > 0
+          and t.dismissed_at is null
+          and t.duplicate_of_track_id is null
+          and coalesce(t.spotify_anchor_attempts, 0) < 6
+          and lower(t.artists_json) not in (?, ?, ?, ?, ?, ?)
+        order by t.has_isrc desc, t.has_embedding desc, t.nearest_finding_score desc, t.id desc
+        limit ?`,
+      [
+        "2026-01-01T00:00:00.000Z",
+        '["unknown artist"]',
+        '["various artists"]',
+        '["va"]',
+        '["unknown"]',
+        '["[unknown]"]',
+        '["traditional"]',
+        INDEX_EVIDENCE_LIMIT,
+      ],
+    );
+    return lockedAndUnforcedConsumerComparison(
+      consumer.locked,
+      consumer.unforced,
+      {
+        allowFullScanOf: ["t", "perf_labels"],
+        forbidTempSort: true,
+        growingTables: ["t", "perf_tracks", "perf_findings", "perf_labels"],
+        requiredDetails: [/perf_tracks_anchor_order_idx/i, /perf_findings/i, /perf_labels/i],
+      },
+      { maxRows: INDEX_EVIDENCE_LIMIT, minRows: 1 },
+      { forbidTempSort: false },
+    );
+  }
+
+  if (entry.name === "projection_repairs_order_idx") {
+    const locked = statement(
+      indexPlanStatement(
+        entry.name,
+        `select projection, subject_type, subject_id, source_epoch, source_version
+         from perf_projection_repairs indexed by __INDEX__
+        where projection = ? and subject_type = ?
+        order by source_epoch, subject_type, subject_id
+        limit 1`,
+        "production-lock",
+      ).sql,
+      ["artist_qualification", "label"],
+    );
+    const unforced = statement(indexPlanStatement(entry.name, locked.sql).sql, locked.args);
+    return lockedAndUnforcedConsumerComparison(
+      locked,
+      unforced,
+      {
+        forbidTempSort: false,
+        growingTables: ["perf_projection_repairs"],
+        requiredDetails: [/perf_projection_repairs_order_idx/i],
+      },
+      { maxRows: 1, minRows: 0 },
+    );
   }
 
   if (entry.name === "tracks_capture_priority_idx") {
