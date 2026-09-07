@@ -237,6 +237,34 @@ describe("updateTrack Sonar artifact coupling", () => {
     expect(await rowCount("artist_qualification_state")).toBe(0);
   });
 
+  it("keeps an uncoordinated finding unlit in both its incremental event and rebuild snapshot", async () => {
+    const { updateTrack } = await import("./track-update");
+    await db.execute({
+      args: [TRACK_ID],
+      sql: "update findings set log_id = null where track_id = ?",
+    });
+
+    await updateTrack(TRACK_ID, { embedding: embeddingJson() });
+    const event = await db.execute({
+      args: [TRACK_ID],
+      sql: "select payload_json from artifact_changes where subject_id = ?",
+    });
+    await registerArtifactConsumer(db, {
+      consumerId: "uncoordinated-snapshot",
+      contracts: [artifactContract("sonar.track")],
+    });
+    const snapshot = await listArtifactSnapshot(db, {
+      consumerId: "uncoordinated-snapshot",
+      stream: "sonar.track",
+      streamVersion: 1,
+    });
+    const incrementalPayload = parsedJson(event.rows[0]?.payload_json);
+    const snapshotPayload = parsedJson(snapshot.items[0]?.payloadJson);
+
+    expect(incrementalPayload).toEqual(snapshotPayload);
+    expect(incrementalPayload).toMatchObject({ certified: false, hasFinding: true });
+  });
+
   it("commits a clear as one delete tombstone beside both source halves", async () => {
     const { updateTrack } = await import("./track-update");
     await updateTrack(TRACK_ID, { embedding: embeddingJson() });

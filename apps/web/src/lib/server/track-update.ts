@@ -437,7 +437,8 @@ type ExistingRow = {
 async function prepareTrackSonarArtifact(
   existing: ExistingRow,
   update: TrackUpdate,
-  certified: boolean,
+  hasFinding: boolean,
+  effectiveLogId: string | null,
   trackId: string,
 ) {
   const embedding = update.embedding;
@@ -473,10 +474,10 @@ async function prepareTrackSonarArtifact(
   return prepareCurrentSonarTrackArtifactChange({
     anchored: existing.spotify_uri !== null,
     bpm: update.bpm ?? existing.bpm,
-    certified,
+    certified: effectiveLogId !== null,
     dismissed: existing.dismissed_at !== null,
     durationMs: existing.duration_ms,
-    hasFinding: certified,
+    hasFinding,
     isDuplicate: existing.duplicate_of_track_id !== null,
     key: update.key ?? existing.key,
     nearestFindingScore: existing.nearest_finding_score,
@@ -1329,7 +1330,13 @@ async function updateTrackWithOptions(
     // visible in the index.
     await db.batch(statements, "write");
   } else {
-    const preparedArtifact = await prepareTrackSonarArtifact(existing, update, certified, trackId);
+    const preparedArtifact = await prepareTrackSonarArtifact(
+      existing,
+      update,
+      certified,
+      effectiveLogId,
+      trackId,
+    );
 
     // Embedding visibility has one production chokepoint. Keep the existing statement list and
     // its changes()-dependent order intact inside an explicit write transaction, then append the

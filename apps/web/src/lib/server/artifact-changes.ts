@@ -914,7 +914,7 @@ export function buildDeviceArtifactChange(input: {
 }
 
 function artifactRowBlob(row: ArtifactChangeRow): Uint8Array | null {
-  return row.payload_blob === null ? null : ownedBytes(row.payload_blob);
+  return row.payload_blob === null ? null : bytesOf(row.payload_blob);
 }
 
 function exactEventMatches(row: ArtifactChangeRow, event: ValidatedArtifactChange): boolean {
@@ -2292,7 +2292,7 @@ export function buildArtifactConsumerPurgeCandidateStatement(
           where checkpoint.consumer_id = c.consumer_id) as checkpoint_count,
         (select count(*) from artifact_change_consumer_contracts contract
           where contract.consumer_id = c.consumer_id) as contract_count
-      from artifact_change_consumers c indexed by sqlite_autoindex_artifact_change_consumers_1
+      from artifact_change_consumers c
       where c.consumer_id > ?
       order by c.consumer_id
       limit ?`,
