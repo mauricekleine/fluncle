@@ -16,14 +16,16 @@
 // renders an unlit row and links it OUT to Spotify is proven on a known set, never on
 // whatever the crawl happens to have brought in.
 
-import { type Client } from "@libsql/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { type Client, createClient } from "@libsql/client";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { linkTrackToAlbum } from "./albums";
 import { linkTracksToArtistEntities } from "./artists";
 import { createIntegrationDb } from "./integration-db";
+import { resetKeyHistogramCache } from "./key-histogram";
 import { linkTrackToLabel } from "./labels";
 import { compileFilters, resolveFilterEntities, searchArchive } from "./search";
 
@@ -37,6 +39,16 @@ vi.mock("./search-llm", () => ({ translateQuery }));
 // query functions run REAL SQL against the REAL migrated schema.
 let db: Client;
 let fixtureDirectory: string | undefined;
+let fixtureClient: Client | undefined;
+let templateDirectory: string | undefined;
+
+async function copyFixture(path: string): Promise<Client> {
+  if (!templateDirectory) {
+    throw new Error("Search fixture template is not initialized");
+  }
+  await copyFile(join(templateDirectory, "template.db"), path);
+  return createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: `file:${path}` });
+}
 
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
@@ -132,78 +144,97 @@ async function seed(client: Client, track: Fixture): Promise<void> {
   await linkTrackToAlbum(track.trackId, track.album);
 }
 
+// Build the real migrated schema, FTS triggers and publish-path seed once. Each test opens
+// its own copy of the closed template: interactive transactions stay file-backed, while
+// schema creation and seed writes are not repeated for every search assertion.
+beforeAll(async () => {
+  templateDirectory = await mkdtemp(join(tmpdir(), "fluncle-search-template-"));
+  db = await createIntegrationDb({ url: `file:${join(templateDirectory, "template.db")}` });
+  try {
+    // Three certified findings — their angles fix the sonic order around the 1991 anchor
+    // (0.0): Netsky at 0.1 is nearest, the uncertified track at 0.3 next, Andromedik at 1.2
+    // furthest.
+    await seed(db, {
+      album: "Second Nature",
+      angle: 0.1,
+      artists: ["Netsky", "Bev Lee Harling"],
+      bpm: 175.5,
+      key: "A minor",
+      label: "Hospital Records",
+      logId: "012.4.4D",
+      releaseDate: "2020-05-01",
+      title: "Let's Leave Tomorrow",
+      trackId: "certified-netsky",
+    });
+    await seed(db, {
+      album: "Chapter One",
+      angle: 0,
+      artists: ["1991"],
+      bpm: 174,
+      key: "F minor",
+      label: "1991",
+      logId: "024.7.2R",
+      releaseDate: "2022-01-01",
+      title: "Nine Clouds",
+      trackId: "certified-1991",
+    });
+    await seed(db, {
+      album: "Take Me Away (Remixes)",
+      angle: 1.2,
+      artists: ["Andromedik", "Lexurus"],
+      bpm: 174,
+      key: "B minor",
+      label: "Andromedik",
+      logId: "038.8.7K",
+      releaseDate: "2026-04-24",
+      title: "Take Me Away - Lexurus Remix",
+      trackId: "certified-andromedik",
+    });
+
+    // …and one UNCERTIFIED track. A `tracks` row with no `findings` row: a light Fluncle's
+    // instruments measured from a distance and never went to. It has no coordinate, so search
+    // must find it and the client must link it OUT. It sits on a label AND a record Fluncle
+    // HAS certified something on, so both entities carry it — which is the whole reason the
+    // graph pages exist.
+    await seed(db, {
+      album: "Second Nature",
+      angle: 0.3,
+      artists: ["Netsky"],
+      bpm: 172,
+      key: "A minor",
+      label: "Hospital Records",
+      releaseDate: "2019-03-03",
+      title: "Rio",
+      trackId: "uncertified-netsky",
+    });
+
+    await db.execute({
+      args: [],
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+          values ('a1', 'Netsky', 'netsky', '2026-07-01', '2026-07-01')`,
+    });
+    // The copied file must contain committed pages, never depend on a WAL sidecar.
+    const checkpoint = await db.execute("pragma wal_checkpoint(TRUNCATE)");
+    if (Number(checkpoint.rows[0]?.busy) !== 0) {
+      throw new Error("Search fixture template WAL checkpoint is busy");
+    }
+  } finally {
+    db.close();
+  }
+}, 20_000);
+
 beforeEach(async () => {
   fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-search-"));
-  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
+  fixtureClient = await copyFixture(join(fixtureDirectory, "fixture.db"));
+  db = fixtureClient;
+  resetKeyHistogramCache();
   translateQuery.mockReset();
   translateQuery.mockResolvedValue(null);
-
-  // Three certified findings — their angles fix the sonic order around the 1991 anchor
-  // (0.0): Netsky at 0.1 is nearest, the uncertified track at 0.3 next, Andromedik at 1.2
-  // furthest.
-  await seed(db, {
-    album: "Second Nature",
-    angle: 0.1,
-    artists: ["Netsky", "Bev Lee Harling"],
-    bpm: 175.5,
-    key: "A minor",
-    label: "Hospital Records",
-    logId: "012.4.4D",
-    releaseDate: "2020-05-01",
-    title: "Let's Leave Tomorrow",
-    trackId: "certified-netsky",
-  });
-  await seed(db, {
-    album: "Chapter One",
-    angle: 0,
-    artists: ["1991"],
-    bpm: 174,
-    key: "F minor",
-    label: "1991",
-    logId: "024.7.2R",
-    releaseDate: "2022-01-01",
-    title: "Nine Clouds",
-    trackId: "certified-1991",
-  });
-  await seed(db, {
-    album: "Take Me Away (Remixes)",
-    angle: 1.2,
-    artists: ["Andromedik", "Lexurus"],
-    bpm: 174,
-    key: "B minor",
-    label: "Andromedik",
-    logId: "038.8.7K",
-    releaseDate: "2026-04-24",
-    title: "Take Me Away - Lexurus Remix",
-    trackId: "certified-andromedik",
-  });
-
-  // …and one UNCERTIFIED track. A `tracks` row with no `findings` row: a light Fluncle's
-  // instruments measured from a distance and never went to. It has no coordinate, so search
-  // must find it and the client must link it OUT. It sits on a label AND a record Fluncle
-  // HAS certified something on, so both entities carry it — which is the whole reason the
-  // graph pages exist.
-  await seed(db, {
-    album: "Second Nature",
-    angle: 0.3,
-    artists: ["Netsky"],
-    bpm: 172,
-    key: "A minor",
-    label: "Hospital Records",
-    releaseDate: "2019-03-03",
-    title: "Rio",
-    trackId: "uncertified-netsky",
-  });
-
-  await db.execute({
-    args: [],
-    sql: `insert into artists (id, name, slug, created_at, updated_at)
-          values ('a1', 'Netsky', 'netsky', '2026-07-01', '2026-07-01')`,
-  });
 });
 
 afterEach(async () => {
-  db.close();
+  fixtureClient?.close();
+  fixtureClient = undefined;
 
   if (fixtureDirectory) {
     await rm(fixtureDirectory, { force: true, recursive: true });
@@ -211,9 +242,37 @@ afterEach(async () => {
   }
 });
 
+afterAll(async () => {
+  if (templateDirectory) {
+    await rm(templateDirectory, { force: true, recursive: true });
+    templateDirectory = undefined;
+  }
+});
+
 // ── The index itself ─────────────────────────────────────────────────────────────────
 
 describe("the FTS5 index", () => {
+  it("isolates copied rows and FTS triggers from other fixtures and the template", async () => {
+    if (!fixtureDirectory) {
+      throw new Error("Search fixture directory is not initialized");
+    }
+    await db.execute("update tracks set title = 'Changed' where track_id = 'certified-1991'");
+    const other = await copyFixture(join(fixtureDirectory, "other.db"));
+    try {
+      const unchanged = await other.execute(
+        "select track_id from tracks_fts where tracks_fts match 'nine'",
+      );
+      expect(unchanged.rows.map((row) => row.track_id)).toEqual(["certified-1991"]);
+      await other.execute("delete from tracks where track_id = 'certified-1991'");
+      const changed = await db.execute(
+        "select track_id from tracks_fts where tracks_fts match 'changed'",
+      );
+      expect(changed.rows.map((row) => row.track_id)).toEqual(["certified-1991"]);
+    } finally {
+      other.close();
+    }
+  });
+
   it("is populated by the insert trigger — the app never writes to it", async () => {
     const rows = await db.execute("select count(*) as n from tracks_fts");
 
