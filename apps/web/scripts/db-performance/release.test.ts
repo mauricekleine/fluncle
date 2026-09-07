@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   PERFORMANCE_BUDGETS,
@@ -427,19 +427,55 @@ describe("database performance release proof", () => {
     async () => {
       const testDirectory = await mkdtemp("/tmp/db-performance-command-deadline-");
       const descendantPidPath = join(testDirectory, "descendant.pid");
-      const program = `const { spawn } = await import("node:child_process"); const { writeFile } = await import("node:fs/promises"); const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1000)"], { stdio: "ignore" }); await writeFile(${JSON.stringify(descendantPidPath)}, String(child.pid)); process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000);`;
+      const parentReadyPath = join(testDirectory, "parent.ready");
+      const descendantReadyPath = join(testDirectory, "descendant.ready");
+      const descendantProgram = `const { writeFile } = await import("node:fs/promises"); process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000); await writeFile(${JSON.stringify(descendantReadyPath)}, "ready");`;
+      const program = `const { spawn } = await import("node:child_process"); const { access, writeFile } = await import("node:fs/promises"); process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000); const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantProgram)}], { stdio: "ignore" }); while (true) { try { await access(${JSON.stringify(descendantReadyPath)}); break; } catch { await new Promise((resolve) => setTimeout(resolve, 5)); } } await writeFile(${JSON.stringify(descendantPidPath)}, String(child.pid)); await writeFile(${JSON.stringify(parentReadyPath)}, "ready");`;
       let descendantPid: number | null = null;
+      let deadlineCallback: (() => void) | null = null;
+      let deadlineFired = false;
+      let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+      const nativeSetTimeout = global.setTimeout;
+      const fireDeadline = () => {
+        if (deadlineFired || deadlineCallback === null) {
+          return;
+        }
+        deadlineFired = true;
+        if (fallbackTimer !== undefined) {
+          clearTimeout(fallbackTimer);
+        }
+        deadlineCallback();
+      };
+      const timeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
+        handler: TimerHandler,
+        timeout?: number,
+        ...args: unknown[]
+      ) => {
+        if (timeout === 100 && deadlineCallback === null && typeof handler === "function") {
+          deadlineCallback = () => handler(...args);
+          fallbackTimer = nativeSetTimeout(fireDeadline, 10_000);
+          return fallbackTimer;
+        }
+        return nativeSetTimeout(handler, timeout, ...args);
+      }) as typeof setTimeout);
+      const childPromise = captureChild({
+        categories: [],
+        command: [process.execPath, "-e", program],
+        cwd: ".",
+        id: "deadline-fixture",
+        timeoutMs: 100,
+      });
+      timeoutSpy.mockRestore();
 
       try {
-        const result = await captureChild({
-          categories: [],
-          command: [process.execPath, "-e", program],
-          cwd: ".",
-          id: "deadline-fixture",
-          timeoutMs: 100,
-        });
+        if (deadlineCallback === null) {
+          throw new Error("deadline fixture did not register its production timeout");
+        }
+        await waitFor(() => pathExists(parentReadyPath));
         await waitFor(() => pathExists(descendantPidPath));
         descendantPid = Number.parseInt(await readFile(descendantPidPath, "utf8"), 10);
+        fireDeadline();
+        const result = await childPromise;
 
         expect(result.timedOut).toBe(true);
         expect(validateChildResult(result)).toEqual(
@@ -451,6 +487,9 @@ describe("database performance release proof", () => {
         await waitFor(() => !processExists(descendantPid ?? -1));
         expect(processExists(descendantPid)).toBe(false);
       } finally {
+        timeoutSpy.mockRestore();
+        fireDeadline();
+        await childPromise.catch(() => undefined);
         if (descendantPid !== null && processExists(descendantPid)) {
           try {
             process.kill(descendantPid, "SIGKILL");
@@ -461,7 +500,7 @@ describe("database performance release proof", () => {
         await rm(testDirectory, { force: true, recursive: true });
       }
     },
-    8_000,
+    12_000,
   );
 
   it.skipIf(process.platform === "win32")(
