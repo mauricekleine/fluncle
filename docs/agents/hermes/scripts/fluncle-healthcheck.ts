@@ -735,6 +735,12 @@ const PROJECTION_MAINTENANCE_OUTCOMES = new Set<unknown>([
   "useful_completion",
 ]);
 
+export type ProjectionMaintenanceState = {
+  converged: boolean | null;
+  oldestDebtAgeMs: number | null;
+  outcome: ProjectionMaintenanceOutcome | null;
+};
+
 /**
  * The cron NAME a given output dir belongs to (from the newest run-file's
  * `# Cron Job: <name>` header, e.g. `fluncle-enrich`), plus that file's mtime. The
@@ -865,10 +871,10 @@ export function findJsonSummary(body: string): Record<string, unknown> | null {
   return null;
 }
 
-/** Read the projection sweep's low-cardinality result for its public status-row message. */
-export function readProjectionMaintenanceOutcome(
+/** Read the projection sweep's convergence facts for its public status-row message. */
+export function readProjectionMaintenanceState(
   dir: string | undefined,
-): ProjectionMaintenanceOutcome | null {
+): ProjectionMaintenanceState | null {
   if (!dir) {
     return null;
   }
@@ -881,13 +887,45 @@ export function readProjectionMaintenanceOutcome(
     if (!newest) {
       return null;
     }
-    const outcome = findJsonSummary(readFileSync(newest.path, "utf8"))?.outcome;
-    return PROJECTION_MAINTENANCE_OUTCOMES.has(outcome)
-      ? (outcome as ProjectionMaintenanceOutcome)
-      : null;
+    const summary = findJsonSummary(readFileSync(newest.path, "utf8"));
+    if (summary === null) {
+      return null;
+    }
+    const outcome = summary.outcome;
+    const oldestDebtAgeMs = summary.oldestDebtAgeMs;
+    return {
+      converged: typeof summary.converged === "boolean" ? summary.converged : null,
+      oldestDebtAgeMs:
+        typeof oldestDebtAgeMs === "number" &&
+        Number.isSafeInteger(oldestDebtAgeMs) &&
+        oldestDebtAgeMs >= 0
+          ? oldestDebtAgeMs
+          : null,
+      outcome: PROJECTION_MAINTENANCE_OUTCOMES.has(outcome)
+        ? (outcome as ProjectionMaintenanceOutcome)
+        : null,
+    };
   } catch {
     return null;
   }
+}
+
+/** One standing window governs both missing ticks and repair debt that survives healthy ticks. */
+export function cronStaleBudgetMs(cron: CronDef): number {
+  return Math.max(cron.cadenceMs * 3, 90_000) + MAX_TIMER_JITTER_MS;
+}
+
+function formatElapsed(elapsedMs: number): string {
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 1) {
+    return "<1m";
+  }
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
 }
 
 /**
@@ -929,7 +967,7 @@ export function judgeCron(
   // Measured across its last 100 ticks: mean 114s, max 188s — over the budget, on a timer
   // behaving exactly as configured. Without this term the board reports a healthy sweep as
   // `lagging`, which is the flap that teaches an operator to stop reading the row.
-  const staleBudgetMs = Math.max(cron.cadenceMs * 3, 90_000) + MAX_TIMER_JITTER_MS;
+  const staleBudgetMs = cronStaleBudgetMs(cron);
 
   // No output dir at all, or an unreadable one. Fresh box ⇒ genuinely "no runs yet"; a box
   // that has been up past this cron's whole stale budget ⇒ it should have produced something.
@@ -1019,11 +1057,23 @@ function runFailed(path: string | undefined): boolean {
 export function cronCheck(
   cron: CronDef,
   verdict: CronVerdict,
-  outcome: ProjectionMaintenanceOutcome | null = null,
+  projection: ProjectionMaintenanceState | null = null,
 ): Check {
   const base = { latencyMs: null, service: cron.service };
-  const outcomeMessage = (message: string) =>
-    msg(outcome === null ? message : `${message}; ${outcome}`);
+  const outcomeMessage = (message: string) => {
+    const details = [message];
+    if (projection?.outcome !== null && projection?.outcome !== undefined) {
+      details.push(projection.outcome);
+    }
+    if (projection?.converged === false) {
+      details.push(
+        projection.oldestDebtAgeMs === null
+          ? "debt age unavailable"
+          : `oldest observed debt ${formatElapsed(projection.oldestDebtAgeMs)}`,
+      );
+    }
+    return msg(details.join("; "));
+  };
 
   if (verdict === "no-summary") {
     // The marker exists but the sweep never emitted its summary — it was killed mid-run.
@@ -1056,6 +1106,14 @@ export function cronCheck(
     return { ...base, message: outcomeMessage("no runs yet"), status: "ok" };
   }
 
+  if (
+    projection?.converged === false &&
+    projection.oldestDebtAgeMs !== null &&
+    projection.oldestDebtAgeMs > cronStaleBudgetMs(cron)
+  ) {
+    return { ...base, message: outcomeMessage("debt persists"), status: "down" };
+  }
+
   return { ...base, message: outcomeMessage("fresh"), status: "ok" };
 }
 
@@ -1071,9 +1129,9 @@ function probeCrons(claimed: Map<string, string>): Check[] {
 
   return AUTOMATION_CRONS.map((cron) => {
     const dir = claimed.get(cron.service);
-    const outcome =
-      cron.service === "cron.projection-maintenance" ? readProjectionMaintenanceOutcome(dir) : null;
-    return cronCheck(cron, judgeCron(cron, dir, uptimeMs), outcome);
+    const projection =
+      cron.service === "cron.projection-maintenance" ? readProjectionMaintenanceState(dir) : null;
+    return cronCheck(cron, judgeCron(cron, dir, uptimeMs), projection);
   });
 }
 

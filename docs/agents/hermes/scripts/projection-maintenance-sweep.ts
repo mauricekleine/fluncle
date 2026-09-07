@@ -76,11 +76,14 @@ export type ProjectionMaintenanceOutcome =
 
 export type ProjectionMaintenanceSummary = {
   artistQualification: FamilySummary;
+  budgetExhaustedFamilies: FamilyName[];
   checked: number | null;
+  converged: boolean | null;
   crawlDueWork: FamilySummary;
   errors: number;
   gateState: "active" | "disabled" | null;
   ok: boolean;
+  oldestDebtAgeMs: number | null;
   outcome: ProjectionMaintenanceOutcome | null;
   produced: number | null;
   publicAggregates: FamilySummary;
@@ -335,11 +338,14 @@ export function runProjectionMaintenanceTick(
 ): ProjectionMaintenanceSummary {
   const summary: ProjectionMaintenanceSummary = {
     artistQualification: emptyFamily(),
+    budgetExhaustedFamilies: [],
     checked: null,
+    converged: null,
     crawlDueWork: emptyFamily(),
     errors: 0,
     gateState: null,
     ok: true,
+    oldestDebtAgeMs: null,
     outcome: null,
     produced: null,
     publicAggregates: emptyFamily(),
@@ -408,14 +414,33 @@ export function runProjectionMaintenanceTick(
     markerAge(artists),
   );
 
-  const families = [
-    summary.trackDueWork,
-    summary.crawlDueWork,
-    summary.publicAggregates,
-    summary.artistQualification,
+  const targetedFamilies: readonly (readonly [FamilyName, FamilySummary])[] = [
+    ["track_due_work", summary.trackDueWork],
+    ["crawl_due_work", summary.crawlDueWork],
+    ["public_aggregates", summary.publicAggregates],
+    ["artist_qualification", summary.artistQualification],
   ];
+  const families = targetedFamilies.map(([, family]) => family);
   summary.outcome = worstOutcome(families);
-  summary.errors = families.filter((family) => family.outcome === "no_progress").length;
+  summary.budgetExhaustedFamilies = targetedFamilies.flatMap(([target, family]) =>
+    family.complete === false && family.error === null ? [target] : [],
+  );
+  summary.converged = families.every(
+    (family) => family.outcome === null || family.outcome === "no_debt" || family.complete === true,
+  );
+  summary.oldestDebtAgeMs = families.reduce<number | null>((oldest, family) => {
+    if (
+      family.complete !== false ||
+      family.oldestOutstandingMarkerAge?.ageMs === null ||
+      family.oldestOutstandingMarkerAge?.ageMs === undefined
+    ) {
+      return oldest;
+    }
+    return Math.max(oldest ?? 0, family.oldestOutstandingMarkerAge.ageMs);
+  }, null);
+  // `ok` and `errors` report execution, not convergence. A clean bounded tick may exhaust
+  // every family budget; `converged`, `outcome`, and `budgetExhaustedFamilies` carry that fact.
+  summary.errors = families.filter((family) => family.error !== null).length;
   summary.ok = summary.errors === 0;
   summary.produced = families.some((family) => family.processed === null)
     ? null
