@@ -14,7 +14,7 @@ import {
   deriveDominantRegressionVitestPaths,
   DOMINANT_REGRESSION_INVENTORY,
 } from "./dominant-regression-inventory";
-import { getScaleManifest } from "./manifest";
+import { createCiFixtureCounts, getScaleManifest } from "./manifest";
 import { expectedFixtureTableCardinalities } from "./fixture";
 import { ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE } from "./local-sidecar";
 import { PERFORMANCE_REPORT_SCHEMA_VERSION } from "./registry";
@@ -42,6 +42,7 @@ import {
   validateExternalArtifactDirectory,
   validateProfileReport,
   validatePortableArtifactFilename,
+  validateSonarResourceReport,
 } from "./release";
 
 async function git(cwd: string, args: readonly string[]): Promise<string> {
@@ -233,6 +234,95 @@ function validProfileReport(profile: "1x" | "2x" | "4x"): string {
       schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,
     },
     schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,
+  });
+}
+
+function validSonarResourceReport(): string {
+  const fixture = createCiFixtureCounts("1x");
+  const bytes = getScaleManifest("1x").vector.bytesPerEmbedding;
+  const sizes = { mainBytes: 10, shmBytes: 2, totalBytes: 15, walBytes: 3 };
+  const window = (sampleCount: number) => ({
+    completedUnixMs: 2,
+    durationsMs: Array.from({ length: sampleCount }, () => 1),
+    maxMs: 1,
+    minMs: 1,
+    ...(sampleCount === 1 ? {} : { p50Ms: 1, p95Ms: 1 }),
+    interpretation:
+      sampleCount === 1
+        ? "single-sample; percentiles omitted because one observation is not a distribution"
+        : "measured-distribution",
+    sampleCount,
+    startedUnixMs: 1,
+  });
+  return JSON.stringify({
+    durationMs: 10,
+    execution: "dedicated-child-per-scale-serial",
+    kind: "fluncle.sonar.resource-proof",
+    networkSyncLatencyProved: false,
+    passed: true,
+    reports: [
+      {
+        correctness: {
+          boundedDeltaMatchesFullRebuild: true,
+          corruptFileQuarantined: true,
+          corruptRecoveryMatchesFullRebuild: true,
+        },
+        counts: {
+          boundedDeltaEventsPerSample: 100,
+          bytesPerVector: bytes,
+          centroidRawVectorBytes: fixture.artists * bytes,
+          centroidVectors: fixture.artists,
+          totalRawVectorBytes: (fixture.trackEmbeddings + fixture.artists) * bytes,
+          totalVectors: fixture.trackEmbeddings + fixture.artists,
+          trackRawVectorBytes: fixture.trackEmbeddings * bytes,
+          trackVectors: fixture.trackEmbeddings,
+          warmDeltaSamples: 5,
+        },
+        exactProfileCardinality: false,
+        kind: "fluncle.sonar.resource-proof.scale",
+        manifestProfile: "1x",
+        metadataDistributions: { anchored: fixture.trackEmbeddings },
+        multiplier: 1,
+        passed: true,
+        profile: "ci",
+        publication: {
+          generationOverlapPeakRssBytes: 1,
+          oldSnapshotHeldAcrossPublish: true,
+          publishSucceededAfterRetiredDrop: true,
+          thirdPublishRefusedWhileRetiredHeld: true,
+        },
+        resources: {
+          fullRebuildAfterCheckpoint: sizes,
+          memoryLimitBytes: 2 * 1024 * 1024 * 1024,
+          peakRssBytes: 1,
+          phasePeakRssBytes: { afterInitialColdBuild: 1 },
+          recoveredAfterCheckpoint: sizes,
+          sonarComponentSourceFiles: sizes,
+          source: "os-process-rss-and-filesystem-stat",
+          stateAfterCheckpoint: sizes,
+          stateBeforeCheckpoint: sizes,
+        },
+        schemaVersion: 1,
+        scope: {
+          caveat: "local hardware only",
+          localRowsStandForReplicaSync: true,
+          measurementInterpretation: "cold, warm, and recovery windows",
+          networkSyncLatencyProved: false,
+          resourceEnvelope: "Sonar component only",
+        },
+        windows: {
+          boundedDeltaApplyBuildValidate: window(5),
+          boundedDeltaPublish: window(5),
+          corruptOpenRecoveringQuarantineRebuild: window(1),
+          fixtureWrite: window(1),
+          fullReplaceRebuild: window(1),
+          initialFullReplaceBuildValidate: window(1),
+          localSourceMutation: window(5),
+          total: window(1),
+        },
+      },
+    ],
+    schemaVersion: 1,
   });
 }
 
@@ -858,6 +948,31 @@ describe("database performance release proof", () => {
     expect(coverage[0]).toMatchObject({ status: "missing" });
     expect(coverage[1]).toMatchObject({ status: "failed" });
     expect(coverage.slice(2).every((entry) => entry.status === "passed")).toBe(true);
+  });
+
+  it("registers and validates the finite local-only Sonar resource proof", () => {
+    expect(validateSonarResourceReport(validSonarResourceReport())).toMatchObject({ errors: [] });
+
+    const falseNetworkClaim = JSON.parse(validSonarResourceReport());
+    falseNetworkClaim.networkSyncLatencyProved = true;
+    expect(validateSonarResourceReport(JSON.stringify(falseNetworkClaim)).errors).toContain(
+      "sonar resource report must not claim network sync latency evidence",
+    );
+
+    const oversized = JSON.parse(validSonarResourceReport());
+    oversized.reports[0].resources.peakRssBytes = 2 * 1024 * 1024 * 1024 + 1;
+    expect(validateSonarResourceReport(JSON.stringify(oversized)).errors).toContain(
+      "sonar resource CI peak RSS evidence is malformed or exceeds 2 GiB",
+    );
+
+    const definition = releaseCommands().find(({ id }) => id === "component-sonar-resource-bounds");
+    expect(definition).toMatchObject({
+      categories: ["sonar-resource-bounds"],
+      command: expect.arrayContaining(["--release", "resource-proof", "--profile", "ci"]),
+      cwd: ".",
+    });
+    expect(definition?.timeoutMs).toBeGreaterThan(0);
+    expect(Number.isFinite(definition?.timeoutMs)).toBe(true);
   });
 
   it("derives every inventory Vitest path into the dominant command and preserves cutover extras", () => {
