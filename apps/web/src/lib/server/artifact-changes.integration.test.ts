@@ -510,6 +510,51 @@ describe("artifact producer registry and immutable sequence", () => {
 });
 
 describe("artifact source snapshots and rebuild lifecycle", () => {
+  it("keeps snapshot wire assembly out of the rebuild-checkpoint transaction", async () => {
+    await seedTrack(db, { logId: "001.A.AA", trackId: "track:checkpoint-work" });
+    await seedEmbedding(
+      db,
+      "track:checkpoint-work",
+      Array.from({ length: 1024 }, (_, index) => index / 1024),
+    );
+    await registerArtifactConsumer(db, {
+      consumerId: "checkpoint-work-reader",
+      contracts: [artifactContract("sonar.track")],
+    });
+    const page = await listArtifactSnapshot(db, {
+      consumerId: "checkpoint-work-reader",
+      stream: "sonar.track",
+      streamVersion: 1,
+    });
+    const base64 = vi.spyOn(globalThis, "btoa");
+    const parse = vi.spyOn(JSON, "parse");
+
+    try {
+      await checkpointArtifactRebuild(db, {
+        consumerDigest: page.sourceDigest,
+        consumerId: "checkpoint-work-reader",
+        consumerItemCount: page.itemCount,
+        generation: page.generation,
+        pageDigest: page.pageDigest,
+        pageLimit: ARTIFACT_SNAPSHOT_MAX_LIMIT,
+        stream: "sonar.track",
+        streamVersion: 1,
+      });
+
+      expect(base64.mock.calls.some(([value]) => value.length === ARTIFACT_VECTOR_BYTES)).toBe(
+        false,
+      );
+      expect(
+        parse.mock.calls.some(
+          ([value]) => typeof value === "string" && value === page.items[0]?.payloadJson,
+        ),
+      ).toBe(false);
+    } finally {
+      base64.mockRestore();
+      parse.mockRestore();
+    }
+  });
+
   it("snapshots the exact current Sonar projection behind a no-gap fence", async () => {
     await seedTrack(db, { logId: "001.A.AA", trackId: "track:a" });
     const vector = Array.from({ length: 1024 }, (_, index) => index / 1024);
@@ -696,6 +741,34 @@ describe("artifact source snapshots and rebuild lifecycle", () => {
 });
 
 describe("artifact ordered reads and acknowledgements", () => {
+  it("keeps change wire envelopes out of the acknowledgement transaction", async () => {
+    await bootstrapConsumer("raw-ack-reader");
+    await insertArtifactChange(db, sonarChange(1));
+    const page = await listArtifactChanges(db, { consumerId: "raw-ack-reader" });
+    const base64 = vi.spyOn(globalThis, "btoa");
+    const parse = vi.spyOn(JSON, "parse");
+
+    try {
+      await acknowledgeArtifactChanges(db, {
+        batchDigest: page.batchDigest,
+        consumerId: "raw-ack-reader",
+        eventCount: page.events.length,
+        fromSeq: page.fromSeq,
+        throughSeq: page.throughSeq,
+      });
+
+      expect(base64).not.toHaveBeenCalled();
+      expect(
+        parse.mock.calls.some(
+          ([value]) => typeof value === "string" && value === page.events[0]?.payloadJson,
+        ),
+      ).toBe(false);
+    } finally {
+      base64.mockRestore();
+      parse.mockRestore();
+    }
+  });
+
   it("reads only the next bounded primary-key range with no temp sort", async () => {
     await bootstrapConsumer("bounded-reader");
 

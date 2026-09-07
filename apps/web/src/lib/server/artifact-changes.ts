@@ -278,6 +278,42 @@ type ArtifactCheckpointRow = ArtifactContractRow & {
   updated_at: string;
 };
 
+type ArtifactSnapshotMaterial = {
+  cursor: string;
+  formatVersion: number;
+  operation: "upsert";
+  payloadBlob: Uint8Array | null;
+  payloadDigest: string;
+  payloadJson: string;
+  stream: ArtifactStream;
+  streamVersion: number;
+  subjectId: string;
+  subjectType: string;
+};
+
+type ArtifactSnapshotVerificationPage = ArtifactContract & {
+  complete: boolean;
+  cursor: string | null;
+  itemCount: number;
+  materials: ArtifactSnapshotMaterial[];
+  pageDigest: string;
+  sourceDigest: string;
+};
+
+type ArtifactChangeVerification = {
+  batchDigest: string;
+  eventCount: number;
+  incompatible: StoredArtifactContract | undefined;
+  throughSeq: number;
+  unknown: StoredArtifactContract | undefined;
+};
+
+type StoredArtifactContract = {
+  formatVersion: number;
+  stream: string;
+  streamVersion: number;
+};
+
 type ValidatedArtifactChange = ArtifactContract & {
   createdAt: string;
   operation: ArtifactOperation;
@@ -869,6 +905,28 @@ async function insertRevisionReceipt(
   });
 }
 
+function artifactChangeDigest(
+  row: ArtifactChangeRow,
+  payloadBlob: Uint8Array | null = artifactRowBlob(row),
+): Promise<string> {
+  return payloadDigest(
+    {
+      createdAt: row.created_at,
+      formatVersion: Number(row.format_version),
+      operation: row.operation,
+      payloadJson: row.payload_json,
+      producer: row.producer,
+      revision: Number(row.revision),
+      seq: Number(row.seq),
+      stream: row.stream,
+      streamVersion: Number(row.stream_version),
+      subjectId: row.subject_id,
+      subjectType: row.subject_type,
+    },
+    payloadBlob,
+  );
+}
+
 async function eventFromRow(
   row: ArtifactChangeRow,
   contracts: readonly ArtifactContract[],
@@ -876,33 +934,13 @@ async function eventFromRow(
   const payloadBlob = artifactRowBlob(row);
   const streamVersion = Number(row.stream_version);
   const formatVersion = Number(row.format_version);
-  const registered = Object.hasOwn(ARTIFACT_STREAM_REGISTRY, row.stream)
-    ? ARTIFACT_STREAM_REGISTRY[row.stream as ArtifactStream]
-    : undefined;
-  const formatRegistered =
-    registered !== undefined &&
-    registered.streamVersion === streamVersion &&
-    registered.formatVersion === formatVersion &&
-    registered.subjectType === row.subject_type;
+  const formatRegistered = registeredArtifactChangeRow(row);
   const supportedByConsumer = contracts.some(
     (contract) =>
       contract.stream === row.stream &&
       contract.streamVersion === streamVersion &&
       contract.formatVersion === formatVersion,
   );
-  const envelope = {
-    createdAt: row.created_at,
-    formatVersion,
-    operation: row.operation,
-    payloadJson: row.payload_json,
-    producer: row.producer,
-    revision: Number(row.revision),
-    seq: Number(row.seq),
-    stream: row.stream,
-    streamVersion,
-    subjectId: row.subject_id,
-    subjectType: row.subject_type,
-  } satisfies Record<string, JsonValue>;
 
   return {
     createdAt: row.created_at,
@@ -910,7 +948,7 @@ async function eventFromRow(
     formatVersion,
     operation: row.operation,
     payloadBlobBase64: payloadBlob === null ? null : artifactBytesToBase64(payloadBlob),
-    payloadDigest: await payloadDigest(envelope, payloadBlob),
+    payloadDigest: await artifactChangeDigest(row, payloadBlob),
     payloadJson: row.payload_json,
     producer: row.producer,
     revision: Number(row.revision),
@@ -1525,10 +1563,10 @@ export async function insertCurrentSonarTrackArtifactChangeInTransaction(
   });
 }
 
-async function snapshotItem(
+async function snapshotMaterial(
   stream: ArtifactStream,
   row: Record<string, unknown>,
-): Promise<{ cursor: string; item: ArtifactSnapshotItem }> {
+): Promise<ArtifactSnapshotMaterial> {
   const definition = ARTIFACT_STREAM_REGISTRY[stream];
   const contract = artifactContract(stream);
   let payload: JsonValue;
@@ -1570,15 +1608,47 @@ async function snapshotItem(
 
   return {
     cursor: encodeSnapshotCursor(cursorValues),
-    item: {
-      ...contract,
-      operation: "upsert",
-      payloadBlobBase64: payloadBlob === null ? null : artifactBytesToBase64(payloadBlob),
-      payloadDigest: await payloadDigest(envelope, payloadBlob),
-      payloadJson,
-      subjectId,
-      subjectType: definition.subjectType,
-    },
+    ...contract,
+    operation: "upsert",
+    payloadBlob,
+    payloadDigest: await payloadDigest(envelope, payloadBlob),
+    payloadJson,
+    subjectId,
+    subjectType: definition.subjectType,
+  };
+}
+
+async function sourceSnapshotVerificationPage(
+  client: Pick<Client, "execute">,
+  contract: ArtifactContract,
+  checkpoint: ArtifactRebuildCheckpoint,
+  limit: number,
+): Promise<ArtifactSnapshotVerificationPage> {
+  const result = await client.execute(
+    buildArtifactSnapshotStatement(contract.stream, checkpoint.cursor, limit),
+  );
+  const rows = typedRows<Record<string, unknown>>(result.rows);
+  const selected = rows.slice(0, limit);
+  const materials = await Promise.all(
+    selected.map((row) => snapshotMaterial(contract.stream, row)),
+  );
+  const pageDigest = await extendDigest(
+    EMPTY_DIGEST,
+    materials.map(({ payloadDigest: digest }) => digest),
+  );
+  const sourceDigest = await extendDigest(
+    checkpoint.sourceDigest,
+    materials.map(({ payloadDigest: digest }) => digest),
+  );
+
+  return {
+    ...contract,
+    complete: rows.length <= limit,
+    cursor: materials.at(-1)?.cursor ?? checkpoint.cursor,
+    itemCount: materials.length,
+    materials,
+    pageDigest,
+    sourceDigest,
   };
 }
 
@@ -1588,30 +1658,19 @@ async function sourceSnapshotPage(
   checkpoint: ArtifactRebuildCheckpoint,
   limit: number,
 ): Promise<Omit<ArtifactSnapshotPage, "consumerId" | "generation" | "headSeq" | "snapshotSeq">> {
-  const result = await client.execute(
-    buildArtifactSnapshotStatement(contract.stream, checkpoint.cursor, limit),
-  );
-  const rows = typedRows<Record<string, unknown>>(result.rows);
-  const selected = rows.slice(0, limit);
-  const mapped = await Promise.all(selected.map((row) => snapshotItem(contract.stream, row)));
-  const items = mapped.map(({ item }) => item);
-  const pageDigest = await extendDigest(
-    EMPTY_DIGEST,
-    items.map((item) => item.payloadDigest),
-  );
-  const sourceDigest = await extendDigest(
-    checkpoint.sourceDigest,
-    items.map((item) => item.payloadDigest),
-  );
+  const page = await sourceSnapshotVerificationPage(client, contract, checkpoint, limit);
 
   return {
     ...contract,
-    complete: rows.length <= limit,
-    cursor: mapped.at(-1)?.cursor ?? checkpoint.cursor,
-    itemCount: items.length,
-    items,
-    pageDigest,
-    sourceDigest,
+    complete: page.complete,
+    cursor: page.cursor,
+    itemCount: page.itemCount,
+    items: page.materials.map(({ cursor: _cursor, payloadBlob, ...item }) => ({
+      ...item,
+      payloadBlobBase64: payloadBlob === null ? null : artifactBytesToBase64(payloadBlob),
+    })),
+    pageDigest: page.pageDigest,
+    sourceDigest: page.sourceDigest,
   };
 }
 
@@ -1716,7 +1775,12 @@ export async function checkpointArtifactRebuild(
       apiError("stale_artifact_rebuild", "Artifact rebuild generation is stale", 409);
     }
 
-    const page = await sourceSnapshotPage(transaction, contract, checkpoint, input.pageLimit);
+    const page = await sourceSnapshotVerificationPage(
+      transaction,
+      contract,
+      checkpoint,
+      input.pageLimit,
+    );
     const expectedConsumerCount = checkpoint.consumerItemCount + page.itemCount;
 
     if (
@@ -1868,6 +1932,59 @@ async function changesFromCheckpoint(
   };
 }
 
+function registeredArtifactChangeRow(row: ArtifactChangeRow): boolean {
+  const registered = Object.hasOwn(ARTIFACT_STREAM_REGISTRY, row.stream)
+    ? ARTIFACT_STREAM_REGISTRY[row.stream as ArtifactStream]
+    : undefined;
+
+  return (
+    registered !== undefined &&
+    registered.streamVersion === Number(row.stream_version) &&
+    registered.formatVersion === Number(row.format_version) &&
+    registered.subjectType === row.subject_type
+  );
+}
+
+function storedArtifactContract(row: ArtifactChangeRow): StoredArtifactContract {
+  return {
+    formatVersion: Number(row.format_version),
+    stream: row.stream,
+    streamVersion: Number(row.stream_version),
+  };
+}
+
+async function verifyChangesFromCheckpoint(
+  client: Pick<Client, "execute">,
+  consumerId: string,
+  afterSeq: number,
+  limit: number,
+): Promise<ArtifactChangeVerification> {
+  const contracts = await readContracts(client, consumerId);
+  const rows = (await readChangeRows(client, afterSeq, limit)).slice(0, limit);
+  const payloadDigests = await Promise.all(rows.map((row) => artifactChangeDigest(row)));
+  const declaredStreams = new Set(contracts.map(({ stream }) => stream));
+  const unknownRow = rows.find((row) => !registeredArtifactChangeRow(row));
+  const incompatibleRow = rows.find(
+    (row) =>
+      declaredStreams.has(row.stream as ArtifactStream) &&
+      !contracts.some(
+        (contract) =>
+          contract.stream === row.stream &&
+          contract.streamVersion === Number(row.stream_version) &&
+          contract.formatVersion === Number(row.format_version),
+      ),
+  );
+
+  return {
+    batchDigest: await extendDigest(EMPTY_DIGEST, payloadDigests),
+    eventCount: rows.length,
+    incompatible:
+      incompatibleRow === undefined ? undefined : storedArtifactContract(incompatibleRow),
+    throughSeq: rows.length === 0 ? afterSeq : Number(rows[rows.length - 1]?.seq),
+    unknown: unknownRow === undefined ? undefined : storedArtifactContract(unknownRow),
+  };
+}
+
 /** Read the next bounded global-sequence page from an active consumer's durable checkpoint. */
 export async function listArtifactChanges(
   client: ArtifactReadClient,
@@ -1939,7 +2056,7 @@ export async function acknowledgeArtifactChanges(
       );
     }
 
-    const page = await changesFromCheckpoint(
+    const page = await verifyChangesFromCheckpoint(
       transaction,
       input.consumerId,
       durable,
@@ -1947,7 +2064,7 @@ export async function acknowledgeArtifactChanges(
     );
 
     if (
-      page.events.length !== input.eventCount ||
+      page.eventCount !== input.eventCount ||
       page.throughSeq !== input.throughSeq ||
       page.batchDigest !== input.batchDigest
     ) {
@@ -1958,7 +2075,7 @@ export async function acknowledgeArtifactChanges(
       );
     }
 
-    const unknown = page.events.find((event) => !event.formatRegistered);
+    const unknown = page.unknown;
     if (unknown !== undefined) {
       apiError(
         "unknown_artifact_version",
@@ -1967,12 +2084,7 @@ export async function acknowledgeArtifactChanges(
       );
     }
 
-    const declaredStreams = new Set(
-      (await readContracts(transaction, input.consumerId)).map(({ stream }) => stream),
-    );
-    const incompatible = page.events.find(
-      (event) => declaredStreams.has(event.stream) && !event.supportedByConsumer,
-    );
+    const incompatible = page.incompatible;
 
     if (incompatible !== undefined) {
       apiError(
