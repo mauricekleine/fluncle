@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test as bunTest } from "bun:test";
 import { fluncleAsciiLogo } from "./brand";
 import {
   ARTIST_RULE_BOUNDARY,
@@ -9,9 +9,17 @@ import {
 } from "./cli";
 
 const cliPath = new URL("./cli.ts", import.meta.url).pathname;
+const CLI_PROCESS_TIMEOUT_MS = 10_000;
+const CLI_TEST_TIMEOUT_MS = 15_000;
+
+const testCli = (name: string, fn: () => void | Promise<unknown>): void => {
+  bunTest(name, fn, CLI_TEST_TIMEOUT_MS);
+};
+
+const test = bunTest;
 
 describe("fluncle CLI parsing and JSON output", () => {
-  test("prints version JSON", async () => {
+  testCli("prints version JSON", async () => {
     const result = await runCli(["version", "--json"]);
 
     expect(result.exitCode).toBe(0);
@@ -24,7 +32,7 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
-  test("keeps validation failures as JSON when --json is present", async () => {
+  testCli("keeps validation failures as JSON when --json is present", async () => {
     const result = await runCli(["tracks", "get", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -37,7 +45,7 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
-  test("preserves the recent alias and limit validation before fetching", async () => {
+  testCli("preserves the recent alias and limit validation before fetching", async () => {
     const result = await runCli(["list", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -50,7 +58,7 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
-  test("admin tracks queue validates --limit before fetching", async () => {
+  testCli("admin tracks queue validates --limit before fetching", async () => {
     const result = await runCli(["admin", "tracks", "queue", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -58,7 +66,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks vehicles validates --limit before fetching", async () => {
+  testCli("admin tracks vehicles validates --limit before fetching", async () => {
     const result = await runCli(["admin", "tracks", "vehicles", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -66,7 +74,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin labels update requires a ruling or a scoped re-walk before fetching", async () => {
+  testCli("admin labels update requires a ruling or a scoped re-walk before fetching", async () => {
     const result = await runCli(["admin", "labels", "update", "test-label", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -74,7 +82,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Pass --seed-state enabled|disabled|undecided or --rewalk");
   });
 
-  test("admin labels update rejects an invalid supplied ruling even with --rewalk", async () => {
+  testCli("admin labels update rejects an invalid supplied ruling even with --rewalk", async () => {
     const result = await runCli([
       "admin",
       "labels",
@@ -103,7 +111,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     ]);
   });
 
-  test("artist rule commands validate mutation inputs before fetching", async () => {
+  testCli("artist rule commands validate mutation inputs before fetching", async () => {
     const invalidMbid = await runCli([
       "admin",
       "artists",
@@ -208,7 +216,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(nulled.startsWith("unmatched")).toBe(true);
   });
 
-  test("admin telemetry validates its page cap before fetching", async () => {
+  testCli("admin telemetry validates its page cap before fetching", async () => {
     const result = await runCli(["admin", "telemetry", "read", "--limit", "101", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -216,7 +224,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin receipts exposes read-only reconciliation and bounded repair", async () => {
+  testCli("admin receipts exposes read-only reconciliation and bounded repair", async () => {
     const result = await runCli(["admin", "receipts", "--help"]);
 
     expect(result.exitCode).toBe(0);
@@ -226,7 +234,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("repair");
   });
 
-  test("admin receipts validates repair bounds before fetching", async () => {
+  testCli("admin receipts validates repair bounds before fetching", async () => {
     const result = await runCli([
       "admin",
       "receipts",
@@ -243,7 +251,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("--limit must be a whole number from 1 through 100");
   });
 
-  test("admin artifacts exposes the complete consumer lifecycle", async () => {
+  testCli("admin artifacts exposes the complete consumer lifecycle", async () => {
     const result = await runCli(["admin", "artifacts", "--help"]);
 
     expect(result.exitCode).toBe(0);
@@ -256,33 +264,36 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("compact");
   });
 
-  test("admin artifacts rejects unknown contracts and over-cap pages before fetching", async () => {
-    const contract = await runCli([
-      "admin",
-      "artifacts",
-      "register",
-      "goal-g",
-      "--contract",
-      "sonar.track@2/1",
-      "--json",
-    ]);
-    const limit = await runCli([
-      "admin",
-      "artifacts",
-      "list",
-      "goal-g",
-      "--limit",
-      "501",
-      "--json",
-    ]);
+  testCli(
+    "admin artifacts rejects unknown contracts and over-cap pages before fetching",
+    async () => {
+      const contract = await runCli([
+        "admin",
+        "artifacts",
+        "register",
+        "goal-g",
+        "--contract",
+        "sonar.track@2/1",
+        "--json",
+      ]);
+      const limit = await runCli([
+        "admin",
+        "artifacts",
+        "list",
+        "goal-g",
+        "--limit",
+        "501",
+        "--json",
+      ]);
 
-    expect(contract.exitCode).toBe(1);
-    expect(contract.stdout).toContain("Unsupported artifact contract");
-    expect(limit.exitCode).toBe(1);
-    expect(limit.stdout).toContain("between 1 and 500");
-  });
+      expect(contract.exitCode).toBe(1);
+      expect(contract.stdout).toContain("Unsupported artifact contract");
+      expect(limit.exitCode).toBe(1);
+      expect(limit.stdout).toContain("between 1 and 500");
+    },
+  );
 
-  test("admin telemetry keeps derived --ok a closed true/false filter", async () => {
+  testCli("admin telemetry keeps derived --ok a closed true/false filter", async () => {
     const result = await runCli(["admin", "telemetry", "read", "--ok", "yes", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -290,7 +301,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("--ok must be true or false");
   });
 
-  test("admin telemetry rejects an inverted time window before fetching", async () => {
+  testCli("admin telemetry rejects an inverted time window before fetching", async () => {
     const result = await runCli([
       "admin",
       "telemetry",
@@ -307,7 +318,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("--since must be before or equal to --until");
   });
 
-  test("admin telemetry exposes every read filter and pagination control", async () => {
+  testCli("admin telemetry exposes every read filter and pagination control", async () => {
     const result = await runCli(["admin", "telemetry", "read", "--help"]);
 
     expect(result.exitCode).toBe(0);
@@ -357,7 +368,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     );
   });
 
-  test("admin telemetry requires a value for --missing-field before fetching", async () => {
+  testCli("admin telemetry requires a value for --missing-field before fetching", async () => {
     const result = await runCli(["admin", "telemetry", "read", "--missing-field", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -365,32 +376,38 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Did you forget to specify the option argument");
   });
 
-  test("admin telemetry keeps the missing-roster view distinct from evidence filters", async () => {
-    const result = await runCli(["admin", "telemetry", "read", "--missing", "--liar", "--json"]);
+  testCli(
+    "admin telemetry keeps the missing-roster view distinct from evidence filters",
+    async () => {
+      const result = await runCli(["admin", "telemetry", "read", "--missing", "--liar", "--json"]);
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("--missing cannot be combined");
-  });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("--missing cannot be combined");
+    },
+  );
 
-  test("admin telemetry validates the closed --missing-field vocabulary before fetching", async () => {
-    const result = await runCli([
-      "admin",
-      "telemetry",
-      "read",
-      "--missing-field",
-      "vendor_calls",
-      "--json",
-    ]);
+  testCli(
+    "admin telemetry validates the closed --missing-field vocabulary before fetching",
+    async () => {
+      const result = await runCli([
+        "admin",
+        "telemetry",
+        "read",
+        "--missing-field",
+        "vendor_calls",
+        "--json",
+      ]);
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "--missing-field must be one of: checked, errors, expected_interval_ms, produced, queue_depth",
-    );
-  });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(
+        "--missing-field must be one of: checked, errors, expected_interval_ms, produced, queue_depth",
+      );
+    },
+  );
 
-  test("admin tracks enrich --queue validates --limit before fetching", async () => {
+  testCli("admin tracks enrich --queue validates --limit before fetching", async () => {
     const result = await runCli(["admin", "tracks", "enrich", "--queue", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -398,7 +415,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks capture-audio --queue validates --limit before fetching", async () => {
+  testCli("admin tracks capture-audio --queue validates --limit before fetching", async () => {
     const result = await runCli([
       "admin",
       "tracks",
@@ -414,15 +431,18 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks capture-audio requires --queue (a worklist view, no single-track form)", async () => {
-    const result = await runCli(["admin", "tracks", "capture-audio", "--json"]);
+  testCli(
+    "admin tracks capture-audio requires --queue (a worklist view, no single-track form)",
+    async () => {
+      const result = await runCli(["admin", "tracks", "capture-audio", "--json"]);
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("worklist view");
-    expect(result.stderr).toContain("capture-audio --queue");
-  });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worklist view");
+      expect(result.stderr).toContain("capture-audio --queue");
+    },
+  );
 
-  test("admin tracks group lists the queue + pipeline subcommands", async () => {
+  testCli("admin tracks group lists the queue + pipeline subcommands", async () => {
     const tracksHelp = await runCli(["admin", "tracks", "--help"]);
 
     expect(tracksHelp.exitCode).toBe(0);
@@ -446,7 +466,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(tracksHelp.stdout).toContain("observe");
   });
 
-  test("admin tracks video requires a footage cut before any upload", async () => {
+  testCli("admin tracks video requires a footage cut before any upload", async () => {
     // A --dir with no footage.mp4 fails the local validation before the presign
     // request, so this runs without a server or admin token.
     const result = await runCli([
@@ -469,7 +489,7 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
-  test("the singular `admin track` group alias is gone", async () => {
+  testCli("the singular `admin track` group alias is gone", async () => {
     const result = await runCli([
       "admin",
       "track",
@@ -486,7 +506,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).not.toContain("A footage cut is required");
   });
 
-  test("admin tracks observe requires a script before any render", async () => {
+  testCli("admin tracks observe requires a script before any render", async () => {
     // No --script / --script-file fails local validation before the API call,
     // so this runs without a server or admin token (and never spends a render).
     const result = await runCli(["admin", "tracks", "observe", "004.7.2I", "--json"]);
@@ -496,7 +516,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin tracks observe");
   });
 
-  test("admin tracks context requires an id before any fetch", async () => {
+  testCli("admin tracks context requires an id before any fetch", async () => {
     // No id fails local validation before the API call, so this runs without a
     // server or admin token (and never spends a Firecrawl fetch).
     const result = await runCli(["admin", "tracks", "context", "--json"]);
@@ -506,7 +526,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin tracks context");
   });
 
-  test("admin tracks get requires an id before any lookup", async () => {
+  testCli("admin tracks get requires an id before any lookup", async () => {
     // No id fails local validation before the API call, so this runs without a
     // server or admin token. The usage names the admin `get`, not the public one.
     const result = await runCli(["admin", "tracks", "get", "--json"]);
@@ -521,7 +541,7 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
-  test("admin tracks requeue-video requires an id before any clear", async () => {
+  testCli("admin tracks requeue-video requires an id before any clear", async () => {
     // No id fails local validation before the API call, so this runs without a
     // server or admin token (and never clears a live video).
     const result = await runCli(["admin", "tracks", "requeue-video", "--json"]);
@@ -531,7 +551,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin tracks requeue-video");
   });
 
-  test("admin tracks context --queue validates --limit before fetching", async () => {
+  testCli("admin tracks context --queue validates --limit before fetching", async () => {
     const result = await runCli([
       "admin",
       "tracks",
@@ -547,7 +567,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks observe --queue validates --limit before fetching", async () => {
+  testCli("admin tracks observe --queue validates --limit before fetching", async () => {
     const result = await runCli([
       "admin",
       "tracks",
@@ -563,7 +583,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks queue accepts the --has-observation filter", async () => {
+  testCli("admin tracks queue accepts the --has-observation filter", async () => {
     // The boolean filter parses cleanly; --limit still validates first.
     const result = await runCli([
       "admin",
@@ -580,7 +600,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("the --has-context no-op flag is gone from admin tracks queue", async () => {
+  testCli("the --has-context no-op flag is gone from admin tracks queue", async () => {
     // The render queue is always context-gated, so the no-op flag was removed:
     // commander now rejects it as an unknown option (surfaced as a JSON error).
     const result = await runCli(["admin", "tracks", "queue", "--has-context", "--json"]);
@@ -589,7 +609,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Unknown option '--has-context'");
   });
 
-  test("admin tracks publish resolves; the old flat admin add alias is gone", async () => {
+  testCli("admin tracks publish resolves; the old flat admin add alias is gone", async () => {
     const canonical = await runCli(["admin", "tracks", "publish", "--json"]);
     const removed = await runCli(["admin", "add", "--json"]);
 
@@ -601,7 +621,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(removed.stdout).not.toContain("Missing Spotify track URL");
   });
 
-  test("admin tracks preview resolves; the old preview-archive name is gone", async () => {
+  testCli("admin tracks preview resolves; the old preview-archive name is gone", async () => {
     const canonical = await runCli(["admin", "tracks", "preview", "--json"]);
     const removed = await runCli(["admin", "tracks", "preview-archive", "--json"]);
 
@@ -614,7 +634,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(removed.stdout).not.toContain("Usage: fluncle admin tracks preview");
   });
 
-  test("keeps root help listener-facing", async () => {
+  testCli("keeps root help listener-facing", async () => {
     const result = await runCli([]);
 
     expect(result.exitCode).toBe(0);
@@ -631,7 +651,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).not.toContain("Operator:");
   });
 
-  test("about prints the wordmark, the intro, and the grouped link map", async () => {
+  testCli("about prints the wordmark, the intro, and the grouped link map", async () => {
     const result = await runCli(["about"]);
 
     expect(result.exitCode).toBe(0);
@@ -653,7 +673,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("https://github.com/mauricekleine/fluncle");
   });
 
-  test("admin newsletter draft requires a content payload before any API call", async () => {
+  testCli("admin newsletter draft requires a content payload before any API call", async () => {
     // No --content-file fails local validation (CliError) before the API call, so
     // this runs without a server or admin token.
     const result = await runCli(["admin", "newsletter", "draft", "--json"]);
@@ -663,7 +683,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("missing_content");
   });
 
-  test("admin newsletter update requires an id before any API call", async () => {
+  testCli("admin newsletter update requires an id before any API call", async () => {
     const result = await runCli(["admin", "newsletter", "update", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -671,7 +691,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin newsletter update");
   });
 
-  test("admin newsletter send requires an id before any API call", async () => {
+  testCli("admin newsletter send requires an id before any API call", async () => {
     // Send is operator-gated server-side; the missing-id guard fails first, so this
     // runs without a server or token (and never reaches the Resend broadcast).
     const result = await runCli(["admin", "newsletter", "send", "--json"]);
@@ -681,7 +701,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin newsletter send");
   });
 
-  test("admin newsletter delete requires an id before any API call", async () => {
+  testCli("admin newsletter delete requires an id before any API call", async () => {
     const result = await runCli(["admin", "newsletter", "delete", "--yes", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -689,7 +709,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin newsletter delete");
   });
 
-  test("admin newsletter delete requires --yes to confirm the hard delete", async () => {
+  testCli("admin newsletter delete requires --yes to confirm the hard delete", async () => {
     // The id is present, so the --yes guard fails first — no server or token needed.
     const result = await runCli(["admin", "newsletter", "delete", "some-id", "--json"]);
 
@@ -698,27 +718,30 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("--yes");
   });
 
-  test("admin newsletter group lists its draft/update/send/list/delete subcommands", async () => {
-    // The group's default action prints its own help (no subcommand given).
-    const help = await runCli(["admin", "newsletter"]);
+  testCli(
+    "admin newsletter group lists its draft/update/send/list/delete subcommands",
+    async () => {
+      // The group's default action prints its own help (no subcommand given).
+      const help = await runCli(["admin", "newsletter"]);
 
-    expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain("Usage: fluncle admin newsletter");
-    expect(help.stdout).toContain("draft");
-    expect(help.stdout).toContain("update");
-    expect(help.stdout).toContain("send");
-    expect(help.stdout).toContain("list");
-    expect(help.stdout).toContain("delete");
-  });
+      expect(help.exitCode).toBe(0);
+      expect(help.stdout).toContain("Usage: fluncle admin newsletter");
+      expect(help.stdout).toContain("draft");
+      expect(help.stdout).toContain("update");
+      expect(help.stdout).toContain("send");
+      expect(help.stdout).toContain("list");
+      expect(help.stdout).toContain("delete");
+    },
+  );
 
-  test("about takes no positional argument", async () => {
+  testCli("about takes no positional argument", async () => {
     const result = await runCli(["about", "extra"]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("Unexpected argument 'extra'");
   });
 
-  test("supports help commands at root and admin levels", async () => {
+  testCli("supports help commands at root and admin levels", async () => {
     const rootHelp = await runCli(["help"]);
     const adminDefault = await runCli(["admin"]);
     const adminHelp = await runCli(["admin", "help"]);
@@ -744,7 +767,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(adminHelp.stdout).toContain("catalogue");
   });
 
-  test("projection value options reach their fixed path and body", async () => {
+  testCli("projection value options reach their fixed path and body", async () => {
     const requests: Array<{ body: unknown; method: string; path: string }> = [];
 
     await withStubApi(
@@ -845,7 +868,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     ]);
   });
 
-  test("projection advance stops after the first completing response", async () => {
+  testCli("projection advance stops after the first completing response", async () => {
     const requests: unknown[] = [];
 
     await withStubApi(
@@ -908,7 +931,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(requests).toEqual([{ action: "audit", includeStatus: false, limit: 17 }]);
   });
 
-  test("projection advance includes aggregate totals in human output", async () => {
+  testCli("projection advance includes aggregate totals in human output", async () => {
     await withStubApi(
       (_req, url) => {
         if (url.pathname === "/api/v1/admin/projections/artist_qualification/advance") {
@@ -953,7 +976,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     );
   });
 
-  test("projection advance aggregates an exhausted serial budget", async () => {
+  testCli("projection advance aggregates an exhausted serial budget", async () => {
     const requests: unknown[] = [];
     let active = 0;
     let overlapped = false;
@@ -1044,7 +1067,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     ]);
   });
 
-  test("the four scheduled repair commands make no terminal status requests", async () => {
+  testCli("the four scheduled repair commands make no terminal status requests", async () => {
     const requests: Array<{ body?: unknown; method: string; path: string }> = [];
     const scheduledRepairs = [
       ["track_due_work", "20"],
@@ -1127,7 +1150,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     ]);
   });
 
-  test("terminal-status omission accepts only JSON repair automation", async () => {
+  testCli("terminal-status omission accepts only JSON repair automation", async () => {
     const rebuild = await runCli([
       "admin",
       "projections",
@@ -1158,7 +1181,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     }
   });
 
-  test("rejects invalid max-steps values before transport", async () => {
+  testCli("rejects invalid max-steps values before transport", async () => {
     let requests = 0;
     const invalidValues = ["0", "1.5", "101", "9007199254740992"];
 
@@ -1198,7 +1221,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(requests).toBe(0);
   });
 
-  test("projection advance stops on the first API error without retrying", async () => {
+  testCli("projection advance stops on the first API error without retrying", async () => {
     const requests: unknown[] = [];
 
     await withStubApi(
@@ -1287,145 +1310,160 @@ describe("sweep commands surface partial failure", () => {
     type: "track",
   };
 
-  test("requeue-analysis --json dry-run with nothing failed keeps ok:true and exit 0", async () => {
-    await withStubApi(
-      (req, url) => {
-        if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
-          return Response.json({ totalCount: 1, tracks: [oneFinding] });
-        }
+  testCli(
+    "requeue-analysis --json dry-run with nothing failed keeps ok:true and exit 0",
+    async () => {
+      await withStubApi(
+        (req, url) => {
+          if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
+            return Response.json({ totalCount: 1, tracks: [oneFinding] });
+          }
 
-        return Response.json(
-          { code: "not_found", message: url.pathname, ok: false },
-          { status: 404 },
-        );
-      },
-      async (baseUrl) => {
-        const result = await runCli(["admin", "tracks", "requeue-analysis", "--json"], {
-          FLUNCLE_API_BASE_URL: baseUrl,
-          FLUNCLE_API_TOKEN: "test-token",
-        });
-
-        expect(result.exitCode).toBe(0);
-        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-        expect(payload.ok).toBe(true);
-        expect(payload.failedCount).toBe(0);
-        expect(payload.applied).toBe(false);
-        expect(payload.scanned).toBe(1);
-      },
-    );
-  });
-
-  test("requeue-analysis --apply --json with a failed flip reports ok:false, failedCount, exit 1", async () => {
-    await withStubApi(
-      (req, url) => {
-        if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
-          return Response.json({ totalCount: 1, tracks: [oneFinding] });
-        }
-
-        if (req.method === "PATCH" && url.pathname === "/api/v1/admin/tracks/t1") {
           return Response.json(
-            { code: "boom", message: "update exploded", ok: false },
-            { status: 500 },
+            { code: "not_found", message: url.pathname, ok: false },
+            { status: 404 },
           );
-        }
-
-        return Response.json(
-          { code: "not_found", message: url.pathname, ok: false },
-          { status: 404 },
-        );
-      },
-      async (baseUrl) => {
-        const result = await runCli(["admin", "tracks", "requeue-analysis", "--apply", "--json"], {
-          FLUNCLE_API_BASE_URL: baseUrl,
-          FLUNCLE_API_TOKEN: "test-token",
-        });
-
-        expect(result.exitCode).toBe(1);
-        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-        expect(payload.ok).toBe(false);
-        expect(payload.failedCount).toBe(1);
-        // The full failed array survives in the payload so automation can see WHICH
-        // items were lost, not just that some were.
-        expect(payload.failed).toEqual([{ error: "update exploded", trackId: "t1" }]);
-        expect(payload.applied).toBe(true);
-      },
-    );
-  });
-
-  test("requeue-analysis --apply non-JSON with a failed flip still exits 1 (regression pin)", async () => {
-    await withStubApi(
-      (req, url) => {
-        if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
-          return Response.json({ totalCount: 1, tracks: [oneFinding] });
-        }
-
-        if (req.method === "PATCH" && url.pathname === "/api/v1/admin/tracks/t1") {
-          return Response.json(
-            { code: "boom", message: "update exploded", ok: false },
-            { status: 500 },
-          );
-        }
-
-        return Response.json(
-          { code: "not_found", message: url.pathname, ok: false },
-          { status: 404 },
-        );
-      },
-      async (baseUrl) => {
-        const result = await runCli(["admin", "tracks", "requeue-analysis", "--apply"], {
-          FLUNCLE_API_BASE_URL: baseUrl,
-          FLUNCLE_API_TOKEN: "test-token",
-        });
-
-        expect(result.exitCode).toBe(1);
-        expect(result.stdout).toContain("1 failed:");
-        expect(result.stdout).toContain("t1: update exploded");
-      },
-    );
-  });
-
-  test("backfills lastfm --json with a failed love reports ok:false, failedCount, exit 1", async () => {
-    await withStubApi(
-      (req, url) => {
-        if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/lastfm") {
-          return Response.json({
-            dryRun: false,
-            failed: [{ error: "vendor 500", logId: "001.1.AA" }],
-            failedCount: 1,
-            loved: ["002.2.BB"],
-            lovedCount: 1,
-            nextCursor: null,
-            ok: true,
-            rateLimited: false,
-            skipped: [],
-            skippedCount: 0,
+        },
+        async (baseUrl) => {
+          const result = await runCli(["admin", "tracks", "requeue-analysis", "--json"], {
+            FLUNCLE_API_BASE_URL: baseUrl,
+            FLUNCLE_API_TOKEN: "test-token",
           });
-        }
 
-        return Response.json(
-          { code: "not_found", message: url.pathname, ok: false },
-          { status: 404 },
-        );
-      },
-      async (baseUrl) => {
-        const result = await runCli(["admin", "backfills", "lastfm", "--json"], {
-          FLUNCLE_API_BASE_URL: baseUrl,
-          FLUNCLE_API_TOKEN: "test-token",
-        });
+          expect(result.exitCode).toBe(0);
+          const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+          expect(payload.ok).toBe(true);
+          expect(payload.failedCount).toBe(0);
+          expect(payload.applied).toBe(false);
+          expect(payload.scanned).toBe(1);
+        },
+      );
+    },
+  );
 
-        expect(result.exitCode).toBe(1);
-        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-        expect(payload.ok).toBe(false);
-        expect(payload.failedCount).toBe(1);
-        expect(payload.failed).toEqual([{ error: "vendor 500", logId: "001.1.AA" }]);
-        // The successes of the same batch survive alongside the failures.
-        expect(payload.loved).toEqual(["002.2.BB"]);
-        expect(payload.lovedCount).toBe(1);
-      },
-    );
-  });
+  testCli(
+    "requeue-analysis --apply --json with a failed flip reports ok:false, failedCount, exit 1",
+    async () => {
+      await withStubApi(
+        (req, url) => {
+          if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
+            return Response.json({ totalCount: 1, tracks: [oneFinding] });
+          }
 
-  test("backfills lastfm --json with nothing failed keeps ok:true and exit 0", async () => {
+          if (req.method === "PATCH" && url.pathname === "/api/v1/admin/tracks/t1") {
+            return Response.json(
+              { code: "boom", message: "update exploded", ok: false },
+              { status: 500 },
+            );
+          }
+
+          return Response.json(
+            { code: "not_found", message: url.pathname, ok: false },
+            { status: 404 },
+          );
+        },
+        async (baseUrl) => {
+          const result = await runCli(
+            ["admin", "tracks", "requeue-analysis", "--apply", "--json"],
+            {
+              FLUNCLE_API_BASE_URL: baseUrl,
+              FLUNCLE_API_TOKEN: "test-token",
+            },
+          );
+
+          expect(result.exitCode).toBe(1);
+          const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+          expect(payload.ok).toBe(false);
+          expect(payload.failedCount).toBe(1);
+          // The full failed array survives in the payload so automation can see WHICH
+          // items were lost, not just that some were.
+          expect(payload.failed).toEqual([{ error: "update exploded", trackId: "t1" }]);
+          expect(payload.applied).toBe(true);
+        },
+      );
+    },
+  );
+
+  testCli(
+    "requeue-analysis --apply non-JSON with a failed flip still exits 1 (regression pin)",
+    async () => {
+      await withStubApi(
+        (req, url) => {
+          if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
+            return Response.json({ totalCount: 1, tracks: [oneFinding] });
+          }
+
+          if (req.method === "PATCH" && url.pathname === "/api/v1/admin/tracks/t1") {
+            return Response.json(
+              { code: "boom", message: "update exploded", ok: false },
+              { status: 500 },
+            );
+          }
+
+          return Response.json(
+            { code: "not_found", message: url.pathname, ok: false },
+            { status: 404 },
+          );
+        },
+        async (baseUrl) => {
+          const result = await runCli(["admin", "tracks", "requeue-analysis", "--apply"], {
+            FLUNCLE_API_BASE_URL: baseUrl,
+            FLUNCLE_API_TOKEN: "test-token",
+          });
+
+          expect(result.exitCode).toBe(1);
+          expect(result.stdout).toContain("1 failed:");
+          expect(result.stdout).toContain("t1: update exploded");
+        },
+      );
+    },
+  );
+
+  testCli(
+    "backfills lastfm --json with a failed love reports ok:false, failedCount, exit 1",
+    async () => {
+      await withStubApi(
+        (req, url) => {
+          if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/lastfm") {
+            return Response.json({
+              dryRun: false,
+              failed: [{ error: "vendor 500", logId: "001.1.AA" }],
+              failedCount: 1,
+              loved: ["002.2.BB"],
+              lovedCount: 1,
+              nextCursor: null,
+              ok: true,
+              rateLimited: false,
+              skipped: [],
+              skippedCount: 0,
+            });
+          }
+
+          return Response.json(
+            { code: "not_found", message: url.pathname, ok: false },
+            { status: 404 },
+          );
+        },
+        async (baseUrl) => {
+          const result = await runCli(["admin", "backfills", "lastfm", "--json"], {
+            FLUNCLE_API_BASE_URL: baseUrl,
+            FLUNCLE_API_TOKEN: "test-token",
+          });
+
+          expect(result.exitCode).toBe(1);
+          const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+          expect(payload.ok).toBe(false);
+          expect(payload.failedCount).toBe(1);
+          expect(payload.failed).toEqual([{ error: "vendor 500", logId: "001.1.AA" }]);
+          // The successes of the same batch survive alongside the failures.
+          expect(payload.loved).toEqual(["002.2.BB"]);
+          expect(payload.lovedCount).toBe(1);
+        },
+      );
+    },
+  );
+
+  testCli("backfills lastfm --json with nothing failed keeps ok:true and exit 0", async () => {
     await withStubApi(
       (req, url) => {
         if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/lastfm") {
@@ -1463,131 +1501,137 @@ describe("sweep commands surface partial failure", () => {
     );
   });
 
-  test("backfills artist-images --json with a failed fill reports ok:false, failedCount, exit 1", async () => {
-    await withStubApi(
-      (req, url) => {
-        if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-images") {
-          return Response.json({
-            budgetLimited: false,
-            checkedCount: 2,
-            dryRun: false,
-            failed: [{ artistId: "a1", error: "spotify 500" }],
-            failedCount: 1,
-            filled: ["a2"],
-            filledCount: 1,
-            nextCursor: null,
-            queueDepth: 1,
-            rateLimited: false,
-            skipped: [],
-            skippedCount: 0,
-          });
-        }
+  testCli(
+    "backfills artist-images --json with a failed fill reports ok:false, failedCount, exit 1",
+    async () => {
+      await withStubApi(
+        (req, url) => {
+          if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-images") {
+            return Response.json({
+              budgetLimited: false,
+              checkedCount: 2,
+              dryRun: false,
+              failed: [{ artistId: "a1", error: "spotify 500" }],
+              failedCount: 1,
+              filled: ["a2"],
+              filledCount: 1,
+              nextCursor: null,
+              queueDepth: 1,
+              rateLimited: false,
+              skipped: [],
+              skippedCount: 0,
+            });
+          }
 
-        return Response.json(
-          { code: "not_found", message: url.pathname, ok: false },
-          { status: 404 },
-        );
-      },
-      async (baseUrl) => {
-        const result = await runCli(["admin", "backfills", "artist-images", "--json"], {
-          FLUNCLE_API_BASE_URL: baseUrl,
-          FLUNCLE_API_TOKEN: "test-token",
-        });
-
-        expect(result.exitCode).toBe(1);
-        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-        expect(payload.ok).toBe(false);
-        expect(payload.failedCount).toBe(1);
-        expect(payload.failed).toEqual([{ artistId: "a1", error: "spotify 500" }]);
-        expect(payload.filled).toEqual(["a2"]);
-        expect(payload.checkedCount).toBe(2);
-        expect(payload.queueDepth).toBe(1);
-        expect(payload.rateLimited).toBe(false);
-        expect(payload.budgetLimited).toBe(false);
-      },
-    );
-  });
-
-  test("backfills artist-images counts only fills toward --limit and follows skip-only pages", async () => {
-    const calls: Array<{ cursor: string | null; limit: string | null }> = [];
-    const skipped = Array.from({ length: 50 }, (_, index) => `skip-${index}`);
-    const filled = Array.from({ length: 50 }, (_, index) => `fill-${index}`);
-
-    await withStubApi(
-      (req, url) => {
-        if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-images") {
-          calls.push({
-            cursor: url.searchParams.get("cursor"),
-            limit: url.searchParams.get("limit"),
+          return Response.json(
+            { code: "not_found", message: url.pathname, ok: false },
+            { status: 404 },
+          );
+        },
+        async (baseUrl) => {
+          const result = await runCli(["admin", "backfills", "artist-images", "--json"], {
+            FLUNCLE_API_BASE_URL: baseUrl,
+            FLUNCLE_API_TOKEN: "test-token",
           });
 
-          if (calls.length === 1) {
+          expect(result.exitCode).toBe(1);
+          const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+          expect(payload.ok).toBe(false);
+          expect(payload.failedCount).toBe(1);
+          expect(payload.failed).toEqual([{ artistId: "a1", error: "spotify 500" }]);
+          expect(payload.filled).toEqual(["a2"]);
+          expect(payload.checkedCount).toBe(2);
+          expect(payload.queueDepth).toBe(1);
+          expect(payload.rateLimited).toBe(false);
+          expect(payload.budgetLimited).toBe(false);
+        },
+      );
+    },
+  );
+
+  testCli(
+    "backfills artist-images counts only fills toward --limit and follows skip-only pages",
+    async () => {
+      const calls: Array<{ cursor: string | null; limit: string | null }> = [];
+      const skipped = Array.from({ length: 50 }, (_, index) => `skip-${index}`);
+      const filled = Array.from({ length: 50 }, (_, index) => `fill-${index}`);
+
+      await withStubApi(
+        (req, url) => {
+          if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-images") {
+            calls.push({
+              cursor: url.searchParams.get("cursor"),
+              limit: url.searchParams.get("limit"),
+            });
+
+            if (calls.length === 1) {
+              return Response.json({
+                budgetLimited: false,
+                checkedCount: 50,
+                dryRun: false,
+                failed: [],
+                failedCount: 0,
+                filled: [],
+                filledCount: 0,
+                nextCursor: "a49",
+                ok: true,
+                queueDepth: 50,
+                rateLimited: false,
+                skipped,
+                skippedCount: 50,
+              });
+            }
+
             return Response.json({
               budgetLimited: false,
               checkedCount: 50,
               dryRun: false,
               failed: [],
               failedCount: 0,
-              filled: [],
-              filledCount: 0,
-              nextCursor: "a49",
+              filled,
+              filledCount: 50,
+              nextCursor: "a99",
               ok: true,
-              queueDepth: 50,
+              queueDepth: 12,
               rateLimited: false,
-              skipped,
-              skippedCount: 50,
+              skipped: [],
+              skippedCount: 0,
             });
           }
 
-          return Response.json({
-            budgetLimited: false,
-            checkedCount: 50,
-            dryRun: false,
-            failed: [],
-            failedCount: 0,
-            filled,
-            filledCount: 50,
-            nextCursor: "a99",
-            ok: true,
-            queueDepth: 12,
-            rateLimited: false,
-            skipped: [],
-            skippedCount: 0,
-          });
-        }
+          return Response.json(
+            { code: "not_found", message: url.pathname, ok: false },
+            { status: 404 },
+          );
+        },
+        async (baseUrl) => {
+          const result = await runCli(
+            ["admin", "backfills", "artist-images", "--limit", "50", "--json"],
+            {
+              FLUNCLE_API_BASE_URL: baseUrl,
+              FLUNCLE_API_TOKEN: "test-token",
+            },
+          );
 
-        return Response.json(
-          { code: "not_found", message: url.pathname, ok: false },
-          { status: 404 },
-        );
-      },
-      async (baseUrl) => {
-        const result = await runCli(
-          ["admin", "backfills", "artist-images", "--limit", "50", "--json"],
-          {
-            FLUNCLE_API_BASE_URL: baseUrl,
-            FLUNCLE_API_TOKEN: "test-token",
-          },
-        );
+          expect(result.exitCode).toBe(0);
+          expect(calls).toEqual([
+            { cursor: null, limit: "50" },
+            { cursor: "a49", limit: "50" },
+          ]);
 
-        expect(result.exitCode).toBe(0);
-        expect(calls).toEqual([
-          { cursor: null, limit: "50" },
-          { cursor: "a49", limit: "50" },
-        ]);
+          const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+          expect(payload.filledCount).toBe(50);
+          expect(payload.skippedCount).toBe(50);
+          expect(payload.checkedCount).toBe(100);
+          expect(payload.queueDepth).toBe(12);
+          expect(payload.filled).toEqual(filled);
+          expect(payload.skipped).toEqual(skipped);
+        },
+      );
+    },
+  );
 
-        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-        expect(payload.filledCount).toBe(50);
-        expect(payload.skippedCount).toBe(50);
-        expect(payload.checkedCount).toBe(100);
-        expect(payload.queueDepth).toBe(12);
-        expect(payload.filled).toEqual(filled);
-        expect(payload.skipped).toEqual(skipped);
-      },
-    );
-  });
-
-  test("backfills artist-images stops paging on throttle or budget exhaustion", async () => {
+  testCli("backfills artist-images stops paging on throttle or budget exhaustion", async () => {
     for (const stopField of ["rateLimited", "budgetLimited"] as const) {
       let calls = 0;
 
@@ -1679,21 +1723,30 @@ async function runCli(
       NODE_ENV: "test",
       ...env,
     },
+    killSignal: "SIGKILL",
     stderr: "pipe",
     stdout: "pipe",
+    timeout: CLI_PROCESS_TIMEOUT_MS,
   });
 
-  const [exitCode, stdout, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
 
-  return {
-    exitCode,
-    stderr,
-    stdout,
-  };
+    return {
+      exitCode,
+      stderr,
+      stdout,
+    };
+  } finally {
+    if (proc.exitCode === null) {
+      proc.kill("SIGKILL");
+    }
+    await proc.exited;
+  }
 }
 
 // Every non-test source file under apps/cli/src, as [repo-relative-ish path, source].
@@ -1766,26 +1819,29 @@ describe("the stringOptions invariant", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("a value option's value never leaks into the positionals (the triage shape)", async () => {
-    // Without --verdict-file in stringOptions this invocation mis-parsed as five
-    // positionals ("Unknown submissions arguments"); with it, the parse succeeds
-    // and the command proceeds (failing later on auth/network, which exits
-    // non-zero but with the triage command's own JSON error, never the parser's).
-    const result = await runCli([
-      "admin",
-      "submissions",
-      "triage",
-      "some-id",
-      "--verdict-file",
-      "/nonexistent-verdict.txt",
-      "--json",
-    ]);
+  testCli(
+    "a value option's value never leaks into the positionals (the triage shape)",
+    async () => {
+      // Without --verdict-file in stringOptions this invocation mis-parsed as five
+      // positionals ("Unknown submissions arguments"); with it, the parse succeeds
+      // and the command proceeds (failing later on auth/network, which exits
+      // non-zero but with the triage command's own JSON error, never the parser's).
+      const result = await runCli([
+        "admin",
+        "submissions",
+        "triage",
+        "some-id",
+        "--verdict-file",
+        "/nonexistent-verdict.txt",
+        "--json",
+      ]);
 
-    expect(result.stdout).not.toContain("Unknown submissions arguments");
-    expect(result.stderr).not.toContain("Unknown submissions arguments");
-    // The second hand-mirror: the subcommand whitelist in the same validator
-    // (it shipped without "triage" too — the sweep found both layers in one night).
-    expect(result.stdout).not.toContain("Unknown submissions command");
-    expect(result.stderr).not.toContain("Unknown submissions command");
-  });
+      expect(result.stdout).not.toContain("Unknown submissions arguments");
+      expect(result.stderr).not.toContain("Unknown submissions arguments");
+      // The second hand-mirror: the subcommand whitelist in the same validator
+      // (it shipped without "triage" too — the sweep found both layers in one night).
+      expect(result.stdout).not.toContain("Unknown submissions command");
+      expect(result.stderr).not.toContain("Unknown submissions command");
+    },
+  );
 });
