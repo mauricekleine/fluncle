@@ -2,6 +2,7 @@ import {
   CONTRACT_D_ANCHOR_FORMAT_VERSION,
   CONTRACT_D_CRAWL_CLAIM_LIMIT,
   CONTRACT_D_HUB_PAGE_SIZE,
+  CRAWL_INDEX_EVIDENCE_SOURCE_VERSION_PREFIX,
   defaultAnchorFixtureRows,
   publicAggregateFixtureBuckets,
 } from "./fixture";
@@ -358,9 +359,13 @@ async function crawlConvergence(context: ContractContext): Promise<ConvergenceOb
   const projected = await context.client.execute(
     "select count(*) as n from perf_crawl_due_work where state = 'ready'",
   );
-  const repairs = await context.client.execute(
-    "select count(*) as n from perf_crawl_projection_repairs",
-  );
+  // The first-marker index contract needs physical rows while this contract measures the business
+  // projection's repair backlog. Fixture-only evidence markers have an explicit stable namespace.
+  const repairs = await context.client.execute({
+    args: [`${CRAWL_INDEX_EVIDENCE_SOURCE_VERSION_PREFIX}%`],
+    sql: `select count(*) as n from perf_crawl_projection_repairs
+        where source_version not like ?`,
+  });
   const sourceRows = countValue(source);
   const projectedRows = countValue(projected);
   const repairRows = countValue(repairs);

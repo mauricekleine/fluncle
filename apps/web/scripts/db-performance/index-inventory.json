@@ -1408,12 +1408,16 @@
           {
             "file": "apps/web/src/lib/server/crawl-due-work.ts",
             "marker": "crawlReleaseReadyQuery"
+          },
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "readProjectedCrawlSelection"
           }
         ],
-        "query": "Release lane filters ready release rows and orders storable_rank, hop, demand_rank, created_at, node_id."
+        "query": "crawlReleaseReadyQuery selects CRAWL_DUE_COLUMNS from ready release rows, explicitly INDEXED BY crawl_due_work_release_ready_idx, ordered by storable_rank, hop, demand_rank, created_at, node_id and bounded by limit."
       },
       "knownContractMappings": ["projection.crawl-two-lane-claim"],
-      "structuralRationale": "Implements the reserved storable-release half of the two-lane crawl claim order.",
+      "structuralRationale": "Keeps the reserved storable-release lane ordered without a growing-table scan or temporary sort. The 1x and 2x unforced real-consumer plans choose this index too, so removing only the production lock is proposed as a separate code change.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-release-ready",
@@ -1438,15 +1442,19 @@
           {
             "file": "apps/web/src/lib/server/crawl-due-work.ts",
             "marker": "crawlGeneralReadyQuery"
+          },
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "readProjectedCrawlSelection"
           }
         ],
-        "query": "General lane filters ready rows and orders breadth-first hop, demand_rank, created_at, node_id."
+        "query": "crawlGeneralReadyQuery selects CRAWL_DUE_COLUMNS from ready rows, can exclude the release lane's explicit node-id set, explicitly INDEXED BY crawl_due_work_ready_idx, orders hop, demand_rank, created_at, node_id and applies a limit."
       },
       "knownContractMappings": [
         "projection.crawl-two-lane-claim",
         "projection.crawl-ready-sentinel"
       ],
-      "structuralRationale": "Provides the general half of the two-lane claim and the ready sentinel order.",
+      "structuralRationale": "Keeps the general lane and ready sentinel in breadth-first order without a growing-table scan or temporary sort. The 1x and 2x unforced real-consumer plans choose this index too, so removing only the production lock is proposed as a separate code change.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-ready",
@@ -1473,9 +1481,9 @@
             "marker": "promoteCrawlDueWork"
           }
         ],
-        "query": "Promotion selects scheduled rows due at or before now, ordered by next_due_at and node_id."
+        "query": "promoteCrawlDueWork selects due.node_id from scheduled due-work explicitly INDEXED BY crawl_due_work_scheduled_idx, joins crawl_frontier by node id, filters completed MusicBrainz artist sources, orders next_due_at and node_id, and applies a limit."
       },
-      "structuralRationale": "Bounds promotion work to the due scheduled prefix.",
+      "structuralRationale": "Bounds promotion to the due scheduled prefix while the frontier state/id index checks the completed MusicBrainz artist source, with no growing-table scan or temporary sort. The 1x and 2x unforced real-consumer plans choose the same indexes, so removing only the production due-work lock is proposed as a separate code change.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-scheduled",
@@ -1531,9 +1539,9 @@
             "marker": "repairCrawlDueNodes"
           }
         ],
-        "query": "Repair pass explicitly INDEXED BY this index for state = 'repair' node-id selection."
+        "query": "repairCrawlDueNodes selects CRAWL_DUE_COLUMNS from the first state = 'repair' rows explicitly INDEXED BY crawl_due_work_repair_idx, ordered by node_id and bounded by limit."
       },
-      "structuralRationale": "Keeps source-repair markers on a separate bounded scan path.",
+      "structuralRationale": "Keeps physical repair rows on a bounded node-id path without a growing-table scan or temporary sort. The 1x and 2x unforced real-consumer plans choose this index too, so removing only the production lock is proposed as a separate code change.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-repair",
@@ -1589,10 +1597,10 @@
             "marker": "claimCrawlDueWork"
           }
         ],
-        "query": "Claim-result read explicitly INDEXED BY this unique index for owner/token and ORDER BY claim_position."
+        "query": "claimCrawlDueWork selects every CRAWL_DUE_COLUMNS field for one leased owner/token explicitly INDEXED BY crawl_due_work_claim_position_idx and orders by claim_position without a limit, requiring table-row lookups for the non-indexed projection."
       },
       "knownContractMappings": ["projection.crawl-two-lane-read"],
-      "structuralRationale": "Preserves exact retry-stable merged lane ordering for one lease token.",
+      "structuralRationale": "Preserves exact retry-stable merged-lane ordering for one lease token; it is intentionally non-covering because the consumer returns full due-work rows. The 1x and 2x unforced real-consumer plans choose this index too, so removing only the production lock is proposed as a separate code change.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-claim-position",
@@ -1685,9 +1693,9 @@
             "marker": "firstCrawlRepairMarker"
           }
         ],
-        "query": "Repair fanout explicitly INDEXED BY this index and takes earliest source epoch/type/id marker."
+        "query": "firstCrawlRepairMarker selects source_type, source_id, source_epoch, source_version, created_at and updated_at from crawl_projection_repairs explicitly INDEXED BY crawl_projection_repairs_order_idx, orders by source_epoch, source_type, source_id and takes the first row."
       },
-      "structuralRationale": "Provides deterministic source-epoch ordering for crawl projection repair fanout.",
+      "structuralRationale": "Provides the deterministic first-marker order through a LIMIT 1 index walk; the full marker projection requires a table-row lookup but no temporary sort. The 1x and 2x unforced plans choose the same index walk, so removing only the production lock is proposed as a separate code change.",
       "performanceContracts": [
         {
           "id": "index.crawl-projection-repairs-order",
@@ -1714,9 +1722,9 @@
             "marker": "fanOutCrawlProjectionRepairs"
           }
         ],
-        "query": "Label repair fanout explicitly INDEXED BY this index to enumerate affected crawl nodes."
+        "query": "fanOutCrawlProjectionRepairs selects node_id for one label_slug explicitly INDEXED BY crawl_due_work_label_slug_node_id_idx, excludes state = 'repair' rows and applies a limit without ordering."
       },
-      "structuralRationale": "Supports label-scoped fanout independently of crawl lifecycle state.",
+      "structuralRationale": "Bounds label-scoped fanout and its completion probe without scanning the growing due-work table; state remains a row filter because it is not indexed. The 1x and 2x unforced real-consumer plans choose this index too, so removing only the production lock is proposed as a separate code change.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-label-slug-node-id",
@@ -1743,9 +1751,9 @@
             "marker": "fanOutCrawlProjectionRepairs"
           }
         ],
-        "query": "Artist/parent repair fanout explicitly INDEXED BY this index to enumerate dependent nodes."
+        "query": "fanOutCrawlProjectionRepairs unions a primary-key lookup of the direct artist node with node_id children selected by parent_id explicitly INDEXED BY crawl_due_work_parent_id_node_id_idx, excluding repair rows and the duplicate direct node, then applies one limit without ordering."
       },
-      "structuralRationale": "Supports bounded parent-to-child crawl repair fanout.",
+      "structuralRationale": "Bounds artist repair fanout through one direct primary-key lookup plus one parent slice, with no growing-table scan or temporary sort. The 1x and 2x unforced real-consumer plans choose the same indexes, so removing only the production parent lock is proposed as a separate code change.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-parent-id-node-id",
