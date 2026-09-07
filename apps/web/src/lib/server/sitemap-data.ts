@@ -46,16 +46,19 @@ import {
   type SitemapLogbookEntry,
   type SitemapLogPage,
   type SitemapPages,
+  type SitemapSqlWindowedKind,
   sitemapPagesStats,
 } from "../sitemap";
 import {
   ALBUM_INDEX_MIN_TRACKS,
+  albumSitemapWindowStatement,
   countIndexableAlbums,
   listAlbumSitemapRows,
   maxAlbumSitemapLastmod,
 } from "./albums";
 import {
   ARTIST_INDEX_MIN_FINDINGS,
+  artistSitemapWindowStatement,
   countIndexableArtists,
   listArtistSitemapRows,
   maxArtistSitemapLastmod,
@@ -66,12 +69,131 @@ import { GALAXY_INDEX_MIN_FINDINGS, listPublicGalaxies } from "./galaxies-map";
 import {
   countIndexableLabels,
   LABEL_INDEX_MIN_TRACKS,
+  labelSitemapWindowStatement,
   listLabelSitemapRows,
   maxLabelSitemapLastmod,
 } from "./labels";
 import { SITEMAP_CACHE_POLICY } from "./edge-cache";
-import { countIndexableTrackPages, listTrackSitemapRows } from "./track-page";
+import {
+  countIndexableTrackPages,
+  listTrackSitemapRows,
+  trackSitemapWindowStatement,
+  TRACK_PAGE_INDEXABLE_WHERE,
+} from "./track-page";
 import { getMixChainDepth } from "./tracks";
+import {
+  hubClauseHash,
+  hubCorpusFingerprint,
+  loadPersistedHubPageAnchors,
+  nearestHubPageAnchor,
+  persistHubPageAnchors,
+  type HubPageAnchor,
+} from "./hub-page-anchors";
+
+type SitemapWindow = { after?: string; limit: number };
+
+const SITEMAP_WINDOW_ORDER: Record<SitemapSqlWindowedKind, string> = {
+  albums: "slug asc",
+  artists: "slug asc",
+  labels: "slug asc",
+  logbook: "sector desc",
+  tracks: "track_id asc",
+};
+
+function sitemapAnchorAddress(kind: SitemapSqlWindowedKind, pageSize: number) {
+  return {
+    clauseHash: hubClauseHash(
+      JSON.stringify({ kind, order: SITEMAP_WINDOW_ORDER[kind], pageSize, version: 1 }),
+    ),
+    hub: `sitemap-${kind}`,
+  };
+}
+
+/**
+ * The bounded key-only query that reconstructs one missing child boundary. Its inner read walks at
+ * most one child page from a known key; the outer aggregate returns only that page's final key.
+ * There is deliberately no OFFSET: a random deep request chains fixed-size seeks until it reaches
+ * the requested page, then persists the exact boundaries for later requests.
+ */
+export function sitemapBoundaryStatement(
+  kind: SitemapSqlWindowedKind,
+  limit: number,
+  after?: string,
+) {
+  const operator = after === undefined ? ">=" : ">";
+  const start = after ?? "";
+
+  switch (kind) {
+    case "albums":
+      return {
+        args: [start, ALBUM_INDEX_MIN_TRACKS, limit],
+        sql: `select max(slug) as boundary, count(*) as n from (
+                select slug from albums
+                where slug ${operator} ? and renderable_track_count >= ?
+                order by slug asc limit ?
+              )`,
+      };
+    case "artists":
+      return {
+        args: [start, ARTIST_INDEX_MIN_FINDINGS, limit],
+        sql: `select max(slug) as boundary, count(*) as n from (
+                select slug from artists
+                where slug ${operator} ? and renderable_track_count >= ?
+                order by slug asc limit ?
+              )`,
+      };
+    case "labels":
+      return {
+        args: [start, LABEL_INDEX_MIN_TRACKS, limit],
+        sql: `select max(slug) as boundary, count(*) as n from (
+                select slug from labels
+                where slug ${operator} ? and renderable_track_count >= ?
+                order by slug asc limit ?
+              )`,
+      };
+    case "logbook": {
+      const sector = after === undefined ? Number.MAX_SAFE_INTEGER : Number(after);
+      const comparison = after === undefined ? "<=" : "<";
+      return {
+        args: [sector, limit],
+        sql: `select min(sector) as boundary, count(*) as n from (
+                select sector from logbook_entries
+                where sector ${comparison} ?
+                order by sector desc limit ?
+              )`,
+      };
+    }
+    case "tracks":
+      return {
+        args: [start, limit],
+        sql: `select max(track_id) as boundary, count(*) as n from (
+                select tracks.track_id from tracks
+                where tracks.track_id ${operator} ? and ${TRACK_PAGE_INDEXABLE_WHERE}
+                order by tracks.track_id asc limit ?
+              )`,
+      };
+  }
+}
+
+/** The exact row-producing statement each SQL-windowed child executes. */
+export function sitemapWindowStatement(
+  kind: SitemapSqlWindowedKind,
+  limit: number,
+  after?: string,
+) {
+  switch (kind) {
+    case "albums":
+      return albumSitemapWindowStatement(ALBUM_INDEX_MIN_TRACKS, limit, after);
+    case "artists":
+      return artistSitemapWindowStatement(ARTIST_INDEX_MIN_FINDINGS, limit, after);
+    case "labels":
+      return labelSitemapWindowStatement(LABEL_INDEX_MIN_TRACKS, limit, after);
+    case "logbook":
+      return logbookSitemapWindowStatement(limit, after);
+    case "tracks":
+      return trackSitemapWindowStatement(limit, after);
+  }
+}
 
 type TrackRow = {
   added_at: string;
@@ -210,8 +332,13 @@ async function readLogPages(): Promise<SitemapLogPage[]> {
 // findings PLUS the quieter catalogue rows, the same sum the artist page's `indexable` keys off
 // — so a crawler-discovered artist with enough tracks is here and the thin ones (which render
 // `noindex, follow`) are not, exactly as labels + albums below.
-async function readArtists(): Promise<SitemapArtist[]> {
-  return (await listArtistSitemapRows(ARTIST_INDEX_MIN_FINDINGS)).map((artist) => ({
+async function readArtists(window: SitemapWindow): Promise<SitemapArtist[]> {
+  return (
+    await listArtistSitemapRows(ARTIST_INDEX_MIN_FINDINGS, {
+      afterSlug: window.after,
+      limit: window.limit,
+    })
+  ).map((artist) => ({
     imageLoc: albumCoverAtSize(artist.coverImageUrl, "large"),
     lastmod: artist.lastmod,
     slug: artist.slug,
@@ -224,16 +351,26 @@ async function readArtists(): Promise<SitemapArtist[]> {
 // inside the two reads below, keyed off the very constants the routes' `indexable` uses —
 // so a page that says "index me" is always in the sitemap, and one that says `noindex`
 // never is. A crawler-discovered label with enough tracks has a real page, and it is here.
-async function readLabels(): Promise<SitemapEntity[]> {
-  return (await listLabelSitemapRows(LABEL_INDEX_MIN_TRACKS)).map((label) => ({
+async function readLabels(window: SitemapWindow): Promise<SitemapEntity[]> {
+  return (
+    await listLabelSitemapRows(LABEL_INDEX_MIN_TRACKS, {
+      afterSlug: window.after,
+      limit: window.limit,
+    })
+  ).map((label) => ({
     imageLoc: albumCoverAtSize(label.coverImageUrl, "large"),
     lastmod: label.lastmod,
     slug: label.slug,
   }));
 }
 
-async function readAlbums(): Promise<SitemapEntity[]> {
-  return (await listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS)).map((album) => ({
+async function readAlbums(window: SitemapWindow): Promise<SitemapEntity[]> {
+  return (
+    await listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS, {
+      afterSlug: window.after,
+      limit: window.limit,
+    })
+  ).map((album) => ({
     imageLoc: albumCoverAtSize(album.coverImageUrl, "large"),
     lastmod: album.lastmod,
     slug: album.slug,
@@ -242,11 +379,21 @@ async function readAlbums(): Promise<SitemapEntity[]> {
 
 /** The logbook travelogue entries — one <loc> per authored sector-day, with its last
     (re)generation as lastmod. */
-async function readLogbook(): Promise<SitemapLogbookEntry[]> {
+export function logbookSitemapWindowStatement(limit: number, afterSector?: string) {
+  const seek = afterSector === undefined ? "sector <= ?" : "sector < ?";
+
+  return {
+    args: [afterSector === undefined ? Number.MAX_SAFE_INTEGER : Number(afterSector), limit],
+    sql: `select sector, generated_at from logbook_entries
+          where ${seek}
+          order by sector desc
+          limit ?`,
+  };
+}
+
+async function readLogbook(window: SitemapWindow): Promise<SitemapLogbookEntry[]> {
   const db = await getDb();
-  const result = await db.execute({
-    sql: `select sector, generated_at from logbook_entries order by sector desc`,
-  });
+  const result = await db.execute(logbookSitemapWindowStatement(window.limit, window.after));
 
   return typedRows<{ generated_at: string; sector: number }>(result.rows).map((row) => ({
     lastmod: row.generated_at,
@@ -469,24 +616,127 @@ export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
   };
 }
 
+async function sitemapWindowCount(kind: SitemapSqlWindowedKind): Promise<number> {
+  switch (kind) {
+    case "albums":
+      return countIndexableAlbums();
+    case "artists":
+      return countIndexableArtists();
+    case "labels":
+      return countIndexableLabels();
+    case "logbook":
+      return (await readLogbookKindStats()).count;
+    case "tracks":
+      return countIndexableTrackPages();
+  }
+}
+
+async function readSitemapBoundary(
+  kind: SitemapSqlWindowedKind,
+  limit: number,
+  after?: string,
+): Promise<{ boundary: string | undefined; count: number }> {
+  const db = await getDb();
+  const result = await db.execute(sitemapBoundaryStatement(kind, limit, after));
+  const row = typedRows<{ boundary: number | string | null; n: number }>(result.rows)[0];
+
+  return {
+    boundary:
+      row?.boundary === null || row?.boundary === undefined ? undefined : String(row.boundary),
+    count: Number(row?.n ?? 0),
+  };
+}
+
+/**
+ * Resolve a numbered child to the exact key immediately before it. Boundaries live in the existing
+ * hub anchor store and are fingerprinted by the maintained membership count plus the first key.
+ * A missing or stale deep boundary is rebuilt as fixed-size seeks; no request ever pays a growing
+ * OFFSET or transfers a preceding page's rows into the isolate.
+ */
+async function resolveSitemapWindow(
+  kind: SitemapSqlWindowedKind,
+  page: number,
+  pageSize: number,
+): Promise<{ after?: string; pastEnd: boolean }> {
+  if (page < 1 || pageSize < 1) {
+    return { pastEnd: true };
+  }
+
+  if (page === 1) {
+    return { pastEnd: false };
+  }
+
+  const total = await sitemapWindowCount(kind);
+
+  if ((page - 1) * pageSize >= total) {
+    return { pastEnd: true };
+  }
+
+  const first = await readSitemapBoundary(kind, 1);
+  const fingerprint = hubCorpusFingerprint(total, first.boundary);
+  const address = sitemapAnchorAddress(kind, pageSize);
+  const stored = await loadPersistedHubPageAnchors(address.hub, address.clauseHash);
+  const anchors = stored?.fingerprint === fingerprint ? [...stored.anchors] : [];
+  const nearest = nearestHubPageAnchor(page, anchors);
+  let after = nearest?.key ?? undefined;
+  let currentPage = nearest?.page ?? 1;
+
+  while (currentPage < page) {
+    const boundary = await readSitemapBoundary(kind, pageSize, after);
+
+    if (boundary.count < pageSize || boundary.boundary === undefined) {
+      return { pastEnd: true };
+    }
+
+    after = boundary.boundary;
+    currentPage += 1;
+    const anchor: HubPageAnchor = { id: after, key: after, page: currentPage };
+    const existing = anchors.findIndex((candidate) => candidate.page === currentPage);
+
+    if (existing >= 0) {
+      anchors[existing] = anchor;
+    } else {
+      anchors.push(anchor);
+    }
+  }
+
+  await persistHubPageAnchors(address.hub, address.clauseHash, anchors, fingerprint);
+
+  return { after, pastEnd: false };
+}
+
 /**
  * ONE child sitemap's bag — the rows `/sitemap/<kind>-<n>.xml` slices, and no other kind's.
  * Every other bag comes back empty, which is exactly what `buildSitemapShardXml` reads for that
  * kind, so a child serves precisely what it always did at one bag's cost instead of seven.
  *
- * `page` is honoured by exactly one kind. Every kind but `tracks` reads its WHOLE bag and lets the
- * builder window it, because every one of them is bounded by the certified corpus or by how many
- * entities exist. `tracks` is bounded by the crawl instead, so its window moves into SQL and the
- * bag comes back already holding that page's rows and no others — which is why `tracks` is in
- * `SITEMAP_SQL_WINDOWED_KINDS` and the builder does not slice it again.
+ * The slug-ordered entity tables, sector-ordered logbook, and track-id-ordered archive all return
+ * exactly one SQL window. Their bags are listed in `SITEMAP_SQL_WINDOWED_KINDS`, so the builder
+ * renders them without a second slice. Findings retain their two-table concatenated order and
+ * galaxies retain their derived member-count order; neither has an existing index that can serve
+ * that order, so the no-migration sitemap contract keeps those bounded bags in memory.
  */
-export async function collectSitemapBag(kind: SitemapKind, page = 1): Promise<SitemapBags> {
+export async function collectSitemapBag(
+  kind: SitemapKind,
+  page = 1,
+  pageSize = sitemapMaxUrls(kind),
+): Promise<SitemapBags> {
   switch (kind) {
-    case "albums":
-      return { ...EMPTY_SITEMAP_BAGS, albums: await readAlbums() };
+    case "albums": {
+      const window = await resolveSitemapWindow("albums", page, pageSize);
+      return {
+        ...EMPTY_SITEMAP_BAGS,
+        albums: window.pastEnd ? [] : await readAlbums({ after: window.after, limit: pageSize }),
+      };
+    }
 
-    case "artists":
-      return { ...EMPTY_SITEMAP_BAGS, artists: await readArtists() };
+    case "artists": {
+      const window = await resolveSitemapWindow("artists", page, pageSize);
+      return {
+        ...EMPTY_SITEMAP_BAGS,
+        artists: window.pastEnd ? [] : await readArtists({ after: window.after, limit: pageSize }),
+      };
+    }
 
     case "docs":
       return { ...EMPTY_SITEMAP_BAGS, docs: readDocs() };
@@ -497,25 +747,34 @@ export async function collectSitemapBag(kind: SitemapKind, page = 1): Promise<Si
     case "galaxies":
       return { ...EMPTY_SITEMAP_BAGS, galaxies: await readGalaxies() };
 
-    case "labels":
-      return { ...EMPTY_SITEMAP_BAGS, labels: await readLabels() };
+    case "labels": {
+      const window = await resolveSitemapWindow("labels", page, pageSize);
+      return {
+        ...EMPTY_SITEMAP_BAGS,
+        labels: window.pastEnd ? [] : await readLabels({ after: window.after, limit: pageSize }),
+      };
+    }
 
-    case "logbook":
-      return { ...EMPTY_SITEMAP_BAGS, logbook: await readLogbook() };
+    case "logbook": {
+      const window = await resolveSitemapWindow("logbook", page, pageSize);
+      return {
+        ...EMPTY_SITEMAP_BAGS,
+        logbook: window.pastEnd ? [] : await readLogbook({ after: window.after, limit: pageSize }),
+      };
+    }
 
     // The static child needs no rows at all — its `<loc>`s are constants and its two `<lastmod>`s
     // are the same aggregates the index reads.
     case "pages":
       return { ...EMPTY_SITEMAP_BAGS, pages: sitemapPagesFrom(await readSitemapPageInputs()) };
 
-    case "tracks":
+    case "tracks": {
+      const window = await resolveSitemapWindow("tracks", page, pageSize);
       return {
         ...EMPTY_SITEMAP_BAGS,
-        tracks: await listTrackSitemapRows(
-          sitemapMaxUrls("tracks"),
-          (page - 1) * sitemapMaxUrls("tracks"),
-        ),
+        tracks: window.pastEnd ? [] : await listTrackSitemapRows(pageSize, window.after),
       };
+    }
   }
 }
 

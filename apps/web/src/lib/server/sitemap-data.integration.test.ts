@@ -25,6 +25,7 @@ import {
   sitemapIndexStatsFromBags,
   sitemapPagesFromBags,
   type SitemapRowBags,
+  type SitemapSqlWindowedKind,
 } from "../sitemap";
 
 let db: Client;
@@ -35,10 +36,17 @@ vi.mock("./db", async () => {
   return { ...actual, getDb: async () => db };
 });
 
-import { linkTrackToAlbum } from "./albums";
+import { ALBUM_INDEX_MIN_TRACKS, linkTrackToAlbum, listAlbumSitemapRows } from "./albums";
+import { typedRows } from "./db";
 import { createIntegrationDb, syncHubCounts } from "./integration-db";
-import { linkTrackToLabel } from "./labels";
-import { collectSitemapBag, collectSitemapIndexStats } from "./sitemap-data";
+import { ARTIST_INDEX_MIN_FINDINGS, listArtistSitemapRows } from "./artists";
+import { LABEL_INDEX_MIN_TRACKS, linkTrackToLabel, listLabelSitemapRows } from "./labels";
+import {
+  collectSitemapBag,
+  collectSitemapIndexStats,
+  sitemapBoundaryStatement,
+  sitemapWindowStatement,
+} from "./sitemap-data";
 
 type TrackFixture = {
   album: string;
@@ -247,6 +255,11 @@ beforeEach(async () => {
   // every write; a fixture that inserts rows directly has to run the real backfill or its world
   // would hold edges with counters at the DDL default of 0.
   await syncHubCounts(db);
+
+  await db.execute({
+    args: ["2026-06-01", "https://open.spotify.com/track/example"],
+    sql: `update tracks set release_date = ?, spotify_url = ? where is_catalogue = 1`,
+  });
 });
 
 afterEach(() => {
@@ -299,6 +312,127 @@ describe("the sitemap index reads aggregates that match the rows", () => {
 });
 
 describe("a child sitemap fetches only its own bag", () => {
+  it("uses bounded row statements for every SQL-windowed child", async () => {
+    const execute = vi.spyOn(db, "execute");
+
+    for (const kind of ["albums", "artists", "labels", "logbook", "tracks"] as const) {
+      execute.mockClear();
+      const bag = await collectSitemapBag(kind, 1, 1);
+      const rows = kind === "logbook" ? bag.logbook : bag[kind];
+      const sql = execute.mock.calls.map(([statement]) => {
+        const input = statement as InStatement;
+        return typeof input === "string" ? input : input.sql;
+      });
+
+      expect(rows.length, `${kind} returned more than its SQL window`).toBeLessThanOrEqual(1);
+      expect(sql.some((statement) => /order by[\s\S]+limit \?/i.test(statement))).toBe(true);
+      expect(sql.some((statement) => /\boffset\b/i.test(statement))).toBe(false);
+    }
+
+    execute.mockClear();
+    expect((await collectSitemapBag("tracks", 2, 1)).tracks).toHaveLength(1);
+    expect(
+      execute.mock.calls.some(([statement]) => {
+        const input = statement as InStatement;
+        const sql = typeof input === "string" ? input : input.sql;
+        return /\boffset\b/i.test(sql);
+      }),
+    ).toBe(false);
+  });
+
+  it("serves every keyset window as an index search without a temporary sort", async () => {
+    const tables: Record<SitemapSqlWindowedKind, string> = {
+      albums: "albums",
+      artists: "(?:artists|a)",
+      labels: "labels",
+      logbook: "logbook_entries",
+      tracks: "tracks",
+    };
+
+    for (const kind of Object.keys(tables) as SitemapSqlWindowedKind[]) {
+      for (const statement of [
+        sitemapBoundaryStatement(kind, 1, kind === "logbook" ? "38" : "a"),
+        sitemapWindowStatement(kind, 1, kind === "logbook" ? "38" : "a"),
+      ]) {
+        const plan = await db.execute({
+          args: statement.args,
+          sql: `explain query plan ${statement.sql}`,
+        });
+        const details = typedRows<{ detail: string }>(plan.rows)
+          .map((row) => row.detail)
+          .join("\n");
+
+        expect(details, `${kind}\n${details}`).toMatch(
+          new RegExp(`SEARCH ${tables[kind]}(?:\\s|$)`, "i"),
+        );
+        expect(details, `${kind}\n${details}`).not.toMatch(
+          new RegExp(`SCAN ${tables[kind]}(?:\\s|$)`, "i"),
+        );
+        expect(details, `${kind}\n${details}`).not.toContain("USE TEMP B-TREE");
+      }
+    }
+  });
+
+  it("preserves each unwindowed set and order across the union of its children", async () => {
+    const trackReference = (
+      await db.execute({
+        sql: `select track_id from tracks
+              where is_catalogue = 1
+                and duplicate_of_track_id is null
+                and trim(title) <> ''
+                and artists_json is not null and trim(artists_json) not in ('', '[]')
+                and dismissed_at is null
+                and album_id is not null
+                and release_date is not null
+                and album_image_url is not null
+                and (spotify_url is not null or apple_music_url is not null)
+              order by track_id`,
+      })
+    ).rows;
+    const trackIds = typedRows<{ track_id: string }>(trackReference).map((row) => row.track_id);
+    const references: Record<SitemapSqlWindowedKind, string[]> = {
+      albums: (await listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS)).map((row) => row.slug),
+      artists: (await listArtistSitemapRows(ARTIST_INDEX_MIN_FINDINGS)).map((row) => row.slug),
+      labels: (await listLabelSitemapRows(LABEL_INDEX_MIN_TRACKS)).map((row) => row.slug),
+      logbook: typedRows<{ sector: number }>(
+        (await db.execute(`select sector from logbook_entries order by sector desc`)).rows,
+      ).map((row) => String(row.sector).padStart(3, "0")),
+      tracks: trackIds,
+    };
+
+    for (const kind of Object.keys(references) as SitemapSqlWindowedKind[]) {
+      const actual: string[] = [];
+      const reference = references[kind];
+
+      for (let page = 1; page <= reference.length + 1; page += 1) {
+        const bag = await collectSitemapBag(kind, page, 1);
+        const rows = kind === "logbook" ? bag.logbook : bag[kind];
+
+        if (rows.length === 0) {
+          break;
+        }
+
+        actual.push(
+          ...rows.map((row) =>
+            "trackId" in row ? row.trackId : "sector" in row ? String(row.sector) : row.slug,
+          ),
+        );
+      }
+
+      expect(actual, kind).toEqual(reference);
+    }
+  });
+
+  it("returns an empty SQL-windowed bag past the maintained count", async () => {
+    for (const kind of ["albums", "artists", "labels", "logbook", "tracks"] as const) {
+      const bag = await collectSitemapBag(kind, 2);
+      const rows = kind === "logbook" ? bag.logbook : bag[kind];
+
+      expect(rows, kind).toEqual([]);
+      expect(buildSitemapShardXml(kind, 2, bag), kind).toBeUndefined();
+    }
+  });
+
   it("does not count catalogue tracks or entities for the static pages child", async () => {
     const execute = vi.spyOn(db, "execute");
     const sqlText = (statement: InStatement) =>
