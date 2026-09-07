@@ -5,6 +5,7 @@ import { resolveArtistCredits } from "./backfill-artist-credits";
 import { resolveArtistEdges } from "./backfill-artist-edges";
 import {
   CATALOGUE_RANK_STATE_KEY,
+  catalogueRankCorpusForTrack,
   countUnverifiedCaptures,
   listUnverifiedCaptures,
   rankCatalogue,
@@ -203,7 +204,7 @@ describe("Goal C core vendor selector cutovers", () => {
             where track_id in (?, ?) order by track_id`,
     });
     expect(rows.rows.map((row) => [row.track_id, row.catalogue_rank_corpus])).toEqual([
-      ["rank_a", summary.corpus],
+      ["rank_a", catalogueRankCorpusForTrack(summary.corpus, false)],
       ["rank_b", null],
     ]);
   });

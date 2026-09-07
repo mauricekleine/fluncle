@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   type ArchiveAffinity,
+  catalogueRankCorpusForTrack,
   capturePriorityFor,
   diversifyRanked,
   type DiversitySignals,
@@ -207,18 +208,18 @@ describe("rankCorpus — the staleness fingerprint", () => {
   const digest = qualifiedArtistsDigest(["a", "b"]);
 
   it("moves when a finding is logged, and when one is embedded", () => {
-    expect(rankCorpus(60, 60, 0, "d")).toBe("v5:60:60:0:d");
+    expect(rankCorpus(60, 60, 0, "d", "initial")).toMatch(/^v6:60:60:0:d:[0-9a-f]{16}$/);
     // A new finding lands (unembedded): the affinity corpus changed, so every ranked row is stale.
-    expect(rankCorpus(61, 60, 0, "d")).not.toBe(rankCorpus(60, 60, 0, "d"));
+    expect(rankCorpus(61, 60, 0, "d", "initial")).not.toBe(rankCorpus(60, 60, 0, "d", "initial"));
     // Then it embeds: a new vector to be near, so every scored row is stale too.
-    expect(rankCorpus(61, 61, 0, "d")).not.toBe(rankCorpus(61, 60, 0, "d"));
+    expect(rankCorpus(61, 61, 0, "d", "initial")).not.toBe(rankCorpus(61, 60, 0, "d", "initial"));
   });
 
   it("moves when the QUALIFIED-ARTIST SET changes — the second-order authorization signal (v5)", () => {
     // Authorization depends on which artists are qualified, which the two finding counts do not see.
     // v5 folds the qualified set: an artist crossing the qualification line flips every catalogue
     // track that credits them (size grows), so the fingerprint must move.
-    expect(rankCorpus(60, 60, 42, "d")).not.toBe(rankCorpus(60, 60, 41, "d"));
+    expect(rankCorpus(60, 60, 42, "d", "initial")).not.toBe(rankCorpus(60, 60, 41, "d", "initial"));
   });
 
   it("moves on a same-size MEMBERSHIP SWAP — the batch-ruling money-bug hole the size alone left open", () => {
@@ -228,22 +229,41 @@ describe("rankCorpus — the staleness fingerprint", () => {
     // digest → different fingerprint.
     const swapped = qualifiedArtistsDigest(["a", "c"]);
     expect(swapped).not.toBe(digest);
-    expect(rankCorpus(60, 60, 2, swapped)).not.toBe(rankCorpus(60, 60, 2, digest));
+    expect(rankCorpus(60, 60, 2, swapped, "initial")).not.toBe(
+      rankCorpus(60, 60, 2, digest, "initial"),
+    );
   });
 
   it("the digest is order-independent (ids arrive sorted from SQL) and stable across calls", () => {
     // The tick reads `... order by artist_id`, so the input is always sorted; the digest of the same
     // membership is identical every tick (no spurious re-rank), and does not depend on insertion order.
     expect(qualifiedArtistsDigest(["a", "b"])).toBe(qualifiedArtistsDigest(["a", "b"]));
-    expect(rankCorpus(60, 60, 2, digest)).toBe(rankCorpus(60, 60, 2, digest));
+    expect(rankCorpus(60, 60, 2, digest, "initial")).toBe(rankCorpus(60, 60, 2, digest, "initial"));
   });
 
   it("catches a DELETED finding, because it is compared for INEQUALITY and not order", () => {
-    expect(rankCorpus(59, 59, 0, "d")).not.toBe(rankCorpus(60, 60, 0, "d"));
+    expect(rankCorpus(59, 59, 0, "d", "initial")).not.toBe(rankCorpus(60, 60, 0, "d", "initial"));
   });
 
   it("is a no-op fingerprint on an unchanged archive", () => {
-    expect(rankCorpus(60, 60, 42, digest)).toBe(rankCorpus(60, 60, 42, digest));
+    expect(rankCorpus(60, 60, 42, digest, "initial")).toBe(
+      rankCorpus(60, 60, 42, digest, "initial"),
+    );
+  });
+
+  it("moves when finding vector content is replaced without changing corpus counts", () => {
+    expect(rankCorpus(60, 60, 42, digest, "track-update:a")).not.toBe(
+      rankCorpus(60, 60, 42, digest, "track-update:b"),
+    );
+  });
+
+  it("keeps pre-audio rows stable across finding-vector-only revisions", () => {
+    expect(catalogueRankCorpusForTrack(rankCorpus(60, 60, 42, digest, "a"), false)).toBe(
+      catalogueRankCorpusForTrack(rankCorpus(60, 60, 42, digest, "b"), false),
+    );
+    expect(catalogueRankCorpusForTrack(rankCorpus(60, 60, 42, digest, "a"), true)).not.toBe(
+      catalogueRankCorpusForTrack(rankCorpus(60, 60, 42, digest, "b"), true),
+    );
   });
 });
 

@@ -16,6 +16,61 @@ export const DUE_WORK_LIVE_GENERATION = "live";
 export const DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID = "@catalogue-rank-corpus";
 export const DUE_WORK_SOURCE_REPAIR_KIND = "source-repair";
 export const MAX_DUE_WORK_CHUNK_SIZE = 500;
+const DUE_WORK_CATALOGUE_RANK_FRESHNESS_SEPARATOR = "|rank-fresh|";
+
+/** Closed producer policy for invalidating the global catalogue-rank corpus definition. */
+export const DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES = {
+  ambiguous: ["capture-verification-quarantine"],
+  excluded: ["label-artist-rules-replace"],
+  materialRevision: ["track-update"],
+  required: [
+    "artist-credit-edges",
+    "artist-edge-backfill",
+    "artist-edge-link",
+    "artist-edge-rank-restale",
+    "artist-edge-upsert",
+    "backfill-artist-links",
+    "backfill-has-embedding-rank-corpus",
+    "backfill-label-seed",
+    "backfill-remixer-role",
+    "catalogue-flag-wrong-audio",
+    "certify-track",
+    "label-seed-state",
+    "publish-track",
+    "track-update",
+  ],
+} as const;
+
+type DueWorkCatalogueRankProducer =
+  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.ambiguous)[number]
+  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.excluded)[number]
+  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.required)[number];
+
+/** Return the synthetic rank subject only for a centrally registered corpus dependency. */
+export function dueWorkCatalogueRankRepairSubjects(
+  producer: DueWorkCatalogueRankProducer,
+): DueWorkSourceSubject[] {
+  const dependencies: readonly string[] = [
+    ...DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.required,
+    ...DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.ambiguous,
+  ];
+  return dependencies.includes(producer)
+    ? [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }]
+    : [];
+}
+
+/** Extract the durable material evidence from a legacy-compatible rank marker. */
+export function dueWorkCatalogueRankMarkerMaterialRevision(
+  sourceVersion: string,
+): string | undefined {
+  const materialRevision = sourceVersion.split(DUE_WORK_CATALOGUE_RANK_FRESHNESS_SEPARATOR, 1)[0];
+  return materialRevision !== undefined &&
+    DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.materialRevision.some((producer) =>
+      materialRevision.startsWith(`${producer}:`),
+    )
+    ? materialRevision
+    : undefined;
+}
 
 export class DueWorkMaintenancePendingError extends Error {
   constructor(workKind: string) {
@@ -125,8 +180,10 @@ export type DueWorkRebuildDefinition<
   readSourceChunk: (context: {
     after: null | string;
     client: DueWorkClient;
+    generation?: string;
     limit: number;
   }) => Promise<Source[]>;
+  resolveGeneration?: (client: DueWorkClient) => Promise<string>;
   subjectType: DueWorkSubjectType;
   workKind: WorkKind;
 };
@@ -407,6 +464,27 @@ function uniqueSourceSubjects(subjects: readonly DueWorkSourceSubject[]): DueWor
   return values;
 }
 
+function materialCatalogueRankMarkerSql(row: "due_work" | "excluded"): string {
+  return DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.materialRevision
+    .map((producer) => `${row}.source_version glob '${producer}:*'`)
+    .join(" or ");
+}
+
+function sourceMarkerVersionConflictAssignment(): string {
+  return `case
+    when due_work.subject_id = '${DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID}'
+      and (${materialCatalogueRankMarkerSql("due_work")})
+      and not (${materialCatalogueRankMarkerSql("excluded")})
+    then case
+      when instr(due_work.source_version, '${DUE_WORK_CATALOGUE_RANK_FRESHNESS_SEPARATOR}') > 0
+      then substr(due_work.source_version, 1,
+        instr(due_work.source_version, '${DUE_WORK_CATALOGUE_RANK_FRESHNESS_SEPARATOR}') - 1)
+      else due_work.source_version
+    end || '${DUE_WORK_CATALOGUE_RANK_FRESHNESS_SEPARATOR}' || excluded.source_version
+    else excluded.source_version
+  end`;
+}
+
 /**
  * Mark each changed source subject once, independently of how many physical queues derive from it.
  * Producers append this statement to the same write batch as the source mutation. The opaque token
@@ -454,7 +532,7 @@ export function markDueWorkSourceRepairsStatement(
         state = 'repair',
         sort_key = '',
         next_due_at = excluded.next_due_at,
-        source_version = excluded.source_version,
+        source_version = ${sourceMarkerVersionConflictAssignment()},
         generation = excluded.generation,
         claim_token = null,
         claim_expires_at = null,
@@ -508,7 +586,7 @@ export function markDueWorkSourceRepairsFromSelectStatement(
         state = 'repair',
         sort_key = '',
         next_due_at = excluded.next_due_at,
-        source_version = excluded.source_version,
+        source_version = ${sourceMarkerVersionConflictAssignment()},
         generation = excluded.generation,
         claim_token = null,
         claim_expires_at = null,
@@ -1084,11 +1162,17 @@ export async function readDueWorkRebuild<WorkKind extends string>(
 
 export async function startDueWorkRebuild<WorkKind extends string>(
   client: DueWorkClient,
-  identity: Pick<DueWorkIdentity<WorkKind>, "subjectType" | "workKind">,
+  identity: Pick<DueWorkIdentity<WorkKind>, "subjectType" | "workKind"> & {
+    resolveGeneration?: (client: DueWorkClient) => Promise<string>;
+  },
   options: { generation?: string; newGeneration?: boolean; now?: () => Date } = {},
 ): Promise<DueWorkRebuildCheckpoint<WorkKind>> {
   const now = nowIso(options.now);
-  const generation = options.generation ?? randomToken();
+  const generation =
+    options.generation ??
+    (identity.resolveGeneration === undefined
+      ? randomToken()
+      : await identity.resolveGeneration(client));
   if (generation === DUE_WORK_LIVE_GENERATION) {
     throw new Error("due-work rebuild generation 'live' is reserved for transactional repairs");
   }
@@ -1369,6 +1453,7 @@ export async function runDueWorkRebuildChunk<
   const sources = await definition.readSourceChunk({
     after: checkpoint.cursor,
     client,
+    generation: checkpoint.generation,
     limit,
   });
   if (sources.length > limit) {

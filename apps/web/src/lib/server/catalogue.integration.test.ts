@@ -344,7 +344,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     const first = await rankCatalogue();
     expect(first.scored).toBe(1);
-    expect(first.corpus).toBe(`v5:1:1:0:${EMPTY_DIGEST}`);
+    expect(first.corpus).toMatch(new RegExp(`^v6:1:1:0:${EMPTY_DIGEST}:[0-9a-f]{16}$`));
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-a");
 
     // Nothing changed: the fingerprint matches, so there is no candidate at all.
@@ -360,7 +360,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.4) });
 
     const third = await rankCatalogue();
-    expect(third.corpus).toBe(`v5:2:2:0:${EMPTY_DIGEST}`);
+    expect(third.corpus).toMatch(new RegExp(`^v6:2:2:0:${EMPTY_DIGEST}:[0-9a-f]{16}$`));
     expect(third.scored).toBe(1);
     expect(third.quarantined).toBe(0);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-b");
@@ -603,7 +603,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     // Stamped, with an honest null score — not left stale to be re-picked every tick.
     const ranking = await rankingOf("cat-a");
     expect(ranking.nearest_finding_score).toBeNull();
-    expect(ranking.catalogue_rank_corpus).toBe(`v5:1:0:0:${EMPTY_DIGEST}`);
+    expect(ranking.catalogue_rank_corpus).toBe(summary.corpus);
     expect(summary.remaining).toBe(0);
   });
 });

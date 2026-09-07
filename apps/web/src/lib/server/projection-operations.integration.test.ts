@@ -13,6 +13,8 @@ import {
 } from "./projection-audit";
 import { readCurrentProjectedTrackHubAnchors } from "./public-projection-cutover";
 import {
+  markPublicTrackSourceChangedStatements,
+  publicTrackSourceVersion,
   readPublicProjectionAuditChunk,
   readTrackAnchorSourcePage,
   type TrackAnchorSourceCursor,
@@ -122,10 +124,14 @@ describe("projection production operations", () => {
         enabled_credit_half_units integer not null, is_qualified integer not null
       );
       create table public_aggregate_membership (
-        track_id text primary key, release_date_bucket text, key_bucket text
+        track_id text primary key, release_date_bucket text, key_bucket text,
+        generation text not null default 'live', source_version text not null default '',
+        updated_at text not null default ''
       );
       create table public_aggregate_counts (
         aggregate_kind text not null, bucket text not null, track_count integer not null,
+        generation text not null default 'live', source_version text not null default '',
+        updated_at text not null default '',
         primary key (aggregate_kind, bucket)
       );
       create table public_aggregate_state (
@@ -1104,6 +1110,89 @@ describe("projection production operations", () => {
           where hub = '${TRACKS_HUB_ANCHOR_ADDRESS.hub}'`)
       ).rows[0]?.generation,
     ).toBe("maintenance");
+  });
+
+  it("publishes anchors between useful key-only public repair pages", async () => {
+    await db.executeMultiple(`
+      insert into tracks (track_id, release_date, key) values
+        ('key-only-a', '2026-01-01', null),
+        ('key-only-b', '2026-01-01', null);
+      insert into public_aggregate_membership
+        (track_id, release_date_bucket, key_bucket, generation, source_version, updated_at) values
+        ('key-only-a', '2026', null, 'live', '["2026-01-01",null]', '2026-01-01T00:00:00.000Z'),
+        ('key-only-b', '2026', null, 'live', '["2026-01-01",null]', '2026-01-01T00:00:00.000Z');
+      insert into public_aggregate_counts
+        (aggregate_kind, bucket, track_count, generation, source_version, updated_at)
+        values ('release_date_bucket', '2026', 2, 'live', '["2026-01-01",null]', '2026-01-01T00:00:00.000Z');
+      update public_aggregate_state
+        set default_track_total = 2, projected_entry_count = 2,
+            generation = 'key-only', release_hub_order_epoch = 1
+        where scope = 'tracks';
+      delete from hub_page_anchor_validity;
+      delete from hub_page_anchors;
+    `);
+
+    for (const [step, mutation] of [
+      ["key-only-a", "Am"],
+      ["key-only-b", "Dm"],
+      ["key-only-a", "Em"],
+    ].entries()) {
+      const [trackId, key] = mutation;
+      if (trackId === undefined || key === undefined) {
+        throw new Error("key-only anchor mutation is incomplete");
+      }
+      await db.batch(
+        [
+          {
+            args: [key, trackId],
+            sql: `update tracks set key = ? where track_id = ?`,
+          },
+          ...markPublicTrackSourceChangedStatements(
+            trackId,
+            publicTrackSourceVersion({ key, releaseDate: "2026-01-01" }),
+            { now: "2026-01-10T00:00:00.000Z" },
+          ),
+        ],
+        "write",
+      );
+
+      const result = await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 1,
+        target: "public_aggregates",
+      });
+      expect(result.processed).toBeGreaterThan(0);
+      if (step < 2) {
+        expect(result.processed).toBeGreaterThan(1);
+      }
+      expect(
+        (
+          await db.execute(`select release_hub_order_epoch as epoch
+            from public_aggregate_state where scope = 'tracks'`)
+        ).rows[0]?.epoch,
+      ).toBe(1);
+      if (step === 1) {
+        expect(
+          (
+            await db.execute({
+              args: ["projection_rebuild_public_anchors_v1"],
+              sql: `select 1 from settings where key = ?`,
+            })
+          ).rows,
+        ).toHaveLength(1);
+      }
+    }
+
+    expect(
+      (
+        await db.execute({
+          args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
+          sql: `select generation, order_epoch from hub_page_anchor_validity
+            where hub = ? and clause_hash = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ generation: "key-only", order_epoch: 1 });
   });
 
   it("does not publish anchors when repair debt arrives at the terminal write", async () => {

@@ -362,7 +362,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
       "The satellite mirrors tracks.has_embedding; due-work reads the atomically maintained mirror.",
     sites: [
       "embedding.ts:delete:track_embeddings:34cdaea5",
-      "embedding.ts:insert:track_embeddings:543d6b2d",
+      "embedding.ts:insert:track_embeddings:07b2e1a2",
     ],
   },
   {

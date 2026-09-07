@@ -14,6 +14,7 @@ import {
   DUE_WORK_REVIEWED_NONPRODUCER_WRITERS,
   GOAL_D_REVIEWED_NONPROJECTION_WRITERS,
 } from "./due-work-producer-inventory";
+import { DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES } from "./due-work-registry";
 
 const SERVER_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIRECTORY = join(SERVER_DIRECTORY, "../../../scripts");
@@ -23,6 +24,7 @@ const MAINTENANCE_HELPERS = new Set([
   "markDueWorkSourceRepairsStatement",
 ]);
 type MaintenanceCall = { file: string; producer: string };
+type CatalogueRankPolicyCall = MaintenanceCall & { direct: boolean; routed: boolean };
 type ProductionSource = { file: string; path: string };
 type ProductionSourceText = { file: string; sourceText: string };
 let productionSourcesPromise: Promise<ProductionSource[]> | null = null;
@@ -92,6 +94,38 @@ function maintenanceCalls(file: string, sourceText: string): MaintenanceCall[] {
     }
 
     calls.push({ file, producer });
+  }
+  return calls;
+}
+
+function catalogueRankPolicyCalls(file: string, sourceText: string): CatalogueRankPolicyCall[] {
+  const calls: CatalogueRankPolicyCall[] = [];
+  const producerPattern = /producer:\s*"([^"]+)"/g;
+  const helperNames = [
+    ...MAINTENANCE_HELPERS,
+    "markDueWorkSourceMaintenanceFromSelectStatements",
+    "markDueWorkSourceMaintenanceStatements",
+  ];
+
+  for (const match of sourceText.matchAll(producerPattern)) {
+    const producer = match[1];
+    const matchIndex = match.index;
+    if (producer === undefined || matchIndex === undefined) {
+      continue;
+    }
+    const prefix = sourceText.slice(0, matchIndex);
+    const helperIndex = Math.max(...helperNames.map((name) => prefix.lastIndexOf(`${name}(`)));
+    if (helperIndex < 0) {
+      continue;
+    }
+    const callPrefix = sourceText.slice(helperIndex, matchIndex);
+    const routed = new RegExp(`dueWorkCatalogueRankRepairSubjects\\(\\s*"${producer}"\\s*\\)`).test(
+      callPrefix,
+    );
+    const direct = callPrefix.includes("DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID");
+    if (direct || routed) {
+      calls.push({ direct, file, producer, routed });
+    }
   }
   return calls;
 }
@@ -245,6 +279,37 @@ describe("due-work producer maintenance inventory", () => {
     const actual = [...new Set(calls.map((call) => `${call.file}:${call.producer}`))].sort();
 
     expect(actual).toEqual(expected);
+  });
+
+  it("reconciles every catalogue-rank marker callsite with the closed producer policy", async () => {
+    const dependencies = DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES;
+    const invalidators = new Set<string>([...dependencies.required, ...dependencies.ambiguous]);
+    const expectedPolicy = [
+      ...dependencies.required,
+      ...dependencies.ambiguous,
+      ...dependencies.excluded,
+    ].sort();
+    const sources = await productionSourceTexts();
+    const calls = sources.flatMap(({ file, sourceText }) =>
+      catalogueRankPolicyCalls(file, sourceText),
+    );
+
+    expect([...new Set(calls.map((call) => call.producer))].sort()).toEqual(expectedPolicy);
+    expect(
+      [
+        ...new Set(
+          calls
+            .filter((call) => call.direct || (call.routed && invalidators.has(call.producer)))
+            .map((call) => call.producer),
+        ),
+      ].sort(),
+    ).toEqual([...invalidators].sort());
+    for (const producer of dependencies.excluded) {
+      expect(calls.find((call) => call.producer === producer)).toMatchObject({
+        direct: false,
+        routed: true,
+      });
+    }
   });
 
   it("uses unique producer ids and declares at least one repaired subject kind per module", () => {
