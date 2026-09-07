@@ -144,6 +144,20 @@ function unavailableOutstandingMarkerAge(repairs: BoundedCount): OldestOutstandi
   };
 }
 
+function oldestCrawlOutstandingMarkerAge(
+  direct: BoundedCount,
+  fanoutRows: readonly unknown[],
+  fanout: BoundedCount,
+  now: number,
+): OldestOutstandingMarkerAge {
+  if (fanoutRows.length === 0) {
+    return unavailableOutstandingMarkerAge(direct);
+  }
+  // Direct rows preserve frontier discovery time rather than repair-entry time. Only fanout
+  // markers have a usable creation timestamp; direct debt makes the observed age incomplete.
+  return oldestOutstandingMarkerAge(fanoutRows, fanout.truncated || direct.count > 0, now);
+}
+
 function emptyRebuild(total = 1): RebuildStatus {
   return { complete: false, completed: 0, projected: 0, running: 0, scanned: 0, total };
 }
@@ -492,7 +506,7 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
-      sql: `select created_at from crawl_due_work indexed by crawl_due_work_repair_idx
+      sql: `select 1 from crawl_due_work indexed by crawl_due_work_repair_idx
         where state = 'repair' limit ?`,
     },
     {
@@ -542,17 +556,16 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
   );
   const crawlDirectRepairRows = results[8]?.rows ?? [];
   const crawlFanoutRepairRows = results[9]?.rows ?? [];
-  const crawlRepairs = addBoundedCounts(
-    boundedCount(crawlDirectRepairRows),
-    boundedCount(crawlFanoutRepairRows),
-  );
+  const crawlDirectRepairs = boundedCount(crawlDirectRepairRows);
+  const crawlFanoutRepairs = boundedCount(crawlFanoutRepairRows);
   const crawl = crawlFamilyStatus(
     results,
     crawlAudit,
     integerSetting(settingRows, CRAWL_DUE_AUDIT_FENCE_KEY),
-    oldestOutstandingMarkerAge(
-      [...crawlDirectRepairRows, ...crawlFanoutRepairRows],
-      crawlRepairs.truncated,
+    oldestCrawlOutstandingMarkerAge(
+      crawlDirectRepairs,
+      crawlFanoutRepairRows,
+      crawlFanoutRepairs,
       now,
     ),
   );

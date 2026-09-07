@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
+import { markCrawlNodeRepairStatement } from "./crawl-due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   advanceProjectionAudit,
@@ -61,6 +62,11 @@ describe("projection production operations", () => {
         generation text not null default 'complete', cursor text,
         started_at text not null default '', updated_at text not null default '', completed_at text,
         primary key (work_kind, subject_type)
+      );
+      create table crawl_frontier (
+        id text primary key, kind text not null default 'release', hop integer not null default 0,
+        demand_rank integer not null default 0, created_at text not null default '',
+        label_slug text, parent_id text, updated_at text not null default ''
       );
       create table crawl_due_work (
         node_id text primary key, state text not null, hop integer not null default 0,
@@ -425,6 +431,7 @@ describe("projection production operations", () => {
       status.projections.crawlDueWork.oldestOutstandingMarkerAge.ageMs,
       createdAt.crawlFanout,
     );
+    expect(status.projections.crawlDueWork.oldestOutstandingMarkerAge.truncated).toBe(true);
     expectExactAge(
       status.projections.publicAggregates.oldestOutstandingMarkerAge.ageMs,
       createdAt.publicAggregate,
@@ -434,6 +441,31 @@ describe("projection production operations", () => {
       createdAt.artist,
     );
     expect(status.projections.trackDueWork.oldestOutstandingMarkerAge).toEqual({
+      ageMs: null,
+      reason: "marker_timestamp_unavailable",
+      truncated: false,
+    });
+  });
+
+  it("explains unavailable marker time when crawl debt contains only a direct repair row", async () => {
+    await db.execute({
+      args: ["crawl-direct-from-old-frontier", "2020-01-01T00:00:00.000Z"],
+      sql: `insert into crawl_frontier (id, created_at) values (?, ?)`,
+    });
+    await db.execute(
+      markCrawlNodeRepairStatement("crawl-direct-from-old-frontier", "repair-version", {
+        now: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    const status = await getProjectionStatusFor(db);
+
+    expect(status.projections.crawlDueWork.repairs).toMatchObject({
+      direct: { count: 1, truncated: false },
+      fanout: { count: 0, truncated: false },
+      total: { count: 1, truncated: false },
+    });
+    expect(status.projections.crawlDueWork.oldestOutstandingMarkerAge).toEqual({
       ageMs: null,
       reason: "marker_timestamp_unavailable",
       truncated: false,
