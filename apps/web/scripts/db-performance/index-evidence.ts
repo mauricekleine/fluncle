@@ -162,9 +162,18 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
       indexName,
       "select id from perf_tracks indexed by __INDEX__ where artist_edges_backfilled_at is null and id >= 'synthetic-track-000000000' order by id limit 25",
     ),
-    tracks_bpm_idx: indexPlanStatement(
-      indexName,
-      "select bpm from perf_tracks indexed by __INDEX__ where bpm >= 160 and bpm <= 180 order by bpm limit 25",
+    tracks_bpm_idx: statement(
+      `select tracks.id as track_id, tracks.title, tracks.artists_json, tracks.album,
+              tracks.album_image_url, tracks.bpm, tracks.key, tracks.label, tracks.release_date,
+              tracks.spotify_url, findings.log_id,
+              (select name from perf_galaxies where perf_galaxies.id = findings.galaxy_id)
+                as galaxy_name
+         from perf_tracks tracks left join perf_findings findings on findings.track_id = tracks.id
+        where tracks.bpm >= ? and tracks.bpm <= ?
+        order by case when findings.track_id is null then 1 else 0 end asc,
+                 tracks.release_date desc, tracks.id asc
+        limit ?`,
+      [160, 180, INDEX_EVIDENCE_LIMIT],
     ),
     tracks_capture_priority_track_id_idx: indexPlanStatement(
       indexName,
@@ -245,9 +254,8 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
            count(label_id) as labeled_rows
       from perf_tracks indexed by __INDEX__`,
     ),
-    tracks_is_catalogue_idx: indexPlanStatement(
-      indexName,
-      "select count(*) from perf_tracks indexed by __INDEX__ where is_catalogue = 1",
+    tracks_is_catalogue_idx: statement(
+      "select count(*) as total from perf_tracks where perf_tracks.is_catalogue = 1",
     ),
     tracks_isrc_idx: indexPlanStatement(
       indexName,
@@ -306,6 +314,7 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
 
   return {
     allowFullScanOf: indexName === "tracks_funnel_scan_idx" ? table : undefined,
+    forbidTempSort: indexName === "tracks_bpm_idx" ? false : undefined,
     maxRows: indexName === "tracks_funnel_scan_idx" ? 1 : INDEX_EVIDENCE_LIMIT,
     minRows: 1,
     statement: selected,
@@ -340,9 +349,14 @@ function genericDatabaseScalePlan(indexName: string): IndexPlanSpec {
       indexName,
       "select stream, stream_version, subject_type, subject_id, revision from perf_artifact_changes indexed by __INDEX__ where stream = 'synthetic-stream-0' and stream_version = 1 and subject_type = 'track' and subject_id = 'synthetic-track-000000000' and revision = 1 limit 25",
     ),
-    artifact_changes_stream_seq_idx: indexPlanStatement(
-      indexName,
-      "select stream, stream_version, seq from perf_artifact_changes indexed by __INDEX__ where stream = 'synthetic-stream-0' and stream_version = 1 and seq >= 1 order by stream, stream_version, seq limit 25",
+    artifact_changes_stream_seq_idx: statement(
+      `select created_at, format_version, operation, payload_blob, payload_json,
+              producer, revision, seq, stream, stream_version, subject_id, subject_type
+         from perf_artifact_changes
+        where seq > ?
+        order by seq
+        limit ?`,
+      [0, INDEX_EVIDENCE_LIMIT + 1],
     ),
     artist_qualification_contributions_artist_track_idx: indexPlanStatement(
       indexName,
@@ -494,7 +508,10 @@ function genericDatabaseScalePlan(indexName: string): IndexPlanSpec {
       indexName === "artifact_change_consumers_compaction_idx"
         ? "perf_artifact_change_consumers"
         : undefined,
-    maxRows: INDEX_EVIDENCE_LIMIT,
+    maxRows:
+      indexName === "artifact_changes_stream_seq_idx"
+        ? INDEX_EVIDENCE_LIMIT + 1
+        : INDEX_EVIDENCE_LIMIT,
     minRows: indexName === "crawl_projection_repairs_order_idx" ? 0 : 1,
     statement: selected,
   };
@@ -508,7 +525,7 @@ function planFor(
   const fixtureIndex = fixtureIndexName(definition.requiredIndexName);
 
   if (definition.requiredIndexName === "artifact-changes-integer-primary-key") {
-    requiredDetails.push(/INTEGER PRIMARY KEY.*rowid</i);
+    requiredDetails.push(/INTEGER PRIMARY KEY.*rowid[<>]/i);
   } else if (definition.requiredIndexName === "bounded-consumer-control-table") {
     // The exact compaction barrier spans active and rebuilding consumers, so the removed active-only
     // partial index is unusable. The registered-consumer table is a bounded control set, not corpus
@@ -879,6 +896,7 @@ function definitionFor(entry: IndexInventoryEntry): IndexEvidenceDefinition {
     artifact_change_checkpoints_running_idx: "artifact-change-checkpoints-primary-key",
     artifact_change_consumers_compaction_idx: "bounded-consumer-control-table",
     artifact_changes_created_seq_idx: "artifact-changes-integer-primary-key",
+    artifact_changes_stream_seq_idx: "artifact-changes-integer-primary-key",
     operation_receipts_operation_audit_idx: "operation-receipts-primary-key",
     tracks_capture_priority_idx: "tracks_vendor_worklist_idx",
     tracks_nearest_finding_score_idx: "tracks_catalogue_ear_idx",
