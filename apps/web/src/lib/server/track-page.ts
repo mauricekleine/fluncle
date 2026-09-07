@@ -651,33 +651,38 @@ export async function countIndexableTrackPages(): Promise<number> {
 /**
  * ONE PAGE of the tracks sitemap child, windowed IN SQL.
  *
- * Every other sitemap kind reads its whole bag and lets the builder slice it, because every other
- * kind is bounded by what Fluncle has certified or by how many entities exist. This one is bounded
- * by the CRAWL, which is six figures and climbing, so reading the whole bag to emit one child would
- * pull a six-figure column into a 128 MB isolate — precisely the shape AGENTS.md forbids. The
- * window moves into the query instead, and `lib/sitemap.ts` marks this kind pre-sliced so the
- * builder does not window it a second time.
+ * This kind is bounded by the CRAWL, which is six figures and climbing, so reading the whole bag to
+ * emit one child would pull a six-figure column into a 128 MB isolate — precisely the shape
+ * AGENTS.md forbids. The window lives in this query, and `lib/sitemap.ts` marks the kind pre-sliced
+ * so the builder does not window it a second time.
  *
  * The order is `track_id` — a primary key, so it is stable while the crawl grows underneath a
  * crawler that is walking the children one at a time. A date order would reshuffle between fetches
- * and hand the same page out twice while orphaning another.
+ * and hand the same page out twice while orphaning another. The optional key is the exact previous
+ * child boundary; the read always seeks and never carries an offset.
  */
-export async function listTrackSitemapRows(
-  limit: number,
-  offset: number,
-): Promise<TrackSitemapRow[]> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [limit, offset],
+export function trackSitemapWindowStatement(limit: number, afterTrackId?: string) {
+  const seek = afterTrackId === undefined ? "tracks.track_id >= ?" : "tracks.track_id > ?";
+
+  return {
+    args: [afterTrackId ?? "", limit],
     sql: `select tracks.track_id, tracks.album_image_url,
                  (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
                  (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
                  (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at
           from tracks
-          where ${TRACK_PAGE_INDEXABLE_WHERE}
+          where ${seek} and ${TRACK_PAGE_INDEXABLE_WHERE}
           order by tracks.track_id
-          limit ? offset ?`,
-  });
+          limit ?`,
+  };
+}
+
+export async function listTrackSitemapRows(
+  limit: number,
+  afterTrackId?: string,
+): Promise<TrackSitemapRow[]> {
+  const db = await getDb();
+  const result = await db.execute(trackSitemapWindowStatement(limit, afterTrackId));
 
   return typedRows<{
     album_image_key: string | null;

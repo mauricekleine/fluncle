@@ -2,10 +2,16 @@ import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { DUE_WORK_COLUMNS, DUE_WORK_COLUMN_NAMES } from "../../src/lib/server/due-work-columns";
+import { trackSitemapWindowStatement } from "../../src/lib/server/track-page";
 
-import { DUE_WORK_PERFORMANCE_CLAIM_RESULT, selectPerformanceContracts } from "./contracts";
+import {
+  DUE_WORK_PERFORMANCE_CLAIM_RESULT,
+  TRACK_SITEMAP_PERFORMANCE_WINDOW,
+  selectPerformanceContracts,
+} from "./contracts";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
+import { analyzeExplainPlan } from "./plan";
 import { type PerformanceClient, runPerformanceContracts } from "./registry";
 
 const CLAIM_TOKEN = "synthetic-claim-token";
@@ -70,6 +76,72 @@ describe("database performance contracts", () => {
       `select ${DUE_WORK_COLUMNS} from due_work`,
     );
     expect(DUE_WORK_COLUMN_NAMES).toHaveLength(12);
+  });
+
+  it("runs the production-shaped track sitemap keyset window and rejects its offset twin", async () => {
+    const contract = selectPerformanceContracts(["sitemap.track-window"])[0];
+    if (!contract?.plan) {
+      throw new Error("track sitemap window contract has no plan policy");
+    }
+
+    const productionStatement = trackSitemapWindowStatement(25, "synthetic-track-000000007");
+    expect(TRACK_SITEMAP_PERFORMANCE_WINDOW.args).toEqual(productionStatement.args);
+    expect(TRACK_SITEMAP_PERFORMANCE_WINDOW.sql).toBe(
+      productionStatement.sql
+        .replaceAll("tracks.track_id", "perf_tracks.id")
+        .replace(/\btracks\b/g, "perf_tracks")
+        .replace(/\balbums\b/g, "perf_albums")
+        .replace("select perf_tracks.id,", "select perf_tracks.id as track_id,"),
+    );
+    expect(TRACK_SITEMAP_PERFORMANCE_WINDOW.sql).toMatch(/perf_tracks\.id > \?/i);
+    expect(TRACK_SITEMAP_PERFORMANCE_WINDOW.sql).not.toMatch(/\boffset\b/i);
+
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    try {
+      await applyFixtureSchema(client);
+      await writeFixture(client, "1x", { counts: createCiFixtureCounts("1x", 256) });
+      const report = await runPerformanceContracts({
+        client,
+        contracts: [contract],
+        profile: "1x",
+      });
+      const result = report.contracts[0];
+
+      expect(result?.passed).toBe(true);
+      expect(result?.resultRowCount.max).toBeGreaterThan(0);
+      expect(result?.resultRowCount.max).toBeLessThanOrEqual(25);
+      expect(result?.plan?.violations).toEqual([]);
+      expect(result?.plan?.fullScans).toEqual([]);
+      expect(result?.plan?.tempSorts).toEqual([]);
+      expect(result?.plan?.details).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /SEARCH perf_tracks USING INDEX perf_tracks_catalogue_active_track_id_idx/i,
+          ),
+          expect.stringMatching(/SEARCH perf_albums USING INDEX sqlite_autoindex_perf_albums_1/i),
+        ]),
+      );
+
+      const offsetStatement = {
+        args: [25, 7],
+        sql: TRACK_SITEMAP_PERFORMANCE_WINDOW.sql
+          .replace("perf_tracks.id > ? and ", "")
+          .replace("limit ?", "limit ? offset ?"),
+      };
+      const offsetPlanResult = await client.execute({
+        args: offsetStatement.args,
+        sql: `EXPLAIN QUERY PLAN ${offsetStatement.sql}`,
+      });
+      const offsetDetails = offsetPlanResult.rows.map((row) =>
+        typeof row.detail === "string" ? row.detail : "",
+      );
+      const offsetAnalysis = analyzeExplainPlan(offsetDetails, contract.plan.policy);
+
+      expect(offsetStatement.sql).toMatch(/\boffset\b/i);
+      expect(offsetAnalysis.violations).not.toEqual([]);
+    } finally {
+      client.close();
+    }
   });
 
   it("finishes a due-work transaction before generic comparison proof and owns late failures", async () => {

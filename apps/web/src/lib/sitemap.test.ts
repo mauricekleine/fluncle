@@ -446,25 +446,23 @@ describe("a child sitemap", () => {
     );
   });
 
-  it("keyset-paginates a NON-findings entity type past SITEMAP_MAX_URLS too", () => {
-    // Pagination is built into every kind, not just findings — an artist space that outgrows a
-    // child grows a second one exactly the same way, so the machinery is proven per type.
-    const manyArtists = Array.from({ length: SITEMAP_MAX_URLS + 2 }, (_unused, index) => ({
-      lastmod: "2026-06-10T14:57:38.786Z",
-      slug: `artist-${index}`,
+  it("slices an in-memory entity bag at SITEMAP_MAX_URLS", () => {
+    // This is the builder's in-memory arithmetic, not a keyset proof. Galaxies stay on this path
+    // because their stable public order begins with a derived member count and has no serving index.
+    const manyGalaxies = Array.from({ length: SITEMAP_MAX_URLS + 2 }, (_unused, index) => ({
+      slug: `galaxy-${index}`,
     }));
-    const artistBags = bags({ artists: manyArtists });
+    const galaxyBags = bags({ galaxies: manyGalaxies });
 
-    expect(shardCount("artists", artistBags)).toBe(2);
-    expect(buildSitemapShardXml("artists", 1, artistBags)?.match(/<loc>/g)).toHaveLength(
+    expect(shardCount("galaxies", galaxyBags)).toBe(2);
+    expect(buildSitemapShardXml("galaxies", 1, galaxyBags)?.match(/<loc>/g)).toHaveLength(
       SITEMAP_MAX_URLS,
     );
-    expect(buildSitemapShardXml("artists", 2, artistBags)?.match(/<loc>/g)).toHaveLength(2);
-    expect(buildSitemapShardXml("artists", 3, artistBags)).toBeUndefined();
-    // The index advertises both artist children.
-    const index = indexXml(artistBags);
-    expect(index).toContain("artists-1.xml");
-    expect(index).toContain("artists-2.xml");
+    expect(buildSitemapShardXml("galaxies", 2, galaxyBags)?.match(/<loc>/g)).toHaveLength(2);
+    expect(buildSitemapShardXml("galaxies", 3, galaxyBags)).toBeUndefined();
+    const index = indexXml(galaxyBags);
+    expect(index).toContain("galaxies-1.xml");
+    expect(index).toContain("galaxies-2.xml");
   });
 });
 

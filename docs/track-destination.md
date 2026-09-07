@@ -97,11 +97,11 @@ Sonar is the lever when the embedded corpus outgrows the scan, behind its own da
 
 ## The sitemap at catalogue scale
 
-`/track/<trackId>` gets its own child kind, `tracks`, and two things about it differ from every other kind.
+`/track/<trackId>` gets its own child kind, `tracks`, with a lower per-child ceiling than the other kinds.
 
 **A lower per-child ceiling.** Every other kind is bounded by what Fluncle has certified or by how many entities exist, so their 45,000-URL ceiling is theoretical. This one is bounded by the crawl, so the ceiling actually fires and decides how much a single request has to build: 45,000 `<url>` elements is several megabytes of string assembled inside a 128 MB Worker isolate on every cache miss. `SITEMAP_TRACKS_MAX_URLS` is 10,000 — a few hundred kilobytes, at the cost of more files, which is exactly what a sitemap index is for.
 
-**The window is in SQL.** Every other kind reads its whole bag and lets the builder slice it. Reading this one whole would pull a six-figure column into the isolate, which is the shape AGENTS.md forbids, so `collectSitemapBag("tracks", page)` applies the `limit`/`offset` itself and the kind is listed in `SITEMAP_SQL_WINDOWED_KINDS` so the builder does not window it a second time. The order is `track_id` — a primary key, stable while the crawl grows underneath a crawler walking the children one at a time; a date order would reshuffle between fetches and hand the same page out twice while orphaning another.
+**The window is in SQL.** Archive tracks, artists, labels, albums, and logbook entries derive the requested child's boundary through capped keyset seeks, then read exactly one SQL window; the builder does not slice those bags a second time. Tracks seek `track_id` without an offset — a primary key order that remains stable while the crawl grows underneath a crawler walking the children one at a time. Findings and galaxies remain in memory because their established concatenated or derived order is not served by an existing index; changing either would require a separate schema decision.
 
 **A track entry carries no `<lastmod>`.** `tracks` has no content-change timestamp, and a release date is a different claim. The entry is honestly undated, exactly as the `docs` and `galaxies` children are, instead of inventing a stamp a crawler would read as one.
 

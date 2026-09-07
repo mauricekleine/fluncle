@@ -38,9 +38,9 @@ export const Route = createFileRoute("/sitemap/$shard")({
           return notFoundResponse();
         }
 
-        // The PAGE is passed through, and only the `tracks` kind reads it: its bag is windowed in
-        // SQL rather than sliced by the builder, because it is the one kind big enough that
-        // reading it whole would pull a six-figure column into the isolate (sitemap-data.ts).
+        // The PAGE is passed through to every SQL-windowed kind. Entity, logbook, and archive-track
+        // bags seek their stable indexed order in SQL instead of loading a whole qualifying table;
+        // findings and galaxies keep their established non-index-served order in memory.
         const bag = await collectSitemapBag(shard.kind, shard.page);
         const xml = buildSitemapShardXml(shard.kind, shard.page, bag);
 
