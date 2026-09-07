@@ -16,7 +16,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # main via pin-watch, no /opt/data copy); this host unit only TRIGGERS it, and the sweep
 # self-writes its /status marker (cron-output.sh) so the fluncle-healthcheck prober stays
 # honest. Parallel host timers replace the one serial gateway runner (~300s global budget).
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-context-note -- bash /opt/hermes-scripts/context-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-context-note -- bash /opt/hermes-scripts/context-sweep.sh
 # A pure Worker-trigger over a bounded batch (cap 6); the box burns no tokens, the Worker does
 # the Firecrawl + Haiku distill. Well under two minutes even on a full batch. The old 180s
 # ceiling false-killed a tick that merely overlapped a pin-watch docker image build (~4 min of
