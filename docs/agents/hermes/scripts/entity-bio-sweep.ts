@@ -147,11 +147,11 @@ const claudeBin = (): string => process.env.CLAUDE_BIN ?? "claude";
 process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 
 // The authoring model. A shared default plus per-kind overrides, all defaulting to the
-// spike-proven Sonnet alias (the voiced-note family; NOT haiku).
+// current Sonnet tier (the voiced-note family; NOT haiku).
 const ARTIST_BIO_CLAUDE_MODEL = process.env.ARTIST_BIO_CLAUDE_MODEL;
 const LABEL_BIO_CLAUDE_MODEL = process.env.LABEL_BIO_CLAUDE_MODEL;
 const ALBUM_BIO_CLAUDE_MODEL = process.env.ALBUM_BIO_CLAUDE_MODEL;
-const ENTITY_BIO_CLAUDE_MODEL = process.env.ENTITY_BIO_CLAUDE_MODEL ?? "claude-sonnet-4-6";
+const ENTITY_BIO_CLAUDE_MODEL = process.env.ENTITY_BIO_CLAUDE_MODEL ?? "claude-sonnet-5";
 // Optional reasoning effort, passed through to `claude -p --effort` when set (mirrors
 // NOTE_CLAUDE_EFFORT / OBSERVE_CLAUDE_EFFORT — the box's per-sweep token dial).
 const ENTITY_BIO_CLAUDE_EFFORT = process.env.ENTITY_BIO_CLAUDE_EFFORT;

@@ -8,7 +8,7 @@
 # chosen for cost ($0.94/$3 per 1M vs Sonnet's $3/$15): the crons run independently
 # on subscription auth (claude -p), so the gateway only carries the Discord chat
 # voice. It must still pass the Fluncle voice gate (flash/generic models slip the
-# deadpan + first-person voice); anthropic/claude-sonnet-4.6 is the premium fallback
+# deadpan + first-person voice); anthropic/claude-sonnet-5 is the premium fallback
 # if the voice ever slips.
 model:
   provider: openrouter

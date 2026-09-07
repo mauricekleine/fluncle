@@ -72,10 +72,8 @@ Stop and ask:
 - Preserve Fluncle domain terms from the docs and code: track, Spotify, Telegram, Turso, public archive, admin API, CLI, Raycast, standalone binary, production profile, and local profile.
 - Include exact paths, commands, PR numbers, and artifacts when known.
 - Include one verifiable stopping condition.
-- Do not invent credentials, production state, validation results, deploy permission, customer data, or secrets.
-- Do not include a preamble like "Here is the prompt".
-- Do not include private analysis in the final prompt; do that reasoning before final output.
-- Do not exceed 4,000 characters.
+- Never invent credentials, production state, validation results, deploy permission, customer data, or secrets.
+- The output is the prompt alone: paste-ready, no preamble and no working notes, within the 4,000-character limit above.
 
 ## Validator
 

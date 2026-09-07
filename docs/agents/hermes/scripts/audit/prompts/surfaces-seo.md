@@ -14,13 +14,11 @@ surface. The `fluncle-surfaces` skill (`packages/skills/fluncle-surfaces`) lists
 that must read it. Verify **each live surface fans out to all of its consumers**:
 `/status` (probe + label + subtitle in `apps/web/src/routes/status.tsx` and the on-box
 `fluncle-healthcheck.ts` mirror), the homepage nav/dev-row, the SSH menu (`apps/ssh`), `llms.txt`
-
-- the markdown-home + `llms-full.txt` (`apps/web/src/lib/server/agent-discovery.ts` **and** the
-  static `apps/web/public/llms.txt`), the sitemap (`apps/web/src/routes/sitemap[.]xml.ts`), and the
-  doctrine doc (`docs/surfaces-doctrine.md`). This is the exact class of gap that recently left the
-  artist crons unlabeled on `/status` and the artist/mixtape APIs missing from the discovery map —
-  hunt it deliberately: a registry entry with a consumer it never reached, or a consumer listing a
-  surface the registry dropped.
+plus the markdown-home and `llms-full.txt` (`apps/web/src/lib/server/agent-discovery.ts` **and** the
+static `apps/web/public/llms.txt`), the sitemap (`apps/web/src/routes/sitemap[.]xml.ts`), and the
+doctrine doc (`docs/surfaces-doctrine.md`). The gap to hunt is a registry entry with a consumer it
+never reached (a cron with no `/status` label, an API missing from the discovery map), or a consumer
+listing a surface the registry dropped.
 
 **2. Structured data / JSON-LD correctness.** Across the public routes (`/`, `/log/<id>`,
 `/artist/<slug>`, `/mixtapes`, `/log` mixtape flavor, `/stories`), confirm the JSON-LD is

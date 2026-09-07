@@ -137,8 +137,8 @@ const claudeBin = (): string => process.env.CLAUDE_BIN ?? "claude";
 process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 
 // The authoring model + optional reasoning effort. Env-configurable; default the
-// spike-proven Sonnet alias (the note/observe-sweep precedent).
-const LOGBOOK_CLAUDE_MODEL = process.env.LOGBOOK_CLAUDE_MODEL ?? "claude-sonnet-4-6";
+// current Sonnet tier (the note/observe-sweep precedent).
+const LOGBOOK_CLAUDE_MODEL = process.env.LOGBOOK_CLAUDE_MODEL ?? "claude-sonnet-5";
 const LOGBOOK_CLAUDE_EFFORT = process.env.LOGBOOK_CLAUDE_EFFORT;
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK;
 

@@ -78,7 +78,7 @@ The Worker owns every platform secret (R2, Postiz, Turso, YouTube, Mixcloud, Las
 
 BYO key via OpenRouter (`config.yaml` `model.provider: openrouter`, `model.default: <slug>`, `OPENROUTER_API_KEY` read from the env). Must be ≥64k context and pinned. Current: `z-ai/glm-5.2` (1M context; ~$0.94/$3 per 1M). Swapping the model is a one-line config change + restart, no rebuild — the versioned baseline is [`docs/agents/hermes/config.yaml`](./hermes/config.yaml).
 
-> Model choice is a **voice** decision as well as cost. Select a model that reliably preserves Fluncle's first-person voice, dry register, and punctuation rules. The gateway uses `z-ai/glm-5.2` for Discord chat; `anthropic/claude-sonnet-4.6` is the premium fallback when the pinned model fails the voice gate. Whatever is pinned must pass the voice gate (below) before the bot goes public.
+> Model choice is a **voice** decision as well as cost. Select a model that reliably preserves Fluncle's first-person voice, dry register, and punctuation rules. The gateway uses `z-ai/glm-5.2` for Discord chat; `anthropic/claude-sonnet-5` is the premium fallback when the pinned model fails the voice gate. Whatever is pinned must pass the voice gate (below) before the bot goes public.
 
 ## Voice
 
