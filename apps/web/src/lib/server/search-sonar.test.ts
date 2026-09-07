@@ -96,6 +96,19 @@ describe("rankTracksByVector — the sonar route (dark)", () => {
     expect(hits.map((hit) => hit.trackId)).toEqual(["t2", "t1"]);
   });
 
+  it("drops a ranked id that no longer hydrates instead of inventing a hit", async () => {
+    isSonarSonicEnabled.mockResolvedValue(true);
+    searchSonar.mockResolvedValue([
+      { id: "deleted-after-refresh", score: 0.95 },
+      { id: "t1", score: 0.8 },
+    ]);
+    execute.mockResolvedValue({ rows: [row("t1")] });
+
+    const hits = await rankTracksByVector(PROBE, NO_FILTERS, undefined, 5);
+
+    expect(hits.map((hit) => hit.trackId)).toEqual(["t1"]);
+  });
+
   it("flag ON with BPM bounds: maps them to sonar's inclusive bpm filter", async () => {
     isSonarSonicEnabled.mockResolvedValue(true);
     searchSonar.mockResolvedValue([{ id: "t1", score: 0.7 }]);

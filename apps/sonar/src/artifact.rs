@@ -154,7 +154,7 @@ struct CheckpointResponse {
     ok: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChangeEvent {
     #[serde(rename = "createdAt")]
@@ -184,7 +184,7 @@ pub struct ChangeEvent {
     pub supported_by_consumer: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChangePage {
     #[serde(rename = "batchDigest")]
@@ -270,7 +270,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-fn event_digest(event: &ChangeEvent, blob: &[u8]) -> Result<String> {
+pub(crate) fn event_digest(event: &ChangeEvent, blob: &[u8]) -> Result<String> {
     let envelope = json!({
         "createdAt": event.created_at,
         "formatVersion": event.format_version,

@@ -164,6 +164,8 @@ async fn health_is_open_and_reports_counts() {
     let v = body_json(resp).await;
     assert_eq!(v["tracks"], 2);
     assert_eq!(v["centroids"], 1);
+    assert_eq!(v["delta_backlog"], 0);
+    assert_eq!(v["delta_age_seconds"], 0);
     assert_eq!(v["ok"], true);
     assert!(v["last_refresh_unix"].as_i64().unwrap() > 0);
     // The build commit — how an operator confirms the box carries a given change BEFORE
