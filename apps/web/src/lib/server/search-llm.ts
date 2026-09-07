@@ -29,6 +29,7 @@ import { type SearchFilters, SearchFiltersSchema } from "@fluncle/contracts/orpc
 import { priceOpenRouterTokens } from "./cost-rates";
 import { captureCostEvents, costEventId } from "./costs";
 import { readOptionalEnv } from "./env";
+import { samplingFor } from "./model-sampling";
 import { resolvePrompt } from "./prompts";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -141,7 +142,7 @@ export async function translateQuery(query: string): Promise<SearchFilters | nul
         ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
         // Structure, not creativity: the same sentence must parse to the same filters.
         response_format: { type: "json_object" },
-        temperature: 0,
+        ...samplingFor(model, 0),
         usage: { include: true },
       }),
       headers: {

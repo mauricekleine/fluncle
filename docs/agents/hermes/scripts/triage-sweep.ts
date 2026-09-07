@@ -61,8 +61,8 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 // backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
 process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 
-// The authoring model. Env-configurable; default the note-sweep-proven Sonnet alias.
-const TRIAGE_CLAUDE_MODEL = process.env.TRIAGE_CLAUDE_MODEL ?? "claude-sonnet-4-6";
+// The authoring model. Env-configurable; default the current Sonnet tier (the note-sweep precedent).
+const TRIAGE_CLAUDE_MODEL = process.env.TRIAGE_CLAUDE_MODEL ?? "claude-sonnet-5";
 // Optional reasoning effort, passed through to `claude -p --effort` when set.
 const TRIAGE_CLAUDE_EFFORT = process.env.TRIAGE_CLAUDE_EFFORT;
 // Optional Discord webhook for the claude-auth-failed alert (best-effort).

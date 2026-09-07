@@ -31,6 +31,7 @@ import { priceOpenRouterTokens } from "./cost-rates";
 import { captureCostEvents, type CostCaptureContext, costEventId } from "./costs";
 import { readEnv, readOptionalEnv } from "./env";
 import { logEvent } from "./log";
+import { samplingFor } from "./model-sampling";
 import { PROMPT_REGISTRY, resolvePrompt } from "./prompts";
 import { ApiError } from "./spotify";
 import { BANNED_WORDS } from "./voice-words";
@@ -647,7 +648,7 @@ export async function distilContextNote(
         ],
         model,
         ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
-        temperature: 0.2,
+        ...samplingFor(model, 0.2),
         // Ask OpenRouter to return the ACTUAL billed cost in the response's `usage.cost`
         // (credits = USD). Model-agnostic pricing straight from the vendor — no per-MTok
         // rate table to keep in sync when the distil model changes (COST-01).

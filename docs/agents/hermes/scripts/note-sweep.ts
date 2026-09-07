@@ -169,8 +169,8 @@ process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 // from the context note + identity alone, exactly as the sweep did before the layer.
 const NEIGHBORS_ENABLED = process.env.NOTE_NEIGHBORS !== "0";
 
-// The authoring model. Env-configurable; default the spike-proven Sonnet alias.
-const NOTE_CLAUDE_MODEL = process.env.NOTE_CLAUDE_MODEL ?? "claude-sonnet-4-6";
+// The authoring model. Env-configurable; default the current Sonnet tier (the voiced-note family, not haiku).
+const NOTE_CLAUDE_MODEL = process.env.NOTE_CLAUDE_MODEL ?? "claude-sonnet-5";
 // Optional reasoning effort, passed through to `claude -p --effort` when set.
 const NOTE_CLAUDE_EFFORT = process.env.NOTE_CLAUDE_EFFORT;
 // Optional Discord webhook for the claude-auth-failed alert (best-effort).
@@ -437,7 +437,7 @@ export function buildAuthoringPrompt(
               `  - ${neighbor.artists.join(", ")} — ${neighbor.title}: "${neighbor.note}"`,
           ),
           "",
-          "READ THEM TWICE, THEN USE THEM AS A LIST OF WHAT IS ALREADY TAKEN.",
+          "USE THEM AS THE LIST OF WHAT IS ALREADY TAKEN.",
           "  - They tell you the REGISTER of this corner of the archive: how certain, how dry, how bodily.",
           "  - Every image, verb, body part, and closing move in them is SPENT. Do not reuse one. Not the shoulders, not the rewind, not the phrasing, not the sentence shape.",
           "  - The server REJECTS a note that lifts a run of words from any of them, and it rejects one that just reshuffles their words. A rejected note is not stored at all.",

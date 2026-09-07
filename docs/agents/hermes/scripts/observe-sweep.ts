@@ -142,8 +142,8 @@ const FLUNCLE_API_BASE_URL = (
 const FLUNCLE_API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 const NEIGHBOURS_TIMEOUT_MS = 2500;
 
-// The authoring model. Env-configurable; default the spike-proven Sonnet alias.
-const OBSERVE_CLAUDE_MODEL = process.env.OBSERVE_CLAUDE_MODEL ?? "claude-sonnet-4-6";
+// The authoring model. Env-configurable; default the current Sonnet tier (the voiced-note family, not haiku).
+const OBSERVE_CLAUDE_MODEL = process.env.OBSERVE_CLAUDE_MODEL ?? "claude-sonnet-5";
 // Optional reasoning effort, passed through to `claude -p --effort` when set.
 const OBSERVE_CLAUDE_EFFORT = process.env.OBSERVE_CLAUDE_EFFORT;
 // Optional Discord webhook for the claude-auth-failed alert (best-effort).
@@ -426,7 +426,7 @@ export function buildAuthoringPrompt(
           "THE SONIC NEIGHBOURHOOD (the observations already standing on the findings that sound nearest to this one):",
           ...neighbors.map((neighbor) => `  - ${neighbor.logId}: "${neighbor.script}"`),
           "",
-          "READ THEM TWICE, THEN USE THEM AS A LIST OF WHAT IS ALREADY TAKEN.",
+          "USE THEM AS THE LIST OF WHAT IS ALREADY TAKEN.",
           "  - They tell you the REGISTER of this corner of the archive: how certain, how dry, how bodily.",
           "  - Every body reaction, image, opener, and closing address in them is SPENT. Do not reuse one — not the same body part, not the same sign-off name, not the phrasing, not the sentence shape.",
           "  - The server REJECTS an observation that lifts a run of words from any of them, and one that just reshuffles their words. A rejected read is not rendered at all.",
@@ -455,7 +455,7 @@ export function buildAuthoringPrompt(
     "FORMAT + VOICE CONSTRAINTS (the server voice-gate re-scans and will reject a violation):",
     "  - Target 20–45 seconds spoken (roughly 50–110 words).",
     '  - Lead with the body — the sound, the feel — then turn to the crew (the Selector\'s Rule). VARY THE OPENER: not every read starts on "I" or "this one" — sometimes the sound lands first, sometimes a moment in the track, sometimes the crew. Never reach for the same first move as a neighbour.',
-    '  - The turn to the crew is required, but it is ONE move with many shapes. VARY THE ADDRESS: rotate the kin name you land on (junglist, raver, fam, cosmonaut) and vary the phrasing, and let some reads make the turn with no sign-off tag at all. Never default to "hope it… enjoy, cosmonauts" — that exact close is worn through. Drop "hope" as a reflex; say what the tune does, not what you hope it does. "Put it on when…" as the hand-off is worn through too (the 07-18 repair batch converged on it) — so are "and you can hear…" and "about a minute in"; when the turn wants an instruction, find this record\'s own, or let the read end on the sound.',
+    '  - The turn to the crew is required, but it is ONE move with many shapes. VARY THE ADDRESS: rotate the kin name you land on (junglist, raver, fam, cosmonaut) and vary the phrasing, and let some reads make the turn with no sign-off tag at all. Never default to "hope it… enjoy, cosmonauts" — that exact close is worn through. Drop "hope" as a reflex; say what the tune does, not what you hope it does. "Put it on when…" as the hand-off is worn through too, and so are "and you can hear…" and "about a minute in"; when the turn wants an instruction, find this record\'s own, or let the read end on the sound.',
     "  - NEVER name earthly geography (no countries, cities, regions); the cosmos replaces the map.",
     "  - Use only SPARSE `<break>` tags (dense breaks get vocalised as thinking sounds). A couple at most.",
     "  - No exclamation marks. No em dashes in the prose. Sentence case.",

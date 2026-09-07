@@ -9,7 +9,7 @@ The catalogue crawler stores a track only when its release's label is `enabled` 
 
 The ruling itself is an OPERATOR act (`update_label` is operator-tier — crawl scope is editorial control). The skill's job is to make each ruling a one-glance decision, never to make it.
 
-## The exception model (why a mixed label is no longer a dead end)
+## The exception model (how a mixed label gets carved)
 
 `seed_state` is the label-level DEFAULT. An **artist rule** is an exception to it, and it fires on the **FIRST credited MusicBrainz artist** of a track — never a guest credit, never a name:
 
@@ -19,7 +19,7 @@ The ruling itself is an OPERATOR act (`update_label` is operator-tier — crawl 
 | artist `block` | **skip their own records** (their guest spots stay) | inert                                          |
 | artist `allow` | inert                                               | **store their own records**, and nobody else's |
 
-That gives a round two shapes the old three buckets could not express, and both change what the NEXT crawl takes while touching nothing already stored:
+A round has two shapes beyond the plain buckets, and both change what the NEXT crawl takes while touching nothing already stored:
 
 - **enable + blocks** — a mainly-DnB label with a recurring off-lane act. Only when the off-lane FIRST-credit share is **≤ 15 %**; above that the label is not mainly DnB and stays `unclear` for the operator.
 - **`dnb_partial`: stay out of the seed set + allows** — a minority-DnB label whose DnB acts deserve the archive (the YUKU / Crucast shape). The label is left exactly as it is (undecided stays undecided); only the allow rules are written.
@@ -127,7 +127,7 @@ python3 <skill>/scripts/apply-rulings.py rescope   # reads calib-rules.json, wri
 
 Re-checks every existing rule against `GET /ws/2/artist/<mbid>` at 1 req/s and reports four shapes: **MERGED** (MusicBrainz answered with a different entity id than the one requested), **GONE** (404), **RENAMED** (the credited spelling no longer matches), **UNREACHABLE**. It writes `rescope-drift.json` and fixes nothing — an MB merge is benign until the operator decides what the rule should say, and re-authoring one re-arms that label's whole crawl scope.
 
-The audit-only `update_artist_rule` PATCH now carries the drift stamps: `checked_at` for every sweep result, `resolved_*` from a MusicBrainz response (or null when the artist is gone). It never re-authors the rule or re-arms label scope; PATCH failures are reported separately and fail the run.
+The audit-only `update_artist_rule` PATCH carries the drift stamps: `checked_at` for every sweep result, `resolved_*` from a MusicBrainz response (or null when the artist is gone). It never re-authors the rule or re-arms label scope; PATCH failures are reported separately and fail the run.
 
 ## Verification quality bar (the pass earns trust once, keeps it always)
 

@@ -165,7 +165,7 @@ bun docs/agents/hermes/scripts/embed-batch.ts --minutes 540 --dry-run   # gate: 
 nohup bun docs/agents/hermes/scripts/embed-batch.ts --minutes 540 > /workspace/embed-run.log 2>&1 &
 ```
 
-Confirm with `grep -c ': embedded' /workspace/embed-run.log` climbing within ~2 min. Use `embed-batch.sh` (the bootstrap curl) for a cold pod — it installs ffmpeg, bun, muq, clones the repo, and pre-warms the ~1 GB of MuQ weights. If you install by hand instead, **pin `transformers==4.40.2` and `numpy<2`**: `muq` leaves both unpinned, and on this image transformers 5.x (needs torch ≥ 2.2) dies with `NameError: name 'torch' is not defined` while numpy 2.x breaks the decode path with `_ARRAY_API not found`. Neither fails at install time — the run just never embeds. The bootstrap now pins them; a hand-rolled `pip install muq` still walks into it.
+Confirm with `grep -c ': embedded' /workspace/embed-run.log` climbing within ~2 min. Use `embed-batch.sh` (the bootstrap curl) for a cold pod — it installs ffmpeg, bun, muq, clones the repo, and pre-warms the ~1 GB of MuQ weights. If you install by hand instead, **pin `transformers==4.40.2` and `numpy<2`**: `muq` leaves both unpinned, and on this image transformers 5.x (needs torch ≥ 2.2) dies with `NameError: name 'torch' is not defined` while numpy 2.x breaks the decode path with `_ARRAY_API not found`. Neither fails at install time — the run just never embeds. The bootstrap pins them; a hand-rolled `pip install muq` walks into it.
 
 ### Monitor from the Mac, and make the destroy session-proof
 
