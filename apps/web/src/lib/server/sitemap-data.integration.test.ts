@@ -15,8 +15,8 @@
 //   - each child's XML from its OWN bag vs from the merged all-bags world, so no kind can quietly
 //     grow a dependency on a bag the one-bag fetch no longer loads.
 
-import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type Client, type InStatement } from "@libsql/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildSitemapIndexXml,
   buildSitemapShardXml,
@@ -249,6 +249,11 @@ beforeEach(async () => {
   await syncHubCounts(db);
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  db.close();
+});
+
 describe("the sitemap index reads aggregates that match the rows", () => {
   it("counts and dates every child exactly as the full bags do", async () => {
     const [stats, bags] = await Promise.all([collectSitemapIndexStats(), readAllBags()]);
@@ -294,6 +299,29 @@ describe("the sitemap index reads aggregates that match the rows", () => {
 });
 
 describe("a child sitemap fetches only its own bag", () => {
+  it("does not count catalogue tracks or entities for the static pages child", async () => {
+    const execute = vi.spyOn(db, "execute");
+    const sqlText = (statement: InStatement) =>
+      typeof statement === "string" ? statement : statement.sql;
+    const catalogueCounts = () =>
+      execute.mock.calls
+        .map(([statement]) => sqlText(statement))
+        .filter((sql) =>
+          /select count\(\*\) as (?:total|n)\s+from (?:tracks|artists|labels|albums)(?:\s|$)/i.test(
+            sql,
+          ),
+        );
+
+    const { pages } = await collectSitemapBag("pages");
+    expect(pages.latest).toBe("2026-07-14T09:00:00.000Z");
+    expect(catalogueCounts()).toEqual([]);
+
+    execute.mockClear();
+    const stats = await collectSitemapIndexStats();
+    expect(catalogueCounts()).toHaveLength(4);
+    expect(stats.pages.lastmod).toBe(pages.latest);
+  });
+
   it("serves the identical document it would from the merged all-bags world", async () => {
     const bags = await readAllBags();
 
