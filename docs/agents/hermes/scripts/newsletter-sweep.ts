@@ -72,7 +72,7 @@ process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 const SITE = process.env.FLUNCLE_SITE_URL ?? "https://www.fluncle.com";
 
 // The authoring model + optional effort, env-overridable (defaults match note-sweep).
-const NEWSLETTER_CLAUDE_MODEL = process.env.NEWSLETTER_CLAUDE_MODEL ?? "claude-sonnet-4-6";
+const NEWSLETTER_CLAUDE_MODEL = process.env.NEWSLETTER_CLAUDE_MODEL ?? "claude-sonnet-5";
 const NEWSLETTER_CLAUDE_EFFORT = process.env.NEWSLETTER_CLAUDE_EFFORT;
 
 // Cap the findings handed to the one authoring call so it stays inside the cron
@@ -131,6 +131,8 @@ type ClaudeReply = {
   is_error?: boolean;
   modelUsage?: Record<string, unknown>;
   result?: string;
+  /** The schema-validated payload when the CLI ran with `--json-schema`. */
+  structured_output?: unknown;
   subtype?: string;
   total_cost_usd?: number;
   usage?: ClaudeUsage;
@@ -473,6 +475,52 @@ export function buildAuthoringPrompt(
   ].join("\n");
 }
 
+// The authored shape, enforced by the CLI (`--json-schema`): the reply's `structured_output` is
+// validated against it before it reaches us, so the fence/brace scraper below is only the floor
+// for a CLI that returns no structured output. `additionalProperties` stays open on purpose —
+// the prompt (operator-editable) may grow a field before this schema does, and a stricter
+// schema would turn that into a dropped edition.
+const AUTHORED_SCHEMA = JSON.stringify({
+  properties: {
+    content: {
+      properties: {
+        galaxies: {
+          items: {
+            properties: {
+              findings: {
+                items: {
+                  properties: { logId: { type: "string" }, why: { type: "string" } },
+                  required: ["logId"],
+                  type: "object",
+                },
+                type: "array",
+              },
+              galaxy: { type: "string" },
+            },
+            type: "object",
+          },
+          type: "array",
+        },
+        intro: { type: "string" },
+        mixtapeRef: { type: "string" },
+        tidbits: {
+          items: {
+            properties: { source: { type: "string" }, text: { type: "string" } },
+            required: ["text", "source"],
+            type: "object",
+          },
+          type: "array",
+        },
+      },
+      required: ["intro", "galaxies"],
+      type: "object",
+    },
+    subject: { type: "string" },
+  },
+  required: ["subject", "content"],
+  type: "object",
+});
+
 /** Pull a JSON object out of the model result (tolerate stray fences/preamble). */
 function extractJson(result: string): string {
   const fenced = result.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -530,6 +578,8 @@ async function authorEdition(
     "Read,Glob,Grep",
     "--output-format",
     "json",
+    "--json-schema",
+    AUTHORED_SCHEMA,
   ];
 
   if (NEWSLETTER_CLAUDE_EFFORT) {
@@ -577,12 +627,17 @@ async function authorEdition(
   const raw = typeof reply.result === "string" ? reply.result : "";
   let authored: Authored;
 
-  try {
-    authored = JSON.parse(extractJson(raw)) as Authored;
-  } catch {
-    log(`could not parse the authored JSON: ${raw.slice(0, 200)}`);
+  // The schema-validated payload first; the scraped `result` text is the floor.
+  if (reply.structured_output && typeof reply.structured_output === "object") {
+    authored = reply.structured_output as Authored;
+  } else {
+    try {
+      authored = JSON.parse(extractJson(raw)) as Authored;
+    } catch {
+      log(`could not parse the authored JSON: ${raw.slice(0, 200)}`);
 
-    return null;
+      return null;
+    }
   }
 
   const subject = authored.subject?.trim();

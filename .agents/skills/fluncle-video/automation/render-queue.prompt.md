@@ -15,7 +15,7 @@ fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>
 ```
 
 - **NEVER run the CLI from source.** Do not use `bun run --cwd apps/cli fluncle …` or `bun run ./src/cli.ts …`. The from-source run loads a **different env profile — the wrong DB / wrong API target** — and on top of that reflects uncommitted local CLI edits instead of the pinned binary, recompiles on every call, and prints a `$ bun run …` banner. The automation must hit the same production endpoint every tick: that is the installed binary, full stop.
-- **Never pipe `fluncle` output through `tail` / `head` / `grep`.** The binary prints clean JSON with no banner and the payloads are small — run the command plainly and read all of it. (Reaching for `tail` to "trim noise" is the exact AGENTS.md smell, and here there is no noise to trim.)
+- **Never pipe `fluncle` output through `tail` / `head` / `grep`.** The binary prints clean JSON with no banner and the payloads are small — run the command plainly and read all of it; there is no noise to trim.
 - **`bun` is only for the video kit.** The render and `ship` steps run `bun run --cwd packages/video …` (Remotion) — that is correct and expected. The rule is narrow: the **`fluncle` CLI is the installed binary**; **`bun` drives `packages/video`**.
 
 ## The one invariant that makes re-runs safe
@@ -28,7 +28,7 @@ Claude Code delivery is **at-least-once** — this prompt may fire more than onc
 
 ## Headless discipline — the render dies with your turn
 
-You run under `claude -p`: the process exits the moment you end your turn, and every background task dies with it. There is no re-invocation, no task notification, no scheduled wakeup — those exist only in interactive sessions. (On 2026-07-19 three consecutive runs each ended their turn "waiting for the render to finish"; all three renders died unshipped and the tick produced nothing.)
+You run under `claude -p`: the process exits the moment you end your turn, and every background task dies with it. There is no re-invocation, no task notification, no scheduled wakeup — those exist only in interactive sessions. A run that ends its turn "waiting for the render to finish" ships nothing.
 
 - **Run every render, encode, and upload in the FOREGROUND** — one plain blocking Bash call. Never `run_in_background`, never your own `nohup`/`setsid`, never a monitor or wakeup you plan to "wait for". The Bash timeout ceiling is raised for this run (`BASH_MAX_TIMEOUT_MS`) precisely so a full render fits in one blocking call — pass a generous `timeout` on the render call itself instead of backgrounding it.
 - **Never end your turn while work is in flight.** The run ends ONLY when the ship upload has succeeded and `video_url` is confirmed set — or when you stop early with an explicit one-line blocker report. A turn that ends "waiting" is a failed run that wastes the whole tick.
@@ -54,7 +54,7 @@ fluncle admin tracks queue --limit 1 --json
 
 This returns `{ "ok": true, "tracks": [ ... ] }`. Each entry has `trackId`, `logId`, `title`, `artists`, and (for queue items) no `videoUrl`.
 
-- **Empty queue** — if `tracks` is `[]`, **STOP NOW**. Every finding already has a video; there is nothing to film. Do not render, do not post anything, do not write any output. Exit silently with a one-line note that the queue was empty.
+- **Empty queue** — if `tracks` is `[]`, stop. Every finding already has a video. Do not render or post; end the turn with one line saying the queue was empty.
 - **A finding is waiting** — take `tracks[0]`. That is THE finding for this run — the oldest one without a video. Record its `trackId` and `logId`. You will film this one and only this one.
 
 A finding with no `logId` cannot be shipped (ship requires a Log ID). If `tracks[0]` is missing `logId`, stop and report it as a blocker (the operator backfills the ISRC) rather than rendering an unshippable video.
@@ -67,7 +67,7 @@ A finding with no `logId` cannot be shipped (ship requires a Log ID). If `tracks
 echo "grain=${FLUNCLE_VIDEO_GRAIN:-unset} register=${FLUNCLE_VIDEO_REGISTER:-unset} avoid=${FLUNCLE_VIDEO_PALETTE_AVOID:-unset}"
 ```
 
-- **When `FLUNCLE_VIDEO_GRAIN` / `FLUNCLE_VIDEO_REGISTER` are SET, they are ASSIGNED — not suggestions.** Do NOT re-choose the grain family or the register. Ship with exactly the assigned `--grain <FLUNCLE_VIDEO_GRAIN>` and `--register <FLUNCLE_VIDEO_REGISTER>`. Your whole creativity lives INSIDE that cell: the vehicle name, the shader concept, the medium/primitive, the motion, the composition, the subject are all still fully yours — pour the invention there. Map your vehicle to the assigned grain family (cookbook §grain families), and stage the assigned register (representational → a placed subject per §presence staging; framed → a portal/sleeve/plate; abstract → a field) — though since 2026-07-20 the assigner only ever emits `representational` (the register is a prerequisite, not a rotation slot; the env var still types all three values), so in practice you stage a placed subject every run.
+- **When `FLUNCLE_VIDEO_GRAIN` / `FLUNCLE_VIDEO_REGISTER` are SET, they are ASSIGNED — not suggestions.** Do NOT re-choose the grain family or the register. Ship with exactly the assigned `--grain <FLUNCLE_VIDEO_GRAIN>` and `--register <FLUNCLE_VIDEO_REGISTER>`. Your whole creativity lives INSIDE that cell: the vehicle name, the shader concept, the medium/primitive, the motion, the composition, the subject are all still fully yours — pour the invention there. Map your vehicle to the assigned grain family (cookbook §grain families), and stage the assigned register (representational → a placed subject per §presence staging; framed → a portal/sleeve/plate; abstract → a field) — though the assigner only ever emits `representational` (the register is a prerequisite, not a rotation slot; the env var still types all three values), so in practice you stage a placed subject every run.
 - **When `FLUNCLE_VIDEO_PALETTE_AVOID` is SET, steer clear of that palette direction** — it names a worn hue/texture; pick a palette clearly away from it.
 - **When they are UNSET (a manual/local render), nothing changes** — the free vehicle/grain/register choice + the immediate-neighbour rule below stand exactly as written.
 
