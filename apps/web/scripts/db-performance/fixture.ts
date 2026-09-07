@@ -8,6 +8,7 @@ export const DEFAULT_FIXTURE_CHUNK_SIZE = 500;
 export const FIXTURE_CENSUS_QUERY_CHUNK_SIZE = 8;
 export const HOSTED_FIXTURE_CENSUS_ROW_LIMIT = 50_000;
 export const SYNTHETIC_FIXTURE_EPOCH = "2026-01-01T00:00:00.000Z";
+export const CRAWL_INDEX_EVIDENCE_SOURCE_VERSION_PREFIX = "synthetic-index-evidence:";
 export const FIXTURE_IDENTITY_TABLE = "perf_fixture_identity";
 
 export const FIXTURE_TABLES = [
@@ -192,7 +193,7 @@ export function projectionFixtureCardinalities(
     perf_artist_qualification_contributions: counts.trackArtists,
     perf_artist_qualification_state: 1,
     perf_crawl_due_work: counts.pendingFrontier + crawlDueWorkLifecycleExtra(counts),
-    perf_crawl_projection_repairs: 0,
+    perf_crawl_projection_repairs: crawlProjectionRepairCount(counts),
     perf_hub_page_anchor_validity: 1,
     perf_hub_page_anchors: 1,
     perf_projection_repairs: 1,
@@ -278,6 +279,17 @@ function crawlDueWorkLifecycleExtra(counts: FixtureCounts): number {
   return multiplier === undefined
     ? Math.max(12, Math.round(counts.pendingFrontier * 0.1))
     : 12 * multiplier;
+}
+
+function crawlProjectionRepairCount(counts: FixtureCounts): number {
+  const multiplier = exactProfileMultiplier(counts.tracks);
+
+  return multiplier === undefined
+    ? Math.max(
+        1,
+        Math.round((counts.pendingFrontier / getScaleManifest("1x").counts.pendingFrontier) * 4),
+      )
+    : 4 * multiplier;
 }
 
 function bucketForIndex(index: number, buckets: readonly ProjectionBucket[]): null | string {
@@ -1391,7 +1403,13 @@ export async function* generateFixture(
 
   yield* generatedChunks("perf_crawl_frontier", counts.crawlFrontier, chunkSize, (index) => {
     const isPending = index < counts.pendingFrontier;
-    const nodeKind = syntheticCrawlNodeKind(index);
+    const lifecycleIndex = index - counts.pendingFrontier;
+    const isScheduledConsumerSource =
+      !isPending &&
+      lifecycleIndex >= 0 &&
+      lifecycleIndex < crawlDueWorkLifecycleExtra(counts) &&
+      lifecycleIndex % 3 === 0;
+    const nodeKind = isScheduledConsumerSource ? "artist" : syntheticCrawlNodeKind(index);
     const now = syntheticTimestamp(index);
 
     return {
@@ -1407,7 +1425,7 @@ export async function* generateFixture(
         nodeKind,
         nodeKind === "label" ? syntheticCrawlLabelSlug(index, counts.labels) : null,
         syntheticCrawlParentId(index),
-        "synthetic-crawl",
+        isScheduledConsumerSource ? "musicbrainz" : "synthetic-crawl",
         isPending ? "pending" : "done",
         now,
         isPending ? SYNTHETIC_FIXTURE_EPOCH : null,
@@ -1447,7 +1465,9 @@ export async function* generateFixture(
       const nodeKind = syntheticCrawlNodeKind(index);
       const nodeId = isReady
         ? `synthetic-frontier-${padded(index)}`
-        : `synthetic-frontier-lifecycle-${padded(lifecycleIndex)}`;
+        : state === "scheduled"
+          ? `synthetic-frontier-${padded(index)}`
+          : `synthetic-frontier-lifecycle-${padded(lifecycleIndex)}`;
       const createdAt = syntheticTimestamp(index);
 
       return {
@@ -1475,6 +1495,34 @@ export async function* generateFixture(
            generation, hop, label_slug, next_due_at, node_id, node_kind, parent_id, source_version,
            state, storable_rank, updated_at)
           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      };
+    },
+  );
+
+  yield* generatedChunks(
+    "perf_crawl_projection_repairs",
+    crawlProjectionRepairCount(counts),
+    chunkSize,
+    (index) => {
+      const sourceType = index % 2 === 0 ? "label" : "artist";
+      const sourceId =
+        sourceType === "label"
+          ? syntheticCrawlLabelSlug(index, counts.labels)
+          : `synthetic-artist-${padded(index)}`;
+      const createdAt = syntheticTimestamp(index, 3);
+
+      return {
+        args: [
+          createdAt,
+          index + 1,
+          sourceId,
+          sourceType,
+          `${CRAWL_INDEX_EVIDENCE_SOURCE_VERSION_PREFIX}${index + 1}`,
+          createdAt,
+        ],
+        sql: `insert or ignore into perf_crawl_projection_repairs
+          (created_at, source_epoch, source_id, source_type, source_version, updated_at)
+          values (?, ?, ?, ?, ?, ?)`,
       };
     },
   );

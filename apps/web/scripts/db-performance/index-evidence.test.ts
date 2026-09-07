@@ -52,6 +52,80 @@ describe("final index plan evidence", () => {
     );
   });
 
+  it("runs the eight reviewed crawl consumers locked and unforced in the same application shape", async () => {
+    const reviewed = [
+      "index.crawl-due-work-label-slug-node-id",
+      "index.crawl-due-work-parent-id-node-id",
+      "index.crawl-due-work-ready",
+      "index.crawl-due-work-release-ready",
+      "index.crawl-due-work-repair",
+      "index.crawl-due-work-scheduled",
+      "index.crawl-projection-repairs-order",
+      "index.crawl-due-work-claim-position",
+    ];
+    const contracts = new Map(indexEvidenceContracts().map((contract) => [contract.id, contract]));
+
+    for (const contractId of reviewed) {
+      const contract = contracts.get(contractId);
+      if (!contract?.plan || !contract.terminalProof || !contract.indexEvidence) {
+        throw new Error(`reviewed crawl index consumer plan is missing: ${contractId}`);
+      }
+      const executedSql: string[] = [];
+      await contract.terminalProof.execute({
+        client: {
+          async execute(candidate) {
+            const sql = typeof candidate === "string" ? candidate : candidate.sql;
+            executedSql.push(sql);
+            return /^EXPLAIN QUERY PLAN/i.test(sql)
+              ? { rows: [{ detail: "SEARCH synthetic fixture" }] }
+              : { rows: [{ node_id: "synthetic-frontier-000000001" }] };
+          },
+        },
+        iteration: 0,
+        now: () => 0,
+        profile: "1x",
+      });
+      const dataSql = executedSql.filter((sql) => !/^EXPLAIN QUERY PLAN/i.test(sql));
+      const [locked, unforced] = dataSql;
+      if (!locked || !unforced) {
+        throw new Error(`reviewed crawl comparison did not execute both variants: ${contractId}`);
+      }
+      const fixtureIndex = `perf_${contract.indexEvidence.inventoryEntry.name}`;
+      const normalize = (sql: string) =>
+        sql
+          .replace(new RegExp(`\\s+indexed\\s+by\\s+${fixtureIndex}\\b`, "gi"), "")
+          .replace(/\s+/g, " ")
+          .trim();
+
+      expect(dataSql).toHaveLength(2);
+      expect(locked.match(/\bINDEXED\s+BY\b/gi)).toHaveLength(1);
+      expect(locked).toMatch(new RegExp(`\\bINDEXED\\s+BY\\s+${fixtureIndex}\\b`, "i"));
+      expect(unforced).not.toMatch(/\bINDEXED\s+BY\b/i);
+      expect(normalize(locked)).toBe(normalize(unforced));
+      expect(contract.plan.policy.growingTables?.length).toBeGreaterThan(0);
+      expect(contract.plan.policy.forbidTempSort).toBe(true);
+    }
+
+    expect(contracts.get("index.crawl-due-work-label-slug-node-id")?.plan?.statement.sql).toMatch(
+      /where label_slug = \? and state <> 'repair' limit \?/i,
+    );
+    expect(contracts.get("index.crawl-due-work-parent-id-node-id")?.plan?.statement.sql).toMatch(
+      /where node_id = \?.*union all.*where parent_id = \?.*node_id <> \?1.*limit \?/is,
+    );
+    expect(contracts.get("index.crawl-due-work-ready")?.plan?.statement.sql).toMatch(
+      /state = 'ready' and node_id not in \(\?\).*order by hop, demand_rank, created_at, node_id/is,
+    );
+    expect(contracts.get("index.crawl-due-work-scheduled")?.plan?.statement.sql).toMatch(
+      /join perf_crawl_frontier.*source\.state = 'done'.*source\.kind = 'artist'.*source\.source = 'musicbrainz'/is,
+    );
+    expect(contracts.get("index.crawl-projection-repairs-order")?.plan?.statement.sql).toMatch(
+      /select source_type, source_id, source_epoch, source_version, created_at, updated_at/is,
+    );
+    expect(contracts.get("index.crawl-due-work-claim-position")?.plan?.statement.sql).not.toMatch(
+      /limit/i,
+    );
+  });
+
   it("uses normal planner choice except for SQL that deliberately locks a production index", () => {
     const runtimeLockedIndexes = new Set(INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES);
     const expectedPolicyFragments: Record<string, string> = {
