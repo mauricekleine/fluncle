@@ -13,6 +13,7 @@ import {
 } from "./budgets";
 import { performanceRegistry } from "./contracts";
 import {
+  createCiFixtureCounts,
   getScaleManifest,
   SCALE_PROFILES,
   type FixtureCounts,
@@ -33,7 +34,7 @@ import { expectedFixtureTableCardinalities } from "./fixture";
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const DEFAULT_ARTIFACT_ROOT = join(tmpdir(), "fluncle-db-performance-release");
 
-export const RELEASE_MANIFEST_SCHEMA_VERSION = 5 as const;
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 6 as const;
 const PROCESS_STOP_GRACE_MS = 2_000;
 const GIT_INSPECTION_TIMEOUT_MS = 30_000;
 const WORKTREE_SETUP_TIMEOUT_MS = 60_000;
@@ -44,6 +45,7 @@ const DEPENDENCY_PREPARATION_TIMEOUT_MS = DEPENDENCY_INSTALL_TIMEOUT_MS + PROCES
 const CHILD_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 const COMPONENT_COMMAND_TIMEOUT_MS = 5 * 60_000;
 const SONAR_COMMAND_TIMEOUT_MS = 10 * 60_000;
+const SONAR_RESOURCE_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const PROFILE_COMMAND_TIMEOUT_MS: Record<ScaleProfile, number> = {
   "1x": 5 * 60_000,
   "2x": 8 * 60_000,
@@ -71,6 +73,7 @@ export const REQUIRED_RELEASE_CATEGORIES = [
   "device-resource-bounds",
   "sonar-rust",
   "sonar-scaled-delta-full-rebuild",
+  "sonar-resource-bounds",
 ] as const;
 
 export type ReleaseCategory = (typeof REQUIRED_RELEASE_CATEGORIES)[number];
@@ -262,6 +265,11 @@ export type ProfileValidation = {
   warningThresholds: Record<string, number> | null;
 };
 
+export type SonarResourceValidation = {
+  errors: string[];
+  report: JsonRecord | null;
+};
+
 export function parseReleaseArguments(args: readonly string[]): ReleaseOptions {
   let candidateCommit: string | null = null;
   let outputDirectory: string | null = null;
@@ -371,6 +379,209 @@ function sameCardinality(
 
 function stringArray(value: unknown): string[] | null {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : null;
+}
+
+function validateSonarResourceCounts(scale: JsonRecord, errors: string[]): void {
+  const expected = createCiFixtureCounts("1x");
+  const counts = readNumericRecord(scale.counts);
+  const expectedCounts = {
+    boundedDeltaEventsPerSample: 100,
+    bytesPerVector: getScaleManifest("1x").vector.bytesPerEmbedding,
+    centroidRawVectorBytes: expected.artists * getScaleManifest("1x").vector.bytesPerEmbedding,
+    centroidVectors: expected.artists,
+    totalRawVectorBytes:
+      (expected.trackEmbeddings + expected.artists) *
+      getScaleManifest("1x").vector.bytesPerEmbedding,
+    totalVectors: expected.trackEmbeddings + expected.artists,
+    trackRawVectorBytes: expected.trackEmbeddings * getScaleManifest("1x").vector.bytesPerEmbedding,
+    trackVectors: expected.trackEmbeddings,
+    warmDeltaSamples: 5,
+  };
+  if (!sameCardinality(counts, expectedCounts)) {
+    errors.push("sonar resource CI counts do not match the ratio-preserving manifest derivative");
+  }
+  if (readNumericRecord(scale.metadataDistributions) === null) {
+    errors.push("sonar resource CI distributions are malformed");
+  }
+}
+
+function validateSonarResourceWindows(scale: JsonRecord, errors: string[]): void {
+  const windows = isRecord(scale.windows) ? scale.windows : null;
+  for (const [field, expectedSamples] of [
+    ["fixtureWrite", 1],
+    ["initialFullReplaceBuildValidate", 1],
+    ["localSourceMutation", 5],
+    ["boundedDeltaApplyBuildValidate", 5],
+    ["boundedDeltaPublish", 5],
+    ["fullReplaceRebuild", 1],
+    ["corruptOpenRecoveringQuarantineRebuild", 1],
+    ["total", 1],
+  ] as const) {
+    const window = isRecord(windows?.[field]) ? windows[field] : null;
+    const durations = Array.isArray(window?.durationsMs)
+      ? window.durationsMs.filter(isNonNegativeFiniteNumber)
+      : [];
+    const percentilesValid =
+      expectedSamples === 1
+        ? window?.p50Ms === undefined && window?.p95Ms === undefined
+        : isNonNegativeFiniteNumber(window?.p50Ms) && isNonNegativeFiniteNumber(window?.p95Ms);
+    const interpretationValid =
+      expectedSamples === 1
+        ? window?.interpretation ===
+          "single-sample; percentiles omitted because one observation is not a distribution"
+        : window?.interpretation === "measured-distribution";
+    if (
+      !isNonNegativeFiniteNumber(window?.startedUnixMs) ||
+      !isNonNegativeFiniteNumber(window.completedUnixMs) ||
+      window.sampleCount !== expectedSamples ||
+      durations.length !== expectedSamples ||
+      !isNonNegativeFiniteNumber(window.minMs) ||
+      !percentilesValid ||
+      !interpretationValid ||
+      !isNonNegativeFiniteNumber(window.maxMs)
+    ) {
+      errors.push(`sonar resource CI window ${field} is malformed`);
+    }
+  }
+}
+
+function validateSonarResourcePublication(scale: JsonRecord, errors: string[]): void {
+  const publication = isRecord(scale.publication) ? scale.publication : null;
+  if (
+    publication?.oldSnapshotHeldAcrossPublish !== true ||
+    publication.thirdPublishRefusedWhileRetiredHeld !== true ||
+    publication.publishSucceededAfterRetiredDrop !== true ||
+    !isNonNegativeFiniteNumber(publication.generationOverlapPeakRssBytes)
+  ) {
+    errors.push("sonar resource CI bounded-publication evidence is malformed");
+  }
+}
+
+function validateSonarResourceFiles(resources: JsonRecord | null, errors: string[]): void {
+  for (const field of [
+    "stateBeforeCheckpoint",
+    "stateAfterCheckpoint",
+    "fullRebuildAfterCheckpoint",
+    "recoveredAfterCheckpoint",
+    "sonarComponentSourceFiles",
+  ]) {
+    const sizes = readNumericRecord(resources?.[field]);
+    if (
+      sizes === null ||
+      sizes.mainBytes === undefined ||
+      sizes.walBytes === undefined ||
+      sizes.shmBytes === undefined ||
+      sizes.totalBytes !== sizes.mainBytes + sizes.walBytes + sizes.shmBytes
+    ) {
+      errors.push(`sonar resource CI ${field} file sizes are malformed`);
+    }
+  }
+}
+
+function validateSonarResourceResources(scale: JsonRecord, errors: string[]): void {
+  const resources = isRecord(scale.resources) ? scale.resources : null;
+  const peak = resources?.peakRssBytes;
+  const limit = resources?.memoryLimitBytes;
+  if (
+    resources?.source !== "os-process-rss-and-filesystem-stat" ||
+    !isNonNegativeFiniteNumber(peak) ||
+    limit !== 2 * 1024 * 1024 * 1024 ||
+    (typeof peak === "number" && peak > limit)
+  ) {
+    errors.push("sonar resource CI peak RSS evidence is malformed or exceeds 2 GiB");
+  }
+  if (readNumericRecord(resources?.phasePeakRssBytes) === null) {
+    errors.push("sonar resource CI phase peak RSS evidence is malformed");
+  }
+  validateSonarResourceFiles(resources, errors);
+}
+
+function validateSonarResourceCorrectnessAndScope(scale: JsonRecord, errors: string[]): void {
+  const correctness = isRecord(scale.correctness) ? scale.correctness : null;
+  if (
+    correctness?.boundedDeltaMatchesFullRebuild !== true ||
+    correctness.corruptRecoveryMatchesFullRebuild !== true ||
+    correctness.corruptFileQuarantined !== true
+  ) {
+    errors.push("sonar resource CI correctness evidence is incomplete");
+  }
+  const scope = isRecord(scale.scope) ? scale.scope : null;
+  if (
+    scope?.localRowsStandForReplicaSync !== true ||
+    scope.networkSyncLatencyProved !== false ||
+    typeof scope.caveat !== "string" ||
+    scope.caveat.length === 0 ||
+    typeof scope.measurementInterpretation !== "string" ||
+    scope.measurementInterpretation.length === 0 ||
+    typeof scope.resourceEnvelope !== "string" ||
+    scope.resourceEnvelope.length === 0
+  ) {
+    errors.push("sonar resource CI local-only scope evidence is malformed");
+  }
+}
+
+function validateSonarResourceScale(scale: JsonRecord, errors: string[]): void {
+  if (
+    scale.schemaVersion !== 1 ||
+    scale.kind !== "fluncle.sonar.resource-proof.scale" ||
+    scale.profile !== "ci" ||
+    scale.manifestProfile !== "1x" ||
+    scale.multiplier !== 1 ||
+    scale.exactProfileCardinality !== false
+  ) {
+    errors.push("sonar resource CI profile identity is malformed");
+  }
+  if (scale.passed !== true) {
+    errors.push("sonar resource CI profile passed is not true");
+  }
+  validateSonarResourceCounts(scale, errors);
+  validateSonarResourceWindows(scale, errors);
+  validateSonarResourcePublication(scale, errors);
+  validateSonarResourceResources(scale, errors);
+  validateSonarResourceCorrectnessAndScope(scale, errors);
+}
+
+export function validateSonarResourceReport(rawJson: string): SonarResourceValidation {
+  const errors: string[] = [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch (error) {
+    return {
+      errors: [`sonar resource stdout is not one JSON document: ${errorMessage(error)}`],
+      report: null,
+    };
+  }
+  if (!isRecord(parsed)) {
+    return { errors: ["sonar resource report root is not an object"], report: null };
+  }
+  if (
+    parsed.schemaVersion !== 1 ||
+    parsed.kind !== "fluncle.sonar.resource-proof" ||
+    parsed.execution !== "dedicated-child-per-scale-serial"
+  ) {
+    errors.push("sonar resource report header is malformed");
+  }
+  if (parsed.networkSyncLatencyProved !== false) {
+    errors.push("sonar resource report must not claim network sync latency evidence");
+  }
+  if (!isNonNegativeFiniteNumber(parsed.durationMs)) {
+    errors.push("sonar resource report durationMs is malformed");
+  }
+  if (parsed.passed !== true) {
+    errors.push("sonar resource report passed is not true");
+  }
+  if (!Array.isArray(parsed.reports) || parsed.reports.length !== 1) {
+    errors.push("sonar resource report must contain one isolated CI profile");
+    return { errors, report: null };
+  }
+  const scale = isRecord(parsed.reports[0]) ? parsed.reports[0] : null;
+  if (scale === null) {
+    errors.push("sonar resource CI scale report is malformed");
+    return { errors, report: null };
+  }
+  validateSonarResourceScale(scale, errors);
+  return { errors, report: errors.length === 0 ? parsed : null };
 }
 
 const DISTRIBUTION_FIELDS = ["max", "p50", "p95", "p99"] as const;
@@ -1206,6 +1417,28 @@ function buildReleaseCommands(
       timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
+      categories: ["sonar-resource-bounds"],
+      command: [
+        "cargo",
+        "run",
+        "--release",
+        "--locked",
+        "--offline",
+        "--features",
+        "resource-proof",
+        "--bin",
+        "resource-proof",
+        "--manifest-path",
+        "apps/sonar/Cargo.toml",
+        "--",
+        "--profile",
+        "ci",
+      ],
+      cwd: ".",
+      id: "component-sonar-resource-bounds",
+      timeoutMs: SONAR_RESOURCE_COMMAND_TIMEOUT_MS,
+    },
+    {
       categories: ["sonar-rust", "sonar-scaled-delta-full-rebuild"],
       command: [
         "cargo",
@@ -1908,6 +2141,33 @@ async function writeText(path: string, contents: string): Promise<void> {
   await Bun.write(path, contents);
 }
 
+async function captureSonarResourceArtifact(options: {
+  artifacts: Map<string, ReleaseArtifactEvidence>;
+  artifactFilenames: Set<string>;
+  commandArtifacts: string[];
+  commandId: string;
+  outputDirectory: string;
+  stdout: string;
+}): Promise<{ artifact: string | null; errors: string[] }> {
+  if (options.commandId !== "component-sonar-resource-bounds") {
+    return { artifact: null, errors: [] };
+  }
+
+  const validation = validateSonarResourceReport(options.stdout);
+  if (validation.report === null) {
+    return { artifact: null, errors: validation.errors };
+  }
+
+  const reportPath = join(options.outputDirectory, "sonar", "resource-proof.json");
+  const contents = `${JSON.stringify(validation.report, null, 2)}\n`;
+  await writeText(reportPath, contents);
+  const artifact = manifestArtifactPath(options.outputDirectory, reportPath);
+  options.commandArtifacts.push(artifact);
+  options.artifactFilenames.add(artifact);
+  options.artifacts.set(artifact, buildArtifactEvidence(artifact, contents));
+  return { artifact, errors: validation.errors };
+}
+
 function selectReleaseCandidate(
   requestedCommit: string | null,
   invocationCommit: string | null,
@@ -1935,6 +2195,7 @@ async function runRelease(
   const artifactFilenames = new Set<string>();
   const artifacts = new Map<string, ReleaseArtifactEvidence>();
   const runnerFailures: string[] = [];
+  let sonarResourceReportArtifact: string | null = null;
   let execution: DetachedExecution | null = null;
   let startedSource: RepositorySnapshot = {
     clean: null,
@@ -2005,6 +2266,16 @@ async function runRelease(
       }
 
       const validationFailures = validateChildResult(child);
+      const sonarResourceCapture = await captureSonarResourceArtifact({
+        artifactFilenames,
+        artifacts,
+        commandArtifacts,
+        commandId: definition.id,
+        outputDirectory,
+        stdout: child.stdout,
+      });
+      validationFailures.push(...sonarResourceCapture.errors);
+      sonarResourceReportArtifact ??= sonarResourceCapture.artifact;
 
       if (definition.profile !== undefined) {
         const profile = definition.profile;
@@ -2151,6 +2422,7 @@ async function runRelease(
       timers: false,
     },
     schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
+    sonarResourceReportArtifact,
     source,
     startedAt: startedAt.toISOString(),
     verdict: noGoReasons.length === 0 ? "pass" : "no-go",

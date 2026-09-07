@@ -15,6 +15,9 @@ license = "Apache-2.0"
 name = "sonar"
 path = "src/lib.rs"
 
+[features]
+resource-proof = []
+
 [[bin]]
 name = "sonar"
 path = "src/main.rs"
@@ -24,6 +27,11 @@ path = "src/main.rs"
 [[bin]]
 name = "bench"
 path = "src/bin/bench.rs"
+
+[[bin]]
+name = "resource-proof"
+path = "src/bin/resource-proof.rs"
+required-features = ["resource-proof"]
 
 [dependencies]
 # HTTP server. axum 0.8 + axum-server for the optional rustls TLS terminator.
@@ -60,6 +68,7 @@ arc-swap = "1" # lock-free atomic hot-swap of the in-memory index snapshot
 subtle = "2" # constant-time secret compare
 
 anyhow = "1"
+libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
