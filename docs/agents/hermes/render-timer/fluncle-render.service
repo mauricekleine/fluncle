@@ -23,7 +23,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # due-work queue maintenance write, then starts this marker-wrapped state-machine payload.
 # NOTE: render-conductor.sh execs provision-rave-03.sh from its own dir, so Unit A MUST bake
 # provision-rave-03.sh alongside it under /opt/hermes-scripts/ (see this dir's README).
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-render -- bash -c '. /opt/hermes-scripts/cron-output.sh && emit_cron_output render -- bash /opt/hermes-scripts/render-conductor.sh'
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-render -- bash -c '. /opt/hermes-scripts/cron-output.sh && emit_cron_output render -- bash /opt/hermes-scripts/render-conductor.sh'
 # The tick is quick (<120s: state read + box poll/trigger); the render runs detached on rave-03.
 # Preserve the prior 180s payload budget after the admission runner's bounded 120s wait.
 TimeoutStartSec=310

@@ -8,7 +8,9 @@ import {
   DATABASE_ADMISSION_HEALTH_STALE_MS,
   DATABASE_ADMISSION_LEASE_MS,
   DATABASE_ADMISSION_QUEUE_TTL_MS,
+  DATABASE_ADMISSION_TRANSACTION_RETRIES,
   type DatabaseAdmissionAction,
+  isDatabaseBusy,
 } from "./database-admission";
 import { createIntegrationDb } from "./integration-db";
 
@@ -88,6 +90,34 @@ async function activeResourceCounts(): Promise<{ heavyRead: number; writer: numb
 }
 
 describe("enforced database admission", () => {
+  it("recognizes only the exact top-level SQLITE_BUSY coordinator failure", () => {
+    expect(isDatabaseBusy({ code: "SQLITE_BUSY" })).toBe(true);
+    expect(isDatabaseBusy({ code: "SQLITE_BUSY_TIMEOUT" })).toBe(false);
+    expect(isDatabaseBusy({ cause: { code: "SQLITE_BUSY" } })).toBe(false);
+  });
+
+  it("exhausts the bounded SQLITE_BUSY acquisition retry budget", async () => {
+    const busy = { code: "SQLITE_BUSY" };
+    const client = {
+      batch: vi.fn().mockRejectedValue(busy),
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ now_ms: nowMs }] })
+        .mockResolvedValueOnce({ rows: [] }),
+    };
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      coordinateDatabaseAdmissionFor(
+        client,
+        { action: "acquire", owner: "fluncle-enrich", runId: "busy-budget" },
+        { enforced: true, monotonicNow: () => 0, serverNowMs: nowMs, wait },
+      ),
+    ).rejects.toBe(busy);
+    expect(client.batch).toHaveBeenCalledTimes(DATABASE_ADMISSION_TRANSACTION_RETRIES + 1);
+    expect(wait).toHaveBeenCalledTimes(DATABASE_ADMISSION_TRANSACTION_RETRIES);
+  });
+
   it("stays default-off unless the settings value is exactly true", async () => {
     const request = { action: "acquire" as const, owner: "fluncle-enrich", runId: "flag" };
     const dependencies = { monotonicNow: () => 0, serverNowMs: nowMs };
@@ -258,6 +288,39 @@ describe("enforced database admission", () => {
       "owner-a",
       "release",
       firstToken ?? undefined,
+    );
+    expect([staleHeartbeat.outcome, staleRelease.outcome]).toEqual(["lost", "lost"]);
+    expect(await activeCounts()).toEqual({ write: 1 });
+  });
+
+  it("expires a paused live owner, fences its stale token, and admits its waiting writer", async () => {
+    const pausedOwner = await coordinate("fluncle-enrich", "paused-live-owner");
+    const pausedToken = pausedOwner.fencingToken;
+    expect(pausedOwner.outcome).toBe("acquired");
+    expect(pausedToken).not.toBeNull();
+
+    nowMs += 1;
+    expect(await coordinate("fluncle-note", "waiting-writer")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "queue",
+    });
+
+    nowMs += DATABASE_ADMISSION_LEASE_MS;
+    const admittedWriter = await coordinate("fluncle-note", "waiting-writer");
+    expect(admittedWriter).toMatchObject({ outcome: "acquired", recovered: true });
+    expect(admittedWriter.fencingToken).toBe((pausedToken ?? 0) + 1);
+
+    const staleHeartbeat = await coordinate(
+      "fluncle-enrich",
+      "paused-live-owner",
+      "heartbeat",
+      pausedToken ?? undefined,
+    );
+    const staleRelease = await coordinate(
+      "fluncle-enrich",
+      "paused-live-owner",
+      "release",
+      pausedToken ?? undefined,
     );
     expect([staleHeartbeat.outcome, staleRelease.outcome]).toEqual(["lost", "lost"]);
     expect(await activeCounts()).toEqual({ write: 1 });

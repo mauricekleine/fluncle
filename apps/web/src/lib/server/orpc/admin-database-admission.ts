@@ -1,7 +1,8 @@
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { type contract } from "@fluncle/contracts/orpc";
+import { ORPCError } from "@orpc/server";
 import { getDb } from "../db";
-import { coordinateDatabaseAdmissionFor } from "../database-admission";
+import { coordinateDatabaseAdmissionFor, isDatabaseBusy } from "../database-admission";
 import { adminAuth } from "../orpc-auth";
 import { type Implementer, toFault } from "./_shared";
 
@@ -15,6 +16,17 @@ export async function coordinateDatabaseAdmissionRequestFor(
   return coordinateDatabaseAdmissionFor(client, input);
 }
 
+export function databaseAdmissionFault(error: unknown) {
+  if (isDatabaseBusy(error)) {
+    return new ORPCError("SERVICE_UNAVAILABLE", {
+      data: { apiCode: "database_busy", apiMessage: "Database admission is busy" },
+      message: "Database admission is busy",
+      status: 503,
+    });
+  }
+  return toFault(error);
+}
+
 /** Build the agent-tier recurring-work admission handler. */
 export function adminDatabaseAdmissionHandlers(os: Implementer) {
   const coordinateHandler = os.coordinate_database_admission
@@ -23,7 +35,7 @@ export function adminDatabaseAdmissionHandlers(os: Implementer) {
       try {
         return await coordinateDatabaseAdmissionRequestFor(await getDb(), input);
       } catch (error) {
-        throw toFault(error);
+        throw databaseAdmissionFault(error);
       }
     });
 

@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const RUNNER = resolve(import.meta.dirname, "database-admission-runner.sh");
@@ -83,7 +83,14 @@ ${body}
 
 async function run(
   command: string[],
-  options: { failClosed?: boolean; home?: string; maxWaitSecs?: number; token?: string } = {},
+  options: {
+    failClosed?: boolean;
+    home?: string;
+    maxWaitSecs?: number;
+    phase?: boolean;
+    pollSecs?: string | null;
+    token?: string;
+  } = {},
   timeoutMs = RUN_TIMEOUT_MS,
 ): Promise<{
   status: number | null;
@@ -91,11 +98,15 @@ async function run(
   stdout: string;
   stderr: string;
 }> {
-  const child = spawn("bash", [RUNNER, "fluncle-enrich", "--", ...command], {
-    detached: true,
-    env: runnerEnvironment(options),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const child = spawn(
+    "bash",
+    [RUNNER, ...(options.phase === true ? ["phase"] : []), "fluncle-enrich", "--", ...command],
+    {
+      detached: true,
+      env: runnerEnvironment(options),
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk: Buffer) => {
@@ -130,22 +141,31 @@ async function run(
 }
 
 function runnerEnvironment(
-  options: { failClosed?: boolean; home?: string; maxWaitSecs?: number; token?: string } = {},
+  options: {
+    failClosed?: boolean;
+    home?: string;
+    maxWaitSecs?: number;
+    pollSecs?: string | null;
+    token?: string;
+  } = {},
 ): NodeJS.ProcessEnv {
   const inheritedPath = process.env.PATH ?? "/usr/bin:/bin";
   const home = options.home ?? directory;
-  return {
+  const environment: NodeJS.ProcessEnv = {
     DATABASE_ADMISSION_FAIL_CLOSED: options.failClosed === true ? "true" : "false",
     DATABASE_ADMISSION_HTTP_TIMEOUT_SECS: "1",
     DATABASE_ADMISSION_KILL_GRACE_SECS: "1",
     DATABASE_ADMISSION_MAX_WAIT_SECS: String(options.maxWaitSecs ?? 1),
-    DATABASE_ADMISSION_POLL_SECS: "0",
     FLUNCLE_API_BASE_URL: "https://admission.invalid",
     FLUNCLE_API_TOKEN: options.token === undefined ? "test-token" : options.token,
     HEALTHCHECK_CRON_OUTPUT_DIR: join(directory, "cron-output"),
     HOME: home,
     PATH: `${binDirectory}:${inheritedPath}`,
   };
+  if (options.pollSecs !== null) {
+    environment.DATABASE_ADMISSION_POLL_SECS = options.pollSecs ?? "1";
+  }
+  return environment;
 }
 
 function liveRebakeHome(): string {
@@ -633,6 +653,144 @@ ${ACQUIRED_RESPONSE}`);
     },
   );
 
+  it.each([
+    ["zero", "0"],
+    ["unset", null],
+  ])(
+    "rejects a %s polling interval before making a request",
+    async (_label, pollSecs) => {
+      fakeCurl(ACQUIRED_RESPONSE);
+      const result = await run(["bash", "-c", "exit 0"], { pollSecs });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(
+        "DATABASE_ADMISSION_POLL_SECS must be a positive integer between 1 and 30",
+      );
+      expect(existsSync(curlLog)).toBe(false);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    [
+      "database busy",
+      `printf '%s\\n%s\\n' '{"code":"database_busy"}' '503'`,
+      "acquisition-database-busy",
+      "database-busy",
+    ],
+    [
+      "gateway transport",
+      `printf '%s\\n%s\\n' '{}' '502'`,
+      "acquisition-gateway-transport",
+      "gateway-transport",
+    ],
+    [
+      "authentication",
+      `printf '%s\\n%s\\n' '{}' '401'`,
+      "acquisition-authentication-failed",
+      "authentication-failed",
+    ],
+  ])(
+    "reports %s acquisition failure without retrying it",
+    async (_label, response, outcome, yieldReason) => {
+      fakeCurl(response);
+      const payloadMarker = join(directory, "payload-started");
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`]);
+
+      expect(result.status).toBe(0);
+      expect(existsSync(payloadMarker)).toBe(false);
+      expect(result.stderr).toContain(`"outcome":"${outcome}"`);
+      expect(result.stderr).toContain(`"yield_reason":"${yieldReason}"`);
+      const calls = readFileSync(curlLog, "utf8");
+      expect(calls.match(/"action":"acquire"/g)?.length ?? 0).toBe(1);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "returns a phase yield without running the command or writing whole-run evidence",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(QUEUED_RESPONSE);
+      const payloadMarker = join(directory, "payload-started");
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        maxWaitSecs: 0,
+        phase: true,
+      });
+
+      expect(result.status).toBe(75);
+      expect(existsSync(payloadMarker)).toBe(false);
+      expect(existsSync(join(directory, "cron-output"))).toBe(false);
+      expect(readFileSync(curlLog, "utf8")).not.toContain('"summary_raw"');
+      expect(result.stderr).toContain('"outcome":"wait-expired"');
+      expect(result.stderr).toContain('"phase_scoped":true');
+    },
+  );
+
+  it(
+    "returns a typed phase failure without running the command or writing whole-run evidence",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(`printf '%s\\n%s\\n' '{"code":"database_busy"}' '503'`);
+      const payloadMarker = join(directory, "payload-started");
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        phase: true,
+      });
+
+      expect(result.status).toBe(75);
+      expect(existsSync(payloadMarker)).toBe(false);
+      expect(existsSync(join(directory, "cron-output"))).toBe(false);
+      expect(readFileSync(curlLog, "utf8")).not.toContain('"summary_raw"');
+      expect(result.stderr).toContain('"outcome":"acquisition-database-busy"');
+      expect(result.stderr).toContain('"yield_reason":"database-busy"');
+      expect(result.stderr).toContain('"phase_scoped":true');
+    },
+  );
+
+  it(
+    "holds admission only across commands declared as critical phases",
+    PROCESS_TEST_OPTIONS,
+    () => {
+      const timeline = join(directory, "phase-timeline");
+      fakeCurl(`
+case "$*" in
+  *'"action":"acquire"'*) printf 'acquire\\n' >> "${timeline}" ;;
+  *'"action":"release"'*) printf 'release\\n' >> "${timeline}" ;;
+esac
+${ACQUIRED_RESPONSE}
+`);
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `"$1" phase fluncle-enrich -- bash -c 'printf "critical-one\\n" >> "$1"' critical "$2"
+printf 'non-critical\\n' >> "$2"
+"$1" phase fluncle-enrich -- bash -c 'printf "critical-two\\n" >> "$1"' critical "$2"`,
+          "payload",
+          RUNNER,
+          timeline,
+        ],
+        {
+          encoding: "utf8",
+          env: runnerEnvironment(),
+          timeout: RUN_TIMEOUT_MS,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(timeline, "utf8").trim().split("\n")).toEqual([
+        "acquire",
+        "critical-one",
+        "release",
+        "non-critical",
+        "acquire",
+        "critical-two",
+        "release",
+      ]);
+      expect(result.stderr.match(/"phase_scoped":true/g)).toHaveLength(2);
+    },
+  );
+
   it(
     "releases a completed payload with the exact fencing token",
     PROCESS_TEST_OPTIONS,
@@ -775,6 +933,64 @@ ${ACQUIRED_RESPONSE}
       expect(result.signal).toBeNull();
       expect(result.stderr).toContain('"outcome":"fenced"');
       expect(result.stderr).toContain('"yield_reason":"partition"');
+    },
+  );
+
+  it(
+    "kills the payload group before lease expiry when a live heartbeat owner is paused",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const advanceClock = join(directory, "advance-watchdog-clock");
+      const payloadMarker = join(directory, "paused-owner-payload");
+      fakeExecutable(
+        "date",
+        `if [ "$1" = "+%s%3N" ]; then
+  if [ -e "${advanceClock}" ]; then printf '100000000'; else printf '1000'; fi
+  exit 0
+fi
+exec /usr/bin/date "$@"`,
+      );
+      fakeCurl(
+        `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":7,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":91000,"operationId":"track.enrich","outcome":"acquired","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":null}'`,
+      );
+      const runner = spawn(
+        "bash",
+        [
+          RUNNER,
+          "fluncle-enrich",
+          "--",
+          "bash",
+          "-c",
+          `printf '%s' "$$" > "${payloadMarker}"; while :; do sleep 1; done`,
+        ],
+        { env: runnerEnvironment(), stdio: ["ignore", "ignore", "pipe"] },
+      );
+      let stderr = "";
+      runner.stderr?.on("data", (chunk: Buffer) => {
+        stderr = (stderr + chunk.toString()).slice(-8_192);
+      });
+
+      try {
+        await waitUntil(() => existsSync(payloadMarker), undefined, "paused-owner payload start");
+        const payloadPid = Number(readFileSync(payloadMarker, "utf8"));
+        expect(Number.isInteger(payloadPid) && payloadPid > 0).toBe(true);
+        runner.kill("SIGSTOP");
+        writeFileSync(advanceClock, "advance\n");
+        await waitUntil(
+          () => !processIsExecuting(payloadPid),
+          PROCESS_STATE_TIMEOUT_MS,
+          "heartbeat deadline containment",
+        );
+        runner.kill("SIGCONT");
+        const outcome = await waitForExit(runner);
+
+        expect(outcome).toEqual({ code: 75, signal: null });
+        expect(stderr).toContain('"outcome":"fenced"');
+        expect(stderr).toContain('"yield_reason":"heartbeat-deadline"');
+      } finally {
+        runner.kill("SIGCONT");
+        await stopSpawnedProcess(runner);
+      }
     },
   );
 
