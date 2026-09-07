@@ -767,6 +767,128 @@ describe("transactionally coupled due-work source repair", () => {
     ).toBe(ordinary.length + 1);
   });
 
+  it("bounds every repair lane while subject and rank writes continue", async () => {
+    const subjectBatches = Array.from({ length: 40 }, (_, batch) =>
+      Array.from({ length: 5 }, (_, offset) => ({
+        subjectId: `continuous-${String(batch * 5 + offset).padStart(3, "0")}`,
+        subjectType: "track" as const,
+      })),
+    );
+    const subjects = subjectBatches.flat();
+    const physicalSubjects = Array.from({ length: 60 }, (_, index) => ({
+      subjectId: `continuous-physical-${String(index).padStart(3, "0")}`,
+      subjectType: "track" as const,
+    }));
+    const sourceRows = [...subjects, ...physicalSubjects];
+    await db.execute({
+      args: sourceRows.flatMap(({ subjectId }) => [
+        subjectId,
+        `Track ${subjectId}`,
+        '["Test Artist"]',
+        `spotify:track:${subjectId}`,
+        270_000,
+      ]),
+      sql: `insert into tracks
+        (track_id, title, artists_json, spotify_uri, duration_ms)
+        values ${sourceRows.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+    });
+    for (const { subjectId } of physicalSubjects) {
+      await markDueWorkRepair(db, {
+        sourceVersion: `continuous-physical:${subjectId}`,
+        subjectId,
+        subjectType: "track",
+        workKind: "artist-edges",
+      });
+    }
+
+    const rankPageCursors: string[] = [];
+    const traced = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        if (typeof statement !== "string" && Array.isArray(statement.args)) {
+          const sql = statement.sql;
+          if (sql.includes("t.catalogue_rank_corpus") && sql.includes("where t.track_id > ?")) {
+            const cursor = statement.args[0];
+            if (typeof cursor !== "string") {
+              throw new Error("catalogue-rank page cursor is not a string");
+            }
+            rankPageCursors.push(cursor);
+          }
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
+    let rankMarkersWritten = 0;
+
+    for (const [step, batch] of subjectBatches.entries()) {
+      const writes = [
+        markDueWorkSourceRepairsStatement(batch, {
+          markerVersion: `continuous-subject-v${step}`,
+          producer: "capture-verification",
+        }),
+      ];
+      if (step < 10) {
+        rankMarkersWritten += 1;
+        writes.push(
+          markDueWorkSourceRepairsStatement(
+            [
+              {
+                subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                subjectType: "track",
+              },
+            ],
+            { markerVersion: `continuous-rank-v${step}`, producer: "catalogue-rank" },
+          ),
+        );
+      }
+      await db.batch(writes, "write");
+
+      await advanceProjectionFor(traced, {
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+        target: "track_due_work",
+      });
+
+      const placeholders = batch.map(() => "?").join(", ");
+      const remainingBatch = await db.execute({
+        args: [DUE_WORK_SOURCE_REPAIR_KIND, ...batch.map(({ subjectId }) => subjectId)],
+        sql: `select subject_id from due_work where work_kind = ?
+          and subject_id in (${placeholders})`,
+      });
+      expect(remainingBatch.rows, `subject batch ${step} exceeded its one-action bound`).toEqual(
+        [],
+      );
+      if (step === 0) {
+        expect(
+          Number(
+            (
+              await db.execute(`select count(*) as n from due_work
+                where work_kind = 'artist-edges' and state = 'repair'`)
+            ).rows[0]?.n ?? 0,
+          ),
+        ).toBe(10);
+        expect(
+          (
+            await db.execute(`select scanned_count from due_work_rebuilds
+              where work_kind = 'catalogue-rank' and subject_type = 'track'`)
+          ).rows[0],
+        ).toMatchObject({ scanned_count: 100 });
+      }
+    }
+
+    expect(subjects).toHaveLength(200);
+    expect(rankMarkersWritten).toBe(10);
+    expect(rankPageCursors.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(rankPageCursors).size).toBe(rankPageCursors.length);
+    expect(
+      Number(
+        (await db.execute(`select count(*) as n from due_work where state = 'repair'`)).rows[0]
+          ?.n ?? 0,
+      ),
+    ).toBe(0);
+  });
+
   it("coalesces ordinary same-semantic markers and refreshes changed rank definitions", async () => {
     for (const trackId of ["definition-a", "definition-b", "definition-c"]) {
       await seedCatalogueTrack(db, { trackId });

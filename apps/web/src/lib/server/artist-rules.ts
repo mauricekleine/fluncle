@@ -5,11 +5,7 @@ import {
   markCrawlProjectionRepairsFromSelectStatement,
 } from "./crawl-due-work";
 import { getDb, typedRows } from "./db";
-import {
-  type DueWorkStatement,
-  dueWorkCatalogueRankRepairSubjects,
-  markDueWorkSourceMaintenanceStatements,
-} from "./due-work";
+import { type DueWorkStatement, markDueWorkSourceMaintenanceStatements } from "./due-work";
 import { LabelNotFoundError } from "./labels";
 import { mbFetch } from "./musicbrainz";
 
@@ -263,17 +259,11 @@ export async function replaceLabelArtistRules(
       args: [now, now, labelId],
       sql: `update labels set scope_changed_at = ?, updated_at = ? where id = ?`,
     },
-    ...markDueWorkSourceMaintenanceStatements(
-      [
-        { subjectId: labelId, subjectType: "label" },
-        ...dueWorkCatalogueRankRepairSubjects("label-artist-rules-replace"),
-      ],
-      {
-        markerVersion: sourceVersion,
-        now,
-        producer: "label-artist-rules-replace",
-      },
-    ),
+    ...markDueWorkSourceMaintenanceStatements([{ subjectId: labelId, subjectType: "label" }], {
+      markerVersion: sourceVersion,
+      now,
+      producer: "label-artist-rules-replace",
+    }),
     markCrawlProjectionRepairsFromSelectStatement(
       "label",
       { args: [labelId], sql: `select slug as source_id from labels where id = ?` },
