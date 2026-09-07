@@ -3,9 +3,7 @@
 // WHY THIS TEST EXISTS. `box resume` returns success immediately, but the box then spends a
 // few seconds RESTORING, and every call against it in that window 500s with
 // `{"code":"box_restoring",…}` — the freshen ssh, both scp refreshes, and the render trigger.
-// The trigger's launch-line check read that healthy box as WEDGED and condemned it: measured
-// three ticks in a row on 2026-07-27 (17:42Z, 19:44Z, 22:46Z), each costing the hourly slot
-// plus a full reprovision. `await_box_ready` waits the window out.
+// `await_box_ready` waits the window out before the launch-line check can judge the box.
 //
 // A gate like that is unproven until a synthetic failure makes it fire, so all three cases run
 // `render-conductor.sh` itself against a stubbed `box`/`fluncle` in a temp HOME — no network,
@@ -28,6 +26,7 @@ import { join } from "node:path";
 const CONDUCTOR = join(import.meta.dir, "render-conductor.sh");
 const BOX_ID = "box-under-test";
 const QUEUE_HEAD = "001.1.1A";
+const SUBPROCESS_TIMEOUT_MS = 4_000;
 
 /** `-1` means "restoring forever"; any other count is how many calls 500 before the box answers. */
 type Tick = {
@@ -47,6 +46,7 @@ type TickResult = {
   exitCode: number;
   log: string;
   orphans: string;
+  sleepCalls: string[];
   state: string;
   stdout: string;
 };
@@ -117,6 +117,12 @@ fi
 exec /bin/date "$@"
 `;
 
+// Readiness waits are driven by DATE_STUB's scripted clock. Record the requested intervals
+// without delaying the test process, so the harness still proves the production sleep calls.
+const SLEEP_STUB = `#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_DIR/sleep-calls"
+`;
+
 // A provision that always fails: this tick must never reach for a fresh box, and if it does the
 // assertions see "provision failed" rather than a silently different path.
 const PROVISION_STUB = `#!/usr/bin/env bash
@@ -152,6 +158,7 @@ function runTick({
     }
     write(join(stub, "box"), BOX_STUB);
     write(join(stub, "date"), DATE_STUB);
+    write(join(stub, "sleep"), SLEEP_STUB);
     write(join(stub, "fluncle"), FLUNCLE_STUB);
     write(join(stub, "provision.sh"), PROVISION_STUB);
     // idle, with a box parked from the last render and no start on the clock — the state a
@@ -185,8 +192,20 @@ function runTick({
         STUB_QUEUE_STDERR: queueStderr,
         STUB_TRACK_HAS_VIDEO: trackHasVideo ? "1" : "0",
       },
-      timeout: 60_000,
+      timeout: SUBPROCESS_TIMEOUT_MS,
     });
+
+    if (run.error || run.signal || run.status === null) {
+      throw new Error(
+        [
+          `render conductor subprocess did not finish within ${SUBPROCESS_TIMEOUT_MS}ms`,
+          `error: ${run.error?.message ?? "none"}`,
+          `signal: ${run.signal ?? "none"}`,
+          `stdout: ${run.stdout ?? ""}`,
+          `stderr: ${run.stderr ?? ""}`,
+        ].join("\n"),
+      );
+    }
 
     const read = (path: string) => {
       try {
@@ -200,6 +219,7 @@ function runTick({
       exitCode: run.status ?? -1,
       log: read(join(stateDir, "conductor.log")),
       orphans: read(join(stateDir, "orphan-boxes")),
+      sleepCalls: read(join(stub, "sleep-calls")).split("\n").filter(Boolean),
       state: read(join(stateDir, "state")),
       stdout: run.stdout ?? "",
     };
@@ -229,8 +249,9 @@ describe("await_box_ready", () => {
     });
 
     expect(tick.log).toContain(`box ${BOX_ID} restoring — waiting`);
+    expect(tick.log.match(/restoring — waiting/g)).toHaveLength(2);
     expect(tick.log).toContain(`box ${BOX_ID} ready after 2s`);
-    // The bug: this tick used to end here instead.
+    expect(tick.sleepCalls).toEqual(["1", "1"]);
     expect(tick.log).not.toContain("condemned");
     expect(tick.orphans.trim()).toBe("");
     expect(tick.boxIdFile).toBe(BOX_ID);
@@ -247,10 +268,15 @@ describe("await_box_ready", () => {
     expect("expected_interval_ms" in lastJsonLine(tick.stdout)).toBe(false);
   });
 
-  test("a box that never stops restoring times out and still reaches the condemn path", () => {
-    const tick = runTick({ readyTimeout: 2, restoringCalls: -1 });
+  test("a box that never stops restoring times out from elapsed time and reaches the condemn path", () => {
+    const tick = runTick({
+      nowSequence: [4070908800, 4070908800, 4070908800, 4070908800, 4070908802],
+      readyTimeout: 2,
+      restoringCalls: -1,
+    });
 
     expect(tick.log).toMatch(/box box-under-test still restoring after \d+s — giving up/);
+    expect(tick.sleepCalls).toEqual(["1"]);
     expect(tick.log).toContain(`condemned box ${BOX_ID}`);
     expect(tick.orphans).toContain(BOX_ID);
     expect(tick.boxIdFile).toBe("");
