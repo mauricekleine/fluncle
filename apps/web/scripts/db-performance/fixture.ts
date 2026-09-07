@@ -793,6 +793,11 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create table if not exists perf_artifact_changes (
     seq integer primary key,
     created_at text not null,
+    format_version integer not null,
+    operation text not null,
+    payload_blob blob,
+    payload_json text,
+    producer text not null,
     stream text not null,
     stream_version integer not null,
     subject_type text not null,
@@ -1256,6 +1261,11 @@ export async function* generateFixture(
       args: [
         index + 1,
         syntheticTimestamp(index),
+        1,
+        "upsert",
+        null,
+        null,
+        "synthetic-producer",
         `synthetic-stream-${index % 3}`,
         1,
         "track",
@@ -1263,8 +1273,9 @@ export async function* generateFixture(
         1,
       ],
       sql: `insert or ignore into perf_artifact_changes
-        (seq, created_at, stream, stream_version, subject_type, subject_id, revision)
-        values (?, ?, ?, ?, ?, ?, ?)`,
+        (seq, created_at, format_version, operation, payload_blob, payload_json, producer,
+         stream, stream_version, subject_type, subject_id, revision)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     }),
   );
 

@@ -27,6 +27,31 @@ function cloneInventory(): IndexInventoryDocument {
 }
 
 describe("final index plan evidence", () => {
+  it("runs the three reviewed consumers unforced, in their application shapes", () => {
+    const contracts = new Map(indexEvidenceContracts().map((contract) => [contract.id, contract]));
+    const artifact = contracts.get("index.artifact-changes-stream-seq");
+    const bpm = contracts.get("index.tracks-bpm");
+    const catalogue = contracts.get("index.tracks-is-catalogue");
+
+    if (!artifact?.plan || !bpm?.plan || !catalogue?.plan) {
+      throw new Error("reviewed index consumer plan is missing");
+    }
+
+    for (const plan of [artifact.plan, bpm.plan, catalogue.plan]) {
+      expect(plan.statement.sql).not.toMatch(/\bINDEXED\s+BY\b/i);
+    }
+    expect(artifact.plan.statement.sql).toMatch(/select created_at, format_version, operation/i);
+    expect(artifact.plan.statement.sql).toMatch(/where seq > \?/i);
+    expect(artifact.plan.statement.sql).toMatch(/order by seq/i);
+    expect(bpm.plan.statement.sql).toMatch(/from perf_tracks tracks left join perf_findings/i);
+    expect(bpm.plan.statement.sql).toMatch(/tracks\.bpm >= \? and tracks\.bpm <= \?/i);
+    expect(bpm.plan.statement.sql).toMatch(/case when findings\.track_id is null/i);
+    expect(bpm.plan.statement.sql).toMatch(/limit \?/i);
+    expect(catalogue.plan.statement.sql).toBe(
+      "select count(*) as total from perf_tracks where perf_tracks.is_catalogue = 1",
+    );
+  });
+
   it("uses normal planner choice except for SQL that deliberately locks a production index", () => {
     const runtimeLockedIndexes = new Set(INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES);
     const expectedPolicyFragments: Record<string, string> = {
