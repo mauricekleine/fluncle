@@ -105,6 +105,8 @@ Sonar is the lever when the embedded corpus outgrows the scan, behind its own da
 
 **A track entry carries no `<lastmod>`.** `tracks` has no content-change timestamp, and a release date is a different claim. The entry is honestly undated, exactly as the `docs` and `galaxies` children are, instead of inventing a stamp a crawler would read as one.
 
+The static `pages` child reads only the timestamps and launch gates its fixed URLs need. It does not count track destinations or entity pages; those four cardinality queries belong to the sitemap index alone. `sitemap-data.integration.test.ts` verifies the query boundary and parity of the index and child timestamps against the actual rows.
+
 ## The tier still has no name
 
 The rule that governs every string on this page and every row that links into it (DESIGN.md's Unlit Rule; [album-entity.md](./album-entity.md)):

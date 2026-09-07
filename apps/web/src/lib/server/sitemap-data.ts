@@ -348,6 +348,35 @@ type SitemapAggregates = {
   mixOpen: boolean;
 };
 
+type SitemapPageInputs = Pick<SitemapAggregates, "galaxyCount" | "logbook" | "logs" | "mixOpen"> & {
+  albumLastmod: string | undefined;
+  artistLastmod: string | undefined;
+  labelLastmod: string | undefined;
+};
+
+/** Static hub URLs need dates and launch gates, never the catalogue's cardinality. */
+async function readSitemapPageInputs(): Promise<SitemapPageInputs> {
+  const [logs, artistLastmod, labelLastmod, albumLastmod, logbook, galaxies, mixDepth] =
+    await Promise.all([
+      readLogKindStats(),
+      maxArtistSitemapLastmod(ARTIST_INDEX_MIN_FINDINGS),
+      maxLabelSitemapLastmod(LABEL_INDEX_MIN_TRACKS),
+      maxAlbumSitemapLastmod(ALBUM_INDEX_MIN_TRACKS),
+      readLogbookKindStats(),
+      readGalaxies(),
+      getMixChainDepth(),
+    ]);
+  return {
+    albumLastmod,
+    artistLastmod,
+    galaxyCount: galaxies.length,
+    labelLastmod,
+    logbook,
+    logs,
+    mixOpen: mixDepth.open,
+  };
+}
+
 /**
  * ONE aggregate pass over the archive: a count and a date per child, plus the two self-lifting
  * gates. Every read in it is a `count(*)` or a `max()` — nothing here pulls a row set into the
@@ -360,63 +389,42 @@ type SitemapAggregates = {
  * `maxLabelSitemapLastmod`), bounded by the certified corpus rather than by the growing tables.
  */
 async function readSitemapAggregates(): Promise<SitemapAggregates> {
-  const [
-    logs,
-    artistCount,
-    artistLastmod,
-    labelCount,
-    labelLastmod,
-    albumCount,
-    albumLastmod,
-    logbook,
-    galaxies,
-    archiveTrackCount,
-    mixDepth,
-  ] = await Promise.all([
-    readLogKindStats(),
+  const [pageInputs, artistCount, labelCount, albumCount, archiveTrackCount] = await Promise.all([
+    readSitemapPageInputs(),
     countIndexableArtists(),
-    maxArtistSitemapLastmod(ARTIST_INDEX_MIN_FINDINGS),
     countIndexableLabels(),
-    maxLabelSitemapLastmod(LABEL_INDEX_MIN_TRACKS),
     countIndexableAlbums(),
-    maxAlbumSitemapLastmod(ALBUM_INDEX_MIN_TRACKS),
-    readLogbookKindStats(),
-    readGalaxies(),
     // The archive-track destinations past the EVIDENCE gate. A `count(*)` whose predicate leads
     // with `is_catalogue = 1`, so it rides the partial catalogue index rather than walking the
     // whole growing table (lib/server/track-page.ts).
     countIndexableTrackPages(),
-    // The `/mix` gate — the SAME self-lifting verdict its route checks on every load
-    // (`getMixChainDepth().open`), memoized per-isolate, so the sitemap lists the hub the day
-    // the tool opens to the world and drops it the day it would close, with no deploy.
-    getMixChainDepth(),
   ]);
 
   return {
-    albums: { count: albumCount, lastmod: albumLastmod },
+    albums: { count: albumCount, lastmod: pageInputs.albumLastmod },
     archiveTrackCount,
-    artists: { count: artistCount, lastmod: artistLastmod },
-    galaxyCount: galaxies.length,
-    labels: { count: labelCount, lastmod: labelLastmod },
-    logbook,
-    logs,
-    mixOpen: mixDepth.open,
+    artists: { count: artistCount, lastmod: pageInputs.artistLastmod },
+    galaxyCount: pageInputs.galaxyCount,
+    labels: { count: labelCount, lastmod: pageInputs.labelLastmod },
+    logbook: pageInputs.logbook,
+    logs: pageInputs.logs,
+    mixOpen: pageInputs.mixOpen,
   };
 }
 
 /**
  * The `pages` child's inputs. `latest` is the freshest date anywhere in the archive, so it is the
- * max of the five dated bags' own maxima — each already an aggregate, never a scan.
+ * max of the five dated bags' own maxima, without enumerating their URLs.
  */
-function sitemapPagesFrom(aggregates: SitemapAggregates): SitemapPages {
+function sitemapPagesFrom(aggregates: SitemapPageInputs): SitemapPages {
   return {
     galaxiesOpen: aggregates.galaxyCount > 0,
     latest: freshest([
       aggregates.logs.lastmod,
-      aggregates.artists.lastmod,
+      aggregates.artistLastmod,
       aggregates.logbook.lastmod,
-      aggregates.labels.lastmod,
-      aggregates.albums.lastmod,
+      aggregates.labelLastmod,
+      aggregates.albumLastmod,
     ]),
     logbookLatest: aggregates.logbook.lastmod,
     mixOpen: aggregates.mixOpen,
@@ -447,7 +455,14 @@ export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
     galaxies: { count: aggregates.galaxyCount },
     labels: aggregates.labels,
     logbook: aggregates.logbook,
-    pages: sitemapPagesStats(sitemapPagesFrom(aggregates)),
+    pages: sitemapPagesStats(
+      sitemapPagesFrom({
+        ...aggregates,
+        albumLastmod: aggregates.albums.lastmod,
+        artistLastmod: aggregates.artists.lastmod,
+        labelLastmod: aggregates.labels.lastmod,
+      }),
+    ),
     // Honestly undated, like `docs` and `galaxies`: `tracks` carries no content-change timestamp,
     // and a release date is a different claim (lib/sitemap.ts § SitemapTrack).
     tracks: { count: aggregates.archiveTrackCount },
@@ -491,7 +506,7 @@ export async function collectSitemapBag(kind: SitemapKind, page = 1): Promise<Si
     // The static child needs no rows at all — its `<loc>`s are constants and its two `<lastmod>`s
     // are the same aggregates the index reads.
     case "pages":
-      return { ...EMPTY_SITEMAP_BAGS, pages: sitemapPagesFrom(await readSitemapAggregates()) };
+      return { ...EMPTY_SITEMAP_BAGS, pages: sitemapPagesFrom(await readSitemapPageInputs()) };
 
     case "tracks":
       return {
