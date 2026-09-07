@@ -123,10 +123,13 @@ async function main() {
   const db = await getDb();
 
   const result = await db.execute({
+    // CROSS JOIN pins `findings` as the driver — the cost ledger is finding-bounded, and without
+    // it the planner scans the growing `tracks` table (catalogue.ts
+    // `FINDING_QUALIFIED_ARTISTS_SQL` states the law).
     sql: `select tracks.track_id, findings.log_id, findings.added_at,
                  findings.observation_script, findings.video_url, tracks.bpm,
                  tracks.has_embedding as has_embedding
-            from findings join tracks on tracks.track_id = findings.track_id
+            from findings cross join tracks on tracks.track_id = findings.track_id
            where findings.log_id is not null`,
   });
 

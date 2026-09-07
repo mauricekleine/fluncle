@@ -69,6 +69,19 @@ function asText(value: unknown): string {
 }
 
 /**
+ * Every distinct album string a CERTIFIED finding carries. Exported so its PLAN can be pinned
+ * (findings-driver-plan.integration.test.ts).
+ *
+ * CROSS JOIN pins `findings` as the driver — the mint is finding-bounded, and without it the
+ * planner scans the growing `tracks` table (catalogue.ts `FINDING_QUALIFIED_ARTISTS_SQL` states
+ * the law; `backfill-labels.ts`'s reconcile carries the same spelling).
+ */
+export const DISTINCT_FINDING_ALBUMS_SQL = `select tracks.album as album
+      from findings cross join tracks on tracks.track_id = findings.track_id
+      where tracks.album is not null and trim(tracks.album) <> ''
+      group by tracks.album`;
+
+/**
  * The idempotent core, taking any libSQL client so a test can drive it against an in-memory
  * database with the real migrations applied.
  */
@@ -77,11 +90,7 @@ export async function backfillAlbums(client: Client): Promise<AlbumsBackfillResu
   const result: AlbumsBackfillResult = { linked: 0, minted: 0 };
 
   // ── 1. MINT — one row per distinct album on a certified finding, folded by slug.
-  const distinct = await client.execute({
-    sql: `select tracks.album as album from findings join tracks on tracks.track_id = findings.track_id
-          where tracks.album is not null and trim(tracks.album) <> ''
-          group by tracks.album`,
-  });
+  const distinct = await client.execute({ sql: DISTINCT_FINDING_ALBUMS_SQL });
 
   // First spelling wins per slug. Stable across runs: a row is only ever inserted once.
   const bySlug = new Map<string, string>();

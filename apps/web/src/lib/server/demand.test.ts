@@ -323,6 +323,62 @@ describe("recordDemand — the rewrite", () => {
     expect(summary.tracksScored).toBe(0);
     expect(await demandScore("t1")).toBe(42); // untouched
   });
+
+  // The per-artist bump is the one statement in this tick whose row set could be reached either
+  // way, and the wrong spelling is invisible in its RESULT. A correlated `where exists (…
+  // track_artists.track_id = tracks.track_id)` makes `tracks` the outer loop — `SCAN tracks` plus
+  // one probe per row, a cost that grows with the crawler while the demanded set does not. The
+  // seek spelling drives the tiny `demand` values list through `track_artists_artist_id_idx` and
+  // enters `tracks` on its primary key. Pin the PLAN of the statement the tick ACTUALLY issues,
+  // because only the plan can tell the two apart.
+  it("bumps the demanded tracks by seek, never by scanning tracks", async () => {
+    process.env.SIMPLE_ANALYTICS_API_KEY = API_KEY;
+
+    await seedArtist("art_a", "artist-a", null);
+    await seedTrack({ artistIds: ["art_a"], trackId: "t1" });
+
+    const issued: string[] = [];
+    const real = db;
+
+    // A plain wrapper, not a Proxy: the libSQL client's methods use private class fields, so a
+    // trapped `get` would hand back an unbound function and throw on the first real call.
+    holder.db = {
+      ...real,
+      batch: async (statements: { sql: string }[], mode?: string) => {
+        issued.push(...statements.map((statement) => statement.sql));
+
+        return real.batch(statements as never, mode as never);
+      },
+      execute: (statement: never) => real.execute(statement),
+    } as unknown as Client;
+
+    try {
+      await recordDemand({
+        fetchImpl: saFetch([{ pageviews: 5, value: "/artist/artist-a" }]),
+        now: NOW,
+      });
+    } finally {
+      holder.db = real;
+    }
+
+    const bump = issued.find((sql) => /update tracks set demand_score = coalesce/.test(sql));
+
+    expect(bump).toBeDefined();
+
+    const plan = await real.execute({
+      args: ["art_a", 5],
+      sql: `explain query plan ${bump ?? ""}`,
+    });
+    const details = (plan.rows as unknown as { detail: string }[]).map((row) => row.detail);
+
+    expect(details.some((detail) => /^SEARCH tracks\b/.test(detail))).toBe(true);
+    expect(details.some((detail) => /^SCAN tracks\b/.test(detail))).toBe(false);
+    expect(
+      details.some((detail) =>
+        /SEARCH track_artists USING INDEX track_artists_artist_id_idx/.test(detail),
+      ),
+    ).toBe(true);
+  });
 });
 
 // ── The social referrers read (Part 3 — the site-side half of reach) ─────────────────────────────

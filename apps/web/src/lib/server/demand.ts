@@ -371,18 +371,27 @@ export async function recordDemand(
 
   if (artistDemandById.size > 0) {
     const demandRows = [...artistDemandById.entries()];
+
     writes.push({
       args: demandRows.flatMap(([artistId, demand]) => [artistId, demand.pageviews]),
+      // The row set is reached by SEEK, not by scan: the `demand` values list drives
+      // `track_artists_artist_id_idx` to the credited `track_id`s, and `tracks` is then entered on
+      // its primary key. Spelled as a correlated `where exists (… where track_artists.track_id =
+      // tracks.track_id)` the same set makes `tracks` the OUTER loop instead — `SCAN tracks` with
+      // one probe per row, a cost that grows with the crawler while the demanded set does not. It
+      // is the shape the `tracksScored` count below reaches the same rows by, and the plan is
+      // pinned in demand.test.ts. The `set` expression stays correlated on purpose: it runs only
+      // for the rows the `where` already selected, riding the `track_artists` primary key from the
+      // other side.
       sql: `with demand(artist_id, score) as
               (values ${demandRows.map(() => "(?, ?)").join(", ")})
             update tracks set demand_score = coalesce(demand_score, 0) + (
               select sum(demand.score) from track_artists
               join demand on demand.artist_id = track_artists.artist_id
               where track_artists.track_id = tracks.track_id
-            ) where exists (
-              select 1 from track_artists
+            ) where track_id in (
+              select track_artists.track_id from track_artists
               join demand on demand.artist_id = track_artists.artist_id
-              where track_artists.track_id = tracks.track_id
             )`,
     });
   }

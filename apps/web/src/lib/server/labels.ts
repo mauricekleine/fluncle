@@ -1805,6 +1805,22 @@ export async function getLabelDetail(slug: string): Promise<LabelDetail | undefi
 }
 
 /**
+ * The distinct label strings a CERTIFIED finding carries, with their finding counts — the census
+ * `reconcileLabels` mints from. Exported so its PLAN can be pinned (findings-driver-plan test).
+ *
+ * CROSS JOIN pins `findings` as the driver, and it is load-bearing rather than style — the same
+ * law `FINDING_QUALIFIED_ARTISTS_SQL` states in full (catalogue.ts). Hosted Turso rejects
+ * `ANALYZE`, so the planner has no statistics and cannot know `findings` is the small side; as a
+ * plain join it drives from `tracks` and probes `findings` once per row, which is the bare
+ * `tracks` scan the contract below says this is not. SQLite treats CROSS JOIN as "do not
+ * reorder", so the walk is `findings` plus one `tracks` primary-key seek per finding.
+ */
+export const FINDING_LABEL_CENSUS_SQL = `select tracks.label as label, count(*) as n
+      from findings cross join tracks on tracks.track_id = findings.track_id
+      where tracks.label is not null and trim(tracks.label) <> ''
+      group by tracks.label`;
+
+/**
  * The deterministic reconcile: a `labels` row for every distinct label carried by a
  * CERTIFIED finding. The self-healing backstop behind `ensureLabel` (a publish whose
  * best-effort upsert threw, a label written by a direct admin update, a row that
@@ -1830,13 +1846,7 @@ export async function getLabelDetail(slug: string): Promise<LabelDetail | undefi
  */
 export async function reconcileLabels(): Promise<number> {
   const db = await getDb();
-  const result = await db.execute({
-    args: [],
-    sql: `select tracks.label as label, count(*) as n
-          from findings join tracks on tracks.track_id = findings.track_id
-          where tracks.label is not null and trim(tracks.label) <> ''
-          group by tracks.label`,
-  });
+  const result = await db.execute({ args: [], sql: FINDING_LABEL_CENSUS_SQL });
 
   // Every slug the operator has already folded into another label — preloaded once so the
   // mint loop below never re-mints one (the re-mint trap this unit closes).
