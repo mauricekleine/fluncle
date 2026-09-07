@@ -433,28 +433,30 @@ describe("synthetic database performance fixture", () => {
       expect(sentinels.every((statement) => !/\bor\b/i.test(statement.sql))).toBe(true);
 
       const embeddingRanges = statements.filter((statement) =>
-        statement.sql.includes("from perf_track_embeddings where track_id between ? and ?"),
+        statement.sql.includes(
+          "from perf_track_embeddings not indexed where rowid between ? and ?",
+        ),
       );
       expect(embeddingRanges).toEqual([
         {
-          args: ["synthetic-track-000000000", "synthetic-track-000000009"],
-          sql: "select count(*) as count from perf_track_embeddings where track_id between ? and ?",
+          args: [1, 10],
+          sql: "select count(*) as count from perf_track_embeddings not indexed where rowid between ? and ?",
         },
         {
-          args: ["synthetic-track-000000010", "synthetic-track-000000019"],
-          sql: "select count(*) as count from perf_track_embeddings where track_id between ? and ?",
+          args: [11, 20],
+          sql: "select count(*) as count from perf_track_embeddings not indexed where rowid between ? and ?",
         },
         {
-          args: ["synthetic-track-000000020", "synthetic-track-000000029"],
-          sql: "select count(*) as count from perf_track_embeddings where track_id between ? and ?",
+          args: [21, 30],
+          sql: "select count(*) as count from perf_track_embeddings not indexed where rowid between ? and ?",
         },
         {
-          args: ["synthetic-track-000000030", "synthetic-track-000000039"],
-          sql: "select count(*) as count from perf_track_embeddings where track_id between ? and ?",
+          args: [31, 40],
+          sql: "select count(*) as count from perf_track_embeddings not indexed where rowid between ? and ?",
         },
         {
-          args: ["synthetic-track-000000040", "synthetic-track-000000040"],
-          sql: "select count(*) as count from perf_track_embeddings where track_id between ? and ?",
+          args: [41, 41],
+          sql: "select count(*) as count from perf_track_embeddings not indexed where rowid between ? and ?",
         },
       ]);
       expect(
@@ -463,7 +465,7 @@ describe("synthetic database performance fixture", () => {
             statement.sql.includes("from perf_track_embeddings not indexed") &&
             statement.sql.includes("rowid between"),
         ),
-      ).toBe(false);
+      ).toBe(true);
     } finally {
       client.close();
     }
@@ -480,7 +482,7 @@ describe("synthetic database performance fixture", () => {
     ).toEqual({ "1x": 93, "2x": 127, "4x": 206 });
   });
 
-  it("maps exact 1x request 17 to a covering embedding-index count", async () => {
+  it("maps exact 1x request 17 to the deterministic embedding rowid window", async () => {
     let request = 0;
     let seventeenthStatement: { args: unknown[]; sql: string } | undefined;
     const client = {
@@ -512,8 +514,8 @@ describe("synthetic database performance fixture", () => {
       }),
     ).rejects.toThrow("request 17 captured");
     expect(seventeenthStatement).toEqual({
-      args: ["synthetic-track-000000000", "synthetic-track-000049999"],
-      sql: "select count(*) as count from perf_track_embeddings where track_id between ? and ?",
+      args: [1, 50_000],
+      sql: "select count(*) as count from perf_track_embeddings not indexed where rowid between ? and ?",
     });
   });
 
@@ -583,7 +585,7 @@ describe("synthetic database performance fixture", () => {
     }
   });
 
-  it("rejects a count-compensated embedding outside the synthetic track-key domain", async () => {
+  it("rejects a count-compensated embedding outside the deterministic rowid domain", async () => {
     const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
     try {
@@ -592,7 +594,7 @@ describe("synthetic database performance fixture", () => {
       await client.execute("delete from perf_track_embeddings where rowid = 1");
       await client.execute(
         `insert into perf_track_embeddings (rowid, track_id, embedding_blob)
-         values (1, 'synthetic-track-999999999', zeroblob(4096))`,
+         values (999, 'synthetic-track-999999999', zeroblob(4096))`,
       );
 
       expect(await scalar(client, "select count(*) as n from perf_track_embeddings")).toBe(
@@ -613,9 +615,9 @@ describe("synthetic database performance fixture", () => {
       );
       expect(
         census.mismatches.some((mismatch) =>
-          mismatch.startsWith("table perf_track_embeddings rowid boundary"),
+          mismatch.startsWith("table perf_track_embeddings rowid boundary overflow"),
         ),
-      ).toBe(false);
+      ).toBe(true);
     } finally {
       client.close();
     }

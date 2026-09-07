@@ -53,9 +53,9 @@
             "marker": "fanOutArtistQualificationLabelRepair"
           }
         ],
-        "query": "Indexed tracks.label_id scans fan out a label ruling only to its tracks."
+        "query": "fanOutArtistQualificationLabelRepair selects t.track_id where t.label_id = ?, a track_artists edge exists, and no artist_qualification/track repair has source_epoch >= ?, explicitly INDEXED BY this index."
       },
-      "structuralRationale": "Serves label graph pages, label-scoped projection repair, and metadata linking without scanning the catalogue.",
+      "structuralRationale": "The label-scoped repair fan-out drives the bounded track slice through this index before its edge and repair anti-probes, avoiding a catalogue scan.",
       "performanceContracts": [
         {
           "id": "index.tracks-label-id",
@@ -410,10 +410,10 @@
             "marker": "projectedTracksHubIdPageQueries"
           }
         ],
-        "query": "The projected hub reads an exact two-column row-value suffix and an explicit null-date suffix through this index."
+        "query": "projectedTracksHubIdPageQueries explicitly INDEXED BY this index for page 1, the non-null (release_date, track_id) cursor, the null-anchor track_id cursor, and the null-fill suffix."
       },
       "knownContractMappings": ["projection.default-anchor-keyset"],
-      "structuralRationale": "Provides the strict ordered suffix needed for stable public hub pagination without a corpus walk or temporary tie sort.",
+      "structuralRationale": "The four locked hub cursor shapes are ordered composite-index walks with no corpus scan or temporary tie sort.",
       "performanceContracts": [
         {
           "id": "index.tracks-release-date-track-id",
@@ -631,9 +631,9 @@
             "marker": "getCrawlStatus"
           }
         ],
-        "query": "Anchor-pending gauge counts unanchored rows that have an ISRC."
+        "query": "getCrawlStatus counts the ISRC-bearing unanchored slice and excludes findings with a correlated anti-join, explicitly INDEXED BY this partial index."
       },
-      "structuralRationale": "Small partial index represents the fillable anchor slice and shrinks as Spotify anchors land.",
+      "structuralRationale": "The partial ISRC-bearing unanchored slice bounds the status gauge before its findings anti-probe and shrinks as anchors land.",
       "performanceContracts": [
         {
           "id": "index.tracks-anchor-queue",
@@ -659,9 +659,9 @@
             "marker": "listIsrcWork"
           }
         ],
-        "query": "Backfill reads unfilled, unattempted recording-MBID rows in track_id order."
+        "query": "listIsrcWork selects track_id and isrc from unfilled, unattempted rows with a usable ISRC, excludes mb_-prefixed crawler ids, seeks track_id > ?, and orders by track_id, explicitly INDEXED BY this partial index."
       },
-      "structuralRationale": "Indexes the derived shrinking worklist rather than the whole catalogue.",
+      "structuralRationale": "The partial recording-MBID worklist supports the real usable-ISRC and crawler-origin residual filters in deterministic track-id order.",
       "performanceContracts": [
         {
           "id": "index.tracks-mb-recording-id-queue",
@@ -883,9 +883,9 @@
             "marker": "listTrackWork"
           }
         ],
-        "query": "anchor kind explicitly INDEXED BY this index and reverse-walks the full priority order."
+        "query": "listTrackWork's anchor kind selects WORK_SELECT, left-joins findings, applies the anchor eligibility predicates, and explicitly INDEXED BY this index for its reverse priority order."
       },
-      "structuralRationale": "Encodes paid-anchor desirability and all ordering terms beneath the unanchored slice, preventing materialize-and-sort.",
+      "structuralRationale": "The locked partial priority walk preserves the anchor budget order and prevents a growing candidate set from being materialized and sorted.",
       "performanceContracts": [
         {
           "id": "index.tracks-anchor-order",
@@ -1351,10 +1351,10 @@
             "marker": "readQualifiedArtistIds"
           }
         ],
-        "query": "Qualified artist set left-joins artist_qualification with is_qualified = 1, explicitly INDEXED BY this index."
+        "query": "readQualifiedArtistIds reads artist_qualification_state's readiness proof, left-joins is_qualified = 1 rows, checks the artist_qualification repair absence, and explicitly INDEXED BY this index."
       },
       "knownContractMappings": ["projection.qualified-artists"],
-      "structuralRationale": "Indexes only the qualified projection subset in its public ordered-ID form.",
+      "structuralRationale": "The readiness-gated public projection reads only qualified artist IDs in index order while retaining its state and repair proof.",
       "performanceContracts": [
         {
           "id": "index.artist-qualification-qualified",
@@ -1627,7 +1627,7 @@
             "marker": "firstRepairOfType"
           }
         ],
-        "query": "Projection repair reads explicitly INDEXED BY this index and select the earliest source-epoch marker."
+        "query": "firstRepairOfType selects projection, subject_type, subject_id, source_epoch, and source_version for projection = ? and subject_type = ?, ordered by source_epoch, subject_type, subject_id, explicitly INDEXED BY this index."
       },
       "knownContractMappings": [
         "projection.public-readiness",
@@ -1637,7 +1637,7 @@
         "projection.qualified-artists",
         "projection.default-anchor-validity"
       ],
-      "structuralRationale": "Orders source-change repair markers by projection and epoch for bounded, deterministic projection catch-up.",
+      "structuralRationale": "The projection/epoch order returns the first typed repair marker deterministically without scanning or sorting the repair queue.",
       "performanceContracts": [
         {
           "id": "index.projection-repairs-order",
