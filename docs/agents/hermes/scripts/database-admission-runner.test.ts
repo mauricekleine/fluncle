@@ -211,7 +211,7 @@ function waitForExit(
 }
 
 async function stopSpawnedProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
   child.kill("SIGKILL");
@@ -307,6 +307,20 @@ const QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":tr
 const MALFORMED_YIELD_QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue\\\\malformed"}'`;
 
 describe("database admission unit runner", () => {
+  it(
+    "cleanup does not wait for an exit from a child that never spawned",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const child = spawn(join(directory, "missing-shell"), [], { stdio: "ignore" });
+      const error = await new Promise<Error>((resolvePromise) => {
+        child.once("error", resolvePromise);
+      });
+      expect(error).toMatchObject({ code: "ENOENT" });
+      expect(child.pid).toBeUndefined();
+      await stopSpawnedProcess(child);
+    },
+  );
+
   it(
     "hard-stops a hung fixture instead of waiting for its TERM handler",
     PROCESS_TEST_OPTIONS,
