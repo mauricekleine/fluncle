@@ -18,7 +18,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from main via
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh) so the prober stays honest.
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-reach -- bash /opt/hermes-scripts/reach-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-reach -- bash /opt/hermes-scripts/reach-sweep.sh
 # One idempotent `fluncle admin reach collect` call; the Worker fetches ~10 platforms
 # best-effort. A generous ceiling for a slow platform or a cold Worker.
 TimeoutStartSec=430

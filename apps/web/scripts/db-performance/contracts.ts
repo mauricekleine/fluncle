@@ -1,5 +1,6 @@
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
 import { DUE_WORK_COLUMNS, DUE_WORK_COLUMN_NAMES } from "../../src/lib/server/due-work-columns";
+import { trackSitemapWindowStatement } from "../../src/lib/server/track-page";
 import { registerContractD } from "./contract-d";
 import { registerFinalProofContracts } from "./final-proof";
 import { registerIndexEvidenceContracts } from "./index-evidence";
@@ -191,6 +192,62 @@ performanceRegistry.register(
     iterations: 20,
     normalizeRows: newestFirst,
     plan: { policy: FINDING_PLAN_POLICY, statement: FINDING_PAGES_AFTER },
+    warmupIterations: 2,
+    workClass: "route-db",
+  }),
+);
+
+const TRACK_SITEMAP_WINDOW_LIMIT = 25;
+const TRACK_SITEMAP_WINDOW_AFTER = "synthetic-track-000000007";
+const productionTrackSitemapWindow = trackSitemapWindowStatement(
+  TRACK_SITEMAP_WINDOW_LIMIT,
+  TRACK_SITEMAP_WINDOW_AFTER,
+);
+
+/** The production query translated only onto the synthetic performance fixture's table names. */
+export const TRACK_SITEMAP_PERFORMANCE_WINDOW = {
+  args: productionTrackSitemapWindow.args,
+  sql: productionTrackSitemapWindow.sql
+    .replaceAll("tracks.track_id", "perf_tracks.id")
+    .replace(/\btracks\b/g, "perf_tracks")
+    .replace(/\balbums\b/g, "perf_albums")
+    .replace("select perf_tracks.id,", "select perf_tracks.id as track_id,"),
+} satisfies PerformanceStatement;
+
+performanceRegistry.register(
+  sqlContract({
+    description: "The archive-track sitemap reads one production-shaped keyset window",
+    id: "sitemap.track-window",
+    iterations: 20,
+    plan: {
+      policy: {
+        forbidTempSort: true,
+        growingTables: ["perf_tracks", "perf_albums"],
+        requiredDetails: [
+          /SEARCH perf_tracks USING INDEX perf_tracks_catalogue_active_track_id_idx \(is_catalogue=\? AND dismissed_at=\? AND id>\?\)/i,
+          /SEARCH perf_albums USING INDEX sqlite_autoindex_perf_albums_1 \(id=\?\)/i,
+        ],
+      },
+      statement: TRACK_SITEMAP_PERFORMANCE_WINDOW,
+    },
+    statement: TRACK_SITEMAP_PERFORMANCE_WINDOW,
+    validate(execution) {
+      const rows = execution.rawResult?.rows ?? [];
+      const trackIds = rows.map((row) => valueAt(row, "track_id"));
+      const failures: string[] = [];
+
+      if (execution.resultRowCount < 1 || execution.resultRowCount > TRACK_SITEMAP_WINDOW_LIMIT) {
+        failures.push(`bounded sitemap window returned ${execution.resultRowCount} rows`);
+      }
+      if (trackIds.some((trackId) => trackId <= TRACK_SITEMAP_WINDOW_AFTER)) {
+        failures.push("sitemap window returned a row at or before its keyset boundary");
+      }
+      if (trackIds.some((trackId, index) => index > 0 && trackId <= (trackIds[index - 1] ?? ""))) {
+        failures.push("sitemap window did not preserve strict track-ID order");
+      }
+
+      return failures;
+    },
     warmupIterations: 2,
     workClass: "route-db",
   }),

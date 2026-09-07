@@ -540,11 +540,41 @@ function albumCover(row: AlbumCoverRow): string | undefined {
  * needs and the album row does not carry (`lastmod`, the freshest certified finding's date; the
  * fallback cover), but it now walks only the albums the floor already admitted.
  */
-export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [minTracks],
+export function albumSitemapWindowStatement(minTracks: number, limit: number, afterSlug?: string) {
+  const seek = afterSlug === undefined ? "albums.slug >= ?" : "albums.slug > ?";
+
+  return {
+    args: [afterSlug ?? "", minTracks, limit],
     sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT},
+                 (select max(f.added_at)
+                    from tracks t join findings f on f.track_id = t.track_id
+                    where t.album_id = albums.id) as lastmod,
+                 (select t.album_image_url
+                    from tracks t join findings f on f.track_id = t.track_id
+                    where t.album_id = albums.id
+                      and f.log_id is not null
+                      and f.added_at = (select max(f2.added_at)
+                        from tracks t2 join findings f2 on f2.track_id = t2.track_id
+                        where t2.album_id = albums.id and f2.log_id is not null)
+                    limit 1) as cover_url
+          from albums
+          where ${seek} and albums.renderable_track_count >= ?
+          order by albums.slug asc
+          limit ?`,
+  };
+}
+
+export async function listAlbumSitemapRows(
+  minTracks: number,
+  window?: { afterSlug?: string; limit: number },
+): Promise<EntitySitemapRow[]> {
+  const db = await getDb();
+  const result = await db.execute(
+    window
+      ? albumSitemapWindowStatement(minTracks, window.limit, window.afterSlug)
+      : {
+          args: [minTracks],
+          sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT},
                  max(findings.added_at) as lastmod,
                  (select t2.album_image_url
                     from findings f2 join tracks t2 on t2.track_id = f2.track_id
@@ -556,7 +586,8 @@ export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySit
           where albums.renderable_track_count >= ?
           group by albums.id
           order by albums.slug asc`,
-  });
+        },
+  );
 
   return typedRows<AlbumCoverRow & { lastmod: string | null; slug: string }>(result.rows).map(
     (row) => ({

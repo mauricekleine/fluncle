@@ -308,6 +308,7 @@ test("the front door is fully keyboard-operable with a visible focus indicator",
 }) => {
   await blockExternalRequests(page);
   await page.goto("/", { waitUntil: "networkidle" });
+  await expect(page.locator("html[data-discovery-listening]")).toBeAttached({ timeout: 30_000 });
 
   // Press Tab until every front-door control has held focus, or we run out of patience. Each
   // target is identified by a class the page owns, so the check is about the PAGE's controls

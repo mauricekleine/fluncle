@@ -56,12 +56,19 @@ export function sitemapMaxUrls(kind: SitemapKind): number {
  * The kinds whose bag is WINDOWED IN SQL — the data layer returns exactly the requested page's
  * rows, so {@link buildSitemapShardXml} must render the bag as-is instead of slicing it again.
  *
- * Only `tracks` is here, and it is here because it is the only kind big enough that reading the
- * whole bag to emit one child would pull a six-figure column into the isolate (AGENTS.md: never
- * pull a whole column in to rank or slice it). Every other kind reads its whole bag and lets the
- * builder window it, which keeps their unit tests exercising the builder's own arithmetic.
+ * The three graph tables, logbook, and archive tracks all have an index-backed stable order, so
+ * their numbered children arrive pre-windowed. `findings` remains in memory because its existing
+ * order composes two differently ordered tables, and `galaxies` because its order begins with a
+ * derived member count; neither has an index that can serve a seek without changing membership or
+ * order. `pages` and `docs` are bounded static lists rather than database tables.
  */
-export const SITEMAP_SQL_WINDOWED_KINDS: readonly SitemapKind[] = ["tracks"];
+export const SITEMAP_SQL_WINDOWED_KINDS: readonly SitemapKind[] = [
+  "tracks",
+  "artists",
+  "labels",
+  "albums",
+  "logbook",
+];
 
 /**
  * The kinds, and the order the index lists them in. One child PER ENTITY TYPE (not a single
@@ -81,6 +88,8 @@ export const SITEMAP_KINDS = [
 ] as const;
 
 export type SitemapKind = (typeof SITEMAP_KINDS)[number];
+
+export type SitemapSqlWindowedKind = "albums" | "artists" | "labels" | "logbook" | "tracks";
 
 /** A finding's rendered video, for the `<video:video>` sitemap extension. */
 export type SitemapVideo = {
@@ -605,7 +614,7 @@ const URLSET_OPEN =
  * `<urlset>` would tell a crawler the URLs had been REMOVED.
  *
  * A {@link SITEMAP_SQL_WINDOWED_KINDS} kind arrives ALREADY windowed (the data layer applied the
- * `limit`/`offset`), so it is rendered as-is; slicing it a second time would serve page 1's rows
+ * keyset seek + `limit`), so it is rendered as-is; slicing it a second time would serve page 1's rows
  * for page 1 and nothing at all for every page after it.
  */
 export function buildSitemapShardXml(

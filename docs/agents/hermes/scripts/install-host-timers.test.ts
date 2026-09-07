@@ -334,7 +334,7 @@ describe("every in-container script a unit execs is baked from scripts/", () => 
     expect(missing).toEqual([]);
   });
 
-  test("every in-container admission runner receives the local fail-closed gate", () => {
+  test("every in-container admission runner receives its required admission environment", () => {
     let covered = 0;
 
     for (const entry of unitDirs) {
@@ -351,6 +351,9 @@ describe("every in-container script a unit execs is baked from scripts/", () => 
         );
         expect(execStart, `${entry.dir}/${service}`).toContain(
           "/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED ",
+        );
+        expect(execStart, `${entry.dir}/${service}`).toContain(
+          "-e DATABASE_ADMISSION_POLL_SECS=5 ",
         );
       }
     }

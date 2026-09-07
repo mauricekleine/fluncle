@@ -400,11 +400,47 @@ export async function countArtistFindings(artistId: string): Promise<number> {
  * not carry: `lastmod` (the freshest certified finding's date, undefined for an artist that carries
  * none — catalogue rows have no `added_at`, and `max` ignores nulls) and the cover.
  */
-export async function listArtistSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [minTracks],
+export function artistSitemapWindowStatement(minTracks: number, limit: number, afterSlug?: string) {
+  const seek = afterSlug === undefined ? "a.slug >= ?" : "a.slug > ?";
+
+  return {
+    args: [afterSlug ?? "", minTracks, limit],
     sql: `select a.slug as slug,
+                 (select max(f.added_at)
+                    from track_artists ta
+                    join tracks t on t.track_id = ta.track_id
+                    join findings f on f.track_id = t.track_id
+                    where ta.artist_id = a.id) as lastmod,
+                 (select t.album_image_url
+                    from track_artists ta
+                    join tracks t on t.track_id = ta.track_id
+                    join findings f on f.track_id = t.track_id
+                    where ta.artist_id = a.id
+                      and f.log_id is not null
+                      and f.added_at = (select max(f2.added_at)
+                        from track_artists ta2
+                        join tracks t2 on t2.track_id = ta2.track_id
+                        join findings f2 on f2.track_id = t2.track_id
+                        where ta2.artist_id = a.id and f2.log_id is not null)
+                    limit 1) as cover_url
+          from artists a
+          where ${seek} and a.renderable_track_count >= ?
+          order by a.slug asc
+          limit ?`,
+  };
+}
+
+export async function listArtistSitemapRows(
+  minTracks: number,
+  window?: { afterSlug?: string; limit: number },
+): Promise<EntitySitemapRow[]> {
+  const db = await getDb();
+  const result = await db.execute(
+    window
+      ? artistSitemapWindowStatement(minTracks, window.limit, window.afterSlug)
+      : {
+          args: [minTracks],
+          sql: `select a.slug as slug,
                  max(findings.added_at) as lastmod,
                  (select t2.album_image_url
                     from (findings join tracks on tracks.track_id = findings.track_id) t2
@@ -418,7 +454,8 @@ export async function listArtistSitemapRows(minTracks: number): Promise<EntitySi
           where a.renderable_track_count >= ?
           group by a.id
           order by a.slug asc`,
-  });
+        },
+  );
 
   return typedRows<{
     cover_url: string | null;
