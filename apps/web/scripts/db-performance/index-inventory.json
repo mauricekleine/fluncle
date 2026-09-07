@@ -78,17 +78,25 @@
         "coordinates": [
           {
             "file": "apps/web/src/lib/server/tracks-hub.ts",
+            "marker": "tracksHubCountQuery"
+          },
+          {
+            "file": "apps/web/src/lib/server/tracks-hub.ts",
             "marker": "listTracksHubPage"
           }
         ],
-        "query": "Catalogue-filtered hub lane uses is_catalogue = 1."
+        "query": "listTracksHubPage's certified=false lane issues tracksHubCountQuery: select count(*) as total from tracks where tracks.is_catalogue = 1."
       },
-      "structuralRationale": "Materializes the catalogue anti-join as a shrinking predicate-free catalogue slice for consumers that only need membership.",
+      "structuralRationale": "The real catalogue-membership count chooses this partial covering index at 1x and 2x; it remains kept, paying one entry only when a catalogue row is inserted or membership flips.",
       "performanceContracts": [
         {
           "id": "index.tracks-is-catalogue",
           "requiredProfiles": ["1x", "2x", "4x"],
           "consumer": [
+            {
+              "file": "apps/web/src/lib/server/tracks-hub.ts",
+              "marker": "tracksHubCountQuery"
+            },
             {
               "file": "apps/web/src/lib/server/tracks-hub.ts",
               "marker": "listTracksHubPage"
@@ -428,17 +436,25 @@
         "coordinates": [
           {
             "file": "apps/web/src/lib/server/search.ts",
+            "marker": "runFilters"
+          },
+          {
+            "file": "apps/web/src/lib/server/search.ts",
             "marker": "compileFilters"
           }
         ],
-        "query": "BPM bounds compile to bare tracks.bpm >= ? and tracks.bpm <= ? predicates."
+        "query": "runFilters issues its archive SELECT with compileFilters' bare tracks.bpm >= ? and tracks.bpm <= ? predicates, certified-first release ordering, and limit."
       },
-      "structuralRationale": "Keeps the optional archive-wide BPM range filter seekable.",
+      "structuralRationale": "The real BPM-filtered archive SELECT chooses this index at 1x and 2x before its required certified-first ordering sort; it remains kept for the optional archive-wide range seek.",
       "performanceContracts": [
         {
           "id": "index.tracks-bpm",
           "requiredProfiles": ["1x", "2x", "4x"],
           "consumer": [
+            {
+              "file": "apps/web/src/lib/server/search.ts",
+              "marker": "runFilters"
+            },
             {
               "file": "apps/web/src/lib/server/search.ts",
               "marker": "compileFilters"
@@ -1274,12 +1290,12 @@
         "coordinates": [
           {
             "file": "apps/web/src/lib/server/artifact-changes.ts",
-            "marker": "insertArtifactChangeInTransaction"
+            "marker": "readChangeRows"
           }
         ],
-        "query": "Existing-event lookup constrains stream and stream_version before subject/revision validation."
+        "query": "readChangeRows issues select ARTIFACT_CHANGE_SELECT from artifact_changes where seq > ? order by seq limit ?."
       },
-      "structuralRationale": "Provides the stream/version prefix of immutable-log lookup paths and remains distinct from the primary seq cursor.",
+      "structuralRationale": "The real global seq cursor chooses the INTEGER PRIMARY KEY at 1x and 2x, not this stream/version index. Keep remains the current schema decision only: a follow-up migration should drop this index and remove one index entry write from every artifact insert.",
       "performanceContracts": [
         {
           "id": "index.artifact-changes-stream-seq",
@@ -1287,7 +1303,7 @@
           "consumer": [
             {
               "file": "apps/web/src/lib/server/artifact-changes.ts",
-              "marker": "insertArtifactChangeInTransaction"
+              "marker": "readChangeRows"
             }
           ]
         }
