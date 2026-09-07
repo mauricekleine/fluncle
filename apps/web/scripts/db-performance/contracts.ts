@@ -3,7 +3,7 @@ import { DUE_WORK_COLUMNS, DUE_WORK_COLUMN_NAMES } from "../../src/lib/server/du
 import { registerContractD } from "./contract-d";
 import { registerFinalProofContracts } from "./final-proof";
 import { registerIndexEvidenceContracts } from "./index-evidence";
-import { simulateMixedLoad } from "./mixed-load";
+import { simulateMixedLoad, simulateRequestWideMixedLoad } from "./mixed-load";
 import { analyzeExplainPlan } from "./plan";
 import {
   type ConvergenceObservation,
@@ -1069,11 +1069,19 @@ registerIndexEvidenceContracts(performanceRegistry);
 
 async function executeMixedLoadContract(): Promise<ContractExecution> {
   const report = simulateMixedLoad();
+  const requestWide = simulateRequestWideMixedLoad();
   const writes = report.events.filter((event) => event.workClass === "write-batch");
+  const requestWideWrites = requestWide.events.filter((event) => event.workClass === "write-batch");
 
   return {
-    batchCount: writes.reduce((sum, event) => sum + (event.batchCount ?? 0), 0),
-    durationMs: report.latencyMs["public-read"].p95,
+    batchCount: [...writes, ...requestWideWrites].reduce(
+      (sum, event) => sum + (event.batchCount ?? 0),
+      0,
+    ),
+    durationMs: Math.max(
+      report.latencyMs["public-read"].p95,
+      requestWide.latencyMs["public-read"].p95,
+    ),
     metadata: {
       heavyReaderLatencyP50Ms: report.latencyMs["heavy-reader"].p50,
       heavyReaderLatencyP95Ms: report.latencyMs["heavy-reader"].p95,
@@ -1089,6 +1097,31 @@ async function executeMixedLoadContract(): Promise<ContractExecution> {
       publicReadQueueP50Ms: report.queueMs["public-read"].p50,
       publicReadQueueP95Ms: report.queueMs["public-read"].p95,
       publicReadQueueP99Ms: report.queueMs["public-read"].p99,
+      requestWideAggregateCeiling: requestWide.aggregateCeiling,
+      requestWideAggregateObservedMaximum: requestWide.aggregateObservedMaximum,
+      requestWideFanoutPerPublicRequest: requestWide.fanoutPerPublicRequest,
+      requestWideHeavyReaderLatencyP50Ms: requestWide.latencyMs["heavy-reader"].p50,
+      requestWideHeavyReaderLatencyP95Ms: requestWide.latencyMs["heavy-reader"].p95,
+      requestWideHeavyReaderLatencyP99Ms: requestWide.latencyMs["heavy-reader"].p99,
+      requestWideHeavyReaderQueueP50Ms: requestWide.queueMs["heavy-reader"].p50,
+      requestWideHeavyReaderQueueP95Ms: requestWide.queueMs["heavy-reader"].p95,
+      requestWideHeavyReaderQueueP99Ms: requestWide.queueMs["heavy-reader"].p99,
+      requestWidePublicReadLatencyP50Ms: requestWide.latencyMs["public-read"].p50,
+      requestWidePublicReadLatencyP95Ms: requestWide.latencyMs["public-read"].p95,
+      requestWidePublicReadLatencyP99Ms: requestWide.latencyMs["public-read"].p99,
+      requestWidePublicReadQueueP50Ms: requestWide.queueMs["public-read"].p50,
+      requestWidePublicReadQueueP95Ms: requestWide.queueMs["public-read"].p95,
+      requestWidePublicReadQueueP99Ms: requestWide.queueMs["public-read"].p99,
+      requestWidePublicRequestCount: requestWide.publicRequestCount,
+      requestWideRuntimeSpanMetric: "request_in_flight_max",
+      requestWideScope: requestWide.scope,
+      requestWideViolations: requestWide.violations.length,
+      requestWideWriteBatchLatencyP50Ms: requestWide.latencyMs["write-batch"].p50,
+      requestWideWriteBatchLatencyP95Ms: requestWide.latencyMs["write-batch"].p95,
+      requestWideWriteBatchLatencyP99Ms: requestWide.latencyMs["write-batch"].p99,
+      requestWideWriteBatchQueueP50Ms: requestWide.queueMs["write-batch"].p50,
+      requestWideWriteBatchQueueP95Ms: requestWide.queueMs["write-batch"].p95,
+      requestWideWriteBatchQueueP99Ms: requestWide.queueMs["write-batch"].p99,
       scope: report.scope,
       telemetryBound: report.bounds.telemetry,
       violations: report.violations.length,
@@ -1099,18 +1132,22 @@ async function executeMixedLoadContract(): Promise<ContractExecution> {
       writeBatchQueueP95Ms: report.queueMs["write-batch"].p95,
       writeBatchQueueP99Ms: report.queueMs["write-batch"].p99,
     },
-    queueMs: report.queueMs["public-read"].p95,
-    resultRowCount: report.events.length,
+    queueMs: Math.max(report.queueMs["public-read"].p95, requestWide.queueMs["public-read"].p95),
+    resultRowCount: report.events.length + requestWide.events.length,
   };
 }
 
 function validateMixedLoadContract(): readonly string[] {
-  return simulateMixedLoad({ bounds: DATABASE_CLIENT_BOUNDS }).violations;
+  return [
+    ...simulateMixedLoad({ bounds: DATABASE_CLIENT_BOUNDS }).violations,
+    ...simulateRequestWideMixedLoad({ bounds: DATABASE_CLIENT_BOUNDS }).violations,
+  ];
 }
 
 for (const contract of [
   {
-    description: "Held heavy reader, public reads, and serialized batches honor per-client bounds",
+    description:
+      "Held heavy reader, public reads, and serialized batches honor per-client and isolate bounds",
     id: "client.mixed-load",
     workClass: "route-db" as const,
   },

@@ -108,3 +108,15 @@ export function classifyDatabaseAccess(sql: string): Exclude<DatabaseAccessClass
 
   return "write";
 }
+
+const HEAVY_READ_SQL_FUNCTION = /\bvector_distance_cos\s*\(/i;
+
+/**
+ * Identify request-time scans whose cost grows with the vector corpus. The ordinary read/write
+ * classifier stays separate because retry safety depends only on mutation semantics.
+ */
+export function classifyDatabaseOperationAccess(sql: string): DatabaseAccessClass {
+  const accessClass = classifyDatabaseAccess(sql);
+
+  return accessClass === "read" && HEAVY_READ_SQL_FUNCTION.test(sql) ? "heavy-read" : accessClass;
+}

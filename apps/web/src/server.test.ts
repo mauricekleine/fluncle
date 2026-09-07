@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { takeWaitUntilPromises } from "./test/cloudflare-workers-stub";
 import {
   CONTENT_POLICY,
   CONTENT_POLICY_WITH_REPORTING,
@@ -97,6 +98,7 @@ function dispatch(url: string, headers: Record<string, string> = {}): Promise<Re
 }
 
 beforeEach(() => {
+  void takeWaitUntilPromises();
   hoisted.handleMcp.mockReset();
   hoisted.handleMcp.mockResolvedValue(undefined);
   hoisted.handleAgentDiscovery.mockReset();
@@ -106,6 +108,15 @@ beforeEach(() => {
 });
 
 describe("server.ts dispatch spine", () => {
+  it("keeps the handler promise alive so disconnects cannot strand database leases", async () => {
+    const response = await dispatch("https://www.fluncle.com/api/v1/search?q=a");
+    const [handlerTask, ...otherTasks] = takeWaitUntilPromises();
+
+    expect(otherTasks).toHaveLength(0);
+    expect(handlerTask).toBeDefined();
+    await expect(handlerTask).resolves.toBe(response);
+  });
+
   it("serves an /api contract path from the REAL handleOrpc — the router never sees it", async () => {
     // `/api/v1/search?q=a` faults in the real oRPC validator (too-short query) with no
     // DB touch — proof the contract dispatcher itself handled the request first.

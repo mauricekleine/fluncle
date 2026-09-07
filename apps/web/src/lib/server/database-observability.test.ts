@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalSqlShape,
   classifyDatabaseAccess,
+  classifyDatabaseOperationAccess,
   DATABASE_OPERATION_ID_MAX_LENGTH,
   isDatabaseOperationId,
   normalizeDatabaseOperationId,
@@ -47,6 +48,22 @@ describe("database observability vocabulary", () => {
       "write",
     );
     expect(classifyDatabaseAccess("pragma foreign_keys = on")).toBe("write");
+  });
+
+  it("classifies vector-distance scans as heavy reads without weakening write detection", () => {
+    expect(
+      classifyDatabaseOperationAccess(
+        "select track_id from track_embeddings order by vector_distance_cos(embedding_blob, ?)",
+      ),
+    ).toBe("heavy-read");
+    expect(classifyDatabaseOperationAccess("select embedding_blob from track_embeddings")).toBe(
+      "read",
+    );
+    expect(
+      classifyDatabaseOperationAccess(
+        "with ranked as (select vector_distance_cos(embedding_blob, ?) as d) update tracks set bpm = 1",
+      ),
+    ).toBe("write");
   });
 
   it("accepts only bounded public release identifiers", () => {
