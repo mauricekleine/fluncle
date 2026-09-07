@@ -4,22 +4,33 @@ import {
   type InArgs,
   type InStatement,
   type Row,
+  type Transaction,
   type TransactionMode,
 } from "@libsql/client/web";
-import { startSpan, type Span } from "@sentry/core";
+import { startInactiveSpan, startSpan, type Span } from "@sentry/core";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "../../db/schema";
-import { PRIMARY_DB_CONCURRENCY, TELEMETRY_DB_CONCURRENCY } from "../database-concurrency";
+import {
+  PRIMARY_DB_CONCURRENCY,
+  TELEMETRY_DB_CONCURRENCY,
+  workerDatabaseConcurrencyGate,
+  type WorkerDatabaseConcurrencyLease,
+} from "../database-concurrency";
 import { SENTRY_RELEASE } from "../sentry-config";
 import {
   canonicalSqlShape,
   classifyDatabaseAccess,
-  isDatabaseAccessClass,
+  classifyDatabaseOperationAccess,
   normalizeDatabaseOperationId,
   normalizeDatabaseRelease,
   type DatabaseAccessClass,
   type DatabaseOutcome,
 } from "./database-observability";
+import {
+  enterDatabaseRequestOperation,
+  getRequestScopedDatabaseClient,
+  type DatabaseRequestOperationLease,
+} from "./database-request-scope";
 import { readEnvs, readOptionalEnv } from "./env";
 
 // Every DB query runs inside a Sentry `db.query` span so slow queries surface in
@@ -89,12 +100,12 @@ function batchStatementSql(statement: InStatement | [string, InArgs?]): string {
 
 function accessClassForStatement(statement: InStatement): DatabaseAccessClass {
   const sql = statementSql(statement);
-  const inferred = classifyDatabaseAccess(sql);
+  const inferred = classifyDatabaseOperationAccess(sql);
   const requested = statementMetadata(statement)?.accessClass;
 
-  // Explicit metadata may elevate a read to heavy-read. It may never disguise
-  // a write as a read, and an unknown value is ignored.
-  return inferred === "read" && isDatabaseAccessClass(requested) ? requested : inferred;
+  // Explicit metadata may elevate an ordinary read to heavy-read. It may never
+  // disguise a write or downgrade a heavy scan, and an unknown value is ignored.
+  return inferred === "read" && requested === "heavy-read" ? requested : inferred;
 }
 
 function operationIdForStatement(statement: InStatement, accessClass: DatabaseAccessClass): string {
@@ -120,18 +131,35 @@ function baseSpanAttributes(
     "db.statement": spanStatement(accessClass, operationId),
     "db.system": "sqlite",
     "fluncle.access_class": accessClass,
+    "fluncle.aggregate_in_flight_max": 0,
     "fluncle.attempt_count": 1,
     "fluncle.batch_count": batchCount,
     "fluncle.duration_ms": 0,
     "fluncle.operation_id": operationId,
     "fluncle.outcome": "success",
+    "fluncle.queue_wait_ms": 0,
     "fluncle.release": normalizeDatabaseRelease(SENTRY_RELEASE),
+    "fluncle.request_in_flight_max": 0,
   };
 }
 
-function finishSpan(span: Span | undefined, startedAt: number, outcome: DatabaseOutcome): void {
+function recordAdmission(span: Span | undefined, lease: WorkerDatabaseConcurrencyLease): void {
+  span?.setAttribute("fluncle.queue_wait_ms", lease.queueWaitMs);
+}
+
+function finishSpan(
+  span: Span | undefined,
+  startedAt: number,
+  outcome: DatabaseOutcome,
+  requestOperation: DatabaseRequestOperationLease,
+): void {
+  span?.setAttribute(
+    "fluncle.aggregate_in_flight_max",
+    workerDatabaseConcurrencyGate.snapshot().aggregateObservedMaximum,
+  );
   span?.setAttribute("fluncle.duration_ms", Math.max(0, Date.now() - startedAt));
   span?.setAttribute("fluncle.outcome", outcome);
+  span?.setAttribute("fluncle.request_in_flight_max", requestOperation.observedMaximum());
 }
 
 // ── Transient-gateway retry ────────────────────────────────────────────────
@@ -148,9 +176,9 @@ function finishSpan(span: Span | undefined, startedAt: number, outcome: Database
 // and NEVER writes. A 5xx on a write is ambiguous — the write may well have
 // been applied before the gateway gave up — so re-running it risks
 // double-applying it. The generic path retries only a statement the classifier
-// is CONFIDENT is a read; `batch` never retries (a batch is one unit and can
-// contain writes) and `transaction` is untouched. The one path-specific write
-// exception is named and justified beside `retryRunEventInsert` below.
+// is CONFIDENT is a read; `batch` and explicit transactions never retry. The
+// one path-specific write exception is named and justified beside
+// `retryRunEventInsert` below.
 
 // 2 retries = 3 attempts total. The backoff array's length IS the retry cap,
 // so tuning is one edit. Kept short: an `/artist/*` render fires several of
@@ -279,10 +307,10 @@ export async function retryRunEventInsert<T>(insert: () => Promise<T>): Promise<
 }
 
 // One chokepoint: wrap the created client in a Proxy that opens a `db.query`
-// span around `execute` and `batch` (every query path in the app) and forwards
-// everything else — `transaction`, `close`, `sync`, drizzle's own calls —
-// straight through. The wrapped methods return EXACTLY what the underlying
-// client returns, so the instrumentation is transparent to every caller.
+// span around `execute`, `batch`, and each explicit transaction lifetime.
+// Everything else — `close`, `sync`, drizzle's own calls — passes through. The
+// wrapped methods return EXACTLY what the underlying client returns, so the
+// instrumentation is transparent to every caller.
 //
 // The libsql client is a class instance backed by private (`#`) fields, so each
 // method must run with `this` bound to the real client: the span wrappers call
@@ -317,6 +345,104 @@ export function readClientProperty(client: Client, property: PropertyKey): unkno
   }
 }
 
+function readTransactionProperty(transaction: Transaction, property: PropertyKey): unknown {
+  switch (property) {
+    case "closed":
+      return transaction.closed;
+    case "constructor":
+      return transaction.constructor;
+    default:
+      return undefined;
+  }
+}
+
+function instrumentTransaction(
+  transaction: Transaction,
+  lease: WorkerDatabaseConcurrencyLease,
+  requestOperation: DatabaseRequestOperationLease,
+  span: Span,
+  startedAt: number,
+): Transaction {
+  let failed = false;
+  let finished = false;
+
+  const finish = (outcome: DatabaseOutcome) => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    finishSpan(span, startedAt, outcome, requestOperation);
+    requestOperation.release();
+    lease.release();
+    span.end();
+  };
+
+  const fail = (target: Transaction, error: unknown): never => {
+    failed = true;
+    // Hrana closes itself in a failed commit/rollback finally block without
+    // going through this proxy's close method. Release immediately when the
+    // driver confirms closure; otherwise keep the seat until cleanup finishes.
+    if (target.closed) {
+      finish("failure");
+    }
+    throw error;
+  };
+
+  return new Proxy(transaction, {
+    get(target, property) {
+      if (property === "execute") {
+        return async (statement: InStatement) => {
+          try {
+            return await target.execute(statement);
+          } catch (error) {
+            return fail(target, error);
+          }
+        };
+      }
+      if (property === "batch") {
+        return async (statements: InStatement[]) => {
+          try {
+            return await target.batch(statements);
+          } catch (error) {
+            return fail(target, error);
+          }
+        };
+      }
+      if (property === "executeMultiple") {
+        return async (sql: string) => {
+          try {
+            return await target.executeMultiple(sql);
+          } catch (error) {
+            return fail(target, error);
+          }
+        };
+      }
+      if (property === "close") {
+        return () => {
+          try {
+            target.close();
+            finish(failed ? "failure" : "success");
+          } catch (error) {
+            finish("failure");
+            throw error;
+          }
+        };
+      }
+      if (property === "commit" || property === "rollback") {
+        return async () => {
+          try {
+            await target[property]();
+            finish(failed ? "failure" : "success");
+          } catch (error) {
+            return fail(target, error);
+          }
+        };
+      }
+      return readTransactionProperty(target, property);
+    },
+  });
+}
+
 function instrument(client: Client): Client {
   return new Proxy(client, {
     get(target, property) {
@@ -335,6 +461,9 @@ function instrument(client: Client): Client {
             },
             async (span) => {
               const startedAt = Date.now();
+              const lease = await workerDatabaseConcurrencyGate.acquire(accessClass);
+              const requestOperation = enterDatabaseRequestOperation();
+              recordAdmission(span, lease);
               const run = () =>
                 args !== undefined && typeof statement === "string"
                   ? target.execute(statement, args)
@@ -344,11 +473,14 @@ function instrument(client: Client): Client {
                 // A write (or anything the classifier can't vouch for) runs
                 // exactly once, exactly as before.
                 const result = await (isRetryableRead(sql) ? runWithRetry(run, span) : run());
-                finishSpan(span, startedAt, "success");
+                finishSpan(span, startedAt, "success", requestOperation);
                 return result;
               } catch (error) {
-                finishSpan(span, startedAt, "failure");
+                finishSpan(span, startedAt, "failure", requestOperation);
                 throw error;
+              } finally {
+                requestOperation.release();
+                lease.release();
               }
             },
           );
@@ -359,7 +491,7 @@ function instrument(client: Client): Client {
         return (stmts: Array<InStatement | [string, InArgs?]>, mode?: TransactionMode) => {
           const statementAccess = stmts.map((statement) =>
             Array.isArray(statement)
-              ? classifyDatabaseAccess(statement[0])
+              ? classifyDatabaseOperationAccess(statement[0])
               : accessClassForStatement(statement),
           );
           const accessClass: DatabaseAccessClass = statementAccess.includes("write")
@@ -393,17 +525,51 @@ function instrument(client: Client): Client {
             },
             async (span) => {
               const startedAt = Date.now();
+              const lease = await workerDatabaseConcurrencyGate.acquire(accessClass);
+              const requestOperation = enterDatabaseRequestOperation();
+              recordAdmission(span, lease);
 
               try {
                 const result = await target.batch(stmts, mode);
-                finishSpan(span, startedAt, "success");
+                finishSpan(span, startedAt, "success", requestOperation);
                 return result;
               } catch (error) {
-                finishSpan(span, startedAt, "failure");
+                finishSpan(span, startedAt, "failure", requestOperation);
                 throw error;
+              } finally {
+                requestOperation.release();
+                lease.release();
               }
             },
           );
+        };
+      }
+
+      if (property === "transaction") {
+        return async (mode?: TransactionMode) => {
+          const accessClass: DatabaseAccessClass = mode === "read" ? "read" : "write";
+          const operationId = `db.${accessClass}.transaction`;
+          const startedAt = Date.now();
+          const span = startInactiveSpan({
+            attributes: baseSpanAttributes(accessClass, operationId, 1),
+            name: `db.query ${operationId}`,
+            op: "db.query",
+          });
+          const lease = await workerDatabaseConcurrencyGate.acquire(accessClass);
+          const requestOperation = enterDatabaseRequestOperation();
+          recordAdmission(span, lease);
+
+          try {
+            const transaction =
+              mode === undefined ? await target.transaction() : await target.transaction(mode);
+            return instrumentTransaction(transaction, lease, requestOperation, span, startedAt);
+          } catch (error) {
+            finishSpan(span, startedAt, "failure", requestOperation);
+            requestOperation.release();
+            lease.release();
+            span.end();
+            throw error;
+          }
         };
       }
 
@@ -413,15 +579,17 @@ function instrument(client: Client): Client {
 }
 
 export async function getDb() {
-  const env = await readEnvs(["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"]);
+  return getRequestScopedDatabaseClient("primary", async () => {
+    const env = await readEnvs(["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"]);
 
-  return instrument(
-    createClient({
-      authToken: env.TURSO_AUTH_TOKEN,
-      concurrency: PRIMARY_DB_CONCURRENCY,
-      url: env.TURSO_DATABASE_URL,
-    }),
-  );
+    return instrument(
+      createClient({
+        authToken: env.TURSO_AUTH_TOKEN,
+        concurrency: PRIMARY_DB_CONCURRENCY,
+        url: env.TURSO_DATABASE_URL,
+      }),
+    );
+  });
 }
 
 export async function getDrizzleDb() {
@@ -451,16 +619,18 @@ export async function getDrizzleDb() {
  * every write instead of degrading cleanly here.
  */
 export async function getTelemetryDb(): Promise<Client | undefined> {
-  const [url, authToken] = await Promise.all([
-    readOptionalEnv("TURSO_TELEMETRY_DATABASE_URL"),
-    readOptionalEnv("TURSO_TELEMETRY_AUTH_TOKEN"),
-  ]);
+  return getRequestScopedDatabaseClient("telemetry", async () => {
+    const [url, authToken] = await Promise.all([
+      readOptionalEnv("TURSO_TELEMETRY_DATABASE_URL"),
+      readOptionalEnv("TURSO_TELEMETRY_AUTH_TOKEN"),
+    ]);
 
-  if (!url || !authToken) {
-    return undefined;
-  }
+    if (!url || !authToken) {
+      return undefined;
+    }
 
-  return instrument(createClient({ authToken, concurrency: TELEMETRY_DB_CONCURRENCY, url }));
+    return instrument(createClient({ authToken, concurrency: TELEMETRY_DB_CONCURRENCY, url }));
+  });
 }
 
 export function typedRow<T extends object>(rows: Row[]): T | undefined {

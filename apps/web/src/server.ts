@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/cloudflare";
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { waitUntil } from "cloudflare:workers";
 import {
   appendAgentLinkHeaders,
   appendOnionLocation,
@@ -7,6 +8,7 @@ import {
 } from "./lib/server/agent-discovery";
 import { edgeCachePolicyFor, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
+import { runWithDatabaseRequestScope } from "./lib/server/database-request-scope";
 import { handleMcp } from "./lib/server/mcp";
 import { handleOrpc } from "./lib/server/orpc";
 import { withSecurityHeaders } from "./lib/server/security-headers";
@@ -66,8 +68,16 @@ const serverEntry = createServerEntry({
   // (up to 300s fresh + 3600s stale on a detail page), so the headers are stamped on
   // the way out instead of baked into the cached body. See lib/server/security-headers.ts
   // for what is applied to what, and for the structural embed-route CSP exemption.
-  async fetch(request) {
-    return withSecurityHeaders(request, await dispatch(request));
+  fetch(request) {
+    const response = runWithDatabaseRequestScope(async () =>
+      withSecurityHeaders(request, await dispatch(request)),
+    );
+
+    // A client disconnect may end the response context while leaving this isolate alive.
+    // Keep the awaited handler chain alive so every database lease reaches its `finally`.
+    // Deferred work must register its own promise, as the edge-cache paths already do.
+    waitUntil(response.catch(() => undefined));
+    return response;
   },
 });
 

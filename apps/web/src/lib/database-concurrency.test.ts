@@ -10,6 +10,8 @@ import {
   PRIMARY_DB_CONCURRENCY,
   REMOTE_DB_CONCURRENCY,
   TELEMETRY_DB_CONCURRENCY,
+  WORKER_DB_AGGREGATE_CONCURRENCY,
+  WORKER_DB_HEAVY_READ_CONCURRENCY,
 } from "./database-concurrency";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -480,6 +482,8 @@ describe("database concurrency bounds", () => {
     expect(CATALOGUE_PUBLIC_ENTITY_COUNT_DB_CONCURRENCY).toBe(3);
     expect(REMOTE_DB_CONCURRENCY).toBe(1);
     expect(LOCAL_DB_CONCURRENCY).toBe(1);
+    expect(WORKER_DB_AGGREGATE_CONCURRENCY).toBe(4);
+    expect(WORKER_DB_HEAVY_READ_CONCURRENCY).toBe(1);
   });
 
   it("gives every tracked createClient config branch an explicit nonzero bound", () => {
