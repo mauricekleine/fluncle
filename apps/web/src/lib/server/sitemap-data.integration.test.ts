@@ -368,6 +368,9 @@ describe("a child sitemap fetches only its own bag", () => {
         expect(details, `${kind}\n${details}`).not.toMatch(
           new RegExp(`SCAN ${tables[kind]}(?:\\s|$)`, "i"),
         );
+        expect(details, `${kind}\n${details}`).not.toMatch(
+          /^SCAN (?:albums|artists|a|labels|logbook_entries|tracks|t\d*|f\d*|ta\d*)\b/im,
+        );
         expect(details, `${kind}\n${details}`).not.toContain("USE TEMP B-TREE");
       }
     }
@@ -431,6 +434,35 @@ describe("a child sitemap fetches only its own bag", () => {
       expect(rows, kind).toEqual([]);
       expect(buildSitemapShardXml(kind, 2, bag), kind).toBeUndefined();
     }
+  });
+
+  it("recomputes boundaries after a same-count interior membership change", async () => {
+    await seedLogbookEntry(38, "2026-07-06T02:11:00.000Z");
+    await seedLogbookEntry(39, "2026-07-07T02:11:00.000Z");
+
+    expect((await collectSitemapBag("logbook", 2, 2)).logbook.map((row) => row.sector)).toEqual([
+      "037",
+      "036",
+    ]);
+
+    await db.batch(
+      [
+        { args: [], sql: `delete from logbook_entries where sector = 38` },
+        {
+          args: [34, "Sector 34", "A drift.", "2026-07-02T02:11:00.000Z"],
+          sql: `insert into logbook_entries
+                  (sector, title, body, generated_at, created_at, updated_at)
+                values (?, ?, ?, ?, '2026-07-02T02:11:00.000Z', '2026-07-02T02:11:00.000Z')`,
+        },
+      ],
+      "write",
+    );
+
+    const actual = (
+      await Promise.all([1, 2].map((page) => collectSitemapBag("logbook", page, 2)))
+    ).flatMap((bag) => bag.logbook.map((row) => row.sector));
+
+    expect(actual).toEqual(["039", "037", "036", "034"]);
   });
 
   it("does not count catalogue tracks or entities for the static pages child", async () => {

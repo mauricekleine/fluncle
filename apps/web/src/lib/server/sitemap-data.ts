@@ -81,39 +81,13 @@ import {
   TRACK_PAGE_INDEXABLE_WHERE,
 } from "./track-page";
 import { getMixChainDepth } from "./tracks";
-import {
-  hubClauseHash,
-  hubCorpusFingerprint,
-  loadPersistedHubPageAnchors,
-  nearestHubPageAnchor,
-  persistHubPageAnchors,
-  type HubPageAnchor,
-} from "./hub-page-anchors";
-
 type SitemapWindow = { after?: string; limit: number };
-
-const SITEMAP_WINDOW_ORDER: Record<SitemapSqlWindowedKind, string> = {
-  albums: "slug asc",
-  artists: "slug asc",
-  labels: "slug asc",
-  logbook: "sector desc",
-  tracks: "track_id asc",
-};
-
-function sitemapAnchorAddress(kind: SitemapSqlWindowedKind, pageSize: number) {
-  return {
-    clauseHash: hubClauseHash(
-      JSON.stringify({ kind, order: SITEMAP_WINDOW_ORDER[kind], pageSize, version: 1 }),
-    ),
-    hub: `sitemap-${kind}`,
-  };
-}
 
 /**
  * The bounded key-only query that reconstructs one missing child boundary. Its inner read walks at
  * most one child page from a known key; the outer aggregate returns only that page's final key.
- * There is deliberately no OFFSET: a random deep request chains fixed-size seeks until it reaches
- * the requested page, then persists the exact boundaries for later requests.
+ * There is deliberately no OFFSET: a deep request chains fixed-size seeks through the current
+ * corpus until it reaches the requested page.
  */
 export function sitemapBoundaryStatement(
   kind: SitemapSqlWindowedKind,
@@ -648,10 +622,11 @@ async function readSitemapBoundary(
 }
 
 /**
- * Resolve a numbered child to the exact key immediately before it. Boundaries live in the existing
- * hub anchor store and are fingerprinted by the maintained membership count plus the first key.
- * A missing or stale deep boundary is rebuilt as fixed-size seeks; no request ever pays a growing
- * OFFSET or transfers a preceding page's rows into the isolate.
+ * Resolve a numbered child to the exact key immediately before it. Every request derives the
+ * boundary from the current corpus as fixed-size keyset seeks. Reusing a persisted boundary would
+ * be incorrect after a same-cardinality interior membership change: count and first-key
+ * fingerprints cannot detect that shift. No request pays a growing OFFSET or transfers a
+ * preceding page's rows into the isolate.
  */
 async function resolveSitemapWindow(
   kind: SitemapSqlWindowedKind,
@@ -672,14 +647,8 @@ async function resolveSitemapWindow(
     return { pastEnd: true };
   }
 
-  const first = await readSitemapBoundary(kind, 1);
-  const fingerprint = hubCorpusFingerprint(total, first.boundary);
-  const address = sitemapAnchorAddress(kind, pageSize);
-  const stored = await loadPersistedHubPageAnchors(address.hub, address.clauseHash);
-  const anchors = stored?.fingerprint === fingerprint ? [...stored.anchors] : [];
-  const nearest = nearestHubPageAnchor(page, anchors);
-  let after = nearest?.key ?? undefined;
-  let currentPage = nearest?.page ?? 1;
+  let after: string | undefined;
+  let currentPage = 1;
 
   while (currentPage < page) {
     const boundary = await readSitemapBoundary(kind, pageSize, after);
@@ -690,17 +659,7 @@ async function resolveSitemapWindow(
 
     after = boundary.boundary;
     currentPage += 1;
-    const anchor: HubPageAnchor = { id: after, key: after, page: currentPage };
-    const existing = anchors.findIndex((candidate) => candidate.page === currentPage);
-
-    if (existing >= 0) {
-      anchors[existing] = anchor;
-    } else {
-      anchors.push(anchor);
-    }
   }
-
-  await persistHubPageAnchors(address.hub, address.clauseHash, anchors, fingerprint);
 
   return { after, pastEnd: false };
 }
