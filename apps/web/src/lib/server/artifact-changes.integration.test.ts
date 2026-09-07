@@ -392,6 +392,104 @@ describe("artifact producer registry and immutable sequence", () => {
     expect(details).not.toMatch(/USE TEMP B-TREE/i);
   });
 
+  it("matches the former whole-history union across empty, split, and isolated histories", async () => {
+    const prepared = await prepareArtifactChange(
+      sonarChange(1, { subjectId: "track:query-template" }),
+    );
+    const transaction = await db.transaction("write");
+    const execute = vi.spyOn(transaction, "execute");
+
+    try {
+      await insertArtifactChangeInTransaction(transaction, prepared);
+      await transaction.commit();
+    } finally {
+      transaction.close();
+    }
+
+    const boundedStatement = execute.mock.calls
+      .map(([statement]) => statement)
+      .find(
+        (statement): statement is Extract<InStatement, { sql: string }> =>
+          typeof statement !== "string" &&
+          statement !== undefined &&
+          statement.sql.includes("select max(revision) as revision") &&
+          statement.sql.includes("from artifact_change_revisions"),
+      );
+
+    if (boundedStatement === undefined) {
+      throw new Error("latest artifact revision statement was not executed");
+    }
+
+    await insertRawArtifactChangeRow({
+      revision: 4,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:live-only",
+      subjectType: "track",
+    });
+    await insertRawArtifactRevisionReceipt({
+      eventSeq: 7_001,
+      revision: 7,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:receipt-only",
+      subjectType: "track",
+    });
+    await insertRawArtifactChangeRow({
+      revision: 3,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:split",
+      subjectType: "track",
+    });
+    await insertRawArtifactRevisionReceipt({
+      eventSeq: 8_001,
+      revision: 8,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:split",
+      subjectType: "track",
+    });
+    await insertRawArtifactChangeRow({
+      revision: 90,
+      stream: "device.track",
+      streamVersion: 1,
+      subjectId: "track:isolated",
+      subjectType: "track",
+    });
+    await insertRawArtifactRevisionReceipt({
+      eventSeq: 91_001,
+      revision: 91,
+      stream: "sonar.track",
+      streamVersion: 2,
+      subjectId: "track:isolated",
+      subjectType: "track",
+    });
+
+    const legacySql = `select max(revision) as revision
+      from (
+        select revision from artifact_change_revisions
+        where stream = ? and stream_version = ? and subject_type = ? and subject_id = ?
+        union all
+        select revision from artifact_changes
+        where stream = ? and stream_version = ? and subject_type = ? and subject_id = ?
+      )`;
+
+    for (const subjectId of [
+      "track:empty",
+      "track:live-only",
+      "track:receipt-only",
+      "track:split",
+      "track:isolated",
+    ]) {
+      const args = ["sonar.track", 1, "track", subjectId, "sonar.track", 1, "track", subjectId];
+      const bounded = await db.execute({ args, sql: boundedStatement.sql });
+      const legacy = await db.execute({ args, sql: legacySql });
+
+      expect(bounded.rows[0]?.revision ?? null).toBe(legacy.rows[0]?.revision ?? null);
+    }
+  });
+
   it("allocates across empty, live-only, split, and isolated revision histories", async () => {
     const empty = await insertArtifactChange(db, sonarChange(1, { subjectId: "track:empty" }));
     expect(empty).toMatchObject({ event: { revision: 1 }, inserted: true });

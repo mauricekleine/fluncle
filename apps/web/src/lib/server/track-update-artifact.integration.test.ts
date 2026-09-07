@@ -110,16 +110,27 @@ describe("updateTrack Sonar artifact coupling", () => {
     const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
     const originalTransaction = db.transaction.bind(db);
     let insertedBlob: ArrayBuffer | ArrayBufferView | null = null;
+    let preparedBlobBase64: string | null = null;
+    let preparedReceiptDigest: string | null = null;
     let receiptDigest: string | null = null;
     let revisionLookupCount = 0;
 
     const float32From = vi.spyOn(Float32Array, "from").mockImplementation((values) => {
       timeline.push("bytes");
-      return originalFloat32From(values);
+      const vector = originalFloat32From(values);
+      preparedBlobBase64 = artifactBytesToBase64(
+        new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength),
+      );
+      return vector;
     });
     const digest = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
-      timeline.push("digest");
-      return originalDigest(algorithm, data);
+      timeline.push("digest:start");
+      const value = await originalDigest(algorithm, data);
+      preparedReceiptDigest = `v2:${[...new Uint8Array(value)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("")}`;
+      timeline.push("digest:complete");
+      return value;
     });
     const transaction = vi.spyOn(db, "transaction").mockImplementation(async () => {
       timeline.push("transaction");
@@ -150,15 +161,12 @@ describe("updateTrack Sonar artifact coupling", () => {
     try {
       await updateTrack(TRACK_ID, { embedding: embeddingJson(3) });
 
-      expect(timeline).toContain("bytes");
-      expect(timeline).toContain("digest");
-      expect(timeline.indexOf("bytes")).toBeLessThan(timeline.indexOf("transaction"));
-      expect(timeline.indexOf("digest")).toBeLessThan(timeline.indexOf("transaction"));
+      expect(timeline).toEqual(["bytes", "digest:start", "digest:complete", "transaction"]);
+      expect(float32From).toHaveBeenCalledTimes(1);
+      expect(digest).toHaveBeenCalledTimes(1);
       expect(insertedBlob).not.toBeNull();
-      expect(blobBase64(insertedBlob)).toBe(
-        blobBase64(new Uint8Array(Float32Array.from(JSON.parse(embeddingJson(3))).buffer)),
-      );
-      expect(receiptDigest).toMatch(/^v2:[a-f0-9]{64}$/);
+      expect(blobBase64(insertedBlob)).toBe(preparedBlobBase64);
+      expect(receiptDigest).toBe(preparedReceiptDigest);
       expect(revisionLookupCount).toBe(1);
     } finally {
       transaction.mockRestore();
