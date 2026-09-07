@@ -28,6 +28,10 @@ export function isYoutubeVerification(value: unknown): value is YoutubeVerificat
 import { isLogId } from "../log-id";
 import { parseArtistsJson } from "./artists";
 import { insertCurrentSonarTrackArtifactChangeInTransaction } from "./artifact-changes";
+import {
+  CATALOGUE_RANK_MATERIAL_REVISION_KEY,
+  catalogueRankMaterialRevisionForFindingStatement,
+} from "./catalogue";
 import { getDb, typedRow } from "./db";
 import { purgeLogCache } from "./edge-cache";
 import {
@@ -45,6 +49,7 @@ import { resolveLogId } from "./log-id";
 import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   markDueWorkSourceMaintenanceStatements,
+  markDueWorkSourceRepairsFromSelectStatement,
 } from "./due-work";
 import { ApiError } from "./spotify";
 import { checkYoutubeOfficial } from "./youtube-official";
@@ -567,6 +572,7 @@ async function updateTrackWithOptions(
   // The third statement, when the write carries a vector: the `track_embeddings` upsert or
   // delete that must travel in the SAME batch as its `has_embedding` half (embedding.ts).
   let embeddingStatement: InStatement | undefined;
+  let catalogueRankMaterialRevision: string | undefined;
   // The coordinate whose cached log surfaces this write stales: the existing one,
   // or the freshly-minted one on a one-time backfill (set below).
   let effectiveLogId = existing.log_id;
@@ -705,6 +711,7 @@ async function updateTrackWithOptions(
         sets.push(SET_EMBEDDING_SQL);
         embeddingStatement = writeEmbeddingSatellite(trackId, update.embedding);
       }
+      catalogueRankMaterialRevision = `track-update:${crypto.randomUUID()}`;
     }
 
     if (update.galaxyId !== undefined) {
@@ -1175,7 +1182,6 @@ async function updateTrackWithOptions(
     update.embedding === undefined ? Number(existing.has_embedding) === 1 : update.embedding !== "";
   const isRankable = nextKey !== null && nextHasEmbedding;
   const rankableDelta = Number(isRankable) - Number(wasRankable);
-
   // Source statements come first, each fired only when its half actually has something to write;
   // the due/public maintenance statements follow in the same fixed list so every changes()-based
   // marker still reads the immediately preceding result. Non-embedding updates issue this list as
@@ -1215,29 +1221,38 @@ async function updateTrackWithOptions(
         ]
       : []),
     ...(embeddingStatement ? [embeddingStatement] : []),
-    ...markDueWorkSourceMaintenanceStatements(
-      [
-        { subjectId: trackId, subjectType: "track" },
-        ...(embeddingStatement
-          ? [
-              {
-                subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-                subjectType: "track" as const,
-              },
-            ]
-          : []),
-      ],
-      {
-        producer: "track-update",
-        publicProjectionImpact: {
-          impact: update.key === undefined ? "neither" : "public_aggregates",
-          justification:
-            update.key === undefined
-              ? "This update does not write tracks.key."
-              : "This update writes tracks.key.",
-        },
+    ...(catalogueRankMaterialRevision === undefined
+      ? []
+      : [catalogueRankMaterialRevisionForFindingStatement(trackId, catalogueRankMaterialRevision)]),
+    ...markDueWorkSourceMaintenanceStatements([{ subjectId: trackId, subjectType: "track" }], {
+      producer: "track-update",
+      publicProjectionImpact: {
+        impact: update.key === undefined ? "neither" : "public_aggregates",
+        justification:
+          update.key === undefined
+            ? "This update does not write tracks.key."
+            : "This update writes tracks.key.",
       },
-    ),
+    }),
+    ...(catalogueRankMaterialRevision === undefined
+      ? []
+      : [
+          markDueWorkSourceRepairsFromSelectStatement(
+            "track",
+            {
+              args: [
+                DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                trackId,
+                CATALOGUE_RANK_MATERIAL_REVISION_KEY,
+                catalogueRankMaterialRevision,
+              ],
+              sql: `select ? as subject_id
+                where exists (select 1 from findings where track_id = ?)
+                  and exists (select 1 from settings where key = ? and value = ?)`,
+            },
+            { markerVersion: catalogueRankMaterialRevision, producer: "track-update" },
+          ),
+        ]),
     ...(rankableDelta === 0
       ? []
       : [rankableArtistDeltaForTrackStatement(trackId, rankableDelta > 0 ? 1 : -1)]),

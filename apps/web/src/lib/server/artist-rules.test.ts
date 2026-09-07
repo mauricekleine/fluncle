@@ -225,6 +225,29 @@ describe("label artist rules", () => {
     expect(state.rows[0]?.updated_at).toBe(state.rows[0]?.scope_changed_at);
   });
 
+  it("repairs label eligibility without invalidating the unrelated rank corpus", async () => {
+    await seedLabel("lbl_scope_only");
+    const before = await db.batch([
+      `select seed_state from labels where id = 'lbl_scope_only'`,
+      `select count(*) as n from track_artists`,
+    ]);
+    mbMiss();
+
+    await replaceLabelArtistRules("lbl_scope_only", [
+      { artistMbid: "mbid-scope", artistName: "Scope Artist", verdict: "allow" },
+    ]);
+
+    const after = await db.batch([
+      `select seed_state from labels where id = 'lbl_scope_only'`,
+      `select count(*) as n from track_artists`,
+      `select subject_type, subject_id from due_work
+        where work_kind = 'source-repair' order by subject_type, subject_id`,
+    ]);
+    expect(after[0]?.rows).toEqual(before[0]?.rows);
+    expect(after[1]?.rows).toEqual(before[1]?.rows);
+    expect(after[2]?.rows).toEqual([{ subject_id: "lbl_scope_only", subject_type: "label" }]);
+  });
+
   it("stores operator provenance by default and triage provenance when supplied", async () => {
     await seedLabel("lbl_operator_source");
     await seedLabel("lbl_triage_source");

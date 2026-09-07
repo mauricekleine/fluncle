@@ -13,7 +13,23 @@ import {
   listArtifactSnapshot,
   registerArtifactConsumer,
 } from "./artifact-changes";
-import { createIntegrationDb, seedArtist, seedEmbedding, seedTrack } from "./integration-db";
+import { CATALOGUE_RANK_MATERIAL_REVISION_KEY, CATALOGUE_RANK_STATE_KEY } from "./catalogue";
+import {
+  compareDueWorkRows,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  DUE_WORK_SOURCE_REPAIR_KIND,
+  markDueWorkSourceRepairsStatement,
+  readDueWorkProjectionChunk,
+} from "./due-work";
+import { DUE_WORK_BACKFILLS } from "./due-work-registry";
+import { fanOutDueWorkSourceRepairs } from "./due-work-source-repair";
+import {
+  createIntegrationDb,
+  seedArtist,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 
 let db: Client;
 let fixtureDirectory: string | undefined;
@@ -54,6 +70,16 @@ async function rowCount(table: string): Promise<number> {
   const result = await db.execute(`select count(*) as count from ${table}`);
 
   return Number(result.rows[0]?.count ?? 0);
+}
+
+async function drainSourceRepairs(): Promise<void> {
+  for (let step = 0; step < 10; step += 1) {
+    const result = await fanOutDueWorkSourceRepairs(db, { limit: 100 });
+    if (!result.hasMore) {
+      return;
+    }
+  }
+  throw new Error("source repairs did not drain within ten bounded actions");
 }
 
 beforeEach(async () => {
@@ -207,6 +233,203 @@ describe("updateTrack Sonar artifact coupling", () => {
 
     expect(live.rows).toEqual([{ operation: "delete", revision: 2 }]);
     expect(receipts.rows).toEqual([{ revision: 1 }, { revision: 2 }]);
+  });
+
+  it("rebuilds every catalogue-rank page when a finding vector is replaced in place", async () => {
+    const { updateTrack } = await import("./track-update");
+    for (const trackId of [
+      "rank-replace-a",
+      "rank-replace-b",
+      "rank-replace-dismissed",
+      "rank-replace-preaudio",
+    ]) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+    for (const trackId of ["rank-replace-a", "rank-replace-b", "rank-replace-dismissed"]) {
+      await seedEmbedding(db, trackId, JSON.parse(embeddingJson()) as number[]);
+    }
+    await db.execute(`update tracks set dismissed_at = '2026-01-01T00:00:00.000Z'
+      where track_id = 'rank-replace-dismissed'`);
+    await updateTrack(TRACK_ID, { embedding: embeddingJson(1) });
+    await drainSourceRepairs();
+
+    const state = await db.execute({
+      args: [CATALOGUE_RANK_STATE_KEY],
+      sql: "select value from settings where key = ?",
+    });
+    const stateValue = state.rows[0]?.value;
+    if (typeof stateValue !== "string") {
+      throw new Error("catalogue-rank state cache was not populated");
+    }
+    const cached = JSON.parse(stateValue) as { corpus?: string };
+    if (cached.corpus === undefined) {
+      throw new Error("catalogue-rank state cache was not populated");
+    }
+    await db.execute({
+      args: [cached.corpus],
+      sql: `update tracks set catalogue_rank_corpus = ?, nearest_finding_score = 0.25,
+        capture_priority = null where track_id like 'rank-replace-%'`,
+    });
+    await db.execute("delete from due_work where work_kind = 'catalogue-rank'");
+    const completed = await db.execute(`select generation from due_work_rebuilds
+      where work_kind = 'catalogue-rank' and subject_type = 'track'`);
+    const completedGeneration = completed.rows[0]?.generation;
+    expect(typeof completedGeneration).toBe("string");
+
+    await updateTrack(TRACK_ID, { embedding: embeddingJson(2) });
+    const marker = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+      sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+    });
+    expect(marker.rows[0]?.source_version).toMatch(/^track-update:/);
+    expect(
+      (
+        await db.execute({
+          args: [CATALOGUE_RANK_MATERIAL_REVISION_KEY],
+          sql: "select value from settings where key = ?",
+        })
+      ).rows[0]?.value,
+    ).toBe(marker.rows[0]?.source_version);
+
+    expect(await fanOutDueWorkSourceRepairs(db, { limit: 100 })).toMatchObject({
+      deferred: 1,
+      rankRebuildScanned: 5,
+    });
+    const replacement = await db.execute(`select generation, scanned_count, state
+      from due_work_rebuilds where work_kind = 'catalogue-rank' and subject_type = 'track'`);
+    expect(replacement.rows[0]?.generation).not.toBe(completedGeneration);
+    expect(replacement.rows[0]).toMatchObject({ scanned_count: 5, state: "running" });
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from due_work
+            where work_kind = 'catalogue-rank' and state = 'ready'`)
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(2);
+    const generationValue = replacement.rows[0]?.generation;
+    if (typeof generationValue !== "string") {
+      throw new Error("replacement catalogue-rank generation is missing");
+    }
+    const generation = generationValue;
+    const definition = DUE_WORK_BACKFILLS.find(
+      (candidate) => candidate.workKind === "catalogue-rank",
+    );
+    if (definition === undefined) {
+      throw new Error("catalogue-rank rebuild definition is missing");
+    }
+    const actual = await readDueWorkProjectionChunk(db, definition, {
+      generation,
+      limit: 100,
+    });
+    const projectionNow = actual.items[0]?.nextDueAt;
+    if (projectionNow === undefined) {
+      throw new Error("material catalogue-rank projection is missing");
+    }
+    const sources = await definition.readSourceChunk({
+      after: null,
+      client: db,
+      generation,
+      limit: 100,
+    });
+    const expected = sources.flatMap((source) => {
+      const projection = definition.project(source, {
+        generation,
+        now: projectionNow,
+      });
+      return projection === null ? [] : [projection];
+    });
+    expect(compareDueWorkRows(expected, actual.items)).toEqual({
+      mismatched: [],
+      missing: [],
+      unexpected: [],
+    });
+    const replacementState = (
+      await db.execute({
+        args: [CATALOGUE_RANK_STATE_KEY],
+        sql: "select value from settings where key = ?",
+      })
+    ).rows[0]?.value;
+    expect(replacementState).not.toBe(state.rows[0]?.value);
+
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "rank-replace-a", subjectType: "track" }], {
+        producer: "capture-verification",
+      }),
+    );
+    await fanOutDueWorkSourceRepairs(db, { includeCatalogueRank: false, limit: 100 });
+    expect(
+      Number(
+        (
+          await db.execute(`select count(*) as n from due_work
+            where work_kind = 'catalogue-rank' and state = 'ready'`)
+        ).rows[0]?.n ?? 0,
+      ),
+    ).toBe(2);
+    expect(
+      (
+        await db.execute({
+          args: [CATALOGUE_RANK_STATE_KEY],
+          sql: "select value from settings where key = ?",
+        })
+      ).rows[0]?.value,
+    ).toBe(replacementState);
+  });
+
+  it("keeps catalogue-only vector writes on their row-local repair marker", async () => {
+    const { updateTrack } = await import("./track-update");
+    await seedCatalogueTrack(db, { trackId: "rank-catalogue-vector" });
+
+    await updateTrack("rank-catalogue-vector", { embedding: embeddingJson(3) });
+
+    const markers = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND],
+      sql: `select subject_id, source_version from due_work
+        where work_kind = ? order by subject_id`,
+    });
+    expect(markers.rows).toHaveLength(1);
+    expect(markers.rows[0]?.subject_id).toBe("rank-catalogue-vector");
+    expect(markers.rows[0]?.source_version).toMatch(/^track-update:/);
+    expect(
+      (
+        await db.execute({
+          args: [CATALOGUE_RANK_MATERIAL_REVISION_KEY],
+          sql: "select value from settings where key = ?",
+        })
+      ).rows,
+    ).toEqual([]);
+  });
+
+  it("does not advance rank material state for identical finding vector bytes", async () => {
+    const { updateTrack } = await import("./track-update");
+    const embedding = embeddingJson(4);
+    await updateTrack(TRACK_ID, { embedding });
+    await drainSourceRepairs();
+    const revision = (
+      await db.execute({
+        args: [CATALOGUE_RANK_MATERIAL_REVISION_KEY],
+        sql: "select value from settings where key = ?",
+      })
+    ).rows[0]?.value;
+
+    await updateTrack(TRACK_ID, { embedding });
+
+    expect(
+      (
+        await db.execute({
+          args: [CATALOGUE_RANK_MATERIAL_REVISION_KEY],
+          sql: "select value from settings where key = ?",
+        })
+      ).rows[0]?.value,
+    ).toBe(revision);
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows,
+    ).toEqual([]);
   });
 
   it("rolls source, shadow, event, and receipt writes back when the event append fails", async () => {

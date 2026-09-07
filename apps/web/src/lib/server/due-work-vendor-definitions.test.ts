@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS,
   DEEZER_MAX_FAILURES,
   DUE_WORK_VENDOR_SOURCE_COLUMNS,
   DUE_WORK_VENDOR_WORK_KIND_INVENTORY,
   MBID_ISRC_REFRESH_AFTER_MS,
   VENDOR_COOLDOWN_BASE_MS,
+  dueWorkVendorSourceVersion,
   evaluateDueWorkVendorQueue,
   type DueWorkVendorKind,
   type DueWorkVendorSource,
@@ -330,5 +332,33 @@ describe("due-work vendor definitions", () => {
     expect(queue("catalogue-rank", [base], "v5:a")[0]?.sourceVersion).not.toBe(
       queue("catalogue-rank", [base], "v5:b")[0]?.sourceVersion,
     );
+  });
+
+  it("versions catalogue-rank rows from only its declared inputs", () => {
+    const base = source();
+    const baseline = dueWorkVendorSourceVersion(base, "catalogue-rank", "v5:a");
+    expect(baseline).toMatch(/^dw-rank1-/);
+    expect(CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS.length).toBeLessThan(
+      DUE_WORK_VENDOR_SOURCE_COLUMNS.length,
+    );
+
+    for (const column of DUE_WORK_VENDOR_SOURCE_COLUMNS) {
+      const value = base[column];
+      const changed = Array.isArray(value)
+        ? [...value, "changed"]
+        : typeof value === "boolean"
+          ? !value
+          : typeof value === "number"
+            ? value + 1
+            : value === null
+              ? "changed"
+              : `${String(value)}-changed`;
+      const candidate = { ...base, [column]: changed } as DueWorkVendorSource;
+      const version = dueWorkVendorSourceVersion(candidate, "catalogue-rank", "v5:a");
+      expect(version === baseline, column).toBe(
+        !(CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS as readonly string[]).includes(column),
+      );
+    }
+    expect(dueWorkVendorSourceVersion(base, "catalogue-rank", "v5:b")).not.toBe(baseline);
   });
 });

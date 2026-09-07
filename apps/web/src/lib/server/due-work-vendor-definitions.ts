@@ -63,6 +63,16 @@ export const DUE_WORK_VENDOR_SOURCE_COLUMNS = [
   "trackId",
 ] as const;
 
+/** Exact row-local inputs that can change catalogue-rank queue membership or ordering. */
+export const CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS = [
+  "capturePriority",
+  "catalogueRankCorpus",
+  "dismissedAt",
+  "hasEmbedding",
+  "isCatalogue",
+  "trackId",
+] as const satisfies readonly (keyof DueWorkVendorSource)[];
+
 export const DUE_WORK_VENDOR_WORK_KIND_INVENTORY = [
   { family: "catalogue", workKind: "catalogue-rank" },
   { family: "capture", workKind: "capture-verification" },
@@ -240,18 +250,21 @@ export function dueWorkVendorSourceVersion(
   rankCorpus?: string,
 ): string {
   let hash = 0xcbf29ce484222325n;
+  const columns =
+    kind === "catalogue-rank"
+      ? CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS
+      : DUE_WORK_VENDOR_SOURCE_COLUMNS;
   const input = [
     `kind:${kind}`,
-    ...DUE_WORK_VENDOR_SOURCE_COLUMNS.map(
-      (column) => `${column}:${JSON.stringify(source[column])}`,
-    ),
+    ...columns.map((column) => `${column}:${JSON.stringify(source[column])}`),
     ...(kind === "catalogue-rank" ? [`rankCorpus:${rankCorpus ?? ""}`] : []),
   ].join("\u001f");
   for (const byte of new TextEncoder().encode(input)) {
     hash ^= BigInt(byte);
     hash = BigInt.asUintN(64, hash * 0x100000001b3n);
   }
-  return `dw1-${hash.toString(16).padStart(16, "0")}`;
+  const prefix = kind === "catalogue-rank" ? "dw-rank1" : "dw1";
+  return `${prefix}-${hash.toString(16).padStart(16, "0")}`;
 }
 
 function catalogueRankDueAt(

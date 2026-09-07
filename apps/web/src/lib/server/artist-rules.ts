@@ -7,7 +7,7 @@ import {
 import { getDb, typedRows } from "./db";
 import {
   type DueWorkStatement,
-  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  dueWorkCatalogueRankRepairSubjects,
   markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { LabelNotFoundError } from "./labels";
@@ -266,7 +266,7 @@ export async function replaceLabelArtistRules(
     ...markDueWorkSourceMaintenanceStatements(
       [
         { subjectId: labelId, subjectType: "label" },
-        { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+        ...dueWorkCatalogueRankRepairSubjects("label-artist-rules-replace"),
       ],
       {
         markerVersion: sourceVersion,
