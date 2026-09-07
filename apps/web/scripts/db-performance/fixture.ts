@@ -419,6 +419,7 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     album_image_url text,
     label text,
     spotify_url text,
+    apple_music_url text,
     label_id text,
     album_id text,
     label_scope text not null,
@@ -870,7 +871,8 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
 ] as const;
 
 const TRACK_INSERT = `insert or ignore into perf_tracks
-  (id, title, artists_json, label_id, album_id, label_scope, is_catalogue,
+  (id, title, artists_json, album_image_url, spotify_url, apple_music_url,
+   label_id, album_id, label_scope, is_catalogue,
    youtube_backlog, musicbrainz_isrc_backlog, full_analysis_backlog, release_date, key, created_at,
    anchor_review_json, analyzed_from, artist_credits_backfilled_at, artist_edges_backfilled_at,
    bpm, capture_priority, capture_verification, capture_verified_at, deezer_track_id, demand_score,
@@ -882,7 +884,7 @@ const TRACK_INSERT = `insert or ignore into perf_tracks
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   )`;
 
 const EMBEDDING_BLOB = new Uint8Array(4096);
@@ -896,6 +898,21 @@ function padded(index: number): string {
 
 function syntheticTimestamp(index: number, dayOffset = 0): string {
   return new Date(Date.UTC(2026, 0, 1 + dayOffset, 0, 0, index)).toISOString();
+}
+
+function syntheticTrackSitemapEvidence(index: number): {
+  albumImageUrl: null | string;
+  appleMusicUrl: null | string;
+  spotifyUrl: null | string;
+} {
+  const spotifyUrl = index % 5 === 0 ? null : `synthetic-spotify-url-${padded(index)}`;
+
+  return {
+    albumImageUrl: index % 13 === 0 ? null : `synthetic-album-image-${padded(index)}`,
+    appleMusicUrl:
+      spotifyUrl === null && index % 7 !== 0 ? `synthetic-apple-music-url-${padded(index)}` : null,
+    spotifyUrl,
+  };
 }
 
 function syntheticArtist(index: number): { mbid: null | string; name: string } {
@@ -1140,6 +1157,7 @@ export async function* generateFixture(
     const hasIsrc = index % 4 === 0 ? 0 : 1;
     const isrc = hasIsrc === 1 ? `synthetic-isrc-${padded(index)}` : null;
     const spotifyUri = index % 5 === 0 ? null : `synthetic-spotify-uri-${padded(index)}`;
+    const sitemapEvidence = syntheticTrackSitemapEvidence(index);
     const mbRecordingId = index % 5 === 0 ? `synthetic-recording-${padded(index)}` : null;
     const mbRecordingIdAttemptedAt = index % 7 === 0 ? syntheticTimestamp(index, 1) : null;
     const nearestFindingScore =
@@ -1152,6 +1170,9 @@ export async function* generateFixture(
         `synthetic-track-${padded(index)}`,
         `Synthetic Track ${padded(index)}`,
         JSON.stringify(syntheticTrackCredits(index, counts.artists)),
+        sitemapEvidence.albumImageUrl,
+        sitemapEvidence.spotifyUrl,
+        sitemapEvidence.appleMusicUrl,
         `synthetic-label-${padded(index % counts.labels)}`,
         `synthetic-album-${padded(index % counts.albums)}`,
         selected(index, counts.tracks, counts.enabledLabelTracks) ? "enabled" : "other",
