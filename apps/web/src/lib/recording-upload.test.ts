@@ -183,6 +183,8 @@ function messageOf(error: unknown): string {
 const PART_SIZE = 16 * 1024 * 1024;
 /** Every `fetch` the uploader made: the complete POST and/or the abort DELETE. */
 let fetches: { method?: string; url: string }[] = [];
+/** The XML body of the completion POST, so the assembled part list itself can be asserted. */
+let completeBody: string | undefined;
 let fetchImpl: (url: string) => Response;
 
 beforeEach(() => {
@@ -190,10 +192,15 @@ beforeEach(() => {
   outcomes = [];
   sent.length = 0;
   fetches = [];
+  completeBody = undefined;
   fetchImpl = () => new Response("", { status: 200 });
   installFakeXhr();
   vi.stubGlobal("fetch", (input: string, init?: RequestInit) => {
     fetches.push({ method: init?.method, url: String(input) });
+
+    if (String(input).endsWith("/complete")) {
+      completeBody = typeof init?.body === "string" ? init.body : undefined;
+    }
 
     return Promise.resolve(fetchImpl(String(input)));
   });
@@ -218,8 +225,16 @@ describe("uploadFileToPresign — the happy path", () => {
       "https://r2.example/part/1",
       "https://r2.example/part/2",
     ]);
-    // The completion carries both ETags in ascending part order, and nothing was aborted.
+    // Nothing was aborted, and the completion really carries each part's OWN ETag in
+    // ascending part order — the pairing R2 assembles the object from, and the one thing a
+    // shuffled `completed.push` would corrupt while every other assertion here still passed.
     expect(fetches).toEqual([{ method: "POST", url: "https://r2.example/complete" }]);
+    expect(completeBody).toBe(
+      "<CompleteMultipartUpload>" +
+        "<Part><PartNumber>1</PartNumber><ETag>&quot;a&quot;</ETag></Part>" +
+        "<Part><PartNumber>2</PartNumber><ETag>&quot;b&quot;</ETag></Part>" +
+        "</CompleteMultipartUpload>",
+    );
   });
 
   it("reports byte-level progress that never exceeds the file size", async () => {
@@ -323,8 +338,9 @@ describe("uploadFileToPresign — permanent failures never retry", () => {
   });
 
   it("refuses to start a part the presign never signed", async () => {
-    // A two-part plan against a one-part presign: the mismatch is caught before any PUT,
-    // so a truncated object is never assembled from a partial part list.
+    // A two-part plan against a one-part presign: part 1 uploads, then the missing part 2
+    // is caught BEFORE its PUT and before the completion POST — so a truncated object is
+    // never assembled from a partial part list.
     const error = await rejection(uploadFileToPresign(fakeFile(PART_SIZE + 1), presignFor(1)));
 
     expect(messageOf(error)).toBe("The upload was not signed for part 2 of 2");
