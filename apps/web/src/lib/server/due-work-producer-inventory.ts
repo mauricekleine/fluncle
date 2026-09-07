@@ -624,6 +624,27 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   },
   {
     disposition: "test-fixture",
+    file: "scripts/db-performance/device-resources.ts",
+    rationale:
+      "Builds and mutates an invocation-local Bun SQLite source solely for the local device resource harness.",
+    sites: [
+      "scripts/db-performance/device-resources.ts:insert:artists:8c220465",
+      "scripts/db-performance/device-resources.ts:insert:labels:73281f1c",
+      "scripts/db-performance/device-resources.ts:insert:albums:cb1fa531",
+      "scripts/db-performance/device-resources.ts:insert:tracks:65a7061c",
+      "scripts/db-performance/device-resources.ts:insert:findings:ccca5fec",
+      "scripts/db-performance/device-resources.ts:insert:track_artists:3bdb1b0a",
+      "scripts/db-performance/device-resources.ts:insert:track_embeddings:0de18a74",
+      "scripts/db-performance/device-resources.ts:update:tracks:179ebf86",
+      "scripts/db-performance/device-resources.ts:update:artists:d308ffbd",
+      "scripts/db-performance/device-resources.ts:update:labels:d2daaa7a",
+      "scripts/db-performance/device-resources.ts:update:albums:03154759",
+      "scripts/db-performance/device-resources.ts:delete:track_artists:ad3d8353",
+      "scripts/db-performance/device-resources.ts:insert:track_artists:dbc0406d",
+    ],
+  },
+  {
+    disposition: "test-fixture",
     file: "scripts/lib/scale-seed.ts",
     rationale: "Seeds deterministic local performance fixtures and never targets application data.",
     sites: [
@@ -858,6 +879,21 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
       "scripts/bench-frontier-novelty.ts:insert:tracks:e7e471d8",
       "scripts/bench-frontier-novelty.ts:insert:tracks:e7e471d8:2",
       "scripts/bench-frontier-novelty.ts:insert:findings:354cf5e9",
+    ],
+  },
+  {
+    disposition: "test-fixture",
+    file: "scripts/db-performance/device-resources.ts",
+    rationale: "Builds and mutates an invocation-local Bun SQLite source only.",
+    sites: [
+      "scripts/db-performance/device-resources.ts:insert:labels:73281f1c",
+      "scripts/db-performance/device-resources.ts:insert:tracks:65a7061c",
+      "scripts/db-performance/device-resources.ts:insert:findings:ccca5fec",
+      "scripts/db-performance/device-resources.ts:insert:track_artists:3bdb1b0a",
+      "scripts/db-performance/device-resources.ts:update:tracks:179ebf86",
+      "scripts/db-performance/device-resources.ts:update:labels:d2daaa7a",
+      "scripts/db-performance/device-resources.ts:delete:track_artists:ad3d8353",
+      "scripts/db-performance/device-resources.ts:insert:track_artists:dbc0406d",
     ],
   },
   {
