@@ -33,6 +33,8 @@ import { expectedFixtureTableCardinalities } from "./fixture";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const DEFAULT_ARTIFACT_ROOT = join(tmpdir(), "fluncle-db-performance-release");
+const DEVICE_RESOURCE_SERVICE_DEADLINE_MS = 3_430_000;
+const DEVICE_RESOURCE_PROFILE_DEADLINE_MS = 3_400_000;
 
 export const RELEASE_MANIFEST_SCHEMA_VERSION = 6 as const;
 const PROCESS_STOP_GRACE_MS = 2_000;
@@ -46,6 +48,7 @@ const CHILD_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 const COMPONENT_COMMAND_TIMEOUT_MS = 5 * 60_000;
 const SONAR_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const SONAR_RESOURCE_COMMAND_TIMEOUT_MS = 10 * 60_000;
+const DEVICE_RESOURCE_COMMAND_TIMEOUT_MS = 3_400_000;
 const PROFILE_COMMAND_TIMEOUT_MS: Record<ScaleProfile, number> = {
   "1x": 5 * 60_000,
   "2x": 8 * 60_000,
@@ -71,6 +74,8 @@ export const REQUIRED_RELEASE_CATEGORIES = [
   "device-mirror",
   "device-scaled-convergence",
   "device-resource-bounds",
+  "device-resource-1x",
+  "device-resource-2x",
   "sonar-rust",
   "sonar-scaled-delta-full-rebuild",
   "sonar-resource-bounds",
@@ -270,6 +275,11 @@ export type SonarResourceValidation = {
   report: JsonRecord | null;
 };
 
+export type DeviceResourceValidation = {
+  errors: string[];
+  report: JsonRecord | null;
+};
+
 export function parseReleaseArguments(args: readonly string[]): ReleaseOptions {
   let candidateCommit: string | null = null;
   let outputDirectory: string | null = null;
@@ -375,6 +385,10 @@ function sameCardinality(
       (key, index) => key === expectedKeys[index] && observed[key] === expected[key],
     )
   );
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return isNonNegativeFiniteNumber(value) && value > 0;
 }
 
 function stringArray(value: unknown): string[] | null {
@@ -584,7 +598,264 @@ export function validateSonarResourceReport(rawJson: string): SonarResourceValid
   return { errors, report: errors.length === 0 ? parsed : null };
 }
 
+function deviceSourceCounts(counts: FixtureCounts): Record<string, number> {
+  return {
+    albums: counts.albums,
+    artists: counts.artists,
+    findings: counts.findings,
+    labels: counts.labels,
+    track_artists: counts.trackArtists,
+    track_embeddings: counts.trackEmbeddings,
+    tracks: counts.tracks,
+  };
+}
+
+/** The anchored cut includes embedding-backed tracks and all artist edges attached to them. */
+function anchoredDeviceParityCounts(counts: FixtureCounts): Record<string, number> {
+  return {
+    albums: counts.albums,
+    artists: counts.artists,
+    findings: counts.findings,
+    labels: counts.labels,
+    track_artists: counts.trackEmbeddings + (counts.trackArtists - counts.tracks),
+    tracks: counts.trackEmbeddings,
+  };
+}
+
+function validateDeviceResourceHeader(
+  report: JsonRecord,
+  profile: ScaleProfile,
+  errors: string[],
+): void {
+  if (
+    report.schemaVersion !== 1 ||
+    report.profile !== profile ||
+    report.exactProfileCardinality !== true
+  ) {
+    errors.push("device resource report profile identity is malformed");
+  }
+  const environment = isRecord(report.environment) ? report.environment : null;
+  if (
+    environment?.sourceReplica !== "local-file-copy" ||
+    environment.sourceReplicaNetworkMeasured !== false ||
+    environment.target !== "local-bun-sqlite" ||
+    environment.targetHostedLibsqlMeasured !== false
+  ) {
+    errors.push("device resource report local-only scope is malformed");
+  }
+}
+
+function validateDeviceResourceFixture(
+  report: JsonRecord,
+  profile: ScaleProfile,
+  errors: string[],
+): void {
+  const fixture = isRecord(report.fixture) ? report.fixture : null;
+  const manifest = getScaleManifest(profile);
+  if (
+    !sameCardinality(readNumericRecord(fixture?.counts), manifest.counts) ||
+    !sameCardinality(readNumericRecord(fixture?.census), deviceSourceCounts(manifest.counts)) ||
+    !isRecord(fixture?.embeddingBytes) ||
+    fixture.embeddingBytes.minimum !== manifest.vector.bytesPerEmbedding ||
+    fixture.embeddingBytes.maximum !== manifest.vector.bytesPerEmbedding ||
+    typeof fixture?.sourceFingerprint !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(fixture.sourceFingerprint)
+  ) {
+    errors.push("device resource report fixture census or fingerprint is malformed");
+  }
+}
+
+function validateDeviceResourceWindows(
+  report: JsonRecord,
+  profile: ScaleProfile,
+  errors: string[],
+): void {
+  const deadline = isRecord(report.deadline) ? report.deadline : null;
+  const measurements = isRecord(report.measurements) ? report.measurements : null;
+  const windows = isRecord(report.windows) ? report.windows : null;
+  if (
+    deadline?.serviceDeadlineMs !== 3_430_000 ||
+    deadline.profileDeadlineMs !== 3_400_000 ||
+    deadline.withinServiceDeadline !== true ||
+    !isNonNegativeFiniteNumber(deadline.headroomMs)
+  ) {
+    errors.push("device resource report deadline evidence is malformed");
+  }
+  const phaseDurations: number[] = [];
+  for (const field of [
+    "incrementalRefresh",
+    "fullRebuild",
+    "corruptReplicaRecovery",
+    "interruptedStageRecovery",
+  ]) {
+    const measurement = isRecord(measurements?.[field]) ? measurements[field] : null;
+    if (
+      measurement?.sampleCount !== 1 ||
+      typeof measurement.startedAt !== "string" ||
+      typeof measurement.completedAt !== "string" ||
+      !isNonNegativeFiniteNumber(measurement.wallDurationMs) ||
+      measurement.wallDurationMs > DEVICE_RESOURCE_PROFILE_DEADLINE_MS
+    ) {
+      errors.push(`device resource report ${field} single-sample window is malformed`);
+    } else {
+      phaseDurations.push(measurement.wallDurationMs);
+    }
+  }
+  if (
+    windows?.samples !== 4 ||
+    typeof windows.startedAt !== "string" ||
+    !isNonNegativeFiniteNumber(windows.wallDurationMs) ||
+    windows.wallDurationMs > DEVICE_RESOURCE_PROFILE_DEADLINE_MS ||
+    windows.wallDurationMs > DEVICE_RESOURCE_SERVICE_DEADLINE_MS ||
+    windows.wallDurationMs < phaseDurations.reduce((total, duration) => total + duration, 0) ||
+    deadline?.headroomMs !== DEVICE_RESOURCE_SERVICE_DEADLINE_MS - windows.wallDurationMs
+  ) {
+    errors.push("device resource report aggregate window is malformed");
+  }
+}
+
+function validateDeviceResourcePeak(report: JsonRecord, errors: string[]): void {
+  const peak = report.peak;
+  if (!isRecord(peak)) {
+    errors.push("device resource report peak is malformed");
+    return;
+  }
+  for (const field of [
+    "heapUsedSampledBytes",
+    "replicaBytesAfterCheckpoint",
+    "replicaBytesBeforeCheckpoint",
+    "replicaWalBytesAfterCheckpoint",
+    "replicaWalBytesBeforeCheckpoint",
+    "rssHighWaterBytes",
+    "rssSampledBytes",
+    "aggregateDiskPeakBytes",
+    "aggregateDiskPeakFiles",
+    "simultaneousGenerationBytes",
+    "simultaneousGenerationFiles",
+    "stagedTargetPeakBytes",
+    "stagedTargetPeakFiles",
+  ]) {
+    if (!isNonNegativeFiniteNumber(peak[field])) {
+      errors.push(`device resource report peak ${field} is malformed`);
+    }
+  }
+  if (
+    !isPositiveFiniteNumber(peak.rssHighWaterBytes) ||
+    !isPositiveFiniteNumber(peak.rssSampledBytes) ||
+    peak.rssHighWaterBytes < peak.rssSampledBytes
+  ) {
+    errors.push("device resource report RSS high-water is below sampled RSS");
+  }
+  if (
+    !isPositiveFiniteNumber(peak.aggregateDiskPeakBytes) ||
+    !isPositiveFiniteNumber(peak.aggregateDiskPeakFiles) ||
+    !isPositiveFiniteNumber(peak.simultaneousGenerationBytes) ||
+    peak.simultaneousGenerationFiles !== 2 ||
+    !isPositiveFiniteNumber(peak.stagedTargetPeakBytes) ||
+    !isPositiveFiniteNumber(peak.stagedTargetPeakFiles)
+  ) {
+    errors.push("device resource report disk peak evidence is malformed");
+  }
+  if (
+    peak.replicaWalBytesBeforeCheckpoint === undefined ||
+    !isPositiveFiniteNumber(peak.replicaWalBytesBeforeCheckpoint) ||
+    peak.replicaWalBytesAfterCheckpoint !== 0
+  ) {
+    errors.push("device resource report replica WAL checkpoint evidence is malformed");
+  }
+  if (
+    stringArray(peak.simultaneousGenerationLabels) === null ||
+    !sameStringArray(stringArray(peak.simultaneousGenerationLabels) ?? [], [
+      "candidate-generation",
+      "last-verified-generation",
+    ])
+  ) {
+    errors.push("device resource report generation overlap labels are malformed");
+  }
+}
+
+function validateDeviceResourceParity(
+  report: JsonRecord,
+  profile: ScaleProfile,
+  errors: string[],
+): void {
+  const parity = isRecord(report.parity) ? report.parity : null;
+  const expected = anchoredDeviceParityCounts(getScaleManifest(profile).counts);
+  for (const field of [
+    "afterIncrementalRefresh",
+    "afterFullRebuild",
+    "afterCorruptReplicaRecovery",
+    "afterInterruptedStageRecovery",
+  ]) {
+    const evidence = isRecord(parity?.[field]) ? parity[field] : null;
+    const rowCounts = readNumericRecord(evidence?.rowCounts);
+    if (
+      typeof evidence?.generationFingerprint !== "string" ||
+      !/^sha256:[0-9a-f]{64}$/.test(evidence.generationFingerprint) ||
+      evidence.targetSourceWatermark !== evidence.generationFingerprint ||
+      rowCounts === null ||
+      !sameCardinality(
+        rowCounts,
+        Object.fromEntries(DEVICE_RESOURCE_PARITY_TABLES.map((table) => [table, expected[table]])),
+      ) ||
+      !DEVICE_RESOURCE_PARITY_TABLES.every((table) => isPositiveFiniteNumber(rowCounts[table]))
+    ) {
+      errors.push(`device resource report ${field} parity evidence is malformed`);
+    }
+  }
+}
+
+function validateDeviceResourceRevision(report: JsonRecord, errors: string[]): void {
+  const revision = isRecord(report.revision) ? report.revision : null;
+  if (
+    revision?.workingTreeDirty !== false ||
+    typeof revision.gitHead !== "string" ||
+    !/^[0-9a-f]{40}$/.test(revision.gitHead) ||
+    report.candidateCommit !== revision.gitHead
+  ) {
+    errors.push("device resource report revision binding is malformed");
+  }
+}
+
+export function validateDeviceResourceReport(
+  rawJson: string,
+  profile: ScaleProfile,
+  expectedCommit: string | null = null,
+): DeviceResourceValidation {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch (error) {
+    return {
+      errors: [`device resource stdout is not one JSON document: ${errorMessage(error)}`],
+      report: null,
+    };
+  }
+  if (!isRecord(parsed)) {
+    return { errors: ["device resource report root is not an object"], report: null };
+  }
+  const errors: string[] = [];
+  validateDeviceResourceHeader(parsed, profile, errors);
+  validateDeviceResourceFixture(parsed, profile, errors);
+  validateDeviceResourceWindows(parsed, profile, errors);
+  validateDeviceResourcePeak(parsed, errors);
+  validateDeviceResourceParity(parsed, profile, errors);
+  validateDeviceResourceRevision(parsed, errors);
+  if (expectedCommit !== null && parsed.candidateCommit !== expectedCommit) {
+    errors.push("device resource report candidate commit does not match the release candidate");
+  }
+  return { errors, report: errors.length === 0 ? parsed : null };
+}
+
 const DISTRIBUTION_FIELDS = ["max", "p50", "p95", "p99"] as const;
+const DEVICE_RESOURCE_PARITY_TABLES = [
+  "tracks",
+  "findings",
+  "artists",
+  "labels",
+  "albums",
+  "track_artists",
+] as const;
 
 function isDistribution(value: unknown): boolean {
   return (
@@ -1410,11 +1681,25 @@ function buildReleaseCommands(
       timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
-      categories: ["device-mirror", "device-scaled-convergence", "device-resource-bounds"],
+      categories: ["device-mirror", "device-scaled-convergence"],
       command: ["bun", "test", "device-mirror-derivation.test.ts", "device-mirror.test.ts"],
       cwd: "docs/agents/hermes/scripts",
       id: "component-device-mirror",
       timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
+    },
+    {
+      categories: ["device-resource-bounds", "device-resource-1x"],
+      command: ["bun", "run", "scripts/db-performance/device-resources.ts", "--profile", "1x"],
+      cwd: "apps/web",
+      id: "component-device-resources-1x",
+      timeoutMs: DEVICE_RESOURCE_COMMAND_TIMEOUT_MS,
+    },
+    {
+      categories: ["device-resource-2x"],
+      command: ["bun", "run", "scripts/db-performance/device-resources.ts", "--profile", "2x"],
+      cwd: "apps/web",
+      id: "component-device-resources-2x",
+      timeoutMs: DEVICE_RESOURCE_COMMAND_TIMEOUT_MS,
     },
     {
       categories: ["sonar-resource-bounds"],
@@ -2168,6 +2453,43 @@ async function captureSonarResourceArtifact(options: {
   return { artifact, errors: validation.errors };
 }
 
+function deviceResourceProfileForCommand(commandId: string): ScaleProfile | null {
+  if (commandId === "component-device-resources-1x") {
+    return "1x";
+  }
+  if (commandId === "component-device-resources-2x") {
+    return "2x";
+  }
+  return null;
+}
+
+async function captureDeviceResourceArtifact(options: {
+  artifacts: Map<string, ReleaseArtifactEvidence>;
+  artifactFilenames: Set<string>;
+  candidateCommit: string | null;
+  commandArtifacts: string[];
+  commandId: string;
+  outputDirectory: string;
+  stdout: string;
+}): Promise<string[]> {
+  const profile = deviceResourceProfileForCommand(options.commandId);
+  if (profile === null) {
+    return [];
+  }
+  const validation = validateDeviceResourceReport(options.stdout, profile, options.candidateCommit);
+  if (validation.report === null) {
+    return validation.errors;
+  }
+  const contents = `${JSON.stringify(validation.report, null, 2)}\n`;
+  const reportPath = join(options.outputDirectory, "device", `${profile}-resource-proof.json`);
+  await writeText(reportPath, contents);
+  const artifact = manifestArtifactPath(options.outputDirectory, reportPath);
+  options.commandArtifacts.push(artifact);
+  options.artifactFilenames.add(artifact);
+  options.artifacts.set(artifact, buildArtifactEvidence(artifact, contents));
+  return [];
+}
+
 function selectReleaseCandidate(
   requestedCommit: string | null,
   invocationCommit: string | null,
@@ -2266,6 +2588,17 @@ async function runRelease(
       }
 
       const validationFailures = validateChildResult(child);
+      validationFailures.push(
+        ...(await captureDeviceResourceArtifact({
+          artifactFilenames,
+          artifacts,
+          candidateCommit,
+          commandArtifacts,
+          commandId: definition.id,
+          outputDirectory,
+          stdout: child.stdout,
+        })),
+      );
       const sonarResourceCapture = await captureSonarResourceArtifact({
         artifactFilenames,
         artifacts,

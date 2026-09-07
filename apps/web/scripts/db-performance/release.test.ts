@@ -40,6 +40,7 @@ import {
   validateChildResult,
   validateDominantRegressionRuntimeCoverage,
   validateExternalArtifactDirectory,
+  validateDeviceResourceReport,
   validateProfileReport,
   validatePortableArtifactFilename,
   validateSonarResourceReport,
@@ -326,6 +327,99 @@ function validSonarResourceReport(): string {
   });
 }
 
+function validDeviceResourceReport(profile: "1x" | "2x"): string {
+  const counts = getScaleManifest(profile).counts;
+  const anchoredTrackArtists = counts.trackEmbeddings + (counts.trackArtists - counts.tracks);
+  return JSON.stringify({
+    candidateCommit: "a".repeat(40),
+    deadline: {
+      headroomMs: 3_429_996,
+      profileDeadlineMs: 3_400_000,
+      serviceDeadlineMs: 3_430_000,
+      withinServiceDeadline: true,
+    },
+    environment: {
+      sourceReplica: "local-file-copy",
+      sourceReplicaNetworkMeasured: false,
+      target: "local-bun-sqlite",
+      targetHostedLibsqlMeasured: false,
+    },
+    exactProfileCardinality: true,
+    fixture: {
+      census: {
+        albums: counts.albums,
+        artists: counts.artists,
+        findings: counts.findings,
+        labels: counts.labels,
+        track_artists: counts.trackArtists,
+        track_embeddings: counts.trackEmbeddings,
+        tracks: counts.tracks,
+      },
+      counts,
+      embeddingBytes: { maximum: 4096, minimum: 4096 },
+      sourceFingerprint: `sha256:${"b".repeat(64)}`,
+    },
+    measurements: Object.fromEntries(
+      [
+        "incrementalRefresh",
+        "fullRebuild",
+        "corruptReplicaRecovery",
+        "interruptedStageRecovery",
+      ].map((field) => [
+        field,
+        {
+          completedAt: "2026-01-01T00:00:01.000Z",
+          sampleCount: 1,
+          startedAt: "2026-01-01T00:00:00.000Z",
+          wallDurationMs: 1,
+        },
+      ]),
+    ),
+    parity: Object.fromEntries(
+      [
+        "afterIncrementalRefresh",
+        "afterFullRebuild",
+        "afterCorruptReplicaRecovery",
+        "afterInterruptedStageRecovery",
+      ].map((field) => [
+        field,
+        {
+          generationFingerprint: `sha256:${"c".repeat(64)}`,
+          rowCounts: {
+            albums: counts.albums,
+            artists: counts.artists,
+            findings: counts.findings,
+            labels: counts.labels,
+            track_artists: anchoredTrackArtists,
+            tracks: counts.trackEmbeddings,
+          },
+          targetSourceWatermark: `sha256:${"c".repeat(64)}`,
+        },
+      ]),
+    ),
+    peak: {
+      aggregateDiskPeakBytes: 3,
+      aggregateDiskPeakFiles: 3,
+      heapUsedSampledBytes: 1,
+      replicaBytesAfterCheckpoint: 1,
+      replicaBytesBeforeCheckpoint: 1,
+      replicaWalBytesAfterCheckpoint: 0,
+      replicaWalBytesBeforeCheckpoint: 1,
+      rssHighWaterBytes: 2,
+      rssSampledBytes: 1,
+      simultaneousGenerationBytes: 1,
+      simultaneousGenerationFiles: 2,
+      simultaneousGenerationLabels: ["candidate-generation", "last-verified-generation"],
+      stagedTargetPeakBytes: 1,
+      stagedTargetPeakFiles: 1,
+    },
+    profile,
+    revision: { gitHead: "a".repeat(40), workingTreeDirty: false },
+    schemaVersion: 1,
+    windows: { samples: 4, startedAt: "2026-01-01T00:00:00.000Z", wallDurationMs: 4 },
+  });
+}
+
 function child(overrides: Partial<ChildResult> = {}): ChildResult {
   return {
     durationMs: 1,
@@ -360,6 +454,68 @@ function commandResult(overrides: Partial<ReleaseCommandResult> = {}): ReleaseCo
 }
 
 describe("database performance release proof", () => {
+  it("validates exact local-only device resource report evidence", () => {
+    expect(validateDeviceResourceReport(validDeviceResourceReport("1x"), "1x").errors).toEqual([]);
+
+    const badScope = JSON.parse(validDeviceResourceReport("1x"));
+    badScope.environment.targetHostedLibsqlMeasured = true;
+    expect(validateDeviceResourceReport(JSON.stringify(badScope), "1x").errors).toContain(
+      "device resource report local-only scope is malformed",
+    );
+
+    const badWindow = JSON.parse(validDeviceResourceReport("2x"));
+    badWindow.measurements.fullRebuild.sampleCount = 2;
+    expect(validateDeviceResourceReport(JSON.stringify(badWindow), "2x").errors).toContain(
+      "device resource report fullRebuild single-sample window is malformed",
+    );
+
+    const badWal = JSON.parse(validDeviceResourceReport("1x"));
+    badWal.peak.replicaWalBytesBeforeCheckpoint = 0;
+    expect(validateDeviceResourceReport(JSON.stringify(badWal), "1x").errors).toContain(
+      "device resource report replica WAL checkpoint evidence is malformed",
+    );
+
+    const badParity = JSON.parse(validDeviceResourceReport("1x"));
+    badParity.parity.afterFullRebuild.rowCounts.tracks = 0;
+    expect(validateDeviceResourceReport(JSON.stringify(badParity), "1x").errors).toContain(
+      "device resource report afterFullRebuild parity evidence is malformed",
+    );
+
+    const badGenerationFiles = JSON.parse(validDeviceResourceReport("1x"));
+    badGenerationFiles.peak.simultaneousGenerationFiles = 9;
+    expect(validateDeviceResourceReport(JSON.stringify(badGenerationFiles), "1x").errors).toContain(
+      "device resource report disk peak evidence is malformed",
+    );
+
+    const badDeadline = JSON.parse(validDeviceResourceReport("1x"));
+    badDeadline.measurements.incrementalRefresh.wallDurationMs = 9_999_999;
+    expect(validateDeviceResourceReport(JSON.stringify(badDeadline), "1x").errors).toContain(
+      "device resource report incrementalRefresh single-sample window is malformed",
+    );
+
+    expect(
+      validateDeviceResourceReport(validDeviceResourceReport("1x"), "1x", "c".repeat(40)).errors,
+    ).toContain("device resource report candidate commit does not match the release candidate");
+  });
+
+  it("runs exact local device resource proofs independently at 1x and 2x", () => {
+    const definitions = releaseCommands();
+    expect(definitions).toContainEqual(
+      expect.objectContaining({
+        categories: ["device-resource-bounds", "device-resource-1x"],
+        id: "component-device-resources-1x",
+        timeoutMs: 3_400_000,
+      }),
+    );
+    expect(definitions).toContainEqual(
+      expect.objectContaining({
+        categories: ["device-resource-2x"],
+        id: "component-device-resources-2x",
+        timeoutMs: 3_400_000,
+      }),
+    );
+  });
+
   it("parses only one optional output directory", () => {
     expect(parseReleaseArguments([])).toEqual({ candidateCommit: null, outputDirectory: null });
     expect(parseReleaseArguments(["--output-dir", "/tmp/proof"])).toEqual({
