@@ -179,6 +179,24 @@ impl StateStore {
         read_manifest(&self.connection()?).await
     }
 
+    #[cfg(feature = "resource-proof")]
+    pub async fn checkpoint_truncate(&self) -> Result<()> {
+        let conn = self.connection()?;
+        let mut rows = conn
+            .query("pragma wal_checkpoint(truncate)", ())
+            .await
+            .context("checkpointing sonar resource-proof state")?;
+        let row = rows
+            .next()
+            .await?
+            .context("sonar resource-proof checkpoint returned no row")?;
+        let busy = required_i64(&row.get_value(0)?, "checkpoint busy count")?;
+        if busy != 0 {
+            bail!("sonar resource-proof checkpoint remained busy");
+        }
+        Ok(())
+    }
+
     pub async fn replace_from_replica(
         &self,
         tracks: &[SourceTrack],

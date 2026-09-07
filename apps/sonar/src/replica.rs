@@ -4,7 +4,7 @@
 //! centroid SELECT runs against the local replica file.
 
 use std::path::Path;
-#[cfg(test)]
+#[cfg(any(test, feature = "resource-proof"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{bail, Context, Result};
@@ -51,9 +51,9 @@ pub struct LocalSnapshotPage {
 pub struct Replica {
     db: Database,
     conn: Connection,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "resource-proof"))]
     interrupt_next_sync: AtomicBool,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "resource-proof"))]
     local_test_source: bool,
 }
 
@@ -69,15 +69,15 @@ impl Replica {
         Ok(Self {
             db,
             conn,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "resource-proof"))]
             interrupt_next_sync: AtomicBool::new(false),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "resource-proof"))]
             local_test_source: false,
         })
     }
 
-    #[cfg(test)]
-    pub(crate) async fn open_local_test_source(path: impl AsRef<Path>) -> Result<Self> {
+    #[cfg(any(test, feature = "resource-proof"))]
+    pub async fn open_local_test_source(path: impl AsRef<Path>) -> Result<Self> {
         let db = Builder::new_local(path)
             .build()
             .await
@@ -100,11 +100,11 @@ impl Replica {
 
     /// Pull committed frames explicitly. No `sync_interval` is configured.
     pub async fn sync(&self) -> Result<SyncStats> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "resource-proof"))]
         if self.interrupt_next_sync.swap(false, Ordering::SeqCst) {
             bail!("injected embedded replica sync interruption");
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "resource-proof"))]
         if self.local_test_source {
             return Ok(SyncStats::default());
         }
