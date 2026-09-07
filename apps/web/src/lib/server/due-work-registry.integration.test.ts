@@ -2,11 +2,17 @@ import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import { DUE_WORK_PRODUCER_INVENTORY } from "./due-work-producer-inventory";
 import {
+  CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS,
+  DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES,
   DUE_WORK_BACKFILLS,
   DUE_WORK_REGISTERED_KINDS,
+  dueWorkCatalogueRankMarkerMaterialRevision,
+  dueWorkCatalogueRankRepairSubjects,
   dueWorkRepairDefinitions,
 } from "./due-work-registry";
+import { DUE_WORK_VENDOR_SOURCE_COLUMNS } from "./due-work-vendor-definitions";
 import {
   compareDueWorkRows,
   markDueWorkRepair,
@@ -162,11 +168,12 @@ function identity(definition: { subjectType: string; workKind: string }): string
 
 async function allSources(
   definition: DueWorkRebuildDefinition<string, DueWorkRebuildSource>,
+  generation?: string,
 ): Promise<DueWorkRebuildSource[]> {
   const sources: DueWorkRebuildSource[] = [];
   let after: null | string = null;
   for (;;) {
-    const chunk = await definition.readSourceChunk({ after, client: db, limit: 2 });
+    const chunk = await definition.readSourceChunk({ after, client: db, generation, limit: 2 });
     sources.push(...chunk);
     if (chunk.length < 2) {
       return sources;
@@ -203,7 +210,7 @@ async function expectedProjection(
   definition: DueWorkRebuildDefinition<string, DueWorkRebuildSource>,
   generation: string,
 ): Promise<DueWorkProjection<string>[]> {
-  return (await allSources(definition)).flatMap((source) => {
+  return (await allSources(definition, generation)).flatMap((source) => {
     const projection = definition.project(source, {
       generation,
       now: NOW.toISOString(),
@@ -247,6 +254,103 @@ describe("due-work registry", () => {
     expect(new Set(rebuilds).size).toBe(rebuilds.length);
     expect(rebuilds.sort()).toEqual(inventory.sort());
     expect(repairs.sort()).toEqual(inventory.sort());
+  });
+
+  it("versions catalogue-rank work from only its declared eligibility inputs", async () => {
+    expect(CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS.length).toBeLessThan(
+      DUE_WORK_VENDOR_SOURCE_COLUMNS.length,
+    );
+    expect(
+      CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS.every((column) =>
+        DUE_WORK_VENDOR_SOURCE_COLUMNS.includes(column),
+      ),
+    ).toBe(true);
+    const definition = DUE_WORK_BACKFILLS.find(
+      (candidate) => candidate.workKind === "catalogue-rank",
+    );
+    if (definition === undefined) {
+      throw new Error("catalogue-rank definition is missing");
+    }
+    const sourceVersion = async (): Promise<string> => {
+      const source = (
+        await definition.readSourceChunk({ after: "catalogue-", client: db, limit: 1 })
+      )[0];
+      if (source === undefined || source.subjectId !== "catalogue-1") {
+        throw new Error("catalogue-rank source fixture is missing");
+      }
+      return source.sourceVersion;
+    };
+    const baseline = await sourceVersion();
+
+    await db.execute(`update tracks set backfill_apple_music_failures = 7
+      where track_id = 'catalogue-1'`);
+    expect(await sourceVersion()).toBe(baseline);
+
+    await db.execute(`update tracks set capture_priority = 11 where track_id = 'catalogue-1'`);
+    expect(await sourceVersion()).not.toBe(baseline);
+  });
+
+  it("keeps the global rank producer policy narrower than due-work eligibility", () => {
+    const allProducers = DUE_WORK_PRODUCER_INVENTORY.flatMap((entry) => entry.producers);
+    const dependencies = DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES;
+    const invalidators = [...dependencies.required, ...dependencies.ambiguous];
+
+    expect(invalidators.length).toBeLessThan(allProducers.length);
+    expect(invalidators.every((producer) => allProducers.includes(producer))).toBe(true);
+    expect(dependencies.ambiguous).toEqual(["capture-verification-quarantine"]);
+    expect(dueWorkCatalogueRankRepairSubjects("capture-verification-quarantine")).toHaveLength(1);
+    expect(dueWorkCatalogueRankRepairSubjects("track-update")).toHaveLength(1);
+    expect(dependencies.materialRevision).toEqual(["track-update"]);
+    expect(dependencies.materialRevision.every((producer) => allProducers.includes(producer))).toBe(
+      true,
+    );
+    expect(dueWorkCatalogueRankMarkerMaterialRevision("track-update:legacy-token")).toBe(
+      "track-update:legacy-token",
+    );
+    expect(dependencies.required).toEqual(
+      expect.arrayContaining([
+        "certify-track",
+        "publish-track",
+        "artist-credit-edges",
+        "artist-edge-upsert",
+        "label-seed-state",
+      ]),
+    );
+    for (const producer of dependencies.excluded) {
+      expect(allProducers).toContain(producer);
+      expect(dueWorkCatalogueRankRepairSubjects(producer), producer).toEqual([]);
+    }
+  });
+
+  it("uses the semantic rank definition as the default owned rebuild generation", async () => {
+    const definition = DUE_WORK_BACKFILLS.find(
+      (candidate) => candidate.workKind === "catalogue-rank",
+    );
+    if (definition === undefined) {
+      throw new Error("catalogue-rank definition is missing");
+    }
+
+    const checkpoint = await startDueWorkRebuild(db, definition, {
+      newGeneration: true,
+      now: () => NOW,
+    });
+
+    expect(checkpoint.generation).toMatch(/^v6:/);
+    const sources = await definition.readSourceChunk({
+      after: null,
+      client: db,
+      generation: checkpoint.generation,
+      limit: 500,
+    });
+    expect(
+      sources.every((source) => {
+        const projection = definition.project(source, {
+          generation: checkpoint.generation,
+          now: NOW.toISOString(),
+        });
+        return projection === null || projection.sourceVersion === source.sourceVersion;
+      }),
+    ).toBe(true);
   });
 
   it("resumes every definition from zero through a primary-key midpoint to completion", async () => {

@@ -108,7 +108,8 @@ export function writeEmbeddingSatellite(trackId: string, embeddingJson: string):
   return {
     args: [trackId, embeddingJson],
     sql: `insert into track_embeddings (track_id, embedding_blob) values (?, vector32(?))
-              on conflict(track_id) do update set embedding_blob = excluded.embedding_blob`,
+              on conflict(track_id) do update set embedding_blob = excluded.embedding_blob
+                where track_embeddings.embedding_blob <> excluded.embedding_blob`,
   };
 }
 

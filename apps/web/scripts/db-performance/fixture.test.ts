@@ -104,11 +104,11 @@ describe("synthetic database performance fixture", () => {
       "perf_artist_qualification",
       "perf_artist_qualification_contributions",
       "perf_crawl_due_work",
+      "perf_crawl_projection_repairs",
       "perf_public_aggregate_membership",
     ] as const;
     const bounded = [
       "perf_artist_qualification_state",
-      "perf_crawl_projection_repairs",
       "perf_hub_page_anchor_validity",
       "perf_hub_page_anchors",
       "perf_projection_repairs",
@@ -240,6 +240,19 @@ describe("synthetic database performance fixture", () => {
       expect(await scalar(client, "select count(*) as n from perf_crawl_due_work")).toBe(
         projectionFixtureCardinalities(SMALL_COUNTS).perf_crawl_due_work,
       );
+      expect(await scalar(client, "select count(*) as n from perf_crawl_projection_repairs")).toBe(
+        projectionFixtureCardinalities(SMALL_COUNTS).perf_crawl_projection_repairs,
+      );
+      expect(
+        await scalar(
+          client,
+          `select count(*) as n
+             from perf_crawl_due_work due
+             join perf_crawl_frontier source on source.id = due.node_id
+            where due.state = 'scheduled' and source.state = 'done'
+              and source.kind = 'artist' and source.source = 'musicbrainz'`,
+        ),
+      ).toBeGreaterThan(0);
       expect(
         await scalar(client, "select count(*) as n from perf_artist_rules where verdict = 'allow'"),
       ).toBe(3);
@@ -464,7 +477,7 @@ describe("synthetic database performance fixture", () => {
           boundedFixtureCensusRequestCount(getScaleManifest(profile).counts),
         ]),
       ),
-    ).toEqual({ "1x": 92, "2x": 126, "4x": 205 });
+    ).toEqual({ "1x": 93, "2x": 127, "4x": 206 });
   });
 
   it("maps exact 1x request 17 to a covering embedding-index count", async () => {

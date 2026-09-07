@@ -51,6 +51,7 @@ type IndexPlanSpec = {
 type ComparisonSpec = IndexPlanSpec & {
   productionPlanPolicies: ExplainPlanPolicy[];
   references: PerformanceStatement[];
+  supplementalPlanPolicies?: ExplainPlanPolicy[];
   supplementalStatements: PerformanceStatement[];
 };
 
@@ -376,11 +377,6 @@ function genericDatabaseScalePlan(indexName: string): IndexPlanSpec {
           and verdict = 'allow'
         limit 25`,
     ),
-    crawl_due_work_claim_position_idx: indexPlanStatement(
-      indexName,
-      "select claimed_by, claim_token, claim_position from perf_crawl_due_work indexed by __INDEX__ where state = 'leased' and claimed_by = 'synthetic-crawl-worker' and claim_token = 'synthetic-crawl-claim-000000002' order by claimed_by, claim_token, claim_position limit 25",
-      "production-lock",
-    ),
     crawl_due_work_cleanup_idx: indexPlanStatement(
       indexName,
       `select generation, node_id, updated_at from (
@@ -404,44 +400,9 @@ function genericDatabaseScalePlan(indexName: string): IndexPlanSpec {
       ) order by generation, updated_at, node_id limit 25`,
       "production-lock",
     ),
-    crawl_due_work_label_slug_node_id_idx: indexPlanStatement(
-      indexName,
-      "select label_slug, node_id from perf_crawl_due_work indexed by __INDEX__ where label_slug = 'synthetic-label-000000001' order by label_slug, node_id limit 25",
-      "production-lock",
-    ),
     crawl_due_work_lease_idx: indexPlanStatement(
       indexName,
       "select node_id, claim_expires_at from perf_crawl_due_work indexed by __INDEX__ where state = 'leased' and claim_expires_at <= '9999-12-31' order by state, claim_expires_at, node_id limit 25",
-      "production-lock",
-    ),
-    crawl_due_work_parent_id_node_id_idx: indexPlanStatement(
-      indexName,
-      "select parent_id, node_id from perf_crawl_due_work indexed by __INDEX__ where parent_id = 'synthetic-frontier-000000000' order by parent_id, node_id limit 25",
-      "production-lock",
-    ),
-    crawl_due_work_ready_idx: indexPlanStatement(
-      indexName,
-      "select node_id from perf_crawl_due_work indexed by __INDEX__ where state = 'ready' and hop >= 0 order by state, hop, demand_rank, created_at, node_id limit 25",
-      "production-lock",
-    ),
-    crawl_due_work_release_ready_idx: indexPlanStatement(
-      indexName,
-      "select node_id from perf_crawl_due_work indexed by __INDEX__ where state = 'ready' and node_kind = 'release' and storable_rank >= 0 order by state, storable_rank, hop, demand_rank, created_at, node_id limit 25",
-      "production-lock",
-    ),
-    crawl_due_work_repair_idx: indexPlanStatement(
-      indexName,
-      "select node_id from perf_crawl_due_work indexed by __INDEX__ where state = 'repair' and node_id >= 'synthetic-frontier-lifecycle-000000001' order by state, node_id limit 25",
-      "production-lock",
-    ),
-    crawl_due_work_scheduled_idx: indexPlanStatement(
-      indexName,
-      "select node_id, next_due_at from perf_crawl_due_work indexed by __INDEX__ where state = 'scheduled' and next_due_at <= '9999-12-31' order by state, next_due_at, node_id limit 25",
-      "production-lock",
-    ),
-    crawl_projection_repairs_order_idx: indexPlanStatement(
-      indexName,
-      "select source_epoch, source_type, source_id from perf_crawl_projection_repairs indexed by __INDEX__ where source_epoch >= 0 order by source_epoch, source_type, source_id limit 25",
       "production-lock",
     ),
     database_admission_contenders_active_lane_idx: indexPlanStatement(
@@ -789,6 +750,8 @@ async function executeComparisonProof(
   const referenceResults: PerformanceResult[] = [];
   const referencePlanDetails: string[][] = [];
   const referencePlanAnalyses = [];
+  const supplementalPlanDetails: string[][] = [];
+  const supplementalPlanAnalyses = [];
   const supplementalResults: PerformanceResult[] = [];
 
   for (const [index, reference] of spec.references.entries()) {
@@ -807,8 +770,18 @@ async function executeComparisonProof(
     referencePlanDetails.push(details);
     referencePlanAnalyses.push(analyzeExplainPlan(details, productionPolicy));
   }
-  for (const supplemental of spec.supplementalStatements) {
+  for (const [index, supplemental] of spec.supplementalStatements.entries()) {
     supplementalResults.push(await context.client.execute(supplemental));
+    const supplementalPolicy = spec.supplementalPlanPolicies?.[index];
+    if (supplementalPolicy !== undefined) {
+      const supplementalPlan = await context.client.execute({
+        args: supplemental.args,
+        sql: `EXPLAIN QUERY PLAN ${supplemental.sql}`,
+      });
+      const details = explainDetails(supplementalPlan);
+      supplementalPlanDetails.push(details);
+      supplementalPlanAnalyses.push(analyzeExplainPlan(details, supplementalPolicy));
+    }
   }
 
   const referenceRows = referenceResults.flatMap((result) => result.rows);
@@ -823,6 +796,7 @@ async function executeComparisonProof(
   const terminalProofRequestCount =
     spec.references.length * 2 +
     spec.supplementalStatements.length +
+    supplementalPlanAnalyses.length +
     (definition.inventoryEntry.decision === "drop" ? 1 : 0);
 
   return {
@@ -853,6 +827,11 @@ async function executeComparisonProof(
       referenceResultRowCount: referenceRows.length,
       requiredIndex: definition.requiredIndexName,
       resultBound: spec.maxRows,
+      supplementalPlanDetails: JSON.stringify(supplementalPlanDetails),
+      supplementalPlanViolations: supplementalPlanAnalyses.reduce(
+        (count, analysis) => count + analysis.violations.length,
+        0,
+      ),
       terminalPlanRequestCount: 1,
       terminalProofRequestCount,
       totalRequestCount:
@@ -885,7 +864,10 @@ function validateComparisonProof(
     failures.push("reference and replacement-index cardinalities differ");
   }
   if (metadata.productionPlanViolations !== 0) {
-    failures.push("an unforced production plan violated its exact consumer policy");
+    failures.push("a production plan violated its exact consumer policy");
+  }
+  if (metadata.supplementalPlanViolations !== 0) {
+    failures.push("a supplemental plan violated its exact consumer policy");
   }
 
   return failures;
@@ -927,10 +909,126 @@ function forceTracksIndex(
   return statement(forcedSql, reference.args);
 }
 
+const CRAWL_DUE_EVIDENCE_COLUMNS = `claim_expires_at, claim_position, claim_token, claimed_by,
+  created_at, demand_rank, generation, hop, label_slug, next_due_at, node_id, node_kind,
+  parent_id, source_version, state, storable_rank, updated_at`;
+
+function reviewedCrawlComparison(entry: IndexInventoryEntry): ComparisonSpec | undefined {
+  const statements: Partial<Record<string, PerformanceStatement>> = {
+    crawl_due_work_claim_position_idx: statement(
+      `select ${CRAWL_DUE_EVIDENCE_COLUMNS}
+         from perf_crawl_due_work indexed by __INDEX__
+        where state = 'leased' and claimed_by = ? and claim_token = ?
+        order by claim_position`,
+      ["synthetic-crawl-worker", "synthetic-crawl-claim-000000002"],
+    ),
+    crawl_due_work_label_slug_node_id_idx: statement(
+      `select node_id from perf_crawl_due_work indexed by __INDEX__
+        where label_slug = ? and state <> 'repair' limit ?`,
+      ["synthetic-label-000000001", INDEX_EVIDENCE_LIMIT],
+    ),
+    crawl_due_work_parent_id_node_id_idx: statement(
+      `select node_id from perf_crawl_due_work
+        where node_id = ? and state <> 'repair'
+        union all
+        select node_id from perf_crawl_due_work indexed by __INDEX__
+        where parent_id = ? and state <> 'repair' and node_id <> ?1
+        limit ?`,
+      ["synthetic-frontier-000000000", "synthetic-frontier-000000000", INDEX_EVIDENCE_LIMIT],
+    ),
+    crawl_due_work_ready_idx: statement(
+      `select ${CRAWL_DUE_EVIDENCE_COLUMNS}
+         from perf_crawl_due_work indexed by __INDEX__
+        where state = 'ready' and node_id not in (?)
+        order by hop, demand_rank, created_at, node_id
+        limit ?`,
+      ["synthetic-frontier-000000000", INDEX_EVIDENCE_LIMIT],
+    ),
+    crawl_due_work_release_ready_idx: statement(
+      `select ${CRAWL_DUE_EVIDENCE_COLUMNS}
+         from perf_crawl_due_work indexed by __INDEX__
+        where state = 'ready' and node_kind = 'release'
+        order by storable_rank, hop, demand_rank, created_at, node_id
+        limit ?`,
+      [INDEX_EVIDENCE_LIMIT],
+    ),
+    crawl_due_work_repair_idx: statement(
+      `select ${CRAWL_DUE_EVIDENCE_COLUMNS}
+         from perf_crawl_due_work indexed by __INDEX__
+        where state = 'repair' order by node_id limit ?`,
+      [INDEX_EVIDENCE_LIMIT],
+    ),
+    crawl_due_work_scheduled_idx: statement(
+      `select due.node_id
+         from perf_crawl_due_work as due indexed by __INDEX__
+         join perf_crawl_frontier as source on source.id = due.node_id
+        where due.state = 'scheduled' and due.next_due_at <= ?
+          and source.state = 'done' and source.kind = 'artist' and source.source = 'musicbrainz'
+        order by due.next_due_at, due.node_id limit ?`,
+      ["9999-12-31T23:59:59.999Z", INDEX_EVIDENCE_LIMIT],
+    ),
+    crawl_projection_repairs_order_idx: statement(
+      `select source_type, source_id, source_epoch, source_version, created_at, updated_at
+         from perf_crawl_projection_repairs indexed by __INDEX__
+        order by source_epoch, source_type, source_id limit 1`,
+    ),
+  };
+  const template = statements[entry.name];
+  if (template === undefined) {
+    return undefined;
+  }
+
+  const productionLock = {
+    ...indexPlanStatement(entry.name, template.sql, "production-lock"),
+    args: template.args,
+  };
+  const unforced = {
+    ...indexPlanStatement(entry.name, template.sql, "unforced"),
+    args: template.args,
+  };
+  const growingTables =
+    entry.name === "crawl_due_work_scheduled_idx"
+      ? ["perf_crawl_due_work", "perf_crawl_frontier"]
+      : [tableForIndex(entry.name)];
+  const productionRequiredDetails = [new RegExp(`\\b${fixtureIndexName(entry.name)}\\b`, "i")];
+  if (entry.name === "crawl_due_work_parent_id_node_id_idx") {
+    productionRequiredDetails.push(/sqlite_autoindex_perf_crawl_due_work_1/i);
+  }
+  if (entry.name === "crawl_due_work_scheduled_idx") {
+    productionRequiredDetails.push(/perf_crawl_frontier_state_id_idx/i);
+  }
+  const allowFullScanOf =
+    entry.name === "crawl_projection_repairs_order_idx"
+      ? ["perf_crawl_projection_repairs"]
+      : undefined;
+
+  return {
+    maxRows: entry.name === "crawl_due_work_claim_position_idx" ? 500 : INDEX_EVIDENCE_LIMIT,
+    minRows: 1,
+    productionPlanPolicies: [
+      {
+        allowFullScanOf,
+        forbidTempSort: true,
+        growingTables,
+        requiredDetails: productionRequiredDetails,
+      },
+    ],
+    references: [productionLock],
+    statement: productionLock,
+    supplementalPlanPolicies: [{ allowFullScanOf, forbidTempSort: true, growingTables }],
+    supplementalStatements: [unforced],
+  };
+}
+
 function planSpecFor(
   entry: IndexInventoryEntry,
   contractId: string,
 ): IndexPlanSpec | ComparisonSpec {
+  const reviewedCrawl = reviewedCrawlComparison(entry);
+  if (reviewedCrawl !== undefined) {
+    return reviewedCrawl;
+  }
+
   if (entry.name === "tracks_capture_priority_idx") {
     // The compact fixture has no vendor reliability columns. Project equivalent fixture state under
     // the production names, then run the unchanged catalogue predicate/order/result shapes so the

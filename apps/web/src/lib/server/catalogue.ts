@@ -55,7 +55,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import {
   batchDueWorkSourceMutation,
   countDueWorkNow,
-  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  dueWorkCatalogueRankRepairSubjects,
   DueWorkMaintenancePendingError,
   MAX_DUE_WORK_CHUNK_SIZE,
   markDueWorkSourceMaintenanceFromSelectStatements,
@@ -645,16 +645,47 @@ function ladderTierForRow(
  * write-path re-staling (this change) — the version bump forces one final deliberate full re-rank,
  * after which steady state is cheap. (The digest arm — closing the batch-ruling membership-swap hole
  * the size alone left open — was folded in the same `v5` before it ever shipped, so no bump was owed.)
+ * `v6` adds a constant-row material revision for in-place finding-vector replacement. Counts cannot
+ * see replacement, while hashing the full vector corpus on each refresh would put an unbounded blob
+ * scan on the maintenance path. The vector write advances the revision in its source transaction.
  */
-const RANK_LOGIC_VERSION = "v5";
+const RANK_LOGIC_VERSION = "v6";
+
+export const CATALOGUE_RANK_MATERIAL_REVISION_KEY = "catalogue_rank_material_revision";
+export const CATALOGUE_RANK_MATERIAL_REVISION_INITIAL = "initial";
 
 export function rankCorpus(
   findings: number,
   embeddedFindings: number,
   qualifiedArtists: number,
   qualifiedDigest: string,
+  materialRevision: string,
 ): string {
-  return `${RANK_LOGIC_VERSION}:${findings}:${embeddedFindings}:${qualifiedArtists}:${qualifiedDigest}`;
+  const materialDigest = createHash("sha256").update(materialRevision).digest("hex").slice(0, 16);
+  return `${RANK_LOGIC_VERSION}:${findings}:${embeddedFindings}:${qualifiedArtists}:${qualifiedDigest}:${materialDigest}`;
+}
+
+/** Remove the finding-vector content revision for rows whose pre-audio rank cannot depend on it. */
+export function catalogueRankCorpusForTrack(corpus: string, hasEmbedding: boolean): string {
+  if (hasEmbedding || !corpus.startsWith(`${RANK_LOGIC_VERSION}:`)) {
+    return corpus;
+  }
+  const separator = corpus.lastIndexOf(":");
+  return separator < 0 ? corpus : `${corpus.slice(0, separator + 1)}unembedded`;
+}
+
+/** Advance the bounded rank input only when the embedding write belongs to a current finding. */
+export function catalogueRankMaterialRevisionForFindingStatement(
+  trackId: string,
+  revision: string,
+): Exclude<InStatement, string> {
+  return {
+    args: [CATALOGUE_RANK_MATERIAL_REVISION_KEY, revision, trackId],
+    sql: `insert into settings (key, value)
+      select ?, ? where changes() > 0
+        and exists (select 1 from findings where track_id = ?)
+      on conflict(key) do update set value = excluded.value`,
+  };
 }
 
 /**
@@ -739,20 +770,24 @@ export function parseCatalogueRankState(value: string | undefined): CatalogueRan
 async function readLiveCatalogueRankState(): Promise<CatalogueRankState> {
   const db = await getDb();
   const countResult = await db.execute({
-    args: [],
+    args: [CATALOGUE_RANK_MATERIAL_REVISION_KEY],
     // CROSS JOIN pins findings as the tiny driver. See rankCatalogue's ranking doctrine below.
     sql: `select
             (select count(*) from findings) as findings,
             (select count(*) from findings cross join tracks ft on ft.track_id = findings.track_id
-             where ft.has_embedding = 1) as embedded`,
+             where ft.has_embedding = 1) as embedded,
+            coalesce((select value from settings where key = ?),
+              '${CATALOGUE_RANK_MATERIAL_REVISION_INITIAL}') as material_revision`,
   });
   const counts = typedRows<{
     embedded: number;
     findings: number;
+    material_revision: string;
   }>(countResult.rows)[0];
   const findings = Number(counts?.findings ?? 0);
   const embeddedFindings = Number(counts?.embedded ?? 0);
   const qualifiedArtistIds = await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL);
+  const materialRevision = counts?.material_revision ?? CATALOGUE_RANK_MATERIAL_REVISION_INITIAL;
 
   return {
     corpus: rankCorpus(
@@ -760,6 +795,7 @@ async function readLiveCatalogueRankState(): Promise<CatalogueRankState> {
       embeddedFindings,
       qualifiedArtistIds.length,
       qualifiedArtistsDigest(qualifiedArtistIds),
+      materialRevision,
     ),
     embeddedFindings,
     findings,
@@ -1505,7 +1541,7 @@ async function legacyRankCandidates(
   }
 
   const candidateResult = await db.execute({
-    args: [corpus, Math.max(0, limit)],
+    args: [corpus, catalogueRankCorpusForTrack(corpus, false), Math.max(0, limit)],
     sql: `select ct.track_id as track_id,
                ct.title as title,
                ct.artists_json as artists_json,
@@ -1519,7 +1555,8 @@ async function legacyRankCandidates(
         where ct.is_catalogue = 1
           and ct.dismissed_at is null
           and (ct.catalogue_rank_corpus is null
-               or ct.catalogue_rank_corpus <> ?
+               or (ct.has_embedding = 1 and ct.catalogue_rank_corpus <> ?)
+               or (ct.has_embedding = 0 and ct.catalogue_rank_corpus <> ?)
                or (ct.has_embedding = 1
                    and ct.capture_priority is not null
                    and ct.capture_priority >= 0))
@@ -1798,7 +1835,7 @@ async function rankCatalogueBatch(
               "quarantine",
               now,
             ),
-            corpus,
+            catalogueRankCorpusForTrack(corpus, false),
             now,
             candidate.track_id,
           ],
@@ -1955,7 +1992,13 @@ async function rankCatalogueBatch(
       const priority = canonical ? DUPLICATE_CAPTURE_TIER : finding.priority;
 
       writes.push({
-        args: [priority, duplicateOf, corpus, now, candidate.track_id],
+        args: [
+          priority,
+          duplicateOf,
+          catalogueRankCorpusForTrack(corpus, false),
+          now,
+          candidate.track_id,
+        ],
         sql: `update tracks
               set capture_priority = ?,
                   duplicate_of_track_id = ?,
@@ -2040,13 +2083,14 @@ export function rankCatalogue(
 async function countStale(corpus: string): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
-    args: [corpus],
+    args: [corpus, catalogueRankCorpusForTrack(corpus, false)],
     sql: `select count(*) as n
           from tracks ct
           where ct.is_catalogue = 1
             and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
-                 or ct.catalogue_rank_corpus <> ?
+                 or (ct.has_embedding = 1 and ct.catalogue_rank_corpus <> ?)
+                 or (ct.has_embedding = 0 and ct.catalogue_rank_corpus <> ?)
                  or (ct.has_embedding = 1
                      and ct.capture_priority is not null
                      and ct.capture_priority >= 0))`,
@@ -3330,7 +3374,7 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
     ],
     [
       { subjectId: trackId, subjectType: "track" },
-      { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+      ...dueWorkCatalogueRankRepairSubjects("catalogue-flag-wrong-audio"),
     ],
     {
       afterMaintenanceStatements: [repairRankableArtistsForTrackStatement(trackId)],
@@ -3673,7 +3717,7 @@ export async function verifyCapture(
     ],
     [
       { subjectId: trackId, subjectType: "track" },
-      { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+      ...dueWorkCatalogueRankRepairSubjects("capture-verification-quarantine"),
     ],
     {
       afterMaintenanceStatements: [repairRankableArtistsForTrackStatement(trackId)],

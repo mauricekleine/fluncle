@@ -2,8 +2,11 @@ import { type Row } from "@libsql/client";
 
 import { parseArtistsJson } from "./artists";
 import {
+  CATALOGUE_RANK_MATERIAL_REVISION_INITIAL,
+  CATALOGUE_RANK_MATERIAL_REVISION_KEY,
   CATALOGUE_RANK_STATE_KEY,
   QUALIFIED_ARTISTS_SQL,
+  catalogueRankCorpusForTrack,
   parseCatalogueRankState,
   qualifiedArtistsDigest,
   rankCorpus,
@@ -56,6 +59,13 @@ import {
   type DueWorkRepairDefinition,
   type DueWorkRow,
   type DueWorkSubjectType,
+} from "./due-work";
+
+export { CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS } from "./due-work-vendor-definitions";
+export {
+  dueWorkCatalogueRankMarkerMaterialRevision,
+  DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES,
+  dueWorkCatalogueRankRepairSubjects,
 } from "./due-work";
 
 type TrackSourceRow = Row & {
@@ -329,12 +339,17 @@ from tracks t
 left join findings f on f.track_id = t.track_id`;
 
 export async function refreshDueWorkCatalogueRankCorpus(client: DueWorkClient): Promise<string> {
-  const counts = await client.execute(`select
+  const counts = await client.execute({
+    args: [CATALOGUE_RANK_MATERIAL_REVISION_KEY],
+    sql: `select
     (select count(*) from findings) as findings,
     (select count(*) from findings cross join tracks ft on ft.track_id = findings.track_id
-      where ft.has_embedding = 1) as embedded`);
+      where ft.has_embedding = 1) as embedded,
+    coalesce((select value from settings where key = ?),
+      '${CATALOGUE_RANK_MATERIAL_REVISION_INITIAL}') as material_revision`,
+  });
   const countRow = counts.rows[0] as
-    | { embedded: bigint | number; findings: bigint | number }
+    | { embedded: bigint | number; findings: bigint | number; material_revision: string }
     | undefined;
   const artistIds = await readQualifiedArtistIds(client, QUALIFIED_ARTISTS_SQL);
   const corpus = rankCorpus(
@@ -342,6 +357,7 @@ export async function refreshDueWorkCatalogueRankCorpus(client: DueWorkClient): 
     Number(countRow?.embedded ?? 0),
     artistIds.length,
     qualifiedArtistsDigest(artistIds),
+    countRow?.material_revision ?? CATALOGUE_RANK_MATERIAL_REVISION_INITIAL,
   );
   await client.execute({
     args: [
@@ -429,16 +445,33 @@ async function vendorSources(
   client: DueWorkClient,
   kind: DueWorkVendorKind,
   rows: readonly Row[],
+  ownedRankCorpus?: string,
 ): Promise<VendorDueWorkSource[]> {
   const currentRankCorpus =
-    kind === "catalogue-rank" ? await readCatalogueRankCorpus(client) : undefined;
+    kind === "catalogue-rank"
+      ? (ownedRankCorpus ?? (await readCatalogueRankCorpus(client)))
+      : undefined;
   return (rows as VendorSourceRow[]).map((row) => {
     const source = vendorSource(row);
+    const sourceRankCorpus =
+      currentRankCorpus === undefined
+        ? undefined
+        : catalogueRankCorpusForTrack(currentRankCorpus, source.hasEmbedding);
+    const authoritativeSource =
+      kind === "catalogue-rank"
+        ? {
+            ...source,
+            catalogueRankCorpus:
+              source.catalogueRankCorpus === null
+                ? null
+                : catalogueRankCorpusForTrack(source.catalogueRankCorpus, source.hasEmbedding),
+          }
+        : source;
     return {
-      ...source,
+      ...authoritativeSource,
       cursor: source.trackId,
-      rankCorpus: currentRankCorpus,
-      sourceVersion: dueWorkVendorSourceVersion(source, kind, currentRankCorpus),
+      rankCorpus: sourceRankCorpus,
+      sourceVersion: dueWorkVendorSourceVersion(authoritativeSource, kind, sourceRankCorpus),
       subjectId: source.trackId,
     };
   });
@@ -447,7 +480,7 @@ async function vendorSources(
 export async function readVendorDueWorkSourceChunk(
   client: DueWorkClient,
   kind: DueWorkVendorKind,
-  options: { after: null | string; limit: number },
+  options: { after: null | string; generation?: string; limit: number },
 ): Promise<VendorDueWorkSource[]> {
   const result = await client.execute({
     args: [options.after ?? "", options.limit],
@@ -456,7 +489,7 @@ export async function readVendorDueWorkSourceChunk(
       order by t.track_id
       limit ?`,
   });
-  return vendorSources(client, kind, result.rows);
+  return vendorSources(client, kind, result.rows, options.generation);
 }
 
 export async function readVendorDueWorkSource(
@@ -484,18 +517,19 @@ function projectVendorSource(
     rankCorpus: source.rankCorpus,
     sources: [source],
   })[0];
-  return row === undefined
-    ? null
-    : projectionFromRow(
-        row,
-        {
-          generation: context.generation,
-          subjectId: source.trackId,
-          subjectType: "track",
-          workKind: entry.workKind,
-        },
-        context.now,
-      );
+  if (row === undefined) {
+    return null;
+  }
+  return projectionFromRow(
+    row,
+    {
+      generation: context.generation,
+      subjectId: source.trackId,
+      subjectType: "track",
+      workKind: entry.workKind,
+    },
+    context.now,
+  );
 }
 
 function vendorBackfillDefinition(
@@ -503,8 +537,13 @@ function vendorBackfillDefinition(
 ): DueWorkRebuildDefinition<string, VendorDueWorkSource> {
   return {
     project: (source, context) => projectVendorSource(entry, source, context),
-    readSourceChunk: ({ after, client, limit }) =>
-      readVendorDueWorkSourceChunk(client, entry.workKind, { after, limit }),
+    // Rebuild pages derive rank staleness from their owned generation rather than the mutable
+    // cache. This keeps source identity and projection evaluation fixed across every cursor page.
+    readSourceChunk: ({ after, client, generation, limit }) =>
+      readVendorDueWorkSourceChunk(client, entry.workKind, { after, generation, limit }),
+    ...(entry.workKind === "catalogue-rank"
+      ? { resolveGeneration: refreshDueWorkCatalogueRankCorpus }
+      : {}),
     subjectType: "track",
     workKind: entry.workKind,
   };
@@ -1100,6 +1139,9 @@ function registeredDefinition<Source extends DueWorkRebuildSource>(
       ? {}
       : { readAuditSourceChunk: definition.readAuditSourceChunk }),
     readSourceChunk: definition.readSourceChunk,
+    ...(definition.resolveGeneration === undefined
+      ? {}
+      : { resolveGeneration: definition.resolveGeneration }),
     subjectType: definition.subjectType,
     workKind: definition.workKind,
   };

@@ -1,6 +1,7 @@
 import {
   clearDueWorkSourceRepairStatement,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  dueWorkCatalogueRankMarkerMaterialRevision,
   DueWorkMaintenancePendingError,
   DUE_WORK_SOURCE_REPAIR_KIND,
   listDueWorkSourceRepairs,
@@ -15,6 +16,7 @@ import {
   type DueWorkStatement,
   type DueWorkSubjectType,
 } from "./due-work";
+import { CATALOGUE_RANK_MATERIAL_REVISION_KEY } from "./catalogue";
 import {
   DUE_WORK_BACKFILLS,
   dueWorkRepairDefinitions,
@@ -272,14 +274,52 @@ async function advanceCatalogueRankRebuild(
     throw new Error("catalogue-rank due-work rebuild definition is missing");
   }
   const checkpoint = await readDueWorkRebuild(client, definition);
-  // A newer corpus marker must not reset a running whole-catalogue rebuild. Finish the owned
-  // generation, leave the newer marker intact, then start its generation on the next call. This
-  // coalesces continuous catalogue writes without losing an invalidation or starving the cursor.
-  const generation = checkpoint?.state === "running" ? checkpoint.generation : marker.sourceVersion;
-  const newGeneration = checkpoint === undefined || checkpoint.generation !== generation;
-  if (newGeneration) {
-    await refreshDueWorkCatalogueRankCorpus(client);
+  // A running generation owns its cached corpus and cursor until completion. Once it completes,
+  // re-read the live definition: an equivalent newer marker clears against the durable generation,
+  // while a changed definition starts once from page zero.
+  const materialRevision = dueWorkCatalogueRankMarkerMaterialRevision(marker.sourceVersion);
+  if (checkpoint?.state !== "running" && materialRevision !== undefined) {
+    // A marker written before the material-revision protocol may be the only durable proof of an
+    // in-place finding-vector replacement. Adopt it exactly once, but only while that exact marker
+    // still owns the synthetic subject; a concurrent newer mutation therefore wins both rows.
+    await client.execute({
+      args: [
+        CATALOGUE_RANK_MATERIAL_REVISION_KEY,
+        materialRevision,
+        DUE_WORK_SOURCE_REPAIR_KIND,
+        marker.subjectType,
+        marker.subjectId,
+        marker.sourceVersion,
+      ],
+      sql: `insert into settings (key, value)
+        select ?, ? where exists (
+          select 1 from due_work
+          where work_kind = ? and subject_type = ? and subject_id = ?
+            and state = 'repair' and source_version = ?
+        )
+        on conflict(key) do update set value = excluded.value`,
+    });
   }
+  const validatedCorpus =
+    checkpoint?.state === "running" ? undefined : await refreshDueWorkCatalogueRankCorpus(client);
+  const desiredGeneration = validatedCorpus;
+  const checkpointSatisfiesMarker =
+    checkpoint !== undefined &&
+    desiredGeneration !== undefined &&
+    checkpoint.generation === desiredGeneration;
+  const generation =
+    checkpoint?.state === "running"
+      ? checkpoint.generation
+      : checkpointSatisfiesMarker
+        ? checkpoint.generation
+        : desiredGeneration;
+  if (generation === undefined) {
+    throw new Error("catalogue-rank generation could not be derived");
+  }
+  const newGeneration =
+    checkpoint?.state === "running"
+      ? false
+      : checkpoint === undefined || !checkpointSatisfiesMarker;
   const result = await runDueWorkRebuildChunk(client, definition, {
     boundedCleanup: true,
     generation,
@@ -288,7 +328,7 @@ async function advanceCatalogueRankRebuild(
   });
 
   let markerCleared = false;
-  if (result.complete && generation === marker.sourceVersion) {
+  if (result.complete && validatedCorpus !== undefined) {
     const clearResults = await client.batch(
       [
         clearDueWorkSourceRepairStatement(marker),
@@ -299,6 +339,44 @@ async function advanceCatalogueRankRebuild(
     markerCleared = (clearResults[0]?.rowsAffected ?? 0) > 0;
   }
   return { complete: result.complete && markerCleared, scanned: result.scanned };
+}
+
+async function readCatalogueRankMarker(
+  client: DueWorkClient,
+): Promise<DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND> | undefined> {
+  const result = await client.execute({
+    args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+    sql: `select generation, next_due_at, sort_key, source_version, updated_at
+      from due_work where work_kind = ? and subject_type = 'track' and subject_id = ?
+        and state = 'repair' limit 1`,
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    return undefined;
+  }
+  if (
+    typeof row.generation !== "string" ||
+    typeof row.next_due_at !== "string" ||
+    typeof row.sort_key !== "string" ||
+    typeof row.source_version !== "string" ||
+    typeof row.updated_at !== "string"
+  ) {
+    throw new Error("catalogue-rank source marker is malformed");
+  }
+  return {
+    claimExpiresAt: null,
+    claimToken: null,
+    claimedBy: null,
+    generation: row.generation,
+    nextDueAt: row.next_due_at,
+    sortKey: row.sort_key,
+    sourceVersion: row.source_version,
+    state: "repair",
+    subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+    subjectType: "track",
+    updatedAt: row.updated_at,
+    workKind: DUE_WORK_SOURCE_REPAIR_KIND,
+  };
 }
 
 /**
@@ -329,48 +407,37 @@ export async function fanOutDueWorkSourceRepairs(
   // callers already continue from the durable marker set while `hasMore` remains true.
   const limit = Math.min(options.limit ?? SOURCE_REPAIR_LIMIT, SOURCE_REPAIR_LIMIT);
   const page = await listDueWorkSourceRepairs(client, {
-    excludeSubjectId:
-      options.includeCatalogueRank === false
-        ? DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID
-        : undefined,
+    excludeSubjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
     limit,
     subjectType: options.subjectType,
   });
-  const rankMarker = page.items.find(
-    (marker) =>
-      marker.subjectType === "track" &&
-      marker.subjectId === DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  );
-  if (rankMarker !== undefined) {
-    // Rank invalidation is already a resumable rebuild. Give it the operator's established
-    // 500-row rebuild bound, but never combine that transaction with multiplicative marker work.
-    const rankLimit = options.limit ?? RANK_REBUILD_LIMIT;
-    const result = await advanceCatalogueRankRebuild(client, rankMarker, rankLimit);
-    return {
-      cursor: rankMarker.subjectId,
-      deferred: result.complete ? 0 : 1,
-      expanded: result.complete ? 1 : 0,
-      hasMore: page.hasMore || page.items.length > 1 || !result.complete,
-      rankRebuildScanned: result.scanned,
-      repaired: result.complete ? 1 : 0,
-      scanned: 1,
-    };
-  }
-
   const regular = page.items;
   const regularOutcomes = await evaluateSourceMarkers(client, regular);
   const cleared = await convergeEvaluatedSourceMarkers(client, regular, regularOutcomes);
-  const expanded = cleared;
-  const deferred = regular.length - cleared;
+  const regularDeferred = regular.length - cleared;
+  const rankMarker =
+    options.includeCatalogueRank === false ||
+    (options.subjectType !== undefined && options.subjectType !== "track")
+      ? undefined
+      : await readCatalogueRankMarker(client);
+  const rankLimit = Math.min(options.limit ?? RANK_REBUILD_LIMIT, RANK_REBUILD_LIMIT);
+  const rankResult =
+    rankMarker === undefined
+      ? undefined
+      : await advanceCatalogueRankRebuild(client, rankMarker, rankLimit);
+  const rankExpanded = rankResult?.complete === true ? 1 : 0;
+  const rankDeferred = rankMarker === undefined || rankResult?.complete === true ? 0 : 1;
+  const expanded = cleared + rankExpanded;
+  const deferred = regularDeferred + rankDeferred;
 
   return {
-    cursor: page.items.at(-1)?.subjectId ?? null,
+    cursor: page.items.at(-1)?.subjectId ?? rankMarker?.subjectId ?? null,
     deferred,
     expanded,
     hasMore: page.hasMore || deferred > 0,
-    rankRebuildScanned: 0,
+    rankRebuildScanned: rankResult?.scanned ?? 0,
     repaired: expanded,
-    scanned: page.items.length,
+    scanned: page.items.length + (rankMarker === undefined ? 0 : 1),
   };
 }
 
