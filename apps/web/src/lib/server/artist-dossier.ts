@@ -37,6 +37,7 @@ import {
 } from "./embedding";
 import { bestArtistAvatarUrl } from "../media";
 import { isSonarArtistsEnabled, searchSonar, type SonarMatch } from "./sonar";
+import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
 
 /** How many "same sector" neighbours the artist page shows (top-N, self excluded). */
 export const ARTIST_NEIGHBOURS_LIMIT = 4;
@@ -705,12 +706,12 @@ type SimilarArtistRow = {
  *      `slug in (…)` join to `artist_centroids`), decode them, and average them in the isolate into
  *      one probe (the mean OF means — each selected artist weighs equally). A slug with no centroid
  *      simply does not contribute; if none do, there is nothing to rank from and the result is empty.
- *   2. The exact `vector_distance_cos` scan of `artist_centroids` with that averaged probe bound as a
+ *   2. The exact `vector_distance_cos` ranking of the bounded `artist_centroids` candidate window with that averaged probe bound as a
  *      RAW float32 BLOB (embedding.ts rule 2 — a text probe is the measured 14× hosted cliff), the
  *      selected artists excluded. This is the SAME scan SHAPE the hosted-proven `rank_artists` sweep
  *      runs per tick ({@link EDGE_RERANK_SQL}); the only differences are that the probe is a live
  *      averaged BLOB rather than a stored single centroid, and the exclusion is a set rather than one
- *      id. No ANN index (ratified — docs/local-database.md); the exact scan is ≈ 2 s at ~5k artists.
+ *      id. No ANN index (ratified — docs/local-database.md); the bounded scan is ≈ 2 s at ~5k artists.
  *
  * Returns the ranked identity (name/slug/avatar); `certified` + the counts are the CALLER's job, off
  * the shared hub gate, so the lit/unlit tier here agrees with the rest of the page. Never throws.
@@ -781,17 +782,26 @@ export async function listSimilarArtistNeighbours(
   const idPlaceholders = selectedIds.map(() => "?").join(", ");
   // Bind order follows the `?` order in the SQL: the probe BLOB (in the select list) leads, then the
   // excluded ids, then the limit.
-  const result = await db.execute({
+  const result = await executeVectorFallback(db, "sonar.fallback.artists", {
     args: [toVectorProbe(probe), ...selectedIds, Math.max(0, limit)],
-    sql: `select a.id as artist_id, a.slug as slug, a.name as name, a.image_url as image_url,
+    sql: `with winners(artist_id, dist) as materialized (
+            select artist_id, vector_distance_cos(centroid_blob, ?) as dist
+            from (
+              select ac.artist_id, ac.centroid_blob
+              from artist_centroids ac
+              where ac.artist_id not in (${idPlaceholders})
+              order by ac.artist_id
+              ${vectorFallbackCandidateLimitSql()}
+            )
+            order by dist asc, artist_id asc
+            limit ?
+          )
+          select a.id as artist_id, a.slug as slug, a.name as name, a.image_url as image_url,
                  a.image_key as image_key, a.image_state as image_state,
-                 a.image_updated_at as image_updated_at,
-                 vector_distance_cos(ac.centroid_blob, ?) as dist
-          from artist_centroids ac
-          join artists a on a.id = ac.artist_id
-          where ac.artist_id not in (${idPlaceholders})
-          order by dist asc, ac.artist_id asc
-          limit ?`,
+                 a.image_updated_at as image_updated_at
+          from winners
+          cross join artists a on a.id = winners.artist_id
+          order by winners.dist asc, winners.artist_id asc`,
   });
 
   return typedRows<SimilarArtistRow>(result.rows).map(toSimilarArtistNeighbour);

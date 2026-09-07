@@ -82,45 +82,25 @@ import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS, resolveConfirmedAliasLabelId } from "./labels";
 import { translateQuery } from "./search-llm";
 import { isSonarSonicEnabled, searchSonar, type SonarFilter, type SonarMatch } from "./sonar";
+import { hydrateRankedSonarMatches } from "./sonar-hydration";
+import {
+  executeVectorFallback,
+  VECTOR_FALLBACK_DEADLINE_MS,
+  vectorFallbackCandidateLimitSql,
+} from "./vector-fallback";
 
 /** How many rows a search returns when the caller does not say. */
 const DEFAULT_LIMIT = 12;
 
-/**
- * How many rows the sonic tier's vector scan ranks before the pre-filter is applied. Not a
- * cap on the answer — a cap on the CANDIDATE set, and only in the sense that the exact scan
- * `order by … limit N` already returns the winners and nothing else.
- */
+/** How many ranked sonic hits the resolver returns. */
 const SONIC_LIMIT = 12;
 
 /**
- * The hard ceiling on the sonic vector scan. The scan is the one query here that has no other
- * bound: it drags every embedded row's blob through `vector_distance_cos` (SEARCH_FROM, ~41k
- * rows and growing), and it ran 8.07s on prod with no way to stop it — a cost/DoS path once
- * the archive grows, on a surface (`/mcp`) that has no session to lean on. libSQL's `execute`
- * takes no per-statement signal, so the scan cannot be CANCELLED; what a timeout does is stop
- * the caller (and the Worker request) WAITING on it past this ceiling. Set above the measured
- * prod latency with headroom, so it never trips a legitimate query today — it is the ceiling a
- * growing catalogue cannot push the wait past, not a tuning knob for the common case.
+ * The hard wait ceiling on the sonic vector fallback. libSQL's `execute` takes no per-statement
+ * signal, so the query itself cannot be cancelled; the deadline stops the caller and Worker
+ * request waiting on it. The shared fallback contract separately caps the candidate relation.
  */
-export const SONIC_SCAN_TIMEOUT_MS = 12_000;
-
-/**
- * Resolve `work`, or reject once `ms` elapses — the caller stops waiting even though the
- * underlying `db.execute` cannot be cancelled. Uses `AbortSignal.timeout` for the timer so the
- * bound is a single, cheap platform primitive. Exported for a focused unit test.
- */
-export async function raceWithTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
-  const timeout = new Promise<never>((_resolve, reject) => {
-    const signal = AbortSignal.timeout(ms);
-
-    signal.addEventListener("abort", () => reject(new Error(`${label} timed out after ${ms}ms`)), {
-      once: true,
-    });
-  });
-
-  return Promise.race([work, timeout]);
-}
+export const SONIC_SCAN_TIMEOUT_MS = VECTOR_FALLBACK_DEADLINE_MS;
 
 /** The whole answer: which tier resolved it, what it found, and what it understood. */
 export type SearchResult = {
@@ -1149,26 +1129,34 @@ export async function rankTracksByVector(
   ].join(" and ");
 
   const db = await getDb();
-  const result = await raceWithTimeout(
-    db.execute({
-      // SQL-TEXT ORDER: the probe's `?` (in the select list) binds first, then the pre-filter
-      // clauses, then the exclusion, then the limit.
-      args: [
-        toVectorProbe(probe),
-        ...clauses.flatMap((clause) => clause.args),
-        ...(excludeTrackId ? [excludeTrackId] : []),
-        limit,
-      ],
-      sql: `select ${SEARCH_SELECT}, vector_distance_cos(emb.embedding_blob, ?) as dist
-          from ${SEARCH_FROM}
-          join track_embeddings emb on emb.track_id = tracks.track_id
-          where ${where}
-          order by dist asc, tracks.track_id asc
-          limit ?`,
-    }),
-    SONIC_SCAN_TIMEOUT_MS,
-    "sonic vector scan",
-  );
+  const result = await executeVectorFallback(db, "sonar.fallback.search", {
+    // SQL-TEXT ORDER: the probe's `?` (in the select list) binds first, then the pre-filter
+    // clauses, then the exclusion, then the limit.
+    args: [
+      toVectorProbe(probe),
+      ...clauses.flatMap((clause) => clause.args),
+      ...(excludeTrackId ? [excludeTrackId] : []),
+      limit,
+    ],
+    sql: `with winners(track_id, dist) as materialized (
+          select track_id, vector_distance_cos(embedding_blob, ?) as dist
+          from (
+            select tracks.track_id, emb.embedding_blob
+            from ${SEARCH_FROM}
+            join track_embeddings emb on emb.track_id = tracks.track_id
+            where ${where}
+            order by tracks.track_id
+            ${vectorFallbackCandidateLimitSql()}
+          )
+          order by dist asc, track_id asc
+          limit ?
+        )
+        select ${SEARCH_SELECT}
+        from winners
+        cross join tracks on tracks.track_id = winners.track_id
+        left join findings on findings.track_id = tracks.track_id
+        order by winners.dist asc, winners.track_id asc`,
+  });
 
   return typedRows<SearchRow>(result.rows).map(toHit);
 }
@@ -1220,16 +1208,21 @@ function sonarTrackFilter(columnFilters: SearchFilters): SonarFilter | null {
  * between sonar's last refresh and now) is dropped, never faked.
  */
 async function hydrateTrackHits(matches: SonarMatch[]): Promise<SearchHit[]> {
-  const ids = matches.map((match) => match.id);
-  const placeholders = ids.map(() => "?").join(", ");
-  const db = await getDb();
-  const result = await db.execute({
-    args: ids,
-    sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM} where tracks.track_id in (${placeholders})`,
-  });
-  const byId = new Map(typedRows<SearchRow>(result.rows).map((row) => [row.track_id, toHit(row)]));
+  return hydrateRankedSonarMatches(
+    matches,
+    async (ids) => {
+      const placeholders = ids.map(() => "?").join(", ");
+      const db = await getDb();
+      const result = await db.execute({
+        args: ids,
+        sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM} where tracks.track_id in (${placeholders})`,
+      });
 
-  return ids.map((id) => byId.get(id)).filter((hit): hit is SearchHit => hit !== undefined);
+      return typedRows<SearchRow>(result.rows);
+    },
+    (row) => row.track_id,
+    (row) => toHit(row),
+  );
 }
 
 /**

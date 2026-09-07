@@ -111,6 +111,21 @@ describe("getSimilarFindings — the /log sonar route (dark)", () => {
     expect(findings.map((finding) => finding.trackId)).not.toContain("t_nolog");
   });
 
+  it("drops a ranked id that no longer hydrates instead of inventing a finding", async () => {
+    await seed([
+      { embedding: vector(1), logId: "004.0.0A", trackId: "t_self" },
+      { embedding: vector(1), logId: "004.1.1A", trackId: "t_good" },
+    ]);
+    searchSonar.mockResolvedValue([
+      { id: "deleted-after-refresh", score: 0.99 },
+      { id: "t_good", score: 0.9 },
+    ]);
+
+    const findings = await getSimilarFindings("t_self");
+
+    expect(findings.map((finding) => finding.trackId)).toEqual(["t_good"]);
+  });
+
   it("the hydration query carries the `log_id is not null` guard", async () => {
     await seed([
       { embedding: vector(1), logId: "004.0.0A", trackId: "t_self" },

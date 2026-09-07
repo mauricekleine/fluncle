@@ -28,11 +28,11 @@ import { getFindingsByGalaxyRanked, getGalaxyAuditionMembers, getMixableTracks }
 const execute = vi.hoisted(() => vi.fn());
 let db: Client;
 
-vi.mock("./db", () => ({
-  getDb: async () => ({ execute }),
-  typedRow: <T extends object>(rows: T[]) => rows[0],
-  typedRows: <T extends object>(rows: T[]) => rows,
-}));
+vi.mock("./db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./db")>();
+
+  return { ...actual, getDb: async () => ({ execute }) };
+});
 
 /** A deterministic pseudo-random L2-normalized vector — a realistic dense MuQ shape. */
 function pseudoVector(seed: number): number[] {

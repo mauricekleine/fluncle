@@ -239,6 +239,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
     let snapshot = state.snapshot.load_full();
     let now = now_unix();
     let head = state.head_seq.load(Ordering::Relaxed);
+    let (delta_backlog, delta_age_seconds) = freshness_metrics(head, &snapshot, now);
     let replica_synced = state.replica_synced_at.load(Ordering::Relaxed);
     Json(Health {
         tracks: snapshot.tracks.len(),
@@ -254,8 +255,8 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
         replica_frames_synced: state.replica_frames_synced.load(Ordering::Relaxed),
         checkpoint: snapshot.checkpoint,
         head_seq: head,
-        delta_backlog: head.saturating_sub(snapshot.checkpoint),
-        delta_age_seconds: now.saturating_sub(snapshot.validated_at),
+        delta_backlog,
+        delta_age_seconds,
         baseline_seq: snapshot.baseline_seq,
         raw_vector_bytes: snapshot.raw_vector_bytes,
         artifact_version: crate::artifact::CONTRACT,
@@ -270,6 +271,17 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
         commit: BUILD_COMMIT,
         ok: true,
     })
+}
+
+pub(crate) fn freshness_metrics(head: u64, snapshot: &PublishedSnapshot, now: i64) -> (u64, i64) {
+    let backlog = head.saturating_sub(snapshot.checkpoint);
+    let age = if backlog == 0 {
+        0
+    } else {
+        now.saturating_sub(snapshot.validated_at)
+    };
+
+    (backlog, age)
 }
 
 /// Constant-time check of the `x-sonar-secret` header against the configured

@@ -55,6 +55,8 @@
 import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { getDb, typedRow, typedRows } from "./db";
 import { isSonarTrackEnabled, searchSonar, type SonarMatch } from "./sonar";
+import { hydrateRankedSonarMatches } from "./sonar-hydration";
+import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
 import { bestAlbumCoverUrl } from "../media";
 import { type ListenKind } from "../track-page";
 import { discogsReleaseUrl } from "./discogs";
@@ -449,11 +451,11 @@ function toNeighbour(row: NeighbourRow): SonicNeighbour {
  * vectors into the isolate. There is exactly ONE probe, so it is one pass over the candidates —
  * never `union all` branches over a CTE, which the planner flattens into one scan per branch. And
  * there is no `libsql_vector_idx`: an ANN index on a populated table wedges hosted Turso's write
- * path, so this is an exact scan, which also means 100% recall.
+ * path, so this is an exact ranking of the shared bounded candidate relation.
  *
- * The scan is bounded by the EMBEDDED corpus (the join to `track_embeddings` is inner, so an
- * un-embedded row never reaches the cosine), and sonar is the lever when that corpus outgrows the
- * scan — see the flag below and docs/vector-serving.md.
+ * The scan is bounded by both the EMBEDDED corpus (the join to `track_embeddings` is inner, so an
+ * un-embedded row never reaches the cosine) and the shared fallback candidate ceiling. Sonar is
+ * the complete-corpus path beyond that ceiling — see the flag below and docs/vector-serving.md.
  *
  * Returns `[]`, never throws, when the track is unknown, carries no embedding yet, or nothing else
  * is embedded. The page renders the band only when it is non-empty, so a dark sonar, an empty
@@ -485,21 +487,17 @@ export async function listSonicNeighbours(
     return [];
   }
 
-  // THE SONAR ROUTE (dark by default). Its filter mirrors NEIGHBOUR_WHERE's two stamp clauses;
-  // sonar carries no title/artist metadata, so the hydrator re-asserts the identity half below —
-  // the `hydrateSimilarFindings` defence, applied to the wider corpus. Any failure, timeout,
-  // unprovisioned env, or empty answer falls through to the exact Turso scan.
-  if (await isSonarTrackEnabled()) {
-    const matches = await searchSonar({
-      excludeIds: [trackId],
-      filter: { dismissed: false, is_duplicate: false },
-      index: "tracks",
-      probes: [target],
-      topK: limit,
-    });
+  const targetBpm = targetRow?.bpm ?? undefined;
 
-    if (matches && matches.length > 0) {
-      return hydrateNeighbours(matches);
+  // THE SONAR ROUTE (dark by default). It runs the same tempo-window-then-widen decision as the
+  // bounded Turso path below. Skipping that first window would let a globally closer half-time row
+  // beat a full in-tempo band only when the flag is on. Any failure, timeout, unprovisioned env, or
+  // empty answer falls through to the database path.
+  if (await isSonarTrackEnabled()) {
+    const fromSonar = await sonarNeighbours(target, targetBpm, trackId, limit);
+
+    if (fromSonar) {
+      return hydrateNeighbours(fromSonar);
     }
   }
 
@@ -529,7 +527,6 @@ export async function listSonicNeighbours(
   // The other three rails are untouched: the probe still binds as a RAW BLOB (`toVectorProbe`), the
   // ranking still happens IN SQL and returns the ~8 winners rather than a column of vectors, and it
   // is still ONE probe in ONE pass — never `union all` branches over a CTE.
-  const targetBpm = targetRow?.bpm ?? undefined;
   const probe = toVectorProbe(target);
   const windowed = targetBpm
     ? await scanNeighbours(db, probe, trackId, limit, [
@@ -567,7 +564,11 @@ async function scanNeighbours(
   limit: number,
   bpmWindow: [number, number] | undefined,
 ): Promise<NeighbourRow[]> {
-  const result = await db.execute(sonicNeighbourScanStatement(probe, trackId, limit, bpmWindow));
+  const result = await executeVectorFallback(
+    db,
+    "sonar.fallback.track",
+    sonicNeighbourScanStatement(probe, trackId, limit, bpmWindow),
+  );
 
   return typedRows<NeighbourRow>(result.rows);
 }
@@ -591,13 +592,17 @@ export function sonicNeighbourScanStatement(
   return {
     args: bpmWindow ? [probe, trackId, bpmWindow[0], bpmWindow[1], limit] : [probe, trackId, limit],
     sql: `with winners(track_id, dist) as materialized (
-            select tracks.track_id,
-                   vector_distance_cos(emb.embedding_blob, ?) as dist
-            from tracks${bpmWindow ? " indexed by tracks_bpm_idx" : ""}
-            join track_embeddings emb on emb.track_id = tracks.track_id
-            where tracks.track_id != ? and ${NEIGHBOUR_WHERE}
-                  ${bpmWindow ? "and tracks.bpm between ? and ?" : ""}
-            order by dist asc, tracks.track_id asc
+            select track_id, vector_distance_cos(embedding_blob, ?) as dist
+            from (
+              select tracks.track_id, emb.embedding_blob
+              from tracks${bpmWindow ? " indexed by tracks_bpm_idx" : ""}
+              join track_embeddings emb on emb.track_id = tracks.track_id
+              where tracks.track_id != ? and ${NEIGHBOUR_WHERE}
+                    ${bpmWindow ? "and tracks.bpm between ? and ?" : ""}
+              order by tracks.track_id
+              ${vectorFallbackCandidateLimitSql()}
+            )
+            order by dist asc, track_id asc
             limit ?
           )
           select ${NEIGHBOUR_SELECT}
@@ -608,25 +613,67 @@ export function sonicNeighbourScanStatement(
   };
 }
 
+/** The same window-first, widen-on-short rule as the Turso fallback. */
+async function sonarNeighbours(
+  target: number[],
+  targetBpm: number | undefined,
+  trackId: string,
+  limit: number,
+): Promise<SonarMatch[] | null> {
+  if (targetBpm) {
+    const windowed = await searchSonar({
+      excludeIds: [trackId],
+      filter: {
+        bpm_max: targetBpm * (1 + NEIGHBOUR_BPM_TOLERANCE),
+        bpm_min: targetBpm * (1 - NEIGHBOUR_BPM_TOLERANCE),
+        dismissed: false,
+        is_duplicate: false,
+      },
+      index: "tracks",
+      probes: [target],
+      topK: limit,
+    });
+
+    if (windowed === null) {
+      return null;
+    }
+
+    if (windowed.length >= limit) {
+      return windowed;
+    }
+  }
+
+  const widened = await searchSonar({
+    excludeIds: [trackId],
+    filter: { dismissed: false, is_duplicate: false },
+    index: "tracks",
+    probes: [target],
+    topK: limit,
+  });
+
+  return widened && widened.length > 0 ? widened : null;
+}
+
 /** Hydrate sonar's ranked ids IN SONAR'S ORDER, re-asserting the candidate rule it cannot express. */
 async function hydrateNeighbours(matches: SonarMatch[]): Promise<SonicNeighbour[]> {
-  const ids = matches.map((match) => match.id);
-  const placeholders = ids.map(() => "?").join(", ");
-  const db = await getDb();
-  const result = await db.execute({
-    args: ids,
-    sql: `select ${NEIGHBOUR_SELECT}
-          from tracks
-          left join findings on findings.track_id = tracks.track_id
-          where tracks.track_id in (${placeholders}) and ${NEIGHBOUR_WHERE}`,
-  });
-  const byId = new Map(typedRows<NeighbourRow>(result.rows).map((row) => [row.track_id, row]));
+  return hydrateRankedSonarMatches(
+    matches,
+    async (ids) => {
+      const placeholders = ids.map(() => "?").join(", ");
+      const db = await getDb();
+      const result = await db.execute({
+        args: ids,
+        sql: `select ${NEIGHBOUR_SELECT}
+              from tracks
+              left join findings on findings.track_id = tracks.track_id
+              where tracks.track_id in (${placeholders}) and ${NEIGHBOUR_WHERE}`,
+      });
 
-  return ids.flatMap((id) => {
-    const row = byId.get(id);
-
-    return row ? [toNeighbour(row)] : [];
-  });
+      return typedRows<NeighbourRow>(result.rows);
+    },
+    (row) => row.track_id,
+    (row) => toNeighbour(row),
+  );
 }
 
 /** One `/track/<id>` row in the sitemap. Cover art rides as the Google Images extension. */

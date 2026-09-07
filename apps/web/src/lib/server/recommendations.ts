@@ -56,6 +56,7 @@ import {
   searchSonar,
   type SonarMatch,
 } from "./sonar";
+import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
 
 /**
  * The seed cap. Twelve is the roadmap's "~10" with head-room, and it is
@@ -513,7 +514,7 @@ export async function listRecommendations(
   //
   // The one-probe case binds the bare distance: single-argument `min()` is
   // SQLite's AGGREGATE min and would collapse the scan to one row.
-  const distanceTerms = probes.map(() => "vector_distance_cos(emb.embedding_blob, ?)");
+  const distanceTerms = probes.map(() => "vector_distance_cos(embedding_blob, ?)");
   const bestDistance =
     distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
 
@@ -565,21 +566,30 @@ export async function listRecommendations(
     resolveScan(
       sonarCatalogueEnabled ? sonarCataloguePool(vectors, [...seedIds, ...excludedIds]) : null,
       async () => {
-        const catalogueScan = await db.execute({
-          args: [...probes, ...seedIds, ...excludedIds, RECOMMENDATIONS_POOL],
-          sql: `select track_id, dist from (
+        const catalogueScan = await executeVectorFallback(
+          db,
+          "sonar.fallback.recommendations-catalogue",
+          {
+            args: [...probes, ...seedIds, ...excludedIds, RECOMMENDATIONS_POOL],
+            sql: `select track_id, dist from (
               select t.track_id, ${bestDistance} as dist
-              from tracks t
-              left join findings f on f.track_id = t.track_id
-              left join track_embeddings emb on emb.track_id = t.track_id
-              where ${REC_ELIGIBLE_WHERE}
-                ${seedExclusion}
-                ${recentExclusion}
+              from (
+                select t.track_id, emb.embedding_blob
+                from tracks t
+                left join findings f on f.track_id = t.track_id
+                left join track_embeddings emb on emb.track_id = t.track_id
+                where ${REC_ELIGIBLE_WHERE}
+                  ${seedExclusion}
+                  ${recentExclusion}
+                order by t.track_id
+                ${vectorFallbackCandidateLimitSql()}
+              ) t
             )
             where dist is not null
             order by dist asc, track_id asc
             limit ?`,
-        });
+          },
+        );
 
         return typedRows<ScanRow>(catalogueScan.rows);
       },
@@ -587,21 +597,30 @@ export async function listRecommendations(
     resolveScan(
       sonarEnabled ? sonarFindingSlots(vectors, [...seedIds, ...excludedIds]) : null,
       async () => {
-        const findingsScan = await db.execute({
-          args: [...probes, ...seedIds, ...excludedIds, FINDINGS_SLOT_COUNT],
-          sql: `select track_id, dist from (
-              select t.track_id, ${bestDistance} as dist
-              from findings f
-              cross join tracks t on t.track_id = f.track_id
-              cross join track_embeddings emb on emb.track_id = t.track_id
-              where f.log_id is not null
-                ${seedExclusion}
-                ${recentExclusion}
+        const findingsScan = await executeVectorFallback(
+          db,
+          "sonar.fallback.recommendations-findings",
+          {
+            args: [...probes, ...seedIds, ...excludedIds, FINDINGS_SLOT_COUNT],
+            sql: `select track_id, dist from (
+              select candidates.track_id, ${bestDistance} as dist
+              from (
+                select t.track_id, emb.embedding_blob
+                from findings f
+                cross join tracks t on t.track_id = f.track_id
+                cross join track_embeddings emb on emb.track_id = t.track_id
+                where f.log_id is not null
+                  ${seedExclusion}
+                  ${recentExclusion}
+                order by t.track_id
+                ${vectorFallbackCandidateLimitSql()}
+              ) candidates
             )
             where dist is not null
             order by dist asc, track_id asc
             limit ?`,
-        });
+          },
+        );
 
         return typedRows<ScanRow>(findingsScan.rows);
       },

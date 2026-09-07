@@ -21,11 +21,11 @@ import { getSimilarFindings } from "./tracks";
 const execute = vi.hoisted(() => vi.fn());
 let db: Client;
 
-vi.mock("./db", () => ({
-  getDb: async () => ({ execute }),
-  typedRow: <T extends object>(rows: T[]) => rows[0],
-  typedRows: <T extends object>(rows: T[]) => rows,
-}));
+vi.mock("./db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./db")>();
+
+  return { ...actual, getDb: async () => ({ execute }) };
+});
 
 /** A 1024-d vector pointing in the (a, b) direction (the rest zero) — a valid MuQ shape. */
 function vector(a: number, b: number): number[] {
