@@ -103,6 +103,92 @@ afterEach(async () => {
 });
 
 describe("updateTrack Sonar artifact coupling", () => {
+  it("prepares vector bytes and content digest before opening one minimal write transaction", async () => {
+    const { updateTrack } = await import("./track-update");
+    const timeline: string[] = [];
+    const originalFloat32From = Float32Array.from.bind(Float32Array);
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    const originalTransaction = db.transaction.bind(db);
+    let insertedBlob: ArrayBuffer | ArrayBufferView | null = null;
+    let preparedBlobBase64: string | null = null;
+    let preparedReceiptDigest: string | null = null;
+    let receiptDigest: string | null = null;
+    let revisionLookupCount = 0;
+
+    const float32From = vi.spyOn(Float32Array, "from").mockImplementation((values) => {
+      timeline.push("bytes");
+      const vector = originalFloat32From(values);
+      preparedBlobBase64 = artifactBytesToBase64(
+        new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength),
+      );
+      return vector;
+    });
+    const digest = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
+      timeline.push("digest:start");
+      const value = await originalDigest(algorithm, data);
+      preparedReceiptDigest = `v2:${[...new Uint8Array(value)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("")}`;
+      timeline.push("digest:complete");
+      return value;
+    });
+    const transaction = vi.spyOn(db, "transaction").mockImplementation(async () => {
+      timeline.push("transaction");
+      const opened = await originalTransaction("write");
+      const originalExecute = opened.execute.bind(opened);
+
+      vi.spyOn(opened, "execute").mockImplementation(async (statement) => {
+        if (typeof statement !== "string") {
+          const statementArgs = Array.isArray(statement.args) ? statement.args : [];
+
+          if (statement.sql.includes("select max(revision) as revision")) {
+            revisionLookupCount += 1;
+          }
+          if (statement.sql.includes("insert into artifact_changes")) {
+            insertedBlob = statementArgs[3] as ArrayBuffer | ArrayBufferView | null;
+          }
+          if (statement.sql.includes("insert into artifact_change_revisions")) {
+            receiptDigest = typeof statementArgs[0] === "string" ? statementArgs[0] : null;
+          }
+        }
+
+        return originalExecute(statement);
+      });
+
+      return opened;
+    });
+
+    try {
+      await updateTrack(TRACK_ID, { embedding: embeddingJson(3) });
+
+      expect(timeline).toEqual(["bytes", "digest:start", "digest:complete", "transaction"]);
+      expect(float32From).toHaveBeenCalledTimes(1);
+      expect(digest).toHaveBeenCalledTimes(1);
+      expect(insertedBlob).not.toBeNull();
+      expect(blobBase64(insertedBlob)).toBe(preparedBlobBase64);
+      expect(receiptDigest).toBe(preparedReceiptDigest);
+      expect(revisionLookupCount).toBe(1);
+    } finally {
+      transaction.mockRestore();
+      digest.mockRestore();
+      float32From.mockRestore();
+    }
+  });
+
+  it("rejects malformed embedding material before opening a transaction", async () => {
+    const { updateTrack } = await import("./track-update");
+    const transaction = vi.spyOn(db, "transaction");
+
+    try {
+      await expect(updateTrack(TRACK_ID, { embedding: "[1]" })).rejects.toThrow(
+        /1024 finite numbers/,
+      );
+      expect(transaction).not.toHaveBeenCalled();
+    } finally {
+      transaction.mockRestore();
+    }
+  });
+
   it("commits a key write, aggregate repair, and one exact current-row upsert together", async () => {
     const { updateTrack } = await import("./track-update");
 
@@ -157,6 +243,34 @@ describe("updateTrack Sonar artifact coupling", () => {
     expect(await rowCount("projection_repairs")).toBe(1);
     expect(await rowCount("public_aggregate_state")).toBe(1);
     expect(await rowCount("artist_qualification_state")).toBe(0);
+  });
+
+  it("keeps an uncoordinated finding unlit in both its incremental event and rebuild snapshot", async () => {
+    const { updateTrack } = await import("./track-update");
+    await db.execute({
+      args: [TRACK_ID],
+      sql: "update findings set log_id = null where track_id = ?",
+    });
+
+    await updateTrack(TRACK_ID, { embedding: embeddingJson() });
+    const event = await db.execute({
+      args: [TRACK_ID],
+      sql: "select payload_json from artifact_changes where subject_id = ?",
+    });
+    await registerArtifactConsumer(db, {
+      consumerId: "uncoordinated-snapshot",
+      contracts: [artifactContract("sonar.track")],
+    });
+    const snapshot = await listArtifactSnapshot(db, {
+      consumerId: "uncoordinated-snapshot",
+      stream: "sonar.track",
+      streamVersion: 1,
+    });
+    const incrementalPayload = parsedJson(event.rows[0]?.payload_json);
+    const snapshotPayload = parsedJson(snapshot.items[0]?.payloadJson);
+
+    expect(incrementalPayload).toEqual(snapshotPayload);
+    expect(incrementalPayload).toMatchObject({ certified: false, hasFinding: true });
   });
 
   it("commits a clear as one delete tombstone beside both source halves", async () => {

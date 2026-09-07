@@ -14,6 +14,7 @@ import {
   ARTIFACT_VECTOR_BYTES,
   artifactBytesToBase64,
   artifactContract,
+  buildArtifactConsumerPurgeCandidateStatement,
   buildArtifactChangeInsertStatement,
   buildArtifactSnapshotStatement,
   canonicalArtifactJson,
@@ -23,8 +24,10 @@ import {
   inactivateArtifactConsumer,
   insertArtifactChange,
   insertArtifactChangeInTransaction,
+  listArtifactConsumerPurgeCandidates,
   listArtifactChanges,
   listArtifactSnapshot,
+  prepareArtifactChange,
   registerArtifactConsumer,
   type ArtifactChangeInput,
   type ArtifactContract,
@@ -306,12 +309,44 @@ describe("artifact producer registry and immutable sequence", () => {
     );
   });
 
+  it("accepts revision-bearing receipts written before prepared content digests", async () => {
+    const input = sonarChange(1, { subjectId: "track:legacy-receipt" });
+    const prepared = await prepareArtifactChange(input);
+
+    await db.execute({
+      args: [
+        prepared.legacyContentDigest,
+        "2026-03-01T00:00:00.000Z",
+        77,
+        "legacy-producer",
+        1,
+        "sonar.track",
+        1,
+        "track:legacy-receipt",
+        "track",
+      ],
+      sql: `insert into artifact_change_revisions
+        (content_digest, created_at, event_seq, producer, revision, stream, stream_version,
+         subject_id, subject_type)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    });
+
+    await expect(insertArtifactChange(db, input)).resolves.toMatchObject({
+      event: { producer: "legacy-producer", seq: 77 },
+      inserted: false,
+    });
+    expect(
+      (await db.execute("select count(*) as count from artifact_changes")).rows[0]?.count,
+    ).toBe(0);
+  });
+
   it("bounds latest revision lookup to one indexed maximum per history table", async () => {
+    const prepared = await prepareArtifactChange(sonarChange(1));
     const transaction = await db.transaction("write");
     const execute = vi.spyOn(transaction, "execute");
 
     try {
-      await insertArtifactChangeInTransaction(transaction, sonarChange(1));
+      await insertArtifactChangeInTransaction(transaction, prepared);
       await transaction.commit();
     } finally {
       transaction.close();
@@ -341,24 +376,118 @@ describe("artifact producer registry and immutable sequence", () => {
     expect(latestStatement?.sql.match(/select max\(revision\) as revision/g)).toHaveLength(3);
     const plan = await db.execute({
       args: latestStatement?.args ?? [],
-      sql: `explain ${latestStatement?.sql ?? ""}`,
+      sql: `explain query plan ${latestStatement?.sql ?? ""}`,
     });
-    const opcodes = plan.rows.map((row) =>
-      typeof row.opcode === "string" ? row.opcode : (JSON.stringify(row.opcode) ?? ""),
-    );
-    const branchMaxima = plan.rows.flatMap((row, index) => {
-      const next = plan.rows[index + 1];
-      const target = plan.rows.find((candidate) => candidate.addr === next?.p2);
+    const details = plan.rows
+      .map((row) =>
+        typeof row.detail === "string" ? row.detail : (JSON.stringify(row.detail ?? null) ?? ""),
+      )
+      .join("\n");
 
-      return row.opcode === "AggStep" && next?.opcode === "Goto" && target?.opcode === "AggFinal"
-        ? [{ next, target }]
-        : [];
+    expect(details).toMatch(
+      /SEARCH artifact_change_revisions USING COVERING INDEX sqlite_autoindex_artifact_change_revisions_1/i,
+    );
+    expect(details).toMatch(/SEARCH artifact_changes USING.*artifact_changes_revision_idx/i);
+    expect(details).not.toMatch(/\bSCAN (?:artifact_change_revisions|artifact_changes)\b/i);
+    expect(details).not.toMatch(/USE TEMP B-TREE/i);
+  });
+
+  it("matches the former whole-history union across empty, split, and isolated histories", async () => {
+    const prepared = await prepareArtifactChange(
+      sonarChange(1, { subjectId: "track:query-template" }),
+    );
+    const transaction = await db.transaction("write");
+    const execute = vi.spyOn(transaction, "execute");
+
+    try {
+      await insertArtifactChangeInTransaction(transaction, prepared);
+      await transaction.commit();
+    } finally {
+      transaction.close();
+    }
+
+    const boundedStatement = execute.mock.calls
+      .map(([statement]) => statement)
+      .find(
+        (statement): statement is Extract<InStatement, { sql: string }> =>
+          typeof statement !== "string" &&
+          statement !== undefined &&
+          statement.sql.includes("select max(revision) as revision") &&
+          statement.sql.includes("from artifact_change_revisions"),
+      );
+
+    if (boundedStatement === undefined) {
+      throw new Error("latest artifact revision statement was not executed");
+    }
+
+    await insertRawArtifactChangeRow({
+      revision: 4,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:live-only",
+      subjectType: "track",
     });
-    expect(opcodes).toContain("SeekLE");
-    expect(opcodes).toContain("IdxLT");
-    expect(opcodes.filter((opcode) => opcode === "AggStep")).toHaveLength(3);
-    expect(branchMaxima).toHaveLength(2);
-    expect(branchMaxima.every(({ next, target }) => next.p2 === target.addr)).toBe(true);
+    await insertRawArtifactRevisionReceipt({
+      eventSeq: 7_001,
+      revision: 7,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:receipt-only",
+      subjectType: "track",
+    });
+    await insertRawArtifactChangeRow({
+      revision: 3,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:split",
+      subjectType: "track",
+    });
+    await insertRawArtifactRevisionReceipt({
+      eventSeq: 8_001,
+      revision: 8,
+      stream: "sonar.track",
+      streamVersion: 1,
+      subjectId: "track:split",
+      subjectType: "track",
+    });
+    await insertRawArtifactChangeRow({
+      revision: 90,
+      stream: "device.track",
+      streamVersion: 1,
+      subjectId: "track:isolated",
+      subjectType: "track",
+    });
+    await insertRawArtifactRevisionReceipt({
+      eventSeq: 91_001,
+      revision: 91,
+      stream: "sonar.track",
+      streamVersion: 2,
+      subjectId: "track:isolated",
+      subjectType: "track",
+    });
+
+    const legacySql = `select max(revision) as revision
+      from (
+        select revision from artifact_change_revisions
+        where stream = ? and stream_version = ? and subject_type = ? and subject_id = ?
+        union all
+        select revision from artifact_changes
+        where stream = ? and stream_version = ? and subject_type = ? and subject_id = ?
+      )`;
+
+    for (const subjectId of [
+      "track:empty",
+      "track:live-only",
+      "track:receipt-only",
+      "track:split",
+      "track:isolated",
+    ]) {
+      const args = ["sonar.track", 1, "track", subjectId, "sonar.track", 1, "track", subjectId];
+      const bounded = await db.execute({ args, sql: boundedStatement.sql });
+      const legacy = await db.execute({ args, sql: legacySql });
+
+      expect(bounded.rows[0]?.revision ?? null).toBe(legacy.rows[0]?.revision ?? null);
+    }
   });
 
   it("allocates across empty, live-only, split, and isolated revision histories", async () => {
@@ -412,6 +541,7 @@ describe("artifact producer registry and immutable sequence", () => {
 
   it("can append beside its source write and safely retries after transaction rollback", async () => {
     await seedTrack(db, { logId: "001.1.01", title: "Before", trackId: "track:a" });
+    const prepared = await prepareArtifactChange(sonarChange(1));
     const abandoned = await db.transaction("write");
 
     try {
@@ -419,7 +549,7 @@ describe("artifact producer registry and immutable sequence", () => {
         args: ["Abandoned", "track:a"],
         sql: "update tracks set title = ? where track_id = ?",
       });
-      await insertArtifactChangeInTransaction(abandoned, sonarChange(1));
+      await insertArtifactChangeInTransaction(abandoned, prepared);
       await abandoned.rollback();
     } finally {
       abandoned.close();
@@ -439,7 +569,7 @@ describe("artifact producer registry and immutable sequence", () => {
         args: ["Committed", "track:a"],
         sql: "update tracks set title = ? where track_id = ?",
       });
-      const event = await insertArtifactChangeInTransaction(committed, sonarChange(1));
+      const event = await insertArtifactChangeInTransaction(committed, prepared);
       expect(event.inserted).toBe(true);
       await committed.commit();
     } finally {
@@ -923,6 +1053,91 @@ describe("artifact ordered reads and acknowledgements", () => {
     });
 
     expect(rebuilt).toMatchObject({ appliedThroughSeq: null, snapshotSeq: 1, state: "rebuilding" });
+  });
+});
+
+describe("artifact consumer retention candidates", () => {
+  it("lists only inactive identities older than the fence through a bounded keyset page", async () => {
+    const contract = [artifactContract("sonar.track")];
+
+    await registerArtifactConsumer(
+      db,
+      { consumerId: "active-a", contracts: contract },
+      { now: "2026-01-01T00:00:00.000Z" },
+    );
+    await registerArtifactConsumer(
+      db,
+      { consumerId: "inactive-old", contracts: contract },
+      { now: "2026-01-01T00:00:00.000Z" },
+    );
+    await inactivateArtifactConsumer(db, "inactive-old", {
+      now: "2026-02-01T00:00:00.000Z",
+    });
+    await registerArtifactConsumer(
+      db,
+      { consumerId: "inactive-recent", contracts: contract },
+      { now: "2026-03-01T00:00:00.000Z" },
+    );
+    await inactivateArtifactConsumer(db, "inactive-recent", {
+      now: "2026-04-01T00:00:00.000Z",
+    });
+
+    const first = await listArtifactConsumerPurgeCandidates(db, {
+      inactiveBefore: "2026-03-01T00:00:00.000Z",
+      limit: 2,
+    });
+    const second = await listArtifactConsumerPurgeCandidates(db, {
+      cursor: first.nextCursor ?? undefined,
+      inactiveBefore: "2026-03-01T00:00:00.000Z",
+      limit: 2,
+    });
+
+    expect(first).toEqual({
+      candidates: [
+        {
+          checkpointCount: 0,
+          consumerId: "inactive-old",
+          contractCount: 1,
+          registeredAt: "2026-01-01T00:00:00.000Z",
+          stateChangedAt: "2026-02-01T00:00:00.000Z",
+          updatedAt: "2026-02-01T00:00:00.000Z",
+        },
+      ],
+      hasMore: true,
+      nextCursor: "inactive-old",
+      scannedCount: 2,
+    });
+    expect(second).toEqual({
+      candidates: [],
+      hasMore: false,
+      nextCursor: "inactive-recent",
+      scannedCount: 1,
+    });
+  });
+
+  it("pins the candidate window and child counts to primary-key searches", async () => {
+    const statement = buildArtifactConsumerPurgeCandidateStatement({ limit: 10 });
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    const details = plan.rows
+      .map((row) =>
+        typeof row.detail === "string" ? row.detail : (JSON.stringify(row.detail ?? null) ?? ""),
+      )
+      .join("\n");
+
+    expect(details).toMatch(
+      /SEARCH c USING INDEX sqlite_autoindex_artifact_change_consumers_1 \(consumer_id>\?\)/i,
+    );
+    expect(details).toMatch(
+      /SEARCH checkpoint USING COVERING INDEX sqlite_autoindex_artifact_change_checkpoints_1 \(consumer_id=\?\)/i,
+    );
+    expect(details).toMatch(
+      /SEARCH contract USING COVERING INDEX sqlite_autoindex_artifact_change_consumer_contracts_1 \(consumer_id=\?\)/i,
+    );
+    expect(details).not.toMatch(/USE TEMP B-TREE/i);
+    expect(details).not.toMatch(/\bSCAN artifact_change_/i);
   });
 });
 

@@ -27,7 +27,10 @@ export function isYoutubeVerification(value: unknown): value is YoutubeVerificat
 
 import { isLogId } from "../log-id";
 import { parseArtistsJson } from "./artists";
-import { insertCurrentSonarTrackArtifactChangeInTransaction } from "./artifact-changes";
+import {
+  insertCurrentSonarTrackArtifactChangeInTransaction,
+  prepareCurrentSonarTrackArtifactChange,
+} from "./artifact-changes";
 import {
   CATALOGUE_RANK_MATERIAL_REVISION_KEY,
   catalogueRankMaterialRevisionForFindingStatement,
@@ -37,7 +40,9 @@ import { purgeLogCache } from "./edge-cache";
 import {
   CLEAR_EMBEDDING_SQL,
   clearEmbeddingSatellite,
+  coerceEmbedding,
   SET_EMBEDDING_SQL,
+  toVectorProbe,
   writeEmbeddingSatellite,
 } from "./embedding";
 import { purgeTrackEntityPages } from "./entity-cache-purge";
@@ -399,9 +404,13 @@ type ExistingRow = {
   // The names this recording is credited to, as stored JSON — read ONLY by the YouTube
   // officialness gate, which compares them against the upload's channel.
   artists_json: string | null;
+  bpm: number | null;
   bpm_source: string | null;
   // 1 when a `findings` row exists — i.e. the track is a FINDING, not a catalogue row.
   certified: number;
+  dismissed_at: string | null;
+  duplicate_of_track_id: string | null;
+  duration_ms: bigint | number | null;
   isrc: string | null;
   /** Stored embedding-presence mirror used by the mixable-artist projection delta. */
   has_embedding: bigint | number;
@@ -414,6 +423,8 @@ type ExistingRow = {
   // The CANONICAL `labels.name` behind `tracks.label_id`, the officialness gate's first choice.
   label_name: string | null;
   log_id: string | null;
+  nearest_finding_score: number | null;
+  spotify_uri: string | null;
   title: string;
   // Already-held capture provenance, so the fill-empty-only rule can short-circuit BEFORE
   // spending an oEmbed request on a row that will not take the answer anyway.
@@ -422,6 +433,59 @@ type ExistingRow = {
   // at 1 — the widening only ever says yes more often.
   youtube_video_official: number | null;
 };
+
+async function prepareTrackSonarArtifact(
+  existing: ExistingRow,
+  update: TrackUpdate,
+  hasFinding: boolean,
+  effectiveLogId: string | null,
+  trackId: string,
+) {
+  const embedding = update.embedding;
+
+  if (embedding === undefined) {
+    throw new ApiError("invalid_embedding", "Embedding material is missing", 400);
+  }
+
+  let vector: Uint8Array | null = null;
+
+  if (embedding !== "") {
+    let parsed: unknown;
+
+    try {
+      parsed = JSON.parse(embedding) as unknown;
+    } catch {
+      throw new ApiError("invalid_embedding", "Embedding is not valid JSON", 400);
+    }
+
+    const values = coerceEmbedding(parsed);
+
+    if (values === null) {
+      throw new ApiError(
+        "invalid_embedding",
+        "Embedding must be a JSON array of 1024 finite numbers",
+        400,
+      );
+    }
+
+    vector = toVectorProbe(values);
+  }
+
+  return prepareCurrentSonarTrackArtifactChange({
+    anchored: existing.spotify_uri !== null,
+    bpm: update.bpm ?? existing.bpm,
+    certified: effectiveLogId !== null,
+    dismissed: existing.dismissed_at !== null,
+    durationMs: existing.duration_ms,
+    hasFinding,
+    isDuplicate: existing.duplicate_of_track_id !== null,
+    key: update.key ?? existing.key,
+    nearestFindingScore: existing.nearest_finding_score,
+    producer: "track-update",
+    trackId,
+    vector,
+  });
+}
 
 /**
  * The names the YouTube officialness gate compares an upload's channel against: everyone this
@@ -526,8 +590,10 @@ async function updateTrackWithOptions(
     // label channel). It rides the indexed `tracks.label_id` → `labels.id` edge and is an OUTER
     // join, so a row with no canonical label resolves exactly as before and falls back to the raw
     // `tracks.label` string.
-    sql: `select tracks.isrc, tracks.title, tracks.bpm_source, tracks.key_source,
+    sql: `select tracks.isrc, tracks.title, tracks.bpm, tracks.bpm_source, tracks.key_source,
                  tracks.key, tracks.has_embedding,
+                 tracks.spotify_uri, tracks.dismissed_at, tracks.duplicate_of_track_id,
+                 tracks.nearest_finding_score, tracks.duration_ms,
                  tracks.artists_json, tracks.youtube_video_id, tracks.youtube_video_official,
                  tracks.label, labels.name as label_name,
                  findings.log_id, findings.added_at,
@@ -1264,17 +1330,22 @@ async function updateTrackWithOptions(
     // visible in the index.
     await db.batch(statements, "write");
   } else {
+    const preparedArtifact = await prepareTrackSonarArtifact(
+      existing,
+      update,
+      certified,
+      effectiveLogId,
+      trackId,
+    );
+
     // Embedding visibility has one production chokepoint. Keep the existing statement list and
-    // its changes()-dependent order intact inside an explicit write transaction, then re-read the
-    // committed-shape Sonar source row and append exactly one event before the shared commit.
+    // its changes()-dependent order intact inside an explicit write transaction, then append the
+    // already-validated Sonar bytes and digest before the shared commit.
     const transaction = await db.transaction("write");
 
     try {
       await transaction.batch(statements);
-      await insertCurrentSonarTrackArtifactChangeInTransaction(transaction, {
-        producer: "track-update",
-        trackId,
-      });
+      await insertCurrentSonarTrackArtifactChangeInTransaction(transaction, preparedArtifact);
       await transaction.commit();
     } catch (error) {
       try {
