@@ -58,6 +58,12 @@ import {
   type DueWorkSubjectType,
 } from "./due-work";
 
+export { CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS } from "./due-work-vendor-definitions";
+export {
+  DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES,
+  dueWorkCatalogueRankRepairSubjects,
+} from "./due-work";
+
 type TrackSourceRow = Row & {
   analyzed_at: null | string;
   analyzed_from: null | string;

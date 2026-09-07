@@ -55,7 +55,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import {
   batchDueWorkSourceMutation,
   countDueWorkNow,
-  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  dueWorkCatalogueRankRepairSubjects,
   DueWorkMaintenancePendingError,
   MAX_DUE_WORK_CHUNK_SIZE,
   markDueWorkSourceMaintenanceFromSelectStatements,
@@ -3330,7 +3330,7 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
     ],
     [
       { subjectId: trackId, subjectType: "track" },
-      { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+      ...dueWorkCatalogueRankRepairSubjects("catalogue-flag-wrong-audio"),
     ],
     {
       afterMaintenanceStatements: [repairRankableArtistsForTrackStatement(trackId)],
@@ -3673,7 +3673,7 @@ export async function verifyCapture(
     ],
     [
       { subjectId: trackId, subjectType: "track" },
-      { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+      ...dueWorkCatalogueRankRepairSubjects("capture-verification-quarantine"),
     ],
     {
       afterMaintenanceStatements: [repairRankableArtistsForTrackStatement(trackId)],

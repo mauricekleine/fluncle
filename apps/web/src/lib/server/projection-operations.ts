@@ -620,13 +620,12 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
     `select 1 from due_work
       where work_kind = 'source-repair' and state = 'repair' limit 1`,
   );
+  let processed = 0;
+  let scheduled = 0;
   if (sourceCount.rows.length > 0) {
     const result = await fanOutDueWorkSourceRepairs(client, { limit });
-    return {
-      complete: !(await hasRepairDebt()),
-      processed: result.scanned,
-      scheduled: result.expanded,
-    };
+    processed += result.scanned;
+    scheduled += result.expanded;
   }
   for (const definition of dueWorkRepairDefinitions(client)) {
     const pending = await client.execute({
@@ -637,9 +636,10 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
       continue;
     }
     const result = await repairDueWorkChunk(client, definition, { limit });
-    return { complete: !(await hasRepairDebt()), processed: result.scanned, scheduled: 0 };
+    processed += result.scanned;
+    break;
   }
-  return { complete: !(await hasRepairDebt()), processed: 0, scheduled: 0 };
+  return { complete: !(await hasRepairDebt()), processed, scheduled };
 }
 
 const PUBLIC_ANCHOR_REBUILD_KEY = "projection_rebuild_public_anchors_v1";

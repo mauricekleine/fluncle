@@ -17,6 +17,45 @@ export const DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID = "@catalogue-rank-corpus
 export const DUE_WORK_SOURCE_REPAIR_KIND = "source-repair";
 export const MAX_DUE_WORK_CHUNK_SIZE = 500;
 
+/** Closed producer policy for invalidating the global catalogue-rank corpus definition. */
+export const DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES = {
+  ambiguous: ["capture-verification-quarantine", "track-update"],
+  excluded: ["label-artist-rules-replace"],
+  required: [
+    "artist-credit-edges",
+    "artist-edge-backfill",
+    "artist-edge-link",
+    "artist-edge-rank-restale",
+    "artist-edge-upsert",
+    "backfill-artist-links",
+    "backfill-has-embedding-rank-corpus",
+    "backfill-label-seed",
+    "backfill-remixer-role",
+    "catalogue-flag-wrong-audio",
+    "certify-track",
+    "label-seed-state",
+    "publish-track",
+  ],
+} as const;
+
+type DueWorkCatalogueRankProducer =
+  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.ambiguous)[number]
+  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.excluded)[number]
+  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.required)[number];
+
+/** Return the synthetic rank subject only for a centrally registered corpus dependency. */
+export function dueWorkCatalogueRankRepairSubjects(
+  producer: DueWorkCatalogueRankProducer,
+): DueWorkSourceSubject[] {
+  const dependencies: readonly string[] = [
+    ...DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.required,
+    ...DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.ambiguous,
+  ];
+  return dependencies.includes(producer)
+    ? [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }]
+    : [];
+}
+
 export class DueWorkMaintenancePendingError extends Error {
   constructor(workKind: string) {
     super(`due-work maintenance is still converging for ${workKind}`);

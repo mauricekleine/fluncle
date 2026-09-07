@@ -2,11 +2,16 @@ import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import { DUE_WORK_PRODUCER_INVENTORY } from "./due-work-producer-inventory";
 import {
+  CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS,
+  DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES,
   DUE_WORK_BACKFILLS,
   DUE_WORK_REGISTERED_KINDS,
+  dueWorkCatalogueRankRepairSubjects,
   dueWorkRepairDefinitions,
 } from "./due-work-registry";
+import { DUE_WORK_VENDOR_SOURCE_COLUMNS } from "./due-work-vendor-definitions";
 import {
   compareDueWorkRows,
   markDueWorkRepair,
@@ -247,6 +252,56 @@ describe("due-work registry", () => {
     expect(new Set(rebuilds).size).toBe(rebuilds.length);
     expect(rebuilds.sort()).toEqual(inventory.sort());
     expect(repairs.sort()).toEqual(inventory.sort());
+  });
+
+  it("versions catalogue-rank work from only its declared eligibility inputs", async () => {
+    expect(CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS.length).toBeLessThan(
+      DUE_WORK_VENDOR_SOURCE_COLUMNS.length,
+    );
+    expect(
+      CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS.every((column) =>
+        DUE_WORK_VENDOR_SOURCE_COLUMNS.includes(column),
+      ),
+    ).toBe(true);
+    const definition = DUE_WORK_BACKFILLS.find(
+      (candidate) => candidate.workKind === "catalogue-rank",
+    );
+    if (definition === undefined) {
+      throw new Error("catalogue-rank definition is missing");
+    }
+    const sourceVersion = async (): Promise<string> => {
+      const source = (
+        await definition.readSourceChunk({ after: "catalogue-", client: db, limit: 1 })
+      )[0];
+      if (source === undefined || source.subjectId !== "catalogue-1") {
+        throw new Error("catalogue-rank source fixture is missing");
+      }
+      return source.sourceVersion;
+    };
+    const baseline = await sourceVersion();
+
+    await db.execute(`update tracks set backfill_apple_music_failures = 7
+      where track_id = 'catalogue-1'`);
+    expect(await sourceVersion()).toBe(baseline);
+
+    await db.execute(`update tracks set capture_priority = 11 where track_id = 'catalogue-1'`);
+    expect(await sourceVersion()).not.toBe(baseline);
+  });
+
+  it("keeps the global rank producer policy narrower than due-work eligibility", () => {
+    const allProducers = DUE_WORK_PRODUCER_INVENTORY.flatMap((entry) => entry.producers);
+    const dependencies = DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES;
+    const invalidators = [...dependencies.required, ...dependencies.ambiguous];
+
+    expect(invalidators.length).toBeLessThan(allProducers.length);
+    expect(invalidators.every((producer) => allProducers.includes(producer))).toBe(true);
+    expect(dependencies.ambiguous).toEqual(["capture-verification-quarantine", "track-update"]);
+    expect(dueWorkCatalogueRankRepairSubjects("capture-verification-quarantine")).toHaveLength(1);
+    expect(dueWorkCatalogueRankRepairSubjects("track-update")).toHaveLength(1);
+    for (const producer of dependencies.excluded) {
+      expect(allProducers).toContain(producer);
+      expect(dueWorkCatalogueRankRepairSubjects(producer), producer).toEqual([]);
+    }
   });
 
   it("resumes every definition from zero through a primary-key midpoint to completion", async () => {
