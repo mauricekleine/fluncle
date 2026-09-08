@@ -969,6 +969,101 @@ describe("transactionally coupled due-work source repair", () => {
     ).toMatchObject({ generation: changedGeneration, scanned_count: 4, state: "complete" });
   });
 
+  it("resumes an in-flight rank generation from its durable cursor for a newer same-corpus marker", async () => {
+    const trackIds = Array.from({ length: 6 }, (_, index) => `resume-${index}`);
+    for (const trackId of trackIds) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+    const rankMarker = (markerVersion: string) =>
+      markDueWorkSourceRepairsStatement(
+        [
+          {
+            subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+            subjectType: "track" as const,
+          },
+        ],
+        { markerVersion, producer: "catalogue-rank" },
+      );
+    const readRebuild = async () =>
+      (
+        await db.execute(`select generation, scanned_count, state from due_work_rebuilds
+          where work_kind = 'catalogue-rank' and subject_type = 'track'`)
+      ).rows[0];
+    const rankPageCursors: string[] = [];
+    const traced = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        if (typeof statement !== "string" && Array.isArray(statement.args)) {
+          const sql = statement.sql;
+          if (sql.includes("t.catalogue_rank_corpus") && sql.includes("where t.track_id > ?")) {
+            const cursor = statement.args[0];
+            if (typeof cursor !== "string") {
+              throw new Error("catalogue-rank page cursor is not a string");
+            }
+            rankPageCursors.push(cursor);
+          }
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
+
+    await db.execute(rankMarker("resume-v1"));
+    expect(await fanOutDueWorkSourceRepairs(traced, { limit: 2 })).toMatchObject({
+      deferred: 1,
+      rankRebuildScanned: 2,
+    });
+    const running = await readRebuild();
+    expect(running).toMatchObject({ scanned_count: 2, state: "running" });
+    const firstGeneration = running?.generation;
+    expect(typeof firstGeneration).toBe("string");
+
+    // A newer marker with an unchanged corpus definition lands while the generation is running:
+    // the next page reads from the durable cursor, never from page zero.
+    await db.execute(rankMarker("resume-v2-same-corpus"));
+    expect(await fanOutDueWorkSourceRepairs(traced, { limit: 2 })).toMatchObject({
+      deferred: 1,
+      rankRebuildScanned: 2,
+    });
+    expect(rankPageCursors).toEqual(["", "resume-1"]);
+    expect(await readRebuild()).toMatchObject({
+      generation: firstGeneration,
+      scanned_count: 4,
+      state: "running",
+    });
+
+    // A changed corpus definition arrives mid-flight: the owned generation still finishes from its
+    // cursor, and only then does the changed definition start one new generation from page zero.
+    await seedTrack(db, { logId: "001.1.1A", trackId: "resume-finding" });
+    await db.execute(rankMarker("resume-v3-changed-corpus"));
+    let ownedComplete = false;
+    for (let step = 0; step < 4 && !ownedComplete; step += 1) {
+      await fanOutDueWorkSourceRepairs(traced, { limit: 2 });
+      const checkpoint = await readRebuild();
+      expect(checkpoint?.generation).toBe(firstGeneration);
+      ownedComplete = checkpoint?.state === "complete";
+    }
+    expect(ownedComplete).toBe(true);
+    expect(rankPageCursors).toEqual(["", "resume-1", "resume-3", "resume-5", "resume-finding"]);
+    expect(await readRebuild()).toMatchObject({ scanned_count: 7, state: "complete" });
+
+    expect(await fanOutDueWorkSourceRepairs(traced, { limit: 2 })).toMatchObject({
+      deferred: 1,
+      rankRebuildScanned: 2,
+    });
+    const changed = await readRebuild();
+    expect(changed?.generation).not.toBe(firstGeneration);
+    expect(changed).toMatchObject({ scanned_count: 2, state: "running" });
+    expect(rankPageCursors.at(-1)).toBe("");
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
+        })
+      ).rows[0],
+    ).toMatchObject({ source_version: "resume-v3-changed-corpus" });
+  });
+
   it("keeps catalogue-rank cleanup bounded before clearing its source marker", async () => {
     await seedCatalogueTrack(db, { trackId: "rank-bounded-current" });
     for (const subjectId of [
