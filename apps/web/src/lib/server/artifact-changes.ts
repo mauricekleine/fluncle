@@ -323,7 +323,7 @@ type ArtifactCheckpointRow = ArtifactContractRow & {
 };
 
 type ArtifactSnapshotMaterial = {
-  cursor: string;
+  cursorValues: string[];
   formatVersion: number;
   operation: "upsert";
   payloadBlob: Uint8Array | null;
@@ -1730,7 +1730,7 @@ async function snapshotMaterial(
   } satisfies Record<string, JsonValue>;
 
   return {
-    cursor: encodeSnapshotCursor(cursorValues),
+    cursorValues,
     ...contract,
     operation: "upsert",
     payloadBlob,
@@ -1763,11 +1763,14 @@ async function sourceSnapshotVerificationPage(
     checkpoint.sourceDigest,
     materials.map(({ payloadDigest: digest }) => digest),
   );
+  // The keyset cursor is the page tail only. Encoding it once keeps the wire encoder off every
+  // other row while the rebuild-checkpoint transaction holds the write lock.
+  const tail = materials.at(-1);
 
   return {
     ...contract,
     complete: rows.length <= limit,
-    cursor: materials.at(-1)?.cursor ?? checkpoint.cursor,
+    cursor: tail === undefined ? checkpoint.cursor : encodeSnapshotCursor(tail.cursorValues),
     itemCount: materials.length,
     materials,
     pageDigest,
@@ -1788,7 +1791,7 @@ async function sourceSnapshotPage(
     complete: page.complete,
     cursor: page.cursor,
     itemCount: page.itemCount,
-    items: page.materials.map(({ cursor: _cursor, payloadBlob, ...item }) => ({
+    items: page.materials.map(({ cursorValues: _cursorValues, payloadBlob, ...item }) => ({
       ...item,
       payloadBlobBase64: payloadBlob === null ? null : artifactBytesToBase64(payloadBlob),
     })),
