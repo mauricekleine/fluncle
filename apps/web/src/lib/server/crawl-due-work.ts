@@ -363,7 +363,8 @@ export function upsertCrawlDueProjectionStatement(
         claim_position = null,
         claim_token = null,
         claimed_by = null,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        repair_entered_at = null`,
   };
 }
 
@@ -471,14 +472,14 @@ export function markCrawlNodeRepairStatement(
     ],
     sql: `insert into crawl_due_work
       (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
-       label_slug, parent_id, generation, source_version, updated_at)
+       label_slug, parent_id, generation, source_version, updated_at, repair_entered_at)
       select id, kind, 'repair', hop, demand_rank, created_at,
              case when kind = 'release' then 1 else null end,
-             null, label_slug, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2
+             null, label_slug, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2, ?2
       from crawl_frontier where id = ?3 ${condition} ${markerCondition}
       union all
       select node_id, node_kind, 'repair', hop, demand_rank, created_at, storable_rank,
-             null, label_slug, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2
+             null, label_slug, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2, ?2
       from crawl_due_work
       where node_id = ?4 and not exists (select 1 from crawl_frontier where id = ?5)
         ${condition} ${markerCondition}
@@ -486,7 +487,9 @@ export function markCrawlNodeRepairStatement(
         state = 'repair', next_due_at = null, generation = '${CRAWL_DUE_LIVE_GENERATION}',
         source_version = excluded.source_version, claim_expires_at = null,
         claim_position = null, claim_token = null, claimed_by = null,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        repair_entered_at = case when crawl_due_work.state = 'repair'
+          then crawl_due_work.repair_entered_at else excluded.repair_entered_at end`,
   };
 }
 
@@ -515,17 +518,19 @@ export function markCrawlNodeRepairsByUpdatedAtStatement(
     args: [sourceVersion, now, ...uniqueIds, now],
     sql: `insert into crawl_due_work
       (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
-       label_slug, parent_id, generation, source_version, updated_at)
+       label_slug, parent_id, generation, source_version, updated_at, repair_entered_at)
       select id, kind, 'repair', hop, demand_rank, created_at,
              case when kind = 'release' then 1 else null end,
-             null, label_slug, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2
+             null, label_slug, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2, ?2
       from crawl_frontier
       where id in (${placeholders}) and updated_at = ?${uniqueIds.length + 3}
       on conflict(node_id) do update set
         state = 'repair', next_due_at = null, generation = '${CRAWL_DUE_LIVE_GENERATION}',
         source_version = excluded.source_version, claim_expires_at = null,
         claim_position = null, claim_token = null, claimed_by = null,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        repair_entered_at = case when crawl_due_work.state = 'repair'
+          then crawl_due_work.repair_entered_at else excluded.repair_entered_at end`,
   };
 }
 
@@ -613,7 +618,8 @@ export async function repairCrawlDueNode(
               label_slug = excluded.label_slug, parent_id = excluded.parent_id,
               generation = excluded.generation, source_version = excluded.source_version,
               claim_expires_at = null, claim_position = null, claim_token = null,
-              claimed_by = null, updated_at = excluded.updated_at`,
+              claimed_by = null, updated_at = excluded.updated_at,
+              repair_entered_at = null`,
         };
   const results = await client.batch(
     [statement, advanceProjectionFenceStatement(CRAWL_DUE_AUDIT_FENCE_KEY)],
@@ -713,7 +719,8 @@ export async function repairCrawlDueNodes(
             label_slug = excluded.label_slug, parent_id = excluded.parent_id,
             generation = excluded.generation, source_version = excluded.source_version,
             claim_expires_at = null, claim_position = null, claim_token = null,
-            claimed_by = null, updated_at = excluded.updated_at`,
+            claimed_by = null, updated_at = excluded.updated_at,
+            repair_entered_at = null`,
       });
     }
 
@@ -840,7 +847,8 @@ export async function fanOutCrawlProjectionRepairs(
     sql: `update crawl_due_work
       set state = 'repair', next_due_at = null, claim_expires_at = null,
           claim_position = null, claim_token = null, claimed_by = null,
-          generation = '${CRAWL_DUE_LIVE_GENERATION}', source_version = ?, updated_at = ?
+          generation = '${CRAWL_DUE_LIVE_GENERATION}', source_version = ?, updated_at = ?,
+          repair_entered_at = case when state = 'repair' then repair_entered_at else ?2 end
       where node_id = ? and exists (
         select 1 from crawl_projection_repairs
         where source_type = ? and source_id = ? and source_epoch = ? and source_version = ?

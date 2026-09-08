@@ -1456,6 +1456,7 @@ export const dueWork = sqliteTable(
     claimedBy: text("claimed_by"),
     generation: text("generation").notNull(),
     nextDueAt: text("next_due_at").notNull(),
+    repairEnteredAt: text("repair_entered_at"),
     sortKey: text("sort_key").notNull(),
     sourceVersion: text("source_version").notNull(),
     state: text("state").notNull(),
@@ -1558,6 +1559,7 @@ export const crawlDueWork = sqliteTable(
     nodeId: text("node_id").primaryKey(),
     nodeKind: text("node_kind", { enum: ["artist", "label", "release"] }).notNull(),
     parentId: text("parent_id"),
+    repairEnteredAt: text("repair_entered_at"),
     sourceVersion: text("source_version").notNull(),
     state: text("state", { enum: ["ready", "scheduled", "leased", "repair"] }).notNull(),
     // 0 sorts a release whose current provenance can store ahead of 1. Non-release rows carry NULL

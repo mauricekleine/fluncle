@@ -19,6 +19,7 @@ import {
   markCrawlProjectionRepairStatement,
   promoteCrawlDueWork,
   readCrawlDueRebuild,
+  repairCrawlDueNode,
   rebuildCrawlDueWork,
   repairCrawlDueNodes,
   runCrawlDueRebuildChunk,
@@ -188,6 +189,41 @@ describe("crawl due-work shadow runtime", () => {
       { node_id: "exact:a" },
       { node_id: "exact:b" },
     ]);
+    expect(
+      (
+        await db.execute(`select distinct repair_entered_at from crawl_due_work
+          where node_id in ('exact:a', 'exact:b')`)
+      ).rows,
+    ).toEqual([{ repair_entered_at: updatedAt }]);
+
+    const reMarkedAt = "2026-01-03T00:00:00.000Z";
+    await db.batch(
+      [
+        {
+          args: [reMarkedAt],
+          sql: `update crawl_frontier set updated_at = ? where id in ('exact:a', 'exact:b')`,
+        },
+        markCrawlNodeRepairsByUpdatedAtStatement(["exact:a", "exact:b"], "exact-v2", reMarkedAt),
+      ],
+      "write",
+    );
+    expect(
+      (
+        await db.execute(`select distinct repair_entered_at from crawl_due_work
+          where node_id in ('exact:a', 'exact:b')`)
+      ).rows,
+    ).toEqual([{ repair_entered_at: updatedAt }]);
+
+    await repairCrawlDueNodes(db, { limit: 10, now: () => NOW });
+    expect(
+      (
+        await db.execute(`select repair_entered_at, state from crawl_due_work
+          where node_id in ('exact:a', 'exact:b') order by node_id`)
+      ).rows,
+    ).toEqual([
+      { repair_entered_at: null, state: "ready" },
+      { repair_entered_at: null, state: "ready" },
+    ]);
     expect(() =>
       markCrawlNodeRepairsByUpdatedAtStatement(
         Array.from({ length: 501 }, (_, index) => `node:${index}`),
@@ -195,6 +231,31 @@ describe("crawl due-work shadow runtime", () => {
         updatedAt,
       ),
     ).toThrow("1 through 500");
+  });
+
+  it("preserves one direct repair-entry time until guarded repair clears it", async () => {
+    await node({ externalId: "direct", hop: 0, id: "direct-repair", kind: "artist" });
+
+    await db.execute(markCrawlNodeRepairStatement("direct-repair", "direct-v1", { now: OLD }));
+    await db.execute(
+      markCrawlNodeRepairStatement("direct-repair", "direct-v2", {
+        now: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+    expect(
+      (
+        await db.execute(`select repair_entered_at, source_version from crawl_due_work
+          where node_id = 'direct-repair'`)
+      ).rows,
+    ).toEqual([{ repair_entered_at: OLD, source_version: "direct-v2" }]);
+
+    expect(await repairCrawlDueNode(db, "direct-repair", { now: () => NOW })).toBe(true);
+    expect(
+      (
+        await db.execute(`select repair_entered_at, state from crawl_due_work
+          where node_id = 'direct-repair'`)
+      ).rows,
+    ).toEqual([{ repair_entered_at: null, state: "ready" }]);
   });
 
   it("matches legacy eligibility, retry windows, stale rearm, and the two claim lanes", async () => {
@@ -541,6 +602,48 @@ describe("crawl due-work shadow runtime", () => {
         where node_id = 'musicbrainz:artist:parent'`)
       ).rows[0]?.state,
     ).toBe("scheduled");
+  });
+
+  it("preserves fanout repair-entry time across source re-marking until direct repair", async () => {
+    await label("repair-entry", "disabled");
+    await node({
+      externalId: "repair-entry",
+      hop: 1,
+      id: "release:repair-entry",
+      kind: "release",
+      labelSlug: "repair-entry",
+    });
+    await rebuildCrawlDueWork(db, { generation: "crawl-repair-entry", limit: 10 });
+
+    await db.execute(
+      markCrawlProjectionRepairStatement("label", "repair-entry", {
+        now: OLD,
+        sourceVersion: "fanout-v1",
+      }),
+    );
+    await fanOutCrawlProjectionRepairs(db, { limit: 10 });
+    await db.execute(
+      markCrawlProjectionRepairStatement("label", "repair-entry", {
+        now: "2026-01-02T00:00:00.000Z",
+        sourceVersion: "fanout-v2",
+      }),
+    );
+    await fanOutCrawlProjectionRepairs(db, { limit: 10 });
+
+    expect(
+      (
+        await db.execute(`select repair_entered_at from crawl_due_work
+          where node_id = 'release:repair-entry'`)
+      ).rows,
+    ).toEqual([{ repair_entered_at: OLD }]);
+
+    await repairCrawlDueNodes(db, { limit: 10, now: () => NOW });
+    expect(
+      (
+        await db.execute(`select repair_entered_at, state from crawl_due_work
+          where node_id = 'release:repair-entry'`)
+      ).rows,
+    ).toEqual([{ repair_entered_at: null, state: "ready" }]);
   });
 
   it("preserves a newer crawl source marker that lands during bounded fanout", async () => {

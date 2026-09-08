@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
-import { markCrawlNodeRepairStatement } from "./crawl-due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   advanceProjectionAudit,
@@ -46,6 +45,7 @@ describe("projection production operations", () => {
         work_kind text not null, subject_type text not null, subject_id text not null default '',
         state text not null, sort_key text not null default '', next_due_at text not null default '',
         claim_expires_at text, generation text not null default '', updated_at text not null default '',
+        repair_entered_at text,
         primary key (work_kind, subject_type, subject_id)
       );
       create index due_work_ready_idx on due_work(work_kind, state, sort_key, subject_id)
@@ -74,7 +74,8 @@ describe("projection production operations", () => {
         next_due_at text, claim_expires_at text, generation text not null default '',
         updated_at text not null default '', claim_position integer, claim_token text,
         claimed_by text, label_slug text, node_kind text not null default 'release',
-        parent_id text, source_version text not null default '', storable_rank integer not null default 0
+        parent_id text, repair_entered_at text, source_version text not null default '',
+        storable_rank integer not null default 0
       );
       create index crawl_due_work_ready_idx
         on crawl_due_work(state, hop, demand_rank, created_at, node_id) where state = 'ready';
@@ -374,24 +375,46 @@ describe("projection production operations", () => {
     }
   });
 
-  it("reports the oldest observed marker age and explains unavailable track marker time", async () => {
+  it("reports direct crawl debt age from its immutable repair-entry time", async () => {
+    const repairEnteredAt = "2025-01-01T00:00:00.000Z";
+    await db.execute({
+      args: [repairEnteredAt],
+      sql: `insert into crawl_due_work
+        (node_id, state, created_at, updated_at, repair_entered_at)
+        values ('direct-crawl-with-age', 'repair', '2020-01-01T00:00:00.000Z',
+          '2021-01-01T00:00:00.000Z', ?)`,
+    });
+
+    const readStartedAt = Date.now();
+    const status = await getProjectionStatusFor(db);
+    const readEndedAt = Date.now();
+    const age = status.projections.crawlDueWork.oldestOutstandingMarkerAge;
+    const markerTime = Date.parse(repairEnteredAt);
+
+    expect(age.ageMs).toBeGreaterThanOrEqual(readStartedAt - markerTime);
+    expect(age.ageMs).toBeLessThanOrEqual(readEndedAt - markerTime);
+    expect(age).toMatchObject({ reason: null, truncated: false });
+  });
+
+  it("reports immutable repair-entry ages across track, direct crawl, and fanout debt", async () => {
     const createdAt = {
       artist: "2025-01-01T00:00:00.000Z",
-      crawlDirect: "2025-01-01T03:00:00.000Z",
       crawlFanout: "2025-01-01T02:00:00.000Z",
       publicAggregate: "2025-01-01T01:00:00.000Z",
+      track: "2025-01-01T03:00:00.000Z",
     };
+    const crawlDirectRepairEnteredAt = "2024-12-31T23:00:00.000Z";
     await db.batch([
       {
-        args: ["track-with-unknown-age", "2020-01-01T00:00:00.000Z"],
+        args: ["track-with-age", "2020-01-01T00:00:00.000Z", createdAt.track],
         sql: `insert into due_work
-          (work_kind, subject_type, subject_id, state, updated_at)
-          values ('source-repair', 'track', ?, 'repair', ?)`,
+          (work_kind, subject_type, subject_id, state, updated_at, repair_entered_at)
+          values ('source-repair', 'track', ?, 'repair', ?, ?)`,
       },
       {
-        args: ["crawl-direct", createdAt.crawlDirect],
-        sql: `insert into crawl_due_work (node_id, state, created_at)
-          values (?, 'repair', ?)`,
+        args: ["crawl-direct", "2020-01-01T00:00:00.000Z", crawlDirectRepairEnteredAt],
+        sql: `insert into crawl_due_work (node_id, state, created_at, repair_entered_at)
+          values (?, 'repair', ?, ?)`,
       },
       {
         args: [1, "crawl-fanout", createdAt.crawlFanout],
@@ -429,9 +452,9 @@ describe("projection production operations", () => {
 
     expectExactAge(
       status.projections.crawlDueWork.oldestOutstandingMarkerAge.ageMs,
-      createdAt.crawlFanout,
+      crawlDirectRepairEnteredAt,
     );
-    expect(status.projections.crawlDueWork.oldestOutstandingMarkerAge.truncated).toBe(true);
+    expect(status.projections.crawlDueWork.oldestOutstandingMarkerAge.truncated).toBe(false);
     expectExactAge(
       status.projections.publicAggregates.oldestOutstandingMarkerAge.ageMs,
       createdAt.publicAggregate,
@@ -440,35 +463,45 @@ describe("projection production operations", () => {
       status.projections.artistQualification.oldestOutstandingMarkerAge.ageMs,
       createdAt.artist,
     );
-    expect(status.projections.trackDueWork.oldestOutstandingMarkerAge).toEqual({
-      ageMs: null,
-      reason: "marker_timestamp_unavailable",
+    expectExactAge(
+      status.projections.trackDueWork.oldestOutstandingMarkerAge.ageMs,
+      createdAt.track,
+    );
+    expect(status.projections.trackDueWork.oldestOutstandingMarkerAge).toMatchObject({
+      reason: null,
       truncated: false,
     });
   });
 
-  it("explains unavailable marker time when crawl debt contains only a direct repair row", async () => {
-    await db.execute({
-      args: ["crawl-direct-from-old-frontier", "2020-01-01T00:00:00.000Z"],
-      sql: `insert into crawl_frontier (id, created_at) values (?, ?)`,
-    });
-    await db.execute(
-      markCrawlNodeRepairStatement("crawl-direct-from-old-frontier", "repair-version", {
-        now: "2026-01-01T00:00:00.000Z",
-      }),
-    );
+  it("reports untimed repair debt as an explicitly truncated unknown age", async () => {
+    await db.batch([
+      {
+        args: [],
+        sql: `insert into due_work
+          (work_kind, subject_type, subject_id, state, updated_at, repair_entered_at)
+          values ('source-repair', 'track', 'legacy-track', 'repair',
+            '2020-01-01T00:00:00.000Z', null)`,
+      },
+      {
+        args: [],
+        sql: `insert into crawl_due_work
+          (node_id, state, created_at, updated_at, repair_entered_at)
+          values ('legacy-crawl', 'repair', '2020-01-01T00:00:00.000Z',
+            '2021-01-01T00:00:00.000Z', null)`,
+      },
+    ]);
 
     const status = await getProjectionStatusFor(db);
 
-    expect(status.projections.crawlDueWork.repairs).toMatchObject({
-      direct: { count: 1, truncated: false },
-      fanout: { count: 0, truncated: false },
-      total: { count: 1, truncated: false },
+    expect(status.projections.trackDueWork.oldestOutstandingMarkerAge).toEqual({
+      ageMs: null,
+      reason: "marker_timestamp_unavailable",
+      truncated: true,
     });
     expect(status.projections.crawlDueWork.oldestOutstandingMarkerAge).toEqual({
       ageMs: null,
       reason: "marker_timestamp_unavailable",
-      truncated: false,
+      truncated: true,
     });
   });
 

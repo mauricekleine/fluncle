@@ -74,7 +74,7 @@ describe("the bio-review ledger", () => {
       work_kind text not null, subject_type text not null, subject_id text not null,
       state text not null, sort_key text not null, next_due_at text not null,
       source_version text not null, generation text not null, updated_at text not null,
-      claim_token text, claim_expires_at text, claimed_by text,
+      claim_token text, claim_expires_at text, claimed_by text, repair_entered_at text,
       primary key (work_kind, subject_type, subject_id)
     )`);
     await db.execute(`create table artist_qualification_state (

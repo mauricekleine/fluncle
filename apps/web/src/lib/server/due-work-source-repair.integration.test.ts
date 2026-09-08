@@ -94,15 +94,27 @@ describe("transactionally coupled due-work source repair", () => {
         },
       ],
       [{ subjectId: "repair-track", subjectType: "track" }],
-      { markerVersion: "track-source-v1", producer: "capture-verification" },
+      {
+        markerVersion: "track-source-v1",
+        now: "2026-01-01T00:00:00.000Z",
+        producer: "capture-verification",
+      },
     );
+
+    expect(
+      (
+        await db.execute(`select repair_entered_at from due_work
+          where work_kind = 'source-repair' and subject_id = 'repair-track'`)
+      ).rows[0]?.repair_entered_at,
+    ).toBe("2026-01-01T00:00:00.000Z");
 
     expect((await fanOutDueWorkSourceRepairs(db, { limit: 1 })).expanded).toBe(1);
     const markers = await db.execute(
-      `select work_kind, state from due_work where subject_id = 'repair-track'`,
+      `select repair_entered_at, work_kind, state from due_work where subject_id = 'repair-track'`,
     );
     expect(markers.rows.some((row) => row.work_kind === DUE_WORK_SOURCE_REPAIR_KIND)).toBe(false);
     expect(markers.rows.some((row) => row.state === "repair")).toBe(false);
+    expect(markers.rows.every((row) => row.repair_entered_at === null)).toBe(true);
 
     expect(
       (await listReadyDueWork(db, "embed-catalogue")).items.map((row) => row.subjectId),
