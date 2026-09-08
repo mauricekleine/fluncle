@@ -473,6 +473,77 @@ describe("projection production operations", () => {
     });
   });
 
+  it("keeps fully observed crawl age complete when direct and fanout counts exceed the combined count cap", async () => {
+    const directRepairEnteredAt = "2025-01-01T00:00:00.000Z";
+    const fanoutCreatedAt = "2025-01-02T00:00:00.000Z";
+    await db.batch([
+      ...Array.from({ length: 60 }, (_, index) => ({
+        args: [`direct-${index}`, directRepairEnteredAt],
+        sql: `insert into crawl_due_work
+          (node_id, state, repair_entered_at) values (?, 'repair', ?)`,
+      })),
+      ...Array.from({ length: 60 }, (_, index) => ({
+        args: [index + 1, `fanout-${index}`, fanoutCreatedAt],
+        sql: `insert into crawl_projection_repairs (source_epoch, source_id, created_at)
+          values (?, ?, ?)`,
+      })),
+    ]);
+
+    const readStartedAt = Date.now();
+    const status = await getProjectionStatusFor(db);
+    const readEndedAt = Date.now();
+    const crawl = status.projections.crawlDueWork;
+
+    expect(crawl.repairs).toEqual({
+      direct: { count: 60, truncated: false },
+      fanout: { count: 60, truncated: false },
+      total: { count: 100, truncated: true },
+    });
+    expect(crawl.oldestOutstandingMarkerAge.ageMs).toBeGreaterThanOrEqual(
+      readStartedAt - Date.parse(directRepairEnteredAt),
+    );
+    expect(crawl.oldestOutstandingMarkerAge.ageMs).toBeLessThanOrEqual(
+      readEndedAt - Date.parse(directRepairEnteredAt),
+    );
+    expect(crawl.oldestOutstandingMarkerAge).toMatchObject({
+      reason: null,
+      truncated: false,
+    });
+  });
+
+  it("marks crawl age truncated when a source probe cannot observe every repair marker", async () => {
+    const observedTimestamp = "2025-01-01T00:00:00.000Z";
+    const unseenTimestamp = "2020-01-01T00:00:00.000Z";
+    await db.batch(
+      Array.from({ length: 102 }, (_, index) => ({
+        args: [
+          `direct-${String(index).padStart(3, "0")}`,
+          index === 101 ? unseenTimestamp : observedTimestamp,
+        ],
+        sql: `insert into crawl_due_work
+          (node_id, state, repair_entered_at) values (?, 'repair', ?)`,
+      })),
+    );
+
+    const readStartedAt = Date.now();
+    const status = await getProjectionStatusFor(db);
+    const readEndedAt = Date.now();
+    const crawl = status.projections.crawlDueWork;
+
+    expect(crawl.repairs.direct).toEqual({ count: 100, truncated: true });
+    expect(crawl.oldestOutstandingMarkerAge.truncated).toBe(true);
+    expect(crawl.oldestOutstandingMarkerAge.reason).toBeNull();
+    expect(crawl.oldestOutstandingMarkerAge.ageMs).toBeGreaterThanOrEqual(
+      readStartedAt - Date.parse(observedTimestamp),
+    );
+    expect(crawl.oldestOutstandingMarkerAge.ageMs).toBeLessThanOrEqual(
+      readEndedAt - Date.parse(observedTimestamp),
+    );
+    expect(crawl.oldestOutstandingMarkerAge.ageMs).toBeLessThan(
+      readStartedAt - Date.parse(unseenTimestamp),
+    );
+  });
+
   it("reports untimed repair debt as an explicitly truncated unknown age", async () => {
     await db.batch([
       {
