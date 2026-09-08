@@ -156,12 +156,11 @@ function oldestCrawlOutstandingMarkerAge(
   direct: BoundedCount,
   fanoutRows: readonly unknown[],
   fanout: BoundedCount,
-  total: BoundedCount,
   now: number,
 ): OldestOutstandingMarkerAge {
   return oldestOutstandingMarkerAge(
     [...directRows, ...fanoutRows],
-    direct.truncated || fanout.truncated || total.truncated,
+    direct.truncated || fanout.truncated,
     now,
   );
 }
@@ -581,7 +580,6 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
       crawlDirectRepairs,
       crawlFanoutRepairRows,
       crawlFanoutRepairs,
-      addBoundedCounts(crawlDirectRepairs, crawlFanoutRepairs),
       now,
     ),
   );
