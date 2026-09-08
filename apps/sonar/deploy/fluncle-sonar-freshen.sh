@@ -806,28 +806,25 @@ presmoke_fail() {
 if [ "$SMOKE_STATE_PRESENT" = "1" ]; then
   # Pick a free high loopback port (bash /dev/tcp probe; no external tool needed).
   port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-  SMOKE_PORT=""
-  for p in 42480 42481 42482 42483 42484; do
-    if port_free "$p"; then SMOKE_PORT="$p"; break; fi
-  done
-  [ -n "$SMOKE_PORT" ] || presmoke_fail "no free loopback port for the isolated boot"
-
   SMOKE_LOG="$WORK_DIR/boot.log"
-  SONAR_STATE_PATH="$SMOKE_STATE_PATH" \
-    SONAR_VALIDATE_ONLY=true \
-    SONAR_SECRET="$SMOKE_SECRET" SONAR_BIND=127.0.0.1 SONAR_PORT="$SMOKE_PORT" \
-    SONAR_TLS_CERT='' SONAR_TLS_KEY='' \
-    "$NEW_BIN" >"$SMOKE_LOG" 2>&1 &
-  SMOKE_PID=$!
   # Always reap the throwaway server — it holds a second full copy of the index in RAM.
-  cleanup_smoke() { kill "$SMOKE_PID" >/dev/null 2>&1 || true; wait "$SMOKE_PID" 2>/dev/null || true; }
+  SMOKE_PID=""
+  cleanup_smoke() {
+    [ -z "$SMOKE_PID" ] || kill "$SMOKE_PID" >/dev/null 2>&1 || true
+    [ -z "$SMOKE_PID" ] || wait "$SMOKE_PID" 2>/dev/null || true
+    SMOKE_PID=""
+  }
   _cleanup() { cleanup_smoke; rm -rf "$WORK_DIR"; }
 
   # sonar's /health serialises `"ok":true` with no spaces (serde), so one grep is the
   # whole assertion: the process is up AND its indexes are built AND it answers HTTP.
   smoke_healthy() {
-    local body health_rc=0
-    body="$(curl -fsS -m 10 "http://127.0.0.1:$SMOKE_PORT/health" 2>/dev/null)" || return 1
+    local body health_rc=0 remaining timeout
+    remaining=$((SMOKE_DEADLINE - SECONDS))
+    [ "$remaining" -gt 0 ] || return 1
+    timeout="$remaining"
+    [ "$timeout" -le 10 ] || timeout=10
+    body="$(curl -fsS -m "$timeout" "http://127.0.0.1:$SMOKE_PORT/health" 2>/dev/null)" || return 1
     printf '%s' "$body" | health_matches "$NEW_SHA" || health_rc=$?
     if [ "$health_rc" -eq 2 ]; then
       SMOKE_IDENTITY_MISMATCH=1
@@ -838,20 +835,52 @@ if [ "$SMOKE_STATE_PRESENT" = "1" ]; then
 
   smoked=0
   SMOKE_IDENTITY_MISMATCH=0
+  SMOKE_BIND_COLLISIONS=0
+  SMOKE_FREE_CANDIDATES=0
+  SMOKE_INFRA_FAILURE=0
   smoke_failure=""
-  for _ in $(seq 1 "$BOOT_TIMEOUT_SECS"); do
-    if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
-      # Include only the tail of the boot log: it is sonar's own tracing output (config
-      # summary + counts), never a secret value.
-      smoke_failure="the new binary exited during boot ($(tr '\n' ' ' <"$SMOKE_LOG" | tail -c 200))"
-      break
-    fi
-    if smoke_healthy; then smoked=1; break; fi
-    if [ "$SMOKE_IDENTITY_MISMATCH" = "1" ]; then break; fi
-    sleep 1
+  SMOKE_DEADLINE=$((SECONDS + BOOT_TIMEOUT_SECS))
+  for p in 42480 42481 42482 42483 42484; do
+    [ "$SECONDS" -lt "$SMOKE_DEADLINE" ] || break
+    port_free "$p" || continue
+    SMOKE_FREE_CANDIDATES=$((SMOKE_FREE_CANDIDATES + 1))
+    SMOKE_PORT="$p"
+    : >"$SMOKE_LOG"
+    SONAR_STATE_PATH="$SMOKE_STATE_PATH" SONAR_VALIDATE_ONLY=true SONAR_SECRET="$SMOKE_SECRET" SONAR_BIND=127.0.0.1 SONAR_PORT="$SMOKE_PORT" SONAR_TLS_CERT='' SONAR_TLS_KEY='' "$NEW_BIN" >"$SMOKE_LOG" 2>&1 &
+    SMOKE_PID=$!
+    SMOKE_IDENTITY_MISMATCH=0
+    while [ "$SECONDS" -lt "$SMOKE_DEADLINE" ]; do
+      if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
+        wait "$SMOKE_PID" 2>/dev/null || true
+        SMOKE_PID=""
+        if grep -Eqi 'address already in use|EADDRINUSE' "$SMOKE_LOG"; then
+          SMOKE_BIND_COLLISIONS=$((SMOKE_BIND_COLLISIONS + 1))
+          SMOKE_IDENTITY_MISMATCH=0
+          log "isolated smoke port $SMOKE_PORT was claimed during boot; trying the next candidate"
+          break
+        fi
+        smoke_failure="the new binary exited during boot ($(tr '\n' ' ' <"$SMOKE_LOG" | tail -c 200))"
+        break 2
+      fi
+      if smoke_healthy; then smoked=1; break 2; fi
+      if [ "$SMOKE_IDENTITY_MISMATCH" = "1" ]; then
+        sleep 1
+        kill -0 "$SMOKE_PID" 2>/dev/null && break 2
+        continue
+      fi
+      sleep 1
+    done
+    cleanup_smoke
   done
   cleanup_smoke
   _cleanup() { rm -rf "$WORK_DIR"; }
+  if [ "$smoked" != "1" ] && [ -z "$smoke_failure" ] && [ "$SMOKE_BIND_COLLISIONS" -gt 0 ] && [ "$SMOKE_BIND_COLLISIONS" -eq "$SMOKE_FREE_CANDIDATES" ]; then
+    if [ "$SECONDS" -ge "$SMOKE_DEADLINE" ]; then smoke_failure="the isolated boot budget expired after confirmed port collisions"; else smoke_failure="every available isolated smoke port was claimed during boot"; fi
+    SMOKE_INFRA_FAILURE=1
+  elif [ "$smoked" != "1" ] && [ -z "$smoke_failure" ] && [ "$SMOKE_FREE_CANDIDATES" -eq 0 ]; then
+    smoke_failure="no free loopback port for the isolated boot"
+    SMOKE_INFRA_FAILURE=1
+  fi
   [ "$SMOKE_IDENTITY_MISMATCH" = "0" ] \
     || presmoke_fail "the downloaded binary reports a different baked commit than sonar.commit"
   if [ "$smoked" = "1" ]; then
@@ -859,6 +888,7 @@ if [ "$SMOKE_STATE_PRESENT" = "1" ]; then
   else
     [ -n "$smoke_failure" ] \
       || smoke_failure="the new binary did not serve a healthy /health within ${BOOT_TIMEOUT_SECS}s"
+    if [ "$SMOKE_INFRA_FAILURE" = "1" ]; then presmoke_fail "$smoke_failure"; fi
     if [ "$BOOTSTRAP_READY" = "1" ]; then
       presmoke_fail "$smoke_failure"
     fi
