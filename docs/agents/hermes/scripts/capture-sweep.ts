@@ -7,8 +7,8 @@
 // ONCE (yt-dlp → a duration-gated public-stream match, through a residential proxy on a per-track STICKY
 // session), duration-guards the match against the track's Spotify length, stores the
 // bytes in the PRIVATE `fluncle-source-audio` R2 bucket (a finding under `<logId>/…`, a
-// catalogue row under `catalogue/<trackId>/…`), and writes the key + status back via the
-// agent-tier `update_track` op. It is a NON-BLOCKING parallel side-channel: it never gates
+// catalogue row under `catalogue/<trackId>/…`), and reconciles the result through the
+// agent-tier capture receipt seam. It is a NON-BLOCKING parallel side-channel: it never gates
 // the enrich/embed queues (docs/track-lifecycle.md).
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
@@ -37,7 +37,8 @@
 // (the archive can never be starved), then `capture_priority` DESC (the Ear's ladder —
 // logged-artist > label-with-a-finding > enabled-seed-label; an operator-DISABLED label is
 // tier −1 and excluded by SQL predicate, never bought). Same URL trick embed-sweep.ts uses: a
-// DIRECT HTTP read (pin-independent), the WRITE-BACK still on the PATCH path below.
+// DIRECT HTTP read (pin-independent), with prepare/commit reads and writes isolated into short
+// database-admitted child phases around the long provider and object-storage work.
 //
 // THE BRAKE IS AT THE QUEUE, NOT HERE (apps/web/src/lib/server/{track-work,capture-budget}.ts).
 // `list_track_work` consults the catalogue capture budget BEFORE it selects the worklist, and
@@ -125,9 +126,26 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  chmodSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import {
+  databaseAdmissionYieldSummary,
+  runDatabaseAdmissionPhase,
+} from "./database-admission-phase";
 // THE FINGERPRINT VERIFICATION GATE (docs/the-ear.md § Wrong audio) — the shared, pure matcher
 // (also used by the historic backfill, verify-captures.ts) + the fpcalc/preview I/O helpers.
 import {
@@ -166,6 +184,10 @@ const R2_BUCKET = process.env.FLUNCLE_SOURCE_AUDIO_R2_BUCKET ?? "fluncle-source-
 // yt-dlp / ffprobe from PATH (both are a box deploy prereq — see cron/README.md).
 const YT_DLP_BIN = process.env.YT_DLP_BIN ?? "yt-dlp";
 const FFPROBE_BIN = process.env.FFPROBE_BIN ?? "ffprobe";
+const BUN_BIN = process.env.BUN_BIN ?? "bun";
+const CAPTURE_PROGRESS_DIR =
+  process.env.FLUNCLE_CAPTURE_PROGRESS_DIR ??
+  join(process.env.HOME ?? tmpdir(), ".fluncle-capture-progress");
 
 // ── FLAT SEARCH EXTRACTION (measured 2026-08-01, n=40) ───────────────────────
 //
@@ -342,6 +364,116 @@ export type CaptureFinding = {
   title?: string;
   trackId: string;
 };
+
+export type CaptureReconciliationKind = "capture" | "youtube-provenance" | "youtube-reverdict";
+export type CaptureExternalResult =
+  | {
+      attemptedAt: string;
+      kind: "capture";
+      outcome: "failed" | "unmatched";
+      sourceAudioRejected?: string;
+    }
+  | {
+      attemptedAt: string;
+      bodyBase64: string;
+      bytes: number;
+      capturedAt: string;
+      captureVerification: "preview-match" | "unverified";
+      contentType: string;
+      kind: "capture";
+      outcome: "done";
+      sourceAudioKey: string;
+      sourceAudioRejected?: string;
+      verifiedAt: string;
+      youtubeVideoId?: string;
+    }
+  | {
+      kind: "youtube-provenance";
+      outcome: "none";
+      verification: "inconclusive" | "no-match";
+    }
+  | {
+      kind: "youtube-provenance";
+      outcome: "source-found";
+      sourceVerification: "soundcloud-archive-match" | "soundcloud-preview-match";
+    }
+  | {
+      kind: "youtube-provenance";
+      outcome: "youtube-found";
+      verification: "archive-match" | "metadata-match" | "preview-match";
+      youtubeVideoId: string;
+    }
+  | { kind: "youtube-reverdict"; outcome: "reverdict" };
+
+export type ReceiptCoordinates = {
+  commitToken: string;
+  operationId: "track.capture";
+  operationKey: string;
+  requestDigest: string;
+};
+
+export type CaptureAttemptProgress = {
+  attempt: {
+    attemptedAt: string;
+    completion?: CaptureProviderCompletion;
+    finding: CaptureFinding;
+    kind: "capture" | "youtube-provenance";
+    localDownload?: { bytes: number; fileName: string };
+    state:
+      | "local-download-present"
+      | "provider-ambiguous"
+      | "provider-completed"
+      | "provider-intent";
+    workDirectory: string;
+  };
+  snapshotToken: string;
+  trackId: string;
+};
+
+type CaptureProviderCompletion =
+  | {
+      completedAt: string;
+      outcome: "none";
+      rejectedSources?: string;
+    }
+  | {
+      completedAt: string;
+      digest: string;
+      ext: string;
+      fileName: string;
+      outcome: "accepted";
+      rejectedSources?: string;
+      source: CaptureSearchSource;
+      verdict: "match" | "no-reference";
+      videoId: string;
+    };
+
+export type CaptureResultProgress = {
+  receipt?: ReceiptCoordinates;
+  result: CaptureExternalResult;
+  snapshotToken: string;
+  trackId: string;
+};
+
+export type CaptureProgress = CaptureAttemptProgress | CaptureResultProgress;
+
+export type PreparedSnapshot =
+  | { prepared: false; reason: "ineligible" | "not-found" | "stale" }
+  | { prepared: true; snapshotToken: string; track: CaptureFinding };
+
+export type ProgressDisposition = "committed" | "failed" | "pending" | "rejected";
+
+export function preparedCaptureFinding(
+  queued: CaptureFinding,
+  current: CaptureFinding,
+): CaptureFinding {
+  return {
+    ...current,
+    ...(queued.artistYoutubeChannelIds
+      ? { artistYoutubeChannelIds: queued.artistYoutubeChannelIds }
+      : {}),
+  };
+}
 
 /**
  * Build the STICKY residential-proxy URL for one track: append `__sessid.<sessionId>` to
@@ -1364,6 +1496,30 @@ async function r2Put(key: string, body: Uint8Array, contentType: string): Promis
   }
 }
 
+async function r2Exists(key: string, expectedBytes: number): Promise<boolean> {
+  const url = `${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`;
+  const headers = await signS3Request({
+    accessKeyId: R2_ACCESS_KEY_ID,
+    method: "HEAD",
+    now: new Date(),
+    region: "auto",
+    secretAccessKey: R2_SECRET_ACCESS_KEY,
+    service: "s3",
+    url,
+  });
+  const response = await fetch(url, { headers, method: "HEAD" });
+  if (response.status === 404) {
+    return false;
+  }
+  if (!response.ok) {
+    throw tagCaptureFailure("r2", new Error(`R2 HEAD ${key} failed (${response.status})`));
+  }
+  if (Number(response.headers.get("content-length")) !== expectedBytes) {
+    throw tagCaptureFailure("r2", new Error(`R2 HEAD ${key} returned an unexpected size`));
+  }
+  return true;
+}
+
 /**
  * Read one object back out of the private source-audio bucket.
  *
@@ -1439,28 +1595,922 @@ async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
   return fetchTrackWork({ kind: "capture", limit: QUEUE_LIMIT, scope: "all" });
 }
 
-async function patchTrack(trackId: string, update: Record<string, unknown>): Promise<void> {
+async function adminApiPost<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    body: JSON.stringify(body),
+    headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
+    method: "POST",
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) {
+    throw tagCaptureFailure(
+      "track-update",
+      new Error(`${path} failed (${response.status}): ${(await response.text()).slice(0, 200)}`),
+    );
+  }
+  return (await response.json()) as T;
+}
+
+function progressPath(trackId: string, kind: CaptureReconciliationKind): string {
+  const id = createHash("sha256").update(`${kind}\u0000${trackId}`).digest("hex");
+  return join(CAPTURE_PROGRESS_DIR, `${id}.json`);
+}
+
+export function writeJsonAtomic(path: string, value: unknown): void {
+  const parent = dirname(path);
+  mkdirSync(parent, { mode: 0o700, recursive: true });
+  chmodSync(parent, 0o700);
+  const temporary = `${path}.${process.pid}.tmp`;
+  const file = openSync(temporary, "w", 0o600);
   try {
-    const url = `${API_BASE_URL}/api/v1/admin/tracks/${encodeURIComponent(trackId)}`;
-    const res = await fetch(url, {
-      body: JSON.stringify(update),
-      headers: {
-        Authorization: `Bearer ${API_TOKEN}`,
-        "Content-Type": "application/json",
+    writeFileSync(file, JSON.stringify(value), { encoding: "utf8" });
+    fsyncSync(file);
+  } finally {
+    closeSync(file);
+  }
+  chmodSync(temporary, 0o600);
+  renameSync(temporary, path);
+  const directory = openSync(parent, "r");
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
+}
+
+function readProgress(path: string): CaptureProgress {
+  return JSON.parse(readFileSync(path, "utf8")) as CaptureProgress;
+}
+
+export function isCaptureAttemptProgress(
+  progress: CaptureProgress,
+): progress is CaptureAttemptProgress {
+  return "attempt" in progress;
+}
+
+export type JournaledCaptureProviderResult<T> =
+  | { disposition: "pending" }
+  | { disposition: "completed"; value: T; workDirectory: string };
+
+/**
+ * Put the conservative per-track intent on durable storage before invoking the provider seam.
+ * The provider offers no request id or idempotency key, so an interrupted call is held for
+ * inspection rather than replayed automatically.
+ */
+export async function runJournaledCaptureProvider<T>(options: {
+  afterProvider?: (value: T) => void | Promise<void>;
+  beforeProvider?: () => void | Promise<void>;
+  completion?: (value: T, workDirectory: string) => CaptureProviderCompletion;
+  finding: CaptureFinding;
+  kind: "capture" | "youtube-provenance";
+  progressPath?: typeof progressPath;
+  provider: (workDirectory: string) => Promise<T>;
+  snapshotToken: string;
+}): Promise<JournaledCaptureProviderResult<T>> {
+  const path = (options.progressPath ?? progressPath)(options.finding.trackId, options.kind);
+  if (existsSync(path)) {
+    return { disposition: "pending" };
+  }
+  const workDirectory = `${path}.work`;
+  rmSync(workDirectory, { force: true, recursive: true });
+  mkdirSync(workDirectory, { mode: 0o700, recursive: true });
+  chmodSync(workDirectory, 0o700);
+  writeJsonAtomic(path, {
+    attempt: {
+      attemptedAt: new Date().toISOString(),
+      finding: options.finding,
+      kind: options.kind,
+      state: "provider-intent",
+      workDirectory,
+    },
+    snapshotToken: options.snapshotToken,
+    trackId: options.finding.trackId,
+  } satisfies CaptureAttemptProgress);
+  await options.beforeProvider?.();
+  const value = await options.provider(workDirectory);
+  await options.afterProvider?.(value);
+  if (options.completion) {
+    const completion = options.completion(value, workDirectory);
+    if (completion.outcome === "accepted") {
+      if (
+        completion.fileName !== basename(completion.fileName) ||
+        !/^audio\.[A-Za-z0-9]+$/.test(completion.fileName)
+      ) {
+        throw new Error(
+          `provider returned an unsafe completed file for ${options.finding.trackId}`,
+        );
+      }
+      const completedFile = join(workDirectory, completion.fileName);
+      chmodSync(completedFile, 0o600);
+      const file = openSync(completedFile, "r");
+      try {
+        fsyncSync(file);
+      } finally {
+        closeSync(file);
+      }
+      const directory = openSync(workDirectory, "r");
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+    }
+    const progress = readProgress(path);
+    if (!isCaptureAttemptProgress(progress)) {
+      throw new Error(`provider attempt journal disappeared for ${options.finding.trackId}`);
+    }
+    writeJsonAtomic(path, {
+      ...progress,
+      attempt: {
+        ...progress.attempt,
+        completion,
+        state: "provider-completed",
       },
-      method: "PATCH",
-      // The Worker API record write (`update_track`), NOT a media download: the mutation can run
-      // slow-but-completing under load, so a 30s budget tripped a false failure alert. 60s clears
-      // the tail; the yt-dlp download/socket timeouts elsewhere in this file are left untouched.
-      signal: AbortSignal.timeout(60_000),
-    });
-    if (!res.ok) {
-      throw new Error(
-        `update_track ${trackId} failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    } satisfies CaptureAttemptProgress);
+  }
+  return { disposition: "completed", value, workDirectory };
+}
+
+function externalResultForWire(result: CaptureExternalResult): Record<string, unknown> {
+  if (result.kind !== "capture" || result.outcome !== "done") {
+    return result;
+  }
+  const { bodyBase64: _bodyBase64, contentType: _contentType, ...wire } = result;
+  return wire;
+}
+
+type CaptureAdmissionAction = "commit" | "prepare" | "queue" | "reconcile";
+
+function phaseCommand(action: CaptureAdmissionAction, statePath: string): string[] {
+  return [BUN_BIN, import.meta.filename, "--admission-phase", action, "--phase-state", statePath];
+}
+
+function admittedPhase(action: CaptureAdmissionAction, statePath: string): "completed" | "yielded" {
+  return runDatabaseAdmissionPhase({
+    command: phaseCommand(action, statePath),
+    owner: "fluncle-capture",
+    yieldRetries: 0,
+  }).kind;
+}
+
+async function runCaptureAdmissionChild(
+  action: CaptureAdmissionAction,
+  statePath: string,
+): Promise<void> {
+  const request = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+  let result: unknown;
+  if (action === "queue") {
+    result = {
+      tracks:
+        typeof request.kind === "string"
+          ? await fetchTrackWork({
+              kind: request.kind as "capture" | "youtube-provenance" | "youtube-reverdict",
+              limit: Number(request.limit),
+              scope: request.scope as "all" | "catalogue" | "findings",
+            })
+          : await fetchCaptureQueue(),
+    };
+  } else if (action === "prepare") {
+    const trackId = typeof request.trackId === "string" ? request.trackId : "";
+    result = await adminApiPost<PreparedSnapshot>(
+      `/api/v1/admin/tracks/${encodeURIComponent(trackId)}/capture/prepare`,
+      request,
+    );
+  } else if (action === "commit") {
+    const trackId = typeof request.trackId === "string" ? request.trackId : "";
+    result = await adminApiPost(
+      `/api/v1/admin/tracks/${encodeURIComponent(trackId)}/capture/commit`,
+      request,
+    );
+  } else {
+    result = await adminApiPost("/api/v1/admin/operation-receipts/resolve", request);
+  }
+  writeJsonAtomic(`${statePath}.result`, result);
+}
+
+function validOptionalPreparedString(
+  track: Record<string, unknown>,
+  key: string,
+  max: number,
+): boolean {
+  const value = track[key];
+  return value === undefined || (typeof value === "string" && value.length <= max);
+}
+
+function validPreparedTrack(value: unknown, expectedTrackId: string): value is CaptureFinding {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const allowedKeys = new Set([
+    "analyzedFrom",
+    "artists",
+    "bpm",
+    "certified",
+    "durationMs",
+    "label",
+    "logId",
+    "sourceAudioFailures",
+    "sourceAudioKey",
+    "sourceAudioRejected",
+    "title",
+    "trackId",
+  ]);
+  return (
+    Object.keys(value).every((key) => allowedKeys.has(key)) &&
+    value.trackId === expectedTrackId &&
+    expectedTrackId.length >= 1 &&
+    expectedTrackId.length <= 256 &&
+    typeof value.title === "string" &&
+    value.title.length <= 2_048 &&
+    typeof value.certified === "boolean" &&
+    Array.isArray(value.artists) &&
+    value.artists.length <= 64 &&
+    value.artists.every((artist) => typeof artist === "string" && artist.length <= 512) &&
+    (value.analyzedFrom === undefined ||
+      value.analyzedFrom === "full" ||
+      value.analyzedFrom === "preview") &&
+    (value.bpm === undefined || (typeof value.bpm === "number" && Number.isFinite(value.bpm))) &&
+    (value.durationMs === undefined ||
+      (Number.isInteger(value.durationMs) && Number(value.durationMs) >= 1)) &&
+    (value.sourceAudioFailures === undefined ||
+      (Number.isInteger(value.sourceAudioFailures) && Number(value.sourceAudioFailures) >= 0)) &&
+    validOptionalPreparedString(value, "label", 1_024) &&
+    validOptionalPreparedString(value, "logId", 64) &&
+    validOptionalPreparedString(value, "sourceAudioKey", 1_024) &&
+    validOptionalPreparedString(value, "sourceAudioRejected", 16_384)
+  );
+}
+
+function parsedPreparedSnapshot(
+  response: unknown,
+  expectedTrackId: string,
+): PreparedSnapshot | undefined {
+  if (!isRecord(response) || response.ok !== true) {
+    return undefined;
+  }
+  if (response.prepared === false) {
+    return hasExactKeys(response, ["ok", "prepared", "reason"]) &&
+      (response.reason === "ineligible" ||
+        response.reason === "not-found" ||
+        response.reason === "stale")
+      ? { prepared: false, reason: response.reason }
+      : undefined;
+  }
+  return response.prepared === true &&
+    hasExactKeys(response, ["ok", "prepared", "snapshotToken", "track"]) &&
+    typeof response.snapshotToken === "string" &&
+    response.snapshotToken.length >= 1 &&
+    response.snapshotToken.length <= 65_536 &&
+    validPreparedTrack(response.track, expectedTrackId)
+    ? { prepared: true, snapshotToken: response.snapshotToken, track: response.track }
+    : undefined;
+}
+
+function validPreparedSnapshotValue(
+  value: unknown,
+  expectedTrackId: string,
+): value is PreparedSnapshot {
+  if (!isRecord(value) || typeof value.prepared !== "boolean") {
+    return false;
+  }
+  return value.prepared
+    ? hasExactKeys(value, ["prepared", "snapshotToken", "track"]) &&
+        typeof value.snapshotToken === "string" &&
+        value.snapshotToken.length >= 1 &&
+        value.snapshotToken.length <= 65_536 &&
+        validPreparedTrack(value.track, expectedTrackId)
+    : hasExactKeys(value, ["prepared", "reason"]) &&
+        (value.reason === "ineligible" || value.reason === "not-found" || value.reason === "stale");
+}
+
+function prepareCurrentSnapshot(
+  trackId: string,
+  kind: CaptureReconciliationKind,
+  priorSnapshotToken?: string,
+): PreparedSnapshot | "yielded" {
+  const path = progressPath(trackId, `${kind}` as CaptureReconciliationKind) + ".prepare";
+  writeJsonAtomic(path, { kind, priorSnapshotToken, trackId });
+  rmSync(`${path}.result`, { force: true });
+  const phase = admittedPhase("prepare", path);
+  if (phase === "yielded") {
+    return "yielded";
+  }
+  const response = parsedPreparedSnapshot(
+    JSON.parse(readFileSync(`${path}.result`, "utf8")),
+    trackId,
+  );
+  rmSync(path, { force: true });
+  rmSync(`${path}.result`, { force: true });
+  if (!response) {
+    throw new Error(`capture prepare returned an invalid response for ${trackId}`);
+  }
+  return response;
+}
+
+function admittedWorkList(options: {
+  kind: "capture" | "youtube-provenance" | "youtube-reverdict";
+  limit: number;
+  scope: "all" | "catalogue" | "findings";
+}): CaptureFinding[] | "yielded" {
+  const path = join(
+    CAPTURE_PROGRESS_DIR,
+    `queue-${options.kind}-${options.scope}-${process.pid}.json`,
+  );
+  writeJsonAtomic(path, options);
+  rmSync(`${path}.result`, { force: true });
+  if (admittedPhase("queue", path) === "yielded") {
+    return "yielded";
+  }
+  const response = JSON.parse(readFileSync(`${path}.result`, "utf8")) as {
+    tracks?: CaptureFinding[];
+  };
+  rmSync(path, { force: true });
+  rmSync(`${path}.result`, { force: true });
+  return response.tracks ?? [];
+}
+
+async function authorizeProgress(progress: CaptureResultProgress): Promise<CaptureResultProgress> {
+  if (progress.receipt) {
+    return progress;
+  }
+  const response = await adminApiPost<ReceiptCoordinates>(
+    `/api/v1/admin/tracks/${encodeURIComponent(progress.trackId)}/capture/authorize`,
+    {
+      result: externalResultForWire(progress.result),
+      snapshotToken: progress.snapshotToken,
+      trackId: progress.trackId,
+    },
+  );
+  return { ...progress, receipt: response };
+}
+
+export type CaptureProgressPorts = {
+  admittedPhase: typeof admittedPhase;
+  authorizeProgress: typeof authorizeProgress;
+  prepareCurrentSnapshot: typeof prepareCurrentSnapshot;
+  progressPath: typeof progressPath;
+  r2Exists: typeof r2Exists;
+  r2Put: typeof r2Put;
+};
+
+const CAPTURE_PROGRESS_PORTS: CaptureProgressPorts = {
+  admittedPhase,
+  authorizeProgress,
+  prepareCurrentSnapshot,
+  progressPath,
+  r2Exists,
+  r2Put,
+};
+
+type ReceiptDisposition = ProgressDisposition | "not-found";
+
+const RECEIPT_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~:/-]*$/;
+const RECEIPT_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+const RECEIPT_SUMMARY_KEYS = [
+  "createdAt",
+  "operationId",
+  "outcome",
+  "resultIdentity",
+  "state",
+  "terminalAt",
+  "updatedAt",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function validReceiptCoordinates(receipt: ReceiptCoordinates): boolean {
+  return (
+    receipt.operationId === "track.capture" &&
+    receipt.operationKey.length >= 1 &&
+    receipt.operationKey.length <= 256 &&
+    RECEIPT_KEY_PATTERN.test(receipt.operationKey) &&
+    RECEIPT_DIGEST_PATTERN.test(receipt.requestDigest) &&
+    receipt.commitToken.length >= 1 &&
+    receipt.commitToken.length <= 65_536
+  );
+}
+
+function completeReceiptSummary(response: unknown): Record<string, unknown> | undefined {
+  return isRecord(response) &&
+    hasExactKeys(response, ["ok", "receipt"]) &&
+    response.ok === true &&
+    isRecord(response.receipt) &&
+    hasExactKeys(response.receipt, RECEIPT_SUMMARY_KEYS)
+    ? response.receipt
+    : undefined;
+}
+
+function isExactNotFoundReceipt(receipt: Record<string, unknown>): boolean {
+  return (
+    receipt.outcome === "not-found" &&
+    receipt.createdAt === null &&
+    receipt.operationId === null &&
+    receipt.resultIdentity === null &&
+    receipt.state === null &&
+    receipt.terminalAt === null &&
+    receipt.updatedAt === null
+  );
+}
+
+function isCoherentStoredReceipt(
+  receipt: Record<string, unknown>,
+  expectedCoordinates: ReceiptCoordinates,
+): boolean {
+  const validFields =
+    receipt.operationId === expectedCoordinates.operationId &&
+    typeof receipt.createdAt === "string" &&
+    typeof receipt.updatedAt === "string" &&
+    (receipt.resultIdentity === null || typeof receipt.resultIdentity === "string") &&
+    (receipt.terminalAt === null || typeof receipt.terminalAt === "string") &&
+    (receipt.state === "accepted" || receipt.state === "committed" || receipt.state === "rejected");
+  if (!validFields) {
+    return false;
+  }
+  return (
+    (receipt.state === "accepted" &&
+      receipt.resultIdentity === null &&
+      receipt.terminalAt === null) ||
+    (receipt.state !== "accepted" &&
+      typeof receipt.resultIdentity === "string" &&
+      receipt.resultIdentity.length >= 1 &&
+      typeof receipt.terminalAt === "string")
+  );
+}
+
+function parsedReceiptDisposition(
+  response: unknown,
+  expectedCoordinates: ReceiptCoordinates,
+): ReceiptDisposition | undefined {
+  const receipt = completeReceiptSummary(response);
+  if (!validReceiptCoordinates(expectedCoordinates) || !receipt) {
+    return undefined;
+  }
+  const outcome = receipt.outcome;
+  if (outcome === "not-found") {
+    return isExactNotFoundReceipt(receipt) ? "not-found" : undefined;
+  }
+  if (!isCoherentStoredReceipt(receipt, expectedCoordinates)) {
+    return undefined;
+  }
+  if (outcome === "committed" && receipt.state === "committed") {
+    return "committed";
+  }
+  if (outcome === "rejected" && receipt.state === "rejected") {
+    return "rejected";
+  }
+  if (outcome === "conflict" && receipt.state === "accepted") {
+    return "rejected";
+  }
+  if (outcome === "in-progress" && receipt.state === "accepted") {
+    return "pending";
+  }
+  return undefined;
+}
+
+function validCommittedCaptureResult(value: unknown, expected: CaptureExternalResult): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["applied", "kind", "outcome"]) &&
+    value.applied === true &&
+    value.kind === expected.kind &&
+    value.outcome === expected.outcome
+  );
+}
+
+function parsedCommitDisposition(
+  response: unknown,
+  expected: CaptureExternalResult,
+): ProgressDisposition | undefined {
+  if (!isRecord(response) || response.ok !== true || typeof response.replayed !== "boolean") {
+    return undefined;
+  }
+  if (response.outcome === "committed") {
+    return hasExactKeys(response, ["ok", "outcome", "replayed", "result"]) &&
+      validCommittedCaptureResult(response.result, expected)
+      ? "committed"
+      : undefined;
+  }
+  if (response.outcome === "rejected") {
+    return hasExactKeys(response, ["ok", "outcome", "replayed", "result"]) &&
+      isRecord(response.result) &&
+      hasExactKeys(response.result, ["applied", "reason"]) &&
+      response.result.applied === false &&
+      response.result.reason === "stale"
+      ? "rejected"
+      : undefined;
+  }
+  if (!hasExactKeys(response, ["ok", "outcome", "replayed"])) {
+    return undefined;
+  }
+  if (response.outcome === "conflict") {
+    return "rejected";
+  }
+  return response.outcome === "in-progress" || response.outcome === "safely-retryable"
+    ? "pending"
+    : undefined;
+}
+
+function reconcileReceipt(
+  progress: CaptureProgress,
+  path: string,
+  ports: CaptureProgressPorts,
+): ReceiptDisposition {
+  const receipt = progress.receipt;
+  if (!receipt) {
+    return "pending";
+  }
+  writeJsonAtomic(path, {
+    operationId: receipt.operationId,
+    operationKey: receipt.operationKey,
+    requestDigest: receipt.requestDigest,
+  });
+  rmSync(`${path}.result`, { force: true });
+  if (ports.admittedPhase("reconcile", path) === "yielded") {
+    return "pending";
+  }
+  let response: unknown;
+  try {
+    response = JSON.parse(readFileSync(`${path}.result`, "utf8"));
+  } catch {
+    return "pending";
+  }
+  return parsedReceiptDisposition(response, receipt) ?? "pending";
+}
+
+function completedLocalDownload(
+  path: string,
+  progress: CaptureAttemptProgress,
+): { bytes: number; fileName: string } | undefined {
+  if (
+    progress.attempt.workDirectory !== `${path}.work` ||
+    !existsSync(progress.attempt.workDirectory)
+  ) {
+    return undefined;
+  }
+  const files = readdirSync(progress.attempt.workDirectory).filter(
+    (fileName) =>
+      /^audio\.[A-Za-z0-9]+$/.test(fileName) &&
+      fileName !== "audio.part" &&
+      fileName !== "audio.ytdl",
+  );
+  if (files.length !== 1) {
+    return undefined;
+  }
+  const fileName = files[0];
+  if (fileName === undefined) {
+    return undefined;
+  }
+  const file = statSync(join(progress.attempt.workDirectory, fileName));
+  return file.isFile() && file.size > 0 ? { bytes: file.size, fileName } : undefined;
+}
+
+function removeCaptureAttempt(path: string, progress: CaptureAttemptProgress): void {
+  rmSync(path, { force: true });
+  if (progress.attempt.workDirectory === `${path}.work`) {
+    rmSync(progress.attempt.workDirectory, { force: true, recursive: true });
+  }
+}
+
+function cleanupProviderWorkDirectory(path: string, workDirectory?: string): void {
+  if (!workDirectory) {
+    return;
+  }
+  let retainAttemptFiles = false;
+  if (existsSync(path)) {
+    try {
+      retainAttemptFiles = isCaptureAttemptProgress(readProgress(path));
+    } catch {
+      retainAttemptFiles = true;
+    }
+  }
+  if (!retainAttemptFiles) {
+    rmSync(workDirectory, { force: true, recursive: true });
+  }
+}
+
+function resultFromProviderCompletion(
+  path: string,
+  progress: CaptureAttemptProgress,
+): CaptureExternalResult | undefined {
+  const completion = progress.attempt.completion;
+  if (!completion) {
+    return undefined;
+  }
+  if (completion.outcome === "none") {
+    if (progress.attempt.kind === "youtube-provenance") {
+      return { kind: "youtube-provenance", outcome: "none", verification: "no-match" };
+    }
+    return {
+      attemptedAt: completion.completedAt,
+      kind: "capture",
+      outcome: "unmatched",
+      ...(completion.rejectedSources ? { sourceAudioRejected: completion.rejectedSources } : {}),
+    };
+  }
+  const localDownload = completedLocalDownload(path, progress);
+  if (
+    !localDownload ||
+    localDownload.fileName !== completion.fileName ||
+    completion.fileName !== `audio.${completion.ext}` ||
+    !/^[A-Za-z0-9]+$/.test(completion.ext) ||
+    !RECEIPT_DIGEST_PATTERN.test(completion.digest) ||
+    completion.digest !==
+      createHash("sha256")
+        .update(readFileSync(join(progress.attempt.workDirectory, completion.fileName)))
+        .digest("hex")
+  ) {
+    return undefined;
+  }
+  if (progress.attempt.kind === "youtube-provenance") {
+    if (completion.verdict !== "match") {
+      return { kind: "youtube-provenance", outcome: "none", verification: "no-match" };
+    }
+    return completion.source === "soundcloud"
+      ? {
+          kind: "youtube-provenance",
+          outcome: "source-found",
+          sourceVerification: "soundcloud-preview-match",
+        }
+      : {
+          kind: "youtube-provenance",
+          outcome: "youtube-found",
+          verification: "preview-match",
+          youtubeVideoId: completion.videoId,
+        };
+  }
+  const bytes = readFileSync(join(progress.attempt.workDirectory, completion.fileName));
+  const keyRoot = progress.attempt.finding.logId ?? `catalogue/${progress.trackId}`;
+  const verification = completion.verdict === "match" ? "preview-match" : "unverified";
+  return {
+    attemptedAt: completion.completedAt,
+    bodyBase64: bytes.toString("base64"),
+    bytes: bytes.byteLength,
+    captureVerification: verification,
+    capturedAt: completion.completedAt,
+    contentType: contentTypeForExt(completion.ext),
+    kind: "capture",
+    outcome: "done",
+    sourceAudioKey: buildSourceAudioKey(keyRoot, completion.digest, completion.ext),
+    ...(completion.rejectedSources ? { sourceAudioRejected: completion.rejectedSources } : {}),
+    verifiedAt: completion.completedAt,
+    ...(completion.verdict === "match" && completion.source !== "soundcloud"
+      ? { youtubeVideoId: completion.videoId }
+      : {}),
+  };
+}
+
+async function finishCaptureAttempt(
+  path: string,
+  progress: CaptureAttemptProgress,
+  ports: CaptureProgressPorts,
+): Promise<ProgressDisposition> {
+  const prepared = ports.prepareCurrentSnapshot(
+    progress.trackId,
+    progress.attempt.kind,
+    progress.snapshotToken,
+  );
+  if (prepared === "yielded") {
+    return "pending";
+  }
+  if (!validPreparedSnapshotValue(prepared, progress.trackId)) {
+    return "pending";
+  }
+  if (!prepared.prepared) {
+    removeCaptureAttempt(path, progress);
+    return "rejected";
+  }
+  const result = resultFromProviderCompletion(path, progress);
+  if (result) {
+    writeJsonAtomic(path, {
+      result,
+      snapshotToken: progress.snapshotToken,
+      trackId: progress.trackId,
+    } satisfies CaptureResultProgress);
+    rmSync(progress.attempt.workDirectory, { force: true, recursive: true });
+    return finishProgress(path, ports);
+  }
+  const localDownload = completedLocalDownload(path, progress);
+  writeJsonAtomic(path, {
+    ...progress,
+    attempt: {
+      ...progress.attempt,
+      ...(localDownload ? { localDownload } : {}),
+      state: localDownload ? "local-download-present" : "provider-ambiguous",
+    },
+  } satisfies CaptureAttemptProgress);
+  return "pending";
+}
+
+export async function finishProgress(
+  path: string,
+  ports: CaptureProgressPorts = CAPTURE_PROGRESS_PORTS,
+): Promise<ProgressDisposition> {
+  let progress = readProgress(path);
+  if (isCaptureAttemptProgress(progress)) {
+    return await finishCaptureAttempt(path, progress, ports);
+  }
+  if (progress.receipt) {
+    let reconciled: ReceiptDisposition;
+    try {
+      reconciled = reconcileReceipt(progress, `${path}.reconcile`, ports);
+    } finally {
+      rmSync(`${path}.reconcile`, { force: true });
+      rmSync(`${path}.reconcile.result`, { force: true });
+    }
+    if (reconciled === "committed" || reconciled === "rejected" || reconciled === "pending") {
+      if (reconciled !== "pending") {
+        rmSync(path, { force: true });
+      }
+      return reconciled;
+    }
+    // The exact receipt coordinates were durably checked and do not exist. Discard the
+    // authorization before continuing so an expired commit token can be refreshed against the
+    // current row instead of being retried forever. A terminal or in-progress receipt returned
+    // above is never replaced.
+    progress = { ...progress, receipt: undefined };
+  }
+  if (progress.result.kind === "capture" && progress.result.outcome === "done") {
+    if (!(await ports.r2Exists(progress.result.sourceAudioKey, progress.result.bytes))) {
+      await ports.r2Put(
+        progress.result.sourceAudioKey,
+        Buffer.from(progress.result.bodyBase64, "base64"),
+        progress.result.contentType,
       );
     }
+  }
+  try {
+    progress = await ports.authorizeProgress(progress);
   } catch (error) {
-    throw tagCaptureFailure("track-update", error);
+    if (!String(error).includes("expired_capture_token")) {
+      throw error;
+    }
+    const refreshed = ports.prepareCurrentSnapshot(
+      progress.trackId,
+      progress.result.kind,
+      progress.snapshotToken,
+    );
+    if (refreshed === "yielded") {
+      return "pending";
+    }
+    if (!refreshed.prepared) {
+      rmSync(path, { force: true });
+      return "rejected";
+    }
+    progress = await ports.authorizeProgress({
+      ...progress,
+      receipt: undefined,
+      snapshotToken: refreshed.snapshotToken,
+    });
+  }
+  writeJsonAtomic(path, progress);
+  const receipt = progress.receipt;
+  if (!receipt) {
+    return "pending";
+  }
+  writeJsonAtomic(`${path}.commit`, { ...receipt, trackId: progress.trackId });
+  rmSync(`${path}.commit.result`, { force: true });
+  if (ports.admittedPhase("commit", `${path}.commit`) === "yielded") {
+    return "pending";
+  }
+  const response = JSON.parse(readFileSync(`${path}.commit.result`, "utf8")) as unknown;
+  rmSync(`${path}.commit`, { force: true });
+  rmSync(`${path}.commit.result`, { force: true });
+  const commitDisposition = parsedCommitDisposition(response, progress.result);
+  if (commitDisposition === "committed") {
+    rmSync(path, { force: true });
+    return "committed";
+  }
+  if (commitDisposition === "rejected") {
+    rmSync(path, { force: true });
+    return "rejected";
+  }
+  return "pending";
+}
+
+export async function persistAndCommit(
+  trackId: string,
+  snapshotToken: string,
+  result: CaptureExternalResult,
+  ports: CaptureProgressPorts = CAPTURE_PROGRESS_PORTS,
+): Promise<ProgressDisposition> {
+  const path = ports.progressPath(trackId, result.kind);
+  writeJsonAtomic(path, { result, snapshotToken, trackId } satisfies CaptureProgress);
+  try {
+    return await finishProgress(path, ports);
+  } catch (error) {
+    log(
+      `capture reconciliation deferred for ${trackId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return "pending";
+  }
+}
+
+export type RecoveredCaptureProgress = {
+  disposition: ProgressDisposition;
+  progress: CaptureProgress;
+};
+
+export async function recoverCaptureProgress(
+  directory: string,
+  ports: CaptureProgressPorts = CAPTURE_PROGRESS_PORTS,
+): Promise<RecoveredCaptureProgress[]> {
+  mkdirSync(directory, { mode: 0o700, recursive: true });
+  chmodSync(directory, 0o700);
+  const recovered: RecoveredCaptureProgress[] = [];
+  for (const name of readdirSync(directory)) {
+    if (!/^[0-9a-f]{64}\.json$/.test(name)) {
+      continue;
+    }
+    const path = join(directory, name);
+    const progress = readProgress(path);
+    const disposition = await finishProgress(path, ports).catch((error: unknown) => {
+      log(
+        `capture reconciliation remains pending for ${progress.trackId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return "pending" as const;
+    });
+    recovered.push({ disposition, progress });
+  }
+  return recovered;
+}
+
+export function protectedTrackIdsFromRecovery(
+  recovered: readonly RecoveredCaptureProgress[],
+): Set<string> {
+  return new Set(
+    recovered
+      .filter(({ disposition }) => disposition === "pending" || disposition === "failed")
+      .map(({ progress }) => progress.trackId),
+  );
+}
+
+export function withoutProtectedTracks(
+  rows: readonly CaptureFinding[],
+  protectedTrackIds: ReadonlySet<string>,
+): CaptureFinding[] {
+  return rows.filter((row) => !protectedTrackIds.has(row.trackId));
+}
+
+async function commitProvenanceUpdate(
+  trackId: string,
+  snapshotToken: string,
+  update: Record<string, unknown>,
+): Promise<ProgressDisposition> {
+  let result: CaptureExternalResult;
+  if (typeof update.sourceVerification === "string") {
+    result = {
+      kind: "youtube-provenance",
+      outcome: "source-found",
+      sourceVerification: update.sourceVerification as
+        | "soundcloud-archive-match"
+        | "soundcloud-preview-match",
+    };
+  } else if (typeof update.youtubeVideoId === "string") {
+    result = {
+      kind: "youtube-provenance",
+      outcome: "youtube-found",
+      verification: update.youtubeVerification as
+        | "archive-match"
+        | "metadata-match"
+        | "preview-match",
+      youtubeVideoId: update.youtubeVideoId,
+    };
+  } else {
+    result = {
+      kind: "youtube-provenance",
+      outcome: "none",
+      verification: update.youtubeVerification === "inconclusive" ? "inconclusive" : "no-match",
+    };
+  }
+  const disposition = await persistAndCommit(trackId, snapshotToken, result);
+  if (disposition === "pending") {
+    throw new PendingCaptureCommitError();
+  }
+  if (disposition !== "committed") {
+    throw new FailedCaptureCommitError(disposition);
+  }
+  return disposition;
+}
+
+class PendingCaptureCommitError extends Error {
+  constructor() {
+    super("capture reconciliation is pending");
+  }
+}
+
+class FailedCaptureCommitError extends Error {
+  constructor(disposition: "failed" | "rejected") {
+    super(`capture reconciliation ${disposition}`);
   }
 }
 
@@ -1817,6 +2867,28 @@ export type VerifiedUpload = {
   videoId: string;
 };
 
+function captureProviderCompletion(
+  accepted: VerifiedUpload | null,
+  memory: RejectedMemory,
+): CaptureProviderCompletion {
+  const completedAt = new Date().toISOString();
+  const rejectedSources = memory.dirty ? JSON.stringify(memory.sources) : undefined;
+  if (!accepted) {
+    return { completedAt, outcome: "none", ...(rejectedSources ? { rejectedSources } : {}) };
+  }
+  return {
+    completedAt,
+    digest: accepted.digest,
+    ext: accepted.ext,
+    fileName: basename(accepted.path),
+    outcome: "accepted",
+    ...(rejectedSources ? { rejectedSources } : {}),
+    source: accepted.source,
+    verdict: accepted.verdict,
+    videoId: accepted.videoId,
+  };
+}
+
 /**
  * Run the ladder for one track and return the first upload that clears the fingerprint gate, or
  * `null` when the walk DISPROVED every candidate it could reach.
@@ -2038,10 +3110,18 @@ async function findVerifiedUpload(options: {
 
 // ── Per-finding capture ────────────────────────────────────────────────────
 
-type FindingOutcome = "done" | "unmatched" | "failed" | "skipped";
+type FindingOutcome =
+  | "done"
+  | "unmatched"
+  | "failed"
+  | "pending"
+  | "rejected"
+  | "skipped"
+  | "unrecorded-failure";
 
 async function captureFinding(
   finding: CaptureFinding,
+  snapshotToken: string,
   botChallenges: BotChallengeMeter,
   failures: CaptureFailureMeter,
 ): Promise<FindingOutcome> {
@@ -2071,7 +3151,8 @@ async function captureFinding(
     botChallenges,
   );
 
-  const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
+  const attemptPath = progressPath(trackId, "capture");
+  let workDirectory: string | undefined;
 
   // The bad-audio memory lives OUTSIDE the try: a run that grew it and then errored still
   // persists it on the `failed` patch in the catch, so a paid-for rejection is never lost.
@@ -2083,13 +3164,26 @@ async function captureFinding(
   try {
     // A capture row carries `source_audio_key` ONLY on a wrong-audio re-capture, where its sha is
     // the known-bad audio the walk must refuse. That is the legacy single-sha memory.
-    const accepted = await findVerifiedUpload({
-      dir,
+    const providerRun = await runJournaledCaptureProvider({
+      completion: (accepted) => captureProviderCompletion(accepted, memory),
       finding,
-      legacyRejectKey: finding.sourceAudioKey,
-      memory,
-      session,
+      kind: "capture",
+      provider: async (directory) => {
+        workDirectory = directory;
+        return findVerifiedUpload({
+          dir: directory,
+          finding,
+          legacyRejectKey: finding.sourceAudioKey,
+          memory,
+          session,
+        });
+      },
+      snapshotToken,
     });
+    if (providerRun.disposition === "pending") {
+      return "pending";
+    }
+    const accepted = providerRun.value;
 
     if (!accepted) {
       // `unmatched` is terminal — the queue never re-burns it; a fresh finding still jumps it
@@ -2104,16 +3198,25 @@ async function captureFinding(
       if (memory.dirty) {
         update.sourceAudioRejected = JSON.stringify(memory.sources);
       }
-      await patchTrack(trackId, update);
-      return "unmatched";
+      const disposition = await persistAndCommit(trackId, snapshotToken, {
+        attemptedAt: String(update.sourceAudioAttemptedAt),
+        kind: "capture",
+        outcome: "unmatched",
+        ...(typeof update.sourceAudioRejected === "string"
+          ? { sourceAudioRejected: update.sourceAudioRejected }
+          : {}),
+      });
+      return disposition === "committed"
+        ? "unmatched"
+        : disposition === "rejected"
+          ? "rejected"
+          : "pending";
     }
 
     // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain). Store the
     // bytes + stamp the verdict provenance in the same write.
     const verification = accepted.verdict === "match" ? "preview-match" : "unverified";
     const key = buildSourceAudioKey(keyRoot, accepted.digest, accepted.ext);
-
-    await r2Put(key, accepted.bytes, contentTypeForExt(accepted.ext));
 
     // The key + done + the captured stamp + THE METER + THE VERIFICATION PROVENANCE.
     // Clobber-safe enrichment trigger — for a CERTIFIED finding, re-queue when the BPM is
@@ -2157,9 +3260,30 @@ async function captureFinding(
     if (shouldReenrichAfterCapture(finding.certified, finding.bpm, finding.analyzedFrom)) {
       update.enrichmentStatus = "pending";
     }
-    await patchTrack(trackId, update);
+    const disposition = await persistAndCommit(trackId, snapshotToken, {
+      attemptedAt: now,
+      bodyBase64: Buffer.from(accepted.bytes).toString("base64"),
+      bytes: accepted.bytes.byteLength,
+      captureVerification: verification,
+      capturedAt: now,
+      contentType: contentTypeForExt(accepted.ext),
+      kind: "capture",
+      outcome: "done",
+      sourceAudioKey: key,
+      ...(typeof update.sourceAudioRejected === "string"
+        ? { sourceAudioRejected: update.sourceAudioRejected }
+        : {}),
+      verifiedAt: now,
+      ...(typeof update.youtubeVideoId === "string"
+        ? { youtubeVideoId: update.youtubeVideoId }
+        : {}),
+    });
 
-    return "done";
+    return disposition === "committed"
+      ? "done"
+      : disposition === "rejected"
+        ? "rejected"
+        : "pending";
   } catch (error) {
     // A yt-dlp / proxy / R2 error → failed (retriable under backoff). ACCUMULATE the
     // consecutive-failure count + stamp the attempt: the capture queue holds a `failed`
@@ -2176,16 +3300,33 @@ async function captureFinding(
       update.sourceAudioRejected = JSON.stringify(memory.sources);
     }
     noteCaptureFailure(failures, error);
-    await patchTrack(trackId, update).catch((patchError: unknown) => {
-      failures.failureRecording += 1;
+    let failureDisposition: ProgressDisposition = "failed";
+    failureDisposition = await persistAndCommit(trackId, snapshotToken, {
+      attemptedAt: String(update.sourceAudioAttemptedAt),
+      kind: "capture",
+      outcome: "failed",
+      ...(typeof update.sourceAudioRejected === "string"
+        ? { sourceAudioRejected: update.sourceAudioRejected }
+        : {}),
+    }).catch((patchError: unknown) => {
       log(`failed to record failure for ${trackId}: ${String(patchError)}`);
+      return "failed" as const;
     });
+    if (failureDisposition === "failed") {
+      failures.failureRecording += 1;
+    }
     log(
       `capture failed for ${logId ?? "catalogue"} (${trackId}): ${error instanceof Error ? error.message : String(error)}`,
     );
-    return "failed";
+    return failureDisposition === "committed"
+      ? "failed"
+      : failureDisposition === "rejected"
+        ? "rejected"
+        : failureDisposition === "failed"
+          ? "unrecorded-failure"
+          : "pending";
   } finally {
-    rmSync(dir, { force: true, recursive: true });
+    cleanupProviderWorkDirectory(attemptPath, workDirectory);
   }
 }
 
@@ -2315,13 +3456,14 @@ function downloadSection(
  */
 async function proveCatalogueProvenance(
   row: CaptureFinding,
+  snapshotToken: string,
   meter: BotChallengeMeter,
   budget: { segments: number },
   counts: ProvenanceLadderCounts,
+  dir: string,
 ): Promise<"deferred" | ProvenanceOutcome> {
   const { trackId } = row;
   const session = openProxySession(captureSessionSeed(trackId, 0), meter);
-  const dir = mkdtempSync(join(tmpdir(), "fluncle-ladder-"));
   // READ-ONLY, exactly as the phase below reads it: a candidate an earlier capture proved wrong must
   // not cost bytes again. This run's own rejections join the set IN MEMORY for the rest of the walk
   // and are never written back — that would be a capture column.
@@ -2358,7 +3500,7 @@ async function proveCatalogueProvenance(
       const topic = rung.source === "soundcloud" ? null : pickTopicCandidate(candidates, row);
 
       if (topic) {
-        await patchTrack(trackId, {
+        await commitProvenanceUpdate(trackId, snapshotToken, {
           youtubeVerification: "metadata-match",
           youtubeVideoId: topic.id,
         });
@@ -2417,7 +3559,9 @@ async function proveCatalogueProvenance(
             // The fingerprint proved the recording against its own archive. Bank that evidence
             // beside the YouTube-only trio and stop: continuing would re-spend searches on a row
             // whose audio provenance is already settled.
-            await patchTrack(trackId, { sourceVerification: "soundcloud-archive-match" });
+            await commitProvenanceUpdate(trackId, snapshotToken, {
+              sourceVerification: "soundcloud-archive-match",
+            });
             counts.segmentVerified += 1;
 
             if (step > 0) {
@@ -2427,7 +3571,7 @@ async function proveCatalogueProvenance(
             return "found";
           }
 
-          await patchTrack(trackId, {
+          await commitProvenanceUpdate(trackId, snapshotToken, {
             youtubeVerification: "archive-match",
             youtubeVideoId: candidate.id,
           });
@@ -2459,19 +3603,27 @@ async function proveCatalogueProvenance(
       // stamp and no receipt — but it must still move something, or a row the CDN refuses forever is
       // handed back every tick and starves everything queued behind it (the 2026-08-01 Deezer
       // lesson). The server bumps `youtube_provenance_failures` and retires the row at the cap.
-      await patchTrack(trackId, { youtubeVerification: "inconclusive" });
+      await commitProvenanceUpdate(trackId, snapshotToken, {
+        youtubeVerification: "inconclusive",
+      });
 
-      return "failed";
+      return "failed-recorded";
     }
 
     // EXHAUSTED — every rung concluded and nothing on YouTube is vouchable for this recording. The
     // stamp is what puts the row inside the server's re-ask window instead of re-buying the same
     // nothing next tick; the streak beside it is what retires a row that keeps coming back empty.
-    await patchTrack(trackId, { youtubeVerification: "no-match" });
+    await commitProvenanceUpdate(trackId, snapshotToken, { youtubeVerification: "no-match" });
     counts.exhausted += 1;
 
     return "none";
   } catch (error) {
+    if (error instanceof PendingCaptureCommitError) {
+      return "pending";
+    }
+    if (error instanceof FailedCaptureCommitError) {
+      return "failed-write";
+    }
     log(
       `catalogue provenance failed for ${trackId}: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -2482,15 +3634,18 @@ async function proveCatalogueProvenance(
     // head of a 30,672-row queue forever. So the failure is reported rather than swallowed: no
     // stamp, no receipt, one on the streak, and the worklist retires it at the cap. The report is
     // itself best-effort, because the thing that just failed may be the API.
-    await patchTrack(trackId, { youtubeVerification: "inconclusive" }).catch(
-      (patchError: unknown) => {
-        log(`failed to record an inconclusive run for ${trackId}: ${String(patchError)}`);
-      },
-    );
-
-    return "failed";
-  } finally {
-    rmSync(dir, { force: true, recursive: true });
+    try {
+      await commitProvenanceUpdate(trackId, snapshotToken, {
+        youtubeVerification: "inconclusive",
+      });
+      return "failed-recorded";
+    } catch (patchError) {
+      if (patchError instanceof PendingCaptureCommitError) {
+        return "pending";
+      }
+      log(`failed to record an inconclusive run for ${trackId}: ${String(patchError)}`);
+      return "failed-write";
+    }
   }
 }
 
@@ -2524,7 +3679,13 @@ async function proveCatalogueProvenance(
 // a rail with no exceptions in it.
 
 /** What one provenance row cost and what it concluded. */
-type ProvenanceOutcome = "found" | "none" | "failed";
+type ProvenanceOutcome =
+  | "failed"
+  | "failed-recorded"
+  | "failed-write"
+  | "found"
+  | "none"
+  | "pending";
 
 /**
  * Re-derive one already-captured row's YouTube provenance: run the ladder, read the verdict, throw
@@ -2540,13 +3701,15 @@ type ProvenanceOutcome = "found" | "none" | "failed";
  */
 async function proveTrackProvenance(
   row: CaptureFinding,
+  snapshotToken: string,
   meter: BotChallengeMeter,
 ): Promise<ProvenanceOutcome> {
   const { logId, trackId } = row;
   // The same sticky-session shape a clean capture run uses — determinism per track is all
   // stickiness needs, and sharing the shape means sharing the behaviour that was tuned for it.
   const session = openProxySession(captureSessionSeed(logId ?? trackId, 0), meter);
-  const dir = mkdtempSync(join(tmpdir(), "fluncle-provenance-"));
+  const attemptPath = progressPath(trackId, "youtube-provenance");
+  let workDirectory: string | undefined;
   // READ-ONLY (see the phase header): it feeds the pre-download filter and is never written back.
   const memory: RejectedMemory = {
     dirty: false,
@@ -2559,50 +3722,97 @@ async function proveTrackProvenance(
     // as a known-bad hash, the way the capture path correctly does for a quarantined row, would
     // blacklist the upload most likely to be the right answer: the one the original capture came
     // from. Same field, opposite meaning, which is why the caller supplies it and the walk does not.
-    const accepted = await findVerifiedUpload({ dir, finding: row, memory, session });
-
-    // THE DISCARD, first and unconditionally. The bytes exist only to be fingerprinted; nothing
-    // downstream may read them, and the `finally` below removes the directory regardless.
-    if (accepted) {
-      rmSync(accepted.path, { force: true });
+    const providerRun = await runJournaledCaptureProvider({
+      completion: (accepted) => captureProviderCompletion(accepted, memory),
+      finding: row,
+      kind: "youtube-provenance",
+      provider: async (directory) => {
+        workDirectory = directory;
+        return findVerifiedUpload({ dir: directory, finding: row, memory, session });
+      },
+      snapshotToken,
+    });
+    if (providerRun.disposition === "pending") {
+      return "pending";
     }
+    const accepted = providerRun.value;
 
     if (!accepted || accepted.verdict !== "match") {
-      await patchTrack(trackId, { youtubeVerification: "no-match" });
+      await commitProvenanceUpdate(trackId, snapshotToken, { youtubeVerification: "no-match" });
       return "none";
     }
 
     if (accepted.source === "soundcloud") {
       // SoundCloud proved the audio, not a YouTube upload. Bank the proof in its sibling field and
       // return before the YouTube no-match/id branches can mislabel or leak it.
-      await patchTrack(trackId, { sourceVerification: "soundcloud-preview-match" });
+      await commitProvenanceUpdate(trackId, snapshotToken, {
+        sourceVerification: "soundcloud-preview-match",
+      });
       return "found";
     }
 
     // ONLY the id and its proof. No capture column appears in this body, by construction — the
     // server accepts the pair and refuses a bare id exactly as it does on the capture path.
-    await patchTrack(trackId, {
+    await commitProvenanceUpdate(trackId, snapshotToken, {
       youtubeVerification: "preview-match",
       youtubeVideoId: accepted.videoId,
     });
 
     return "found";
   } catch (error) {
-    // NOTHING IS WRITTEN on a transient failure — no stamp, no id, and above all no capture
-    // column. The row keeps its place in the worklist and is asked again on a later tick, which is
-    // the right answer for a proxy hiccup and costs only the slot this tick already spent.
+    if (error instanceof PendingCaptureCommitError) {
+      return "pending";
+    }
+    if (error instanceof FailedCaptureCommitError) {
+      return "failed-write";
+    }
     log(
       `provenance failed for ${logId ?? "catalogue"} (${trackId}): ${error instanceof Error ? error.message : String(error)}`,
     );
-
-    return "failed";
+    try {
+      await commitProvenanceUpdate(trackId, snapshotToken, {
+        youtubeVerification: "inconclusive",
+      });
+      return "failed-recorded";
+    } catch (patchError) {
+      if (patchError instanceof PendingCaptureCommitError) {
+        return "pending";
+      }
+      log(`failed to record an inconclusive provenance run for ${trackId}: ${String(patchError)}`);
+      return "failed-write";
+    }
   } finally {
-    rmSync(dir, { force: true, recursive: true });
+    cleanupProviderWorkDirectory(attemptPath, workDirectory);
   }
 }
 
 /** The provenance phase's tally for the tick summary. */
-export type ProvenanceCounts = { failed: number; found: number; none: number };
+export type ProvenanceCounts = {
+  failed: number;
+  found: number;
+  none: number;
+  pending?: number;
+  writesConfirmed?: number;
+  writesFailed?: number;
+  writesPending?: number;
+};
+
+function noteProvenanceOutcome(counts: ProvenanceCounts, outcome: ProvenanceOutcome): void {
+  if (outcome === "found" || outcome === "none") {
+    counts[outcome] += 1;
+    counts.writesConfirmed = (counts.writesConfirmed ?? 0) + 1;
+  } else if (outcome === "pending") {
+    counts.pending = (counts.pending ?? 0) + 1;
+    counts.writesPending = (counts.writesPending ?? 0) + 1;
+  } else {
+    counts.failed += 1;
+    if (outcome === "failed-recorded") {
+      counts.writesConfirmed = (counts.writesConfirmed ?? 0) + 1;
+    } else if (outcome === "failed-write") {
+      counts.writesFailed = (counts.writesFailed ?? 0) + 1;
+    }
+  }
+}
 
 /**
  * Split the tick's provenance budget between the two halves of the archive.
@@ -2622,8 +3832,17 @@ export function splitProvenanceBudget(
 
 async function runProvenancePhase(
   meter: BotChallengeMeter,
+  protectedTrackIds: Set<string> = new Set(),
 ): Promise<{ counts: ProvenanceCounts; ladder: ProvenanceLadderCounts }> {
-  const counts: ProvenanceCounts = { failed: 0, found: 0, none: 0 };
+  const counts: ProvenanceCounts = {
+    failed: 0,
+    found: 0,
+    none: 0,
+    pending: 0,
+    writesConfirmed: 0,
+    writesFailed: 0,
+    writesPending: 0,
+  };
   const ladder = createLadderCounts();
   const budget = splitProvenanceBudget(PROVENANCE_LIMIT, PROVENANCE_CATALOGUE_LIMIT);
 
@@ -2638,17 +3857,43 @@ async function runProvenancePhase(
   // THE FINDINGS TIER KEEPS THE FULL FINGERPRINT and is untouched by the cheap ladder. It is a small
   // set, it is the archive, and it is already done — spending a whole download on a certified row is
   // exactly the right trade, and changing it would buy nothing but risk.
-  const rows = await fetchTrackWork({
+  const queuedRows = admittedWorkList({
     kind: "youtube-provenance",
     limit: budget.findings,
     scope: "findings",
   });
+  if (queuedRows === "yielded") {
+    counts.pending += budget.findings;
+    return { counts, ladder };
+  }
+  const rows = withoutProtectedTracks(queuedRows, protectedTrackIds);
 
   // SERIAL, not the capture batch's worker pool. The budget is two rows; a pool over two rows buys
   // nothing and would only widen the concurrent proxy footprint of a tick that is already running
   // its capture batch.
   for (const row of rows) {
-    counts[await proveTrackProvenance(row, meter)] += 1;
+    try {
+      const prepared = prepareCurrentSnapshot(row.trackId, "youtube-provenance");
+      if (prepared === "yielded") {
+        counts.pending = (counts.pending ?? 0) + 1;
+        continue;
+      }
+      if (!prepared.prepared) {
+        counts.failed += 1;
+        continue;
+      }
+      const currentRow = preparedCaptureFinding(row, prepared.track);
+      const outcome = await proveTrackProvenance(currentRow, prepared.snapshotToken, meter);
+      noteProvenanceOutcome(counts, outcome);
+      if (outcome === "pending") {
+        protectedTrackIds.add(row.trackId);
+      }
+    } catch (error) {
+      counts.failed += 1;
+      log(
+        `provenance row failed for ${row.trackId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   // …and only what the findings left over may go to the catalogue, up to the sub-cap.
@@ -2664,20 +3909,86 @@ async function runProvenancePhase(
   // rather than by how many rows were read. A row that reaches rung 2 with the counter at zero is
   // deferred, untouched, and asked again next tick.
   const segmentBudget = { segments: catalogueRoom };
-  const catalogueRows = await fetchTrackWork({
-    kind: "youtube-provenance",
-    limit: catalogueRoom * Math.max(1, Math.trunc(PROVENANCE_SEARCH_FACTOR) || 1),
-    scope: "catalogue",
-  });
+  let queuedCatalogueRows: CaptureFinding[] | "yielded";
+  try {
+    queuedCatalogueRows = admittedWorkList({
+      kind: "youtube-provenance",
+      limit: catalogueRoom * Math.max(1, Math.trunc(PROVENANCE_SEARCH_FACTOR) || 1),
+      scope: "catalogue",
+    });
+  } catch (error) {
+    log(
+      `catalogue provenance queue failed after findings completed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return { counts, ladder };
+  }
+  if (queuedCatalogueRows === "yielded") {
+    counts.pending += catalogueRoom;
+    return { counts, ladder };
+  }
+  const catalogueRows = withoutProtectedTracks(queuedCatalogueRows, protectedTrackIds);
 
   for (const row of catalogueRows) {
-    const outcome = await proveCatalogueProvenance(row, meter, segmentBudget, ladder);
+    try {
+      const prepared = prepareCurrentSnapshot(row.trackId, "youtube-provenance");
+      if (prepared === "yielded") {
+        counts.pending = (counts.pending ?? 0) + 1;
+        continue;
+      }
+      if (!prepared.prepared) {
+        counts.failed += 1;
+        continue;
+      }
+      const currentRow = preparedCaptureFinding(row, prepared.track);
+      const attemptPath = progressPath(row.trackId, "youtube-provenance");
+      let workDirectory: string | undefined;
+      const providerRun = await runJournaledCaptureProvider({
+        finding: currentRow,
+        kind: "youtube-provenance",
+        provider: async (directory) => {
+          workDirectory = directory;
+          return proveCatalogueProvenance(
+            currentRow,
+            prepared.snapshotToken,
+            meter,
+            segmentBudget,
+            ladder,
+            directory,
+          );
+        },
+        snapshotToken: prepared.snapshotToken,
+      }).finally(() => cleanupProviderWorkDirectory(attemptPath, workDirectory));
+      if (providerRun.disposition === "pending") {
+        noteProvenanceOutcome(counts, "pending");
+        protectedTrackIds.add(row.trackId);
+        continue;
+      }
+      const outcome = providerRun.value;
+      if (outcome === "deferred" && existsSync(attemptPath)) {
+        const progress = readProgress(attemptPath);
+        if (isCaptureAttemptProgress(progress)) {
+          removeCaptureAttempt(attemptPath, progress);
+        }
+      }
 
-    // A DEFERRAL IS NOT AN OUTCOME. It concluded nothing, wrote nothing and cost no download, so
-    // folding it into `found`/`none`/`failed` would make the phase's own gauges lie about what a
-    // tick achieved. It has its own counter, and that is the whole of its report.
-    if (outcome !== "deferred") {
-      counts[outcome] += 1;
+      // A DEFERRAL IS NOT AN OUTCOME. It concluded nothing, wrote nothing and cost no download, so
+      // folding it into `found`/`none`/`failed` would make the phase's own gauges lie about what a
+      // tick achieved. It has its own counter, and that is the whole of its report.
+      if (outcome !== "deferred") {
+        noteProvenanceOutcome(counts, outcome);
+      }
+      if (outcome === "pending") {
+        protectedTrackIds.add(row.trackId);
+      }
+    } catch (error) {
+      counts.failed += 1;
+      log(
+        `catalogue provenance row failed for ${row.trackId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -2692,23 +4003,78 @@ async function runProvenancePhase(
 // a `youtubeReverdict` ask per row. It never fetches the oEmbed, never sees a channel name, and
 // never carries a verdict — permission is decided server-side or it is not decided at all.
 
-async function runReverdictPhase(): Promise<{ asked: number; failed: number }> {
+type ReverdictCounts = {
+  asked: number;
+  failed: number;
+  pending?: number;
+  writesConfirmed?: number;
+  writesFailed?: number;
+  writesPending?: number;
+};
+
+async function runReverdictPhase(
+  protectedTrackIds: Set<string> = new Set(),
+): Promise<ReverdictCounts> {
   const limit = Math.max(0, Math.trunc(REVERDICT_LIMIT) || 0);
 
   if (limit === 0) {
-    return { asked: 0, failed: 0 };
+    return {
+      asked: 0,
+      failed: 0,
+      pending: 0,
+      writesConfirmed: 0,
+      writesFailed: 0,
+      writesPending: 0,
+    };
   }
 
   // `scope=all`: this phase spends no metered bandwidth, so there is no reason to hold the
   // catalogue's rows back from a free re-ask.
-  const rows = await fetchTrackWork({ kind: "youtube-reverdict", limit, scope: "all" });
+  const queuedRows = admittedWorkList({ kind: "youtube-reverdict", limit, scope: "all" });
+  if (queuedRows === "yielded") {
+    return {
+      asked: 0,
+      failed: 0,
+      pending: limit,
+      writesConfirmed: 0,
+      writesFailed: 0,
+      writesPending: 0,
+    };
+  }
+  const rows = withoutProtectedTracks(queuedRows, protectedTrackIds);
   let asked = 0;
   let failed = 0;
+  let pending = 0;
+  let writesConfirmed = 0;
+  let writesFailed = 0;
+  let writesPending = 0;
 
   for (const row of rows) {
     try {
-      await patchTrack(row.trackId, { youtubeReverdict: true });
-      asked += 1;
+      const prepared = prepareCurrentSnapshot(row.trackId, "youtube-reverdict");
+      if (prepared === "yielded") {
+        pending += 1;
+        continue;
+      }
+      if (!prepared.prepared) {
+        failed += 1;
+        continue;
+      }
+      const disposition = await persistAndCommit(row.trackId, prepared.snapshotToken, {
+        kind: "youtube-reverdict",
+        outcome: "reverdict",
+      });
+      if (disposition === "committed") {
+        asked += 1;
+        writesConfirmed += 1;
+      } else if (disposition === "pending") {
+        pending += 1;
+        writesPending += 1;
+        protectedTrackIds.add(row.trackId);
+      } else {
+        failed += 1;
+        writesFailed += 1;
+      }
     } catch (error) {
       failed += 1;
       log(
@@ -2717,7 +4083,7 @@ async function runReverdictPhase(): Promise<{ asked: number; failed: number }> {
     }
   }
 
-  return { asked, failed };
+  return { asked, failed, pending, writesConfirmed, writesFailed, writesPending };
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -2725,6 +4091,9 @@ async function runReverdictPhase(): Promise<{ asked: number; failed: number }> {
 type CaptureCounts = {
   done: number;
   failed: number;
+  pending?: number;
+  reconciled?: number;
+  rejected?: number;
   skipped: number;
   unmatched: number;
 };
@@ -2739,7 +4108,8 @@ export function buildCaptureSummary(options: {
   /** The catalogue ladder's per-rung tally. Absent on a tick whose catalogue budget was shut. */
   ladder?: ProvenanceLadderCounts;
   provenance: ProvenanceCounts;
-  reverdict: { asked: number; failed: number };
+  reverdict: ReverdictCounts;
+  writes: { confirmed: number; failed: number; pending: number };
 }): Record<string, unknown> {
   const { counts, ladder, provenance, reverdict } = options;
   const failures = options.failures ?? createCaptureFailureMeter();
@@ -2748,6 +4118,9 @@ export function buildCaptureSummary(options: {
     batch: options.batch,
     botChallenges: options.botChallenges,
     botChallengesUncleared: options.botChallengesUncleared,
+    capturePending: counts.pending ?? 0,
+    captureReconciled: counts.reconciled ?? 0,
+    captureRejected: counts.rejected ?? 0,
     checked: options.batch,
     done: counts.done,
     elapsedMs: options.elapsedMs,
@@ -2775,15 +4148,20 @@ export function buildCaptureSummary(options: {
     provenanceLadderSegmentVerified: ladder?.segmentVerified ?? 0,
     provenanceLadderTopicServed: ladder?.topicServed ?? 0,
     provenanceNone: provenance.none,
+    provenancePending: provenance.pending ?? 0,
     proxyFailures: failures.proxy,
     r2Failures: failures.r2,
     reverdictAsked: reverdict.asked,
     reverdictFailed: reverdict.failed,
+    reverdictPending: reverdict.pending ?? 0,
     // Deliberately no `queue_depth`: capture's whole-backlog count is an unindexed hot-path scan.
     skipped: counts.skipped,
     trackUpdateFailures: failures.trackUpdate,
     unknownFailures: failures.unknown,
     unmatched: counts.unmatched,
+    writesConfirmed: options.writes.confirmed,
+    writesFailed: options.writes.failed,
+    writesPending: options.writes.pending,
     ytDlpFailures: failures.ytDlp,
   };
 }
@@ -2811,7 +4189,31 @@ export function buildCaptureFatalSummary(error: unknown): Record<string, unknown
   };
 }
 
+function argumentValue(argv: readonly string[], name: string): string | undefined {
+  const index = argv.indexOf(name);
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
+// The entrypoint intentionally keeps the whole tick's ordered fail-soft orchestration visible: its
+// branches are the domain outcome accounting, while provider, journal, and phase work stay isolated.
+// oxlint-disable-next-line complexity
 async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  const admissionPhase = argumentValue(argv, "--admission-phase");
+  const phaseStatePath = argumentValue(argv, "--phase-state");
+  if (admissionPhase) {
+    if (
+      !phaseStatePath ||
+      (admissionPhase !== "prepare" &&
+        admissionPhase !== "commit" &&
+        admissionPhase !== "queue" &&
+        admissionPhase !== "reconcile")
+    ) {
+      throw new Error("invalid capture admission phase invocation");
+    }
+    await runCaptureAdmissionChild(admissionPhase, phaseStatePath);
+    return;
+  }
   const started = Date.now();
 
   if (!API_TOKEN) {
@@ -2827,10 +4229,106 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const queue = await fetchCaptureQueue();
-  const batch = queue.slice(0, Number.isFinite(BATCH_CAP) && BATCH_CAP > 0 ? BATCH_CAP : 4);
+  let recoveredConfirmed = 0;
+  let recoveredPending = 0;
+  let recoveredRejected = 0;
+  const recoveredCapture = { pending: 0, reconciled: 0, rejected: 0 };
+  const recoveredProvenance: ProvenanceCounts = {
+    failed: 0,
+    found: 0,
+    none: 0,
+    pending: 0,
+    writesConfirmed: 0,
+    writesFailed: 0,
+    writesPending: 0,
+  };
+  const recoveredReverdict: ReverdictCounts = {
+    asked: 0,
+    failed: 0,
+    pending: 0,
+    writesConfirmed: 0,
+    writesFailed: 0,
+    writesPending: 0,
+  };
+  const recovered = await recoverCaptureProgress(CAPTURE_PROGRESS_DIR);
+  const protectedTrackIds = protectedTrackIdsFromRecovery(recovered);
+  for (const { disposition, progress: prior } of recovered) {
+    if (disposition === "pending" || disposition === "failed") {
+      recoveredPending += 1;
+    } else if (disposition === "committed") {
+      recoveredConfirmed += 1;
+    } else {
+      recoveredRejected += 1;
+    }
+    const priorKind = isCaptureAttemptProgress(prior) ? prior.attempt.kind : prior.result.kind;
+    if (priorKind === "capture") {
+      if (disposition === "committed") {
+        recoveredCapture.reconciled += 1;
+      } else if (disposition === "rejected") {
+        recoveredCapture.rejected += 1;
+      } else {
+        recoveredCapture.pending += 1;
+      }
+    } else if (priorKind === "youtube-provenance") {
+      if (disposition === "committed") {
+        recoveredProvenance.writesConfirmed = (recoveredProvenance.writesConfirmed ?? 0) + 1;
+        if (!isCaptureAttemptProgress(prior) && prior.result.outcome === "none") {
+          recoveredProvenance.none += 1;
+        } else {
+          recoveredProvenance.found += 1;
+        }
+      } else if (disposition === "rejected") {
+        recoveredProvenance.failed += 1;
+        recoveredProvenance.writesFailed = (recoveredProvenance.writesFailed ?? 0) + 1;
+      } else {
+        recoveredProvenance.pending = (recoveredProvenance.pending ?? 0) + 1;
+        recoveredProvenance.writesPending = (recoveredProvenance.writesPending ?? 0) + 1;
+      }
+    } else if (disposition === "committed") {
+      recoveredReverdict.asked += 1;
+      recoveredReverdict.writesConfirmed = (recoveredReverdict.writesConfirmed ?? 0) + 1;
+    } else if (disposition === "rejected") {
+      recoveredReverdict.failed += 1;
+      recoveredReverdict.writesFailed = (recoveredReverdict.writesFailed ?? 0) + 1;
+    } else {
+      recoveredReverdict.pending = (recoveredReverdict.pending ?? 0) + 1;
+      recoveredReverdict.writesPending = (recoveredReverdict.writesPending ?? 0) + 1;
+    }
+  }
 
-  const counts = { done: 0, failed: 0, skipped: 0, unmatched: 0 };
+  const queue = admittedWorkList({ kind: "capture", limit: QUEUE_LIMIT, scope: "all" });
+  if (queue === "yielded") {
+    console.log(
+      JSON.stringify(
+        databaseAdmissionYieldSummary({
+          checked: 0,
+          writesConfirmed: recoveredConfirmed,
+          writesFailed: recoveredRejected,
+          writesPending: recoveredPending,
+        }),
+      ),
+    );
+    return;
+  }
+  const batch = withoutProtectedTracks(queue, protectedTrackIds).slice(
+    0,
+    Number.isFinite(BATCH_CAP) && BATCH_CAP > 0 ? BATCH_CAP : 4,
+  );
+
+  const counts = {
+    done: 0,
+    failed: 0,
+    pending: recoveredCapture.pending,
+    reconciled: recoveredCapture.reconciled,
+    rejected: recoveredCapture.rejected,
+    skipped: 0,
+    unmatched: 0,
+  };
+  const captureWrites = {
+    confirmed: recoveredCapture.reconciled,
+    failed: recoveredCapture.rejected,
+    pending: recoveredCapture.pending,
+  };
   // ONE meter for the whole tick, shared by every worker (each `+= 1` is synchronous, so the
   // pool cannot lose a count). It rides into the summary below as the rate an operator can
   // finally read per tick instead of grepping a floor out of the journal.
@@ -2850,8 +4348,34 @@ async function main(): Promise<void> {
       }
 
       try {
-        const outcome = await captureFinding(finding, botChallenges, failures);
-        counts[outcome] += 1;
+        const prepared = prepareCurrentSnapshot(finding.trackId, "capture");
+        if (prepared === "yielded") {
+          counts.pending += 1;
+          continue;
+        }
+        if (!prepared.prepared) {
+          counts.rejected += 1;
+          continue;
+        }
+        const outcome = await captureFinding(
+          preparedCaptureFinding(finding, prepared.track),
+          prepared.snapshotToken,
+          botChallenges,
+          failures,
+        );
+        if (outcome === "unrecorded-failure") {
+          counts.failed += 1;
+        } else {
+          counts[outcome] += 1;
+        }
+        if (outcome === "pending") {
+          captureWrites.pending += 1;
+          protectedTrackIds.add(finding.trackId);
+        } else if (outcome === "rejected") {
+          captureWrites.failed += 1;
+        } else if (outcome !== "skipped" && outcome !== "unrecorded-failure") {
+          captureWrites.confirmed += 1;
+        }
       } catch (error) {
         counts.failed += 1;
         noteCaptureFailure(failures, error);
@@ -2871,16 +4395,39 @@ async function main(): Promise<void> {
   // delay or starve it. Both phases are caught here rather than thrown, for the same reason the
   // capture worker catches per row — a backfill that could abort the tick would be able to hide a
   // capture that already succeeded.
-  const provenance = await runProvenancePhase(botChallenges).catch((error: unknown) => {
-    log(`provenance phase failed: ${error instanceof Error ? error.message : String(error)}`);
+  const currentProvenance = await runProvenancePhase(botChallenges, protectedTrackIds).catch(
+    (error: unknown) => {
+      log(`provenance phase failed: ${error instanceof Error ? error.message : String(error)}`);
 
-    return { counts: { failed: 0, found: 0, none: 0 }, ladder: createLadderCounts() };
-  });
-  const reverdict = await runReverdictPhase().catch((error: unknown) => {
+      return { counts: { failed: 0, found: 0, none: 0 }, ladder: createLadderCounts() };
+    },
+  );
+  const provenance: ProvenanceCounts = {
+    failed: currentProvenance.counts.failed + recoveredProvenance.failed,
+    found: currentProvenance.counts.found + recoveredProvenance.found,
+    none: currentProvenance.counts.none + recoveredProvenance.none,
+    pending: (currentProvenance.counts.pending ?? 0) + (recoveredProvenance.pending ?? 0),
+    writesConfirmed:
+      (currentProvenance.counts.writesConfirmed ?? 0) + (recoveredProvenance.writesConfirmed ?? 0),
+    writesFailed:
+      (currentProvenance.counts.writesFailed ?? 0) + (recoveredProvenance.writesFailed ?? 0),
+    writesPending:
+      (currentProvenance.counts.writesPending ?? 0) + (recoveredProvenance.writesPending ?? 0),
+  };
+  const currentReverdict = await runReverdictPhase(protectedTrackIds).catch((error: unknown) => {
     log(`re-verdict phase failed: ${error instanceof Error ? error.message : String(error)}`);
 
     return { asked: 0, failed: 0 };
   });
+  const reverdict = {
+    asked: currentReverdict.asked + recoveredReverdict.asked,
+    failed: currentReverdict.failed + recoveredReverdict.failed,
+    pending: (currentReverdict.pending ?? 0) + (recoveredReverdict.pending ?? 0),
+    writesConfirmed:
+      (currentReverdict.writesConfirmed ?? 0) + (recoveredReverdict.writesConfirmed ?? 0),
+    writesFailed: (currentReverdict.writesFailed ?? 0) + (recoveredReverdict.writesFailed ?? 0),
+    writesPending: (currentReverdict.writesPending ?? 0) + (recoveredReverdict.writesPending ?? 0),
+  };
 
   logBotChallengeRecap(botChallenges);
 
@@ -2903,9 +4450,24 @@ async function main(): Promise<void> {
         // `checked` IS emitted, so item-level `failed` is now judged as a RATE against it rather
         // than counted. A steady ~4-of-12 tick is ~33%, under the 50% bar, so this sweep's honest
         // baseline against bot challenges no longer parks it on the public degraded row.
-        ladder: provenance.ladder,
-        provenance: provenance.counts,
+        ladder: currentProvenance.ladder,
+        provenance,
         reverdict,
+        writes: {
+          confirmed:
+            captureWrites.confirmed +
+            (provenance.writesConfirmed ?? 0) +
+            (reverdict.writesConfirmed ?? 0),
+          failed:
+            captureWrites.failed +
+            failures.failureRecording +
+            (provenance.writesFailed ?? 0) +
+            (reverdict.writesFailed ?? 0),
+          pending:
+            captureWrites.pending +
+            (provenance.writesPending ?? 0) +
+            (reverdict.writesPending ?? 0),
+        },
       }),
     ),
   );

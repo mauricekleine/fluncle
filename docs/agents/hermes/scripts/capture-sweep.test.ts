@@ -8,7 +8,18 @@
 // side-effect free (no yt-dlp spawn, no R2, no network). Keep this green when touching
 // the sticky-proxy builder, the duration guard, the key builder, or the candidate ranker.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   bpmIsMissing,
   buildCaptureConfigFailureSummary,
@@ -32,6 +43,7 @@ import {
   DEFAULT_QUERY_VARIANTS,
   durationWithinTolerance,
   extractSourceAudioSha256,
+  finishProgress,
   findFirstRankedCaptureRung,
   hasForeignVersionMarker,
   isBotChallengeStderr,
@@ -48,12 +60,22 @@ import {
   pickCandidate,
   pickSegmentCandidates,
   pickTopicCandidate,
+  persistAndCommit,
+  preparedCaptureFinding,
+  protectedTrackIdsFromRecovery,
   rankCandidates,
+  recoverCaptureProgress,
   rerollSessionId,
+  runJournaledCaptureProvider,
   shouldReenrichAfterCapture,
   splitProvenanceBudget,
   topicChannelArtist,
   verifyCaptureFile,
+  withoutProtectedTracks,
+  writeJsonAtomic,
+  type CaptureProgress,
+  type CaptureProgressPorts,
+  type ReceiptCoordinates,
 } from "./capture-sweep";
 // The REAL /status strain detector, imported rather than re-implemented: since #994 this
 // sweep's stderr is teed into the marker and scored by these two functions, so the only
@@ -80,6 +102,7 @@ describe("capture sweep canonical counters", () => {
       },
       provenance: { failed: 0, found: 0, none: 0 },
       reverdict: { asked: 0, failed: 0 },
+      writes: { confirmed: 4, failed: 1, pending: 0 },
     });
 
     expect(summary).toMatchObject({
@@ -130,7 +153,45 @@ describe("capture sweep canonical counters", () => {
     );
 
     expect(captureFindingSource).toContain("noteCaptureFailure(failures, error);");
+    expect(captureFindingSource).toContain('if (failureDisposition === "failed")');
     expect(captureFindingSource).toContain("failures.failureRecording += 1;");
+    expect(captureFindingSource).toContain('? "unrecorded-failure"');
+  });
+
+  test("separates confirmed, failed, and pending reconciliation outcomes", () => {
+    const summary = buildCaptureSummary({
+      batch: 5,
+      botChallenges: 0,
+      botChallengesUncleared: 0,
+      counts: { done: 1, failed: 1, pending: 2, rejected: 1, skipped: 0, unmatched: 1 },
+      elapsedMs: 1,
+      failures: {
+        failureRecording: 1,
+        proxy: 0,
+        r2: 0,
+        trackUpdate: 0,
+        unknown: 0,
+        ytDlp: 0,
+      },
+      provenance: { failed: 1, found: 1, none: 1, pending: 2 },
+      reverdict: { asked: 1, failed: 1, pending: 1 },
+      writes: { confirmed: 6, failed: 4, pending: 5 },
+    });
+
+    expect(summary).toMatchObject({
+      capturePending: 2,
+      captureRejected: 1,
+      failureRecordingFailures: 1,
+      provenancePending: 2,
+      reverdictPending: 1,
+      writesConfirmed: 6,
+      writesFailed: 4,
+      writesPending: 5,
+    });
+    expect(source).toContain('return "failed-recorded"');
+    expect(source).toContain('return "failed-write"');
+    expect(source).toContain("writesConfirmed:");
+    expect(source).toContain("writesPending:");
   });
 
   test("preserves a measured empty batch as checked:0", () => {
@@ -142,6 +203,7 @@ describe("capture sweep canonical counters", () => {
       elapsedMs: 1,
       provenance: { failed: 0, found: 0, none: 0 },
       reverdict: { asked: 0, failed: 0 },
+      writes: { confirmed: 0, failed: 0, pending: 0 },
     });
 
     expect(summary.checked).toBe(0);
@@ -165,6 +227,7 @@ describe("capture sweep canonical counters", () => {
       elapsedMs: 1,
       provenance: { failed: 0, found: 0, none: 0 },
       reverdict: { asked: 0, failed: 0 },
+      writes: { confirmed: 1, failed: 0, pending: 0 },
     });
 
     expect(summary).not.toHaveProperty("queue_depth");
@@ -186,6 +249,911 @@ describe("capture sweep canonical counters", () => {
       failed: null,
       produced: null,
     });
+  });
+});
+
+describe("capture reconciliation durability and admission boundaries", () => {
+  const receipt: ReceiptCoordinates = {
+    commitToken: "commit-token",
+    operationId: "track.capture",
+    operationKey: "track.capture:receipt",
+    requestDigest: "a".repeat(64),
+  };
+
+  function progressFile(directory: string): string {
+    return join(directory, `${"b".repeat(64)}.json`);
+  }
+
+  function ports(
+    directory: string,
+    overrides: Partial<CaptureProgressPorts> = {},
+  ): CaptureProgressPorts {
+    return {
+      admittedPhase: () => {
+        throw new Error("unexpected admitted phase");
+      },
+      authorizeProgress: async () => {
+        throw new Error("unexpected authorization");
+      },
+      prepareCurrentSnapshot: () => {
+        throw new Error("unexpected snapshot refresh");
+      },
+      progressPath: () => progressFile(directory),
+      r2Exists: async () => true,
+      r2Put: async () => {
+        throw new Error("unexpected R2 PUT");
+      },
+      ...overrides,
+    };
+  }
+
+  function writePhaseResult(path: string, value: unknown): void {
+    writeFileSync(`${path}.result`, JSON.stringify(value));
+  }
+
+  function receiptResolution(
+    outcome: "committed" | "in-progress" | "not-found" | "rejected",
+  ): Record<string, unknown> {
+    if (outcome === "not-found") {
+      return {
+        ok: true,
+        receipt: {
+          createdAt: null,
+          operationId: null,
+          outcome,
+          resultIdentity: null,
+          state: null,
+          terminalAt: null,
+          updatedAt: null,
+        },
+      };
+    }
+    const state = outcome === "in-progress" ? "accepted" : outcome;
+    return {
+      ok: true,
+      receipt: {
+        createdAt: "2026-09-08T10:00:00.000Z",
+        operationId: receipt.operationId,
+        outcome,
+        resultIdentity: outcome === "in-progress" ? null : "capture-result",
+        state,
+        terminalAt: outcome === "in-progress" ? null : "2026-09-08T10:00:01.000Z",
+        updatedAt: "2026-09-08T10:00:01.000Z",
+      },
+    };
+  }
+
+  function committedResolution(
+    kind: "capture" | "youtube-provenance" | "youtube-reverdict",
+    outcome:
+      | "done"
+      | "failed"
+      | "none"
+      | "reverdict"
+      | "source-found"
+      | "unmatched"
+      | "youtube-found",
+  ): Record<string, unknown> {
+    return {
+      ok: true,
+      outcome: "committed",
+      replayed: false,
+      result: { applied: true, kind, outcome },
+    };
+  }
+
+  test("fsync-backed atomic journals retain private file and directory modes", () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    try {
+      chmodSync(directory, 0o755);
+      writeJsonAtomic(path, { acceptedBytes: "exact" });
+
+      expect(statSync(directory).mode & 0o777).toBe(0o700);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ acceptedBytes: "exact" });
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("an interruption before the first billed request leaves a protected durable intent", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    let providerCalls = 0;
+    try {
+      let failure: unknown;
+      try {
+        await runJournaledCaptureProvider({
+          beforeProvider: () => {
+            throw new Error("simulated process stop before provider dispatch");
+          },
+          finding: { title: "Intent", trackId: "track-1" },
+          kind: "capture",
+          progressPath: () => path,
+          provider: async () => {
+            providerCalls += 1;
+            return null;
+          },
+          snapshotToken: "snapshot-token",
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ message: "simulated process stop before provider dispatch" });
+      expect(providerCalls).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+        attempt: { kind: "capture", state: "provider-intent" },
+        trackId: "track-1",
+      });
+
+      const recovered = await recoverCaptureProgress(
+        directory,
+        ports(directory, {
+          prepareCurrentSnapshot: () => ({
+            prepared: true,
+            snapshotToken: "fresh-snapshot-token",
+            track: { artists: [], certified: false, title: "Intent", trackId: "track-1" },
+          }),
+        }),
+      );
+      expect(recovered).toMatchObject([
+        { disposition: "pending", progress: { trackId: "track-1" } },
+      ]);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+        attempt: { state: "provider-ambiguous" },
+      });
+      expect(providerCalls).toBe(0);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("an interruption after provider completion records the provable local download without replay", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    let providerCalls = 0;
+    try {
+      let failure: unknown;
+      try {
+        await runJournaledCaptureProvider({
+          afterProvider: () => {
+            throw new Error("simulated process stop before result persistence");
+          },
+          finding: { title: "Downloaded", trackId: "track-1" },
+          kind: "capture",
+          progressPath: () => path,
+          provider: async (workDirectory) => {
+            providerCalls += 1;
+            expect(existsSync(path)).toBe(true);
+            writeFileSync(join(workDirectory, "audio.webm"), "completed provider bytes");
+            return { outcome: "downloaded" as const };
+          },
+          snapshotToken: "snapshot-token",
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({
+        message: "simulated process stop before result persistence",
+      });
+      expect(providerCalls).toBe(1);
+
+      const recovered = await recoverCaptureProgress(
+        directory,
+        ports(directory, {
+          prepareCurrentSnapshot: () => ({
+            prepared: true,
+            snapshotToken: "fresh-snapshot-token",
+            track: { artists: [], certified: false, title: "Downloaded", trackId: "track-1" },
+          }),
+        }),
+      );
+      expect(recovered).toMatchObject([{ disposition: "pending" }]);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+        attempt: {
+          localDownload: {
+            bytes: Buffer.byteLength("completed provider bytes"),
+            fileName: "audio.webm",
+          },
+          state: "local-download-present",
+        },
+      });
+      expect(providerCalls).toBe(1);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a durably completed provider result reconciles from its local file without rebuying", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const audio = "completed provider bytes";
+    const digest = createHash("sha256").update(audio).digest("hex");
+    let providerCalls = 0;
+    let authorizationCalls = 0;
+    try {
+      await runJournaledCaptureProvider({
+        completion: (_value, _workDirectory) => ({
+          completedAt: "2026-09-08T10:00:00.000Z",
+          digest,
+          ext: "webm",
+          fileName: "audio.webm",
+          outcome: "accepted",
+          source: "youtube",
+          verdict: "match",
+          videoId: "video-1",
+        }),
+        finding: { logId: "099.9.9Z", title: "Downloaded", trackId: "track-1" },
+        kind: "capture",
+        progressPath: () => path,
+        provider: async (workDirectory) => {
+          providerCalls += 1;
+          writeFileSync(join(workDirectory, "audio.webm"), audio);
+          return { outcome: "downloaded" as const };
+        },
+        snapshotToken: "snapshot-token",
+      });
+
+      const recovered = await recoverCaptureProgress(
+        directory,
+        ports(directory, {
+          admittedPhase: (action, statePath) => {
+            expect(action).toBe("commit");
+            writePhaseResult(statePath, committedResolution("capture", "done"));
+            return "completed";
+          },
+          authorizeProgress: async (progress) => {
+            authorizationCalls += 1;
+            expect(progress.result).toMatchObject({
+              kind: "capture",
+              outcome: "done",
+              youtubeVideoId: "video-1",
+            });
+            return { ...progress, receipt };
+          },
+          prepareCurrentSnapshot: () => ({
+            prepared: true,
+            snapshotToken: "fresh-snapshot-token",
+            track: { artists: [], certified: false, title: "Downloaded", trackId: "track-1" },
+          }),
+        }),
+      );
+      expect(recovered).toMatchObject([{ disposition: "committed" }]);
+      expect(providerCalls).toBe(1);
+      expect(authorizationCalls).toBe(1);
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("provenance uses the same durable intent and completed result recovery", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    let providerCalls = 0;
+    try {
+      await runJournaledCaptureProvider({
+        completion: () => ({
+          completedAt: "2026-09-08T10:00:00.000Z",
+          outcome: "none",
+        }),
+        finding: { title: "Provenance", trackId: "track-1" },
+        kind: "youtube-provenance",
+        progressPath: () => path,
+        provider: async () => {
+          providerCalls += 1;
+          return null;
+        },
+        snapshotToken: "snapshot-token",
+      });
+
+      expect(
+        await finishProgress(
+          path,
+          ports(directory, {
+            admittedPhase: (action, statePath) => {
+              expect(action).toBe("commit");
+              writePhaseResult(statePath, committedResolution("youtube-provenance", "none"));
+              return "completed";
+            },
+            authorizeProgress: async (progress) => {
+              expect(progress.result).toEqual({
+                kind: "youtube-provenance",
+                outcome: "none",
+                verification: "no-match",
+              });
+              return { ...progress, receipt };
+            },
+            prepareCurrentSnapshot: (_trackId, kind) => {
+              expect(kind).toBe("youtube-provenance");
+              return {
+                prepared: true,
+                snapshotToken: "fresh-snapshot-token",
+                track: {
+                  artists: [],
+                  certified: false,
+                  title: "Provenance",
+                  trackId: "track-1",
+                },
+              };
+            },
+          }),
+        ),
+      ).toBe("committed");
+      expect(providerCalls).toBe(1);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a known provider failure replaces the intent and settles through the normal receipt", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    try {
+      let providerFailure: unknown;
+      try {
+        await runJournaledCaptureProvider({
+          finding: { title: "Failure", trackId: "track-1" },
+          kind: "capture",
+          progressPath: () => path,
+          provider: async () => {
+            throw new Error("known provider failure");
+          },
+          snapshotToken: "snapshot-token",
+        });
+      } catch (error) {
+        providerFailure = error;
+      }
+      expect(providerFailure).toMatchObject({ message: "known provider failure" });
+
+      const testPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(action).toBe("commit");
+          writePhaseResult(statePath, committedResolution("capture", "failed"));
+          return "completed";
+        },
+        authorizeProgress: async (progress) => ({ ...progress, receipt }),
+      });
+      expect(
+        await persistAndCommit(
+          "track-1",
+          "snapshot-token",
+          {
+            attemptedAt: "2026-09-08T10:00:00.000Z",
+            kind: "capture",
+            outcome: "failed",
+          },
+          testPorts,
+        ),
+      ).toBe("committed");
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a malformed prepare response keeps the provider intent pending", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    try {
+      let failure: unknown;
+      try {
+        await runJournaledCaptureProvider({
+          beforeProvider: () => {
+            throw new Error("stop after intent");
+          },
+          finding: { title: "Malformed prepare", trackId: "track-1" },
+          kind: "capture",
+          progressPath: () => path,
+          provider: async () => null,
+          snapshotToken: "snapshot-token",
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ message: "stop after intent" });
+
+      expect(
+        await finishProgress(
+          path,
+          ports(directory, {
+            prepareCurrentSnapshot: () => ({}) as never,
+          }),
+        ),
+      ).toBe("pending");
+      expect(existsSync(path)).toBe(true);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+        attempt: { state: "provider-intent" },
+      });
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a partial committed response cannot erase the result journal", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    try {
+      const testPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(action).toBe("commit");
+          writePhaseResult(statePath, { outcome: "committed" });
+          return "completed";
+        },
+        authorizeProgress: async (progress) => ({ ...progress, receipt }),
+      });
+      expect(
+        await persistAndCommit(
+          "track-1",
+          "snapshot-token",
+          { kind: "youtube-reverdict", outcome: "reverdict" },
+          testPorts,
+        ),
+      ).toBe("pending");
+      expect(existsSync(path)).toBe(true);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+        receipt,
+        result: { kind: "youtube-reverdict", outcome: "reverdict" },
+      });
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("R2 PUT followed by an admission yield restarts without repeated external work", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    let objectExists = false;
+    let authorizationCalls = 0;
+    let puts = 0;
+    const firstPorts = ports(directory, {
+      admittedPhase: (action) => {
+        expect(action).toBe("commit");
+        return "yielded";
+      },
+      authorizeProgress: async (progress) => {
+        authorizationCalls += 1;
+        return { ...progress, receipt };
+      },
+      r2Exists: async () => objectExists,
+      r2Put: async () => {
+        puts += 1;
+        objectExists = true;
+      },
+    });
+    try {
+      const result = {
+        attemptedAt: "2026-09-08T10:00:00.000Z",
+        bodyBase64: Buffer.from("accepted-audio").toString("base64"),
+        bytes: Buffer.byteLength("accepted-audio"),
+        captureVerification: "unverified" as const,
+        capturedAt: "2026-09-08T10:00:00.000Z",
+        contentType: "audio/opus",
+        kind: "capture" as const,
+        outcome: "done" as const,
+        sourceAudioKey: `099.9.9Z/${"c".repeat(64)}.opus`,
+        verifiedAt: "2026-09-08T10:00:00.000Z",
+      };
+
+      expect(await persistAndCommit("track-1", "snapshot-token", result, firstPorts)).toBe(
+        "pending",
+      );
+      expect(existsSync(path)).toBe(true);
+
+      const restartPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(action).toBe("reconcile");
+          writePhaseResult(statePath, receiptResolution("in-progress"));
+          return "completed";
+        },
+        authorizeProgress: async () => {
+          throw new Error("restart repeated authorization");
+        },
+        r2Exists: async () => {
+          throw new Error("restart repeated R2 HEAD");
+        },
+      });
+      expect(await finishProgress(path, restartPorts)).toBe("pending");
+      expect(authorizationCalls).toBe(1);
+      expect(puts).toBe(1);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("an unknown committed response resolves exactly once from its receipt", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    let authorizationCalls = 0;
+    let reconciliations = 0;
+    try {
+      const firstPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(action).toBe("commit");
+          writePhaseResult(statePath, committedResolution("youtube-reverdict", "reverdict"));
+          throw new Error("commit response lost");
+        },
+        authorizeProgress: async (progress) => {
+          authorizationCalls += 1;
+          return { ...progress, receipt };
+        },
+      });
+      expect(
+        await persistAndCommit(
+          "track-1",
+          "snapshot-token",
+          { kind: "youtube-reverdict", outcome: "reverdict" },
+          firstPorts,
+        ),
+      ).toBe("pending");
+
+      const restartPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(action).toBe("reconcile");
+          reconciliations += 1;
+          writePhaseResult(statePath, receiptResolution("committed"));
+          return "completed";
+        },
+      });
+      expect(await finishProgress(path, restartPorts)).toBe("committed");
+      expect(authorizationCalls).toBe(1);
+      expect(reconciliations).toBe(1);
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a malformed receipt envelope stays pending without new authorization", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const progress: CaptureProgress = {
+      receipt,
+      result: { kind: "youtube-reverdict", outcome: "reverdict" },
+      snapshotToken: "snapshot-token",
+      trackId: "track-1",
+    };
+    let authorizationCalls = 0;
+    try {
+      writeJsonAtomic(path, progress);
+      const testPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(action).toBe("reconcile");
+          writePhaseResult(statePath, { ok: true, receipt: { state: "committed" } });
+          return "completed";
+        },
+        authorizeProgress: async (current) => {
+          authorizationCalls += 1;
+          return current;
+        },
+      });
+
+      expect(await finishProgress(path, testPorts)).toBe("pending");
+      expect(authorizationCalls).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(progress);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test.each([
+    ["missing ok", (valid: Record<string, unknown>) => ({ receipt: valid.receipt })],
+    ["ok false", (valid: Record<string, unknown>) => ({ ...valid, ok: false })],
+    [
+      "mismatched not-found coordinates",
+      (valid: Record<string, unknown>) => ({
+        ...valid,
+        receipt: { ...(valid.receipt as Record<string, unknown>), operationId: "other.operation" },
+      }),
+    ],
+  ])("a %s envelope carrying not-found cannot refresh authorization", async (_name, mutate) => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const progress: CaptureProgress = {
+      receipt,
+      result: { kind: "youtube-reverdict", outcome: "reverdict" },
+      snapshotToken: "snapshot-token",
+      trackId: "track-1",
+    };
+    let authorizationCalls = 0;
+    try {
+      writeJsonAtomic(path, progress);
+      const testPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(action).toBe("reconcile");
+          writePhaseResult(statePath, mutate(receiptResolution("not-found")));
+          return "completed";
+        },
+        authorizeProgress: async (current) => {
+          authorizationCalls += 1;
+          return current;
+        },
+      });
+
+      expect(await finishProgress(path, testPorts)).toBe("pending");
+      expect(authorizationCalls).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(progress);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test.each([
+    [
+      "mismatched operation id",
+      (valid: Record<string, unknown>) => ({
+        ...valid,
+        receipt: { ...(valid.receipt as Record<string, unknown>), operationId: "other.operation" },
+      }),
+    ],
+    [
+      "committed outcome with accepted state",
+      (valid: Record<string, unknown>) => ({
+        ...valid,
+        receipt: {
+          ...(valid.receipt as Record<string, unknown>),
+          resultIdentity: null,
+          state: "accepted",
+          terminalAt: null,
+        },
+      }),
+    ],
+    [
+      "terminal state without result identity",
+      (valid: Record<string, unknown>) => ({
+        ...valid,
+        receipt: { ...(valid.receipt as Record<string, unknown>), resultIdentity: null },
+      }),
+    ],
+  ])("a %s terminal receipt remains pending", async (_name, mutate) => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const progress: CaptureProgress = {
+      receipt,
+      result: { kind: "youtube-reverdict", outcome: "reverdict" },
+      snapshotToken: "snapshot-token",
+      trackId: "track-1",
+    };
+    let authorizationCalls = 0;
+    try {
+      writeJsonAtomic(path, progress);
+      const testPorts = ports(directory, {
+        admittedPhase: (_action, statePath) => {
+          writePhaseResult(statePath, mutate(receiptResolution("committed")));
+          return "completed";
+        },
+        authorizeProgress: async (current) => {
+          authorizationCalls += 1;
+          return current;
+        },
+      });
+      expect(await finishProgress(path, testPorts)).toBe("pending");
+      expect(authorizationCalls).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(progress);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("malformed stored receipt coordinates cannot interpret a valid not-found response", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const progress: CaptureProgress = {
+      receipt: { ...receipt, requestDigest: "not-a-digest" },
+      result: { kind: "youtube-reverdict", outcome: "reverdict" },
+      snapshotToken: "snapshot-token",
+      trackId: "track-1",
+    };
+    let authorizationCalls = 0;
+    try {
+      writeJsonAtomic(path, progress);
+      const testPorts = ports(directory, {
+        admittedPhase: (_action, statePath) => {
+          writePhaseResult(statePath, receiptResolution("not-found"));
+          return "completed";
+        },
+        authorizeProgress: async (current) => {
+          authorizationCalls += 1;
+          return current;
+        },
+      });
+      expect(await finishProgress(path, testPorts)).toBe("pending");
+      expect(authorizationCalls).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(progress);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("only an explicit not-found receipt permits authorization refresh", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const progress: CaptureProgress = {
+      receipt,
+      result: { kind: "youtube-reverdict", outcome: "reverdict" },
+      snapshotToken: "snapshot-token",
+      trackId: "track-1",
+    };
+    let authorizationCalls = 0;
+    try {
+      writeJsonAtomic(path, progress);
+      const testPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          if (action === "reconcile") {
+            writePhaseResult(statePath, receiptResolution("not-found"));
+          } else {
+            expect(action).toBe("commit");
+            writePhaseResult(statePath, committedResolution("youtube-reverdict", "reverdict"));
+          }
+          return "completed";
+        },
+        authorizeProgress: async (current) => {
+          authorizationCalls += 1;
+          return { ...current, receipt };
+        },
+      });
+
+      expect(await finishProgress(path, testPorts)).toBe("committed");
+      expect(authorizationCalls).toBe(1);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a reconciliation transport failure preserves the known receipt", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const progress: CaptureProgress = {
+      receipt,
+      result: { kind: "youtube-reverdict", outcome: "reverdict" },
+      snapshotToken: "snapshot-token",
+      trackId: "track-1",
+    };
+    try {
+      writeJsonAtomic(path, progress);
+      let failure: unknown;
+      try {
+        await finishProgress(
+          path,
+          ports(directory, {
+            admittedPhase: () => {
+              throw new Error("receipt reconciliation transport failure");
+            },
+          }),
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ message: "receipt reconciliation transport failure" });
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(progress);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("slow authorization runs while no database phase is active", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    let databasePhaseActive = false;
+    try {
+      writeJsonAtomic(path, {
+        result: { kind: "youtube-reverdict", outcome: "reverdict" },
+        snapshotToken: "snapshot-token",
+        trackId: "track-1",
+      } satisfies CaptureProgress);
+      const testPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(databasePhaseActive).toBe(false);
+          databasePhaseActive = true;
+          expect(action).toBe("commit");
+          writePhaseResult(statePath, committedResolution("youtube-reverdict", "reverdict"));
+          databasePhaseActive = false;
+          return "completed";
+        },
+        authorizeProgress: async (progress) => {
+          expect(databasePhaseActive).toBe(false);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          expect(databasePhaseActive).toBe(false);
+          return { ...progress, receipt };
+        },
+      });
+
+      expect(await finishProgress(path, testPorts)).toBe("committed");
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a stale commit child result is removed before a new admitted attempt", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    try {
+      writeFileSync(`${path}.commit.result`, JSON.stringify({ outcome: "committed" }));
+      const testPorts = ports(directory, {
+        admittedPhase: (action) => {
+          expect(action).toBe("commit");
+          return "completed";
+        },
+        authorizeProgress: async (progress) => ({ ...progress, receipt }),
+      });
+      expect(
+        await persistAndCommit(
+          "track-1",
+          "snapshot-token",
+          { kind: "youtube-reverdict", outcome: "reverdict" },
+          testPorts,
+        ),
+      ).toBe("pending");
+      expect(existsSync(path)).toBe(true);
+      expect(existsSync(`${path}.commit.result`)).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a recovered pending journal protects capture, provenance, and re-verdict work", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const pending: CaptureProgress = {
+      receipt,
+      result: { kind: "youtube-reverdict", outcome: "reverdict" },
+      snapshotToken: "snapshot-token",
+      trackId: "protected-track",
+    };
+    try {
+      writeJsonAtomic(path, pending);
+      const recovered = await recoverCaptureProgress(
+        directory,
+        ports(directory, {
+          admittedPhase: (_action, statePath) => {
+            const response = receiptResolution("in-progress");
+            writePhaseResult(statePath, {
+              ...response,
+              receipt: {
+                ...(response.receipt as Record<string, unknown>),
+                outcome: "future-outcome",
+              },
+            });
+            return "completed";
+          },
+        }),
+      );
+      const protectedTrackIds = protectedTrackIdsFromRecovery(recovered);
+      const offeredRows = [
+        { title: "Protected", trackId: "protected-track" },
+        { title: "Open", trackId: "open-track" },
+      ];
+
+      expect(recovered).toMatchObject([{ disposition: "pending" }]);
+      for (const _kind of ["capture", "youtube-provenance", "youtube-reverdict"] as const) {
+        expect(withoutProtectedTracks(offeredRows, protectedTrackIds)).toEqual([
+          { title: "Open", trackId: "open-track" },
+        ]);
+      }
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("provider work consumes the freshly prepared row rather than the older queue page", () => {
+    const queued = {
+      artists: ["Old name"],
+      durationMs: 100,
+      sourceAudioRejected: '[{"sha256":"old"}]',
+      title: "Old title",
+      trackId: "track-1",
+    };
+    const current = {
+      artists: ["Current name"],
+      certified: true,
+      durationMs: 200,
+      sourceAudioRejected: '[{"sha256":"old"},{"sha256":"new"}]',
+      title: "Current title",
+      trackId: "track-1",
+    };
+
+    expect(preparedCaptureFinding(queued, current)).toEqual(current);
   });
 });
 
@@ -1200,7 +2168,7 @@ describe("captureSessionSeed — retry runs rotate off the flagged exit", () => 
   });
 });
 
-describe("the accepted upload's id rides the success PATCH", () => {
+describe("the accepted upload's id rides the successful reconciliation", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
 
   test("the success update carries youtubeVideoId, taken from the candidate that WON", () => {
@@ -1221,7 +2189,7 @@ describe("the accepted upload's id rides the success PATCH", () => {
     );
   });
 
-  test("only the SUCCESS path reports an id — never the unmatched or failed patches", () => {
+  test("only the SUCCESS path reports an id — never unmatched or failed results", () => {
     // An id is provenance for audio Fluncle actually kept. A walk that stored nothing has no
     // upload to attribute, and a failed one never got that far.
     const unmatched = source.slice(source.indexOf('captureStatus: "unmatched"'));
@@ -1279,9 +2247,9 @@ describe("the PROVENANCE phase never touches a capture column", () => {
 
   test("it never stores the candidate — no R2 put, and the file is deleted", () => {
     // The bytes exist only to be fingerprinted. `r2Put` is the archive's only door and this phase
-    // does not go through it; the accepted file is removed the moment its verdict has been read.
+    // does not go through it; cleanup waits until the durable result replaces the provider intent.
     expect(phase).not.toContain("r2Put");
-    expect(phase).toContain("rmSync(accepted.path, { force: true })");
+    expect(phase).toContain("cleanupProviderWorkDirectory(attemptPath, workDirectory)");
   });
 
   test("it reports the id under its OWN verdict field, never capture's", () => {
@@ -1310,12 +2278,12 @@ describe("the PROVENANCE phase never touches a capture column", () => {
     expect(soundcloud).not.toContain("youtubeVideoId");
   });
 
-  test("a transient failure writes NOTHING at all", () => {
-    // Not even the no-match stamp: a proxy hiccup is not an answer, and burning the re-ask window
-    // on one would cost the row months for a reason that had nothing to do with the row.
+  test("a known transient failure advances the bounded inconclusive streak", () => {
+    // The failure is not a no-match, but it must settle durably so a known failed provider call
+    // cannot leave an ambiguous intent holding the queue forever.
     const failurePath = phase.slice(phase.indexOf("} catch (error) {"));
 
-    expect(failurePath).not.toContain("patchTrack");
+    expect(failurePath).toContain('youtubeVerification: "inconclusive"');
   });
 
   test("it runs the SHARED ladder, never a second copy of it", () => {
@@ -1335,7 +2303,9 @@ describe("the PROVENANCE phase never touches a capture column", () => {
     // `no-match` for recordings whose id was sitting right there. So the walk never reads the key
     // itself: the CAPTURE caller passes it, and this one deliberately does not.
     // The phase's CALL passes exactly four options, and `legacyRejectKey` is not among them.
-    expect(phase).toContain("findVerifiedUpload({ dir, finding: row, memory, session })");
+    expect(phase).toContain(
+      "findVerifiedUpload({ dir: directory, finding: row, memory, session })",
+    );
     expect(phase).not.toContain("legacyRejectKey:");
     // The capture path, which is where the key genuinely IS known-bad, still passes it.
     expect(source).toContain("legacyRejectKey: finding.sourceAudioKey");
@@ -1378,12 +2348,12 @@ describe("the provenance and re-verdict phases ride the tick without distorting 
   test("both phases run AFTER the capture batch and cannot abort the tick", () => {
     const main = source.slice(source.indexOf("async function main("));
     const batchEnd = main.indexOf("Array.from({ length: Math.min(CONCURRENCY");
-    const provenanceAt = main.indexOf("runProvenancePhase(botChallenges)");
+    const provenanceAt = main.indexOf("runProvenancePhase(botChallenges, protectedTrackIds)");
 
     expect(provenanceAt).toBeGreaterThan(batchEnd);
     // Caught, not thrown: a backfill that could abort the tick could hide a capture that succeeded.
-    expect(main).toContain("runProvenancePhase(botChallenges).catch(");
-    expect(main).toContain("runReverdictPhase().catch(");
+    expect(main).toContain("runProvenancePhase(botChallenges, protectedTrackIds).catch(");
+    expect(main).toContain("runReverdictPhase(protectedTrackIds).catch(");
   });
 
   test("the phases report their OWN counters, never the capture gauges /status reads as a rate", () => {
@@ -1395,6 +2365,7 @@ describe("the provenance and re-verdict phases ride the tick without distorting 
       elapsedMs: 1,
       provenance: { failed: 2, found: 1, none: 3 },
       reverdict: { asked: 5, failed: 1 },
+      writes: { confirmed: 13, failed: 1, pending: 0 },
     });
 
     // The capture gauges are untouched by a busy — or a failing — backfill.
@@ -1411,7 +2382,8 @@ describe("the provenance and re-verdict phases ride the tick without distorting 
   test("the re-verdict ask carries no verdict — the box paces, the server rules", () => {
     const phase = source.slice(source.indexOf("async function runReverdictPhase("));
 
-    expect(phase).toContain("youtubeReverdict: true");
+    expect(phase).toContain('kind: "youtube-reverdict"');
+    expect(phase).toContain('outcome: "reverdict"');
     expect(phase).not.toContain("checkYoutubeOfficial");
     expect(phase).not.toContain("author_name");
   });
@@ -1789,7 +2761,8 @@ describe("THE CATALOGUE LADDER never buys a whole song", () => {
     const failurePath = ladder.slice(ladder.indexOf("} catch (error) {"));
 
     expect(failurePath).toContain('youtubeVerification: "inconclusive"');
-    expect(failurePath).toContain(".catch(");
+    expect(failurePath).toContain('return "failed-recorded"');
+    expect(failurePath).toContain("patchError instanceof PendingCaptureCommitError");
   });
 
   test("a DEFERRED row is not written to at all", () => {
@@ -1830,9 +2803,11 @@ describe("the catalogue tier's budget accounting", () => {
   });
 
   test("the FINDINGS tier keeps the full fingerprint — the cheap ladder is catalogue-only", () => {
-    expect(phase).toContain("proveTrackProvenance(row, meter)");
+    expect(phase).toContain("proveTrackProvenance(currentRow, prepared.snapshotToken, meter)");
     expect(phase).toContain('scope: "findings"');
-    expect(phase).toContain("proveCatalogueProvenance(row, meter, segmentBudget, ladder)");
+    expect(phase).toContain("proveCatalogueProvenance(");
+    expect(phase).toContain("prepared.snapshotToken");
+    expect(phase).toContain("segmentBudget");
   });
 
   test("a deferral is not folded into the phase's outcome gauges", () => {
@@ -1857,6 +2832,7 @@ describe("the catalogue tier's budget accounting", () => {
       },
       provenance: { failed: 0, found: 9, none: 4 },
       reverdict: { asked: 0, failed: 0 },
+      writes: { confirmed: 13, failed: 0, pending: 0 },
     });
 
     expect(summary).toMatchObject({
@@ -1881,6 +2857,7 @@ describe("the catalogue tier's budget accounting", () => {
       elapsedMs: 1,
       provenance: { failed: 0, found: 0, none: 0 },
       reverdict: { asked: 0, failed: 0 },
+      writes: { confirmed: 1, failed: 0, pending: 0 },
     });
 
     expect(summary).toMatchObject({ provenanceLadderSearched: 0, provenanceLadderTopicServed: 0 });

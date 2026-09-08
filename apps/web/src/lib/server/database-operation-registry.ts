@@ -263,8 +263,10 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "submissions.triage": wholeLifetime(
     "Each moderation decision immediately determines the next database-backed queue state.",
   ),
-  "track.capture": wholeLifetime(
-    "Capture claims, remote media work, and non-replayable track receipts form one per-item state machine.",
+  "track.capture": phased(
+    `${SCRIPTS}/capture-sweep.ts`,
+    "Each queue, current-state prepare, receipt reconciliation, and atomic commit is a bounded phase; provider, fingerprint, and object-storage work runs between leases.",
+    0,
   ),
   "track.context": wholeLifetime(
     "Grounding reads and guarded context writes are interleaved per track.",
@@ -564,11 +566,12 @@ export const DATABASE_MUTATION_POLICIES = {
     reconciliation: "Read the submission's current state before applying the verdict again.",
   },
   "track.capture": {
-    evidenceSource: "apps/web/src/lib/server/track-update.ts",
-    kind: "deliberately-non-replayable",
-    rationale: "Download and object-storage work precedes the mutable track update.",
+    evidenceSource: "apps/web/src/lib/server/track-capture-reconciliation.ts",
+    kind: "receipt-backed",
+    rationale:
+      "A snapshot-bound terminal receipt and every capture counter, marker, and provenance write commit in one transaction after the external result is durable.",
     reconciliation:
-      "Inspect one track's capture state, owned object, and hash before downloading again.",
+      "Resolve the exact receipt and deterministic object key before repeating any provider or object-storage work.",
   },
   "track.context": {
     evidenceSource: "apps/web/src/lib/server/track-update.ts",
@@ -1409,10 +1412,33 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       endpoint(
+        "track.capture.prepare",
+        "read",
+        "POST",
+        "/api/v1/admin/tracks/{trackId}/capture/prepare",
+        `${SCRIPTS}/capture-sweep.ts`,
+        { mutationTarget: null },
+      ),
+      noDatabase(
+        "track.capture.authorize",
+        null,
+        "POST /api/v1/admin/tracks/{trackId}/capture/authorize",
+        `${SCRIPTS}/capture-sweep.ts`,
+        { mutationTarget: null },
+      ),
+      endpoint(
+        "track.capture.reconcile",
+        "read",
+        "POST",
+        "/api/v1/admin/operation-receipts/resolve",
+        `${SCRIPTS}/capture-sweep.ts`,
+        { mutationTarget: null },
+      ),
+      endpoint(
         "track.capture.write",
         "write",
-        "PATCH",
-        "/api/v1/admin/tracks/{trackId}",
+        "POST",
+        "/api/v1/admin/tracks/{trackId}/capture/commit",
         `${SCRIPTS}/capture-sweep.ts`,
         { mutationTarget: "primary" },
       ),

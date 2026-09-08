@@ -567,6 +567,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the Worker DERIVES `ok` and appends to `run_events` in the second telemetry database.
   "POST /admin/telemetry/runs": "record_run",
   "POST /admin/tracks": "publish_track",
+  // Capture is an agent-driven, snapshot-bound state machine. The server prepares current
+  // eligibility, owns the external officialness verdict, and commits through an atomic receipt.
+  "POST /admin/tracks/{trackId}/capture/authorize": "authorize_track_capture",
+  "POST /admin/tracks/{trackId}/capture/commit": "commit_track_capture",
+  "POST /admin/tracks/{trackId}/capture/prepare": "prepare_track_capture",
   // context_track is served by oRPC at its own path; it has no TanStack route FILE
   // (oRPC owns the path directly), so it lives here as a path→op entry without a
   // `tracks.$trackId.context.ts` route file.

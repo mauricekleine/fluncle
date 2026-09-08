@@ -143,6 +143,7 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "recording-mbid-prefix-strip",
     "recording-mbid-resolved",
     "social-finding-touch",
+    "track-capture-reconciliation",
     "track-note-fill",
   ]),
   ...staticPolicies("public_aggregates", ["crawl-track-mint", "label-release-track-mint"]),

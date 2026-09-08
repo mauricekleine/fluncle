@@ -261,6 +261,194 @@ export const updateTrack = oc
     }),
   );
 
+const CaptureReconciliationKindSchema = z.enum([
+  "capture",
+  "youtube-provenance",
+  "youtube-reverdict",
+]);
+
+const CaptureExternalResultSchema = z.union([
+  z.discriminatedUnion("outcome", [
+    z.strictObject({
+      attemptedAt: z.string().datetime({ offset: true }),
+      kind: z.literal("capture"),
+      outcome: z.enum(["failed", "unmatched"]),
+      sourceAudioRejected: z.string().max(16_384).optional(),
+    }),
+    z.strictObject({
+      attemptedAt: z.string().datetime({ offset: true }),
+      bytes: z.number().int().min(1),
+      captureVerification: z.enum(["preview-match", "unverified"]),
+      capturedAt: z.string().datetime({ offset: true }),
+      kind: z.literal("capture"),
+      outcome: z.literal("done"),
+      sourceAudioKey: z.string().min(1).max(1024),
+      sourceAudioRejected: z.string().max(16_384).optional(),
+      verifiedAt: z.string().datetime({ offset: true }),
+      youtubeVideoId: z.string().min(1).max(128).optional(),
+    }),
+  ]),
+  z.discriminatedUnion("outcome", [
+    z.strictObject({
+      kind: z.literal("youtube-provenance"),
+      outcome: z.literal("none"),
+      verification: z.enum(["inconclusive", "no-match"]),
+    }),
+    z.strictObject({
+      kind: z.literal("youtube-provenance"),
+      outcome: z.literal("source-found"),
+      sourceVerification: z.enum(["soundcloud-archive-match", "soundcloud-preview-match"]),
+    }),
+    z.strictObject({
+      kind: z.literal("youtube-provenance"),
+      outcome: z.literal("youtube-found"),
+      verification: z.enum(["archive-match", "metadata-match", "preview-match"]),
+      youtubeVideoId: z.string().min(1).max(128),
+    }),
+  ]),
+  z.strictObject({ kind: z.literal("youtube-reverdict"), outcome: z.literal("reverdict") }),
+]);
+
+const CaptureReceiptCoordinatesSchema = z.strictObject({
+  operationId: z.literal("track.capture"),
+  operationKey: z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._~:/-]*$/),
+  requestDigest: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+const CapturePreparedTrackSchema = z.strictObject({
+  analyzedFrom: z.enum(["full", "preview"]).optional(),
+  artists: z.array(z.string().max(512)).max(64),
+  bpm: z.number().optional(),
+  certified: z.boolean(),
+  durationMs: z.number().int().min(1).optional(),
+  label: z.string().max(1024).optional(),
+  logId: z.string().max(64).optional(),
+  sourceAudioFailures: z.number().int().min(0).optional(),
+  sourceAudioKey: z.string().max(1024).optional(),
+  sourceAudioRejected: z.string().max(16_384).optional(),
+  title: z.string().max(2048),
+  trackId: z.string().min(1).max(256),
+});
+
+const CaptureCommittedReceiptResultSchema = z.union([
+  z.strictObject({
+    applied: z.literal(true),
+    kind: z.literal("capture"),
+    outcome: z.enum(["done", "failed", "unmatched"]),
+  }),
+  z.strictObject({
+    applied: z.literal(true),
+    kind: z.literal("youtube-provenance"),
+    outcome: z.enum(["none", "source-found", "youtube-found"]),
+  }),
+  z.strictObject({
+    applied: z.literal(true),
+    kind: z.literal("youtube-reverdict"),
+    outcome: z.literal("reverdict"),
+  }),
+]);
+
+const CaptureRejectedReceiptResultSchema = z.strictObject({
+  applied: z.literal(false),
+  reason: z.literal("stale"),
+});
+
+/** Freeze one currently eligible capture/provenance row before any provider work starts. */
+export const prepareTrackCapture = oc
+  .route({
+    method: "POST",
+    operationId: "prepareTrackCapture",
+    path: "/admin/tracks/{trackId}/capture/prepare",
+    summary: "Prepare a current capture reconciliation snapshot",
+    tags: ["Admin"],
+  })
+  .input(
+    z.strictObject({
+      kind: CaptureReconciliationKindSchema,
+      priorSnapshotToken: z.string().min(1).max(65_536).optional(),
+      trackId: z.string().min(1).max(256),
+    }),
+  )
+  .output(
+    z.discriminatedUnion("prepared", [
+      z.strictObject({
+        ok: z.literal(true),
+        prepared: z.literal(false),
+        reason: z.enum(["ineligible", "not-found", "stale"]),
+      }),
+      z.strictObject({
+        ok: z.literal(true),
+        prepared: z.literal(true),
+        snapshotToken: z.string().min(1).max(65_536),
+        track: CapturePreparedTrackSchema,
+      }),
+    ]),
+  );
+
+/** Resolve server-owned YouTube officialness without opening or holding a database transaction. */
+export const authorizeTrackCapture = oc
+  .route({
+    method: "POST",
+    operationId: "authorizeTrackCapture",
+    path: "/admin/tracks/{trackId}/capture/authorize",
+    summary: "Authorize a prepared capture result",
+    tags: ["Admin"],
+  })
+  .input(
+    z.strictObject({
+      result: CaptureExternalResultSchema,
+      snapshotToken: z.string().min(1).max(65_536),
+      trackId: z.string().min(1).max(256),
+    }),
+  )
+  .output(
+    CaptureReceiptCoordinatesSchema.extend({
+      commitToken: z.string().min(1).max(65_536),
+      ok: z.literal(true),
+    }),
+  );
+
+/** Atomically commit a snapshot-bound capture result through the durable operation receipt rail. */
+export const commitTrackCapture = oc
+  .route({
+    method: "POST",
+    operationId: "commitTrackCapture",
+    path: "/admin/tracks/{trackId}/capture/commit",
+    summary: "Commit a prepared capture result",
+    tags: ["Admin"],
+  })
+  .input(
+    CaptureReceiptCoordinatesSchema.extend({
+      commitToken: z.string().min(1).max(65_536),
+      trackId: z.string().min(1).max(256),
+    }),
+  )
+  .output(
+    z.discriminatedUnion("outcome", [
+      z.strictObject({
+        ok: z.literal(true),
+        outcome: z.literal("committed"),
+        replayed: z.boolean(),
+        result: CaptureCommittedReceiptResultSchema,
+      }),
+      z.strictObject({
+        ok: z.literal(true),
+        outcome: z.literal("rejected"),
+        replayed: z.boolean(),
+        result: CaptureRejectedReceiptResultSchema,
+      }),
+      z.strictObject({
+        ok: z.literal(true),
+        outcome: z.enum(["conflict", "in-progress", "safely-retryable"]),
+        replayed: z.boolean(),
+      }),
+    ]),
+  );
+
 /**
  * `observe_track` → `POST /admin/tracks/{trackId}/observe` (operationId
  * `observeTrack`).
@@ -895,6 +1083,8 @@ export const getMixableOrder = oc
 
 /** The `admin-tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTracksContract = {
+  authorize_track_capture: authorizeTrackCapture,
+  commit_track_capture: commitTrackCapture,
   context_track: contextTrack,
   finalize_track_video: finalizeTrackVideo,
   get_mixable_order: getMixableOrder,
@@ -903,6 +1093,7 @@ export const adminTracksContract = {
   list_tracks_admin: listTracksAdmin,
   note_track: noteTrack,
   observe_track: observeTrack,
+  prepare_track_capture: prepareTrackCapture,
   presign_track_video_uploads: presignTrackVideoUploads,
   publish_track: publishTrack,
   purge_video: purgeVideo,

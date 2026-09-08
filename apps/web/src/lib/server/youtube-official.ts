@@ -121,17 +121,18 @@ export function isOfficialAuthor(authorName: string, names: RecordingNames): boo
 /** The oEmbed response, narrowed to the one field this gate reads. */
 type OEmbedResponse = { author_name?: unknown };
 
-// Short on purpose: this runs INSIDE the capture sweep's PATCH, so a slow YouTube must not hold a
-// box write open. A timeout is simply an unconcluded check.
+// Short on purpose: this runs in capture result authorization after the box has released its
+// database-admission lease. A timeout is simply an unconcluded check.
 const OEMBED_TIMEOUT_MS = 5_000;
 
 /**
  * Ask YouTube who uploaded `videoId`, and rule on it. Returns 1 (may be shown), 0 (checked and
  * refused), or null (no check concluded — the caller stores NULL and shows nothing).
  *
- * NEVER THROWS. Every failure path collapses to `null`, because this gate rides an unrelated write:
- * a capture that succeeded must land its bytes, its key, and its stamps even when YouTube is
- * unreachable. Losing a capture over an optional provenance lookup would be the worse bug.
+ * NEVER THROWS. Every failure path collapses to `null`, because this gate rides capture result
+ * authorization: a capture that succeeded must keep its durable bytes and eventually land its key
+ * and stamps even when YouTube is unreachable. Losing a capture over an optional provenance lookup
+ * would be the worse bug.
  */
 export async function checkYoutubeOfficial(
   videoId: string,

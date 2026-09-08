@@ -243,10 +243,18 @@ const handler = new OpenAPIHandler(router, {
 const API_PREFIX = "/api/v1";
 
 // Responses that must never enter a browser or edge cache. Health is a live probe;
-// the replica response carries a short-lived credential that must remain specific
-// to the requesting device. oRPC owns the response framing, so these headers live
-// at the shared mount rather than in domain handlers.
+// replica, vector-serving, and capture-reconciliation responses carry credentials or state that
+// must remain specific to the requesting principal. oRPC owns the response framing,
+// so these headers live at the shared mount rather than in domain handlers.
 const NO_STORE_SUFFIXES = new Set(["/admin/vectors/tracks/serving", "/health", "/replica/token"]);
+const NO_STORE_SUFFIX_PATTERNS = [/^\/admin\/tracks\/[^/]+\/capture\/(?:prepare|authorize)$/];
+
+function isNoStoreSuffix(suffix: string): boolean {
+  return (
+    NO_STORE_SUFFIXES.has(suffix) ||
+    NO_STORE_SUFFIX_PATTERNS.some((pattern) => pattern.test(suffix))
+  );
+}
 
 // WHICH PATHS MAY ANSWER A BROWSER FROM ANOTHER ORIGIN, derived once from the router
 // above. The rule and its reasoning live in ./orpc-cors; what matters here is that it
@@ -297,7 +305,7 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
     return null;
   }
 
-  if (NO_STORE_SUFFIXES.has(suffix)) {
+  if (isNoStoreSuffix(suffix)) {
     response.headers.set("Cache-Control", "no-store");
   }
 

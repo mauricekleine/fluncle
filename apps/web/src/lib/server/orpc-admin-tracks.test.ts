@@ -51,6 +51,9 @@ const getNoteEchoThresholds = vi.fn();
 const getObservationEchoThresholds = vi.fn();
 const observationNeighbours = vi.fn();
 const recordObservationRejection = vi.fn();
+const prepareCaptureReconciliation = vi.fn();
+const authorizeCaptureReconciliation = vi.fn();
+const commitCaptureReconciliation = vi.fn();
 
 vi.mock("cloudflare:workers", () => ({
   env: {
@@ -70,6 +73,12 @@ vi.mock("./track-update", async (importOriginal) => {
     updateTrack: (...args: unknown[]) => updateTrack(...args),
   };
 });
+
+vi.mock("./track-capture-reconciliation", () => ({
+  authorizeCaptureReconciliation: (...args: unknown[]) => authorizeCaptureReconciliation(...args),
+  commitCaptureReconciliation: (...args: unknown[]) => commitCaptureReconciliation(...args),
+  prepareCaptureReconciliation: (...args: unknown[]) => prepareCaptureReconciliation(...args),
+}));
 
 vi.mock("./backfill", () => ({
   recordNoteAttempt: (...args: unknown[]) => recordNoteAttempt(...args),
@@ -213,6 +222,9 @@ beforeEach(() => {
   listTracks.mockReset();
   searchTracks.mockReset();
   publishTrack.mockReset();
+  prepareCaptureReconciliation.mockReset();
+  authorizeCaptureReconciliation.mockReset();
+  commitCaptureReconciliation.mockReset();
   recordNoteAttempt.mockReset().mockResolvedValue(undefined);
 });
 
@@ -243,6 +255,103 @@ function post(path: string, token: string | undefined, body: unknown): Request {
     method: "POST",
   });
 }
+
+describe("oRPC capture reconciliation", () => {
+  it("requires an admin principal before preparing current state", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/capture/prepare", undefined, {
+        kind: "capture",
+        trackId: TRACK_ID,
+      }),
+    );
+
+    expect(response?.status).toBe(401);
+    expect(prepareCaptureReconciliation).not.toHaveBeenCalled();
+  });
+
+  it("lets the agent prepare, authorize, and receipt-commit one bounded result", async () => {
+    prepareCaptureReconciliation.mockResolvedValueOnce({
+      prepared: true,
+      snapshotToken: "snapshot-token",
+      track: {
+        artists: ["Calibre"],
+        certified: true,
+        title: "Even If",
+        trackId: TRACK_ID,
+      },
+    });
+    authorizeCaptureReconciliation.mockResolvedValueOnce({
+      commitToken: "commit-token",
+      operationId: "track.capture",
+      operationKey: "track.capture:receipt",
+      requestDigest: "a".repeat(64),
+    });
+    commitCaptureReconciliation.mockResolvedValueOnce({
+      outcome: "committed",
+      replayed: false,
+      result: { applied: true, kind: "capture", outcome: "unmatched" },
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const prepared = await handleOrpc(
+      post("/capture/prepare", AGENT_TOKEN, { kind: "capture", trackId: TRACK_ID }),
+    );
+    expect(prepared?.status).toBe(200);
+    expect(prepared?.headers.get("Cache-Control")).toBe("no-store");
+    expect(prepareCaptureReconciliation).toHaveBeenCalledWith(TRACK_ID, "capture", undefined);
+
+    const authorized = await handleOrpc(
+      post("/capture/authorize", AGENT_TOKEN, {
+        result: {
+          attemptedAt: "2026-09-08T10:00:00.000Z",
+          kind: "capture",
+          outcome: "unmatched",
+        },
+        snapshotToken: "snapshot-token",
+        trackId: TRACK_ID,
+      }),
+    );
+    expect(authorized?.status).toBe(200);
+    expect(authorized?.headers.get("Cache-Control")).toBe("no-store");
+
+    const committed = await handleOrpc(
+      post("/capture/commit", AGENT_TOKEN, {
+        commitToken: "commit-token",
+        operationId: "track.capture",
+        operationKey: "track.capture:receipt",
+        requestDigest: "a".repeat(64),
+        trackId: TRACK_ID,
+      }),
+    );
+    expect(committed?.status).toBe(200);
+    expect(await readJson(committed)).toMatchObject({
+      ok: true,
+      outcome: "committed",
+      replayed: false,
+    });
+  });
+
+  it("rejects a box-supplied YouTube officialness verdict", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/capture/authorize", AGENT_TOKEN, {
+        result: {
+          kind: "youtube-provenance",
+          outcome: "youtube-found",
+          verification: "preview-match",
+          youtubeVideoId: "video-1",
+          youtubeVideoOfficial: 1,
+        },
+        snapshotToken: "snapshot-token",
+        trackId: TRACK_ID,
+      }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(authorizeCaptureReconciliation).not.toHaveBeenCalled();
+  });
+});
 
 // ── update_track — the field-level role guard ───────────────────────────────
 describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
