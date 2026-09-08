@@ -12,6 +12,7 @@ import {
   isSonarTrackEnabled,
   SONAR_MAX_PROBES,
   SONAR_MAX_TOP_K,
+  readSonarHealth,
   searchSonar,
 } from "./sonar";
 
@@ -56,6 +57,55 @@ function reply(matches: Array<{ id: string; score: number }>) {
 }
 
 const REQUEST = { index: "tracks" as const, probes: [[0.1, 0.2]], topK: 5 };
+
+const HEALTH = {
+  artifact_version: "sonar.track@1/1",
+  checkpoint: 42,
+  commit: "a".repeat(40),
+  consumer_id: "sonar-test",
+  delta_age_seconds: 0,
+  delta_backlog: 0,
+  head_seq: 42,
+  ok: true,
+  pending_ack: false,
+  replica_lag_seconds: 10,
+  tracks: 12,
+  validation: "valid",
+};
+
+describe("readSonarHealth — authenticated commissioning evidence", () => {
+  it("returns a strict normalized health response and sends the existing secret", async () => {
+    fetchMock.mockResolvedValue({ json: async () => HEALTH, ok: true });
+
+    await expect(readSonarHealth()).resolves.toEqual({
+      artifactVersion: "sonar.track@1/1",
+      checkpoint: 42,
+      commit: "a".repeat(40),
+      consumerId: "sonar-test",
+      deltaAgeSeconds: 0,
+      deltaBacklog: 0,
+      headSeq: 42,
+      ok: true,
+      pendingAck: false,
+      replicaLagSeconds: 10,
+      tracks: 12,
+      validation: "valid",
+    });
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.headers).toEqual({
+      "x-sonar-secret": "shhh",
+    });
+  });
+
+  it("rejects unauthenticated-shaped or malformed health evidence", async () => {
+    fetchMock.mockResolvedValue({
+      json: async () => ({ ...HEALTH, consumer_id: undefined }),
+      ok: true,
+    });
+
+    await expect(readSonarHealth()).resolves.toBeNull();
+  });
+});
 
 describe("searchSonar — the triple-gated fallback client", () => {
   it("returns parsed matches when sonar answers OK", async () => {

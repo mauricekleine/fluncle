@@ -71,7 +71,7 @@
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "0c5d4d5c940cae5bdca3065b43536e6e7ccdc1c4e64ef67d117c68a4b43e2801"
+      "computedHash": "271d829fee0f6e594c5376159a087a4e904f7a10b1e472e08c1b7f91f3278734"
     },
     "fluncle-publish": {
       "source": "packages/skills/fluncle-publish",

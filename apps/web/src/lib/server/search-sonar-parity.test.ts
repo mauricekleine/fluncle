@@ -122,11 +122,20 @@ describe("rankTracksByVector — sonic search Sonar parity", () => {
     const probe = vector(1, 1);
 
     isSonarSonicEnabled.mockResolvedValue(false);
-    const database = await rankTracksByVector(probe, filters, "anchor", 3);
+    const database = await rankTracksByVector(probe, filters, "anchor", 3, {
+      allowBoundedSql: true,
+    });
 
     isSonarSonicEnabled.mockResolvedValue(true);
     searchSonar.mockImplementation(referenceSonar);
     const sonar = await rankTracksByVector(probe, filters, "anchor", 3);
+
+    expect(database).not.toBeNull();
+    expect(sonar).not.toBeNull();
+
+    if (!database || !sonar) {
+      return;
+    }
 
     expect(sonar.map((row) => row.trackId)).toEqual(database.map((row) => row.trackId));
     expect(sonar.map((row) => row.trackId)).toEqual(["near", "tied-a", "tied-b"]);

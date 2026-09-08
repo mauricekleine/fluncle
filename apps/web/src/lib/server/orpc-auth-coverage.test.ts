@@ -463,6 +463,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // list_tracks_admin / get_recording precedent: an authoritative by-coordinate read
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
+  get_vector_serving: "operator",
   // Inactivation deliberately discards the consumer's reusable checkpoint and forces a rebuild;
   // the affected agent may retire its own consumer identity without compacting the shared log.
   inactivate_artifact_consumer: "admin",
@@ -810,6 +811,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // operator tier: steering what the telescope keeps pointing at is a taste ruling, the
   // `update_label` class, so an agent may never dismiss.
   set_track_dismissed: "operator",
+  set_vector_serving: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
   // The pre-chew triage verdict write — agent tier (adminAuth only, no operatorGuard),

@@ -109,7 +109,7 @@ beforeEach(async () => {
 describe("getSimilarFindings — /log Sonar parity", () => {
   it("returns the same ids in the same order through Sonar and the bounded database path", async () => {
     isSonarLogEnabled.mockResolvedValue(false);
-    const database = await getSimilarFindings("target", 3);
+    const database = await getSimilarFindings("target", 3, { allowBoundedSql: true });
 
     isSonarLogEnabled.mockResolvedValue(true);
     searchSonar.mockImplementation(referenceSonar);

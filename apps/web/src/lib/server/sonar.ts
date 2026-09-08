@@ -15,10 +15,11 @@
 //   1. its dark flag is the exact string "true" in the `settings` KV (DEFAULT OFF — unset ⇒ OFF),
 //   2. BOTH `SONAR_BASE_URL` and `SONAR_SECRET` are provisioned in the Worker env, AND
 //   3. sonar actually answers OK, in time, with a well-formed body.
-// If ANY of those is false/absent/slow/malformed, {@link searchSonar} returns `null` and the
-// caller FALLS BACK to the existing Turso scan, returning exactly what it returns today. The flag
-// being unset is the steady state, so the feature ships as a pure no-op and stays dark until an
-// operator deliberately writes "true". This mirrors the anchor slice's dark flag
+// If ANY of those is false/absent/slow/malformed, {@link searchSonar} returns `null`. Interactive
+// surfaces treat that as unavailable and degrade without starting a remote vector scan whose work
+// cannot be cancelled by the Worker's deadline. An unset flag keeps Sonar dark and makes public
+// sonic search fall back to FTS while optional neighbour bands disappear until an operator
+// deliberately writes "true". This mirrors the anchor slice's dark flag
 // (./anchor-spotify-search.ts) and rides the same one flag store (./settings.ts) every kill
 // switch uses — never a second flag mechanism.
 
@@ -29,7 +30,8 @@ import { getSetting, setSetting } from "./settings";
 //
 // Each is read default-DENY like the clip-drip/anchor switches: ONLY the literal "true" enables
 // the surface's sonar route. An unset key, an empty database, a fresh preview, or any other value
-// all read OFF, so the surface keeps running its existing Turso scan until an operator flips it.
+// all read OFF, so public latency-sensitive surfaces take their typed degradation until an
+// operator flips the corresponding flag.
 
 /** Sonic search (`sounds like <track>` / `sounds like these artists`) → sonar `tracks` index. */
 export const SONAR_SONIC_ENABLED_KEY = "sonar_sonic_enabled";
@@ -154,10 +156,12 @@ export async function setSonarTrackEnabled(enabled: boolean): Promise<void> {
 
 /**
  * THE DEADLINE. sonar answers a single probe in tens of ms; anything past this is a hung or
- * unreachable sidecar, and a slow sonar must NEVER become a slow page — it must fall back. Kept
- * short on purpose: the Turso scan behind the fallback is itself the acceptable-latency floor.
+ * unreachable sidecar, and a slow sonar must NEVER become a slow page. Kept short so public
+ * latency-sensitive callers can take their typed degradation promptly.
  */
 export const SONAR_TIMEOUT_MS = 800;
+export const SONAR_DELTA_CADENCE_SECS = 30;
+export const SONAR_RECONCILE_CADENCE_SECS = 3600;
 
 /**
  * THE REQUEST CAPS, mirrored from the engine (`apps/sonar/src/search.rs`: `MAX_TOP_K`,
@@ -239,24 +243,114 @@ export type SonarMatch = {
   score: number;
 };
 
+export type SonarHealth = {
+  artifactVersion: string;
+  checkpoint: number;
+  commit: string;
+  consumerId: string;
+  deltaAgeSeconds: number;
+  deltaBacklog: number;
+  headSeq: number;
+  ok: boolean;
+  pendingAck: boolean;
+  replicaLagSeconds: number;
+  tracks: number;
+  validation: "last_attempt_failed" | "valid";
+};
+
+/** Read authenticated engine evidence for the operator commissioning guard. */
+export async function readSonarHealth(): Promise<SonarHealth | null> {
+  const baseUrl = await readOptionalEnv("SONAR_BASE_URL");
+  const secret = await readOptionalEnv("SONAR_SECRET");
+
+  if (!baseUrl || !secret) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(new URL("/health", baseUrl), {
+      headers: { "x-sonar-secret": secret },
+      signal: AbortSignal.timeout(SONAR_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return parseHealth(await response.json());
+  } catch {
+    return null;
+  }
+}
+
+function parseHealth(payload: unknown): SonarHealth | null {
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
+
+  const value = payload as Record<string, unknown>;
+  const nonnegativeInteger = (field: string) => {
+    const candidate = value[field];
+    return typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate >= 0
+      ? candidate
+      : null;
+  };
+  const checkpoint = nonnegativeInteger("checkpoint");
+  const deltaAgeSeconds = nonnegativeInteger("delta_age_seconds");
+  const deltaBacklog = nonnegativeInteger("delta_backlog");
+  const headSeq = nonnegativeInteger("head_seq");
+  const tracks = nonnegativeInteger("tracks");
+
+  if (
+    checkpoint === null ||
+    deltaAgeSeconds === null ||
+    deltaBacklog === null ||
+    headSeq === null ||
+    tracks === null ||
+    typeof value.artifact_version !== "string" ||
+    typeof value.commit !== "string" ||
+    typeof value.consumer_id !== "string" ||
+    !/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(value.consumer_id) ||
+    typeof value.ok !== "boolean" ||
+    typeof value.pending_ack !== "boolean" ||
+    (value.validation !== "valid" && value.validation !== "last_attempt_failed") ||
+    typeof value.replica_lag_seconds !== "number" ||
+    !Number.isSafeInteger(value.replica_lag_seconds)
+  ) {
+    return null;
+  }
+
+  return {
+    artifactVersion: value.artifact_version,
+    checkpoint,
+    commit: value.commit,
+    consumerId: value.consumer_id,
+    deltaAgeSeconds,
+    deltaBacklog,
+    headSeq,
+    ok: value.ok,
+    pendingAck: value.pending_ack,
+    replicaLagSeconds: value.replica_lag_seconds,
+    tracks,
+    validation: value.validation,
+  };
+}
+
 /**
  * Ask sonar for the nearest ids to `request.probes`, or `null` when sonar cannot be used and the
- * caller must fall back to the Turso scan.
+ * caller must treat the engine as unavailable.
  *
  * NULL IS A SUPPORTED ANSWER, not an error path — it is the fallback signal. It happens on: an
  * unprovisioned Worker (no `SONAR_BASE_URL`/`SONAR_SECRET`, the local-dev steady state), a request
  * past {@link SONAR_MAX_TOP_K}/{@link SONAR_MAX_PROBES} (which the engine would 400), a non-2xx
  * status, a timeout past {@link SONAR_TIMEOUT_MS}, a DNS/transport failure, or a body that does not
- * parse to `{ matches: [{id, score}] }`. Every one of them means the same thing to the caller: use
- * the existing path. A well-formed EMPTY result is returned as `[]` (a real "no matches"), distinct
- * from `null`; surfaces treat an empty result as a fallback too, since a reached surface always has
- * a real probe over a populated corpus, so zero matches is a sonar hiccup rather than a true empty
- * neighbourhood — and falling back can only restore today's behaviour, never worsen it.
+ * parse to `{ matches: [{id, score}] }`. A well-formed EMPTY result is returned as `[]` (a real
+ * "no matches"), distinct from `null`; callers must preserve that distinction.
  */
 export async function searchSonar(request: SonarSearchRequest): Promise<SonarMatch[] | null> {
   // The caps, checked before anything else: an over-cap request is one the engine answers with a
   // 400 (search.rs `cap_violation`), so sending it would only buy a wasted round trip. `null` here
-  // is the same fallback the 400 produces — never a clamp (see SONAR_MAX_TOP_K).
+  // is the same unavailable result the 400 produces — never a clamp (see SONAR_MAX_TOP_K).
   if (request.topK > SONAR_MAX_TOP_K || request.probes.length > SONAR_MAX_PROBES) {
     return null;
   }
@@ -303,8 +397,9 @@ export async function searchSonar(request: SonarSearchRequest): Promise<SonarMat
 
 /**
  * Validate sonar's reply as `{ matches: [{ id: string, score: number }] }`. Returns the matches, or
- * `null` when the body is not that shape — an untrusted-input gate, so a garbled response degrades
- * to the Turso fallback rather than a throw. A present-but-empty `matches` array is a valid `[]`.
+ * `null` when the body is not that shape — an untrusted-input gate, so a garbled response takes the
+ * caller's typed degradation rather than throwing. A present-but-empty `matches` array is a valid
+ * `[]`.
  */
 function parseMatches(payload: unknown): SonarMatch[] | null {
   if (typeof payload !== "object" || payload === null || !("matches" in payload)) {

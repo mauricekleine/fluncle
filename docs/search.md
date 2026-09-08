@@ -63,6 +63,8 @@ The key filter took the same shape from the other side. There is no id to resolv
 
 `translateQuery` returns `null` when the model is unprovisioned, slow (past a 3-second deadline), or failing — every failure mode collapses to that one answer. Tier 4 then falls back to FTS5 with **OR** semantics: bm25 ranks by rarity, so the one distinctive word in the sentence carries the result. The response carries `degraded: true` and the dialog says so, rather than passing text hits off as the filters you asked for.
 
+The same typed degradation covers a disabled or unavailable Sonar engine for a sonic query. A valid empty Sonar result remains an honest empty sonic result; a flag that is not exactly `true` or a `null` engine answer returns the FTS5 answer with `degraded: true`. Neither state starts the 50,000-candidate Turso vector scan: that scan is exact only within its cap, and a Worker timeout cannot cancel its remote work after acceptance, so presenting it as complete-corpus sonic recall would be both slow and misleading. The accepted bounded SQL builder and its parity proof remain as diagnostics, not the public fallback.
+
 Asked _"Andromedik tracks in A minor"_ with no model, it still surfaces the Andromedik tracks.
 
 **In local dev this is the steady state** — `OPENROUTER_API_KEY` is a production Worker secret and the local template does not carry it — so the degradation path is exercised every day, by everyone, for free.

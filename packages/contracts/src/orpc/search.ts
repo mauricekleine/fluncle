@@ -136,9 +136,9 @@ export const SearchKindSchema = z
  * a coordinate, an exact entity, a bare token (FTS5), and only then a small LLM that
  * translates the sentence into `SearchFilters` which SQL executes.
  *
- * `degraded: true` says the fourth tier was ASKED FOR and could not run (no key, a slow
- * model, a vendor outage) and the query fell back to full-text. Search degrades; it never
- * breaks — and it says so rather than pretending the text hits were what you meant.
+ * `degraded: true` says a semantic tier was ASKED FOR and could not run (no key, a slow
+ * model or vector engine, a vendor outage) and the query fell back to full text. Search degrades;
+ * it never breaks or presents bounded vector recall as a full-corpus answer.
  */
 export const searchArchive = oc
   .route({
@@ -155,7 +155,7 @@ export const searchArchive = oc
     z.object({
       /** The track the sonic tier anchored on — a REAL row, never an invented vibe. */
       anchor: SearchHitSchema.optional(),
-      /** True ⇔ the LLM tier was wanted and unavailable; these are full-text results. */
+      /** True when a requested semantic tier was unavailable; these are full-text results. */
       degraded: z.boolean(),
       entities: z.array(SearchEntitySchema),
       /** What the LLM understood, echoed back so the reader can see it and correct it. */

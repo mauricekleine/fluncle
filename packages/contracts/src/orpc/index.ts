@@ -35,6 +35,7 @@ import { adminDatabaseAdmissionContract } from "./admin-database-admission";
 import { adminGalaxiesContract } from "./admin-galaxies";
 import { adminPromptsContract } from "./admin-prompts";
 import { adminProjectionsContract } from "./admin-projections";
+import { adminVectorsContract } from "./admin-vectors";
 import { adminReachContract } from "./admin-reach";
 import { albumsContract } from "./albums";
 import { artistsContract } from "./artists";
@@ -189,6 +190,15 @@ export {
   ProjectionTargetSchema,
   setProjectionCutover,
 } from "./admin-projections";
+export {
+  adminVectorsContract,
+  getVectorServing,
+  setVectorServing,
+  type VectorServingReason,
+  VectorServingReasonSchema,
+  type VectorServingStatus,
+  VectorServingStatusSchema,
+} from "./admin-vectors";
 export {
   addArtistRule,
   AddArtistRuleInputSchema,
@@ -573,6 +583,7 @@ export const contract = {
   ...adminGalaxiesContract,
   ...adminPromptsContract,
   ...adminProjectionsContract,
+  ...adminVectorsContract,
   ...adminReachContract,
   ...albumsContract,
   ...artistsContract,

@@ -1,7 +1,8 @@
 //! The axum HTTP surface: shared state, routing, handlers, and auth.
 //!
 //! `/search` requires a constant-time-checked `x-sonar-secret` header. `/health`
-//! and `/` are open (Cloudflare health checks hit `/health` unauthenticated).
+//! and `/` are open (Cloudflare health checks hit `/health` unauthenticated); an
+//! authenticated health read additionally receives the artifact consumer identity.
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -10,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arc_swap::ArcSwap;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -35,6 +36,7 @@ pub struct AppState {
     retired: Mutex<Option<Weak<PublishedSnapshot>>>,
     /// Shared secret for `/search` (compared in constant time).
     pub secret: String,
+    consumer_id: Option<String>,
 }
 
 /// One complete generation. Tracks, centroids, durable checkpoint, and
@@ -84,6 +86,7 @@ impl AppState {
             pending_ack: AtomicBool::new(false),
             retired: Mutex::new(None),
             secret,
+            consumer_id: None,
         }
     }
 
@@ -102,7 +105,16 @@ impl AppState {
             snapshot: ArcSwap::from_pointee(snapshot),
             retired: Mutex::new(None),
             secret,
+            consumer_id: None,
         }
+    }
+
+    /// Bind runtime health to the exact artifact consumer identity used by this process.
+    pub fn with_consumer_id(mut self, consumer_id: String) -> Self {
+        if !consumer_id.is_empty() {
+            self.consumer_id = Some(consumer_id);
+        }
+        self
     }
 
     /// Publish only when the prior retired generation is no longer held by a
@@ -233,15 +245,20 @@ struct Health {
     rebuild_duration_ms: u64,
     commit: &'static str,
     ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consumer_id: Option<String>,
 }
 
-async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
+async fn health(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ([(axum::http::HeaderName, &'static str); 1], Json<Health>) {
     let snapshot = state.snapshot.load_full();
     let now = now_unix();
     let head = state.head_seq.load(Ordering::Relaxed);
     let (delta_backlog, delta_age_seconds) = freshness_metrics(head, &snapshot, now);
     let replica_synced = state.replica_synced_at.load(Ordering::Relaxed);
-    Json(Health {
+    let health = Json(Health {
         tracks: snapshot.tracks.len(),
         centroids: snapshot.centroids.len(),
         last_refresh_unix: state.last_refresh.load(Ordering::Relaxed),
@@ -270,7 +287,14 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
         rebuild_duration_ms: state.rebuild_duration_ms.load(Ordering::Relaxed),
         commit: BUILD_COMMIT,
         ok: true,
-    })
+        consumer_id: if authorized(&headers, &state.secret) {
+            state.consumer_id.clone()
+        } else {
+            None
+        },
+    });
+
+    ([(header::CACHE_CONTROL, "no-store")], health)
 }
 
 pub(crate) fn freshness_metrics(head: u64, snapshot: &PublishedSnapshot, now: i64) -> (u64, i64) {

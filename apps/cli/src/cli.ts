@@ -73,6 +73,10 @@ type AdminProjectionCutoverOptions = JsonOptions & {
   target: string;
 };
 
+type AdminVectorSetOptions = JsonOptions & {
+  enabled: string;
+};
+
 type AdminArtifactRegisterOptions = JsonOptions & {
   contract: string[];
 };
@@ -1043,6 +1047,48 @@ JSON field reference:
         return;
       }
       console.log(`${result.target}: cutover ${result.enabled ? "open" : "dark"}.`);
+    });
+
+  const adminVectors = configureCommand(
+    admin.command("vectors").description("Vector-serving readiness and rollback controls"),
+  );
+
+  adminVectors.action(() => {
+    adminVectors.outputHelp();
+  });
+
+  adminVectors
+    .command("get")
+    .description("Read vector-serving commissioning and runtime readiness")
+    .argument("<target>", "tracks")
+    .option("--json", "Print the complete machine-readable readiness contract", false)
+    .action(async (targetValue: string, options: JsonOptions) => {
+      const vectors = await import("./commands/admin-vectors");
+      const result = await vectors.getVectorServingCommand(vectors.parseVectorTarget(targetValue));
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(vectors.vectorServingStatusLines(result.status).join("\n"));
+    });
+
+  adminVectors
+    .command("set")
+    .description("Enable a commissioned vector target or disable it unconditionally")
+    .argument("<target>", "tracks")
+    .requiredOption("--enabled <boolean>", "true enables; false disables unconditionally")
+    .option("--json", "Print the stored flag and current readiness as JSON", false)
+    .action(async (targetValue: string, options: AdminVectorSetOptions) => {
+      const vectors = await import("./commands/admin-vectors");
+      const result = await vectors.setVectorServingCommand({
+        enabled: vectors.parseVectorEnabled(options.enabled),
+        target: vectors.parseVectorTarget(targetValue),
+      });
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(vectors.vectorServingStatusLines(result.status).join("\n"));
     });
 
   // The versioned artifact-log transport. These are deliberately literal operator controls: the

@@ -1481,7 +1481,8 @@ export async function getTrackNeighbors(track: {
  * `list_similar_tracks` op; a future "play something like this" radio hook reads the
  * same function.
  *
- * THE RANKING IS AN EXACT SCAN IN SQL — `order by vector_distance_cos(vector, ?) limit N`
+ * The explicit diagnostic path is an exact scan in SQL —
+ * `order by vector_distance_cos(vector, ?) limit N`
  * with the probe bound as a RAW BLOB (`toVectorProbe`; see embedding.ts for why the
  * binding is the whole ballgame). It returns the ~6 winners from the shared deterministic
  * candidate window, never the corpus, in one round trip. The old shape — every stored JSON vector into the
@@ -1498,17 +1499,27 @@ export async function getTrackNeighbors(track: {
  *
  * Ordering is deterministic: distance ascending, `track_id` ascending as the tiebreak.
  *
- * SCALE NOTE. The scan is semantically global — "close in sound" is a nearest-neighbour question
- * over the archive — but its deterministic candidate window is capped by the shared fallback
- * contract. Ranking the satellite's native vector column directly (the DB does the cosine in SQL)
- * keeps it a plain bounded linear blob scan. The
+ * SCALE NOTE. The diagnostic scan asks a semantically global question — "close in sound" is a
+ * nearest-neighbour question over the archive — but its deterministic candidate window is capped
+ * by the shared fallback contract. Ranking the satellite's native vector column directly (the DB
+ * does the cosine in SQL) keeps it a plain bounded linear blob scan. The
  * lever, when the archive gets large, is a btree pre-filter before the scan — `where galaxy_id = ?` — but
  * it would confine the row to the finding's own galaxy, which CHANGES what comes back, and
  * a precomputed neighbour table (the Ear pattern) is the durable answer. Both are product/
  * infra calls, not made here.
  */
-export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<TrackListItem[]> {
+export async function getSimilarFindings(
+  idOrLogId: string,
+  limit = 6,
+  options: { allowBoundedSql?: boolean } = {},
+): Promise<TrackListItem[]> {
   if (limit <= 0) {
+    return [];
+  }
+
+  const sonarEnabled = await isSonarLogEnabled();
+
+  if (!sonarEnabled && options.allowBoundedSql !== true) {
     return [];
   }
 
@@ -1541,8 +1552,10 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   // excluded. sonar DEFINES `certified` as `findings.log_id is not null` (apps/sonar/src/turso.rs
   // joins on that, since `log_id` is nullable), which is exactly the set the Turso scan below ranks
   // (`where findings.log_id is not null`); the hydrator re-asserts the Log ID as defense-in-depth.
-  // Falls through to the exact Turso scan when off/unprovisioned/down.
-  if (await isSonarLogEnabled()) {
+  // When enabled, an unavailable or empty Sonar answer omits this optional band promptly. The
+  // exact Turso scan is available only through the explicit diagnostic option: public flag-OFF
+  // and outage paths never start remote work that cannot be cancelled once Turso accepts it.
+  if (sonarEnabled) {
     const matches = await searchSonar({
       excludeIds: [targetRow.track_id],
       filter: { certified: true },
@@ -1551,9 +1564,7 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
       topK: limit,
     });
 
-    if (matches && matches.length > 0) {
-      return hydrateSimilarFindings(matches);
-    }
+    return matches === null ? [] : hydrateSimilarFindings(matches);
   }
 
   // The probe rides as raw f32 bytes, NOT as a JSON string — a 14x cliff on hosted that

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
-use axum::http::{Request, StatusCode};
+use axum::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use tower::ServiceExt; // for `oneshot`
 
@@ -49,7 +49,7 @@ fn test_state() -> Arc<AppState> {
         vector: padded(&[1.0, 0.0]),
         meta: None,
     }]);
-    Arc::new(AppState::new(tracks, centroids, SECRET.into()))
+    Arc::new(AppState::new(tracks, centroids, SECRET.into()).with_consumer_id("sonar-test".into()))
 }
 
 async fn body_json(resp: axum::response::Response) -> Value {
@@ -161,17 +161,41 @@ async fn health_is_open_and_reports_counts() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
     let v = body_json(resp).await;
     assert_eq!(v["tracks"], 2);
     assert_eq!(v["centroids"], 1);
     assert_eq!(v["delta_backlog"], 0);
     assert_eq!(v["delta_age_seconds"], 0);
     assert_eq!(v["ok"], true);
+    assert!(v.get("consumer_id").is_none());
     assert!(v["last_refresh_unix"].as_i64().unwrap() > 0);
     // The build commit — how an operator confirms the box carries a given change BEFORE
     // flipping a flag that depends on it. `"unknown"` here, since a local `cargo test`
     // does not set GIT_SHA; the release workflow bakes the real one.
     assert!(!v["commit"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn authenticated_health_reports_the_artifact_consumer_identity() {
+    let app = router(test_state());
+    let req = Request::builder()
+        .method("GET")
+        .uri("/health")
+        .header("x-sonar-secret", SECRET)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    let v = body_json(resp).await;
+    assert_eq!(v["consumer_id"], "sonar-test");
 }
 
 /// The catalogue-eligibility filter over the wire: the whole predicate in one body, with the

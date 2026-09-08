@@ -170,7 +170,7 @@ describe("the moved reads still answer off the satellite", () => {
   it("the JOIN read ranks by cosine to the satellite's vector, nearest first", async () => {
     const { getSimilarFindings } = await import("./tracks");
 
-    const similar = await getSimilarFindings(TARGET, 6);
+    const similar = await getSimilarFindings(TARGET, 6, { allowBoundedSql: true });
 
     expect(similar.map((item) => item.trackId)).toEqual([NEAR, FAR]);
   });
@@ -181,7 +181,7 @@ describe("the moved reads still answer off the satellite", () => {
 
     await updateTrack(NEAR, { embedding: "" });
 
-    const similar = await getSimilarFindings(TARGET, 6);
+    const similar = await getSimilarFindings(TARGET, 6, { allowBoundedSql: true });
 
     expect(similar.map((item) => item.trackId)).toEqual([FAR]);
   });

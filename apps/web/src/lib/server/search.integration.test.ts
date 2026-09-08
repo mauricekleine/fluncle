@@ -27,7 +27,11 @@ import { linkTracksToArtistEntities } from "./artists";
 import { createIntegrationDb } from "./integration-db";
 import { resetKeyHistogramCache } from "./key-histogram";
 import { linkTrackToLabel } from "./labels";
-import { compileFilters, resolveFilterEntities, searchArchive } from "./search";
+import {
+  compileFilters,
+  resolveFilterEntities,
+  searchArchive as searchArchiveLive,
+} from "./search";
 
 // The LLM tier is a network call. Stubbed here so each test states EXACTLY what the model
 // returned — including "nothing", which is the degradation the spec demands be proven.
@@ -55,6 +59,12 @@ vi.mock("./db", async () => {
 
   return { ...actual, getDb: async () => db };
 });
+
+// This suite owns the real bounded-SQL diagnostic proof. Public callers omit this explicit seam
+// and degrade to full text when Sonar is dark, which search-sonar.test.ts proves separately.
+function searchArchive(options: { limit?: number; q: string }) {
+  return searchArchiveLive({ ...options, allowBoundedSonicForDiagnostics: true });
+}
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────
 

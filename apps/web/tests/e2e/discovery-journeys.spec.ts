@@ -17,12 +17,7 @@ import {
   installDiscoveryEventProbe,
   type ObservedDiscoveryEvent,
 } from "./browser";
-import {
-  SEEDED_GRAPH_ENTITIES,
-  SEEDED_LEAD,
-  SEEDED_SONIC_ANCHOR,
-  SEEDED_SONIC_NEIGHBOUR,
-} from "./seed";
+import { SEEDED_GRAPH_ENTITIES, SEEDED_LEAD, SEEDED_SONIC_ANCHOR } from "./seed";
 
 const VIEWPORTS = [
   { height: 900, name: "desktop-1440x900", width: 1440 },
@@ -119,7 +114,9 @@ for (const viewport of VIEWPORTS) {
   test.describe(`${viewport.name} discovery journeys`, () => {
     test.use({ viewport: { height: viewport.height, width: viewport.width } });
 
-    test("zero-input browse to track to related discovery to outbound listen", async ({ page }) => {
+    test("zero-input browse continues through an adjacent finding when similarity is off", async ({
+      page,
+    }) => {
       await blockExternalRequests(page);
 
       const probe = await installDiscoveryEventProbe(page);
@@ -130,10 +127,11 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(new RegExp(`/log/${SEEDED_LEAD.logId}`), { timeout: 15_000 });
       await expect(page.locator("html[data-discovery-listening]")).toBeAttached();
 
-      const neighbour = page.locator('[data-discovery="similar"] a').first();
+      await expect(page.locator('[data-discovery="similar"]')).toHaveCount(0);
+      const adjacent = page.locator(".log-neighbor-older").first();
 
-      await expect(neighbour).toBeVisible({ timeout: 15_000 });
-      await neighbour.click();
+      await expect(adjacent).toBeVisible({ timeout: 15_000 });
+      await adjacent.click();
       await expect(page).toHaveURL(/\/log\//);
       expect(page.url()).not.toContain(SEEDED_LEAD.logId);
       await expect(page.locator("html[data-discovery-listening]")).toBeAttached();
@@ -145,7 +143,7 @@ for (const viewport of VIEWPORTS) {
       expect(
         events.map((event) => event.event),
         `observed ${JSON.stringify(events)}`,
-      ).toEqual(["discovery_open", "discovery_similar", "discovery_outbound"]);
+      ).toEqual(["discovery_open", "discovery_open", "discovery_outbound"]);
       expect(events[0]?.kind).toBe("finding");
       expect(events[1]?.kind).toBe("finding");
       expect(events[2]?.service).toBe("spotify");
@@ -154,7 +152,7 @@ for (const viewport of VIEWPORTS) {
       expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
     });
 
-    test("known seed to sonic neighbour to outbound listen", async ({ page }) => {
+    test("known sonic seed degrades to a name match before outbound listen", async ({ page }) => {
       await blockExternalRequests(page);
 
       const probe = await installDiscoveryEventProbe(page);
@@ -168,14 +166,13 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/q=/);
       await expect(page.locator("html[data-discovery-listening]")).toBeAttached();
       await expect(
-        page.getByText(SEEDED_SONIC_NEIGHBOUR.title, { exact: false }).first(),
+        page.getByText("Reading by name only right now.", { exact: false }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(SEEDED_SONIC_ANCHOR.title, { exact: false }).first(),
       ).toBeVisible();
 
-      await page
-        .getByRole("link")
-        .filter({ hasText: SEEDED_SONIC_NEIGHBOUR.title })
-        .first()
-        .click();
+      await page.getByRole("link").filter({ hasText: SEEDED_SONIC_ANCHOR.title }).first().click();
       await expect(page).toHaveURL(/\/log\//);
       await expect(page.locator("html[data-discovery-listening]")).toBeAttached();
 
@@ -191,7 +188,7 @@ for (const viewport of VIEWPORTS) {
       expect(events[1]?.kind).toBe("finding");
       expect(events[2]?.service).toBe("spotify");
 
-      writeEvidence(viewport.name, "known-seed-sonic", events);
+      writeEvidence(viewport.name, "known-seed-sonic-degraded", events);
       expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
     });
 
@@ -251,10 +248,11 @@ test("discovery actions complete when Simple Analytics is absent", async ({ page
   await expect(page).toHaveURL(new RegExp(`/log/${SEEDED_LEAD.logId}`), { timeout: 15_000 });
   await expect(page.locator("html[data-discovery-listening]")).toBeAttached();
 
-  const neighbour = page.locator('[data-discovery="similar"] a').first();
+  await expect(page.locator('[data-discovery="similar"]')).toHaveCount(0);
+  const adjacent = page.locator(".log-neighbor-older").first();
 
-  await expect(neighbour).toBeVisible({ timeout: 15_000 });
-  await neighbour.click();
+  await expect(adjacent).toBeVisible({ timeout: 15_000 });
+  await adjacent.click();
   await expect(page).toHaveURL(/\/log\//);
 
   await listenOutbound(page);

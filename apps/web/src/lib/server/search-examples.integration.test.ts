@@ -7,7 +7,7 @@ import { linkTrackToAlbum } from "./albums";
 import { linkTracksToArtistEntities } from "./artists";
 import { createIntegrationDb } from "./integration-db";
 import { linkTrackToLabel } from "./labels";
-import { searchArchive } from "./search";
+import { searchArchive as searchArchiveLive } from "./search";
 import { EMBEDDING_DIMS } from "./embedding";
 import { SEARCH_EXAMPLES, type SearchExampleIcon } from "@/lib/search-results";
 
@@ -52,6 +52,12 @@ vi.mock("./db", async () => {
 
   return { ...actual, getDb: async () => db };
 });
+
+// The offline promise keeps the accepted bounded-SQL tier as an explicit diagnostic. Public
+// callers omit this seam and use typed full-text degradation while Sonar is dark.
+function searchArchive(options: { limit?: number; q: string }) {
+  return searchArchiveLive({ ...options, allowBoundedSonicForDiagnostics: true });
+}
 
 /** A unit vector at `angle` radians in the (0,1) plane — cosine distance is then arithmetic. */
 function angleVector(angle: number): Float32Array {

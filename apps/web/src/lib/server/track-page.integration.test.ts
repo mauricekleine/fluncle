@@ -12,13 +12,26 @@ import {
 import { EMBEDDING_DIMS } from "./embedding";
 import { vectorFallbackCandidateLimitSql } from "./vector-fallback";
 import {
-  listSonicNeighbours,
+  listSonicNeighbours as listSonicNeighboursLive,
   readTrackDestination,
   sonicNeighbourScanStatement,
 } from "./track-page";
 import { sameAsUrls } from "../track-page";
-import { resolveTrackPageData } from "../../routes/-track-page-data";
+import { optionalSonicNeighbours, resolveTrackPageData } from "../../routes/-track-page-data";
 import { bestAlbumCoverUrl } from "../media";
+
+const isSonarTrackEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
+const searchSonar = vi.hoisted(() => vi.fn());
+
+vi.mock("./sonar", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sonar")>();
+
+  return { ...actual, isSonarTrackEnabled, searchSonar };
+});
+
+function listSonicNeighbours(trackId: string, limit?: number) {
+  return listSonicNeighboursLive(trackId, limit, { allowBoundedSql: true });
+}
 
 // THE ARCHIVE TRACK DESTINATION, over a real schema.
 //
@@ -82,6 +95,9 @@ async function makeEvidenceRich(trackId: string): Promise<void> {
 
 beforeEach(async () => {
   db = await createIntegrationDb();
+  isSonarTrackEnabled.mockReset();
+  isSonarTrackEnabled.mockResolvedValue(false);
+  searchSonar.mockReset();
 
   await seedAlbum(db, { id: "album-signal", name: "Signal Bloom", slug: "signal-bloom" });
 
@@ -503,6 +519,8 @@ describe("close in sound", () => {
   it("rides on the resolved page, so a reader can continue from one track to the next", async () => {
     await seedEmbedding(db, RICH, axisVector(0));
     await seedEmbedding(db, SOURCELESS, axisVector(3));
+    isSonarTrackEnabled.mockResolvedValue(true);
+    searchSonar.mockResolvedValue([{ id: SOURCELESS, score: 0.9 }]);
 
     const data = await resolveTrackPageData(RICH);
 
@@ -513,6 +531,14 @@ describe("close in sound", () => {
 });
 
 describe("the sentinels that are values, not nulls", () => {
+  it("keeps the resolved page when its optional neighbour read fails", async () => {
+    await expect(
+      optionalSonicNeighbours(RICH, async () => {
+        throw new Error("optional neighbour outage");
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("reports NO length for a row whose duration is the crawler's 0", async () => {
     // The crawler writes `recording.length ?? track.length ?? 0` and calls 0 "the honest
     // 'unknown'" (crawl.ts), so the DTO must hand back an absence rather than a zero the page and
