@@ -73,6 +73,7 @@ import {
 import {
   type HubOrderedPageShape,
   type HubPageAnchor,
+  type HubProjectedPageStart,
   hubAnchorExtractionQuery,
   hubClauseHash,
   hubClauseSetKey,
@@ -82,7 +83,6 @@ import {
   hubSeekPageQuery,
   isShallowHubPage,
   loadPersistedHubPageAnchors,
-  nearestHubPageAnchor,
   persistHubPageAnchors,
   persistedAnchorDecision,
   scheduleHubPageAnchorRefresh,
@@ -91,7 +91,7 @@ import { type CatalogueHubNumberedPage, CatalogueHubPageOutOfRangeError } from "
 import {
   readProjectedAggregateBuckets,
   readProjectedDefaultTrackTotal,
-  readProjectedTrackHubAnchors,
+  readProjectedTrackHubPageStart,
 } from "./public-projection-cutover";
 import {
   type Clause,
@@ -608,46 +608,54 @@ export type ProjectedTracksHubIdPageQueries = {
 };
 
 /**
- * The complete projected anchor document gives every numbered page an exact preceding boundary.
- * Split the one transition page at the NULL zone so both halves are true composite-index ranges.
- * The row-value bound intentionally excludes NULL release dates under SQL's three-valued logic;
- * `nullFill` reads that zone explicitly. The general OR-shaped legacy seek remains available only
- * to shadow/rollback callers.
+ * A projected page starts a bounded offset behind one exact row (or a zone head) that the current
+ * anchor document resolved for it. Split the one transition page at the NULL zone so both halves
+ * are true composite-index ranges. The row-value bound intentionally excludes NULL release dates
+ * under SQL's three-valued logic; `nullFill` reads that zone explicitly and skips nothing, because a
+ * non-NULL start that runs short has exhausted the non-NULL zone exactly at the zone head. The
+ * general OR-shaped legacy seek remains available only to shadow/rollback callers.
  */
 export function projectedTracksHubIdPageQueries(
-  page: number,
-  anchors: HubPageAnchor[],
+  start: HubProjectedPageStart,
   limit: number,
 ): ProjectedTracksHubIdPageQueries {
-  const anchor = nearestHubPageAnchor(page, anchors);
+  if (start.phase === "null") {
+    return {
+      primary:
+        start.after === null
+          ? {
+              args: [limit, start.offset],
+              sql: `select tracks.track_id as track_id
+                from tracks indexed by tracks_release_date_track_id_idx
+                where tracks.release_date is null
+                order by ${TRACKS_HUB_ORDER_BY}
+                limit ? offset ?`,
+            }
+          : {
+              args: [start.after.id, limit, start.offset],
+              sql: `select tracks.track_id as track_id
+                from tracks indexed by tracks_release_date_track_id_idx
+                where tracks.release_date is null and tracks.track_id < ?
+                order by ${TRACKS_HUB_ORDER_BY}
+                limit ? offset ?`,
+            },
+    };
+  }
 
-  if (page === 1) {
+  if (start.after === null) {
     return {
       primary: {
-        args: [limit],
+        args: [limit, start.offset],
         sql: `select tracks.track_id as track_id
           from tracks indexed by tracks_release_date_track_id_idx
           order by ${TRACKS_HUB_ORDER_BY}
-          limit ?`,
+          limit ? offset ?`,
       },
     };
   }
 
-  if (anchor === undefined) {
-    throw new Error("projected tracks hub anchors do not cover the requested page");
-  }
-
-  if (anchor.key === null) {
-    return {
-      primary: {
-        args: [anchor.id, limit],
-        sql: `select tracks.track_id as track_id
-          from tracks indexed by tracks_release_date_track_id_idx
-          where tracks.release_date is null and tracks.track_id < ?
-          order by ${TRACKS_HUB_ORDER_BY}
-          limit ?`,
-      },
-    };
+  if (start.after.key === null) {
+    throw new Error("projected tracks hub page start mixes a NULL row into the non-NULL phase");
   }
 
   return {
@@ -660,23 +668,22 @@ export function projectedTracksHubIdPageQueries(
         limit ?`,
     }),
     primary: {
-      args: [anchor.key, anchor.id, limit],
+      args: [start.after.key, start.after.id, limit, start.offset],
       sql: `select tracks.track_id as track_id
         from tracks indexed by tracks_release_date_track_id_idx
         where (tracks.release_date, tracks.track_id) < (?, ?)
         order by ${TRACKS_HUB_ORDER_BY}
-        limit ?`,
+        limit ? offset ?`,
     },
   };
 }
 
 async function readProjectedTracksHubIdPage(
   client: Pick<Client, "execute">,
-  page: number,
-  anchors: HubPageAnchor[],
+  start: HubProjectedPageStart,
   limit: number,
 ): Promise<Awaited<ReturnType<Client["execute"]>>> {
-  const queries = projectedTracksHubIdPageQueries(page, anchors, limit);
+  const queries = projectedTracksHubIdPageQueries(start, limit);
   const primary = await client.execute(queries.primary);
   const remaining = limit - primary.rows.length;
 
@@ -788,17 +795,17 @@ export async function listTracksHubPage(
   let total: number;
   let idsResult: Awaited<ReturnType<typeof db.execute>>;
 
-  const projectedAnchors =
+  const projectedStart =
     clauses.length === 0
-      ? await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, limit)
+      ? await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, limit, page)
       : undefined;
 
-  if (projectedAnchors !== undefined) {
-    total = projectedAnchors.total;
-    if (page > Math.max(Math.ceil(total / limit), 1)) {
+  if (projectedStart !== undefined) {
+    total = projectedStart.total;
+    if (projectedStart.start === undefined || page > Math.max(Math.ceil(total / limit), 1)) {
       throw new CatalogueHubPageOutOfRangeError();
     }
-    idsResult = await readProjectedTracksHubIdPage(db, page, projectedAnchors.anchors, limit);
+    idsResult = await readProjectedTracksHubIdPage(db, projectedStart.start, limit);
   } else if (isShallowHubPage(page, limit)) {
     // The bounded front of the pager stays on today's direct offset path; the total remains
     // page-independent and memoized.

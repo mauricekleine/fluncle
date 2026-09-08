@@ -289,11 +289,10 @@ describe("public shadow projections", () => {
     await seedProjectedTrack({ key: null, releaseDate: null, trackId: "track-null-z" });
 
     const transition = projectedTracksHubIdPageQueries(
-      2,
-      [{ id: "track-z", key: "2025-01-01", page: 2 }],
+      { after: { id: "track-z", key: "2025-01-01" }, offset: 0, phase: "non_null" },
       3,
     );
-    expect(transition.primary.args).toEqual(["2025-01-01", "track-z", 3]);
+    expect(transition.primary.args).toEqual(["2025-01-01", "track-z", 3, 0]);
     expect(transition.primary.sql).toContain(
       "where (tracks.release_date, tracks.track_id) < (?, ?)",
     );
@@ -306,8 +305,7 @@ describe("public shadow projections", () => {
     ]);
 
     const nullZone = projectedTracksHubIdPageQueries(
-      2,
-      [{ id: "track-null-z", key: null, page: 2 }],
+      { after: { id: "track-null-z", key: null }, offset: 0, phase: "null" },
       3,
     );
     expect((await db.execute(nullZone.primary)).rows.map((row) => row.track_id)).toEqual([
@@ -347,8 +345,7 @@ describe("public shadow projections", () => {
 
     const anchorId = "track-tie-128";
     const query = projectedTracksHubIdPageQueries(
-      2,
-      [{ id: anchorId, key: "2024-01-01", page: 2 }],
+      { after: { id: anchorId, key: "2024-01-01" }, offset: 0, phase: "non_null" },
       48,
     ).primary;
     const rows = await db.execute(query);

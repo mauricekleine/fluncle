@@ -27,10 +27,21 @@ import {
   type ProjectionAuditTarget,
 } from "./projection-audit";
 import {
+  ANCHOR_LEAF_META_VALID_SQL,
+  ANCHOR_LEAF_ROWS_SQL,
+  ANCHOR_SHARD_RANGE_SQL,
+  isCurrentProjectedTrackHubAnchorDocumentUsable,
   PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
-  readCurrentProjectedTrackHubAnchors,
 } from "./public-projection-cutover";
-import { type HubPageAnchor } from "./hub-page-anchors";
+import {
+  amendPublicAnchorDocument,
+  purgeAnchorOrderChangesStatement,
+} from "./public-anchor-amendments";
+import {
+  type HubOrderKey,
+  type HubPageAnchor,
+  serializeHubAnchorLeafMeta,
+} from "./hub-page-anchors";
 import { CRAWL_DUE_AUDIT_FENCE_KEY, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 import { TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE } from "./tracks-hub";
 
@@ -240,12 +251,10 @@ function publicFamily(
 }
 
 async function anchorsReady(client: ProjectionClient): Promise<boolean> {
-  return (
-    (await readCurrentProjectedTrackHubAnchors(
-      client,
-      TRACKS_HUB_ANCHOR_ADDRESS,
-      TRACKS_HUB_PAGE_SIZE,
-    )) !== undefined
+  return isCurrentProjectedTrackHubAnchorDocumentUsable(
+    client,
+    TRACKS_HUB_ANCHOR_ADDRESS,
+    TRACKS_HUB_PAGE_SIZE,
   );
 }
 
@@ -772,12 +781,12 @@ async function currentAnchorDocumentMatches(
   client: ProjectionClient,
   projection: AnchorProjectionState,
 ): Promise<boolean> {
-  const document = await readCurrentProjectedTrackHubAnchors(
+  const usable = await isCurrentProjectedTrackHubAnchorDocumentUsable(
     client,
     TRACKS_HUB_ANCHOR_ADDRESS,
     TRACKS_HUB_PAGE_SIZE,
   );
-  if (document === undefined) {
+  if (!usable) {
     return false;
   }
   const current = await client.execute({
@@ -1461,6 +1470,78 @@ async function recoverPublicAnchorState(
   return undefined;
 }
 
+/**
+ * Page-local maintenance: when the order epoch moved past the document, consume the order-change
+ * ledger against the published document of the current generation or against the built prefix of
+ * an in-flight build. Returns undefined whenever the ledger cannot carry the document to the
+ * current epoch, so the caller's existing recovery decides between resuming and rebuilding.
+ */
+async function amendPublicAnchorsFromLedger(
+  client: ProjectionClient,
+  options: {
+    persistedValue: unknown;
+    projectionState: AnchorProjectionState;
+    published: PublishedAnchorState | undefined;
+    restartKey: string;
+    saved: AnchorRebuildState | undefined;
+  },
+): Promise<{ complete: boolean; processed: number } | undefined> {
+  const { persistedValue, projectionState, published, restartKey, saved } = options;
+  const { generation, orderEpoch, total } = projectionState;
+  const restarting = await client.execute({
+    args: [restartKey],
+    sql: `select 1 from settings where key = ? limit 1`,
+  });
+  if (restarting.rows.length > 0) {
+    return undefined;
+  }
+  const input = {
+    currentEpoch: orderEpoch,
+    generation,
+    now: new Date().toISOString(),
+    sourceReady: {
+      args: [generation, orderEpoch, restartKey],
+      sql: PUBLIC_ANCHOR_SOURCE_READY_SQL,
+    },
+    total,
+  };
+  const publishedEpoch = Number(published?.order_epoch);
+  if (
+    published?.generation === generation &&
+    Number(published.anchor_format_version) === PUBLIC_ANCHOR_FORMAT_VERSION &&
+    Number.isSafeInteger(publishedEpoch) &&
+    publishedEpoch < orderEpoch &&
+    saved?.generation !== generation
+  ) {
+    return amendPublicAnchorDocument(client, {
+      ...input,
+      target: { kind: "published", orderEpoch: publishedEpoch },
+    });
+  }
+  if (
+    saved !== undefined &&
+    typeof persistedValue === "string" &&
+    saved.generation === generation &&
+    saved.orderEpoch < orderEpoch &&
+    published?.generation !== generation
+  ) {
+    return amendPublicAnchorDocument(client, {
+      ...input,
+      target: {
+        end: saved.cursorId === null ? null : { id: saved.cursorId, key: saved.cursorKey },
+        kind: "partial",
+        orderEpoch: saved.orderEpoch,
+        processed: saved.processed,
+        serialize: (epoch, processed) => JSON.stringify({ ...saved, orderEpoch: epoch, processed }),
+        serialized: persistedValue,
+        shard: saved.shard,
+        stateKey: PUBLIC_ANCHOR_REBUILD_KEY,
+      },
+    });
+  }
+  return undefined;
+}
+
 export async function advancePublicAnchors(
   client: ProjectionClient,
   limit: number,
@@ -1521,6 +1602,18 @@ export async function advancePublicAnchors(
   const publishedCurrent = publishedAnchorIsCurrent(published, projectionState);
   const persistedValue = persisted.rows[0]?.value;
   const saved = parseAnchorState(persistedValue);
+  if (!publishedCurrent) {
+    const amended = await amendPublicAnchorsFromLedger(client, {
+      persistedValue,
+      projectionState,
+      published,
+      restartKey,
+      saved,
+    });
+    if (amended !== undefined) {
+      return amended;
+    }
+  }
   const recovered = await recoverPublicAnchorState(client, {
     generation,
     limit,
@@ -1534,6 +1627,10 @@ export async function advancePublicAnchors(
     return recovered;
   }
   const state = anchorBuildState(saved, projectionState);
+  const freshBuild = state !== saved;
+  const leafAfter: HubOrderKey | null =
+    state.cursorId === null ? null : { id: state.cursorId, key: state.cursorKey };
+  const leafBase = state.processed;
   const page = await readTrackAnchorSourcePage(
     client,
     { id: state.cursorId, key: state.cursorKey, phase: state.phase },
@@ -1581,12 +1678,21 @@ export async function advancePublicAnchors(
   const shardClauseHash = `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:${generation}:${String(
     state.shard,
   ).padStart(10, "0")}`;
+  // The shard is a self-describing run: its fingerprint carries the row it starts behind, its row
+  // counts, and its base position, so later page-local maintenance can amend it in place.
+  const leafMeta = serializeHubAnchorLeafMeta({
+    after: leafAfter,
+    base: leafBase,
+    n: tracks.length,
+    nn: tracks.filter((track) => track.release_date !== null).length,
+    v: 1,
+  });
   const shardStatement = {
     args: [
       TRACKS_HUB_ANCHOR_ADDRESS.hub,
       shardClauseHash,
       JSON.stringify(anchors),
-      `${total}:${state.firstId ?? ""}:${state.shard}`,
+      leafMeta,
       now,
       generation,
       orderEpoch,
@@ -1606,8 +1712,12 @@ export async function advancePublicAnchors(
         select ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
         on conflict(key) do update set value = excluded.value`,
     };
+    // Every walked run is written, boundary rows or not, so the runs cover the whole order. A fresh
+    // build represents every order change at or below its epoch, so the ledger up to it is spent.
     await client.batch(
-      anchors.length > 0 ? [shardStatement, stateStatement] : [stateStatement],
+      freshBuild
+        ? [shardStatement, stateStatement, purgeAnchorOrderChangesStatement(orderEpoch)]
+        : [shardStatement, stateStatement],
       "write",
     );
     return { complete: false, processed: tracks.length };
@@ -1616,9 +1726,10 @@ export async function advancePublicAnchors(
     throw new Error("public anchor rebuild total changed without an order epoch change");
   }
   const statements: InStatement[] = [];
-  if (anchors.length > 0 || state.processed < TRACKS_HUB_PAGE_SIZE) {
+  if (anchors.length > 0 || tracks.length > 0 || state.processed < TRACKS_HUB_PAGE_SIZE) {
     statements.push(shardStatement);
   }
+  statements.push(purgeAnchorOrderChangesStatement(orderEpoch));
   const previousGeneration = published?.generation;
   const savedRollback = rollbackResult.rows[0]?.value;
   const rollbackGeneration = rollbackGenerationFor(previousGeneration, savedRollback, generation);
@@ -1986,6 +2097,16 @@ function openCutoverStatement(target: ProjectionCutover) {
               where shard.hub = validity.hub
                 and shard.clause_hash >= validity.clause_hash || ':' || validity.generation || ':'
                 and shard.clause_hash < validity.clause_hash || ':' || validity.generation || ':\uffff')
+            and ((
+              -- A leaf document proves itself from run metadata: every shard is a valid run and
+              -- the runs cover exactly the projected total.
+              not exists (select 1 from hub_page_anchors shard
+                where ${ANCHOR_SHARD_RANGE_SQL} and not ${ANCHOR_LEAF_META_VALID_SQL})
+              and (select coalesce(sum(${ANCHOR_LEAF_ROWS_SQL}), 0) from hub_page_anchors shard
+                where ${ANCHOR_SHARD_RANGE_SQL}) = aggregate.default_track_total
+            ) or (
+            not exists (select 1 from hub_page_anchors shard
+              where ${ANCHOR_SHARD_RANGE_SQL} and ${ANCHOR_LEAF_META_VALID_SQL})
             and not exists (select 1 from hub_page_anchors shard
               where shard.hub = validity.hub
                 and shard.clause_hash >= validity.clause_hash || ':' || validity.generation || ':'
@@ -2035,7 +2156,7 @@ function openCutoverStatement(target: ProjectionCutover) {
                 where shard.hub = validity.hub
                   and shard.clause_hash >= validity.clause_hash || ':' || validity.generation || ':'
                   and shard.clause_hash < validity.clause_hash || ':' || validity.generation || ':\uffff')
-                 = cast(aggregate.default_track_total / ? as integer) + 1)))
+                 = cast(aggregate.default_track_total / ? as integer) + 1)))))
       on conflict(key) do update set value = excluded.value`,
   };
 }
