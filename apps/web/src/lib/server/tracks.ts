@@ -25,6 +25,8 @@ import { readKeyHistogram } from "./key-histogram";
 import { logEvent } from "./log";
 import { readMixableArtistsProjection } from "./mixable-artists-projection";
 import { isSonarLogEnabled, isSonarMixEnabled, searchSonar, type SonarMatch } from "./sonar";
+import { hydrateRankedSonarMatches } from "./sonar-hydration";
+import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
 import { isLogId } from "../log-id";
 import { dedupeByRecordingIdentity } from "./track-match";
 import { FINDING_TRACK_OR_LOG_ID_CTE, TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
@@ -1481,8 +1483,8 @@ export async function getTrackNeighbors(track: {
  *
  * THE RANKING IS AN EXACT SCAN IN SQL — `order by vector_distance_cos(vector, ?) limit N`
  * with the probe bound as a RAW BLOB (`toVectorProbe`; see embedding.ts for why the
- * binding is the whole ballgame). It returns the ~6 winners, never the corpus: 100%
- * recall, one round trip, ~2.5 KB. The old shape — every stored JSON vector into the
+ * binding is the whole ballgame). It returns the ~6 winners from the shared deterministic
+ * candidate window, never the corpus, in one round trip. The old shape — every stored JSON vector into the
  * isolate, cosine there — hard-failed `turso dev`'s 10 MiB response cap at 460 embedded
  * findings and was on course to OOM the 128 MB Worker isolate in prod
  * (docs/local-database.md "Local is not production"). No ANN index: `libsql_vector_idx`
@@ -1496,9 +1498,10 @@ export async function getTrackNeighbors(track: {
  *
  * Ordering is deterministic: distance ascending, `track_id` ascending as the tiebreak.
  *
- * SCALE NOTE. The scan is unfiltered by design — "close in sound" is a GLOBAL nearest-
- * neighbour question, and the archive is one corpus. Ranking the satellite's native vector
- * column directly (the DB does the cosine in SQL) keeps it a plain linear blob scan. The
+ * SCALE NOTE. The scan is semantically global — "close in sound" is a nearest-neighbour question
+ * over the archive — but its deterministic candidate window is capped by the shared fallback
+ * contract. Ranking the satellite's native vector column directly (the DB does the cosine in SQL)
+ * keeps it a plain bounded linear blob scan. The
  * lever, when the archive gets large, is a btree pre-filter before the scan — `where galaxy_id = ?` — but
  * it would confine the row to the finding's own galaxy, which CHANGES what comes back, and
  * a precomputed neighbour table (the Ear pattern) is the durable answer. Both are product/
@@ -1563,17 +1566,28 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   // no-embedding guard; `vector_distance_cos` throws on a NULL probe). The join to
   // `track_embeddings` is INNER, which IS the old `embedding_blob is not null` filter: a
   // candidate with no vector never reaches the cosine, it simply is not in the satellite.
-  // Args bind in SQL-TEXT order: probe, then the excluded target, then the limit.
-  const rankedResult = await db.execute({
+  // Args bind in SQL-TEXT order: probe, then the excluded target, then the result limit.
+  const rankedResult = await executeVectorFallback(db, "sonar.fallback.log", {
     args: [probe, targetRow.track_id, limit],
-    sql: `select ${TRACK_SELECT},
-                 vector_distance_cos(emb.embedding_blob, ?) as dist
-          from ${FINDINGS_FROM}
-          join track_embeddings emb on emb.track_id = tracks.track_id
-          where findings.log_id is not null
-            and tracks.track_id != ?
-          order by dist asc, tracks.track_id asc
-          limit ?`,
+    sql: `with winners(track_id, dist) as materialized (
+            select track_id, vector_distance_cos(embedding_blob, ?) as dist
+            from (
+              select tracks.track_id, emb.embedding_blob
+              from ${FINDINGS_FROM}
+              join track_embeddings emb on emb.track_id = tracks.track_id
+              where findings.log_id is not null
+                and tracks.track_id != ?
+              order by tracks.track_id
+              ${vectorFallbackCandidateLimitSql()}
+            )
+            order by dist asc, track_id asc
+            limit ?
+          )
+          select ${TRACK_SELECT}
+          from winners
+          cross join tracks on tracks.track_id = winners.track_id
+          cross join findings on findings.track_id = tracks.track_id
+          order by winners.dist asc, winners.track_id asc`,
   });
 
   return typedRows<TrackRow>(rankedResult.rows).map((row) => toTrackListItem(row));
@@ -1594,19 +1608,22 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
  * log_id since sonar's last refresh) is dropped, never faked.
  */
 async function hydrateSimilarFindings(matches: SonarMatch[]): Promise<TrackListItem[]> {
-  const ids = matches.map((match) => match.id);
-  const placeholders = ids.map(() => "?").join(", ");
-  const db = await getDb();
-  const result = await db.execute({
-    args: ids,
-    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
-          where tracks.track_id in (${placeholders}) and findings.log_id is not null`,
-  });
-  const byId = new Map(
-    typedRows<TrackRow>(result.rows).map((row) => [row.track_id, toTrackListItem(row)]),
-  );
+  return hydrateRankedSonarMatches(
+    matches,
+    async (ids) => {
+      const placeholders = ids.map(() => "?").join(", ");
+      const db = await getDb();
+      const result = await db.execute({
+        args: ids,
+        sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+              where tracks.track_id in (${placeholders}) and findings.log_id is not null`,
+      });
 
-  return ids.map((id) => byId.get(id)).filter((item): item is TrackListItem => item !== undefined);
+      return typedRows<TrackRow>(result.rows);
+    },
+    (row) => row.track_id,
+    (row) => toTrackListItem(row),
+  );
 }
 
 // ── `/mix`: the catalogue-aware rail ─────────────────────────────────────────
@@ -1931,7 +1948,7 @@ export async function getMixableTracks(
       : "";
 
   const distanceSql = probe ? `vector_distance_cos(vec, ?)` : `null`;
-  const candidateResult = await db.execute({
+  const candidateStatement = {
     // SQL-TEXT order decides the bind order, and the probe's `?` is in the OUTER select —
     // which is textually BEFORE the inner subquery — so the probe binds FIRST, then the
     // inner WHERE's keys, target, and exclusions in the order they appear. (Getting this
@@ -1960,8 +1977,13 @@ export async function getMixableTracks(
             left join track_embeddings emb on emb.track_id = tracks.track_id
             where tracks.key in (${keyClause})
               and tracks.track_id != ? ${logIdClause} ${trackIdClause}
+            order by tracks.rowid
+            ${vectorFallbackCandidateLimitSql()}
           )`,
-  });
+  };
+  const candidateResult = probe
+    ? await executeVectorFallback(db, "sonar.fallback.mix", candidateStatement)
+    : await db.execute(candidateStatement);
 
   const candidateRows = typedRows<MixCandidateRow>(candidateResult.rows);
   const candidates: RankCandidate<string>[] = candidateRows.map((row) => ({

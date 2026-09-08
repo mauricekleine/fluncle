@@ -684,18 +684,27 @@ pub fn manifest_is_pending(manifest: &Manifest) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifact::{Contract, ValidatedBatch, ValidatedEvent, ValidatedOperation};
+    use crate::artifact::{
+        canonical_payload, event_digest, extend_digest, ChangeEvent, ChangePage, Contract,
+        ValidatedBatch, ValidatedEvent, ValidatedOperation, EMPTY_DIGEST,
+    };
     use crate::decode::BLOB_LEN;
     use crate::index::{Index, TrackMeta};
     use crate::replica::{SourceRevision, SourceTrack};
+    use crate::server::freshness_metrics;
     use crate::state::PendingAck;
+    use axum::extract::State as AxumState;
     use axum::routing::{get, post};
     use axum::{Json, Router};
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
     use libsql::{params, Builder};
     use serde_json::{json, Value};
     use std::path::Path;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+    use std::sync::Mutex;
     use tempfile::tempdir;
+    use tokio::sync::Notify;
 
     fn test_blob(seed: f32) -> Vec<u8> {
         let mut bytes = vec![0_u8; BLOB_LEN];
@@ -787,6 +796,179 @@ mod tests {
             .await
             .unwrap();
         rows.next().await.unwrap().unwrap().get(0).unwrap()
+    }
+
+    fn change_event(track: &SourceTrack) -> ChangeEvent {
+        let payload_json = canonical_payload(&track.meta).unwrap();
+        let mut event = ChangeEvent {
+            created_at: "2030-01-02T03:04:05.000Z".into(),
+            format_registered: true,
+            format_version: 1,
+            operation: "upsert".into(),
+            payload_blob_base64: Some(STANDARD.encode(&track.blob)),
+            payload_digest: String::new(),
+            payload_json,
+            producer: "test".into(),
+            revision: track.revision,
+            seq: track.revision,
+            stream: STREAM.into(),
+            stream_version: 1,
+            subject_id: track.id.clone(),
+            subject_type: "track".into(),
+            supported_by_consumer: true,
+        };
+        event.payload_digest = event_digest(&event, &track.blob).unwrap();
+        event
+    }
+
+    async fn append_replica_burst(path: &Path, tracks: &[SourceTrack]) {
+        let db = Builder::new_local(path).build().await.unwrap();
+        let conn = db.connect().unwrap();
+
+        for track in tracks {
+            conn.execute(
+                "insert into tracks(track_id,bpm,spotify_uri) values(?,174.0,'spotify:track:test')",
+                [track.id.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "insert into track_embeddings(track_id,embedding_blob) values(?,?)",
+                params![track.id.clone(), track.blob.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "insert into artifact_change_revisions(stream,stream_version,subject_type,subject_id,revision) values('sonar.track',1,'track',?,?)",
+                params![track.id.clone(), i64::try_from(track.revision).unwrap()],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "insert into artifact_changes(body) values(?)",
+                [format!("event-{}", track.revision)],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    struct FresheningApi {
+        ack_release: Notify,
+        ack_started: Notify,
+        block_ack: AtomicBool,
+        block_changes: AtomicBool,
+        changes_release: Notify,
+        changes_started: Notify,
+        checkpoint: AtomicU64,
+        events: Mutex<Vec<ChangeEvent>>,
+        head: AtomicU64,
+    }
+
+    impl FresheningApi {
+        fn new(checkpoint: u64) -> Self {
+            Self {
+                ack_release: Notify::new(),
+                ack_started: Notify::new(),
+                block_ack: AtomicBool::new(true),
+                block_changes: AtomicBool::new(true),
+                changes_release: Notify::new(),
+                changes_started: Notify::new(),
+                checkpoint: AtomicU64::new(checkpoint),
+                events: Mutex::new(Vec::new()),
+                head: AtomicU64::new(checkpoint),
+            }
+        }
+    }
+
+    async fn freshening_status(AxumState(api): AxumState<Arc<FresheningApi>>) -> Json<Value> {
+        let checkpoint = api.checkpoint.load(Ordering::SeqCst);
+        let head = api.head.load(Ordering::SeqCst);
+        let earliest = (head > checkpoint).then_some(checkpoint + 1);
+
+        Json(json!({
+            "consumer": response_status("active", Some(checkpoint), earliest, head, Vec::new()),
+            "ok": true
+        }))
+    }
+
+    async fn freshening_changes(AxumState(api): AxumState<Arc<FresheningApi>>) -> Json<ChangePage> {
+        if api.block_changes.swap(false, Ordering::SeqCst) {
+            api.changes_started.notify_one();
+            api.changes_release.notified().await;
+        }
+
+        let checkpoint = api.checkpoint.load(Ordering::SeqCst);
+        let head = api.head.load(Ordering::SeqCst);
+        let events = api
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.seq > checkpoint)
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>();
+        let through = events.last().map_or(checkpoint, |event| event.seq);
+        let digests = events
+            .iter()
+            .map(|event| event.payload_digest.clone())
+            .collect::<Vec<_>>();
+
+        Json(ChangePage {
+            batch_digest: extend_digest(EMPTY_DIGEST, &digests).unwrap(),
+            consumer_id: "sonar-test".into(),
+            events,
+            from_seq: checkpoint,
+            has_more: through < head,
+            head_seq: head,
+            ok: true,
+            through_seq: through,
+        })
+    }
+
+    async fn freshening_ack(
+        AxumState(api): AxumState<Arc<FresheningApi>>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        if api.block_ack.load(Ordering::SeqCst) {
+            api.ack_started.notify_one();
+            api.ack_release.notified().await;
+        }
+
+        let through = body["throughSeq"].as_u64().unwrap();
+        api.checkpoint.fetch_max(through, Ordering::SeqCst);
+        let checkpoint = api.checkpoint.load(Ordering::SeqCst);
+        let head = api.head.load(Ordering::SeqCst);
+
+        Json(json!({
+            "consumer": response_status("active", Some(checkpoint), None, head, Vec::new()),
+            "ok": true
+        }))
+    }
+
+    async fn freshening_api(
+        checkpoint: u64,
+    ) -> (String, Arc<FresheningApi>, tokio::task::JoinHandle<()>) {
+        let api = Arc::new(FresheningApi::new(checkpoint));
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test",
+                get(freshening_status),
+            )
+            .route("/api/v1/admin/artifacts/changes", get(freshening_changes))
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test/checkpoint",
+                post(freshening_ack),
+            )
+            .with_state(Arc::clone(&api));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        (format!("http://{address}"), api, task)
     }
 
     fn response_status(
@@ -1169,6 +1351,141 @@ mod tests {
             state_changed_at: "2030-01-01T00:00:00.000Z".into(),
             updated_at: "2030-01-01T00:00:00.000Z".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn write_burst_interrupted_mid_delta_recovers_freshness_within_four_seconds() {
+        const RECOVERY_BOUND: Duration = Duration::from_secs(4);
+        const METRIC_SETTLE: Duration = Duration::from_millis(1_100);
+
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("state.db");
+        let replica_path = dir.path().join("replica.db");
+        let baseline = test_track("baseline", 1, 1.0);
+        let store = StateStore::open(&state_path).await.unwrap();
+        let stored = store
+            .replace_from_replica(
+                std::slice::from_ref(&baseline),
+                &[SourceRevision {
+                    id: baseline.id.clone(),
+                    revision: baseline.revision,
+                }],
+                &[],
+                1,
+                1,
+                now_unix(),
+            )
+            .await
+            .unwrap();
+        store.mark_activated(&stored.manifest).await.unwrap();
+        let replica = local_replica(&replica_path, std::slice::from_ref(&baseline), 1, false).await;
+        let app = Arc::new(AppState::from_snapshot(published(&stored), "secret".into()));
+        let (base_url, api, server) = freshening_api(1).await;
+        let consumer = Arc::new(
+            Consumer::new(
+                ArtifactClient::new(base_url.clone(), "test", "sonar-test".into()).unwrap(),
+                replica,
+                store,
+                2,
+                10,
+            )
+            .unwrap(),
+        );
+        let running_consumer = Arc::clone(&consumer);
+        let running_app = Arc::clone(&app);
+        let consuming =
+            tokio::spawn(async move { running_consumer.consume_once(&running_app).await });
+
+        tokio::time::timeout(RECOVERY_BOUND, api.changes_started.notified())
+            .await
+            .expect("consumer did not enter the delta read");
+        let burst = (2..=6)
+            .map(|revision| test_track(&format!("burst-{revision}"), revision, revision as f32))
+            .collect::<Vec<_>>();
+        append_replica_burst(&replica_path, &burst).await;
+        *api.events.lock().unwrap() = burst.iter().map(change_event).collect();
+        api.head.store(6, Ordering::SeqCst);
+        api.changes_release.notify_one();
+
+        tokio::time::timeout(RECOVERY_BOUND, api.ack_started.notified())
+            .await
+            .expect("consumer did not reach the mid-delta acknowledgement");
+        let interrupted_snapshot = app.snapshot.load_full();
+        let (backlog_before, _) = freshness_metrics(
+            app.head_seq.load(Ordering::Relaxed),
+            &interrupted_snapshot,
+            now_unix(),
+        );
+        assert_eq!(interrupted_snapshot.checkpoint, 3);
+        assert_eq!(backlog_before, 3);
+        assert!(interrupted_snapshot.pending_ack);
+        assert!(consumer.state.manifest().await.unwrap().pending.is_some());
+
+        consuming.abort();
+        assert!(consuming.await.unwrap_err().is_cancelled());
+        tokio::time::sleep(METRIC_SETTLE).await;
+        let (_, age_before) = freshness_metrics(
+            app.head_seq.load(Ordering::Relaxed),
+            &app.snapshot.load_full(),
+            now_unix(),
+        );
+        assert!(age_before >= 1);
+
+        let recovery_started = Instant::now();
+        api.block_ack.store(false, Ordering::SeqCst);
+        api.ack_release.notify_waiters();
+        let restarted = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            Replica::open_local_test_source(&replica_path)
+                .await
+                .unwrap(),
+            StateStore::open(&state_path).await.unwrap(),
+            2,
+            10,
+        )
+        .unwrap();
+        let (recovered, activation, corrupt, sync) = restarted.initial_snapshot().await.unwrap();
+        assert_eq!(activation, None);
+        assert!(!corrupt);
+        assert!(sync.is_none());
+        let recovered_app = AppState::from_snapshot(published(&recovered), "secret".into());
+
+        tokio::time::timeout(RECOVERY_BOUND - METRIC_SETTLE, async {
+            loop {
+                restarted.consume_once(&recovered_app).await.unwrap();
+                let snapshot = recovered_app.snapshot.load_full();
+                let (backlog, _) = freshness_metrics(
+                    recovered_app.head_seq.load(Ordering::Relaxed),
+                    &snapshot,
+                    now_unix(),
+                );
+                if backlog == 0 {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("delta backlog did not drain within the recovery bound");
+
+        tokio::time::sleep(METRIC_SETTLE).await;
+        let recovered_snapshot = recovered_app.snapshot.load_full();
+        let (backlog_after, age_after) = freshness_metrics(
+            recovered_app.head_seq.load(Ordering::Relaxed),
+            &recovered_snapshot,
+            now_unix(),
+        );
+        let recovery_ms = recovery_started.elapsed().as_millis();
+        assert!(recovery_started.elapsed() <= RECOVERY_BOUND);
+        assert_eq!(recovered_snapshot.checkpoint, 6);
+        assert_eq!(recovered_snapshot.tracks.len(), 6);
+        assert_eq!(backlog_after, 0);
+        assert_eq!(age_after, 0);
+        eprintln!(
+            "freshness recovery: backlog {backlog_before}->0, age {age_before}->0s, recovered in {recovery_ms}ms (bound {}ms)",
+            RECOVERY_BOUND.as_millis()
+        );
+
+        server.abort();
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ import { ApiError } from "./spotify";
 export const ARTIFACT_CHANGE_READ_LIMIT = 100;
 export const ARTIFACT_CHANGE_MAX_READ_LIMIT = 500;
 export const ARTIFACT_COMPACTION_MAX_LIMIT = 1_000;
+export const ARTIFACT_CONSUMER_PURGE_CANDIDATE_MAX_LIMIT = 200;
 export const ARTIFACT_SNAPSHOT_LIMIT = 100;
 export const ARTIFACT_SNAPSHOT_MAX_LIMIT = 200;
 export const ARTIFACT_VECTOR_BYTES = 1024 * Float32Array.BYTES_PER_ELEMENT;
@@ -23,6 +24,7 @@ const CONSUMER_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const PRODUCER_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const SUBJECT_ID_MAX_CHARS = 1_024;
 const UINT32_MAX = 4_294_967_295;
+const REVISION_INDEPENDENT_DIGEST_PREFIX = "v2:";
 
 export type ArtifactOperation = "delete" | "upsert";
 export type ArtifactConsumerState = "active" | "inactive" | "rebuilding";
@@ -147,6 +149,22 @@ export type ArtifactChangeInsertResult = {
   inserted: boolean;
 };
 
+export type PreparedArtifactChange = {
+  contentDigest: string;
+  event: ValidatedArtifactChange;
+  legacyContentDigest: string;
+};
+
+export type PreparedArtifactChangeMaterial = {
+  contentDigest: string;
+  event: Omit<ValidatedArtifactChange, "revision">;
+};
+
+export type ArtifactChangeTransactionResult = {
+  inserted: boolean;
+  row: ArtifactChangeRow;
+};
+
 export type ArtifactChangePage = {
   batchDigest: string;
   consumerId: string;
@@ -217,10 +235,26 @@ export type ArtifactCompactionResult = {
   reason: "compacted" | "empty" | "no_safe_barrier";
 };
 
+export type ArtifactConsumerPurgeCandidate = {
+  checkpointCount: number;
+  consumerId: string;
+  contractCount: number;
+  registeredAt: string;
+  stateChangedAt: string;
+  updatedAt: string;
+};
+
+export type ArtifactConsumerPurgeCandidatePage = {
+  candidates: ArtifactConsumerPurgeCandidate[];
+  hasMore: boolean;
+  nextCursor: string | null;
+  scannedCount: number;
+};
+
 type ArtifactClient = Pick<Client, "batch" | "execute" | "transaction">;
 type ArtifactReadClient = Pick<Client, "batch" | "execute">;
 
-type ArtifactChangeRow = {
+export type ArtifactChangeRow = {
   created_at: string;
   format_version: bigint | number;
   operation: ArtifactOperation;
@@ -253,6 +287,16 @@ type ArtifactConsumerRow = {
   consumer_id: string;
   registered_at: string;
   snapshot_seq: bigint | number | null;
+  state: ArtifactConsumerState;
+  state_changed_at: string;
+  updated_at: string;
+};
+
+type ArtifactConsumerPurgeCandidateRow = {
+  checkpoint_count: bigint | number;
+  consumer_id: string;
+  contract_count: bigint | number;
+  registered_at: string;
   state: ArtifactConsumerState;
   state_changed_at: string;
   updated_at: string;
@@ -314,7 +358,7 @@ type StoredArtifactContract = {
   streamVersion: number;
 };
 
-type ValidatedArtifactChange = ArtifactContract & {
+export type ValidatedArtifactChange = ArtifactContract & {
   createdAt: string;
   operation: ArtifactOperation;
   payloadBlob: Uint8Array | null;
@@ -492,6 +536,23 @@ async function immutableContentDigest(event: ValidatedArtifactChange): Promise<s
     },
     event.payloadBlob,
   );
+}
+
+async function revisionIndependentContentDigest(
+  event: Omit<ValidatedArtifactChange, "revision">,
+): Promise<string> {
+  return `${REVISION_INDEPENDENT_DIGEST_PREFIX}${await payloadDigest(
+    {
+      formatVersion: event.formatVersion,
+      operation: event.operation,
+      payloadJson: event.payloadJson,
+      stream: event.stream,
+      streamVersion: event.streamVersion,
+      subjectId: event.subjectId,
+      subjectType: event.subjectType,
+    },
+    event.payloadBlob,
+  )}`;
 }
 
 async function extendDigest(previous: string, itemDigests: readonly string[]): Promise<string> {
@@ -759,20 +820,22 @@ function validateArtifactChange(input: ArtifactChangeInput): ValidatedArtifactCh
 }
 
 function inBlob(value: Uint8Array | null): InValue {
-  if (value === null) {
-    return null;
-  }
-
-  return Uint8Array.from(value);
+  return value;
 }
 
-/**
- * Build only the validated event-body statement. Source writers must call
- * insertArtifactChangeInTransaction so the durable retry receipt lands in the same transaction.
- */
-export function buildArtifactChangeInsertStatement(input: ArtifactChangeInput): InStatement {
+export async function prepareArtifactChange(
+  input: ArtifactChangeInput,
+): Promise<PreparedArtifactChange> {
   const event = validateArtifactChange(input);
 
+  return {
+    contentDigest: await revisionIndependentContentDigest(event),
+    event,
+    legacyContentDigest: await immutableContentDigest(event),
+  };
+}
+
+function buildPreparedArtifactChangeInsertStatement(event: ValidatedArtifactChange): InStatement {
   return {
     args: [
       event.createdAt,
@@ -795,6 +858,14 @@ export function buildArtifactChangeInsertStatement(input: ArtifactChangeInput): 
       returning created_at, format_version, operation, payload_blob, payload_json, producer,
                 revision, seq, stream, stream_version, subject_id, subject_type`,
   };
+}
+
+/**
+ * Build only the validated event-body statement. Source writers must call
+ * insertArtifactChangeInTransaction so the durable retry receipt lands in the same transaction.
+ */
+export function buildArtifactChangeInsertStatement(input: ArtifactChangeInput): InStatement {
+  return buildPreparedArtifactChangeInsertStatement(validateArtifactChange(input));
 }
 
 export function buildSonarTrackArtifactChange(input: {
@@ -843,7 +914,7 @@ export function buildDeviceArtifactChange(input: {
 }
 
 function artifactRowBlob(row: ArtifactChangeRow): Uint8Array | null {
-  return row.payload_blob === null ? null : ownedBytes(row.payload_blob);
+  return row.payload_blob === null ? null : bytesOf(row.payload_blob);
 }
 
 function exactEventMatches(row: ArtifactChangeRow, event: ValidatedArtifactChange): boolean {
@@ -999,10 +1070,17 @@ async function latestArtifactRevisionInTransaction(
  */
 export async function insertArtifactChangeInTransaction(
   client: Pick<Client, "execute">,
-  input: ArtifactChangeInput,
-): Promise<ArtifactChangeInsertResult> {
-  const validated = validateArtifactChange(input);
-  const contentDigest = await immutableContentDigest(validated);
+  prepared: PreparedArtifactChange,
+): Promise<ArtifactChangeTransactionResult> {
+  return insertPreparedArtifactChangeInTransaction(client, prepared);
+}
+
+async function insertPreparedArtifactChangeInTransaction(
+  client: Pick<Client, "execute">,
+  prepared: PreparedArtifactChange,
+  knownLatestRevision?: number,
+): Promise<ArtifactChangeTransactionResult> {
+  const { contentDigest, event: validated, legacyContentDigest } = prepared;
   const revisionResult = await client.execute({
     args: [
       validated.stream,
@@ -1019,7 +1097,10 @@ export async function insertArtifactChangeInTransaction(
   const revision = typedRow<ArtifactRevisionRow>(revisionResult.rows);
 
   if (revision !== undefined) {
-    if (revision.content_digest !== contentDigest) {
+    if (
+      revision.content_digest !== contentDigest &&
+      revision.content_digest !== legacyContentDigest
+    ) {
       apiError(
         "artifact_revision_conflict",
         "Artifact revision already exists with different immutable content",
@@ -1028,8 +1109,8 @@ export async function insertArtifactChangeInTransaction(
     }
 
     return {
-      event: await eventFromRow(revisionEvent(revision, validated), []),
       inserted: false,
+      row: revisionEvent(revision, validated),
     };
   }
 
@@ -1058,10 +1139,11 @@ export async function insertArtifactChangeInTransaction(
     }
 
     await insertRevisionReceipt(client, validated, Number(existing.seq), contentDigest);
-    return { event: await eventFromRow(existing, []), inserted: false };
+    return { inserted: false, row: existing };
   }
 
-  const latest = await latestArtifactRevisionInTransaction(client, validated);
+  const latest =
+    knownLatestRevision ?? (await latestArtifactRevisionInTransaction(client, validated));
 
   if (validated.revision <= latest) {
     apiError(
@@ -1071,7 +1153,9 @@ export async function insertArtifactChangeInTransaction(
     );
   }
 
-  const insertedResult = await client.execute(buildArtifactChangeInsertStatement(input));
+  const insertedResult = await client.execute(
+    buildPreparedArtifactChangeInsertStatement(validated),
+  );
   const inserted = typedRow<ArtifactChangeRow>(insertedResult.rows);
 
   if (inserted === undefined) {
@@ -1079,7 +1163,7 @@ export async function insertArtifactChangeInTransaction(
   }
 
   await insertRevisionReceipt(client, validated, Number(inserted.seq), contentDigest);
-  return { event: await eventFromRow(inserted, []), inserted: true };
+  return { inserted: true, row: inserted };
 }
 
 /** Open a write transaction and append one material revision atomically. */
@@ -1087,15 +1171,21 @@ export async function insertArtifactChange(
   client: ArtifactClient,
   input: ArtifactChangeInput,
 ): Promise<ArtifactChangeInsertResult> {
+  const prepared = await prepareArtifactChange(input);
   const transaction = await client.transaction("write");
+  let transactionResult: ArtifactChangeTransactionResult;
 
   try {
-    const result = await insertArtifactChangeInTransaction(transaction, input);
+    transactionResult = await insertArtifactChangeInTransaction(transaction, prepared);
     await transaction.commit();
-    return result;
   } finally {
     transaction.close();
   }
+
+  return {
+    event: await eventFromRow(transactionResult.row, []),
+    inserted: transactionResult.inserted,
+  };
 }
 
 function assertConsumerId(consumerId: string): void {
@@ -1519,30 +1609,63 @@ function sonarTrackSourceProjection(row: Record<string, unknown>): {
   };
 }
 
+export async function prepareCurrentSonarTrackArtifactChange(input: {
+  anchored: boolean;
+  bpm: unknown;
+  certified: boolean;
+  createdAt?: string;
+  dismissed: boolean;
+  durationMs: unknown;
+  hasFinding: boolean;
+  isDuplicate: boolean;
+  key: string | null;
+  nearestFindingScore: unknown;
+  producer: string;
+  trackId: string;
+  vector: ArrayBuffer | ArrayBufferView | null;
+}): Promise<PreparedArtifactChangeMaterial> {
+  const validated = validateArtifactChange({
+    ...artifactContract("sonar.track"),
+    createdAt: input.createdAt,
+    operation: input.vector === null ? "delete" : "upsert",
+    payload:
+      input.vector === null
+        ? {}
+        : {
+            anchored: input.anchored,
+            bpm: optionalF32(input.bpm),
+            certified: input.certified,
+            dismissed: input.dismissed,
+            durationMs: optionalU32(input.durationMs),
+            hasFinding: input.hasFinding,
+            isDuplicate: input.isDuplicate,
+            key: input.key,
+            nearestFindingScore: optionalF32(input.nearestFindingScore),
+          },
+    payloadBlob: input.vector,
+    producer: input.producer,
+    revision: 1,
+    subjectId: input.trackId,
+    subjectType: "track",
+  });
+  const { revision: _revision, ...event } = validated;
+
+  return {
+    contentDigest: await revisionIndependentContentDigest(event),
+    event,
+  };
+}
+
 /**
- * Append the exact current Sonar projection after its source mutation in a caller-owned write
- * transaction. The write transaction serializes revision allocation with every other producer;
- * compacted receipts participate in the same maximum as live event bodies.
+ * Append one prepared Sonar projection in a caller-owned write transaction. The write transaction
+ * serializes revision allocation with every other producer; compacted receipts participate in the
+ * same maximum as live event bodies.
  */
 export async function insertCurrentSonarTrackArtifactChangeInTransaction(
   client: Pick<Client, "execute">,
-  input: { createdAt?: string; producer: string; trackId: string },
-): Promise<ArtifactChangeInsertResult> {
-  const sourceResult = await client.execute({
-    args: [input.trackId],
-    sql: `select ${SONAR_TRACK_SOURCE_COLUMNS}
-      from tracks t
-      left join track_embeddings e on e.track_id = t.track_id
-      left join findings f on f.track_id = t.track_id
-      where t.track_id = ?
-      limit 1`,
-  });
-  const projection = sonarTrackSourceProjection(
-    typedRow<Record<string, unknown>>(sourceResult.rows) ?? {},
-  );
-  const contract = artifactContract("sonar.track");
-  const subject = { ...contract, subjectId: input.trackId, subjectType: "track" };
-  const latestRevision = await latestArtifactRevisionInTransaction(client, subject);
+  prepared: PreparedArtifactChangeMaterial,
+): Promise<ArtifactChangeTransactionResult> {
+  const latestRevision = await latestArtifactRevisionInTransaction(client, prepared.event);
 
   if (!Number.isSafeInteger(latestRevision) || latestRevision >= Number.MAX_SAFE_INTEGER) {
     apiError(
@@ -1552,15 +1675,15 @@ export async function insertCurrentSonarTrackArtifactChangeInTransaction(
     );
   }
 
-  return insertArtifactChangeInTransaction(client, {
-    ...subject,
-    createdAt: input.createdAt,
-    operation: projection === null ? "delete" : "upsert",
-    payload: projection?.payload ?? {},
-    payloadBlob: projection?.payloadBlob ?? null,
-    producer: input.producer,
-    revision: latestRevision + 1,
-  });
+  return insertPreparedArtifactChangeInTransaction(
+    client,
+    {
+      contentDigest: prepared.contentDigest,
+      event: { ...prepared.event, revision: latestRevision + 1 },
+      legacyContentDigest: prepared.contentDigest,
+    },
+    latestRevision,
+  );
 }
 
 async function snapshotMaterial(
@@ -2146,6 +2269,73 @@ export async function inactivateArtifactConsumer(
   }
 
   return getArtifactConsumerStatus(client, consumerId);
+}
+
+export function buildArtifactConsumerPurgeCandidateStatement(
+  input: {
+    cursor?: string;
+    limit?: number;
+  } = {},
+): { args: InValue[]; sql: string } {
+  const cursor = input.cursor ?? "";
+  const limit = input.limit ?? ARTIFACT_CONSUMER_PURGE_CANDIDATE_MAX_LIMIT;
+
+  if (cursor !== "") {
+    assertConsumerId(cursor);
+  }
+  assertLimit(limit, ARTIFACT_CONSUMER_PURGE_CANDIDATE_MAX_LIMIT, "Artifact consumer scan");
+
+  return {
+    args: [cursor, limit + 1],
+    sql: `select c.consumer_id, c.registered_at, c.state, c.state_changed_at, c.updated_at,
+        (select count(*) from artifact_change_checkpoints checkpoint
+          where checkpoint.consumer_id = c.consumer_id) as checkpoint_count,
+        (select count(*) from artifact_change_consumer_contracts contract
+          where contract.consumer_id = c.consumer_id) as contract_count
+      from artifact_change_consumers c
+      where c.consumer_id > ?
+      order by c.consumer_id
+      limit ?`,
+  };
+}
+
+/**
+ * List one primary-key-keyset page of inactive consumer identities old enough for an operator to
+ * consider purging. This is deliberately read-only: no runtime route or delete operation exists.
+ */
+export async function listArtifactConsumerPurgeCandidates(
+  client: Pick<Client, "execute">,
+  input: { cursor?: string; inactiveBefore: string; limit?: number },
+): Promise<ArtifactConsumerPurgeCandidatePage> {
+  const inactiveBeforeEpoch = Date.parse(input.inactiveBefore);
+
+  if (!Number.isFinite(inactiveBeforeEpoch)) {
+    apiError("invalid_artifact_retention_fence", "Inactive-before must be an ISO timestamp");
+  }
+
+  const inactiveBefore = new Date(inactiveBeforeEpoch).toISOString();
+  const limit = input.limit ?? ARTIFACT_CONSUMER_PURGE_CANDIDATE_MAX_LIMIT;
+  const result = await client.execute(
+    buildArtifactConsumerPurgeCandidateStatement({ cursor: input.cursor, limit }),
+  );
+  const rows = typedRows<ArtifactConsumerPurgeCandidateRow>(result.rows);
+  const selected = rows.slice(0, limit);
+
+  return {
+    candidates: selected
+      .filter((row) => row.state === "inactive" && row.state_changed_at < inactiveBefore)
+      .map((row) => ({
+        checkpointCount: Number(row.checkpoint_count),
+        consumerId: row.consumer_id,
+        contractCount: Number(row.contract_count),
+        registeredAt: row.registered_at,
+        stateChangedAt: row.state_changed_at,
+        updatedAt: row.updated_at,
+      })),
+    hasMore: rows.length > limit,
+    nextCursor: selected.at(-1)?.consumer_id ?? null,
+    scannedCount: selected.length,
+  };
 }
 
 async function compactionBarrier(client: Pick<Client, "execute">): Promise<number | null> {

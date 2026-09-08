@@ -108,7 +108,7 @@ function boundedDuration(value: number): number {
   return Math.max(0, Math.round(value));
 }
 
-function isDatabaseBusy(error: unknown): boolean {
+export function isDatabaseBusy(error: unknown): boolean {
   return (
     typeof error === "object" && error !== null && "code" in error && error.code === "SQLITE_BUSY"
   );
