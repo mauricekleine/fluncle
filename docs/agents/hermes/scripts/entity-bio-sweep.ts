@@ -83,6 +83,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
+import {
+  databaseAdmissionYieldSummary,
+  runDatabaseAdmissionPhase,
+} from "./database-admission-phase";
 
 // ---------------------------------------------------------------------------
 // Config — a SMALL bounded batch: each bio burns claude subscription quota, so keep
@@ -334,6 +338,23 @@ type DescribeResult = {
   gateBypassed?: boolean;
   outcome: BioOutcome;
 };
+
+type PhasedBioRead = Readonly<{
+  exhausted: QueueRow[];
+  queueLength: number;
+  work: ReadonlyArray<Readonly<{ draft: BioDraft | null; row: QueueRow }>>;
+}>;
+
+type PhasedBioWrite = Readonly<{
+  authored: AuthoredBio;
+  finalAttempt: boolean;
+  slug: string;
+}>;
+
+type PhasedBioWriteResult = Readonly<{
+  costWriteFailures: number;
+  deliveries: ReadonlyArray<Readonly<{ delivery: Delivery; slug: string }>>;
+}>;
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -1258,13 +1279,283 @@ export function exhaustedRecapLine(kind: EntityKind, exhausted: readonly QueueRo
 }
 
 // ---------------------------------------------------------------------------
+// Phased recurring run — one batched read, external authoring, then bounded batched writes.
+// ---------------------------------------------------------------------------
+
+function argumentValue(argv: readonly string[], name: string): string | undefined {
+  const index = argv.indexOf(name);
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function readJsonFile<T>(path: string): T {
+  return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+
+function phaseCommand(kind: EntityKind, phase: "read" | "write", statePath: string): string[] {
+  return [
+    process.execPath,
+    import.meta.path,
+    "--kind",
+    kind,
+    "--admission-phase",
+    phase,
+    "--phase-state",
+    statePath,
+  ];
+}
+
+async function runBioReadPhase(kind: EntityKind, statePath: string): Promise<void> {
+  const group = groupForKind(kind);
+  const queue = fluncleJson<QueueRow[]>([
+    "admin",
+    group,
+    "describe",
+    "--queue",
+    "--limit",
+    String(QUEUE_LIMIT),
+  ]);
+  const ledger = readAttemptLedger(attemptLedgerPath());
+  const { exhausted, work } = selectBioWork(queue, ledger, kind, BATCH_CAP);
+  const state: PhasedBioRead = {
+    exhausted,
+    queueLength: queue.length,
+    work: work.map((row) => ({
+      draft: row.slug ? fetchBioDraft(group, row.slug) : null,
+      row,
+    })),
+  };
+
+  writeFileSync(statePath, JSON.stringify(state), "utf8");
+}
+
+async function runBioWritePhase(kind: EntityKind, statePath: string): Promise<void> {
+  const writes = readJsonFile<PhasedBioWrite[]>(statePath);
+  const deliveries: Array<{ delivery: Delivery; slug: string }> = [];
+  const costs: BoxCostEvent[] = [];
+
+  for (const write of writes) {
+    const delivery = deliverBio({
+      bio: write.authored.bio,
+      finalAttempt: write.finalAttempt,
+      kind,
+      promptVersion: write.authored.promptVersion,
+      slug: write.slug,
+    });
+    deliveries.push({ delivery, slug: write.slug });
+    const cost = bioCostEvent({
+      authored: write.authored,
+      dryRun: false,
+      outcome: delivery.outcome,
+      slug: write.slug,
+    });
+
+    if (cost) {
+      costs.push(cost);
+    }
+  }
+
+  const costWriteFailures = (await emitCost(costs)).failed;
+  const result: PhasedBioWriteResult = { costWriteFailures, deliveries };
+  writeFileSync(`${statePath}.result`, JSON.stringify(result), "utf8");
+}
+
+type PendingBio = {
+  draft: BioDraft & { prompt: string };
+  rejection?: string;
+  row: QueueRow & { slug: string };
+};
+
+async function runPhasedBioMain(kind: EntityKind): Promise<void> {
+  const directory = mkdtempSync(join(tmpdir(), "entity-bio-phases-"));
+  const readStatePath = join(directory, "read.json");
+  const owner = `fluncle-${kind}-bio`;
+
+  try {
+    const readPhase = runDatabaseAdmissionPhase({
+      command: phaseCommand(kind, "read", readStatePath),
+      owner,
+      yieldRetries: 0,
+    });
+
+    if (readPhase.kind === "yielded") {
+      console.log(
+        JSON.stringify(databaseAdmissionYieldSummary({ checked: 0, kind, queueDepth: null })),
+      );
+      return;
+    }
+
+    const readState = readJsonFile<PhasedBioRead>(readStatePath);
+    const summary = createBioSweepSummary(kind);
+    const ledgerPath = attemptLedgerPath();
+    const ledger = readAttemptLedger(ledgerPath);
+    summary.exhausted = readState.exhausted.length;
+
+    if (readState.queueLength === 0) {
+      console.log(JSON.stringify({ ok: bioSweepOk(summary), ...summary }));
+      return;
+    }
+
+    if (readState.exhausted.length > 0) {
+      log(exhaustedRecapLine(kind, readState.exhausted));
+    }
+
+    let pending: PendingBio[] = [];
+
+    for (const candidate of readState.work) {
+      const slug = candidate.row.slug;
+      if (!slug || !isAuthorableDraft(candidate.draft)) {
+        if (candidate.draft?.found === false && slug) {
+          log(`${slug}: the Worker did not resolve the ${kind} — skipping (stays queued)`);
+        }
+        recordBioOutcome(summary, "skipped");
+        continue;
+      }
+
+      pending.push({ draft: candidate.draft, row: { ...candidate.row, slug } });
+    }
+
+    let costWriteFailures = 0;
+
+    while (pending.length > 0) {
+      const writes: PhasedBioWrite[] = [];
+      const attempted = new Map<string, { authored: AuthoredBio; pending: PendingBio }>();
+
+      for (const item of pending) {
+        const plan = planAttempt(ledger, kind, item.row.slug);
+        if (plan.exhausted) {
+          logExhausted(kind, item.row.slug);
+          recordBioOutcome(summary, "exhausted");
+          continue;
+        }
+        if (plan.attempt > 1) {
+          log(
+            `${item.row.slug}: re-authoring (attempt ${plan.attempt} of ${MAX_BIO_ATTEMPTS})${
+              plan.final ? " — the LAST one; its draft lands even if the gate refuses it" : ""
+            }`,
+          );
+        }
+
+        const authored = await authorBio(
+          kind,
+          `${buildRewriteBlock(item.rejection, plan.attempt)}${item.draft.prompt}`,
+          item.draft.promptVersion ?? 0,
+        );
+        if (!authored) {
+          recordBioOutcome(summary, "skipped");
+          continue;
+        }
+
+        writes.push({ authored, finalAttempt: plan.final, slug: item.row.slug });
+        attempted.set(item.row.slug, { authored, pending: item });
+      }
+
+      if (writes.length === 0) {
+        break;
+      }
+
+      const writeStatePath = join(directory, `write-${summary.checked}.json`);
+      writeFileSync(writeStatePath, JSON.stringify(writes), "utf8");
+      const writePhase = runDatabaseAdmissionPhase({
+        command: phaseCommand(kind, "write", writeStatePath),
+        owner,
+        // bio.<kind> is replay-safe-idempotent in DATABASE_MUTATION_POLICIES.
+        yieldRetries: 1,
+      });
+
+      if (writePhase.kind === "yielded") {
+        console.log(
+          JSON.stringify(
+            databaseAdmissionYieldSummary({
+              ...summary,
+              checked: summary.checked + writes.length,
+              costWriteFailures,
+              produced: summary.produced,
+            }),
+          ),
+        );
+        return;
+      }
+
+      const writeResult = readJsonFile<PhasedBioWriteResult>(`${writeStatePath}.result`);
+      costWriteFailures += writeResult.costWriteFailures;
+      const next: PendingBio[] = [];
+
+      for (const result of writeResult.deliveries) {
+        const source = attempted.get(result.slug);
+        if (!source) {
+          throw new Error(`bio write phase returned unknown slug ${result.slug}`);
+        }
+
+        if (result.delivery.outcome === "gateSkipped") {
+          recordAttempt(ledger, kind, result.slug, Math.floor(Date.now() / 1000));
+          writeAttemptLedger(ledgerPath, ledger);
+          if (planAttempt(ledger, kind, result.slug).exhausted) {
+            log(
+              `${result.slug}: EXHAUSTED — the last of ${MAX_BIO_ATTEMPTS} drafts was still rejected${
+                result.delivery.rejection ? ` (${result.delivery.rejection})` : ""
+              }; giving up on this ${kind}, it stays bio-less`,
+            );
+            recordBioOutcome(summary, "exhausted");
+          } else {
+            next.push({ ...source.pending, rejection: result.delivery.rejection });
+          }
+          continue;
+        }
+
+        if (result.delivery.outcome === "authored" || result.delivery.outcome === "alreadyBio") {
+          clearAttempts(ledger, kind, result.slug);
+          writeAttemptLedger(ledgerPath, ledger);
+        }
+        recordBioOutcome(summary, result.delivery.outcome, result.delivery.gateBypassed);
+      }
+
+      pending = next;
+    }
+
+    console.log(JSON.stringify({ costWriteFailures, ok: bioSweepOk(summary), ...summary }));
+  } catch (error) {
+    if (error instanceof ClaudeAuthError) {
+      log("claude auth failed — aborting the batch, the queue is untouched");
+      pingClaudeAuthFailure(kind, error.message);
+      console.log(
+        JSON.stringify({
+          ...createBioSweepSummary(kind),
+          errors: 1,
+          ok: false,
+          reason: "claude_auth",
+        }),
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    throw error;
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main — drain a bounded batch off the bio queue for one kind.
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const kind = parseKind(argv);
-  const group = groupForKind(kind);
+  const admissionPhase = argumentValue(argv, "--admission-phase");
+  const phaseStatePath = argumentValue(argv, "--phase-state");
+
+  if (admissionPhase) {
+    if (!phaseStatePath || (admissionPhase !== "read" && admissionPhase !== "write")) {
+      throw new Error("invalid entity-bio admission phase invocation");
+    }
+    if (admissionPhase === "read") {
+      await runBioReadPhase(kind, phaseStatePath);
+    } else {
+      await runBioWritePhase(kind, phaseStatePath);
+    }
+    return;
+  }
 
   // `--dry-run <slug…>` — the operator's pre-flight. Author for the named entities, run the
   // voice gate, print the paragraphs, store NOTHING. A `--kind <k>` sits in argv too; drop
@@ -1309,80 +1600,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // `describe --queue --json` returns a BARE ARRAY of `{ id, name, slug }` (the CLI
-  // unwraps the `{ ok, <kind>s }` reply before printing).
-  const queue = fluncleJson<QueueRow[]>([
-    "admin",
-    group,
-    "describe",
-    "--queue",
-    "--limit",
-    String(QUEUE_LIMIT),
-  ]);
-
-  const summary = createBioSweepSummary(kind);
-
-  if (queue.length === 0) {
-    console.log(JSON.stringify({ ok: bioSweepOk(summary), ...summary }));
-
-    return; // fast no-op
-  }
-
-  // The attempt budgets, loaded once per tick and written through as they are spent.
-  const ledgerPath = attemptLedgerPath();
-  const ledger = readAttemptLedger(ledgerPath);
-
-  // Exhausted rows are dropped BEFORE the cap: an exhausted head must never block the entities
-  // behind it (that would trade an infinite loop for a permanent stall).
-  const { exhausted, work } = selectBioWork(queue, ledger, kind, BATCH_CAP);
-
-  summary.exhausted = exhausted.length;
-
-  if (exhausted.length > 0) {
-    log(exhaustedRecapLine(kind, exhausted));
-  }
-
-  // The tick's authoring-spend rows, POSTed once at the end (best-effort, after the bios
-  // are already durable — a dropped POST only understates the ledger).
-  const costs: BoxCostEvent[] = [];
-
-  for (const row of work) {
-    try {
-      const { cost, gateBypassed, outcome } = await describeOne(kind, row, { ledger, ledgerPath });
-
-      if (cost) {
-        costs.push(cost);
-      }
-
-      recordBioOutcome(summary, outcome, gateBypassed);
-    } catch (error) {
-      if (error instanceof ClaudeAuthError) {
-        // Auth failure: STOP the batch, leave the queue intact, alert loudly.
-        summary.checked += 1;
-        summary.errors += 1;
-        log("claude auth failed — aborting the batch, the queue is untouched");
-        pingClaudeAuthFailure(kind, error.message);
-        console.log(
-          JSON.stringify({
-            ok: false,
-            reason: "claude_auth",
-            ...summary,
-          }),
-        );
-        process.exit(1);
-      }
-
-      // One entity's failure must not abort the sweep — log it and move on; it stays in
-      // the queue for the next tick.
-      recordBioOutcome(summary, "skipped");
-      log(`error on ${row.slug ?? "?"}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // Record the tick's authoring spend best-effort. It cannot throw or outlive its
-  // 15s budget; rejected rows remain visible in the final status reading.
-  const costWriteFailures = (await emitCost(costs)).failed;
-  console.log(JSON.stringify({ costWriteFailures, ok: bioSweepOk(summary), ...summary }));
+  await runPhasedBioMain(kind);
 }
 
 // `import.meta.main` so the pure helpers (the fallback prompt builder) can be imported by

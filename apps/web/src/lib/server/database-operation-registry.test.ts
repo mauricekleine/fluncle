@@ -9,6 +9,7 @@ import {
   isDatabaseOperationId,
 } from "./database-observability";
 import {
+  DATABASE_ADMISSION_SHAPES,
   DATABASE_MUTATION_POLICIES,
   DATABASE_OPERATION_REGISTRY,
   type DatabaseMutationTarget,
@@ -539,7 +540,7 @@ describe("database operation registry", () => {
     }
   });
 
-  it("routes every admitted writer and heavy reader through the one admission runner", () => {
+  it("enforces each admitted operation's recorded whole-lifetime or phased unit shape", () => {
     const runnerSource = join(HERMES_ROOT, "scripts/database-admission-runner.sh");
     expect(existsSync(runnerSource)).toBe(true);
     const runner = readFileSync(runnerSource, "utf8");
@@ -547,6 +548,12 @@ describe("database operation registry", () => {
       /ADMISSION_MAX_WAIT_SECS="\$\{DATABASE_ADMISSION_MAX_WAIT_SECS:-([0-9]+)\}"/.exec(runner);
     const maxWaitSec = Number(maxWaitMatch?.[1]);
     expect(Number.isFinite(maxWaitSec)).toBe(true);
+    const admitted = DATABASE_OPERATION_REGISTRY.filter(
+      (operation) => operation.admissionMode === "required",
+    );
+    expect(sorted(Object.keys(DATABASE_ADMISSION_SHAPES))).toEqual(
+      sorted(admitted.map((operation) => operation.operationId)),
+    );
 
     for (const operation of DATABASE_OPERATION_REGISTRY) {
       const service = readFileSync(join(REPO_ROOT, operation.serviceSource), "utf8");
@@ -558,21 +565,48 @@ describe("database operation registry", () => {
           operation.accessClass === "write" || operation.accessClass === "heavy-read",
           operation.operationId,
         ).toBe(true);
-        expect(execStart, operation.owner.service).toContain("database-admission-runner.sh");
+        const shape = operation.admissionShape;
+        expect(shape, operation.operationId).not.toBeNull();
+        if (!shape) {
+          continue;
+        }
+        expect(shape.rationale.trim().length, operation.operationId).toBeGreaterThan(0);
+        if (shape.yieldRetries > 0) {
+          expect(operation.mutationDisposition.kind, operation.operationId).toBe(
+            "replay-safe-idempotent",
+          );
+        }
         const tokens = execStart.split(/\s+/);
-        const runnerIndex = tokens.findIndex((token) =>
+        const runnerTokens = tokens.filter((token) =>
           token.endsWith("/database-admission-runner.sh"),
         );
-        expect(runnerIndex, operation.owner.service).toBeGreaterThanOrEqual(0);
-        expect(tokens[runnerIndex + 1], operation.owner.service).toBe(
-          operation.owner.service.replace(/\.service$/, ""),
-        );
-        expect(tokens[runnerIndex + 2], operation.owner.service).toBe("--");
-        expect(tokens[runnerIndex + 3], operation.owner.service).toBeTruthy();
-        expect(
-          tokens.filter((token) => token.endsWith("/database-admission-runner.sh")),
-          operation.owner.service,
-        ).toHaveLength(1);
+
+        if (shape.shape === "whole-lifetime") {
+          expect(runnerTokens, operation.owner.service).toHaveLength(1);
+          const runnerIndex = tokens.indexOf(runnerTokens[0] ?? "");
+          expect(tokens[runnerIndex + 1], operation.owner.service).toBe(
+            operation.owner.service.replace(/\.service$/, ""),
+          );
+          expect(tokens[runnerIndex + 2], operation.owner.service).toBe("--");
+          expect(tokens[runnerIndex + 3], operation.owner.service).toBeTruthy();
+          expect(shape.phaseSource, operation.operationId).toBeUndefined();
+        } else {
+          expect(runnerTokens, operation.owner.service).toHaveLength(0);
+          expect(execStart, operation.owner.service).toContain(basename(operation.wrapperSource));
+          expect(execStart, operation.owner.service).toContain(
+            "/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED ",
+          );
+          expect(execStart, operation.owner.service).toContain(
+            "-e DATABASE_ADMISSION_POLL_SECS=5 ",
+          );
+          expect(shape.phaseSource, operation.operationId).toBeDefined();
+          const phaseSource = shape.phaseSource ?? "";
+          expect(existsSync(join(REPO_ROOT, phaseSource)), operation.operationId).toBe(true);
+          expect(
+            readFileSync(join(REPO_ROOT, phaseSource), "utf8"),
+            operation.operationId,
+          ).toContain("runDatabaseAdmissionPhase");
+        }
         expect(
           operation.cadence.randomizedDelaySec,
           operation.owner.timer ?? operation.operationId,
@@ -581,6 +615,7 @@ describe("database operation registry", () => {
         expect(Number.isFinite(timeoutSec), operation.owner.service).toBe(true);
         expect(timeoutSec, operation.owner.service).toBeGreaterThanOrEqual(maxWaitSec + 10);
       } else {
+        expect(operation.admissionShape, operation.operationId).toBeNull();
         expect(execStart, operation.owner.service).not.toContain("database-admission-runner.sh");
         if (operation.admissionMode === "not-applicable") {
           expect(
@@ -807,6 +842,7 @@ describe("database operation registry", () => {
     }
 
     expect(Object.fromEntries(unresolvedBySource)).toEqual({
+      [`${SCRIPTS}/enrich-sweep.ts`]: 1,
       [`${SCRIPTS}/entity-bio-sweep.ts`]: 3,
     });
 

@@ -52,10 +52,14 @@
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
+import {
+  databaseAdmissionYieldSummary,
+  runDatabaseAdmissionPhase,
+} from "./database-admission-phase";
 
 // ---------------------------------------------------------------------------
 // Config — bounded batch so a tick stays cheap and a transient failure can't
@@ -132,11 +136,28 @@ type AnalyzeOutput = {
 
 type Outcome = "done" | "failed" | "skipped";
 
-// The outcome plus the self-seconds cost row to emit — non-null whenever the analyze
-// compute actually RAN (done / failed / analyzer-error), null on the pre-analyze
-// skips. The box-seconds are a real spend regardless of the analysis result, so unlike
-// the authoring rows this records `failed` too (it tracks compute, not delivered copy).
-type EnrichResult = { cost: BoxCostEvent | null; outcome: Outcome };
+type EnrichArm = "catalogue" | "finding";
+
+type EnrichReadState = Readonly<{
+  catalogue: CatalogueWorkItem[];
+  findings: QueueFinding[];
+  queued: number;
+}>;
+
+type PreparedEnrich = Readonly<{
+  arm: EnrichArm;
+  cost: BoxCostEvent | null;
+  outcome: Outcome;
+  trackId: string;
+  updateArgs: string[] | null;
+}>;
+
+type EnrichWriteResult = Readonly<{
+  costWriteFailures: number;
+  results: ReadonlyArray<
+    Readonly<{ arm: EnrichArm; outcome: Outcome; trackId: string; writeFailed: boolean }>
+  >;
+}>;
 
 // ---------------------------------------------------------------------------
 // Shell helpers — synchronous, fail-loud where it matters.
@@ -356,135 +377,6 @@ function findingUpdateArgs(parsed: AnalyzeOutput, analyzedFrom: "full" | "previe
 }
 
 // ---------------------------------------------------------------------------
-// Per-finding: get → analyze → write back.
-// ---------------------------------------------------------------------------
-
-async function enrichOne(finding: QueueFinding): Promise<EnrichResult> {
-  const id = finding.trackId ?? finding.logId;
-
-  if (!id) {
-    log("queue item without a trackId/logId — skipping");
-
-    return { cost: null, outcome: "skipped" };
-  }
-
-  // (a) Re-read the finding to get the canonical artist/title/isrc/trackId/sourceAudioKey.
-  // The queue payload already carries them, but a fresh `tracks get` is the source of truth
-  // and tolerates the queue surface changing shape under us. NOTE: the public lookup group is
-  // PLURAL (`tracks get`) per Convention B; there is no singular `track` alias.
-  const finder = fluncleJson<QueueFinding>(["tracks", "get", id]);
-  const trackId = finder.trackId ?? finding.trackId;
-  const artist = finder.artists?.[0] ?? finding.artists?.[0];
-  const title = finder.title ?? finding.title;
-  const isrc = finder.isrc ?? finding.isrc;
-  const sourceAudioKey = finder.sourceAudioKey ?? finding.sourceAudioKey;
-
-  if (!trackId || !artist || !title) {
-    log(`${id}: missing trackId/artist/title — skipping`);
-
-    return { cost: null, outcome: "skipped" };
-  }
-
-  const logId = finder.logId ?? finding.logId ?? null;
-
-  // (b) Pick the analysis SOURCE. When capture has landed the full song (source_audio_key
-  // present), S3-GET it to a temp file and analyze THAT; otherwise the analyzer resolves +
-  // reads the 30s preview itself. The enrich queue is capture-INDEPENDENT (RFC
-  // docs/track-lifecycle.md) — this only upgrades the source when it exists,
-  // permanently; a missing/broken key falls back to the preview and never blocks.
-  let audioTmpDir: string | undefined;
-  let audioFilePath: string | undefined;
-
-  if (sourceAudioKey) {
-    try {
-      const bytes = await r2Get(sourceAudioKey);
-      audioTmpDir = mkdtempSync(join(tmpdir(), "fluncle-enrich-src-"));
-      audioFilePath = join(audioTmpDir, `source.${extFromKey(sourceAudioKey)}`);
-      writeFileSync(audioFilePath, bytes);
-      log(`${trackId}: analyzing captured full song (${sourceAudioKey})`);
-    } catch (error) {
-      audioFilePath = undefined;
-      if (audioTmpDir) {
-        rmSync(audioTmpDir, { force: true, recursive: true });
-        audioTmpDir = undefined;
-      }
-      log(
-        `${trackId}: source-audio GET failed (${sourceAudioKey}) — falling back to preview: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
-  try {
-    // (c) Analyze. Exit 2 = no audio / nothing decoded → mark the finding `failed`.
-    // Time the analyze compute (ffmpeg + the DSP) for the self-seconds cost row — the
-    // box-seconds are the spend, so the row is built here and attributed to every
-    // outcome where the analyzer actually RAN (done / failed / analyzer-error).
-    const analyzeStart = Date.now();
-    const analysis = run(
-      BUN_BIN,
-      buildAnalyzeArgs(ANALYZE_SCRIPT, { artist, audioFilePath, isrc, title }),
-    );
-    const cost = selfSecondsCost({
-      logId,
-      occurredAt: new Date().toISOString(),
-      seconds: (Date.now() - analyzeStart) / 1000,
-      step: "enrich",
-      trackId,
-    });
-
-    if (analysis.code === 2) {
-      log(`${trackId}: no audio available → status=failed`);
-      fluncleJson(["admin", "tracks", "update", trackId, "--status", "failed"]);
-
-      return { cost, outcome: "failed" };
-    }
-
-    if (analysis.code !== 0) {
-      // A genuine analyzer error (not the no-audio signal). Leave the finding in the
-      // queue so the next tick retries; don't write a misleading status.
-      log(
-        `${trackId}: analyze-track exited ${analysis.code}: ${analysis.stderr.trim().slice(-200)}`,
-      );
-
-      return { cost, outcome: "skipped" };
-    }
-
-    let parsed: AnalyzeOutput;
-
-    try {
-      parsed = JSON.parse(analysis.stdout) as AnalyzeOutput;
-    } catch {
-      log(`${trackId}: analyze-track did not return JSON — leaving queued`);
-
-      return { cost, outcome: "skipped" };
-    }
-
-    // (d) Write back. `--key` only when non-null (respect the skill's confidence gate);
-    // features always; status=done. ALSO write the analysis PROVENANCE (RFC
-    // bpm-key-accuracy): `--analyzed-from` = "full" when we analyzed the captured song
-    // (--audio-file), else "preview"; `--analyzed-at` = now, on EVERY successful analysis.
-    // The bpm/key SOURCE + CONFIDENCE ride along only when the matching value was written
-    // (the sweep writes --bpm/--key only when non-null), so provenance never claims a
-    // source for a value the row didn't get.
-    const analyzedFrom = audioFilePath ? "full" : "preview";
-    fluncleJson(["admin", "tracks", "update", trackId, ...findingUpdateArgs(parsed, analyzedFrom)]);
-    // Surface the BPM provenance so a fallback BPM is distinguishable in cron logs (e.g.
-    // `via audio-file` for the captured full song, or `via acousticbrainz` when the preview
-    // was beatless and the structured ISRC fallback supplied the tempo).
-    const bpmVia = parsed.bpm !== null && parsed.bpmSource ? ` via ${parsed.bpmSource}` : "";
-    log(`${trackId}: done (bpm ${parsed.bpm ?? "null"}${bpmVia}, key ${parsed.key ?? "null"})`);
-
-    return { cost, outcome: "done" };
-  } finally {
-    if (audioTmpDir) {
-      rmSync(audioTmpDir, { force: true, recursive: true });
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // THE CATALOGUE ARM — analyse an uncertified track from its captured full song.
 // ---------------------------------------------------------------------------
 
@@ -524,45 +416,194 @@ async function fetchCatalogueAnalyzeQueue(): Promise<CatalogueWorkItem[]> {
   return Array.isArray(body.tracks) ? body.tracks : [];
 }
 
-/**
- * Analyse ONE catalogue track from its captured full song, and write the measurements back.
- *
- * Three things differ from `enrichOne`, all of them consequences of the track being
- * uncertified:
- *
- *   · NO `tracks get` re-read. That is a PUBLIC read and it resolves through the finding join,
- *     so it 404s on a catalogue track. The work-queue payload is the source of truth here.
- *   · NO PREVIEW FALLBACK. The queue is key-gated; a missing/broken key leaves the row queued
- *     for a later tick rather than reaching for a 30s preview (a preview-grade BPM/key is the
- *     garbage the full-audio ruling exists to keep out).
- *   · NO `--status`. `enrichment_status` is a CERTIFICATION column; the server 409s an
- *     uncertified write of one. Fluncle measures this track. He does not speak about it.
- */
-async function analyzeCatalogueOne(item: CatalogueWorkItem): Promise<EnrichResult> {
+// ---------------------------------------------------------------------------
+// Phased recurring run — one batched read, DSP outside admission, one batched write.
+// ---------------------------------------------------------------------------
+
+function argumentValue(argv: readonly string[], name: string): string | undefined {
+  const index = argv.indexOf(name);
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function readJsonFile<T>(path: string): T {
+  return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+
+function phaseCommand(phase: "read" | "write", statePath: string): string[] {
+  return [
+    process.execPath,
+    import.meta.path,
+    "--admission-phase",
+    phase,
+    "--phase-state",
+    statePath,
+  ];
+}
+
+async function runEnrichReadPhase(statePath: string): Promise<void> {
+  const response = fluncleJson<{ tracks?: QueueFinding[] }>([
+    "admin",
+    "tracks",
+    "enrich",
+    "--queue",
+    "--limit",
+    String(QUEUE_LIMIT),
+  ]);
+  const queue = response.tracks ?? [];
+  const findings: QueueFinding[] = [];
+
+  for (const finding of queue.slice(0, BATCH_CAP)) {
+    const id = finding.trackId ?? finding.logId;
+    if (!id) {
+      findings.push(finding);
+      continue;
+    }
+
+    const canonical = fluncleJson<QueueFinding>(["tracks", "get", id]);
+    findings.push({
+      ...finding,
+      ...canonical,
+      artists: canonical.artists ?? finding.artists,
+      isrc: canonical.isrc ?? finding.isrc,
+      logId: canonical.logId ?? finding.logId,
+      sourceAudioKey: canonical.sourceAudioKey ?? finding.sourceAudioKey,
+      title: canonical.title ?? finding.title,
+      trackId: canonical.trackId ?? finding.trackId,
+    });
+  }
+
+  let catalogue: CatalogueWorkItem[] = [];
+  if (API_TOKEN) {
+    try {
+      catalogue = (await fetchCatalogueAnalyzeQueue()).slice(0, CATALOGUE_BATCH_CAP);
+    } catch (error) {
+      log(`catalogue arm skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const state: EnrichReadState = { catalogue, findings, queued: queue.length };
+  writeFileSync(statePath, JSON.stringify(state), "utf8");
+}
+
+async function prepareFinding(finding: QueueFinding): Promise<PreparedEnrich> {
+  const trackId = finding.trackId;
+  const artist = finding.artists?.[0];
+  const title = finding.title;
+  const isrc = finding.isrc;
+  const sourceAudioKey = finding.sourceAudioKey;
+
+  if (!trackId || !artist || !title) {
+    log(`${trackId ?? finding.logId ?? "?"}: missing trackId/artist/title — skipping`);
+    return {
+      arm: "finding",
+      cost: null,
+      outcome: "skipped",
+      trackId: trackId ?? finding.logId ?? "unknown",
+      updateArgs: null,
+    };
+  }
+
+  let audioTmpDir: string | undefined;
+  let audioFilePath: string | undefined;
+  if (sourceAudioKey) {
+    try {
+      const bytes = await r2Get(sourceAudioKey);
+      audioTmpDir = mkdtempSync(join(tmpdir(), "fluncle-enrich-src-"));
+      audioFilePath = join(audioTmpDir, `source.${extFromKey(sourceAudioKey)}`);
+      writeFileSync(audioFilePath, bytes);
+      log(`${trackId}: analyzing captured full song (${sourceAudioKey})`);
+    } catch (error) {
+      if (audioTmpDir) {
+        rmSync(audioTmpDir, { force: true, recursive: true });
+      }
+      audioTmpDir = undefined;
+      audioFilePath = undefined;
+      log(
+        `${trackId}: source-audio GET failed (${sourceAudioKey}) — falling back to preview: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  try {
+    const analyzeStart = Date.now();
+    const analysis = run(
+      BUN_BIN,
+      buildAnalyzeArgs(ANALYZE_SCRIPT, { artist, audioFilePath, isrc, title }),
+    );
+    const cost = selfSecondsCost({
+      logId: finding.logId ?? null,
+      occurredAt: new Date().toISOString(),
+      seconds: (Date.now() - analyzeStart) / 1000,
+      step: "enrich",
+      trackId,
+    });
+
+    if (analysis.code === 2) {
+      log(`${trackId}: no audio available → status=failed`);
+      return {
+        arm: "finding",
+        cost,
+        outcome: "failed",
+        trackId,
+        updateArgs: ["admin", "tracks", "update", trackId, "--status", "failed"],
+      };
+    }
+    if (analysis.code !== 0) {
+      log(`${trackId}: analyze-track exited ${analysis.code} — leaving queued`);
+      return { arm: "finding", cost, outcome: "skipped", trackId, updateArgs: null };
+    }
+
+    let parsed: AnalyzeOutput;
+    try {
+      parsed = JSON.parse(analysis.stdout) as AnalyzeOutput;
+    } catch {
+      log(`${trackId}: analyze-track did not return JSON — leaving queued`);
+      return { arm: "finding", cost, outcome: "skipped", trackId, updateArgs: null };
+    }
+
+    const analyzedFrom = audioFilePath ? "full" : "preview";
+    return {
+      arm: "finding",
+      cost,
+      outcome: "done",
+      trackId,
+      updateArgs: [
+        "admin",
+        "tracks",
+        "update",
+        trackId,
+        ...findingUpdateArgs(parsed, analyzedFrom),
+      ],
+    };
+  } finally {
+    if (audioTmpDir) {
+      rmSync(audioTmpDir, { force: true, recursive: true });
+    }
+  }
+}
+
+async function prepareCatalogue(item: CatalogueWorkItem): Promise<PreparedEnrich> {
   const trackId = item.trackId;
   const artist = item.artists?.[0];
   const title = item.title;
   const sourceAudioKey = item.sourceAudioKey;
-
-  if (!trackId || !artist || !title) {
-    log("catalogue item without a trackId/artist/title — skipping");
-
-    return { cost: null, outcome: "skipped" };
+  if (!trackId || !artist || !title || !sourceAudioKey) {
+    log(`${trackId ?? "?"}: incomplete catalogue work item — leaving queued`);
+    return {
+      arm: "catalogue",
+      cost: null,
+      outcome: "skipped",
+      trackId: trackId ?? "unknown",
+      updateArgs: null,
+    };
   }
 
-  if (!sourceAudioKey) {
-    // The queue is key-gated upstream, so this is defensive. Never a preview fallback.
-    log(`${trackId}: catalogue row with no source_audio_key — leaving queued`);
-
-    return { cost: null, outcome: "skipped" };
-  }
-
-  const audioTmpDir = mkdtempSync(join(tmpdir(), "fluncle-enrich-cat-"));
-
+  const directory = mkdtempSync(join(tmpdir(), "fluncle-enrich-cat-"));
   try {
-    const audioFilePath = join(audioTmpDir, `source.${extFromKey(sourceAudioKey)}`);
+    const audioFilePath = join(directory, `source.${extFromKey(sourceAudioKey)}`);
     writeFileSync(audioFilePath, await r2Get(sourceAudioKey));
-
     const analyzeStart = Date.now();
     const analysis = run(
       BUN_BIN,
@@ -580,64 +621,202 @@ async function analyzeCatalogueOne(item: CatalogueWorkItem): Promise<EnrichResul
       step: "enrich",
       trackId,
     });
-
     if (analysis.code !== 0) {
-      // Including exit 2 (nothing decoded). There is no `enrichment_status` to mark `failed`
-      // on a catalogue row, so a bad analysis simply leaves it queued; if the captured bytes
-      // are genuinely undecodable it will retry, cheaply, and the capture side owns that.
       log(`${trackId}: analyze-track exited ${analysis.code} — leaving queued`);
-
-      return { cost, outcome: "skipped" };
+      return { arm: "catalogue", cost, outcome: "skipped", trackId, updateArgs: null };
     }
 
     let parsed: AnalyzeOutput;
-
     try {
       parsed = JSON.parse(analysis.stdout) as AnalyzeOutput;
     } catch {
       log(`${trackId}: analyze-track did not return JSON — leaving queued`);
-
-      return { cost, outcome: "skipped" };
+      return { arm: "catalogue", cost, outcome: "skipped", trackId, updateArgs: null };
     }
 
     const updateArgs = ["admin", "tracks", "update", trackId];
-
     if (parsed.bpm !== null && parsed.bpm !== undefined) {
       updateArgs.push("--bpm", String(parsed.bpm));
-
       if (parsed.bpmSource) {
         updateArgs.push("--bpm-source", parsed.bpmSource);
       }
-
       if (parsed.bpmConfidence !== null && parsed.bpmConfidence !== undefined) {
         updateArgs.push("--bpm-confidence", String(parsed.bpmConfidence));
       }
     }
-
     if (parsed.key !== null && parsed.key !== undefined) {
       updateArgs.push("--key", parsed.key);
-
       if (parsed.keySource) {
         updateArgs.push("--key-source", parsed.keySource);
       }
-
       if (parsed.keyConfidence !== null && parsed.keyConfidence !== undefined) {
         updateArgs.push("--key-confidence", String(parsed.keyConfidence));
       }
     }
-
-    updateArgs.push("--features", JSON.stringify(parsed.features ?? {}));
-    // `analyzed_from = full` is what takes the row OUT of the analyze queue — it is the
-    // queue's own done-marker, standing in for the `enrichment_status` a catalogue row lacks.
-    updateArgs.push("--analyzed-from", "full");
-    updateArgs.push("--analyzed-at", new Date().toISOString());
-
-    fluncleJson(updateArgs);
-    log(`${trackId}: catalogue done (bpm ${parsed.bpm ?? "null"}, key ${parsed.key ?? "null"})`);
-
-    return { cost, outcome: "done" };
+    updateArgs.push(
+      "--features",
+      JSON.stringify(parsed.features ?? {}),
+      "--analyzed-from",
+      "full",
+      "--analyzed-at",
+      new Date().toISOString(),
+    );
+    return { arm: "catalogue", cost, outcome: "done", trackId, updateArgs };
   } finally {
-    rmSync(audioTmpDir, { force: true, recursive: true });
+    rmSync(directory, { force: true, recursive: true });
+  }
+}
+
+async function runEnrichWritePhase(statePath: string): Promise<void> {
+  const prepared = readJsonFile<PreparedEnrich[]>(statePath);
+  const results: Array<{
+    arm: EnrichArm;
+    outcome: Outcome;
+    trackId: string;
+    writeFailed: boolean;
+  }> = [];
+  const costs: BoxCostEvent[] = [];
+
+  for (const item of prepared) {
+    let writeFailed = false;
+    if (item.updateArgs) {
+      try {
+        fluncleJson(item.updateArgs);
+      } catch (error) {
+        writeFailed = true;
+        log(
+          `write failed for ${item.trackId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    if (!writeFailed && item.cost) {
+      costs.push(item.cost);
+    }
+    results.push({
+      arm: item.arm,
+      outcome: writeFailed ? "skipped" : item.outcome,
+      trackId: item.trackId,
+      writeFailed,
+    });
+  }
+
+  const costWriteFailures = (await emitCost(costs)).failed;
+  const result: EnrichWriteResult = { costWriteFailures, results };
+  writeFileSync(`${statePath}.result`, JSON.stringify(result), "utf8");
+}
+
+async function runPhasedEnrichMain(): Promise<void> {
+  const directory = mkdtempSync(join(tmpdir(), "enrich-phases-"));
+  const readStatePath = join(directory, "read.json");
+
+  try {
+    const readPhase = runDatabaseAdmissionPhase({
+      command: phaseCommand("read", readStatePath),
+      owner: "fluncle-enrich",
+      yieldRetries: 0,
+    });
+    if (readPhase.kind === "yielded") {
+      console.log(
+        JSON.stringify(
+          databaseAdmissionYieldSummary({ checked: 0, queueDepth: null, queued: null }),
+        ),
+      );
+      return;
+    }
+
+    const state = readJsonFile<EnrichReadState>(readStatePath);
+    const summary = {
+      batch: state.findings.length,
+      catalogueDone: 0,
+      checked: 0,
+      done: 0,
+      errors: 0,
+      failed: 0,
+      produced: 0,
+      queued: state.queued,
+      skipped: 0,
+    };
+    const prepared: PreparedEnrich[] = [];
+
+    for (const finding of state.findings) {
+      summary.checked += 1;
+      try {
+        prepared.push(await prepareFinding(finding));
+      } catch (error) {
+        summary.skipped += 1;
+        summary.failed += 1;
+        log(
+          `error on ${finding.trackId ?? finding.logId ?? "?"}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    for (const item of state.catalogue) {
+      summary.checked += 1;
+      try {
+        prepared.push(await prepareCatalogue(item));
+      } catch (error) {
+        summary.skipped += 1;
+        summary.failed += 1;
+        log(
+          `error on catalogue ${item.trackId ?? "?"}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    if (prepared.length === 0) {
+      console.log(JSON.stringify({ costWriteFailures: 0, ok: true, ...summary }));
+      return;
+    }
+
+    const writeStatePath = join(directory, "write.json");
+    writeFileSync(writeStatePath, JSON.stringify(prepared), "utf8");
+    const writePhase = runDatabaseAdmissionPhase({
+      command: phaseCommand("write", writeStatePath),
+      owner: "fluncle-enrich",
+      // track.enrich is deliberately non-replayable in DATABASE_MUTATION_POLICIES.
+      yieldRetries: 0,
+    });
+    if (writePhase.kind === "yielded") {
+      console.log(
+        JSON.stringify(
+          databaseAdmissionYieldSummary({
+            ...summary,
+            produced: 0,
+            writesPending: prepared.length,
+          }),
+        ),
+      );
+      return;
+    }
+
+    const writeResult = readJsonFile<EnrichWriteResult>(`${writeStatePath}.result`);
+    for (const result of writeResult.results) {
+      if (result.writeFailed) {
+        summary.failed += 1;
+        summary.skipped += 1;
+      } else if (result.arm === "catalogue") {
+        if (result.outcome === "done") {
+          summary.catalogueDone += 1;
+          summary.produced += 1;
+        } else {
+          summary.skipped += 1;
+        }
+      } else {
+        summary[result.outcome] += 1;
+        if (result.outcome === "done") {
+          summary.produced += 1;
+        }
+      }
+    }
+    console.log(
+      JSON.stringify({ costWriteFailures: writeResult.costWriteFailures, ok: true, ...summary }),
+    );
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
   }
 }
 
@@ -646,110 +825,23 @@ async function analyzeCatalogueOne(item: CatalogueWorkItem): Promise<EnrichResul
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  // `enrich --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
-  const response = fluncleJson<{ tracks?: QueueFinding[] }>([
-    "admin",
-    "tracks",
-    "enrich",
-    "--queue",
-    "--limit",
-    String(QUEUE_LIMIT),
-  ]);
-  const queue = response.tracks ?? [];
+  const argv = process.argv.slice(2);
+  const admissionPhase = argumentValue(argv, "--admission-phase");
+  const phaseStatePath = argumentValue(argv, "--phase-state");
 
-  const summary = {
-    batch: 0,
-    catalogueDone: 0,
-    checked: 0,
-    done: 0,
-    errors: 0,
-    failed: 0,
-    produced: 0,
-    queued: queue.length,
-    skipped: 0,
-  };
-
-  // The tick's self-seconds rows, POSTed once at the end (best-effort, after the
-  // write-backs are already durable — a dropped POST only understates the ledger).
-  const costs: BoxCostEvent[] = [];
-
-  // ── ARM 1: the certified findings. Untouched — status-driven, capture-independent,
-  // preview-capable. It gets the batch budget FIRST: a speculative catalogue row never
-  // delays a track Fluncle has already said yes to.
-  for (const finding of queue.slice(0, BATCH_CAP)) {
-    summary.batch += 1;
-    summary.checked += 1;
-
-    try {
-      const { cost, outcome } = await enrichOne(finding);
-
-      if (cost) {
-        costs.push(cost);
-      }
-
-      summary[outcome] += 1;
-      if (outcome === "done") {
-        summary.produced += 1;
-      }
-    } catch (error) {
-      // One finding's failure must not abort the sweep — log it and move on; it
-      // stays in the queue for the next tick.
-      summary.skipped += 1;
-      summary.failed += 1;
-      log(
-        `error on ${finding.trackId ?? finding.logId ?? "?"}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+  if (admissionPhase) {
+    if (!phaseStatePath || (admissionPhase !== "read" && admissionPhase !== "write")) {
+      throw new Error("invalid enrich admission phase invocation");
     }
+    if (admissionPhase === "read") {
+      await runEnrichReadPhase(phaseStatePath);
+    } else {
+      await runEnrichWritePhase(phaseStatePath);
+    }
+    return;
   }
 
-  // ── ARM 2: the catalogue. Additive and disjoint (`scope=catalogue`), so nothing above is
-  // re-worked. Analysis is a measurement of a RECORDING, so an uncertified track with captured
-  // audio is analysable — and must be, or the archive never learns its BPM or key. A failure
-  // here must never take the findings arm's summary down with it: the whole arm is wrapped.
-  if (API_TOKEN) {
-    try {
-      const catalogueQueue = await fetchCatalogueAnalyzeQueue();
-
-      for (const item of catalogueQueue.slice(0, CATALOGUE_BATCH_CAP)) {
-        summary.checked += 1;
-
-        try {
-          const { cost, outcome } = await analyzeCatalogueOne(item);
-
-          if (cost) {
-            costs.push(cost);
-          }
-
-          if (outcome === "done") {
-            summary.catalogueDone += 1;
-            summary.produced += 1;
-          } else {
-            summary.skipped += 1;
-          }
-        } catch (error) {
-          summary.skipped += 1;
-          summary.failed += 1;
-          log(
-            `error on catalogue ${item.trackId ?? "?"}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-      }
-    } catch (error) {
-      // The catalogue arm is best-effort. A queue read that fails (an older Worker without the
-      // op, a transient 5xx) must not fail the tick — the findings arm already did its work.
-      summary.failed += 1;
-      log(`catalogue arm skipped: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // Record the tick's compute spend best-effort. A ledger failure cannot kill the
-  // sweep, but its rejected row count belongs in the final status reading.
-  const costWriteFailures = (await emitCost(costs)).failed;
-  console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
+  await runPhasedEnrichMain();
 }
 
 // Guard the entrypoint so importing this module for tests is side-effect free (no
