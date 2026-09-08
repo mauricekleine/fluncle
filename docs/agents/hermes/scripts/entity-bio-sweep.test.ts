@@ -21,6 +21,7 @@
 //   bun test docs/agents/hermes/scripts/entity-bio-sweep.test.ts
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,6 +47,7 @@ writeFileSync(
   `#!/usr/bin/env bash
 set -euo pipefail
 prompt="$(cat)"
+if [ -n "\${PHASE_TIMELINE:-}" ]; then printf 'external\\n' >> "$PHASE_TIMELINE"; fi
 printf '%s\\n---\\n' "$prompt" >> "${CONTROL}/prompts"
 printf 'x\\n' >> "${CONTROL}/authorings"
 if [ "$(cat "${CONTROL}/claude-verdict" 2>/dev/null || printf 'up')" = "down" ]; then
@@ -65,6 +67,10 @@ writeFileSync(
   `#!/usr/bin/env bash
 set -euo pipefail
 verb="\${3:-}"
+if [[ " $* " = *" --queue "* ]]; then
+  printf '[{"id":"artist-1","name":"Future Signal","slug":"future-signal"}]'
+  exit 0
+fi
 if [ "$verb" = "draft-bio" ]; then
   printf '{"found":true,"hasFacts":true,"findingCount":2,"name":"Future Signal","prompt":"AUTHOR THE BIO","promptVersion":0}'
   exit 0
@@ -786,5 +792,68 @@ describe("what the sweep's logs say to the /status strain detector", () => {
     expect(authorings()).toBe(1);
     // No ledger was passed, so nothing was counted and nothing was written.
     expect(() => readFileSync(attemptLedgerPath(), "utf8")).toThrow();
+  });
+});
+
+describe("the recurring phased orchestrator", () => {
+  beforeEach(() => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    claudeVerdict("up");
+    verdict("pass");
+  });
+
+  test("batches queue and draft reads before authoring, then batches delivery", () => {
+    const timeline = join(CONTROL, "phase-timeline");
+    const runner = join(RIG, "phase-runner");
+    writeFileSync(
+      runner,
+      `#!/usr/bin/env bash
+set -euo pipefail
+shift 2
+if [ "\${1:-}" = "--" ]; then shift; fi
+case " $* " in
+  *" --admission-phase read "*) label=read ;;
+  *" --admission-phase write "*) label=writes ;;
+  *) exit 2 ;;
+esac
+printf 'acquire\\n%s\\n' "$label" >> "$PHASE_TIMELINE"
+"$@"
+status="$?"
+printf 'release\\n' >> "$PHASE_TIMELINE"
+exit "$status"
+`,
+      { mode: 0o755 },
+    );
+    const sweep = join(import.meta.dir, "entity-bio-sweep.ts");
+    const result = spawnSync(process.execPath, [sweep, "--kind", "artist"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        DATABASE_ADMISSION_RUNNER: runner,
+        ENTITY_BIO_STATE_DIR: STATE_DIR,
+        FLUNCLE_API_TOKEN: "",
+        PHASE_TIMELINE: timeline,
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(timeline, "utf8").trim().split("\n")).toEqual([
+      "acquire",
+      "read",
+      "release",
+      "external",
+      "acquire",
+      "writes",
+      "release",
+    ]);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      authored: 1,
+      checked: 1,
+      kind: "artist",
+      ok: true,
+      produced: 1,
+    });
   });
 });

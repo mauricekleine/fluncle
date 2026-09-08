@@ -23,6 +23,16 @@ export type DatabaseMutationTarget = "derived-local" | "derived-remote" | "prima
 
 export type DatabaseAdmissionMode = "control-plane-exempt" | "not-applicable" | "required";
 
+export type DatabaseAdmissionShape = Readonly<{
+  /** Checked-in payload source that invokes phase mode; absent for whole-lifetime units. */
+  phaseSource?: string;
+  /** Why this operation owns this lease shape. */
+  rationale: string;
+  shape: "phased" | "whole-lifetime";
+  /** Bounded in-run retries after exit 75. Non-zero is legal only for replay-safe writes. */
+  yieldRetries: 0 | 1;
+}>;
+
 export type OperationDatabaseProfile = Readonly<{
   /** Access against the primary application database, independent of any derived target. */
   accessClass: DatabaseAccessClass | null;
@@ -66,8 +76,10 @@ export type IncidentOperation = Readonly<{
 
 export type RecurringDatabaseOperation = OperationDatabaseProfile &
   Readonly<{
-    /** Whether the whole unit is subject to database admission. */
+    /** Whether the recurring operation is subject to database admission. */
     admissionMode: DatabaseAdmissionMode;
+    /** Exact lease scope for admitted operations; null for exempt and database-light operations. */
+    admissionShape: DatabaseAdmissionShape | null;
     /** Stable run-level ID used by spans and fleet telemetry. */
     operationId: string;
     cadence: OperationCadence;
@@ -96,6 +108,7 @@ type DatabaseProfileDefinition = Readonly<{
 type OperationDefinition = Omit<
   RecurringDatabaseOperation,
   | "admissionMode"
+  | "admissionShape"
   | "cadenceSource"
   | "compatibility"
   | "incidents"
@@ -125,6 +138,152 @@ type OperationDefinition = Omit<
 };
 
 const HERMES_ROOT = "docs/agents/hermes";
+const SCRIPTS = `${HERMES_ROOT}/scripts`;
+
+const wholeLifetime = (rationale: string): DatabaseAdmissionShape => ({
+  rationale,
+  shape: "whole-lifetime",
+  yieldRetries: 0,
+});
+
+const phased = (
+  phaseSource: string,
+  rationale: string,
+  yieldRetries: 0 | 1,
+): DatabaseAdmissionShape => ({ phaseSource, rationale, shape: "phased", yieldRetries });
+
+/** Strict lease-shape roster for every operation whose admissionMode resolves to required. */
+export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissionShape>> = {
+  "analytics.funnel-snapshot": wholeLifetime(
+    "One bounded database recompute is the payload; there is no external phase to release around.",
+  ),
+  "artist.resolve": wholeLifetime(
+    "Resolution interleaves provider lookups with per-artist guarded writes; batching needs a separate resumable state machine.",
+  ),
+  "backfill.artist-credits": wholeLifetime(
+    "One bounded database backfill command owns the complete tick.",
+  ),
+  "backfill.artist-edges": wholeLifetime(
+    "One bounded database graph-backfill command owns the complete tick.",
+  ),
+  "backfill.cover-masters": wholeLifetime(
+    "Each bounded resolver interleaves source fetches with entity writes and durable progress.",
+  ),
+  "backfill.label-images": wholeLifetime(
+    "The bounded resolver interleaves image discovery with per-label guarded writes.",
+  ),
+  "backfill.label-lineage": wholeLifetime(
+    "The bounded MusicBrainz walk interleaves lineage discovery with durable per-label progress.",
+  ),
+  "backfill.recording-mbids": wholeLifetime(
+    "One bounded identity backfill command owns the complete tick.",
+  ),
+  "backfill.vendor-sweep": wholeLifetime(
+    "Provider reads and guarded vendor writes are interleaved across several independently bounded passes.",
+  ),
+  "bio.album": phased(
+    `${SCRIPTS}/entity-bio-sweep.ts`,
+    "Queue and draft reads are batched before Claude authoring; deliveries are batched afterward.",
+    1,
+  ),
+  "bio.artist": phased(
+    `${SCRIPTS}/entity-bio-sweep.ts`,
+    "Queue and draft reads are batched before Claude authoring; deliveries are batched afterward.",
+    1,
+  ),
+  "bio.label": phased(
+    `${SCRIPTS}/entity-bio-sweep.ts`,
+    "Queue and draft reads are batched before Claude authoring; deliveries are batched afterward.",
+    1,
+  ),
+  "catalogue.anchor": wholeLifetime(
+    "The bounded search ladder interleaves external identity asks with cursor and anchor writes.",
+  ),
+  "catalogue.crawl": wholeLifetime(
+    "One bounded crawler command interleaves MusicBrainz traversal with frontier persistence.",
+  ),
+  "catalogue.demand": wholeLifetime("One bounded demand-projection write is the payload."),
+  "catalogue.isrc-recovery": wholeLifetime(
+    "The bounded resolver interleaves external identity recovery with per-track durable stamps.",
+  ),
+  "catalogue.label-releases": wholeLifetime(
+    "Spotify budget checks and release writes form an interleaved resumable loop.",
+  ),
+  "catalogue.rank": wholeLifetime(
+    "The database-only ranking rebuild is one atomic maintenance phase.",
+  ),
+  "catalogue.reconcile-hub-counts": wholeLifetime(
+    "The database-only projection reconciliation is one bounded command.",
+  ),
+  "catalogue.verify-captures": wholeLifetime(
+    "Queue reads and per-track verification writes are interleaved with remote object checks.",
+  ),
+  "clips.studio": wholeLifetime(
+    "Clip selection, media work, and non-replayable delivery are one per-item state machine.",
+  ),
+  "database.backup": wholeLifetime(
+    "The heavy database export must retain one read lease for its complete consistent snapshot.",
+  ),
+  "device.mirror": wholeLifetime(
+    "The continuous source scan and local mirror transaction form one consistency window.",
+  ),
+  "frontier.refresh": wholeLifetime(
+    "The non-replayable playlist refresh interleaves source reads with publication state.",
+  ),
+  "galaxies.cluster": wholeLifetime(
+    "Database clustering reads and its derived write are one bounded maintenance command.",
+  ),
+  "live.snapshot": wholeLifetime(
+    "The non-replayable live snapshot write is the complete short payload.",
+  ),
+  "logbook.draft": wholeLifetime(
+    "Echo-driven authoring alternates database state and model turns per finding; phase batching needs durable continuation state.",
+  ),
+  "newsletter.draft": wholeLifetime(
+    "Discovery, authoring, and the receipt-backed draft write form one weekly state machine.",
+  ),
+  "projections.repair": wholeLifetime(
+    "The database-only repair family intentionally holds one lease across its bounded convergence pass.",
+  ),
+  "reach.collect": wholeLifetime(
+    "Remote metric collection is interleaved with per-surface durable observations.",
+  ),
+  "render.conductor": wholeLifetime(
+    "The non-replayable render claim and completion receipts surround the media process.",
+  ),
+  "social.capture": wholeLifetime(
+    "The non-replayable platform capture and its publication receipt are one state machine.",
+  ),
+  "social.metrics": wholeLifetime(
+    "Platform reads and per-post metric snapshots are interleaved in one bounded pass.",
+  ),
+  "social.publish-advance": wholeLifetime(
+    "The short database-only publication-state advance is the whole payload.",
+  ),
+  "submissions.triage": wholeLifetime(
+    "Each moderation decision immediately determines the next database-backed queue state.",
+  ),
+  "track.capture": wholeLifetime(
+    "Capture claims, remote media work, and non-replayable track receipts form one per-item state machine.",
+  ),
+  "track.context": wholeLifetime(
+    "Grounding reads and guarded context writes are interleaved per track.",
+  ),
+  "track.embed": wholeLifetime(
+    "Queue claims, audio inference, and non-replayable embedding writes form one per-item state machine.",
+  ),
+  "track.enrich": phased(
+    `${SCRIPTS}/enrich-sweep.ts`,
+    "Worklist and canonical track reads are batched before DSP; all resulting updates are batched afterward.",
+    0,
+  ),
+  "track.note": wholeLifetime(
+    "Echo-driven authoring alternates database state and model turns per finding; phase batching needs durable continuation state.",
+  ),
+  "track.observe": wholeLifetime(
+    "Observation claims and non-replayable authored writes alternate per finding.",
+  ),
+} as const;
 
 type MutationPolicy = Omit<OperationMutationDisposition, "evidenceSource"> & {
   evidenceSource: string;
@@ -700,10 +859,18 @@ function defineOperation(definition: OperationDefinition): RecurringDatabaseOper
   }
   const admissionMode =
     definition.admissionMode ?? (requiresAdmission ? "required" : "not-applicable");
+  const admissionShape = DATABASE_ADMISSION_SHAPES[definition.operationId] ?? null;
+  if (admissionMode === "required" && admissionShape === null) {
+    throw new Error(`admitted operation ${definition.operationId} has no admission shape`);
+  }
+  if (admissionMode !== "required" && admissionShape !== null) {
+    throw new Error(`non-admitted operation ${definition.operationId} declares an admission shape`);
+  }
 
   return {
     ...operationProfile,
     admissionMode,
+    admissionShape,
     cadence: definition.cadence,
     cadenceSource,
     ...(compatibility ? { compatibility } : {}),
@@ -863,8 +1030,6 @@ const daemon = (
     environment: reconcileEnvironment,
   },
 });
-
-const SCRIPTS = `${HERMES_ROOT}/scripts`;
 
 const DUE_WORK_FLAG_OFF_COMPATIBILITY: DatabaseProfileDefinition = {
   accessClass: "read",
