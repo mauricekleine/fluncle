@@ -323,6 +323,58 @@ describe("recordDemand — the rewrite", () => {
     expect(summary.tracksScored).toBe(0);
     expect(await demandScore("t1")).toBe(42); // untouched
   });
+
+  it("seeks demanded artist edges and adds every demanded artist credit", async () => {
+    await seedArtist("art_a", "artist-a", null);
+    await seedArtist("art_b", "artist-b", null);
+    await seedTrack({ artistIds: ["art_a", "art_b"], trackId: "t1" });
+
+    const issued: string[] = [];
+    const real = db;
+
+    // Use a plain wrapper because libSQL client methods rely on their original receiver.
+    holder.db = {
+      ...real,
+      batch: async (statements: { sql: string }[], mode?: string) => {
+        issued.push(...statements.map((statement) => statement.sql));
+
+        return real.batch(statements as never, mode as never);
+      },
+      execute: (statement: never) => real.execute(statement),
+    } as unknown as Client;
+
+    try {
+      await recordDemand({
+        fetchImpl: saFetch([
+          { pageviews: 5, value: "/artist/artist-a" },
+          { pageviews: 7, value: "/artist/artist-b" },
+        ]),
+        now: NOW,
+      });
+    } finally {
+      holder.db = real;
+    }
+
+    expect(await demandScore("t1")).toBe(12);
+
+    const bump = issued.find((sql) => /update tracks set demand_score = coalesce/.test(sql));
+
+    expect(bump).toBeDefined();
+
+    const plan = await real.execute({
+      args: ["art_a", 5, "art_b", 7],
+      sql: `explain query plan ${bump ?? ""}`,
+    });
+    const details = (plan.rows as unknown as { detail: string }[]).map((row) => row.detail);
+
+    expect(details.some((detail) => /^SCAN tracks\b/.test(detail))).toBe(false);
+    expect(details.some((detail) => /^SEARCH tracks\b/.test(detail))).toBe(true);
+    expect(
+      details.some((detail) =>
+        /SEARCH track_artists USING INDEX track_artists_artist_id_idx/.test(detail),
+      ),
+    ).toBe(true);
+  });
 });
 
 // ── The social referrers read (Part 3 — the site-side half of reach) ─────────────────────────────
