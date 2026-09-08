@@ -91,9 +91,11 @@ operation_id=""
 queue_age_ms=0
 wait_ms=0
 yield_reason=""
+last_wait_yield_reason=""
 recovered=false
 payload_pid=""
 terminal_action_started=0
+admission_curl_timed_out=false
 watchdog_directory=""
 watchdog_state=""
 watchdog_window_ms=$(( (90 - ADMISSION_KILL_GRACE_SECS - 5) * 1000 ))
@@ -153,9 +155,10 @@ json_boolean() {
 }
 
 admission_post() {
-  local action="$1" token="${2:-}" request_timeout="${3:-$ADMISSION_HTTP_TIMEOUT_SECS}" body response response_code response_with_code
+  local action="$1" token="${2:-}" request_timeout="${3:-$ADMISSION_HTTP_TIMEOUT_SECS}" body curl_status response response_code response_with_code
   ADMISSION_RESPONSE=""
   ADMISSION_ERROR_REASON="coordinator-unavailable"
+  admission_curl_timed_out=false
   [ -n "$api_base" ] || return 1
   [ -n "$api_token" ] || return 1
   command -v curl >/dev/null 2>&1 || return 1
@@ -167,7 +170,12 @@ admission_post() {
   response_with_code="$(curl -sS --max-time "$request_timeout" -w '\n%{http_code}' \
     -X POST -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${api_token}" \
-    --data-binary "$body" "${api_base}${ADMISSION_PATH}" 2>/dev/null)" || return 1
+    --data-binary "$body" "${api_base}${ADMISSION_PATH}" 2>/dev/null)"
+  curl_status=$?
+  if [ "$curl_status" -ne 0 ]; then
+    [ "$curl_status" -eq 28 ] && admission_curl_timed_out=true
+    return 1
+  fi
   response_code="${response_with_code##*$'\n'}"
   case "$response_code" in
     [0-9][0-9][0-9]) response="${response_with_code%$'\n'*}" ;;
@@ -231,6 +239,15 @@ exit_admission_yield() {
   fi
   emit_admission_skip "$outcome" "$yield_reason"
   exit 0
+}
+
+exit_wait_expired() {
+  local reason="$1" now_ms
+  now_ms="$(current_time_ms)"
+  wait_ms=$((now_ms - started_at_ms))
+  yield_reason="$reason"
+  terminal_admission
+  exit_admission_yield wait-expired "$yield_reason"
 }
 
 duration_ms_as_seconds() {
@@ -310,7 +327,13 @@ trap on_signal TERM INT HUP
 # failure and shadow responses preserve compatibility. Once locally armed or remotely enforced,
 # inability to prove ownership always yields without starting or continuing the payload.
 while :; do
+  if [ "$enforced" -eq 1 ] && [ "$(current_time_ms)" -ge "$acquisition_deadline_ms" ]; then
+    exit_wait_expired "${last_wait_yield_reason:-queue}"
+  fi
   if ! admission_post acquire "" "$(acquisition_request_timeout)"; then
+    if [ "$admission_curl_timed_out" = "true" ] && [ "$enforced" -eq 1 ] && [ -n "$last_wait_yield_reason" ] && [ "$(current_time_ms)" -ge "$acquisition_deadline_ms" ]; then
+      exit_wait_expired "$last_wait_yield_reason"
+    fi
     if [ "$enforced" -eq 0 ] && [ "$ADMISSION_FAIL_CLOSED" != "true" ] && [ "$ADMISSION_ERROR_REASON" = "coordinator-unavailable" ]; then
       emit_admission_event shadow-unavailable 0
       exec "$@"
@@ -357,18 +380,16 @@ while :; do
       exit_admission_yield invalid-grant "invalid-grant"
     fi
     if [ "$(current_time_ms)" -ge "$acquisition_deadline_ms" ]; then
-      terminal_admission
-      yield_reason="queue"
-      exit_admission_yield wait-expired "$yield_reason"
+      exit_wait_expired "${last_wait_yield_reason:-queue}"
     fi
     break
   fi
 
+  last_wait_yield_reason="$(safe_admission_yield_reason "${yield_reason:-queue}")"
+
   remaining_ms=$((acquisition_deadline_ms - $(current_time_ms)))
   if [ "$remaining_ms" -le 0 ]; then
-    yield_reason="${yield_reason:-queue}"
-    terminal_admission
-    exit_admission_yield wait-expired "$yield_reason"
+    exit_wait_expired "$last_wait_yield_reason"
   fi
   poll_ms=$((ADMISSION_POLL_SECS * 1000))
   [ "$poll_ms" -lt "$remaining_ms" ] || poll_ms="$remaining_ms"

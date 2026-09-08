@@ -81,6 +81,26 @@ ${body}
   chmodSync(path, 0o755);
 }
 
+function fakeAdmissionClock(...timesMs: number[]): void {
+  const clock = join(directory, "admission-clock");
+  writeFileSync(clock, `${timesMs.join("\n")}\n`);
+  fakeExecutable(
+    "date",
+    `case "$*" in
+  "+%s%3N")
+    value="$(sed -n '1p' "${clock}")"
+    [ -n "$value" ] || exit 1
+    sed '1d' "${clock}" > "${clock}.next"
+    mv "${clock}.next" "${clock}"
+    printf '%s' "$value"
+    ;;
+  "-u +%Y%m%dT%H%M%SZ") printf '20260908T000000Z' ;;
+  "+%s") printf '1' ;;
+  *) exit 1 ;;
+esac`,
+  );
+}
+
 async function run(
   command: string[],
   options: {
@@ -324,6 +344,7 @@ async function stopProcessGroup(groupPid: number): Promise<void> {
 const SHADOW_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":false,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"shadow-acquire","queueAgeMs":0,"recovered":false,"waitMs":0,"yieldReason":null}'`;
 const ACQUIRED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":7,"heavyRead":false,"heartbeatAfterMs":1,"holdMs":0,"lane":"write","leaseExpiresAtMs":91000,"operationId":"track.enrich","outcome":"acquired","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":null}'`;
 const QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue"}'`;
+const PUBLIC_LATENCY_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"public-latency"}'`;
 const MALFORMED_YIELD_QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue\\\\malformed"}'`;
 
 describe("database admission unit runner", () => {
@@ -515,7 +536,9 @@ else
 fi
 `);
       const payloadMarker = join(directory, "payload-started");
-      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`]);
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        maxWaitSecs: 2,
+      });
 
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(false);
@@ -528,6 +551,7 @@ fi
     "cancels a bounded queued acquisition without starting the payload",
     PROCESS_TEST_OPTIONS,
     async () => {
+      fakeAdmissionClock(1_000, 1_000, 1_000, 1_000);
       fakeCurl(QUEUED_RESPONSE);
       const payloadMarker = join(directory, "payload-started");
       const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
@@ -540,7 +564,7 @@ fi
       expect(result.stderr).toContain('"outcome":"wait-expired"');
       expect(markerSummary()).toEqual({
         admissionOutcome: "wait-expired",
-        admissionWaitMs: 12,
+        admissionWaitMs: 0,
         admissionYieldReason: "queue",
         checked: null,
         errors: 0,
@@ -549,6 +573,118 @@ fi
         payloadStarted: false,
         produced: null,
         queueDepth: null,
+      });
+    },
+  );
+
+  it(
+    "preserves public latency when the final poll sleep exhausts acquisition",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeAdmissionClock(1_000, 1_000, 1_100, 2_000, 2_000);
+      fakeExecutable("sleep", ":");
+      fakeCurl(PUBLIC_LATENCY_RESPONSE);
+      const payloadMarker = join(directory, "payload-started");
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        maxWaitSecs: 1,
+      });
+
+      expect(result.status).toBe(0);
+      expect(existsSync(payloadMarker)).toBe(false);
+      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(1);
+      expect(result.stderr).toContain('"outcome":"wait-expired"');
+      expect(result.stderr).toContain('"yield_reason":"public-latency"');
+      expect(markerSummary()).toMatchObject({
+        admissionOutcome: "wait-expired",
+        admissionWaitMs: 1_000,
+        admissionYieldReason: "public-latency",
+      });
+    },
+  );
+
+  it(
+    "preserves the last admitted reason when an in-flight retry exhausts acquisition",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeAdmissionClock(1_000, 1_000, 1_100, 1_200, 1_200, 2_000, 2_000);
+      fakeExecutable("sleep", ":");
+      fakeCurl(`
+acquire_count="$(grep -c '"action":"acquire"' "${curlLog}")"
+if [ "$acquire_count" -eq 1 ]; then
+  ${PUBLIC_LATENCY_RESPONSE}
+elif [ "$acquire_count" -eq 2 ]; then
+  exit 28
+else
+  printf '{}'
+fi
+`);
+      const result = await run(["bash", "-c", "exit 0"], { maxWaitSecs: 1 });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(2);
+      expect(result.stderr).toContain('"outcome":"wait-expired"');
+      expect(result.stderr).toContain('"yield_reason":"public-latency"');
+      expect(markerSummary()).toMatchObject({
+        admissionOutcome: "wait-expired",
+        admissionWaitMs: 1_000,
+        admissionYieldReason: "public-latency",
+      });
+    },
+  );
+
+  it(
+    "keeps a known HTTP failure typed when it arrives at the deadline boundary",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeAdmissionClock(1_000, 1_000, 1_100, 1_200, 1_200, 2_000);
+      fakeExecutable("sleep", ":");
+      fakeCurl(`
+acquire_count="$(grep -c '"action":"acquire"' "${curlLog}")"
+if [ "$acquire_count" -eq 1 ]; then
+  ${PUBLIC_LATENCY_RESPONSE}
+elif [ "$acquire_count" -eq 2 ]; then
+  date +%s%3N >/dev/null
+  printf '{}\\n401\\n'
+else
+  printf '{}'
+fi
+`);
+      const result = await run(["bash", "-c", "exit 0"], { maxWaitSecs: 1 });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(2);
+      expect(result.stderr).toContain('"outcome":"acquisition-authentication-failed"');
+      expect(result.stderr).toContain('"yield_reason":"authentication-failed"');
+      expect(markerSummary()).toMatchObject({
+        admissionOutcome: "acquisition-authentication-failed",
+        admissionYieldReason: "authentication-failed",
+      });
+    },
+  );
+
+  it(
+    "reports a genuine pre-deadline retry failure by its typed cause",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeAdmissionClock(1_000, 1_000, 1_100, 1_200, 1_200, 1_300);
+      fakeExecutable("sleep", ":");
+      fakeCurl(`
+if [ "$(wc -l < "${curlLog}")" -eq 1 ]; then
+  ${PUBLIC_LATENCY_RESPONSE}
+else
+  date +%s%3N >/dev/null
+  printf '{}\\n503\\n'
+fi
+`);
+      const result = await run(["bash", "-c", "exit 0"], { maxWaitSecs: 1 });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(2);
+      expect(result.stderr).toContain('"outcome":"acquisition-gateway-transport"');
+      expect(result.stderr).toContain('"yield_reason":"gateway-transport"');
+      expect(markerSummary()).toMatchObject({
+        admissionOutcome: "acquisition-gateway-transport",
+        admissionYieldReason: "gateway-transport",
       });
     },
   );
