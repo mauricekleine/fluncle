@@ -754,9 +754,13 @@ async function resolveTracklistMembers(
   return members;
 }
 
+/** Finding-bounded track identity rows used by recording text matching. */
+export const FINDING_MATCH_CORPUS_SQL = `select tracks.track_id, tracks.title, tracks.artists_json
+      from findings cross join tracks on tracks.track_id = findings.track_id`;
+
 // Resolve each `{ artists, title }` item to a finding's trackId (or null) by
-// normalized title+artist against the full catalogue — the rekordbox_sync matcher
-// discipline (see ./track-match). One catalogue read per call; tracklists are
+// normalized title+artist against the certified corpus — the rekordbox_sync matcher
+// discipline (see ./track-match). One finding-bounded read per call; tracklists are
 // tiny and this path is admin-only.
 async function resolveFindingIdsByText(
   items: RecordingTracklistItem[],
@@ -766,9 +770,7 @@ async function resolveFindingIdsByText(
   }
 
   const db = await getDb();
-  const result = await db.execute({
-    sql: `select tracks.track_id, tracks.title, tracks.artists_json from findings join tracks on tracks.track_id = findings.track_id`,
-  });
+  const result = await db.execute({ sql: FINDING_MATCH_CORPUS_SQL });
   const index = buildTrackMatchIndex(
     typedRows<{ artists_json: string; title: string; track_id: string }>(result.rows).map(
       (row) => ({

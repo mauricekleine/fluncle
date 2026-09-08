@@ -371,18 +371,20 @@ export async function recordDemand(
 
   if (artistDemandById.size > 0) {
     const demandRows = [...artistDemandById.entries()];
+
     writes.push({
       args: demandRows.flatMap(([artistId, demand]) => [artistId, demand.pageviews]),
+      // Drive the demanded artist set through its track edge index, then seek each track by key.
+      // The correlated score expression still sums every demanded artist credited on that track.
       sql: `with demand(artist_id, score) as
               (values ${demandRows.map(() => "(?, ?)").join(", ")})
             update tracks set demand_score = coalesce(demand_score, 0) + (
               select sum(demand.score) from track_artists
               join demand on demand.artist_id = track_artists.artist_id
               where track_artists.track_id = tracks.track_id
-            ) where exists (
-              select 1 from track_artists
+            ) where track_id in (
+              select track_artists.track_id from track_artists
               join demand on demand.artist_id = track_artists.artist_id
-              where track_artists.track_id = tracks.track_id
             )`,
     });
   }

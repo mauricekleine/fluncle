@@ -1804,6 +1804,12 @@ export async function getLabelDetail(slug: string): Promise<LabelDetail | undefi
   };
 }
 
+/** Finding-bounded label counts used by the runtime label reconciliation. */
+export const FINDING_LABEL_CENSUS_SQL = `select tracks.label as label, count(*) as n
+      from findings cross join tracks on tracks.track_id = findings.track_id
+      where tracks.label is not null and trim(tracks.label) <> ''
+      group by tracks.label`;
+
 /**
  * The deterministic reconcile: a `labels` row for every distinct label carried by a
  * CERTIFIED finding. The self-healing backstop behind `ensureLabel` (a publish whose
@@ -1830,13 +1836,7 @@ export async function getLabelDetail(slug: string): Promise<LabelDetail | undefi
  */
 export async function reconcileLabels(): Promise<number> {
   const db = await getDb();
-  const result = await db.execute({
-    args: [],
-    sql: `select tracks.label as label, count(*) as n
-          from findings join tracks on tracks.track_id = findings.track_id
-          where tracks.label is not null and trim(tracks.label) <> ''
-          group by tracks.label`,
-  });
+  const result = await db.execute({ args: [], sql: FINDING_LABEL_CENSUS_SQL });
 
   // Every slug the operator has already folded into another label — preloaded once so the
   // mint loop below never re-mints one (the re-mint trap this unit closes).
