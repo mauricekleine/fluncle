@@ -2,6 +2,12 @@ import { type Client } from "@libsql/client/web";
 
 import { DUPLICATE_SIMILARITY, LONG_FORM_MS } from "../../src/lib/catalogue-eligibility";
 import {
+  FINDINGS_SLOT_COUNT,
+  MAX_REC_SEEDS,
+  RECOMMENDATIONS_POOL,
+} from "../../src/lib/server/recommendations";
+import { SONIC_NEIGHBOUR_LIMIT } from "../../src/lib/server/track-page";
+import {
   executeVectorFallback,
   VECTOR_FALLBACK_CANDIDATE_LIMIT,
   VECTOR_FALLBACK_DEADLINE_MS,
@@ -19,9 +25,8 @@ import { getScaleManifest, isScaleProfile, type ScaleProfile } from "./manifest"
 
 const WARMUP_ITERATIONS = 2;
 const SAMPLE_COUNT = 10;
-const RESULT_LIMIT = 12;
-const TRACK_RESULT_LIMIT = 8;
-const RECOMMENDATION_PROBES = 12;
+const LOG_RESULT_LIMIT = 6;
+const SEARCH_RESULT_LIMIT = 12;
 
 type Consumer = {
   name: "log" | "recommendations" | "sonic-search" | "track-page";
@@ -30,7 +35,7 @@ type Consumer = {
 };
 
 const searchStatement = {
-  args: [EMBEDDING_BLOB, RESULT_LIMIT],
+  args: [EMBEDDING_BLOB, SEARCH_RESULT_LIMIT],
   sql: `with candidates(track_id) as materialized (
           select perf_tracks.id
           from perf_tracks
@@ -45,8 +50,11 @@ const searchStatement = {
           order by dist asc, candidates.track_id asc
           limit ?
         )
-        select winners.track_id, perf_tracks.title, perf_tracks.artists_json, perf_tracks.bpm,
-               perf_findings.log_id
+        select winners.track_id, perf_tracks.title, perf_tracks.artists_json, perf_tracks.album,
+               perf_tracks.album_image_url, perf_tracks.bpm, perf_tracks.key, perf_tracks.label,
+               perf_tracks.release_date, perf_tracks.spotify_url, perf_findings.log_id,
+               (select name from perf_galaxies
+                where perf_galaxies.id = perf_findings.galaxy_id) as galaxy_name
         from winners
         cross join perf_tracks on perf_tracks.id = winners.track_id
         left join perf_findings on perf_findings.track_id = perf_tracks.id
@@ -54,7 +62,7 @@ const searchStatement = {
 };
 
 const trackPageStatement = {
-  args: ["synthetic-track-000000000", 160, 188, EMBEDDING_BLOB, TRACK_RESULT_LIMIT],
+  args: ["synthetic-track-000000000", 160, 188, EMBEDDING_BLOB, SONIC_NEIGHBOUR_LIMIT],
   sql: `with candidates(track_id) as materialized (
           select perf_tracks.id
           from perf_tracks indexed by perf_tracks_bpm_idx
@@ -75,7 +83,14 @@ const trackPageStatement = {
           limit ?
         )
         select winners.track_id, perf_tracks.title, perf_tracks.artists_json,
-               perf_tracks.album_image_url, perf_findings.log_id
+               perf_tracks.album_image_url,
+               (select image_key from perf_albums
+                where perf_albums.id = perf_tracks.album_id) as album_image_key,
+               (select image_state from perf_albums
+                where perf_albums.id = perf_tracks.album_id) as album_image_state,
+               (select image_updated_at from perf_albums
+                where perf_albums.id = perf_tracks.album_id) as album_image_updated_at,
+               perf_findings.log_id
         from winners
         cross join perf_tracks on perf_tracks.id = winners.track_id
         left join perf_findings on perf_findings.track_id = perf_tracks.id
@@ -83,7 +98,7 @@ const trackPageStatement = {
 };
 
 const logStatement = {
-  args: ["synthetic-track-000000000", EMBEDDING_BLOB, RESULT_LIMIT],
+  args: ["synthetic-track-000000000", EMBEDDING_BLOB, LOG_RESULT_LIMIT],
   sql: `with candidates(track_id) as materialized (
           select perf_tracks.id
           from perf_findings
@@ -99,7 +114,24 @@ const logStatement = {
           order by dist asc, candidates.track_id asc
           limit ?
         )
-        select winners.track_id, perf_tracks.title, perf_tracks.artists_json, perf_findings.log_id
+        select winners.track_id, perf_tracks.spotify_url, perf_tracks.apple_music_url,
+               perf_tracks.title, perf_tracks.album, perf_tracks.album_image_url,
+               perf_tracks.artists_json, perf_tracks.analyzed_from, perf_tracks.bpm,
+               perf_tracks.duration_ms, perf_tracks.in_release_id, perf_tracks.isrc,
+               perf_tracks.key, perf_tracks.label, perf_tracks.mb_recording_id,
+               perf_tracks.release_date, perf_tracks.source_audio_failures,
+               perf_tracks.source_audio_key, perf_findings.log_id, perf_findings.added_at,
+               perf_findings.updated_at, perf_findings.video_squared_at,
+               (select name from perf_galaxies
+                where perf_galaxies.id = perf_findings.galaxy_id) as galaxy_name,
+               (select slug from perf_albums
+                where perf_albums.id = perf_tracks.album_id) as album_slug,
+               (select image_key from perf_albums
+                where perf_albums.id = perf_tracks.album_id) as album_image_key,
+               (select image_state from perf_albums
+                where perf_albums.id = perf_tracks.album_id) as album_image_state,
+               (select image_updated_at from perf_albums
+                where perf_albums.id = perf_tracks.album_id) as album_image_updated_at
         from winners
         cross join perf_tracks on perf_tracks.id = winners.track_id
         cross join perf_findings on perf_findings.track_id = perf_tracks.id
@@ -107,14 +139,14 @@ const logStatement = {
 };
 
 const recommendationDistance = `min(${Array.from(
-  { length: RECOMMENDATION_PROBES },
+  { length: MAX_REC_SEEDS },
   () => "vector_distance_cos(emb.embedding_blob, ?)",
 ).join(", ")})`;
-const recommendationProbeArgs = Array.from<Uint8Array>({ length: RECOMMENDATION_PROBES }).fill(
+const recommendationProbeArgs = Array.from<Uint8Array>({ length: MAX_REC_SEEDS }).fill(
   EMBEDDING_BLOB,
 );
 const recommendationCatalogueStatement = {
-  args: [...recommendationProbeArgs, RESULT_LIMIT],
+  args: [...recommendationProbeArgs, RECOMMENDATIONS_POOL],
   sql: `with candidates(track_id) as materialized (
           select t.id
           from perf_tracks t
@@ -140,7 +172,7 @@ const recommendationCatalogueStatement = {
         limit ?`,
 };
 const recommendationFindingsStatement = {
-  args: [...recommendationProbeArgs, 3],
+  args: [...recommendationProbeArgs, FINDINGS_SLOT_COUNT],
   sql: `with candidates(track_id) as materialized (
           select t.id
           from perf_findings f
