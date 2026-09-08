@@ -213,7 +213,8 @@ async function convergeEvaluatedSourceMarkers(
           claim_token = null,
           claim_expires_at = null,
           claimed_by = null,
-          updated_at = excluded.updated_at`,
+          updated_at = excluded.updated_at,
+          repair_entered_at = null`,
     });
   }
   if (removed.length > 0) {

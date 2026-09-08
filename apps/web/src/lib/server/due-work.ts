@@ -341,7 +341,8 @@ export function upsertDueWorkStatement<WorkKind extends string>(
         claim_token = null,
         claim_expires_at = null,
         claimed_by = null,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        repair_entered_at = null`,
   };
 }
 
@@ -387,11 +388,12 @@ export function markDueWorkRepairStatement<WorkKind extends string>(
       identity.sourceVersion,
       options.generation ?? DUE_WORK_LIVE_GENERATION,
       updatedAt,
+      updatedAt,
     ],
     sql: `insert into due_work
       (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
-       source_version, generation, updated_at)
-      values (?, ?, ?, 'repair', '', ?, ?, ?, ?)
+       source_version, generation, updated_at, repair_entered_at)
+      values (?, ?, ?, 'repair', '', ?, ?, ?, ?, ?)
       on conflict(work_kind, subject_type, subject_id) do update set
         state = 'repair',
         sort_key = '',
@@ -401,7 +403,9 @@ export function markDueWorkRepairStatement<WorkKind extends string>(
         claim_token = null,
         claim_expires_at = null,
         claimed_by = null,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        repair_entered_at = case when due_work.state = 'repair'
+          then due_work.repair_entered_at else excluded.repair_entered_at end`,
   };
 }
 
@@ -471,7 +475,7 @@ export function markDueWorkSourceRepairsStatement(
   // Turso's hosted SQLite build caps compound SELECTs at 50 terms. A VALUES CTE is the same
   // parameterized row constructor without that parser limit, preserves the immediately-adjacent
   // `changes()` gate, and supports the helper's full 500-subject API bound.
-  const rows = unique.map(() => "(?, ?, ?, 'repair', '', ?, ?, ?, ?)").join(", ");
+  const rows = unique.map(() => "(?, ?, ?, 'repair', '', ?, ?, ?, ?, ?)").join(", ");
   const args = unique.flatMap((subject) => [
     DUE_WORK_SOURCE_REPAIR_KIND,
     subject.subjectType,
@@ -480,16 +484,17 @@ export function markDueWorkSourceRepairsStatement(
     markerVersion,
     DUE_WORK_LIVE_GENERATION,
     updatedAt,
+    updatedAt,
   ]);
 
   return {
     args,
     sql: `with source
       (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
-       source_version, generation, updated_at) as (values ${rows})
+       source_version, generation, updated_at, repair_entered_at) as (values ${rows})
       insert into due_work
       (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
-       source_version, generation, updated_at)
+       source_version, generation, updated_at, repair_entered_at)
       select * from source
       where 1 = 1${options.onlyIfPreviousStatementChanged === true ? " and changes() > 0" : ""}
       on conflict(work_kind, subject_type, subject_id) do update set
@@ -501,7 +506,9 @@ export function markDueWorkSourceRepairsStatement(
         claim_token = null,
         claim_expires_at = null,
         claimed_by = null,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        repair_entered_at = case when due_work.state = 'repair'
+          then due_work.repair_entered_at else excluded.repair_entered_at end`,
   };
 }
 
@@ -538,12 +545,13 @@ export function markDueWorkSourceRepairsFromSelectStatement(
       markerVersion,
       DUE_WORK_LIVE_GENERATION,
       updatedAt,
+      updatedAt,
       ...(selection.args ?? []),
     ],
     sql: `insert into due_work
       (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
-       source_version, generation, updated_at)
-      select distinct ?, ?, source.subject_id, 'repair', '', ?, ?, ?, ?
+       source_version, generation, updated_at, repair_entered_at)
+      select distinct ?, ?, source.subject_id, 'repair', '', ?, ?, ?, ?, ?
       from (${selection.sql}) source
       where source.subject_id is not null and trim(source.subject_id) <> ''
       on conflict(work_kind, subject_type, subject_id) do update set
@@ -555,7 +563,9 @@ export function markDueWorkSourceRepairsFromSelectStatement(
         claim_token = null,
         claim_expires_at = null,
         claimed_by = null,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        repair_entered_at = case when due_work.state = 'repair'
+          then due_work.repair_entered_at else excluded.repair_entered_at end`,
   };
 }
 
@@ -1064,8 +1074,9 @@ export async function repairDueWorkChunk<WorkKind extends string>(
           claim_token = null,
           claim_expires_at = null,
           claimed_by = null,
-          updated_at = excluded.updated_at
-        returning subject_id`,
+          updated_at = excluded.updated_at,
+          repair_entered_at = null
+          returning subject_id`,
     });
   }
   if (removed.length > 0) {

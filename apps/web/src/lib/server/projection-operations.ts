@@ -123,39 +123,47 @@ function oldestOutstandingMarkerAge(
   if (rows.length === 0) {
     return { ageMs: null, reason: null, truncated };
   }
-  const timestamps = (rows as { created_at: unknown }[]).map((row) =>
-    typeof row.created_at === "string" ? Date.parse(row.created_at) : Number.NaN,
-  );
-  if (timestamps.some(Number.isNaN)) {
-    return { ageMs: null, reason: "marker_timestamp_invalid", truncated };
+  const timestamps: number[] = [];
+  let invalid = false;
+  let untimed = false;
+  for (const row of rows as { created_at: unknown }[]) {
+    if (row.created_at === null) {
+      untimed = true;
+      continue;
+    }
+    const timestamp = typeof row.created_at === "string" ? Date.parse(row.created_at) : Number.NaN;
+    if (Number.isNaN(timestamp)) {
+      invalid = true;
+      continue;
+    }
+    timestamps.push(timestamp);
+  }
+  if (invalid) {
+    return { ageMs: null, reason: "marker_timestamp_invalid", truncated: truncated || untimed };
+  }
+  if (timestamps.length === 0) {
+    return { ageMs: null, reason: "marker_timestamp_unavailable", truncated: true };
   }
   return {
     ageMs: Math.max(...timestamps.map((timestamp) => Math.max(0, now - timestamp))),
     reason: null,
-    truncated,
-  };
-}
-
-function unavailableOutstandingMarkerAge(repairs: BoundedCount): OldestOutstandingMarkerAge {
-  return {
-    ageMs: null,
-    reason: repairs.count > 0 ? "marker_timestamp_unavailable" : null,
-    truncated: repairs.truncated,
+    truncated: truncated || untimed,
   };
 }
 
 function oldestCrawlOutstandingMarkerAge(
+  directRows: readonly unknown[],
   direct: BoundedCount,
   fanoutRows: readonly unknown[],
   fanout: BoundedCount,
+  total: BoundedCount,
   now: number,
 ): OldestOutstandingMarkerAge {
-  if (fanoutRows.length === 0) {
-    return unavailableOutstandingMarkerAge(direct);
-  }
-  // Direct rows preserve frontier discovery time rather than repair-entry time. Only fanout
-  // markers have a usable creation timestamp; direct debt makes the observed age incomplete.
-  return oldestOutstandingMarkerAge(fanoutRows, fanout.truncated || direct.count > 0, now);
+  return oldestOutstandingMarkerAge(
+    [...directRows, ...fanoutRows],
+    direct.truncated || fanout.truncated || total.truncated,
+    now,
+  );
 }
 
 function emptyRebuild(total = 1): RebuildStatus {
@@ -344,6 +352,7 @@ function trackFamilyStatus(
   results: readonly ResultSet[],
   audit: ProjectionAuditEvidence | undefined,
   sourceFence: number,
+  oldestMarkerAge: OldestOutstandingMarkerAge,
 ): FamilyStatus {
   const rows = results[12]?.rows as unknown as
     | { projected_count: number; scanned_count: number; state: string }[]
@@ -394,7 +403,7 @@ function trackFamilyStatus(
       sourceDigest,
       sourceEpoch: null,
     },
-    oldestOutstandingMarkerAge: unavailableOutstandingMarkerAge(total),
+    oldestOutstandingMarkerAge: oldestMarkerAge,
     ready: rebuild.complete && total.count === 0 && digestMatched,
     rebuild,
     repairs: { direct, fanout, total },
@@ -486,8 +495,9 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
-      sql: `select work_kind from due_work indexed by due_work_repair_idx
-        where state = 'repair' limit ?`,
+      sql: `select work_kind, repair_entered_at as created_at
+        from due_work indexed by due_work_repair_idx
+        where state = 'repair' order by subject_type, subject_id limit ?`,
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
@@ -506,8 +516,9 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
-      sql: `select 1 from crawl_due_work indexed by crawl_due_work_repair_idx
-        where state = 'repair' limit ?`,
+      sql: `select repair_entered_at as created_at
+        from crawl_due_work indexed by crawl_due_work_repair_idx
+        where state = 'repair' order by node_id limit ?`,
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
@@ -549,10 +560,13 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
 
   const now = Date.now();
   const settingRows = results[0]?.rows ?? [];
+  const trackRepairRows = results[4]?.rows ?? [];
+  const trackRepairs = boundedCount(trackRepairRows);
   const track = trackFamilyStatus(
     results,
     trackAudit,
     integerSetting(settingRows, TRACK_DUE_AUDIT_FENCE_KEY),
+    oldestOutstandingMarkerAge(trackRepairRows, trackRepairs.truncated, now),
   );
   const crawlDirectRepairRows = results[8]?.rows ?? [];
   const crawlFanoutRepairRows = results[9]?.rows ?? [];
@@ -563,9 +577,11 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
     crawlAudit,
     integerSetting(settingRows, CRAWL_DUE_AUDIT_FENCE_KEY),
     oldestCrawlOutstandingMarkerAge(
+      crawlDirectRepairRows,
       crawlDirectRepairs,
       crawlFanoutRepairRows,
       crawlFanoutRepairs,
+      addBoundedCounts(crawlDirectRepairs, crawlFanoutRepairs),
       now,
     ),
   );

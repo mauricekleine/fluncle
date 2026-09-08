@@ -440,7 +440,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
       .map((statement) =>
         typeof statement === "string" || Array.isArray(statement)
           ? 0
-          : statement.sql.split("(?, ?, ?, 'repair', '', ?, ?, ?, ?)").length - 1,
+          : statement.sql.split("(?, ?, ?, 'repair', '', ?, ?, ?, ?, ?)").length - 1,
       );
     expect(sourceRepairRows).toEqual([500, 1]);
     expect(

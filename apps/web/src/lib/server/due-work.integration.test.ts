@@ -18,6 +18,7 @@ import {
   markDueWorkRepair,
   markDueWorkRepairStatement,
   markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceRepairsFromSelectStatement,
   markDueWorkSourceRepairsStatement,
   readDueWorkProjectionChunk,
   readDueWorkRebuild,
@@ -469,11 +470,15 @@ describe("due-work repair and drift", () => {
     await db.batch([first, first], "write");
     const idempotent = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND, source.subjectType, source.subjectId],
-      sql: `select source_version, state from due_work
+      sql: `select repair_entered_at, source_version, state from due_work
         where work_kind = ? and subject_type = ? and subject_id = ?`,
     });
     expect(idempotent.rows).toHaveLength(1);
-    expect(idempotent.rows[0]).toMatchObject({ source_version: "source-v1", state: "repair" });
+    expect(idempotent.rows[0]).toMatchObject({
+      repair_entered_at: T0.toISOString(),
+      source_version: "source-v1",
+      state: "repair",
+    });
 
     await db.batch(
       [
@@ -488,16 +493,71 @@ describe("due-work repair and drift", () => {
     );
     const raced = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND, source.subjectType, source.subjectId],
-      sql: `select source_version, state from due_work
+      sql: `select repair_entered_at, source_version, state from due_work
         where work_kind = ? and subject_type = ? and subject_id = ?`,
     });
     expect(raced.rows).toHaveLength(1);
-    expect(raced.rows[0]).toMatchObject({ source_version: "source-v2", state: "repair" });
+    expect(raced.rows[0]).toMatchObject({
+      repair_entered_at: T0.toISOString(),
+      source_version: "source-v2",
+      state: "repair",
+    });
 
     const cleared = await db.execute(
       clearDueWorkSourceRepairStatement({ ...source, sourceVersion: "source-v2" }),
     );
     expect(cleared.rowsAffected).toBe(1);
+    expect(
+      (
+        await db.execute({
+          args: [DUE_WORK_SOURCE_REPAIR_KIND, source.subjectType, source.subjectId],
+          sql: `select 1 from due_work
+            where work_kind = ? and subject_type = ? and subject_id = ?`,
+        })
+      ).rows,
+    ).toEqual([]);
+  });
+
+  it("preserves repair entry time for select-distinct markers until guarded deletion", async () => {
+    await db.execute(`create table selected_repair_source (subject_id text primary key)`);
+    await db.execute(`insert into selected_repair_source values ('selected-repair')`);
+    const selection = { sql: `select subject_id from selected_repair_source` };
+
+    await db.execute(
+      markDueWorkSourceRepairsFromSelectStatement("track", selection, {
+        markerVersion: "selected-v1",
+        now: T0,
+        producer: "capture-verification",
+      }),
+    );
+    await db.execute(
+      markDueWorkSourceRepairsFromSelectStatement("track", selection, {
+        markerVersion: "selected-v2",
+        now: T1,
+        producer: "capture-verification",
+      }),
+    );
+
+    expect(
+      (
+        await db.execute(`select repair_entered_at, source_version from due_work
+          where work_kind = 'source-repair' and subject_id = 'selected-repair'`)
+      ).rows,
+    ).toEqual([{ repair_entered_at: T0.toISOString(), source_version: "selected-v2" }]);
+
+    await db.execute(
+      clearDueWorkSourceRepairStatement({
+        sourceVersion: "selected-v2",
+        subjectId: "selected-repair",
+        subjectType: "track",
+      }),
+    );
+    expect(
+      (
+        await db.execute(`select 1 from due_work
+          where work_kind = 'source-repair' and subject_id = 'selected-repair'`)
+      ).rows,
+    ).toEqual([]);
   });
 
   it("marks the full source-repair API batch without a compound SELECT", async () => {
@@ -513,7 +573,7 @@ describe("due-work repair and drift", () => {
 
     expect(statement.sql).toContain("with source");
     expect(statement.sql.toLowerCase()).not.toContain("union all");
-    expect(statement.sql.split("(?, ?, ?, 'repair', '', ?, ?, ?, ?)")).toHaveLength(
+    expect(statement.sql.split("(?, ?, ?, 'repair', '', ?, ?, ?, ?, ?)")).toHaveLength(
       MAX_DUE_WORK_CHUNK_SIZE + 1,
     );
 
@@ -537,6 +597,12 @@ describe("due-work repair and drift", () => {
       { now: T0 },
     );
     expect(await hasReadyDueWork(db, "repair-kind")).toBe(false);
+    expect(
+      (
+        await db.execute(`select repair_entered_at from due_work
+          where work_kind = 'repair-kind' and subject_id = 'repair-track'`)
+      ).rows[0]?.repair_entered_at,
+    ).toBe(T0.toISOString());
 
     const raced = await repairDueWorkChunk(
       db,
@@ -560,9 +626,14 @@ describe("due-work repair and drift", () => {
     );
     expect(raced).toMatchObject({ deferred: 1, repaired: 0, scanned: 1 });
     const marker = await db.execute(
-      "select state, source_version from due_work where work_kind = 'repair-kind'",
+      `select repair_entered_at, state, source_version from due_work
+       where work_kind = 'repair-kind'`,
     );
-    expect(marker.rows[0]).toMatchObject({ source_version: "version-b", state: "repair" });
+    expect(marker.rows[0]).toMatchObject({
+      repair_entered_at: T0.toISOString(),
+      source_version: "version-b",
+      state: "repair",
+    });
 
     const converged = await repairDueWorkChunk(
       db,
@@ -585,6 +656,12 @@ describe("due-work repair and drift", () => {
     );
     expect(converged).toMatchObject({ deferred: 0, repaired: 1, scanned: 1 });
     expect((await listReadyDueWork(db, "repair-kind")).items[0]?.sourceVersion).toBe("version-b");
+    expect(
+      (
+        await db.execute(`select repair_entered_at from due_work
+          where work_kind = 'repair-kind' and subject_id = 'repair-track'`)
+      ).rows[0]?.repair_entered_at,
+    ).toBeNull();
   });
 
   it("bulk-projects a repair page and keeps a concurrent replacement marker", async () => {

@@ -1233,6 +1233,13 @@
       "when": 1788566654667,
       "tag": "0175_huge_kabuki",
       "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "6",
+      "when": 1788844435725,
+      "tag": "0176_burly_loa",
+      "breakpoints": true
     }
   ]
 }
