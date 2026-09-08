@@ -570,11 +570,9 @@ export async function listRecommendations(
           db,
           "sonar.fallback.recommendations-catalogue",
           {
-            args: [...probes, ...seedIds, ...excludedIds, RECOMMENDATIONS_POOL],
-            sql: `select track_id, dist from (
-              select t.track_id, ${bestDistance} as dist
-              from (
-                select t.track_id, emb.embedding_blob
+            args: [...seedIds, ...excludedIds, ...probes, RECOMMENDATIONS_POOL],
+            sql: `with candidates(track_id) as materialized (
+                select t.track_id
                 from tracks t
                 left join findings f on f.track_id = t.track_id
                 left join track_embeddings emb on emb.track_id = t.track_id
@@ -583,8 +581,12 @@ export async function listRecommendations(
                   ${recentExclusion}
                 order by t.track_id
                 ${vectorFallbackCandidateLimitSql()}
-              ) t
-            )
+              ), ranked(track_id, dist) as materialized (
+                select candidates.track_id, ${bestDistance} as dist
+                from candidates
+                join track_embeddings emb on emb.track_id = candidates.track_id
+              )
+            select track_id, dist from ranked
             where dist is not null
             order by dist asc, track_id asc
             limit ?`,
@@ -601,11 +603,9 @@ export async function listRecommendations(
           db,
           "sonar.fallback.recommendations-findings",
           {
-            args: [...probes, ...seedIds, ...excludedIds, FINDINGS_SLOT_COUNT],
-            sql: `select track_id, dist from (
-              select candidates.track_id, ${bestDistance} as dist
-              from (
-                select t.track_id, emb.embedding_blob
+            args: [...seedIds, ...excludedIds, ...probes, FINDINGS_SLOT_COUNT],
+            sql: `with candidates(track_id) as materialized (
+                select t.track_id
                 from findings f
                 cross join tracks t on t.track_id = f.track_id
                 cross join track_embeddings emb on emb.track_id = t.track_id
@@ -614,8 +614,12 @@ export async function listRecommendations(
                   ${recentExclusion}
                 order by t.track_id
                 ${vectorFallbackCandidateLimitSql()}
-              ) candidates
-            )
+              ), ranked(track_id, dist) as materialized (
+                select candidates.track_id, ${bestDistance} as dist
+                from candidates
+                join track_embeddings emb on emb.track_id = candidates.track_id
+              )
+            select track_id, dist from ranked
             where dist is not null
             order by dist asc, track_id asc
             limit ?`,

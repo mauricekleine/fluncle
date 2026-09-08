@@ -34,19 +34,40 @@ describe("Sonar's Turso fallback cost contract", () => {
       "sonar.fallback.search",
       {
         args: [],
-        sql: `select id from (
-          select id, vector_distance_cos(embedding_blob, vector32('[1, 0]')) as dist
-          from (
-            select id, embedding_blob from candidates order by id
-            ${vectorFallbackCandidateLimitSql(2)}
-          )
-          order by dist asc, id asc
-        )`,
+        sql: `with bounded_ids(id) as materialized (
+          select id from candidates where embedding_blob is not null order by id
+          ${vectorFallbackCandidateLimitSql(2)}
+        ) select bounded_ids.id from bounded_ids
+          join candidates on candidates.id = bounded_ids.id
+          order by vector_distance_cos(candidates.embedding_blob, vector32('[1, 0]')), bounded_ids.id`,
       },
       { candidateLimit: 2 },
     );
 
     expect(result.rows.map((row) => row.id)).toEqual(["b", "a"]);
+    db.close();
+  });
+
+  it("keeps embedding membership ahead of the ID-only cap", async () => {
+    const db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    await db.execute("create table candidates (id text primary key, embedding_blob F32_BLOB(2))");
+    await db.execute({ args: ["a"], sql: "insert into candidates(id) values(?)" });
+    await db.batch(
+      ["b", "c"].map((id, index) => ({
+        args: [id, index === 0 ? "[0, 1]" : "[1, 0]"],
+        sql: "insert into candidates(id, embedding_blob) values(?, vector32(?))",
+      })),
+      "write",
+    );
+
+    const result = await db.execute(`with bounded_ids(id) as materialized (
+      select id from candidates where embedding_blob is not null order by id
+      ${vectorFallbackCandidateLimitSql(2)}
+    ) select bounded_ids.id from bounded_ids
+      join candidates on candidates.id = bounded_ids.id
+      order by bounded_ids.id`);
+
+    expect(result.rows.map((row) => row.id)).toEqual(["b", "c"]);
     db.close();
   });
 
