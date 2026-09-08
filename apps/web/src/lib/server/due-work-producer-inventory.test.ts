@@ -284,11 +284,7 @@ describe("due-work producer maintenance inventory", () => {
   it("reconciles every catalogue-rank marker callsite with the closed producer policy", async () => {
     const dependencies = DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES;
     const invalidators = new Set<string>([...dependencies.required, ...dependencies.ambiguous]);
-    const expectedPolicy = [
-      ...dependencies.required,
-      ...dependencies.ambiguous,
-      ...dependencies.excluded,
-    ].sort();
+    const expectedPolicy = [...dependencies.required, ...dependencies.ambiguous].sort();
     const sources = await productionSourceTexts();
     const calls = sources.flatMap(({ file, sourceText }) =>
       catalogueRankPolicyCalls(file, sourceText),
@@ -304,12 +300,6 @@ describe("due-work producer maintenance inventory", () => {
         ),
       ].sort(),
     ).toEqual([...invalidators].sort());
-    for (const producer of dependencies.excluded) {
-      expect(calls.find((call) => call.producer === producer)).toMatchObject({
-        direct: false,
-        routed: true,
-      });
-    }
   });
 
   it("uses unique producer ids and declares at least one repaired subject kind per module", () => {

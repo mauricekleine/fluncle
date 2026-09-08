@@ -8,7 +8,7 @@ import {
 import { CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
 import { repairDueWorkChunk, runDueWorkRebuildChunk } from "./due-work";
 import { DUE_WORK_BACKFILLS, dueWorkRepairDefinitions } from "./due-work-registry";
-import { fanOutDueWorkSourceRepairs } from "./due-work-source-repair";
+import { fanOutDueWorkSourceRepairs, PHYSICAL_REPAIR_LIMIT } from "./due-work-source-repair";
 import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
 import {
   PUBLIC_ANCHOR_FORMAT_VERSION,
@@ -706,7 +706,9 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
     if (pending.rows.length === 0) {
       continue;
     }
-    const result = await repairDueWorkChunk(client, definition, { limit });
+    const result = await repairDueWorkChunk(client, definition, {
+      limit: Math.min(limit, PHYSICAL_REPAIR_LIMIT),
+    });
     processed += result.scanned;
     break;
   }
