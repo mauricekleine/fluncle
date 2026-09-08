@@ -29,9 +29,10 @@
 //
 // If this test fails, the installer would have skipped something on the next box rebuild.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -48,6 +49,13 @@ import { basename, join } from "node:path";
 const HERMES_DIR = join(import.meta.dir, "..");
 const INSTALLER = join(HERMES_DIR, "install-host-timers.sh");
 const CONTAINER_SCRIPT_PREFIX = "/opt/hermes-scripts/";
+const fixtureRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of fixtureRoots.splice(0)) {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
 /** The distro bindirs a unit may exec straight out of — the installer never lays these down. */
 const SYSTEM_BINDIRS = ["/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/"];
@@ -62,6 +70,138 @@ type Plan = {
 
 function runInstaller(cwd: string, script: string) {
   return spawnSync("bash", [script, "--dry-run"], { cwd, encoding: "utf8" });
+}
+
+type InstallerFixture = {
+  dest: string;
+  installLog: string;
+  opLog: string;
+  root: string;
+  script: string;
+  systemctlLog: string;
+};
+
+function writeExecutable(path: string, body: string): void {
+  writeFileSync(path, body);
+  chmodSync(path, 0o755);
+}
+
+function createInstallerFixture(): InstallerFixture {
+  const root = mkdtempSync(join(tmpdir(), "fluncle-install-host-timers-refresh-"));
+  fixtureRoots.push(root);
+  const script = join(root, "install-host-timers.sh");
+  const fakeBin = join(root, "fake-bin");
+  const dest = join(root, "systemd");
+  const installLog = join(root, "install.log");
+  const systemctlLog = join(root, "systemctl.log");
+  const opLog = join(root, "op.log");
+
+  mkdirSync(fakeBin, { recursive: true });
+  mkdirSync(dest, { recursive: true });
+  mkdirSync(join(root, "scripts"), { recursive: true });
+  copyFileSync(INSTALLER, script);
+  writeFileSync(join(root, "scripts", "database-admission-runner.sh"), "#!/usr/bin/env bash\n");
+
+  mkdirSync(join(root, "alpha-timer"), { recursive: true });
+  writeFileSync(
+    join(root, "alpha-timer", "fluncle-alpha.service"),
+    [
+      "[Service]",
+      "Type=oneshot",
+      "ExecStart=/opt/fluncle-database-admission/database-admission-runner.sh alpha -- /opt/fluncle-alpha/run.sh",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(join(root, "alpha-timer", "run.sh"), "#!/usr/bin/env bash\n");
+  writeFileSync(
+    join(root, "alpha-timer", "fluncle-alpha.timer"),
+    "[Timer]\nOnUnitActiveSec=1h\n\n[Install]\nWantedBy=timers.target\n",
+  );
+
+  mkdirSync(join(root, "beta-timer"), { recursive: true });
+  writeFileSync(
+    join(root, "beta-timer", "fluncle-beta.service"),
+    "[Service]\nType=oneshot\nExecStart=/opt/fluncle-beta/run.sh\n",
+  );
+  writeFileSync(join(root, "beta-timer", "run.sh"), "#!/usr/bin/env bash\n");
+  writeFileSync(
+    join(root, "beta-timer", "fluncle-beta.timer"),
+    "[Timer]\nOnUnitActiveSec=1h\n\n[Install]\nWantedBy=timers.target\n",
+  );
+
+  for (const dir of ["ambiguous-one", "ambiguous-two"]) {
+    mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(
+      join(root, dir, "fluncle-ambiguous.service"),
+      "[Service]\nType=oneshot\nExecStart=/usr/bin/true\n",
+    );
+  }
+
+  writeExecutable(
+    join(fakeBin, "id"),
+    '#!/usr/bin/env bash\nif [ "${1:-}" = "-u" ]; then printf \'0\\n\'; else /usr/bin/id "$@"; fi\n',
+  );
+  writeExecutable(
+    join(fakeBin, "install"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "operands=()",
+      'while [ "$#" -gt 0 ]; do',
+      '  case "$1" in',
+      "    -D) shift ;;",
+      "    -m) shift 2 ;;",
+      '    *) operands+=("$1"); shift ;;',
+      "  esac",
+      "done",
+      'source_path="${operands[0]}"',
+      'destination="${operands[1]}"',
+      'case "$destination" in',
+      '  */) destination="${destination}$(basename "$source_path")" ;;',
+      "esac",
+      'case "$destination" in',
+      '  /opt/* | /usr/local/*) destination="${FAKE_INSTALL_ROOT}${destination}" ;;',
+      "esac",
+      'mkdir -p "$(dirname "$destination")"',
+      'cp "$source_path" "$destination"',
+      'printf \'%s\\n\' "$destination" >> "$FAKE_INSTALL_LOG"',
+      "",
+    ].join("\n"),
+  );
+  writeExecutable(
+    join(fakeBin, "systemctl"),
+    '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$FAKE_SYSTEMCTL_LOG"\n',
+  );
+  writeExecutable(
+    join(fakeBin, "op"),
+    '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$FAKE_OP_LOG"\n',
+  );
+
+  return { dest, installLog, opLog, root, script, systemctlLog };
+}
+
+function runFixture(fixture: InstallerFixture, args: string[]) {
+  return spawnSync("bash", [fixture.script, ...args], {
+    cwd: fixture.root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      FAKE_INSTALL_LOG: fixture.installLog,
+      FAKE_INSTALL_ROOT: join(fixture.root, "host-root"),
+      FAKE_OP_LOG: fixture.opLog,
+      FAKE_SYSTEMCTL_LOG: fixture.systemctlLog,
+      INSTALL_HOST_TIMERS_DEST: fixture.dest,
+      PATH: `${join(fixture.root, "fake-bin")}:${process.env.PATH ?? ""}`,
+    },
+  });
+}
+
+function readLog(path: string): string[] {
+  if (!existsSync(path)) {
+    return [];
+  }
+
+  return readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
 }
 
 function parsePlan(stdout: string): Plan {
@@ -359,6 +499,111 @@ describe("every in-container script a unit execs is baked from scripts/", () => 
     }
 
     expect(covered).toBeGreaterThan(0);
+  });
+});
+
+describe("the installer refreshes an authorized unit subset without activation", () => {
+  test("installs only selected canonical units and their host ExecStart dependencies", () => {
+    const fixture = createInstallerFixture();
+
+    try {
+      const refreshed = runFixture(fixture, [
+        "--refresh-unit",
+        "fluncle-alpha.service",
+        "--refresh-unit",
+        "fluncle-alpha.timer",
+      ]);
+
+      expect(refreshed.status).toBe(0);
+      expect(refreshed.stderr).toBe("");
+      expect(refreshed.stdout).toContain("no timers or services activated");
+      expect(readdirSync(fixture.dest).sort()).toEqual([
+        "fluncle-alpha.service",
+        "fluncle-alpha.timer",
+      ]);
+      expect(readLog(fixture.installLog)).toEqual([
+        join(fixture.dest, "fluncle-alpha.service"),
+        join(fixture.dest, "fluncle-alpha.timer"),
+        join(
+          fixture.root,
+          "host-root",
+          "opt/fluncle-database-admission/database-admission-runner.sh",
+        ),
+        join(fixture.root, "host-root", "opt/fluncle-alpha/run.sh"),
+      ]);
+      expect(existsSync(join(fixture.root, "host-root", "opt/fluncle-beta/run.sh"))).toBe(false);
+      expect(readLog(fixture.systemctlLog)).toEqual(["daemon-reload"]);
+      expect(readLog(fixture.opLog)).toEqual([]);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("accepts a selected service without its timer", () => {
+    const fixture = createInstallerFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.service"]);
+
+      expect(refreshed.status).toBe(0);
+      expect(refreshed.stderr).toBe("");
+      expect(readdirSync(fixture.dest)).toEqual(["fluncle-beta.service"]);
+      expect(existsSync(join(fixture.root, "host-root", "opt/fluncle-beta/run.sh"))).toBe(true);
+      expect(readLog(fixture.systemctlLog)).toEqual(["daemon-reload"]);
+      expect(readLog(fixture.opLog)).toEqual([]);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("dry-run states that refresh performs no activation", () => {
+    const fixture = createInstallerFixture();
+
+    try {
+      const preview = runFixture(fixture, ["--dry-run", "--refresh-unit", "fluncle-alpha.service"]);
+
+      expect(preview.status).toBe(0);
+      expect(preview.stdout).toContain("plan: unit alpha-timer/fluncle-alpha.service");
+      expect(preview.stdout).not.toContain("plan: unit alpha-timer/fluncle-alpha.timer");
+      expect(preview.stdout).toContain("no timers or services would be activated");
+      expect(readdirSync(fixture.dest)).toEqual([]);
+      expect(readLog(fixture.systemctlLog)).toEqual([]);
+      expect(readLog(fixture.opLog)).toEqual([]);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("rejects unknown, duplicate, ambiguous, and non-unit selections before writes", () => {
+    const cases = [
+      { args: ["--refresh-unit", "fluncle-missing.service"], message: "unknown refresh unit" },
+      {
+        args: ["--refresh-unit", "fluncle-beta.service", "--refresh-unit", "fluncle-beta.service"],
+        message: "duplicate --refresh-unit selection",
+      },
+      {
+        args: ["--refresh-unit", "fluncle-ambiguous.service"],
+        message: "ambiguous refresh unit basename",
+      },
+      { args: ["--refresh-unit", "fluncle-beta"], message: "exact .service or .timer basename" },
+    ];
+
+    for (const invalid of cases) {
+      const fixture = createInstallerFixture();
+
+      try {
+        const rejected = runFixture(fixture, invalid.args);
+
+        expect(rejected.status).toBe(2);
+        expect(rejected.stderr).toContain(invalid.message);
+        expect(readdirSync(fixture.dest)).toEqual([]);
+        expect(readLog(fixture.installLog)).toEqual([]);
+        expect(readLog(fixture.systemctlLog)).toEqual([]);
+        expect(readLog(fixture.opLog)).toEqual([]);
+      } finally {
+        rmSync(fixture.root, { force: true, recursive: true });
+      }
+    }
   });
 });
 

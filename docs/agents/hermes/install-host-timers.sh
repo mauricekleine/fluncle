@@ -13,6 +13,10 @@
 # Preview the plan without touching the host (no root needed — this is what the CI test runs):
 #     bash docs/agents/hermes/install-host-timers.sh --dry-run
 #
+# Refresh an exact, authorized subset without changing any unit's runtime state or syncing secrets:
+#     sudo bash docs/agents/hermes/install-host-timers.sh \
+#       --refresh-unit fluncle-example.service --refresh-unit fluncle-example.timer
+#
 # WHAT IT DOES, AND WHY IT DERIVES EVERYTHING
 # -------------------------------------------
 # It DISCOVERS its own work rather than being told:
@@ -54,33 +58,35 @@
 # missing from the plan.
 set -euo pipefail
 
-DEST=/etc/systemd/system
+DEST="${INSTALL_HOST_TIMERS_DEST:-/etc/systemd/system}"
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ADMISSION_RUNNER_SOURCE="${REPO_DIR}/scripts/database-admission-runner.sh"
 
 dry_run=0
-for arg in "$@"; do
-  case "$arg" in
+refresh_unit_names=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --dry-run | -n)
       dry_run=1
+      shift
+      ;;
+    --refresh-unit)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+        echo "install-host-timers.sh: --refresh-unit requires a service or timer basename" >&2
+        exit 2
+      fi
+      refresh_unit_names+=("$2")
+      shift 2
       ;;
     *)
-      echo "usage: install-host-timers.sh [--dry-run]" >&2
+      echo "usage: install-host-timers.sh [--dry-run] [--refresh-unit NAME ...]" >&2
       exit 2
       ;;
   esac
 done
-
-if [ "$dry_run" -eq 0 ]; then
-  if [ "$(id -u)" -ne 0 ]; then
-    echo "install-host-timers.sh must run as root (sudo), or pass --dry-run to preview." >&2
-    exit 1
-  fi
-
-  if [ ! -d "$DEST" ]; then
-    echo "no ${DEST} — is this a systemd host?" >&2
-    exit 1
-  fi
+refresh_mode=0
+if [ "${#refresh_unit_names[@]}" -ne 0 ]; then
+  refresh_mode=1
 fi
 
 shopt -s nullglob
@@ -171,6 +177,61 @@ if [ "${#unit_dirs[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# Resolve refresh selections against the complete derived roster before any host write. Basenames
+# are the systemd identity operators use, but they must be unique in the repo so selection cannot
+# silently depend on directory order.
+selected_unit_files=()
+if [ "$refresh_mode" -eq 1 ]; then
+  seen_refresh_names=()
+  for requested_name in "${refresh_unit_names[@]}"; do
+    case "$requested_name" in
+      *.service | *.timer) ;;
+      *)
+        echo "install-host-timers.sh: refresh unit must be an exact .service or .timer basename: ${requested_name}" >&2
+        exit 2
+        ;;
+    esac
+    if contains "$requested_name" ${seen_refresh_names[@]+"${seen_refresh_names[@]}"}; then
+      echo "install-host-timers.sh: duplicate --refresh-unit selection: ${requested_name}" >&2
+      exit 2
+    fi
+    seen_refresh_names+=("$requested_name")
+
+    matches=()
+    for dir in "${unit_dirs[@]}"; do
+      for unit in "$dir"/*.service "$dir"/*.timer; do
+        if [ "$(basename "$unit")" = "$requested_name" ]; then
+          matches+=("$unit")
+        fi
+      done
+    done
+    if [ "${#matches[@]}" -eq 0 ]; then
+      echo "install-host-timers.sh: unknown refresh unit: ${requested_name}" >&2
+      exit 2
+    fi
+    if [ "${#matches[@]}" -gt 1 ]; then
+      {
+        echo "install-host-timers.sh: ambiguous refresh unit basename: ${requested_name}"
+        printf '  - %s\n' "${matches[@]/#${REPO_DIR}\//}"
+      } >&2
+      exit 2
+    fi
+    selected_unit_files+=("${matches[0]}")
+  done
+fi
+
+if [ "$dry_run" -eq 0 ]; then
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "install-host-timers.sh must run as root (sudo), or pass --dry-run to preview." >&2
+    exit 1
+  fi
+
+  if [ ! -d "$DEST" ]; then
+    echo "no ${DEST} — is this a systemd host?" >&2
+    exit 1
+  fi
+fi
+
 # ---------------------------------------------------------------------------------------
 # 2. PRE-FLIGHT every ExecStart BEFORE touching the host. A unit that runs a host path needs
 #    that script laid down; its source is the file of the same name in the unit's own dir.
@@ -180,39 +241,49 @@ host_pairs=() # "<source path>|<destination path>"
 system_bins=()
 unresolved=()
 
-for dir in "${unit_dirs[@]}"; do
-  for unit in "$dir"/*.service "$dir"/*.timer; do
-    unit_files+=("$unit")
+if [ "$refresh_mode" -eq 1 ]; then
+  unit_files=("${selected_unit_files[@]}")
+else
+  for dir in "${unit_dirs[@]}"; do
+    for unit in "$dir"/*.service "$dir"/*.timer; do
+      unit_files+=("$unit")
+    done
   done
-  for unit in "$dir"/*.service; do
-    while IFS= read -r exec_path; do
-      case "$exec_path" in
-        /*) ;;
-        *)
-          unresolved+=("$(rel "$unit"): ExecStart is not an absolute path (${exec_path})")
-          continue
-          ;;
-      esac
-      if is_system_binary "$exec_path"; then
-        if ! contains "$exec_path" ${system_bins[@]+"${system_bins[@]}"}; then
-          system_bins+=("$exec_path")
-        fi
+fi
+
+for unit in "${unit_files[@]}"; do
+  case "$unit" in
+    *.service) ;;
+    *) continue ;;
+  esac
+  dir="$(dirname "$unit")"
+  while IFS= read -r exec_path; do
+    case "$exec_path" in
+      /*) ;;
+      *)
+        unresolved+=("$(rel "$unit"): ExecStart is not an absolute path (${exec_path})")
         continue
+        ;;
+    esac
+    if is_system_binary "$exec_path"; then
+      if ! contains "$exec_path" ${system_bins[@]+"${system_bins[@]}"}; then
+        system_bins+=("$exec_path")
       fi
-      if [ "$(basename "$exec_path")" = "database-admission-runner.sh" ]; then
-        src="$ADMISSION_RUNNER_SOURCE"
-      else
-        src="${dir}/$(basename "$exec_path")"
-      fi
-      if [ ! -e "$src" ]; then
-        unresolved+=("$(rel "$unit"): ExecStart=${exec_path} has no source at $(rel "$src")")
-        continue
-      fi
-      if ! contains "${src}|${exec_path}" ${host_pairs[@]+"${host_pairs[@]}"}; then
-        host_pairs+=("${src}|${exec_path}")
-      fi
-    done < <(exec_paths "$unit")
-  done
+      continue
+    fi
+    if [ "$(basename "$exec_path")" = "database-admission-runner.sh" ]; then
+      src="$ADMISSION_RUNNER_SOURCE"
+    else
+      src="${dir}/$(basename "$exec_path")"
+    fi
+    if [ ! -e "$src" ]; then
+      unresolved+=("$(rel "$unit"): ExecStart=${exec_path} has no source at $(rel "$src")")
+      continue
+    fi
+    if ! contains "${src}|${exec_path}" ${host_pairs[@]+"${host_pairs[@]}"}; then
+      host_pairs+=("${src}|${exec_path}")
+    fi
+  done < <(exec_paths "$unit")
 done
 
 if [ "${#unresolved[@]}" -ne 0 ]; then
@@ -232,55 +303,62 @@ for unit in "${unit_files[@]}"; do
 done
 
 # ---------------------------------------------------------------------------------------
-# 3. Which timers get enabled. A template unit (`name@.service`) is instantiated on demand by
-#    the `OnFailure=` that references it and is never enabled directly.
+# 3. Which timers get enabled during a full provision. Refresh mode deliberately computes no
+#    activation plan: it only replaces the selected canonical files and reloads systemd.
 # ---------------------------------------------------------------------------------------
 timers=()
 skipped_enables=()
-for dir in "${unit_dirs[@]}"; do
-  for timer in "$dir"/*.timer; do
-    name="$(basename "$timer")"
-    case "$name" in
-      *@*)
-        skipped_enables+=("${name} (template unit — instantiated on demand, never enabled)")
-        continue
-        ;;
-    esac
-    timers+=("$name")
+if [ "$refresh_mode" -eq 0 ]; then
+  for dir in "${unit_dirs[@]}"; do
+    for timer in "$dir"/*.timer; do
+      name="$(basename "$timer")"
+      case "$name" in
+        *@*)
+          skipped_enables+=("${name} (template unit — instantiated on demand, never enabled)")
+          continue
+          ;;
+      esac
+      timers+=("$name")
+    done
+    for service in "$dir"/*@.service; do
+      skipped_enables+=("$(basename "$service") (template unit — instantiated on demand, never enabled)")
+    done
   done
-  for service in "$dir"/*@.service; do
-    skipped_enables+=("$(basename "$service") (template unit — instantiated on demand, never enabled)")
-  done
-done
 
-if [ "${#timers[@]}" -eq 0 ]; then
-  echo "no .timer units found under ${REPO_DIR} — refusing to install a schedule with nothing in it" >&2
-  exit 1
+  if [ "${#timers[@]}" -eq 0 ]; then
+    echo "no .timer units found under ${REPO_DIR} — refusing to install a schedule with nothing in it" >&2
+    exit 1
+  fi
+
+  # Secrets first: on a re-provision the sweeps must not start ticking before 1Password has
+  # materialized the box's credentials. The rest keep glob (alphabetical) order.
+  ordered_timers=()
+  for name in "${timers[@]}"; do
+    if [ "$name" = "fluncle-secrets-sync.timer" ]; then
+      ordered_timers+=("$name")
+    fi
+  done
+  for name in "${timers[@]}"; do
+    if [ "$name" != "fluncle-secrets-sync.timer" ]; then
+      ordered_timers+=("$name")
+    fi
+  done
+  timers=("${ordered_timers[@]}")
+
+  for name in "${timers[@]}"; do
+    plan "timer ${name}"
+  done
 fi
-
-# Secrets first: on a re-provision the sweeps must not start ticking before 1Password has
-# materialized the box's credentials. The rest keep glob (alphabetical) order.
-ordered_timers=()
-for name in "${timers[@]}"; do
-  if [ "$name" = "fluncle-secrets-sync.timer" ]; then
-    ordered_timers+=("$name")
-  fi
-done
-for name in "${timers[@]}"; do
-  if [ "$name" != "fluncle-secrets-sync.timer" ]; then
-    ordered_timers+=("$name")
-  fi
-done
-timers=("${ordered_timers[@]}")
-
-for name in "${timers[@]}"; do
-  plan "timer ${name}"
-done
 
 if [ "$dry_run" -eq 1 ]; then
   printf 'DRY RUN — nothing installed.\n'
-  printf 'Would install %d unit files from %d dirs and %d host scripts; enable %d timers.\n' \
-    "${#unit_files[@]}" "${#unit_dirs[@]}" "${#host_pairs[@]}" "${#timers[@]}"
+  if [ "$refresh_mode" -eq 1 ]; then
+    printf 'Would refresh %d selected unit files and %d host scripts; no timers or services would be activated.\n' \
+      "${#unit_files[@]}" "${#host_pairs[@]}"
+  else
+    printf 'Would install %d unit files from %d dirs and %d host scripts; enable %d timers.\n' \
+      "${#unit_files[@]}" "${#unit_dirs[@]}" "${#host_pairs[@]}" "${#timers[@]}"
+  fi
   exit 0
 fi
 
@@ -297,6 +375,16 @@ for pair in ${host_pairs[@]+"${host_pairs[@]}"}; do
 done
 
 systemctl daemon-reload
+
+if [ "$refresh_mode" -eq 1 ]; then
+  printf 'Refreshed %d selected unit files and %d host scripts; no timers or services activated.\n' \
+    "${#unit_files[@]}" "${#host_pairs[@]}"
+  if [ "${#host_pairs[@]}" -ne 0 ]; then
+    printf '  host script: %s\n' "${host_pairs[@]//|/ -> }"
+  fi
+  printf '  refreshed: %s\n' "${unit_files[@]/#${REPO_DIR}\//}"
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------------------
 # 5. Enable. Secrets sync also gets one immediate best-effort run so a fresh box holds its
