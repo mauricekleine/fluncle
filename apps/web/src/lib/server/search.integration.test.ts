@@ -1455,7 +1455,7 @@ describe("the compound sonic tier — sound like several artists", () => {
     expect(scan).toBeDefined();
     const sql = scan?.sql ?? "";
 
-    expect(sql).toContain("vector_distance_cos(embedding_blob, ?)");
+    expect(sql).toContain("vector_distance_cos(emb.embedding_blob, ?)");
     expect(sql).toContain("join track_embeddings emb on emb.track_id = tracks.track_id");
     expect(sql).toContain("tracks.key in"); // the btree pre-filter, in the same statement
     expect(sql).not.toContain("lower(tracks.key)"); // …and it is the BARE column, so the btree serves it

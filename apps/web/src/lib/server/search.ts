@@ -1130,25 +1130,25 @@ export async function rankTracksByVector(
 
   const db = await getDb();
   const result = await executeVectorFallback(db, "sonar.fallback.search", {
-    // SQL-TEXT ORDER: the probe's `?` (in the select list) binds first, then the pre-filter
-    // clauses, then the exclusion, then the limit.
+    // SQL-TEXT ORDER: candidate pre-filter clauses and exclusion bind before the probe, then limit.
     args: [
-      toVectorProbe(probe),
       ...clauses.flatMap((clause) => clause.args),
       ...(excludeTrackId ? [excludeTrackId] : []),
+      toVectorProbe(probe),
       limit,
     ],
-    sql: `with winners(track_id, dist) as materialized (
-          select track_id, vector_distance_cos(embedding_blob, ?) as dist
-          from (
-            select tracks.track_id, emb.embedding_blob
+    sql: `with candidates(track_id) as materialized (
+            select tracks.track_id
             from ${SEARCH_FROM}
             join track_embeddings emb on emb.track_id = tracks.track_id
             where ${where}
             order by tracks.track_id
             ${vectorFallbackCandidateLimitSql()}
-          )
-          order by dist asc, track_id asc
+          ), winners(track_id, dist) as materialized (
+          select candidates.track_id, vector_distance_cos(emb.embedding_blob, ?) as dist
+          from candidates
+          join track_embeddings emb on emb.track_id = candidates.track_id
+          order by dist asc, candidates.track_id asc
           limit ?
         )
         select ${SEARCH_SELECT}
