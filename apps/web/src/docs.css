@@ -18,8 +18,13 @@
    styles.css, so there is nothing to re-declare here. */
 
 /* The terminal voice (DESIGN: The One Voice Rule) — code is the machine's own
-   word, set in Monaspace Krypton like the CLI/SSH surfaces. The reading body
-   stays on the system sans Fumadocs already uses. */
+   word, set in Monaspace Krypton like the CLI/SSH surfaces. Only the mono face
+   needs re-pointing: the Fumadocs sheets declare no `font-family` at all, so the
+   docs subtree inherits the app's `--font-sans` (Space Grotesk, carrying the One
+   Box metric overrides) through the `html { font-family: var(--default-font-family) }`
+   rule Tailwind's preflight emits off the `@theme` block in styles.css. The
+   reading body is already on the canon face — The Canon Travels Rule holds here
+   with nothing to declare. */
 #nd-docs-layout {
   --fd-font-mono: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
 }

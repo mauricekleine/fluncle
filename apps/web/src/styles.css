@@ -1132,6 +1132,29 @@ body::before {
   }
 }
 
+/* The alert dialog is the SAME OBJECT as the dialog — identical `bg-popover` popup, identical
+   `ring-1 ring-foreground/10` edge, and it grounds with it under reduced motion (see the
+   `[data-slot="alert-dialog-content"]` rule further down) — so it gets the same one scrim. The
+   generated overlay ships Shadcn's stock `bg-black/10` with no `supports-backdrop-filter` step,
+   which over the cosmos backdrop and its grain leaves a destructive confirmation barely separated
+   from the page it is asking about. It reaches a public surface: the account door's remove-a-save
+   confirmation, not admin alone. Values are the dialog's own
+   (`packages/ui/src/components/dialog.tsx`) — 60%, thinned to 40% where a blur carries part of the
+   separation — because the app has ONE modal scrim rather than three. Keyed on the slot and
+   unlayered for the reason the sheet override above is: it survives a `shadcn add alert-dialog`
+   regeneration, where a hand edit in the generated component would be silently dropped. */
+[data-slot="alert-dialog-overlay"] {
+  background: rgb(0 0 0 / 0.6);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-slot="alert-dialog-overlay"] {
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    background: rgb(0 0 0 / 0.4);
+  }
+}
+
 /* Inside the drawer: the spoken walkthrough (the builder's tour), the composition
    frame, then the choices as a single-column field stack. */
 .log-behind-body {
@@ -3649,6 +3672,42 @@ a.catalogue-letter:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* Inline links in the plate's READING TEXT — the story sections and the definition list. They
+   need a rule of their own: this app styles anchors per context and has no base `a` rule, and
+   Tailwind's preflight resets an anchor to `color: inherit; text-decoration: inherit`, so a bare
+   <a> in a paragraph paints exactly like the prose around it. No colour step, no underline,
+   nothing to hover — a link a sighted reader cannot see.
+
+   The register is the Graph Link's (DESIGN.md §5), which is canon for a name inside reading text:
+   Starlight Cream under a dotted underline at rest, heating to Eclipse Glow with a solid underline
+   on hover and focus — The Ignition Rule applied to a link. Cream and not gold AT REST is the
+   load-bearing half: these plates spend their One Sun on the masthead and the footer, and a gold
+   link mid-paragraph would read as the page's primary action.
+
+   The identity page's own link out is excluded and styled below: that surface lists certified and
+   uncertified recordings together, so its links spend no gold at all (The Unlit Rule). */
+.log-about-story a,
+.log-about-definition dd a:not(.identity-out) {
+  color: var(--starlight-cream);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, currentcolor 45%, transparent);
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  transition:
+    color 150ms ease-out,
+    text-decoration-color 150ms ease-out;
+}
+
+.log-about-story a:hover,
+.log-about-story a:focus-visible,
+.log-about-definition dd a:not(.identity-out):hover,
+.log-about-definition dd a:not(.identity-out):focus-visible {
+  color: var(--eclipse-glow);
+  text-decoration-color: var(--eclipse-glow);
+  text-decoration-style: solid;
+}
+
 .log-privacy-intro {
   color: var(--stardust);
   font-size: 0.92rem;
@@ -3741,6 +3800,33 @@ a.catalogue-letter:focus-visible {
   color: var(--muted-foreground);
   font-size: 0.88rem;
   line-height: 1.5;
+}
+
+/* The row's link OUT, and the pointer to the twin recording. Both need a visible affordance —
+   a bare <a> here inherits the row's ink and paints identically to the `.identity-value` beside
+   it — and both get it WITHOUT gold, at rest or on hover: this page renders certified and
+   uncertified recordings in one list, and an uncertified one is never lit by the certification
+   light (DESIGN.md's Unlit Rule). So the ink stays the host's (the Graph Link's own carve-out for
+   a host that already owns its register) and the HEAT is the underline's — dotted and dimmed at
+   rest, solid and full on hover and focus. Focus keeps the Eclipse Gold ring, the one thing the
+   Unlit Rule exempts, because focus is an accessibility affordance and not a claim about the
+   music. */
+.identity-out,
+.identity-relation a {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, currentcolor 45%, transparent);
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color 150ms ease-out;
+}
+
+.identity-out:focus-visible,
+.identity-out:hover,
+.identity-relation a:focus-visible,
+.identity-relation a:hover {
+  text-decoration-color: currentcolor;
+  text-decoration-style: solid;
 }
 
 /* The state cell: the link (or the identifier itself) on its own line, the provenance under it. */
