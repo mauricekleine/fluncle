@@ -89,7 +89,11 @@
     "yaml": "~2.9.0"
   },
   "overrides": {
+    "@xmldom/xmldom@^0.8.8": "0.8.15",
+    "@xmldom/xmldom@^0.9.10": "0.9.12",
+    "js-yaml": "4.3.2",
     "nanoid@^3.0.0": "3.3.18",
+    "sharp": "0.35.4",
     "undici": "7.29.0"
   },
   "lint-staged": {
@@ -105,7 +109,11 @@
   },
   "packageManager": "bun@1.4.2",
   "// overrides": {
+    "@xmldom/xmldom@^0.8.8": "Drop when @expo/plist resolves to @xmldom/xmldom 0.8.15 or newer on its own.",
+    "@xmldom/xmldom@^0.9.10": "Drop when plist resolves to @xmldom/xmldom 0.9.12 or newer on its own.",
+    "js-yaml": "Drop when every parent chain resolves to js-yaml 4.3.2 or newer on its own.",
     "nanoid@^3.0.0": "Drop when every parent chain resolves to nanoid 3.3.18 or newer on its own.",
+    "sharp": "Drop when every parent chain resolves to sharp 0.35.4 or newer on its own.",
     "undici": "Drop when Miniflare's exact undici dependency is 7.29.0 or newer."
   },
   "patchedDependencies": {
