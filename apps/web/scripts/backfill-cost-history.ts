@@ -52,6 +52,13 @@ type FindingRow = {
   video_url: string | null;
 };
 
+/** Finding-bounded source rows used to reconstruct the historical cost ledger. */
+export const FINDING_COST_HISTORY_SOURCE_SQL = `select tracks.track_id, findings.log_id,
+             findings.added_at, findings.observation_script, findings.video_url, tracks.bpm,
+             tracks.has_embedding as has_embedding
+        from findings cross join tracks on tracks.track_id = findings.track_id
+       where findings.log_id is not null`;
+
 function buildEvents(row: FindingRow): CostEventInput[] {
   const events: CostEventInput[] = [];
   // A STABLE per-finding instant so the idempotency key never drifts across runs.
@@ -122,13 +129,7 @@ async function main() {
   const confirm = process.argv.includes("--confirm");
   const db = await getDb();
 
-  const result = await db.execute({
-    sql: `select tracks.track_id, findings.log_id, findings.added_at,
-                 findings.observation_script, findings.video_url, tracks.bpm,
-                 tracks.has_embedding as has_embedding
-            from findings join tracks on tracks.track_id = findings.track_id
-           where findings.log_id is not null`,
-  });
+  const result = await db.execute({ sql: FINDING_COST_HISTORY_SOURCE_SQL });
 
   const events: CostEventInput[] = [];
 
@@ -163,7 +164,9 @@ async function main() {
   console.log(`\nWrote ${inserted} new rows (${events.length - inserted} already present).`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

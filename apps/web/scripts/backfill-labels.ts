@@ -233,6 +233,12 @@ function asText(value: unknown): string {
   return "";
 }
 
+/** Finding-bounded label names used to mint the certified label graph. */
+export const DISTINCT_FINDING_LABELS_SQL = `select tracks.label as label
+      from findings cross join tracks on tracks.track_id = findings.track_id
+      where tracks.label is not null and trim(tracks.label) <> ''
+      group by tracks.label`;
+
 /**
  * The idempotent core, taking any libSQL client so a test can drive it against an
  * in-memory database with the real migrations applied.
@@ -254,11 +260,7 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
   const confirmedAliases = await loadConfirmedAliases(client);
 
   // ── 1. RECONCILE (every deploy) — a row per distinct tracks.label, folded by slug.
-  const distinct = await client.execute({
-    sql: `select tracks.label as label from findings join tracks on tracks.track_id = findings.track_id
-          where tracks.label is not null and trim(tracks.label) <> ''
-          group by tracks.label`,
-  });
+  const distinct = await client.execute({ sql: DISTINCT_FINDING_LABELS_SQL });
 
   // First spelling wins per slug. Stable across runs: a row is only ever inserted once.
   const bySlug = new Map<string, string>();
