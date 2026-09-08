@@ -653,11 +653,39 @@ ${ACQUIRED_RESPONSE}`);
     },
   );
 
+  it(
+    "uses the five-second default when the polling interval is absent",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const sleepLog = join(directory, "sleep.log");
+      const payloadMarker = join(directory, "payload-started");
+      fakeExecutable("sleep", `printf '%s\\n' "$*" >> "${sleepLog}"`);
+      fakeCurl(`
+if [ "$(wc -l < "${curlLog}")" -eq 1 ]; then
+  ${QUEUED_RESPONSE}
+else
+  ${ACQUIRED_RESPONSE}
+fi
+`);
+
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        maxWaitSecs: 10,
+        pollSecs: null,
+      });
+
+      expect(result.status).toBe(0);
+      expect(existsSync(payloadMarker)).toBe(true);
+      expect(readFileSync(sleepLog, "utf8").split("\n")[0]).toBe("5.000");
+      expect(result.stderr).toContain('"outcome":"released"');
+      expect(readFileSync(curlLog, "utf8")).toContain('"action":"release"');
+    },
+  );
+
   it.each([
+    ["empty", ""],
     ["zero", "0"],
-    ["unset", null],
   ])(
-    "rejects a %s polling interval before making a request",
+    "rejects an explicit %s polling interval before making a request",
     async (_label, pollSecs) => {
       fakeCurl(ACQUIRED_RESPONSE);
       const result = await run(["bash", "-c", "exit 0"], { pollSecs });
