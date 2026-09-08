@@ -335,3 +335,226 @@ export function scheduleHubPageAnchorRefresh(key: string, refresh: () => Promise
   // the detached refresh may be cut short if an isolate ends immediately after the response.
   void task;
 }
+
+/** One row's position in a hub order: the ordering key plus the id tiebreak. A NULL key sorts last. */
+export type HubOrderKey = {
+  id: string;
+  key: null | string;
+};
+
+/**
+ * The release-hub order, `key desc, id desc` with NULL keys last: negative when `a` precedes `b`,
+ * zero only for the same row. Both sides use binary text comparison, which is the collation of the
+ * serving index, so the isolate and SQL agree on rank.
+ */
+export function compareHubOrderKeys(a: HubOrderKey, b: HubOrderKey): number {
+  if (a.key !== null && b.key !== null && a.key !== b.key) {
+    return a.key > b.key ? -1 : 1;
+  }
+  if (a.key === null && b.key !== null) {
+    return 1;
+  }
+  if (a.key !== null && b.key === null) {
+    return -1;
+  }
+  if (a.id === b.id) {
+    return 0;
+  }
+  return a.id > b.id ? -1 : 1;
+}
+
+/**
+ * The self-description a projected anchor shard carries beside its boundary rows. A shard then
+ * covers one contiguous run of the order, `(after, next.after]`: `after` is the row the run starts
+ * strictly behind (`null` for the head of the order), `n` counts the rows in the run and `nn` the
+ * leading non-NULL-key rows among them, and `base` is the run's absolute start position when its
+ * boundary rows were last computed. Boundary rows keep their page numbers so a pager can recover a
+ * boundary's position inside the run from `base` even after earlier runs grew or shrank.
+ */
+export type HubAnchorLeafMeta = {
+  after: HubOrderKey | null;
+  base: number;
+  n: number;
+  nn: number;
+  v: 1;
+};
+
+/** The persisted marker that makes a shard fingerprint leaf metadata rather than a corpus fingerprint. */
+export const HUB_ANCHOR_LEAF_META_VERSION = 1;
+
+function isHubOrderKey(value: unknown): value is HubOrderKey {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const id = record["id"];
+  const key = record["key"];
+  return typeof id === "string" && id.length > 0 && (key === null || typeof key === "string");
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function parseHubAnchorLeafMeta(value: unknown): HubAnchorLeafMeta | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    const after = record["after"];
+    const base = record["base"];
+    const n = record["n"];
+    const nn = record["nn"];
+    if (
+      record["v"] !== HUB_ANCHOR_LEAF_META_VERSION ||
+      (after !== null && !isHubOrderKey(after)) ||
+      !isCount(base) ||
+      !isCount(n) ||
+      !isCount(nn) ||
+      nn > n ||
+      (after !== null && after.key === null && nn > 0)
+    ) {
+      return undefined;
+    }
+    return { after: after === null ? null : { id: after.id, key: after.key }, base, n, nn, v: 1 };
+  } catch {
+    return undefined;
+  }
+}
+
+export function serializeHubAnchorLeafMeta(meta: HubAnchorLeafMeta): string {
+  return JSON.stringify({
+    after: meta.after,
+    base: meta.base,
+    n: meta.n,
+    nn: meta.nn,
+    v: HUB_ANCHOR_LEAF_META_VERSION,
+  });
+}
+
+/**
+ * The boundary rows of one run whose first row sits at absolute position `prefix`: every row whose
+ * one-based rank is a page-size multiple, numbered with the page it opens.
+ */
+export function hubLeafSamplesFromRows(
+  rows: readonly HubOrderKey[],
+  prefix: number,
+  pageSize: number,
+): HubPageAnchor[] {
+  return rows.flatMap((row, index) => {
+    const rank = prefix + index + 1;
+    return rank % pageSize === 0 ? [{ id: row.id, key: row.key, page: rank / pageSize + 1 }] : [];
+  });
+}
+
+/** Where a projected numbered page starts: a bounded offset behind one exact row or a zone head. */
+export type HubProjectedPageStart = {
+  /** The row to seek strictly behind; `null` seeks from the head of the phase. */
+  after: HubOrderKey | null;
+  /** Rows still skipped behind `after`; always below the page size for a maintained run. */
+  offset: number;
+  /** Which composite-index zone the seek runs in. */
+  phase: "non_null" | "null";
+};
+
+export type HubAnchorLeaf = {
+  anchors: HubPageAnchor[];
+  meta: HubAnchorLeafMeta;
+  /** The run's absolute start position under the current prefix counts. */
+  prefix: number;
+};
+
+/**
+ * Resolve the page whose first row has absolute zero-based position `pageStart` inside the run that
+ * holds it. Boundary rows recover their position in the run from the run's `base`; the nearest one
+ * before the page start keeps the offset below the page size, and the run's `after` row covers a
+ * page start before the first boundary. A page starting in the run's NULL-key tail seeks inside the
+ * NULL zone: behind a NULL boundary row when one precedes it, else from the zone head, which the run
+ * itself opens because it holds both key phases.
+ */
+export function hubLeafPageStart(
+  pageStart: number,
+  leaf: HubAnchorLeaf,
+  pageSize: number,
+): HubProjectedPageStart | undefined {
+  const relative = pageStart - leaf.prefix;
+  if (!Number.isSafeInteger(relative) || relative < 0 || relative >= leaf.meta.n) {
+    return undefined;
+  }
+  let best: { position: number; row: HubOrderKey } | undefined;
+  for (const anchor of leaf.anchors) {
+    const position = pageSize * (anchor.page - 1) - 1 - leaf.meta.base;
+    if (position >= 0 && position < relative && (best === undefined || position > best.position)) {
+      best = { position, row: { id: anchor.id, key: anchor.key } };
+    }
+  }
+  if (relative >= leaf.meta.nn) {
+    if (best !== undefined && best.row.key === null) {
+      return { after: best.row, offset: relative - best.position - 1, phase: "null" };
+    }
+    if (leaf.meta.after !== null && leaf.meta.after.key === null) {
+      return { after: leaf.meta.after, offset: relative, phase: "null" };
+    }
+    return { after: null, offset: relative - leaf.meta.nn, phase: "null" };
+  }
+  if (best !== undefined) {
+    return { after: best.row, offset: relative - best.position - 1, phase: "non_null" };
+  }
+  return { after: leaf.meta.after, offset: relative, phase: "non_null" };
+}
+
+function midpointFractionDigits(lower: string, upper: string): string {
+  for (let index = 0; ; index += 1) {
+    const low = index < lower.length ? Number(lower[index]) : 0;
+    if (index < upper.length) {
+      const high = Number(upper[index]);
+      if (low === high) {
+        continue;
+      }
+      if (high - low >= 2) {
+        return `${upper.slice(0, index)}${Math.floor((low + high) / 2)}`;
+      }
+      return `${upper.slice(0, index)}${low}${midpointFractionDigits(lower.slice(index + 1), "")}`;
+    }
+    if (low <= 8) {
+      return `${upper.slice(0, index)}${Math.floor((low + 10) / 2)}`;
+    }
+    return `${upper.slice(0, index)}9${midpointFractionDigits(lower.slice(index + 1), "")}`;
+  }
+}
+
+function splitShardSuffix(suffix: string): { fraction: string; integer: string } | undefined {
+  const match = /^(\d+)(?:\.(\d*[1-9]))?$/.exec(suffix);
+  if (match === null) {
+    return undefined;
+  }
+  return { fraction: match[2] ?? "", integer: match[1] ?? "" };
+}
+
+/**
+ * A shard suffix that sorts strictly between `lower` and `upper` under binary text order, so a run
+ * can split in place without renumbering its neighbours. Suffixes are a fixed-width integer with an
+ * optional decimal fraction that never ends in zero; `upper` absent means the next integer.
+ */
+export function hubAnchorShardSuffixBetween(lower: string, upper: string | undefined): string {
+  const low = splitShardSuffix(lower);
+  const high = upper === undefined ? undefined : splitShardSuffix(upper);
+  if (low === undefined || (upper !== undefined && high === undefined)) {
+    throw new Error("anchor shard suffix is malformed");
+  }
+  const sameInteger = high !== undefined && high.integer === low.integer;
+  const upperFraction = sameInteger ? high.fraction : "";
+  if (sameInteger && upperFraction <= low.fraction) {
+    throw new Error("anchor shard suffixes are not ordered");
+  }
+  const suffix = `${low.integer}.${midpointFractionDigits(low.fraction, upperFraction)}`;
+  if (suffix <= lower || (upper !== undefined && suffix >= upper)) {
+    throw new Error("anchor shard suffix midpoint escaped its bounds");
+  }
+  return suffix;
+}

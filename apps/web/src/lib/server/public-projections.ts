@@ -2,9 +2,21 @@ import { type Client, type InValue } from "@libsql/client";
 import { createHash } from "node:crypto";
 
 import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
-import { hubCorpusFingerprint, hubPageAnchorsFromRows } from "./hub-page-anchors";
 import {
+  compareHubOrderKeys,
+  type HubOrderKey,
+  type HubPageAnchor,
+  hubCorpusFingerprint,
+  hubPageAnchorsFromRows,
+  parseHubAnchorLeafMeta,
+} from "./hub-page-anchors";
+import {
+  ANCHOR_LEAF_META_VALID_SQL,
+  parseAnchorDocument,
   PUBLIC_ANCHOR_FORMAT_VERSION,
+  PUBLIC_ANCHOR_ORDER_CHANGE_EPOCH_WIDTH,
+  PUBLIC_ANCHOR_ORDER_CHANGE_PREFIX,
+  type PublicAnchorOrderChange,
   readStoredTrackHubAnchorsForAudit,
 } from "./public-projection-cutover";
 import {
@@ -697,6 +709,48 @@ function preservesNewerAggregateWrite(
   );
 }
 
+function anchorOrderChangeKind(
+  old: { present: boolean; releaseDate: null | string | undefined },
+  source: { releaseDate: null | string } | undefined,
+): PublicAnchorOrderChange["kind"] {
+  if (!old.present) {
+    return source === undefined ? "noop" : "insert";
+  }
+  if (old.releaseDate === undefined) {
+    return "unknown";
+  }
+  return source === undefined ? "delete" : "move";
+}
+
+/**
+ * The ledger row naming the epoch a subject-level repair mints, written in the repair's own
+ * transaction so anchor maintenance can amend the affected runs instead of rebuilding the document.
+ */
+function anchorOrderChangeLedgerStatement(
+  trackId: string,
+  old: { present: boolean; releaseDate: null | string | undefined },
+  source: { releaseDate: null | string } | undefined,
+  guard: ProjectionWriteGuard | undefined,
+): PublicProjectionStatement {
+  return {
+    args: [
+      PUBLIC_ANCHOR_ORDER_CHANGE_PREFIX,
+      `%0${PUBLIC_ANCHOR_ORDER_CHANGE_EPOCH_WIDTH}d`,
+      trackId,
+      anchorOrderChangeKind(old, source),
+      old.releaseDate ?? null,
+      source?.releaseDate ?? null,
+      ...(guard?.args ?? []),
+    ],
+    sql: `insert into settings (key, value)
+      select ? || printf(?, release_hub_order_epoch),
+        json_object('epoch', release_hub_order_epoch, 'id', ?, 'kind', ?,
+          'from', ?, 'to', ?, 'v', 1)
+      from public_aggregate_state where scope = 'tracks' ${guard ? `and ${guard.sql}` : ""}
+      on conflict(key) do update set value = excluded.value`,
+  };
+}
+
 function publicAggregateTrackProjectionStatements(
   trackId: string,
   source: TrackProjectionSource | undefined,
@@ -757,6 +811,16 @@ function publicAggregateTrackProjectionStatements(
           release_hub_order_epoch = release_hub_order_epoch + ?, updated_at = ?
       where scope = 'tracks' ${guard ? `and ${guard.sql}` : ""}`,
   });
+  if (options.marker !== undefined && orderChanged) {
+    writes.push(
+      anchorOrderChangeLedgerStatement(
+        trackId,
+        { present: old !== undefined, releaseDate: oldReleaseDate },
+        source,
+        guard,
+      ),
+    );
+  }
   writes.push({
     args: guard?.args ?? [],
     sql: `delete from public_aggregate_counts where track_count = 0
@@ -1901,6 +1965,225 @@ function parsePublicCleanupState(
   return { cursor, phase };
 }
 
+function anchorSourceCursorFor(after: HubOrderKey | null): TrackAnchorSourceCursor {
+  if (after === null) {
+    return { id: null, key: null, phase: "non_null" };
+  }
+  return after.key === null
+    ? { id: after.id, key: null, phase: "null" }
+    : { id: after.id, key: after.key, phase: "non_null" };
+}
+
+/**
+ * The rows of one run, read strictly behind `after` up to and including `end` (the next run's
+ * `after`, or the corpus end when `end` is null). At most `bound` rows are read, so the run's exact
+ * size is proven only when the read reaches `end` or the corpus end within the bound.
+ */
+export async function readTrackAnchorLeafRows(
+  client: Pick<Client, "execute">,
+  after: HubOrderKey | null,
+  end: HubOrderKey | null,
+  bound: number,
+): Promise<{ complete: boolean; rows: HubOrderKey[] }> {
+  const page = await readTrackAnchorSourcePage(client, anchorSourceCursorFor(after), bound);
+  const rows: HubOrderKey[] = [];
+  for (const row of page.rows) {
+    const key = { id: row.track_id, key: row.release_date };
+    if (end !== null && compareHubOrderKeys(key, end) > 0) {
+      return { complete: true, rows };
+    }
+    rows.push(key);
+  }
+  return { complete: page.complete, rows };
+}
+
+type ProjectedAnchorLeafRow = {
+  anchorsJson: unknown;
+  clauseHash: string;
+  fingerprint: unknown;
+};
+
+async function readProjectedAnchorLeafRows(
+  client: Pick<Client, "execute">,
+  generation: string,
+  afterClauseHash: string,
+  limit: number,
+): Promise<ProjectedAnchorLeafRow[]> {
+  const prefix = `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:${generation}:`;
+  const result = await client.execute({
+    args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, prefix, `${prefix}\uffff`, afterClauseHash, limit],
+    sql: `select clause_hash, anchors_json, fingerprint from hub_page_anchors
+      where hub = ? and clause_hash >= ? and clause_hash < ? and clause_hash > ?
+      order by clause_hash limit ?`,
+  });
+  return result.rows.flatMap((row) =>
+    typeof row.clause_hash === "string"
+      ? [
+          {
+            anchorsJson: row.anchors_json,
+            clauseHash: row.clause_hash,
+            fingerprint: row.fingerprint,
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * Verify one run of a leaf document against the source and emit the canonical page boundaries it
+ * serves, in the same row shape as the source anchor lane. A run whose metadata, size, key phases,
+ * or stored boundary rows disagree with the source emits a `leaf` row the source lane never emits,
+ * so the lane digests cannot match. The final chunk also proves the runs cover the projected total.
+ */
+export async function readProjectedAnchorLeafAuditChunk(
+  client: Pick<Client, "execute">,
+  generation: string,
+  total: number,
+  options: { cursor: null | string; limit: number },
+): Promise<{ complete: boolean; cursor: null | string; rows: unknown[][]; scanned: number }> {
+  const [afterClauseHash, prefixText] = pairCursor(options.cursor);
+  const prefix = afterClauseHash === "" ? 0 : Number(prefixText);
+  if (!Number.isSafeInteger(prefix) || prefix < 0) {
+    throw new Error("malformed anchor leaf audit cursor");
+  }
+  const [leaf, next] = await readProjectedAnchorLeafRows(client, generation, afterClauseHash, 2);
+  if (leaf === undefined) {
+    return {
+      complete: true,
+      cursor: null,
+      rows: prefix === total ? [] : [["leaf", "coverage", prefix, total]],
+      scanned: 0,
+    };
+  }
+  const meta = parseHubAnchorLeafMeta(leaf.fingerprint);
+  const anchors = parseAnchorDocument(leaf.anchorsJson);
+  const nextMeta = next === undefined ? undefined : parseHubAnchorLeafMeta(next.fingerprint);
+  const rows: unknown[][] = [];
+  const mismatch = (reason: string) => rows.push(["leaf", leaf.clauseHash, reason]);
+  if (
+    meta === undefined ||
+    anchors === undefined ||
+    (next !== undefined && nextMeta === undefined)
+  ) {
+    mismatch("malformed");
+    return {
+      complete: false,
+      cursor: JSON.stringify([leaf.clauseHash, String(prefix)]),
+      rows,
+      scanned: 0,
+    };
+  }
+  if (afterClauseHash === "" && meta.after !== null) {
+    mismatch("head");
+  }
+  // One run is one bounded read whatever the audit page size: the run's own ceiling bounds it.
+  const bound = meta.n + 1;
+  if (bound > MAX_PUBLIC_PROJECTION_CHUNK_SIZE) {
+    mismatch("oversized");
+    return {
+      complete: false,
+      cursor: JSON.stringify([leaf.clauseHash, String(prefix + meta.n)]),
+      rows,
+      scanned: 0,
+    };
+  }
+  const source = await readTrackAnchorLeafRows(client, meta.after, nextMeta?.after ?? null, bound);
+  if (source.rows.length !== meta.n || !source.complete) {
+    mismatch("size");
+  } else {
+    if (source.rows.filter((row) => row.key !== null).length !== meta.nn) {
+      mismatch("phase");
+    }
+    for (const anchor of anchors) {
+      const position = TRACKS_HUB_PAGE_SIZE * (anchor.page - 1) - 1 - meta.base;
+      const row = source.rows[position];
+      if (row === undefined || row.id !== anchor.id || row.key !== anchor.key) {
+        mismatch("boundary");
+        break;
+      }
+    }
+    for (const [index, row] of source.rows.entries()) {
+      const rank = prefix + index + 1;
+      if (rank % TRACKS_HUB_PAGE_SIZE === 0) {
+        rows.push(["anchor", row.id, row.key, rank / TRACKS_HUB_PAGE_SIZE + 1]);
+      }
+    }
+  }
+  return {
+    complete: false,
+    cursor: JSON.stringify([leaf.clauseHash, String(prefix + meta.n)]),
+    rows,
+    scanned: source.rows.length,
+  };
+}
+
+/** The verified served boundaries of the current leaf document, or undefined on any disagreement. */
+export async function readVerifiedProjectedAnchorLeaves(
+  client: Pick<Client, "execute">,
+  generation: string,
+  total: number,
+): Promise<[string, null | string, number][] | undefined> {
+  const anchors: [string, null | string, number][] = [];
+  let cursor: null | string = null;
+  for (;;) {
+    const chunk = await readProjectedAnchorLeafAuditChunk(client, generation, total, {
+      cursor,
+      limit: MAX_PUBLIC_PROJECTION_CHUNK_SIZE,
+    });
+    for (const row of chunk.rows) {
+      const [kind, id, key, page] = row;
+      if (
+        kind !== "anchor" ||
+        typeof id !== "string" ||
+        (key !== null && typeof key !== "string")
+      ) {
+        return undefined;
+      }
+      anchors.push([id, key, Number(page)]);
+    }
+    if (chunk.complete) {
+      return anchors;
+    }
+    cursor = chunk.cursor;
+  }
+}
+
+async function readCurrentLeafDocumentIdentity(
+  client: Pick<Client, "execute">,
+): Promise<{ generation: string; total: number } | undefined> {
+  const result = await client.execute({
+    args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
+    sql: `select validity.generation, aggregate.default_track_total as total,
+        (select count(*) from hub_page_anchors shard
+          where shard.hub = validity.hub
+            and shard.clause_hash >= validity.clause_hash || ':' || validity.generation || ':'
+            and shard.clause_hash < validity.clause_hash || ':' || validity.generation || ':\uffff'
+            and not ${ANCHOR_LEAF_META_VALID_SQL}) as legacy_shards,
+        (select count(*) from hub_page_anchors shard
+          where shard.hub = validity.hub
+            and shard.clause_hash >= validity.clause_hash || ':' || validity.generation || ':'
+            and shard.clause_hash < validity.clause_hash || ':' || validity.generation || ':\uffff') as shards
+      from public_aggregate_state aggregate
+      join hub_page_anchor_validity validity
+        on validity.hub = ? and validity.clause_hash = ?
+       and validity.generation = aggregate.generation
+       and validity.order_epoch = aggregate.release_hub_order_epoch
+      where aggregate.scope = 'tracks' limit 1`,
+  });
+  const row = result.rows[0];
+  const total = Number(row?.total);
+  const shards = Number(row?.shards);
+  if (
+    typeof row?.generation !== "string" ||
+    !Number.isSafeInteger(total) ||
+    shards === 0 ||
+    Number(row.legacy_shards) !== 0
+  ) {
+    return undefined;
+  }
+  return { generation: row.generation, total };
+}
+
 /** One bounded canonical audit page. The operator control plane owns durable cursors/digests. */
 export async function readPublicProjectionAuditChunk(
   client: PublicProjectionClient,
@@ -1912,6 +2195,26 @@ export async function readPublicProjectionAuditChunk(
     return readAggregateSourceAnchorAuditChunk(client, options);
   }
   if (lane === "aggregate_projected_anchors") {
+    return readProjectedAnchorAuditChunk(client, options);
+  }
+  return readRemainingPublicProjectionAuditChunk(client, lane, options);
+}
+
+/** The projected anchor lane: a leaf document is verified run by run; older shards read flat. */
+async function readProjectedAnchorAuditChunk(
+  client: PublicProjectionClient,
+  options: { cursor: null | string; limit: number },
+): Promise<{ complete?: boolean; cursor: null | string; rows: unknown[][]; scanned: number }> {
+  const leafDocument = await readCurrentLeafDocumentIdentity(client);
+  if (leafDocument !== undefined) {
+    return readProjectedAnchorLeafAuditChunk(
+      client,
+      leafDocument.generation,
+      leafDocument.total,
+      options,
+    );
+  }
+  {
     const [clauseHash, itemIndex] = pairCursor(options.cursor);
     const result = await client.execute({
       args: [
@@ -1960,6 +2263,13 @@ export async function readPublicProjectionAuditChunk(
       scanned: result.rows.length,
     };
   }
+}
+
+async function readRemainingPublicProjectionAuditChunk(
+  client: PublicProjectionClient,
+  lane: PublicProjectionAuditLane,
+  options: { cursor: null | string; limit: number },
+): Promise<{ complete?: boolean; cursor: null | string; rows: unknown[][]; scanned: number }> {
   if (lane === "aggregate_source_membership" || lane === "aggregate_projected_membership") {
     const source = lane === "aggregate_source_membership";
     const result = await client.execute({
@@ -3117,8 +3427,22 @@ export async function shadowPublicProjections(client: PublicProjectionClient): P
     "rd",
     TRACKS_HUB_PAGE_SIZE,
   );
-  const storedAnchorRows = storedAnchors?.anchors ?? null;
+  // A leaf document stores runs rather than every canonical boundary, so its served boundaries are
+  // re-derived by verifying each run against the source before the comparison.
+  const storedAnchorRows =
+    storedAnchors === undefined
+      ? null
+      : storedAnchors.leaf
+        ? await readVerifiedProjectedAnchorLeaves(
+            client,
+            (await readCurrentLeafDocumentIdentity(client))?.generation ?? "",
+            storedAnchors.total,
+          ).then((verified) =>
+            verified?.map(([id, key, page]) => ({ id, key, page }) satisfies HubPageAnchor),
+          )
+        : storedAnchors.anchors;
   const anchorOrderMatched =
+    storedAnchorRows !== undefined &&
     JSON.stringify(expectedAnchorRows) === JSON.stringify(storedAnchorRows);
   const anchorEpochMatched =
     Number(aggregateState.rows[0]?.order_epoch ?? -1) ===

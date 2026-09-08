@@ -2,16 +2,22 @@ import { createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { describe, expect, it } from "vitest";
 import {
+  compareHubOrderKeys,
   type HubOrderedPageShape,
   type HubPageAnchor,
   HUB_SHALLOW_MAX_OFFSET,
   hubAnchorExtractionQuery,
+  hubAnchorShardSuffixBetween,
+  hubLeafPageStart,
+  hubLeafSamplesFromRows,
   hubPageAnchorsFromRows,
   hubSeekPageQuery,
   isShallowHubPage,
   nearestHubPageAnchor,
+  parseHubAnchorLeafMeta,
   persistedAnchorDecision,
   scheduleHubPageAnchorRefresh,
+  serializeHubAnchorLeafMeta,
 } from "./hub-page-anchors";
 import {
   type CatalogueEntityPageQuery,
@@ -237,6 +243,148 @@ describe("snapshot consistency", () => {
     expect(nullBoundaryQuery.sql).toContain("items.rd is null and items.id < ?");
 
     db.close();
+  });
+});
+
+describe("leaf runs", () => {
+  it("orders keys date-desc, id-desc, NULL dates last, as the serving index does", () => {
+    const newer = { id: "a", key: "2026-01-01" };
+    const older = { id: "z", key: "2025-01-01" };
+    const tie = { id: "b", key: "2026-01-01" };
+    const nullA = { id: "a", key: null };
+    const nullB = { id: "b", key: null };
+    expect(compareHubOrderKeys(newer, older)).toBeLessThan(0);
+    expect(compareHubOrderKeys(older, newer)).toBeGreaterThan(0);
+    expect(compareHubOrderKeys(tie, newer)).toBeLessThan(0);
+    expect(compareHubOrderKeys(older, nullA)).toBeLessThan(0);
+    expect(compareHubOrderKeys(nullA, older)).toBeGreaterThan(0);
+    expect(compareHubOrderKeys(nullB, nullA)).toBeLessThan(0);
+    expect(compareHubOrderKeys(nullA, { ...nullA })).toBe(0);
+  });
+
+  it("round-trips leaf metadata and rejects every malformed field", () => {
+    const meta = {
+      after: { id: "x", key: "2026-01-01" },
+      base: 100,
+      n: 100,
+      nn: 90,
+      v: 1 as const,
+    };
+    expect(parseHubAnchorLeafMeta(serializeHubAnchorLeafMeta(meta))).toEqual(meta);
+    expect(parseHubAnchorLeafMeta(serializeHubAnchorLeafMeta({ ...meta, after: null }))).toEqual({
+      ...meta,
+      after: null,
+    });
+    for (const malformed of [
+      "250:first:0",
+      "",
+      "[]",
+      JSON.stringify({ ...meta, v: 2 }),
+      JSON.stringify({ ...meta, n: -1 }),
+      JSON.stringify({ ...meta, nn: 101 }),
+      JSON.stringify({ ...meta, base: "0" }),
+      JSON.stringify({ ...meta, after: { id: "", key: null } }),
+      JSON.stringify({ ...meta, after: { id: "x", key: null }, nn: 1 }),
+    ]) {
+      expect(parseHubAnchorLeafMeta(malformed)).toBeUndefined();
+    }
+  });
+
+  it("samples the rows whose rank is a page-size multiple, numbered by the page they open", () => {
+    const rows = Array.from({ length: 10 }, (_, index) => ({ id: `r${index}`, key: "2026" }));
+    expect(hubLeafSamplesFromRows(rows, 5, 4)).toEqual([
+      { id: "r2", key: "2026", page: 3 },
+      { id: "r6", key: "2026", page: 4 },
+    ]);
+  });
+
+  it("resolves a page start behind the nearest earlier boundary with a sub-page offset", () => {
+    const leaf = {
+      anchors: [
+        { id: "b1", key: "2026", page: 3 },
+        { id: "b2", key: "2026", page: 4 },
+      ],
+      meta: { after: { id: "a", key: "2027" }, base: 5, n: 12, nn: 12, v: 1 as const },
+      prefix: 7,
+    };
+    // Boundary positions inside the run stay 2 and 6 whatever the current prefix is.
+    expect(hubLeafPageStart(7, leaf, 4)).toEqual({
+      after: leaf.meta.after,
+      offset: 0,
+      phase: "non_null",
+    });
+    expect(hubLeafPageStart(9, leaf, 4)).toEqual({
+      after: leaf.meta.after,
+      offset: 2,
+      phase: "non_null",
+    });
+    expect(hubLeafPageStart(10, leaf, 4)).toEqual({
+      after: { id: "b1", key: "2026" },
+      offset: 0,
+      phase: "non_null",
+    });
+    expect(hubLeafPageStart(16, leaf, 4)).toEqual({
+      after: { id: "b2", key: "2026" },
+      offset: 2,
+      phase: "non_null",
+    });
+    expect(hubLeafPageStart(19, leaf, 4)).toBeUndefined();
+    expect(hubLeafPageStart(6, leaf, 4)).toBeUndefined();
+  });
+
+  it("seeks inside the NULL zone when the page starts in a run's NULL tail", () => {
+    const transition = {
+      anchors: [{ id: "n1", key: null, page: 3 }],
+      meta: { after: { id: "a", key: "2027" }, base: 0, n: 12, nn: 5, v: 1 as const },
+      prefix: 0,
+    };
+    // Rows 5.. are NULL-dated; the run opened the NULL zone, so it starts at offset (start - nn).
+    expect(hubLeafPageStart(6, transition, 4)).toEqual({ after: null, offset: 1, phase: "null" });
+    // Behind the NULL boundary row at position 7 the seek runs on `track_id` alone.
+    expect(hubLeafPageStart(9, transition, 4)).toEqual({
+      after: { id: "n1", key: null },
+      offset: 1,
+      phase: "null",
+    });
+    const nullRun = {
+      anchors: [],
+      meta: { after: { id: "n9", key: null }, base: 20, n: 3, nn: 0, v: 1 as const },
+      prefix: 20,
+    };
+    expect(hubLeafPageStart(21, nullRun, 4)).toEqual({
+      after: nullRun.meta.after,
+      offset: 1,
+      phase: "null",
+    });
+    const head = {
+      anchors: [],
+      meta: { after: null, base: 0, n: 3, nn: 3, v: 1 as const },
+      prefix: 0,
+    };
+    expect(hubLeafPageStart(0, head, 4)).toEqual({ after: null, offset: 0, phase: "non_null" });
+  });
+
+  it("mints split suffixes that sort strictly between their neighbours", () => {
+    const between = (lower: string, upper: string | undefined) => {
+      const suffix = hubAnchorShardSuffixBetween(lower, upper);
+      expect(suffix > lower).toBe(true);
+      if (upper !== undefined) {
+        expect(suffix < upper).toBe(true);
+      }
+      return suffix;
+    };
+    expect(between("0000000005", "0000000006")).toBe("0000000005.5");
+    expect(between("0000000005", undefined)).toBe("0000000005.5");
+    expect(between("0000000005.5", "0000000006")).toBe("0000000005.7");
+    expect(between("0000000005", "0000000005.5")).toBe("0000000005.2");
+    expect(between("0000000005.5", "0000000005.6")).toBe("0000000005.55");
+    expect(between("0000000005.9", undefined)).toBe("0000000005.95");
+    let lower = "0000000000";
+    for (let round = 0; round < 40; round += 1) {
+      lower = between(lower, "0000000001");
+    }
+    expect(() => hubAnchorShardSuffixBetween("0000000005.5", "0000000005.5")).toThrow();
+    expect(() => hubAnchorShardSuffixBetween("junk", undefined)).toThrow();
   });
 });
 
