@@ -1722,6 +1722,9 @@ describe("projection production operations", () => {
         target: "public_aggregates",
       });
       expect(result.processed).toBeLessThanOrEqual(100);
+      if (step === 0) {
+        expect(result.processed).toBe(3);
+      }
       complete = result.complete;
     }
     expect(complete).toBe(true);
@@ -1783,6 +1786,9 @@ describe("projection production operations", () => {
     for (let step = 0; step < 10 && !complete; step += 1) {
       const result = await advancePublicAnchors(db, 100);
       expect(result.processed).toBeLessThanOrEqual(100);
+      if (step === 0) {
+        expect(result.processed).toBe(2);
+      }
       complete = result.complete;
     }
     expect(complete).toBe(true);

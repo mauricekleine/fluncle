@@ -404,6 +404,20 @@ describe("close in sound", () => {
         trackId: THIN,
       },
     ]);
+
+    const statement = sonicNeighbourScanStatement(
+      new Uint8Array(EMBEDDING_DIMS * Float32Array.BYTES_PER_ELEMENT),
+      RICH,
+      2,
+      undefined,
+    );
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    expect(
+      plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : "")).join("\n"),
+    ).toContain("MATERIALIZE winners");
   });
 
   it("materializes bounded ids before winner-first metadata hydration", async () => {
