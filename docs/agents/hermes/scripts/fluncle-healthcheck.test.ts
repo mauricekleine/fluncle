@@ -34,6 +34,7 @@ import {
   countSummaryStrain,
   type CronDef,
   cronCheck,
+  cronStaleBudgetMs,
   escalationDue,
   findJsonSummary,
   foldStrain,
@@ -49,6 +50,7 @@ import {
   normalizeStrain,
   probeSweepStrain,
   postSnapshot,
+  readProjectionMaintenanceState,
   serializeState,
   type ServiceState,
   STDERR_DELIMITER,
@@ -260,6 +262,71 @@ describe("judgeCron — the marker's body", () => {
 
     expect(judgeCron(CRON, dir)).toBe("fresh-ok");
     expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
+  });
+
+  test("the projection-maintenance row carries healthy incomplete convergence facts", () => {
+    const cron: CronDef = {
+      cadenceMs: 5 * 60_000,
+      match: "projection-maintenance",
+      service: "cron.projection-maintenance",
+    };
+    const dir = markerDir([
+      {
+        ageMs: 60_000,
+        body: marker(
+          '{"ok":true,"converged":false,"oldestDebtAgeMs":120000,"outcome":"partial_progress"}\n',
+        ),
+      },
+    ]);
+    const projection = readProjectionMaintenanceState(dir);
+
+    expect(projection).toEqual({
+      converged: false,
+      oldestDebtAgeMs: 120_000,
+      outcome: "partial_progress",
+    });
+    expect(cronCheck(cron, judgeCron(cron, dir), projection)).toMatchObject({
+      message: "fresh; partial_progress; oldest observed debt 2m",
+      status: "ok",
+    });
+  });
+
+  test("persistent incomplete projection debt alerts after the cron freshness window", () => {
+    const cron: CronDef = {
+      cadenceMs: 5 * 60_000,
+      match: "projection-maintenance",
+      service: "cron.projection-maintenance",
+    };
+    const oldestDebtAgeMs = cronStaleBudgetMs(cron) + 1;
+    const projection = {
+      converged: false,
+      oldestDebtAgeMs,
+      outcome: "partial_progress" as const,
+    };
+
+    expect(cronCheck(cron, "fresh-ok", projection)).toMatchObject({
+      message: "debt persists; partial_progress; oldest observed debt 16m",
+      status: "down",
+    });
+  });
+
+  test("unknown debt age remains explicit without inventing a persistence alert", () => {
+    const cron: CronDef = {
+      cadenceMs: 5 * 60_000,
+      match: "projection-maintenance",
+      service: "cron.projection-maintenance",
+    };
+
+    expect(
+      cronCheck(cron, "fresh-ok", {
+        converged: false,
+        oldestDebtAgeMs: null,
+        outcome: "no_progress",
+      }),
+    ).toMatchObject({
+      message: "fresh; no_progress; debt age unavailable",
+      status: "ok",
+    });
   });
 
   test("a summary followed by trailing log lines is still ok", () => {

@@ -237,6 +237,10 @@ const RECOGNISED_KEYS = new Set<string>([
   "admissionOutcome",
   "admissionWaitMs",
   "admissionYieldReason",
+  "budgetExhaustedFamilies",
+  "converged",
+  "oldestDebtAgeMs",
+  "outcome",
   "payloadStarted",
 ]);
 

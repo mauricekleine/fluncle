@@ -11,6 +11,7 @@ import {
 
 const family = (overrides: Record<string, unknown> = {}) => ({
   convergence: { epochMatched: true },
+  oldestOutstandingMarkerAge: { ageMs: null, reason: null, truncated: false },
   repairs: {
     direct: { count: 0, truncated: false },
     fanout: { count: 0, truncated: false },
@@ -68,10 +69,13 @@ describe("projection maintenance status gate", () => {
 
     expect(calls).toEqual([["admin", "projections", "get"]]);
     expect(summary).toMatchObject({
+      budgetExhaustedFamilies: [],
       checked: 0,
+      converged: null,
       errors: 0,
       gateState: "disabled",
       ok: true,
+      oldestDebtAgeMs: null,
       produced: 0,
       reason: "projection_cutovers_disabled",
     });
@@ -85,7 +89,15 @@ describe("projection maintenance status gate", () => {
     });
 
     expect(calls).toEqual([["admin", "projections", "get"]]);
-    expect(summary).toMatchObject({ checked: 4, errors: 0, gateState: "active", produced: 0 });
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: [],
+      checked: 4,
+      converged: true,
+      errors: 0,
+      gateState: "active",
+      oldestDebtAgeMs: null,
+      produced: 0,
+    });
     expect(summary.trackDueWork).toMatchObject({ attempted: false, complete: true });
     expect(summary.crawlDueWork).toMatchObject({ attempted: false, complete: true });
     expect(summary.publicAggregates).toMatchObject({ attempted: false, complete: true });
@@ -94,6 +106,220 @@ describe("projection maintenance status gate", () => {
 });
 
 describe("projection maintenance bounded family repair", () => {
+  test("reports no_debt when an enabled family has nothing to repair", () => {
+    const summary = runProjectionMaintenanceTick(() => status({ trackDueWork: true }));
+
+    expect(summary.trackDueWork).toMatchObject({
+      attempted: false,
+      outcome: "no_debt",
+      processed: 0,
+    });
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: [],
+      converged: true,
+      errors: 0,
+      ok: true,
+      oldestDebtAgeMs: null,
+      outcome: "no_debt",
+    });
+  });
+
+  test("keeps repairing against an older status response without the optional age field", () => {
+    const debt = family({
+      oldestOutstandingMarkerAge: undefined,
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const summary = runProjectionMaintenanceTick((args) =>
+      args[2] === "get"
+        ? status({ trackDueWork: true }, { track: debt })
+        : advance("track_due_work"),
+    );
+
+    expect(summary.trackDueWork.oldestOutstandingMarkerAge).toEqual({
+      ageMs: null,
+      reason: "status_field_unavailable",
+      truncated: false,
+    });
+    expect(summary.trackDueWork.outcome).toBe("useful_completion");
+  });
+
+  test("reports useful_completion when existing debt drains within the budget", () => {
+    const oldestOutstandingMarkerAge = {
+      ageMs: 3_600_000,
+      reason: null,
+      truncated: false,
+    };
+    const debt = family({
+      oldestOutstandingMarkerAge,
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const summary = runProjectionMaintenanceTick((args) =>
+      args[2] === "get"
+        ? status({ trackDueWork: true }, { track: debt })
+        : advance("track_due_work", true, 3),
+    );
+
+    expect(summary.trackDueWork).toMatchObject({
+      attempted: true,
+      oldestOutstandingMarkerAge,
+      outcome: "useful_completion",
+      processed: 3,
+    });
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: [],
+      converged: true,
+      errors: 0,
+      ok: true,
+      oldestDebtAgeMs: null,
+      outcome: "useful_completion",
+    });
+  });
+
+  test("reports partial_progress without failing when processed pages exhaust the budget", () => {
+    const debt = family({
+      oldestOutstandingMarkerAge: { ageMs: 3_600_000, reason: null, truncated: false },
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const summary = runProjectionMaintenanceTick((args) =>
+      args[2] === "get"
+        ? status({ crawlDueWork: true }, { crawl: debt })
+        : advance("crawl_due_work", false, 50, 20),
+    );
+
+    expect(summary.crawlDueWork).toMatchObject({
+      attempted: true,
+      complete: false,
+      outcome: "partial_progress",
+      processed: 50,
+      steps: 20,
+    });
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: ["crawl_due_work"],
+      converged: false,
+      errors: 0,
+      ok: true,
+      oldestDebtAgeMs: 3_600_000,
+      outcome: "partial_progress",
+    });
+  });
+
+  test("reports no_progress without execution failure when debt spends a budget without processing pages", () => {
+    const debt = family({
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const summary = runProjectionMaintenanceTick((args) =>
+      args[2] === "get"
+        ? status({ trackDueWork: true }, { track: debt })
+        : advance("track_due_work", false, 0, 20),
+    );
+
+    expect(summary.trackDueWork).toMatchObject({
+      attempted: true,
+      complete: false,
+      outcome: "no_progress",
+      processed: 0,
+      steps: 20,
+    });
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: ["track_due_work"],
+      converged: false,
+      errors: 0,
+      ok: true,
+      outcome: "no_progress",
+    });
+  });
+
+  test("reports the worst attempted family outcome at the top level", () => {
+    const debt = family({
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const summary = runProjectionMaintenanceTick((args) => {
+      if (args[2] === "get") {
+        return status(
+          { crawlDueWork: true, publicProjections: true, trackDueWork: true },
+          { aggregate: debt, artists: debt, crawl: debt, track: debt },
+        );
+      }
+      const target = args[args.indexOf("--target") + 1] as FamilyName;
+      if (target === "track_due_work") {
+        return advance(target, true, 1);
+      }
+      if (target === "crawl_due_work") {
+        return advance(target, false, 1, 20);
+      }
+      if (target === "public_aggregates") {
+        return advance(target, false, 0, 4);
+      }
+      return advance(target, true, 2);
+    });
+
+    expect(summary.trackDueWork.outcome).toBe("useful_completion");
+    expect(summary.crawlDueWork.outcome).toBe("partial_progress");
+    expect(summary.publicAggregates.outcome).toBe("no_progress");
+    expect(summary.artistQualification.outcome).toBe("useful_completion");
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: ["crawl_due_work", "public_aggregates"],
+      converged: false,
+      errors: 0,
+      ok: true,
+      outcome: "no_progress",
+    });
+  });
+
+  test("keeps execution healthy while every family exhausts its budget without progress", () => {
+    const debt = family({
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const summary = runProjectionMaintenanceTick((args) => {
+      if (args[2] === "get") {
+        return status(
+          { crawlDueWork: true, publicProjections: true, trackDueWork: true },
+          { aggregate: debt, artists: debt, crawl: debt, track: debt },
+        );
+      }
+      const target = args[args.indexOf("--target") + 1] as FamilyName;
+      return advance(target, false, 0, target.endsWith("due_work") ? 20 : 4);
+    });
+
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: [
+        "track_due_work",
+        "crawl_due_work",
+        "public_aggregates",
+        "artist_qualification",
+      ],
+      converged: false,
+      errors: 0,
+      ok: true,
+      outcome: "no_progress",
+      produced: 0,
+    });
+  });
+
   test("runs all exact bounded repair commands serially in one tick", () => {
     const calls: string[][] = [];
     const debt = family({
@@ -138,7 +364,19 @@ describe("projection maintenance bounded family repair", () => {
         "--no-terminal-status",
       ]),
     );
-    expect(summary).toMatchObject({ checked: 4, errors: 0, ok: true, produced: 21 });
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: [
+        "track_due_work",
+        "crawl_due_work",
+        "public_aggregates",
+        "artist_qualification",
+      ],
+      checked: 4,
+      converged: false,
+      errors: 0,
+      ok: true,
+      produced: 21,
+    });
     expect(summary.trackDueWork).toMatchObject({ complete: false, steps: 4 });
     expect(summary.crawlDueWork).toMatchObject({ complete: false, steps: 4 });
     expect(summary.publicAggregates).toMatchObject({ complete: false, steps: 4 });
@@ -211,7 +449,13 @@ describe("projection maintenance bounded family repair", () => {
     });
 
     expect(calls).toHaveLength(5);
-    expect(summary).toMatchObject({ errors: 1, ok: false, produced: null });
+    expect(summary).toMatchObject({
+      budgetExhaustedFamilies: [],
+      converged: false,
+      errors: 1,
+      ok: false,
+      produced: null,
+    });
     expect(summary.trackDueWork).toMatchObject({
       complete: false,
       error: "track fault",

@@ -43,6 +43,14 @@ const RepairSchema = z.object({
   total: BoundedCountSchema,
 });
 
+const OldestOutstandingMarkerAgeSchema = z.object({
+  ageMs: CountSchema.nullable(),
+  reason: z
+    .enum(["marker_timestamp_invalid", "marker_timestamp_unavailable", "status_field_unavailable"])
+    .nullable(),
+  truncated: z.boolean(),
+});
+
 const ConvergenceSchema = z.object({
   digestMatched: z.boolean().nullable(),
   epochMatched: z.boolean().nullable(),
@@ -55,6 +63,7 @@ const ConvergenceSchema = z.object({
 const ProjectionFamilyStatusSchema = z.object({
   backlog: BacklogSchema,
   convergence: ConvergenceSchema,
+  oldestOutstandingMarkerAge: OldestOutstandingMarkerAgeSchema.optional(),
   ready: z.boolean(),
   rebuild: RebuildSchema,
   repairs: RepairSchema,
