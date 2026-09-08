@@ -1172,7 +1172,9 @@ type SonarFixture = {
 };
 
 const SHA_A = "a".repeat(40);
-const SHA_B = "b".repeat(40);
+// Concurrent script-test processes share the fixed smoke-port candidates. A process-unique
+// commit keeps one fixture's healthy listener from satisfying another fixture's identity check.
+const SHA_B = new Bun.CryptoHasher("sha1").update(`run-events:${process.pid}`).digest("hex");
 
 /** A stand-in `sonar` binary: boots on SONAR_PORT and serves the one thing the smoke reads. */
 const SONAR_STUB = [
