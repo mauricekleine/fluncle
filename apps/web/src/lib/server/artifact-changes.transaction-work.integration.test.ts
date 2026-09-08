@@ -298,9 +298,13 @@ describe("artifact write transactions carry digest work only", () => {
       throughSeq: page.throughSeq,
     };
 
-    await expect(acknowledgeArtifactChanges(client, input)).rejects.toThrow(
-      /raced another acknowledgement/,
-    );
+    // The guarded advance matched zero rows, which is the artifact_checkpoint_race branch and
+    // nothing else: the regression, unseen and contract checks all passed before it ran.
+    await expect(acknowledgeArtifactChanges(client, input)).rejects.toMatchObject({
+      code: "artifact_checkpoint_race",
+      message: "Artifact checkpoint raced another acknowledgement",
+      status: 409,
+    });
 
     expect(raced).toBe(true);
     expect(client.work).toHaveLength(1);
