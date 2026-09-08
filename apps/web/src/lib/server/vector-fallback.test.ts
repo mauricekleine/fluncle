@@ -11,6 +11,24 @@ import {
 } from "./vector-fallback";
 
 describe("Sonar's Turso fallback cost contract", () => {
+  const consumers = [
+    {
+      file: "track-page.ts",
+      name: "track page",
+      operationIds: ["sonar.fallback.track"],
+    },
+    { file: "tracks.ts", name: "log", operationIds: ["sonar.fallback.log"] },
+    { file: "search.ts", name: "sonic search", operationIds: ["sonar.fallback.search"] },
+    {
+      file: "recommendations.ts",
+      name: "recommendations",
+      operationIds: [
+        "sonar.fallback.recommendations-catalogue",
+        "sonar.fallback.recommendations-findings",
+      ],
+    },
+  ] as const;
+
   it("cuts a real candidate relation at the configured bound", async () => {
     const db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
@@ -136,5 +154,62 @@ describe("Sonar's Turso fallback cost contract", () => {
     expect(joined.match(/executeVectorFallback\(/g)).toHaveLength(
       VECTOR_FALLBACK_OPERATION_IDS.length,
     );
+  });
+
+  it("enumerates every route consumer under a candidate bound, deadline, and cost span", async () => {
+    expect(consumers.map((consumer) => consumer.name)).toEqual([
+      "track page",
+      "log",
+      "sonic search",
+      "recommendations",
+    ]);
+
+    for (const consumer of consumers) {
+      const source = readFileSync(new URL(consumer.file, import.meta.url), "utf8");
+
+      for (const operationId of consumer.operationIds) {
+        expect(source, `${consumer.name}: ${operationId}`).toMatch(
+          new RegExp(`executeVectorFallback\\(\\s*db,\\s*"${operationId}"`),
+        );
+        expect(source, `${consumer.name}: ${operationId}`).toContain(
+          "vectorFallbackCandidateLimitSql()",
+        );
+
+        await expect(
+          executeVectorFallback(
+            { execute: async () => ({ rows: [] }) } as never,
+            operationId,
+            "select 1",
+          ),
+        ).rejects.toThrow(`${VECTOR_FALLBACK_CANDIDATE_LIMIT}-row candidate bound`);
+
+        await expect(
+          executeVectorFallback(
+            { execute: () => new Promise<never>(() => undefined) } as never,
+            operationId,
+            `select 1 ${vectorFallbackCandidateLimitSql()}`,
+            { deadlineMs: 1 },
+          ),
+        ).rejects.toThrow(`${operationId} timed out after 1ms`);
+
+        let observed: unknown;
+        await executeVectorFallback(
+          {
+            execute: (statement: unknown) => {
+              observed = statement;
+              return Promise.resolve({ rows: [] });
+            },
+          } as never,
+          operationId,
+          `select 1 ${vectorFallbackCandidateLimitSql()}`,
+        );
+        const symbols = Object.getOwnPropertySymbols(observed as object);
+
+        expect((observed as Record<symbol, unknown>)[symbols[0] as symbol]).toEqual({
+          accessClass: "heavy-read",
+          operationId,
+        });
+      }
+    }
   });
 });
