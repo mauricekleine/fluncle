@@ -588,21 +588,22 @@ export function sonicNeighbourScanStatement(
   limit: number,
   bpmWindow: [number, number] | undefined,
 ) {
-  // Args bind in SQL-TEXT order: the probe, the excluded target, the window bounds, the limit.
+  // Args bind in SQL-TEXT order: the excluded target, window bounds, probe, then limit.
   return {
-    args: bpmWindow ? [probe, trackId, bpmWindow[0], bpmWindow[1], limit] : [probe, trackId, limit],
-    sql: `with winners(track_id, dist) as materialized (
-            select track_id, vector_distance_cos(embedding_blob, ?) as dist
-            from (
-              select tracks.track_id, emb.embedding_blob
+    args: bpmWindow ? [trackId, bpmWindow[0], bpmWindow[1], probe, limit] : [trackId, probe, limit],
+    sql: `with candidates(track_id) as materialized (
+              select tracks.track_id
               from tracks${bpmWindow ? " indexed by tracks_bpm_idx" : ""}
               join track_embeddings emb on emb.track_id = tracks.track_id
               where tracks.track_id != ? and ${NEIGHBOUR_WHERE}
                     ${bpmWindow ? "and tracks.bpm between ? and ?" : ""}
               order by tracks.track_id
               ${vectorFallbackCandidateLimitSql()}
-            )
-            order by dist asc, track_id asc
+            ), winners(track_id, dist) as materialized (
+            select candidates.track_id, vector_distance_cos(emb.embedding_blob, ?) as dist
+            from candidates
+            join track_embeddings emb on emb.track_id = candidates.track_id
+            order by dist asc, candidates.track_id asc
             limit ?
           )
           select ${NEIGHBOUR_SELECT}
