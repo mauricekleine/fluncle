@@ -722,6 +722,25 @@ export type CronVerdict =
   | "no-data"
   | "no-summary";
 
+type ProjectionMaintenanceOutcome =
+  | "no_debt"
+  | "no_progress"
+  | "partial_progress"
+  | "useful_completion";
+
+const PROJECTION_MAINTENANCE_OUTCOMES = new Set<unknown>([
+  "no_debt",
+  "no_progress",
+  "partial_progress",
+  "useful_completion",
+]);
+
+export type ProjectionMaintenanceState = {
+  converged: boolean | null;
+  oldestDebtAgeMs: number | null;
+  outcome: ProjectionMaintenanceOutcome | null;
+};
+
 /**
  * The cron NAME a given output dir belongs to (from the newest run-file's
  * `# Cron Job: <name>` header, e.g. `fluncle-enrich`), plus that file's mtime. The
@@ -852,6 +871,63 @@ export function findJsonSummary(body: string): Record<string, unknown> | null {
   return null;
 }
 
+/** Read the projection sweep's convergence facts for its public status-row message. */
+export function readProjectionMaintenanceState(
+  dir: string | undefined,
+): ProjectionMaintenanceState | null {
+  if (!dir) {
+    return null;
+  }
+  try {
+    const newest = readdirSync(dir)
+      .filter((entry) => entry.endsWith(".md"))
+      .map((entry) => join(dir, entry))
+      .map((path) => ({ mtimeMs: statSync(path).mtimeMs, path }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+    if (!newest) {
+      return null;
+    }
+    const summary = findJsonSummary(readFileSync(newest.path, "utf8"));
+    if (summary === null) {
+      return null;
+    }
+    const outcome = summary.outcome;
+    const oldestDebtAgeMs = summary.oldestDebtAgeMs;
+    return {
+      converged: typeof summary.converged === "boolean" ? summary.converged : null,
+      oldestDebtAgeMs:
+        typeof oldestDebtAgeMs === "number" &&
+        Number.isSafeInteger(oldestDebtAgeMs) &&
+        oldestDebtAgeMs >= 0
+          ? oldestDebtAgeMs
+          : null,
+      outcome: PROJECTION_MAINTENANCE_OUTCOMES.has(outcome)
+        ? (outcome as ProjectionMaintenanceOutcome)
+        : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** One standing window governs both missing ticks and repair debt that survives healthy ticks. */
+export function cronStaleBudgetMs(cron: CronDef): number {
+  return Math.max(cron.cadenceMs * 3, 90_000) + MAX_TIMER_JITTER_MS;
+}
+
+function formatElapsed(elapsedMs: number): string {
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 1) {
+    return "<1m";
+  }
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+}
+
 /**
  * How long this box has been up, in ms — or null where that can't be known (no procfs).
  * Used to age a never-ran cron out of "no runs yet": on a box that has been up for days, a
@@ -891,7 +967,7 @@ export function judgeCron(
   // Measured across its last 100 ticks: mean 114s, max 188s — over the budget, on a timer
   // behaving exactly as configured. Without this term the board reports a healthy sweep as
   // `lagging`, which is the flap that teaches an operator to stop reading the row.
-  const staleBudgetMs = Math.max(cron.cadenceMs * 3, 90_000) + MAX_TIMER_JITTER_MS;
+  const staleBudgetMs = cronStaleBudgetMs(cron);
 
   // No output dir at all, or an unreadable one. Fresh box ⇒ genuinely "no runs yet"; a box
   // that has been up past this cron's whole stale budget ⇒ it should have produced something.
@@ -978,37 +1054,67 @@ function runFailed(path: string | undefined): boolean {
 }
 
 /** Map one cron's verdict to its public Check (status + a short, public-safe note). */
-export function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
+export function cronCheck(
+  cron: CronDef,
+  verdict: CronVerdict,
+  projection: ProjectionMaintenanceState | null = null,
+): Check {
   const base = { latencyMs: null, service: cron.service };
+  const outcomeMessage = (message: string) => {
+    const details = [message];
+    if (projection?.outcome !== null && projection?.outcome !== undefined) {
+      details.push(projection.outcome);
+    }
+    if (projection?.converged === false) {
+      details.push(
+        projection.oldestDebtAgeMs === null
+          ? "debt age unavailable"
+          : `oldest observed debt ${formatElapsed(projection.oldestDebtAgeMs)}`,
+      );
+    }
+    return msg(details.join("; "));
+  };
 
   if (verdict === "no-summary") {
     // The marker exists but the sweep never emitted its summary — it was killed mid-run.
     // Down on the first sighting: a process that died is not a job "watching its retry".
-    return { ...base, message: msg("last run died mid-flight"), status: "down" };
+    return { ...base, message: outcomeMessage("last run died mid-flight"), status: "down" };
   }
 
   if (verdict === "failed") {
     // Two consecutive failed runs — the job is stuck, not unlucky. A real outage.
-    return { ...base, message: msg("last runs failed"), status: "down" };
+    return { ...base, message: outcomeMessage("last runs failed"), status: "down" };
   }
 
   if (verdict === "failed-once") {
     // A single failed run with a healthy one before it — the sweep's own retry is the
     // remediation, so this surfaces as degraded and resolves (or escalates) on the next tick.
-    return { ...base, message: msg("last run failed; watching the retry"), status: "degraded" };
+    return {
+      ...base,
+      message: outcomeMessage("last run failed; watching the retry"),
+      status: "degraded",
+    };
   }
 
   if (verdict === "lagging") {
     // Healthy-looking output, but stale beyond 3× the cadence — the job is behind.
-    return { ...base, message: msg("behind schedule"), status: "degraded" };
+    return { ...base, message: outcomeMessage("behind schedule"), status: "degraded" };
   }
 
   if (verdict === "no-data") {
     // No output dir / no runs yet — a freshly-rebuilt box, not a fault. ok-unknown.
-    return { ...base, message: msg("no runs yet"), status: "ok" };
+    return { ...base, message: outcomeMessage("no runs yet"), status: "ok" };
   }
 
-  return { ...base, message: msg("fresh"), status: "ok" };
+  if (
+    projection?.converged === false &&
+    projection.oldestDebtAgeMs !== null &&
+    projection.oldestDebtAgeMs > cronStaleBudgetMs(cron)
+  ) {
+    return { ...base, message: outcomeMessage("debt persists"), status: "down" };
+  }
+
+  return { ...base, message: outcomeMessage("fresh"), status: "ok" };
 }
 
 /**
@@ -1021,9 +1127,12 @@ export function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
 function probeCrons(claimed: Map<string, string>): Check[] {
   const uptimeMs = boxUptimeMs();
 
-  return AUTOMATION_CRONS.map((cron) =>
-    cronCheck(cron, judgeCron(cron, claimed.get(cron.service), uptimeMs)),
-  );
+  return AUTOMATION_CRONS.map((cron) => {
+    const dir = claimed.get(cron.service);
+    const projection =
+      cron.service === "cron.projection-maintenance" ? readProjectionMaintenanceState(dir) : null;
+    return cronCheck(cron, judgeCron(cron, dir, uptimeMs), projection);
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ function family(ready: boolean) {
       sourceDigest: ready ? "b".repeat(64) : null,
       sourceEpoch: ready ? 4 : null,
     },
+    oldestOutstandingMarkerAge: { ageMs: null, reason: null, truncated: false },
     ready,
     rebuild: {
       complete: ready,

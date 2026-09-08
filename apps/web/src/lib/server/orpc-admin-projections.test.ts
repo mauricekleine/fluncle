@@ -30,6 +30,7 @@ const family = {
     sourceDigest: "0".repeat(64),
     sourceEpoch: 0,
   },
+  oldestOutstandingMarkerAge: { ageMs: null, reason: null, truncated: false },
   ready: true,
   rebuild: { complete: true, completed: 1, projected: 0, running: 0, scanned: 0, total: 1 },
   repairs: { direct: count, fanout: count, total: count },
