@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 
 import {
+  EMBEDDING_BLOB,
   FIXTURE_CENSUS_QUERY_CHUNK_SIZE,
   FIXTURE_IDENTITY_TABLE,
   FIXTURE_TABLES,
@@ -46,6 +47,24 @@ async function scalar(client: ReturnType<typeof createClient>, sql: string): Pro
 }
 
 describe("synthetic database performance fixture", () => {
+  it("provides a finite full-width vector for cosine contracts", async () => {
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+
+    try {
+      const result = await client.execute({
+        args: [EMBEDDING_BLOB, EMBEDDING_BLOB],
+        sql: "select vector_distance_cos(?, ?) as distance",
+      });
+
+      const distance = result.rows[0]?.distance;
+
+      expect(typeof distance).toBe("number");
+      expect(Number.isFinite(distance)).toBe(true);
+    } finally {
+      client.close();
+    }
+  });
+
   it("streams bounded chunks made only from stable synthetic values", async () => {
     const counts = Object.fromEntries(FIXTURE_TABLES.map((table) => [table, 0]));
     let chunks = 0;

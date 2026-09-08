@@ -894,10 +894,9 @@ const TRACK_INSERT = `insert or ignore into perf_tracks
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   )`;
 
-const EMBEDDING_BLOB = new Uint8Array(4096);
-for (let index = 0; index < EMBEDDING_BLOB.length; index += 1) {
-  EMBEDDING_BLOB[index] = (index * 29 + 17) % 251;
-}
+export const EMBEDDING_BLOB = new Uint8Array(
+  new Float32Array(1024).fill(1 / Math.sqrt(1024)).buffer,
+);
 
 function padded(index: number): string {
   return index.toString().padStart(9, "0");
