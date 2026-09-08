@@ -4,10 +4,10 @@
 // hydration of a genuinely client-only control, a clean console — see `tests/e2e/README.md`), and
 // then the five things specific to THIS surface that cannot be asserted in prose:
 //
-//   A. THE COLD-ARRIVAL JOURNEY, end to end and with no account: land on a track, continue into an
-//      UNFAMILIAR sonic neighbour, and leave from there to an accurate outbound listening service.
-//      Run at desktop 1440×900 and mobile 390×844, and evidenced by retained full-page screenshots
-//      at every step rather than by a claim.
+//   A. THE COLD-ARRIVAL JOURNEY, end to end and with no account: land on a track while the optional
+//      similarity band is unavailable, continue through the all-tracks index into an unfamiliar
+//      recording, and leave from there to an accurate outbound listening service. Run at desktop
+//      1440×900 and mobile 390×844, evidenced by retained full-page screenshots at every step.
 //   B. The certified rail: `/track/<id>` for a CERTIFIED track is a permanent redirect to
 //      `/log/<coordinate>`, and that log page still answers exactly as it did.
 //   C. The EVIDENCE gate, on both sides of the same expression: an evidence-rich page is
@@ -21,7 +21,7 @@
 // the rendered text or in the SSR bytes, may introduce, name, or count the register a track
 // belongs to.
 
-import { expect, test, type ConsoleMessage, type Locator, type Page } from "@playwright/test";
+import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { blockExternalRequests } from "./browser";
@@ -135,8 +135,8 @@ test("the destination SSRs every fact the archive holds, and names no tier", asy
   // The outbound controls — the exact ratified labels `/log` already uses.
   expect(raw).toContain("Listen on Spotify");
   expect(raw).toContain("Listen on Apple Music");
-  // The way on.
-  expect(raw).toContain("Close in sound");
+  // The optional similarity band is honestly absent while its serving flag is off.
+  expect(raw).not.toContain("Close in sound");
 
   // (2) THE UNNAMED TIER, asserted on the raw bytes so a meta description or a JSON-LD string
   // cannot smuggle the word past a visible-text check.
@@ -284,20 +284,24 @@ test.describe("the cold-arrival journey", () => {
       expect(overflow, `no horizontal bleed at ${name}`).toBeLessThanOrEqual(1);
       await page.screenshot({ fullPage: true, path: join(SHOT_DIR, `${name}-1-arrive.png`) });
 
-      // STEP 2 — continue into an UNFAMILIAR neighbour. It is deliberately the UNLIT row: a track
-      // with no coordinate and no cover, which before this unit had nowhere to send anyone.
-      const neighbour: Locator = page.locator(`.track-neighbour-unlit a[href="${NEIGHBOUR_PATH}"]`);
+      // STEP 2 — the optional similarity rail is absent while Sonar is off, but the established
+      // all-tracks path still carries the reader into an unfamiliar recording.
+      await expect(page.locator('[data-discovery="similar"]')).toHaveCount(0);
+      await page.getByRole("link", { exact: true, name: "All tracks" }).click();
+      await page.waitForURL("**/tracks");
+
+      const neighbour = page.locator(`a[href="${NEIGHBOUR_PATH}"]`).first();
 
       await expect(
         neighbour,
-        "the neighbour band offers an unlit row to continue into",
+        "the all-tracks index offers the unlit row as a continuing path",
       ).toBeVisible();
       await neighbour.click();
       await page.waitForURL(`**${NEIGHBOUR_PATH}`);
       await expect(page.getByRole("heading", { level: 1 })).toHaveText(
         SEEDED_DESTINATION_NEIGHBOUR.title,
       );
-      await page.screenshot({ fullPage: true, path: join(SHOT_DIR, `${name}-2-neighbour.png`) });
+      await page.screenshot({ fullPage: true, path: join(SHOT_DIR, `${name}-2-index-route.png`) });
 
       // STEP 3 — leave to an ACCURATE outbound listening service. Accurate means the URL the
       // archive actually stores for THIS recording, not a search link and not the previous page's.

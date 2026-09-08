@@ -219,7 +219,7 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
     await embed(CATALOGUE_ID, 0.99); // nearest
     await embed(FINDING_ID, 0.2); // further
 
-    const similar = await getSimilarFindings(target, 6);
+    const similar = await getSimilarFindings(target, 6, { allowBoundedSql: true });
 
     expect(similar.map((item) => item.trackId)).toEqual([FINDING_ID]);
   });

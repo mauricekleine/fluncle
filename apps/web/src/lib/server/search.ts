@@ -106,7 +106,7 @@ export const SONIC_SCAN_TIMEOUT_MS = VECTOR_FALLBACK_DEADLINE_MS;
 export type SearchResult = {
   /** The real track the sonic tier anchored on (`sonic` only). */
   anchor?: SearchHit;
-  /** The LLM tier was wanted and could not run; these are full-text results instead. */
+  /** A requested semantic tier could not run; these are full-text results instead. */
   degraded: boolean;
   /** Artists the query named or prefixed — jump targets, above the rows. */
   entities: SearchEntity[];
@@ -1093,26 +1093,33 @@ export async function rankTracksByVector(
   columnFilters: SearchFilters,
   excludeTrackId: string | undefined,
   limit: number,
-): Promise<SearchHit[]> {
+  options: { allowBoundedSql?: boolean } = {},
+): Promise<SearchHit[] | null> {
   // THE SONAR ROUTE (dark, DEFAULT OFF). When the sonic flag is on AND the column filters are ones
-  // sonar can express faithfully AND sonar answers, take the in-memory scan and hydrate its ids;
-  // otherwise fall through to the exact Turso scan below, byte-for-byte today's behaviour.
+  // sonar can express faithfully AND sonar answers, take the in-memory scan and hydrate its ids.
+  // Unsupported filters return the same typed unavailable result without asking Sonar. Once Sonar
+  // is actually asked, `null` means unavailable and `[]` means a valid empty result; neither starts
+  // the remote SQL fallback, whose work cannot be cancelled after Turso accepts it.
   if (await isSonarSonicEnabled()) {
     const filter = sonarTrackFilter(columnFilters);
 
-    if (filter) {
-      const matches = await searchSonar({
-        excludeIds: excludeTrackId ? [excludeTrackId] : [],
-        filter,
-        index: "tracks",
-        probes: [probe],
-        topK: limit,
-      });
-
-      if (matches && matches.length > 0) {
-        return hydrateTrackHits(matches);
-      }
+    if (!filter) {
+      return null;
     }
+
+    const matches = await searchSonar({
+      excludeIds: excludeTrackId ? [excludeTrackId] : [],
+      filter,
+      index: "tracks",
+      probes: [probe],
+      topK: limit,
+    });
+
+    return matches === null ? null : hydrateTrackHits(matches);
+  }
+
+  if (options.allowBoundedSql !== true) {
+    return null;
   }
 
   // The pre-filter is compiled through the SAME name→id resolution the non-sonic path uses, so
@@ -1163,16 +1170,17 @@ export async function rankTracksByVector(
 
 /**
  * Map the sonic tier's `columnFilters` to sonar's metadata pre-filter, or `null` when they are NOT
- * faithfully expressible — the signal to skip sonar and fall back to the exact Turso scan, so the
- * flag flip stays a pure latency win and never a ranking change.
+ * faithfully expressible. An enabled sonic surface treats that as unavailable and degrades to
+ * full text rather than presenting the capped SQL relation as complete-corpus vector recall.
  *
  * sonar can express ONLY inclusive BPM bounds with identical semantics. `key` is deliberately NOT
  * mapped: the Turso path matches the bare `tracks.key` column against a spread of canonical
  * spellings ({@link keySpellings}) and sonar's `key_in` is now the same kind of exact set, so the
  * two could be made to agree — but routing key queries to sonar is a RANKING-affecting flag change,
- * not the query-shape fix this path just took, so it stays a fallback until that is measured.
+ * not the query-shape fix this path just took, so it takes the explicit full-text degradation until
+ * that is measured.
  * `artist`/`album`/`label`/`year`/`text` have no
- * sonar-filter equivalent at all, so any of them present also falls back (hydration cannot re-apply
+ * sonar-filter equivalent at all, so any of them present also declines (hydration cannot re-apply
  * them without breaking sonar's top-k, so routing to sonar would silently drop the filter).
  */
 function sonarTrackFilter(columnFilters: SearchFilters): SonarFilter | null {
@@ -1229,7 +1237,14 @@ async function hydrateTrackHits(matches: SonarMatch[]): Promise<SearchHit[]> {
  * "Tracks that sound like <X>" — the sonic tier. The anchor is a real, embedded row; its MuQ vector
  * is the probe, and every other filter becomes the btree pre-filter in {@link rankTracksByVector}.
  */
-async function runSonic(filters: SearchFilters, limit: number): Promise<SearchResult | null> {
+const SONIC_UNAVAILABLE = Symbol("sonic-unavailable");
+type SonicResolution = SearchResult | null | typeof SONIC_UNAVAILABLE;
+
+async function runSonic(
+  filters: SearchFilters,
+  limit: number,
+  allowBoundedSql: boolean,
+): Promise<SonicResolution> {
   const reference = filters.soundsLike;
 
   if (!reference) {
@@ -1250,7 +1265,19 @@ async function runSonic(filters: SearchFilters, limit: number): Promise<SearchRe
     text: _words,
     ...columnFilters
   } = filters;
-  const results = await rankTracksByVector(anchor.vector, columnFilters, anchor.hit.trackId, limit);
+  const results = await rankTracksByVector(
+    anchor.vector,
+    columnFilters,
+    anchor.hit.trackId,
+    limit,
+    {
+      allowBoundedSql,
+    },
+  );
+
+  if (results === null) {
+    return SONIC_UNAVAILABLE;
+  }
 
   return { anchor: anchor.hit, degraded: false, entities: [], filters, kind: "sonic", results };
 }
@@ -1371,7 +1398,11 @@ async function resolveArtistCentroids(
  * artist resolves to a centroid — anchored on real rows, never an invented vibe. The transparency
  * echo carries the RESOLVED names, so the reader sees which artists the vibe was actually built from.
  */
-async function runArtistSonic(filters: SearchFilters, limit: number): Promise<SearchResult | null> {
+async function runArtistSonic(
+  filters: SearchFilters,
+  limit: number,
+  allowBoundedSql: boolean,
+): Promise<SonicResolution> {
   const inputs = filters.soundsLikeArtists;
 
   if (!inputs || inputs.length === 0) {
@@ -1391,7 +1422,13 @@ async function runArtistSonic(filters: SearchFilters, limit: number): Promise<Se
     text: _words,
     ...columnFilters
   } = filters;
-  const results = await rankTracksByVector(probe, columnFilters, undefined, limit);
+  const results = await rankTracksByVector(probe, columnFilters, undefined, limit, {
+    allowBoundedSql,
+  });
+
+  if (results === null) {
+    return SONIC_UNAVAILABLE;
+  }
 
   return {
     degraded: false,
@@ -1428,7 +1465,23 @@ function parseSpotifyTrackId(q: string): string | null {
  * common cases (a coordinate, a name, a word) never reach a model, and the case that does is
  * on a 3-second leash with a full-text fallback behind it.
  */
-export async function searchArchive(options: { q: string; limit?: number }): Promise<SearchResult> {
+async function textFallback(q: string, limit: number, degraded: boolean): Promise<SearchResult> {
+  const match = toFtsMatch(q, "or");
+  const [results, entities] = await Promise.all([
+    match ? ftsSearch(match, limit) : Promise.resolve([]),
+    // The first token is the one worth prefixing an entity against ("andromedik tracks …").
+    prefixEntities(tokenize(q)[0] ?? ""),
+  ]);
+
+  return { degraded, entities, kind: "token", results };
+}
+
+export async function searchArchive(options: {
+  /** Keep the bounded SQL implementation reachable for local parity/integration diagnostics only. */
+  allowBoundedSonicForDiagnostics?: boolean;
+  limit?: number;
+  q: string;
+}): Promise<SearchResult> {
   const q = options.q.trim();
   const limit = Math.min(
     Math.max(Math.trunc(options.limit ?? DEFAULT_LIMIT) || DEFAULT_LIMIT, 1),
@@ -1524,7 +1577,15 @@ export async function searchArchive(options: { q: string; limit?: number }): Pro
   const sonicPhrase = parseSonicPhrase(q);
 
   if (sonicPhrase) {
-    const sonic = await runSonic({ soundsLike: sonicPhrase }, Math.min(limit, SONIC_LIMIT));
+    const sonic = await runSonic(
+      { soundsLike: sonicPhrase },
+      Math.min(limit, SONIC_LIMIT),
+      options.allowBoundedSonicForDiagnostics === true,
+    );
+
+    if (sonic === SONIC_UNAVAILABLE) {
+      return textFallback(q, limit, true);
+    }
 
     if (sonic) {
       return sonic;
@@ -1540,13 +1601,29 @@ export async function searchArchive(options: { q: string; limit?: number }): Pro
     // The COMPOUND sonic tier goes first: "artists that sound like X and Y (in A minor)" is a
     // vector rank behind a btree pre-filter, anchored on the artists' centroids. It declines (and
     // falls through) when no named artist resolves to a centroid.
-    const artistSonic = await runArtistSonic(filters, Math.min(limit, SONIC_LIMIT));
+    const artistSonic = await runArtistSonic(
+      filters,
+      Math.min(limit, SONIC_LIMIT),
+      options.allowBoundedSonicForDiagnostics === true,
+    );
+
+    if (artistSonic === SONIC_UNAVAILABLE) {
+      return textFallback(q, limit, true);
+    }
 
     if (artistSonic) {
       return artistSonic;
     }
 
-    const sonic = await runSonic(filters, Math.min(limit, SONIC_LIMIT));
+    const sonic = await runSonic(
+      filters,
+      Math.min(limit, SONIC_LIMIT),
+      options.allowBoundedSonicForDiagnostics === true,
+    );
+
+    if (sonic === SONIC_UNAVAILABLE) {
+      return textFallback(q, limit, true);
+    }
 
     if (sonic) {
       return sonic;
@@ -1575,12 +1652,5 @@ export async function searchArchive(options: { q: string; limit?: number }): Pro
   // ── The degradation. The model was wanted and could not run (unprovisioned, slow, down),
   // or it parsed to nothing usable. Full text with OR semantics: bm25 ranks by rarity, so the
   // one distinctive word in the sentence carries the result.
-  const match = toFtsMatch(q, "or");
-  const [results, entities] = await Promise.all([
-    match ? ftsSearch(match, limit) : Promise.resolve([]),
-    // The first token is the one worth prefixing an entity against ("andromedik tracks …").
-    prefixEntities(tokenize(q)[0] ?? ""),
-  ]);
-
-  return { degraded: filters === null, entities, kind: "token", results };
+  return textFallback(q, limit, filters === null);
 }

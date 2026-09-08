@@ -2,7 +2,11 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cosineSimilarity, EMBEDDING_DIMS, rankBySimilarity, readEmbeddingBlob } from "./embedding";
 import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
-import { getSimilarFindings } from "./tracks";
+import { getSimilarFindings as getSimilarFindingsLive } from "./tracks";
+
+function getSimilarFindings(idOrLogId: string, limit = 6) {
+  return getSimilarFindingsLive(idOrLogId, limit, { allowBoundedSql: true });
+}
 
 // The DB-backed "more like this" reader (docs/track-lifecycle.md) — the data source for
 // the public `list_similar_tracks` op AND the `/log` row.

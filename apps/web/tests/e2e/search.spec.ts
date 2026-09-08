@@ -35,15 +35,15 @@
 //   - an EXACT ENTITY (`Nova Kestrel`) — tier 2, returns on a hit;
 //   - a BARE TOKEN (`Aurora`, `zzzqqx`) — tier 3, returns even with zero rows,
 //     which is what makes `zzzqqx` a deterministic way to reach the empty state;
-//   - a SONIC phrase (`tracks that sound like Synthetic Aurora`) — tier 3½, a
-//     regex and a `vector_distance_cos` scan over the seeded embeddings;
+//   - a SONIC phrase (`tracks that sound like Synthetic Aurora`) — tier 3½,
+//     honestly degrading to full text while the local Sonar flag is off;
 //   - a STRUCTURED sentence — tier 4, unprovisioned, degrading to full text.
 
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { blockExternalRequests } from "./browser";
-import { SEEDED_FINDING_TITLES, SEEDED_SONIC_ANCHOR, SEEDED_SONIC_NEIGHBOUR } from "./seed";
+import { SEEDED_FINDING_TITLES, SEEDED_SONIC_ANCHOR } from "./seed";
 
 // The graph entity seeded in `seed.ts` and wired to the first finding — the
 // exact-entity (tier 2) target, and the label filter's value on the hub.
@@ -229,22 +229,22 @@ const MOBILE = { height: 844, width: 390 };
  */
 const QUERY_KINDS = [
   {
-    expect: FIRST_FINDING_TITLE,
+    expected: [FIRST_FINDING_TITLE],
     kind: "text",
     query: "Aurora",
   },
   {
-    expect: SEEDED_ARTIST_NAME,
+    expected: [SEEDED_ARTIST_NAME],
     kind: "entity",
     query: SEEDED_ARTIST_NAME,
   },
   {
-    expect: "Reading by name only right now.",
+    expected: ["Reading by name only right now."],
     kind: "structured",
     query: `${SEEDED_ARTIST_NAME} tracks in A minor`,
   },
   {
-    expect: SEEDED_SONIC_NEIGHBOUR.title,
+    expected: ["Reading by name only right now.", SEEDED_SONIC_ANCHOR.title],
     kind: "sonic",
     query: `tracks that sound like ${SEEDED_SONIC_ANCHOR.title}`,
   },
@@ -255,19 +255,23 @@ test("the whole query state lives in the URL, for every kind of query", async ({
 
   const problems = watchForErrors(page);
 
-  for (const { expect: expected, kind, query } of QUERY_KINDS) {
+  for (const { expected, kind, query } of QUERY_KINDS) {
     const url = `/search?q=${encodeURIComponent(query)}`;
 
     // (1) SSR — the ANSWER is in the server HTML, not fetched after hydration. This is what makes
     // the surface shareable to a crawler and readable with JS off, and it is the difference from
     // the palette rather than a nicety.
     const rawHtml = await (await page.request.get(url)).text();
-    expect(rawHtml, `${kind}: the SSR HTML should already carry the answer`).toContain(expected);
+    for (const text of expected) {
+      expect(rawHtml, `${kind}: the SSR HTML should already carry "${text}"`).toContain(text);
+    }
 
     // (2) A COLD LOAD of that URL renders the same answer — no client state, no prior navigation.
     const response = await page.goto(url, { waitUntil: "networkidle" });
     expect(response?.status(), `${kind}: a shared URL must load`).toBe(200);
-    await expect(page.getByText(expected).first()).toBeVisible();
+    for (const text of expected) {
+      await expect(page.getByText(text, { exact: false }).first()).toBeVisible();
+    }
 
     // (3) The field is seeded FROM the URL, so what the reader sees typed is what produced the
     // answer under it — a page whose field and results disagree cannot be trusted or corrected.
@@ -279,7 +283,9 @@ test("the whole query state lives in the URL, for every kind of query", async ({
     await expect(page).toHaveURL(
       new RegExp(`q=${encodeURIComponent(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
     );
-    await expect(page.getByText(expected).first()).toBeVisible();
+    for (const text of expected) {
+      await expect(page.getByText(text, { exact: false }).first()).toBeVisible();
+    }
   }
 
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);

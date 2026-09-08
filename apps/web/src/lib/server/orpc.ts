@@ -44,6 +44,7 @@ import { adminDatabaseAdmissionHandlers } from "./orpc/admin-database-admission"
 import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
 import { adminPromptsHandlers } from "./orpc/admin-prompts";
 import { adminProjectionHandlers } from "./orpc/admin-projections";
+import { adminVectorHandlers } from "./orpc/admin-vectors";
 import { adminReachHandlers } from "./orpc/admin-reach";
 import { albumsHandlers } from "./orpc/albums";
 import { artistsHandlers } from "./orpc/artists";
@@ -121,6 +122,7 @@ export const router = os.router({
   ...adminGalaxiesHandlers(os),
   ...adminPromptsHandlers(os),
   ...adminProjectionHandlers(os),
+  ...adminVectorHandlers(os),
   ...adminReachHandlers(os),
   ...albumsHandlers(os),
   ...artistsHandlers(os),
@@ -244,7 +246,7 @@ const API_PREFIX = "/api/v1";
 // the replica response carries a short-lived credential that must remain specific
 // to the requesting device. oRPC owns the response framing, so these headers live
 // at the shared mount rather than in domain handlers.
-const NO_STORE_SUFFIXES = new Set(["/health", "/replica/token"]);
+const NO_STORE_SUFFIXES = new Set(["/admin/vectors/tracks/serving", "/health", "/replica/token"]);
 
 // WHICH PATHS MAY ANSWER A BROWSER FROM ANOTHER ORIGIN, derived once from the router
 // above. The rule and its reasoning live in ./orpc-cors; what matters here is that it

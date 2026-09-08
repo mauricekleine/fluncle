@@ -105,9 +105,19 @@ beforeEach(async () => {
 });
 
 describe("listSonicNeighbours — the /track sonar route", () => {
+  it("returns no optional band before a database read when the flag is off", async () => {
+    isSonarTrackEnabled.mockResolvedValue(false);
+    const execute = vi.spyOn(db, "execute");
+
+    await expect(listSonicNeighbours("target", 2)).resolves.toEqual([]);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(searchSonar).not.toHaveBeenCalled();
+  });
+
   it("returns the same ids in the same order through sonar and the bounded Turso path", async () => {
     isSonarTrackEnabled.mockResolvedValue(false);
-    const turso = await listSonicNeighbours("target", 2);
+    const turso = await listSonicNeighbours("target", 2, { allowBoundedSql: true });
 
     isSonarTrackEnabled.mockResolvedValue(true);
     searchSonar.mockImplementation(referenceSonar);
@@ -139,4 +149,24 @@ describe("listSonicNeighbours — the /track sonar route", () => {
 
     expect(neighbours.map((row) => row.trackId)).toEqual(["tempo-near"]);
   });
+
+  it.each([null, []])(
+    "returns no optional band without a vector fallback when Sonar returns %j",
+    async (sonarResult) => {
+      isSonarTrackEnabled.mockResolvedValue(true);
+      searchSonar.mockResolvedValue(sonarResult);
+      const execute = vi.spyOn(db, "execute");
+
+      const neighbours = await listSonicNeighbours("target", 2);
+
+      expect(neighbours).toEqual([]);
+      expect(
+        execute.mock.calls.some(([query]) =>
+          typeof query === "object" && query
+            ? (query as { sql?: string }).sql?.includes("vector_distance_cos")
+            : false,
+        ),
+      ).toBe(false);
+    },
+  );
 });

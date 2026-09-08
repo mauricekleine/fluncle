@@ -67,6 +67,15 @@ afterEach(() => {
 });
 
 describe("getSimilarFindings — the /log sonar route (dark)", () => {
+  it("returns no optional band before a database read when the flag is off", async () => {
+    isSonarLogEnabled.mockResolvedValue(false);
+
+    await expect(getSimilarFindings("t_self")).resolves.toEqual([]);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(searchSonar).not.toHaveBeenCalled();
+  });
+
   it("calls sonar with the certified pre-filter, the target excluded, and hydrates in sonar order", async () => {
     await seed([
       { embedding: vector(1), logId: "004.0.0A", trackId: "t_self" },
@@ -142,18 +151,27 @@ describe("getSimilarFindings — the /log sonar route (dark)", () => {
     expect(hydrationSql).toContain("findings.log_id is not null");
   });
 
-  it("falls back to the Turso scan when sonar returns empty", async () => {
-    await seed([
-      { embedding: vector(1), logId: "004.0.0A", trackId: "t_self" },
-      { embedding: vector(1), logId: "004.1.1A", trackId: "t_a" },
-    ]);
-    searchSonar.mockResolvedValue([]);
+  it.each([null, []])(
+    "returns no optional band without a vector fallback when Sonar returns %j",
+    async (sonarResult) => {
+      await seed([
+        { embedding: vector(1), logId: "004.0.0A", trackId: "t_self" },
+        { embedding: vector(1), logId: "004.1.1A", trackId: "t_a" },
+      ]);
+      searchSonar.mockResolvedValue(sonarResult);
 
-    const findings = await getSimilarFindings("t_self");
+      const findings = await getSimilarFindings("t_self");
 
-    // The Turso vector scan still answers — same result the flag-OFF path returns today.
-    expect(findings.map((finding) => finding.trackId)).toEqual(["t_a"]);
-  });
+      expect(findings).toEqual([]);
+      expect(
+        execute.mock.calls.some(([query]) =>
+          typeof query === "object" && query
+            ? (query as { sql?: string }).sql?.includes("vector_distance_cos")
+            : false,
+        ),
+      ).toBe(false);
+    },
+  );
 });
 
 // ── The `/mix` rail's SONAR route (dark) ──────────────────────────────────────────────────

@@ -123,7 +123,7 @@ const fetchLogPage = createServerFn({ method: "GET" })
 
     const [neighbors, similar, artistSlugs, galaxyReady] = await Promise.all([
       getTrackNeighbors(track),
-      getSimilarFindings(track.logId),
+      getSimilarFindings(track.logId).catch(() => []),
       getArtistSlugMap(track.trackId),
       isGalaxyMapFullyNamed(),
     ]);

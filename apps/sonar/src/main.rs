@@ -95,10 +95,10 @@ async fn main() -> Result<()> {
         "loaded validated local indexes"
     );
 
-    let state = Arc::new(AppState::from_snapshot(
-        published(&stored),
-        cfg.secret.clone(),
-    ));
+    let state = Arc::new(
+        AppState::from_snapshot(published(&stored), cfg.secret.clone())
+            .with_consumer_id(cfg.consumer_id.clone()),
+    );
     if let Some(sync) = replica_sync {
         state.record_replica_sync(sync.frame_no, sync.frames_synced);
     }

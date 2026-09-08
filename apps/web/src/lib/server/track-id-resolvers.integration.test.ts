@@ -26,11 +26,15 @@ import {
   getLivePreviewTrack,
   getMixableTracks,
   getObservationProvenance,
-  getSimilarFindings,
+  getSimilarFindings as getSimilarFindingsLive,
   getSourceAudioKey,
   getTrackByIdOrLogId,
   getTrackContextNote,
 } from "./tracks";
+
+function getSimilarFindings(idOrLogId: string, limit = 6) {
+  return getSimilarFindingsLive(idOrLogId, limit, { allowBoundedSql: true });
+}
 
 type CapturedStatement = {
   args?: InArgs;

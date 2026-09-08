@@ -53,7 +53,7 @@ Tracks, centroids, and checkpoint metadata live in one published generation. A r
 
 ## Health
 
-`GET /health` remains open. It reports the served track and centroid counts, build commit, checkpoint, local baseline, producer head, delta backlog and age, last successful replica sync, raw vector bytes, artifact contract, validation state, and the last rebuild duration. Fields have bounded names and values. Structured logs use closed stage and rebuild-cause names plus numeric counters.
+`GET /health` remains open. It reports the served track and centroid counts, build commit, checkpoint, local baseline, producer head, delta backlog and age, last successful replica sync, raw vector bytes, artifact contract, validation state, and the last rebuild duration. A request carrying the valid existing `x-sonar-secret` additionally receives `consumer_id`, which binds commissioning evidence to the exact artifact consumer without exposing that deployment identity to public probes. Authenticated and anonymous responses both carry `Cache-Control: no-store`, preventing an intermediary from reusing the private body for a public request. Fields have bounded names and values. Structured logs use closed stage and rebuild-cause names plus numeric counters.
 
 `POST /search` still requires `x-sonar-secret`, compared in constant time.
 

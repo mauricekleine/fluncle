@@ -221,6 +221,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The user-account roster — contract-only oRPC (no TanStack route file; oRPC owns the
   // path directly). Admin tier (agent-allowed read).
   "GET /admin/users": "list_users_admin",
+  // Contract-only operator diagnostic. It joins authenticated Sonar health to one bounded
+  // artifact-consumer status read and exposes no raw catalogue rows.
+  "GET /admin/vectors/tracks/serving": "get_vector_serving",
   // MusicBrainz drift-audit bookkeeping for either scope of artist rule. Operator tier, but not
   // an acquisition-scope change: this cannot touch verdicts, re-arm watermarks, or label scope.
   "PATCH /admin/artist-rules/{id}": "update_artist_rule",
@@ -634,6 +637,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The render → publish auto-advance KILL SWITCH — contract-only oRPC (no TanStack route
   // file). Operator tier: pause/resume every future auto-publish, no deploy.
   "PUT /admin/social/publish/advance/state": "set_publish_advance",
+  // The tracks-only Sonar switch: first enable is readiness-gated; disable is unconditional.
+  "PUT /admin/vectors/tracks/serving": "set_vector_serving",
 };
 
 // Routes that stay on TanStack by design (carve-outs), keyed by their TanStack

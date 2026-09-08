@@ -446,12 +446,13 @@ function toNeighbour(row: NeighbourRow): SonicNeighbour {
  * by whether it carries a coordinate, never by the query.
  *
  * ── THE SCALE RULES, ALL FOUR OF THEM ─────────────────────────────────────────────────────────
- * The probe binds as a RAW BLOB, never as text (`toVectorProbe`; a 14× cliff hosted that does not
- * reproduce locally). The ranking happens IN SQL and returns the ~8 winners, never a column of
- * vectors into the isolate. There is exactly ONE probe, so it is one pass over the candidates —
- * never `union all` branches over a CTE, which the planner flattens into one scan per branch. And
- * there is no `libsql_vector_idx`: an ANN index on a populated table wedges hosted Turso's write
- * path, so this is an exact ranking of the shared bounded candidate relation.
+ * The diagnostic SQL path binds its probe as a RAW BLOB, never as text (`toVectorProbe`; a 14×
+ * cliff hosted that does not reproduce locally). Ranking happens IN SQL and returns the ~8
+ * winners, never a column of vectors into the isolate. There is exactly ONE probe, so it is one
+ * pass over the candidates — never `union all` branches over a CTE, which the planner flattens
+ * into one scan per branch. And there is no `libsql_vector_idx`: an ANN index on a populated table
+ * wedges hosted Turso's write path, so this is an exact ranking of the shared bounded candidate
+ * relation.
  *
  * The scan is bounded by both the EMBEDDED corpus (the join to `track_embeddings` is inner, so an
  * un-embedded row never reaches the cosine) and the shared fallback candidate ceiling. Sonar is
@@ -464,8 +465,15 @@ function toNeighbour(row: NeighbourRow): SonicNeighbour {
 export async function listSonicNeighbours(
   trackId: string,
   limit = SONIC_NEIGHBOUR_LIMIT,
+  options: { allowBoundedSql?: boolean } = {},
 ): Promise<SonicNeighbour[]> {
   if (limit <= 0) {
+    return [];
+  }
+
+  const sonarEnabled = await isSonarTrackEnabled();
+
+  if (!sonarEnabled && options.allowBoundedSql !== true) {
     return [];
   }
 
@@ -492,18 +500,17 @@ export async function listSonicNeighbours(
   // THE SONAR ROUTE (dark by default). It runs the same tempo-window-then-widen decision as the
   // bounded Turso path below. Skipping that first window would let a globally closer half-time row
   // beat a full in-tempo band only when the flag is on. Any failure, timeout, unprovisioned env, or
-  // empty answer falls through to the database path.
-  if (await isSonarTrackEnabled()) {
+  // empty answer returns no band promptly. A remote vector scan cannot be cancelled once Turso has
+  // accepted it, so an enabled surface never starts that heavy fallback after a Sonar outage.
+  if (sonarEnabled) {
     const fromSonar = await sonarNeighbours(target, targetBpm, trackId, limit);
 
-    if (fromSonar) {
-      return hydrateNeighbours(fromSonar);
-    }
+    return fromSonar === null ? [] : hydrateNeighbours(fromSonar);
   }
 
-  // THE BTREE PRE-FILTER, ahead of the exact scan — the shape AGENTS.md's hosted-Turso rail
-  // prescribes (`vector_distance_cos` with a btree pre-filter on key/BPM or galaxy) and the shape
-  // `/mix`'s candidate scan already ships, there on `tracks.key in (…)`.
+  // THE DIAGNOSTIC BTREE PRE-FILTER, ahead of the exact scan — the shape AGENTS.md's hosted-Turso
+  // rail prescribes (`vector_distance_cos` with a btree pre-filter on key/BPM or galaxy) and the
+  // shape `/mix`'s candidate scan already ships, there on `tracks.key in (…)`.
   //
   // THIS ONE IS ON TEMPO, and the choice is the surface rather than convenience. `key` is the
   // right axis for a MIX (a harmonic move is defined on it); it is the wrong axis for "close in
@@ -652,7 +659,7 @@ async function sonarNeighbours(
     topK: limit,
   });
 
-  return widened && widened.length > 0 ? widened : null;
+  return widened;
 }
 
 /** Hydrate sonar's ranked ids IN SONAR'S ORDER, re-asserting the candidate rule it cannot express. */

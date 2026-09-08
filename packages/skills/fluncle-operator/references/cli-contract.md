@@ -9,6 +9,8 @@ bun run --cwd apps/cli fluncle recent [--limit 10] [--json]
 bun run --cwd apps/cli fluncle admin tracks queue [--limit 10] [--json]
 bun run --cwd apps/cli fluncle admin tracks vehicles [--limit 10] [--json]
 bun run --cwd apps/cli fluncle admin tracks publish <spotify-url-or-uri> [--note "text"] [--dry-run] [--json]
+bun run --cwd apps/cli fluncle admin vectors get tracks [--json]
+bun run --cwd apps/cli fluncle admin vectors set tracks --enabled true|false [--json]
 bun run --cwd apps/cli fluncle admin auth spotify
 ```
 

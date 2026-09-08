@@ -77,7 +77,7 @@ This page is the first surface that both renders a Beatport link _and_ composes 
 
 `/log`'s "more like this" asks a question about **findings** and scans the certified corpus. This one asks a question about **music**, so it ranks `tracks` without a findings predicate and LEFT-joins findings only after the winners are bounded; a certified neighbour competes on exactly the same terms as an uncertified one. The register a neighbour renders in is decided by whether it carries a coordinate, never by the query.
 
-All four of [AGENTS.md](../AGENTS.md)'s database rules bind here and the scan obeys each one: the probe binds as a **raw blob**, the ranking happens **in SQL** and returns the ~8 winners rather than a column of vectors, there is exactly **one probe** so it is one pass (never `union all` branches over a CTE), and there is **no `libsql_vector_idx`** — an exact scan, which also means 100% recall.
+All four of [AGENTS.md](../AGENTS.md)'s database rules bind the diagnostic SQL path: the probe binds as a **raw blob**, the ranking happens **in SQL** and returns the ~8 winners rather than a column of vectors, there is exactly **one probe** so it is one pass (never `union all` branches over a CTE), and there is **no `libsql_vector_idx`**. The scan is exact only within its bounded candidate relation; complete-corpus recall belongs to Sonar and is never implied by this diagnostic.
 
 The scan ranks into a two-column `(track_id, distance)` `MATERIALIZED` winner relation before it reads findings or album metadata. The materialization fence prevents SQLite from flattening those lookups back into the candidate sort, and winner-first primary-key hydration bounds all three album lookups to the final limit. This changes the cost of metadata hydration only: exact vector scoring still visits the filtered embedded corpus and remains linear in that candidate count.
 
@@ -91,9 +91,9 @@ The window is ±8% of the target's tempo (±14 BPM at 174). A hard filter has a 
 
 `/track/<trackId>` is enrolled in the entity **detail** tier (`edge-cache.ts`), 300s fresh / 3600s stale-while-revalidate. It earns that tier on both halves rather than inheriting it: its content is one row's enrichment plus its neighbours, so a re-enrichment should surface inside minutes exactly as it should on `/log/<id>` or `/album/<slug>`; and the invalidation is explicit rather than left to the window — `track` is an `EntityCacheKind`, and `getTrackEntityPurgeTargets` returns the track's own page alongside its artist/album/label pages, so every write path that already calls `purgeTrackEntityPages` evicts it too.
 
-It matters more here than anywhere else in that tier: this is the surface with six figures of crawlable URLs behind it, an uncached view pays the exact vector scan above, and crawler traffic is uncached-first by definition.
+It matters more here than anywhere else in that tier: this is the surface with six figures of crawlable URLs behind it, and crawler traffic is uncached-first by definition. A healthy enabled Sonar request still pays the complete-corpus vector lookup before winner hydration; an off or unavailable engine omits the optional band promptly.
 
-Sonar is the lever when the embedded corpus outgrows the scan, behind its own dark flag (`sonar_track_enabled`, default off — see [vector-serving.md](./vector-serving.md)). Off, unprovisioned, timed out, or answering empty, the exact Turso scan answers. A track with no embedding, an archive with nothing else embedded, and a dark sonar all arrive as an empty list, and all three degrade to the same honest thing: **no band at all**.
+Sonar is the complete-corpus serving path, behind its own dark flag (`sonar_track_enabled`, default off — see [vector-serving.md](./vector-serving.md)). When the flag is off or the enabled engine is unavailable, the public page promptly omits the optional band instead of starting a remote SQL scan. A healthy empty Sonar answer also remains an empty band. The bounded Turso builder stays explicitly available for diagnostic parity, where its candidate ceiling is understood; it is not a public fallback.
 
 ## The sitemap at catalogue scale
 

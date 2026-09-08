@@ -64,8 +64,19 @@ export async function resolveTrackPageData(trackId: string): Promise<TrackPageDa
   }
 
   return {
-    neighbours: await listSonicNeighbours(row.track.trackId),
+    neighbours: await optionalSonicNeighbours(row.track.trackId),
     status: "found",
     track: row.track,
   };
+}
+
+export async function optionalSonicNeighbours(
+  trackId: string,
+  load: (id: string) => Promise<SonicNeighbour[]> = listSonicNeighbours,
+): Promise<SonicNeighbour[]> {
+  try {
+    return await load(trackId);
+  } catch {
+    return [];
+  }
 }
