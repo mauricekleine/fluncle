@@ -1,5 +1,10 @@
 import rawInventory from "./index-inventory.json";
 import { SCALE_PROFILES, type ScaleProfile } from "./manifest";
+import {
+  PRODUCTION_LOCK_INVENTORY,
+  type ProductionLockContract,
+  type ProductionLockIndex,
+} from "./production-lock-inventory";
 import { type ContractReport, type PerformanceContract } from "./registry";
 
 export const INDEX_AUDIT_PROFILES = [...SCALE_PROFILES] as const;
@@ -91,6 +96,16 @@ export type IndexAuditReport = {
   missingProfileEvidence: string[];
   observedProfile: ScaleProfile;
   productionInventory: IndexInventoryDocument["productionInventory"];
+  productionLocks: {
+    contracts: IndexAuditContractEvidence[];
+    indexes: ProductionLockIndex[];
+    missingConsumers: string[];
+    missingPlanEvidence: string[];
+    missingProfileEvidence: string[];
+    passed: boolean;
+    profileEvidence: Record<ScaleProfile, { declaredContracts: number; observedContracts: number }>;
+    totals: { contracts: number; indexes: number };
+  };
   profileEvidence: Record<ScaleProfile, { declaredContracts: number; observedContracts: number }>;
   passed: boolean;
   totals: {
@@ -297,6 +312,29 @@ function evidenceFromReport(
   };
 }
 
+function productionLockEvidenceFromReport(
+  reference: ProductionLockContract,
+  report: ContractReport,
+  profile: ScaleProfile,
+): IndexAuditContractEvidence {
+  return {
+    contractId: reference.id,
+    metadata: report.metadata[0] ?? null,
+    observedProfile: profile,
+    passed: report.passed,
+    plan: report.plan
+      ? {
+          details: report.plan.details,
+          fullScans: report.plan.fullScans,
+          tempSorts: report.plan.tempSorts,
+          violations: report.plan.violations,
+        }
+      : null,
+    requiredProfiles: reference.requiredProfiles,
+    resultRowCount: report.resultRowCount,
+  };
+}
+
 export function buildIndexAudit(options: {
   contracts: readonly PerformanceContract[];
   inventory?: IndexInventoryDocument;
@@ -306,8 +344,11 @@ export function buildIndexAudit(options: {
   const inventory = options.inventory ?? FINAL_INDEX_INVENTORY;
   const entries = allIndexInventoryEntries(inventory);
   const indexContracts = options.contracts.filter((contract) => contract.indexEvidence);
+  const productionLockContracts = options.contracts.filter(
+    (contract) => contract.productionLockEvidence,
+  );
 
-  if (indexContracts.length === 0) {
+  if (indexContracts.length === 0 && productionLockContracts.length === 0) {
     return null;
   }
 
@@ -328,6 +369,12 @@ export function buildIndexAudit(options: {
   const decisionCounts: Record<IndexDecision, number> = { add: 0, drop: 0, keep: 0 };
   const decisionByIndex: Record<string, IndexDecision> = {};
   const profileEvidence = Object.fromEntries(
+    INDEX_AUDIT_PROFILES.map((profile) => [
+      profile,
+      { declaredContracts: 0, observedContracts: 0 },
+    ]),
+  ) as Record<ScaleProfile, { declaredContracts: number; observedContracts: number }>;
+  const productionLockProfileEvidence = Object.fromEntries(
     INDEX_AUDIT_PROFILES.map((profile) => [
       profile,
       { declaredContracts: 0, observedContracts: 0 },
@@ -386,6 +433,55 @@ export function buildIndexAudit(options: {
         contract.passed && contract.plan !== null && contract.plan.violations.length === 0,
     ),
   );
+  const productionLockEvidence: IndexAuditContractEvidence[] = [];
+  const missingProductionLockConsumers = PRODUCTION_LOCK_INVENTORY.contracts
+    .filter(
+      (reference) =>
+        reference.consumer.length === 0 ||
+        reference.consumer.some(
+          (coordinate) => coordinate.file.length === 0 || coordinate.marker.length === 0,
+        ) ||
+        reference.query.length === 0,
+    )
+    .map((reference) => reference.id);
+  const missingProductionLockPlans: string[] = [];
+  const missingProductionLockProfiles: string[] = [];
+
+  for (const reference of PRODUCTION_LOCK_INVENTORY.contracts) {
+    const declaredProfiles = new Set<ScaleProfile>();
+    for (const profile of reference.requiredProfiles) {
+      declaredProfiles.add(profile);
+      productionLockProfileEvidence[profile].declaredContracts += 1;
+    }
+    for (const profile of INDEX_AUDIT_PROFILES) {
+      if (!declaredProfiles.has(profile)) {
+        missingProductionLockProfiles.push(`${reference.id}:${profile}`);
+      }
+    }
+
+    const definition = productionLockContracts.find(
+      (contract) => contract.productionLockEvidence?.contractId === reference.id,
+    )?.productionLockEvidence;
+    const report = reportsById.get(reference.id);
+    if (!definition || !report) {
+      missingProductionLockPlans.push(reference.id);
+      continue;
+    }
+    productionLockEvidence.push(
+      productionLockEvidenceFromReport(reference, report, options.profile),
+    );
+    productionLockProfileEvidence[options.profile].observedContracts += 1;
+  }
+
+  const productionLockEvidencePassed = productionLockEvidence.every(
+    (contract) =>
+      contract.passed && contract.plan !== null && contract.plan.violations.length === 0,
+  );
+  const productionLocksPassed =
+    missingProductionLockConsumers.length === 0 &&
+    missingProductionLockPlans.length === 0 &&
+    missingProductionLockProfiles.length === 0 &&
+    productionLockEvidencePassed;
 
   return {
     decisions: { byIndex: decisionByIndex, counts: decisionCounts },
@@ -398,8 +494,22 @@ export function buildIndexAudit(options: {
       missingConsumers.length === 0 &&
       missingPlanEvidence.length === 0 &&
       missingProfileEvidence.length === 0 &&
-      evidencePassed,
+      evidencePassed &&
+      productionLocksPassed,
     productionInventory: inventory.productionInventory,
+    productionLocks: {
+      contracts: productionLockEvidence,
+      indexes: PRODUCTION_LOCK_INVENTORY.indexes,
+      missingConsumers: missingProductionLockConsumers,
+      missingPlanEvidence: missingProductionLockPlans,
+      missingProfileEvidence: missingProductionLockProfiles,
+      passed: productionLocksPassed,
+      profileEvidence: productionLockProfileEvidence,
+      totals: {
+        contracts: PRODUCTION_LOCK_INVENTORY.contracts.length,
+        indexes: PRODUCTION_LOCK_INVENTORY.indexes.length,
+      },
+    },
     profileEvidence,
     totals: {
       databaseScaleIndexes: inventory.databaseScaleIndexes.length,
