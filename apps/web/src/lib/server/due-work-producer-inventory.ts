@@ -645,6 +645,16 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   },
   {
     disposition: "test-fixture",
+    file: "scripts/db-performance/artifact-transactions.ts",
+    rationale:
+      "Seeds an invocation-local libSQL source solely for the artifact write-transaction measurement.",
+    sites: [
+      "scripts/db-performance/artifact-transactions.ts:insert:tracks:0fabb041",
+      "scripts/db-performance/artifact-transactions.ts:insert:track_embeddings:0de18a74",
+    ],
+  },
+  {
+    disposition: "test-fixture",
     file: "scripts/lib/scale-seed.ts",
     rationale: "Seeds deterministic local performance fixtures and never targets application data.",
     sites: [
@@ -895,6 +905,12 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
       "scripts/db-performance/device-resources.ts:delete:track_artists:ad3d8353",
       "scripts/db-performance/device-resources.ts:insert:track_artists:dbc0406d",
     ],
+  },
+  {
+    disposition: "test-fixture",
+    file: "scripts/db-performance/artifact-transactions.ts",
+    rationale: "Seeds an invocation-local libSQL source only.",
+    sites: ["scripts/db-performance/artifact-transactions.ts:insert:tracks:0fabb041"],
   },
   {
     disposition: "test-fixture",
