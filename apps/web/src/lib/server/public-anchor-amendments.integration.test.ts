@@ -407,11 +407,15 @@ describe("page-local public anchor maintenance", () => {
         TRACKS_HUB_PAGE_SIZE,
         page,
       );
-      if (projected?.start === undefined) {
+      if (projected === undefined) {
         const fallback = await db.execute(
           tracksHubIdPageQuery({}, TRACKS_HUB_PAGE_SIZE, (page - 1) * TRACKS_HUB_PAGE_SIZE),
         );
         expect(fallback.rows.length, `published-range fallback page ${page}`).toBeGreaterThan(0);
+        continue;
+      }
+      expect(projected.start, `published-range projected page ${page} start`).toBeDefined();
+      if (projected.start === undefined) {
         continue;
       }
       const queries = projectedTracksHubIdPageQueries(projected.start, TRACKS_HUB_PAGE_SIZE);
