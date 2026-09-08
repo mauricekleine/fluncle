@@ -18,12 +18,23 @@ describe("artifact transaction measurement", () => {
     const report = await runArtifactTransactionProfile("1x", { acknowledgements: 2, counts });
     const expectedPages = Math.ceil(counts.trackEmbeddings / ARTIFACT_SNAPSHOT_MAX_LIMIT);
 
-    expect(report.schemaVersion).toBe(1);
+    expect(report.schemaVersion).toBe(2);
     expect(report.exactProfileCardinality).toBe(false);
     expect(report.census).toEqual({
+      albums: counts.albums,
       artifactChangesBelowFence: expect.any(Number),
+      artists: counts.artists,
+      crawlFrontier: counts.crawlFrontier,
+      findings: counts.findings,
+      labels: counts.labels,
+      trackArtists: counts.trackArtists,
       trackEmbeddings: counts.trackEmbeddings,
       tracks: counts.tracks,
+    });
+    expect(report.findingJoin).toEqual({
+      matchedItems: counts.findings,
+      pagesWithMatchedItems: 1,
+      unmatchedItems: counts.trackEmbeddings - counts.findings,
     });
     expect(expectedPages).toBeGreaterThanOrEqual(3);
 

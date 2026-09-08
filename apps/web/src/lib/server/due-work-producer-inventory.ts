@@ -649,8 +649,13 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     rationale:
       "Seeds an invocation-local libSQL source solely for the artifact write-transaction measurement.",
     sites: [
-      "scripts/db-performance/artifact-transactions.ts:insert:tracks:0fabb041",
+      "scripts/db-performance/artifact-transactions.ts:insert:labels:a39abea2",
+      "scripts/db-performance/artifact-transactions.ts:insert:albums:cb1fa531",
+      "scripts/db-performance/artifact-transactions.ts:insert:artists:8c220465",
+      "scripts/db-performance/artifact-transactions.ts:insert:tracks:5109fd4a",
+      "scripts/db-performance/artifact-transactions.ts:insert:findings:ccca5fec",
       "scripts/db-performance/artifact-transactions.ts:insert:track_embeddings:0de18a74",
+      "scripts/db-performance/artifact-transactions.ts:insert:track_artists:3bdb1b0a",
     ],
   },
   {
@@ -910,7 +915,13 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     disposition: "test-fixture",
     file: "scripts/db-performance/artifact-transactions.ts",
     rationale: "Seeds an invocation-local libSQL source only.",
-    sites: ["scripts/db-performance/artifact-transactions.ts:insert:tracks:0fabb041"],
+    sites: [
+      "scripts/db-performance/artifact-transactions.ts:insert:labels:a39abea2",
+      "scripts/db-performance/artifact-transactions.ts:insert:tracks:5109fd4a",
+      "scripts/db-performance/artifact-transactions.ts:insert:findings:ccca5fec",
+      "scripts/db-performance/artifact-transactions.ts:insert:track_artists:3bdb1b0a",
+      "scripts/db-performance/artifact-transactions.ts:insert:crawl_frontier:7be8f24c",
+    ],
   },
   {
     disposition: "test-fixture",

@@ -48,7 +48,7 @@ import {
   type ScaleProfile,
 } from "./manifest";
 
-export const ARTIFACT_TRANSACTION_SCHEMA_VERSION = 1 as const;
+export const ARTIFACT_TRANSACTION_SCHEMA_VERSION = 2 as const;
 const CONSUMER_ID = "artifact-transaction-measure";
 const PRODUCER = "artifact-transaction-measure";
 const SEED_BATCH_SIZE = 500;
@@ -97,12 +97,29 @@ export type ArtifactTransactionPathReport = {
 
 export type ArtifactTransactionReport = {
   acknowledgement: ArtifactTransactionPathReport;
-  census: { artifactChangesBelowFence: number; trackEmbeddings: number; tracks: number };
+  census: ArtifactTransactionCensus;
   exactProfileCardinality: boolean;
+  findingJoin: {
+    matchedItems: number;
+    pagesWithMatchedItems: number;
+    unmatchedItems: number;
+  };
   profile: ScaleProfile;
   rebuildCheckpoint: ArtifactTransactionPathReport;
   schemaVersion: typeof ARTIFACT_TRANSACTION_SCHEMA_VERSION;
   seedDurationMs: number;
+};
+
+export type ArtifactTransactionCensus = {
+  albums: number;
+  artifactChangesBelowFence: number;
+  artists: number;
+  crawlFrontier: number;
+  findings: number;
+  labels: number;
+  trackArtists: number;
+  trackEmbeddings: number;
+  tracks: number;
 };
 
 export type ArtifactTransactionOptions = {
@@ -114,6 +131,18 @@ export type ArtifactTransactionOptions = {
 
 function trackId(index: number): string {
   return `artifact-transaction-track-${String(index).padStart(8, "0")}`;
+}
+
+function artistId(index: number): string {
+  return `artifact-transaction-artist-${String(index).padStart(8, "0")}`;
+}
+
+function labelId(index: number): string {
+  return `artifact-transaction-label-${String(index).padStart(8, "0")}`;
+}
+
+function albumId(index: number): string {
+  return `artifact-transaction-album-${String(index).padStart(8, "0")}`;
 }
 
 function distinct(values: readonly number[]): number[] {
@@ -305,55 +334,147 @@ async function writeBatched(client: Client, statements: InStatement[]): Promise<
   }
 }
 
+async function writeGenerated(
+  client: Client,
+  total: number,
+  statement: (index: number) => InStatement,
+): Promise<void> {
+  for (let offset = 0; offset < total; offset += SEED_BATCH_SIZE) {
+    const end = Math.min(total, offset + SEED_BATCH_SIZE);
+    await client.batch(
+      Array.from({ length: end - offset }, (_, index) => statement(offset + index)),
+      "write",
+    );
+  }
+}
+
 /**
- * The profile's tracks and 4,096-byte embeddings on the production schema, plus the manifest's
- * proportional artifact-log volume below the consumer's registration fence so the acknowledged
- * pages sit on top of a populated log rather than an empty one.
+ * The profile's complete table census on the production schema, plus the manifest's proportional
+ * artifact-log volume below the consumer's registration fence so the acknowledged pages sit on top
+ * of a populated log rather than an empty one. Findings occupy the first tracks, which are also the
+ * first embedded tracks, so the measured snapshot sees both sides of its findings left join. Every
+ * track has one artist edge and the manifest's surplus edges are spread deterministically as second
+ * credits.
+ *
+ * The two measured transactions do not read crawl-frontier state, label seed state, provenance or
+ * analysis backlog fields. The pending-frontier, enabled-label-track, YouTube-provenance,
+ * MusicBrainz-ISRC and full-analysis distributions therefore stay unmodelled: their table counts are
+ * present for census fidelity, but reproducing the perf_* distribution machinery would not change a
+ * statement, projected byte, digest or encoder call on either measured path.
  */
 async function seedSource(client: Client, counts: FixtureCounts): Promise<number> {
+  if (counts.findings > counts.trackEmbeddings) {
+    throw new Error("artifact transaction findings must fit inside the embedded track prefix");
+  }
+
+  if (counts.trackArtists < counts.tracks || counts.trackArtists > counts.tracks * counts.artists) {
+    throw new Error("artifact transaction artist-edge count is not representable");
+  }
+
   const embedding = new Uint8Array(ARTIFACT_VECTOR_BYTES);
   embedding.fill(17);
-  const trackStatements: InStatement[] = [];
-  const embeddingStatements: InStatement[] = [];
 
-  for (let index = 0; index < counts.tracks; index += 1) {
+  await writeGenerated(client, counts.labels, (index) => ({
+    args: [labelId(index), `Synthetic Label ${index}`, labelId(index), TIMESTAMP, TIMESTAMP],
+    sql: `insert into labels (id, name, slug, created_at, updated_at)
+      values (?, ?, ?, ?, ?)`,
+  }));
+  await writeGenerated(client, counts.albums, (index) => ({
+    args: [albumId(index), `Synthetic Album ${index}`, albumId(index), TIMESTAMP, TIMESTAMP],
+    sql: `insert into albums (id, name, slug, created_at, updated_at)
+      values (?, ?, ?, ?, ?)`,
+  }));
+  await writeGenerated(client, counts.artists, (index) => ({
+    args: [artistId(index), `Synthetic Artist ${index}`, artistId(index), TIMESTAMP, TIMESTAMP],
+    sql: `insert into artists (id, name, slug, created_at, updated_at)
+      values (?, ?, ?, ?, ?)`,
+  }));
+  await writeGenerated(client, counts.tracks, (index) => {
     const id = trackId(index);
     const embedded = index < counts.trackEmbeddings;
-    trackStatements.push({
+
+    return {
       args: [
         id,
         `Synthetic Track ${index}`,
-        '["Synthetic Artist"]',
+        JSON.stringify([`Synthetic Artist ${index % counts.artists}`]),
         `spotify:track:${id}`,
         `https://example.invalid/${id}`,
         `Label ${index % Math.max(1, counts.labels)}`,
+        labelId(index % counts.labels),
+        albumId(index % counts.albums),
+        index < counts.findings ? 0 : 1,
         embedded ? 1 : 0,
       ],
       sql: `insert into tracks
-        (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, label,
-         release_date, is_catalogue, has_embedding)
-        values (?, ?, ?, ?, ?, 270000, ?, '2026-01-01', 1, ?)`,
-    });
+        (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, label, label_id,
+         album_id, release_date, is_catalogue, has_embedding)
+        values (?, ?, ?, ?, ?, 270000, ?, ?, ?, '2026-01-01', ?, ?)`,
+    };
+  });
+  await writeGenerated(client, counts.findings, (index) => ({
+    args: [trackId(index), `artifact-${String(index).padStart(8, "0")}`, TIMESTAMP],
+    sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
+  }));
+  await writeGenerated(client, counts.trackEmbeddings, (index) => ({
+    args: [trackId(index), embedding],
+    sql: "insert into track_embeddings (track_id, embedding_blob) values (?, ?)",
+  }));
+  await writeGenerated(client, counts.trackArtists, (index) => {
+    const extra = index - counts.tracks;
+    const selectedTrack = index < counts.tracks ? index : extra % counts.tracks;
+    const leadArtist = selectedTrack % counts.artists;
+    const selectedArtist =
+      index < counts.tracks
+        ? leadArtist
+        : (leadArtist + 1 + Math.floor(extra / counts.tracks)) % counts.artists;
 
-    if (embedded) {
-      embeddingStatements.push({
-        args: [id, embedding],
-        sql: "insert into track_embeddings (track_id, embedding_blob) values (?, ?)",
-      });
-    }
-  }
-
-  await writeBatched(client, trackStatements);
-  await writeBatched(client, embeddingStatements);
+    return {
+      args: [trackId(selectedTrack), artistId(selectedArtist), index < counts.tracks ? 1 : 2],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, ?)`,
+    };
+  });
+  await writeGenerated(client, counts.crawlFrontier, (index) => ({
+    args: [
+      `artifact-transaction-frontier-${String(index).padStart(8, "0")}`,
+      `artifact-transaction-external-${String(index).padStart(8, "0")}`,
+      TIMESTAMP,
+      TIMESTAMP,
+    ],
+    sql: `insert into crawl_frontier
+      (id, kind, state, source, external_id, hop, created_at, updated_at)
+      values (?, 'release', 'done', 'musicbrainz', ?, 1, ?, ?)`,
+  }));
   const backgroundCount = indexFixtureCardinalities(counts).perf_artifact_changes;
-  await writeBatched(
-    client,
-    Array.from({ length: backgroundCount }, (_, index) =>
-      buildArtifactChangeInsertStatement(backgroundChange(index)),
-    ),
+  await writeGenerated(client, backgroundCount, (index) =>
+    buildArtifactChangeInsertStatement(backgroundChange(index)),
   );
 
   return backgroundCount;
+}
+
+function profileTableCounts(
+  counts: FixtureCounts,
+): Omit<ArtifactTransactionCensus, "artifactChangesBelowFence"> {
+  return {
+    albums: counts.albums,
+    artists: counts.artists,
+    crawlFrontier: counts.crawlFrontier,
+    findings: counts.findings,
+    labels: counts.labels,
+    trackArtists: counts.trackArtists,
+    trackEmbeddings: counts.trackEmbeddings,
+    tracks: counts.tracks,
+  };
+}
+
+function censusMatches(
+  census: ArtifactTransactionCensus,
+  expected: Omit<ArtifactTransactionCensus, "artifactChangesBelowFence">,
+): boolean {
+  return (Object.keys(expected) as (keyof typeof expected)[]).every(
+    (key) => census[key] === expected[key],
+  );
 }
 
 async function count(client: Client, table: string): Promise<number> {
@@ -376,14 +497,20 @@ export async function runArtifactTransactionProfile(
     const artifactChangesBelowFence = await seedSource(db, counts);
     const seedDurationMs = performance.now() - seedStartedAt;
     const census = {
+      albums: await count(db, "albums"),
       artifactChangesBelowFence,
+      artists: await count(db, "artists"),
+      crawlFrontier: await count(db, "crawl_frontier"),
+      findings: await count(db, "findings"),
+      labels: await count(db, "labels"),
+      trackArtists: await count(db, "track_artists"),
       trackEmbeddings: await count(db, "track_embeddings"),
       tracks: await count(db, "tracks"),
     };
+    const requestedTableCounts = profileTableCounts(counts);
 
     if (
-      census.tracks !== counts.tracks ||
-      census.trackEmbeddings !== counts.trackEmbeddings ||
+      !censusMatches(census, requestedTableCounts) ||
       (await count(db, "artifact_changes")) !== artifactChangesBelowFence
     ) {
       throw new Error("artifact transaction source census does not match the requested counts");
@@ -396,6 +523,9 @@ export async function runArtifactTransactionProfile(
     const checkpointClient = instrumentTransactions(db);
     const checkpointSamples: ArtifactTransactionSample[] = [];
     let consumerItemCount = 0;
+    let matchedFindingItems = 0;
+    let pagesWithMatchedItems = 0;
+    let unmatchedFindingItems = 0;
 
     for (let sequence = 1; ; sequence += 1) {
       const page = await listArtifactSnapshot(db, {
@@ -405,6 +535,14 @@ export async function runArtifactTransactionProfile(
         streamVersion: 1,
       });
       consumerItemCount += page.itemCount;
+      const pageFindingItems = page.items.filter((item) => {
+        const payload = JSON.parse(item.payloadJson) as { hasFinding?: unknown };
+
+        return payload.hasFinding === true;
+      }).length;
+      matchedFindingItems += pageFindingItems;
+      unmatchedFindingItems += page.itemCount - pageFindingItems;
+      pagesWithMatchedItems += pageFindingItems > 0 ? 1 : 0;
       const checkpoint = await checkpointArtifactRebuild(checkpointClient.client, {
         consumerDigest: page.sourceDigest,
         consumerId: CONSUMER_ID,
@@ -426,6 +564,10 @@ export async function runArtifactTransactionProfile(
       if (checkpoint.state === "complete") {
         break;
       }
+    }
+
+    if (matchedFindingItems < 1 || pagesWithMatchedItems < 1 || unmatchedFindingItems < 1) {
+      throw new Error("artifact snapshot did not exercise both sides of the findings left join");
     }
 
     await activateArtifactConsumer(db, CONSUMER_ID);
@@ -473,7 +615,15 @@ export async function runArtifactTransactionProfile(
         summary: summarize(acknowledgementSamples),
       },
       census,
-      exactProfileCardinality: options.counts === undefined,
+      exactProfileCardinality: censusMatches(
+        census,
+        profileTableCounts(getScaleManifest(profile).counts),
+      ),
+      findingJoin: {
+        matchedItems: matchedFindingItems,
+        pagesWithMatchedItems,
+        unmatchedItems: unmatchedFindingItems,
+      },
       profile,
       rebuildCheckpoint: {
         pageLimit: ARTIFACT_SNAPSHOT_MAX_LIMIT,
@@ -503,7 +653,7 @@ export function formatArtifactTransactionMarkdown(report: ArtifactTransactionRep
   const cardinality = report.exactProfileCardinality ? "exact" : "compact";
 
   return [
-    `| path (${report.profile} ${cardinality}: ${report.census.tracks} tracks, ${report.census.trackEmbeddings} embeddings, ${report.census.artifactChangesBelowFence} log rows below fence) | samples | statements | base64 calls | JSON.parse calls | SHA-256 calls | wall ms min / median / p95 / max |`,
+    `| path (${report.profile} ${cardinality}: ${report.census.tracks} tracks, ${report.census.trackEmbeddings} embeddings, ${report.census.findings} findings, ${report.census.artifactChangesBelowFence} log rows below fence) | samples | statements | base64 calls | JSON.parse calls | SHA-256 calls | wall ms min / median / p95 / max |`,
     "| --- | --- | --- | --- | --- | --- | --- |",
     row(
       `acknowledgement (${report.acknowledgement.pageLimit}-event pages)`,
