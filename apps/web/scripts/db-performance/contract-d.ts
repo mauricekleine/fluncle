@@ -4,6 +4,7 @@ import {
   CONTRACT_D_HUB_PAGE_SIZE,
   CRAWL_INDEX_EVIDENCE_SOURCE_VERSION_PREFIX,
   defaultAnchorFixtureRows,
+  defaultHubFixtureOrder,
   publicAggregateFixtureBuckets,
 } from "./fixture";
 import { getScaleManifest, type FixtureCounts } from "./manifest";
@@ -765,40 +766,16 @@ function validateAnchorValidity(execution: ContractExecution): readonly string[]
   return failures;
 }
 
-function trackIndexAtRank(
-  rank: number,
-  buckets: ReturnType<typeof publicAggregateFixtureBuckets>["releaseDate"],
-): number {
-  let start = 0;
-  let rankStart = 1;
-
-  for (const bucket of buckets) {
-    if (rank <= rankStart + bucket.count - 1) {
-      return start + bucket.count - (rank - rankStart) - 1;
-    }
-    start += bucket.count;
-    rankStart += bucket.count;
-  }
-
-  return -1;
-}
-
 function expectedKeysetRows(
   counts: FixtureCounts,
   anchor: Anchor,
 ): { id: string; rd: null | string }[] {
-  const buckets = publicAggregateFixtureBuckets(counts).releaseDate;
-  const rank = (anchor.page - 1) * CONTRACT_D_HUB_PAGE_SIZE;
-
-  return Array.from({ length: CONTRACT_D_HUB_PAGE_SIZE }, (_value, offset) => {
-    const index = trackIndexAtRank(rank + offset + 1, buckets);
-    const releaseDate = buckets.reduce<null | string>((found, bucket, bucketIndex) => {
-      const start = buckets.slice(0, bucketIndex).reduce((sum, entry) => sum + entry.count, 0);
-      return found ?? (index >= start && index < start + bucket.count ? bucket.bucket : null);
-    }, null);
-
-    return { id: `synthetic-track-${index.toString().padStart(9, "0")}`, rd: releaseDate };
-  });
+  const order = defaultHubFixtureOrder(counts);
+  const anchorIndex = order.findIndex((row) => row.id === anchor.id && row.key === anchor.key);
+  return order.slice(anchorIndex + 1, anchorIndex + 1 + CONTRACT_D_HUB_PAGE_SIZE).map((row) => ({
+    id: row.id,
+    rd: row.key,
+  }));
 }
 
 async function executeKeyset(context: ContractContext): Promise<ContractExecution> {

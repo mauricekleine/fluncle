@@ -14,6 +14,11 @@ import {
   type PerformanceStatement,
 } from "./registry";
 import { analyzeExplainPlan, type ExplainPlanPolicy } from "./plan";
+import {
+  PRODUCTION_LOCK_INVENTORY,
+  type ProductionLockContract,
+  type ProductionLockEvidenceDefinition,
+} from "./production-lock-inventory";
 
 const INDEX_EVIDENCE_LIMIT = 25;
 const INDEX_EVIDENCE_ITERATIONS = 2;
@@ -51,8 +56,29 @@ type IndexPlanSpec = {
 type ComparisonSpec = IndexPlanSpec & {
   productionPlanPolicies: ExplainPlanPolicy[];
   references: PerformanceStatement[];
+  /** Supplemental same-shape statements, normally the planner-unforced counterpart. */
   supplementalPlanPolicies?: ExplainPlanPolicy[];
   supplementalStatements: PerformanceStatement[];
+};
+
+type ProductionLockComparisonSpec = {
+  expectedPlanUses: ProductionLockPlanUse[];
+  locked: PerformanceStatement;
+  lockedPolicy: ExplainPlanPolicy;
+  maxRows: number;
+  minRows: number;
+  mutating: boolean;
+  mutationPreparation?: PerformanceStatement;
+  mutationRestoration?: PerformanceStatement[];
+  mutationRows?: { max: number; min: number };
+  unforced: PerformanceStatement;
+  unforcedPolicy: ExplainPlanPolicy;
+};
+
+type ProductionLockPlanUse = {
+  count: number;
+  index: string;
+  pattern: RegExp;
 };
 
 function statement(sql: string, args: PerformanceStatement["args"] = []): PerformanceStatement {
@@ -125,6 +151,31 @@ function indexPlanStatement(
       ? indexedSql
       : indexedSql.replace(new RegExp(`\\s+indexed\\s+by\\s+${fixtureIndex}\\b`, "gi"), ""),
   );
+}
+
+function productionLockStatementPair(
+  indexes: readonly string[],
+  sql: string,
+  args: PerformanceStatement["args"],
+): { locked: PerformanceStatement; unforced: PerformanceStatement } {
+  let lockedSql = sql;
+  for (const index of indexes) {
+    lockedSql = indexPlanStatement(
+      index,
+      lockedSql.replaceAll(`__${index.toUpperCase()}__`, "__INDEX__"),
+      "production-lock",
+    ).sql;
+  }
+
+  let unforcedSql = lockedSql;
+  for (const index of indexes) {
+    unforcedSql = indexPlanStatement(index, unforcedSql, "unforced").sql;
+  }
+
+  return {
+    locked: statement(lockedSql, args),
+    unforced: statement(unforcedSql, args),
+  };
 }
 
 function genericTrackPlan(indexName: string): IndexPlanSpec {
@@ -679,6 +730,54 @@ const DEFAULT_HUB_NULL_SUPPLEMENTAL = indexPlanStatement(
     limit 48`,
   "supplemental-force",
 );
+const DEFAULT_HUB_NON_NULL_UNFORCED = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id, release_date as rd
+     from perf_tracks indexed by __INDEX__
+    where (release_date, id) < ('2026', 'synthetic-track-000000464')
+    order by release_date desc, id desc
+    limit 48`,
+);
+const DEFAULT_HUB_NULL_UNFORCED = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id, release_date as rd
+     from perf_tracks indexed by __INDEX__
+    where release_date is null
+    order by release_date desc, id desc
+    limit 48`,
+);
+const DEFAULT_HUB_PAGE_ONE_PRODUCTION_LOCK = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id
+     from perf_tracks indexed by __INDEX__
+    order by release_date desc, id desc
+    limit 48`,
+  "production-lock",
+);
+const DEFAULT_HUB_NULL_ANCHOR_PRODUCTION_LOCK = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id
+     from perf_tracks indexed by __INDEX__
+    where release_date is null and id < 'synthetic-track-000100000'
+    order by release_date desc, id desc
+    limit 48`,
+  "production-lock",
+);
+const DEFAULT_HUB_PAGE_ONE_SUPPLEMENTAL = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id
+     from perf_tracks indexed by __INDEX__
+    order by release_date desc, id desc
+    limit 48`,
+);
+const DEFAULT_HUB_NULL_ANCHOR_SUPPLEMENTAL = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id
+     from perf_tracks indexed by __INDEX__
+    where release_date is null and id < 'synthetic-track-000100000'
+    order by release_date desc, id desc
+    limit 48`,
+);
 
 function releaseDateComparison(
   references: PerformanceStatement[],
@@ -697,21 +796,35 @@ function releaseDateComparison(
 
 function defaultHubComparison(productionLocked = false): ComparisonSpec {
   const policy: ExplainPlanPolicy = {
+    allowFullScanOf: productionLocked ? ["perf_tracks"] : undefined,
     forbidTempSort: true,
     growingTables: ["perf_tracks"],
     requiredDetails: [/perf_tracks_release_date_track_id_idx/i],
   };
   const references = productionLocked
-    ? [DEFAULT_HUB_NON_NULL_PRODUCTION_LOCK, DEFAULT_HUB_NULL_PRODUCTION_LOCK]
+    ? [
+        DEFAULT_HUB_PAGE_ONE_PRODUCTION_LOCK,
+        DEFAULT_HUB_NON_NULL_PRODUCTION_LOCK,
+        DEFAULT_HUB_NULL_ANCHOR_PRODUCTION_LOCK,
+        DEFAULT_HUB_NULL_PRODUCTION_LOCK,
+      ]
     : [DEFAULT_HUB_NON_NULL_REFERENCE, DEFAULT_HUB_NULL_REFERENCE];
 
   return {
-    maxRows: 96,
+    maxRows: productionLocked ? 192 : 96,
     minRows: 1,
-    productionPlanPolicies: [policy, policy],
+    productionPlanPolicies: productionLocked ? [policy, policy, policy, policy] : [policy, policy],
     references,
     statement: references[0] ?? DEFAULT_HUB_NON_NULL_REFERENCE,
-    supplementalStatements: [DEFAULT_HUB_NON_NULL_SUPPLEMENTAL, DEFAULT_HUB_NULL_SUPPLEMENTAL],
+    supplementalPlanPolicies: productionLocked ? [policy, policy, policy, policy] : undefined,
+    supplementalStatements: productionLocked
+      ? [
+          DEFAULT_HUB_PAGE_ONE_SUPPLEMENTAL,
+          DEFAULT_HUB_NON_NULL_UNFORCED,
+          DEFAULT_HUB_NULL_ANCHOR_SUPPLEMENTAL,
+          DEFAULT_HUB_NULL_UNFORCED,
+        ]
+      : [DEFAULT_HUB_NON_NULL_SUPPLEMENTAL, DEFAULT_HUB_NULL_SUPPLEMENTAL],
   };
 }
 
@@ -864,10 +977,13 @@ function validateComparisonProof(
     failures.push("reference and replacement-index cardinalities differ");
   }
   if (metadata.productionPlanViolations !== 0) {
-    failures.push("a production plan violated its exact consumer policy");
+    failures.push("a production consumer plan violated its exact consumer policy");
   }
-  if (metadata.supplementalPlanViolations !== 0) {
-    failures.push("a supplemental plan violated its exact consumer policy");
+  if (
+    metadata.supplementalPlanViolations !== undefined &&
+    metadata.supplementalPlanViolations !== 0
+  ) {
+    failures.push("a supplemental same-shape plan violated its consumer policy");
   }
 
   return failures;
@@ -1020,6 +1136,35 @@ function reviewedCrawlComparison(entry: IndexInventoryEntry): ComparisonSpec | u
   };
 }
 
+function lockedAndUnforcedConsumerComparison(
+  locked: PerformanceStatement,
+  unforced: PerformanceStatement,
+  policy: ExplainPlanPolicy,
+  bounds: Pick<IndexPlanSpec, "maxRows" | "minRows">,
+  supplementalPolicyOverrides: Partial<ExplainPlanPolicy> = {},
+): ComparisonSpec {
+  const { requiredDetails: _requiredDetails, ...unforcedPolicy } = policy;
+  return {
+    ...bounds,
+    productionPlanPolicies: [policy],
+    references: [locked],
+    statement: locked,
+    supplementalPlanPolicies: [{ ...unforcedPolicy, ...supplementalPolicyOverrides }],
+    supplementalStatements: [unforced],
+  };
+}
+
+function lockedTrackConsumerStatement(
+  indexName: string,
+  sql: string,
+  args: PerformanceStatement["args"],
+): { locked: PerformanceStatement; unforced: PerformanceStatement } {
+  return {
+    locked: statement(indexPlanStatement(indexName, sql, "production-lock").sql, args),
+    unforced: statement(indexPlanStatement(indexName, sql).sql, args),
+  };
+}
+
 function planSpecFor(
   entry: IndexInventoryEntry,
   contractId: string,
@@ -1027,6 +1172,197 @@ function planSpecFor(
   const reviewedCrawl = reviewedCrawlComparison(entry);
   if (reviewedCrawl !== undefined) {
     return reviewedCrawl;
+  }
+
+  if (entry.name === "tracks_anchor_queue_idx") {
+    const consumer = lockedTrackConsumerStatement(
+      entry.name,
+      `select count(*) as n
+         from perf_tracks indexed by __INDEX__
+        where isrc is not null and spotify_uri is null
+          and not exists (
+            select 1 from perf_findings where perf_findings.track_id = perf_tracks.id
+          )`,
+      [],
+    );
+    return lockedAndUnforcedConsumerComparison(
+      consumer.locked,
+      consumer.unforced,
+      {
+        forbidTempSort: true,
+        growingTables: ["perf_tracks", "perf_findings"],
+        requiredDetails: [/perf_tracks_anchor_queue_idx/i, /perf_findings/i],
+      },
+      { maxRows: 1, minRows: 1 },
+    );
+  }
+
+  if (entry.name === "tracks_label_id_idx") {
+    const consumer = lockedTrackConsumerStatement(
+      entry.name,
+      `select t.id as track_id
+         from perf_tracks t indexed by __INDEX__
+        where t.label_id = ?
+          and exists (select 1 from perf_track_artists ta where ta.track_id = t.id)
+          and not exists (
+            select 1 from perf_projection_repairs pr
+             where pr.projection = 'artist_qualification' and pr.subject_type = 'track'
+               and pr.subject_id = t.id and pr.source_epoch >= ?
+          )
+        limit ?`,
+      ["synthetic-label-000000000", 2, INDEX_EVIDENCE_LIMIT],
+    );
+    return lockedAndUnforcedConsumerComparison(
+      consumer.locked,
+      consumer.unforced,
+      {
+        forbidTempSort: true,
+        growingTables: ["perf_tracks", "perf_track_artists", "perf_projection_repairs"],
+        requiredDetails: [
+          /perf_tracks_label_id_idx/i,
+          /perf_track_artists/i,
+          /perf_projection_repairs/i,
+        ],
+      },
+      { maxRows: INDEX_EVIDENCE_LIMIT, minRows: 1 },
+      { forbidTempSort: false },
+    );
+  }
+
+  if (entry.name === "tracks_mb_recording_id_queue_idx") {
+    const consumer = lockedTrackConsumerStatement(
+      entry.name,
+      `select id as track_id, isrc
+         from perf_tracks indexed by __INDEX__
+        where mb_recording_id is null
+          and mb_recording_id_attempted_at is null
+          and isrc is not null and isrc != ''
+          and substr(id, 1, 3) != 'mb_'
+          and id > ?
+        order by id asc
+        limit ?`,
+      ["synthetic-track-000000000", INDEX_EVIDENCE_LIMIT],
+    );
+    return lockedAndUnforcedConsumerComparison(
+      consumer.locked,
+      consumer.unforced,
+      {
+        forbidTempSort: true,
+        growingTables: ["perf_tracks"],
+        requiredDetails: [/perf_tracks_mb_recording_id_queue_idx/i],
+      },
+      { maxRows: INDEX_EVIDENCE_LIMIT, minRows: 1 },
+      { forbidTempSort: false },
+    );
+  }
+
+  if (entry.name === "artist_qualification_qualified_idx") {
+    const locked = statement(
+      indexPlanStatement(
+        entry.name,
+        `select qualification.artist_id
+         from perf_artist_qualification_state as artist_state
+         left join perf_artist_qualification as qualification
+           indexed by __INDEX__ on qualification.is_qualified = 1
+        where artist_state.scope = 'artists'
+          and artist_state.state = 'complete'
+          and artist_state.projection_epoch = artist_state.source_epoch
+          and not exists (
+            select 1 from perf_projection_repairs where projection = 'artist_qualification'
+          )
+        order by qualification.artist_id`,
+        "production-lock",
+      ).sql,
+      [],
+    );
+    const unforced = statement(indexPlanStatement(entry.name, locked.sql).sql, locked.args);
+    return lockedAndUnforcedConsumerComparison(
+      locked,
+      unforced,
+      {
+        forbidTempSort: true,
+        growingTables: [
+          "perf_artist_qualification",
+          "perf_artist_qualification_state",
+          "perf_projection_repairs",
+        ],
+        requiredDetails: [/perf_artist_qualification_qualified_idx/i, /perf_projection_repairs/i],
+      },
+      { maxRows: INDEX_EVIDENCE_LIMIT, minRows: 0 },
+    );
+  }
+
+  if (entry.name === "tracks_anchor_order_idx") {
+    const consumer = lockedTrackConsumerStatement(
+      entry.name,
+      `select t.id as track_id, t.title, t.artists_json, t.isrc, t.label, t.duration_ms,
+              t.source_audio_key, t.source_audio_rejected, t.capture_priority, t.bpm,
+              t.analyzed_from, t.source_audio_failures, f.log_id as log_id,
+              (f.track_id is not null) as certified
+         from perf_tracks t indexed by __INDEX__
+         left join perf_findings f on f.track_id = t.id
+        where f.track_id is null
+          and t.spotify_uri is null
+          and (t.spotify_anchor_attempted_at is null or t.spotify_anchor_attempted_at < ?)
+          and (t.label_id is null or t.label_id not in (
+            select id from perf_labels where seed_state = 'disabled'
+          ))
+          and t.duration_ms > 0
+          and t.dismissed_at is null
+          and t.duplicate_of_track_id is null
+          and coalesce(t.spotify_anchor_attempts, 0) < 6
+          and lower(t.artists_json) not in (?, ?, ?, ?, ?, ?)
+        order by t.has_isrc desc, t.has_embedding desc, t.nearest_finding_score desc, t.id desc
+        limit ?`,
+      [
+        "2026-01-01T00:00:00.000Z",
+        '["unknown artist"]',
+        '["various artists"]',
+        '["va"]',
+        '["unknown"]',
+        '["[unknown]"]',
+        '["traditional"]',
+        INDEX_EVIDENCE_LIMIT,
+      ],
+    );
+    return lockedAndUnforcedConsumerComparison(
+      consumer.locked,
+      consumer.unforced,
+      {
+        allowFullScanOf: ["t", "perf_labels"],
+        forbidTempSort: true,
+        growingTables: ["t", "perf_tracks", "perf_findings", "perf_labels"],
+        requiredDetails: [/perf_tracks_anchor_order_idx/i, /perf_findings/i, /perf_labels/i],
+      },
+      { maxRows: INDEX_EVIDENCE_LIMIT, minRows: 1 },
+      { forbidTempSort: false },
+    );
+  }
+
+  if (entry.name === "projection_repairs_order_idx") {
+    const locked = statement(
+      indexPlanStatement(
+        entry.name,
+        `select projection, subject_type, subject_id, source_epoch, source_version
+         from perf_projection_repairs indexed by __INDEX__
+        where projection = ? and subject_type = ?
+        order by source_epoch, subject_type, subject_id
+        limit 1`,
+        "production-lock",
+      ).sql,
+      ["artist_qualification", "label"],
+    );
+    const unforced = statement(indexPlanStatement(entry.name, locked.sql).sql, locked.args);
+    return lockedAndUnforcedConsumerComparison(
+      locked,
+      unforced,
+      {
+        forbidTempSort: false,
+        growingTables: ["perf_projection_repairs"],
+        requiredDetails: [/perf_projection_repairs_order_idx/i],
+      },
+      { maxRows: 1, minRows: 0 },
+    );
   }
 
   if (entry.name === "tracks_capture_priority_idx") {
@@ -1359,6 +1695,678 @@ function planSpecFor(
     : genericDatabaseScalePlan(entry.name);
 }
 
+function productionLockPolicy(
+  expectedPlanUses: readonly ProductionLockPlanUse[],
+  growingTables: readonly string[],
+  options: Pick<ExplainPlanPolicy, "allowFullScanOf" | "forbidTempSort"> = {},
+): ExplainPlanPolicy {
+  return {
+    allowFullScanOf: options.allowFullScanOf,
+    forbidTempSort: options.forbidTempSort ?? true,
+    growingTables,
+    requiredDetails: expectedPlanUses.map((use) => use.pattern),
+  };
+}
+
+function unforcedProductionLockPolicy(policy: ExplainPlanPolicy): ExplainPlanPolicy {
+  return { ...policy, requiredDetails: [] };
+}
+
+function productionLockSpec(reference: ProductionLockContract): ProductionLockComparisonSpec {
+  if (reference.id === "index.production-lock.artist-link") {
+    const trackIds = [
+      "synthetic-track-000000000",
+      "synthetic-track-000000001",
+      "synthetic-track-000000002",
+      "synthetic-track-000000003",
+      "synthetic-track-000000004",
+    ];
+    const placeholders = trackIds.map(() => "?").join(", ");
+    const triples = JSON.stringify([
+      [trackIds[0], 1, "synthetic-mbid-identity"],
+      [trackIds[1], 1, "synthetic-mbid-unclaimed"],
+      [trackIds[2], 1, "synthetic-mbid-collision"],
+      [trackIds[3], 2, "synthetic-mbid-identity"],
+      [trackIds[3], 3, "synthetic-mbid-identity"],
+      [trackIds[4], 1, "synthetic-mbid-identity"],
+    ]);
+    const statements = productionLockStatementPair(
+      reference.indexes,
+      `with credit_id as materialized (
+         select cast(json_extract(value, '$[0]') as text) as track_id,
+                cast(json_extract(value, '$[1]') as integer) as position,
+                cast(json_extract(value, '$[2]') as text) as mbid
+           from json_each(?)
+       ),
+       requested_credit as materialized (
+         select tracks.id as track_id,
+                cast(credit.key as integer) + 1 as position,
+                cast(credit.value as text) as artist_name,
+                tracks.is_catalogue,
+                credit_id.mbid
+           from perf_tracks tracks
+           join json_each(tracks.artists_json) credit
+           left join credit_id
+             on credit_id.track_id = tracks.id
+            and credit_id.position = cast(credit.key as integer) + 1
+          where tracks.id in (${placeholders})
+       ),
+       resolved_candidate as materialized (
+         select credit.track_id, artist.id as artist_id, credit.position, credit.is_catalogue
+           from requested_credit credit
+           cross join perf_artists artist indexed by __ARTISTS_MBID_IDX__
+             on artist.mbid = credit.mbid
+          where credit.mbid is not null
+         union all
+         select credit.track_id, artist.id as artist_id, credit.position, credit.is_catalogue
+           from requested_credit credit
+           cross join perf_artists artist indexed by __ARTISTS_NAME_NOCASE_IDX__
+             on artist.name collate nocase = credit.artist_name
+          where credit.mbid is not null
+            and artist.mbid is null
+            and not exists (
+                  select 1 from perf_artists claimed indexed by __ARTISTS_MBID_IDX__
+                   where claimed.mbid = credit.mbid
+                )
+         union all
+         select credit.track_id, artist.id as artist_id, credit.position, credit.is_catalogue
+           from requested_credit credit
+           cross join perf_artists artist indexed by __ARTISTS_NAME_NOCASE_IDX__
+             on artist.name collate nocase = credit.artist_name
+          where credit.mbid is null
+       ),
+       resolved_edge as (
+         select candidate.track_id, candidate.artist_id, candidate.position
+           from resolved_candidate candidate
+          where not exists (
+                select 1
+                  from resolved_candidate earlier
+                 where earlier.track_id = candidate.track_id
+                   and earlier.artist_id = candidate.artist_id
+                   and earlier.position < candidate.position
+          )
+       )
+       insert or ignore into perf_track_artists (track_id, artist_id, position)
+       select track_id, artist_id, position from resolved_edge
+       returning track_id, artist_id,
+                 (select tracks.is_catalogue
+                    from perf_tracks tracks
+                   where tracks.id = perf_track_artists.track_id) as is_catalogue,
+                 (select tracks.key is not null and tracks.has_embedding = 1
+                    from perf_tracks tracks
+                   where tracks.id = perf_track_artists.track_id) as is_rankable`,
+      [triples, ...trackIds],
+    );
+    const expectedPlanUses = [
+      {
+        count: 1,
+        index: "artists_mbid_idx",
+        pattern: /SEARCH artist USING (?:COVERING )?INDEX perf_artists_mbid_idx \(mbid=\?\)/i,
+      },
+      {
+        count: 1,
+        index: "artists_mbid_idx",
+        pattern: /SEARCH claimed USING (?:COVERING )?INDEX perf_artists_mbid_idx \(mbid=\?\)/i,
+      },
+      {
+        count: 2,
+        index: "artists_name_nocase_idx",
+        pattern:
+          /SEARCH artist USING (?:COVERING )?INDEX perf_artists_name_nocase_idx \(name=\?\)/i,
+      },
+    ];
+    const originalEdges = trackIds.flatMap((trackId, index) => [
+      [trackId, `synthetic-artist-${index.toString().padStart(9, "0")}`, 1, null],
+      [trackId, `synthetic-artist-${(index * 7 + 3).toString().padStart(9, "0")}`, 2, "remixer"],
+    ]);
+    const policy = productionLockPolicy(expectedPlanUses, [
+      "tracks",
+      "artist",
+      "claimed",
+      "perf_track_artists",
+    ]);
+    return {
+      ...statements,
+      expectedPlanUses,
+      lockedPolicy: policy,
+      maxRows: 25,
+      minRows: 0,
+      mutating: true,
+      mutationPreparation: statement(
+        `delete from perf_track_artists where track_id in (${placeholders})`,
+        trackIds,
+      ),
+      mutationRestoration: [
+        statement(`delete from perf_track_artists where track_id in (${placeholders})`, trackIds),
+        statement(
+          `insert into perf_track_artists (track_id, artist_id, position, role)
+           values ${originalEdges.map(() => "(?, ?, ?, ?)").join(", ")}`,
+          originalEdges.flat(),
+        ),
+      ],
+      mutationRows: { max: 7, min: 7 },
+      unforcedPolicy: unforcedProductionLockPolicy(policy),
+    };
+  }
+
+  if (reference.id === "index.production-lock.mixable-artists") {
+    const statements = productionLockStatementPair(
+      reference.indexes,
+      `select artists.name, artists.slug, artists.image_url,
+              artists.rankable_track_count as track_count
+         from perf_artists artists indexed by __ARTISTS_MIXABLE_ORDER_IDX__
+        where artists.rankable_track_count > 0
+          and artists.name like ? collate nocase
+        order by -artists.rankable_track_count asc, artists.name asc
+        limit ?`,
+      ["%Synthetic Artist%", 60],
+    );
+    const expectedPlanUses = [
+      {
+        count: 1,
+        index: "artists_mixable_order_idx",
+        pattern: /SCAN artists USING INDEX perf_artists_mixable_order_idx/i,
+      },
+    ];
+    const policy = productionLockPolicy(expectedPlanUses, ["artists"], {
+      allowFullScanOf: ["artists"],
+    });
+    return {
+      ...statements,
+      expectedPlanUses,
+      lockedPolicy: policy,
+      maxRows: 60,
+      minRows: 1,
+      mutating: false,
+      unforcedPolicy: unforcedProductionLockPolicy(policy),
+    };
+  }
+
+  if (reference.id === "index.production-lock.due-work-cleanup") {
+    const statements = productionLockStatementPair(
+      reference.indexes,
+      `select generation, subject_id, updated_at from (
+         select generation, subject_id, updated_at
+           from perf_due_work indexed by __DUE_WORK_CLEANUP_IDX__
+          where work_kind = ? and subject_type = ? and state <> 'repair'
+            and generation < ? and subject_id > ?
+         union all
+         select generation, subject_id, updated_at
+           from perf_due_work indexed by __DUE_WORK_CLEANUP_IDX__
+          where work_kind = ? and subject_type = ? and state <> 'repair'
+            and generation > ? and generation < ? and subject_id > ?
+         union all
+         select generation, subject_id, updated_at
+           from perf_due_work indexed by __DUE_WORK_CLEANUP_IDX__
+          where work_kind = ? and subject_type = ? and state <> 'repair'
+            and generation > ? and subject_id > ?
+         union all
+         select generation, subject_id, updated_at
+           from perf_due_work indexed by __DUE_WORK_CLEANUP_IDX__
+          where work_kind = ? and subject_type = ? and state <> 'repair'
+            and generation = 'live' and updated_at < ? and subject_id > ?
+       ) order by generation, updated_at, subject_id limit ?`,
+      [
+        "youtube-provenance-findings",
+        "track",
+        "live",
+        "",
+        "youtube-provenance-findings",
+        "track",
+        "live",
+        "synthetic-index-evidence",
+        "",
+        "youtube-provenance-findings",
+        "track",
+        "synthetic-index-evidence",
+        "",
+        "youtube-provenance-findings",
+        "track",
+        "2027-01-01T00:00:00.000Z",
+        "",
+        INDEX_EVIDENCE_LIMIT,
+      ],
+    );
+    const expectedPlanUses = [
+      {
+        count: 1,
+        index: "due_work_cleanup_idx",
+        pattern:
+          /SEARCH perf_due_work USING INDEX perf_due_work_cleanup_idx \(work_kind=\? AND subject_type=\? AND generation<\?\)/i,
+      },
+      {
+        count: 1,
+        index: "due_work_cleanup_idx",
+        pattern:
+          /SEARCH perf_due_work USING INDEX perf_due_work_cleanup_idx \(work_kind=\? AND subject_type=\? AND generation>\? AND generation<\?\)/i,
+      },
+      {
+        count: 1,
+        index: "due_work_cleanup_idx",
+        pattern:
+          /SEARCH perf_due_work USING INDEX perf_due_work_cleanup_idx \(work_kind=\? AND subject_type=\? AND generation>\?\)/i,
+      },
+      {
+        count: 1,
+        index: "due_work_cleanup_idx",
+        pattern:
+          /SEARCH perf_due_work USING INDEX perf_due_work_cleanup_idx \(work_kind=\? AND subject_type=\? AND generation=\? AND updated_at<\?\)/i,
+      },
+    ];
+    const policy = productionLockPolicy(expectedPlanUses, ["perf_due_work"]);
+    return {
+      ...statements,
+      expectedPlanUses,
+      lockedPolicy: policy,
+      maxRows: INDEX_EVIDENCE_LIMIT,
+      minRows: 1,
+      mutating: false,
+      unforcedPolicy: unforcedProductionLockPolicy(policy),
+    };
+  }
+
+  if (reference.id === "index.production-lock.rankable-artist-repair") {
+    const statements = productionLockStatementPair(
+      reference.indexes,
+      `with affected(id) as (
+         select artist_id from perf_track_artists where track_id = ?
+       ), truth(id, rankable) as (
+         select affected.id, count(tracks.id)
+           from affected
+           left join perf_track_artists artist_tracks indexed by __TRACK_ARTISTS_ARTIST_ID_IDX__
+             on artist_tracks.artist_id = affected.id
+           left join perf_tracks tracks on tracks.id = artist_tracks.track_id
+             and tracks.key is not null and tracks.has_embedding = 1
+          group by affected.id
+       )
+       update perf_artists
+          set rankable_track_count = truth.rankable
+         from truth
+        where perf_artists.id = truth.id
+          and perf_artists.rankable_track_count <> truth.rankable`,
+      ["synthetic-track-000000000"],
+    );
+    const expectedPlanUses = [
+      {
+        count: 1,
+        index: "track_artists_artist_id_idx",
+        pattern:
+          /SEARCH artist_tracks USING INDEX perf_track_artists_artist_id_idx \(artist_id=\?\)/i,
+      },
+    ];
+    const policy = productionLockPolicy(expectedPlanUses, [
+      "perf_track_artists",
+      "artist_tracks",
+      "perf_tracks",
+      "tracks",
+      "perf_artists",
+    ]);
+    return {
+      ...statements,
+      expectedPlanUses,
+      lockedPolicy: policy,
+      maxRows: 0,
+      minRows: 0,
+      mutating: true,
+      mutationPreparation: statement(
+        `update perf_artists set rankable_track_count = -1
+          where id in (select artist_id from perf_track_artists where track_id = ?)`,
+        ["synthetic-track-000000000"],
+      ),
+      mutationRestoration: [
+        statement(
+          `update perf_artists set rankable_track_count =
+             case id when 'synthetic-artist-000000000' then 1
+                     when 'synthetic-artist-000000003' then 4 end
+            where id in ('synthetic-artist-000000000', 'synthetic-artist-000000003')`,
+        ),
+      ],
+      mutationRows: { max: 2, min: 2 },
+      unforcedPolicy: unforcedProductionLockPolicy(policy),
+    };
+  }
+
+  if (reference.id === "index.production-lock.public-projection-audit-chunk") {
+    const statements = productionLockStatementPair(
+      reference.indexes,
+      `with page as (
+         select distinct artist_id as id
+           from perf_track_artists indexed by __TRACK_ARTISTS_ARTIST_ID_IDX__
+          where artist_id > ? order by artist_id limit ?
+       )
+       select page.id as artist_id,
+              count(case when f.track_id is not null then 1 end) as certified_finding_count,
+              coalesce(sum(case when l.seed_state = 'enabled'
+                then case when ta.role = 'remixer' then 1 else 2 end else 0 end), 0)
+                as enabled_credit_half_units
+         from page
+         left join perf_track_artists ta on ta.artist_id = page.id
+         left join perf_tracks t on t.id = ta.track_id
+         left join perf_findings f on f.track_id = t.id
+         left join perf_labels l on l.id = t.label_id
+        group by page.id order by page.id`,
+      ["", INDEX_EVIDENCE_LIMIT],
+    );
+    const expectedPlanUses = [
+      {
+        count: 1,
+        index: "track_artists_artist_id_idx",
+        pattern:
+          /SEARCH perf_track_artists USING COVERING INDEX perf_track_artists_artist_id_idx \(artist_id>\?\)/i,
+      },
+    ];
+    const policy = productionLockPolicy(
+      expectedPlanUses,
+      ["perf_track_artists", "ta", "t", "f", "l"],
+      { forbidTempSort: false },
+    );
+    return {
+      ...statements,
+      expectedPlanUses,
+      lockedPolicy: policy,
+      maxRows: INDEX_EVIDENCE_LIMIT,
+      minRows: 1,
+      mutating: false,
+      unforcedPolicy: unforcedProductionLockPolicy(policy),
+    };
+  }
+
+  if (reference.id === "index.production-lock.mixable-artists-reconciliation") {
+    const ids = [
+      "synthetic-artist-000000000",
+      "synthetic-artist-000000001",
+      "synthetic-artist-000000002",
+      "synthetic-artist-000000003",
+    ];
+    const statements = productionLockStatementPair(
+      reference.indexes,
+      `with page(id) as (values ${ids.map(() => "(?)").join(", ")}),
+            truth(id, rankable) as (
+              select page.id, count(tracks.id)
+                from page
+                left join perf_track_artists indexed by __TRACK_ARTISTS_ARTIST_ID_IDX__
+                  on perf_track_artists.artist_id = page.id
+                left join perf_tracks tracks on tracks.id = perf_track_artists.track_id
+                  and tracks.key is not null and tracks.has_embedding = 1
+               group by page.id
+            )
+       update perf_artists
+          set rankable_track_count = truth.rankable
+         from truth
+        where perf_artists.id = truth.id
+          and perf_artists.rankable_track_count <> truth.rankable`,
+      ids,
+    );
+    const expectedPlanUses = [
+      {
+        count: 1,
+        index: "track_artists_artist_id_idx",
+        pattern:
+          /SEARCH perf_track_artists USING INDEX perf_track_artists_artist_id_idx \(artist_id=\?\)/i,
+      },
+    ];
+    const policy = productionLockPolicy(
+      expectedPlanUses,
+      ["perf_track_artists", "tracks", "perf_artists"],
+      { forbidTempSort: false },
+    );
+    return {
+      ...statements,
+      expectedPlanUses,
+      lockedPolicy: policy,
+      maxRows: 0,
+      minRows: 0,
+      mutating: true,
+      mutationPreparation: statement(
+        `update perf_artists set rankable_track_count = -1
+          where id in (${ids.map(() => "?").join(", ")})`,
+        ids,
+      ),
+      mutationRestoration: [
+        statement(
+          `update perf_artists set rankable_track_count =
+             case id when 'synthetic-artist-000000000' then 1
+                     when 'synthetic-artist-000000001' then 2
+                     when 'synthetic-artist-000000002' then 3
+                     when 'synthetic-artist-000000003' then 4 end
+            where id in (${ids.map(() => "?").join(", ")})`,
+          ids,
+        ),
+      ],
+      mutationRows: { max: 4, min: 4 },
+      unforcedPolicy: unforcedProductionLockPolicy(policy),
+    };
+  }
+
+  throw new Error(`unknown production-lock contract ${reference.id}`);
+}
+
+async function executeProductionLockStatement(
+  spec: ProductionLockComparisonSpec,
+  context: ContractContext,
+): Promise<ContractExecution> {
+  if (spec.mutationPreparation) {
+    await context.client.execute(spec.mutationPreparation);
+  }
+  const finalStatement = await executeTimedFinalStatement(context, spec.locked);
+  for (const restoration of spec.mutationRestoration ?? []) {
+    await context.client.execute(restoration);
+  }
+
+  return {
+    affectedRowCount:
+      (finalStatement.result.rowsAffected ?? 0) > 0
+        ? (finalStatement.result.rowsAffected ?? 0)
+        : finalStatement.result.rows.length,
+    durationMs: finalStatement.durationMs,
+    metadata: {
+      finalStatementRequestCount: 1,
+      preparationRequestCount: spec.mutationPreparation ? 1 : 0,
+      restorationRequestCount: spec.mutationRestoration?.length ?? 0,
+      timingScope: "worst-single-final-statement",
+    },
+    rawResult: finalStatement.result,
+    resultRowCount: finalStatement.result.rows.length,
+  };
+}
+
+function mutationRowCount(result: PerformanceResult): number {
+  const rowsAffected = result.rowsAffected ?? 0;
+  return rowsAffected > 0 ? rowsAffected : result.rows.length;
+}
+
+function planUseCounts(
+  details: readonly string[],
+  expectedPlanUses: readonly ProductionLockPlanUse[],
+): { actual: number; expected: number; index: string; pattern: string }[] {
+  return expectedPlanUses.map((use) => ({
+    actual: details.filter((detail) => use.pattern.test(detail)).length,
+    expected: use.count,
+    index: use.index,
+    pattern: use.pattern.source,
+  }));
+}
+
+function planUsesMatch(counts: readonly { actual: number; expected: number }[]): boolean {
+  return counts.every((entry) => entry.actual === entry.expected);
+}
+
+async function executeProductionLockProof(
+  reference: ProductionLockContract,
+  spec: ProductionLockComparisonSpec,
+  context: ContractContext,
+): Promise<ContractExecution> {
+  const lockedPlan = await context.client.execute({
+    args: spec.locked.args,
+    sql: `EXPLAIN QUERY PLAN ${spec.locked.sql}`,
+  });
+  const unforcedPlan = await context.client.execute({
+    args: spec.unforced.args,
+    sql: `EXPLAIN QUERY PLAN ${spec.unforced.sql}`,
+  });
+  const lockedDetails = explainDetails(lockedPlan);
+  const unforcedDetails = explainDetails(unforcedPlan);
+  const lockedAnalysis = analyzeExplainPlan(lockedDetails, spec.lockedPolicy);
+  const unforcedAnalysis = analyzeExplainPlan(unforcedDetails, spec.unforcedPolicy);
+  let outputsEquivalent: boolean | null = null;
+  let referenceRowCount = 0;
+  let terminalProofRequestCount = 2;
+  let lockedAffectedRows: number | null = null;
+  let unforcedAffectedRows: number | null = null;
+
+  if (spec.mutating) {
+    if (!spec.mutationPreparation || !spec.mutationRows) {
+      throw new Error(`mutating production-lock contract ${reference.id} has no reset contract`);
+    }
+    await context.client.execute(spec.mutationPreparation);
+    const lockedResult = await context.client.execute(spec.locked);
+    for (const restoration of spec.mutationRestoration ?? []) {
+      await context.client.execute(restoration);
+    }
+    await context.client.execute(spec.mutationPreparation);
+    const unforcedResult = await context.client.execute(spec.unforced);
+    for (const restoration of spec.mutationRestoration ?? []) {
+      await context.client.execute(restoration);
+    }
+    lockedAffectedRows = mutationRowCount(lockedResult);
+    unforcedAffectedRows = mutationRowCount(unforcedResult);
+    outputsEquivalent =
+      lockedAffectedRows === unforcedAffectedRows &&
+      serializableRows(lockedResult.rows) === serializableRows(unforcedResult.rows);
+    referenceRowCount = lockedResult.rows.length;
+    terminalProofRequestCount += 4 + (spec.mutationRestoration?.length ?? 0) * 2;
+  } else {
+    const lockedResult = await context.client.execute(spec.locked);
+    const unforcedResult = await context.client.execute(spec.unforced);
+    outputsEquivalent =
+      serializableRows(lockedResult.rows) === serializableRows(unforcedResult.rows);
+    referenceRowCount = lockedResult.rows.length;
+    terminalProofRequestCount += 2;
+  }
+
+  const lockedPlanUseCounts = planUseCounts(lockedDetails, spec.expectedPlanUses);
+  const unforcedPlanUseCounts = planUseCounts(unforcedDetails, spec.expectedPlanUses);
+  const allUnforcedLockSitesChosen = planUsesMatch(unforcedPlanUseCounts);
+  const mutationCardinality =
+    !spec.mutating ||
+    (lockedAffectedRows !== null &&
+      unforcedAffectedRows !== null &&
+      spec.mutationRows !== undefined &&
+      lockedAffectedRows >= spec.mutationRows.min &&
+      lockedAffectedRows <= spec.mutationRows.max &&
+      unforcedAffectedRows >= spec.mutationRows.min &&
+      unforcedAffectedRows <= spec.mutationRows.max);
+  const requestsPerMeasuredIteration = spec.mutationPreparation
+    ? 2 + (spec.mutationRestoration?.length ?? 0)
+    : 1;
+
+  return {
+    metadata: {
+      cardinalityBound:
+        mutationCardinality &&
+        (spec.mutating || (referenceRowCount >= spec.minRows && referenceRowCount <= spec.maxRows)),
+      expectedProductionLockCount: reference.expectedLockCount,
+      lockClassification: allUnforcedLockSitesChosen ? "redundant" : "necessary",
+      lockedAffectedRows,
+      lockedPlanDetails: JSON.stringify(lockedDetails),
+      lockedPlanUseCounts: JSON.stringify(lockedPlanUseCounts),
+      lockedPlanViolations: lockedAnalysis.violations.length,
+      measuredRequestCount:
+        (INDEX_EVIDENCE_ITERATIONS + INDEX_EVIDENCE_WARMUP_ITERATIONS) *
+        requestsPerMeasuredIteration,
+      minimumResultRows: spec.minRows,
+      outputsEquivalent,
+      resultBound: spec.maxRows,
+      terminalPlanRequestCount: 1,
+      terminalProofRequestCount,
+      totalRequestCount:
+        (INDEX_EVIDENCE_ITERATIONS + INDEX_EVIDENCE_WARMUP_ITERATIONS) *
+          requestsPerMeasuredIteration +
+        terminalProofRequestCount +
+        1,
+      unforcedAffectedRows,
+      unforcedPlanDetails: JSON.stringify(unforcedDetails),
+      unforcedPlanUseCounts: JSON.stringify(unforcedPlanUseCounts),
+      unforcedPlanViolations: unforcedAnalysis.violations.length,
+    },
+    resultRowCount: referenceRowCount,
+  };
+}
+
+function validateProductionLockProof(
+  spec: ProductionLockComparisonSpec,
+  execution: ContractExecution,
+): readonly string[] {
+  const metadata = execution.metadata ?? {};
+  const failures: string[] = [];
+
+  if (metadata.cardinalityBound !== true) {
+    failures.push("production-lock evidence exceeded its bounded result cardinality");
+  }
+  if (metadata.lockedPlanViolations !== 0) {
+    failures.push("the production-lock plan violated its real-consumer policy");
+  }
+  if (metadata.unforcedPlanViolations !== 0) {
+    failures.push("the unforced same-shape plan violated its real-consumer policy");
+  }
+  if (metadata.outputsEquivalent !== true) {
+    failures.push("the locked and unforced real-consumer outputs differ");
+  }
+  const lockedPlanUseCounts = JSON.parse(String(metadata.lockedPlanUseCounts ?? "[]")) as {
+    actual: number;
+    expected: number;
+  }[];
+  if (!planUsesMatch(lockedPlanUseCounts)) {
+    failures.push("the production-lock plan did not use every lock at its declared site");
+  }
+
+  return failures;
+}
+
+function productionLockEvidenceContracts(): PerformanceContract[] {
+  return PRODUCTION_LOCK_INVENTORY.contracts.map((reference) => {
+    const spec = productionLockSpec(reference);
+    const expectedPlanUseCount = spec.expectedPlanUses.reduce((total, use) => total + use.count, 0);
+    if (expectedPlanUseCount !== reference.expectedLockCount) {
+      throw new Error(
+        `${reference.id} declares ${reference.expectedLockCount} locks but ${expectedPlanUseCount} plan sites`,
+      );
+    }
+    const definition: ProductionLockEvidenceDefinition = {
+      contractId: reference.id,
+      expectedLockCount: reference.expectedLockCount,
+      growingTables: [...(spec.lockedPolicy.growingTables ?? [])],
+      indexes: [...reference.indexes],
+    };
+
+    return {
+      description: `Production-lock evidence outside the audit inventory: ${reference.query}`,
+      execute: (context) => executeProductionLockStatement(spec, context),
+      id: reference.id,
+      iterations: INDEX_EVIDENCE_ITERATIONS,
+      plan: { policy: spec.lockedPolicy, statement: spec.locked },
+      productionLockEvidence: definition,
+      terminalProof: {
+        execute: (context) => executeProductionLockProof(reference, spec, context),
+        validate: (execution) => validateProductionLockProof(spec, execution),
+      },
+      validate: (execution) => {
+        if (!spec.mutationRows) {
+          return [];
+        }
+        const affected = execution.affectedRowCount ?? 0;
+        return affected >= spec.mutationRows.min && affected <= spec.mutationRows.max
+          ? []
+          : [
+              `production-lock mutation affected ${affected} rows, expected ${spec.mutationRows.min}-${spec.mutationRows.max}`,
+            ];
+      },
+      warmupIterations: INDEX_EVIDENCE_WARMUP_ITERATIONS,
+      workClass: spec.mutating ? "mutation" : "projection",
+    } satisfies PerformanceContract;
+  });
+}
+
 function comparisonContract(
   entry: IndexInventoryEntry,
   contractId: string,
@@ -1388,7 +2396,7 @@ function comparisonContract(
 }
 
 export function indexEvidenceContracts(): PerformanceContract[] {
-  return allIndexInventoryEntries(FINAL_INDEX_INVENTORY).flatMap((entry) =>
+  const inventoryContracts = allIndexInventoryEntries(FINAL_INDEX_INVENTORY).flatMap((entry) =>
     entry.performanceContracts.map((reference) => {
       const definition = definitionFor(entry);
       const spec = planSpecFor(entry, reference.id);
@@ -1415,6 +2423,8 @@ export function indexEvidenceContracts(): PerformanceContract[] {
       } satisfies PerformanceContract;
     }),
   );
+
+  return [...inventoryContracts, ...productionLockEvidenceContracts()];
 }
 
 export function registerIndexEvidenceContracts(registry: {

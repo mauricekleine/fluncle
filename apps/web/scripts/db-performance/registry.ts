@@ -16,9 +16,10 @@ import {
   type IndexEvidenceDefinition,
 } from "./index-inventory";
 import { type ExplainPlanAnalysis, type ExplainPlanPolicy, analyzeExplainPlan } from "./plan";
+import { type ProductionLockEvidenceDefinition } from "./production-lock-inventory";
 
 export const PERFORMANCE_CONTRACT_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
-export const PERFORMANCE_REPORT_SCHEMA_VERSION = 5 as const;
+export const PERFORMANCE_REPORT_SCHEMA_VERSION = 6 as const;
 
 export type PerformanceStatement = { args: InValue[]; sql: string };
 
@@ -184,6 +185,8 @@ export type PerformanceContract = {
     policy: ExplainPlanPolicy;
     statement: PerformanceStatement;
   };
+  /** Set only on contracts that reproduce a production-lock consumer outside the audit inventory. */
+  productionLockEvidence?: ProductionLockEvidenceDefinition;
   terminalProof?: {
     execute: (context: ContractContext) => Promise<ContractExecution>;
     validate?: (execution: ContractExecution) => readonly string[];

@@ -26,7 +26,7 @@ import {
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
 const SOURCE_REPAIR_LIMIT = 5;
-const PHYSICAL_REPAIR_LIMIT = 50;
+export const PHYSICAL_REPAIR_LIMIT = 50;
 const RANK_REBUILD_LIMIT = 100;
 
 export type DueWorkSourceRepairResult = DueWorkRepairResult & {

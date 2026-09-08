@@ -1,5 +1,5 @@
 import { createClient } from "@libsql/client";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
@@ -15,6 +15,13 @@ import { selectPerformanceContracts } from "./contracts";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
 import {
+  PRODUCTION_LOCK_CONTRACT_COUNT,
+  PRODUCTION_LOCK_INDEX_COUNT,
+  PRODUCTION_LOCK_INVENTORY,
+  type ProductionLockInventory,
+  validateProductionLockInventory,
+} from "./production-lock-inventory";
+import {
   type PerformanceClient,
   type PerformanceContract,
   runPerformanceContracts,
@@ -24,6 +31,20 @@ const REPOSITORY_ROOT = join(import.meta.dirname, "../../../..");
 
 function cloneInventory(): IndexInventoryDocument {
   return JSON.parse(JSON.stringify(FINAL_INDEX_INVENTORY)) as IndexInventoryDocument;
+}
+
+async function typescriptFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = await Promise.all(
+    entries.map(async (entry) => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        return typescriptFiles(path);
+      }
+      return /\.tsx?$/.test(entry.name) ? [path] : [];
+    }),
+  );
+  return files.flat();
 }
 
 describe("final index plan evidence", () => {
@@ -170,6 +191,125 @@ describe("final index plan evidence", () => {
         expectedPolicyFragment,
       );
     }
+
+    const expectedProductionLockCounts: Record<string, number> = {
+      "index.production-lock.artist-link": 4,
+      "index.production-lock.due-work-cleanup": 4,
+      "index.production-lock.mixable-artists": 1,
+      "index.production-lock.mixable-artists-reconciliation": 1,
+      "index.production-lock.public-projection-audit-chunk": 1,
+      "index.production-lock.rankable-artist-repair": 1,
+    };
+    const productionLockContracts = indexEvidenceContracts().filter(
+      (contract) => contract.productionLockEvidence,
+    );
+    expect(productionLockContracts).toHaveLength(PRODUCTION_LOCK_CONTRACT_COUNT);
+    for (const contract of productionLockContracts) {
+      const plan = contract.plan;
+      const expectedLockCount = expectedProductionLockCounts[contract.id];
+      if (!plan || expectedLockCount === undefined) {
+        throw new Error(`production-lock evidence contract is incomplete: ${contract.id}`);
+      }
+      expect(plan.statement.sql.match(/\bINDEXED\s+BY\b/gi)?.length ?? 0).toBe(expectedLockCount);
+      expect(contract.productionLockEvidence?.expectedLockCount).toBe(expectedLockCount);
+    }
+  });
+
+  it("keeps the production locks outside the exact audit inventory", () => {
+    expect(validateProductionLockInventory()).toEqual([]);
+    expect(PRODUCTION_LOCK_INVENTORY.indexes).toHaveLength(PRODUCTION_LOCK_INDEX_COUNT);
+    expect(PRODUCTION_LOCK_INVENTORY.contracts).toHaveLength(PRODUCTION_LOCK_CONTRACT_COUNT);
+
+    const auditNames = new Set(
+      FINAL_INDEX_INVENTORY.tracksIndexes
+        .concat(FINAL_INDEX_INVENTORY.databaseScaleIndexes)
+        .map((entry) => entry.name),
+    );
+    for (const index of PRODUCTION_LOCK_INVENTORY.indexes) {
+      expect(auditNames.has(index.name), index.name).toBe(false);
+      expect(INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES).not.toContain(index.name);
+    }
+
+    const missingIndex = JSON.parse(
+      JSON.stringify(PRODUCTION_LOCK_INVENTORY),
+    ) as ProductionLockInventory;
+    missingIndex.indexes.pop();
+    expect(validateProductionLockInventory(missingIndex)).toContain(
+      "expected 5 production-lock indexes, found 4",
+    );
+    const missingContract = JSON.parse(
+      JSON.stringify(PRODUCTION_LOCK_INVENTORY),
+    ) as ProductionLockInventory;
+    missingContract.contracts.pop();
+    expect(validateProductionLockInventory(missingContract)).toContain(
+      "expected 6 production-lock contracts, found 5",
+    );
+  });
+
+  it("mirrors every outside-inventory production lock and explains its unforced twin", async () => {
+    const contracts = indexEvidenceContracts().filter(
+      (contract) => contract.productionLockEvidence,
+    );
+
+    for (const contract of contracts) {
+      if (!contract.plan || !contract.terminalProof || !contract.productionLockEvidence) {
+        throw new Error(`production-lock evidence contract is incomplete: ${contract.id}`);
+      }
+      const executedSql: string[] = [];
+      await contract.terminalProof.execute({
+        client: {
+          async execute(candidate) {
+            const sql = typeof candidate === "string" ? candidate : candidate.sql;
+            executedSql.push(sql);
+            if (/^EXPLAIN QUERY PLAN/i.test(sql)) {
+              return {
+                rows: contract.productionLockEvidence?.indexes.map((index) => ({
+                  detail: `SEARCH fixture USING INDEX perf_${index}`,
+                })) ?? [{ detail: "SEARCH fixture" }],
+              };
+            }
+            return { rows: [{ synthetic: "same" }] };
+          },
+        },
+        iteration: 0,
+        now: () => 0,
+        profile: "1x",
+      });
+      const explained = executedSql
+        .filter((sql) => /^EXPLAIN QUERY PLAN/i.test(sql))
+        .map((sql) => sql.replace(/^EXPLAIN QUERY PLAN\s+/i, ""));
+      const [locked, unforced] = explained;
+      if (!locked || !unforced) {
+        throw new Error(`production-lock comparison omitted a plan variant: ${contract.id}`);
+      }
+      const normalize = (sql: string) =>
+        sql
+          .replace(/\s+indexed\s+by\s+perf_[a-z0-9_]+/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+
+      expect(explained).toHaveLength(2);
+      expect(locked.match(/\bINDEXED\s+BY\b/gi)).toHaveLength(
+        contract.productionLockEvidence.expectedLockCount,
+      );
+      expect(unforced).not.toMatch(/\bINDEXED\s+BY\b/i);
+      expect(normalize(locked)).toBe(normalize(unforced));
+      expect(contract.plan.policy.growingTables?.length).toBeGreaterThan(0);
+    }
+
+    const byId = new Map(contracts.map((contract) => [contract.id, contract]));
+    expect(byId.get("index.production-lock.artist-link")?.plan?.statement.sql).toMatch(
+      /insert or ignore into perf_track_artists[\s\S]*returning track_id, artist_id/i,
+    );
+    expect(byId.get("index.production-lock.mixable-artists")?.plan?.statement.sql).toMatch(
+      /rankable_track_count > 0[\s\S]*order by -artists\.rankable_track_count asc, artists\.name asc/i,
+    );
+    expect(byId.get("index.production-lock.due-work-cleanup")?.plan?.statement.sql).toMatch(
+      /union all[\s\S]*union all[\s\S]*union all[\s\S]*generation = 'live' and updated_at < \?/i,
+    );
+    expect(
+      byId.get("index.production-lock.public-projection-audit-chunk")?.plan?.policy.forbidTempSort,
+    ).toBe(false);
   });
 
   it("resolves every final and per-contract consumer coordinate against the filesystem", async () => {
@@ -187,6 +327,20 @@ describe("final index plan evidence", () => {
           })),
         ),
       ]);
+    coordinates.push(
+      ...PRODUCTION_LOCK_INVENTORY.contracts.flatMap((contract) =>
+        contract.consumer.map((coordinate) => ({
+          coordinate,
+          label: `production-lock contract ${contract.id}`,
+        })),
+      ),
+      ...PRODUCTION_LOCK_INVENTORY.indexes.flatMap((index) =>
+        index.sites.map((coordinate) => ({
+          coordinate,
+          label: `production-lock index ${index.name}`,
+        })),
+      ),
+    );
 
     expect(coordinates.length).toBeGreaterThan(0);
     await Promise.all(
@@ -198,6 +352,93 @@ describe("final index plan evidence", () => {
         await expect(readFile(path, "utf8"), label).resolves.toContain(coordinate.marker);
       }),
     );
+  });
+
+  it("matches every outside-inventory lock site to the exact production source count", async () => {
+    const sourceFiles = [
+      ...(await typescriptFiles(join(REPOSITORY_ROOT, "apps/web/src"))),
+      ...(await typescriptFiles(join(REPOSITORY_ROOT, "apps/web/scripts"))),
+    ].filter(
+      (file) =>
+        !file.includes("/scripts/db-performance/") &&
+        !file.endsWith(".test.ts") &&
+        !file.endsWith(".test.tsx"),
+    );
+
+    for (const index of PRODUCTION_LOCK_INVENTORY.indexes) {
+      const sitesByFile = new Map<string, number>();
+      for (const site of index.sites) {
+        sitesByFile.set(site.file, (sitesByFile.get(site.file) ?? 0) + 1);
+      }
+      const observedByFile = new Map<string, number>();
+      for (const absoluteFile of sourceFiles) {
+        const source = await readFile(absoluteFile, "utf8");
+        const count =
+          source.match(new RegExp(`\\bindexed\\s+by\\s+${index.name}\\b`, "gi"))?.length ?? 0;
+        if (count > 0) {
+          observedByFile.set(absoluteFile.slice(REPOSITORY_ROOT.length + 1), count);
+        }
+      }
+      expect(Object.fromEntries(observedByFile), index.name).toEqual(
+        Object.fromEntries(sitesByFile),
+      );
+    }
+  });
+
+  it("executes every mutating production-lock consumer against meaningful fixture rows", async () => {
+    const counts = createCiFixtureCounts("1x", 512);
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    const contracts = new Map(indexEvidenceContracts().map((contract) => [contract.id, contract]));
+
+    try {
+      await applyFixtureSchema(client);
+      await writeFixture(client, "1x", { counts });
+      const context = { client, iteration: 0, now: () => 0, profile: "1x" as const };
+      const artistLink = await contracts.get("index.production-lock.artist-link")?.execute(context);
+      expect(artistLink?.affectedRowCount).toBe(7);
+      expect(artistLink?.resultRowCount).toBe(7);
+      expect(
+        artistLink?.rawResult?.rows.map((row) => {
+          const edge = row as { artist_id: string; track_id: string };
+          return [edge.track_id, edge.artist_id];
+        }),
+      ).toEqual(
+        expect.arrayContaining([
+          ["synthetic-track-000000000", "synthetic-artist-000000000"],
+          ["synthetic-track-000000001", "synthetic-artist-000000001"],
+          ["synthetic-track-000000002", "synthetic-artist-000000002"],
+          ["synthetic-track-000000003", "synthetic-artist-000000001"],
+          ["synthetic-track-000000003", "synthetic-artist-000000002"],
+          ["synthetic-track-000000003", "synthetic-artist-000000000"],
+          ["synthetic-track-000000004", "synthetic-artist-000000000"],
+        ]),
+      );
+
+      const repair = await contracts
+        .get("index.production-lock.rankable-artist-repair")
+        ?.execute(context);
+      const reconciliation = await contracts
+        .get("index.production-lock.mixable-artists-reconciliation")
+        ?.execute(context);
+      expect(repair?.affectedRowCount).toBe(2);
+      expect(reconciliation?.affectedRowCount).toBe(4);
+      const restored = await client.execute(
+        `select id, rankable_track_count from perf_artists
+          where id in ('synthetic-artist-000000000', 'synthetic-artist-000000001',
+                       'synthetic-artist-000000002', 'synthetic-artist-000000003') order by id`,
+      );
+      expect(restored.rows).toEqual([
+        { id: "synthetic-artist-000000000", rankable_track_count: 1 },
+        { id: "synthetic-artist-000000001", rankable_track_count: 2 },
+        { id: "synthetic-artist-000000002", rankable_track_count: 3 },
+        { id: "synthetic-artist-000000003", rankable_track_count: 4 },
+      ]);
+      expect(
+        await client.execute("select count(*) as count from perf_track_artists"),
+      ).toMatchObject({ rows: [{ count: counts.trackArtists }] });
+    } finally {
+      client.close();
+    }
   });
 
   it("keeps Apple, Deezer, and Beatport catalogue worklists unforced with forced variants supplemental", async () => {
@@ -296,9 +537,9 @@ describe("final index plan evidence", () => {
     expect(execution.metadata?.productionPlanViolations).toBe(0);
   });
 
-  it("keeps forced release-date variants supplemental to the unforced production plan", async () => {
+  it("keeps the locked release-date hub cursor shapes and records their unforced counterparts", async () => {
     const contract = indexEvidenceContracts().find(
-      (candidate) => candidate.id === "index.tracks-release-date-default-hub",
+      (candidate) => candidate.id === "index.tracks-release-date-track-id",
     );
     if (!contract?.plan || !contract.terminalProof) {
       throw new Error("default hub release-date comparison contract has no plan");
@@ -326,15 +567,42 @@ describe("final index plan evidence", () => {
       (sql) => !/^EXPLAIN QUERY PLAN/i.test(sql) && !/sqlite_master/i.test(sql),
     );
 
-    expect(contract.plan.statement.sql).not.toMatch(/\bINDEXED\s+BY\b/i);
+    expect(contract.plan.statement.sql).toMatch(
+      /\bINDEXED\s+BY\s+perf_tracks_release_date_track_id_idx\b/i,
+    );
     expect(execution.metadata?.outputsEquivalent).toBe(true);
-    expect(dataSql).toHaveLength(4);
-    expect(dataSql.slice(0, 2).every((sql) => !/\bINDEXED\s+BY\b/i.test(sql))).toBe(true);
+    expect(dataSql).toHaveLength(8);
     expect(
       dataSql
-        .slice(2)
+        .slice(0, 4)
         .every((sql) => /\bINDEXED\s+BY\s+perf_tracks_release_date_track_id_idx\b/i.test(sql)),
     ).toBe(true);
+    expect(dataSql.slice(4).every((sql) => !/\bINDEXED\s+BY\b/i.test(sql))).toBe(true);
+    expect(dataSql[0]).toMatch(
+      /from perf_tracks indexed by perf_tracks_release_date_track_id_idx\s+order by/i,
+    );
+    expect(dataSql[2]).toMatch(/release_date is null and id < /i);
+  });
+
+  it("mirrors the six reviewed locked consumers and records an unforced same-shape plan", () => {
+    const contracts = new Map(indexEvidenceContracts().map((contract) => [contract.id, contract]));
+    const reviewed = [
+      ["index.tracks-anchor-queue", /count\(\*\)[\s\S]*not exists/i],
+      ["index.tracks-label-id", /exists \(select 1 from perf_track_artists/i],
+      ["index.tracks-mb-recording-id-queue", /substr\(id, 1, 3\) != 'mb_'/i],
+      ["index.artist-qualification-qualified", /perf_artist_qualification_state/i],
+      ["index.tracks-anchor-order", /left join perf_findings/i],
+      ["index.projection-repairs-order", /source_version/i],
+    ] as const;
+
+    for (const [id, shape] of reviewed) {
+      const contract = contracts.get(id);
+      if (!contract?.plan || !contract.terminalProof) {
+        throw new Error(`reviewed consumer contract is missing: ${id}`);
+      }
+      expect(contract.plan.statement.sql).toMatch(/\bINDEXED\s+BY\b/i);
+      expect(contract.plan.statement.sql).toMatch(shape);
+    }
   });
 
   it("excludes structural drop proof latency from a single final consumer statement", async () => {
@@ -412,7 +680,7 @@ describe("final index plan evidence", () => {
 
   it("budgets a multi-consumer proof by its slowest final statement", async () => {
     const contract = indexEvidenceContracts().find(
-      (candidate) => candidate.id === "index.tracks-release-date-default-hub",
+      (candidate) => candidate.id === "index.tracks-release-date-track-id",
     );
     if (!contract) {
       throw new Error("default hub release-date comparison contract is missing");
@@ -453,16 +721,16 @@ describe("final index plan evidence", () => {
     });
     const evidence = report.contracts[0];
 
-    expect(evidence?.durationMs).toEqual({ max: 300, p50: 300, p95: 300, p99: 300 });
+    expect(evidence?.durationMs).toEqual({ max: 900, p50: 900, p95: 900, p99: 900 });
     expect(evidence?.metadata[0]).toMatchObject({
-      finalStatementRequestCount: 2,
-      measuredRequestCount: 6,
+      finalStatementRequestCount: 4,
+      measuredRequestCount: 12,
       terminalPlanRequestCount: 1,
-      terminalProofRequestCount: 6,
+      terminalProofRequestCount: 16,
       timingScope: "worst-single-final-statement",
-      totalRequestCount: 13,
+      totalRequestCount: 29,
     });
-    expect(evidence?.budget.failures).toEqual(["p95 300ms exceeds 250ms"]);
+    expect(evidence?.budget.failures).toEqual(["p95 900ms exceeds 250ms"]);
     expect(evidence?.validationFailures).toEqual([]);
   });
 
@@ -601,9 +869,13 @@ describe("final index plan evidence", () => {
   it("runs all declared evidence at every local profile and retains the proven singleton", async () => {
     const contracts = indexEvidenceContracts();
 
-    expect(contracts).toHaveLength(69);
+    expect(contracts).toHaveLength(69 + PRODUCTION_LOCK_CONTRACT_COUNT);
     expect(
-      contracts.every((contract) => contract.indexEvidence?.inventoryEntry.finalConsumer.query),
+      contracts.every(
+        (contract) =>
+          contract.indexEvidence?.inventoryEntry.finalConsumer.query ||
+          contract.productionLockEvidence !== undefined,
+      ),
     ).toBe(true);
 
     for (const profile of ["1x", "2x", "4x"] as const) {
@@ -643,6 +915,23 @@ describe("final index plan evidence", () => {
           currentFinalSchemaBeforeContraction: { indexes: 180, tracksIndexes: 32 },
           finalSchemaAfterContraction: { indexes: 174, tracksIndexes: 30 },
         });
+        expect(audit.productionLocks.passed).toBe(true);
+        expect(audit.productionLocks.totals).toEqual({ contracts: 6, indexes: 5 });
+        expect(audit.productionLocks.missingConsumers).toEqual([]);
+        expect(audit.productionLocks.missingPlanEvidence).toEqual([]);
+        expect(audit.productionLocks.missingProfileEvidence).toEqual([]);
+        expect(audit.productionLocks.profileEvidence[profile]).toEqual({
+          declaredContracts: 6,
+          observedContracts: 6,
+        });
+        expect(
+          audit.productionLocks.contracts.every(
+            (contract) =>
+              contract.metadata?.lockClassification === "redundant" &&
+              contract.metadata.lockedPlanViolations === 0 &&
+              contract.metadata.unforcedPlanViolations === 0,
+          ),
+        ).toBe(true);
         expect(audit.missingConsumers).toEqual([]);
         expect(audit.missingPlanEvidence).toEqual([]);
         expect(audit.missingProfileEvidence).toEqual([]);

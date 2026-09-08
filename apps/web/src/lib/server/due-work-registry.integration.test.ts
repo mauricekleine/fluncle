@@ -300,10 +300,6 @@ describe("due-work registry", () => {
     expect(dependencies.ambiguous).toEqual(["capture-verification-quarantine"]);
     expect(dueWorkCatalogueRankRepairSubjects("capture-verification-quarantine")).toHaveLength(1);
     expect(dueWorkCatalogueRankRepairSubjects("track-update")).toHaveLength(1);
-    expect(dependencies.materialRevision).toEqual(["track-update"]);
-    expect(dependencies.materialRevision.every((producer) => allProducers.includes(producer))).toBe(
-      true,
-    );
     expect(dueWorkCatalogueRankMarkerMaterialRevision("track-update:legacy-token")).toBe(
       "track-update:legacy-token",
     );
@@ -316,10 +312,6 @@ describe("due-work registry", () => {
         "label-seed-state",
       ]),
     );
-    for (const producer of dependencies.excluded) {
-      expect(allProducers).toContain(producer);
-      expect(dueWorkCatalogueRankRepairSubjects(producer), producer).toEqual([]);
-    }
   });
 
   it("uses the semantic rank definition as the default owned rebuild generation", async () => {

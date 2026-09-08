@@ -196,7 +196,7 @@ export function projectionFixtureCardinalities(
     perf_crawl_projection_repairs: crawlProjectionRepairCount(counts),
     perf_hub_page_anchor_validity: 1,
     perf_hub_page_anchors: 1,
-    perf_projection_repairs: 1,
+    perf_projection_repairs: 3,
     perf_public_aggregate_counts:
       buckets.releaseDate.filter((entry) => entry.bucket !== null).length +
       buckets.key.filter((entry) => entry.bucket !== null).length,
@@ -339,30 +339,26 @@ function sourceVersionForPublicTrack(releaseDate: null | string, key: null | str
   return JSON.stringify([releaseDate, key]);
 }
 
-function syntheticAnchorRows(
-  total: number,
-  releaseBuckets: readonly ProjectionBucket[],
-): { id: string; key: null | string; page: number }[] {
-  const anchors: { id: string; key: null | string; page: number }[] = [];
-  let rank = 0;
-
+export function defaultHubFixtureOrder(
+  counts: FixtureCounts,
+): { id: string; key: null | string }[] {
+  const rows: { id: string; key: null | string }[] = [];
+  const releaseBuckets = publicAggregateFixtureBuckets(counts).releaseDate;
   for (const bucket of releaseBuckets) {
     const firstIndex = releaseBuckets
       .slice(0, releaseBuckets.indexOf(bucket))
       .reduce((sum, entry) => sum + entry.count, 0);
-    for (let index = firstIndex + bucket.count - 1; index >= firstIndex; index -= 1) {
-      rank += 1;
-      if (rank % CONTRACT_D_HUB_PAGE_SIZE === 0) {
-        anchors.push({
-          id: `synthetic-track-${padded(index)}`,
-          key: releaseDateForIndex(index, releaseBuckets),
-          page: rank / CONTRACT_D_HUB_PAGE_SIZE + 1,
-        });
-      }
+    const indexes = Array.from({ length: bucket.count }, (_, offset) => firstIndex + offset).sort(
+      (left, right) => syntheticTrackId(right).localeCompare(syntheticTrackId(left)),
+    );
+    for (const index of indexes) {
+      rows.push({
+        id: syntheticTrackId(index),
+        key: bucket.bucket,
+      });
     }
   }
-
-  return anchors;
+  return rows;
 }
 
 export function defaultAnchorFixtureRows(counts: FixtureCounts): {
@@ -370,7 +366,11 @@ export function defaultAnchorFixtureRows(counts: FixtureCounts): {
   key: null | string;
   page: number;
 }[] {
-  return syntheticAnchorRows(counts.tracks, publicAggregateFixtureBuckets(counts).releaseDate);
+  return defaultHubFixtureOrder(counts).flatMap((row, index) =>
+    (index + 1) % CONTRACT_D_HUB_PAGE_SIZE === 0
+      ? [{ ...row, page: (index + 1) / CONTRACT_D_HUB_PAGE_SIZE + 1 }]
+      : [],
+  );
 }
 
 export function defaultAnchorFixtureFingerprint(counts: FixtureCounts): string {
@@ -381,6 +381,7 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create table if not exists perf_artists (
     id text primary key,
     name text not null,
+    slug text not null,
     mbid text,
     image_url text,
     image_key text,
@@ -391,9 +392,9 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   )`,
   `create index if not exists perf_artists_mbid_idx on perf_artists(mbid)`,
   `create index if not exists perf_artists_name_nocase_idx
-    on perf_artists(name collate nocase)`,
+    on perf_artists(name collate nocase, slug)`,
   `create index if not exists perf_artists_mixable_order_idx
-    on perf_artists(-rankable_track_count, name, id)
+    on perf_artists(-rankable_track_count, name, slug)
     where rankable_track_count > 0`,
   `create table if not exists perf_labels (
     id text primary key,
@@ -451,7 +452,9 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     mb_recording_id_attempted_at text,
     nearest_finding_score real,
     source_audio_attempted_at text,
+    source_audio_failures integer,
     source_audio_key text,
+    source_audio_rejected text,
     spotify_anchor_attempted_at text,
     spotify_anchor_attempts integer,
     spotify_uri text
@@ -787,6 +790,9 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create index if not exists perf_due_work_claim_idx
     on perf_due_work(work_kind, state, claimed_by, claim_token, sort_key, subject_id)
     where state = 'leased'`,
+  `create index if not exists perf_due_work_cleanup_idx
+    on perf_due_work(work_kind, subject_type, generation, updated_at, subject_id)
+    where state <> 'repair'`,
   `create table if not exists perf_artifact_change_checkpoints (
     consumer_id text not null,
     phase text not null,
@@ -878,13 +884,14 @@ const TRACK_INSERT = `insert or ignore into perf_tracks
    bpm, capture_priority, capture_verification, capture_verified_at, deezer_track_id, demand_score,
    dismissed_at, duplicate_of_track_id, duration_ms, has_embedding, has_isrc, in_release_id, isrc,
    mb_recording_id, mb_recording_id_attempted_at, nearest_finding_score,
-   source_audio_attempted_at, source_audio_key, spotify_anchor_attempted_at,
+   source_audio_attempted_at, source_audio_failures, source_audio_key, source_audio_rejected,
+   spotify_anchor_attempted_at,
    spotify_anchor_attempts, spotify_uri)
   values (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   )`;
 
 const EMBEDDING_BLOB = new Uint8Array(4096);
@@ -894,6 +901,12 @@ for (let index = 0; index < EMBEDDING_BLOB.length; index += 1) {
 
 function padded(index: number): string {
   return index.toString().padStart(9, "0");
+}
+
+/** Crawler-born rows use the production `mb_` prefix and remain linked through every fixture edge. */
+function syntheticTrackId(index: number): string {
+  const prefix = index > 0 && index % 97 === 0 ? "mb_" : "synthetic-track-";
+  return `${prefix}${padded(index)}`;
 }
 
 function syntheticTimestamp(index: number, dayOffset = 0): string {
@@ -939,7 +952,11 @@ function syntheticTrackCredits(index: number, artistCount: number): string[] {
     return ["Synthetic Identity"];
   }
 
-  if (index === 1 || index === 2) {
+  if (index === 1) {
+    return ["synthetic collision"];
+  }
+
+  if (index === 2) {
     return ["Synthetic Collision"];
   }
 
@@ -1101,6 +1118,7 @@ export async function* generateFixture(
       args: [
         `synthetic-artist-${padded(index)}`,
         artist.name,
+        `synthetic-artist-${padded(index)}`,
         artist.mbid,
         `synthetic-artist-image-${padded(index)}`,
         `synthetic-artist-image-key-${padded(index)}`,
@@ -1110,8 +1128,8 @@ export async function* generateFixture(
         (index % 8) + 1,
       ],
       sql: `insert or ignore into perf_artists
-              (id, name, mbid, image_url, image_key, image_state, image_updated_at,
-               renderable_track_count, rankable_track_count) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (id, name, slug, mbid, image_url, image_key, image_state, image_updated_at,
+               renderable_track_count, rankable_track_count) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     };
   });
 
@@ -1167,7 +1185,7 @@ export async function* generateFixture(
     const captureVerification = captureVerificationForIndex(index);
     return {
       args: [
-        `synthetic-track-${padded(index)}`,
+        syntheticTrackId(index),
         `Synthetic Track ${padded(index)}`,
         JSON.stringify(syntheticTrackCredits(index, counts.artists)),
         sitemapEvidence.albumImageUrl,
@@ -1194,7 +1212,7 @@ export async function* generateFixture(
         index % 3 === 0 ? null : `synthetic-deezer-${padded(index)}`,
         index % 127 === 0 ? index % 17 : null,
         index % 101 === 0 ? syntheticTimestamp(index, 3) : null,
-        index % 211 === 0 ? `synthetic-track-${padded(index)}` : null,
+        index % 211 === 0 ? syntheticTrackId(index) : null,
         180_000 + index,
         hasEmbedding,
         hasIsrc,
@@ -1204,7 +1222,9 @@ export async function* generateFixture(
         mbRecordingIdAttemptedAt,
         nearestFindingScore,
         index % 4 === 0 ? syntheticTimestamp(index, 1) : null,
+        index % 5,
         index % 3 === 0 ? `synthetic-audio-${padded(index)}` : null,
+        index % 31 === 0 ? "wrong-audio" : null,
         index % 9 === 0 ? syntheticTimestamp(index, 1) : null,
         index % 9 === 0 ? (index % 4) + 1 : 0,
         spotifyUri,
@@ -1228,13 +1248,23 @@ export async function* generateFixture(
     const subjectId = `synthetic-due-subject-${padded(index)}`;
     const workKind = index % 2 === 0 ? "youtube-provenance-findings" : "mbid-isrc-lookup";
     const isLeased = state === "leased";
+    const generation = [
+      "earlier-synthetic-generation",
+      "live",
+      "synthetic-generation-prior",
+      "synthetic-superseding-generation",
+    ][Math.floor(index / 4) % 4];
+
+    if (generation === undefined) {
+      throw new Error("due-work fixture generation is missing");
+    }
 
     return {
       args: [
         isLeased ? index + 10_000 : null,
         isLeased ? `synthetic-claim-${padded(index)}` : null,
         isLeased ? `synthetic-owner-${padded(index)}` : null,
-        "synthetic-index-evidence",
+        generation,
         syntheticTimestamp(index),
         padded(index),
         JSON.stringify([subjectId, workKind]),
@@ -1302,7 +1332,7 @@ export async function* generateFixture(
         `synthetic-stream-${index % 3}`,
         1,
         "track",
-        `synthetic-track-${padded(index)}`,
+        syntheticTrackId(index),
         1,
       ],
       sql: `insert or ignore into perf_artifact_changes
@@ -1317,14 +1347,7 @@ export async function* generateFixture(
     indexCounts.perf_artifact_change_revisions,
     chunkSize,
     (index) => ({
-      args: [
-        `synthetic-stream-${index % 3}`,
-        1,
-        "track",
-        `synthetic-track-${padded(index)}`,
-        1,
-        index + 1,
-      ],
+      args: [`synthetic-stream-${index % 3}`, 1, "track", syntheticTrackId(index), 1, index + 1],
       sql: `insert or ignore into perf_artifact_change_revisions
         (stream, stream_version, subject_type, subject_id, revision, event_seq)
         values (?, ?, ?, ?, ?, ?)`,
@@ -1382,7 +1405,7 @@ export async function* generateFixture(
     selected(index, counts.tracks, counts.findings)
       ? {
           args: [
-            `synthetic-track-${padded(index)}`,
+            syntheticTrackId(index),
             `synthetic-log-${padded(Math.floor((index * counts.findings) / counts.tracks))}`,
             syntheticTimestamp(index),
             index % 5 === 0 ? syntheticTimestamp(index, 31) : null,
@@ -1398,7 +1421,7 @@ export async function* generateFixture(
   yield* generatedChunks("perf_track_embeddings", counts.tracks, chunkSize, (index) =>
     selected(index, counts.tracks, counts.trackEmbeddings)
       ? {
-          args: [`synthetic-track-${padded(index)}`, EMBEDDING_BLOB],
+          args: [syntheticTrackId(index), EMBEDDING_BLOB],
           sql: "insert or ignore into perf_track_embeddings (track_id, embedding_blob) values (?, ?)",
         }
       : null,
@@ -1413,7 +1436,7 @@ export async function* generateFixture(
 
     return {
       args: [
-        `synthetic-track-${padded(edge.trackIndex)}`,
+        syntheticTrackId(edge.trackIndex),
         `synthetic-artist-${padded(edge.artistIndex)}`,
         edge.isSecondEdge ? 2 : 1,
         edge.isSecondEdge ? "remixer" : null,
@@ -1582,7 +1605,7 @@ export async function* generateFixture(
 
       const labelIndex = edge.trackIndex % counts.labels;
       const labelEnabled = !(labelIndex % 5 === 0 && counts.labels > 1);
-      const trackId = `synthetic-track-${padded(edge.trackIndex)}`;
+      const trackId = syntheticTrackId(edge.trackIndex);
       const artistId = `synthetic-artist-${padded(edge.artistIndex)}`;
 
       return {
@@ -1644,7 +1667,7 @@ export async function* generateFixture(
         key,
         releaseDate === null ? null : releaseDate.slice(0, 4),
         sourceVersionForPublicTrack(releaseDate, key),
-        `synthetic-track-${padded(index)}`,
+        syntheticTrackId(index),
         syntheticTimestamp(index, 4),
       ],
       sql: `insert or ignore into perf_public_aggregate_membership
@@ -1722,20 +1745,36 @@ export async function* generateFixture(
     table: "perf_public_aggregate_state",
   };
 
-  yield* generatedChunks("perf_projection_repairs", 1, chunkSize, () => ({
-    args: [
-      syntheticTimestamp(0, 4),
-      "synthetic-index-evidence",
-      1,
-      "synthetic-index-evidence-v1",
-      "synthetic-track-000000000",
-      "track",
-      syntheticTimestamp(0, 4),
-    ],
-    sql: `insert or ignore into perf_projection_repairs
-      (created_at, projection, source_epoch, source_version, subject_id, subject_type, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?)`,
-  }));
+  // Keep projection readiness clean while giving index evidence every marker subject type.
+  const projectionRepairMarkers = ["label", "artist", "track"] as const;
+  yield* generatedChunks(
+    "perf_projection_repairs",
+    projectionRepairMarkers.length,
+    chunkSize,
+    (index) => {
+      const marker = projectionRepairMarkers[index];
+      if (marker === undefined) {
+        return null;
+      }
+      const subjectType = marker;
+      return {
+        args: [
+          syntheticTimestamp(index, 4),
+          "synthetic-index-evidence",
+          index + 1,
+          `synthetic-index-evidence-${subjectType}-v${index + 1}`,
+          subjectType === "track"
+            ? syntheticTrackId(index)
+            : `synthetic-${subjectType}-${padded(index)}`,
+          subjectType,
+          syntheticTimestamp(index, 4),
+        ],
+        sql: `insert or ignore into perf_projection_repairs
+        (created_at, projection, source_epoch, source_version, subject_id, subject_type, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?)`,
+      };
+    },
+  );
 
   const anchorRows = defaultAnchorFixtureRows(counts);
   yield {
@@ -1987,11 +2026,11 @@ function boundedCensusQueriesForSource(options: {
       expectedCount:
         options.target.kind === "table" && !embeddingIndexRange ? end - start + 1 : null,
       kind: "range",
-      label: `${label} ${embeddingIndexRange ? "track_id" : "rowid"} ${start}-${end}`,
+      label: `${label} rowid ${start}-${end}`,
       statement: embeddingIndexRange
         ? {
-            args: [`synthetic-track-${padded(start - 1)}`, `synthetic-track-${padded(end - 1)}`],
-            sql: `select count(*) as count from perf_track_embeddings where track_id between ? and ?`,
+            args: [start, end],
+            sql: `select count(*) as count from perf_track_embeddings not indexed where rowid between ? and ?`,
           }
         : {
             args: [start, end],

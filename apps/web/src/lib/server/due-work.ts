@@ -11,52 +11,20 @@ import {
   markPublicProjectionSourceChangedStatements,
 } from "./public-projection-source-maintenance";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
+import { type DueWorkCatalogueRankProducer } from "./due-work-registry";
 
 export const DUE_WORK_LIVE_GENERATION = "live";
 export const DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID = "@catalogue-rank-corpus";
 export const DUE_WORK_SOURCE_REPAIR_KIND = "source-repair";
 export const MAX_DUE_WORK_CHUNK_SIZE = 500;
 const DUE_WORK_CATALOGUE_RANK_FRESHNESS_SEPARATOR = "|rank-fresh|";
-
-/** Closed producer policy for invalidating the global catalogue-rank corpus definition. */
-export const DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES = {
-  ambiguous: ["capture-verification-quarantine"],
-  excluded: ["label-artist-rules-replace"],
-  materialRevision: ["track-update"],
-  required: [
-    "artist-credit-edges",
-    "artist-edge-backfill",
-    "artist-edge-link",
-    "artist-edge-rank-restale",
-    "artist-edge-upsert",
-    "backfill-artist-links",
-    "backfill-has-embedding-rank-corpus",
-    "backfill-label-seed",
-    "backfill-remixer-role",
-    "catalogue-flag-wrong-audio",
-    "certify-track",
-    "label-seed-state",
-    "publish-track",
-    "track-update",
-  ],
-} as const;
-
-type DueWorkCatalogueRankProducer =
-  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.ambiguous)[number]
-  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.excluded)[number]
-  | (typeof DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.required)[number];
+const DUE_WORK_CATALOGUE_RANK_MATERIAL_REVISION_PREFIX = "track-update:";
 
 /** Return the synthetic rank subject only for a centrally registered corpus dependency. */
 export function dueWorkCatalogueRankRepairSubjects(
-  producer: DueWorkCatalogueRankProducer,
+  _producer: DueWorkCatalogueRankProducer,
 ): DueWorkSourceSubject[] {
-  const dependencies: readonly string[] = [
-    ...DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.required,
-    ...DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.ambiguous,
-  ];
-  return dependencies.includes(producer)
-    ? [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }]
-    : [];
+  return [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }];
 }
 
 /** Extract the durable material evidence from a legacy-compatible rank marker. */
@@ -65,9 +33,7 @@ export function dueWorkCatalogueRankMarkerMaterialRevision(
 ): string | undefined {
   const materialRevision = sourceVersion.split(DUE_WORK_CATALOGUE_RANK_FRESHNESS_SEPARATOR, 1)[0];
   return materialRevision !== undefined &&
-    DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.materialRevision.some((producer) =>
-      materialRevision.startsWith(`${producer}:`),
-    )
+    materialRevision.startsWith(DUE_WORK_CATALOGUE_RANK_MATERIAL_REVISION_PREFIX)
     ? materialRevision
     : undefined;
 }
@@ -465,9 +431,7 @@ function uniqueSourceSubjects(subjects: readonly DueWorkSourceSubject[]): DueWor
 }
 
 function materialCatalogueRankMarkerSql(row: "due_work" | "excluded"): string {
-  return DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES.materialRevision
-    .map((producer) => `${row}.source_version glob '${producer}:*'`)
-    .join(" or ");
+  return `${row}.source_version glob '${DUE_WORK_CATALOGUE_RANK_MATERIAL_REVISION_PREFIX}*'`;
 }
 
 function sourceMarkerVersionConflictAssignment(): string {

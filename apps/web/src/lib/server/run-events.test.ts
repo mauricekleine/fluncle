@@ -559,6 +559,19 @@ describe("normalizeRunSummary — a crashed sweep is captured, not choked on", (
 });
 
 describe("normalizeRunSummary — unrecognised keys are recorded, never dropped", () => {
+  it("recognises every projection-maintenance convergence field", () => {
+    const result = normalizeRunSummary(
+      JSON.stringify({
+        budgetExhaustedFamilies: ["crawl_due_work"],
+        converged: false,
+        oldestDebtAgeMs: 120_000,
+        outcome: "partial_progress",
+      }),
+    );
+
+    expect(result.unrecognisedFields).toEqual([]);
+  });
+
   it("collects unknown keys sorted", () => {
     // `isrcRecoveredByDeezer: 0` was printed for seven days and read by nobody. It lands
     // here now — the other half of the upgrade queue: `missing_fields` says what to ADD,
