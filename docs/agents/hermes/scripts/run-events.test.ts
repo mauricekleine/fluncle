@@ -52,8 +52,37 @@ const SECRETS_SYNC_TIMER = join(REPO, "docs/agents/hermes/secrets/fluncle-secret
 const SONAR_FRESHEN = join(REPO, "apps/sonar/deploy/fluncle-sonar-freshen.sh");
 const SONAR_FRESHEN_TIMER = join(REPO, "apps/sonar/deploy/fluncle-sonar-freshen.timer");
 const temporaryDirectories: string[] = [];
+const SCRIPT_CHILD_EXIT_TIMEOUT_MS = 30_000;
+const activeHostScripts = new Set<Bun.Subprocess>();
+const hostScriptCleanups = new Map<Bun.Subprocess, Promise<void>>();
 
-afterEach(() => {
+function stopHostScript(proc: Bun.Subprocess): Promise<void> {
+  const existing = hostScriptCleanups.get(proc);
+  if (existing) {
+    return existing;
+  }
+  const stopGroup = (signal: NodeJS.Signals): void => {
+    try {
+      process.kill(-proc.pid, signal);
+    } catch (cause) {
+      if ((cause as { code?: string }).code !== "ESRCH") {
+        proc.kill(signal);
+      }
+    }
+  };
+  const cleanup = (async () => {
+    // The shell may have exited while a descendant retains its pipes, so kill the disposable
+    // fixture group itself and wait for the direct child before removing its tree.
+    stopGroup("SIGKILL");
+    await proc.exited;
+  })();
+  hostScriptCleanups.set(proc, cleanup);
+  return cleanup;
+}
+
+afterEach(async () => {
+  await Promise.all([...activeHostScripts].map((proc) => stopHostScript(proc)));
+  activeHostScripts.clear();
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
   }
@@ -589,30 +618,52 @@ async function runScript(
   script: string,
   env: Record<string, string>,
   args: string[] = [],
+  timeoutMs = SCRIPT_CHILD_EXIT_TIMEOUT_MS,
 ): Promise<{ code: number; stderr: string; stdout: string }> {
   const rail = loopbackCurlRail();
   const merged = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", ...env };
   const proc = Bun.spawn(["bash", script, ...args], {
     // The rail goes on LAST and FIRST: after the spread so a fixture's own PATH cannot displace
     // it, and at the head of the list so its `curl` is the one every run finds.
+    detached: true,
     env: { ...merged, PATH: `${rail.dir}:${merged.PATH}` },
     stderr: "pipe",
     stdout: "pipe",
   });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  const code = await proc.exited;
+  activeHostScripts.add(proc);
+  // Drain both pipes before waiting for exit: a verbose child otherwise blocks on a full pipe
+  // while this fixture waits for the exit that cannot happen.
+  const stdoutPromise = new Response(proc.stdout).text();
+  const stderrPromise = new Response(proc.stderr).text();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeoutExit = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        void stopHostScript(proc);
+        reject(new Error(`host script did not exit within ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    const code = await Promise.race([proc.exited, timeoutExit]);
+    const pipes = await Promise.race([Promise.all([stdoutPromise, stderrPromise]), timeoutExit]);
+    const [stdout, stderr] = pipes;
 
-  if (existsSync(rail.refusals)) {
-    throw new Error(
-      `a run reached off-loopback — the fixture is missing its ledger base:\n${readFileSync(
-        rail.refusals,
-        "utf8",
-      )}`,
-    );
+    if (existsSync(rail.refusals)) {
+      throw new Error(
+        `a run reached off-loopback — the fixture is missing its ledger base:\n${readFileSync(
+          rail.refusals,
+          "utf8",
+        )}`,
+      );
+    }
+
+    return { code, stderr, stdout };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    await stopHostScript(proc);
+    activeHostScripts.delete(proc);
   }
-
-  return { code, stderr, stdout };
 }
 
 /**
@@ -626,6 +677,86 @@ async function runScript(
 function derivedOk(exitCode: number, errors: Summary[string] | undefined): boolean {
   return exitCode === 0 && (errors ?? 0) === 0;
 }
+
+describe("host-script fixture lifecycle", () => {
+  test("a timed-out fixture is killed before afterEach removes its tree", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fluncle-host-script-timeout-"));
+    temporaryDirectories.push(root);
+    const script = join(root, "hang.sh");
+    writeFileSync(script, "#!/usr/bin/env bash\ntrap '' TERM\nsleep 30 &\nwait\n", "utf8");
+    chmodSync(script, 0o755);
+
+    let failure: unknown;
+    try {
+      await runScript(script, {}, [], 50);
+    } catch (cause) {
+      failure = cause;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("did not exit within 50ms");
+    expect(activeHostScripts.size).toBe(0);
+  });
+
+  test("a grandchild retaining inherited pipes is reaped with its detached group", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fluncle-host-script-grandchild-"));
+    temporaryDirectories.push(root);
+    const marker = join(root, "grandchild-survived");
+    const childPidPath = join(root, "grandchild.pid");
+    const readyPath = join(root, "grandchild.ready");
+    const script = join(root, "grandchild.sh");
+    writeFileSync(
+      script,
+      '#!/usr/bin/env bash\n(trap "" TERM; sleep 30; : > "$1") &\necho "$!" > "$2"\n: > "$3"\nexit 0\n',
+      "utf8",
+    );
+    chmodSync(script, 0o755);
+    const proc = Bun.spawn(["bash", script, marker, childPidPath, readyPath], {
+      detached: true,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+    activeHostScripts.add(proc);
+    await new Promise<void>((resolve, reject) => {
+      let finished = false;
+      const finish = (result: "ready" | "timeout"): void => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        clearTimeout(deadline);
+        if (result === "ready") {
+          resolve();
+        } else {
+          reject(new Error("grandchild never became ready"));
+        }
+      };
+      const deadline = setTimeout(() => finish("timeout"), 1_000);
+      const observe = (): void => {
+        if (finished) {
+          return;
+        }
+        if (existsSync(readyPath)) {
+          finish("ready");
+          return;
+        }
+        setTimeout(observe, 5);
+      };
+      observe();
+    });
+    await proc.exited;
+    await stopHostScript(proc);
+    activeHostScripts.delete(proc);
+    expect(existsSync(marker)).toBe(false);
+    const childPid = Number(readFileSync(childPidPath, "utf8").trim());
+    const childState = new TextDecoder()
+      .decode(Bun.spawnSync(["ps", "-o", "stat=", "-p", String(childPid)]).stdout)
+      .trim();
+    // A short-lived zombie can await the system reaper, but no runnable/sleeping orphan may
+    // remain in the fixture group after cleanup.
+    expect(childState === "" || childState.startsWith("Z")).toBe(true);
+    expect(activeHostScripts.size).toBe(0);
+  });
+});
 
 /** The LAST non-empty stdout line, parsed — the same line the wrapper sends as summary_raw. */
 function lastJsonLine(stdout: string): Summary {
@@ -1147,6 +1278,8 @@ type SonarFixture = {
   artifactCommit?: string;
   /** Override the complete health body served by the downloaded artifact. */
   artifactHealthBody?: string;
+  /** Make this many isolated child boots lose the free-port probe-to-bind race. */
+  presmokeBindCollisions?: number;
   /** Override the commit returned by the restarted live service. */
   liveCommit?: string;
   /** Override the commit served by the pre-swap binary independently of deployed-sha. */
@@ -1180,6 +1313,7 @@ const SHA_B = new Bun.CryptoHasher("sha1").update(`run-events:${process.pid}`).d
 const SONAR_STUB = [
   "#!/usr/bin/env bash",
   'if [ "${SONAR_VALIDATE_ONLY:-}" = "true" ] && grep -q "^partial$" "$SONAR_STATE_PATH" 2>/dev/null; then echo "state has no completed manifest" >&2; exit 2; fi',
+  'if [ "${SONAR_VALIDATE_ONLY:-}" = "true" ] && [ "${SONAR_TEST_BIND_COLLISIONS:-0}" -gt 0 ]; then printf "attempt\\n" >>"$SONAR_TEST_BIND_ATTEMPTS"; attempts="$(awk \'END { print NR }\' "$SONAR_TEST_BIND_ATTEMPTS")"; if [ "$attempts" -le "$SONAR_TEST_BIND_COLLISIONS" ]; then echo "Address already in use (os error 98)" >&2; exit 1; fi; fi',
   'exec "$SONAR_TEST_BUN" -e "Bun.serve({fetch: () => new Response(process.env.SONAR_TEST_HEALTH_BODY || JSON.stringify({ok:true,commit:process.env.SONAR_TEST_COMMIT})), port: Number(process.env.SONAR_PORT)}); await new Promise(() => {});"',
   "",
 ].join("\n");
@@ -1212,6 +1346,10 @@ function fixtureLiveCommit(fixture: SonarFixture, runningOld: boolean): string {
 
 function shellFlag(value: boolean | undefined): string {
   return value ? "1" : "0";
+}
+
+function numericFixtureValue(value: number | undefined): string {
+  return String(value ?? 0);
 }
 
 async function runSonar(
@@ -1247,6 +1385,7 @@ async function runSonar(
   const cleanupFailed = join(root, "cleanup-failed");
   const acceptedShaFailed = join(root, "accepted-sha-failed");
   const bootstrapUnlinkFailed = join(root, "bootstrap-unlink-failed");
+  const bindAttempts = join(root, "bind-attempts");
   const stateDir = join(root, "state");
   const rollbackIntent = join(stateDir, "swap-in-progress");
   const rollbackState = join(stateDir, "local-state.rollback");
@@ -1455,6 +1594,8 @@ async function runSonar(
       SONARFRESHEN_SERVICE_ENV: serviceEnv,
       SONARFRESHEN_STATE_DIR: stateDir,
       SONARFRESHEN_WORKER_URL: base ?? "http://127.0.0.1:1",
+      SONAR_TEST_BIND_ATTEMPTS: bindAttempts,
+      SONAR_TEST_BIND_COLLISIONS: numericFixtureValue(fixture.presmokeBindCollisions),
       SONAR_TEST_BUN: process.execPath,
       SONAR_TEST_COMMIT: fixture.artifactCommit ?? fixture.commit ?? SHA_B,
       SONAR_TEST_HEALTH_BODY: fixture.artifactHealthBody ?? "",
@@ -1847,6 +1988,46 @@ describe("sonar-freshen reports a run", () => {
     expect(appContents).toContain("old-sonar");
     expect(previousExists).toBe(false);
     expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
+  }, 60_000);
+
+  test("pre-smoke retries a confirmed bind collision on the next bounded candidate", async () => {
+    const { code, stderr, summary } = await runSonar(
+      { commit: SHA_B, deployed: SHA_A, presmokeBindCollisions: 1 },
+      undefined,
+      ["--dry-run"],
+    );
+
+    expect(code, stderr).toBe(0);
+    expect(stderr).toContain("was claimed during boot; trying the next candidate");
+    expect(stderr).toContain("pre-smoke passed");
+    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 0, queueDepth: 1 });
+  }, 60_000);
+
+  test("pre-smoke fails after every bounded candidate reports a bind collision", async () => {
+    const { appContents, code, previousExists, stderr, summary } = await runSonar(
+      { commit: SHA_B, deployed: SHA_A, presmokeBindCollisions: 5 },
+      undefined,
+    );
+
+    expect(code).toBe(1);
+    expect(stderr).toContain(
+      "pre-smoke failed: every available isolated smoke port was claimed during boot",
+    );
+    expect(appContents).toContain("old-sonar");
+    expect(previousExists).toBe(false);
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
+  }, 60_000);
+
+  test("a bind retry cannot soften the candidate's wrong baked commit", async () => {
+    const { appContents, code, stderr } = await runSonar(
+      { artifactCommit: SHA_A, commit: SHA_B, deployed: SHA_A, presmokeBindCollisions: 1 },
+      undefined,
+      ["--dry-run"],
+    );
+
+    expect(code, stderr).toBe(1);
+    expect(stderr).toContain("reports a different baked commit than sonar.commit");
+    expect(appContents).toContain("old-sonar");
   }, 60_000);
 
   test("post-smoke rolls back when the live listener reports a different commit", async () => {
