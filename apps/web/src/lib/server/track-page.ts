@@ -61,8 +61,9 @@ import { type ListenKind } from "../track-page";
 import { discogsReleaseUrl } from "./discogs";
 import { parseArtistsJson } from "./artists";
 import {
-  TRACK_PAGE_INDEXABLE_COUNT_INDEX,
+  TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX,
   trackPageIdentityWhere,
+  trackPageIndexableCountQueryWhere,
   trackPageIndexableWhere,
 } from "../../db/track-page-indexability";
 
@@ -686,9 +687,9 @@ export type TrackSitemapRow = { imageLoc: string | undefined; trackId: string };
 /**
  * How many `/track/<id>` pages are indexable — the tracks child's line in the sitemap index.
  *
- * This returns one row from the exact evidence-membership partial index. Its explicit index lock
- * is separately plan- and parity-contracted; the child keyset reader stays on its active-catalogue
- * index. The index document is edge-cached, so this is paid once per cache window, never per crawler.
+ * This returns one row from two disjoint, evidence-gated destination partitions. Both branches lock
+ * the covering count index; the child keyset stays on its established active-catalogue index. The
+ * index document is edge-cached, so this is paid once per cache window.
  */
 export async function countIndexableTrackPages(): Promise<number> {
   const db = await getDb();
@@ -698,14 +699,19 @@ export async function countIndexableTrackPages(): Promise<number> {
 }
 
 /**
- * The sitemap index's one-row archive-track count. The exact partial-index lock makes this count
- * path structural when the planner might otherwise choose a broader catalogue index.
+ * The sitemap index's one-row archive-track count. The branches partition Spotify-or-Apple
+ * membership but share one covering index; each still evaluates the whole evidence gate.
  */
 export function trackSitemapIndexCountStatement() {
   return {
     args: [],
-    sql: `select count(*) as total from tracks indexed by ${TRACK_PAGE_INDEXABLE_COUNT_INDEX}
-      where ${TRACK_PAGE_INDEXABLE_WHERE}`,
+    sql: `select coalesce(sum(total), 0) as total from (
+        select count(*) as total from tracks indexed by ${TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX}
+        where ${trackPageIndexableCountQueryWhere("spotify", "tracks")}
+        union all
+        select count(*) as total from tracks indexed by ${TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX}
+        where ${trackPageIndexableCountQueryWhere("appleOnly", "tracks")}
+      )`,
   };
 }
 

@@ -146,7 +146,7 @@ describe("database performance contracts", () => {
     }
   });
 
-  it("counts archive-track sitemap membership through the exact partial index", async () => {
+  it("counts archive-track sitemap membership through the covering catalogue index", async () => {
     const contract = selectPerformanceContracts(["sitemap.track-index-count"])[0];
     if (!contract?.plan || !contract.terminalProof) {
       throw new Error("track sitemap count contract is missing its plan or parity proof");
@@ -164,7 +164,7 @@ describe("database performance contracts", () => {
       const result = report.contracts[0];
 
       expect(TRACK_SITEMAP_INDEX_COUNT.sql).toContain(
-        "indexed by perf_tracks_sitemap_indexable_track_id_idx",
+        "indexed by perf_tracks_sitemap_indexable_cover_idx",
       );
       expect(result?.passed).toBe(true);
       expect(result?.resultRowCount.max).toBe(1);
@@ -172,7 +172,7 @@ describe("database performance contracts", () => {
       expect(result?.plan?.details).toEqual(
         expect.arrayContaining([
           expect.stringMatching(
-            /SCAN perf_tracks USING INDEX perf_tracks_sitemap_indexable_track_id_idx/i,
+            /(?:SCAN|SEARCH) perf_tracks USING (?:COVERING )?INDEX perf_tracks_sitemap_indexable_cover_idx/i,
           ),
         ]),
       );

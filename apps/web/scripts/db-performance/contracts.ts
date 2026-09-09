@@ -223,17 +223,14 @@ const productionTrackSitemapIndexCount = trackSitemapIndexCountStatement();
 export const TRACK_SITEMAP_INDEX_COUNT = {
   args: productionTrackSitemapIndexCount.args,
   sql: productionTrackSitemapIndexCount.sql
-    .replaceAll(
-      "tracks_sitemap_indexable_track_id_idx",
-      "perf_tracks_sitemap_indexable_track_id_idx",
-    )
+    .replaceAll("tracks_sitemap_indexable_cover_idx", "perf_tracks_sitemap_indexable_cover_idx")
     .replace(/\btracks\b/g, "perf_tracks"),
 } satisfies PerformanceStatement;
 
 const TRACK_SITEMAP_INDEX_COUNT_REFERENCE = {
   args: TRACK_SITEMAP_INDEX_COUNT.args,
-  sql: TRACK_SITEMAP_INDEX_COUNT.sql.replace(
-    " indexed by perf_tracks_sitemap_indexable_track_id_idx",
+  sql: TRACK_SITEMAP_INDEX_COUNT.sql.replaceAll(
+    " indexed by perf_tracks_sitemap_indexable_cover_idx",
     "",
   ),
 } satisfies PerformanceStatement;
@@ -242,7 +239,7 @@ performanceRegistry.register(
   comparisonContract({
     after: TRACK_SITEMAP_INDEX_COUNT,
     before: TRACK_SITEMAP_INDEX_COUNT_REFERENCE,
-    description: "The archive-track sitemap count uses its exact evidence-membership index",
+    description: "The archive-track sitemap count uses its covering catalogue index",
     id: "sitemap.track-index-count",
     iterations: 20,
     plan: {
@@ -251,7 +248,7 @@ performanceRegistry.register(
         forbidTempSort: true,
         growingTables: ["perf_tracks"],
         requiredDetails: [
-          /SCAN perf_tracks USING INDEX perf_tracks_sitemap_indexable_track_id_idx/i,
+          /(?:SCAN|SEARCH) perf_tracks USING (?:COVERING )?INDEX perf_tracks_sitemap_indexable_cover_idx/i,
         ],
       },
       statement: TRACK_SITEMAP_INDEX_COUNT,

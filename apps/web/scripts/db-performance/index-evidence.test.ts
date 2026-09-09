@@ -11,7 +11,7 @@ import {
   type IndexInventoryDocument,
 } from "./index-inventory";
 import { INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES, indexEvidenceContracts } from "./index-evidence";
-import { TRACK_PAGE_INDEXABLE_COUNT_INDEX } from "../../src/db/track-page-indexability";
+import { TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX } from "../../src/db/track-page-indexability";
 import { selectPerformanceContracts } from "./contracts";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
@@ -200,7 +200,7 @@ describe("final index plan evidence", () => {
       "index.production-lock.mixable-artists-reconciliation": 1,
       "index.production-lock.public-projection-audit-chunk": 1,
       "index.production-lock.rankable-artist-repair": 1,
-      "index.production-lock.sitemap-index-count": 1,
+      "index.production-lock.sitemap-index-count": 2,
     };
     const productionLockContracts = indexEvidenceContracts().filter(
       (contract) => contract.productionLockEvidence,
@@ -378,9 +378,9 @@ describe("final index plan evidence", () => {
         const literalCount =
           source.match(new RegExp(`\\bindexed\\s+by\\s+${index.name}\\b`, "gi"))?.length ?? 0;
         const constantCount =
-          index.name === TRACK_PAGE_INDEXABLE_COUNT_INDEX
-            ? (source.match(/\bindexed\s+by\s+\$\{TRACK_PAGE_INDEXABLE_COUNT_INDEX\}/g)?.length ??
-              0)
+          index.name === TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX
+            ? (source.match(/\bindexed\s+by\s+\$\{TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX\}/g)
+                ?.length ?? 0)
             : 0;
         const count = literalCount + constantCount;
         if (count > 0) {
