@@ -3708,6 +3708,17 @@ a.catalogue-letter:focus-visible {
   text-decoration-style: solid;
 }
 
+/* The ring is explicit, not a UA fallback — the house pattern for an inline link
+   (`.graph-link:focus-visible`, `.unlit-link:focus-visible`). A browser's `outline-style: auto`
+   ring ignores the author's outline colour, so without this the one gold thing on the page's
+   focus state would be whatever the platform draws. */
+.log-about-story a:focus-visible,
+.log-about-definition dd a:not(.identity-out):focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
 .log-privacy-intro {
   color: var(--stardust);
   font-size: 0.92rem;
@@ -3827,6 +3838,15 @@ a.catalogue-letter:focus-visible {
 .identity-relation a:hover {
   text-decoration-color: currentcolor;
   text-decoration-style: solid;
+}
+
+/* And the ring itself, drawn rather than left to the UA, for the reason above — this is the one
+   place the Unlit Rule lets gold in, so it has to actually be gold. */
+.identity-out:focus-visible,
+.identity-relation a:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
 }
 
 /* The state cell: the link (or the identifier itself) on its own line, the provenance under it. */
