@@ -41,7 +41,7 @@ bun run quality:preflight -- join
 
 ## CI topology and measurement
 
-Quality Checks has two parallel evidence jobs and one small aggregator. `core` owns static policy, migrations, affected TypeScript packages, scripts, skills, Go, Rust, and workflow topology. `e2e` either reports a cheap intentional skip or runs the complete isolated Turso-compatible public-flow contract. `Lint, Format, and Typecheck` always runs with `if: always()` and passes only when both owners succeeded, so branch protection keeps a stable context even for non-web changes.
+Quality Checks has two parallel evidence jobs and one small aggregator. `core` owns static policy, migrations, affected TypeScript packages, scripts, skills, Go, Rust, and workflow topology. `e2e` either reports a cheap intentional skip or runs the complete isolated Turso-compatible public-flow contract. Draft pull-request events skip every runner; readiness starts a fresh run. On ready pull requests and every non-pull-request event, `Lint, Format, and Typecheck` uses `always()` and passes only when both owners succeeded, so branch protection keeps a stable context even for non-web changes.
 
 Every selected lane writes its duration to a JSONL record and the Actions step summary through `measure.mjs` and `report-run.mjs`. The record includes the closure, first actionable failure, billed-minute projection, cache hit/bytes when available, and placeholders for confirmed real/flaky classification and full-backstop escapes. Post-deploy reporting separately records wait time and surface-sweep time. A future failure-triage automation may enrich the placeholders without changing lane authority.
 
