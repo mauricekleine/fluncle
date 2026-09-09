@@ -1,7 +1,7 @@
 import rawInventory from "./index-inventory.json";
 import {
-  TRACK_PAGE_INDEXABLE_COUNT_INDEX,
-  trackPageIndexableWhere,
+  TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX,
+  trackPageIndexableCoverIndexWhere,
 } from "../../src/db/track-page-indexability";
 import { type IndexConsumerCoordinate, type IndexInventoryDocument } from "./index-inventory";
 import { SCALE_PROFILES, type ScaleProfile } from "./manifest";
@@ -144,11 +144,11 @@ export const PRODUCTION_LOCK_INVENTORY: ProductionLockInventory = {
     },
     {
       consumer: [{ file: TRACK_PAGE_FILE, marker: "trackSitemapIndexCountStatement" }],
-      expectedLockCount: 1,
+      expectedLockCount: 2,
       id: PRODUCTION_LOCK_CONTRACT_IDS.sitemapIndexCount,
-      indexes: [TRACK_PAGE_INDEXABLE_COUNT_INDEX],
+      indexes: [TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX],
       query:
-        "trackSitemapIndexCountStatement counts exact archive-track sitemap membership through its evidence partial index; its unforced twin selects the broader active-catalogue index on the audited local profiles.",
+        "trackSitemapIndexCountStatement counts exact archive-track sitemap membership through disjoint Spotify and Apple-only branches over one covering catalogue partial index; its unforced twin selects the broader active-catalogue index on the audited local profiles.",
       requiredProfiles: [...PRODUCTION_LOCK_PROFILES],
     },
   ],
@@ -260,15 +260,30 @@ export const PRODUCTION_LOCK_INVENTORY: ProductionLockInventory = {
       table: "track_artists",
     },
     {
-      columns: ["track_id"],
+      columns: [
+        "duplicate_of_track_id",
+        "dismissed_at",
+        "spotify_url",
+        "apple_music_url",
+        "album_id",
+        "release_date",
+        "album_image_url",
+        "title",
+        "artists_json",
+      ],
       fixtureTable: "perf_tracks",
-      name: TRACK_PAGE_INDEXABLE_COUNT_INDEX,
-      partialPredicate: trackPageIndexableWhere(),
+      name: TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX,
+      partialPredicate: trackPageIndexableCoverIndexWhere(),
       sites: [
         {
           contractId: PRODUCTION_LOCK_CONTRACT_IDS.sitemapIndexCount,
           file: TRACK_PAGE_FILE,
-          marker: "from tracks indexed by ${TRACK_PAGE_INDEXABLE_COUNT_INDEX}",
+          marker: "from tracks indexed by ${TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX}",
+        },
+        {
+          contractId: PRODUCTION_LOCK_CONTRACT_IDS.sitemapIndexCount,
+          file: TRACK_PAGE_FILE,
+          marker: "from tracks indexed by ${TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX}",
         },
       ],
       table: "tracks",

@@ -218,7 +218,61 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
     const planDetails = plan.rows
       .map((row) => (typeof row.detail === "string" ? row.detail : ""))
       .join("\n");
-    expect(planDetails).toMatch(/SCAN tracks USING INDEX tracks_sitemap_indexable_track_id_idx/i);
+    expect(planDetails.match(/tracks_sitemap_indexable_cover_idx/gi)).toHaveLength(2);
+
+    const program = await db.execute({
+      args: [],
+      sql: `explain ${trackSitemapIndexCountStatement().sql}`,
+    });
+    const instructions = program.rows.map((row) => ({
+      opcode: typeof row.opcode === "string" ? row.opcode : "",
+      p1: typeof row.p1 === "number" ? row.p1 : -1,
+      p4: typeof row.p4 === "string" ? row.p4 : "",
+    }));
+    // A deferred seek is only a marker; a real table read would open the table cursor. Both
+    // branches are index-only when every evidence field is covered.
+    expect(
+      instructions.filter(({ opcode, p4 }) => opcode === "OpenRead" && !p4.startsWith("k(")),
+    ).toEqual([]);
+  });
+
+  it("counts each listening-destination shape once and excludes the source-less shape", async () => {
+    const spotifyOnly = "spotify-only-indexable";
+    const appleOnly = "apple-only-indexable";
+    const neither = "neither-indexable";
+    for (const trackId of [spotifyOnly, appleOnly, neither]) {
+      await seedCatalogueTrack(db, {
+        artists: ["Destination Matrix"],
+        title: trackId,
+        trackId,
+      });
+      await makeEvidenceRich(trackId);
+    }
+    await db.execute({
+      args: [appleOnly, neither],
+      sql: `update tracks
+               set spotify_url = null
+             where track_id in (?, ?)`,
+    });
+    await db.execute({
+      args: [spotifyOnly, neither],
+      sql: `update tracks
+               set apple_music_url = null
+             where track_id in (?, ?)`,
+    });
+
+    const [stats, bag] = await Promise.all([
+      collectSitemapIndexStats(),
+      collectSitemapBag("tracks"),
+    ]);
+    const expected = [RICH, spotifyOnly, appleOnly];
+    const ids = bag.tracks.map((entry) => entry.trackId);
+
+    expect(stats.tracks.count).toBe(ids.length);
+    for (const trackId of expected) {
+      expect(ids.filter((id) => id === trackId)).toHaveLength(1);
+    }
+    expect(ids).not.toContain(neither);
   });
 });
 

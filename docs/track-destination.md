@@ -52,7 +52,7 @@ The page's robots directive and the sitemap's membership **cannot drift**, becau
 
 ### Why it is a conjunction of simple terms
 
-It could have been a weighted score, and a score would have been prettier and unusable. This predicate runs over the whole `tracks` table for the sitemap — a table the crawler grows without bound — so it has to stay a shape the planner can drive off an index. The sitemap index's one-row count locks the exact evidence-membership partial `tracks_sitemap_indexable_track_id_idx`; the child keyset window remains on `tracks_catalogue_active_track_id_idx`. Every term is a plain null test or equality on a column.
+It could have been a weighted score, and a score would have been prettier and unusable. This predicate runs over the whole `tracks` table for the sitemap — a table the crawler grows without bound — so it has to stay a shape the planner can drive off an index. The sitemap index's one-row count locks a covering index behind the simple catalogue partial predicate; its two Spotify-or-Apple branches still evaluate this full evidence predicate, so their sum remains exact. The child keyset window remains on `tracks_catalogue_active_track_id_idx`. The shared predicate keeps identity and evidence terms in one source, while the count index stores the remaining evidence columns as keys rather than claiming that its partial predicate is the whole rule.
 
 `is_catalogue` stays what its column comment says it is: internal bookkeeping, used to **select** and never to **render**.
 

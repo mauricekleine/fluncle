@@ -1718,22 +1718,20 @@ function productionLockSpec(reference: ProductionLockContract): ProductionLockCo
     const production = trackSitemapIndexCountStatement();
     const locked = statement(
       production.sql
-        .replaceAll(
-          "tracks_sitemap_indexable_track_id_idx",
-          "perf_tracks_sitemap_indexable_track_id_idx",
-        )
+        .replaceAll("tracks_sitemap_indexable_cover_idx", "perf_tracks_sitemap_indexable_cover_idx")
         .replace(/\btracks\b/g, "perf_tracks"),
       production.args,
     );
     const unforced = statement(
-      locked.sql.replace(" indexed by perf_tracks_sitemap_indexable_track_id_idx", ""),
+      locked.sql.replaceAll(" indexed by perf_tracks_sitemap_indexable_cover_idx", ""),
       locked.args,
     );
     const expectedPlanUses = [
       {
-        count: 1,
-        index: "tracks_sitemap_indexable_track_id_idx",
-        pattern: /SCAN perf_tracks USING INDEX perf_tracks_sitemap_indexable_track_id_idx/i,
+        count: 2,
+        index: "tracks_sitemap_indexable_cover_idx",
+        pattern:
+          /(?:SCAN|SEARCH) perf_tracks USING (?:COVERING )?INDEX perf_tracks_sitemap_indexable_cover_idx/i,
       },
     ];
     const lockedPolicy = productionLockPolicy(expectedPlanUses, ["perf_tracks"], {

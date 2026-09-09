@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_sitemap_indexable_cover_idx` ON `tracks` (`duplicate_of_track_id`,`dismissed_at`,`spotify_url`,`apple_music_url`,`album_id`,`release_date`,`album_image_url`,`title`,`artists_json`) WHERE is_catalogue = 1;

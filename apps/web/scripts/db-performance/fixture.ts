@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { type Client, type ResultSet } from "@libsql/client";
 
 import {
-  TRACK_PAGE_INDEXABLE_COUNT_INDEX,
+  TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX,
+  TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX,
+  trackPageIndexableCoverIndexWhere,
   trackPageIndexableWhere,
 } from "../../src/db/track-page-indexability";
 import { getScaleManifest, type FixtureCounts, type ScaleProfile } from "./manifest";
@@ -467,8 +469,11 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create index if not exists perf_tracks_label_id_idx on perf_tracks(label_id)`,
   `create index if not exists perf_tracks_is_catalogue_idx
     on perf_tracks(is_catalogue) where is_catalogue = 1`,
-  `create index if not exists perf_${TRACK_PAGE_INDEXABLE_COUNT_INDEX}
+  `create index if not exists perf_${TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX}
     on perf_tracks(id) where ${trackPageIndexableWhere()}`,
+  `create index if not exists perf_${TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX}
+    on perf_tracks(duplicate_of_track_id, dismissed_at, spotify_url, apple_music_url, album_id, release_date, album_image_url, title, artists_json)
+    where ${trackPageIndexableCoverIndexWhere()}`,
   `create index if not exists perf_tracks_fresh_catalogue_idx
     on perf_tracks(is_catalogue, release_date, id)`,
   `create index if not exists perf_tracks_catalogue_active_track_id_idx
