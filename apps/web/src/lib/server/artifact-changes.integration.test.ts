@@ -1,5 +1,6 @@
 import { ARTIFACT_SUPPORTED_CONTRACTS } from "@fluncle/contracts/orpc";
 import { type Client, type InStatement } from "@libsql/client";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +33,28 @@ import {
   type ArtifactChangeInput,
   type ArtifactContract,
 } from "./artifact-changes";
-import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
+
+type CanonicalPayloadFixture = {
+  expectedDigest: string;
+  expectedPayloadJson: string;
+  inputBpm: string | null;
+  inputNearestFindingScore?: string;
+  name: string;
+  subjectId: string;
+};
+
+const CANONICAL_PAYLOAD_FIXTURES = JSON.parse(
+  readFileSync(
+    new URL("../../../../sonar/tests/fixtures/canonical-sonar-payloads.json", import.meta.url),
+    "utf8",
+  ),
+) as CanonicalPayloadFixture[];
 
 let db: Client;
 let fixtureDirectory: string | undefined;
@@ -640,6 +662,47 @@ describe("artifact producer registry and immutable sequence", () => {
 });
 
 describe("artifact source snapshots and rebuild lifecycle", () => {
+  it("matches the shared ECMAScript number and digest goldens", async () => {
+    for (const fixture of CANONICAL_PAYLOAD_FIXTURES) {
+      await seedCatalogueTrack(db, {
+        durationMs: 123,
+        trackId: fixture.subjectId,
+      });
+      await seedEmbedding(
+        db,
+        fixture.subjectId,
+        Array.from({ length: 1024 }, () => 0),
+      );
+      await db.execute({
+        args: [
+          fixture.inputBpm === null ? null : Number(fixture.inputBpm),
+          fixture.inputNearestFindingScore === undefined
+            ? null
+            : Number(fixture.inputNearestFindingScore),
+          fixture.subjectId,
+        ],
+        sql: "update tracks set bpm = ?, nearest_finding_score = ? where track_id = ?",
+      });
+    }
+    await registerArtifactConsumer(db, {
+      consumerId: "canonical-number-reader",
+      contracts: [artifactContract("sonar.track")],
+    });
+
+    const page = await listArtifactSnapshot(db, {
+      consumerId: "canonical-number-reader",
+      stream: "sonar.track",
+      streamVersion: 1,
+    });
+
+    expect(page.items).toHaveLength(CANONICAL_PAYLOAD_FIXTURES.length);
+    for (const fixture of CANONICAL_PAYLOAD_FIXTURES) {
+      const item = page.items.find(({ subjectId }) => subjectId === fixture.subjectId);
+      expect(item?.payloadJson, fixture.name).toBe(fixture.expectedPayloadJson);
+      expect(item?.payloadDigest, fixture.name).toBe(fixture.expectedDigest);
+    }
+  });
+
   it("keeps snapshot wire assembly out of the rebuild-checkpoint transaction", async () => {
     await seedTrack(db, { logId: "001.A.AA", trackId: "track:checkpoint-work" });
     await seedEmbedding(
