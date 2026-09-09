@@ -15,6 +15,7 @@ import {
   listSonicNeighbours as listSonicNeighboursLive,
   readTrackDestination,
   sonicNeighbourScanStatement,
+  trackSitemapIndexCountStatement,
 } from "./track-page";
 import { sameAsUrls } from "../track-page";
 import { optionalSonicNeighbours, resolveTrackPageData } from "../../routes/-track-page-data";
@@ -209,6 +210,15 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
     // Honestly undated: `tracks` carries no content-change timestamp, so a track entry omits
     // `<lastmod>` rather than inventing one from a release date.
     expect(stats.tracks.lastmod).toBeUndefined();
+
+    const plan = await db.execute({
+      args: [],
+      sql: `explain query plan ${trackSitemapIndexCountStatement().sql}`,
+    });
+    const planDetails = plan.rows
+      .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+      .join("\n");
+    expect(planDetails).toMatch(/SCAN tracks USING INDEX tracks_sitemap_indexable_track_id_idx/i);
   });
 });
 

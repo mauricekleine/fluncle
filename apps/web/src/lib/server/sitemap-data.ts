@@ -519,9 +519,9 @@ async function readSitemapAggregates(): Promise<SitemapAggregates> {
     countIndexableArtists(),
     countIndexableLabels(),
     countIndexableAlbums(),
-    // The archive-track destinations past the EVIDENCE gate. A `count(*)` whose predicate leads
-    // with `is_catalogue = 1`, so it rides the partial catalogue index rather than walking the
-    // whole growing table (lib/server/track-page.ts).
+    // The archive-track destinations past the EVIDENCE gate. The one-row count locks the exact
+    // evidence-membership partial index; the child keyset remains on its active-catalogue index
+    // (lib/server/track-page.ts).
     countIndexableTrackPages(),
   ]);
 

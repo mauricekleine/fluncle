@@ -11,6 +11,7 @@ import {
   type IndexInventoryDocument,
 } from "./index-inventory";
 import { INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES, indexEvidenceContracts } from "./index-evidence";
+import { TRACK_PAGE_INDEXABLE_COUNT_INDEX } from "../../src/db/track-page-indexability";
 import { selectPerformanceContracts } from "./contracts";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
@@ -199,6 +200,7 @@ describe("final index plan evidence", () => {
       "index.production-lock.mixable-artists-reconciliation": 1,
       "index.production-lock.public-projection-audit-chunk": 1,
       "index.production-lock.rankable-artist-repair": 1,
+      "index.production-lock.sitemap-index-count": 1,
     };
     const productionLockContracts = indexEvidenceContracts().filter(
       (contract) => contract.productionLockEvidence,
@@ -235,14 +237,14 @@ describe("final index plan evidence", () => {
     ) as ProductionLockInventory;
     missingIndex.indexes.pop();
     expect(validateProductionLockInventory(missingIndex)).toContain(
-      "expected 5 production-lock indexes, found 4",
+      "expected 6 production-lock indexes, found 5",
     );
     const missingContract = JSON.parse(
       JSON.stringify(PRODUCTION_LOCK_INVENTORY),
     ) as ProductionLockInventory;
     missingContract.contracts.pop();
     expect(validateProductionLockInventory(missingContract)).toContain(
-      "expected 6 production-lock contracts, found 5",
+      "expected 7 production-lock contracts, found 6",
     );
   });
 
@@ -373,8 +375,14 @@ describe("final index plan evidence", () => {
       const observedByFile = new Map<string, number>();
       for (const absoluteFile of sourceFiles) {
         const source = await readFile(absoluteFile, "utf8");
-        const count =
+        const literalCount =
           source.match(new RegExp(`\\bindexed\\s+by\\s+${index.name}\\b`, "gi"))?.length ?? 0;
+        const constantCount =
+          index.name === TRACK_PAGE_INDEXABLE_COUNT_INDEX
+            ? (source.match(/\bindexed\s+by\s+\$\{TRACK_PAGE_INDEXABLE_COUNT_INDEX\}/g)?.length ??
+              0)
+            : 0;
+        const count = literalCount + constantCount;
         if (count > 0) {
           observedByFile.set(absoluteFile.slice(REPOSITORY_ROOT.length + 1), count);
         }
@@ -916,22 +924,31 @@ describe("final index plan evidence", () => {
           finalSchemaAfterContraction: { indexes: 174, tracksIndexes: 30 },
         });
         expect(audit.productionLocks.passed).toBe(true);
-        expect(audit.productionLocks.totals).toEqual({ contracts: 6, indexes: 5 });
+        expect(audit.productionLocks.totals).toEqual({ contracts: 7, indexes: 6 });
         expect(audit.productionLocks.missingConsumers).toEqual([]);
         expect(audit.productionLocks.missingPlanEvidence).toEqual([]);
         expect(audit.productionLocks.missingProfileEvidence).toEqual([]);
         expect(audit.productionLocks.profileEvidence[profile]).toEqual({
-          declaredContracts: 6,
-          observedContracts: 6,
+          declaredContracts: 7,
+          observedContracts: 7,
         });
         expect(
-          audit.productionLocks.contracts.every(
-            (contract) =>
-              contract.metadata?.lockClassification === "redundant" &&
-              contract.metadata.lockedPlanViolations === 0 &&
-              contract.metadata.unforcedPlanViolations === 0,
-          ),
+          audit.productionLocks.contracts
+            .filter(
+              (contract) => contract.contractId !== "index.production-lock.sitemap-index-count",
+            )
+            .every(
+              (contract) =>
+                contract.metadata?.lockClassification === "redundant" &&
+                contract.metadata.lockedPlanViolations === 0 &&
+                contract.metadata.unforcedPlanViolations === 0,
+            ),
         ).toBe(true);
+        expect(
+          audit.productionLocks.contracts.find(
+            (contract) => contract.contractId === "index.production-lock.sitemap-index-count",
+          )?.metadata?.lockClassification,
+        ).toBe("necessary");
         expect(audit.missingConsumers).toEqual([]);
         expect(audit.missingPlanEvidence).toEqual([]);
         expect(audit.missingProfileEvidence).toEqual([]);

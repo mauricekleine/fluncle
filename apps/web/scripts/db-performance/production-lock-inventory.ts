@@ -1,4 +1,8 @@
 import rawInventory from "./index-inventory.json";
+import {
+  TRACK_PAGE_INDEXABLE_COUNT_INDEX,
+  trackPageIndexableWhere,
+} from "../../src/db/track-page-indexability";
 import { type IndexConsumerCoordinate, type IndexInventoryDocument } from "./index-inventory";
 import { SCALE_PROFILES, type ScaleProfile } from "./manifest";
 
@@ -61,8 +65,8 @@ export type ProductionLockInventory = {
   inventoryKind: string;
 };
 
-export const PRODUCTION_LOCK_INDEX_COUNT = 5;
-export const PRODUCTION_LOCK_CONTRACT_COUNT = 6;
+export const PRODUCTION_LOCK_INDEX_COUNT = 6;
+export const PRODUCTION_LOCK_CONTRACT_COUNT = 7;
 
 const ARTISTS_FILE = "apps/web/src/lib/server/artists.ts";
 const DUE_WORK_FILE = "apps/web/src/lib/server/due-work.ts";
@@ -70,6 +74,7 @@ const HUB_COUNTS_FILE = "apps/web/src/lib/server/hub-counts.ts";
 const MIXABLE_FILE = "apps/web/src/lib/server/mixable-artists-projection.ts";
 const MIXABLE_BACKFILL_FILE = "apps/web/scripts/backfill-mixable-artists-projection.ts";
 const PUBLIC_PROJECTIONS_FILE = "apps/web/src/lib/server/public-projections.ts";
+const TRACK_PAGE_FILE = "apps/web/src/lib/server/track-page.ts";
 
 export const PRODUCTION_LOCK_CONTRACT_IDS = {
   artistLink: "index.production-lock.artist-link",
@@ -78,6 +83,7 @@ export const PRODUCTION_LOCK_CONTRACT_IDS = {
   mixableArtistsReconciliation: "index.production-lock.mixable-artists-reconciliation",
   publicProjectionAuditChunk: "index.production-lock.public-projection-audit-chunk",
   rankableArtistRepair: "index.production-lock.rankable-artist-repair",
+  sitemapIndexCount: "index.production-lock.sitemap-index-count",
 } as const;
 
 export const PRODUCTION_LOCK_INVENTORY: ProductionLockInventory = {
@@ -134,6 +140,15 @@ export const PRODUCTION_LOCK_INVENTORY: ProductionLockInventory = {
       indexes: ["track_artists_artist_id_idx"],
       query:
         "The mixable-artist projection reconciliation recounts one keyset page of artist ids through the artist-id edge index and updates only the artists whose stored rankable_track_count differs; deploy:cf runs it with --activate.",
+      requiredProfiles: [...PRODUCTION_LOCK_PROFILES],
+    },
+    {
+      consumer: [{ file: TRACK_PAGE_FILE, marker: "trackSitemapIndexCountStatement" }],
+      expectedLockCount: 1,
+      id: PRODUCTION_LOCK_CONTRACT_IDS.sitemapIndexCount,
+      indexes: [TRACK_PAGE_INDEXABLE_COUNT_INDEX],
+      query:
+        "trackSitemapIndexCountStatement counts exact archive-track sitemap membership through its evidence partial index; its unforced twin selects the broader active-catalogue index on the audited local profiles.",
       requiredProfiles: [...PRODUCTION_LOCK_PROFILES],
     },
   ],
@@ -243,6 +258,20 @@ export const PRODUCTION_LOCK_INVENTORY: ProductionLockInventory = {
         },
       ],
       table: "track_artists",
+    },
+    {
+      columns: ["track_id"],
+      fixtureTable: "perf_tracks",
+      name: TRACK_PAGE_INDEXABLE_COUNT_INDEX,
+      partialPredicate: trackPageIndexableWhere(),
+      sites: [
+        {
+          contractId: PRODUCTION_LOCK_CONTRACT_IDS.sitemapIndexCount,
+          file: TRACK_PAGE_FILE,
+          marker: "from tracks indexed by ${TRACK_PAGE_INDEXABLE_COUNT_INDEX}",
+        },
+      ],
+      table: "tracks",
     },
   ],
   inventoryKind: "production-lock-inventory",
