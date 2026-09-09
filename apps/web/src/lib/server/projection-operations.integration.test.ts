@@ -866,7 +866,7 @@ describe("projection production operations", () => {
       limit: 10,
       target: "artist_qualification",
     });
-    expect(drained).toMatchObject({ complete: true, processed: 0, scheduled: 0 });
+    expect(drained).toMatchObject({ complete: true, processed: 1, scheduled: 0 });
     expect(
       (
         await db.execute(`select 1 from projection_repairs
@@ -910,6 +910,229 @@ describe("projection production operations", () => {
             and subject_id = 'refreshed-label'`)
       ).rows[0],
     ).toMatchObject({ source_epoch: 2, source_version: "refreshed" });
+  });
+
+  it("drains a zero-expansion label prefix before the bounded repair budget starves older artist debt", async () => {
+    await db.execute(`insert into artists (id) values ('aged-artist')`);
+    await db.execute(`update artist_qualification_state
+      set source_epoch = 2, projection_epoch = 0 where scope = 'artists'`);
+    await db.batch([
+      ...Array.from({ length: 6 }, (_, index) => ({
+        args: [`empty-label-${index}`, `label-${index}`],
+        sql: `insert into projection_repairs
+          (projection, subject_type, subject_id, source_epoch, source_version, created_at)
+          values ('artist_qualification', 'label', ?, 2, ?, '2026-01-02T00:00:00.000Z')`,
+      })),
+      {
+        args: [],
+        sql: `insert into projection_repairs
+          (projection, subject_type, subject_id, source_epoch, source_version, created_at)
+          values ('artist_qualification', 'artist', 'aged-artist', 1, 'artist-1',
+            '2026-01-01T00:00:00.000Z')`,
+      },
+    ]);
+
+    let labelPrefixStatement: InStatement | string | undefined;
+    const traced = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("order by projection, subject_type, subject_id limit ?")) {
+          labelPrefixStatement = statement;
+        }
+        return db.execute(statement);
+      },
+    };
+
+    let complete = false;
+    let processed = 0;
+    let steps = 0;
+    while (!complete && steps < 4) {
+      const result = await advanceProjectionFor(traced, {
+        action: "repair",
+        includeStatus: false,
+        limit: 10,
+        target: "artist_qualification",
+      });
+      complete = result.complete;
+      processed += result.processed;
+      steps += 1;
+    }
+
+    expect({ complete, processed, steps }).toEqual({ complete: true, processed: 7, steps: 1 });
+    expect(
+      (
+        await db.execute(`select subject_type, subject_id from projection_repairs
+          where projection = 'artist_qualification'`)
+      ).rows,
+    ).toEqual([]);
+    expect(
+      (
+        await db.execute(`select projection_epoch, source_epoch from artist_qualification_state
+          where scope = 'artists'`)
+      ).rows[0],
+    ).toMatchObject({ projection_epoch: 2, source_epoch: 2 });
+    if (labelPrefixStatement === undefined) {
+      throw new Error("artist label-prefix query was not captured");
+    }
+    const prefixSql =
+      typeof labelPrefixStatement === "string" ? labelPrefixStatement : labelPrefixStatement.sql;
+    const prefixArgs =
+      typeof labelPrefixStatement === "string" ? [] : (labelPrefixStatement.args ?? []);
+    const prefixPlan = await db.execute({
+      args: prefixArgs,
+      sql: `explain query plan ${prefixSql}`,
+    });
+    const prefixPlanDetail = prefixPlan.rows
+      .flatMap((row) => (typeof row.detail === "string" ? [row.detail] : []))
+      .join("\n");
+    expect(prefixPlanDetail).toContain("sqlite_autoindex_projection_repairs_1");
+    expect(prefixPlanDetail).not.toContain("projection_repairs_order_idx");
+    expect(prefixPlanDetail).not.toContain("USE TEMP B-TREE");
+  });
+
+  it("caps one empty-label prefix drain at the existing 50-marker write subpage", async () => {
+    await db.batch(
+      Array.from({ length: 51 }, (_, index) => ({
+        args: [`empty-label-${String(index).padStart(2, "0")}`, `label-${index}`],
+        sql: `insert into projection_repairs
+          (projection, subject_type, subject_id, source_epoch, source_version)
+          values ('artist_qualification', 'label', ?, 1, ?)`,
+      })),
+    );
+
+    const result = await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 500,
+      target: "artist_qualification",
+    });
+    expect(result).toMatchObject({ complete: false, processed: 50, scheduled: 0 });
+    expect(
+      (
+        await db.execute(`select subject_id from projection_repairs
+          where projection = 'artist_qualification' and subject_type = 'label'`)
+      ).rows,
+    ).toEqual([{ subject_id: "empty-label-50" }]);
+  });
+
+  it("retains an empty label marker when a newly eligible track races its guarded delete", async () => {
+    await db.execute(`insert into projection_repairs
+      (projection, subject_type, subject_id, source_epoch, source_version)
+      values ('artist_qualification', 'label', 'raced-label', 1, 'label-1')`);
+    let raced = false;
+    const racingClient = {
+      batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+        const deletesEmptyLabel = statements.some((statement) => {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          return (
+            sql.includes("delete from projection_repairs") && sql.includes("tracks_label_id_idx")
+          );
+        });
+        if (!raced && deletesEmptyLabel) {
+          raced = true;
+          await db.batch([
+            {
+              args: [],
+              sql: `insert into tracks (track_id, label_id) values ('raced-track', 'raced-label')`,
+            },
+            {
+              args: [],
+              sql: `insert into track_artists (track_id, artist_id)
+                values ('raced-track', 'raced-artist')`,
+            },
+          ]);
+        }
+        return db.batch(statements, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+
+    const retained = await advanceProjectionFor(racingClient, {
+      action: "repair",
+      includeStatus: false,
+      limit: 10,
+      target: "artist_qualification",
+    });
+    expect(raced).toBe(true);
+    expect(retained).toMatchObject({ complete: false, processed: 0, scheduled: 0 });
+    expect(
+      (
+        await db.execute(`select subject_id from projection_repairs
+          where projection = 'artist_qualification' and subject_type = 'label'`)
+      ).rows,
+    ).toEqual([{ subject_id: "raced-label" }]);
+    expect(
+      (
+        await db.execute(`select subject_id from projection_repairs
+          where projection = 'artist_qualification' and subject_type = 'track'`)
+      ).rows,
+    ).toEqual([]);
+
+    const resumed = await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 10,
+      target: "artist_qualification",
+    });
+    expect(resumed).toMatchObject({ complete: false, processed: 1, scheduled: 1 });
+    expect(
+      (
+        await db.execute(`select subject_type, subject_id from projection_repairs
+          where projection = 'artist_qualification' order by subject_type, subject_id`)
+      ).rows,
+    ).toEqual([{ subject_id: "raced-track", subject_type: "track" }]);
+  });
+
+  it("finishes a nonempty label fanout before consuming its implicit visited track markers", async () => {
+    await db.execute(`insert into projection_repairs
+      (projection, subject_type, subject_id, source_epoch, source_version)
+      values ('artist_qualification', 'label', 'wide-label', 1, 'label-1')`);
+    for (let index = 0; index < 3; index += 1) {
+      await db.execute({
+        args: [`wide-track-${index}`, "wide-label"],
+        sql: `insert into tracks (track_id, label_id) values (?, ?)`,
+      });
+      await db.execute({
+        args: [`wide-track-${index}`, `wide-artist-${index}`],
+        sql: `insert into track_artists (track_id, artist_id) values (?, ?)`,
+      });
+    }
+
+    const first = await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 2,
+      target: "artist_qualification",
+    });
+    expect(first).toMatchObject({ complete: false, processed: 2, scheduled: 2 });
+    expect(
+      (
+        await db.execute(`select subject_type, count(*) as count from projection_repairs
+          where projection = 'artist_qualification' group by subject_type order by subject_type`)
+      ).rows,
+    ).toEqual([
+      { count: 1, subject_type: "label" },
+      { count: 2, subject_type: "track" },
+    ]);
+
+    const second = await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 2,
+      target: "artist_qualification",
+    });
+    expect(second).toMatchObject({ complete: false, processed: 1, scheduled: 1 });
+    expect(
+      (
+        await db.execute(`select subject_type, subject_id from projection_repairs
+          where projection = 'artist_qualification' order by subject_type, subject_id`)
+      ).rows,
+    ).toEqual([
+      { subject_id: "wide-track-0", subject_type: "track" },
+      { subject_id: "wide-track-1", subject_type: "track" },
+      { subject_id: "wide-track-2", subject_type: "track" },
+    ]);
   });
 
   it("atomically rejects an open when readiness changes before the conditional write", async () => {

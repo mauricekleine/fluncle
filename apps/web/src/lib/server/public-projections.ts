@@ -1354,16 +1354,45 @@ export function artistQualificationLabelFanoutQuery(
   };
 }
 
+function deleteEmptyArtistQualificationLabelRepairStatement(
+  marker: ProjectionRepairMarker,
+): PublicProjectionStatement {
+  return {
+    args: [
+      marker.projection,
+      marker.subjectType,
+      marker.subjectId,
+      marker.sourceEpoch,
+      marker.sourceVersion,
+      marker.subjectId,
+      marker.sourceEpoch,
+    ],
+    sql: `delete from projection_repairs
+      where projection = ? and subject_type = ? and subject_id = ?
+        and source_epoch = ? and source_version = ?
+        and not exists (
+          select 1 from tracks t indexed by tracks_label_id_idx
+          where t.label_id = ?
+            and exists (select 1 from track_artists ta where ta.track_id = t.track_id)
+            and not exists (
+              select 1 from projection_repairs pr
+              where pr.projection = 'artist_qualification' and pr.subject_type = 'track'
+                and pr.subject_id = t.track_id and pr.source_epoch >= ?
+            )
+        )`,
+  };
+}
+
 export async function fanOutArtistQualificationLabelRepair(
   client: PublicProjectionClient,
   labelId: string,
   options: { limit?: number; now?: () => Date } = {},
-): Promise<{ complete: boolean; expanded: number }> {
+): Promise<{ complete: boolean; expanded: number; markerDeleted: boolean }> {
   const limit = options.limit ?? 100;
   assertLimit(limit);
   const marker = await readRepairMarker(client, "artist_qualification", "label", labelId);
   if (marker === undefined) {
-    return { complete: true, expanded: 0 };
+    return { complete: true, expanded: 0, markerDeleted: false };
   }
   const selected = await client.execute(
     artistQualificationLabelFanoutQuery(labelId, marker.sourceEpoch, limit),
@@ -1385,32 +1414,10 @@ export async function fanOutArtistQualificationLabelRepair(
           when excluded.source_epoch >= projection_repairs.source_epoch
             then excluded.updated_at else projection_repairs.updated_at end`,
   }));
-  writes.push({
-    args: [
-      marker.projection,
-      marker.subjectType,
-      marker.subjectId,
-      marker.sourceEpoch,
-      marker.sourceVersion,
-      labelId,
-      marker.sourceEpoch,
-    ],
-    sql: `delete from projection_repairs
-      where projection = ? and subject_type = ? and subject_id = ?
-        and source_epoch = ? and source_version = ?
-        and not exists (
-          select 1 from tracks t indexed by tracks_label_id_idx
-          where t.label_id = ?
-            and exists (select 1 from track_artists ta where ta.track_id = t.track_id)
-            and not exists (
-              select 1 from projection_repairs pr
-              where pr.projection = 'artist_qualification' and pr.subject_type = 'track'
-                and pr.subject_id = t.track_id and pr.source_epoch >= ?
-            )
-        )`,
-  });
+  writes.push(deleteEmptyArtistQualificationLabelRepairStatement(marker));
   const results = await client.batch(writes, "write");
-  return { complete: (results.at(-1)?.rowsAffected ?? 0) > 0, expanded: trackIds.length };
+  const markerDeleted = (results.at(-1)?.rowsAffected ?? 0) > 0;
+  return { complete: markerDeleted, expanded: trackIds.length, markerDeleted };
 }
 
 async function firstRepairOfType(
@@ -1443,6 +1450,87 @@ async function firstRepairOfType(
         subjectId: row.subject_id,
         subjectType: row.subject_type,
       };
+}
+
+type EmptyArtistLabelPrefixDrain = {
+  blocked: boolean;
+  drained: number;
+  limitReached: boolean;
+  nextLabel: ProjectionRepairMarker | undefined;
+};
+
+async function readArtistQualificationLabelRepairPrefix(
+  client: PublicProjectionClient,
+  limit: number,
+): Promise<ProjectionRepairMarker[]> {
+  const result = await client.execute({
+    args: [limit],
+    sql: `select projection, subject_type, subject_id, source_epoch, source_version
+      from projection_repairs
+      where projection = 'artist_qualification' and subject_type = 'label'
+      order by projection, subject_type, subject_id limit ?`,
+  });
+  return (
+    result.rows as unknown as {
+      projection: PublicProjectionName;
+      source_epoch: number;
+      source_version: string;
+      subject_id: string;
+      subject_type: "label";
+    }[]
+  ).map(
+    (row): ProjectionRepairMarker => ({
+      projection: row.projection,
+      sourceEpoch: Number(row.source_epoch),
+      sourceVersion: row.source_version,
+      subjectId: row.subject_id,
+      subjectType: row.subject_type,
+    }),
+  );
+}
+
+/**
+ * Drain one bounded prefix of label markers that have no unvisited tracks. The primary key starts
+ * with projection + subject type, so this read never walks unrelated track/artist repair debt.
+ * Every delete repeats both the exact marker guard and the eligibility absence check because the
+ * classification read can race a refreshed marker, a new track, or a new credit.
+ */
+async function drainEmptyArtistQualificationLabelPrefix(
+  client: PublicProjectionClient,
+  limit: number,
+  now: string,
+): Promise<EmptyArtistLabelPrefixDrain> {
+  const prefixLimit = Math.min(limit, PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE);
+  const markers = await readArtistQualificationLabelRepairPrefix(client, prefixLimit);
+  if (markers.length === 0) {
+    return { blocked: false, drained: 0, limitReached: false, nextLabel: undefined };
+  }
+
+  const classifications = await client.batch(
+    markers.map((marker) =>
+      artistQualificationLabelFanoutQuery(marker.subjectId, marker.sourceEpoch, 1),
+    ),
+  );
+  const firstNonempty = classifications.findIndex(
+    (classification) => classification.rows.length > 0,
+  );
+  const emptyMarkers = firstNonempty < 0 ? markers : markers.slice(0, firstNonempty);
+  const nextLabel = firstNonempty < 0 ? undefined : markers[firstNonempty];
+  if (emptyMarkers.length === 0) {
+    return { blocked: false, drained: 0, limitReached: false, nextLabel };
+  }
+
+  const deletes = emptyMarkers.map(deleteEmptyArtistQualificationLabelRepairStatement);
+  const deleted = await client.batch([...deletes, cleanArtistEpochStatement(now)], "write");
+  const drained = deleted
+    .slice(0, deletes.length)
+    .filter((deletion) => (deletion.rowsAffected ?? 0) > 0).length;
+  return {
+    blocked: drained !== emptyMarkers.length,
+    drained,
+    limitReached: firstNonempty < 0 && markers.length === prefixLimit,
+    nextLabel,
+  };
 }
 
 async function repairPublicAggregateMarkerPage(
@@ -1536,17 +1624,33 @@ export async function repairPublicProjectionChunk(
 ): Promise<{ fanout: number; repaired: number }> {
   const limit = options.limit ?? 100;
   assertLimit(limit);
-  const label =
-    options.projection === "public_aggregates"
-      ? undefined
-      : await firstRepairOfType(client, "artist_qualification", "label");
-  if (label !== undefined) {
-    const result = await fanOutArtistQualificationLabelRepair(client, label.subjectId, options);
-    return { fanout: result.expanded, repaired: 0 };
-  }
-
   let attempted = 0;
   let repaired = 0;
+  if (options.projection !== "public_aggregates") {
+    const prefix = await drainEmptyArtistQualificationLabelPrefix(
+      client,
+      limit,
+      nowIso(options.now),
+    );
+    attempted += prefix.drained;
+    repaired += prefix.drained;
+    if (prefix.blocked || prefix.limitReached || attempted >= limit) {
+      return { fanout: 0, repaired };
+    }
+    const nextLabel =
+      prefix.nextLabel ?? (await readArtistQualificationLabelRepairPrefix(client, 1))[0];
+    if (nextLabel !== undefined) {
+      const result = await fanOutArtistQualificationLabelRepair(client, nextLabel.subjectId, {
+        ...options,
+        limit: limit - attempted,
+      });
+      return {
+        fanout: result.expanded,
+        repaired: repaired + Number(result.expanded === 0 && result.markerDeleted),
+      };
+    }
+  }
+
   const projections = options.projection
     ? ([options.projection] as const)
     : (["public_aggregates", "artist_qualification"] as const);
