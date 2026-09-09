@@ -29,12 +29,11 @@
 // ── WHY THE EVIDENCE RULE IS A CONJUNCTION OF SIMPLE TERMS ────────────────────────────────────
 // It could have been a weighted score, and a score would have been prettier and unusable. This
 // predicate runs over the whole `tracks` table for the sitemap — a table the crawler grows without
-// bound — so it has to stay a shape the planner can drive off an index. Leading it with
-// `is_catalogue = 1` puts the read on `tracks_is_catalogue_idx` (the maintained mirror of the
-// tracks/findings split, INTERNAL bookkeeping that may be selected on and never rendered) and
-// bounds the scan to the catalogue slice, and every remaining term is a plain null test on a
-// column. AGENTS.md's database rules are not advice here: this is the one query in the unit that
-// touches every row.
+// bound — so it has to stay a shape the planner can drive off an index. The sitemap index's one-row
+// count locks the exact evidence-membership partial index; the child keyset keeps its established
+// active-catalogue index. Every remaining term is a plain null test or equality on a column.
+// AGENTS.md's database rules are not advice here: this is the one query in the unit that touches
+// every row.
 //
 // The four terms are what a reader needs for the page to be worth landing on:
 //   - it belongs to a RECORD (`album_id`), so the page sits in the graph rather than dangling;
@@ -61,6 +60,11 @@ import { bestAlbumCoverUrl } from "../media";
 import { type ListenKind } from "../track-page";
 import { discogsReleaseUrl } from "./discogs";
 import { parseArtistsJson } from "./artists";
+import {
+  TRACK_PAGE_INDEXABLE_COUNT_INDEX,
+  trackPageIdentityWhere,
+  trackPageIndexableWhere,
+} from "../../db/track-page-indexability";
 
 /**
  * SUFFICIENT IDENTITY, in SQL. The client-side twin is `hasTrackPageIdentity` — the same two name
@@ -71,21 +75,13 @@ import { parseArtistsJson } from "./artists";
  * The alias is fixed at `tracks`, the `REC_ELIGIBLE_WHERE` precedent: a consumer joins under that
  * name or does not use this fragment.
  */
-export const TRACK_PAGE_IDENTITY_WHERE = `trim(tracks.title) <> ''
-      and tracks.artists_json is not null and trim(tracks.artists_json) not in ('', '[]')
-      and tracks.dismissed_at is null`;
+export const TRACK_PAGE_IDENTITY_WHERE = trackPageIdentityWhere("tracks");
 
 /**
  * EVIDENCE, in SQL — the single definition the page's `robots` directive and the sitemap's
  * membership both read. See the header for why each term is here and why it is a conjunction.
  */
-export const TRACK_PAGE_INDEXABLE_WHERE = `tracks.is_catalogue = 1
-      and tracks.duplicate_of_track_id is null
-      and ${TRACK_PAGE_IDENTITY_WHERE}
-      and tracks.album_id is not null
-      and tracks.release_date is not null
-      and tracks.album_image_url is not null
-      and (tracks.spotify_url is not null or tracks.apple_music_url is not null)`;
+export const TRACK_PAGE_INDEXABLE_WHERE = trackPageIndexableWhere("tracks");
 
 /** One outbound listening destination the archive actually holds for a recording. */
 export type ListenDestination = {
@@ -690,17 +686,27 @@ export type TrackSitemapRow = { imageLoc: string | undefined; trackId: string };
 /**
  * How many `/track/<id>` pages are indexable — the tracks child's line in the sitemap index.
  *
- * It is a `count(*)` over {@link TRACK_PAGE_INDEXABLE_WHERE}, whose leading `is_catalogue = 1`
- * puts it on the partial catalogue index rather than a full table walk, and it returns ONE ROW.
- * The index document is edge-cached, so this is paid once per cache window, never per crawler.
+ * This returns one row from the exact evidence-membership partial index. Its explicit index lock
+ * is separately plan- and parity-contracted; the child keyset reader stays on its active-catalogue
+ * index. The index document is edge-cached, so this is paid once per cache window, never per crawler.
  */
 export async function countIndexableTrackPages(): Promise<number> {
   const db = await getDb();
-  const result = await db.execute(
-    `select count(*) as total from tracks where ${TRACK_PAGE_INDEXABLE_WHERE}`,
-  );
+  const result = await db.execute(trackSitemapIndexCountStatement());
 
   return Number(typedRow<{ total: number }>(result.rows)?.total ?? 0);
+}
+
+/**
+ * The sitemap index's one-row archive-track count. The exact partial-index lock makes this count
+ * path structural when the planner might otherwise choose a broader catalogue index.
+ */
+export function trackSitemapIndexCountStatement() {
+  return {
+    args: [],
+    sql: `select count(*) as total from tracks indexed by ${TRACK_PAGE_INDEXABLE_COUNT_INDEX}
+      where ${TRACK_PAGE_INDEXABLE_WHERE}`,
+  };
 }
 
 /**

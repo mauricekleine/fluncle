@@ -6,6 +6,7 @@ import { trackSitemapWindowStatement } from "../../src/lib/server/track-page";
 
 import {
   DUE_WORK_PERFORMANCE_CLAIM_RESULT,
+  TRACK_SITEMAP_INDEX_COUNT,
   TRACK_SITEMAP_PERFORMANCE_WINDOW,
   selectPerformanceContracts,
 } from "./contracts";
@@ -45,7 +46,7 @@ describe("database performance contracts", () => {
         contract.productionLockEvidence === undefined,
     );
 
-    expect(comparisons).toHaveLength(11);
+    expect(comparisons).toHaveLength(12);
     for (const contract of comparisons) {
       let elapsedMs = 0;
       const executedSql: string[] = [];
@@ -140,6 +141,41 @@ describe("database performance contracts", () => {
 
       expect(offsetStatement.sql).toMatch(/\boffset\b/i);
       expect(offsetAnalysis.violations).not.toEqual([]);
+    } finally {
+      client.close();
+    }
+  });
+
+  it("counts archive-track sitemap membership through the exact partial index", async () => {
+    const contract = selectPerformanceContracts(["sitemap.track-index-count"])[0];
+    if (!contract?.plan || !contract.terminalProof) {
+      throw new Error("track sitemap count contract is missing its plan or parity proof");
+    }
+
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    try {
+      await applyFixtureSchema(client);
+      await writeFixture(client, "1x", { counts: createCiFixtureCounts("1x", 256) });
+      const report = await runPerformanceContracts({
+        client,
+        contracts: [contract],
+        profile: "1x",
+      });
+      const result = report.contracts[0];
+
+      expect(TRACK_SITEMAP_INDEX_COUNT.sql).toContain(
+        "indexed by perf_tracks_sitemap_indexable_track_id_idx",
+      );
+      expect(result?.passed).toBe(true);
+      expect(result?.resultRowCount.max).toBe(1);
+      expect(result?.metadata[0]).toMatchObject({ outputsEquivalent: true });
+      expect(result?.plan?.details).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /SCAN perf_tracks USING INDEX perf_tracks_sitemap_indexable_track_id_idx/i,
+          ),
+        ]),
+      );
     } finally {
       client.close();
     }

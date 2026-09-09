@@ -27,6 +27,7 @@ vi.mock("../lib/server/artists", () => ({
 }));
 vi.mock("../lib/server/galaxies-map", () => ({
   GALAXY_INDEX_MIN_FINDINGS: 3,
+  countPublicIndexableGalaxies: vi.fn(async () => 0),
   isGalaxyMapFullyNamed: vi.fn(async () => false),
   listPublicGalaxies: vi.fn(async () => []),
 }));

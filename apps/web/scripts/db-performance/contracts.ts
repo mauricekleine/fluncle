@@ -1,6 +1,9 @@
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
 import { DUE_WORK_COLUMNS, DUE_WORK_COLUMN_NAMES } from "../../src/lib/server/due-work-columns";
-import { trackSitemapWindowStatement } from "../../src/lib/server/track-page";
+import {
+  trackSitemapIndexCountStatement,
+  trackSitemapWindowStatement,
+} from "../../src/lib/server/track-page";
 import { registerContractD } from "./contract-d";
 import { registerFinalProofContracts } from "./final-proof";
 import { registerIndexEvidenceContracts } from "./index-evidence";
@@ -213,6 +216,50 @@ export const TRACK_SITEMAP_PERFORMANCE_WINDOW = {
     .replace(/\balbums\b/g, "perf_albums")
     .replace("select perf_tracks.id,", "select perf_tracks.id as track_id,"),
 } satisfies PerformanceStatement;
+
+const productionTrackSitemapIndexCount = trackSitemapIndexCountStatement();
+
+/** The production count translated only onto the synthetic fixture's table and index names. */
+export const TRACK_SITEMAP_INDEX_COUNT = {
+  args: productionTrackSitemapIndexCount.args,
+  sql: productionTrackSitemapIndexCount.sql
+    .replaceAll(
+      "tracks_sitemap_indexable_track_id_idx",
+      "perf_tracks_sitemap_indexable_track_id_idx",
+    )
+    .replace(/\btracks\b/g, "perf_tracks"),
+} satisfies PerformanceStatement;
+
+const TRACK_SITEMAP_INDEX_COUNT_REFERENCE = {
+  args: TRACK_SITEMAP_INDEX_COUNT.args,
+  sql: TRACK_SITEMAP_INDEX_COUNT.sql.replace(
+    " indexed by perf_tracks_sitemap_indexable_track_id_idx",
+    "",
+  ),
+} satisfies PerformanceStatement;
+
+performanceRegistry.register(
+  comparisonContract({
+    after: TRACK_SITEMAP_INDEX_COUNT,
+    before: TRACK_SITEMAP_INDEX_COUNT_REFERENCE,
+    description: "The archive-track sitemap count uses its exact evidence-membership index",
+    id: "sitemap.track-index-count",
+    iterations: 20,
+    plan: {
+      policy: {
+        allowFullScanOf: ["perf_tracks"],
+        forbidTempSort: true,
+        growingTables: ["perf_tracks"],
+        requiredDetails: [
+          /SCAN perf_tracks USING INDEX perf_tracks_sitemap_indexable_track_id_idx/i,
+        ],
+      },
+      statement: TRACK_SITEMAP_INDEX_COUNT,
+    },
+    warmupIterations: 2,
+    workClass: "route-db",
+  }),
+);
 
 performanceRegistry.register(
   sqlContract({

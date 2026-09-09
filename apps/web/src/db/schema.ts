@@ -10,6 +10,10 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import {
+  TRACK_PAGE_INDEXABLE_COUNT_INDEX,
+  trackPageIndexableWhere,
+} from "./track-page-indexability";
 
 /**
  * libSQL's native fixed-width float32 vector column — `F32_BLOB(1024)`, the storage
@@ -944,6 +948,14 @@ export const tracks = sqliteTable(
     index("tracks_is_catalogue_idx")
       .on(table.isCatalogue)
       .where(sql`${table.isCatalogue} = 1`),
+    // THE ARCHIVE-TRACK SITEMAP COUNT. Its evidence gate is broader than the active-catalogue
+    // window: a count must reject thin, duplicate, and destinationless rows as well. The partial
+    // index holds only that exact eligible membership and the stable primary key. SQLite's planner
+    // does not choose this hidden partial predicate reliably, so `countIndexableTrackPages` names
+    // it explicitly; child windows retain their own established active-catalogue keyset index.
+    index(TRACK_PAGE_INDEXABLE_COUNT_INDEX)
+      .on(table.trackId)
+      .where(sql.raw(trackPageIndexableWhere())),
     // THE FRESH CATALOGUE WINDOW. `is_catalogue` stopped discriminating: the crawler grew the
     // catalogue into 99,637 of 99,729 rows, so the partial index above now matches 99.9% of the
     // table and selects essentially everything. `/fresh`'s unlit half asks for a DATE WINDOW off

@@ -65,7 +65,11 @@ import {
   parseArtistsJson,
 } from "./artists";
 import { getDb, typedRows } from "./db";
-import { GALAXY_INDEX_MIN_FINDINGS, listPublicGalaxies } from "./galaxies-map";
+import {
+  countPublicIndexableGalaxies,
+  GALAXY_INDEX_MIN_FINDINGS,
+  listPublicGalaxies,
+} from "./galaxies-map";
 import {
   countIndexableLabels,
   LABEL_INDEX_MIN_TRACKS,
@@ -477,20 +481,20 @@ type SitemapPageInputs = Pick<SitemapAggregates, "galaxyCount" | "logbook" | "lo
 
 /** Static hub URLs need dates and launch gates, never the catalogue's cardinality. */
 async function readSitemapPageInputs(): Promise<SitemapPageInputs> {
-  const [logs, artistLastmod, labelLastmod, albumLastmod, logbook, galaxies, mixDepth] =
+  const [logs, artistLastmod, labelLastmod, albumLastmod, logbook, galaxyCount, mixDepth] =
     await Promise.all([
       readLogKindStats(),
       maxArtistSitemapLastmod(ARTIST_INDEX_MIN_FINDINGS),
       maxLabelSitemapLastmod(LABEL_INDEX_MIN_TRACKS),
       maxAlbumSitemapLastmod(ALBUM_INDEX_MIN_TRACKS),
       readLogbookKindStats(),
-      readGalaxies(),
+      countPublicIndexableGalaxies(GALAXY_INDEX_MIN_FINDINGS),
       getMixChainDepth(),
     ]);
   return {
     albumLastmod,
     artistLastmod,
-    galaxyCount: galaxies.length,
+    galaxyCount,
     labelLastmod,
     logbook,
     logs,
@@ -515,9 +519,9 @@ async function readSitemapAggregates(): Promise<SitemapAggregates> {
     countIndexableArtists(),
     countIndexableLabels(),
     countIndexableAlbums(),
-    // The archive-track destinations past the EVIDENCE gate. A `count(*)` whose predicate leads
-    // with `is_catalogue = 1`, so it rides the partial catalogue index rather than walking the
-    // whole growing table (lib/server/track-page.ts).
+    // The archive-track destinations past the EVIDENCE gate. The one-row count locks the exact
+    // evidence-membership partial index; the child keyset remains on its active-catalogue index
+    // (lib/server/track-page.ts).
     countIndexableTrackPages(),
   ]);
 

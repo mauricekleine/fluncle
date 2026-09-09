@@ -263,6 +263,40 @@ export async function listPublicGalaxies(): Promise<GalaxyListItem[]> {
 }
 
 /**
+ * The sitemap index only needs the number of public galaxies which clear its thin-content floor;
+ * loading the public galaxy DTOs merely to discard them would make that aggregate read the whole
+ * `findings` galaxy map. This scalar keeps the public launch gate exact while counting each live
+ * galaxy through `findings_galaxy_id_idx`, and returns no member rows to the Worker.
+ */
+export async function countPublicIndexableGalaxies(minFindings: number): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minFindings],
+    sql: `select count(*) as n
+          from galaxies as galaxy
+          where galaxy.name is not null
+            and galaxy.slug is not null
+            and galaxy.retired_at is null
+            and exists (
+              select 1 from galaxies as active
+              where active.retired_at is null
+            )
+            and not exists (
+              select 1 from galaxies as unnamed
+              where unnamed.retired_at is null
+                and (unnamed.name is null or unnamed.slug is null)
+            )
+            and (
+              select count(*) from findings as member indexed by findings_galaxy_id_idx
+              where member.galaxy_id = galaxy.id
+            ) >= ?`,
+  });
+  const row = typedRow<{ n: number }>(result.rows);
+
+  return Number(row?.n ?? 0);
+}
+
+/**
  * The PUBLIC by-slug read — `getNamedGalaxyBySlug` behind the launch gate: a
  * `GalaxyNotFoundError` (→ 404) while the map is only partially named, so no single
  * galaxy leaks before the whole map ships. Backs the public `get_galaxy` op.

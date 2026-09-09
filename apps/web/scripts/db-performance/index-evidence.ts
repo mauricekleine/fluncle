@@ -19,6 +19,7 @@ import {
   type ProductionLockContract,
   type ProductionLockEvidenceDefinition,
 } from "./production-lock-inventory";
+import { trackSitemapIndexCountStatement } from "../../src/lib/server/track-page";
 
 const INDEX_EVIDENCE_LIMIT = 25;
 const INDEX_EVIDENCE_ITERATIONS = 2;
@@ -1713,6 +1714,44 @@ function unforcedProductionLockPolicy(policy: ExplainPlanPolicy): ExplainPlanPol
 }
 
 function productionLockSpec(reference: ProductionLockContract): ProductionLockComparisonSpec {
+  if (reference.id === "index.production-lock.sitemap-index-count") {
+    const production = trackSitemapIndexCountStatement();
+    const locked = statement(
+      production.sql
+        .replaceAll(
+          "tracks_sitemap_indexable_track_id_idx",
+          "perf_tracks_sitemap_indexable_track_id_idx",
+        )
+        .replace(/\btracks\b/g, "perf_tracks"),
+      production.args,
+    );
+    const unforced = statement(
+      locked.sql.replace(" indexed by perf_tracks_sitemap_indexable_track_id_idx", ""),
+      locked.args,
+    );
+    const expectedPlanUses = [
+      {
+        count: 1,
+        index: "tracks_sitemap_indexable_track_id_idx",
+        pattern: /SCAN perf_tracks USING INDEX perf_tracks_sitemap_indexable_track_id_idx/i,
+      },
+    ];
+    const lockedPolicy = productionLockPolicy(expectedPlanUses, ["perf_tracks"], {
+      allowFullScanOf: ["perf_tracks"],
+    });
+
+    return {
+      expectedPlanUses,
+      locked,
+      lockedPolicy,
+      maxRows: 1,
+      minRows: 1,
+      mutating: false,
+      unforced,
+      unforcedPolicy: unforcedProductionLockPolicy(lockedPolicy),
+    };
+  }
+
   if (reference.id === "index.production-lock.artist-link") {
     const trackIds = [
       "synthetic-track-000000000",

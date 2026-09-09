@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 
 import { type Client, type ResultSet } from "@libsql/client";
 
+import {
+  TRACK_PAGE_INDEXABLE_COUNT_INDEX,
+  trackPageIndexableWhere,
+} from "../../src/db/track-page-indexability";
 import { getScaleManifest, type FixtureCounts, type ScaleProfile } from "./manifest";
 
 export const DEFAULT_FIXTURE_CHUNK_SIZE = 500;
@@ -463,6 +467,8 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create index if not exists perf_tracks_label_id_idx on perf_tracks(label_id)`,
   `create index if not exists perf_tracks_is_catalogue_idx
     on perf_tracks(is_catalogue) where is_catalogue = 1`,
+  `create index if not exists perf_${TRACK_PAGE_INDEXABLE_COUNT_INDEX}
+    on perf_tracks(id) where ${trackPageIndexableWhere()}`,
   `create index if not exists perf_tracks_fresh_catalogue_idx
     on perf_tracks(is_catalogue, release_date, id)`,
   `create index if not exists perf_tracks_catalogue_active_track_id_idx

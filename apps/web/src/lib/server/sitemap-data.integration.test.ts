@@ -151,6 +151,37 @@ async function seedLogbookEntry(sector: number, generatedAt: string): Promise<vo
   });
 }
 
+async function seedGalaxy(options: {
+  id: string;
+  name: string;
+  retiredAt?: string;
+  slug: string;
+}): Promise<void> {
+  await db.execute({
+    args: [
+      options.id,
+      `handle-${options.id}`,
+      options.name,
+      options.slug,
+      options.retiredAt ?? null,
+    ],
+    sql: `insert into galaxies (id, handle, name, slug, centroid_json, retired_at, created_at, updated_at)
+          values (?, ?, ?, ?, '[1,0]', ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+  });
+}
+
+async function seedGalaxyMembers(galaxyId: string, count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await db.execute({
+      args: [`${galaxyId}-member-${index}`, galaxyId],
+      // Galaxy membership is derived from `findings.galaxy_id`; this fixture isolates that count
+      // contract, so the no-log members do not alter the sitemap's certified-log bag.
+      sql: `insert into findings (track_id, galaxy_id, added_at)
+            values (?, ?, '2026-07-01T00:00:00.000Z')`,
+    });
+  }
+}
+
 /** Every row bag, each fetched the way its own child route fetches it. */
 async function readRowBags(): Promise<SitemapRowBags> {
   const [albums, artists, docs, galaxies, labels, logbook, logs, tracks] = await Promise.all([
@@ -250,6 +281,19 @@ beforeEach(async () => {
 
   await seedLogbookEntry(36, "2026-07-04T02:11:00.000Z");
   await seedLogbookEntry(37, "2026-07-05T02:11:00.000Z");
+  // A public map with the three sitemap-relevant states: exactly at the floor, thin, and retired.
+  // All live rows are named, so the launch gate is open; the child may publish only the first.
+  await seedGalaxy({ id: "gal-live", name: "The Liquid Deep", slug: "the-liquid-deep" });
+  await seedGalaxyMembers("gal-live", 4);
+  await seedGalaxy({ id: "gal-thin", name: "Weightless Rollers", slug: "weightless-rollers" });
+  await seedGalaxyMembers("gal-thin", 3);
+  await seedGalaxy({
+    id: "gal-retired",
+    name: "Former System",
+    retiredAt: "2026-07-01T00:00:00.000Z",
+    slug: "former-system",
+  });
+  await seedGalaxyMembers("gal-retired", 8);
 
   // The maintained hub counters the thin-content gate reads. Production moves them as deltas on
   // every write; a fixture that inserts rows directly has to run the real backfill or its world
@@ -295,6 +339,7 @@ describe("the sitemap index reads aggregates that match the rows", () => {
     // An entity dates from its freshest CERTIFIED finding (`added_at`), never from a catalogue row.
     expect(stats.albums.lastmod).toBe("2026-06-10T14:57:38.786Z");
     expect(stats.logbook).toEqual({ count: 2, lastmod: "2026-07-05T02:11:00.000Z" });
+    expect(stats.galaxies.count).toBe(1);
     // Undated by design: the MDX carries no timestamp, and a lens page has no honest date.
     expect(stats.docs.lastmod).toBeUndefined();
     expect(stats.galaxies.lastmod).toBeUndefined();
@@ -308,6 +353,45 @@ describe("the sitemap index reads aggregates that match the rows", () => {
     // The hubs' shared stamp is the freshest date ANYWHERE, which here is the squared video.
     expect(pages.latest).toBe("2026-07-14T09:00:00.000Z");
     expect(pages.logbookLatest).toBe("2026-07-05T02:11:00.000Z");
+  });
+
+  it("counts sitemap galaxies through the scalar index-backed reader", async () => {
+    const execute = vi.spyOn(db, "execute");
+
+    const [stats, bag] = await Promise.all([
+      collectSitemapIndexStats(),
+      collectSitemapBag("galaxies"),
+    ]);
+
+    expect(stats.galaxies.count).toBe(1);
+    expect(bag.galaxies).toEqual([{ slug: "the-liquid-deep" }]);
+
+    const statement = execute.mock.calls
+      .map(([input]) => input as InStatement)
+      .find(
+        (input) =>
+          typeof input !== "string" &&
+          input.sql.includes("from galaxies as galaxy") &&
+          input.sql.includes("findings_galaxy_id_idx"),
+      );
+
+    if (statement === undefined || typeof statement === "string") {
+      throw new Error("sitemap index did not issue its scalar galaxy count");
+    }
+
+    expect(statement.sql).not.toMatch(/group by galaxy_id/i);
+    expect(statement.sql).not.toMatch(/select id, name, slug/i);
+
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    const details = typedRows<{ detail: string }>(plan.rows)
+      .map((row) => row.detail)
+      .join("\n");
+
+    expect(details, details).toMatch(/SEARCH member USING COVERING INDEX findings_galaxy_id_idx/i);
+    expect(details, details).not.toContain("USE TEMP B-TREE");
   });
 });
 
