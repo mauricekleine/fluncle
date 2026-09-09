@@ -109,7 +109,7 @@ const EXPECTED_INCIDENT_FUNCTION_NAMES = [
   "rearmStaleAllowedArtists",
   "stripCrawlerPrefixes",
 ] as const;
-const EXPECTED_RECEIPT_BACKED_OPERATION_IDS = ["health.snapshot"] as const;
+const EXPECTED_RECEIPT_BACKED_OPERATION_IDS = ["health.snapshot", "track.capture"] as const;
 const EXPECTED_CONTROL_PLANE_ADMISSION_EXEMPTIONS = [
   "health.snapshot",
   "ops.pin-watch",
@@ -127,7 +127,6 @@ const EXPECTED_DELIBERATELY_NON_REPLAYABLE_OPERATION_IDS = [
   "ops.ssh-freshen",
   "render.conductor",
   "social.capture",
-  "track.capture",
   "track.embed",
   "track.enrich",
   "track.observe",
@@ -1079,9 +1078,11 @@ describe("database operation registry", () => {
     for (const operation of direct) {
       expect(operation.accessClass).toBe("write");
       expect(operation.mutationDisposition.kind).toBe(
-        operation.operationId === "track.capture" || operation.operationId === "social.capture"
-          ? "deliberately-non-replayable"
-          : "replay-safe-idempotent",
+        operation.operationId === "track.capture"
+          ? "receipt-backed"
+          : operation.operationId === "social.capture"
+            ? "deliberately-non-replayable"
+            : "replay-safe-idempotent",
       );
       expect(operation.triggers.some((trigger) => trigger.kind === "worker-endpoint")).toBe(true);
     }

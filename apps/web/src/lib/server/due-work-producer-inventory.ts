@@ -256,6 +256,11 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
   },
   { file: "social.ts", producers: ["social-finding-touch"], subjects: ["track"] },
   {
+    file: "track-capture-reconciliation.ts",
+    producers: ["track-capture-reconciliation"],
+    subjects: ["track"],
+  },
+  {
     file: "track-update.ts",
     producers: ["track-note-fill", "track-update"],
     subjects: ["track"],

@@ -242,6 +242,25 @@ The deterministic mixed-load contract starts one held 100 ms heavy reader, three
 
 This evidence covers per-client bounds and request-wide admission inside one Worker isolate only. The mixed-load simulator's write lane models SQLite transaction serialization inside those scenarios; it must not be described as cross-unit admission evidence. Cross-unit FIFO fairness, writer/heavy-reader leases, fencing, guardrail yield, process containment, and recovery are proven separately by the admission model and source-shape checks against the implemented coordinator.
 
+### Real maintenance under accelerated arrivals
+
+The opt-in `due-work-mixed-arrival.integration.test.ts` contract uses a file-backed database built from the real production migrations and invokes the real source-marker, physical-repair, `advanceProjectionFor`, capture-queue, and artist-edge queue paths. Its producer predeclares twelve arrivals on absolute monotonic deadlines independently of the serial maintenance consumer. Each case offers work for 60 wall-clock seconds at 60× logical-time acceleration, then drains within a finite action bound. The exact invocation is:
+
+```bash
+cd apps/web
+FLUNCLE_EXACT_MIXED_ARRIVAL=true bun test src/lib/server/due-work-mixed-arrival.integration.test.ts
+```
+
+| Local synthetic-capacity case |  Tracks | Each ordinary and physical cohort offered/admitted per second | Rank offered/admitted per second | Service samples | Service p50 / p95 / p99 / max  | Maximum sampled residual ordinary / physical repair debt | Maximum wall debt age |
+| ----------------------------- | ------: | ------------------------------------------------------------- | -------------------------------- | --------------: | ------------------------------ | -------------------------------------------------------- | --------------------: |
+| 1× data, base arrivals        | 122,151 | 0.6 / 0.59999                                                 | 0.03333 / 0.03333                |           1,235 | 6.93 / 8.30 / 9.46 / 24.77 ms  | 0 / 0                                                    |                8.75 s |
+| 2× data, base arrivals        | 244,302 | 0.6 / 0.59998                                                 | 0.03333 / 0.03333                |           2,456 | 7.06 / 9.21 / 11.41 / 24.43 ms | 4 / 0                                                    |               18.22 s |
+| 2× data, doubled arrivals     | 244,302 | 1.2 / 1.20000                                                 | 0.06667 / 0.06667                |           2,466 | 7.06 / 8.70 / 11.34 / 37.25 ms | 13 / 0                                                   |               17.99 s |
+
+The three cases clear every final physical repair row and finish the rank cursor. Base arrivals produce 36 ready capture rows and 72 ready artist-edge rows; doubled arrivals produce 72 and 144. Ordinary and direct physical subjects use disjoint fixture cohorts, and fairness compares the exact identities present before an action with those remaining afterward while also requiring rank-cursor advancement or completion. Rank markers keep the corpus unchanged, so they prove resumable maintenance and fairness rather than material-vector replacement; the material-revision contracts remain authoritative for replacement behavior.
+
+This is accelerated local repair/fairness evidence, not hosted writer capacity or a 60-minute hosted-load claim. At 2×, producer admission delay remains material even though maintenance service calls are short: p95 is approximately 11.4–11.6 seconds and the maximum is approximately 16.4–16.6 seconds. Service-call latency therefore must not be presented as source-to-ready freshness or as the database request budget. The test wraps maintenance plus three queued reads in the existing four-seat gate, but the independent producer and raw census queries sit outside that wrapper; its observed maximum of four is not total request-wide database-concurrency proof. The dedicated request-wide gate contract above remains the authority for that ceiling. The default compact derivative checks orchestration and oracles only and never counts as exact-cardinality evidence.
+
 ## Telemetry and privacy vocabulary
 
 Database query spans and fleet run records share a bounded vocabulary: `operation_id`, `access_class`, `release`, `attempt_count`, nullable `batch_count`, `duration_ms`, and `outcome`. Database query spans additionally record the numeric `queue_wait_ms` and `aggregate_in_flight_max` from isolate admission plus `request_in_flight_max` from the current request scope; none of these fields is an identifier. Operation IDs are stable, validated, low-cardinality identifiers with a deterministic sanitized fallback. Access class is exactly `read`, `write`, or `heavy-read`. Release identifies committed code, attempts count actual attempts, batch count is null when unknowable, duration includes isolate queueing plus execution, and outcome is exactly `success` or `failure`.
