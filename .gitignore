@@ -100,6 +100,9 @@ apps/web/public/void/event-horizon.png
 
 # The show orchestrator's dedicated Chromium profile (runtime state, never content)
 packages/live/.show-profile/
+# The crew wall's uploaded logos (a set's working state: the room's own images plus the
+# store index). Never codebase history, and never ours to publish.
+packages/live/.crew/
 
 # Local, never-commit 1Password audit (item/field NAMES only, no values)
 docs/1password-audit.local.md

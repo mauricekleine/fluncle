@@ -4,6 +4,8 @@
 //     seed served, now bridge-owned — the glass's standalone /plan on :4173 stays
 //     for bridge-less mode, so :4180 takes precedence when the bridge is up),
 //   * serves the phone remote at /remote (canon surface, LAN),
+//   * serves the CREW WALL at /crew (the room adds its logos; the operator approves them;
+//     /crew/wall is the overlay OBS composites over the show) — see crew.ts,
 //   * streams ShowState over ws://:4180/state at 30Hz with seq/t + per-channel
 //     staleness, and ingests ShowCommands (mel frames, nudges, blackout, intensity,
 //     heartbeats) on the same socket,
@@ -14,12 +16,15 @@
 // The matcher never touches the network again — the never-crash rail.
 
 import {
+  BRIDGE_CREW_PATH,
   BRIDGE_PORT,
   BRIDGE_REMOTE_PATH,
   BRIDGE_WS_PATH,
   type PlanEntry,
   type ShowCommand,
 } from "../contract";
+import { lanBase } from "../lan";
+import { createCrewRouter, createCrewStore, crewAutoApprove, resolveCrewDir } from "./crew";
 import { fingerprintPlan, fingerprintPlanFullSong } from "./fingerprint";
 import { type Finding, resolveDeck } from "./identity";
 import { type Fingerprint } from "./matcher";
@@ -268,6 +273,20 @@ async function main(): Promise<void> {
     );
   }
 
+  // THE CREW WALL: the room's own logos, waiting on the operator's approval. Its store is
+  // opened at boot so a bridge restart mid-show keeps every approved logo, and the QR encodes
+  // the LAN URL (a phone cannot reach `localhost`). Independent of the plan: it runs the same
+  // in an ordered set, in RANDOM-VJ mode, and with no plan at all.
+  const crewDir = resolveCrewDir();
+  const crewStore = createCrewStore({ autoApprove: crewAutoApprove(), dir: crewDir });
+  const crewUrl = `${lanBase(BRIDGE_PORT)}${BRIDGE_CREW_PATH}`;
+  const crew = createCrewRouter({ crewUrl, store: crewStore });
+  console.error(
+    `bridge: crew wall on ${crewUrl} — ${crewStore.list("approved").length} approved, ` +
+      `${crewStore.list("pending").length} pending, ` +
+      `${crewAutoApprove() ? "AUTO-APPROVE (anyone on the WiFi reaches the stream)" : "operator approves"}`,
+  );
+
   // The set of connected sockets (glass + any phone remotes).
   const sockets = new Set<import("bun").ServerWebSocket<unknown>>();
 
@@ -313,7 +332,12 @@ async function main(): Promise<void> {
       if (url.pathname === "/health") {
         return Response.json({ findings: plan.length, ok: true });
       }
-      return new Response("the glass bridge — /plan /remote /state /health", { status: 404 });
+      // The crew wall owns every /crew path and returns null for anything else.
+      const crewed = await crew.handle(req, srv.requestIP(req)?.address ?? null);
+      if (crewed !== null) {
+        return crewed;
+      }
+      return new Response("the glass bridge — /plan /remote /crew /state /health", { status: 404 });
     },
     port: BRIDGE_PORT,
     websocket: {
@@ -371,7 +395,7 @@ async function main(): Promise<void> {
 
   console.error(
     `bridge: live on :${BRIDGE_PORT} — ws${BRIDGE_WS_PATH} · /plan · ${BRIDGE_REMOTE_PATH} · ` +
-      `matcher ${state.matcherReady ? "ready" : "off"}`,
+      `${BRIDGE_CREW_PATH} · matcher ${state.matcherReady ? "ready" : "off"}`,
   );
 }
 

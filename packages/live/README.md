@@ -3,7 +3,8 @@
 The live runtime: Fluncle's journey rendered through the ship's glass while the
 operator mixes. Two local processes — the **glass** (`bun run glass`, the WebGL
 renderer on :4173) and the **bridge** (`bun run bridge`, plan + fingerprint
-identity + supervisor + phone remote on :4180) — bound by `src/contract.ts`.
+identity + supervisor + phone remote + the crew wall on :4180) — bound by
+`src/contract.ts`.
 Local-only by design (the never-crash rail: no network dependency mid-show).
 
 ## The glass (Unit L)
@@ -100,7 +101,62 @@ One stateless-restartable Bun process on `:4180`:
 - **`GET /remote`** — the phone web-remote (`remote.ts`), a canon surface served on
   the LAN: big NEXT / PREV, the current + next finding, hold-to-engage blackout,
   intensity, and channel health in canon colours.
+- **`GET /crew`, `GET /crew/wall`, `GET /crew/moderate`** — THE CREW WALL (`crew.ts` +
+  `crew-page.ts`), the room's own logos on the show screen. See below.
 - **`GET /health`**, **`GET /scene?logId=`** — resource reads.
+
+### The crew wall (`crew.ts`, `crew-page.ts`)
+
+Everyone in the room is on the same WiFi, so they put their own logo on the screen behind the
+decks. Three LAN pages on `:4180` beside `/remote`, and one store:
+
+- **`/crew`** — the page a stranger opens off a QR: pick an image, optional name, send. An
+  ARRIVAL surface, so its copy speaks plain (no cosmos vocabulary; nobody scanning a code at a
+  party has read the lore).
+- **`/crew/moderate`** — the operator's queue: thumbnail, name, `Approve` / `Reject`, and
+  `Remove` for anything already up. Refreshes itself every 3s.
+- **`/crew/wall`** — the overlay OBS reads as a **Browser Source**. Transparent ground, one
+  logo at a time crossfading on the dwell, parked in a corner, with a QR card carrying the LAN
+  URL so the stream itself tells the room where to go. Tunable from the source URL with no code
+  edit: `?corner=tl|tr|bl|br` `&size=<px>` `&opacity=<0-1>` `&dwell=<ms>` `&qr=0`
+  `&qr-corner=tl|tr|bl|br` `&qr-size=<px>`. The QR card scales with the canvas; the room's
+  screen is the path it is sized for, and a stream watched on a phone wants `qr-size` raised.
+
+The rails, in the bridge's house style:
+
+- **The operator gate is ON by default.** An upload lands `pending` and reaches the wall only
+  once he approves it. `FLUNCLE_CREW_AUTO_APPROVE=1` skips the queue for a room he trusts —
+  anyone on the WiFi then reaches the stream directly, so it is opt-in and never the default.
+- **Raster only, decided by MAGIC BYTES** (PNG / JPEG / WebP / GIF), never by the filename or
+  the browser's claimed content-type. **SVG is refused outright**: it executes script, and the
+  wall is a browser source pointed at the stream.
+- **Bounded** — 2 MB a file, 60 logos a wall, 5 uploads a minute per address, all from
+  `contract.ts`. The rate gate runs BEFORE the body is read, and an oversized body is refused
+  on its declared `content-length` rather than buffered first.
+- **Never-crash** — every store entry point is total and returns a discriminated outcome
+  (`{ok:false, reason}`), a corrupt index starts clean rather than throwing, and the wall keeps
+  walking the order it holds when a poll fails. A logo deleted mid-show fires the `<img>` error
+  path and advances instead of freezing.
+- **Restartable** — the logos and their states live in the gitignored `packages/live/.crew/`
+  (override with `FLUNCLE_CREW_DIR`), so a bridge restart mid-set keeps the wall. An index
+  entry whose file has gone missing is dropped on load, never served as a hole.
+- **One shuffle implementation** — the rotation order is drawn bridge-side by the SAME
+  `createShuffleBag` the RANDOM-VJ director uses (`/crew/roll`, where `?last=` rotates the order
+  so the seam between two rolls cannot repeat a logo). The browser holds no shuffle of its own
+  to drift out of step, and it polls the cheap `/crew/version` rather than rebuilding a roll
+  every few seconds.
+- Uploader-supplied text is rendered with `textContent`, never `innerHTML`.
+
+LAN-local by design, exactly like `/remote`: no auth, nothing in `@fluncle/registry`, never on
+the open internet. `run show` prints the three URLs and a scannable code in its boot table.
+
+The QR is encoded offline by `src/qr.ts` (byte mode, level M, versions 1-10) — no hosted QR
+service, because the rig has no network dependency mid-show. `qr.test.ts` pins a golden matrix
+plus the structural invariants; the golden is only as good as the day a real scanner read it, so
+**`bun run --cwd packages/live qr:verify`** is that day, repeatable: it renders every case and
+decodes it with OpenCV's `QRCodeDetector`, requiring the source string back. Run it after any
+change to `src/qr.ts`. It needs `uv` and is outside `bun test` for the same reason
+`test:matcher-accuracy` is.
 
 ### The plan-scoped fingerprint matcher (`matcher.ts`, the star)
 
@@ -162,7 +218,9 @@ the relaunch seconds.
 `FLUNCLE_FOUND_BASE`, `FLUNCLE_CHROMIUM`, `FLUNCLE_GLASS_URL`, `FLUNCLE_FFMPEG`,
 `FLUNCLE_BRIDGE_PORT` (the `:4180` the glass proxies its `/plan` to; default
 `BRIDGE_PORT`), `FLUNCLE_VJ_TRANSITION_PORT` (RANDOM-VJ MODE's UDP transition port;
-default `VJ_TRANSITION_PORT` = `9000`). A plan HANDLE additionally reads the admin API base + token from the
+default `VJ_TRANSITION_PORT` = `9000`), `FLUNCLE_CREW_DIR` (where the crew wall keeps its
+logos; default the gitignored `packages/live/.crew/`), `FLUNCLE_CREW_AUTO_APPROVE` (skip the
+operator's approval queue — opt-in, never the default). A plan HANDLE additionally reads the admin API base + token from the
 env (`FLUNCLE_API_TOKEN` / `FLUNCLE_API_BASE_URL`) or `~/.config/fluncle/.env.production`
 (the CLI's stored credential, read-only).
 

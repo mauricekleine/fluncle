@@ -22,7 +22,9 @@
 import net from "node:net";
 import { basename, resolve } from "node:path";
 
-import { BRIDGE_PORT, BRIDGE_WS_PATH, GLASS_PORT } from "./contract";
+import { BRIDGE_CREW_PATH, BRIDGE_PORT, BRIDGE_WS_PATH, GLASS_PORT } from "./contract";
+import { lanBase } from "./lan";
+import { qrAscii, qrAsciiWidth } from "./qr";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -713,6 +715,27 @@ function watchStdin(procName: string, initialIndex: number | undefined): void {
   });
 }
 
+/**
+ * The crew wall's boot card: the three URLs plus a scannable code for the one the room uses.
+ * `lanBase` resolves the address a phone can reach; `localhost` is useless to everyone but
+ * OBS, which is why the wall URL is the only one printed as localhost.
+ */
+function crewCard(): void {
+  const base = lanBase(BRIDGE_PORT);
+  const crewUrl = `${base}${BRIDGE_CREW_PATH}`;
+  say("\nthe crew wall");
+  line("clear", "the room adds logos at", crewUrl);
+  line("clear", "you approve them at", `${base}${BRIDGE_CREW_PATH}/moderate`);
+  line("clear", "OBS browser source", `http://localhost:${BRIDGE_PORT}${BRIDGE_CREW_PATH}/wall`);
+  const columns = process.stdout.columns ?? 80;
+  if (qrAsciiWidth(crewUrl) <= columns) {
+    say("");
+    say(qrAscii(crewUrl));
+  } else {
+    line("dark", "the code", `terminal too narrow (${columns} columns) — read the URL out instead`);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -786,6 +809,13 @@ async function main(): Promise<void> {
       return teardown("the state socket never opened");
     }
   }
+
+  // The crew wall: tell the operator (and through him, the room) where to point a phone.
+  // The bridge serves it regardless; this is the boot table's half — the LAN URL, the OBS
+  // source URL, the approval queue, and a scannable code, because nobody at a party types
+  // an IP address. The code is skipped rather than wrapped when the terminal is too narrow
+  // (a wrapped QR does not scan).
+  crewCard();
 
   // The glass: raise it, wait for the page.
   say("\nraising the glass");
