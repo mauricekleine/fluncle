@@ -229,6 +229,7 @@ cd packages/ui && bunx --bun shadcn@latest add dialog
 ## Git
 
 - SHOULD: Two git modes, decided by **where the work runs**, not by who is running it. Work in the **main checkout** commits straight on `main` — no feature branch, no PR. Work running in a **delegated sub-agent's isolated worktree is delivered as a PR**: a worktree sub-agent opens a PR and does **not** push to `main` (unless its brief says otherwise); the orchestrating session reviews the diff and merges it (`gh pr merge --squash --admin --delete-branch`). See the `mk-agent-orchestration` skill. Either way, a push to `main` auto-deploys (mind the coalescing note under External Effects).
+- For draft-guarded CI, keep the PR draft through edits, local preflight, and local review; mark it ready once for protected contexts, then follow the normal reviewed PR path after they succeed on that head.
 - MUST: If `git commit` fails because Git cannot write commit metadata or access signing helpers, retry the commit with elevated permissions before changing Git config.
 - On headless/automation runs the 1Password SSH agent can be unavailable — signing and SSH push fail even with the sandbox off; fetch/push over HTTPS with `git -c credential.helper='!gh auth git-credential'` instead (`gh` itself is keyring-backed, so it also needs the sandbox off).
 - NEVER: Disable commit signing with `commit.gpgsign=false` unless the user explicitly asks for an unsigned commit.

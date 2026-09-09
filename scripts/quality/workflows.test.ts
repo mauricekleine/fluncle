@@ -58,6 +58,28 @@ describe("quality topology", () => {
   const quality = workflow("quality-checks.yml");
   const qualitySource = source("quality-checks.yml");
 
+  test("draft pull requests skip runners until readiness without changing protected contexts", () => {
+    const draftEvents = [
+      "opened",
+      "reopened",
+      "synchronize",
+      "ready_for_review",
+      "converted_to_draft",
+    ];
+    const draftGuard =
+      "github.event_name != 'pull_request' || github.event.pull_request.draft == false";
+
+    for (const file of ["quality-checks.yml", "gitleaks.yml", "dependency-audit.yml"]) {
+      expect(at(workflow(file), "on", "pull_request", "types")).toEqual(draftEvents);
+    }
+
+    expect(at(quality, "jobs", "core", "if")).toBe(draftGuard);
+    expect(at(quality, "jobs", "e2e", "if")).toBe(draftGuard);
+    expect(at(quality, "jobs", "gate", "if")).toBe(`always() && (${draftGuard})`);
+    expect(at(workflow("gitleaks.yml"), "jobs", "scan", "if")).toBe(draftGuard);
+    expect(at(workflow("dependency-audit.yml"), "jobs", "audit", "if")).toBe(draftGuard);
+  });
+
   test("the protected context always reports and aggregates every selected lane", () => {
     expect(at(quality, "on", "pull_request", "paths")).toBeUndefined();
     expect(at(quality, "on", "pull_request", "paths-ignore")).toBeUndefined();
@@ -65,7 +87,9 @@ describe("quality topology", () => {
     expect(at(quality, "on", "push", "paths-ignore")).toBeUndefined();
     expect(at(quality, "jobs", "gate", "name")).toBe("Lint, Format, and Typecheck");
     expect(at(quality, "jobs", "gate", "needs")).toEqual(["core", "e2e"]);
-    expect(at(quality, "jobs", "gate", "if")).toBe("always()");
+    expect(at(quality, "jobs", "gate", "if")).toBe(
+      "always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)",
+    );
   });
 
   test("public E2E is classifier-selected but remains the complete suite", () => {
