@@ -6,7 +6,7 @@ Everything rave-01 needs to run and keep running [`apps/sonar`](../), the in-mem
 
 The runtime service owns two writable libSQL files below the private directory created by `StateDirectory=fluncle-sonar`:
 
-- `SONAR_REPLICA_PATH` points at the embedded source replica. Sonar calls libSQL `Database::sync()` explicitly. No background replica sync interval is configured.
+- `SONAR_REPLICA_PATH` points at the embedded source replica. Sonar pins libSQL's V2 sync protocol, requires its authenticated `/info` probe to succeed, and never falls back to the retired V1 protocol. A clean open explicitly synchronizes before creating its first connection so the pinned native client streams its export into the client's existing atomic database/metadata commit path; later synchronizations preserve the snapshot fences below. No background replica sync interval is configured. The exact upstream package and the single native semantic patch are recorded in [`vendor/libsql-0.9.30/FLUNCLE-PATCH.md`](../vendor/libsql-0.9.30/FLUNCLE-PATCH.md).
 - `SONAR_STATE_PATH` points at a separate consumer database containing exact raw vectors, producer revisions and tombstones, the validated manifest, the local checkpoint, and any pending remote acknowledgement.
 
 The two paths must differ and stay on the service account's local disk. The committed unit creates the directory with mode `0700` and applies `UMask=0077`. The public unit names only environment variables. Concrete credentials and topology remain in the operator-owned environment file.

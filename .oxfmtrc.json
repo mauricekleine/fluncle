@@ -12,6 +12,9 @@
     // change. Reformatting them would rewrite the evidence and could quietly move an attribute
     // the parser matches on. Formatting-only, so they are still linted and still committed.
     "apps/web/src/lib/server/__fixtures__/**/*.html",
+    // Complete published libSQL source retained byte-for-byte except for the documented native
+    // sync patch. Rust formatting is checked independently; oxfmt must not rewrite crate metadata.
+    "apps/sonar/vendor/libsql-0.9.30/**",
     // Repository-owned policy, vendored verbatim so updates stay auditable against upstream.
     "tools/oxlint/anti-slop/**"
   ]
