@@ -135,7 +135,7 @@ export function notifyNewFinding(
     body: artistLine,
     category: "findings",
     channelId: FINDINGS_CHANNEL,
-    title: "fresh banger logged",
+    title: "Fresh banger logged",
     url: logPageUrl(logId),
   });
 }
@@ -154,7 +154,7 @@ export function notifyNewMixtape(mixtape: { logId?: string; title: string }): vo
     body: mixtape.title,
     category: "mixtapes",
     channelId: MIXTAPES_CHANNEL,
-    title: "fresh mixtape on the deck",
+    title: "Fresh mixtape on the deck",
     url: logPageUrl(mixtape.logId),
   });
 }

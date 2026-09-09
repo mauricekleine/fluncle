@@ -1454,7 +1454,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.fillStyle = palette.creamMuted;
     ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    fillTextFromCapTop("The galaxy will wait.", width / 2, baseY + 18);
+    fillTextFromCapTop("The Galaxy will wait.", width / 2, baseY + 18);
 
     let hintY = baseY + 36;
 

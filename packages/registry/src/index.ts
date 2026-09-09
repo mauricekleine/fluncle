@@ -583,7 +583,7 @@ export const SURFACES: readonly Surface[] = [
   // would double-count one surface under two names.
   {
     exposedContent: [
-      "the galaxy factory — a draggable map of a finding's whole life, from the first CMD+F through the enrichment sweeps to the launch into the Galaxy",
+      "the Galaxy factory — a draggable map of a finding's whole life, from the first CMD+F through the enrichment sweeps to the launch into the Galaxy",
     ],
     kind: "web_route",
     name: "web.pipeline",

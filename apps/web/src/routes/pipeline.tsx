@@ -8,7 +8,7 @@ import { useEffect, useRef } from "react";
 // archive's bundle stays light). noindex: a for-the-nerds internal-machinery view, not a
 // search surface.
 
-const title = "Fluncle's galaxy factory";
+const title = "Fluncle's Galaxy factory";
 const description =
   "Follow a banger through every machine Fluncle built, from the first CMD+F to the launch into the Galaxy.";
 
@@ -50,7 +50,7 @@ function PipelinePage() {
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-background">
-      <h1 className="sr-only">Fluncle's galaxy factory</h1>
+      <h1 className="sr-only">Fluncle's Galaxy factory</h1>
       <p className="sr-only">
         A guided map of the machinery Fluncle built for his findings: he hits CMD+F when he hears a
         banger, his machines pull it apart and analyze it, he sends it out to wherever you are, it
