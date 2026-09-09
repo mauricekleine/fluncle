@@ -106,6 +106,19 @@ export function commandsForLane(plan, lane, options = {}) {
       ]),
       command("cargo", ["build", "--release", "--locked", "--manifest-path", manifest]),
       command("cargo", ["test", "--locked", "--manifest-path", manifest]),
+      command("cargo", [
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/sonar/vendor/libsql-0.9.30/Cargo.toml",
+        "--target-dir",
+        "apps/sonar/target",
+        "--no-default-features",
+        "--features",
+        "core,replication,sync,tls",
+        "--lib",
+        "sync::test::",
+      ]),
     ];
   }
 

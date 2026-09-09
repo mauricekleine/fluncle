@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{bail, Context, Result};
-use libsql::{Builder, Connection, Database, Value};
+use libsql::{Builder, Connection, Database, SyncProtocol, Value};
 
 use crate::artifact::{canonical_payload, extend_digest, snapshot_item_digest, EMPTY_DIGEST};
 use crate::decode::decode_le_f32;
@@ -60,9 +60,13 @@ pub struct Replica {
 impl Replica {
     pub async fn open(path: impl AsRef<Path>, url: String, token: String) -> Result<Self> {
         let db = Builder::new_remote_replica(path, url, token)
+            .sync_protocol(SyncProtocol::V2)
             .build()
             .await
             .context("opening embedded libSQL replica")?;
+        db.sync()
+            .await
+            .context("initialising embedded libSQL replica")?;
         let conn = db
             .connect()
             .context("connecting to embedded libSQL replica")?;
@@ -380,6 +384,217 @@ fn nonnegative_u64(value: &Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        extract::{Request, State},
+        http::StatusCode,
+        response::{IntoResponse, Response},
+        routing::get,
+        Json, Router,
+    };
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
+    use std::time::Duration;
+
+    async fn reject_v2_info(
+        State(requests): State<Arc<AtomicUsize>>,
+    ) -> (StatusCode, &'static str) {
+        requests.fetch_add(1, Ordering::SeqCst);
+        (StatusCode::NOT_FOUND, "v2 unavailable")
+    }
+
+    async fn reject_v2_info_with_oversized_body(
+        State(requests): State<Arc<AtomicUsize>>,
+    ) -> (StatusCode, Vec<u8>) {
+        requests.fetch_add(1, Ordering::SeqCst);
+        (StatusCode::BAD_GATEWAY, vec![b'x'; 64 * 1024 + 1])
+    }
+
+    async fn record_legacy_fallback(State(requests): State<Arc<AtomicUsize>>) -> StatusCode {
+        requests.fetch_add(1, Ordering::SeqCst);
+        StatusCode::IM_A_TEAPOT
+    }
+
+    #[derive(Clone)]
+    struct V2BootstrapServer {
+        export_before_local_file: Arc<AtomicBool>,
+        export_bytes: Arc<Vec<u8>>,
+        replica_path: PathBuf,
+        requests: Arc<Mutex<Vec<String>>>,
+    }
+
+    async fn serve_v2_bootstrap(
+        State(server): State<V2BootstrapServer>,
+        request: Request,
+    ) -> Response {
+        let path = request.uri().path().to_owned();
+        server.requests.lock().unwrap().push(path.clone());
+        match path.as_str() {
+            "/info" => Json(json!({ "current_generation": 1 })).into_response(),
+            "/export/1" => {
+                server
+                    .export_before_local_file
+                    .store(!server.replica_path.exists(), Ordering::SeqCst);
+                (StatusCode::OK, server.export_bytes.as_ref().clone()).into_response()
+            }
+            path if path.starts_with("/sync/1/") => {
+                (StatusCode::BAD_REQUEST, Json(json!({ "generation": 1 }))).into_response()
+            }
+            _ => StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_v2_rejects_info_error_without_legacy_fallback() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/info", get(reject_v2_info))
+            .fallback(record_legacy_fallback)
+            .with_state(Arc::clone(&requests));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            Replica::open(
+                dir.path().join("replica.db"),
+                format!("http://{address}"),
+                "test".into(),
+            ),
+        )
+        .await
+        .expect("the protocol probe must be bounded");
+        let error = match result {
+            Ok(_) => panic!("an unavailable V2 endpoint must fail closed"),
+            Err(error) => error,
+        };
+
+        assert!(format!("{error:#}").contains("HTTP error 404"));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn explicit_v2_caps_info_error_without_legacy_fallback() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/info", get(reject_v2_info_with_oversized_body))
+            .fallback(record_legacy_fallback)
+            .with_state(Arc::clone(&requests));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            Replica::open(
+                dir.path().join("replica.db"),
+                format!("http://{address}"),
+                "test".into(),
+            ),
+        )
+        .await
+        .expect("the protocol probe must be bounded");
+        let error = match result {
+            Ok(_) => panic!("an oversized V2 error must fail closed"),
+            Err(error) => error,
+        };
+
+        let message = format!("{error:#}");
+        assert!(message.contains("sync protocol probe error response body exceeded 65536 bytes"));
+        assert!(message.contains("status=502 Bad Gateway"));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn clean_v2_initialization_exports_before_connecting() {
+        let export_dir = tempfile::tempdir().unwrap();
+        let export_path = export_dir.path().join("export.db");
+        let export_db = Builder::new_local(&export_path).build().await.unwrap();
+        let export_conn = export_db.connect().unwrap();
+        export_conn
+            .execute_batch(
+                "create table bootstrap_probe(value integer not null);\
+                 insert into bootstrap_probe(value) values(42);",
+            )
+            .await
+            .unwrap();
+        drop(export_conn);
+        drop(export_db);
+        let export_bytes = Arc::new(std::fs::read(export_path).unwrap());
+
+        let replica_dir = tempfile::tempdir().unwrap();
+        let replica_path = replica_dir.path().join("replica.db");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let export_before_local_file = Arc::new(AtomicBool::new(false));
+        let app = Router::new()
+            .fallback(serve_v2_bootstrap)
+            .with_state(V2BootstrapServer {
+                export_before_local_file: Arc::clone(&export_before_local_file),
+                export_bytes,
+                replica_path: replica_path.clone(),
+                requests: Arc::clone(&requests),
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let replica = tokio::time::timeout(
+            Duration::from_secs(2),
+            Replica::open(
+                replica_path.clone(),
+                format!("http://{address}"),
+                "test".into(),
+            ),
+        )
+        .await
+        .expect("clean V2 initialization must be bounded")
+        .unwrap();
+
+        assert!(export_before_local_file.load(Ordering::SeqCst));
+        assert!(replica_path.exists());
+        assert!(PathBuf::from(format!("{}-info", replica_path.display())).exists());
+        assert!(requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|path| path == "/export/1"));
+        let sync_requests_after_bootstrap = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| path.starts_with("/sync/1/"))
+            .count();
+        replica.sync().await.unwrap();
+        let sync_requests_after_followup = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| path.starts_with("/sync/1/"))
+            .count();
+        assert!(sync_requests_after_followup > sync_requests_after_bootstrap);
+        let mut rows = replica
+            .conn
+            .query("select value from bootstrap_probe", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert!(matches!(row.get_value(0).unwrap(), Value::Integer(42)));
+        server.abort();
+    }
 
     #[tokio::test]
     async fn artifact_head_survives_full_event_body_compaction() {
