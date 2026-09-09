@@ -3,6 +3,7 @@ name: Quality Checks
 on:
   pull_request:
     branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   push:
     branches: [main]
   schedule:
@@ -24,6 +25,7 @@ env:
 jobs:
   core:
     name: Selected quality lanes
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -182,6 +184,7 @@ jobs:
 
   e2e:
     name: Public flows when selected
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -321,7 +324,7 @@ jobs:
 
   gate:
     name: Lint, Format, and Typecheck
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     needs: [core, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 2
