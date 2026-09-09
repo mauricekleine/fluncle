@@ -52,6 +52,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The artifact protocol hashes ECMAScript-canonical JSON bytes. JCS uses the
+# same number serialization as JSON.stringify, including -0 and exponent form.
+serde_json_canonicalizer = "=0.3.2"
 
 # The source database is an explicitly-synchronised embedded replica and the
 # consumer checkpoint is a separate local libSQL database. `sync` selects the

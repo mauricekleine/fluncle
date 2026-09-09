@@ -9,7 +9,8 @@ use libsql::{params, Builder, Connection, OpenFlags, Transaction, TransactionBeh
 use sha2::{Digest, Sha256};
 
 use crate::artifact::{
-    canonical_payload, sha256_hex, SonarPayload, ValidatedBatch, ValidatedOperation,
+    canonical_payload, canonical_sonar_payload, sha256_hex, SonarPayload, ValidatedBatch,
+    ValidatedOperation,
 };
 use crate::decode::decode_le_f32;
 use crate::index::{Index, IndexBuilder};
@@ -377,7 +378,7 @@ impl StateStore {
                         ValidatedOperation::Delete => !present && digest == delete_value_digest(),
                         ValidatedOperation::Upsert { blob, payload } => {
                             present
-                                && digest == value_digest(&serde_json::to_string(payload)?, blob)
+                                && digest == value_digest(&canonical_sonar_payload(payload)?, blob)
                         }
                         ValidatedOperation::Skip => true,
                     };
@@ -401,7 +402,7 @@ impl StateStore {
                     ).await?;
                 }
                 ValidatedOperation::Upsert { blob, payload } => {
-                    let payload_json = serde_json::to_string(payload)?;
+                    let payload_json = canonical_sonar_payload(payload)?;
                     let digest = value_digest(&payload_json, blob);
                     tx.execute(
                         "insert into sonar_tracks(id,payload_json,vector,revision,value_digest) values(?,?,?,?,?) \
@@ -712,7 +713,7 @@ async fn build_state(conn: &impl Queryable) -> Result<BuiltState> {
         let id = required_text(&row.get_value(0)?, "track id")?;
         let payload_json = required_text(&row.get_value(1)?, "payload JSON")?;
         let payload: SonarPayload = serde_json::from_str(&payload_json)?;
-        if serde_json::to_string(&payload)? != payload_json {
+        if canonical_sonar_payload(&payload)? != payload_json {
             bail!("stored payload is not canonical");
         }
         let blob = match row.get_value(2)? {

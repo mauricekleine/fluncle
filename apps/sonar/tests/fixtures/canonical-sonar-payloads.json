@@ -1,0 +1,74 @@
+[
+  {
+    "name": "integer",
+    "inputBpm": "170",
+    "subjectId": "canonical:integer",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":170,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":null}",
+    "expectedDigest": "396766950da4ca96364ca0cea81b5183dbab1761e4e5a624aedbac3df2d06685"
+  },
+  {
+    "name": "zero",
+    "inputBpm": "0",
+    "subjectId": "canonical:zero",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":0,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":null}",
+    "expectedDigest": "c17104b90d183fb9286c7b383bd39230420dc549b75c414914577253c94701a3"
+  },
+  {
+    "name": "negative-zero",
+    "inputBpm": "-0",
+    "subjectId": "canonical:negative-zero",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":0,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":null}",
+    "expectedDigest": "ff93f75854d28c8d9223cb6cdbca6a38a504cac9cc7f90195be06bc2a221f041"
+  },
+  {
+    "name": "one",
+    "inputBpm": "1",
+    "subjectId": "canonical:one",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":1,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":null}",
+    "expectedDigest": "964535cef2bc7b2e6e6aadfb6ba96080e96c29c3f766542ed9eb44b22514b452"
+  },
+  {
+    "name": "nonexact-f32",
+    "inputBpm": "0.1",
+    "subjectId": "canonical:nonexact-f32",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":0.10000000149011612,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":null}",
+    "expectedDigest": "a1054e5c1e04ce986fdc564dcf956e9d55e41cfae286d16d09917b7c766d947d"
+  },
+  {
+    "name": "small-exponent",
+    "inputBpm": "1e-7",
+    "subjectId": "canonical:small-exponent",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":1.0000000116860974e-7,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":null}",
+    "expectedDigest": "865ef37bf3b7ee787e7e69034f904438dafbb72419f85f7512c64fa0a66284d5"
+  },
+  {
+    "name": "large-exponent",
+    "inputBpm": "1e21",
+    "subjectId": "canonical:large-exponent",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":1.0000000200408773e+21,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":null}",
+    "expectedDigest": "2673167c81f3e9f7ab4a0d354039fc9e4cd1dd3225f882b13914514196c78efd"
+  },
+  {
+    "name": "null",
+    "inputBpm": null,
+    "subjectId": "canonical:null",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":null,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":null}",
+    "expectedDigest": "54a9cb41e7ba3a727be96e323f58f92c0343ee13a2ef50d9b1494b2ef8a4b27b"
+  },
+  {
+    "name": "score-zero",
+    "inputBpm": null,
+    "inputNearestFindingScore": "0",
+    "subjectId": "canonical:score-zero",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":null,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":0}",
+    "expectedDigest": "3983bec62e606104441ec5a40ca0c80d22f00b47f98810364ee12abb4655efe5"
+  },
+  {
+    "name": "score-one",
+    "inputBpm": null,
+    "inputNearestFindingScore": "1",
+    "subjectId": "canonical:score-one",
+    "expectedPayloadJson": "{\"anchored\":true,\"bpm\":null,\"certified\":false,\"dismissed\":false,\"durationMs\":123,\"hasFinding\":false,\"isDuplicate\":false,\"key\":null,\"nearestFindingScore\":1}",
+    "expectedDigest": "520fafcd5c86fa30b0576fd234a2686d2b10719c442d3f3960eed49f7ebe956b"
+  }
+]
