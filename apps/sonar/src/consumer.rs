@@ -15,6 +15,29 @@ use crate::replica::{Replica, SyncStats};
 use crate::server::{now_unix, AppState, PublishedSnapshot, RebuildCause};
 use crate::state::{Manifest, StateStore, StoredSnapshot};
 
+const MAX_CONSECUTIVE_STALE_SNAPSHOT_PAGES: usize = 3;
+
+#[derive(Default)]
+struct StaleSnapshotPageRetries {
+    consecutive: usize,
+}
+
+impl StaleSnapshotPageRetries {
+    fn accepted_progress(&mut self) {
+        self.consecutive = 0;
+    }
+
+    fn retry(&mut self) -> bool {
+        self.consecutive += 1;
+        self.consecutive <= MAX_CONSECUTIVE_STALE_SNAPSHOT_PAGES
+    }
+}
+
+fn rebuild_checkpoint_advanced(before: &RebuildCheckpoint, after: &RebuildCheckpoint) -> bool {
+    after.generation == before.generation
+        && (after.state == "complete" || after.cursor != before.cursor)
+}
+
 pub struct Consumer {
     api: ArtifactClient,
     batch_limit: usize,
@@ -253,6 +276,7 @@ impl Consumer {
     }
 
     async fn attest_local_snapshot(&self) -> Result<()> {
+        let mut stale_page_retries = StaleSnapshotPageRetries::default();
         loop {
             let status = self.api.status().await?;
             validate_contract(&status)?;
@@ -290,6 +314,10 @@ impl Consumer {
                     {
                         bail!("remote rebuild checkpoint disagrees with local attestation");
                     }
+                    if !rebuild_checkpoint_advanced(rebuild, &checkpoint) {
+                        bail!("remote rebuild checkpoint did not advance the snapshot cursor");
+                    }
+                    stale_page_retries.accepted_progress();
                 }
                 Err(error) => {
                     // A timed-out POST may have committed. Status is the receipt.
@@ -298,7 +326,9 @@ impl Consumer {
                     let checkpoint = sonar_rebuild(&after_error)?;
                     if checkpoint.consumer_digest == page.consumer_digest
                         && checkpoint.consumer_item_count == page.consumer_item_count
+                        && rebuild_checkpoint_advanced(rebuild, checkpoint)
                     {
+                        stale_page_retries.accepted_progress();
                         continue;
                     }
                     if checkpoint.generation == rebuild.generation
@@ -307,6 +337,16 @@ impl Consumer {
                         && checkpoint.consumer_item_count == rebuild.consumer_item_count
                         && checkpoint.cursor == rebuild.cursor
                     {
+                        if !ArtifactClient::is_stale_snapshot_page(&error) {
+                            return Err(error).context(
+                                "artifact rebuild checkpoint did not durably advance after a non-retryable error",
+                            );
+                        }
+                        if !stale_page_retries.retry() {
+                            return Err(error).context(format!(
+                                "artifact snapshot page made no progress after {MAX_CONSECUTIVE_STALE_SNAPSHOT_PAGES} stale-page retries"
+                            ));
+                        }
                         self.replica.sync().await.context(
                             "resynchronising a snapshot page rejected after source churn",
                         )?;
@@ -694,6 +734,7 @@ mod tests {
     use crate::server::freshness_metrics;
     use crate::state::PendingAck;
     use axum::extract::State as AxumState;
+    use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use base64::engine::general_purpose::STANDARD;
@@ -1133,6 +1174,256 @@ mod tests {
             activations,
             task,
         )
+    }
+
+    #[derive(Clone, Copy)]
+    enum AttestationBehavior {
+        AmbiguousAccepted,
+        PersistentStale,
+        StaleThenAccepted,
+        Unauthorized,
+    }
+
+    struct AttestationApi {
+        accepted: AtomicBool,
+        behavior: AttestationBehavior,
+        checkpoint_calls: AtomicUsize,
+        consumer_digest: String,
+        consumer_item_count: u64,
+    }
+
+    fn attestation_rebuild(state: &str, consumer_digest: &str, consumer_item_count: u64) -> Value {
+        json!({
+            "completedAt": (state == "complete").then_some("2030-01-01T00:00:01.000Z"),
+            "consumerDigest": consumer_digest,
+            "consumerItemCount": consumer_item_count,
+            "cursor": null,
+            "formatVersion": 1,
+            "generation": "attestation-rebuild",
+            "snapshotSeq": 3,
+            "sourceDigest": consumer_digest,
+            "sourceItemCount": consumer_item_count,
+            "startedAt": "2030-01-01T00:00:00.000Z",
+            "state": state,
+            "stream": STREAM,
+            "streamVersion": 1,
+            "updatedAt": "2030-01-01T00:00:01.000Z"
+        })
+    }
+
+    async fn attestation_status(AxumState(api): AxumState<Arc<AttestationApi>>) -> Json<Value> {
+        let accepted = api.accepted.load(Ordering::SeqCst);
+        let (digest, count, state) = if accepted {
+            (
+                api.consumer_digest.as_str(),
+                api.consumer_item_count,
+                "complete",
+            )
+        } else {
+            (EMPTY_DIGEST, 0, "running")
+        };
+        Json(json!({
+            "consumer": response_status(
+                "rebuilding",
+                None,
+                None,
+                3,
+                vec![attestation_rebuild(state, digest, count)]
+            ),
+            "ok": true
+        }))
+    }
+
+    async fn attestation_checkpoint(AxumState(api): AxumState<Arc<AttestationApi>>) -> Response {
+        let call = api.checkpoint_calls.fetch_add(1, Ordering::SeqCst);
+        match api.behavior {
+            AttestationBehavior::PersistentStale => (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({
+                    "code": "stale_artifact_snapshot_page",
+                    "message": "Snapshot page changed",
+                    "ok": false
+                })),
+            )
+                .into_response(),
+            AttestationBehavior::Unauthorized => (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "code": "unauthorized",
+                    "message": "Unauthorized",
+                    "ok": false
+                })),
+            )
+                .into_response(),
+            AttestationBehavior::StaleThenAccepted if call == 0 => (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({
+                    "code": "stale_artifact_snapshot_page",
+                    "message": "Snapshot page changed",
+                    "ok": false
+                })),
+            )
+                .into_response(),
+            AttestationBehavior::AmbiguousAccepted => {
+                api.accepted.store(true, Ordering::SeqCst);
+                (axum::http::StatusCode::OK, "{").into_response()
+            }
+            AttestationBehavior::StaleThenAccepted => {
+                api.accepted.store(true, Ordering::SeqCst);
+                Json(json!({
+                    "checkpoint": attestation_rebuild(
+                        "complete",
+                        &api.consumer_digest,
+                        api.consumer_item_count
+                    ),
+                    "ok": true
+                }))
+                .into_response()
+            }
+        }
+    }
+
+    async fn attestation_api(
+        behavior: AttestationBehavior,
+        consumer_digest: String,
+        consumer_item_count: u64,
+    ) -> (String, Arc<AttestationApi>, tokio::task::JoinHandle<()>) {
+        let api = Arc::new(AttestationApi {
+            accepted: AtomicBool::new(false),
+            behavior,
+            checkpoint_calls: AtomicUsize::new(0),
+            consumer_digest,
+            consumer_item_count,
+        });
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test",
+                get(attestation_status),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test/rebuilds/sonar.track/checkpoint",
+                post(attestation_checkpoint),
+            )
+            .with_state(Arc::clone(&api));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}"), api, task)
+    }
+
+    async fn snapshot_attestation_consumer(
+        directory: &Path,
+        behavior: AttestationBehavior,
+    ) -> (Consumer, Arc<AttestationApi>, tokio::task::JoinHandle<()>) {
+        let track = test_track("attested", 1, 2.5);
+        let item_digest = crate::artifact::snapshot_item_digest(
+            &track.id,
+            &canonical_payload(&track.meta).unwrap(),
+            &track.blob,
+        )
+        .unwrap();
+        let consumer_digest = extend_digest(EMPTY_DIGEST, &[item_digest]).unwrap();
+        let (base_url, api, server) = attestation_api(behavior, consumer_digest, 1).await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            local_replica(&directory.join("replica.db"), &[track], 1, false).await,
+            StateStore::open(&directory.join("state.db")).await.unwrap(),
+            10,
+            10,
+        )
+        .unwrap();
+        (consumer, api, server)
+    }
+
+    #[test]
+    fn snapshot_progress_requires_a_new_cursor_or_completion() {
+        let before: RebuildCheckpoint =
+            serde_json::from_value(attestation_rebuild("running", EMPTY_DIGEST, 0)).unwrap();
+        let unchanged: RebuildCheckpoint =
+            serde_json::from_value(attestation_rebuild("running", EMPTY_DIGEST, 0)).unwrap();
+        assert!(!rebuild_checkpoint_advanced(&before, &unchanged));
+
+        let mut advanced_value = attestation_rebuild("running", "a", 1);
+        advanced_value["cursor"] = json!("attested");
+        let advanced: RebuildCheckpoint = serde_json::from_value(advanced_value).unwrap();
+        assert!(rebuild_checkpoint_advanced(&before, &advanced));
+
+        let complete: RebuildCheckpoint =
+            serde_json::from_value(attestation_rebuild("complete", EMPTY_DIGEST, 0)).unwrap();
+        assert!(rebuild_checkpoint_advanced(&before, &complete));
+    }
+
+    #[test]
+    fn snapshot_retry_budget_resets_after_accepted_progress() {
+        let mut retries = StaleSnapshotPageRetries::default();
+        for _ in 0..MAX_CONSECUTIVE_STALE_SNAPSHOT_PAGES {
+            assert!(retries.retry());
+        }
+        assert!(!retries.retry());
+
+        retries.accepted_progress();
+        for _ in 0..MAX_CONSECUTIVE_STALE_SNAPSHOT_PAGES {
+            assert!(retries.retry());
+        }
+        assert!(!retries.retry());
+    }
+
+    #[tokio::test]
+    async fn stale_snapshot_page_resyncs_and_retries() {
+        let directory = tempdir().unwrap();
+        let (consumer, api, server) =
+            snapshot_attestation_consumer(directory.path(), AttestationBehavior::StaleThenAccepted)
+                .await;
+
+        consumer.attest_local_snapshot().await.unwrap();
+
+        assert_eq!(api.checkpoint_calls.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn persistent_stale_snapshot_page_stops_after_the_no_progress_budget() {
+        let directory = tempdir().unwrap();
+        let (consumer, api, server) =
+            snapshot_attestation_consumer(directory.path(), AttestationBehavior::PersistentStale)
+                .await;
+
+        let error = consumer.attest_local_snapshot().await.unwrap_err();
+
+        assert!(format!("{error:#}").contains("made no progress after 3 stale-page retries"));
+        assert_eq!(api.checkpoint_calls.load(Ordering::SeqCst), 4);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn authorization_rejection_does_not_retry_snapshot_attestation() {
+        let directory = tempdir().unwrap();
+        let (consumer, api, server) =
+            snapshot_attestation_consumer(directory.path(), AttestationBehavior::Unauthorized)
+                .await;
+
+        let error = consumer.attest_local_snapshot().await.unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("401 Unauthorized"));
+        assert!(message.contains("did not durably advance after a non-retryable error"));
+        assert_eq!(api.checkpoint_calls.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn ambiguous_snapshot_checkpoint_uses_the_remote_status_receipt() {
+        let directory = tempdir().unwrap();
+        let (consumer, api, server) =
+            snapshot_attestation_consumer(directory.path(), AttestationBehavior::AmbiguousAccepted)
+                .await;
+
+        consumer.attest_local_snapshot().await.unwrap();
+
+        assert_eq!(api.checkpoint_calls.load(Ordering::SeqCst), 1);
+        server.abort();
     }
 
     async fn rejected_activation_with_old_checkpoint_api() -> (String, tokio::task::JoinHandle<()>)

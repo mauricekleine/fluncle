@@ -24,6 +24,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug)]
 struct ArtifactHttpStatusError {
     body: String,
+    code: Option<String>,
     status: reqwest::StatusCode,
 }
 
@@ -391,7 +392,7 @@ pub fn validate_change_page(
                             bail!("sonar.track f32 JSON value is not an exact widened f32");
                         }
                     }
-                    if serde_json::to_string(&payload)? != event.payload_json {
+                    if canonical_sonar_payload(&payload)? != event.payload_json {
                         bail!("sonar.track payload JSON is not canonical");
                     }
                     ValidatedOperation::Upsert { blob, payload }
@@ -475,8 +476,12 @@ impl ArtifactClient {
             return Ok(response);
         }
         let body = response.text().await.unwrap_or_default();
+        let code = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|body| body.get("code")?.as_str().map(str::to_owned));
         Err(ArtifactHttpStatusError {
             body: body.chars().take(240).collect(),
+            code,
             status,
         }
         .into())
@@ -510,6 +515,17 @@ impl ArtifactClient {
                         || error.is_timeout()
                         || error.is_request()
                         || error.is_body()
+                })
+        })
+    }
+
+    pub fn is_stale_snapshot_page(error: &anyhow::Error) -> bool {
+        error.chain().any(|cause| {
+            cause
+                .downcast_ref::<ArtifactHttpStatusError>()
+                .is_some_and(|error| {
+                    error.status == reqwest::StatusCode::CONFLICT
+                        && error.code.as_deref() == Some("stale_artifact_snapshot_page")
                 })
         })
     }
@@ -639,8 +655,12 @@ impl ArtifactClient {
     }
 }
 
+pub(crate) fn canonical_sonar_payload(payload: &SonarPayload) -> Result<String> {
+    serde_json_canonicalizer::to_string(payload).context("serializing canonical sonar payload")
+}
+
 pub fn canonical_payload(meta: &TrackMeta) -> Result<String> {
-    serde_json::to_string(&SonarPayload {
+    canonical_sonar_payload(&SonarPayload {
         anchored: meta.anchored,
         bpm: meta.bpm.map(f64::from),
         certified: meta.certified,
@@ -651,7 +671,6 @@ pub fn canonical_payload(meta: &TrackMeta) -> Result<String> {
         key: meta.key.clone(),
         nearest_finding_score: meta.nearest_finding_score.map(f64::from),
     })
-    .context("serializing sonar payload")
 }
 
 pub fn validate_contract(status: &ConsumerStatus) -> Result<()> {
@@ -702,6 +721,24 @@ mod tests {
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use std::time::Instant;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CanonicalPayloadFixture {
+        expected_digest: String,
+        expected_payload_json: String,
+        input_bpm: Option<String>,
+        input_nearest_finding_score: Option<String>,
+        name: String,
+        subject_id: String,
+    }
+
+    fn canonical_payload_fixtures() -> Vec<CanonicalPayloadFixture> {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/canonical-sonar-payloads.json"
+        ))
+        .unwrap()
+    }
 
     fn wrong_consumer_response() -> Value {
         json!({
@@ -838,6 +875,45 @@ mod tests {
     }
 
     #[test]
+    fn canonical_sonar_numbers_match_the_shared_ecmascript_goldens() {
+        let blob = vec![0_u8; BLOB_LEN];
+        for fixture in canonical_payload_fixtures() {
+            let bpm = fixture
+                .input_bpm
+                .as_deref()
+                .map(str::parse::<f32>)
+                .transpose()
+                .unwrap();
+            let nearest_finding_score = fixture
+                .input_nearest_finding_score
+                .as_deref()
+                .map(str::parse::<f32>)
+                .transpose()
+                .unwrap();
+            let payload_json = canonical_payload(&TrackMeta {
+                anchored: true,
+                bpm,
+                duration_ms: Some(123),
+                nearest_finding_score,
+                ..TrackMeta::default()
+            })
+            .unwrap();
+
+            assert_eq!(
+                payload_json, fixture.expected_payload_json,
+                "{}",
+                fixture.name
+            );
+            assert_eq!(
+                snapshot_item_digest(&fixture.subject_id, &payload_json, &blob).unwrap(),
+                fixture.expected_digest,
+                "{}",
+                fixture.name
+            );
+        }
+    }
+
+    #[test]
     fn skips_known_undeclared_stream_but_keeps_global_order() {
         let mut other = event(8, "delete", "{}".into(), None);
         other.stream = "device.track".into();
@@ -869,6 +945,7 @@ mod tests {
         ] {
             let error = anyhow::Error::new(ArtifactHttpStatusError {
                 body: "unavailable".into(),
+                code: None,
                 status,
             });
             assert!(ArtifactClient::is_transport_failure(&error), "{status}");
@@ -880,9 +957,39 @@ mod tests {
         ] {
             let error = anyhow::Error::new(ArtifactHttpStatusError {
                 body: "semantic rejection".into(),
+                code: None,
                 status,
             });
             assert!(!ArtifactClient::is_transport_failure(&error), "{status}");
+        }
+    }
+
+    #[test]
+    fn only_the_typed_stale_snapshot_conflict_is_retryable() {
+        let stale = anyhow::Error::new(ArtifactHttpStatusError {
+            body: "stale".into(),
+            code: Some("stale_artifact_snapshot_page".into()),
+            status: reqwest::StatusCode::CONFLICT,
+        });
+        assert!(ArtifactClient::is_stale_snapshot_page(&stale));
+
+        for (status, code) in [
+            (
+                reqwest::StatusCode::CONFLICT,
+                Some("stale_artifact_rebuild".into()),
+            ),
+            (
+                reqwest::StatusCode::UNAUTHORIZED,
+                Some("stale_artifact_snapshot_page".into()),
+            ),
+            (reqwest::StatusCode::CONFLICT, None),
+        ] {
+            let error = anyhow::Error::new(ArtifactHttpStatusError {
+                body: "definitive rejection".into(),
+                code,
+                status,
+            });
+            assert!(!ArtifactClient::is_stale_snapshot_page(&error));
         }
     }
 
