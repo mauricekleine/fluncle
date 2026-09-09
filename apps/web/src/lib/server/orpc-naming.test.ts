@@ -88,6 +88,9 @@ const APPROVED_VERBS = new Set<string>([
   // create, building each from the platform's native content id) — added
   // deliberately with the `capture_post_urls` sweep.
   "capture",
+  // `commit` settles an already-prepared, receipt-bound reconciliation result atomically. It is
+  // distinct from `update`: the caller cannot patch arbitrary fields, and stale snapshots reject.
+  "commit",
   "distribute",
   "draft",
   // `drip` (post one bounded tick of due clips to Instagram) — added deliberately with
@@ -102,6 +105,9 @@ const APPROVED_VERBS = new Set<string>([
   // archived 30s previews from the public bucket to the private one. Distinct from
   // `backfill` (fill missing data) — this MOVES existing data + rewrites pointers.
   "migrate",
+  // `prepare` freezes the current eligible state before external work. It is distinct from `get`:
+  // the snapshot becomes the authority checked by the later receipt-bound commit.
+  "prepare",
   // `note` (auto-author a finding's editorial note) — the written-note sibling of
   // `observe`/`context`, same verb-as-action shape ("note this finding").
   "note",

@@ -221,6 +221,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (and is one-shot, marker-guarded), so the agent token 403s.
   announce_mixtape: "operator",
   approve_submission: "operator",
+  // Capture authorization accepts only a signed snapshot-bound result shape; the generic operator
+  // PATCH surface keeps its existing field-level behavior.
+  authorize_track_capture: "admin",
   // The Apple catalogue drain — agent tier (adminAuth only): the catalogue sibling of
   // `backfill_apple_music`. It writes catalogue identity only (a URL on `tracks`, facts on
   // `albums`), never a certification, so the box's agent-token cron drives it.
@@ -295,6 +298,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // same reasoning that keeps `update_label` and `set_capture_budget` operator-tier.
   clear_wrong_audio: "operator",
   collect_private_galaxy_log: "private-session",
+  // Capture commit settles only the receipt-bound result authorized for the prepared snapshot.
+  commit_track_capture: "admin",
   // Prefix deletion is irreversible even though the runtime proves every live consumer is beyond
   // the barrier, so only an operator may trigger a bounded compaction transaction.
   compact_artifact_changes: "operator",
@@ -590,6 +595,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
   note_track: "admin",
   observe_track: "admin",
+  // Capture prepare freezes current eligibility before the box starts external work.
+  prepare_track_capture: "admin",
   // The box's clip-cut upload presign (Fluncle Studio Unit C) — agent tier (adminAuth
   // only, no operatorGuard), the presign_track_video_uploads precedent: the on-box cron
   // signs its OWN clip output (`<clipId>/footage.mp4`) with the agent token. Distinct

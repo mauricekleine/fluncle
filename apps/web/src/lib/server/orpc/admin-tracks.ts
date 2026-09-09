@@ -43,6 +43,7 @@ import {
   recordObservationRejection,
 } from "../observation-rejections";
 import { adminAuth, operatorGuard } from "../orpc-auth";
+import { ApiError } from "../spotify";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
 import {
   fillEmptyNote,
@@ -51,6 +52,13 @@ import {
   updateTrack,
 } from "../track-update";
 import { countTrackWork, listTrackWork } from "../track-work";
+import {
+  authorizeCaptureReconciliation,
+  commitCaptureReconciliation,
+  prepareCaptureReconciliation,
+  type CaptureExternalResult,
+  type CaptureReconciliationKind,
+} from "../track-capture-reconciliation";
 import { purgeVideoCache } from "../video-cache";
 import {
   type EnrichmentStatusFilter,
@@ -170,11 +178,131 @@ function safeJsonParse(value: string): unknown {
   }
 }
 
+type CaptureCommittedResult =
+  | { applied: true; kind: "capture"; outcome: "done" | "failed" | "unmatched" }
+  | {
+      applied: true;
+      kind: "youtube-provenance";
+      outcome: "none" | "source-found" | "youtube-found";
+    }
+  | { applied: true; kind: "youtube-reverdict"; outcome: "reverdict" };
+
+function isCaptureCommittedResult(value: unknown): value is CaptureCommittedResult {
+  if (typeof value !== "object" || value === null || !("applied" in value)) {
+    return false;
+  }
+  if (value.applied !== true || !("kind" in value) || !("outcome" in value)) {
+    return false;
+  }
+  return (
+    (value.kind === "capture" &&
+      (value.outcome === "done" || value.outcome === "failed" || value.outcome === "unmatched")) ||
+    (value.kind === "youtube-provenance" &&
+      (value.outcome === "none" ||
+        value.outcome === "source-found" ||
+        value.outcome === "youtube-found")) ||
+    (value.kind === "youtube-reverdict" && value.outcome === "reverdict")
+  );
+}
+
+function isCaptureRejectedResult(value: unknown): value is { applied: false; reason: "stale" } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "applied" in value &&
+    value.applied === false &&
+    "reason" in value &&
+    value.reason === "stale"
+  );
+}
+
 /**
  * Build the `admin-tracks` domain's handlers. Each reuses the live route logic
  * verbatim; only the auth gate is relocated to the procedure middleware.
  */
 export function adminTracksHandlers(os: Implementer) {
+  const prepareTrackCaptureHandler = os.prepare_track_capture
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const result = await prepareCaptureReconciliation(
+          input.trackId,
+          input.kind as CaptureReconciliationKind,
+          input.priorSnapshotToken,
+        );
+        return { ok: true as const, ...result };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  const authorizeTrackCaptureHandler = os.authorize_track_capture
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const result = await authorizeCaptureReconciliation({
+          result: input.result as CaptureExternalResult,
+          snapshotToken: input.snapshotToken,
+          trackId: input.trackId,
+        });
+        return { ok: true as const, ...result };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  const commitTrackCaptureHandler = os.commit_track_capture
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const outcome = await commitCaptureReconciliation(input);
+        if (outcome.outcome === "lookup-failed") {
+          throw new ApiError(
+            "capture_receipt_lookup_failed",
+            "The capture receipt could not be reconciled safely.",
+            503,
+          );
+        }
+        if (outcome.outcome === "committed") {
+          if (!isCaptureCommittedResult(outcome.result)) {
+            throw new ApiError(
+              "capture_receipt_result_invalid",
+              "The capture receipt returned an invalid terminal result.",
+              503,
+            );
+          }
+          return {
+            ok: true as const,
+            outcome: outcome.outcome,
+            replayed: outcome.replayed,
+            result: outcome.result,
+          };
+        }
+        if (outcome.outcome === "rejected") {
+          if (!isCaptureRejectedResult(outcome.result)) {
+            throw new ApiError(
+              "capture_receipt_result_invalid",
+              "The capture receipt returned an invalid terminal result.",
+              503,
+            );
+          }
+          return {
+            ok: true as const,
+            outcome: outcome.outcome,
+            replayed: outcome.replayed,
+            result: outcome.result,
+          };
+        }
+        return {
+          ok: true as const,
+          outcome: outcome.outcome,
+          replayed: outcome.replayed,
+        };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   // PATCH /admin/tracks/{trackId} — on `adminAuth` (operator OR agent). The
   // field-level guard reads `context.role`.
   const updateTrackHandler = os.update_track.use(adminAuth).handler(async ({ context, input }) => {
@@ -1347,6 +1475,8 @@ export function adminTracksHandlers(os: Implementer) {
   });
 
   return {
+    authorize_track_capture: authorizeTrackCaptureHandler,
+    commit_track_capture: commitTrackCaptureHandler,
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
     get_mixable_order: getMixableOrderHandler,
@@ -1355,6 +1485,7 @@ export function adminTracksHandlers(os: Implementer) {
     list_tracks_admin: listTracksAdminHandler,
     note_track: noteTrackHandler,
     observe_track: observeTrackHandler,
+    prepare_track_capture: prepareTrackCaptureHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
     publish_track: publishTrackHandler,
     purge_video: purgeVideoHandler,

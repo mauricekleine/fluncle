@@ -20,14 +20,14 @@
 # downloads the full song ONCE via yt-dlp through a residential proxy on a per-track STICKY
 # session, duration-guards the YouTube match against the finding's Spotify length, stores
 # the bytes in the PRIVATE fluncle-source-audio R2 bucket (never fluncle-videos — that is
-# world-served at found.fluncle.com), and writes the key + status back via the agent-tier
-# update_track op. A NON-BLOCKING side-channel: it never gates the enrich/embed queues.
+# world-served at found.fluncle.com), and reconciles the key + status through an agent-tier
+# prepare/commit receipt seam. A NON-BLOCKING side-channel: it never gates the enrich/embed queues.
 #
 # PRODUCTION PRE-REQS (see ../capture-timer/README.md for the full runbook):
 #   - yt-dlp BAKED PINNED at /opt/hermes-scripts/yt-dlp (on this wrapper's PATH) + ffprobe in the image — both ride the image (see capture-timer/README).
 #   - Secrets in the shared 0600 ${HOME}/.fluncle-secrets.env (op-injected by
 #     fluncle-secrets-sync), sourced below:
-#       FLUNCLE_API_TOKEN — the box's AGENT-scoped token (the update_track write-back).
+#       FLUNCLE_API_TOKEN — the box's AGENT-scoped token (queue + capture receipts).
 #       FLUNCLE_YTDLP_PROXY_HOST / _PORT / _USERNAME / _PASSWORD — the residential proxy.
 #       FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID / _SECRET_ACCESS_KEY — an R2 token scoped
 #         Object Read & Write on fluncle-source-audio ONLY (never fluncle-videos).
@@ -51,6 +51,8 @@
 #         FLUNCLE_CAPTURE_FLAT_SEARCH (1) — flat search extraction (1/7th the bytes). Set 0 to
 #           restore the historic resolving search byte-for-byte, with no re-bake;
 #         FLUNCLE_CAPTURE_REVERDICT_LIMIT (5) — officialness re-asks a tick. Keyless oEmbed, free.
+#         FLUNCLE_CAPTURE_PROGRESS_DIR — durable per-item journals; defaults beneath HOME on the
+#           persistent /opt/data mount, so a container restart cannot repeat a paid download.
 #   - The private bucket must exist (operator step; done 2026-07-07).
 #
 # Operator install (host timer — full runbook in ../capture-timer/README.md): the sweep + the
