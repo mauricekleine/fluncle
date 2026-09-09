@@ -30,6 +30,7 @@ import {
   getGalaxyLensPage,
   getPublicGalaxyBySlug,
   GalaxyNotFoundError,
+  countPublicIndexableGalaxies,
   isGalaxyMapFullyNamed,
   listGalaxyPanes,
   listPublicGalaxies,
@@ -89,10 +90,12 @@ describe("the galaxy launch gate", () => {
       `create table findings (track_id text primary key, galaxy_id text, added_at text,
         log_id text)`,
     );
+    await db.execute(`create index findings_galaxy_id_idx on findings (galaxy_id)`);
   });
 
   it("an EMPTY map is not fully named — every public read is dark", async () => {
     expect(await isGalaxyMapFullyNamed()).toBe(false);
+    expect(await countPublicIndexableGalaxies(4)).toBe(0);
     expect(await listPublicGalaxies()).toEqual([]);
     expect(await listGalaxyPanes(4)).toEqual([]);
     expect(await getGalaxyLensPage("anything", 24, 0)).toBeNull();
@@ -104,6 +107,7 @@ describe("the galaxy launch gate", () => {
     await seedMembers(db, "gA", 5);
 
     expect(await isGalaxyMapFullyNamed()).toBe(false);
+    expect(await countPublicIndexableGalaxies(4)).toBe(0);
     // The named galaxy exists, but NOT ONE public surface reveals it while the map is partial:
     expect(await listPublicGalaxies()).toEqual([]);
     expect(await listGalaxyPanes(4)).toEqual([]);
@@ -146,6 +150,8 @@ describe("the galaxy launch gate", () => {
       "the-feral-steppers", // 1
     ]);
     expect(listed[0]?.memberCount).toBe(6);
+    expect(await countPublicIndexableGalaxies(4)).toBe(1);
+    expect(await countPublicIndexableGalaxies(6)).toBe(1);
 
     // The index panes carry the derived count + a core-first cover sample.
     const panes = await listGalaxyPanes(4);
@@ -170,11 +176,19 @@ describe("the galaxy launch gate", () => {
   it("a RETIRED unnamed galaxy never blocks the launch (excluded from the gate)", async () => {
     await seedGalaxy(db, { id: "gA", name: "The Liquid Deep", slug: "the-liquid-deep" });
     await seedGalaxy(db, { id: "gDead", name: null, retiredAt: "t9", slug: null });
+    await seedGalaxy(db, {
+      id: "gNamedDead",
+      name: "Former System",
+      retiredAt: "t9",
+      slug: "former-system",
+    });
     await seedMembers(db, "gA", 5);
+    await seedMembers(db, "gNamedDead", 8);
 
     // The only NON-retired galaxy is named → the map is fully named despite the retired
     // unnamed row, and the public surfaces are live.
     expect(await isGalaxyMapFullyNamed()).toBe(true);
+    expect(await countPublicIndexableGalaxies(4)).toBe(1);
     expect((await listPublicGalaxies()).map((g) => g.slug)).toEqual(["the-liquid-deep"]);
     // The retired galaxy never appears publicly.
     expect((await listPublicGalaxies()).some((g) => g.slug === null)).toBe(false);
