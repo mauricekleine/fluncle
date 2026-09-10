@@ -457,16 +457,6 @@ export async function recordHealthSnapshotFor(
   await pruneRateLimitsAfterHealthSnapshot(db, snapshot.at);
 }
 
-/** Persist a health snapshot and its terminal receipt in one transaction. */
-export async function recordHealthSnapshotWithReceipt(
-  operationKey: string,
-  producer: string,
-  at: string,
-  checks: HealthCheckInput[],
-): Promise<OperationReceiptOutcome> {
-  return recordHealthSnapshotWithReceiptFor(await getDb(), operationKey, producer, at, checks);
-}
-
 /** Client-injected receipt writer for real-libSQL failure and compatibility tests. */
 export async function recordHealthSnapshotWithReceiptFor(
   client: Client,

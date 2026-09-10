@@ -236,8 +236,9 @@ const API_DIR = fileURLToPath(new URL("../../routes/api", import.meta.url));
 const V1_DIR = `${API_DIR}/v1`;
 
 // The two roots the public net walks. `/api/v1` is the canonical mount, but a route
-// may be mounted at the BARE `/api/*` path with NO /api/v1 twin (`og.set.ts`, at
-// /api/og/set, is the live instance) — and a bare-only route was checked by NEITHER
+// may be mounted at the BARE `/api/*` path with NO /api/v1 twin (`og.set.ts` at
+// /api/og/set and `og.hub.ts` at /api/og/hub are the live instances) — and a bare-only
+// route was checked by NEITHER
 // net: this file only ever walked v1, and orpc-admin-coverage.test.ts only ever walks
 // /api/admin. So the bare top level is walked too, and a new bare-only public route
 // now has to be documented or carved out like any other.

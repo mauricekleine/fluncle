@@ -1,6 +1,5 @@
 import { type Client, type InStatement, type InValue, type ResultSet } from "@libsql/client";
 
-import { getDb } from "./db";
 import { DUE_WORK_COLUMNS } from "./due-work-columns";
 import {
   type PublicProjectionDynamicImpactOverride,
@@ -1657,9 +1656,4 @@ export async function readDueWorkProjectionChunk<WorkKind extends string>(
   });
   const rows = dueWorkRows<WorkKind>(result);
   return { hasMore: rows.length > limit, items: rows.slice(0, limit) };
-}
-
-/** Convenience for scripts that must use the same configured client as the Worker. */
-export async function configuredDueWorkClient(): Promise<DueWorkClient> {
-  return getDb();
 }
