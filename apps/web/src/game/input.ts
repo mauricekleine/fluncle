@@ -1,7 +1,7 @@
 // Keyboard + touch input. Keyboard: arrows or A/D steer, space (or up/W)
 // boosts. Touch: left/right halves steer, a bottom-center zone boosts. Any
 // key or tap doubles as the menu action (launch / skip / fly again); M
-// toggles mute, C toggles the atlas (the game says "Charting the galaxy…" —
+// toggles mute, C toggles the atlas (the game says "Charting the Galaxy…" —
 // C is the chart key), Escape pauses.
 
 const STEER_LEFT_KEYS = new Set(["a", "arrowleft"]);

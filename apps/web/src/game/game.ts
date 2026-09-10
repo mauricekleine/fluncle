@@ -282,7 +282,7 @@ export function createGame(container: HTMLElement): Game {
         card = undefined;
         break;
       case "warped":
-        pushTelemetry("Pulled under. Flung across the galaxy.");
+        pushTelemetry("Pulled under. Flung across the Galaxy.");
         break;
       default:
         break;
@@ -504,7 +504,7 @@ export function createGame(container: HTMLElement): Game {
       sim: holdingSim(),
       steer: 0,
       telemetry: [
-        emptyGalaxy ? "No findings logged yet. Quiet sector tonight." : "Charting the galaxy…",
+        emptyGalaxy ? "No findings logged yet. Quiet sector tonight." : "Charting the Galaxy…",
       ],
       touch: input.touchSeen() || isCoarsePointer(),
       towedT: 0,
@@ -592,7 +592,7 @@ export function createGame(container: HTMLElement): Game {
       },
       log: () => {
         if (!sim) {
-          return "Still charting the galaxy.";
+          return "Still charting the Galaxy.";
         }
 
         const carrier = nearestCarrier(sim);
@@ -624,7 +624,7 @@ export function createGame(container: HTMLElement): Game {
       },
       refuel: () => {
         if (!sim) {
-          return "Still charting the galaxy.";
+          return "Still charting the Galaxy.";
         }
 
         sim.ship.fuel = sim.config.tankCapacity;
@@ -635,7 +635,7 @@ export function createGame(container: HTMLElement): Game {
       sim: () => sim,
       trigger: (what: "death" | "win") => {
         if (!sim) {
-          return "Still charting the galaxy.";
+          return "Still charting the Galaxy.";
         }
 
         if (phase !== "play") {
@@ -678,7 +678,7 @@ export function createGame(container: HTMLElement): Game {
       },
       warp: (logId: string) => {
         if (!sim) {
-          return "Still charting the galaxy.";
+          return "Still charting the Galaxy.";
         }
 
         if (phase !== "play") {

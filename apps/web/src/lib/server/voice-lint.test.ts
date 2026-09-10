@@ -57,8 +57,8 @@
 //     tree wholesale would bury the gate in a judgment call it cannot make. The
 //     modules whose strings reach a PUBLIC audience are pulled into SCAN_ROOTS
 //     individually instead — the MCP specs and agent-discovery, the entity strings (`identity.ts`), the log page's
-//     definitional prose (`log-prose.ts`), and the two CREW FEEDS (`telegram.ts`,
-//     `bluesky.ts`), which carry the most voice-load-bearing hand-written copy in
+//     definitional prose (`log-prose.ts`), and the three CREW FEEDS (`telegram.ts`,
+//     `bluesky.ts`, `push.ts`), which carry the most voice-load-bearing hand-written copy in
 //     the repo and were outside the net only because of where they live. Drawing
 //     the real `lib/**` boundary is a follow-up, and it is a canon question before
 //     it is a code one.
@@ -131,11 +131,14 @@ const SCAN_ROOTS = [
   // The log page's definitional prose — the visible block, the meta description, and
   // the MusicRecording JSON-LD description all read from it.
   "apps/web/src/lib/log-prose.ts",
-  // The two CREW FEEDS. These are the most voice-load-bearing hand-written strings
-  // Fluncle ships (a post lands in a stranger's Telegram and on Bluesky), and they
-  // sat outside the net purely because they live under lib/.
+  // The CREW FEEDS. These are the most voice-load-bearing hand-written strings
+  // Fluncle ships (a post lands in a stranger's Telegram, on Bluesky, and on a
+  // phone's lock screen), and they sat outside the net purely because they live
+  // under lib/. `push.ts` is the third of them: its `title`/`body` are the copy the
+  // mobile crew meets before they have opened anything.
   "apps/web/src/lib/server/telegram.ts",
   "apps/web/src/lib/server/bluesky.ts",
+  "apps/web/src/lib/server/push.ts",
 ];
 
 /** The operator workstation — a different register, out of the public net. */
@@ -479,6 +482,7 @@ describe("voice lint", () => {
     expect(scanned.has("apps/web/src/lib/log-prose.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/telegram.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/bluesky.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/server/push.ts")).toBe(true);
 
     const strays = [...scanned].filter(
       (file) =>

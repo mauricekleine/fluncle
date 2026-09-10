@@ -57,4 +57,4 @@ The story is one thing; how it is told, drawn, and shipped are three others. Thi
 - **[DESIGN.md](./DESIGN.md)** — how the Galaxy looks (the Nostalgic Cosmos). Wins on visuals.
 - **[PRODUCT.md](./PRODUCT.md)** — what the product is, who it's for, and how publishing stays operator-controlled. Wins on strategy.
 
-Where a surface needs to tell the story — the [/about](./apps/web/src/routes/about.tsx) page, the [/pipeline](./apps/web/src/pipeline/create-pipeline.ts) galaxy factory, an empty state, a finding's note — it draws the truths from here and the words from VOICE.md.
+Where a surface needs to tell the story — the [/about](./apps/web/src/routes/about.tsx) page, the [/pipeline](./apps/web/src/pipeline/create-pipeline.ts) Galaxy factory, an empty state, a finding's note — it draws the truths from here and the words from VOICE.md.
