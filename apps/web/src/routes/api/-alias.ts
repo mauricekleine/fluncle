@@ -14,10 +14,10 @@
 //
 // The dual mount is ENFORCED, not remembered: `lib/server/api-alias-parity.test.ts`
 // walks both trees and fails the build when a route importing `aliasHandlers` is
-// missing either half, or when an undocumented file appears under /api/v1. The one
-// deliberate bare-only route is `og.set` (its ruling is written at ./og.set.ts:47) —
-// it mounts once and so never imports this helper, which is exactly what keeps it
-// outside the net.
+// missing either half, or when an undocumented file appears under /api/v1. The two
+// deliberate bare-only routes are the Satori cards `og.set` and `og.hub` (each ruling
+// is written on its own `serverHandlers` comment) — they mount once and so never import
+// this helper, which is exactly what keeps them outside the net.
 //
 // This file is excluded from the route tree by its `-` prefix (TanStack's
 // routeFileIgnorePrefix), so it can be imported by routes without becoming one.

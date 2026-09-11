@@ -236,11 +236,12 @@ const API_DIR = fileURLToPath(new URL("../../routes/api", import.meta.url));
 const V1_DIR = `${API_DIR}/v1`;
 
 // The two roots the public net walks. `/api/v1` is the canonical mount, but a route
-// may be mounted at the BARE `/api/*` path with NO /api/v1 twin (`og.set.ts`, at
-// /api/og/set, is the live instance) — and a bare-only route was checked by NEITHER
-// net: this file only ever walked v1, and orpc-admin-coverage.test.ts only ever walks
-// /api/admin. So the bare top level is walked too, and a new bare-only public route
-// now has to be documented or carved out like any other.
+// may be mounted at the BARE `/api/*` path with NO /api/v1 twin (`og.set.ts` at
+// /api/og/set and `og.hub.ts` at /api/og/hub are the live instances) — and a bare-only
+// route was checked by NEITHER net: this file only ever walked v1, and
+// orpc-admin-coverage.test.ts only ever walks /api/admin. So the bare top level is
+// walked too, and a new bare-only public route now has to be documented or carved out
+// like any other.
 const PUBLIC_ROUTE_DIRS = [V1_DIR, API_DIR];
 
 // Directories the public walk does NOT descend: `admin` has its own coverage net
@@ -410,12 +411,14 @@ describe("oRPC public-route contract coverage", () => {
   });
 
   // The net is only worth having if it would actually catch the thing it was blind to.
-  // Prove the bare walk reaches a bare-only route (og.set today), so a future public
-  // route mounted at /api/<x> with no /api/v1/<x> twin cannot slip in unexamined.
+  // Prove the bare walk reaches the bare-only routes (og.set and og.hub today), so a
+  // future public route mounted at /api/<x> with no /api/v1/<x> twin cannot slip in
+  // unexamined.
   it("walks the BARE /api top level, not just /api/v1", () => {
     const bare = listRouteBasenames(API_DIR);
 
     expect(bare).toContain("og.set");
+    expect(bare).toContain("og.hub");
     // …and does not double-count the canonical tree under a `v1/` prefix.
     expect(bare.some((basename) => basename.startsWith("v1/"))).toBe(false);
     // …nor the admin tree, which has its own coverage net.

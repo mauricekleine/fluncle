@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 // The discriminator for "this route is dual-mounted" is the `aliasHandlers` import:
 // the helper exists solely to unbind the phantom path coupling when one handler object
 // is mounted twice, so importing it IS the declaration of intent. A route that mounts
-// only once (og.set, below) does not import it and is correctly outside the net.
+// only once (og.set and og.hub, below) does not import it and is correctly outside the net.
 
 const API_DIR = fileURLToPath(new URL("../../routes/api", import.meta.url));
 const V1_DIR = `${API_DIR}/v1`;

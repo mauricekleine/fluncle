@@ -307,7 +307,7 @@
         "typescript": "catalog:",
       },
       "peerDependencies": {
-        "react": "~19.2.7",
+        "react": "catalog:",
         "react-dom": "catalog:",
       },
     },

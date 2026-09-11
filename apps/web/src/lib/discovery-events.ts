@@ -198,15 +198,3 @@ export function emitDiscoveryFromHref(href: string, options: { similar?: boolean
 
   emitDiscoveryEvent(classified.event, classified.metadata);
 }
-
-/**
- * Capture-phase click classification. Returns the event that WOULD fire so tests can prove
- * once-per-action without a browser. `undefined` when the click is not a discovery control.
- */
-export function classifyDiscoveryClick(
-  href: string,
-  similar: boolean,
-  base?: string,
-): ClassifiedDiscovery | undefined {
-  return classifyDiscoveryHref(href, { base, similar });
-}
