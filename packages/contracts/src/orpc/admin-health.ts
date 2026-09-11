@@ -12,6 +12,9 @@
 // per probed service. `status` is the three-state health enum; `message`/
 // `latencyMs` are nullable; `transitioned` flags the checks whose status flipped
 // since the last snapshot (those, and only those, append a `status_events` row).
+// The roster is bounded on both axes it can grow along — how many checks a snapshot
+// carries and how long a `service` identifier may be — because each check becomes a
+// permanent public `service_status` row (see the two caps below).
 // The output is the bare `{ ok: true }` ack — the cron only needs the write to
 // have landed.
 
@@ -26,6 +29,28 @@ import {
 export const HEALTH_SNAPSHOT_PRODUCER_MAX = 64;
 export const HEALTH_SNAPSHOT_PRODUCER_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 
+/**
+ * The most checks one snapshot may carry. The widest real producer is the box's
+ * healthcheck prober, which emits its `AUTOMATION_CRONS` roster
+ * (`docs/agents/hermes/scripts/fluncle-healthcheck.ts:615`) plus eleven fixed rows —
+ * 55 today; the other producer (`docs/agents/hermes/pin-watch/rebuild-hermes.sh:320`)
+ * sends exactly one. This sits above 2× that, so the roster has room to keep growing.
+ *
+ * The bound is REJECT, never trim: each check upserts a permanent `service_status`
+ * row that the PUBLIC /status board renders, and every row costs three or four
+ * sequential libSQL round trips inside one Worker request. Silently dropping the
+ * tail would leave a service unreported and still green on the board.
+ */
+export const HEALTH_SNAPSHOT_CHECKS_MAX = 128;
+
+/**
+ * The longest service name a check may carry. `service` is the primary key of
+ * `service_status` and prints on the public board, so it is a bounded identifier
+ * like `producer` above — the same 64, well past the longest real id
+ * (`cron.projection-maintenance`, 27).
+ */
+export const HEALTH_SNAPSHOT_SERVICE_MAX = 64;
+
 /** The three-state service health enum, shared by the snapshot + the stored rows. */
 export const ServiceHealthStatusSchema = z
   .enum(["ok", "degraded", "down"])
@@ -39,7 +64,7 @@ const HealthCheckSchema = z
     // A short, public-safe human message (never an internal address / raw error).
     message: z.string().nullable(),
     // The probed service name (web/db/r2/dns/ssh/onion/hermes/render-box, …).
-    service: z.string().min(1),
+    service: z.string().min(1).max(HEALTH_SNAPSHOT_SERVICE_MAX),
     status: ServiceHealthStatusSchema,
     // `true` when this check's status FLIPPED since the last snapshot — the probe
     // computes the transition, and only a transition appends a `status_events` row.
@@ -70,7 +95,7 @@ export const recordHealth = oc
     z
       .object({
         at: z.string().max(64).datetime({ offset: true }),
-        checks: z.array(HealthCheckSchema),
+        checks: z.array(HealthCheckSchema).max(HEALTH_SNAPSHOT_CHECKS_MAX),
         operationKey: z
           .string()
           .min(1)
