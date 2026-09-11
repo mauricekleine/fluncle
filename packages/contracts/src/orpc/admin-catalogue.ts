@@ -690,6 +690,73 @@ export const CrawlPassSchema = z
   })
   .meta({ id: "CrawlPass" });
 
+const CrawlPhaseInitializationSchema = z.object({
+  artistsRearmed: z.number(),
+  releasesRearmed: z.number(),
+  seeded: z.number(),
+  seedsRearmed: z.number(),
+});
+
+const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
+  z.object({ phase: z.literal("initialize") }),
+  z.object({
+    limit: z.number().int().min(1).max(2).default(2),
+    maxHop: z.number().int().min(0).max(3).default(2),
+    phase: z.literal("prepare"),
+  }),
+  z.object({ phase: z.literal("fetch"), preparedToken: z.string().max(2 * 1024 * 1024) }),
+  z.object({
+    commitToken: z.string().max(2 * 1024 * 1024),
+    operationId: z.literal("catalogue.crawl"),
+    operationKey: z.string().max(128),
+    phase: z.literal("commit"),
+    requestDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  }),
+]);
+
+const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
+  z.object({
+    initialization: CrawlPhaseInitializationSchema,
+    kind: z.enum(["initialized", "unavailable"]),
+    ok: z.literal(true),
+    phase: z.literal("initialize"),
+  }),
+  z.object({
+    frontierPending: z.number(),
+    initialization: CrawlPhaseInitializationSchema,
+    items: z.array(z.object({ nodeId: z.string(), preparedToken: z.string() })).max(2),
+    kind: z.enum(["drained", "prepared", "unavailable"]),
+    ok: z.literal(true),
+    phase: z.literal("prepare"),
+  }),
+  z.object({
+    commitToken: z.string(),
+    ok: z.literal(true),
+    operationId: z.literal("catalogue.crawl"),
+    operationKey: z.string(),
+    phase: z.literal("fetch"),
+    requestDigest: z.string(),
+  }),
+  z.object({
+    ok: z.literal(true),
+    phase: z.literal("commit"),
+    receipt: z.object({
+      outcome: z.enum([
+        "committed",
+        "conflict",
+        "in-progress",
+        "lookup-failed",
+        "rejected",
+        "safely-retryable",
+      ]),
+      replayed: z.boolean(),
+      result: z.json().optional(),
+      resultIdentity: z.string().optional(),
+      state: z.enum(["accepted", "committed", "rejected"]).optional(),
+    }),
+  }),
+]);
+
 /** The frontier at rest. */
 export const CrawlStatusSchema = z
   .object({
@@ -735,6 +802,7 @@ export const crawlCatalogue = oc
   })
   .input(
     z.object({
+      body: CrawlPhaseInputSchema.optional(),
       query: z.object({
         dryRun: z.string().optional(),
         /** Frontier nodes to expand this pass (default 10, clamped to 60). */
@@ -744,7 +812,7 @@ export const crawlCatalogue = oc
       }),
     }),
   )
-  .output(CrawlPassSchema.extend({ ok: z.literal(true) }));
+  .output(z.union([CrawlPassSchema.extend({ ok: z.literal(true) }), CrawlPhaseOutputSchema]));
 
 /**
  * `get_crawl_status` → `GET /admin/catalogue/crawl` (operationId `getCrawlStatus`).

@@ -69,7 +69,16 @@ import {
 import { recordDemand } from "../demand";
 import { getSpotifyAnchorBreakerState, resetSpotifyAnchorBreaker } from "../spotify-anchor-breaker";
 import { syncTelescopePlaylist } from "../telescope-playlist";
-import { crawlCatalogue, DEFAULT_MAX_HOP, getCrawlStatus, MAX_HOP_CEILING } from "../crawl";
+import {
+  commitCrawlPhase,
+  crawlCatalogue,
+  DEFAULT_MAX_HOP,
+  fetchCrawlPhase,
+  getCrawlStatus,
+  initializeCrawlPhase,
+  MAX_HOP_CEILING,
+  prepareCrawlPhase,
+} from "../crawl";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { certifyExistingTrack } from "../publish";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
@@ -325,6 +334,33 @@ export function adminCatalogueHandlers(os: Implementer) {
   // POST /admin/catalogue/crawl — one bounded, resumable pass of the crawl.
   const crawlCatalogueHandler = os.crawl_catalogue.use(adminAuth).handler(async ({ input }) => {
     try {
+      const phase = input.body;
+      if (phase?.phase === "initialize") {
+        const { kind, ...initialization } = await initializeCrawlPhase();
+        return { initialization, kind, ok: true as const, phase: phase.phase };
+      }
+      if (phase?.phase === "prepare") {
+        return {
+          ...(await prepareCrawlPhase({ limit: phase.limit, maxHop: phase.maxHop })),
+          ok: true as const,
+          phase: phase.phase,
+        };
+      }
+      if (phase?.phase === "fetch") {
+        return {
+          ...(await fetchCrawlPhase(phase.preparedToken)),
+          ok: true as const,
+          phase: phase.phase,
+        };
+      }
+      if (phase?.phase === "commit") {
+        return {
+          ok: true as const,
+          phase: phase.phase,
+          receipt: await commitCrawlPhase(phase),
+        };
+      }
+
       const { query } = input;
       const pass = await crawlCatalogue({
         dryRun: parseBool(query.dryRun),

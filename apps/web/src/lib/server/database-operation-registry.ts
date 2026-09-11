@@ -199,8 +199,10 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "catalogue.anchor": wholeLifetime(
     "The bounded search ladder interleaves external identity asks with cursor and anchor writes.",
   ),
-  "catalogue.crawl": wholeLifetime(
-    "One bounded crawler command interleaves MusicBrainz traversal with frontier persistence.",
+  "catalogue.crawl": phased(
+    `${SCRIPTS}/crawl-sweep.ts`,
+    "Each node is claimed and committed in bounded database phases around an unadmitted MusicBrainz fetch.",
+    0,
   ),
   "catalogue.demand": wholeLifetime("One bounded demand-projection write is the payload."),
   "catalogue.isrc-recovery": wholeLifetime(

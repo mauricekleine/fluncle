@@ -37,9 +37,9 @@ const RATE_COUNTER_EMITTER_PROOFS: Readonly<Record<string, EmitterProof>> = {
   failed: {
     file: "crawl-sweep.ts",
     patterns: [
-      /const attemptedFailures = pass\.failed \?\? 0/,
-      /summary\.failed = Math\.max\(0, attemptedFailures - \(pass\.rateLimited \? 1 : 0\)\)/,
-      /summary\.checked = summary\.expanded \+ attemptedFailures/,
+      /const attemptedFailures = Number\(result\.failed \?\? 0\)/,
+      /summary\.failed \+= Math\.max\(0, attemptedFailures - \(result\.rateLimited === true \? 1 : 0\)\)/,
+      /summary\.checked \+= expanded \+ attemptedFailures/,
     ],
   },
 };

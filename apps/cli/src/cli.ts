@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { type ArtistRule } from "@fluncle/contracts";
 import path from "node:path";
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import { type TelemetryMissingField } from "./commands/admin-telemetry";
 import { type FreshView } from "./commands/fresh";
@@ -383,6 +383,7 @@ type CrawlOptions = {
   json: boolean;
   limit?: string;
   maxHop?: string;
+  phaseFile?: string;
 };
 
 type MigratePreviewArchiveOptions = {
@@ -3120,9 +3121,20 @@ JSON field reference:
     .option("--dry-run", "Report the seed plan and write nothing at all", false)
     .option("--limit <limit>", "Frontier nodes to expand this pass", "10")
     .option("--max-hop <maxHop>", "Graph distance from a seed label (0-3)", "2")
+    .addOption(new Option("--phase-file <path>").hideHelp())
     .option("--json", "Print JSON", false)
     .action(async (options: CrawlOptions) => {
-      const { crawlCatalogueCommand } = await import("./commands/admin-catalogue");
+      const { crawlCatalogueCommand, crawlCataloguePhaseCommand } =
+        await import("./commands/admin-catalogue");
+      if (options.phaseFile) {
+        if (options.dryRun) {
+          throw new Error("--phase-file cannot be combined with --dry-run");
+        }
+        const body: unknown = JSON.parse(readFileSync(options.phaseFile, "utf8"));
+        const result = await crawlCataloguePhaseCommand<unknown>(body);
+        printJson(result);
+        return;
+      }
       await runCrawlCatalogue(options, crawlCatalogueCommand);
     });
 

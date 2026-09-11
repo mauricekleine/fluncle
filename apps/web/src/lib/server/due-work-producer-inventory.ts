@@ -317,7 +317,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     disposition: "delegated-atomicity",
     file: "artists.ts",
     rationale:
-      "The edge statement builder is executed only by the inventoried explicit write transaction.",
+      "The edge statement builder uses the owned explicit write transaction or the crawl receipt's caller-supplied transaction; both append its due-work maintenance before their transaction commits.",
     sites: ["artists.ts:insert:track_artists:6430174d"],
   },
   {
@@ -344,7 +344,11 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     sites: ["backfill.ts:update:albums:1d0eb024"],
   },
   {
-    delegates: ["restaleCatalogueRankByLabelStatement", "restaleCatalogueRankStatements"],
+    delegates: [
+      "artistLinkFollowUpStatements",
+      "restaleCatalogueRankByLabelStatement",
+      "restaleCatalogueRankStatements",
+    ],
     disposition: "delegated-atomicity",
     file: "catalogue-rank-restale.ts",
     rationale:
@@ -383,6 +387,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   },
   {
     delegates: [
+      "artistLinkFollowUpStatements",
       "hubCountArtistDeltaStatement",
       "hubCountArtistEdgeStatements",
       "hubCountDeltaForTrackArtistsStatement",

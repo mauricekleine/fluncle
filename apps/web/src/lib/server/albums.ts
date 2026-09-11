@@ -20,6 +20,7 @@
 // editorial index stays findings-bounded, the crawl-minted rows reach a page only through the
 // renderable-track thin-content gate. See docs/album-entity.md.
 
+import { type Client } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { type AlbumDetail, type AlbumListItem } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
@@ -145,8 +146,9 @@ function toAlbumRecord(row: AlbumRow): AlbumRecord {
 export async function ensureAlbum(
   raw: string | null | undefined,
   releaseGroupMbid?: null | string,
+  client?: Pick<Client, "batch" | "execute">,
 ): Promise<string | undefined> {
-  const db = await getDb();
+  const db = client ?? (await getDb());
   const mbid =
     typeof releaseGroupMbid === "string" && releaseGroupMbid.trim()
       ? releaseGroupMbid.trim()

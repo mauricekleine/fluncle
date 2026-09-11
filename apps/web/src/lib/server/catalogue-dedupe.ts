@@ -16,6 +16,8 @@
 // deliberately TIGHT — exact, and only within one album — so a VIP/remix (a DIFFERENT title:
 // "Foo VIP" folds apart from "Foo") is never merged into its original.
 
+import { type Client } from "@libsql/client";
+
 import { getDb, typedRows } from "./db";
 
 /**
@@ -41,12 +43,13 @@ export function foldTrackTitle(title: string): string {
  */
 export async function existingAlbumTitleFolds(
   albumId: null | string,
+  client?: Pick<Client, "execute">,
 ): Promise<Map<string, string>> {
   if (!albumId) {
     return new Map();
   }
 
-  const db = await getDb();
+  const db = client ?? (await getDb());
   const result = await db.execute({
     args: [albumId],
     sql: `select track_id, title from tracks where album_id = ?`,

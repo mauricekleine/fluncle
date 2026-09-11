@@ -71,6 +71,9 @@
 //
 // See docs/catalogue-crawler.md.
 
+import { type Client } from "@libsql/client";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+
 import { ensureAlbum } from "./albums";
 import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
@@ -83,7 +86,9 @@ import {
 import {
   CRAWL_CATALOGUE_CLAIM_OWNER,
   CRAWL_CATALOGUE_LEASE_MS,
+  type ClaimedCrawlFrontierRow,
   claimCrawlFrontierRows,
+  isClaimedCrawlFrontierRowCurrent,
   isCrawlDueCutoverEnabled,
   settleClaimedCrawlFrontierRow,
 } from "./crawl-cutover";
@@ -96,6 +101,15 @@ import { setLabelMbLabelId } from "./label-images";
 import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
+import {
+  canonicalOperationJson,
+  digestOperationRequest,
+  executeReceiptBackedOperation,
+  type JsonValue,
+  type OperationReceiptEffectResult,
+  type OperationReceiptOutcome,
+} from "./operation-receipts";
+import { readEnv } from "./env";
 import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
@@ -108,6 +122,8 @@ export const MAX_HOP_CEILING = 3;
 
 /** MusicBrainz's browse page size ceiling. One page = one request. */
 const BROWSE_PAGE_SIZE = 100;
+
+type CrawlDbClient = Pick<Client, "batch" | "execute">;
 
 /**
  * THE CURSOR, SIGNED — one integer carries a browse node's walk DIRECTION and its offset, so
@@ -364,15 +380,18 @@ const fold = labelFold;
  * Returns 1 when a node was actually minted, 0 when it collided — the NEWNESS signal the
  * tail-first re-arm early-stops on (a browse page that mints 0 new nodes is already walked).
  */
-async function enqueue(node: {
-  externalId: string;
-  hop: number;
-  kind: CrawlNodeKind;
-  labelSlug: string | null;
-  parentId: string | null;
-  source: CrawlNodeSource;
-}): Promise<number> {
-  const db = await getDb();
+async function enqueue(
+  node: {
+    externalId: string;
+    hop: number;
+    kind: CrawlNodeKind;
+    labelSlug: string | null;
+    parentId: string | null;
+    source: CrawlNodeSource;
+  },
+  client?: CrawlDbClient,
+): Promise<number> {
+  const db = client ?? (await getDb());
   const now = new Date().toISOString();
   const id = frontierId(node.source, node.kind, node.externalId);
   const sourceVersion = `crawl-enqueue:${crypto.randomUUID()}`;
@@ -411,8 +430,9 @@ async function settle(
   id: string,
   state: CrawlNodeState,
   patch: { cursor?: number; failures?: number; note?: string } = {},
+  client?: CrawlDbClient,
 ): Promise<void> {
-  const db = await getDb();
+  const db = client ?? (await getDb());
   const now = new Date().toISOString();
 
   await db.batch(
@@ -565,8 +585,11 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
  *
  * Bounded: `labels` holds one row per DISTINCT label (tens), never one per track.
  */
-async function canonicalLabelName(name: string): Promise<string | undefined> {
-  const db = await getDb();
+async function canonicalLabelName(
+  name: string,
+  client?: Pick<Client, "execute">,
+): Promise<string | undefined> {
+  const db = client ?? (await getDb());
   const result = await db.execute("select name from labels");
   const want = fold(name);
 
@@ -940,12 +963,13 @@ async function rearmStaleAllowedArtists(): Promise<number> {
 async function writeCatalogueTracks(
   candidates: TrackCandidate[],
   releaseAlbumId: null | string,
+  client?: CrawlDbClient,
 ): Promise<{ skipped: number; written: number; writtenIds: string[] }> {
   if (candidates.length === 0) {
     return { skipped: 0, written: 0, writtenIds: [] };
   }
 
-  const db = await getDb();
+  const db = client ?? (await getDb());
   const ids = candidates.map((candidate) => catalogueTrackId(candidate.recordingId));
   const isrcs = candidates
     .map((candidate) => candidate.isrc)
@@ -970,7 +994,7 @@ async function writeCatalogueTracks(
   }
 
   // Layer 2: the same-album title-fold convergence index (the Apple-twin guard).
-  const albumTitleFolds = await existingAlbumTitleFolds(releaseAlbumId);
+  const albumTitleFolds = await existingAlbumTitleFolds(releaseAlbumId, db);
 
   let written = 0;
   let skipped = 0;
@@ -1103,12 +1127,13 @@ async function linkTracksToLabel(
   trackIds: string[],
   labelName: string,
   mbLabelId: null | string,
+  client?: CrawlDbClient,
 ): Promise<void> {
   if (trackIds.length === 0) {
     return;
   }
 
-  const db = await getDb();
+  const db = client ?? (await getDb());
   const mbid = mbLabelId?.trim() ? mbLabelId.trim() : null;
 
   // mbid-first: the row `ensureLabel` just folded on this MBID, whatever its slug. Falls back
@@ -1145,7 +1170,7 @@ async function linkTracksToLabel(
   // pre-move census (one grouped row per current `label_id`) and rides the debit/credit deltas for
   // the maintained hub counts in the same batch as the UPDATE — the ratified DELTA arithmetic, never
   // a recompute (keystone 2, lib/server/hub-counts.ts).
-  await relinkTracksToEntity("labels", labelId, trackIds);
+  await relinkTracksToEntity("labels", labelId, trackIds, db);
 }
 
 /**
@@ -1161,13 +1186,17 @@ async function linkTracksToLabel(
  * onto the mbid rather than duplicated), with `ensureAlbum`'s slug fallback for a release MB has no
  * release group for. A null id (a blank title, no release group) links nothing.
  */
-async function linkTracksToAlbumId(trackIds: string[], albumId: null | string): Promise<void> {
+async function linkTracksToAlbumId(
+  trackIds: string[],
+  albumId: null | string,
+  client?: CrawlDbClient,
+): Promise<void> {
   if (trackIds.length === 0 || !albumId) {
     return;
   }
 
   // Same census-then-delta contract as the label twin above (keystone 2).
-  await relinkTracksToEntity("albums", albumId, trackIds);
+  await relinkTracksToEntity("albums", albumId, trackIds, client);
 }
 
 // ── Node expansion ───────────────────────────────────────────────────────────
@@ -1199,6 +1228,33 @@ const EMPTY: Expansion = {
   tracksWritten: 0,
 };
 
+type CrawlProviderPlan =
+  | { kind: "browse-forward"; childHop: number; key: "artist" | "label" }
+  | { kind: "browse-rearmed"; childHop: number; key: "artist" | "label" }
+  | { kind: "release" }
+  | {
+      kind: "seed";
+      label: null | { mbLabelId: string | null; name: string; slug: string };
+    }
+  | { kind: "terminal"; expansion: Expansion };
+
+type RearmedBrowseProviderData = {
+  offset: number;
+  page: MbReleaseBrowse | null;
+  staleTotal: number | null;
+};
+
+type CrawlProviderData =
+  | { kind: "browse-forward"; browse: MbReleaseBrowse | null }
+  | { kind: "browse-rearmed"; browse: RearmedBrowseProviderData }
+  | { kind: "release"; release: MbReleaseDetail | null }
+  | { kind: "seed"; search: MbLabelSearch | null }
+  | { kind: "terminal" };
+
+type CrawlProviderOutcome =
+  | { kind: "failed"; message: string; rateLimited: boolean }
+  | { data: CrawlProviderData; kind: "success" };
+
 /** Thrown when MusicBrainz is actively throttling — the pass's circuit breaker. */
 class ThrottledError extends Error {}
 
@@ -1211,6 +1267,100 @@ async function mb<T>(path: string): Promise<T | null> {
   }
 
   return data;
+}
+
+async function planCrawlNode(
+  node: FrontierRow,
+  maxHop: number,
+  client?: Pick<Client, "execute">,
+): Promise<CrawlProviderPlan> {
+  if (node.kind === "release") {
+    return { kind: "release" };
+  }
+  if (node.kind === "label" && node.source === "fluncle") {
+    const labels = await listLabels("enabled", client);
+    const label = labels.find((candidate) => candidate.slug === node.external_id);
+    return {
+      kind: "seed",
+      label: label
+        ? {
+            mbLabelId: label.mbLabelId ?? null,
+            name: label.name,
+            slug: label.slug,
+          }
+        : null,
+    };
+  }
+
+  const childHop = node.kind === "label" ? 0 : node.hop + 1;
+  if (childHop > maxHop) {
+    return {
+      expansion: { ...EMPTY, next: { cursor: 0, note: `hop limit ${maxHop}`, state: "done" } },
+      kind: "terminal",
+    };
+  }
+  const key = node.kind === "label" ? "label" : "artist";
+  return node.cursor < 0
+    ? { childHop, key, kind: "browse-rearmed" }
+    : { childHop, key, kind: "browse-forward" };
+}
+
+async function fetchCrawlProvider(
+  plan: CrawlProviderPlan,
+  node: FrontierRow,
+): Promise<CrawlProviderData> {
+  if (plan.kind === "terminal") {
+    return { kind: "terminal" };
+  }
+  if (plan.kind === "release") {
+    return {
+      kind: "release",
+      release: await mb<MbReleaseDetail>(
+        `/release/${node.external_id}?inc=recordings+artist-credits+isrcs+labels+release-groups+url-rels`,
+      ),
+    };
+  }
+  if (plan.kind === "seed") {
+    if (!plan.label || plan.label.mbLabelId) {
+      return { kind: "seed", search: null };
+    }
+    return {
+      kind: "seed",
+      search: await mb<MbLabelSearch>(
+        `/label?query=${encodeURIComponent(plan.label.name)}&limit=5`,
+      ),
+    };
+  }
+  if (plan.kind === "browse-forward") {
+    return {
+      browse: await mb<MbReleaseBrowse>(
+        `/release?${plan.key}=${node.external_id}&limit=${BROWSE_PAGE_SIZE}&offset=${node.cursor}`,
+      ),
+      kind: "browse-forward",
+    };
+  }
+
+  const browse = (offset: number, limit: number): Promise<MbReleaseBrowse | null> =>
+    mb<MbReleaseBrowse>(`/release?${plan.key}=${node.external_id}&limit=${limit}&offset=${offset}`);
+  let offset: number;
+  let staleTotal: null | number = null;
+  if (node.cursor === REARM_TAIL) {
+    const probe = await browse(0, 1);
+    staleTotal = probe?.["release-count"] ?? 0;
+    if (staleTotal <= 0) {
+      return {
+        browse: { offset: 0, page: null, staleTotal },
+        kind: "browse-rearmed",
+      };
+    }
+    offset = Math.max(0, staleTotal - BROWSE_PAGE_SIZE);
+  } else {
+    offset = descendOffset(node.cursor);
+  }
+  return {
+    browse: { offset, page: await browse(offset, BROWSE_PAGE_SIZE), staleTotal },
+    kind: "browse-rearmed",
+  };
 }
 
 /**
@@ -1236,8 +1386,13 @@ async function mb<T>(path: string): Promise<T | null> {
  *   2. The free-text search, for a row that carries no MBID yet — with the ambiguity guard
  *      below, so a coin-flip is never taken on the operator's behalf.
  */
-async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
-  const labels = await listLabels("enabled");
+async function applySeedLabel(
+  node: FrontierRow,
+  plan: Extract<CrawlProviderPlan, { kind: "seed" }>,
+  search: MbLabelSearch | null,
+  client?: CrawlDbClient,
+): Promise<Expansion> {
+  const labels = await listLabels("enabled", client);
   const label = labels.find((candidate) => candidate.slug === node.external_id);
 
   if (!label) {
@@ -1252,14 +1407,28 @@ async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
     // stored), so this path costs ZERO MusicBrainz requests.
     return {
       ...EMPTY,
-      enqueued: await enqueue({
-        externalId: label.mbLabelId,
-        hop: 0,
-        kind: "label",
-        labelSlug: label.slug,
-        parentId: node.id,
-        source: "musicbrainz",
-      }),
+      enqueued: await enqueue(
+        {
+          externalId: label.mbLabelId,
+          hop: 0,
+          kind: "label",
+          labelSlug: label.slug,
+          parentId: node.id,
+          source: "musicbrainz",
+        },
+        client,
+      ),
+    };
+  }
+
+  if (!plan.label || plan.label.name !== label.name || plan.label.slug !== label.slug) {
+    return {
+      ...EMPTY,
+      next: {
+        cursor: node.cursor,
+        note: "label changed while provider was pending",
+        state: "pending",
+      },
     };
   }
 
@@ -1268,7 +1437,6 @@ async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
   // A FREE-TEXT query, not a field-scoped exact phrase: `label:"Medschool"` returns
   // nothing (MusicBrainz spells it "Med School"), while the free-text search returns it
   // at score 100. Verified live. The exactness lives in the fold, not in the query.
-  const search = await mb<MbLabelSearch>(`/label?query=${encodeURIComponent(label.name)}&limit=5`);
   const want = fold(label.name);
   const matches = (search?.labels ?? []).filter(
     (candidate): candidate is { id: string; name: string } =>
@@ -1308,18 +1476,21 @@ async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
   // MB search (and it is the label's durable KG anchor). Non-clobbering + best-effort: it never
   // fights the sweep and a failure here must not derail the crawl. See label-images.ts. It is
   // also what turns this seed into a step-1 resolve on every later tick.
-  await setLabelMbLabelId(label.slug, only).catch((error) => {
+  await setLabelMbLabelId(label.slug, only, client).catch((error) => {
     logEvent("warn", "crawl.persist-mb-label-id-failed", { error, slug: label.slug });
   });
 
-  const enqueued = await enqueue({
-    externalId: only,
-    hop: 0,
-    kind: "label",
-    labelSlug: label.slug,
-    parentId: node.id,
-    source: "musicbrainz",
-  });
+  const enqueued = await enqueue(
+    {
+      externalId: only,
+      hop: 0,
+      kind: "label",
+      labelSlug: label.slug,
+      parentId: node.id,
+      source: "musicbrainz",
+    },
+    client,
+  );
 
   return { ...EMPTY, enqueued };
 }
@@ -1346,23 +1517,27 @@ async function enqueueReleaseNodes(
   releases: { id: string }[],
   childHop: number,
   replayWatermark?: string,
+  client?: CrawlDbClient,
 ): Promise<number> {
   let newlyEnqueued = 0;
 
   for (const release of releases) {
     if (!replayWatermark) {
-      newlyEnqueued += await enqueue({
-        externalId: release.id,
-        hop: childHop,
-        kind: "release",
-        labelSlug: node.label_slug,
-        parentId: node.id,
-        source: "musicbrainz",
-      });
+      newlyEnqueued += await enqueue(
+        {
+          externalId: release.id,
+          hop: childHop,
+          kind: "release",
+          labelSlug: node.label_slug,
+          parentId: node.id,
+          source: "musicbrainz",
+        },
+        client,
+      );
       continue;
     }
 
-    const db = await getDb();
+    const db = client ?? (await getDb());
     const now = new Date().toISOString();
     const nodeId = frontierId("musicbrainz", "release", release.id);
     const results = await db.batch(
@@ -1412,12 +1587,15 @@ async function enqueueReleaseNodes(
  * `done_at` is retained on the pending browse node until its final settle, so later pages keep
  * reviving release nodes whose terminal state predates the scope change, even across isolates.
  */
-async function forwardReplayWatermark(node: FrontierRow): Promise<string | undefined> {
+async function forwardReplayWatermark(
+  node: FrontierRow,
+  client?: Pick<Client, "execute">,
+): Promise<string | undefined> {
   if (node.source !== "musicbrainz" || node.cursor < 0) {
     return undefined;
   }
 
-  const db = await getDb();
+  const db = client ?? (await getDb());
 
   if (node.kind === "label" && node.done_at && node.label_slug) {
     const result = await db.execute({
@@ -1468,32 +1646,16 @@ async function forwardReplayWatermark(node: FrontierRow): Promise<string | undef
  *     browse has no date sort and appends new pressings at the END, so the fresh drop lives at the
  *     tail. Page backward from the last page, stop at the first all-known page.
  */
-async function expandBrowse(node: FrontierRow, maxHop: number): Promise<Expansion> {
-  const childHop = node.kind === "label" ? 0 : node.hop + 1;
-
-  if (childHop > maxHop) {
-    return { ...EMPTY, next: { cursor: 0, note: `hop limit ${maxHop}`, state: "done" } };
-  }
-
-  const key = node.kind === "label" ? "label" : "artist";
-
-  return node.cursor < 0
-    ? expandRearmedBrowse(node, key, childHop)
-    : expandForwardBrowse(node, key, childHop);
-}
-
 /** A COLD browse node's forward drain — the whole release list, head to tail, one page a tick. */
-async function expandForwardBrowse(
+async function applyForwardBrowse(
   node: FrontierRow,
-  key: string,
   childHop: number,
+  browse: MbReleaseBrowse | null,
+  client?: CrawlDbClient,
 ): Promise<Expansion> {
-  const replayWatermark = await forwardReplayWatermark(node);
-  const browse = await mb<MbReleaseBrowse>(
-    `/release?${key}=${node.external_id}&limit=${BROWSE_PAGE_SIZE}&offset=${node.cursor}`,
-  );
+  const replayWatermark = await forwardReplayWatermark(node, client);
   const releases = browseReleases(browse, node.kind === "label" && replayWatermark !== undefined);
-  const enqueued = await enqueueReleaseNodes(node, releases, childHop, replayWatermark);
+  const enqueued = await enqueueReleaseNodes(node, releases, childHop, replayWatermark, client);
 
   // Cursor movement follows MusicBrainz's RAW page array, including scoped status exclusions and
   // malformed entries. Otherwise one dropped item in a full page advances by 99, overlaps the next
@@ -1530,35 +1692,19 @@ async function expandForwardBrowse(
  * The one-page label (< `BROWSE_PAGE_SIZE` releases) is the degenerate tail = page 0 case, handled
  * by the same two conditions. Every new release still mints a `pending` node the deep walk drains.
  */
-async function expandRearmedBrowse(
+async function applyRearmedBrowse(
   node: FrontierRow,
-  key: string,
   childHop: number,
+  provider: RearmedBrowseProviderData,
+  client?: CrawlDbClient,
 ): Promise<Expansion> {
-  const browse = (offset: number, limit: number): Promise<MbReleaseBrowse | null> =>
-    mb<MbReleaseBrowse>(`/release?${key}=${node.external_id}&limit=${limit}&offset=${offset}`);
-
-  let offset: number;
-  let staleTotal: null | number = null;
-
-  if (node.cursor === REARM_TAIL) {
-    const probe = await browse(0, 1);
-    staleTotal = probe?.["release-count"] ?? 0;
-
-    if (staleTotal <= 0) {
-      // MusicBrainz now lists nothing for this label — nothing to re-walk. Done, cheaply.
-      return { ...EMPTY, next: { cursor: 0, state: "done" } };
-    }
-
-    offset = Math.max(0, staleTotal - BROWSE_PAGE_SIZE);
-  } else {
-    offset = descendOffset(node.cursor);
+  const { offset, page, staleTotal } = provider;
+  if (node.cursor === REARM_TAIL && staleTotal !== null && staleTotal <= 0) {
+    return { ...EMPTY, next: { cursor: 0, state: "done" } };
   }
-
-  const page = await browse(offset, BROWSE_PAGE_SIZE);
   const releases = browseReleases(page);
   const total = page?.["release-count"] ?? offset + releases.length;
-  const enqueued = await enqueueReleaseNodes(node, releases, childHop);
+  const enqueued = await enqueueReleaseNodes(node, releases, childHop, undefined, client);
 
   if (staleTotal !== null && total > staleTotal) {
     // The count grew in the probe→tail window: re-aim at the fresh tail, cover the miss next tick.
@@ -1588,9 +1734,9 @@ async function expandRearmedBrowse(
 // rules. Exact MB label identity wins over the name fold; an unsafe fold collision falls back to the
 // label default only, so two namesakes never borrow each other's artist scope.
 //
-// Read ONCE per crawl tick (the bounded `artist_rules` read plus the label entity set), never once
-// per candidate. `crawlCatalogue` clears the memo at the pass boundary so a ruling made since the
-// last tick takes effect atomically on the next one.
+// Read ONCE per release commit (the bounded `artist_rules` read plus the label entity set), never
+// once per candidate. A phased commit reads it through that commit's transaction so a ruling made
+// during provider I/O wins and no process-global snapshot can cross requests.
 type LabelScopeEntry = { enabled: boolean; labelId: string };
 type FoldScopeEntry = "ambiguous" | LabelScopeEntry;
 type ScopeMemo = {
@@ -1610,21 +1756,15 @@ type ArtistRuleMemoRow = {
 type ReleaseLabelScope = { enabled: boolean; labelId: string | null; rulesAllowed: boolean };
 type ScopeDecision = "allow" | "block" | "default";
 
-let scopeMemo: null | ScopeMemo = null;
-
 function addLabelRule(map: Map<string, Set<string>>, labelId: string, artistMbid: string): void {
   const artists = map.get(labelId) ?? new Set<string>();
   artists.add(artistMbid);
   map.set(labelId, artists);
 }
 
-async function getScopeMemo(): Promise<ScopeMemo> {
-  if (scopeMemo) {
-    return scopeMemo;
-  }
-
-  const labels = await listLabels();
-  const db = await getDb();
+async function getScopeMemo(client?: Pick<Client, "execute">): Promise<ScopeMemo> {
+  const labels = await listLabels(undefined, client);
+  const db = client ?? (await getDb());
   const result = await db.execute({
     args: [ARTIST_RULE_MEMO_LIMIT + 1],
     sql: `select artist_mbid, label_id, verdict from artist_rules
@@ -1686,15 +1826,14 @@ async function getScopeMemo(): Promise<ScopeMemo> {
     );
   }
 
-  scopeMemo = memo;
   return memo;
 }
 
-async function releaseLabelScope(
+function releaseLabelScope(
   mbLabelId: null | string,
   labelName: null | string | undefined,
-): Promise<ReleaseLabelScope> {
-  const memo = await getScopeMemo();
+  memo: ScopeMemo,
+): ReleaseLabelScope {
   const exact = mbLabelId ? memo.labelByMbid.get(mbLabelId) : undefined;
 
   if (exact) {
@@ -1785,11 +1924,12 @@ function discogsIdsForRelease(release: MbReleaseDetail): {
  * billed records they cover. An album is minted + linked only when at least one candidate survives
  * that gate, folded on the release-group MBID (`inc=release-groups`).
  */
-async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansion> {
-  const release = await mb<MbReleaseDetail>(
-    `/release/${node.external_id}?inc=recordings+artist-credits+isrcs+labels+release-groups+url-rels`,
-  );
-
+async function applyRelease(
+  node: FrontierRow,
+  maxHop: number,
+  release: MbReleaseDetail | null,
+  client?: CrawlDbClient,
+): Promise<Expansion> {
   if (!release?.id) {
     return { ...EMPTY, next: { cursor: 0, note: "no MusicBrainz release", state: "skipped" } };
   }
@@ -1811,7 +1951,7 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   let labelName = mbLabelName;
 
   if (mbLabelName && labelSlug(mbLabelName)) {
-    const known = await canonicalLabelName(mbLabelName);
+    const known = await canonicalLabelName(mbLabelName, client);
 
     if (known) {
       labelName = known;
@@ -1820,7 +1960,7 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
       // surfaces in the operator's attention queue. It is NOT crawled — the next crawl
       // seeds from it only if he enables it. The crawler proposes; the operator rules.
       // Minted (or folded) on the MBID so two spellings that slugify apart collapse to one row.
-      await ensureLabel(mbLabelName, mbLabelId);
+      await ensureLabel(mbLabelName, mbLabelId, client);
       labelsDiscovered.push(mbLabelName);
     }
   }
@@ -1894,8 +2034,8 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   // ── THE STORAGE GATE ──────────────────────────────────────────────────────────
   // Apply FIRST-credit exceptions to the label default. The artist-hop walk below remains
   // deliberately unfiltered: storage scope never prunes discovery, and maxHop still terminates it.
-  const scope = await releaseLabelScope(mbLabelId, mbLabelName ?? labelName);
-  const memo = await getScopeMemo();
+  const memo = await getScopeMemo(client);
+  const scope = releaseLabelScope(mbLabelId, mbLabelName ?? labelName, memo);
   const labelCanAllow = scope.labelId ? (memo.labelAllow.get(scope.labelId)?.size ?? 0) > 0 : false;
   const canAllow = scope.rulesAllowed && (memo.globalAllow.size > 0 || labelCanAllow);
   const kept: TrackCandidate[] = [];
@@ -1936,20 +2076,21 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
     // the `album_id` edge stamped below — one resolve, so the two can never disagree. Resolved inside
     // the gate: a non-enabled release stores no album either, so no childless `albums` row is minted.
     const albumId =
-      (await ensureAlbum(release.title ?? null, release["release-group"]?.id ?? null)) ?? null;
+      (await ensureAlbum(release.title ?? null, release["release-group"]?.id ?? null, client)) ??
+      null;
 
-    const result = await writeCatalogueTracks(kept, albumId);
+    const result = await writeCatalogueTracks(kept, albumId, client);
     tracksSkippedHeld = result.skipped;
     written = result.written;
     const { writtenIds } = result;
 
     if (labelName) {
-      await linkTracksToLabel(writtenIds, labelName, mbLabelId);
+      await linkTracksToLabel(writtenIds, labelName, mbLabelId, client);
     }
 
     // The album edge, stamped INLINE — every pressing of a record resolves to one album row.
     // Purely additive; a crawled album is minted here now, no deploy backfill.
-    await linkTracksToAlbumId(writtenIds, albumId);
+    await linkTracksToAlbumId(writtenIds, albumId, client);
 
     // The other indexed edge these rows need, stamped in the same breath as `label_id` and for
     // the same reason: `/artist/<slug>` shows the rest of an artist's catalogue, and it can only
@@ -1971,13 +2112,14 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
       new Map(
         kept.map((candidate) => [catalogueTrackId(candidate.recordingId), candidate.creditMbids]),
       ),
+      client,
     );
 
     // Stamp any remixer credit these titles name (RFC label-lineage-remixer, U2), now the
     // `track_artists` edges exist. A crawled remix by an ALREADY-CERTIFIED remixer (the only kind
     // `linkTracksToArtistEntities` links) gets its `role='remixer'` stamp; an uncertified remixer
     // has no linked row, so nothing is stamped — the same exact-match-only rail.
-    await stampRemixerRoles(writtenIds);
+    await stampRemixerRoles(writtenIds, client);
   }
 
   // The outward edge: the artists on this release, one hop further out. Past the limit
@@ -1989,14 +2131,17 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
 
   if (artistHop <= maxHop) {
     for (const mbid of artistMbids) {
-      enqueued += await enqueue({
-        externalId: mbid,
-        hop: artistHop,
-        kind: "artist",
-        labelSlug: node.label_slug,
-        parentId: node.id,
-        source: "musicbrainz",
-      });
+      enqueued += await enqueue(
+        {
+          externalId: mbid,
+          hop: artistHop,
+          kind: "artist",
+          labelSlug: node.label_slug,
+          parentId: node.id,
+          source: "musicbrainz",
+        },
+        client,
+      );
     }
   }
 
@@ -2016,6 +2161,459 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
     tracksSkippedLabelGate,
     tracksWritten: written,
   };
+}
+
+async function applyCrawlProvider(
+  node: FrontierRow,
+  maxHop: number,
+  plan: CrawlProviderPlan,
+  outcome: CrawlProviderOutcome,
+  client?: CrawlDbClient,
+): Promise<Expansion> {
+  if (outcome.kind === "failed") {
+    const error = outcome.rateLimited
+      ? new ThrottledError(outcome.message)
+      : new Error(outcome.message);
+    throw error;
+  }
+  if (plan.kind === "terminal" && outcome.data.kind === "terminal") {
+    return plan.expansion;
+  }
+  if (plan.kind === "seed" && outcome.data.kind === "seed") {
+    return applySeedLabel(node, plan, outcome.data.search, client);
+  }
+  if (plan.kind === "browse-forward" && outcome.data.kind === "browse-forward") {
+    return applyForwardBrowse(node, plan.childHop, outcome.data.browse, client);
+  }
+  if (plan.kind === "browse-rearmed" && outcome.data.kind === "browse-rearmed") {
+    return applyRearmedBrowse(node, plan.childHop, outcome.data.browse, client);
+  }
+  if (plan.kind === "release" && outcome.data.kind === "release") {
+    return applyRelease(node, maxHop, outcome.data.release, client);
+  }
+  throw new Error("Crawl provider result does not match its prepared node");
+}
+
+async function expandNode(node: FrontierRow, maxHop: number): Promise<Expansion> {
+  const plan = await planCrawlNode(node, maxHop);
+  const data = await fetchCrawlProvider(plan, node);
+  return applyCrawlProvider(node, maxHop, plan, { data, kind: "success" });
+}
+
+const CRAWL_PHASE_TOKEN_KEY_LABEL = "fluncle/catalogue-crawl-phase/v1";
+export const CRAWL_PHASE_TOKEN_MAX_BYTES = 2 * 1024 * 1024;
+const CRAWL_PHASE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+type PreparedCrawlPhaseToken = {
+  claimToken: string;
+  expiresAt: number;
+  iat: number;
+  maxHop: number;
+  node: ClaimedCrawlFrontierRow;
+  plan: CrawlProviderPlan;
+  stage: "prepared";
+};
+
+type FetchedCrawlPhaseToken = Omit<PreparedCrawlPhaseToken, "stage"> & {
+  outcome: CrawlProviderOutcome;
+  stage: "fetched";
+};
+
+export type CrawlPhaseInitialization = Pick<
+  CrawlPass,
+  "artistsRearmed" | "releasesRearmed" | "seeded" | "seedsRearmed"
+>;
+
+export type CrawlPhasePrepareResult = {
+  frontierPending: number;
+  initialization: CrawlPhaseInitialization;
+  items: { nodeId: string; preparedToken: string }[];
+  kind: "drained" | "prepared" | "unavailable";
+};
+
+export type CrawlPhaseFetchResult = {
+  commitToken: string;
+  operationId: "catalogue.crawl";
+  operationKey: string;
+  requestDigest: string;
+};
+
+function crawlPhaseTokenKey(): Promise<Buffer> {
+  return readEnv("ADMIN_SESSION_SECRET").then((secret) =>
+    createHmac("sha256", secret).update(CRAWL_PHASE_TOKEN_KEY_LABEL).digest(),
+  );
+}
+
+async function signCrawlPhaseToken(
+  payload: FetchedCrawlPhaseToken | PreparedCrawlPhaseToken,
+): Promise<string> {
+  const body = Buffer.from(canonicalOperationJson(crawlPhaseJsonValue(payload))).toString(
+    "base64url",
+  );
+  const signature = createHmac("sha256", await crawlPhaseTokenKey())
+    .update(body)
+    .digest("base64url");
+  const token = `${body}.${signature}`;
+  if (Buffer.byteLength(token, "utf8") > CRAWL_PHASE_TOKEN_MAX_BYTES) {
+    throw new Error(`crawl phase provider envelope exceeds ${CRAWL_PHASE_TOKEN_MAX_BYTES} bytes`);
+  }
+  return token;
+}
+
+function crawlPhaseJsonValue(value: unknown): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(crawlPhaseJsonValue);
+  }
+  if (isRecord(value)) {
+    const normalized: { [key: string]: JsonValue } = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (child !== undefined) {
+        normalized[key] = crawlPhaseJsonValue(child);
+      }
+    }
+    return normalized;
+  }
+  throw new Error("crawl phase token contains a non-JSON value");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validClaimedNode(value: unknown): value is ClaimedCrawlFrontierRow {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.external_id === "string" &&
+    typeof value.source_version === "string" &&
+    typeof value.updated_at === "string" &&
+    typeof value.claim_expires_at === "string" &&
+    (value.kind === "artist" || value.kind === "label" || value.kind === "release") &&
+    (value.source === "fluncle" || value.source === "musicbrainz") &&
+    Number.isSafeInteger(value.cursor) &&
+    Number.isSafeInteger(value.failures) &&
+    Number.isSafeInteger(value.hop)
+  );
+}
+
+async function verifyCrawlPhaseToken<T extends FetchedCrawlPhaseToken | PreparedCrawlPhaseToken>(
+  token: string,
+  stage: T["stage"],
+  enforceExpiry = true,
+): Promise<T> {
+  if (Buffer.byteLength(token, "utf8") > CRAWL_PHASE_TOKEN_MAX_BYTES) {
+    throw new Error("invalid crawl phase token");
+  }
+  const [body, signature, extra] = token.split(".");
+  if (!body || !signature || extra !== undefined) {
+    throw new Error("invalid crawl phase token");
+  }
+  const expected = createHmac("sha256", await crawlPhaseTokenKey())
+    .update(body)
+    .digest("base64url");
+  const left = Buffer.from(signature);
+  const right = Buffer.from(expected);
+  if (left.length !== right.length || !timingSafeEqual(left, right)) {
+    throw new Error("invalid crawl phase token");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("invalid crawl phase token");
+  }
+  if (
+    !isRecord(parsed) ||
+    parsed.stage !== stage ||
+    typeof parsed.claimToken !== "string" ||
+    !Number.isSafeInteger(parsed.iat) ||
+    !Number.isSafeInteger(parsed.expiresAt) ||
+    !Number.isSafeInteger(parsed.maxHop) ||
+    !validClaimedNode(parsed.node) ||
+    !isRecord(parsed.plan) ||
+    (stage === "fetched" && !isRecord(parsed.outcome))
+  ) {
+    throw new Error("invalid crawl phase token");
+  }
+  const now = Date.now();
+  if (
+    Number(parsed.iat) > now + CRAWL_PHASE_CLOCK_SKEW_MS ||
+    (enforceExpiry && Number(parsed.expiresAt) < now) ||
+    Number(parsed.expiresAt) <= Number(parsed.iat)
+  ) {
+    throw new Error("expired crawl phase token");
+  }
+  return parsed as T;
+}
+
+function emptyCrawlPhaseInitialization(): CrawlPhaseInitialization {
+  return { artistsRearmed: 0, releasesRearmed: 0, seeded: 0, seedsRearmed: 0 };
+}
+
+async function initializeCrawlPhaseState(
+  cutoverEnabled: boolean,
+): Promise<CrawlPhaseInitialization> {
+  const seed = await seedFromEnabledLabels();
+  const releasesRearmed = await rearmScopedLabelReleases();
+  let artistsRearmed = await rearmAllowedArtists();
+  const seedsRearmed = await rearmSeedLabels();
+  if (!cutoverEnabled) {
+    artistsRearmed += await rearmStaleAllowedArtists();
+  }
+  const initialization: CrawlPhaseInitialization = {
+    artistsRearmed,
+    releasesRearmed,
+    seeded: seed.minted,
+    seedsRearmed,
+  };
+  return initialization;
+}
+
+/** Run the bounded DB-only subscription maintenance before per-node provider phases begin. */
+export async function initializeCrawlPhase(): Promise<
+  CrawlPhaseInitialization & { kind: "initialized" | "unavailable" }
+> {
+  const cutoverEnabled = await isCrawlDueCutoverEnabled();
+  if (!cutoverEnabled) {
+    return { ...emptyCrawlPhaseInitialization(), kind: "unavailable" };
+  }
+  return { ...(await initializeCrawlPhaseState(true)), kind: "initialized" };
+}
+
+/** Claim at most two nearby nodes immediately before their serial provider requests. */
+export async function prepareCrawlPhase({
+  limit = 2,
+  maxHop = DEFAULT_MAX_HOP,
+}: {
+  limit?: number;
+  maxHop?: number;
+} = {}): Promise<CrawlPhasePrepareResult> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 2) {
+    throw new Error("crawl prepare limit must be an integer from 1 through 2");
+  }
+  if (!(await isCrawlDueCutoverEnabled())) {
+    return {
+      frontierPending: await countFrontierPending(),
+      initialization: emptyCrawlPhaseInitialization(),
+      items: [],
+      kind: "unavailable",
+    };
+  }
+
+  const db = await getDb();
+  const claimed = await claimCrawlFrontierRows(db, {
+    claimedBy: CRAWL_CATALOGUE_CLAIM_OWNER,
+    leaseMs: CRAWL_CATALOGUE_LEASE_MS,
+    limit,
+    token: crypto.randomUUID(),
+  });
+  if (claimed.rows.length === 0) {
+    return {
+      frontierPending: await countFrontierPending(),
+      initialization: {
+        ...emptyCrawlPhaseInitialization(),
+        artistsRearmed: claimed.artistsRearmed,
+      },
+      items: [],
+      kind: "drained",
+    };
+  }
+
+  const hopLimit = Math.max(0, Math.min(maxHop, MAX_HOP_CEILING));
+  const items: CrawlPhasePrepareResult["items"] = [];
+  for (const claimedNode of claimed.rows) {
+    items.push({
+      nodeId: claimedNode.id,
+      preparedToken: await signCrawlPhaseToken({
+        claimToken: claimed.claimToken,
+        expiresAt: Date.parse(claimedNode.claim_expires_at),
+        iat: Date.now(),
+        maxHop: hopLimit,
+        node: claimedNode,
+        plan: await planCrawlNode(claimedNode, hopLimit, db),
+        stage: "prepared",
+      }),
+    });
+  }
+  return {
+    frontierPending: await countFrontierPending(),
+    initialization: {
+      ...emptyCrawlPhaseInitialization(),
+      artistsRearmed: claimed.artistsRearmed,
+    },
+    items,
+    kind: "prepared",
+  };
+}
+
+function crawlCommitCoordinates(commitToken: string): Promise<{
+  operationId: "catalogue.crawl";
+  operationKey: string;
+  requestDigest: string;
+}> {
+  const operationId = "catalogue.crawl" as const;
+  const tokenDigest = createHash("sha256").update(commitToken).digest("hex");
+  return digestOperationRequest({ commitToken }).then((requestDigest) => ({
+    operationId,
+    operationKey: `${operationId}:${tokenDigest}`,
+    requestDigest,
+  }));
+}
+
+/** Perform only provider I/O. The returned bytes are signed before crossing back into admission. */
+export async function fetchCrawlPhase(preparedToken: string): Promise<CrawlPhaseFetchResult> {
+  const prepared = await verifyCrawlPhaseToken<PreparedCrawlPhaseToken>(preparedToken, "prepared");
+  let outcome: CrawlProviderOutcome;
+  try {
+    outcome = {
+      data: await fetchCrawlProvider(prepared.plan, prepared.node),
+      kind: "success",
+    };
+  } catch (error) {
+    outcome = {
+      kind: "failed",
+      message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+      rateLimited: error instanceof ThrottledError,
+    };
+  }
+
+  const fetched = { ...prepared, outcome, stage: "fetched" as const };
+  let commitToken: string;
+  try {
+    commitToken = await signCrawlPhaseToken(fetched);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("provider envelope exceeds")) {
+      throw error;
+    }
+    commitToken = await signCrawlPhaseToken({
+      ...prepared,
+      outcome: {
+        kind: "failed",
+        message: "MusicBrainz response exceeded the bounded crawl provider envelope",
+        rateLimited: false,
+      },
+      stage: "fetched",
+    });
+  }
+  return { commitToken, ...(await crawlCommitCoordinates(commitToken)) };
+}
+
+function expansionResult(expansion: Expansion): JsonValue {
+  return {
+    expanded: 1,
+    failed: 0,
+    labelsDiscovered: expansion.labelsDiscovered,
+    nodesEnqueued: expansion.enqueued,
+    rateLimited: false,
+    tracksAllowedIn: expansion.tracksAllowedIn,
+    tracksFound: expansion.tracksFound,
+    tracksSkipped: expansion.tracksSkipped,
+    tracksSkippedArtistRule: expansion.tracksSkippedArtistRule,
+    tracksSkippedHeld: expansion.tracksSkippedHeld,
+    tracksSkippedLabelGate: expansion.tracksSkippedLabelGate,
+    tracksWritten: expansion.tracksWritten,
+  };
+}
+
+/** Apply a fetched result and settle its claim in the operation receipt's single transaction. */
+export async function commitCrawlPhase(
+  options: CrawlPhaseFetchResult,
+): Promise<OperationReceiptOutcome> {
+  const fetched = await verifyCrawlPhaseToken<FetchedCrawlPhaseToken>(
+    options.commitToken,
+    "fetched",
+    false,
+  );
+  const coordinates = await crawlCommitCoordinates(options.commitToken);
+  if (
+    options.operationId !== coordinates.operationId ||
+    options.operationKey !== coordinates.operationKey ||
+    options.requestDigest !== coordinates.requestDigest
+  ) {
+    throw new Error("crawl phase operation coordinates do not match the signed provider result");
+  }
+
+  return executeReceiptBackedOperation({
+    client: await getDb(),
+    effect: async (transaction): Promise<OperationReceiptEffectResult> => {
+      const current = await isClaimedCrawlFrontierRowCurrent(
+        transaction,
+        fetched.node,
+        fetched.claimToken,
+      );
+      if (!current) {
+        return {
+          result: { code: "stale_crawl_claim", nodeId: fetched.node.id },
+          resultIdentity: fetched.node.id,
+          state: "rejected",
+        };
+      }
+
+      if (fetched.outcome.kind === "failed") {
+        const settled = await settleClaimedCrawlFrontierRow(transaction, {
+          claimToken: fetched.claimToken,
+          cursor: fetched.node.cursor,
+          failures: fetched.node.failures + 1,
+          id: fetched.node.id,
+          note: fetched.outcome.rateLimited
+            ? "musicbrainz rate-limited"
+            : fetched.outcome.message.slice(0, 200),
+          state: "failed",
+        });
+        if (!settled) {
+          throw new Error("crawl claim changed while its provider failure was settling");
+        }
+        return {
+          result: {
+            expanded: 0,
+            failed: 1,
+            labelsDiscovered: [],
+            nodesEnqueued: 0,
+            rateLimited: fetched.outcome.rateLimited,
+            tracksAllowedIn: 0,
+            tracksFound: 0,
+            tracksSkipped: 0,
+            tracksSkippedArtistRule: 0,
+            tracksSkippedHeld: 0,
+            tracksSkippedLabelGate: 0,
+            tracksWritten: 0,
+          },
+          resultIdentity: fetched.node.id,
+          state: "committed",
+        };
+      }
+
+      const expansion = await applyCrawlProvider(
+        fetched.node,
+        fetched.maxHop,
+        fetched.plan,
+        fetched.outcome,
+        transaction,
+      );
+      const settled = await settleClaimedCrawlFrontierRow(transaction, {
+        claimToken: fetched.claimToken,
+        cursor: expansion.next.cursor,
+        id: fetched.node.id,
+        note: expansion.next.note,
+        state: expansion.next.state,
+      });
+      if (!settled) {
+        throw new Error("crawl claim changed while its provider result was settling");
+      }
+      return {
+        result: expansionResult(expansion),
+        resultIdentity: fetched.node.id,
+        state: "committed",
+      };
+    },
+    ...coordinates,
+  });
 }
 
 // ── The pass ─────────────────────────────────────────────────────────────────
@@ -2038,9 +2636,6 @@ export async function crawlCatalogue({
   limit?: number;
   maxHop?: number;
 } = {}): Promise<CrawlPass> {
-  // One immutable gate snapshot per tick: label identities/defaults and every artist exception.
-  scopeMemo = null;
-
   const hopLimit = Math.max(0, Math.min(maxHop, MAX_HOP_CEILING));
   const pass: CrawlPass = {
     artistsRearmed: 0,
@@ -2073,20 +2668,12 @@ export async function crawlCatalogue({
     return { ...pass, frontierPending: await countFrontierPending(), seeded: enabled.length };
   }
 
-  const seed = await seedFromEnabledLabels();
-  pass.seeded = seed.minted;
-
-  // Scope-widening full replays win before the daily tail subscription: both target the same done
-  // label node, and the full replay must not be collapsed into a tail read. Both happen BEFORE the
-  // pick so a re-armed browse node can expand in this very pass, bounded against frontier floods.
-  pass.releasesRearmed = await rearmScopedLabelReleases();
-  pass.artistsRearmed = await rearmAllowedArtists();
-  pass.seedsRearmed = await rearmSeedLabels();
-
   const cutoverEnabled = await isCrawlDueCutoverEnabled();
-  if (!cutoverEnabled) {
-    pass.artistsRearmed += await rearmStaleAllowedArtists();
-  }
+  const initialization = await initializeCrawlPhaseState(cutoverEnabled);
+  pass.seeded = initialization.seeded;
+  pass.releasesRearmed = initialization.releasesRearmed;
+  pass.artistsRearmed = initialization.artistsRearmed;
+  pass.seedsRearmed = initialization.seedsRearmed;
   const claimToken = cutoverEnabled ? crypto.randomUUID() : undefined;
   const claimed =
     cutoverEnabled && claimToken !== undefined
@@ -2120,12 +2707,7 @@ export async function crawlCatalogue({
   for (const node of nodes) {
     let expansion: Expansion;
     try {
-      expansion =
-        node.kind === "release"
-          ? await expandRelease(node, hopLimit)
-          : node.kind === "artist" || node.source === "musicbrainz"
-            ? await expandBrowse(node, hopLimit)
-            : await expandSeedLabel(node);
+      expansion = await expandNode(node, hopLimit);
     } catch (error) {
       const throttled = error instanceof ThrottledError;
 
