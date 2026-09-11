@@ -74,6 +74,26 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
+  testCli(
+    "catalogue crawl rejects --phase-file combined with --dry-run before reading the file",
+    async () => {
+      const result = await runCli([
+        "admin",
+        "catalogue",
+        "crawl",
+        "--phase-file",
+        "/does/not/exist",
+        "--dry-run",
+        "--json",
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("--phase-file cannot be combined with --dry-run");
+      expect(result.stdout).not.toContain("ENOENT");
+    },
+  );
+
   testCli("admin labels update requires a ruling or a scoped re-walk before fetching", async () => {
     const result = await runCli(["admin", "labels", "update", "test-label", "--json"]);
 

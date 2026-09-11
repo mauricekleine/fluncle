@@ -17,6 +17,7 @@ export const CRAWL_CATALOGUE_LEASE_MS = 10 * 60 * 1000;
 export const CRAWL_CATALOGUE_CLAIM_OWNER = "crawl-catalogue";
 
 export type ClaimedCrawlFrontierRow = {
+  claim_expires_at: string;
   cursor: number;
   done_at: string | null;
   external_id: string;
@@ -26,6 +27,8 @@ export type ClaimedCrawlFrontierRow = {
   kind: "artist" | "label" | "release";
   label_slug: string | null;
   source: "fluncle" | "musicbrainz";
+  source_version: string;
+  updated_at: string;
 };
 
 export type ClaimedCrawlFrontierPage = {
@@ -45,13 +48,17 @@ export async function isCrawlDueCutoverEnabled(): Promise<boolean> {
 function frontierRow(row: Record<string, unknown>): ClaimedCrawlFrontierRow | undefined {
   if (
     typeof row["id"] !== "string" ||
+    typeof row["claim_expires_at"] !== "string" ||
     (row["kind"] !== "artist" && row["kind"] !== "label" && row["kind"] !== "release") ||
     (row["source"] !== "fluncle" && row["source"] !== "musicbrainz") ||
-    typeof row["external_id"] !== "string"
+    typeof row["external_id"] !== "string" ||
+    typeof row["source_version"] !== "string" ||
+    typeof row["updated_at"] !== "string"
   ) {
     return undefined;
   }
   return {
+    claim_expires_at: row["claim_expires_at"],
     cursor: Number(row["cursor"]),
     done_at: (row["done_at"] as null | string) ?? null,
     external_id: row["external_id"],
@@ -61,6 +68,8 @@ function frontierRow(row: Record<string, unknown>): ClaimedCrawlFrontierRow | un
     kind: row["kind"],
     label_slug: (row["label_slug"] as null | string) ?? null,
     source: row["source"],
+    source_version: row["source_version"],
+    updated_at: row["updated_at"],
   };
 }
 
@@ -112,10 +121,14 @@ export async function claimCrawlFrontierRows(
   }
 
   const hydrated = await client.execute({
-    args: ids,
-    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug, done_at
-      from crawl_frontier
-      where id in (${ids.map(() => "?").join(", ")})`,
+    args: [...ids, claim.claimToken],
+    sql: `select frontier.id, frontier.kind, frontier.source, frontier.external_id, frontier.hop,
+        frontier.cursor, frontier.failures, frontier.label_slug, frontier.done_at,
+        frontier.updated_at, due.source_version, due.claim_expires_at
+      from crawl_frontier frontier
+      join crawl_due_work due on due.node_id = frontier.id
+      where frontier.id in (${ids.map(() => "?").join(", ")})
+        and due.state = 'leased' and due.claim_token = ?`,
   });
   const byId = new Map<string, ClaimedCrawlFrontierRow>();
   for (const candidate of hydrated.rows) {
@@ -132,6 +145,42 @@ export async function claimCrawlFrontierRows(
       return row === undefined ? [] : [row];
     }),
   };
+}
+
+/** The exact durable claim + source snapshot fence checked before a provider result may write. */
+export async function isClaimedCrawlFrontierRowCurrent(
+  client: CrawlDueClient,
+  row: ClaimedCrawlFrontierRow,
+  claimToken: string,
+): Promise<boolean> {
+  const result = await client.execute({
+    args: [
+      row.id,
+      claimToken,
+      row.source_version,
+      row.claim_expires_at,
+      new Date().toISOString(),
+      row.kind,
+      row.source,
+      row.external_id,
+      row.hop,
+      row.cursor,
+      row.failures,
+      row.label_slug,
+      row.done_at,
+      row.updated_at,
+    ],
+    sql: `select 1
+      from crawl_due_work due
+      join crawl_frontier frontier on frontier.id = due.node_id
+      where due.node_id = ? and due.state = 'leased' and due.claim_token = ?
+        and due.source_version = ? and due.claim_expires_at = ? and due.claim_expires_at > ?
+        and frontier.kind = ? and frontier.source = ? and frontier.external_id = ?
+        and frontier.hop = ? and frontier.cursor = ? and frontier.failures = ?
+        and frontier.label_slug is ? and frontier.done_at is ? and frontier.updated_at = ?
+      limit 1`,
+  });
+  return result.rows.length === 1;
 }
 
 /**

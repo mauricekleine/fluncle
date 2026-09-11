@@ -24,6 +24,7 @@
 // reserved for a trustworthy absence verdict — a vendor outage must never masquerade as one.
 // Idempotent by construction — a second run over a fully-resolved archive fetches nothing.
 
+import { type Client } from "@libsql/client";
 import { type DiscogsLabelCandidate, type DiscogsLabelWork } from "@fluncle/contracts/orpc";
 import {
   type DiscogsLabelImage,
@@ -400,8 +401,12 @@ async function listPendingLabels(
 }
 
 /** Persist a resolved external id, non-clobbering (never overwrite one already stored). */
-async function persistLabelMbLabelIdInternal(slug: string, mbLabelId: string): Promise<void> {
-  const db = await getDb();
+async function persistLabelMbLabelIdInternal(
+  slug: string,
+  mbLabelId: string,
+  client?: Pick<Client, "execute">,
+): Promise<void> {
+  const db = client ?? (await getDb());
 
   await db.execute({
     args: [mbLabelId, slug],
@@ -424,8 +429,12 @@ async function persistDiscogsLabelId(slug: string, discogsLabelId: number): Prom
  * crawl's own module stamps the id it holds instead of throwing it away — the sweep then skips
  * the MB search for that label.
  */
-export async function setLabelMbLabelId(slug: string, mbLabelId: string): Promise<void> {
-  await persistLabelMbLabelIdInternal(slug, mbLabelId);
+export async function setLabelMbLabelId(
+  slug: string,
+  mbLabelId: string,
+  client?: Pick<Client, "execute">,
+): Promise<void> {
+  await persistLabelMbLabelIdInternal(slug, mbLabelId, client);
 }
 
 async function markResolved(slug: string, imageKey: string): Promise<void> {

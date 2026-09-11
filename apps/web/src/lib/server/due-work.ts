@@ -648,20 +648,21 @@ export function markDueWorkSourceMaintenanceFromSelectStatements(
   ];
 }
 
-/** Execute a bounded source mutation and its repair marker in one libSQL write transaction. */
-export async function batchDueWorkSourceMutation(
-  client: DueWorkClient,
+type DueWorkSourceMutationOptions = {
+  afterMaintenanceStatements?: readonly InStatement[];
+  markerVersion?: string;
+  now?: Date | string;
+  onlyIfLastSourceStatementChanged?: boolean;
+  producer: string;
+  publicProjectionImpact?: PublicProjectionDynamicImpactOverride;
+};
+
+/** Build one bounded source mutation and its adjacent repair markers for a caller-owned batch. */
+export function dueWorkSourceMutationStatements(
   statements: readonly InStatement[],
   subjects: readonly DueWorkSourceSubject[],
-  options: {
-    afterMaintenanceStatements?: readonly InStatement[];
-    markerVersion?: string;
-    now?: Date | string;
-    onlyIfLastSourceStatementChanged?: boolean;
-    producer: string;
-    publicProjectionImpact?: PublicProjectionDynamicImpactOverride;
-  },
-): Promise<ResultSet[]> {
+  options: DueWorkSourceMutationOptions,
+): InStatement[] {
   if (statements.length === 0) {
     throw new Error("due-work source mutation batches must contain at least one source statement");
   }
@@ -680,7 +681,55 @@ export async function batchDueWorkSourceMutation(
     );
   }
 
-  return client.batch([...statements, ...maintenance, ...afterMaintenance], "write");
+  return [...statements, ...maintenance, ...afterMaintenance];
+}
+
+/** Execute complete mutation groups in bounded batches without splitting their statement order. */
+export async function batchDueWorkMutationGroups(
+  client: Pick<Client, "batch">,
+  groups: readonly (readonly InStatement[])[],
+  statementLimit: number,
+): Promise<ResultSet[][]> {
+  const groupedResults: ResultSet[][] = [];
+  let pendingGroups: Array<readonly InStatement[]> = [];
+  let pendingStatementCount = 0;
+
+  const flush = async (): Promise<void> => {
+    if (pendingStatementCount === 0) {
+      return;
+    }
+    const results = await client.batch(pendingGroups.flat(), "write");
+    let offset = 0;
+    for (const group of pendingGroups) {
+      groupedResults.push(results.slice(offset, offset + group.length));
+      offset += group.length;
+    }
+    pendingGroups = [];
+    pendingStatementCount = 0;
+  };
+
+  for (const group of groups) {
+    if (group.length === 0 || group.length > statementLimit) {
+      throw new Error(`mutation groups must contain 1 through ${statementLimit} statements`);
+    }
+    if (pendingStatementCount + group.length > statementLimit) {
+      await flush();
+    }
+    pendingGroups.push(group);
+    pendingStatementCount += group.length;
+  }
+  await flush();
+  return groupedResults;
+}
+
+/** Execute a bounded source mutation and its repair marker in one libSQL write transaction. */
+export async function batchDueWorkSourceMutation(
+  client: DueWorkClient,
+  statements: readonly InStatement[],
+  subjects: readonly DueWorkSourceSubject[],
+  options: DueWorkSourceMutationOptions,
+): Promise<ResultSet[]> {
+  return client.batch(dueWorkSourceMutationStatements(statements, subjects, options), "write");
 }
 
 export async function listReadyDueWork<WorkKind extends string>(

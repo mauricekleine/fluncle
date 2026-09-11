@@ -1,3 +1,4 @@
+import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { type ArtistListItem } from "@fluncle/contracts";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
@@ -8,10 +9,13 @@ import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
+  batchDueWorkMutationGroups,
   batchDueWorkSourceMutation,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  dueWorkSourceMutationStatements,
   markDueWorkSourceMaintenanceFromSelectStatements,
   markDueWorkSourceMaintenanceStatements,
+  MAX_DUE_WORK_CHUNK_SIZE,
 } from "./due-work";
 import {
   hubCountArtistEdgeStatements,
@@ -1092,63 +1096,76 @@ export function buildArtistLinkStatement(
   };
 }
 
+function artistLinkFollowUpStatements(inserted: ResultSet) {
+  const newEdges = typedRows<{
+    artist_id: string;
+    is_catalogue: bigint | number;
+    is_rankable: bigint | number;
+    track_id: string;
+  }>(inserted.rows).map((row) => ({
+    artistId: row.artist_id,
+    certified: Number(row.is_catalogue) === 0,
+    rankable: Number(row.is_rankable) === 1,
+    trackId: row.track_id,
+  }));
+  return [
+    ...hubCountArtistEdgeStatements(newEdges),
+    ...restaleCatalogueRankStatements(newEdges.map((edge) => edge.trackId)),
+    ...(newEdges.length > 0
+      ? [
+          ...markDueWorkSourceMaintenanceStatements(
+            [
+              {
+                subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                subjectType: "track" as const,
+              },
+              ...newEdges.map((edge) => ({
+                subjectId: edge.trackId,
+                subjectType: "track" as const,
+              })),
+              ...newEdges.map((edge) => ({
+                subjectId: edge.artistId,
+                subjectType: "artist" as const,
+              })),
+            ],
+            { producer: "artist-edge-link" },
+          ),
+        ]
+      : []),
+  ];
+}
+
 export async function linkTracksToArtistEntities(
   trackIds: string[],
   creditMbids?: CreditMbidsByTrack,
+  client?: Pick<Client, "batch" | "execute">,
 ): Promise<number> {
   if (trackIds.length === 0) {
     return 0;
+  }
+
+  const statement = buildArtistLinkStatement(trackIds, creditMbids);
+  if (client) {
+    const inserted = await client.execute(statement);
+    const followUp = artistLinkFollowUpStatements(inserted);
+    if (followUp.length > 0) {
+      await client.batch(followUp);
+    }
+    return inserted.rows.length;
   }
 
   const db = await getDb();
   const transaction = await db.transaction("write");
 
   try {
-    const inserted = await transaction.execute(buildArtistLinkStatement(trackIds, creditMbids));
-    const newEdges = typedRows<{
-      artist_id: string;
-      is_catalogue: bigint | number;
-      is_rankable: bigint | number;
-      track_id: string;
-    }>(inserted.rows).map((row) => ({
-      artistId: row.artist_id,
-      certified: Number(row.is_catalogue) === 0,
-      rankable: Number(row.is_rankable) === 1,
-      trackId: row.track_id,
-    }));
-    const followUp = [
-      ...hubCountArtistEdgeStatements(newEdges),
-      ...restaleCatalogueRankStatements(newEdges.map((edge) => edge.trackId)),
-      ...(newEdges.length > 0
-        ? [
-            ...markDueWorkSourceMaintenanceStatements(
-              [
-                {
-                  subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-                  subjectType: "track" as const,
-                },
-                ...newEdges.map((edge) => ({
-                  subjectId: edge.trackId,
-                  subjectType: "track" as const,
-                })),
-                ...newEdges.map((edge) => ({
-                  subjectId: edge.artistId,
-                  subjectType: "artist" as const,
-                })),
-              ],
-              { producer: "artist-edge-link" },
-            ),
-          ]
-        : []),
-    ];
-
+    const inserted = await transaction.execute(statement);
+    const followUp = artistLinkFollowUpStatements(inserted);
     if (followUp.length > 0) {
       await transaction.batch(followUp);
     }
-
     await transaction.commit();
 
-    return newEdges.length;
+    return inserted.rows.length;
   } finally {
     transaction.close();
   }
@@ -1169,12 +1186,15 @@ export async function linkTracksToArtistEntities(
  * count of rows stamped. Best-effort by contract — the callers wrap it so a failure never blocks
  * the write it follows.
  */
-export async function stampRemixerRoles(trackIds: string[]): Promise<number> {
+export async function stampRemixerRoles(
+  trackIds: string[],
+  client?: Pick<Client, "batch" | "execute">,
+): Promise<number> {
   if (trackIds.length === 0) {
     return 0;
   }
 
-  const db = await getDb();
+  const db = client ?? (await getDb());
   const placeholders = trackIds.map(() => "?").join(", ");
 
   // One read: every UNSTAMPED (track, linked-artist) edge in the batch, carrying the track's title
@@ -1219,7 +1239,7 @@ export async function stampRemixerRoles(trackIds: string[]): Promise<number> {
     entry.linked.push({ artistId: row.artist_id, name: row.artist_name });
   }
 
-  let stamped = 0;
+  const mutationGroups: InStatement[][] = [];
 
   for (const [trackId, entry] of byTrack) {
     const remixerFolds = new Set(
@@ -1235,27 +1255,27 @@ export async function stampRemixerRoles(trackIds: string[]): Promise<number> {
         continue;
       }
 
-      const [result] = await batchDueWorkSourceMutation(
-        db,
-        [
-          {
-            args: [artist.artistId, trackId],
-            sql: `update track_artists set role = 'remixer'
+      mutationGroups.push(
+        dueWorkSourceMutationStatements(
+          [
+            {
+              args: [artist.artistId, trackId],
+              sql: `update track_artists set role = 'remixer'
                   where artist_id = ? and track_id = ? and role is null`,
+            },
+          ],
+          [{ subjectId: trackId, subjectType: "track" }],
+          {
+            onlyIfLastSourceStatementChanged: true,
+            producer: "artist-remixer-role-stamp",
           },
-        ],
-        [{ subjectId: trackId, subjectType: "track" }],
-        {
-          onlyIfLastSourceStatementChanged: true,
-          producer: "artist-remixer-role-stamp",
-        },
+        ),
       );
-
-      stamped += result?.rowsAffected ?? 0;
     }
   }
 
-  return stamped;
+  const results = await batchDueWorkMutationGroups(db, mutationGroups, MAX_DUE_WORK_CHUNK_SIZE);
+  return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
 }
 
 // Upsert artists + track_artists for a track that was just inserted. Called at

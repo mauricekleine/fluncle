@@ -19,6 +19,7 @@
 // no `slugify`, so the fold happens here in TS over a bounded `GROUP BY label` read
 // (one row per DISTINCT label, never a row per track).
 
+import { type Client } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import {
   type LabelAdminItem,
@@ -177,8 +178,11 @@ export const LABELS_ADMIN_PAGE_SIZE = 50;
  * spelling of the same join. Only `confirmed` ever resolves — a `candidate` is an unruled
  * derivation guess, and search must never answer from one.
  */
-export async function resolveConfirmedAliasLabelId(slug: string): Promise<string | undefined> {
-  const db = await getDb();
+export async function resolveConfirmedAliasLabelId(
+  slug: string,
+  client?: Pick<Client, "execute">,
+): Promise<string | undefined> {
+  const db = client ?? (await getDb());
   const result = await db.execute({
     args: [slug],
     sql: `select label_id from label_aliases where alias_slug = ? and status = 'confirmed' limit 1`,
@@ -223,8 +227,9 @@ export async function resolveConfirmedAliasLabelId(slug: string): Promise<string
 export async function ensureLabel(
   raw: string | null | undefined,
   mbLabelId?: null | string,
+  client?: Pick<Client, "batch" | "execute">,
 ): Promise<string | undefined> {
-  const db = await getDb();
+  const db = client ?? (await getDb());
   const mbid = typeof mbLabelId === "string" && mbLabelId.trim() ? mbLabelId.trim() : null;
 
   // 1. mbid-first: a label already folded on this MusicBrainz MBID wins, whatever its slug.
@@ -247,10 +252,10 @@ export async function ensureLabel(
     return undefined;
   }
 
-  const aliasLabelId = await resolveConfirmedAliasLabelId(slug);
+  const aliasLabelId = await resolveConfirmedAliasLabelId(slug, db);
 
   if (aliasLabelId) {
-    await adoptLabelMbLabelId(aliasLabelId, mbid);
+    await adoptLabelMbLabelId(aliasLabelId, mbid, db);
 
     return aliasLabelId;
   }
@@ -286,7 +291,7 @@ export async function ensureLabel(
 
   // Adopt the MBID onto a pre-existing slug row that has none — fill-empty-only.
   if (!row.mb_label_id) {
-    await adoptLabelMbLabelId(row.id, mbid);
+    await adoptLabelMbLabelId(row.id, mbid, db);
   }
 
   return row.id;
@@ -298,12 +303,16 @@ export async function ensureLabel(
  * race harmlessly; the id is already in the caller's hand, so a throw here must not lose it (the
  * `.catch()` keeps it). A no-op when there is no MBID to adopt.
  */
-async function adoptLabelMbLabelId(labelId: string, mbid: null | string): Promise<void> {
+async function adoptLabelMbLabelId(
+  labelId: string,
+  mbid: null | string,
+  client?: Pick<Client, "execute">,
+): Promise<void> {
   if (!mbid) {
     return;
   }
 
-  const db = await getDb();
+  const db = client ?? (await getDb());
 
   await db
     .execute({
@@ -1922,8 +1931,11 @@ function toLabelSeedItem(row: LabelRow): LabelSeedItem {
  * read, so the seed resolver gets the ruled identity for free instead of paying a second query for
  * it. See {@link LabelSeedItem}.
  */
-export async function listLabels(seedState?: LabelSeedState): Promise<LabelSeedItem[]> {
-  const db = await getDb();
+export async function listLabels(
+  seedState?: LabelSeedState,
+  client?: Pick<Client, "execute">,
+): Promise<LabelSeedItem[]> {
+  const db = client ?? (await getDb());
   const result = seedState
     ? await db.execute({
         args: [seedState],

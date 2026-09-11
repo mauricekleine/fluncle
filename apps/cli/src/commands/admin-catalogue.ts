@@ -343,6 +343,11 @@ export async function crawlCatalogueCommand(
   return adminApiPost<CrawlPassResult>(`/api/v1/admin/catalogue/crawl?${params.toString()}`);
 }
 
+/** Drive one internal crawl admission phase through the existing authenticated action. */
+export async function crawlCataloguePhaseCommand<T>(body: unknown): Promise<T> {
+  return adminApiPost<T>("/api/v1/admin/catalogue/crawl", body);
+}
+
 /** Read the crawl frontier's state, the catalogue's size, and the seed set. */
 export async function crawlStatusCommand(): Promise<CrawlStatusResult> {
   return adminApiGet<CrawlStatusResult>("/api/v1/admin/catalogue/crawl");

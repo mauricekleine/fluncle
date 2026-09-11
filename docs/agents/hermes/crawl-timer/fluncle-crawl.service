@@ -16,22 +16,17 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # from main via pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its
 # /status marker (cron-output.sh). NO new secret: `crawl_catalogue` is AGENT tier, so the
 # box's existing agent-scoped token drives it.
-# FLUNCLE_CRAWL_NODES is the per-pass frontier budget (the sweep's `--limit`, default 10). It must
+# FLUNCLE_CRAWL_NODES is the per-pass frontier budget (default 10). It must
 # ride the `docker exec` as `-e`: a systemd `Environment=` would set it on this host wrapper and
 # never reach the sweep inside the container. Sizing rule (see the README): a node costs ~3s of the
 # shared 1 req/s MusicBrainz budget, so the pass must stay a MINORITY of the 600s window — the same
 # serialized budget feeds the sibling MB sweeps, and the ledger's throttled-tick ratio is the gauge
 # that says the value is too high. 60 nodes ≈ 180s (~30% duty cycle).
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home -e FLUNCLE_CRAWL_NODES=60 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-crawl -- bash /opt/hermes-scripts/crawl-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home -e FLUNCLE_CRAWL_NODES=60 hermes bash /opt/hermes-scripts/crawl-sweep.sh
 # A PURE trigger — zero LLM tokens. One pass is ~3 MusicBrainz calls per node paced at ~1 req/s in
-# the Worker (measured ~3s/node, so ≈180s at 60 nodes), plus headroom for a Retry-After'd 503.
-# The ceiling must fit the sweep's WORST case, not the nominal pass: the CLI caps one request at
-# 300s, and the sweep retries a timed-out call once, so a slow-MusicBrainz tick can legitimately
-# spend 300s (dead first call) + up to 300s (retry) — a 600s ceiling kills exactly that tick
-# mid-retry, before it can write its /status marker or an honest failure. 900s fits the full
-# retry window with margin. Past the 10-min cadence an over-long pass just eats the next
-# trigger (systemd never starts a new tick while one is active) and self-heals — this is a
-# backstop, never the normal path.
+# the Worker (measured ~3s/node, so ≈180s at 60 nodes), plus headroom for Retry-After'd 503s.
+# Each node's provider request is outside database admission; only its prepare and atomic commit
+# phases hold the writer lease. The timeout remains a process backstop, never an admission window.
 TimeoutStartSec=1030
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true

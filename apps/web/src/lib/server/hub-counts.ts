@@ -26,6 +26,8 @@
 // sweep, never a correctness gate. The `max(0, …)` clamp is the same posture: a count must never
 // read negative, whatever a lost race did.
 
+import { type Client } from "@libsql/client";
+
 import { getDb, typedRows } from "./db";
 import { markDueWorkSourceMaintenanceStatements } from "./due-work";
 
@@ -320,12 +322,13 @@ export async function relinkTracksToEntity(
   entity: "albums" | "labels",
   entityId: string,
   trackIds: readonly string[],
+  client?: Pick<Client, "batch" | "execute">,
 ): Promise<number> {
   if (trackIds.length === 0) {
     return 0;
   }
 
-  const db = await getDb();
+  const db = client ?? (await getDb());
   const foreignKey = FOREIGN_KEY[entity];
   const census = await db.execute(hubCountCensusQuery(foreignKey, trackIds));
   const groups = toHubCountMoveGroups(typedRows<HubCountCensusRow>(census.rows));

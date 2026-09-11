@@ -11,10 +11,11 @@ describe("run-level errors stay separate from item-level failures", () => {
     const source = sweep("crawl");
 
     expect(source).not.toContain("summary.errors = summary.failed");
-    expect(source).toContain("const attemptedFailures = pass.failed ?? 0");
+    expect(source).toContain("const attemptedFailures = Number(result.failed ?? 0)");
     expect(source).toContain(
-      "summary.failed = Math.max(0, attemptedFailures - (pass.rateLimited ? 1 : 0))",
+      "summary.failed += Math.max(0, attemptedFailures - (result.rateLimited === true ? 1 : 0))",
     );
+    expect(source).toContain("summary.checked += expanded + attemptedFailures");
     expect(source).toContain("summary.errors = 1");
   });
 

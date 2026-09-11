@@ -141,12 +141,12 @@ describe("crawl runtime cutover", () => {
     ]);
     const hydration = statements.find((statement) => {
       const sql = typeof statement === "string" ? statement : statement.sql;
-      return sql.includes("from crawl_frontier") && sql.includes("where id in");
+      return sql.includes("from crawl_frontier frontier") && sql.includes("frontier.id in");
     });
     expect(hydration).toBeDefined();
     const hydrationSql = typeof hydration === "string" ? hydration : hydration?.sql;
     expect(hydrationSql).not.toContain("order by");
-    expect(typeof hydration === "string" ? [] : hydration?.args).toHaveLength(4);
+    expect(typeof hydration === "string" ? [] : hydration?.args).toHaveLength(5);
     if (hydration !== undefined) {
       const explainedSql = typeof hydration === "string" ? hydration : hydration.sql;
       const plan = await db.execute({
@@ -156,8 +156,8 @@ describe("crawl runtime cutover", () => {
       const details = plan.rows
         .map((row) => (typeof row.detail === "string" ? row.detail : ""))
         .join("\n");
-      expect(details).toContain("SEARCH crawl_frontier");
-      expect(details).not.toContain("SCAN crawl_frontier");
+      expect(details).toContain("SEARCH frontier");
+      expect(details).not.toContain("SCAN frontier");
       expect(details).not.toContain("USE TEMP B-TREE");
     }
   });
