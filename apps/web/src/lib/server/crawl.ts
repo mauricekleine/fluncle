@@ -71,7 +71,7 @@
 //
 // See docs/catalogue-crawler.md.
 
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { ensureAlbum } from "./albums";
@@ -79,6 +79,7 @@ import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import {
   CRAWL_STALE_ARTIST_REARM_LIMIT,
+  MAX_CRAWL_DUE_CHUNK_SIZE,
   markCrawlNodeRepairStatement,
   markCrawlNodeRepairsByUpdatedAtStatement,
   markCrawlProjectionRepairStatement,
@@ -94,7 +95,13 @@ import {
 } from "./crawl-cutover";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
-import { batchDueWorkSourceMutation, type DueWorkStatement } from "./due-work";
+import {
+  batchDueWorkSourceMutation,
+  batchDueWorkMutationGroups,
+  dueWorkSourceMutationStatements,
+  MAX_DUE_WORK_CHUNK_SIZE,
+  type DueWorkStatement,
+} from "./due-work";
 import { relinkTracksToEntity } from "./hub-counts";
 import { hasIsrc } from "./isrc";
 import { setLabelMbLabelId } from "./label-images";
@@ -380,23 +387,30 @@ const fold = labelFold;
  * Returns 1 when a node was actually minted, 0 when it collided — the NEWNESS signal the
  * tail-first re-arm early-stops on (a browse page that mints 0 new nodes is already walked).
  */
-async function enqueue(
-  node: {
-    externalId: string;
-    hop: number;
-    kind: CrawlNodeKind;
-    labelSlug: string | null;
-    parentId: string | null;
-    source: CrawlNodeSource;
-  },
-  client?: CrawlDbClient,
-): Promise<number> {
+type EnqueueNode = {
+  externalId: string;
+  hop: number;
+  kind: CrawlNodeKind;
+  labelSlug: string | null;
+  parentId: string | null;
+  source: CrawlNodeSource;
+};
+
+async function enqueue(node: EnqueueNode, client?: CrawlDbClient): Promise<number> {
+  return enqueueMany([node], client);
+}
+
+async function enqueueMany(nodes: readonly EnqueueNode[], client?: CrawlDbClient): Promise<number> {
+  if (nodes.length === 0) {
+    return 0;
+  }
   const db = client ?? (await getDb());
-  const now = new Date().toISOString();
-  const id = frontierId(node.source, node.kind, node.externalId);
-  const sourceVersion = `crawl-enqueue:${crypto.randomUUID()}`;
-  const results = await db.batch(
-    [
+  const groups: InStatement[][] = [];
+  for (const node of nodes) {
+    const now = new Date().toISOString();
+    const id = frontierId(node.source, node.kind, node.externalId);
+    const sourceVersion = `crawl-enqueue:${crypto.randomUUID()}`;
+    groups.push([
       {
         args: [
           id,
@@ -418,11 +432,10 @@ async function enqueue(
         now,
         onlyIfPreviousStatementChanged: true,
       }),
-    ],
-    "write",
-  );
-
-  return results[0]?.rowsAffected ?? 0;
+    ]);
+  }
+  const results = await batchDueWorkMutationGroups(db, groups, MAX_CRAWL_DUE_CHUNK_SIZE);
+  return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
 }
 
 /** Record how a node's expansion ended. The durable state the next tick resumes from. */
@@ -999,6 +1012,8 @@ async function writeCatalogueTracks(
   let written = 0;
   let skipped = 0;
   const writtenIds: string[] = [];
+  const plannedGroups: InStatement[][] = [];
+  const plannedTrackIds: string[] = [];
   // One instant for the whole batch — these rows all came out of the same release read, so they
   // were all attempted at the same moment, and a per-row `new Date()` would only pretend otherwise.
   const writtenAt = new Date().toISOString();
@@ -1061,20 +1076,71 @@ async function writeCatalogueTracks(
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             on conflict (track_id) do nothing`,
     };
-    const results = await batchDueWorkSourceMutation(
-      db,
-      [
-        insertTrack,
-        insertTrackDuplicateKeyStatement({
-          artistsJson,
-          isrc: candidate.isrc,
-          title: candidate.title,
-          trackId,
-        }),
-      ],
-      [{ subjectId: trackId, subjectType: "track" }],
-      { onlyIfLastSourceStatementChanged: true, producer: "crawl-track-mint" },
+    const duplicateKeyStatement = insertTrackDuplicateKeyStatement({
+      artistsJson,
+      isrc: candidate.isrc,
+      title: candidate.title,
+      trackId,
+    });
+
+    // The retained bodyless/manual crawler does not own one outer write transaction. Preserve its
+    // result-by-result race behavior; only a caller-supplied transaction can safely reserve the
+    // candidate's identities before the grouped batch reports its insert result.
+    if (!client) {
+      const result = (
+        await batchDueWorkSourceMutation(
+          db,
+          [insertTrack, duplicateKeyStatement],
+          [{ subjectId: trackId, subjectType: "track" }],
+          { onlyIfLastSourceStatementChanged: true, producer: "crawl-track-mint" },
+        )
+      )[0];
+      if (!result) {
+        throw new Error("Catalogue track insert batch returned no track result");
+      }
+      if (result.rowsAffected > 0) {
+        written += 1;
+        writtenIds.push(trackId);
+        heldIds.add(trackId);
+        if (candidate.isrc) {
+          heldIsrcs.add(candidate.isrc);
+        }
+        if (titleFold) {
+          albumTitleFolds.set(titleFold, trackId);
+        }
+      } else {
+        skipped += 1;
+      }
+      continue;
+    }
+
+    plannedGroups.push(
+      dueWorkSourceMutationStatements(
+        [insertTrack, duplicateKeyStatement],
+        [{ subjectId: trackId, subjectType: "track" }],
+        { onlyIfLastSourceStatementChanged: true, producer: "crawl-track-mint" },
+      ),
     );
+    plannedTrackIds.push(trackId);
+    heldIds.add(trackId);
+
+    if (candidate.isrc) {
+      heldIsrcs.add(candidate.isrc);
+    }
+
+    if (titleFold) {
+      // Guard two candidates on one release that fold to the same title within this batch.
+      albumTitleFolds.set(titleFold, trackId);
+    }
+  }
+
+  const groupedResults = await batchDueWorkMutationGroups(
+    db,
+    plannedGroups,
+    MAX_DUE_WORK_CHUNK_SIZE,
+  );
+
+  for (const [index, results] of groupedResults.entries()) {
     const result = results[0];
 
     if (!result) {
@@ -1083,17 +1149,11 @@ async function writeCatalogueTracks(
 
     if (result.rowsAffected > 0) {
       written += 1;
+      const trackId = plannedTrackIds[index];
+      if (!trackId) {
+        throw new Error("Catalogue track mutation result has no planned candidate");
+      }
       writtenIds.push(trackId);
-      heldIds.add(trackId);
-
-      if (candidate.isrc) {
-        heldIsrcs.add(candidate.isrc);
-      }
-
-      if (titleFold) {
-        // Guard two candidates on one release that fold to the same title within this batch.
-        albumTitleFolds.set(titleFold, trackId);
-      }
     } else {
       skipped += 1;
     }
@@ -1519,43 +1579,39 @@ async function enqueueReleaseNodes(
   replayWatermark?: string,
   client?: CrawlDbClient,
 ): Promise<number> {
-  let newlyEnqueued = 0;
-
+  if (!replayWatermark) {
+    return enqueueMany(
+      releases.map((release) => ({
+        externalId: release.id,
+        hop: childHop,
+        kind: "release",
+        labelSlug: node.label_slug,
+        parentId: node.id,
+        source: "musicbrainz",
+      })),
+      client,
+    );
+  }
+  const db = client ?? (await getDb());
+  const groups: InStatement[][] = [];
   for (const release of releases) {
-    if (!replayWatermark) {
-      newlyEnqueued += await enqueue(
-        {
+    const now = new Date().toISOString();
+    const nodeId = frontierId("musicbrainz", "release", release.id);
+    groups.push([
+      {
+        args: {
+          createdAt: now,
           externalId: release.id,
           hop: childHop,
+          id: nodeId,
           kind: "release",
           labelSlug: node.label_slug,
           parentId: node.id,
           source: "musicbrainz",
+          updatedAt: now,
+          watermark: replayWatermark,
         },
-        client,
-      );
-      continue;
-    }
-
-    const db = client ?? (await getDb());
-    const now = new Date().toISOString();
-    const nodeId = frontierId("musicbrainz", "release", release.id);
-    const results = await db.batch(
-      [
-        {
-          args: {
-            createdAt: now,
-            externalId: release.id,
-            hop: childHop,
-            id: nodeId,
-            kind: "release",
-            labelSlug: node.label_slug,
-            parentId: node.id,
-            source: "musicbrainz",
-            updatedAt: now,
-            watermark: replayWatermark,
-          },
-          sql: `insert into crawl_frontier
+        sql: `insert into crawl_frontier
                   (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
                 values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug, :createdAt, :updatedAt)
                 on conflict (id) do update set
@@ -1568,18 +1624,15 @@ async function enqueueReleaseNodes(
                        and (crawl_frontier.parent_id is not :parentId
                             or crawl_frontier.hop <> 0
                             or crawl_frontier.label_slug is not :labelSlug))`,
-        },
-        markCrawlNodeRepairStatement(nodeId, `crawl-replay-enqueue:${crypto.randomUUID()}`, {
-          now,
-          onlyIfPreviousStatementChanged: true,
-        }),
-      ],
-      "write",
-    );
-    newlyEnqueued += results[0]?.rowsAffected ?? 0;
+      },
+      markCrawlNodeRepairStatement(nodeId, `crawl-replay-enqueue:${crypto.randomUUID()}`, {
+        now,
+        onlyIfPreviousStatementChanged: true,
+      }),
+    ]);
   }
-
-  return newlyEnqueued;
+  const results = await batchDueWorkMutationGroups(db, groups, MAX_CRAWL_DUE_CHUNK_SIZE);
+  return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
 }
 
 /**
@@ -2126,24 +2179,21 @@ async function applyRelease(
   // nothing is enqueued, which is what makes the walk terminate. This is the DISCOVERY leg —
   // it runs whether or not the release was stored, so a non-enabled release still leads the
   // walk on to the labels it can reveal.
-  let enqueued = 0;
   const artistHop = node.hop + 1;
-
-  if (artistHop <= maxHop) {
-    for (const mbid of artistMbids) {
-      enqueued += await enqueue(
-        {
-          externalId: mbid,
-          hop: artistHop,
-          kind: "artist",
-          labelSlug: node.label_slug,
-          parentId: node.id,
-          source: "musicbrainz",
-        },
-        client,
-      );
-    }
-  }
+  const enqueued =
+    artistHop <= maxHop
+      ? await enqueueMany(
+          [...artistMbids].map((mbid) => ({
+            externalId: mbid,
+            hop: artistHop,
+            kind: "artist",
+            labelSlug: node.label_slug,
+            parentId: node.id,
+            source: "musicbrainz",
+          })),
+          client,
+        )
+      : 0;
 
   return {
     enqueued,

@@ -12,6 +12,7 @@ import {
   DUE_WORK_LIVE_GENERATION,
   DUE_WORK_SOURCE_REPAIR_KIND,
   dueWorkCleanupPageStatement,
+  dueWorkSourceMutationStatements,
   hasReadyDueWork,
   listReadyDueWork,
   MAX_DUE_WORK_CHUNK_SIZE,
@@ -206,6 +207,33 @@ describe("due-work ready reads and leases", () => {
 });
 
 describe("due-work repair and drift", () => {
+  it("exposes source and maintenance statements in their guarded execution order", () => {
+    const source = { args: ["source-1"], sql: `insert into tracks (track_id) values (?)` };
+    const after = { sql: `select 1` };
+    const statements = dueWorkSourceMutationStatements(
+      [source],
+      [{ subjectId: "source-1", subjectType: "track" }],
+      {
+        afterMaintenanceStatements: [after],
+        markerVersion: "source-v1",
+        now: T0,
+        onlyIfLastSourceStatementChanged: true,
+        producer: "crawl-track-mint",
+      },
+    );
+
+    expect(statements[0]).toBe(source);
+    expect(statements.at(-1)).toBe(after);
+    expect(statements).toHaveLength(5);
+    expect(
+      statements
+        .slice(1, -1)
+        .every(
+          (statement) => typeof statement !== "string" && statement.sql.includes("changes() > 0"),
+        ),
+    ).toBe(true);
+  });
+
   it("rolls back the source mutation when its coupled marker cannot commit", async () => {
     await db.execute(`create table source_probe (id text primary key)`);
     await db.execute(`create trigger reject_source_repair before insert on due_work

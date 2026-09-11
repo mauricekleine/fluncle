@@ -60,14 +60,16 @@ const FUNCTION_TYPES = new Set([
   "FunctionDeclaration",
   "FunctionExpression",
 ]);
-const SOURCE_HELPER = "batchDueWorkSourceMutation";
+const SOURCE_HELPER_STATEMENTS_ARGUMENT = new Map([["batchDueWorkSourceMutation", 1]]);
 const DUE_WORK_MARKER_HELPERS = new Set([
+  "dueWorkSourceMutationStatements",
   "markDueWorkSourceMaintenanceFromSelectStatements",
   "markDueWorkSourceMaintenanceStatements",
   "markDueWorkSourceRepairsFromSelectStatement",
   "markDueWorkSourceRepairsStatement",
 ]);
 const PUBLIC_PROJECTION_MARKER_HELPERS = new Set([
+  "dueWorkSourceMutationStatements",
   "markDueWorkSourceMaintenanceFromSelectStatements",
   "markDueWorkSourceMaintenanceStatements",
   "markPublicProjectionSourceChangedFromSelectStatements",
@@ -437,6 +439,13 @@ function isWriteBatch(call: AstNode): boolean {
   return mode === undefined || stringValue(mode) === "write";
 }
 
+function writeBatchStatements(call: AstNode): AstNode | undefined {
+  if (callName(call) === "batchDueWorkMutationGroups") {
+    return callArguments(call)[1];
+  }
+  return isWriteBatch(call) ? callArguments(call)[0] : undefined;
+}
+
 function isWriteTransactionBinding(name: string, scope: AstNode): boolean {
   let found = false;
   visitScope(scope, (node) => {
@@ -473,10 +482,14 @@ function mutationCoupling(
       return;
     }
     const arguments_ = callArguments(candidate);
-    const firstArgument = arguments_[0];
-    const statementsArgument = arguments_[1];
+    const batchStatements = writeBatchStatements(candidate);
+    const statementsArgumentIndex = SOURCE_HELPER_STATEMENTS_ARGUMENT.get(
+      callName(candidate) ?? "",
+    );
+    const statementsArgument =
+      statementsArgumentIndex === undefined ? undefined : arguments_[statementsArgumentIndex];
     if (
-      callName(candidate) === SOURCE_HELPER &&
+      statementsArgumentIndex !== undefined &&
       statementsArgument !== undefined &&
       collectionContains(statementsArgument, node, scope, parents)
     ) {
@@ -484,10 +497,9 @@ function mutationCoupling(
       return;
     }
     if (
-      isWriteBatch(candidate) &&
-      firstArgument !== undefined &&
-      collectionContains(firstArgument, node, scope, parents) &&
-      partsContainMarker(collectionParts(firstArgument, scope), program, markerHelpers)
+      batchStatements !== undefined &&
+      collectionContains(batchStatements, node, scope, parents) &&
+      partsContainMarker(collectionParts(batchStatements, scope), program, markerHelpers)
     ) {
       coupling = "write-batch";
     }

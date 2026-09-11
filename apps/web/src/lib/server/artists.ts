@@ -1,4 +1,4 @@
-import { type Client, type ResultSet } from "@libsql/client";
+import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { type ArtistListItem } from "@fluncle/contracts";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
@@ -9,10 +9,13 @@ import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
+  batchDueWorkMutationGroups,
   batchDueWorkSourceMutation,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  dueWorkSourceMutationStatements,
   markDueWorkSourceMaintenanceFromSelectStatements,
   markDueWorkSourceMaintenanceStatements,
+  MAX_DUE_WORK_CHUNK_SIZE,
 } from "./due-work";
 import {
   hubCountArtistEdgeStatements,
@@ -1236,7 +1239,7 @@ export async function stampRemixerRoles(
     entry.linked.push({ artistId: row.artist_id, name: row.artist_name });
   }
 
-  let stamped = 0;
+  const mutationGroups: InStatement[][] = [];
 
   for (const [trackId, entry] of byTrack) {
     const remixerFolds = new Set(
@@ -1252,27 +1255,27 @@ export async function stampRemixerRoles(
         continue;
       }
 
-      const [result] = await batchDueWorkSourceMutation(
-        db,
-        [
-          {
-            args: [artist.artistId, trackId],
-            sql: `update track_artists set role = 'remixer'
+      mutationGroups.push(
+        dueWorkSourceMutationStatements(
+          [
+            {
+              args: [artist.artistId, trackId],
+              sql: `update track_artists set role = 'remixer'
                   where artist_id = ? and track_id = ? and role is null`,
+            },
+          ],
+          [{ subjectId: trackId, subjectType: "track" }],
+          {
+            onlyIfLastSourceStatementChanged: true,
+            producer: "artist-remixer-role-stamp",
           },
-        ],
-        [{ subjectId: trackId, subjectType: "track" }],
-        {
-          onlyIfLastSourceStatementChanged: true,
-          producer: "artist-remixer-role-stamp",
-        },
+        ),
       );
-
-      stamped += result?.rowsAffected ?? 0;
     }
   }
 
-  return stamped;
+  const results = await batchDueWorkMutationGroups(db, mutationGroups, MAX_DUE_WORK_CHUNK_SIZE);
+  return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
 }
 
 // Upsert artists + track_artists for a track that was just inserted. Called at

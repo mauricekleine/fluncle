@@ -20,6 +20,7 @@ const SERVER_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIRECTORY = join(SERVER_DIRECTORY, "../../../scripts");
 const MAINTENANCE_HELPERS = new Set([
   "batchDueWorkSourceMutation",
+  "dueWorkSourceMutationStatements",
   "markDueWorkSourceRepairsFromSelectStatement",
   "markDueWorkSourceRepairsStatement",
 ]);
@@ -147,6 +148,22 @@ describe("due-work producer maintenance inventory", () => {
       ["artists", null],
     ]);
     expect(sites.map((site) => site.projectionCoupling)).toEqual(["source-helper", null]);
+  });
+
+  it("does not treat an unused source-statement builder as atomic execution", () => {
+    const sites = auditDueWorkMutationSites(
+      "unused-builder.ts",
+      `async function write(db: Db) {
+        const statement = { sql: "update tracks set title = ? where track_id = ?" };
+        dueWorkSourceMutationStatements([statement], subjects, {
+          producer: "crawl-track-mint",
+        });
+        await db.execute(statement);
+      }`,
+    );
+
+    expect(sites.map((site) => site.coupling)).toEqual([null]);
+    expect(sites.map((site) => site.projectionCoupling)).toEqual([null]);
   });
 
   it("discovers every eligibility satellite table as its own mutation site", () => {

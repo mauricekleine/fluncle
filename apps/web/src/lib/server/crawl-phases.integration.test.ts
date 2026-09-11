@@ -19,15 +19,37 @@ let db: Client;
 let fixtureDirectory: string | undefined;
 const timestamp = "2026-08-01T00:00:00.000Z";
 
+type TransactionCounts = {
+  batch: number;
+  commit: number;
+  execute: number;
+  maxBatchStatements: number;
+};
+
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
   return { ...actual, getDb: async () => db };
 });
 
 function providerRelease(trackCount: number, titleBytes = 0): object {
+  return providerReleaseWithArtistCount(trackCount, titleBytes, trackCount);
+}
+
+function providerReleaseWithArtistCount(
+  trackCount: number,
+  titleBytes = 0,
+  artistCount = trackCount,
+): object {
   const tracks = Array.from({ length: trackCount }, (_, index) => ({
     recording: {
-      "artist-credit": [{ artist: { id: `artist-${index}`, name: `Artist ${index}` } }],
+      "artist-credit": [
+        {
+          artist: {
+            id: `artist-${index % artistCount}`,
+            name: `Artist ${index % artistCount}`,
+          },
+        },
+      ],
       id: `recording-${index}`,
       isrcs: [],
       length: 180_000,
@@ -46,6 +68,43 @@ function providerRelease(trackCount: number, titleBytes = 0): object {
     "release-group": { id: "release-group-phase" },
     title: "Phase Album",
   };
+}
+
+function providerBrowse(childCount: number): object {
+  return {
+    "release-count": childCount,
+    releases: Array.from({ length: childCount }, (_, index) => ({
+      id: `browse-release-${index}`,
+      status: "Official",
+    })),
+  };
+}
+
+function instrumentTransactions(client: Client): { client: Client; counts: TransactionCounts } {
+  const counts: TransactionCounts = { batch: 0, commit: 0, execute: 0, maxBatchStatements: 0 };
+  const originalTransaction = client.transaction.bind(client);
+  client.transaction = (async (...args: Parameters<Client["transaction"]>) => {
+    const transaction = await originalTransaction(...args);
+    const originalExecute = transaction.execute.bind(transaction);
+    const originalBatch = transaction.batch.bind(transaction);
+    const originalCommit = transaction.commit.bind(transaction);
+    transaction.execute = ((...executeArgs: Parameters<typeof transaction.execute>) => {
+      counts.execute += 1;
+      return originalExecute(...executeArgs);
+    }) as typeof transaction.execute;
+    transaction.batch = ((...batchArgs: Parameters<typeof transaction.batch>) => {
+      counts.batch += 1;
+      const statements = batchArgs[0];
+      counts.maxBatchStatements = Math.max(counts.maxBatchStatements, statements.length);
+      return originalBatch(...batchArgs);
+    }) as typeof transaction.batch;
+    transaction.commit = (async (...commitArgs: Parameters<typeof transaction.commit>) => {
+      counts.commit += 1;
+      return originalCommit(...commitArgs);
+    }) as typeof transaction.commit;
+    return transaction;
+  }) as Client["transaction"];
+  return { client, counts };
 }
 
 async function seedRelease(): Promise<void> {
@@ -67,6 +126,22 @@ async function seedRelease(): Promise<void> {
         'release-phase', 0, 'phase-label', ?, ?)`,
   });
   await rebuildCrawlDueWork(db, { generation: crypto.randomUUID(), limit: 10 });
+}
+
+async function seedBrowseNode(): Promise<void> {
+  await db.execute("delete from crawl_due_work");
+  await db.execute("delete from crawl_frontier");
+  await db.execute({
+    args: [timestamp, timestamp],
+    sql: `insert into crawl_frontier
+      (id, kind, source, external_id, hop, label_slug, created_at, updated_at)
+      values ('musicbrainz:artist:browse-artist', 'artist', 'musicbrainz',
+        'browse-artist', 0, 'phase-label', ?, ?)`,
+  });
+  await db.batch(
+    [markCrawlNodeRepairStatement("musicbrainz:artist:browse-artist", crypto.randomUUID())],
+    "write",
+  );
 }
 
 async function prepareAndFetch(): Promise<Awaited<ReturnType<typeof fetchCrawlPhase>>> {
@@ -142,6 +217,81 @@ describe("crawl admission phases", () => {
     ).toEqual({ attempts: 1, state: "done" });
     expect(await commitCrawlPhase(fetched)).toMatchObject({ outcome: "committed", replayed: true });
     expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(60);
+  });
+
+  it("keeps a 100-child browse commit within seven transaction operations", async () => {
+    await seedBrowseNode();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify(providerBrowse(100)), { status: 200 })),
+      ),
+    );
+
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    const item = prepared.items[0];
+    if (!item) {
+      throw new Error("test expected a prepared browse token");
+    }
+    const fetched = await fetchCrawlPhase(item.preparedToken);
+    const instrumented = instrumentTransactions(db);
+    db = instrumented.client;
+
+    const receipt = await commitCrawlPhase(fetched);
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { expanded: 1, failed: 0, nodesEnqueued: 100 },
+    });
+    expect(
+      instrumented.counts.execute + instrumented.counts.batch + instrumented.counts.commit,
+    ).toBe(7);
+    expect(instrumented.counts.maxBatchStatements).toBe(200);
+  });
+
+  it("keeps a representative 100-track release within twenty-five transaction operations", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify(providerReleaseWithArtistCount(100, 0, 1)), { status: 200 }),
+        ),
+      ),
+    );
+
+    const fetched = await prepareAndFetch();
+    const instrumented = instrumentTransactions(db);
+    db = instrumented.client;
+    const receipt = await commitCrawlPhase(fetched);
+
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { expanded: 1, failed: 0, tracksFound: 100, tracksWritten: 100 },
+    });
+    expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(100);
+    expect(
+      instrumented.counts.execute + instrumented.counts.batch + instrumented.counts.commit,
+    ).toBe(22);
+    expect(instrumented.counts.maxBatchStatements).toBe(500);
+  });
+
+  it("retains supported semantics for a release with more than one hundred tracks", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify(providerReleaseWithArtistCount(101, 0, 1)), { status: 200 }),
+        ),
+      ),
+    );
+
+    const fetched = await prepareAndFetch();
+    const receipt = await commitCrawlPhase(fetched);
+
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { expanded: 1, failed: 0, tracksFound: 101, tracksWritten: 101 },
+    });
+    expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(101);
   });
 
   it("accepts a multi-medium provider envelope near the signed size ceiling", async () => {
