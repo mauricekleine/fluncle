@@ -1,173 +1,319 @@
-// Unit tests for rank-sweep.ts — The Ear's `--no-agent` ranking cron.
-//
-// The contract worth pinning is the DRAIN: unlike the crawl (one pass per tick, because
-// its pace is a vendor's rate limit), ranking is local SQL with a natural finish line, so
-// the sweep loops while `remaining > 0` up to a hard tick budget. A crawl that just landed
-// 700 rows must be ranked by the next tick, not seventy minutes later — and the budget
-// must still bound the tick when the backlog is bigger than the budget.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live
-// outside any package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/rank-sweep.test.ts
-//
-// The fluncle CLI is stubbed with a tiny executable selected via FLUNCLE_BIN. A mode FILE
-// beside it selects the response shape (Bun's spawnSync snapshots the environment, so the
-// mode cannot ride on an env var), and a COUNTER file lets the stub answer differently on
-// each successive call — which is the only way to exercise a drain.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const STUB = `#!/bin/bash
 DIR="$(dirname "$0")"
-N=$(cat "$DIR/count" 2>/dev/null || echo 0)
-N=$((N + 1))
-echo "$N" > "$DIR/count"
+ARGS="$*"
+increment() {
+  local FILE="$1" N
+  N=$(cat "$FILE" 2>/dev/null || echo 0)
+  N=$((N + 1))
+  echo "$N" > "$FILE"
+  printf '%s' "$N"
+}
+add_debt() {
+  local ADDED="$1" DEBT
+  DEBT=$(cat "$DIR/debt" 2>/dev/null || echo 0)
+  echo $((DEBT + ADDED)) > "$DIR/debt"
+}
+
+if [[ "$ARGS" == *"admin projections advance"* ]]; then
+  increment "$DIR/repair-count" >/dev/null
+  DEBT=$(cat "$DIR/debt" 2>/dev/null || echo 0)
+  PROCESSED=$DEBT
+  [ "$PROCESSED" -le 5 ] || PROCESSED=5
+  DEBT=$((DEBT - PROCESSED))
+  echo "$DEBT" > "$DIR/debt"
+  if [ "$DEBT" -eq 0 ]; then COMPLETE=true; else COMPLETE=false; fi
+  printf '{"action":"repair","complete":%s,"ok":true,"processed":%s,"scheduled":%s,"steps":1,"target":"track_due_work"}\n' "$COMPLETE" "$PROCESSED" "$PROCESSED"
+  exit 0
+fi
+
+N=$(increment "$DIR/rank-count")
 case "$(cat "$DIR/mode")" in
-  # Three ticks of real work, then drained — in the REAL CLI shape: the counts nest under
-  # "summary" ({"ok":true,"summary":{…}}). The original stubs printed the counts FLAT, which
-  # is exactly how the 2026-07-14 regression shipped green: the sweep read top-level keys,
-  # prod nested them, and every tick parsed as zeros. The stubs now mirror prod.
   drain)
     case "$N" in
-      1) printf '{"ok":true,"summary":{"scored":250,"prioritized":10,"quarantined":2,"catalogueDuplicates":3,"remaining":400,"corpus":"60:60"}}\\n' ;;
-      2) printf '{"ok":true,"summary":{"scored":250,"prioritized":5,"quarantined":1,"catalogueDuplicates":2,"remaining":150,"corpus":"60:60"}}\\n' ;;
-      *) printf '{"ok":true,"summary":{"scored":150,"prioritized":0,"quarantined":0,"catalogueDuplicates":0,"remaining":0,"corpus":"60:60"}}\\n' ;;
+      1) add_debt 10; printf '{"ok":true,"summary":{"scored":8,"prioritized":1,"quarantined":1,"catalogueDuplicates":3,"remaining":1,"corpus":"60:60"}}\n' ;;
+      2) add_debt 10; printf '{"ok":true,"summary":{"scored":9,"prioritized":1,"quarantined":0,"catalogueDuplicates":2,"remaining":1,"corpus":"60:60"}}\n' ;;
+      *) add_debt 6; printf '{"ok":true,"summary":{"scored":6,"prioritized":0,"quarantined":0,"catalogueDuplicates":0,"remaining":0,"corpus":"60:60"}}\n' ;;
     esac ;;
-  # Never drains — the tick budget must stop it, and say so honestly.
-  endless) printf '{"ok":true,"summary":{"scored":250,"prioritized":0,"remaining":9999,"corpus":"60:60"}}\\n' ;;
-  # An unchanged archive: one cheap scoped COUNT, nothing to do.
-  idle) printf '{"ok":true,"summary":{"scored":0,"prioritized":0,"remaining":0,"corpus":"60:60"}}\\n' ;;
-  # The pre-wrapper flat shape — the unwrap keeps it parseable as a fallback.
-  flat) printf '{"ok":true,"scored":42,"prioritized":7,"remaining":0,"corpus":"60:60"}\\n' ;;
-  cli-error) printf '{"code":"missing_token","message":"Missing required env vars","ok":false}\\n'; exit 1 ;;
-  crash) printf 'boom\\n' >&2; exit 1 ;;
+  endless) add_debt 10; printf '{"ok":true,"summary":{"scored":10,"prioritized":0,"remaining":9999,"corpus":"60:60"}}\n' ;;
+  idle) printf '{"ok":true,"summary":{"scored":0,"prioritized":0,"remaining":0,"corpus":"60:60"}}\n' ;;
+  flat) add_debt 5; printf '{"ok":true,"scored":4,"prioritized":1,"remaining":0,"corpus":"60:60"}\n' ;;
+  pending) printf '{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\n'; exit 1 ;;
+  cli-error) printf '{"code":"missing_token","message":"Missing required env vars","ok":false}\n'; exit 1 ;;
+  crash) printf 'boom\n' >&2; exit 1 ;;
+  missing-remaining) printf '{"ok":true,"summary":{"scored":0}}\n' ;;
 esac
+`;
+
+const RUNNER = `#!/bin/bash
+DIR="$(dirname "$0")"
+if [ "$(cat "$DIR/runner-mode")" = "yield" ]; then
+  exit 75
+fi
+[ "$1" = "phase" ] && shift
+shift
+[ "$1" = "--" ] && shift
+exec "$@"
 `;
 
 let dir: string;
 let main: typeof import("./rank-sweep").main;
 let fluncleJson: typeof import("./rank-sweep").fluncleJson;
 
-function mode(name: string): void {
+function mode(name: string, runnerMode = "run"): void {
   writeFileSync(join(dir, "mode"), name);
-  writeFileSync(join(dir, "count"), "0");
+  writeFileSync(join(dir, "runner-mode"), runnerMode);
+  writeFileSync(join(dir, "rank-count"), "0");
+  writeFileSync(join(dir, "repair-count"), "0");
+  writeFileSync(join(dir, "debt"), "0");
 }
 
-function calls(): number {
-  return Number(readFileSync(join(dir, "count"), "utf8").trim());
+function count(name: "rank" | "repair"): number {
+  return Number(readFileSync(join(dir, `${name}-count`), "utf8").trim());
 }
 
-/** Capture the sweep's one JSON summary line. */
 function run(): Record<string, unknown> {
   const lines: string[] = [];
-  const log = console.log;
+  const consoleLog = console.log;
   console.log = (line: string) => lines.push(line);
-
   try {
     main();
   } finally {
-    console.log = log;
+    console.log = consoleLog;
   }
-
-  return JSON.parse(lines[lines.length - 1] ?? "{}") as Record<string, unknown>;
+  return JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
 }
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "rank-sweep-"));
   const bin = join(dir, "fluncle");
+  const runner = join(dir, "database-admission-runner.sh");
   writeFileSync(bin, STUB);
+  writeFileSync(runner, RUNNER);
   chmodSync(bin, 0o755);
+  chmodSync(runner, 0o755);
   process.env.FLUNCLE_BIN = bin;
+  process.env.DATABASE_ADMISSION_RUNNER = runner;
+  process.env.FLUNCLE_RANK_BATCH = "10";
   process.env.FLUNCLE_RANK_MAX_CALLS = "8";
   mode("idle");
-
   ({ fluncleJson, main } = await import("./rank-sweep"));
 });
 
 afterAll(() => {
+  delete process.env.DATABASE_ADMISSION_RUNNER;
+  delete process.env.FLUNCLE_ADMISSION_RUNNER_PID;
+  delete process.env.FLUNCLE_BIN;
+  delete process.env.FLUNCLE_RANK_BATCH;
+  delete process.env.FLUNCLE_RANK_MAX_CALLS;
   rmSync(dir, { force: true, recursive: true });
 });
 
-describe("rank-sweep drains the stale set", () => {
-  test("keeps calling while `remaining > 0`, and stops the moment it hits 0", () => {
+describe("rank-sweep phased drain", () => {
+  test("drains maintenance between two full pages and cleans the final short page", () => {
     mode("drain");
     const summary = run();
 
-    expect(calls()).toBe(3); // it did NOT take one bite and leave 400 rows stale
-    expect(summary.calls).toBe(3);
-    expect(summary.scored).toBe(650); // 250 + 250 + 150, summed across the drain
-    expect(summary.prioritized).toBe(15);
-    expect(summary.quarantined).toBe(3);
-    expect(summary.catalogueDuplicates).toBe(5);
-    expect(summary.remaining).toBe(0);
-    expect(summary.ok).toBe(true);
-    // Duplicate rows are a subset of `scored`, not extra checked/produced work.
+    expect(count("rank")).toBe(3);
+    expect(count("repair")).toBe(7);
     expect(summary).toMatchObject({
-      checked: 668,
-      errors: 0,
-      failed: 0,
-      produced: 668,
+      calls: 3,
+      catalogueDuplicates: 5,
+      checked: 26,
+      maintenanceComplete: true,
+      ok: true,
+      partial: false,
+      prioritized: 2,
+      quarantined: 1,
+      remaining: 0,
+      repairPhases: 7,
+      scored: 23,
     });
-    // `remaining` is only a 0/1 fullness sentinel on the automation path, never queue depth.
-    expect(summary).not.toHaveProperty("queue_depth");
   });
 
-  test("the tick BUDGET bounds it when the backlog is bigger — and it says so", () => {
+  test("runs all eight configured pages and still drains page eight's marker fanout", () => {
     mode("endless");
     const summary = run();
 
-    expect(calls()).toBe(8); // FLUNCLE_RANK_MAX_CALLS, not forever
-    expect(summary.remaining).toBe(9999);
-    // Still `ok`: a leftover backlog is not a failure, it is the next tick's work.
-    expect(summary.ok).toBe(true);
+    expect(count("rank")).toBe(8);
+    expect(count("repair")).toBe(17);
+    expect(summary).toMatchObject({
+      calls: 8,
+      checked: 80,
+      maintenanceComplete: true,
+      ok: true,
+      partial: true,
+      reason: "rank_page_budget",
+      remaining: 9999,
+      repairPhases: 17,
+    });
+    expect(readFileSync(join(dir, "debt"), "utf8").trim()).toBe("0");
   });
 
-  test("an unchanged archive is ONE call and a no-op", () => {
+  test("bounds initial maintenance debt before any rank page starts", () => {
+    mode("idle");
+    writeFileSync(join(dir, "debt"), "100");
+    const summary = run();
+
+    expect(count("rank")).toBe(0);
+    expect(count("repair")).toBe(17);
+    expect(summary).toMatchObject({
+      calls: 0,
+      maintenanceComplete: false,
+      partial: true,
+      reason: "repair_phase_budget",
+      repairPhases: 17,
+    });
+    expect(summary.remaining).toBeGreaterThan(0);
+    expect(readFileSync(join(dir, "debt"), "utf8").trim()).toBe("15");
+  });
+
+  test("stops on the monotonic wall budget before starting a phase", () => {
+    mode("idle");
+    const now = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(600_000);
+
+    try {
+      const summary = run();
+
+      expect(count("rank")).toBe(0);
+      expect(count("repair")).toBe(0);
+      expect(summary).toMatchObject({
+        calls: 0,
+        maintenanceComplete: false,
+        partial: true,
+        reason: "rank_wall_budget",
+        repairPhases: 0,
+      });
+      expect(summary.remaining).toBeGreaterThan(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test("an unchanged archive is one repair proof and one no-op rank call", () => {
     mode("idle");
     const summary = run();
 
-    expect(calls()).toBe(1);
-    expect(summary.scored).toBe(0);
-    expect(summary.remaining).toBe(0);
-    // A measured empty stale set must survive as zero, not disappear into null/absence.
-    expect(summary).toMatchObject({ checked: 0, errors: 0, failed: 0, produced: 0 });
-    expect(summary).not.toHaveProperty("queue_depth");
+    expect(count("rank")).toBe(1);
+    expect(count("repair")).toBe(1);
+    expect(summary).toMatchObject({
+      checked: 0,
+      maintenanceComplete: true,
+      ok: true,
+      remaining: 0,
+    });
   });
 
-  test("the pre-wrapper FLAT payload still parses (the unwrap fallback)", () => {
+  test("the flat rank payload remains compatible and its writes are cleaned", () => {
     mode("flat");
     const summary = run();
 
-    expect(calls()).toBe(1);
-    expect(summary.scored).toBe(42);
-    expect(summary.prioritized).toBe(7);
-    expect(summary.remaining).toBe(0);
+    expect(count("rank")).toBe(1);
+    expect(count("repair")).toBe(2);
+    expect(summary).toMatchObject({ maintenanceComplete: true, prioritized: 1, scored: 4 });
+  });
+
+  test("a phase yield stops without replay and reports healthy backpressure", () => {
+    mode("idle", "yield");
+    const summary = run();
+
+    expect(count("rank")).toBe(0);
+    expect(count("repair")).toBe(0);
+    expect(summary).toMatchObject({
+      admissionOutcome: "phase-yielded",
+      calls: 0,
+      ok: true,
+      partial: true,
+      reason: "database_admission",
+      remaining: 1,
+      throttled: true,
+    });
+  });
+
+  test("typed maintenance pending is a healthy partial result", () => {
+    mode("pending");
+    const summary = run();
+
+    expect(count("rank")).toBe(1);
+    expect(count("repair")).toBe(1);
+    expect(summary).toMatchObject({
+      calls: 0,
+      errors: 0,
+      ok: true,
+      partial: true,
+      reason: "due_work_maintenance_pending",
+      remaining: 1,
+      throttled: true,
+    });
+  });
+
+  test("a missing remaining sentinel fails instead of claiming an empty queue", () => {
+    mode("missing-remaining");
+    const summary = run();
+
+    expect(summary).toMatchObject({ errors: 1, ok: false, remaining: 1 });
   });
 });
 
-describe("rank-sweep's fluncleJson", () => {
-  test("throws on the CLI's own error payload (a failed command, not a partial batch)", () => {
-    mode("cli-error");
-
-    expect(() => fluncleJson(["admin", "catalogue", "rank"])).toThrow(/missing_token/);
+describe("rank-sweep rolling compatibility", () => {
+  test("an inherited whole-lifetime lease makes one nonnested rank request", () => {
+    mode("drain");
+    process.env.FLUNCLE_ADMISSION_RUNNER_PID = "old-runner";
+    try {
+      const summary = run();
+      expect(count("rank")).toBe(1);
+      expect(count("repair")).toBe(0);
+      expect(summary).toMatchObject({
+        calls: 1,
+        ok: true,
+        partial: true,
+        reason: "rolling_admission_compatibility",
+        remaining: 1,
+      });
+    } finally {
+      delete process.env.FLUNCLE_ADMISSION_RUNNER_PID;
+    }
   });
 
-  test("throws when the CLI crashes with no parseable JSON", () => {
-    mode("crash");
+  test("an inherited lease treats typed maintenance pending as healthy partial", () => {
+    mode("pending");
+    process.env.FLUNCLE_ADMISSION_RUNNER_PID = "old-runner";
+    try {
+      const summary = run();
+      expect(count("rank")).toBe(1);
+      expect(count("repair")).toBe(0);
+      expect(summary).toMatchObject({
+        calls: 0,
+        errors: 0,
+        ok: true,
+        reason: "due_work_maintenance_pending",
+        remaining: 1,
+      });
+    } finally {
+      delete process.env.FLUNCLE_ADMISSION_RUNNER_PID;
+    }
+  });
+});
 
+describe("rank-sweep fluncle transport", () => {
+  test("throws on the CLI's own non-maintenance error payload", () => {
+    mode("cli-error");
+    expect(() => fluncleJson(["admin", "catalogue", "rank"])).toThrow(/Missing required env vars/);
+  });
+
+  test("throws when the CLI crashes without parseable JSON", () => {
+    mode("crash");
     expect(() => fluncleJson(["admin", "catalogue", "rank"])).toThrow(/exited 1/);
   });
 
-  test("a failing tick reports ok:false rather than pretending it drained", () => {
+  test("a transport failure remains a failed tick", () => {
     mode("crash");
     const summary = run();
 
-    expect(summary.ok).toBe(false);
-    expect(summary.error).toBeTruthy();
-    expect(summary.errors).toBe(1);
-    expect(summary.failed).toBe(0);
+    expect(summary).toMatchObject({ errors: 1, ok: false, remaining: 1 });
   });
 });

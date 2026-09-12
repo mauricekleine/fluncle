@@ -994,8 +994,28 @@ describe("database operation registry", () => {
       .map((trigger) => trigger.target);
 
     expect(repairTargets).toEqual([
+      "fluncle admin projections advance --target track_due_work --action repair --limit 500 --max-steps 1 --no-terminal-status --json",
       "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --no-terminal-status --json",
       "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --no-terminal-status --json",
+    ]);
+  });
+
+  it("pins rank's non-retried phased admission and one-step repair trigger", () => {
+    const rank = DATABASE_OPERATION_REGISTRY.find(
+      (operation) => operation.operationId === "catalogue.rank",
+    );
+
+    expect(rank?.admissionShape).toMatchObject({
+      phaseSource: `${SCRIPTS}/rank-sweep.ts`,
+      shape: "phased",
+      yieldRetries: 0,
+    });
+    expect(rank?.triggers.map((trigger) => [trigger.operationId, trigger.target])).toEqual([
+      [
+        "projections.repair",
+        "fluncle admin projections advance --target track_due_work --action repair --limit 500 --max-steps 1 --no-terminal-status --json",
+      ],
+      ["catalogue.rank", "fluncle admin catalogue rank --limit <bounded-limit> --json"],
     ]);
   });
 

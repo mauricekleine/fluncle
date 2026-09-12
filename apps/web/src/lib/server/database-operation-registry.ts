@@ -211,8 +211,10 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "catalogue.label-releases": wholeLifetime(
     "Spotify budget checks and release writes form an interleaved resumable loop.",
   ),
-  "catalogue.rank": wholeLifetime(
-    "The database-only ranking rebuild is one atomic maintenance phase.",
+  "catalogue.rank": phased(
+    `${SCRIPTS}/rank-sweep.ts`,
+    "Each admitted phase advances one due-work repair step and ranks at most one page after a clean guard.",
+    0,
   ),
   "catalogue.reconcile-hub-counts": wholeLifetime(
     "The database-only projection reconciliation is one bounded command.",
@@ -2170,6 +2172,14 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     telemetryUnit: "rank",
     timer: "fluncle-rank.timer",
     triggers: [
+      cli(
+        "projections.repair",
+        "write",
+        ["admin", "projections", "advance"],
+        "fluncle admin projections advance --target track_due_work --action repair --limit 500 --max-steps 1 --no-terminal-status --json",
+        `${SCRIPTS}/rank-sweep.ts`,
+        { mutationTarget: "primary" },
+      ),
       cli(
         "catalogue.rank",
         "write",

@@ -35,6 +35,9 @@ const STATE_DIR = join(RIG, "state");
 const CONTROL = join(RIG, "control");
 const FLUNCLE_STUB = join(RIG, "fluncle");
 const CLAUDE_STUB = join(RIG, "claude");
+// These tests drive a real process fixture; the outer budget covers lifecycle overhead and is
+// not a performance SLA for the sweep itself.
+const PROCESS_FIXTURE_TIMEOUT_MS = 15_000;
 
 mkdirSync(CONTROL, { recursive: true });
 
@@ -568,87 +571,111 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
     mkdirSync(CONTROL, { recursive: true });
   });
 
-  test("a gate-PASSING entity is authored exactly once and leaves no budget behind", async () => {
-    verdict("pass");
+  test(
+    "a gate-PASSING entity is authored exactly once and leaves no budget behind",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("pass");
 
-    const result = await tick("future-signal");
+      const result = await tick("future-signal");
 
-    // Unchanged from before this slice: one author, one describe, no --final-attempt, no marker.
-    expect(result.outcome).toBe("authored");
-    expect(result.gateBypassed).toBe(false);
-    expect(authorings()).toBe(1);
-    expect(describes()).toEqual([false]);
-    expect(loadLedger().size).toBe(0);
-  });
+      // Unchanged from before this slice: one author, one describe, no --final-attempt, no marker.
+      expect(result.outcome).toBe("authored");
+      expect(result.gateBypassed).toBe(false);
+      expect(authorings()).toBe(1);
+      expect(describes()).toEqual([false]);
+      expect(loadLedger().size).toBe(0);
+    },
+  );
 
-  test("a gate-REFUSING entity is authored at most three times, and the THIRD draft is stored", async () => {
-    verdict("reject");
+  test(
+    "a gate-REFUSING entity is authored at most three times, and the THIRD draft is stored",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("reject");
 
-    const result = await tick("future-signal");
+      const result = await tick("future-signal");
 
-    expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
-    // The third describe is the one that carried --final-attempt, and it landed.
-    expect(describes()).toEqual([false, false, true]);
-    expect(result.outcome).toBe("authored");
-    // …and the acceptance is reported, never silent.
-    expect(result.gateBypassed).toBe(true);
-  });
+      expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
+      // The third describe is the one that carried --final-attempt, and it landed.
+      expect(describes()).toEqual([false, false, true]);
+      expect(result.outcome).toBe("authored");
+      // …and the acceptance is reported, never silent.
+      expect(result.gateBypassed).toBe(true);
+    },
+  );
 
-  test("the rewrites are TOLD what the gate refused (a blind retry never converges)", async () => {
-    verdict("reject");
-    await tick("future-signal");
+  test(
+    "the rewrites are TOLD what the gate refused (a blind retry never converges)",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("reject");
+      await tick("future-signal");
 
-    const [first, second, third] = prompts();
+      const [first, second, third] = prompts();
 
-    expect(first).not.toContain("YOUR LAST DRAFT WAS REJECTED");
-    expect(second).toContain('banned identity word "signal"');
-    expect(third).toContain("YOUR LAST DRAFT WAS REJECTED");
-  });
+      expect(first).not.toContain("YOUR LAST DRAFT WAS REJECTED");
+      expect(second).toContain('banned identity word "signal"');
+      expect(third).toContain("YOUR LAST DRAFT WAS REJECTED");
+    },
+  );
 
-  test("a FOURTH authoring never happens on a later tick", async () => {
-    // The one way an entity survives its whole budget still bio-less: even the final draft is
-    // refused on a STRUCTURAL ground the acceptance keeps enforcing (here, too long). It stays
-    // queued, so the cron keeps meeting it — and must never author for it again.
-    verdict("structural");
+  test(
+    "a FOURTH authoring never happens on a later tick",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      // The one way an entity survives its whole budget still bio-less: even the final draft is
+      // refused on a STRUCTURAL ground the acceptance keeps enforcing (here, too long). It stays
+      // queued, so the cron keeps meeting it — and must never author for it again.
+      verdict("structural");
 
-    expect((await tick("future-signal")).outcome).toBe("exhausted");
-    expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
-
-    for (let i = 0; i < 5; i += 1) {
       expect((await tick("future-signal")).outcome).toBe("exhausted");
-    }
+      expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
 
-    // Five more ticks, zero more model calls. This is the whole point of the slice.
-    expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
-  });
+      for (let i = 0; i < 5; i += 1) {
+        expect((await tick("future-signal")).outcome).toBe("exhausted");
+      }
 
-  test("an exhausted entity costs NOTHING — no draft fetch, no model call", async () => {
-    verdict("structural");
-    await tick("future-signal");
+      // Five more ticks, zero more model calls. This is the whole point of the slice.
+      expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
+    },
+  );
 
-    const describesAfterBudget = describes().length;
+  test(
+    "an exhausted entity costs NOTHING — no draft fetch, no model call",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("structural");
+      await tick("future-signal");
 
-    await tick("future-signal");
+      const describesAfterBudget = describes().length;
 
-    expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
-    expect(describes().length).toBe(describesAfterBudget);
-  });
+      await tick("future-signal");
 
-  test("a partly-spent budget resumes where it left off across ticks", async () => {
-    verdict("reject");
+      expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
+      expect(describes().length).toBe(describesAfterBudget);
+    },
+  );
 
-    // One rejection already on the books, then the "process" ended without finishing the entity.
-    const ledger = new Map();
+  test(
+    "a partly-spent budget resumes where it left off across ticks",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("reject");
 
-    recordAttempt(ledger, "artist", "future-signal", 1);
-    mkdirSync(STATE_DIR, { recursive: true });
-    writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
+      // One rejection already on the books, then the "process" ended without finishing the entity.
+      const ledger = new Map();
 
-    // The next tick resumes with what is LEFT (2); it does not refund three fresh drafts.
-    await tick("future-signal");
+      recordAttempt(ledger, "artist", "future-signal", 1);
+      mkdirSync(STATE_DIR, { recursive: true });
+      writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
 
-    expect(authorings()).toBe(MAX_BIO_ATTEMPTS - 1);
-  });
+      // The next tick resumes with what is LEFT (2); it does not refund three fresh drafts.
+      await tick("future-signal");
+
+      expect(authorings()).toBe(MAX_BIO_ATTEMPTS - 1);
+    },
+  );
 });
 
 // ── ONLY A GATE REJECTION MAY SPEND THE BUDGET ─────────────────────────────────────────
@@ -667,64 +694,76 @@ describe("the transport/model failure never spends an attempt", () => {
     claudeVerdict("up");
   });
 
-  test("a failing `claude -p` leaves the budget untouched, however many ticks it fails for", async () => {
-    verdict("pass");
-    claudeVerdict("down");
+  test(
+    "a failing `claude -p` leaves the budget untouched, however many ticks it fails for",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("pass");
+      claudeVerdict("down");
 
-    for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 4; i += 1) {
+        expect((await tick("future-signal")).outcome).toBe("skipped");
+      }
+
+      // Four failed model calls, and the entity has still not spent a single attempt.
+      expect(authorings()).toBe(4);
+      expect(loadLedger().size).toBe(0);
+    },
+  );
+
+  test(
+    "…so the entity still gets its FULL budget once the model comes back",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("reject");
+      claudeVerdict("down");
+      await tick("future-signal");
+      await tick("future-signal");
+
+      const wasted = authorings();
+
+      claudeVerdict("up");
+
+      const result = await tick("future-signal");
+
+      // The full three drafts, and the third still lands via the acceptance — nothing was eaten
+      // by the outage.
+      expect(authorings() - wasted).toBe(MAX_BIO_ATTEMPTS);
+      expect(describes()).toEqual([false, false, true]);
+      expect(result.outcome).toBe("authored");
+      expect(result.gateBypassed).toBe(true);
+    },
+  );
+
+  test(
+    "a model failure on the LAST attempt does not exhaust the entity",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("reject");
+
+      // Burn the first two attempts on real rejections, so only the final one is left.
+      claudeVerdict("up");
+      const ledger = new Map();
+
+      recordAttempt(ledger, "artist", "future-signal", 1);
+      recordAttempt(ledger, "artist", "future-signal", 2);
+      mkdirSync(STATE_DIR, { recursive: true });
+      writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
+
+      // The model falls over on the final attempt. Before this rule that was a permanent
+      // write-off: no draft to accept, and no budget left to try again.
+      claudeVerdict("down");
       expect((await tick("future-signal")).outcome).toBe("skipped");
-    }
+      expect(loadLedger().get(attemptKey("artist", "future-signal"))?.attempts).toBe(2);
 
-    // Four failed model calls, and the entity has still not spent a single attempt.
-    expect(authorings()).toBe(4);
-    expect(loadLedger().size).toBe(0);
-  });
+      // The model recovers, the final attempt happens for real, and the bio lands.
+      claudeVerdict("up");
+      const result = await tick("future-signal");
 
-  test("…so the entity still gets its FULL budget once the model comes back", async () => {
-    verdict("reject");
-    claudeVerdict("down");
-    await tick("future-signal");
-    await tick("future-signal");
-
-    const wasted = authorings();
-
-    claudeVerdict("up");
-
-    const result = await tick("future-signal");
-
-    // The full three drafts, and the third still lands via the acceptance — nothing was eaten
-    // by the outage.
-    expect(authorings() - wasted).toBe(MAX_BIO_ATTEMPTS);
-    expect(describes()).toEqual([false, false, true]);
-    expect(result.outcome).toBe("authored");
-    expect(result.gateBypassed).toBe(true);
-  });
-
-  test("a model failure on the LAST attempt does not exhaust the entity", async () => {
-    verdict("reject");
-
-    // Burn the first two attempts on real rejections, so only the final one is left.
-    claudeVerdict("up");
-    const ledger = new Map();
-
-    recordAttempt(ledger, "artist", "future-signal", 1);
-    recordAttempt(ledger, "artist", "future-signal", 2);
-    mkdirSync(STATE_DIR, { recursive: true });
-    writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
-
-    // The model falls over on the final attempt. Before this rule that was a permanent
-    // write-off: no draft to accept, and no budget left to try again.
-    claudeVerdict("down");
-    expect((await tick("future-signal")).outcome).toBe("skipped");
-    expect(loadLedger().get(attemptKey("artist", "future-signal"))?.attempts).toBe(2);
-
-    // The model recovers, the final attempt happens for real, and the bio lands.
-    claudeVerdict("up");
-    const result = await tick("future-signal");
-
-    expect(result.outcome).toBe("authored");
-    expect(result.gateBypassed).toBe(true);
-  });
+      expect(result.outcome).toBe("authored");
+      expect(result.gateBypassed).toBe(true);
+    },
+  );
 });
 
 // ── THE STRAIN VOCABULARY ──────────────────────────────────────────────────────────────
@@ -741,37 +780,53 @@ describe("what the sweep's logs say to the /status strain detector", () => {
     claudeVerdict("up");
   });
 
-  test("a clean authoring tick reads as ZERO strain", async () => {
-    verdict("pass");
+  test(
+    "a clean authoring tick reads as ZERO strain",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("pass");
 
-    expect((await tickWithStrain("future-signal")).strain).toBe(0);
-  });
+      expect((await tickWithStrain("future-signal")).strain).toBe(0);
+    },
+  );
 
-  test("rewriting and then LANDING reads as ZERO strain — it is a healthy tick", async () => {
-    // The whole false-positive risk: two rejected drafts, one accepted bio. A sweep that
-    // rewrites and succeeds must never push its cron toward `degraded`.
-    verdict("reject");
+  test(
+    "rewriting and then LANDING reads as ZERO strain — it is a healthy tick",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      // The whole false-positive risk: two rejected drafts, one accepted bio. A sweep that
+      // rewrites and succeeds must never push its cron toward `degraded`.
+      verdict("reject");
 
-    const { lines, strain } = await tickWithStrain("future-signal");
+      const { lines, strain } = await tickWithStrain("future-signal");
 
-    expect(lines.join("\n")).toContain("FINAL-ATTEMPT ACCEPTANCE");
-    expect(strain).toBe(0);
-  });
+      expect(lines.join("\n")).toContain("FINAL-ATTEMPT ACCEPTANCE");
+      expect(strain).toBe(0);
+    },
+  );
 
-  test("EXHAUSTING an entity DOES read as strain — it is a permanent write-off", async () => {
-    verdict("structural");
+  test(
+    "EXHAUSTING an entity DOES read as strain — it is a permanent write-off",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("structural");
 
-    expect((await tickWithStrain("future-signal")).strain).toBeGreaterThan(0);
-  });
+      expect((await tickWithStrain("future-signal")).strain).toBeGreaterThan(0);
+    },
+  );
 
-  test("a transport/model failure DOES read as strain — nothing else is watching it now", async () => {
-    // It no longer costs the entity any budget, so this line is the only signal that a sweep is
-    // grinding against a broken model.
-    verdict("pass");
-    claudeVerdict("down");
+  test(
+    "a transport/model failure DOES read as strain — nothing else is watching it now",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      // It no longer costs the entity any budget, so this line is the only signal that a sweep is
+      // grinding against a broken model.
+      verdict("pass");
+      claudeVerdict("down");
 
-    expect((await tickWithStrain("future-signal")).strain).toBeGreaterThan(0);
-  });
+      expect((await tickWithStrain("future-signal")).strain).toBeGreaterThan(0);
+    },
+  );
 
   test("the per-tick exhausted RECAP is silent — it would otherwise nag forever", () => {
     // The line `main()` prints on every later tick for entities `selectBioWork` filtered out.
@@ -783,16 +838,20 @@ describe("what the sweep's logs say to the /status strain detector", () => {
     expect(countDistressLines(recap)).toBe(0);
   });
 
-  test("a DRY RUN spends no budget — the operator pre-flight is not an attempt", async () => {
-    verdict("pass");
+  test(
+    "a DRY RUN spends no budget — the operator pre-flight is not an attempt",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    async () => {
+      verdict("pass");
 
-    const result = await describeOne("artist", { slug: "future-signal" }, { dryRun: true });
+      const result = await describeOne("artist", { slug: "future-signal" }, { dryRun: true });
 
-    expect(result.outcome).toBe("authored");
-    expect(authorings()).toBe(1);
-    // No ledger was passed, so nothing was counted and nothing was written.
-    expect(() => readFileSync(attemptLedgerPath(), "utf8")).toThrow();
-  });
+      expect(result.outcome).toBe("authored");
+      expect(authorings()).toBe(1);
+      // No ledger was passed, so nothing was counted and nothing was written.
+      expect(() => readFileSync(attemptLedgerPath(), "utf8")).toThrow();
+    },
+  );
 });
 
 describe("the recurring phased orchestrator", () => {
@@ -804,12 +863,15 @@ describe("the recurring phased orchestrator", () => {
     verdict("pass");
   });
 
-  test("batches queue and draft reads before authoring, then batches delivery", () => {
-    const timeline = join(CONTROL, "phase-timeline");
-    const runner = join(RIG, "phase-runner");
-    writeFileSync(
-      runner,
-      `#!/usr/bin/env bash
+  test(
+    "batches queue and draft reads before authoring, then batches delivery",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const timeline = join(CONTROL, "phase-timeline");
+      const runner = join(RIG, "phase-runner");
+      writeFileSync(
+        runner,
+        `#!/usr/bin/env bash
 set -euo pipefail
 shift 2
 if [ "\${1:-}" = "--" ]; then shift; fi
@@ -824,36 +886,37 @@ status="$?"
 printf 'release\\n' >> "$PHASE_TIMELINE"
 exit "$status"
 `,
-      { mode: 0o755 },
-    );
-    const sweep = join(import.meta.dir, "entity-bio-sweep.ts");
-    const result = spawnSync(process.execPath, [sweep, "--kind", "artist"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DATABASE_ADMISSION_RUNNER: runner,
-        ENTITY_BIO_STATE_DIR: STATE_DIR,
-        FLUNCLE_API_TOKEN: "",
-        PHASE_TIMELINE: timeline,
-      },
-    });
+        { mode: 0o755 },
+      );
+      const sweep = join(import.meta.dir, "entity-bio-sweep.ts");
+      const result = spawnSync(process.execPath, [sweep, "--kind", "artist"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          DATABASE_ADMISSION_RUNNER: runner,
+          ENTITY_BIO_STATE_DIR: STATE_DIR,
+          FLUNCLE_API_TOKEN: "",
+          PHASE_TIMELINE: timeline,
+        },
+      });
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(timeline, "utf8").trim().split("\n")).toEqual([
-      "acquire",
-      "read",
-      "release",
-      "external",
-      "acquire",
-      "writes",
-      "release",
-    ]);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      authored: 1,
-      checked: 1,
-      kind: "artist",
-      ok: true,
-      produced: 1,
-    });
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(timeline, "utf8").trim().split("\n")).toEqual([
+        "acquire",
+        "read",
+        "release",
+        "external",
+        "acquire",
+        "writes",
+        "release",
+      ]);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        authored: 1,
+        checked: 1,
+        kind: "artist",
+        ok: true,
+        produced: 1,
+      });
+    },
+  );
 });
