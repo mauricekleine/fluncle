@@ -21,7 +21,7 @@ on:
     # The moment a fluncle release publishes, sweep so the box gets it within minutes,
     # not up to an hour. The hourly cron above is the backstop: npm CDN propagation can
     # lag a publish by a few seconds, in which case this tick no-ops and the next cron catches it.
-    workflows: ["CLI Release"]
+    workflows: ["Releases"]
     types: [completed]
 
 concurrency:

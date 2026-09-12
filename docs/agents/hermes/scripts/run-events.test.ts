@@ -1208,16 +1208,26 @@ describe("secrets-sync reports a run", () => {
   test("a missing bootstrap env reports the failure rather than dying quiet", async () => {
     const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-nobootstrap-"));
     temporaryDirectories.push(root);
+    const bin = join(root, "bin");
+    const dockerCalled = join(root, "docker-called");
+    mkdirSync(bin, { recursive: true });
+    // EXIT reporting still looks for a ledger token in the container configuration. Keep this
+    // failure fixture independent of a CI host's real Docker CLI or daemon, just like every
+    // `runSecretsSync` fixture above; an absent container is a fast, expected empty lookup.
+    writeStub(bin, "docker", `: >${JSON.stringify(dockerCalled)}\nexit 1`);
     const run = await runScript(SECRETS_SYNC, {
       FLUNCLE_API_BASE_URL: "",
       HOME: root,
-      PATH: "/usr/bin:/bin",
+      PATH: `${bin}:/usr/bin:/bin`,
       SECRETS_SYNC_BOOTSTRAP: join(root, "does-not-exist.env"),
       SECRETS_SYNC_SWEEP_OUT: join(root, "state/home/.fluncle-secrets.env"),
     });
     const summary = lastJsonLine(run.stdout);
 
     expect(run.code).toBe(1);
+    expect(existsSync(dockerCalled)).toBe(true);
+    expect(run.stderr).toContain("fluncle-secrets-sync: missing");
+    expect(run.stderr).toContain("run-ledger receipt did not land (missing-token)");
     expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0 });
     expect(derivedOk(run.code, summary.errors)).toBe(false);
   });
