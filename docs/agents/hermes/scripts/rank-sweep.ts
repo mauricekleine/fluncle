@@ -1,133 +1,90 @@
 #!/usr/bin/env bun
-// rank-sweep.ts — the bun orchestrator behind the `--no-agent` catalogue-ranking cron
-// (`fluncle-rank`). THE EAR's schedule (docs/the-ear.md).
-//
-// Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (rank-sweep.sh) the host
-// timer execs on a schedule — see that file's header for the wire-up and
-// ../cron/README.md for the cron model.
-//
-// ── WHY THIS TIMER LANDS WITH THE CRAWLER'S PR ────────────────────────────────
-// The Ear shipped `rank_catalogue` deliberately WITHOUT a schedule, and said so:
-// "a timer ranking an empty table would be a /status row that means nothing; the crawler
-// is what creates rows, so its PR is where `rank_catalogue` gets its schedule." The
-// crawler now exists. So does the schedule.
-//
-// WHAT IT DOES. One tick ranks a bounded batch of STALE catalogue rows — each against
-// every embedded finding, entirely in SQL inside the Worker — storing each one's nearest
-// finding, the cosine similarity to it, and (for a row with no audio yet) its
-// capture-priority tier. The CLI holds no ranking logic; this driver holds even less. It
-// paces, it reports, it stops.
-//
-// ── THE `remaining` CONTRACT, AND WHY THIS ONE LOOPS ──────────────────────────
-// Unlike the crawl (whose pace is a VENDOR'S rate limit, so one pass per tick is the
-// whole point), ranking is pure local SQL with no external budget to respect — the only
-// cost is the box's own CPU. And it has a natural finish line: `remaining` is the server's
-// "> 0, run me again" signal, INFERRED from batch fullness rather than scanned — a FULL
-// batch means more rows are stale by construction, a SHORT (or empty) one means the stale
-// set drained (docs/db-scale-backlog Wave 1 #1, which took the ~19s per-tick COUNT off the
-// hot path). So this sweep DRAINS: it loops while `remaining > 0`, up to a hard tick budget,
-// and stops. A crawl that just landed 700 rows is fully ranked by the next tick rather than
-// in 70 minutes.
-//
-// SELF-HEALING, so the tick is honest either way. Staleness is a fingerprint of the
-// finding corpus (`"<findings>:<embedded>"`), so logging or embedding a finding makes
-// every catalogue row disagree with it and re-rank on later ticks — no invalidation call
-// from the publish path, and a no-op on an unchanged archive. An idle tick fetches an empty
-// batch and reports `remaining: 0` with no scan.
-//
-// It certifies nothing: `rank_catalogue` writes DERIVED columns on CATALOGUE rows only
-// (`tracks` with no `findings` row), so it cannot mint a coordinate, write a note, or
-// touch a finding. Agent tier, agent token, no new secret. Zero LLM tokens.
-//
-// stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
+// The Ear's bounded catalogue-ranking cron. Every database-critical phase first advances one
+// track due-work repair step and may rank one page only after that step proves the queue clean.
 
 import { spawnSync } from "node:child_process";
 
-// ---------------------------------------------------------------------------
-// Config. `BATCH` is rows per CALL (the Worker clamps at 1000); `MAX_CALLS` is the tick's
-// hard budget, so a tick is bounded even when the crawler has just dumped thousands of
-// fresh rows in — the rest simply drains on the next tick. 250 × 8 = 2,000 rows/tick,
-// which is a few seconds of SQL and comfortably inside the unit's timeout.
-// ---------------------------------------------------------------------------
+import { runDatabaseAdmissionPhase } from "./database-admission-phase";
 
 const BATCH = Number(process.env.FLUNCLE_RANK_BATCH ?? "250");
 const MAX_CALLS = Number(process.env.FLUNCLE_RANK_MAX_CALLS ?? "8");
-
+const SOURCE_REPAIRS_PER_PHASE = 5;
+const PHASE_START_BUDGET_MS = 600_000;
+const CLI_CHILD_TIMEOUT_MS = 120_000;
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
+const ADMISSION_OWNER = "fluncle-rank";
+
+// One initial clean proof, then enough phases to drain every marker that the configured rank
+// pages can create. The monotonic wall budget remains the tighter bound when phases are slow.
+const MAX_REPAIR_PHASES = 1 + MAX_CALLS * Math.ceil(BATCH / SOURCE_REPAIRS_PER_PHASE);
 
 const log = (message: string) => console.error(`[rank-sweep] ${message}`);
-
-// ---------------------------------------------------------------------------
-// Types — only the fields we consume from the rank summary.
-// ---------------------------------------------------------------------------
 
 type RankSummary = {
   catalogueDuplicates?: number;
   corpus?: string;
-  embeddedFindings?: number;
-  findings?: number;
-  ok?: boolean;
   prioritized?: number;
   quarantined?: number;
-  // The server's "> 0, run me again" signal — INFERRED from batch fullness, not a live
-  // count (a full batch ⇒ more stale by construction; a short/empty batch ⇒ drained). The
-  // sweep reads it only for the `=== 0` stop test below (docs/db-scale-backlog Wave 1 #1).
   remaining?: number;
   scored?: number;
 };
 
-// The CLI prints the rank tick as an WRAPPER — `{"ok":true,"summary":{…}}` — with the
-// counts nested under `summary`. This sweep originally read them at the TOP level, so
-// every count parsed as `undefined ?? 0`: the tick reported zeros AND `remaining = 0`
-// broke the drain loop after ONE call of its MAX_CALLS budget — the 2026-07-14 silent
-// 1/8th-pace regression (the server ranked; the sweep just couldn't see it). Unwrap the
-// wrapper, and keep the flat read as a fallback so either shape parses.
 type RankResponse = RankSummary & { summary?: RankSummary };
+
+type RepairResponse = {
+  action?: string;
+  complete?: boolean;
+  ok?: boolean;
+  processed?: number;
+  scheduled?: number;
+  steps?: number;
+  target?: string;
+};
+
+type PhaseEnvelope = {
+  kind: "maintenance-pending" | "ranked" | "repaired" | "repair-incomplete";
+  rank?: RankSummary;
+  repair: Required<Pick<RepairResponse, "complete" | "processed" | "scheduled">>;
+};
+
+type SweepSummary = {
+  admissionOutcome: "completed" | "phase-yielded";
+  calls: number;
+  catalogueDuplicates: number;
+  checked: number;
+  corpus: string | null;
+  error: string | null;
+  errors: number;
+  failed: number;
+  maintenanceComplete: boolean;
+  maintenanceProcessed: number;
+  maintenanceScheduled: number;
+  ok: boolean;
+  partial: boolean;
+  prioritized: number;
+  produced: number;
+  quarantined: number;
+  reason: string | null;
+  remaining: number;
+  repairPhases: number;
+  scored: number;
+  throttled: boolean;
+};
+
+class FluncleCliError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "FluncleCliError";
+  }
+}
 
 function unwrapRankSummary(response: RankResponse): RankSummary {
   return response.summary ?? response;
 }
 
-// ---------------------------------------------------------------------------
-// Shell helper — synchronous, fail-loud where it matters. Parse-first, so a partial
-// batch is RECORDED rather than discarded as a crash (the backfill-sweep contract).
-// ---------------------------------------------------------------------------
-
-export function fluncleJson<T>(args: string[]): T {
-  const result = spawnSync(FLUNCLE_BIN, [...args, "--json"], {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
-
-  if (result.error) {
-    throw new Error(`failed to spawn ${FLUNCLE_BIN}: ${result.error.message}`);
-  }
-
-  const code = result.status ?? 1;
-  const stdout = result.stdout ?? "";
-
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    if (code !== 0) {
-      throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${(result.stderr ?? "").trim()}`);
-    }
-
-    throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
-  }
-
-  if (code !== 0 && isCliErrorPayload(parsed)) {
-    throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
-  }
-
-  return parsed as T;
-}
-
-// The CLI's own failure payload (`{ code, message, ok: false }`). Distinguishable from a
-// rank summary, which carries no `code`/`message` pair.
 function isCliErrorPayload(value: unknown): value is { code: string; message: string } {
   return (
     typeof value === "object" &&
@@ -138,79 +95,321 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main — drain the stale set, bounded by MAX_CALLS.
-// ---------------------------------------------------------------------------
+function isMaintenancePending(error: unknown): boolean {
+  return error instanceof FluncleCliError && error.code === "due_work_maintenance_pending";
+}
 
-// `main` RETURNS its summary and never exits: the process-level exit code is the
-// entrypoint's job (below). That keeps the sweep importable — a `process.exit` inside it
-// would tear down the test runner mid-assertion, which is exactly what it did once.
-export function main(): { ok: boolean } & Record<string, unknown> {
-  const summary = {
+export function fluncleJson<T>(args: string[]): T {
+  const result = spawnSync(FLUNCLE_BIN, [...args, "--json"], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: CLI_CHILD_TIMEOUT_MS,
+  });
+
+  if (result.error) {
+    throw new Error(`failed to run ${FLUNCLE_BIN}: ${result.error.message}`);
+  }
+
+  const code = result.status ?? 1;
+  const stdout = result.stdout ?? "";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    if (code !== 0) {
+      throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${(result.stderr ?? "").trim()}`);
+    }
+    throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
+  }
+
+  if (code !== 0) {
+    if (isCliErrorPayload(parsed)) {
+      throw new FluncleCliError(parsed.code, parsed.message);
+    }
+    throw new Error(`fluncle ${args.join(" ")} exited ${code}`);
+  }
+
+  return parsed as T;
+}
+
+function validateConfig(): void {
+  if (!Number.isInteger(BATCH) || BATCH < 1 || BATCH > 1000) {
+    throw new Error("FLUNCLE_RANK_BATCH must be an integer from 1 through 1000");
+  }
+  if (!Number.isInteger(MAX_CALLS) || MAX_CALLS < 1 || MAX_CALLS > 8) {
+    throw new Error("FLUNCLE_RANK_MAX_CALLS must be an integer from 1 through 8");
+  }
+}
+
+function normalizeCount(value: number | undefined, field: string): number {
+  if (value === undefined) {
+    return 0;
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`rank response ${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function validateRankSummary(rank: RankSummary): RankSummary {
+  if (!Number.isSafeInteger(rank.remaining) || (rank.remaining ?? -1) < 0) {
+    throw new Error("rank response is missing a valid remaining sentinel");
+  }
+  normalizeCount(rank.scored, "scored");
+  normalizeCount(rank.prioritized, "prioritized");
+  normalizeCount(rank.quarantined, "quarantined");
+  normalizeCount(rank.catalogueDuplicates, "catalogueDuplicates");
+  return rank;
+}
+
+function repairOnce(): Required<Pick<RepairResponse, "complete" | "processed" | "scheduled">> {
+  const repair = fluncleJson<RepairResponse>([
+    "admin",
+    "projections",
+    "advance",
+    "--target",
+    "track_due_work",
+    "--action",
+    "repair",
+    "--limit",
+    "500",
+    "--max-steps",
+    "1",
+    "--no-terminal-status",
+  ]);
+
+  if (
+    repair.ok !== true ||
+    repair.action !== "repair" ||
+    repair.target !== "track_due_work" ||
+    repair.steps !== 1 ||
+    typeof repair.complete !== "boolean"
+  ) {
+    throw new Error("track due-work repair returned an invalid response");
+  }
+
+  return {
+    complete: repair.complete,
+    processed: normalizeCount(repair.processed, "repair processed"),
+    scheduled: normalizeCount(repair.scheduled, "repair scheduled"),
+  };
+}
+
+function rankOnce(): RankSummary {
+  return validateRankSummary(
+    unwrapRankSummary(
+      fluncleJson<RankResponse>(["admin", "catalogue", "rank", "--limit", String(BATCH)]),
+    ),
+  );
+}
+
+function runCriticalPhase(allowRank: boolean): PhaseEnvelope {
+  const repair = repairOnce();
+  if (!repair.complete) {
+    return { kind: "repair-incomplete", repair };
+  }
+  if (!allowRank) {
+    return { kind: "repaired", repair };
+  }
+
+  try {
+    return { kind: "ranked", rank: rankOnce(), repair };
+  } catch (error) {
+    if (isMaintenancePending(error)) {
+      return { kind: "maintenance-pending", repair };
+    }
+    throw error;
+  }
+}
+
+function admittedPhase(allowRank: boolean): PhaseEnvelope | undefined {
+  const result = runDatabaseAdmissionPhase({
+    command: [
+      process.execPath,
+      import.meta.path,
+      "--critical-phase",
+      allowRank ? "rank" : "repair",
+    ],
+    owner: ADMISSION_OWNER,
+    yieldRetries: 0,
+  });
+  if (result.kind === "yielded") {
+    return undefined;
+  }
+  return JSON.parse(result.stdout) as PhaseEnvelope;
+}
+
+function createSummary(): SweepSummary {
+  return {
+    admissionOutcome: "completed",
     calls: 0,
     catalogueDuplicates: 0,
     checked: 0,
-    corpus: null as null | string,
-    error: null as null | string,
+    corpus: null,
+    error: null,
     errors: 0,
     failed: 0,
+    maintenanceComplete: false,
+    maintenanceProcessed: 0,
+    maintenanceScheduled: 0,
     ok: true,
+    partial: false,
     prioritized: 0,
     produced: 0,
     quarantined: 0,
-    // What is still stale when the tick's budget ran out. > 0 is not a failure — it is
-    // the honest "there is more, and the next tick will take it".
+    reason: null,
     remaining: 0,
+    repairPhases: 0,
     scored: 0,
+    throttled: false,
   };
+}
 
+function applyRank(summary: SweepSummary, tick: RankSummary): number {
+  const scored = normalizeCount(tick.scored, "scored");
+  const prioritized = normalizeCount(tick.prioritized, "prioritized");
+  const quarantined = normalizeCount(tick.quarantined, "quarantined");
+  summary.calls += 1;
+  summary.corpus = tick.corpus ?? summary.corpus;
+  summary.scored += scored;
+  summary.prioritized += prioritized;
+  summary.quarantined += quarantined;
+  summary.catalogueDuplicates += normalizeCount(tick.catalogueDuplicates, "catalogueDuplicates");
+  summary.remaining = tick.remaining ?? 0;
+  return scored + prioritized + quarantined;
+}
+
+function markPartial(
+  summary: SweepSummary,
+  reason: string,
+  options: {
+    admissionYield?: boolean;
+    preserveMaintenanceComplete?: boolean;
+    throttled?: boolean;
+  } = {},
+): void {
+  if (!options.preserveMaintenanceComplete) {
+    summary.maintenanceComplete = false;
+  }
+  summary.partial = true;
+  summary.reason = reason;
+  summary.remaining = Math.max(1, summary.remaining);
+  summary.throttled = options.throttled ?? false;
+  if (options.admissionYield) {
+    summary.admissionOutcome = "phase-yielded";
+  }
+}
+
+function runLegacy(summary: SweepSummary): void {
   try {
-    for (let call = 0; call < MAX_CALLS; call += 1) {
-      const tick = unwrapRankSummary(
-        fluncleJson<RankResponse>(["admin", "catalogue", "rank", "--limit", String(BATCH)]),
-      );
+    const moved = applyRank(summary, rankOnce());
+    if (moved > 0 || summary.remaining > 0) {
+      markPartial(summary, "rolling_admission_compatibility");
+    } else {
+      summary.maintenanceComplete = true;
+    }
+  } catch (error) {
+    if (isMaintenancePending(error)) {
+      markPartial(summary, "due_work_maintenance_pending", { throttled: true });
+      return;
+    }
+    throw error;
+  }
+}
 
-      summary.calls += 1;
-      summary.corpus = tick.corpus ?? summary.corpus;
-      summary.scored += tick.scored ?? 0;
-      summary.prioritized += tick.prioritized ?? 0;
-      summary.quarantined += tick.quarantined ?? 0;
-      summary.catalogueDuplicates += tick.catalogueDuplicates ?? 0;
-      summary.remaining = tick.remaining ?? 0;
+function runPhased(summary: SweepSummary): void {
+  const startedAt = performance.now();
+  let allowRank = true;
+  let cleanupNeeded = false;
 
-      if (summary.remaining === 0) {
-        break;
-      }
+  while (summary.repairPhases < MAX_REPAIR_PHASES) {
+    if (performance.now() - startedAt >= PHASE_START_BUDGET_MS) {
+      markPartial(summary, "rank_wall_budget");
+      return;
     }
 
-    if (summary.remaining > 0) {
-      log(
-        `tick budget spent with ${summary.remaining} row(s) still stale — the next tick takes them`,
-      );
+    const phase = admittedPhase(allowRank);
+    if (!phase) {
+      markPartial(summary, "database_admission", { admissionYield: true, throttled: true });
+      return;
+    }
+
+    summary.repairPhases += 1;
+    summary.maintenanceProcessed += phase.repair.processed;
+    summary.maintenanceScheduled += phase.repair.scheduled;
+
+    if (phase.kind === "repair-incomplete") {
+      cleanupNeeded = true;
+      continue;
+    }
+    if (phase.kind === "maintenance-pending") {
+      markPartial(summary, "due_work_maintenance_pending", { throttled: true });
+      return;
+    }
+    if (phase.kind === "repaired") {
+      summary.maintenanceComplete = true;
+      if (!allowRank) {
+        if (summary.remaining > 0) {
+          markPartial(summary, "rank_page_budget", { preserveMaintenanceComplete: true });
+        }
+        return;
+      }
+      throw new Error("rank phase omitted its rank response");
+    }
+    if (phase.kind !== "ranked" || !phase.rank) {
+      throw new Error("rank phase returned an invalid envelope");
+    }
+
+    cleanupNeeded = applyRank(summary, validateRankSummary(phase.rank)) > 0;
+    if (summary.remaining > 0 && summary.calls < MAX_CALLS) {
+      allowRank = true;
+      continue;
+    }
+    if (!cleanupNeeded) {
+      summary.maintenanceComplete = true;
+      if (summary.remaining > 0) {
+        markPartial(summary, "rank_page_budget", { preserveMaintenanceComplete: true });
+      }
+      return;
+    }
+    allowRank = false;
+  }
+
+  if (cleanupNeeded || summary.remaining > 0) {
+    markPartial(summary, "repair_phase_budget");
+  } else {
+    summary.maintenanceComplete = true;
+  }
+}
+
+export function main(): SweepSummary {
+  const summary = createSummary();
+  try {
+    validateConfig();
+    if (process.env.FLUNCLE_ADMISSION_RUNNER_PID) {
+      runLegacy(summary);
+    } else {
+      runPhased(summary);
     }
   } catch (error) {
     summary.ok = false;
     summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
+    summary.maintenanceComplete = false;
+    summary.remaining = Math.max(1, summary.remaining);
     log(`rank sweep failed: ${summary.error}`);
   }
 
-  // `catalogueDuplicates` is a forensic SUBSET of rows already scored, never extra work.
-  // Quarantine and priority writes are successful actions in their own right, so both belong in
-  // the canonical denominator/numerator alongside scored rows.
   summary.checked = summary.scored + summary.prioritized + summary.quarantined;
   summary.produced = summary.checked;
-
   console.log(JSON.stringify(summary));
-
   return summary;
 }
 
-// The cron runs this file directly; the guard keeps importing `main`/`fluncleJson` for the
-// tests (rank-sweep.test.ts) side-effect free — and it owns the exit code, so a failing tick
-// is a failing unit without `main` being able to kill its own caller.
 if (import.meta.main) {
-  if (!main().ok) {
+  if (process.argv[2] === "--critical-phase") {
+    console.log(JSON.stringify(runCriticalPhase(process.argv[3] === "rank")));
+  } else if (!main().ok) {
     process.exit(1);
   }
 }

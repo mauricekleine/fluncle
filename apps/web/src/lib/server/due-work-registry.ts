@@ -1019,16 +1019,31 @@ export async function projectTrackDueWorkSourceRepairs<Marker extends DueWorkRow
 
     const vendor = vendors.get(marker.subjectId);
     for (const entry of DUE_WORK_VENDOR_WORK_KIND_INVENTORY) {
-      const rank = entry.workKind === "catalogue-rank" ? currentRankCorpus : undefined;
+      const rank =
+        entry.workKind === "catalogue-rank" &&
+        currentRankCorpus !== undefined &&
+        vendor !== undefined
+          ? catalogueRankCorpusForTrack(currentRankCorpus, vendor.hasEmbedding)
+          : undefined;
+      const authoritativeVendor =
+        entry.workKind === "catalogue-rank" && vendor !== undefined
+          ? {
+              ...vendor,
+              catalogueRankCorpus:
+                vendor.catalogueRankCorpus === null
+                  ? null
+                  : catalogueRankCorpusForTrack(vendor.catalogueRankCorpus, vendor.hasEmbedding),
+            }
+          : vendor;
       const source: VendorDueWorkSource | undefined =
-        vendor === undefined
+        authoritativeVendor === undefined
           ? undefined
           : {
-              ...vendor,
-              cursor: vendor.trackId,
+              ...authoritativeVendor,
+              cursor: authoritativeVendor.trackId,
               rankCorpus: rank,
-              sourceVersion: dueWorkVendorSourceVersion(vendor, entry.workKind, rank),
-              subjectId: vendor.trackId,
+              sourceVersion: dueWorkVendorSourceVersion(authoritativeVendor, entry.workKind, rank),
+              subjectId: authoritativeVendor.trackId,
             };
       projected.push({
         marker,
