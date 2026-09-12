@@ -26,7 +26,11 @@ import {
   DISCOGS_RELEASE_WORK_LIMIT,
 } from "./admin-backfills";
 import { recordCost } from "./admin-costs";
-import { recordHealth } from "./admin-health";
+import {
+  HEALTH_SNAPSHOT_CHECKS_MAX,
+  HEALTH_SNAPSHOT_SERVICE_MAX,
+  recordHealth,
+} from "./admin-health";
 import { updateArtistRule } from "./admin-artist-rules";
 import { replaceLabelArtistRules } from "./admin-labels";
 import {
@@ -856,6 +860,69 @@ function accepts(op: unknown, input: unknown): boolean {
     accepts(recordHealth, { ...health, operationKey: "é".repeat(100) }),
     false,
     "health rejects a non-ASCII operation key within the character cap",
+  );
+}
+
+// ── record_health: one snapshot's checks, bounded in count and in service name ────────────
+//
+// Every check upserts a permanent `service_status` row the PUBLIC /status board renders, and
+// costs three or four sequential libSQL round trips inside one Worker request — so an
+// unbounded roster is both a public surface and a request amplifier. REJECTED at the edge,
+// never trimmed: a dropped check is a service that silently stays green on the board.
+{
+  const snapshot = (checks: unknown) => ({ at: "2026-08-26T10:00:00.000Z", checks });
+  const check = (service: string) => ({
+    latencyMs: null,
+    message: null,
+    service,
+    status: "ok",
+    transitioned: false,
+  });
+
+  assert.equal(
+    accepts(
+      recordHealth,
+      snapshot(Array.from({ length: HEALTH_SNAPSHOT_CHECKS_MAX }, (_, i) => check(`cron.s${i}`))),
+    ),
+    true,
+    "a snapshot at the checks cap is accepted",
+  );
+  assert.equal(
+    accepts(
+      recordHealth,
+      snapshot(
+        Array.from({ length: HEALTH_SNAPSHOT_CHECKS_MAX + 1 }, (_, i) => check(`cron.s${i}`)),
+      ),
+    ),
+    false,
+    "a snapshot past the checks cap is rejected",
+  );
+
+  // The widest real producer: the prober's cron roster plus its fixed rows, far below the cap.
+  assert.equal(
+    accepts(recordHealth, snapshot(Array.from({ length: 55 }, (_, i) => check(`cron.s${i}`)))),
+    true,
+    "the real prober's snapshot size is accepted",
+  );
+  assert.equal(
+    accepts(recordHealth, snapshot([check("cron.projection-maintenance")])),
+    true,
+    "the longest real service name is accepted",
+  );
+  assert.equal(
+    accepts(recordHealth, snapshot([check("s".repeat(HEALTH_SNAPSHOT_SERVICE_MAX))])),
+    true,
+    "a service name at the identifier cap is accepted",
+  );
+  assert.equal(
+    accepts(recordHealth, snapshot([check("s".repeat(HEALTH_SNAPSHOT_SERVICE_MAX + 1))])),
+    false,
+    "a service name past the identifier cap is rejected",
+  );
+  assert.equal(
+    accepts(recordHealth, snapshot([check("")])),
+    false,
+    "an empty service name is rejected",
   );
 }
 
