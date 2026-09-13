@@ -1033,6 +1033,30 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "tertiary" },
   },
   {
+    apiFormat: "text/plain",
+    exposedContent: [
+      "RFC 9116 security.txt — where to send a vulnerability report, in the one place a researcher looks first",
+    ],
+    kind: "discovery",
+    name: "discovery.security-txt",
+    operatorNotes:
+      "A static file, apps/web/public/.well-known/security.txt. It carries an `Expires` field the RFC requires a responder to keep in the future — when it lapses, a reporter reads the contact as stale. No probeConfig, exactly like robots.txt and llms.txt: a static asset the Worker never computes.",
+    route: "/.well-known/security.txt",
+    url: `${SITE}/.well-known/security.txt`,
+    weights: { web: "tertiary" },
+  },
+  {
+    apiFormat: "text/plain",
+    exposedContent: ["humans.txt — who made this, who is thanked, and what it is built with"],
+    kind: "discovery",
+    name: "discovery.humans",
+    operatorNotes:
+      "A static file, apps/web/public/humans.txt — the human counterpart to robots.txt. Machine-fetched by convention, never browsed, which is why it sits under `discovery` beside robots.txt rather than as a web route.",
+    route: "/humans.txt",
+    url: `${SITE}/humans.txt`,
+    weights: { web: "tertiary" },
+  },
+  {
     apiFormat: "text/markdown",
     discoveryUrl: `${SITE}/.well-known/api-catalog`,
     exposedContent: ["the plain-language map of the Galaxy for LLMs"],
