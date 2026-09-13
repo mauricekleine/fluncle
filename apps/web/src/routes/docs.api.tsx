@@ -2,6 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ApiReferenceReact } from "@scalar/api-reference-react";
 import scalarCssUrl from "@scalar/api-reference-react/style.css?url";
 import { siteUrl } from "@/lib/fluncle-links";
+import { jsonLdScript } from "@/lib/json-ld";
+import { docsBreadcrumbsJsonLd } from "@/lib/log-schema";
 
 // The embedded Scalar API reference, at /docs/api inside the docs hub. It reads
 // the already-served OpenAPI 3.1 document at /api/v1/openapi.json (the same
@@ -44,6 +46,10 @@ export const Route = createFileRoute("/docs/api")({
         name: "description",
       },
     ],
+    // Fluncle → Docs → API reference. This page is a `/docs` LEAF with its own head, so it owes
+    // its own trail: the chrome marks up hub trails only (components/nav/nav-breadcrumb.tsx), and
+    // the leaf name is the reference's real title, which the slug alone could only read as "Api".
+    scripts: [jsonLdScript(docsBreadcrumbsJsonLd("API reference"))],
   }),
 });
 
