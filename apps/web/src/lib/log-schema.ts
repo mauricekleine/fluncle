@@ -545,34 +545,43 @@ export function musicGroupJsonLd(
     image: artist.imageUrl,
     name: artist.name,
     ...(sameAs.length > 0 ? { sameAs } : {}),
-    track: {
-      "@type": "ItemList",
-      itemListElement: findings.reduce<
-        Array<{
-          "@type": "ListItem";
-          item: {
-            "@type": "MusicRecording";
-            byArtist: Array<Record<string, unknown>>;
-            name: string;
-            url: string;
-          };
-          position: number;
-        }>
-      >((items, finding) => {
-        items.push({
-          "@type": "ListItem",
-          item: {
-            "@type": "MusicRecording",
-            byArtist: finding.artists.map((name) => byArtistNode(name, artistSlugs)),
-            name: finding.title,
-            url: logPageUrl(finding.logId),
-          },
-          position: items.length + 1,
-        });
+    // OMITTED, never an empty ItemList. Most artists in the archive are catalogue rows Fluncle
+    // has not certified a finding from, and the unnamed tier means their quieter tracks are never
+    // named here (docs/album-entity.md) — so `findings` is empty on the majority of these pages.
+    // An `ItemList` with no members asserts "this artist has a track list, and it holds nothing",
+    // which contradicts the page; the same omit-cleanly rule the rest of this node follows.
+    ...(findings.length > 0
+      ? {
+          track: {
+            "@type": "ItemList",
+            itemListElement: findings.reduce<
+              Array<{
+                "@type": "ListItem";
+                item: {
+                  "@type": "MusicRecording";
+                  byArtist: Array<Record<string, unknown>>;
+                  name: string;
+                  url: string;
+                };
+                position: number;
+              }>
+            >((items, finding) => {
+              items.push({
+                "@type": "ListItem",
+                item: {
+                  "@type": "MusicRecording",
+                  byArtist: finding.artists.map((name) => byArtistNode(name, artistSlugs)),
+                  name: finding.title,
+                  url: logPageUrl(finding.logId),
+                },
+                position: items.length + 1,
+              });
 
-        return items;
-      }, []),
-    },
+              return items;
+            }, []),
+          },
+        }
+      : {}),
     url: artistUrl,
   };
 }
@@ -911,11 +920,19 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
             },
           }
         : {}),
-    byArtist: album.artists.map((artist) => ({
-      "@id": artistPageUrl(artist.slug),
-      "@type": "MusicGroup",
-      name: artist.name,
-    })),
+    // OMITTED, never `byArtist: []`. A various-artists compilation resolves no album-level artist
+    // entity at all, and an empty `byArtist` asserts the record was made by nobody — while the
+    // `track` list directly below names an artist on every line. Absence is the true answer; the
+    // per-track credits carry the attribution.
+    ...(album.artists.length > 0
+      ? {
+          byArtist: album.artists.map((artist) => ({
+            "@id": artistPageUrl(artist.slug),
+            "@type": "MusicGroup",
+            name: artist.name,
+          })),
+        }
+      : {}),
     // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly
     // (never `description: null`) until one is authored.
     ...(album.bio ? { description: album.bio } : {}),
@@ -1093,6 +1110,24 @@ export function logbookBreadcrumbsJsonLd(sectorLabel: string): Record<string, un
       { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
       { "@type": "ListItem", item: `${siteUrl}/logbook`, name: "Logbook", position: 2 },
       { "@type": "ListItem", name: sectorLabel, position: 3 },
+    ],
+  };
+}
+
+/**
+ * Fluncle → Docs → the doc's own title, e.g. "Log ID".
+ *
+ * The leaf is the MDX front matter's `title`, never the slug: the chrome's trail can only
+ * humanize `/docs/log-id` into "Log Id", and the markup is where the real name has to land.
+ */
+export function docsBreadcrumbsJsonLd(title: string): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+      { "@type": "ListItem", item: `${siteUrl}/docs`, name: "Docs", position: 2 },
+      { "@type": "ListItem", name: title, position: 3 },
     ],
   };
 }

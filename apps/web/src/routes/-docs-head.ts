@@ -1,4 +1,6 @@
 import { siteUrl } from "@/lib/fluncle-links";
+import { jsonLdScript } from "@/lib/json-ld";
+import { docsBreadcrumbsJsonLd } from "@/lib/log-schema";
 
 // The `<head>` for every /docs page — shared by the index (`docs.index.tsx`) and the
 // catch-all (`docs.$.tsx`), because both resolve one Fumadocs page and both owe it the
@@ -12,8 +14,10 @@ import { siteUrl } from "@/lib/fluncle-links";
 // the head. This carries them there.
 //
 // CLIENT-SAFE by construction: a route's `head` is in its eagerly-bundled half
-// (docs/client-bundle.md Rule 1), so this module imports only `lib/fluncle-links` and
-// never `lib/server/**` — the front matter arrives as plain loader data.
+// (docs/client-bundle.md Rule 1), so this module reaches for no `lib/server/**` or `db/**`
+// module — the front matter arrives as plain loader data. `lib/log-schema` is already an
+// eager-chunk resident (every entity route's `head` builds its JSON-LD from it), so taking
+// the breadcrumb builder from there adds nothing to the entry chunk.
 
 /** The front matter + resolved URL one doc page's head needs. */
 export type DocsHeadData = {
@@ -37,6 +41,8 @@ export function docsHead(data: DocsHeadData | undefined) {
 
   const canonical = `${siteUrl}${data.url}`;
   const title = docsTitle(data.title);
+  /** A `/docs/<slug>` page rather than the `/docs` hub — the two differ in head twice, below. */
+  const isLeaf = data.url !== "/docs";
   // The Markdown twin of this page, advertised the standard way so an agent that would rather
   // read Markdown than parse the HTML finds it without guessing. The page-actions affordance
   // ("View as Markdown", "Open in ChatGPT/Claude/Cursor") already points at this URL; this is
@@ -46,8 +52,7 @@ export function docsHead(data: DocsHeadData | undefined) {
   // certain to resolve. The hub's own twin would be the bare `/docs.md` (the empty splat), and
   // whether the splat route answers its own parent path is not something the repo states — so
   // the hub advertises no alternate rather than a link that might 404.
-  const markdownTwin =
-    data.url === "/docs" ? undefined : `${siteUrl}/docs.md${data.url.slice("/docs".length)}`;
+  const markdownTwin = isLeaf ? `${siteUrl}/docs.md${data.url.slice("/docs".length)}` : undefined;
 
   return {
     links: [
@@ -72,5 +77,10 @@ export function docsHead(data: DocsHeadData | undefined) {
       { content: "article", property: "og:type" },
       { content: title, name: "twitter:title" },
     ],
+    // Fluncle → Docs → the doc's own name. Only for a `/docs/<slug>` page: the hub is a single
+    // crumb and the chrome's own trail marks that one up (components/nav/nav-breadcrumb.tsx —
+    // the route owns a LEAF trail because only the route knows the real name; `/docs/log-id`
+    // reads "Log ID" from the front matter, where the slug alone could only say "Log Id").
+    scripts: isLeaf ? [jsonLdScript(docsBreadcrumbsJsonLd(data.title))] : [],
   };
 }
