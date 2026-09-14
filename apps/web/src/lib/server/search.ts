@@ -270,6 +270,31 @@ type EntityQuery = {
   sql: string;
 };
 
+/** Tier 2 asks whether the query NAMES an entity; tier 3 asks whether it PREFIXES one. */
+export type EntityMatchMode = "exact" | "prefix";
+
+/**
+ * The one statement `matchEntities` runs for a kind, a raw query, and a mode — or `undefined` for a
+ * blank query, which matches nothing. Exposed so the integration suite pins its plan and its parity
+ * with the `lower()` compare it serves.
+ */
+export function entityMatchStatement(
+  kind: SearchEntity["kind"],
+  query: string,
+  mode: EntityMatchMode,
+  limit = ENTITY_LIMIT,
+): { args: (number | string)[]; sql: string } | undefined {
+  const needle = query.trim().toLowerCase();
+
+  if (needle.length === 0) {
+    return undefined;
+  }
+
+  const { buildArgs, sql } = entitySql(kind, mode);
+
+  return { args: buildArgs(needle, limit), sql };
+}
+
 /** The page an entity IS — `/<kind>/<slug>` for most, but a galaxy's segment is plural and a
     mixtape's page is its LOG page. The one place a (kind, slug) becomes a route. */
 function entityUrl(kind: SearchEntity["kind"], slug: string): string {
@@ -324,16 +349,19 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
  * a tie the primary name's way: an artist the query names DIRECTLY outranks one it reaches only
  * through an alias, so a name that is one artist's primary and another's AKA still lands on the
  * primary. Matched on `lower(alias)` — the same case-insensitive raw compare the name uses, not
- * the slug — and correlated by `artist_id` (`artist_aliases_artist_id_idx`).
+ * the slug.
  *
- * SCALE CAVEAT, deliberately recorded rather than fixed here: `artists` is NOT archive-sized. The
- * credit sweep mints a row per unmatched MusicBrainz credit (`mintArtistByMbid`), so the table
- * tracks the crawl, and `lower(<name>) <predicate> or exists (<alias probe>)` cannot be served by
- * any index — a correlated `exists` is not an indexable `or` arm, so the planner scans every artist
- * and probes the aliases per row. `resolveFilterArtistId` below shows the shape that fixes it (ask
- * the two ranks as two statements, so rank 0 is a seek); doing the same here has to split a LIMIT
- * across the two ranks and de-duplicate an artist matched both ways, which is why it is filed in
- * docs/audit-backlog.md rather than done in passing.
+ * THE ARTIST READ IS TWO INDEXABLE `OR` ARMS, because `artists` is NOT archive-sized: the credit
+ * sweep mints a row per unmatched MusicBrainz credit (`mintArtistByMbid`), so the table tracks the
+ * crawl. The NAME arm is spelled on the bare column — `artists.name = ? collate nocase` for exact,
+ * `artists.name like ?` with the `%` bound into the argument for prefix — so
+ * `artists_name_nocase_idx` answers it with a seek or a range. Both spellings are exactly the
+ * `lower(artists.name)` compare they replace: SQLite's `lower()`, its NOCASE collation, and `LIKE`
+ * all fold ASCII A–Z and nothing else, and the needle is already lowercased. The ALIAS arm is an
+ * uncorrelated `artists.id in (select artist_id …)` list, evaluated once per statement over the
+ * small alias table and probed by primary key. Together they give the planner a MULTI-INDEX OR; a
+ * correlated `exists` arm, or a `lower()`-wrapped name, makes it scan every artist and probe the
+ * aliases per row instead. `search.integration.test.ts` pins the plan and the result parity.
  *
  * AND SO DOES A LABEL. `label_aliases` is the structural twin of `artist_aliases` — the same fold
  * an operator's label MERGE writes (the loser's name becomes a `confirmed` alias of the winner) and
@@ -347,24 +375,35 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
  * `candidate|confirmed`, where a `candidate` is an UNRULED derivation guess awaiting the operator.
  * So this gate is `status = 'confirmed'` ONLY — the same trust the public `alternateName` and
  * `ensureLabel`'s fold use. A `hint` never resolves either, on the same rule as the artist read.
- * Correlated by `label_id`, which leads the `label_aliases_label_slug_source_idx` composite, over a
- * `labels` table the hub gate already bounds. An ALBUM has no alias table; its read is unchanged.
+ * Read as the same uncorrelated id list the artist read uses (`labels.id in (select label_id …)`),
+ * so the confirmed aliases are read once per statement rather than once per label row, and the hub
+ * gate still applies to whatever the list admits. An ALBUM has no alias table; its read is unchanged.
  */
-function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
+function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQuery {
+  const predicate = mode === "exact" ? "= ?" : "like ? || '%'";
+
   if (kind === "artist") {
+    // The name arm binds its own argument: the bare needle for the NOCASE equality, the needle
+    // with its `%` for the prefix `LIKE` (a bound pattern is what lets the index range serve it).
+    const nameMatch = mode === "exact" ? "artists.name = ? collate nocase" : "artists.name like ?";
+
     return {
-      buildArgs: (needle, limit) => [needle, needle, needle, limit],
+      buildArgs: (needle, limit) => [
+        needle,
+        mode === "exact" ? needle : `${needle}%`,
+        needle,
+        limit,
+      ],
       sql: `select artists.name as name, artists.slug as slug, artists.image_url as image_url,
               artists.image_key as image_key, artists.image_state as image_state,
               artists.image_updated_at as image_updated_at,
               case when lower(artists.name) ${predicate} then 0 else 1 end as name_rank
             from artists
-            where lower(artists.name) ${predicate}
-               or exists (select 1 from artist_aliases
-                          where artist_aliases.artist_id = artists.id
-                            and artist_aliases.kind = 'name'
-                            and artist_aliases.status in ('auto', 'confirmed')
-                            and lower(artist_aliases.alias) ${predicate})
+            where ${nameMatch}
+               or artists.id in (select artist_aliases.artist_id from artist_aliases
+                                 where artist_aliases.kind = 'name'
+                                   and artist_aliases.status in ('auto', 'confirmed')
+                                   and lower(artist_aliases.alias) ${predicate})
             order by name_rank asc, length(artists.name) asc, artists.name asc
             limit ?`,
     };
@@ -407,13 +446,14 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
     ? "labels.image_key as logo_key, labels.image_updated_at as logo_updated_at,"
     : "";
   // A LABEL answers to every spelling the operator has RULED (see the doctrine above); an ALBUM
-  // has no alias table, so these three fragments are empty for it and its read is untouched.
+  // has no alias table, so these three fragments are empty for it and its read is untouched. The
+  // alias arm is an uncorrelated id list, evaluated once per statement: a correlated `exists`
+  // would re-read the confirmed aliases for every label row the name arm does not match.
   const labelAliasWhere = isLabel
-    ? `or exists (select 1 from label_aliases
-                  where label_aliases.label_id = labels.id
-                    and label_aliases.kind = 'name'
-                    and label_aliases.status = 'confirmed'
-                    and lower(label_aliases.alias) ${predicate})`
+    ? `or labels.id in (select label_aliases.label_id from label_aliases
+                        where label_aliases.kind = 'name'
+                          and label_aliases.status = 'confirmed'
+                          and lower(label_aliases.alias) ${predicate})`
     : "";
   const labelRankSelect = isLabel
     ? `case when lower(labels.name) ${predicate} then 0 else 1 end as name_rank,`
@@ -485,18 +525,17 @@ function entityImageUrl(kind: SearchEntity["kind"], row: EntityRow): string | un
 async function matchEntities(
   kind: SearchEntity["kind"],
   query: string,
-  mode: "exact" | "prefix",
+  mode: EntityMatchMode,
   limit = ENTITY_LIMIT,
 ): Promise<SearchEntity[]> {
-  const needle = query.trim().toLowerCase();
+  const statement = entityMatchStatement(kind, query, mode, limit);
 
-  if (needle.length === 0) {
+  if (!statement) {
     return [];
   }
 
-  const { buildArgs, sql } = entitySql(kind, mode === "exact" ? "= ?" : "like ? || '%'");
   const db = await getDb();
-  const result = await db.execute({ args: buildArgs(needle, limit), sql });
+  const result = await db.execute(statement);
 
   return typedRows<EntityRow>(result.rows).map((row) => ({
     imageUrl: entityImageUrl(kind, row),

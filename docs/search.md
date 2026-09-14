@@ -25,7 +25,7 @@ Tier 2 and tier 3 both hand back **entities** — jump targets that sit above th
 
 Tier 2 and tier 3 return label and album jump targets when they clear `hubInclusionWhere`. Below-floor entities decline the jump and remain available as filters.
 
-- **The entity reads are archive-sized, not catalogue-sized** — a label/album is bounded by that floor, and galaxies and mixtapes are a handful today, dozens at most — so the exact/prefix match stays a cheap read however deep the catalogue gets. A galaxy resolves only when it is **named and not retired**; a mixtape only when it is **published**.
+- **The entity reads stay off the growing tables' rows.** `artists` grows with the crawl, so the artist read spells its name arm on the bare column (`name = ? collate nocase`, or `name like ?` with the `%` bound into the argument) and `artists_name_nocase_idx` answers it; those spellings are exactly the `lower(name)` compare, because `lower()`, NOCASE, and `LIKE` all fold ASCII A–Z and nothing else. Every alias arm, artist and label, is one uncorrelated id list read once per statement, never a correlated probe per entity row. The label and album name arms still read their own tables, because no name index serves them ([docs/db-scale-backlog.md](./db-scale-backlog.md), Wave 3 item 7). A label/album result is bounded by that floor, and galaxies and mixtapes are a handful today, dozens at most. A galaxy resolves only when it is **named and not retired**; a mixtape only when it is **published**.
 
 ### An artist answers to every name
 
