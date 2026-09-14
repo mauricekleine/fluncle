@@ -153,6 +153,65 @@ esac`,
   });
 });
 
+describe("phased enrichment under a due-work deferral", () => {
+  test("a deferred findings queue ends the tick in the read phase as paused backpressure", () => {
+    const fixture = rig();
+    executable(
+      fixture.fluncle,
+      `case " $* " in
+  *" admin tracks enrich --queue "*) printf '{\\n  "code": "due_work_maintenance_pending",\\n  "message": "Due-work maintenance is still converging",\\n  "ok": false\\n}\\n'; exit 1 ;;
+  *) printf 'unexpected fluncle call: %s\\n' "$*" >&2; exit 2 ;;
+esac`,
+    );
+    const result = Bun.spawnSync([process.execPath, ENRICH], {
+      env: baseEnvironment(fixture),
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(readFileSync(fixture.timeline, "utf8").trim().split("\n")).toEqual([
+      "acquire",
+      "read",
+      "release",
+    ]);
+    expect(() => readFileSync(fixture.writes, "utf8")).toThrow();
+    expect(JSON.parse(result.stdout.toString())).toMatchObject({
+      checked: 0,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      partial: false,
+      produced: 0,
+      reason: "due_work_repair_pending",
+      throttled: true,
+    });
+  });
+
+  test("a generic Worker fault on the findings queue stays a failed run", () => {
+    const fixture = rig();
+    executable(
+      fixture.fluncle,
+      `case " $* " in
+  *" admin tracks enrich --queue "*) printf '{"code":"error","message":"Internal error","ok":false}\\n'; exit 1 ;;
+  *) printf 'unexpected fluncle call: %s\\n' "$*" >&2; exit 2 ;;
+esac`,
+    );
+    const result = Bun.spawnSync([process.execPath, ENRICH], {
+      env: baseEnvironment(fixture),
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout.toString())).toMatchObject({
+      errors: 1,
+      ok: false,
+      reason: "enrich_failed",
+    });
+  });
+});
+
 describe("bounded phase-yield replay", () => {
   test("retries only when the caller supplies the registry-approved retry budget", () => {
     const directory = mkdtempSync(join(tmpdir(), "database-admission-retry-"));

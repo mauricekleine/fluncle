@@ -146,6 +146,11 @@ import {
   databaseAdmissionYieldSummary,
   runDatabaseAdmissionPhase,
 } from "./database-admission-phase";
+import {
+  dueWorkRepairPendingSummary,
+  failureBodyUnlessRepairPending,
+  isDueWorkRepairPending,
+} from "./due-work-repair-pending";
 // THE FINGERPRINT VERIFICATION GATE (docs/the-ear.md § Wrong audio) — the shared, pure matcher
 // (also used by the historic backfill, verify-captures.ts) + the fpcalc/preview I/O helpers.
 import {
@@ -1578,9 +1583,8 @@ async function fetchTrackWork(options: {
     signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
-    throw new Error(
-      `${options.kind} queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-    );
+    const failure = await failureBodyUnlessRepairPending(res, `${options.kind} queue read`);
+    throw new Error(`${options.kind} queue read failed (${res.status}): ${failure.slice(0, 200)}`);
   }
   const body = (await res.json()) as { tracks?: CaptureFinding[] };
   return Array.isArray(body.tracks) ? body.tracks : [];
@@ -1763,16 +1767,26 @@ async function runCaptureAdmissionChild(
   const request = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
   let result: unknown;
   if (action === "queue") {
-    result = {
-      tracks:
-        typeof request.kind === "string"
-          ? await fetchTrackWork({
-              kind: request.kind as "capture" | "youtube-provenance" | "youtube-reverdict",
-              limit: Number(request.limit),
-              scope: request.scope as "all" | "catalogue" | "findings",
-            })
-          : await fetchCaptureQueue(),
-    };
+    try {
+      result = {
+        tracks:
+          typeof request.kind === "string"
+            ? await fetchTrackWork({
+                kind: request.kind as "capture" | "youtube-provenance" | "youtube-reverdict",
+                limit: Number(request.limit),
+                scope: request.scope as "all" | "catalogue" | "findings",
+              })
+            : await fetchCaptureQueue(),
+      };
+    } catch (error) {
+      if (!isDueWorkRepairPending(error)) {
+        throw error;
+      }
+      // The deferral crosses the phase boundary as data: a non-zero child exit reads as a failed
+      // phase, while this result tells the parent the queue was deferred rather than empty.
+      log(error.message);
+      result = { dueWorkRepairPending: true };
+    }
   } else if (action === "prepare") {
     const trackId = typeof request.trackId === "string" ? request.trackId : "";
     result = await adminApiPost<PreparedSnapshot>(
@@ -1920,7 +1934,7 @@ function admittedWorkList(options: {
   kind: "capture" | "youtube-provenance" | "youtube-reverdict";
   limit: number;
   scope: "all" | "catalogue" | "findings";
-}): CaptureFinding[] | "yielded" {
+}): CaptureFinding[] | "due-work-repair-pending" | "yielded" {
   const path = join(
     CAPTURE_PROGRESS_DIR,
     `queue-${options.kind}-${options.scope}-${process.pid}.json`,
@@ -1931,10 +1945,16 @@ function admittedWorkList(options: {
     return "yielded";
   }
   const response = JSON.parse(readFileSync(`${path}.result`, "utf8")) as {
+    dueWorkRepairPending?: boolean;
     tracks?: CaptureFinding[];
   };
   rmSync(path, { force: true });
   rmSync(`${path}.result`, { force: true });
+  // The Worker deferred this worklist while due-work repair converges: the queue was not read, so it
+  // is neither empty nor a failure.
+  if (response.dueWorkRepairPending === true) {
+    return "due-work-repair-pending";
+  }
   return response.tracks ?? [];
 }
 
@@ -3937,7 +3957,7 @@ async function runProvenancePhase(
     limit: budget.findings,
     scope: "findings",
   });
-  if (queuedRows === "yielded") {
+  if (queuedRows === "yielded" || queuedRows === "due-work-repair-pending") {
     counts.pending += budget.findings;
     return { counts, ladder };
   }
@@ -3984,7 +4004,7 @@ async function runProvenancePhase(
   // rather than by how many rows were read. A row that reaches rung 2 with the counter at zero is
   // deferred, untouched, and asked again next tick.
   const segmentBudget = { segments: catalogueRoom };
-  let queuedCatalogueRows: CaptureFinding[] | "yielded";
+  let queuedCatalogueRows: CaptureFinding[] | "due-work-repair-pending" | "yielded";
   try {
     queuedCatalogueRows = admittedWorkList({
       kind: "youtube-provenance",
@@ -3999,7 +4019,7 @@ async function runProvenancePhase(
     );
     return { counts, ladder };
   }
-  if (queuedCatalogueRows === "yielded") {
+  if (queuedCatalogueRows === "yielded" || queuedCatalogueRows === "due-work-repair-pending") {
     counts.pending += catalogueRoom;
     return { counts, ladder };
   }
@@ -4106,7 +4126,7 @@ async function runReverdictPhase(
   // `scope=all`: this phase spends no metered bandwidth, so there is no reason to hold the
   // catalogue's rows back from a free re-ask.
   const queuedRows = admittedWorkList({ kind: "youtube-reverdict", limit, scope: "all" });
-  if (queuedRows === "yielded") {
+  if (queuedRows === "yielded" || queuedRows === "due-work-repair-pending") {
     return {
       asked: 0,
       failed: 0,
@@ -4372,6 +4392,19 @@ async function main(): Promise<void> {
   }
 
   const queue = admittedWorkList({ kind: "capture", limit: QUEUE_LIMIT, scope: "all" });
+  if (queue === "due-work-repair-pending") {
+    console.log(
+      JSON.stringify(
+        dueWorkRepairPendingSummary({
+          checked: 0,
+          writesConfirmed: recoveredConfirmed,
+          writesFailed: recoveredRejected,
+          writesPending: recoveredPending,
+        }),
+      ),
+    );
+    return;
+  }
   if (queue === "yielded") {
     console.log(
       JSON.stringify(

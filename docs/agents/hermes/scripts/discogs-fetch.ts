@@ -3,6 +3,8 @@
 // existing match gate, and owns the write. It is self-contained because deployed box scripts do
 // not import the monorepo workspace.
 
+import { failureBodyUnlessRepairPending } from "./due-work-repair-pending";
+
 const DISCOGS_API_ROOT = "https://api.discogs.com";
 const USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 const MIN_REQUEST_INTERVAL_MS = 1_100;
@@ -220,7 +222,10 @@ export async function postDiscogsAgentOperation<T>(
   });
 
   if (!response.ok) {
-    const detail = (await response.text()).slice(0, 500);
+    const detail = (await failureBodyUnlessRepairPending(response, `Fluncle ${path}`)).slice(
+      0,
+      500,
+    );
     throw new Error(
       `Fluncle ${path} returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`,
     );

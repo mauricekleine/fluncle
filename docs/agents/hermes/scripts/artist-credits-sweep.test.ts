@@ -28,6 +28,8 @@ case "$(cat "$(dirname "$0")/mode")" in
   drained) printf '{"ok":true,"dryRun":false,"scanned":0,"mintedArtists":0,"adoptedArtists":0,"matchedArtists":0,"edgesWritten":0,"skippedNoIdentity":0,"rateLimited":false,"nextCursor":null}\\n' ;;
   throttled) printf '{"ok":true,"dryRun":false,"scanned":3,"mintedArtists":2,"adoptedArtists":1,"matchedArtists":1,"edgesWritten":3,"skippedNoIdentity":0,"rateLimited":true,"nextCursor":null}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
+  pending) printf '{\\n  "code": "due_work_maintenance_pending",\\n  "message": "Due-work maintenance is still converging",\\n  "ok": false\\n}\\n'; exit 1 ;;
+  generic-fault) printf '{"code":"error","message":"Internal error","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
   *) printf '{"ok":true,"dryRun":false,"scanned":5,"mintedArtists":4,"adoptedArtists":3,"matchedArtists":2,"edgesWritten":7,"skippedNoIdentity":1,"rateLimited":false,"nextCursor":"t-5"}\\n' ;;
 esac
@@ -114,5 +116,68 @@ describe("artist-credits-sweep's fluncleJson", () => {
     mode("crash");
 
     expect(() => fluncleJson<Pass>(["admin", "backfills", "artist-credits"])).toThrow(/exited 1/);
+  });
+
+  test("throws the typed pause on the Worker's due-work deferral and a plain error on a generic fault", async () => {
+    const { DueWorkRepairPendingError } = await import("./due-work-repair-pending");
+
+    mode("pending");
+    expect(() => fluncleJson<Pass>(["admin", "backfills", "artist-credits"])).toThrow(
+      DueWorkRepairPendingError,
+    );
+
+    mode("generic-fault");
+    let thrown: unknown;
+    try {
+      fluncleJson<Pass>(["admin", "backfills", "artist-credits"]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(DueWorkRepairPendingError);
+  });
+});
+
+describe("artist-credits-sweep's run outcome", () => {
+  function tick(): { exitCode: number; summary: Record<string, unknown> } {
+    const result = Bun.spawnSync(
+      [process.execPath, join(import.meta.dir, "artist-credits-sweep.ts")],
+      {
+        env: { ...process.env, FLUNCLE_BIN: join(dir, "fluncle") },
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+
+    return {
+      exitCode: result.exitCode,
+      summary: JSON.parse(result.stdout.toString()) as Record<string, unknown>,
+    };
+  }
+
+  test("the Worker's due-work deferral is an exit-zero paused tick", () => {
+    mode("pending");
+
+    expect(tick()).toMatchObject({
+      exitCode: 0,
+      summary: {
+        errors: 0,
+        gateState: "paused",
+        ok: true,
+        partial: false,
+        produced: 0,
+        reason: "due_work_repair_pending",
+        throttled: true,
+      },
+    });
+  });
+
+  test("a generic Worker fault stays a failed run that exits non-zero", () => {
+    mode("generic-fault");
+    const { exitCode, summary } = tick();
+
+    expect(exitCode).toBe(1);
+    expect(summary).toMatchObject({ errors: 1, ok: false });
+    expect(summary).not.toHaveProperty("gateState");
   });
 });

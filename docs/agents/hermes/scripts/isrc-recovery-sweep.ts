@@ -8,6 +8,13 @@
 //
 // stdout: exactly one JSON summary line. Diagnostics go to stderr.
 
+import {
+  type DueWorkRepairPendingGate,
+  dueWorkRepairPendingGate,
+  failureBodyUnlessRepairPending,
+  isDueWorkRepairPending,
+} from "./due-work-repair-pending";
+
 const DEFAULT_API_BASE_URL = "https://www.fluncle.com";
 const DEFAULT_BATCH = 100;
 const MAX_WORK_LIMIT = 200;
@@ -81,7 +88,7 @@ export type IsrcRecoverySummary = {
   /** Malformed work rows that could not be attempted. */
   skipped: number;
   transportFailed: number;
-};
+} & Partial<DueWorkRepairPendingGate>;
 
 export type IsrcRecoveryDeps = {
   fetchQueue: (limit: number) => Promise<IsrcRecoveryQueue>;
@@ -138,9 +145,16 @@ export async function runIsrcRecoverySweep(
   try {
     queue = await deps.fetchQueue(limit);
   } catch (error) {
+    deps.log(error instanceof Error ? error.message : String(error));
+
+    if (isDueWorkRepairPending(error)) {
+      // The Worker deferred the read while due-work repair converges: nothing was read, so the tick
+      // pauses cleanly and the next tick reads again.
+      return { ...summary, ...dueWorkRepairPendingGate(summary) };
+    }
+
     summary.errors = 1;
     summary.ok = false;
-    deps.log(error instanceof Error ? error.message : String(error));
     return summary;
   }
 
@@ -354,8 +368,9 @@ function productionDeps(effects: RuntimeEffects): IsrcRecoveryDeps {
       );
 
       if (!response.ok) {
+        const body = await failureBodyUnlessRepairPending(response, "isrc-recovery queue read");
         throw new Error(
-          `isrc-recovery queue read failed (${response.status}): ${(await response.text()).slice(0, 200)}`,
+          `isrc-recovery queue read failed (${response.status}): ${body.slice(0, 200)}`,
         );
       }
 

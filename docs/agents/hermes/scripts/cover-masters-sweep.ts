@@ -23,6 +23,11 @@
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
+import {
+  dueWorkRepairPendingGate,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 // A small bounded batch per KIND per tick. The CLI loops the slug cursor internally up to this
 // cap (or until the worklist drains); each entity is a single image GET, so the batch can be
@@ -65,6 +70,8 @@ export function fluncleJson<T>(args: string[]): T {
 
     throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
   }
+
+  throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
 
   if (code !== 0 && isCliErrorPayload(parsed)) {
     throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
@@ -110,6 +117,8 @@ export function main(): { ok: boolean } & Record<string, unknown> {
     resolved: 0,
   };
 
+  let repairPending = false;
+
   try {
     for (const kind of ["album", "artist"] as const) {
       const pass = drainKind(kind);
@@ -118,10 +127,17 @@ export function main(): { ok: boolean } & Record<string, unknown> {
       summary.failed += pass.failedCount ?? 0;
     }
   } catch (error) {
-    summary.ok = false;
-    summary.errors = 1;
-    summary.error = error instanceof Error ? error.message : String(error);
-    log(`cover-master resolve pass failed: ${summary.error}`);
+    if (isDueWorkRepairPending(error)) {
+      // The Worker deferred a kind's worklist while due-work repair converges: the pass stops there,
+      // keeps every kind it already drained, and the next tick reads again.
+      repairPending = true;
+      log(error.message);
+    } else {
+      summary.ok = false;
+      summary.errors = 1;
+      summary.error = error instanceof Error ? error.message : String(error);
+      log(`cover-master resolve pass failed: ${summary.error}`);
+    }
   }
 
   // `none` is a successful terminal action: the entity was checked and durably retired from the
@@ -129,9 +145,10 @@ export function main(): { ok: boolean } & Record<string, unknown> {
   summary.checked = summary.resolved + summary.none + summary.failed;
   summary.produced = summary.resolved + summary.none;
 
-  console.log(JSON.stringify(summary));
+  const line = repairPending ? { ...summary, ...dueWorkRepairPendingGate(summary) } : summary;
+  console.log(JSON.stringify(line));
 
-  return summary;
+  return line;
 }
 
 // The cron runs this file directly; the guard keeps importing `fluncleJson` for the tests

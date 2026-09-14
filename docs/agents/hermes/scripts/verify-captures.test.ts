@@ -312,3 +312,45 @@ describe("runVerifyTick — the second rung (ISRC-null, title+artist reference)"
     expect(summary.verified).toBe(1);
   });
 });
+
+describe("runVerifyTick — due-work repair pause", () => {
+  test("a queue read the Worker defers pauses the tick without failing it", async () => {
+    const { DueWorkRepairPendingError } = await import("./due-work-repair-pending");
+    const report = mock(async () => "preview-match");
+    const summary = await runVerifyTick(
+      20,
+      stubDeps({
+        fetchQueue: async () => {
+          throw new DueWorkRepairPendingError("verify queue read");
+        },
+        report,
+      }),
+    );
+
+    expect(report).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      partial: false,
+      produced: 0,
+      reason: "due_work_repair_pending",
+      throttled: true,
+    });
+  });
+
+  test("any other queue-read failure stays a run error", async () => {
+    const summary = await runVerifyTick(
+      20,
+      stubDeps({
+        fetchQueue: async () => {
+          throw new Error("verify queue read failed (500): Internal error");
+        },
+      }),
+    );
+
+    expect(summary).toMatchObject({ errors: 1, ok: false });
+    expect(summary.gateState).toBeUndefined();
+  });
+});

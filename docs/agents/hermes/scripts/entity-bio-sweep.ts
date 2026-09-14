@@ -87,6 +87,11 @@ import {
   databaseAdmissionYieldSummary,
   runDatabaseAdmissionPhase,
 } from "./database-admission-phase";
+import {
+  dueWorkRepairPendingSummary,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
 // Config — a SMALL bounded batch: each bio burns claude subscription quota, so keep
@@ -342,6 +347,8 @@ type DescribeResult = {
 type PhasedBioRead = Readonly<{
   exhausted: QueueRow[];
   queueLength: number;
+  /** The Worker deferred the queue read while due-work repair converges; nothing was read. */
+  repairPending: boolean;
   work: ReadonlyArray<Readonly<{ draft: BioDraft | null; row: QueueRow }>>;
 }>;
 
@@ -563,6 +570,7 @@ function fluncleJson<T>(args: string[]): T {
   const { code, stderr, stdout } = run(fluncleBin(), [...args, "--json"]);
 
   if (code !== 0) {
+    throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
     throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${stderr.trim()}`);
   }
 
@@ -1306,19 +1314,42 @@ function phaseCommand(kind: EntityKind, phase: "read" | "write", statePath: stri
 
 async function runBioReadPhase(kind: EntityKind, statePath: string): Promise<void> {
   const group = groupForKind(kind);
-  const queue = fluncleJson<QueueRow[]>([
-    "admin",
-    group,
-    "describe",
-    "--queue",
-    "--limit",
-    String(QUEUE_LIMIT),
-  ]);
+  let queue: QueueRow[];
+
+  try {
+    queue = fluncleJson<QueueRow[]>([
+      "admin",
+      group,
+      "describe",
+      "--queue",
+      "--limit",
+      String(QUEUE_LIMIT),
+    ]);
+  } catch (error) {
+    if (!isDueWorkRepairPending(error)) {
+      throw error;
+    }
+
+    // The deferral crosses the phase boundary as data, so the parent reports a paused tick rather
+    // than a failed phase.
+    log(error.message);
+    const deferred: PhasedBioRead = {
+      exhausted: [],
+      queueLength: 0,
+      repairPending: true,
+      work: [],
+    };
+    writeFileSync(statePath, JSON.stringify(deferred), "utf8");
+
+    return;
+  }
+
   const ledger = readAttemptLedger(attemptLedgerPath());
   const { exhausted, work } = selectBioWork(queue, ledger, kind, BATCH_CAP);
   const state: PhasedBioRead = {
     exhausted,
     queueLength: queue.length,
+    repairPending: false,
     work: work.map((row) => ({
       draft: row.slug ? fetchBioDraft(group, row.slug) : null,
       row,
@@ -1385,6 +1416,14 @@ async function runPhasedBioMain(kind: EntityKind): Promise<void> {
     }
 
     const readState = readJsonFile<PhasedBioRead>(readStatePath);
+
+    if (readState.repairPending) {
+      console.log(
+        JSON.stringify(dueWorkRepairPendingSummary({ checked: 0, kind, queueDepth: null })),
+      );
+      return;
+    }
+
     const summary = createBioSweepSummary(kind);
     const ledgerPath = attemptLedgerPath();
     const ledger = readAttemptLedger(ledgerPath);

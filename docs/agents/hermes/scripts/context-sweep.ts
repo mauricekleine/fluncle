@@ -36,6 +36,11 @@
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
+import {
+  dueWorkRepairPendingSummary,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
 // Config — bounded batch so a tick stays cheap and a transient failure can't
@@ -151,6 +156,7 @@ function fluncleJson<T>(args: string[]): T {
   const stdout = result.stdout ?? "";
 
   if (code !== 0) {
+    throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
     throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${(result.stderr ?? "").trim()}`);
   }
 
@@ -204,15 +210,35 @@ export function main(): void {
   // `context --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
   // `--retry-empty` (the occasional widen pass) also re-picks confirmed-empty finds;
   // the routine cron omits it, so the worklist stays narrow tick to tick.
-  const response = fluncleJson<{ tracks?: QueueFinding[] }>([
-    "admin",
-    "tracks",
-    "context",
-    "--queue",
-    "--limit",
-    String(QUEUE_LIMIT),
-    ...(RETRY_EMPTY ? ["--retry-empty"] : []),
-  ]);
+  let response: { tracks?: QueueFinding[] };
+
+  try {
+    response = fluncleJson<{ tracks?: QueueFinding[] }>([
+      "admin",
+      "tracks",
+      "context",
+      "--queue",
+      "--limit",
+      String(QUEUE_LIMIT),
+      ...(RETRY_EMPTY ? ["--retry-empty"] : []),
+    ]);
+  } catch (error) {
+    if (!isDueWorkRepairPending(error)) {
+      throw error;
+    }
+
+    // The Worker deferred the queue read while due-work repair converges: nothing was read, so the
+    // tick pauses cleanly and the next tick reads again.
+    log(error.message);
+    console.log(
+      JSON.stringify(
+        dueWorkRepairPendingSummary({ checked: 0, failed: 0, retryEmpty: RETRY_EMPTY }),
+      ),
+    );
+
+    return;
+  }
+
   const queue = response.tracks ?? [];
 
   const counts: ContextCounts = {
