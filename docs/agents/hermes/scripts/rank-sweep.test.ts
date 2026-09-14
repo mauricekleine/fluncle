@@ -5,10 +5,10 @@ import { join } from "node:path";
 
 // The stub models the two server scopes the driver meets. `other` holds markers of other subjects,
 // which the shared repair step pages first; `track` holds track source markers, the only markers
-// the rank guard waits for. `orphan` is repair debt no registered definition converges, so the
-// shared step never reports complete. The guard clears five track markers per call and refuses
-// with the typed pending answer while more remain; every ranked page appends one marker per moved
-// row.
+// the rank guard and the post-page drain wait for. `orphan` is repair debt no registered definition
+// converges, so the shared step never reports complete. The guard clears five track markers per
+// call and refuses with the typed pending answer while more remain; every ranked page appends one
+// marker per moved row. `repair-unreported` models a Worker that omits track source-marker state.
 const STUB = `#!/bin/bash
 DIR="$(dirname "$0")"
 ARGS="$*"
@@ -53,7 +53,13 @@ if [[ "$ARGS" == *"admin projections advance"* ]]; then
     || [ -e "$DIR/orphan" ] || [ "$MODE" = pending ]; then
     COMPLETE=false
   fi
-  printf '{"action":"repair","complete":%s,"ok":true,"processed":%s,"scheduled":%s,"steps":1,"target":"track_due_work"}\\n' "$COMPLETE" "$PROCESSED" "$PROCESSED"
+  PENDING=false
+  [ "$(read_count "$DIR/track")" -gt 0 ] && PENDING=true
+  if [ -e "$DIR/repair-unreported" ]; then
+    printf '{"action":"repair","complete":%s,"ok":true,"processed":%s,"scheduled":%s,"steps":1,"target":"track_due_work"}\\n' "$COMPLETE" "$PROCESSED" "$PROCESSED"
+  else
+    printf '{"action":"repair","complete":%s,"ok":true,"processed":%s,"scheduled":%s,"steps":1,"target":"track_due_work","trackSourceMarkersPending":%s}\\n' "$COMPLETE" "$PROCESSED" "$PROCESSED" "$PENDING"
+  fi
   exit 0
 fi
 
@@ -68,17 +74,18 @@ esac
 DEBT=$(read_count "$DIR/track")
 take "$DIR/track" 5 >/dev/null
 [ "$DEBT" -le 5 ] || pending
+P=$(increment "$DIR/page-count")
 
 case "$MODE" in
   drain)
-    case "$N" in
+    case "$P" in
       1) add_markers 10; printf '{"ok":true,"summary":{"scored":8,"prioritized":1,"quarantined":1,"catalogueDuplicates":3,"remaining":1,"corpus":"60:60"}}\\n' ;;
       2) add_markers 10; printf '{"ok":true,"summary":{"scored":9,"prioritized":1,"quarantined":0,"catalogueDuplicates":2,"remaining":1,"corpus":"60:60"}}\\n' ;;
       *) add_markers 6; printf '{"ok":true,"summary":{"scored":6,"prioritized":0,"quarantined":0,"catalogueDuplicates":0,"remaining":0,"corpus":"60:60"}}\\n' ;;
     esac ;;
   endless) add_markers 10; printf '{"ok":true,"summary":{"scored":10,"prioritized":0,"remaining":9999,"corpus":"60:60"}}\\n' ;;
   crash-after-page)
-    if [ "$N" -eq 1 ]; then
+    if [ "$P" -eq 1 ]; then
       add_markers 10; printf '{"ok":true,"summary":{"scored":10,"prioritized":0,"remaining":9999,"corpus":"60:60"}}\\n'
     else
       printf 'boom\\n' >&2; exit 1
@@ -99,8 +106,8 @@ shift
 exec "$@"
 `;
 
-// Every phase spawns the admission runner, a bun child, and two CLI stubs; the longest drains run
-// up to the phase cap, so they need more than the default per-test deadline.
+// Every phase spawns the admission runner, a bun child, and up to two CLI stubs; the longest drains
+// run up to the phase cap, so they need more than the default per-test deadline.
 const PHASE_DRAIN_TIMEOUT_MS = 60_000;
 
 let dir: string;
@@ -111,21 +118,32 @@ let sourceRepairsPerRankGuard: number;
 
 function mode(
   name: string,
-  options: { orphan?: boolean; other?: number; repairInvalid?: boolean; runner?: string } = {},
+  options: {
+    orphan?: boolean;
+    other?: number;
+    repairInvalid?: boolean;
+    repairUnreported?: boolean;
+    runner?: string;
+  } = {},
 ): void {
   writeFileSync(join(dir, "mode"), name);
   writeFileSync(join(dir, "runner-mode"), options.runner ?? "run");
   writeFileSync(join(dir, "rank-count"), "0");
   writeFileSync(join(dir, "repair-count"), "0");
+  writeFileSync(join(dir, "page-count"), "0");
   writeFileSync(join(dir, "track"), "0");
   writeFileSync(join(dir, "other"), String(options.other ?? 0));
-  rmSync(join(dir, "orphan"), { force: true });
-  rmSync(join(dir, "repair-invalid"), { force: true });
+  for (const flag of ["orphan", "repair-invalid", "repair-unreported"]) {
+    rmSync(join(dir, flag), { force: true });
+  }
   if (options.orphan) {
     writeFileSync(join(dir, "orphan"), "");
   }
   if (options.repairInvalid) {
     writeFileSync(join(dir, "repair-invalid"), "");
+  }
+  if (options.repairUnreported) {
+    writeFileSync(join(dir, "repair-unreported"), "");
   }
 }
 
@@ -176,35 +194,37 @@ afterAll(() => {
 });
 
 describe("rank-sweep phase cap", () => {
-  test("a clean drain of every default page fits the cap with two page drains of slack", () => {
+  test("a clean default tick and its drain fit the cap with two page drains of slack", () => {
     const phasesPerPage = Math.ceil(250 / sourceRepairsPerRankGuard);
-    const cleanWorstCase = 1 + (8 - 1) * phasesPerPage;
+    const cleanWorstCase = 1 + 8 * phasesPerPage;
 
     expect(sourceRepairsPerRankGuard).toBe(5);
-    expect(rankPhaseCap(250, 8)).toBe(450);
-    expect(cleanWorstCase).toBe(351);
+    expect(rankPhaseCap(250, 8)).toBe(500);
+    expect(cleanWorstCase).toBe(401);
     expect(rankPhaseCap(250, 8) - cleanWorstCase).toBe(2 * phasesPerPage - 1);
   });
 
-  test("the smallest batch still admits one phase per page plus slack", () => {
-    expect(rankPhaseCap(1, 1)).toBe(2);
-    expect(rankPhaseCap(10, 8)).toBe(18);
+  test("the smallest batch still admits one phase per page and its drain plus slack", () => {
+    expect(rankPhaseCap(1, 1)).toBe(3);
+    expect(rankPhaseCap(10, 8)).toBe(20);
   });
 });
 
 describe("rank-sweep phased drain", () => {
   test(
-    "attempts a page every phase and ranks once the ride-along repair clears the last page",
+    "attempts a page every phase, then drains the last page's markers to clean",
     () => {
       mode("drain");
       const summary = run();
 
       expect(count("rank")).toBe(3);
-      expect(count("repair")).toBe(3);
+      expect(count("repair")).toBe(5);
       expect(summary).toMatchObject({
         calls: 3,
         catalogueDuplicates: 5,
         checked: 26,
+        drainComplete: true,
+        drainPhases: 2,
         ok: true,
         partial: false,
         prioritized: 2,
@@ -212,41 +232,43 @@ describe("rank-sweep phased drain", () => {
         rankPending: 0,
         reason: null,
         remaining: 0,
-        repairSteps: 3,
+        repairSteps: 5,
         scored: 23,
-        trackRepairQueueComplete: false,
+        trackRepairQueueComplete: true,
       });
-      // The final page's markers stay durable for the next guarded read or projection maintenance.
-      expect(count("track")).toBe(6);
+      expect(count("track")).toBe(0);
     },
     PHASE_DRAIN_TIMEOUT_MS,
   );
 
   test(
-    "ranks all eight configured pages and stops on the page budget",
+    "ranks all eight configured pages, then drains the eighth page to clean",
     () => {
       mode("endless");
       const summary = run();
 
       expect(count("rank")).toBe(8);
-      expect(count("repair")).toBe(8);
+      expect(count("repair")).toBe(10);
       expect(summary).toMatchObject({
         calls: 8,
         checked: 80,
+        drainComplete: true,
+        drainPhases: 2,
         ok: true,
         partial: true,
         rankPending: 0,
         reason: "rank_page_budget",
         remaining: 9999,
-        repairSteps: 8,
+        repairSteps: 10,
         throttled: false,
       });
+      expect(count("track")).toBe(0);
     },
     PHASE_DRAIN_TIMEOUT_MS,
   );
 
   test(
-    "a stuck unrelated repair row never holds back a rank page",
+    "a stuck unrelated repair row never holds back a rank page or the drain",
     () => {
       mode("endless", { orphan: true });
       const summary = run();
@@ -254,10 +276,11 @@ describe("rank-sweep phased drain", () => {
       expect(count("rank")).toBe(8);
       expect(summary).toMatchObject({
         calls: 8,
+        drainComplete: true,
         ok: true,
         rankPending: 0,
         reason: "rank_page_budget",
-        repairSteps: 8,
+        repairSteps: 10,
         trackRepairQueueComplete: false,
       });
     },
@@ -265,24 +288,100 @@ describe("rank-sweep phased drain", () => {
   );
 
   test(
-    "drains eight pages inside the cap when the repair step spends every page elsewhere",
+    "the worst clean tick and its drain fit inside the cap when repair spends pages elsewhere",
+    () => {
+      // Exactly enough other-subject markers to absorb every ride-along step until page eight.
+      mode("endless", { other: 75 });
+      const summary = run();
+
+      // Page one, two phases per later page (the guard clears five markers and refuses, then clears
+      // the last five and reads), then two drain phases.
+      expect(count("rank")).toBe(15);
+      expect(count("repair")).toBe(17);
+      expect(summary).toMatchObject({
+        calls: 8,
+        drainComplete: true,
+        drainPhases: 2,
+        ok: true,
+        rankPending: 7,
+        reason: "rank_page_budget",
+        repairSteps: 1 + 8 * Math.ceil(10 / sourceRepairsPerRankGuard),
+      });
+      expect(Number(summary.repairSteps)).toBeLessThan(rankPhaseCap(10, 8));
+    },
+    PHASE_DRAIN_TIMEOUT_MS,
+  );
+
+  test(
+    "a drain that cannot clear ends on the phase cap with no further rank attempt",
     () => {
       mode("endless", { other: 1000 });
       const summary = run();
 
-      // Page one, then two phases per later page: the guard clears five markers and refuses, then
-      // clears the last five and reads.
       expect(count("rank")).toBe(15);
-      expect(count("repair")).toBe(15);
+      expect(count("repair")).toBe(rankPhaseCap(10, 8));
       expect(summary).toMatchObject({
         calls: 8,
+        drainComplete: false,
+        drainPhases: rankPhaseCap(10, 8) - 15,
         ok: true,
-        rankPending: 7,
-        reason: "rank_page_budget",
-        repairSteps: 15,
-        throttled: false,
+        partial: true,
+        reason: "drain_phase_budget",
+        remaining: 9999,
+        repairSteps: rankPhaseCap(10, 8),
       });
-      expect(Number(summary.repairSteps)).toBeLessThan(rankPhaseCap(10, 8));
+    },
+    PHASE_DRAIN_TIMEOUT_MS,
+  );
+
+  test(
+    "a drain cut by the wall budget reports a partial tick",
+    () => {
+      mode("drain", { other: 1000 });
+      // The clock reaches the budget once two drain phases have run after the three rank pages.
+      const now = spyOn(performance, "now").mockImplementation(() =>
+        count("repair") >= 7 ? 600_000 : 0,
+      );
+
+      try {
+        const summary = run();
+
+        expect(count("rank")).toBe(5);
+        expect(count("repair")).toBe(7);
+        expect(summary).toMatchObject({
+          calls: 3,
+          drainComplete: false,
+          drainPhases: 2,
+          errors: 0,
+          ok: true,
+          partial: true,
+          reason: "drain_wall_budget",
+          remaining: 1,
+          throttled: false,
+        });
+        expect(count("track")).toBeGreaterThan(0);
+      } finally {
+        now.mockRestore();
+      }
+    },
+    PHASE_DRAIN_TIMEOUT_MS,
+  );
+
+  test(
+    "a repair step that does not report track source markers cannot prove the drain",
+    () => {
+      mode("flat", { repairUnreported: true });
+      const summary = run();
+
+      expect(count("rank")).toBe(1);
+      expect(count("repair")).toBe(2);
+      expect(summary).toMatchObject({
+        drainComplete: false,
+        drainPhases: 1,
+        ok: true,
+        partial: true,
+        reason: "drain_unverified",
+      });
     },
     PHASE_DRAIN_TIMEOUT_MS,
   );
@@ -297,6 +396,8 @@ describe("rank-sweep phased drain", () => {
       expect(count("repair")).toBe(rankPhaseCap(10, 8));
       expect(summary).toMatchObject({
         calls: 0,
+        drainComplete: null,
+        drainPhases: 0,
         errors: 0,
         ok: true,
         partial: true,
@@ -364,7 +465,7 @@ describe("rank-sweep phased drain", () => {
     }
   });
 
-  test("an unchanged archive is one repair step and one no-op rank call", () => {
+  test("an unchanged archive is one repair step and one no-op rank call with nothing to drain", () => {
     mode("idle");
     const summary = run();
 
@@ -372,6 +473,8 @@ describe("rank-sweep phased drain", () => {
     expect(count("repair")).toBe(1);
     expect(summary).toMatchObject({
       checked: 0,
+      drainComplete: null,
+      drainPhases: 0,
       ok: true,
       partial: false,
       remaining: 0,
@@ -379,13 +482,21 @@ describe("rank-sweep phased drain", () => {
     });
   });
 
-  test("the flat rank payload remains compatible", () => {
+  test("the flat rank payload remains compatible and its page is drained", () => {
     mode("flat");
     const summary = run();
 
     expect(count("rank")).toBe(1);
-    expect(count("repair")).toBe(1);
-    expect(summary).toMatchObject({ ok: true, prioritized: 1, remaining: 0, scored: 4 });
+    expect(count("repair")).toBe(2);
+    expect(summary).toMatchObject({
+      drainComplete: true,
+      drainPhases: 1,
+      ok: true,
+      partial: false,
+      prioritized: 1,
+      remaining: 0,
+      scored: 4,
+    });
   });
 
   test("a phase yield stops without replay and reports healthy backpressure", () => {
@@ -432,6 +543,7 @@ describe("rank-sweep rolling compatibility", () => {
       expect(count("repair")).toBe(0);
       expect(summary).toMatchObject({
         calls: 1,
+        drainPhases: 0,
         ok: true,
         partial: true,
         reason: "rolling_admission_compatibility",
@@ -491,7 +603,13 @@ describe("rank-sweep fluncle transport", () => {
 
       expect(count("rank")).toBe(2);
       expect(count("repair")).toBe(2);
-      expect(summary).toMatchObject({ calls: 1, errors: 1, ok: false, remaining: 9999 });
+      expect(summary).toMatchObject({
+        calls: 1,
+        drainPhases: 0,
+        errors: 1,
+        ok: false,
+        remaining: 9999,
+      });
     },
     PHASE_DRAIN_TIMEOUT_MS,
   );

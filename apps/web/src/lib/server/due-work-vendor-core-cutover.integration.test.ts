@@ -13,11 +13,14 @@ import {
 import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
 import {
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   DUE_WORK_SOURCE_REPAIR_KIND,
   DueWorkMaintenancePendingError,
   markDueWorkRepair,
+  markDueWorkSourceRepairsStatement,
   upsertDueWork,
 } from "./due-work";
+import { hasPendingTrackSourceMarkers } from "./due-work-source-repair";
 import { createIntegrationDb, seedArtist, seedCatalogueTrack } from "./integration-db";
 import { advanceProjectionFor } from "./projection-operations";
 import { resolveRecordingMbids } from "./recording-mbids";
@@ -301,6 +304,56 @@ describe("Goal C core vendor selector cutovers", () => {
       sql: `select state from due_work where work_kind = ?`,
     });
     expect(unrelated.rows.map((row) => row.state)).toEqual(["repair"]);
+  });
+
+  it("reports pending track source markers until a ranked page's fanout drains", async () => {
+    const trackIds = ["rank_drain_0", "rank_drain_1", "rank_drain_2", "rank_drain_3"];
+    trackIds.push("rank_drain_4", "rank_drain_5");
+    for (const trackId of trackIds) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+    await enableCutover();
+    for (const trackId of trackIds) {
+      await schedule("catalogue-rank", trackId);
+    }
+    expect((await rankCatalogue(6)).prioritized).toBe(6);
+
+    const step = () =>
+      advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+        target: "track_due_work",
+      });
+    // One step fans out five of the page's six markers; the next clears the last one.
+    expect(await step()).toMatchObject({ complete: false, trackSourceMarkersPending: true });
+    expect(await step()).toMatchObject({ complete: true, trackSourceMarkersPending: false });
+  });
+
+  it("counts only ordinary track source markers as pending", async () => {
+    expect(await hasPendingTrackSourceMarkers(db)).toBe(false);
+
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }],
+        { markerVersion: "corpus-v1", producer: "catalogue-rank" },
+      ),
+    );
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "artist_marker", subjectType: "artist" }], {
+        markerVersion: "artist-v1",
+        producer: "catalogue-rank",
+      }),
+    );
+    expect(await hasPendingTrackSourceMarkers(db)).toBe(false);
+
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "track_marker", subjectType: "track" }], {
+        markerVersion: "track-v1",
+        producer: "catalogue-rank",
+      }),
+    );
+    expect(await hasPendingTrackSourceMarkers(db)).toBe(true);
   });
 
   it("proves an empty projected rank tick never reads the growing source corpus", async () => {

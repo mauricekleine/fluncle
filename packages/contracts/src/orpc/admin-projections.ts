@@ -125,6 +125,9 @@ export const advanceProjection = oc
       scheduled: CountSchema,
       status: ProjectionStatusSchema.optional(),
       target: ProjectionTargetSchema,
+      // Track repair only: whether an ordinary track source marker still awaits fanout after the
+      // step. The synthetic catalogue-rank corpus marker never counts.
+      trackSourceMarkersPending: z.boolean().optional(),
     }),
   );
 

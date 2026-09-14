@@ -20,6 +20,7 @@ import {
   triggerMutationPolicyId,
   TRIGGER_MUTATION_POLICY_IDS,
 } from "./database-operation-registry";
+import { SOURCE_REPAIR_LIMIT } from "./due-work-source-repair";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../../..");
 const HERMES_ROOT = join(REPO_ROOT, "docs/agents/hermes");
@@ -1017,6 +1018,13 @@ describe("database operation registry", () => {
       ],
       ["catalogue.rank", "fluncle admin catalogue rank --limit <bounded-limit> --json"],
     ]);
+  });
+
+  it("keeps rank's guard drain constant equal to the server source-repair page", () => {
+    const script = readFileSync(join(REPO_ROOT, SCRIPTS, "rank-sweep.ts"), "utf8");
+    const guard = /^export const SOURCE_REPAIRS_PER_RANK_GUARD = (\d+);$/m.exec(script);
+
+    expect(Number(guard?.[1])).toBe(SOURCE_REPAIR_LIMIT);
   });
 
   it("separates device mirror primary reads from its derived remote mutation", () => {
