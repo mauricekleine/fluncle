@@ -1143,6 +1143,15 @@ export function cronCheck(
     return { ...base, message: outcomeMessage("debt persists"), status: "down" };
   }
 
+  if (projection !== null && projection.judgementAgeMs === null) {
+    // None of the retained markers judges convergence: a five-minute loop has gone its whole
+    // retained history without measuring its debt, which is an outage. A dark gate is itself a
+    // judgement, so this never fires while one is retained. It outranks a late or once-failed
+    // firing because the row then leaves `down` only on a real judgement, never when the last
+    // judging marker ages out of retention.
+    return { ...base, message: outcomeMessage("behind schedule"), status: "down" };
+  }
+
   if (verdict === "failed-once") {
     // A single failed run with a healthy one before it — the sweep's own retry is the
     // remediation, so this surfaces as degraded and resolves (or escalates) on the next tick.
@@ -1165,10 +1174,11 @@ export function cronCheck(
 
   if (
     projection !== null &&
-    (projection.judgementAgeMs === null || projection.judgementAgeMs > staleBudgetMs)
+    projection.judgementAgeMs !== null &&
+    projection.judgementAgeMs > staleBudgetMs
   ) {
-    // Fresh markers that judge nothing, such as a run of admission-skipped firings, mean the
-    // maintenance loop has not measured its debt within its window: behind schedule, never fresh.
+    // Fresh markers over an older judgement, such as a short run of admission-skipped firings,
+    // mean the loop has not measured its debt within its window: behind schedule, never fresh.
     return { ...base, message: outcomeMessage("behind schedule"), status: "degraded" };
   }
 

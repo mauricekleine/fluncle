@@ -393,23 +393,19 @@ describe("judgeCron — the marker's body", () => {
     }
   });
 
-  test("no convergence judgement within the window or the marker lookback never reads fresh", () => {
-    const unjudged = {
-      converged: null,
-      judgementAgeMs: null,
-      oldestDebtAgeMs: null,
-      outcome: null,
-    };
-    const onlySkips = markerDir([
-      { ageMs: 11 * 60_000, body: ADMISSION_SKIPPED_MARKER },
-      { ageMs: 6 * 60_000, body: ADMISSION_SKIPPED_MARKER },
-      { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
-    ]);
+  const UNJUDGED = { converged: null, judgementAgeMs: null, oldestDebtAgeMs: null, outcome: null };
+
+  test("a stale judgement reads behind schedule, and no judgement in the retained markers reads down", () => {
     const staleJudgement = markerDir([
       {
         ageMs: PROJECTION_BUDGET_MS + 60_000,
         body: projectionMarker({ converged: true, oldestDebtAgeMs: null, outcome: "no_debt" }),
       },
+      { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
+    ]);
+    const onlySkips = markerDir([
+      { ageMs: 11 * 60_000, body: ADMISSION_SKIPPED_MARKER },
+      { ageMs: 6 * 60_000, body: ADMISSION_SKIPPED_MARKER },
       { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
     ]);
     // A judgement inside the time window but older than every marker the lookback reads.
@@ -424,12 +420,12 @@ describe("judgeCron — the marker's body", () => {
       })),
     ]);
 
-    expect(readProjectionMaintenanceState(onlySkips)).toEqual(unjudged);
-    expect(readProjectionMaintenanceState(beyondLookback)).toEqual(unjudged);
-    for (const [dir, message] of [
-      [onlySkips, "behind schedule"],
-      [staleJudgement, "behind schedule; no_debt"],
-      [beyondLookback, "behind schedule"],
+    expect(readProjectionMaintenanceState(onlySkips)).toEqual(UNJUDGED);
+    expect(readProjectionMaintenanceState(beyondLookback)).toEqual(UNJUDGED);
+    for (const [dir, message, status] of [
+      [staleJudgement, "behind schedule; no_debt", "degraded"],
+      [onlySkips, "behind schedule", "down"],
+      [beyondLookback, "behind schedule", "down"],
     ] as const) {
       expect(judgeCron(PROJECTION_CRON, dir)).toBe("fresh-ok");
       expect(
@@ -438,7 +434,72 @@ describe("judgeCron — the marker's body", () => {
           judgeCron(PROJECTION_CRON, dir),
           readProjectionMaintenanceState(dir),
         ),
-      ).toMatchObject({ message, status: "degraded" });
+      ).toMatchObject({ message, status });
+    }
+  });
+
+  test("a down row stays down when its last judging marker ages out of retention", () => {
+    const lookback = PROJECTION_JUDGEMENT_LOOKBACK_MARKERS;
+    const judgedDown = markerDir([
+      {
+        ageMs: 6 * 60_000,
+        body: projectionMarker({
+          converged: false,
+          oldestDebtAgeMs: PROJECTION_BUDGET_MS + 1,
+          outcome: "partial_progress",
+        }),
+      },
+      { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
+    ]);
+    const judgedCheck = cronCheck(
+      PROJECTION_CRON,
+      judgeCron(PROJECTION_CRON, judgedDown),
+      readProjectionMaintenanceState(judgedDown),
+    );
+    expect(judgedCheck.status).toBe("down");
+    const prior = nextServiceState(undefined, judgedCheck.status);
+
+    // The retained markers after a skip streak outlasts retention: every judging marker is gone.
+    const skipStreak = (offsetMs: number) =>
+      Array.from({ length: lookback }, (_, index) => ({
+        ageMs: (lookback - index) * 5 * 60_000 + offsetMs,
+        body: ADMISSION_SKIPPED_MARKER,
+      }));
+    const evicted = markerDir(skipStreak(0));
+    // The same streak whose newest firing failed its status read.
+    const failedRead = markerDir([
+      ...skipStreak(5 * 60_000).slice(1),
+      {
+        ageMs: 60_000,
+        body: projectionMarker({
+          converged: null,
+          errors: 1,
+          gateState: null,
+          ok: false,
+          oldestDebtAgeMs: null,
+          outcome: "no_progress",
+          reason: "status read failed",
+        }),
+      },
+    ]);
+    // The same streak after the timer stops firing altogether.
+    const stopped = markerDir(skipStreak(PROJECTION_BUDGET_MS));
+
+    for (const [dir, verdict] of [
+      [evicted, "fresh-ok"],
+      [failedRead, "failed-once"],
+      [stopped, "lagging"],
+    ] as const) {
+      expect(readProjectionMaintenanceState(dir)).toEqual(UNJUDGED);
+      expect(judgeCron(PROJECTION_CRON, dir)).toBe(verdict);
+      const check = cronCheck(PROJECTION_CRON, verdict, readProjectionMaintenanceState(dir));
+      expect(check).toMatchObject({ message: "behind schedule", status: "down" });
+      // No transition out of `down`, so no recovery alert.
+      expect(nextServiceState(prior, check.status)).toEqual({
+        downStreak: 2,
+        escalatedStreak: 0,
+        status: "down",
+      });
     }
   });
 
