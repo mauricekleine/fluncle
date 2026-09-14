@@ -50,6 +50,7 @@ import {
   normalizeStrain,
   probeSweepStrain,
   postSnapshot,
+  PROJECTION_JUDGEMENT_LOOKBACK_MARKERS,
   readProjectionMaintenanceState,
   serializeState,
   type ServiceState,
@@ -264,12 +265,21 @@ describe("judgeCron — the marker's body", () => {
     expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
   });
 
+  const PROJECTION_CRON: CronDef = {
+    cadenceMs: 5 * 60_000,
+    match: "projection-maintenance",
+    service: "cron.projection-maintenance",
+  };
+  const PROJECTION_BUDGET_MS = cronStaleBudgetMs(PROJECTION_CRON);
+  // The marker database-admission-runner.sh hands cron-output.sh when a firing yields before its
+  // payload: it never read projection status, so it carries no debt fields.
+  const ADMISSION_SKIPPED_MARKER = marker(
+    '{"admissionOutcome":"acquisition-unavailable","admissionWaitMs":120000,"admissionYieldReason":"coordinator-unavailable","checked":null,"errors":0,"expectedIntervalMs":null,"gateState":"admission-skipped","payloadStarted":false,"produced":null,"queueDepth":null}\n',
+  );
+  const projectionMarker = (fields: Record<string, unknown>): string =>
+    marker(`${JSON.stringify({ errors: 0, gateState: "active", ok: true, ...fields })}\n`);
+
   test("the projection-maintenance row carries healthy incomplete convergence facts", () => {
-    const cron: CronDef = {
-      cadenceMs: 5 * 60_000,
-      match: "projection-maintenance",
-      service: "cron.projection-maintenance",
-    };
     const dir = markerDir([
       {
         ageMs: 60_000,
@@ -280,46 +290,39 @@ describe("judgeCron — the marker's body", () => {
     ]);
     const projection = readProjectionMaintenanceState(dir);
 
-    expect(projection).toEqual({
+    expect(projection).toMatchObject({
       converged: false,
       oldestDebtAgeMs: 120_000,
       outcome: "partial_progress",
     });
-    expect(cronCheck(cron, judgeCron(cron, dir), projection)).toMatchObject({
-      message: "fresh; partial_progress; oldest observed debt 2m",
+    expect(projection?.judgementAgeMs).toBeGreaterThanOrEqual(59_000);
+    expect(projection?.judgementAgeMs).toBeLessThan(120_000);
+    // The observed two minutes of debt have aged another minute since the marker was written.
+    expect(cronCheck(PROJECTION_CRON, judgeCron(PROJECTION_CRON, dir), projection)).toMatchObject({
+      message: "fresh; partial_progress; oldest observed debt 3m",
       status: "ok",
     });
   });
 
   test("persistent incomplete projection debt alerts after the cron freshness window", () => {
-    const cron: CronDef = {
-      cadenceMs: 5 * 60_000,
-      match: "projection-maintenance",
-      service: "cron.projection-maintenance",
-    };
-    const oldestDebtAgeMs = cronStaleBudgetMs(cron) + 1;
     const projection = {
       converged: false,
-      oldestDebtAgeMs,
+      judgementAgeMs: 0,
+      oldestDebtAgeMs: PROJECTION_BUDGET_MS + 1,
       outcome: "partial_progress" as const,
     };
 
-    expect(cronCheck(cron, "fresh-ok", projection)).toMatchObject({
+    expect(cronCheck(PROJECTION_CRON, "fresh-ok", projection)).toMatchObject({
       message: "debt persists; partial_progress; oldest observed debt 16m",
       status: "down",
     });
   });
 
   test("unknown debt age remains explicit without inventing a persistence alert", () => {
-    const cron: CronDef = {
-      cadenceMs: 5 * 60_000,
-      match: "projection-maintenance",
-      service: "cron.projection-maintenance",
-    };
-
     expect(
-      cronCheck(cron, "fresh-ok", {
+      cronCheck(PROJECTION_CRON, "fresh-ok", {
         converged: false,
+        judgementAgeMs: 0,
         oldestDebtAgeMs: null,
         outcome: "no_progress",
       }),
@@ -327,6 +330,193 @@ describe("judgeCron — the marker's body", () => {
       message: "fresh; no_progress; debt age unavailable",
       status: "ok",
     });
+  });
+
+  test("an admission-skipped newest marker never hides earlier debt past the maintenance window", () => {
+    // Debt already past the window when observed, and debt that crosses it while firings skip.
+    for (const oldestDebtAgeMs of [PROJECTION_BUDGET_MS + 1, PROJECTION_BUDGET_MS - 60_000]) {
+      const dir = markerDir([
+        {
+          ageMs: 6 * 60_000,
+          body: projectionMarker({
+            converged: false,
+            oldestDebtAgeMs,
+            outcome: "partial_progress",
+          }),
+        },
+        { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
+      ]);
+      const projection = readProjectionMaintenanceState(dir);
+      const check = cronCheck(PROJECTION_CRON, judgeCron(PROJECTION_CRON, dir), projection);
+
+      expect(judgeCron(PROJECTION_CRON, dir)).toBe("fresh-ok");
+      expect(projection).toMatchObject({
+        converged: false,
+        oldestDebtAgeMs,
+        outcome: "partial_progress",
+      });
+      expect(check.status).toBe("down");
+      expect(check.message).toStartWith("debt persists; partial_progress; oldest observed debt ");
+    }
+  });
+
+  test("an admission-skipped newest marker over a converged or dark judgement stays fresh", () => {
+    const judgements = [
+      {
+        message: "fresh; useful_completion",
+        summary: { converged: true, oldestDebtAgeMs: null, outcome: "useful_completion" },
+      },
+      {
+        message: "fresh",
+        summary: {
+          converged: null,
+          gateState: "disabled",
+          oldestDebtAgeMs: null,
+          outcome: null,
+          reason: "projection_cutovers_disabled",
+        },
+      },
+    ];
+    for (const { message, summary } of judgements) {
+      const dir = markerDir([
+        { ageMs: 6 * 60_000, body: projectionMarker(summary) },
+        { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
+      ]);
+
+      expect(
+        cronCheck(
+          PROJECTION_CRON,
+          judgeCron(PROJECTION_CRON, dir),
+          readProjectionMaintenanceState(dir),
+        ),
+      ).toMatchObject({ message, status: "ok" });
+    }
+  });
+
+  const UNJUDGED = { converged: null, judgementAgeMs: null, oldestDebtAgeMs: null, outcome: null };
+
+  test("a stale judgement reads behind schedule, and no judgement in the retained markers reads down", () => {
+    const staleJudgement = markerDir([
+      {
+        ageMs: PROJECTION_BUDGET_MS + 60_000,
+        body: projectionMarker({ converged: true, oldestDebtAgeMs: null, outcome: "no_debt" }),
+      },
+      { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
+    ]);
+    const onlySkips = markerDir([
+      { ageMs: 11 * 60_000, body: ADMISSION_SKIPPED_MARKER },
+      { ageMs: 6 * 60_000, body: ADMISSION_SKIPPED_MARKER },
+      { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
+    ]);
+    // A judgement inside the time window but older than every marker the lookback reads.
+    const beyondLookback = markerDir([
+      {
+        ageMs: 11 * 60_000,
+        body: projectionMarker({ converged: true, oldestDebtAgeMs: null, outcome: "no_debt" }),
+      },
+      ...Array.from({ length: PROJECTION_JUDGEMENT_LOOKBACK_MARKERS }, (_, index) => ({
+        ageMs: (PROJECTION_JUDGEMENT_LOOKBACK_MARKERS - index) * 30_000,
+        body: ADMISSION_SKIPPED_MARKER,
+      })),
+    ]);
+
+    expect(readProjectionMaintenanceState(onlySkips)).toEqual(UNJUDGED);
+    expect(readProjectionMaintenanceState(beyondLookback)).toEqual(UNJUDGED);
+    for (const [dir, message, status] of [
+      [staleJudgement, "behind schedule; no_debt", "degraded"],
+      [onlySkips, "behind schedule", "down"],
+      [beyondLookback, "behind schedule", "down"],
+    ] as const) {
+      expect(judgeCron(PROJECTION_CRON, dir)).toBe("fresh-ok");
+      expect(
+        cronCheck(
+          PROJECTION_CRON,
+          judgeCron(PROJECTION_CRON, dir),
+          readProjectionMaintenanceState(dir),
+        ),
+      ).toMatchObject({ message, status });
+    }
+  });
+
+  test("a down row stays down when its last judging marker ages out of retention", () => {
+    const lookback = PROJECTION_JUDGEMENT_LOOKBACK_MARKERS;
+    const judgedDown = markerDir([
+      {
+        ageMs: 6 * 60_000,
+        body: projectionMarker({
+          converged: false,
+          oldestDebtAgeMs: PROJECTION_BUDGET_MS + 1,
+          outcome: "partial_progress",
+        }),
+      },
+      { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
+    ]);
+    const judgedCheck = cronCheck(
+      PROJECTION_CRON,
+      judgeCron(PROJECTION_CRON, judgedDown),
+      readProjectionMaintenanceState(judgedDown),
+    );
+    expect(judgedCheck.status).toBe("down");
+    const prior = nextServiceState(undefined, judgedCheck.status);
+
+    // The retained markers after a skip streak outlasts retention: every judging marker is gone.
+    const skipStreak = (offsetMs: number) =>
+      Array.from({ length: lookback }, (_, index) => ({
+        ageMs: (lookback - index) * 5 * 60_000 + offsetMs,
+        body: ADMISSION_SKIPPED_MARKER,
+      }));
+    const evicted = markerDir(skipStreak(0));
+    // The same streak whose newest firing failed its status read.
+    const failedRead = markerDir([
+      ...skipStreak(5 * 60_000).slice(1),
+      {
+        ageMs: 60_000,
+        body: projectionMarker({
+          converged: null,
+          errors: 1,
+          gateState: null,
+          ok: false,
+          oldestDebtAgeMs: null,
+          outcome: "no_progress",
+          reason: "status read failed",
+        }),
+      },
+    ]);
+    // The same streak after the timer stops firing altogether.
+    const stopped = markerDir(skipStreak(PROJECTION_BUDGET_MS));
+
+    for (const [dir, verdict] of [
+      [evicted, "fresh-ok"],
+      [failedRead, "failed-once"],
+      [stopped, "lagging"],
+    ] as const) {
+      expect(readProjectionMaintenanceState(dir)).toEqual(UNJUDGED);
+      expect(judgeCron(PROJECTION_CRON, dir)).toBe(verdict);
+      const check = cronCheck(PROJECTION_CRON, verdict, readProjectionMaintenanceState(dir));
+      expect(check).toMatchObject({ message: "behind schedule", status: "down" });
+      // No transition out of `down`, so no recovery alert.
+      expect(nextServiceState(prior, check.status)).toEqual({
+        downStreak: 2,
+        escalatedStreak: 0,
+        status: "down",
+      });
+    }
+  });
+
+  test("known debt past the window outranks a late or once-failed firing", () => {
+    const projection = {
+      converged: false,
+      judgementAgeMs: PROJECTION_BUDGET_MS,
+      oldestDebtAgeMs: 60_000,
+      outcome: "partial_progress" as const,
+    };
+
+    for (const verdict of ["lagging", "failed-once"] as const) {
+      expect(cronCheck(PROJECTION_CRON, verdict, projection)).toMatchObject({
+        message: "debt persists; partial_progress; oldest observed debt 17m",
+        status: "down",
+      });
+    }
   });
 
   test("a summary followed by trailing log lines is still ok", () => {

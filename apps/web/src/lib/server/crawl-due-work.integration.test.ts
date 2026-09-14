@@ -522,6 +522,34 @@ describe("crawl due-work shadow runtime", () => {
     }
   });
 
+  it("re-arms stale artists by primary-key lookup, never by walking every done frontier row", async () => {
+    const statements: InStatement[] = [];
+    const traced = {
+      batch: async (batch: InStatement[], mode?: "read" | "write") => {
+        statements.push(...batch);
+        return db.batch(batch, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+    await promoteCrawlDueWork(traced, { limit: 20, now: () => NOW });
+
+    const rearm = statements[0];
+    expect(rearm).toBeDefined();
+    const sql = typeof rearm === "string" ? rearm : (rearm?.sql ?? "");
+    const args = typeof rearm === "string" || rearm === undefined ? [] : rearm.args;
+    // The in-memory schema carries no `sqlite_stat1`, exactly like hosted Turso, so it reproduces
+    // the statistics-free choice between the id list and `crawl_frontier_pick_idx (state=?)`.
+    const details = planDetails(
+      (await db.execute({ args, sql: `explain query plan ${sql}` })).rows,
+    ).join("\n");
+
+    expect(sql).toContain("update crawl_frontier");
+    expect(details).toContain(
+      "SEARCH crawl_frontier USING INDEX sqlite_autoindex_crawl_frontier_1",
+    );
+    expect(details).not.toContain("crawl_frontier_pick_idx");
+  });
+
   it("fans label and artist rule changes through bounded indexed rows, then repairs exact facts", async () => {
     await label("lane", "disabled");
     await node({

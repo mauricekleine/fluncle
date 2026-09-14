@@ -132,7 +132,7 @@ The registry encodes budgets as assertions and reports p50, p95, p99, maximum, r
 
 ## Query-plan laws
 
-A request-time or per-tick query must not scan a growing corpus merely to prove an empty queue, compute a count, or select a bounded batch. A bounded claim starts from an index whose leading columns express eligibility, due time, and ordering, or from a maintained work projection whose cardinality follows the backlog. Separate identity keys use separate sargable branches; a `CASE` or `OR` join that defeats every candidate index is forbidden on growing tables. A tiny selective relation such as `findings` must be able to drive its join because hosted Turso provides no production `ANALYZE` statistics for this workload. Request-time window sampling, expression grouping over a full catalogue, and repeated `UNION`/`GROUP BY` reconstruction belong in maintained projections or aggregates rather than hot reads.
+A request-time or per-tick query must not scan a growing corpus merely to prove an empty queue, compute a count, or select a bounded batch. A bounded claim starts from an index whose leading columns express eligibility, due time, and ordering, or from a maintained work projection whose cardinality follows the backlog. Separate identity keys use separate sargable branches; a `CASE` or `OR` join that defeats every candidate index is forbidden on growing tables. A tiny selective relation such as `findings` must be able to drive its join because hosted Turso provides no production `ANALYZE` statistics for this workload. The same missing statistics make the planner rate an equality or `IS NULL` predicate on any indexed column as selective, however common the value; when a partial index or the primary key is the intended access path, a unary `+` on that column (`+state = 'done'`, `+spotify_uri is null`) removes it from index consideration without changing the predicate, and a plan assertion pins the resulting plan. Request-time window sampling, expression grouping over a full catalogue, and repeated `UNION`/`GROUP BY` reconstruction belong in maintained projections or aggregates rather than hot reads.
 
 Every critical contract asserts output correctness and plan shape. The runner records every `EXPLAIN QUERY PLAN` detail and detects a growing-table `SCAN` and `USE TEMP B-TREE`; contracts name the growing tables, allowed exceptional scans, required index/driver details, and whether temporary sorting is forbidden. A revision maximum spanning live event bodies and durable receipts must aggregate each indexed subject-prefix branch before `UNION ALL`, so the outer aggregate consumes bounded branch results; its contract proves the SQL and bytecode shape rather than claiming a timing improvement from `EXPLAIN` alone. Timing is evidence, never the only regression oracle.
 
@@ -222,6 +222,16 @@ Local libSQL is the correctness oracle, not a hosted-performance substitute. Fou
 4. A flattened CTE fanned out by `UNION ALL` branches or outer cross-join rows is re-executed per branch or row. Fold multi-probe distances into one select expression; materialize bounded pair scans and pin the small findings relation as the driver.
 
 Any query scanning a table that grows with the archive needs an attended hosted scratch replay before anyone claims that it scales. That replay confirms planner and network behavior; it never targets production or development databases.
+
+## Worker placement
+
+The web Worker runs beside the database. `apps/web/wrangler.jsonc` sets a Placement Hint (`placement.region`) naming the cloud region of the Turso primary, so each statement pays an in-region round trip rather than an intercontinental one. A request issues most of its statements in sequence, so that round trip multiplies across the request, and the public database-span and end-to-end budgets above assume it. When the primary moves to another region, the placement hint moves in the same change; `turso db show` names the primary's location.
+
+Placement changes where the Worker executes and nothing else:
+
+- Static assets are still served from the data center nearest the viewer; only non-asset requests and the paths in `assets.run_worker_first` invoke the Worker.
+- The Worker's Cache API store (`caches.default`, `apps/web/src/lib/server/edge-cache.ts`) is local to the data center that runs the Worker, so it lives in the placed data center. Every viewer shares that one store, an edge-cache hit still pays the viewer-to-placed-data-center hop, and a purge's local `cache.delete` lands on the store the reads use. The zone purge-by-URL remains the global eviction for entries held in any other data center. Cache keys are the canonical origin and path, never the serving data center.
+- Outbound calls from the Worker (sonar, third-party APIs) leave from the placed region, so a provider that answers by caller region or limits per egress address sees that region.
 
 ## Client bounds and mixed-load evidence
 
