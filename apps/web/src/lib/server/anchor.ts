@@ -1763,6 +1763,31 @@ export type AnchorReviewRow = {
 };
 
 /**
+ * The anchor-review queue read as a statement, so `anchor.integration.test.ts` can pin its plan
+ * against the migrated schema.
+ *
+ * The unary `+` on `spotify_uri` is load-bearing. Hosted Turso carries no `sqlite_stat1`, so the
+ * planner rates an `is null` equality on any indexed column as selective and would seek
+ * `tracks_spotify_uri_idx` — every un-anchored catalogue row — then sort the survivors in a temp
+ * b-tree. The `+` removes `spotify_uri` from index consideration, leaving the partial
+ * `tracks_anchor_review_idx` as the only access path: a walk of the reviewed rows in `track_id`
+ * order that stops at the limit.
+ */
+export function anchorReviewQueueStatement(): { args: number[]; sql: string } {
+  return {
+    args: [ANCHOR_REVIEW_QUEUE_LIMIT],
+    sql: `select track_id, title, artists_json, album_image_url, duration_ms,
+                 mb_recording_id, anchor_review_json
+          from tracks
+          where anchor_review_json is not null
+            and +spotify_uri is null
+            and dismissed_at is null
+          order by track_id asc
+          limit ?`,
+  };
+}
+
+/**
  * The attention-queue source: every UN-ANCHORED catalogue row carrying a suspected-version-mismatch
  * review, capped at {@link ANCHOR_REVIEW_QUEUE_LIMIT}.
  *
@@ -1779,17 +1804,7 @@ export type AnchorReviewRow = {
  */
 export async function listAnchorReviewRows(): Promise<AnchorReviewRow[]> {
   const db = await getDb();
-  const result = await db.execute({
-    args: [ANCHOR_REVIEW_QUEUE_LIMIT],
-    sql: `select track_id, title, artists_json, album_image_url, duration_ms,
-                 mb_recording_id, anchor_review_json
-          from tracks
-          where anchor_review_json is not null
-            and spotify_uri is null
-            and dismissed_at is null
-          order by track_id asc
-          limit ?`,
-  });
+  const result = await db.execute(anchorReviewQueueStatement());
 
   const rows = typedRows<{
     album_image_url: null | string;

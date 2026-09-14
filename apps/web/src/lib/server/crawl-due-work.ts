@@ -962,11 +962,16 @@ export async function promoteCrawlDueWork(
     order by due.next_due_at, due.node_id limit ?`;
   const results = await client.batch(
     [
+      // The unary `+` on the outer `state` is load-bearing. Hosted Turso carries no
+      // `sqlite_stat1`, so the planner rates `state = 'done'` as selective and would walk every
+      // done frontier row through `crawl_frontier_pick_idx`, testing each against the bounded id
+      // list. The `+` removes `state` from index consideration, so the update probes the primary
+      // key once per listed id and `state` stays a residual guard against a concurrent transition.
       {
         args: [CRAWL_REARM_TAIL_CURSOR, now, now, CRAWL_STALE_ARTIST_REARM_LIMIT],
         sql: `update crawl_frontier
           set state = 'pending', cursor = ?, updated_at = ?
-          where id in (${staleSelection}) and state = 'done'`,
+          where id in (${staleSelection}) and +state = 'done'`,
       },
       {
         args: [now, now, CRAWL_STALE_ARTIST_REARM_LIMIT],
