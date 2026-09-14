@@ -21,10 +21,10 @@ import {
 } from "./hub-page-anchors";
 import {
   type CatalogueEntityPageQuery,
-  ENTITY_HUB_ORDER_BY,
   catalogueEntityAnchorExtractionQuery,
   catalogueEntityOffsetPageQuery,
   catalogueEntitySeekPageQuery,
+  entityHubOrderBy,
 } from "./labels";
 import {
   TRACKS_HUB_ORDER_BY,
@@ -115,15 +115,16 @@ describe("seek SQL compilation", () => {
     expect(query.args.slice(0, 1)).toEqual(["null-boundary"]);
   });
 
-  it("compiles the slug/id ascending seek as one gated-CTE consumer with no UNION", () => {
+  it("compiles the slug/id ascending seek as one slug range on the entity table with no UNION", () => {
     const query = catalogueEntitySeekPageQuery(ENTITY_QUERY, 50, 12, [
       { id: "entity-500", key: "metalheadz", page: 12 },
     ]);
 
-    expect(query.sql).toContain("from gated g");
-    expect(query.sql).toContain("(g.slug > ? or (g.slug = ? and g.id > ?))");
+    expect(query.sql).toContain("from entities e");
+    expect(query.sql).not.toContain("gated");
+    expect(query.sql).toContain("(e.slug >= ? and (e.slug > ? or e.id > ?))");
     expect(query.sql.toLowerCase()).not.toContain("union all");
-    expect(query.args.slice(1, 4)).toEqual(["metalheadz", "metalheadz", "entity-500"]);
+    expect(query.args.slice(0, 4)).toEqual([3, "metalheadz", "metalheadz", "entity-500"]);
   });
 
   it("uses one literal order spelling in every extraction, offset, and seek statement", () => {
@@ -141,7 +142,9 @@ describe("seek SQL compilation", () => {
     ];
 
     expect(trackQueries.map((sql) => occurrences(sql, TRACKS_HUB_ORDER_BY))).toEqual([1, 1, 1]);
-    expect(entityQueries.map((sql) => occurrences(sql, ENTITY_HUB_ORDER_BY))).toEqual([1, 1, 1]);
+    expect(entityQueries.map((sql) => occurrences(sql, entityHubOrderBy(ENTITY_QUERY)))).toEqual([
+      1, 1, 1,
+    ]);
   });
 });
 
