@@ -29,6 +29,8 @@ import { resetKeyHistogramCache } from "./key-histogram";
 import { linkTrackToLabel } from "./labels";
 import {
   compileFilters,
+  type EntityMatchMode,
+  entityMatchStatement,
   resolveFilterEntities,
   searchArchive as searchArchiveLive,
 } from "./search";
@@ -1327,6 +1329,229 @@ describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
       slug: "005.F.03",
       url: "/log/005.F.03",
     });
+  });
+});
+
+// ── The entity reads · index-served, and exactly the `lower()` compare ───────────────
+
+// Tier 2 and tier 3 ask every entity table on every search, and `artists` grows with the crawl. The
+// artist read is two indexable `or` arms — the bare name column through `artists_name_nocase_idx`,
+// the aliases as one uncorrelated id list — and the label read's aliases are that same list. These
+// tests pin the plan, and prove the rewrite answers exactly what the `lower(name)` + correlated
+// `exists` reference answered, across ASCII case, LIKE wildcards in the needle, non-ASCII capitals
+// (which neither spelling folds), alias ties, and the label hub gate.
+describe("the entity reads — index-served, and exactly the lower() compare they replace", () => {
+  /** The reference: the `lower()`-wrapped name and the correlated alias `exists`, verbatim. */
+  function referenceStatement(kind: "artist" | "label", query: string, mode: EntityMatchMode) {
+    const needle = query.trim().toLowerCase();
+    const predicate = mode === "exact" ? "= ?" : "like ? || '%'";
+
+    if (kind === "artist") {
+      return {
+        args: [needle, needle, needle, 10],
+        sql: `select artists.name as name, artists.slug as slug,
+                case when lower(artists.name) ${predicate} then 0 else 1 end as name_rank
+              from artists
+              where lower(artists.name) ${predicate}
+                 or exists (select 1 from artist_aliases
+                            where artist_aliases.artist_id = artists.id
+                              and artist_aliases.kind = 'name'
+                              and artist_aliases.status in ('auto', 'confirmed')
+                              and lower(artist_aliases.alias) ${predicate})
+              order by name_rank asc, length(artists.name) asc, artists.name asc
+              limit ?`,
+      };
+    }
+
+    return {
+      args: [needle, needle, needle, 3, 10],
+      sql: `select labels.name as name, labels.slug as slug,
+              case when lower(labels.name) ${predicate} then 0 else 1 end as name_rank
+            from labels
+            where (lower(labels.name) ${predicate}
+                   or exists (select 1 from label_aliases
+                              where label_aliases.label_id = labels.id
+                                and label_aliases.kind = 'name'
+                                and label_aliases.status = 'confirmed'
+                                and lower(label_aliases.alias) ${predicate}))
+              and (labels.certified_finding_count > 0 or labels.renderable_track_count >= ?)
+            order by name_rank asc, length(labels.name) asc, labels.name asc
+            limit ?`,
+    };
+  }
+
+  function rowsOf(result: { rows: unknown[] }): { name: string; slug: string }[] {
+    return (result.rows as unknown as { name: string; slug: string }[]).map((row) => ({
+      name: row.name,
+      slug: row.slug,
+    }));
+  }
+
+  async function planRows(statement: { args: (number | string)[]; sql: string } | undefined) {
+    if (!statement) {
+      throw new Error("expected a statement for a non-blank query");
+    }
+
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+
+    return (plan.rows as unknown as { detail: string; id: number; parent: number }[]).map(
+      (row) => ({
+        detail: String(row.detail),
+        id: Number(row.id),
+        parent: Number(row.parent),
+      }),
+    );
+  }
+
+  beforeEach(async () => {
+    const now = "2026-07-01";
+    const artists: [string, string, string][] = [
+      ["a2", "Origin", "origin"],
+      ["a3", "NETSKY TWO", "netsky-two"],
+      ["a4", "Net_Sky", "net-sky"],
+      ["a5", "Net%Work", "net-work"],
+      ["a6", "Ëlectron", "electron"],
+      ["a7", "ëlectron dub", "electron-dub"],
+    ];
+
+    for (const [id, name, slug] of artists) {
+      await db.execute({
+        args: [id, name, slug, now, now],
+        sql: `insert into artists (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+      });
+    }
+
+    const artistAliases: [string, string, string, string, string][] = [
+      ["aa1", "a1", "Boris Daenen", "name", "auto"],
+      ["aa2", "a1", "Origin", "name", "auto"],
+      ["aa3", "a1", "Netsky Hint", "hint", "auto"],
+      ["aa4", "a6", "Electron", "name", "confirmed"],
+    ];
+
+    for (const [id, artistId, alias, kind, status] of artistAliases) {
+      await db.execute({
+        args: [id, artistId, alias, alias.toLowerCase().replaceAll(" ", "-"), kind, status, now],
+        sql: `insert into artist_aliases
+                (id, artist_id, alias, alias_slug, source, kind, status, created_at)
+              values (?, ?, ?, ?, 'musicbrainz', ?, ?, ?)`,
+      });
+    }
+
+    const hospital = await db.execute(`select id from labels where slug = 'hospital-records'`);
+    const hospitalId = hospital.rows[0]?.id;
+
+    if (typeof hospitalId !== "string") {
+      throw new Error("fixture: no labels row for hospital-records");
+    }
+
+    await db.execute({
+      args: [now, now],
+      sql: `insert into labels (id, name, slug, created_at, updated_at)
+            values ('l-crawled', 'Crawled Imprint', 'crawled-imprint', ?, ?)`,
+    });
+
+    const labelAliases: [string, string, string, string, string][] = [
+      ["la1", hospitalId, "Med School", "name", "confirmed"],
+      ["la2", hospitalId, "Andromedik", "name", "confirmed"],
+      ["la3", hospitalId, "Hospitality Sound", "name", "candidate"],
+      ["la4", "l-crawled", "Walked Past Records", "name", "confirmed"],
+    ];
+
+    for (const [id, labelId, alias, kind, status] of labelAliases) {
+      await db.execute({
+        args: [id, labelId, alias, alias.toLowerCase().replaceAll(" ", "-"), kind, status, now],
+        sql: `insert into label_aliases
+                (id, label_id, alias, alias_slug, source, kind, status, created_at)
+              values (?, ?, ?, ?, 'operator', ?, ?, ?)`,
+      });
+    }
+  });
+
+  it("answers exactly what the lower() + correlated-exists reference answers", async () => {
+    const needles = [
+      "Netsky",
+      "NETSKY",
+      "nets",
+      "net_",
+      "net%",
+      "n",
+      "boris",
+      "Boris Daenen",
+      "origin",
+      "netsky hint",
+      "ëlectron",
+      "ËLECTRON",
+      "electron",
+      "hospital",
+      "Hospital Records",
+      "med",
+      "andromedik",
+      "hospitality",
+      "1991",
+      "walked",
+      "crawled",
+      "zzz",
+    ];
+
+    for (const kind of ["artist", "label"] as const) {
+      for (const mode of ["exact", "prefix"] as const) {
+        for (const needle of needles) {
+          const statement = entityMatchStatement(kind, needle, mode, 10);
+
+          if (!statement) {
+            throw new Error(`expected a statement for ${needle}`);
+          }
+
+          const expected = rowsOf(await db.execute(referenceStatement(kind, needle, mode)));
+          const actual = rowsOf(await db.execute(statement));
+
+          expect({ kind, mode, needle, rows: actual }).toEqual({
+            kind,
+            mode,
+            needle,
+            rows: expected,
+          });
+        }
+      }
+    }
+
+    // The matrix is not vacuous: both spellings match through the name, the alias, and a wildcard.
+    expect(rowsOf(await db.execute(referenceStatement("artist", "net_", "prefix")))).toEqual([
+      { name: "Netsky", slug: "netsky" },
+      { name: "Net_Sky", slug: "net-sky" },
+      { name: "Net%Work", slug: "net-work" },
+      { name: "NETSKY TWO", slug: "netsky-two" },
+    ]);
+    expect(rowsOf(await db.execute(referenceStatement("label", "med", "prefix")))).toEqual([
+      { name: "Hospital Records", slug: "hospital-records" },
+    ]);
+  });
+
+  it("serves the artist name through artists_name_nocase_idx with the aliases as one list", async () => {
+    for (const mode of ["exact", "prefix"] as const) {
+      const details = (await planRows(entityMatchStatement("artist", "Netsky", mode)))
+        .map((row) => row.detail)
+        .join("\n");
+
+      expect(details).toContain("MULTI-INDEX OR");
+      expect(details).toContain("USING INDEX artists_name_nocase_idx");
+      expect(details).toContain("LIST SUBQUERY");
+      expect(details).not.toContain("CORRELATED");
+    }
+  });
+
+  it("reads the label aliases once per statement, never once per label row", async () => {
+    for (const mode of ["exact", "prefix"] as const) {
+      const rows = await planRows(entityMatchStatement("label", "Hospital", mode));
+      const aliasRead = rows.find((row) => row.detail.includes("label_aliases"));
+      const aliasParent = rows.find((row) => row.id === aliasRead?.parent);
+
+      expect(aliasRead).toBeDefined();
+      expect(aliasParent?.detail).toMatch(/^LIST SUBQUERY/);
+    }
   });
 });
 
