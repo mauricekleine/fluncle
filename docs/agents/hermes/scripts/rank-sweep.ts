@@ -9,6 +9,7 @@
 import { spawnSync } from "node:child_process";
 
 import { runDatabaseAdmissionPhase } from "./database-admission-phase";
+import { DUE_WORK_REPAIR_PENDING_REASON } from "./due-work-repair-pending";
 
 const BATCH = Number(process.env.FLUNCLE_RANK_BATCH ?? "250");
 const MAX_CALLS = Number(process.env.FLUNCLE_RANK_MAX_CALLS ?? "8");
@@ -380,7 +381,7 @@ function runLegacy(summary: SweepSummary): void {
     }
   } catch (error) {
     if (isMaintenancePending(error)) {
-      markPartial(summary, "due_work_maintenance_pending", { throttled: true });
+      markPartial(summary, DUE_WORK_REPAIR_PENDING_REASON, { throttled: true });
       return;
     }
     throw error;

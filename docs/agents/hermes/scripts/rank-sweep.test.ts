@@ -565,7 +565,7 @@ describe("rank-sweep rolling compatibility", () => {
         calls: 0,
         errors: 0,
         ok: true,
-        reason: "due_work_maintenance_pending",
+        reason: "due_work_repair_pending",
         remaining: 1,
         throttled: true,
       });
