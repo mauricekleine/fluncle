@@ -11,6 +11,7 @@ import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   fanOutDueWorkSourceRepairs,
   findPendingPhysicalRepairDefinition,
+  PENDING_TRACK_SOURCE_MARKERS_SQL,
   PHYSICAL_REPAIR_LIMIT,
 } from "./due-work-source-repair";
 import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
@@ -707,13 +708,6 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
 }
 
 async function advanceTrackRepair(client: ProjectionClient, limit: number) {
-  const hasRepairDebt = async (): Promise<boolean> => {
-    const result = await client.execute(
-      `select 1 from due_work indexed by due_work_repair_idx
-        where state = 'repair' limit 1`,
-    );
-    return result.rows.length > 0;
-  };
   const sourceCount = await client.execute(
     `select 1 from due_work
       where work_kind = 'source-repair' and state = 'repair' limit 1`,
@@ -732,7 +726,20 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
     });
     processed += result.scanned;
   }
-  return { complete: !(await hasRepairDebt()), processed, scheduled };
+  // One read answers both the whole-queue convergence flag and the track source-marker state that
+  // every track reader's guard waits for; a missing row reads as outstanding work.
+  const convergence = await client.execute(
+    `select exists (select 1 from due_work indexed by due_work_repair_idx
+        where state = 'repair') as repair_debt,
+      exists (${PENDING_TRACK_SOURCE_MARKERS_SQL}) as track_source_markers_pending`,
+  );
+  const row = convergence.rows[0];
+  return {
+    complete: Number(row?.repair_debt ?? 1) === 0,
+    processed,
+    scheduled,
+    trackSourceMarkersPending: Number(row?.track_source_markers_pending ?? 1) === 1,
+  };
 }
 
 const PUBLIC_ANCHOR_REBUILD_KEY = "projection_rebuild_public_anchors_v1";
@@ -1834,6 +1841,8 @@ type ProjectionAdvanceOutcome = {
   complete: boolean;
   processed: number;
   scheduled: number;
+  // Track repair only: whether an ordinary track source marker still awaits fanout.
+  trackSourceMarkersPending?: boolean;
 };
 
 async function advanceAuditProjection(
@@ -1883,7 +1892,7 @@ export async function advanceProjectionFor(
   if (input.action !== "audit") {
     await clearProjectionAuditEvidence(client, input.target);
   }
-  let outcome: { complete: boolean; processed: number; scheduled: number };
+  let outcome: ProjectionAdvanceOutcome;
   if (input.action === "audit") {
     return advanceAuditProjection(client, input, includeStatus);
   }

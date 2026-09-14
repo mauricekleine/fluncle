@@ -26,7 +26,10 @@ import { join } from "node:path";
 const CONDUCTOR = join(import.meta.dir, "render-conductor.sh");
 const BOX_ID = "box-under-test";
 const QUEUE_HEAD = "001.1.1A";
-const SUBPROCESS_TIMEOUT_MS = 4_000;
+// The fixture exercises a real shell lifecycle; these process budgets cover harness overhead,
+// not an assertion about the conductor's production performance SLA.
+const SUBPROCESS_TIMEOUT_MS = 10_000;
+const PROCESS_FIXTURE_TIMEOUT_MS = 15_000;
 
 /** `-1` means "restoring forever"; any other count is how many calls 500 before the box answers. */
 type Tick = {
@@ -241,150 +244,182 @@ function lastJsonLine(stdout: string): Record<string, unknown> {
 }
 
 describe("await_box_ready", () => {
-  test("a box that restores and then answers renders, and is never condemned", () => {
-    const tick = runTick({
-      nowSequence: [4070908800, 4070908800, 4070908800, 4070908801, 4070908802, 4070908802],
-      readyTimeout: 30,
-      restoringCalls: 2,
-    });
+  test(
+    "a box that restores and then answers renders, and is never condemned",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        nowSequence: [4070908800, 4070908800, 4070908800, 4070908801, 4070908802, 4070908802],
+        readyTimeout: 30,
+        restoringCalls: 2,
+      });
 
-    expect(tick.log).toContain(`box ${BOX_ID} restoring — waiting`);
-    expect(tick.log.match(/restoring — waiting/g)).toHaveLength(2);
-    expect(tick.log).toContain(`box ${BOX_ID} ready after 2s`);
-    expect(tick.sleepCalls).toEqual(["1", "1"]);
-    expect(tick.log).not.toContain("condemned");
-    expect(tick.orphans.trim()).toBe("");
-    expect(tick.boxIdFile).toBe(BOX_ID);
-    expect(tick.state).toBe("rendering");
-    expect(tick.stdout).toContain(`started render of ${QUEUE_HEAD} on ${BOX_ID}`);
-    expect(lastJsonLine(tick.stdout)).toMatchObject({
-      checked: 1,
-      errors: 0,
-      failed: 0,
-      produced: 1,
-    });
-    // The queue read is capped at 25; that page length is not the whole remaining backlog.
-    expect("queue_depth" in lastJsonLine(tick.stdout)).toBe(false);
-    expect("expected_interval_ms" in lastJsonLine(tick.stdout)).toBe(false);
-  });
+      expect(tick.log).toContain(`box ${BOX_ID} restoring — waiting`);
+      expect(tick.log.match(/restoring — waiting/g)).toHaveLength(2);
+      expect(tick.log).toContain(`box ${BOX_ID} ready after 2s`);
+      expect(tick.sleepCalls).toEqual(["1", "1"]);
+      expect(tick.log).not.toContain("condemned");
+      expect(tick.orphans.trim()).toBe("");
+      expect(tick.boxIdFile).toBe(BOX_ID);
+      expect(tick.state).toBe("rendering");
+      expect(tick.stdout).toContain(`started render of ${QUEUE_HEAD} on ${BOX_ID}`);
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        checked: 1,
+        errors: 0,
+        failed: 0,
+        produced: 1,
+      });
+      // The queue read is capped at 25; that page length is not the whole remaining backlog.
+      expect("queue_depth" in lastJsonLine(tick.stdout)).toBe(false);
+      expect("expected_interval_ms" in lastJsonLine(tick.stdout)).toBe(false);
+    },
+  );
 
-  test("a box that never stops restoring times out from elapsed time and reaches the condemn path", () => {
-    const tick = runTick({
-      nowSequence: [4070908800, 4070908800, 4070908800, 4070908800, 4070908802],
-      readyTimeout: 2,
-      restoringCalls: -1,
-    });
+  test(
+    "a box that never stops restoring times out from elapsed time and reaches the condemn path",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        nowSequence: [4070908800, 4070908800, 4070908800, 4070908800, 4070908802],
+        readyTimeout: 2,
+        restoringCalls: -1,
+      });
 
-    expect(tick.log).toMatch(/box box-under-test still restoring after \d+s — giving up/);
-    expect(tick.sleepCalls).toEqual(["1"]);
-    expect(tick.log).toContain(`condemned box ${BOX_ID}`);
-    expect(tick.orphans).toContain(BOX_ID);
-    expect(tick.boxIdFile).toBe("");
-    expect(tick.state).toBe("idle");
-    expect(tick.stdout).toContain('"ok":false');
-    expect(lastJsonLine(tick.stdout)).toMatchObject({
-      checked: 1,
-      errors: 1,
-      failed: 1,
-      produced: 0,
-    });
-  });
+      expect(tick.log).toMatch(/box box-under-test still restoring after \d+s — giving up/);
+      expect(tick.sleepCalls).toEqual(["1"]);
+      expect(tick.log).toContain(`condemned box ${BOX_ID}`);
+      expect(tick.orphans).toContain(BOX_ID);
+      expect(tick.boxIdFile).toBe("");
+      expect(tick.state).toBe("idle");
+      expect(tick.stdout).toContain('"ok":false');
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        checked: 1,
+        errors: 1,
+        failed: 1,
+        produced: 0,
+      });
+    },
+  );
 
-  test("a box that answers straight away never logs a duration across a clock boundary", () => {
-    const tick = runTick({
-      nowSequence: [4070908800, 4070908800, 4070908800, 4070908801],
-      restoringCalls: 0,
-    });
+  test(
+    "a box that answers straight away never logs a duration across a clock boundary",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        nowSequence: [4070908800, 4070908800, 4070908800, 4070908801],
+        restoringCalls: 0,
+      });
 
-    expect(tick.log).not.toContain("restoring");
-    expect(tick.log).not.toContain("ready after");
-    expect(tick.state).toBe("rendering");
-  });
+      expect(tick.log).not.toContain("restoring");
+      expect(tick.log).not.toContain("ready after");
+      expect(tick.state).toBe("rendering");
+    },
+  );
 });
 
 describe("queue read", () => {
-  test("a genuinely empty queue is a healthy idle tick", () => {
-    const tick = runTick({
-      queueResponse: '{"ok":true,"tracks":[]}',
-      restoringCalls: 0,
-    });
+  test(
+    "a genuinely empty queue is a healthy idle tick",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        queueResponse: '{"ok":true,"tracks":[]}',
+        restoringCalls: 0,
+      });
 
-    expect(tick.exitCode).toBe(0);
-    expect(tick.stdout).toContain("render-conductor: queue empty — nothing to render");
-    expect(lastJsonLine(tick.stdout)).toMatchObject({
-      checked: 0,
-      errors: 0,
-      failed: 0,
-      ok: true,
-      produced: 0,
-    });
-  });
+      expect(tick.exitCode).toBe(0);
+      expect(tick.stdout).toContain("render-conductor: queue empty — nothing to render");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        checked: 0,
+        errors: 0,
+        failed: 0,
+        ok: true,
+        produced: 0,
+      });
+    },
+  );
 
-  test("a failed queue read is a run error, not an empty queue", () => {
-    const tick = runTick({
-      queueExitCode: 7,
-      queueResponse: "",
-      queueStderr: "transport error",
-      restoringCalls: 0,
-    });
+  test(
+    "a failed queue read is a run error, not an empty queue",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        queueExitCode: 7,
+        queueResponse: "",
+        queueStderr: "transport error",
+        restoringCalls: 0,
+      });
 
-    expect(tick.exitCode).toBe(1);
-    expect(tick.stdout).toContain("render-conductor: queue read failed");
-    expect(tick.stdout).not.toContain("queue empty");
-    expect(tick.log).toContain("transport error");
-    expect(lastJsonLine(tick.stdout)).toMatchObject({
-      errors: 1,
-      ok: false,
-    });
-  });
+      expect(tick.exitCode).toBe(1);
+      expect(tick.stdout).toContain("render-conductor: queue read failed");
+      expect(tick.stdout).not.toContain("queue empty");
+      expect(tick.log).toContain("transport error");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        errors: 1,
+        ok: false,
+      });
+    },
+  );
 
-  test("a successful error wrapper is a malformed response, not an empty queue", () => {
-    const tick = runTick({
-      queueResponse: '{"ok":false,"error":"rate limited"}',
-      restoringCalls: 0,
-    });
+  test(
+    "a successful error wrapper is a malformed response, not an empty queue",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        queueResponse: '{"ok":false,"error":"rate limited"}',
+        restoringCalls: 0,
+      });
 
-    expect(tick.exitCode).toBe(1);
-    expect(tick.stdout).toContain("render-conductor: queue response malformed");
-    expect(tick.stdout).not.toContain("queue empty");
-    expect(lastJsonLine(tick.stdout)).toMatchObject({
-      errors: 1,
-      ok: false,
-    });
-  });
+      expect(tick.exitCode).toBe(1);
+      expect(tick.stdout).toContain("render-conductor: queue response malformed");
+      expect(tick.stdout).not.toContain("queue empty");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        errors: 1,
+        ok: false,
+      });
+    },
+  );
 });
 
 describe("render state counters", () => {
-  test("a shipped completion counts the inspected finding and successful completion", () => {
-    const tick = runTick({
-      doneResult: "EXIT=0 @ 2099-01-01T00:00:00Z DURATION=5",
-      initialState: "rendering",
-      queueResponse: '{"ok":true,"tracks":[]}',
-      restoringCalls: 0,
-      trackHasVideo: true,
-    });
+  test(
+    "a shipped completion counts the inspected finding and successful completion",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        doneResult: "EXIT=0 @ 2099-01-01T00:00:00Z DURATION=5",
+        initialState: "rendering",
+        queueResponse: '{"ok":true,"tracks":[]}',
+        restoringCalls: 0,
+        trackHasVideo: true,
+      });
 
-    expect(lastJsonLine(tick.stdout)).toMatchObject({
-      checked: 1,
-      errors: 0,
-      failed: 0,
-      produced: 1,
-    });
-  });
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        checked: 1,
+        errors: 0,
+        failed: 0,
+        produced: 1,
+      });
+    },
+  );
 
-  test("a failed completion stays in failed and does not become a run error", () => {
-    const tick = runTick({
-      doneResult: "EXIT=7 @ 2099-01-01T00:00:00Z DURATION=5",
-      initialState: "rendering",
-      queueResponse: '{"ok":true,"tracks":[]}',
-      restoringCalls: 0,
-    });
+  test(
+    "a failed completion stays in failed and does not become a run error",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        doneResult: "EXIT=7 @ 2099-01-01T00:00:00Z DURATION=5",
+        initialState: "rendering",
+        queueResponse: '{"ok":true,"tracks":[]}',
+        restoringCalls: 0,
+      });
 
-    expect(lastJsonLine(tick.stdout)).toMatchObject({
-      checked: 1,
-      errors: 0,
-      failed: 1,
-      produced: 0,
-    });
-  });
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        checked: 1,
+        errors: 0,
+        failed: 1,
+        produced: 0,
+      });
+    },
+  );
 });
