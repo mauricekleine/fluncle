@@ -6,6 +6,7 @@
 import { contract } from "@fluncle/contracts/orpc";
 import { type implement, ORPCError } from "@orpc/server";
 import * as Sentry from "@sentry/cloudflare";
+import { DueWorkMaintenancePendingError } from "../due-work";
 import { logEvent } from "../log";
 import { type OrpcContext } from "../orpc-auth";
 import { type TrackListItem, getTrackByIdOrLogId } from "../tracks";
@@ -93,6 +94,17 @@ export function isApiFaultData(data: unknown): data is ApiFaultData {
  * for one wire-compatible 500 path.
  */
 export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
+  if (error instanceof DueWorkMaintenancePendingError) {
+    return new ORPCError("SERVICE_UNAVAILABLE", {
+      data: {
+        apiCode: "due_work_maintenance_pending",
+        apiMessage: "Due-work maintenance is still converging",
+      },
+      message: "Due-work maintenance is still converging",
+      status: 503,
+    });
+  }
+
   if (error instanceof ApiError) {
     return new ORPCError("INTERNAL_SERVER_ERROR", {
       data: { apiCode: error.code, apiMessage: error.message },

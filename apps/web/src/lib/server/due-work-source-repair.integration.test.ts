@@ -10,7 +10,11 @@ import {
   markDueWorkSourceRepairsStatement,
   upsertDueWork,
 } from "./due-work";
-import { CATALOGUE_RANK_MATERIAL_REVISION_KEY, CATALOGUE_RANK_STATE_KEY } from "./catalogue";
+import {
+  CATALOGUE_RANK_MATERIAL_REVISION_KEY,
+  CATALOGUE_RANK_STATE_KEY,
+  catalogueRankCorpusForTrack,
+} from "./catalogue";
 import { fanOutDueWorkSourceRepairs, repairDueWorkBeforeRead } from "./due-work-source-repair";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
@@ -157,6 +161,89 @@ describe("transactionally coupled due-work source repair", () => {
       expanded: 1,
       scanned: 1,
     });
+  });
+
+  it("keeps source-marker and rebuild rank normalization identical", async () => {
+    const corpus = "v6:0:0:0:canonical:material";
+    const tracks = [
+      { fresh: true, hasEmbedding: false, trackId: "rank-normalized-fresh-unembedded" },
+      { fresh: false, hasEmbedding: false, trackId: "rank-normalized-stale-unembedded" },
+      { fresh: true, hasEmbedding: true, trackId: "rank-normalized-fresh-embedded" },
+      { fresh: false, hasEmbedding: true, trackId: "rank-normalized-stale-embedded" },
+    ];
+    for (const track of tracks) {
+      await seedCatalogueTrack(db, { trackId: track.trackId });
+      await db.execute({
+        args: [
+          track.hasEmbedding ? 1 : 0,
+          track.fresh ? catalogueRankCorpusForTrack(corpus, track.hasEmbedding) : null,
+          track.trackId,
+        ],
+        sql: `update tracks set has_embedding = ?, catalogue_rank_corpus = ? where track_id = ?`,
+      });
+      if (track.fresh) {
+        await upsertDueWork(db, {
+          nextDueAt: "2026-01-01T00:00:00.000Z",
+          sortKey: track.trackId,
+          sourceVersion: "incorrectly-ready",
+          state: "ready",
+          subjectId: track.trackId,
+          subjectType: "track",
+          workKind: "catalogue-rank",
+        });
+      }
+    }
+    await db.batch(
+      [
+        {
+          args: [
+            CATALOGUE_RANK_STATE_KEY,
+            JSON.stringify({ corpus, embeddedFindings: 0, findings: 0 }),
+          ],
+          sql: `insert into settings (key, value) values (?, ?)`,
+        },
+        markDueWorkSourceRepairsStatement(
+          tracks.map((track) => ({ subjectId: track.trackId, subjectType: "track" })),
+          { markerVersion: "rank-normalized-v1", producer: "catalogue-rank" },
+        ),
+      ],
+      "write",
+    );
+
+    const definition = DUE_WORK_BACKFILLS.find(
+      (candidate) => candidate.workKind === "catalogue-rank",
+    );
+    if (definition === undefined) {
+      throw new Error("catalogue-rank rebuild definition is missing");
+    }
+    const rebuildSources = await definition.readSourceChunk({
+      after: null,
+      client: db,
+      generation: corpus,
+      limit: 100,
+    });
+    const rebuildVersions = new Map(
+      rebuildSources.map((source) => [source.subjectId, source.sourceVersion]),
+    );
+
+    expect(await fanOutDueWorkSourceRepairs(db, { limit: 5 })).toMatchObject({
+      deferred: 0,
+      expanded: 4,
+    });
+    const repaired = await db.execute({
+      args: ["catalogue-rank"],
+      sql: `select subject_id, source_version from due_work
+        where work_kind = ? order by subject_id`,
+    });
+    expect(repaired.rows).toEqual(
+      tracks
+        .filter((track) => !track.fresh)
+        .map((track) => ({
+          source_version: rebuildVersions.get(track.trackId),
+          subject_id: track.trackId,
+        }))
+        .sort((left, right) => left.subject_id.localeCompare(right.subject_id)),
+    );
   });
 
   it("caps a requested 500-source page and continues from the durable marker set", async () => {

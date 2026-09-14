@@ -24,6 +24,8 @@ const PROCESS_STATE_TIMEOUT_MS = 15_000;
 const PROCESS_EXIT_TIMEOUT_MS = 15_000;
 const PROCESS_CLEANUP_TIMEOUT_MS = 5_000;
 const PROCESS_TEST_OPTIONS = { timeout: PROCESS_TEST_TIMEOUT_MS };
+// Successful fixtures allow shell startup and acquisition within the bounded process deadline.
+const SUCCESS_MAX_WAIT_SECS = 5;
 let directory: string;
 let binDirectory: string;
 let curlLog: string;
@@ -175,7 +177,7 @@ function runnerEnvironment(
     DATABASE_ADMISSION_FAIL_CLOSED: options.failClosed === true ? "true" : "false",
     DATABASE_ADMISSION_HTTP_TIMEOUT_SECS: "1",
     DATABASE_ADMISSION_KILL_GRACE_SECS: "1",
-    DATABASE_ADMISSION_MAX_WAIT_SECS: String(options.maxWaitSecs ?? 1),
+    DATABASE_ADMISSION_MAX_WAIT_SECS: String(options.maxWaitSecs ?? SUCCESS_MAX_WAIT_SECS),
     FLUNCLE_API_BASE_URL: "https://admission.invalid",
     FLUNCLE_API_TOKEN: options.token === undefined ? "test-token" : options.token,
     HEALTHCHECK_CRON_OUTPUT_DIR: join(directory, "cron-output"),
@@ -927,7 +929,8 @@ ${ACQUIRED_RESPONSE}
         "bash",
         [
           "-c",
-          `"$1" phase fluncle-enrich -- bash -c 'printf "critical-one\\n" >> "$1"' critical "$2"
+          `set -e
+"$1" phase fluncle-enrich -- bash -c 'printf "critical-one\\n" >> "$1"' critical "$2"
 printf 'non-critical\\n' >> "$2"
 "$1" phase fluncle-enrich -- bash -c 'printf "critical-two\\n" >> "$1"' critical "$2"`,
           "payload",
@@ -941,7 +944,7 @@ printf 'non-critical\\n' >> "$2"
         },
       );
 
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       expect(readFileSync(timeline, "utf8").trim().split("\n")).toEqual([
         "acquire",
         "critical-one",

@@ -1,8 +1,15 @@
 import { ORPCError } from "@orpc/server";
+import * as Sentry from "@sentry/cloudflare";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DueWorkMaintenancePendingError } from "./due-work";
 import { apiErrorResponse } from "./http-errors";
 import { apiFault, type ApiFaultData, isApiFaultData } from "./orpc/_shared";
 import { ApiError } from "./spotify";
+
+vi.mock("@sentry/cloudflare", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/cloudflare")>()),
+  captureException: vi.fn(),
+}));
 
 // Regression pins for the unexpected-500 branch: a deliberate `ApiError` keeps
 // its precise status/code/message (a client contract the CLI renders), while an
@@ -14,6 +21,23 @@ afterEach(() => {
 });
 
 describe("apiFault — the oRPC catch converter", () => {
+  it("maps expected due-work convergence to a quiet typed 503", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const sentrySpy = vi.mocked(Sentry.captureException);
+    sentrySpy.mockClear();
+
+    const fault = apiFault(new DueWorkMaintenancePendingError("catalogue-rank"));
+
+    expect(fault.status).toBe(503);
+    expect(fault.message).toBe("Due-work maintenance is still converging");
+    expect(fault.data).toEqual({
+      apiCode: "due_work_maintenance_pending",
+      apiMessage: "Due-work maintenance is still converging",
+    });
+    expect(errSpy).not.toHaveBeenCalled();
+    expect(sentrySpy).not.toHaveBeenCalled();
+  });
+
   it("genericizes an unexpected fault and never leaks the raw message", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

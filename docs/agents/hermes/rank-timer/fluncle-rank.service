@@ -16,18 +16,13 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). NO new secret: `rank_catalogue` is AGENT tier, so the box's existing
 # agent-scoped token drives it.
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-rank -- bash /opt/hermes-scripts/rank-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/rank-sweep.sh
 # A PURE trigger — zero LLM tokens. The work is SQL inside the Worker; the tick drains up to
 # FLUNCLE_RANK_MAX_CALLS batches and stops, so it is bounded even right after a big crawl.
-# The BUDGET is the bound, not the wall clock: a full tick is MAX_CALLS=8 × BATCH=250, and as
-# the catalogue tripled over ten days each call went from a few seconds to ~60s+ — so a full
-# tick is 7–9 min. Measured 2026-07-28 on rave-02: the old 300s ceiling failed 81% of ticks
-# since 2026-07-26, every one of them `Result: timeout` on work that had ALREADY landed
-# (`"ok":true` markers throughout). Worse, the kill only reaps the docker-exec CLIENT while
-# the container-side work runs on, so /status stayed green while `systemctl --failed` showed
-# red and OnFailure alerted — pure phantom red. 900s covers the measured tick with headroom
-# and still sits well under the 30-min cadence, so there is no overlap risk (systemd skips an
-# overlapping trigger on a oneshot rather than double-firing).
+# The orchestrator starts phases for at most 600s. A last composite phase may wait 120s for
+# admission and then run one 120s repair plus one 120s rank child, so it finishes by 960s. The
+# service timeout leaves another 70s for wrapper and process teardown while remaining below the
+# 30-minute cadence; systemd skips an overlapping trigger on a oneshot rather than double-firing.
 TimeoutStartSec=1030
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true

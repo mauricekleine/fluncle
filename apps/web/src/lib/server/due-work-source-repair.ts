@@ -26,7 +26,7 @@ import {
 } from "./due-work-registry";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
-const SOURCE_REPAIR_LIMIT = 5;
+export const SOURCE_REPAIR_LIMIT = 5;
 export const PHYSICAL_REPAIR_LIMIT = 50;
 // A rank rebuild page is one indexed `track_id` range read, then one write batch of per-row guarded
 // upserts (14 bound values each, no compound SELECT) plus one guarded checkpoint advance; bounded
@@ -537,6 +537,21 @@ export async function findPendingPhysicalRepairDefinition(
     unregistered.push([row.work_kind, row.subject_type]);
   }
   return undefined;
+}
+
+/**
+ * Whether an ordinary track source marker still awaits fanout. Every track reader's guard refuses
+ * while more than a page of these remain; the synthetic catalogue-rank corpus marker is excluded
+ * because only the rank read waits for it. The unary `+` keeps the partial repair index out of the
+ * plan: that index would walk every track repair row, while the primary key seeks markers only.
+ */
+export const PENDING_TRACK_SOURCE_MARKERS_SQL = `select 1 from due_work
+  where work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}' and subject_type = 'track' and +state = 'repair'
+    and subject_id <> '${DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID}'`;
+
+export async function hasPendingTrackSourceMarkers(client: DueWorkClient): Promise<boolean> {
+  const result = await client.execute(`${PENDING_TRACK_SOURCE_MARKERS_SQL} limit 1`);
+  return result.rows.length > 0;
 }
 
 /** Repair generic producers and the requested physical queue before reading its ready index. */
