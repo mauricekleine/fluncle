@@ -1427,4 +1427,54 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
     expect(summary.pages).toBe(2);
     expect(summary.pulled).toBe(2);
   });
+
+  test("a page the Worker defers after measured pages pauses the firing as partial, not failed", async () => {
+    const { DueWorkRepairPendingError } = await import("./due-work-repair-pending");
+    const deps = pagedDeps([rows("a", 2)]);
+    let call = 0;
+    const deferred: AnchorDeps = {
+      ...deps,
+      fetchQueue: (limit) => {
+        call += 1;
+
+        return call === 1
+          ? deps.fetchQueue(limit)
+          : Promise.reject(new DueWorkRepairPendingError("anchor queue read"));
+      },
+    };
+    const summary = await runAnchorSweep(10, deferred, 2);
+
+    expect(call).toBe(2);
+    expect(summary).toMatchObject({
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      pages: 2,
+      partial: true,
+      pulled: 2,
+      reason: "due_work_repair_pending",
+      throttled: true,
+    });
+    expect(summary.error).toBeNull();
+  });
+
+  test("a first page the Worker defers pauses with nothing measured", async () => {
+    const { DueWorkRepairPendingError } = await import("./due-work-repair-pending");
+    const deferred: AnchorDeps = {
+      ...pagedDeps([]),
+      fetchQueue: () => Promise.reject(new DueWorkRepairPendingError("anchor queue read")),
+    };
+    const summary = await runAnchorSweep(10, deferred, 2);
+
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      pages: 1,
+      partial: false,
+      produced: 0,
+      queueDepth: null,
+    });
+  });
 });

@@ -854,6 +854,68 @@ describe("what the sweep's logs say to the /status strain detector", () => {
   );
 });
 
+describe("the phased orchestrator under a due-work deferral", () => {
+  test("a deferred bio queue is a paused tick that authors nothing", () => {
+    const pendingRig = mkdtempSync(join(tmpdir(), "entity-bio-pending-"));
+    const runner = join(pendingRig, "phase-runner");
+    const fluncle = join(pendingRig, "fluncle");
+    writeFileSync(
+      runner,
+      `#!/usr/bin/env bash
+set -euo pipefail
+shift 2
+if [ "\${1:-}" = "--" ]; then shift; fi
+"$@"
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      fluncle,
+      `#!/usr/bin/env bash
+if [[ " $* " = *" --queue "* ]]; then
+  printf '{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\\n'
+  exit 1
+fi
+printf 'unexpected fluncle call: %s\\n' "$*" >&2
+exit 2
+`,
+      { mode: 0o755 },
+    );
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [join(import.meta.dir, "entity-bio-sweep.ts"), "--kind", "label"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DATABASE_ADMISSION_RUNNER: runner,
+            ENTITY_BIO_STATE_DIR: join(pendingRig, "state"),
+            FLUNCLE_API_TOKEN: "",
+            FLUNCLE_BIN: fluncle,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checked: 0,
+        errors: 0,
+        gateState: "paused",
+        kind: "label",
+        ok: true,
+        partial: false,
+        produced: 0,
+        reason: "due_work_repair_pending",
+        throttled: true,
+      });
+    } finally {
+      rmSync(pendingRig, { force: true, recursive: true });
+    }
+  });
+});
+
 describe("the recurring phased orchestrator", () => {
   beforeEach(() => {
     rmSync(CONTROL, { force: true, recursive: true });

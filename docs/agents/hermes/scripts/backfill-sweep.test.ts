@@ -84,6 +84,7 @@ case "$1" in
         if [ -f ${JSON.stringify(deezerModeFile)} ]; then mode="$(cat ${JSON.stringify(deezerModeFile)})"; fi
         case "$mode" in
           throttled) printf '{"ok":true,"resolvedCount":0,"unresolvedCount":0,"unvouchableCount":0,"failedCount":0,"rateLimited":true}\\n' ;;
+          pending) printf '{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\\n'; exit 1 ;;
           crash) printf 'deezer boom\\n' >&2; exit 1 ;;
           partial) printf '{"ok":false,"resolvedCount":2,"unresolvedCount":3,"unvouchableCount":4,"failedCount":5,"rateLimited":false}\\n'; exit 1 ;;
           *) printf '{"ok":true,"resolvedCount":23,"unresolvedCount":24,"unvouchableCount":25,"failedCount":26,"rateLimited":false}\\n' ;;
@@ -754,5 +755,30 @@ describe("the tick's legs", () => {
     expect(summary.failed).toBe(53);
     expect(summary.ok).toBe(false);
     expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
+  });
+
+  test("a leg the Worker defers pauses alone: the other legs still run and nothing is a run error", async () => {
+    writeFileSync(deezerModeFile, "pending");
+
+    const summary = await runBackfillSweep();
+
+    expect(summary.repairPendingLegs).toEqual(["deezer"]);
+    expect(summary).toMatchObject({
+      errors: 0,
+      gateState: "paused",
+      partial: true,
+      reason: "due_work_repair_pending",
+      throttled: true,
+    });
+    expect(summary.deezer).toEqual({
+      error: null,
+      failed: 0,
+      resolved: 0,
+      throttled: false,
+      unresolved: 0,
+      unvouchable: 0,
+    });
+    expect((summary.beatport as { resolved: number }).resolved).toBe(13);
+    expect((summary["discogs-facts"] as { resolved: number }).resolved).toBe(17);
   });
 });

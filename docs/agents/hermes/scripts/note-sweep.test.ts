@@ -74,6 +74,10 @@ if [ "\${1:-}" = "admin" ] && [ "\${3:-}" = "context" ]; then
   exit 0
 fi
 if [ "\${1:-}" = "admin" ] && [ "\${2:-}" = "tracks" ] && [ "\${3:-}" = "note" ] && [ "\${4:-}" = "--queue" ]; then
+  if [ "\${NOTE_STUB_QUEUE_PENDING:-0}" = "1" ]; then
+    printf '{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\\n'
+    exit 1
+  fi
   if [ "\${NOTE_STUB_QUEUE_FAIL:-0}" = "1" ]; then
     printf 'queue read failed\\n' >&2
     exit 1
@@ -281,6 +285,40 @@ describe("note sweep run-error vocabulary", () => {
       errors: 1,
       ok: false,
       reason: "sweep_error",
+    });
+  });
+
+  test("the Worker's due-work deferral of the note queue is an exit-zero paused tick", async () => {
+    const proc = Bun.spawn(
+      [process.execPath, new URL("./note-sweep.ts", import.meta.url).pathname],
+      {
+        env: {
+          ...process.env,
+          CLAUDE_BIN: CLAUDE_STUB,
+          FLUNCLE_BIN: FLUNCLE_STUB,
+          NOTE_STATE_DIR: STATE_DIR,
+          NOTE_STUB_QUEUE_PENDING: "1",
+        },
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [exitCode, stdout] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      checked: 0,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      partial: false,
+      produced: 0,
+      reason: "due_work_repair_pending",
+      throttled: true,
     });
   });
 });

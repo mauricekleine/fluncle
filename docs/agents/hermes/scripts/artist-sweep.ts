@@ -32,6 +32,11 @@
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
+import {
+  dueWorkRepairPendingGate,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -83,6 +88,8 @@ type ArtistImagesOutcome = {
   filled: number;
   queueDepth: number | null;
   rateLimited: boolean;
+  /** The Worker deferred the avatar worklist while due-work repair converges; nothing was read. */
+  repairPending: boolean;
   skipped: number;
 };
 
@@ -124,6 +131,8 @@ export function fluncleJson<T>(args: string[]): T {
 
     throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
   }
+
+  throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
 
   if (code !== 0 && isCliErrorPayload(parsed)) {
     throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
@@ -214,8 +223,34 @@ function drainArtistImages(): ArtistImagesOutcome {
       log(`artist-images: checked ${checked}, filled ${filled}, ${skipped} without an image`);
     }
 
-    return { budgetLimited, checked, failed, filled, queueDepth, rateLimited, skipped };
+    return {
+      budgetLimited,
+      checked,
+      failed,
+      filled,
+      queueDepth,
+      rateLimited,
+      repairPending: false,
+      skipped,
+    };
   } catch (error) {
+    if (isDueWorkRepairPending(error)) {
+      // The Worker deferred the avatar worklist while due-work repair converges: no artist was
+      // read, so nothing failed and the next tick reads again.
+      log(error.message);
+
+      return {
+        budgetLimited: false,
+        checked: 0,
+        failed: 0,
+        filled: 0,
+        queueDepth: null,
+        rateLimited: false,
+        repairPending: true,
+        skipped: 0,
+      };
+    }
+
     // A pinned box CLI predating the subcommand — or any transient failure — must
     // never fail the sweep; the backfill self-heals next tick / after the re-bake.
     log(`artist-images drain skipped: ${error instanceof Error ? error.message : String(error)}`);
@@ -227,6 +262,7 @@ function drainArtistImages(): ArtistImagesOutcome {
       filled: 0,
       queueDepth: null,
       rateLimited: false,
+      repairPending: false,
       skipped: 0,
     };
   }
@@ -308,16 +344,19 @@ function main(): void {
       ? summary.queueRemaining + images.queueDepth
       : null;
 
+  const line = {
+    ...summary,
+    checked,
+    expected_interval_ms: EXPECTED_INTERVAL_MS,
+    ok: true,
+    processed,
+    produced,
+    queue_depth: queueDepth,
+  };
+
+  // A deferred avatar worklist pauses the tick; the artist half's measured counts stay real.
   console.log(
-    JSON.stringify({
-      ...summary,
-      checked,
-      expected_interval_ms: EXPECTED_INTERVAL_MS,
-      ok: true,
-      processed,
-      produced,
-      queue_depth: queueDepth,
-    }),
+    JSON.stringify(images.repairPending ? { ...line, ...dueWorkRepairPendingGate(line) } : line),
   );
 }
 

@@ -21,6 +21,8 @@ const STUB = `#!/bin/bash
 case "$(cat "$(dirname "$0")/mode")" in
   partial) printf '{"ok":true,"kind":"album","dryRun":false,"resolved":["some-album"],"resolvedCount":1,"none":["bare-album"],"noneCount":1,"failed":[{"error":"boom","slug":"flaky-album"}],"failedCount":1,"rateLimited":false}\\n'; exit 1 ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
+  artist-pending) case " $* " in *" --kind artist "*) printf '{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\\n'; exit 1 ;; *) printf '{"ok":true,"kind":"album","dryRun":false,"resolved":["some-album","other-album"],"resolvedCount":2,"none":["bare-album"],"noneCount":1,"failed":[],"failedCount":0,"rateLimited":false}\\n' ;; esac ;;
+  generic-fault) printf '{"code":"error","message":"Internal error","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
   *) printf '{"ok":true,"kind":"album","dryRun":false,"resolved":["some-album","other-album"],"resolvedCount":2,"none":["bare-album"],"noneCount":1,"failed":[],"failedCount":0,"rateLimited":false}\\n' ;;
 esac
@@ -82,6 +84,32 @@ describe("cover-masters-sweep's canonical counters", () => {
     // image_state + cooldown worklists have no covering index, so a per-tick count is deliberately
     // omitted instead of taxing this hot path with a scan.
     expect(summary).not.toHaveProperty("queue_depth");
+  });
+
+  test("a kind the Worker defers mid-pass keeps the drained kind's counts and pauses as partial", () => {
+    mode("artist-pending");
+
+    expect(run()).toMatchObject({
+      checked: 3,
+      errors: 0,
+      failed: 0,
+      gateState: "paused",
+      none: 1,
+      ok: true,
+      partial: true,
+      produced: 3,
+      reason: "due_work_repair_pending",
+      resolved: 2,
+      throttled: true,
+    });
+  });
+
+  test("a generic Worker fault stays a run error, never a pause", () => {
+    mode("generic-fault");
+    const summary = run();
+
+    expect(summary).toMatchObject({ errors: 1, ok: false });
+    expect(summary).not.toHaveProperty("gateState");
   });
 });
 

@@ -330,6 +330,58 @@ describe("isrc-recovery sweep", () => {
   });
 });
 
+describe("isrc-recovery due-work repair pause", () => {
+  test("the typed 503 pauses the tick with no search, no resolve, and exit 0", async () => {
+    const harness = effects((url) => {
+      if (url.includes("/tracks/work?")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              code: "due_work_maintenance_pending",
+              message: "Due-work maintenance is still converging",
+              ok: false,
+            }),
+            { status: 503 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response("unexpected", { status: 500 }));
+    });
+
+    const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
+
+    expect(exitCode).toBe(0);
+    expect(harness.calls).toHaveLength(1);
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      partial: false,
+      produced: 0,
+      reason: "due_work_repair_pending",
+      throttled: true,
+    });
+    expect(JSON.parse(harness.output[0] ?? "{}")).toMatchObject({ gateState: "paused", ok: true });
+  });
+
+  test("a generic Worker 500 on the queue read stays a failed run", async () => {
+    const harness = effects(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ code: "error", message: "Internal error", ok: false }), {
+          status: 500,
+        }),
+      ),
+    );
+
+    const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
+
+    expect(exitCode).toBe(1);
+    expect(summary).toMatchObject({ errors: 1, ok: false });
+    expect(summary.gateState).toBeUndefined();
+  });
+});
+
 describe("searchDeezerCandidates", () => {
   test("treats non-quota error bodies and malformed result bodies as transport failures", async () => {
     for (const response of [

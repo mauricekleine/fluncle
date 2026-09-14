@@ -191,4 +191,43 @@ describe("label image box-side Discogs split", () => {
     expect(bodies).toEqual([undefined]);
     expect(summary).toMatchObject({ error: "network failed", errors: 1, ok: false });
   });
+
+  test("the Worker's typed due-work deferral pauses the pass without failing it", async () => {
+    const summary = await runLabelImagesSweep({
+      env,
+      fetch: (async () =>
+        new Response(
+          JSON.stringify({
+            code: "due_work_maintenance_pending",
+            message: "Due-work maintenance is still converging",
+            ok: false,
+          }),
+          { status: 503 },
+        )) as typeof globalThis.fetch,
+    });
+
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      partial: false,
+      produced: 0,
+      reason: "due_work_repair_pending",
+      throttled: true,
+    });
+  });
+
+  test("a generic Worker 500 stays a failed pass", async () => {
+    const summary = await runLabelImagesSweep({
+      env,
+      fetch: (async () =>
+        new Response(JSON.stringify({ code: "error", message: "Internal error", ok: false }), {
+          status: 500,
+        })) as typeof globalThis.fetch,
+    });
+
+    expect(summary).toMatchObject({ errors: 1, ok: false });
+    expect(summary).not.toHaveProperty("gateState");
+  });
 });

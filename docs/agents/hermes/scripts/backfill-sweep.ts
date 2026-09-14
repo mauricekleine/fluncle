@@ -75,6 +75,11 @@ import {
   type DiscogsReleaseWork,
   postDiscogsAgentOperation,
 } from "./discogs-fetch";
+import {
+  dueWorkRepairPendingGate,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
 // Config — each Discogs prepare response is bounded to three findings and the helper serializes
@@ -277,6 +282,8 @@ export function fluncleJson<T>(args: string[]): T {
     throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
   }
 
+  throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
+
   if (code !== 0 && isCliErrorPayload(parsed)) {
     throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
   }
@@ -381,6 +388,20 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
 
   const limit = ["--limit", String(BATCH_LIMIT)];
 
+  // Legs the Worker deferred while due-work repair converges. Each leg reads its own worklist, so a
+  // deferred leg pauses alone: it is never re-asked this tick, and the remaining legs still run.
+  const repairPendingLegs: string[] = [];
+  const deferredLeg = (leg: string, error: unknown): boolean => {
+    if (!isDueWorkRepairPending(error)) {
+      return false;
+    }
+
+    repairPendingLegs.push(leg);
+    log(error.message);
+
+    return true;
+  };
+
   const runDiscogs = async (): Promise<void> => {
     try {
       const addDiscogsPass = (pass: DiscogsSummary): void => {
@@ -429,6 +450,10 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
       summary.checked += summary.discogs.resolved + summary.discogs.unresolved;
       summary.produced += summary.discogs.resolved;
     } catch (error) {
+      if (deferredLeg("discogs", error)) {
+        return;
+      }
+
       summary.ok = false;
       summary.errors += 1;
       summary.discogs.error = error instanceof Error ? error.message : String(error);
@@ -455,6 +480,10 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
         log(`lastfm backfill partial: ${summary.lastfm.failed} item(s) failed this tick`);
       }
     } catch (error) {
+      if (deferredLeg("lastfm", error)) {
+        return;
+      }
+
       summary.ok = false;
       summary.errors += 1;
       summary.lastfm.error = error instanceof Error ? error.message : String(error);
@@ -487,6 +516,10 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
         );
       }
     } catch (error) {
+      if (deferredLeg("apple-music", error)) {
+        return;
+      }
+
       summary.ok = false;
       summary.errors += 1;
       summary["apple-music"].error = error instanceof Error ? error.message : String(error);
@@ -532,6 +565,10 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
         log("apple-catalogue backfill yielded: the shared Apple breaker/budget stopped the pass");
       }
     } catch (error) {
+      if (deferredLeg("apple-catalogue", error)) {
+        return;
+      }
+
       summary.ok = false;
       summary.errors += 1;
       summary["apple-catalogue"].error = error instanceof Error ? error.message : String(error);
@@ -578,6 +615,10 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
         log(`beatport backfill partial: ${summary.beatport.failed} finding(s) failed this tick`);
       }
     } catch (error) {
+      if (deferredLeg("beatport", error)) {
+        return;
+      }
+
       summary.ok = false;
       summary.errors += 1;
       summary.beatport.error = error instanceof Error ? error.message : String(error);
@@ -646,6 +687,10 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
         }
       }
     } catch (error) {
+      if (deferredLeg("discogs-facts", error)) {
+        return;
+      }
+
       summary.ok = false;
       summary.errors += 1;
       summary["discogs-facts"].error = error instanceof Error ? error.message : String(error);
@@ -688,6 +733,10 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
         log("deezer backfill yielded: Deezer answered its quota limit, nothing was stamped");
       }
     } catch (error) {
+      if (deferredLeg("deezer", error)) {
+        return;
+      }
+
       summary.ok = false;
       summary.errors += 1;
       summary.deezer.error = error instanceof Error ? error.message : String(error);
@@ -703,7 +752,9 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
   await runDiscogsFacts();
   runDeezer();
 
-  return summary;
+  return repairPendingLegs.length === 0
+    ? summary
+    : { ...summary, ...dueWorkRepairPendingGate(summary), repairPendingLegs };
 }
 
 export function backfillSweepExitCode(summary: { ok: boolean }): 0 | 1 {

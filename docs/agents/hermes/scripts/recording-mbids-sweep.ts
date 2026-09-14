@@ -41,6 +41,11 @@
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
+import {
+  dueWorkRepairPendingGate,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
 // Config — a small bounded batch per tick. The CLI loops the track-id cursor internally up to this
@@ -113,6 +118,8 @@ export function fluncleJson<T>(args: string[]): T {
 
     throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
   }
+
+  throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
 
   if (code !== 0 && isCliErrorPayload(parsed)) {
     throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
@@ -198,6 +205,16 @@ export function runRecordingMbidsSweep() {
       log("MusicBrainz throttled the pass — stopped clean; the next tick resumes.");
     }
   } catch (error) {
+    if (isDueWorkRepairPending(error)) {
+      // The Worker deferred the worklist while due-work repair converges: nothing was read, so the
+      // tick pauses cleanly and the next tick reads again.
+      log(error.message);
+      summary.checked = 0;
+      summary.produced = 0;
+
+      return { ...summary, ...dueWorkRepairPendingGate(summary) };
+    }
+
     summary.ok = false;
     summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);

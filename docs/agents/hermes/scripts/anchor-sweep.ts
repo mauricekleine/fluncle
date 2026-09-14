@@ -76,6 +76,13 @@
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
+import {
+  type DueWorkRepairPendingGate,
+  dueWorkRepairPendingGate,
+  failureBodyUnlessRepairPending,
+  isDueWorkRepairPending,
+} from "./due-work-repair-pending";
+
 // ── Config (env; the shared ~/.fluncle-secrets.env supplies the secrets on the box) ──
 
 const API_BASE_URL = process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com";
@@ -379,7 +386,7 @@ export type AnchorSummary = {
    * back early and the tick correctly got out of the way.
    */
   spotifyDeferredYield: number;
-};
+} & Partial<DueWorkRepairPendingGate>;
 
 /** The injected effects — so the tick's mapping + routing are provable with stubs (no network). */
 export type AnchorDeps = {
@@ -698,6 +705,14 @@ async function fetchAnchorWorkRows(
     summary.checked = queue.length;
     return queue;
   } catch (error) {
+    if (isDueWorkRepairPending(error)) {
+      // The Worker deferred this page while due-work repair converges: it was never read, so it
+      // pauses instead of failing and the next tick reads again.
+      deps.log(error.message);
+      Object.assign(summary, dueWorkRepairPendingGate(summary));
+      return undefined;
+    }
+
     summary.ok = false;
     recordRunError(summary, error instanceof Error ? error.message : String(error));
     return undefined;
@@ -1021,15 +1036,20 @@ async function fetchAnchorQueue(limit: number): Promise<AnchorQueuePage> {
     });
   let res = await attempt().catch(() => undefined);
 
+  // The Worker's typed due-work deferral is never retried in-tick: the refused read already advanced
+  // its bounded repair step, and the next tick reads again.
+  if (res !== undefined && !res.ok) {
+    await failureBodyUnlessRepairPending(res, "anchor queue read");
+  }
+
   if (!res?.ok) {
     await new Promise((resolve) => setTimeout(resolve, 10_000));
     res = await attempt();
   }
 
   if (!res.ok) {
-    throw new Error(
-      `anchor queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-    );
+    const body = await failureBodyUnlessRepairPending(res, "anchor queue read");
+    throw new Error(`anchor queue read failed (${res.status}): ${body.slice(0, 200)}`);
   }
 
   const body = (await res.json()) as { queued?: unknown; tracks?: unknown };
@@ -1399,7 +1419,8 @@ export async function runAnchorSweep(
     merged.pulled += pulled;
     merged.checked += page.checked;
     merged.produced += page.produced;
-    merged.queueDepth = page.queueDepth;
+    // A deferred page read nothing, so the last measured backlog gauge stands.
+    merged.queueDepth = page.gateState === "paused" ? merged.queueDepth : page.queueDepth;
     merged.apifyActorErrors += page.apifyActorErrors;
     merged.anchoredByIsrc += page.anchoredByIsrc;
     merged.anchoredByListenbrainz += page.anchoredByListenbrainz;
@@ -1434,6 +1455,13 @@ export async function runAnchorSweep(
     merged.spotifyDeferredWindow += page.spotifyDeferredWindow;
     merged.spotifyDeferredYield += page.spotifyDeferredYield;
     merged.spotifyIsrcAsks += page.spotifyIsrcAsks;
+
+    if (page.gateState === "paused") {
+      // The Worker deferred this page while due-work repair converges. The firing stops without
+      // re-asking; the pages before it keep their counts and make the pause partial.
+      Object.assign(merged, dueWorkRepairPendingGate(merged));
+      break;
+    }
 
     if (!page.ok) {
       merged.ok = false;
