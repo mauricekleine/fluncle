@@ -213,7 +213,7 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   ),
   "catalogue.rank": phased(
     `${SCRIPTS}/rank-sweep.ts`,
-    "Each admitted phase advances one due-work repair step and ranks at most one page after a clean guard.",
+    "Each admitted phase advances one due-work repair step, then attempts one guarded rank page; a maintenance-pending answer moves to the next phase.",
     0,
   ),
   "catalogue.reconcile-hub-counts": wholeLifetime(

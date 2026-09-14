@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
-// The Ear's bounded catalogue-ranking cron. Every database-critical phase first advances one
-// track due-work repair step and may rank one page only after that step proves the queue clean.
+// The Ear's bounded catalogue-ranking cron. Every database-critical phase advances one bounded
+// track due-work repair step and then attempts one guarded rank page inside the same lease. The
+// rank read's own guard decides whether the page may be read; a typed maintenance-pending answer
+// sends the driver to the next phase and is never retried inside the phase.
 
 import { spawnSync } from "node:child_process";
 
@@ -8,15 +10,30 @@ import { runDatabaseAdmissionPhase } from "./database-admission-phase";
 
 const BATCH = Number(process.env.FLUNCLE_RANK_BATCH ?? "250");
 const MAX_CALLS = Number(process.env.FLUNCLE_RANK_MAX_CALLS ?? "8");
-const SOURCE_REPAIRS_PER_PHASE = 5;
+// The guarded rank read clears at most this many track source markers per call before it answers
+// `due_work_maintenance_pending` (`SOURCE_REPAIR_LIMIT` in
+// apps/web/src/lib/server/due-work-source-repair.ts). A larger server limit only widens the slack
+// in the phase cap below; a smaller one must lower this constant with it.
+export const SOURCE_REPAIRS_PER_RANK_GUARD = 5;
 const PHASE_START_BUDGET_MS = 600_000;
 const CLI_CHILD_TIMEOUT_MS = 120_000;
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const ADMISSION_OWNER = "fluncle-rank";
 
-// One initial clean proof, then enough phases to drain every marker that the configured rank
-// pages can create. The monotonic wall budget remains the tighter bound when phases are slow.
-const MAX_REPAIR_PHASES = 1 + MAX_CALLS * Math.ceil(BATCH / SOURCE_REPAIRS_PER_PHASE);
+/**
+ * The tick's hard phase bound. A ranked page leaves at most `batch` track source markers, and the
+ * rank guard alone clears five of them per phase, so the next page becomes readable within
+ * `ceil(batch / 5)` phases even when the ride-along repair step spends its page on other subjects.
+ * A clean drain of `maxCalls` pages therefore needs at most `1 + (maxCalls - 1) * ceil(batch / 5)`
+ * phases. The cap grants `maxCalls + 1` page drains: two full drains of slack for markers that
+ * other producers append during the tick. The monotonic wall budget bounds slow phases and a rank
+ * guard that never clears.
+ */
+export function rankPhaseCap(batch: number, maxCalls: number): number {
+  return (maxCalls + 1) * Math.ceil(batch / SOURCE_REPAIRS_PER_RANK_GUARD);
+}
+
+const MAX_PHASES = rankPhaseCap(BATCH, MAX_CALLS);
 
 const log = (message: string) => console.error(`[rank-sweep] ${message}`);
 
@@ -41,11 +58,11 @@ type RepairResponse = {
   target?: string;
 };
 
-type PhaseEnvelope = {
-  kind: "maintenance-pending" | "ranked" | "repaired" | "repair-incomplete";
-  rank?: RankSummary;
-  repair: Required<Pick<RepairResponse, "complete" | "processed" | "scheduled">>;
-};
+type RepairOutcome = Required<Pick<RepairResponse, "complete" | "processed" | "scheduled">>;
+
+type PhaseEnvelope =
+  | { kind: "rank-pending"; repair: RepairOutcome }
+  | { kind: "ranked"; rank: RankSummary; repair: RepairOutcome };
 
 type SweepSummary = {
   admissionOutcome: "completed" | "phase-yielded";
@@ -56,19 +73,23 @@ type SweepSummary = {
   error: string | null;
   errors: number;
   failed: number;
-  maintenanceComplete: boolean;
-  maintenanceProcessed: number;
-  maintenanceScheduled: number;
   ok: boolean;
   partial: boolean;
   prioritized: number;
   produced: number;
   quarantined: number;
+  rankPending: number;
   reason: string | null;
   remaining: number;
-  repairPhases: number;
+  repairProcessed: number;
+  repairScheduled: number;
+  repairSteps: number;
   scored: number;
   throttled: boolean;
+  // The shared `track_due_work` repair step's own convergence flag from the latest completed
+  // phase. It covers every registered due-work kind and subject, so it is diagnostic only and
+  // never decides whether a rank page is attempted.
+  trackRepairQueueComplete: boolean | null;
 };
 
 class FluncleCliError extends Error {
@@ -162,7 +183,18 @@ function validateRankSummary(rank: RankSummary): RankSummary {
   return rank;
 }
 
-function repairOnce(): Required<Pick<RepairResponse, "complete" | "processed" | "scheduled">> {
+function validateRepairOutcome(repair: RepairResponse): RepairOutcome {
+  if (typeof repair.complete !== "boolean") {
+    throw new Error("track due-work repair returned an invalid response");
+  }
+  return {
+    complete: repair.complete,
+    processed: normalizeCount(repair.processed, "repair processed"),
+    scheduled: normalizeCount(repair.scheduled, "repair scheduled"),
+  };
+}
+
+function repairOnce(): RepairOutcome {
   const repair = fluncleJson<RepairResponse>([
     "admin",
     "projections",
@@ -182,17 +214,12 @@ function repairOnce(): Required<Pick<RepairResponse, "complete" | "processed" | 
     repair.ok !== true ||
     repair.action !== "repair" ||
     repair.target !== "track_due_work" ||
-    repair.steps !== 1 ||
-    typeof repair.complete !== "boolean"
+    repair.steps !== 1
   ) {
     throw new Error("track due-work repair returned an invalid response");
   }
 
-  return {
-    complete: repair.complete,
-    processed: normalizeCount(repair.processed, "repair processed"),
-    scheduled: normalizeCount(repair.scheduled, "repair scheduled"),
-  };
+  return validateRepairOutcome(repair);
 }
 
 function rankOnce(): RankSummary {
@@ -203,40 +230,49 @@ function rankOnce(): RankSummary {
   );
 }
 
-function runCriticalPhase(allowRank: boolean): PhaseEnvelope {
+/**
+ * One admitted phase: a bounded shared repair step, then exactly one rank attempt. The rank guard
+ * repairs its own scope before it reads; its typed pending answer proves no page was read, so the
+ * phase reports it instead of retrying. Every other rank failure, including an unparseable or
+ * timed-out transport, fails the phase and is never replayed.
+ */
+function runCriticalPhase(): PhaseEnvelope {
   const repair = repairOnce();
-  if (!repair.complete) {
-    return { kind: "repair-incomplete", repair };
-  }
-  if (!allowRank) {
-    return { kind: "repaired", repair };
-  }
-
   try {
     return { kind: "ranked", rank: rankOnce(), repair };
   } catch (error) {
     if (isMaintenancePending(error)) {
-      return { kind: "maintenance-pending", repair };
+      return { kind: "rank-pending", repair };
     }
     throw error;
   }
 }
 
-function admittedPhase(allowRank: boolean): PhaseEnvelope | undefined {
+function parsePhaseEnvelope(stdout: string): PhaseEnvelope {
+  const parsed = JSON.parse(stdout) as Partial<{ kind: unknown; rank: unknown; repair: unknown }>;
+  if (typeof parsed.repair !== "object" || parsed.repair === null) {
+    throw new Error("rank phase returned an invalid envelope");
+  }
+  const repair = validateRepairOutcome(parsed.repair as RepairResponse);
+  if (parsed.kind === "rank-pending") {
+    return { kind: "rank-pending", repair };
+  }
+  if (parsed.kind === "ranked" && typeof parsed.rank === "object" && parsed.rank !== null) {
+    return { kind: "ranked", rank: validateRankSummary(parsed.rank as RankSummary), repair };
+  }
+  throw new Error("rank phase returned an invalid envelope");
+}
+
+function admittedPhase(): PhaseEnvelope | undefined {
   const result = runDatabaseAdmissionPhase({
-    command: [
-      process.execPath,
-      import.meta.path,
-      "--critical-phase",
-      allowRank ? "rank" : "repair",
-    ],
+    command: [process.execPath, import.meta.path, "--critical-phase"],
     owner: ADMISSION_OWNER,
     yieldRetries: 0,
   });
   if (result.kind === "yielded") {
     return undefined;
   }
-  return JSON.parse(result.stdout) as PhaseEnvelope;
+  return parsePhaseEnvelope(result.stdout);
 }
 
 function createSummary(): SweepSummary {
@@ -249,48 +285,45 @@ function createSummary(): SweepSummary {
     error: null,
     errors: 0,
     failed: 0,
-    maintenanceComplete: false,
-    maintenanceProcessed: 0,
-    maintenanceScheduled: 0,
     ok: true,
     partial: false,
     prioritized: 0,
     produced: 0,
     quarantined: 0,
+    rankPending: 0,
     reason: null,
     remaining: 0,
-    repairPhases: 0,
+    repairProcessed: 0,
+    repairScheduled: 0,
+    repairSteps: 0,
     scored: 0,
     throttled: false,
+    trackRepairQueueComplete: null,
   };
 }
 
-function applyRank(summary: SweepSummary, tick: RankSummary): number {
-  const scored = normalizeCount(tick.scored, "scored");
-  const prioritized = normalizeCount(tick.prioritized, "prioritized");
-  const quarantined = normalizeCount(tick.quarantined, "quarantined");
+function applyRank(summary: SweepSummary, tick: RankSummary): void {
   summary.calls += 1;
   summary.corpus = tick.corpus ?? summary.corpus;
-  summary.scored += scored;
-  summary.prioritized += prioritized;
-  summary.quarantined += quarantined;
+  summary.scored += normalizeCount(tick.scored, "scored");
+  summary.prioritized += normalizeCount(tick.prioritized, "prioritized");
+  summary.quarantined += normalizeCount(tick.quarantined, "quarantined");
   summary.catalogueDuplicates += normalizeCount(tick.catalogueDuplicates, "catalogueDuplicates");
   summary.remaining = tick.remaining ?? 0;
-  return scored + prioritized + quarantined;
+}
+
+function applyRepair(summary: SweepSummary, repair: RepairOutcome): void {
+  summary.repairSteps += 1;
+  summary.repairProcessed += repair.processed;
+  summary.repairScheduled += repair.scheduled;
+  summary.trackRepairQueueComplete = repair.complete;
 }
 
 function markPartial(
   summary: SweepSummary,
   reason: string,
-  options: {
-    admissionYield?: boolean;
-    preserveMaintenanceComplete?: boolean;
-    throttled?: boolean;
-  } = {},
+  options: { admissionYield?: boolean; throttled?: boolean } = {},
 ): void {
-  if (!options.preserveMaintenanceComplete) {
-    summary.maintenanceComplete = false;
-  }
   summary.partial = true;
   summary.reason = reason;
   summary.remaining = Math.max(1, summary.remaining);
@@ -302,11 +335,14 @@ function markPartial(
 
 function runLegacy(summary: SweepSummary): void {
   try {
-    const moved = applyRank(summary, rankOnce());
+    const tick = rankOnce();
+    applyRank(summary, tick);
+    const moved =
+      normalizeCount(tick.scored, "scored") +
+      normalizeCount(tick.prioritized, "prioritized") +
+      normalizeCount(tick.quarantined, "quarantined");
     if (moved > 0 || summary.remaining > 0) {
       markPartial(summary, "rolling_admission_compatibility");
-    } else {
-      summary.maintenanceComplete = true;
     }
   } catch (error) {
     if (isMaintenancePending(error)) {
@@ -319,67 +355,40 @@ function runLegacy(summary: SweepSummary): void {
 
 function runPhased(summary: SweepSummary): void {
   const startedAt = performance.now();
-  let allowRank = true;
-  let cleanupNeeded = false;
+  // A budget stop right after the guard refused is maintenance backpressure, not a page budget.
+  let lastAttemptPending = false;
 
-  while (summary.repairPhases < MAX_REPAIR_PHASES) {
+  while (summary.repairSteps < MAX_PHASES) {
     if (performance.now() - startedAt >= PHASE_START_BUDGET_MS) {
-      markPartial(summary, "rank_wall_budget");
+      markPartial(summary, "rank_wall_budget", { throttled: lastAttemptPending });
       return;
     }
 
-    const phase = admittedPhase(allowRank);
+    const phase = admittedPhase();
     if (!phase) {
       markPartial(summary, "database_admission", { admissionYield: true, throttled: true });
       return;
     }
 
-    summary.repairPhases += 1;
-    summary.maintenanceProcessed += phase.repair.processed;
-    summary.maintenanceScheduled += phase.repair.scheduled;
-
-    if (phase.kind === "repair-incomplete") {
-      cleanupNeeded = true;
+    applyRepair(summary, phase.repair);
+    if (phase.kind === "rank-pending") {
+      summary.rankPending += 1;
+      lastAttemptPending = true;
       continue;
     }
-    if (phase.kind === "maintenance-pending") {
-      markPartial(summary, "due_work_maintenance_pending", { throttled: true });
+
+    lastAttemptPending = false;
+    applyRank(summary, phase.rank);
+    if (summary.remaining === 0) {
       return;
     }
-    if (phase.kind === "repaired") {
-      summary.maintenanceComplete = true;
-      if (!allowRank) {
-        if (summary.remaining > 0) {
-          markPartial(summary, "rank_page_budget", { preserveMaintenanceComplete: true });
-        }
-        return;
-      }
-      throw new Error("rank phase omitted its rank response");
-    }
-    if (phase.kind !== "ranked" || !phase.rank) {
-      throw new Error("rank phase returned an invalid envelope");
-    }
-
-    cleanupNeeded = applyRank(summary, validateRankSummary(phase.rank)) > 0;
-    if (summary.remaining > 0 && summary.calls < MAX_CALLS) {
-      allowRank = true;
-      continue;
-    }
-    if (!cleanupNeeded) {
-      summary.maintenanceComplete = true;
-      if (summary.remaining > 0) {
-        markPartial(summary, "rank_page_budget", { preserveMaintenanceComplete: true });
-      }
+    if (summary.calls >= MAX_CALLS) {
+      markPartial(summary, "rank_page_budget");
       return;
     }
-    allowRank = false;
   }
 
-  if (cleanupNeeded || summary.remaining > 0) {
-    markPartial(summary, "repair_phase_budget");
-  } else {
-    summary.maintenanceComplete = true;
-  }
+  markPartial(summary, "rank_phase_budget", { throttled: lastAttemptPending });
 }
 
 export function main(): SweepSummary {
@@ -395,7 +404,6 @@ export function main(): SweepSummary {
     summary.ok = false;
     summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
-    summary.maintenanceComplete = false;
     summary.remaining = Math.max(1, summary.remaining);
     log(`rank sweep failed: ${summary.error}`);
   }
@@ -408,7 +416,7 @@ export function main(): SweepSummary {
 
 if (import.meta.main) {
   if (process.argv[2] === "--critical-phase") {
-    console.log(JSON.stringify(runCriticalPhase(process.argv[3] === "rank")));
+    console.log(JSON.stringify(runCriticalPhase()));
   } else if (!main().ok) {
     process.exit(1);
   }

@@ -15,6 +15,7 @@ import { encodeDueWorkOrder } from "./due-work-order";
 import {
   DUE_WORK_SOURCE_REPAIR_KIND,
   DueWorkMaintenancePendingError,
+  markDueWorkRepair,
   upsertDueWork,
 } from "./due-work";
 import { createIntegrationDb, seedArtist, seedCatalogueTrack } from "./integration-db";
@@ -265,6 +266,41 @@ describe("Goal C core vendor selector cutovers", () => {
       `select track_id from tracks where catalogue_rank_corpus is not null order by track_id`,
     );
     expect(rows.rows.map((row) => row.track_id)).toEqual(trackIds.slice(0, 12));
+  });
+
+  it("reads a rank page while unrelated repair debt keeps the shared track repair step incomplete", async () => {
+    const trackIds = Array.from({ length: 6 }, (_, index) => `rank_unrelated_${index}`);
+    for (const trackId of trackIds) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+    await enableCutover();
+    for (const trackId of trackIds) {
+      await schedule("catalogue-rank", trackId);
+    }
+    // Repair debt outside catalogue-rank's scope that no registered definition converges.
+    await markDueWorkRepair(db, {
+      sourceVersion: "unrelated-v1",
+      subjectId: "artist_unrelated",
+      subjectType: "artist",
+      workKind: "unregistered-repair-debt",
+    });
+
+    const repair = await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 500,
+      target: "track_due_work",
+    });
+    expect(repair.complete).toBe(false);
+
+    const ranked = await rankCatalogue(6);
+    expect(ranked.prioritized).toBe(6);
+
+    const unrelated = await db.execute({
+      args: ["unregistered-repair-debt"],
+      sql: `select state from due_work where work_kind = ?`,
+    });
+    expect(unrelated.rows.map((row) => row.state)).toEqual(["repair"]);
   });
 
   it("proves an empty projected rank tick never reads the growing source corpus", async () => {
