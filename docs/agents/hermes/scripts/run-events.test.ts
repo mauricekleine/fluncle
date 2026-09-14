@@ -53,6 +53,9 @@ const SONAR_FRESHEN = join(REPO, "apps/sonar/deploy/fluncle-sonar-freshen.sh");
 const SONAR_FRESHEN_TIMER = join(REPO, "apps/sonar/deploy/fluncle-sonar-freshen.timer");
 const temporaryDirectories: string[] = [];
 const SCRIPT_CHILD_EXIT_TIMEOUT_MS = 30_000;
+// Outer process-test budgets include the bounded child work plus time to reap its fixture group.
+const SCRIPT_TEST_TIMEOUT_MS = SCRIPT_CHILD_EXIT_TIMEOUT_MS + 5_000;
+const TWO_SCRIPT_TEST_TIMEOUT_MS = SCRIPT_CHILD_EXIT_TIMEOUT_MS * 2 + 5_000;
 const activeHostScripts = new Set<Bun.Subprocess>();
 const hostScriptCleanups = new Map<Bun.Subprocess, Promise<void>>();
 
@@ -872,62 +875,78 @@ async function runWatchdog(
 describe("timer-watchdog reports a run", () => {
   const HEALTHY = ["fluncle-enrich.timer", "fluncle-crawl.timer", "pin-watch.timer"];
 
-  test("a clean pass counts what it examined", async () => {
-    const { code, summary } = await runWatchdog({ timers: HEALTHY });
+  test(
+    "a clean pass counts what it examined",
+    async () => {
+      const { code, summary } = await runWatchdog({ timers: HEALTHY });
 
-    expect(code).toBe(0);
-    // An EXACT shape, so a stray key cannot creep in: the ledger rejects a summary carrying
-    // `ok`, and `toMatchObject` would have let one ride along unnoticed.
-    expect(summary).toEqual({
-      checked: 3,
-      errors: 0,
-      expectedIntervalMs: 900_000,
-      gateState: null,
-      produced: 0,
-      queue_depth: 0,
-    });
-    expect(derivedOk(code, summary.errors)).toBe(true);
-  });
+      expect(code).toBe(0);
+      // An EXACT shape, so a stray key cannot creep in: the ledger rejects a summary carrying
+      // `ok`, and `toMatchObject` would have let one ride along unnoticed.
+      expect(summary).toEqual({
+        checked: 3,
+        errors: 0,
+        expectedIntervalMs: 900_000,
+        gateState: null,
+        produced: 0,
+        queue_depth: 0,
+      });
+      expect(derivedOk(code, summary.errors)).toBe(true);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   // THE ONE THIS UNIT EXISTS FOR. A watchdog that enumerates nothing must fail locally rather
   // than rely on a future reader to notice the denominator. `produced:0` and `queue_depth:0`
   // otherwise look identical to the healthy run above.
-  test("checked == 0 exits non-zero", async () => {
-    const { code, summary } = await runWatchdog({ timers: [] });
+  test(
+    "checked == 0 exits non-zero",
+    async () => {
+      const { code, summary } = await runWatchdog({ timers: [] });
 
-    expect(code).toBe(1);
-    expect(summary.checked).toBe(0);
-    expect(summary.errors).toBe(1);
-    expect(summary.produced).toBe(0);
-    expect(summary.queue_depth).toBe(0);
-    expect(derivedOk(code, summary.errors)).toBe(false);
-  });
+      expect(code).toBe(1);
+      expect(summary.checked).toBe(0);
+      expect(summary.errors).toBe(1);
+      expect(summary.produced).toBe(0);
+      expect(summary.queue_depth).toBe(0);
+      expect(derivedOk(code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("a stranded timer shows up as backlog cleared, not as backlog hidden", async () => {
-    const { code, summary } = await runWatchdog({
-      infinity: ["fluncle-anchor.timer"],
-      timers: [...HEALTHY, "fluncle-anchor.timer"],
-    });
+  test(
+    "a stranded timer shows up as backlog cleared, not as backlog hidden",
+    async () => {
+      const { code, summary } = await runWatchdog({
+        infinity: ["fluncle-anchor.timer"],
+        timers: [...HEALTHY, "fluncle-anchor.timer"],
+      });
 
-    expect(code).toBe(0);
-    expect(summary).toMatchObject({ checked: 4, errors: 0, produced: 1, queue_depth: 1 });
-    expect(derivedOk(code, summary.errors)).toBe(true);
-  });
+      expect(code).toBe(0);
+      expect(summary).toMatchObject({ checked: 4, errors: 0, produced: 1, queue_depth: 1 });
+      expect(derivedOk(code, summary.errors)).toBe(true);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   // The ledger's alarm conjunction, from the real script: stranded timers found, none
   // re-armed. `produced == 0 AND queue_depth > 0` — and the derived verdict is false because
   // the errors are COUNTED.
-  test("ALARM SHAPE: found stranded, re-armed none", async () => {
-    const { code, summary } = await runWatchdog({
-      infinity: ["fluncle-anchor.timer", "fluncle-rank.timer"],
-      startFails: ["fluncle-anchor.service", "fluncle-rank.service"],
-      timers: [...HEALTHY, "fluncle-anchor.timer", "fluncle-rank.timer"],
-    });
+  test(
+    "ALARM SHAPE: found stranded, re-armed none",
+    async () => {
+      const { code, summary } = await runWatchdog({
+        infinity: ["fluncle-anchor.timer", "fluncle-rank.timer"],
+        startFails: ["fluncle-anchor.service", "fluncle-rank.service"],
+        timers: [...HEALTHY, "fluncle-anchor.timer", "fluncle-rank.timer"],
+      });
 
-    expect(code).toBe(1);
-    expect(summary).toMatchObject({ checked: 5, errors: 2, produced: 0, queue_depth: 2 });
-    expect(derivedOk(code, summary.errors)).toBe(false);
-  });
+      expect(code).toBe(1);
+      expect(summary).toMatchObject({ checked: 5, errors: 2, produced: 0, queue_depth: 2 });
+      expect(derivedOk(code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   test("the alert attempt happens before the failed-rearm exit", () => {
     const body = readFileSync(WATCHDOG, "utf8");
@@ -940,64 +959,80 @@ describe("timer-watchdog reports a run", () => {
     expect(alertAttempt).toBeLessThan(failedRearmExit);
   });
 
-  test("a busy oneshot is examined but never counted as stranded", async () => {
-    const { summary } = await runWatchdog({
-      busy: ["fluncle-anchor.service"],
-      infinity: ["fluncle-anchor.timer"],
-      timers: [...HEALTHY, "fluncle-anchor.timer"],
-    });
+  test(
+    "a busy oneshot is examined but never counted as stranded",
+    async () => {
+      const { summary } = await runWatchdog({
+        busy: ["fluncle-anchor.service"],
+        infinity: ["fluncle-anchor.timer"],
+        timers: [...HEALTHY, "fluncle-anchor.timer"],
+      });
 
-    expect(summary).toMatchObject({ checked: 4, produced: 0, queue_depth: 0 });
-  });
+      expect(summary).toMatchObject({ checked: 4, produced: 0, queue_depth: 0 });
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("posts the run record, with the token read off the live container", async () => {
-    const { calls } = await withLedger(async (base, calls) => {
-      await runWatchdog(
-        { containerEnv: { FLUNCLE_API_TOKEN: "container-agent-token" }, timers: HEALTHY },
-        base,
-      );
-
-      return { calls };
-    });
-
-    expect(runEvents(calls)).toHaveLength(1);
-    expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
-
-    const { posted, summary } = received(calls);
-
-    expect(posted.unit).toBe("fluncle-timer-watchdog");
-    expect(posted.exit_code).toBe(0);
-    expect(summary.checked).toBe(3);
-  });
-
-  test("no token on the container ⇒ no POST, and the pass is unaffected", async () => {
-    const { calls, code } = await withLedger(async (base, calls) => {
-      const run = await runWatchdog({ timers: HEALTHY }, base);
-
-      return { calls, code: run.code };
-    });
-
-    expect(runEvents(calls)).toHaveLength(0);
-    expect(code).toBe(0);
-  });
-
-  test("a permanently failing ledger POST leaves the sweep unharmed and the row absent", async () => {
-    const { calls, code, landed } = await withLedger(
-      async (base, calls, landed) => {
-        const run = await runWatchdog(
+  test(
+    "posts the run record, with the token read off the live container",
+    async () => {
+      const { calls } = await withLedger(async (base, calls) => {
+        await runWatchdog(
           { containerEnv: { FLUNCLE_API_TOKEN: "container-agent-token" }, timers: HEALTHY },
           base,
         );
 
-        return { calls, code: run.code, landed };
-      },
-      { responseStatus: 502 },
-    );
+        return { calls };
+      });
 
-    expect(runEvents(calls)).toHaveLength(1);
-    expect(runEvents(landed)).toHaveLength(0);
-    expect(code).toBe(0);
-  });
+      expect(runEvents(calls)).toHaveLength(1);
+      expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
+
+      const { posted, summary } = received(calls);
+
+      expect(posted.unit).toBe("fluncle-timer-watchdog");
+      expect(posted.exit_code).toBe(0);
+      expect(summary.checked).toBe(3);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "no token on the container ⇒ no POST, and the pass is unaffected",
+    async () => {
+      const { calls, code } = await withLedger(async (base, calls) => {
+        const run = await runWatchdog({ timers: HEALTHY }, base);
+
+        return { calls, code: run.code };
+      });
+
+      expect(runEvents(calls)).toHaveLength(0);
+      expect(code).toBe(0);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a permanently failing ledger POST leaves the sweep unharmed and the row absent",
+    async () => {
+      const { calls, code, landed } = await withLedger(
+        async (base, calls, landed) => {
+          const run = await runWatchdog(
+            { containerEnv: { FLUNCLE_API_TOKEN: "container-agent-token" }, timers: HEALTHY },
+            base,
+          );
+
+          return { calls, code: run.code, landed };
+        },
+        { responseStatus: 502 },
+      );
+
+      expect(runEvents(calls)).toHaveLength(1);
+      expect(runEvents(landed)).toHaveLength(0);
+      expect(code).toBe(0);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1105,155 +1140,183 @@ async function runSecretsSync(
 }
 
 describe("secrets-sync reports a run", () => {
-  test("a clean sync writes both targets and says so", async () => {
-    const { code, root, summary } = await runSecretsSync({});
+  test(
+    "a clean sync writes both targets and says so",
+    async () => {
+      const { code, root, summary } = await runSecretsSync({});
 
-    expect(code).toBe(0);
-    expect(summary).toEqual({
-      checked: 2,
-      errors: 0,
-      expectedIntervalMs: 900_000,
-      gateState: null,
-      produced: 2,
-      queue_depth: 0,
-      runLedgerReceipt: false,
-    });
-    expect(derivedOk(code, summary.errors)).toBe(true);
-    // The real work still happened — the summary is a report, not a replacement.
-    expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
-    expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    );
-  });
+      expect(code).toBe(0);
+      expect(summary).toEqual({
+        checked: 2,
+        errors: 0,
+        expectedIntervalMs: 900_000,
+        gateState: null,
+        produced: 2,
+        queue_depth: 0,
+        runLedgerReceipt: false,
+      });
+      expect(derivedOk(code, summary.errors)).toBe(true);
+      // The real work still happened — the summary is a report, not a replacement.
+      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
+      expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
+        "CLAUDE_CODE_OAUTH_TOKEN",
+      );
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("posts with the token resolved from the container configuration", async () => {
-    const { calls } = await withLedger(async (base, calls) => {
-      await runSecretsSync({ containerToken: "container-agent-token" }, base);
+  test(
+    "posts with the token resolved from the container configuration",
+    async () => {
+      const { calls } = await withLedger(async (base, calls) => {
+        await runSecretsSync({ containerToken: "container-agent-token" }, base);
 
-      return { calls };
-    });
+        return { calls };
+      });
 
-    expect(runEvents(calls)).toHaveLength(1);
-    expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
+      expect(runEvents(calls)).toHaveLength(1);
+      expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
 
-    const { posted, summary } = received(calls);
+      const { posted, summary } = received(calls);
 
-    expect(posted.unit).toBe("fluncle-secrets-sync");
-    expect(summary).toMatchObject({ errors: 0, produced: 2 });
-    expect("ok" in summary).toBe(false);
-  });
+      expect(posted.unit).toBe("fluncle-secrets-sync");
+      expect(summary).toMatchObject({ errors: 0, produced: 2 });
+      expect("ok" in summary).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   // The container source is independent of the files this script rewrites, so an op outage is
   // still reportable even though no fresh sweep-secrets file exists.
-  test("a failed op inject still reports with the container token", async () => {
-    const { calls, code } = await withLedger(async (base, calls) => {
-      const run = await runSecretsSync(
-        { containerToken: "container-agent-token", injectFails: true },
-        base,
+  test(
+    "a failed op inject still reports with the container token",
+    async () => {
+      const { calls, code } = await withLedger(async (base, calls) => {
+        const run = await runSecretsSync(
+          { containerToken: "container-agent-token", injectFails: true },
+          base,
+        );
+
+        return { calls, code: run.code };
+      });
+
+      expect(code).not.toBe(0);
+      expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
+
+      const { posted, summary } = received(calls);
+
+      expect(posted.exit_code).not.toBe(0);
+      // Two targets promised, none written: the shortfall is the backlog, and the exit code the
+      // posted carries is what the ledger derives a false verdict from.
+      expect(summary).toMatchObject({ checked: 2, produced: 0, queue_depth: 2 });
+      expect(derivedOk(posted.exit_code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a missing container token is visible but does not fail the credential refresh",
+    async () => {
+      const { calls, code, root, stderr, summary } = await withLedger(async (base, calls) => {
+        const run = await runSecretsSync({}, base);
+
+        return { calls, ...run };
+      });
+
+      expect(runEvents(calls)).toHaveLength(0);
+      expect(code).toBe(0);
+      expect(stderr).toContain("run-ledger receipt did not land (missing-token)");
+      expect(summary).toMatchObject({ errors: 0, produced: 2, runLedgerReceipt: false });
+      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
+      expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
+        "CLAUDE_CODE_OAUTH_TOKEN",
+      );
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a failed POST is visible but does not fail the credential refresh",
+    async () => {
+      const { calls, code, landed, root, stderr, summary } = await withLedger(
+        async (base, calls, landed) => {
+          const run = await runSecretsSync({ containerToken: "container-agent-token" }, base);
+
+          return { calls, landed, ...run };
+        },
+        { responseStatus: 502 },
       );
 
-      return { calls, code: run.code };
-    });
+      expect(runEvents(calls)).toHaveLength(1);
+      expect(runEvents(landed)).toHaveLength(0);
+      expect(code).toBe(0);
+      expect(stderr).toContain("run-ledger receipt did not land (post-failed)");
+      expect(summary).toMatchObject({ errors: 0, produced: 2, runLedgerReceipt: false });
+      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
+      expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
+        "CLAUDE_CODE_OAUTH_TOKEN",
+      );
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-    expect(code).not.toBe(0);
-    expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
+  test(
+    "a missing bootstrap env reports the failure rather than dying quiet",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-nobootstrap-"));
+      temporaryDirectories.push(root);
+      const bin = join(root, "bin");
+      const dockerCalled = join(root, "docker-called");
+      mkdirSync(bin, { recursive: true });
+      // EXIT reporting still looks for a ledger token in the container configuration. Keep this
+      // failure fixture independent of a CI host's real Docker CLI or daemon, just like every
+      // `runSecretsSync` fixture above; an absent container is a fast, expected empty lookup.
+      writeStub(bin, "docker", `: >${JSON.stringify(dockerCalled)}\nexit 1`);
+      const run = await runScript(SECRETS_SYNC, {
+        FLUNCLE_API_BASE_URL: "",
+        HOME: root,
+        PATH: `${bin}:/usr/bin:/bin`,
+        SECRETS_SYNC_BOOTSTRAP: join(root, "does-not-exist.env"),
+        SECRETS_SYNC_SWEEP_OUT: join(root, "state/home/.fluncle-secrets.env"),
+      });
+      const summary = lastJsonLine(run.stdout);
 
-    const { posted, summary } = received(calls);
+      expect(run.code).toBe(1);
+      expect(existsSync(dockerCalled)).toBe(true);
+      expect(run.stderr).toContain("fluncle-secrets-sync: missing");
+      expect(run.stderr).toContain("run-ledger receipt did not land (missing-token)");
+      expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0 });
+      expect(derivedOk(run.code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-    expect(posted.exit_code).not.toBe(0);
-    // Two targets promised, none written: the shortfall is the backlog, and the exit code the
-    // posted carries is what the ledger derives a false verdict from.
-    expect(summary).toMatchObject({ checked: 2, produced: 0, queue_depth: 2 });
-    expect(derivedOk(posted.exit_code, summary.errors)).toBe(false);
-  });
+  test(
+    "the optional GSC key counts as a target — success and failure both land",
+    async () => {
+      const clean = await runSecretsSync({ gsc: "ok" });
 
-  test("a missing container token is visible but does not fail the credential refresh", async () => {
-    const { calls, code, root, stderr, summary } = await withLedger(async (base, calls) => {
-      const run = await runSecretsSync({}, base);
+      expect(clean.code).toBe(0);
+      expect(clean.summary).toMatchObject({ checked: 3, errors: 0, produced: 3 });
+      expect(derivedOk(clean.code, clean.summary.errors)).toBe(true);
 
-      return { calls, ...run };
-    });
+      // Exits 0 on purpose (the audit degrades), which is exactly why the error is COUNTED:
+      // a green exit code beside a nonzero error count must not read green.
+      const degraded = await runSecretsSync({ gsc: "fails" });
 
-    expect(runEvents(calls)).toHaveLength(0);
-    expect(code).toBe(0);
-    expect(stderr).toContain("run-ledger receipt did not land (missing-token)");
-    expect(summary).toMatchObject({ errors: 0, produced: 2, runLedgerReceipt: false });
-    expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
-    expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    );
-  });
-
-  test("a failed POST is visible but does not fail the credential refresh", async () => {
-    const { calls, code, landed, root, stderr, summary } = await withLedger(
-      async (base, calls, landed) => {
-        const run = await runSecretsSync({ containerToken: "container-agent-token" }, base);
-
-        return { calls, landed, ...run };
-      },
-      { responseStatus: 502 },
-    );
-
-    expect(runEvents(calls)).toHaveLength(1);
-    expect(runEvents(landed)).toHaveLength(0);
-    expect(code).toBe(0);
-    expect(stderr).toContain("run-ledger receipt did not land (post-failed)");
-    expect(summary).toMatchObject({ errors: 0, produced: 2, runLedgerReceipt: false });
-    expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
-    expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    );
-  });
-
-  test("a missing bootstrap env reports the failure rather than dying quiet", async () => {
-    const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-nobootstrap-"));
-    temporaryDirectories.push(root);
-    const bin = join(root, "bin");
-    const dockerCalled = join(root, "docker-called");
-    mkdirSync(bin, { recursive: true });
-    // EXIT reporting still looks for a ledger token in the container configuration. Keep this
-    // failure fixture independent of a CI host's real Docker CLI or daemon, just like every
-    // `runSecretsSync` fixture above; an absent container is a fast, expected empty lookup.
-    writeStub(bin, "docker", `: >${JSON.stringify(dockerCalled)}\nexit 1`);
-    const run = await runScript(SECRETS_SYNC, {
-      FLUNCLE_API_BASE_URL: "",
-      HOME: root,
-      PATH: `${bin}:/usr/bin:/bin`,
-      SECRETS_SYNC_BOOTSTRAP: join(root, "does-not-exist.env"),
-      SECRETS_SYNC_SWEEP_OUT: join(root, "state/home/.fluncle-secrets.env"),
-    });
-    const summary = lastJsonLine(run.stdout);
-
-    expect(run.code).toBe(1);
-    expect(existsSync(dockerCalled)).toBe(true);
-    expect(run.stderr).toContain("fluncle-secrets-sync: missing");
-    expect(run.stderr).toContain("run-ledger receipt did not land (missing-token)");
-    expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0 });
-    expect(derivedOk(run.code, summary.errors)).toBe(false);
-  });
-
-  test("the optional GSC key counts as a target — success and failure both land", async () => {
-    const clean = await runSecretsSync({ gsc: "ok" });
-
-    expect(clean.code).toBe(0);
-    expect(clean.summary).toMatchObject({ checked: 3, errors: 0, produced: 3 });
-    expect(derivedOk(clean.code, clean.summary.errors)).toBe(true);
-
-    // Exits 0 on purpose (the audit degrades), which is exactly why the error is COUNTED:
-    // a green exit code beside a nonzero error count must not read green.
-    const degraded = await runSecretsSync({ gsc: "fails" });
-
-    expect(degraded.code).toBe(0);
-    expect(degraded.summary).toMatchObject({
-      checked: 3,
-      errors: 1,
-      produced: 2,
-      queue_depth: 1,
-    });
-    // Exit code 0, one counted error — so the DERIVED verdict is false where a self-reported one
-    // would have been true. This single line is the whole argument for deriving it.
-    expect(derivedOk(degraded.code, degraded.summary.errors)).toBe(false);
-  });
+      expect(degraded.code).toBe(0);
+      expect(degraded.summary).toMatchObject({
+        checked: 3,
+        errors: 1,
+        produced: 2,
+        queue_depth: 1,
+      });
+      // Exit code 0, one counted error — so the DERIVED verdict is false where a self-reported one
+      // would have been true. This single line is the whole argument for deriving it.
+      expect(derivedOk(degraded.code, degraded.summary.errors)).toBe(false);
+    },
+    TWO_SCRIPT_TEST_TIMEOUT_MS,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1666,40 +1729,52 @@ describe("sonar-freshen reports a run", () => {
     expect(cleanup).toBeGreaterThan(disarm);
   });
 
-  test("the common tick: checked, nothing to do, nothing done", async () => {
-    const { code, summary } = await runSonar({ commit: SHA_A, deployed: SHA_A }, undefined);
+  test(
+    "the common tick: checked, nothing to do, nothing done",
+    async () => {
+      const { code, summary } = await runSonar({ commit: SHA_A, deployed: SHA_A }, undefined);
 
-    expect(code).toBe(0);
-    expect(summary).toEqual({
-      checked: 1,
-      errors: 0,
-      expectedIntervalMs: 3_600_000,
-      gateState: null,
-      produced: 0,
-      queueDepth: 0,
-    });
-    expect(derivedOk(code, summary.errors)).toBe(true);
-  });
+      expect(code).toBe(0);
+      expect(summary).toEqual({
+        checked: 1,
+        errors: 0,
+        expectedIntervalMs: 3_600_000,
+        gateState: null,
+        produced: 0,
+        queueDepth: 0,
+      });
+      expect(derivedOk(code, summary.errors)).toBe(true);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   // A dead release feed exits 0 BY DESIGN (leave the box alone). Before this, that was
   // indistinguishable from a healthy no-op — which is the seven-days-invisible failure shape
   // in miniature. `checked:0` is what makes it legible, and the counted error is what stops
   // the row reading green.
-  test("BLINDNESS: an unreachable release feed is `checked:0`, never a quiet success", async () => {
-    const { code, summary } = await runSonar({ unreachable: true }, undefined);
+  test(
+    "BLINDNESS: an unreachable release feed is `checked:0`, never a quiet success",
+    async () => {
+      const { code, summary } = await runSonar({ unreachable: true }, undefined);
 
-    expect(code).toBe(0);
-    expect(summary).toMatchObject({ checked: 0, errors: 1, queueDepth: 0 });
-    expect(derivedOk(code, summary.errors)).toBe(false);
-  });
+      expect(code).toBe(0);
+      expect(summary).toMatchObject({ checked: 0, errors: 1, queueDepth: 0 });
+      expect(derivedOk(code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("a malformed sonar.commit is the same shape — it resolved nothing", async () => {
-    const { code, summary } = await runSonar({ commit: "<html>not a sha</html>" }, undefined);
+  test(
+    "a malformed sonar.commit is the same shape — it resolved nothing",
+    async () => {
+      const { code, summary } = await runSonar({ commit: "<html>not a sha</html>" }, undefined);
 
-    expect(code).toBe(0);
-    expect(summary).toMatchObject({ checked: 0, errors: 1 });
-    expect(derivedOk(code, summary.errors)).toBe(false);
-  });
+      expect(code).toBe(0);
+      expect(summary).toMatchObject({ checked: 0, errors: 1 });
+      expect(derivedOk(code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   // The third state. A lock-skipped tick measured NOTHING, so its counters are `null` rather
   // than `0` — `0` is reserved for "I tried and found nothing", and conflating the two would
@@ -1709,19 +1784,23 @@ describe("sonar-freshen reports a run", () => {
   // never-looked gates — which is what makes the `null` counters correct rather than laundered.
   // A gate value of this script's invention is rejected by the Worker, and a rejected POST leaves
   // NO ROW: the same silent-empty-ledger failure as a wrong endpoint, one field further in.
-  test("GATED: a lock-held tick reports null counters, not zeros", async () => {
-    const { code, summary } = await runSonar({ commit: SHA_A, locked: true }, undefined);
+  test(
+    "GATED: a lock-held tick reports null counters, not zeros",
+    async () => {
+      const { code, summary } = await runSonar({ commit: SHA_A, locked: true }, undefined);
 
-    expect(code).toBe(0);
-    expect(summary).toEqual({
-      checked: null,
-      errors: 0,
-      expectedIntervalMs: 3_600_000,
-      gateState: "locked",
-      produced: null,
-      queueDepth: null,
-    });
-  });
+      expect(code).toBe(0);
+      expect(summary).toEqual({
+        checked: null,
+        errors: 0,
+        expectedIntervalMs: 3_600_000,
+        gateState: "locked",
+        produced: null,
+        queueDepth: null,
+      });
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   test("a real deploy: downloaded, verified, pre-smoked, swapped, and COUNTED", async () => {
     const { calls, code, summary } = await withLedger(async (base, calls) => {
@@ -1835,149 +1914,176 @@ describe("sonar-freshen reports a run", () => {
     expect(stderr).not.toContain("ROLLBACK ALSO FAILED");
   }, 60_000);
 
-  test("a hard-killed swap is recovered from disk before an already-current no-op", async () => {
-    const { appContents, attempts, code, previousExists, stateContents, stderr, summary } =
-      await runSonar({ commit: SHA_B, crashAfterSwap: true, deployed: SHA_B }, undefined, [
-        "--force",
-      ]);
+  test(
+    "a hard-killed swap is recovered from disk before an already-current no-op",
+    async () => {
+      const { appContents, attempts, code, previousExists, stateContents, stderr, summary } =
+        await runSonar({ commit: SHA_B, crashAfterSwap: true, deployed: SHA_B }, undefined, [
+          "--force",
+        ]);
 
-    expect(attempts[0]?.code).not.toBe(0);
-    expect(code).toBe(0);
-    expect(stderr).toContain(
-      "interrupted-swap recovery restored the previous healthy sonar binary",
-    );
-    expect(stderr).toContain("already current — no-op");
-    expect(appContents).toContain("old-sonar");
-    expect(stateContents).toBe("fixture");
-    expect(previousExists).toBe(false);
-    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 0 });
-  }, 60_000);
+      expect(attempts[0]?.code).not.toBe(0);
+      expect(code).toBe(0);
+      expect(stderr).toContain(
+        "interrupted-swap recovery restored the previous healthy sonar binary",
+      );
+      expect(stderr).toContain("already current — no-op");
+      expect(appContents).toContain("old-sonar");
+      expect(stateContents).toBe("fixture");
+      expect(previousExists).toBe(false);
+      expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 0 });
+    },
+    TWO_SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("a hard kill after intent removal keeps accepted identity crash-consistent", async () => {
-    const {
-      appContents,
-      attempts,
-      code,
-      deployedSha,
-      intentExists,
-      previousExists,
-      rollbackStateExists,
-      stderr,
-      summary,
-    } = await runSonar(
-      {
-        commit: SHA_B,
-        crashAfterAcceptanceIntentRemoval: true,
-        deployed: SHA_A,
-        priorLiveCommit: SHA_B,
-      },
-      undefined,
-    );
+  test(
+    "a hard kill after intent removal keeps accepted identity crash-consistent",
+    async () => {
+      const {
+        appContents,
+        attempts,
+        code,
+        deployedSha,
+        intentExists,
+        previousExists,
+        rollbackStateExists,
+        stderr,
+        summary,
+      } = await runSonar(
+        {
+          commit: SHA_B,
+          crashAfterAcceptanceIntentRemoval: true,
+          deployed: SHA_A,
+          priorLiveCommit: SHA_B,
+        },
+        undefined,
+      );
 
-    expect(attempts[0]?.code).not.toBe(0);
-    expect(code).toBe(0);
-    expect(appContents).not.toContain("old-sonar");
-    expect(deployedSha).toBe(SHA_B);
-    expect(intentExists).toBe(false);
-    expect(previousExists).toBe(false);
-    expect(rollbackStateExists).toBe(false);
-    expect(stderr).toContain("already current — no-op");
-    expect(stderr).not.toContain("interrupted-swap recovery restored");
-    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 0, queueDepth: 0 });
-  }, 60_000);
+      expect(attempts[0]?.code).not.toBe(0);
+      expect(code).toBe(0);
+      expect(appContents).not.toContain("old-sonar");
+      expect(deployedSha).toBe(SHA_B);
+      expect(intentExists).toBe(false);
+      expect(previousExists).toBe(false);
+      expect(rollbackStateExists).toBe(false);
+      expect(stderr).toContain("already current — no-op");
+      expect(stderr).not.toContain("interrupted-swap recovery restored");
+      expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 0, queueDepth: 0 });
+    },
+    TWO_SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("accepted cleanup debt preserves success and is removed by the next no-op", async () => {
-    const {
-      attempts,
-      code,
-      deployedSha,
-      previousExists,
-      rollbackStateExists,
-      rollbackWalExists,
-      stderr,
-      summary,
-    } = await runSonar({ acceptanceCleanupFails: true, commit: SHA_B, deployed: SHA_A }, undefined);
-    const accepted = attempts.at(0);
-    if (!accepted) {
-      throw new Error("accepted cleanup fixture produced no first attempt");
-    }
+  test(
+    "accepted cleanup debt preserves success and is removed by the next no-op",
+    async () => {
+      const {
+        attempts,
+        code,
+        deployedSha,
+        previousExists,
+        rollbackStateExists,
+        rollbackWalExists,
+        stderr,
+        summary,
+      } = await runSonar(
+        { acceptanceCleanupFails: true, commit: SHA_B, deployed: SHA_A },
+        undefined,
+      );
+      const accepted = attempts.at(0);
+      if (!accepted) {
+        throw new Error("accepted cleanup fixture produced no first attempt");
+      }
 
-    expect(accepted.code).toBe(0);
-    expect(lastJsonLine(accepted.stdout)).toMatchObject({ errors: 0, produced: 1, queueDepth: 0 });
-    expect(accepted.stderr).toContain("accepted sonar is healthy, but stale rollback files");
-    expect(code).toBe(0);
-    expect(deployedSha).toBe(SHA_B);
-    expect(previousExists).toBe(false);
-    expect(rollbackStateExists).toBe(false);
-    expect(rollbackWalExists).toBe(false);
-    expect(stderr).toContain("already current — no-op");
-    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 0, queueDepth: 0 });
-  }, 60_000);
+      expect(accepted.code).toBe(0);
+      expect(lastJsonLine(accepted.stdout)).toMatchObject({
+        errors: 0,
+        produced: 1,
+        queueDepth: 0,
+      });
+      expect(accepted.stderr).toContain("accepted sonar is healthy, but stale rollback files");
+      expect(code).toBe(0);
+      expect(deployedSha).toBe(SHA_B);
+      expect(previousExists).toBe(false);
+      expect(rollbackStateExists).toBe(false);
+      expect(rollbackWalExists).toBe(false);
+      expect(stderr).toContain("already current — no-op");
+      expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 0, queueDepth: 0 });
+    },
+    TWO_SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("bootstrap-marker unlink failure leaves durable recovery intent and still restores", async () => {
-    const { attempts, bootstrapReady, code, deployedSha, intentExists, stderr, summary } =
-      await runSonar(
+  test(
+    "bootstrap-marker unlink failure leaves durable recovery intent and still restores",
+    async () => {
+      const { attempts, bootstrapReady, code, deployedSha, intentExists, stderr, summary } =
+        await runSonar(
+          {
+            acceptedShaWriteFails: true,
+            bootstrapMarkerRemovalFails: true,
+            commit: SHA_B,
+            deployed: SHA_A,
+          },
+          undefined,
+        );
+      const failed = attempts.at(0);
+      if (!failed) {
+        throw new Error("bootstrap-marker cleanup fixture produced no first attempt");
+      }
+
+      expect(failed.code).toBe(1);
+      expect(failed.stderr).toContain(
+        "rollback is healthy and durable, but bootstrap-marker cleanup is pending",
+      );
+      expect(failed.stderr).toContain("rollback restored the previous healthy sonar binary");
+      expect(failed.stderr).not.toContain("rollback failed — sonar is down");
+      expect(code).toBe(0);
+      expect(deployedSha).toBe(SHA_B);
+      expect(intentExists).toBe(false);
+      expect(bootstrapReady).toBe(true);
+      expect(stderr).toContain(
+        "interrupted-swap recovery restored the previous healthy sonar binary",
+      );
+      expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 1, queueDepth: 0 });
+    },
+    TWO_SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "persistent marker cleanup debt retains intent and every rollback artifact",
+    async () => {
+      const {
+        appContents,
+        bootstrapReady,
+        code,
+        deployedSha,
+        intentExists,
+        previousExists,
+        rollbackStateExists,
+        stderr,
+        summary,
+      } = await runSonar(
         {
           acceptedShaWriteFails: true,
-          bootstrapMarkerRemovalFails: true,
+          bootstrapMarkerRemovalPersists: true,
           commit: SHA_B,
           deployed: SHA_A,
         },
         undefined,
       );
-    const failed = attempts.at(0);
-    if (!failed) {
-      throw new Error("bootstrap-marker cleanup fixture produced no first attempt");
-    }
 
-    expect(failed.code).toBe(1);
-    expect(failed.stderr).toContain(
-      "rollback is healthy and durable, but bootstrap-marker cleanup is pending",
-    );
-    expect(failed.stderr).toContain("rollback restored the previous healthy sonar binary");
-    expect(failed.stderr).not.toContain("rollback failed — sonar is down");
-    expect(code).toBe(0);
-    expect(deployedSha).toBe(SHA_B);
-    expect(intentExists).toBe(false);
-    expect(bootstrapReady).toBe(true);
-    expect(stderr).toContain(
-      "interrupted-swap recovery restored the previous healthy sonar binary",
-    );
-    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 1, queueDepth: 0 });
-  }, 60_000);
-
-  test("persistent marker cleanup debt retains intent and every rollback artifact", async () => {
-    const {
-      appContents,
-      bootstrapReady,
-      code,
-      deployedSha,
-      intentExists,
-      previousExists,
-      rollbackStateExists,
-      stderr,
-      summary,
-    } = await runSonar(
-      {
-        acceptedShaWriteFails: true,
-        bootstrapMarkerRemovalPersists: true,
-        commit: SHA_B,
-        deployed: SHA_A,
-      },
-      undefined,
-    );
-
-    expect(code).toBe(1);
-    expect(appContents).toContain("old-sonar");
-    expect(deployedSha).toBe(SHA_A);
-    expect(intentExists).toBe(true);
-    expect(previousExists).toBe(true);
-    expect(rollbackStateExists).toBe(true);
-    expect(bootstrapReady).toBe(true);
-    expect(stderr).toContain("rollback cleanup remains pending; deferring the release check");
-    expect(stderr).not.toContain("a newer sonar build is published");
-    expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0, queueDepth: 0 });
-  }, 60_000);
+      expect(code).toBe(1);
+      expect(appContents).toContain("old-sonar");
+      expect(deployedSha).toBe(SHA_A);
+      expect(intentExists).toBe(true);
+      expect(previousExists).toBe(true);
+      expect(rollbackStateExists).toBe(true);
+      expect(bootstrapReady).toBe(true);
+      expect(stderr).toContain("rollback cleanup remains pending; deferring the release check");
+      expect(stderr).not.toContain("a newer sonar build is published");
+      expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0, queueDepth: 0 });
+    },
+    TWO_SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   test("pre-smoke rejects a self-consistent artifact built from a different commit", async () => {
     const { appContents, code, previousExists, stderr, summary } = await runSonar(
@@ -2053,101 +2159,123 @@ describe("sonar-freshen reports a run", () => {
     expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
   }, 60_000);
 
-  test("a legacy runtime contract refuses before downloading or touching the live service", async () => {
-    const { assetRequests, code, stderr, summary } = await runSonar(
-      { commit: SHA_B, deployed: SHA_A, runtimeContract: "legacy" },
-      undefined,
-    );
+  test(
+    "a legacy runtime contract refuses before downloading or touching the live service",
+    async () => {
+      const { assetRequests, code, stderr, summary } = await runSonar(
+        { commit: SHA_B, deployed: SHA_A, runtimeContract: "legacy" },
+        undefined,
+      );
 
-    expect(code).toBe(1);
-    expect(stderr).toContain("legacy remote-query runtime contract");
-    expect(assetRequests).toEqual(["/download/sonar.commit"]);
-    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
-    expect(derivedOk(code, summary.errors)).toBe(false);
-  });
+      expect(code).toBe(1);
+      expect(stderr).toContain("legacy remote-query runtime contract");
+      expect(assetRequests).toEqual(["/download/sonar.commit"]);
+      expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queueDepth: 1 });
+      expect(derivedOk(code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("a complete current contract may bootstrap once through the guarded swap", async () => {
-    const { assetRequests, code, stderr, summary } = await runSonar(
-      { commit: SHA_B, deployed: SHA_A, stateInitialized: false },
-      undefined,
-    );
+  test(
+    "a complete current contract may bootstrap once through the guarded swap",
+    async () => {
+      const { assetRequests, code, stderr, summary } = await runSonar(
+        { commit: SHA_B, deployed: SHA_A, stateInitialized: false },
+        undefined,
+      );
 
-    expect(code).toBe(0);
-    expect(stderr).toContain("deferring the one-time bootstrap to the guarded service swap");
-    expect(stderr).toContain("post-swap smoke passed");
-    expect(assetRequests).toEqual([
-      "/download/sonar.commit",
-      "/download/sonar",
-      "/download/sonar.sha256",
-    ]);
-    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
-    expect(derivedOk(code, summary.errors)).toBe(true);
-  });
+      expect(code).toBe(0);
+      expect(stderr).toContain("deferring the one-time bootstrap to the guarded service swap");
+      expect(stderr).toContain("post-swap smoke passed");
+      expect(assetRequests).toEqual([
+        "/download/sonar.commit",
+        "/download/sonar",
+        "/download/sonar.sha256",
+      ]);
+      expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
+      expect(derivedOk(code, summary.errors)).toBe(true);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("a failed bootstrap retries after rollback removes its partial state", async () => {
-    const { attempts, bootstrapReady, code, stateContents, stderr, summary } = await runSonar(
-      {
-        commit: SHA_B,
-        deployed: SHA_A,
-        retryAfterBootstrapFailure: true,
-        stateInitialized: false,
-      },
-      undefined,
-    );
-    const first = attempts.at(0);
-    if (!first) {
-      throw new Error("bootstrap retry fixture produced no first attempt");
-    }
+  test(
+    "a failed bootstrap retries after rollback removes its partial state",
+    async () => {
+      const { attempts, bootstrapReady, code, stateContents, stderr, summary } = await runSonar(
+        {
+          commit: SHA_B,
+          deployed: SHA_A,
+          retryAfterBootstrapFailure: true,
+          stateInitialized: false,
+        },
+        undefined,
+      );
+      const first = attempts.at(0);
+      if (!first) {
+        throw new Error("bootstrap retry fixture produced no first attempt");
+      }
 
-    expect(first.code).toBe(1);
-    expect(lastJsonLine(first.stdout)).toMatchObject({ errors: 1, produced: 0, queueDepth: 1 });
-    expect(code).toBe(0);
-    expect(attempts.at(0)?.stderr).toContain("rollback restored the previous healthy sonar binary");
-    expect(stderr).toContain(
-      "durable state is not initialized; deferring the one-time bootstrap to the guarded service swap",
-    );
-    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
-    expect(stateContents).toBe("complete\n");
-    expect(bootstrapReady).toBe(true);
-  });
+      expect(first.code).toBe(1);
+      expect(lastJsonLine(first.stdout)).toMatchObject({ errors: 1, produced: 0, queueDepth: 1 });
+      expect(code).toBe(0);
+      expect(attempts.at(0)?.stderr).toContain(
+        "rollback restored the previous healthy sonar binary",
+      );
+      expect(stderr).toContain(
+        "durable state is not initialized; deferring the one-time bootstrap to the guarded service swap",
+      );
+      expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1, queueDepth: 0 });
+      expect(stateContents).toBe("complete\n");
+      expect(bootstrapReady).toBe(true);
+    },
+    TWO_SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("a marked bootstrap never downgrades a validation failure into a retry", async () => {
-    const { bootstrapReady, code, stderr, summary } = await runSonar(
-      {
-        bootstrapMarked: true,
-        commit: SHA_B,
-        deployed: SHA_A,
-        stateContents: "partial\n",
-      },
-      undefined,
-    );
+  test(
+    "a marked bootstrap never downgrades a validation failure into a retry",
+    async () => {
+      const { bootstrapReady, code, stderr, summary } = await runSonar(
+        {
+          bootstrapMarked: true,
+          commit: SHA_B,
+          deployed: SHA_A,
+          stateContents: "partial\n",
+        },
+        undefined,
+      );
 
-    expect(code).toBe(1);
-    expect(stderr).toContain("pre-smoke failed: the new binary exited during boot");
-    expect(stderr).not.toContain("retrying the incomplete bootstrap");
-    expect(summary).toMatchObject({ errors: 1, produced: 0, queueDepth: 1 });
-    expect(bootstrapReady).toBe(true);
-  });
+      expect(code).toBe(1);
+      expect(stderr).toContain("pre-smoke failed: the new binary exited during boot");
+      expect(stderr).not.toContain("retrying the incomplete bootstrap");
+      expect(summary).toMatchObject({ errors: 1, produced: 0, queueDepth: 1 });
+      expect(bootstrapReady).toBe(true);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
-  test("a dry run never bootstraps missing durable state", async () => {
-    const { assetRequests, code, stderr, summary } = await runSonar(
-      { commit: SHA_B, deployed: SHA_A, stateInitialized: false },
-      undefined,
-      ["--dry-run"],
-    );
+  test(
+    "a dry run never bootstraps missing durable state",
+    async () => {
+      const { assetRequests, code, stderr, summary } = await runSonar(
+        { commit: SHA_B, deployed: SHA_A, stateInitialized: false },
+        undefined,
+        ["--dry-run"],
+      );
 
-    expect(code).toBe(1);
-    expect(stderr).toContain("dry-run cannot perform the first guarded bootstrap");
-    expect(assetRequests).toEqual(["/download/sonar.commit"]);
-    expect(summary).toMatchObject({
-      checked: 1,
-      errors: 1,
-      gateState: "dry-run",
-      produced: 0,
-      queueDepth: 1,
-    });
-    expect(derivedOk(code, summary.errors)).toBe(false);
-  });
+      expect(code).toBe(1);
+      expect(stderr).toContain("dry-run cannot perform the first guarded bootstrap");
+      expect(assetRequests).toEqual(["/download/sonar.commit"]);
+      expect(summary).toMatchObject({
+        checked: 1,
+        errors: 1,
+        gateState: "dry-run",
+        produced: 0,
+        queueDepth: 1,
+      });
+      expect(derivedOk(code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 
   // The ledger's alarm conjunction on this unit: a build is published, the box did not take
   // it. `--dry-run` produces the same counters on purpose, and carries a `gateState` so an

@@ -20,6 +20,7 @@ import {
   triggerMutationPolicyId,
   TRIGGER_MUTATION_POLICY_IDS,
 } from "./database-operation-registry";
+import { SOURCE_REPAIR_LIMIT } from "./due-work-source-repair";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../../..");
 const HERMES_ROOT = join(REPO_ROOT, "docs/agents/hermes");
@@ -994,9 +995,36 @@ describe("database operation registry", () => {
       .map((trigger) => trigger.target);
 
     expect(repairTargets).toEqual([
+      "fluncle admin projections advance --target track_due_work --action repair --limit 500 --max-steps 1 --no-terminal-status --json",
       "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --no-terminal-status --json",
       "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --no-terminal-status --json",
     ]);
+  });
+
+  it("pins rank's non-retried phased admission and one-step repair trigger", () => {
+    const rank = DATABASE_OPERATION_REGISTRY.find(
+      (operation) => operation.operationId === "catalogue.rank",
+    );
+
+    expect(rank?.admissionShape).toMatchObject({
+      phaseSource: `${SCRIPTS}/rank-sweep.ts`,
+      shape: "phased",
+      yieldRetries: 0,
+    });
+    expect(rank?.triggers.map((trigger) => [trigger.operationId, trigger.target])).toEqual([
+      [
+        "projections.repair",
+        "fluncle admin projections advance --target track_due_work --action repair --limit 500 --max-steps 1 --no-terminal-status --json",
+      ],
+      ["catalogue.rank", "fluncle admin catalogue rank --limit <bounded-limit> --json"],
+    ]);
+  });
+
+  it("keeps rank's guard drain constant equal to the server source-repair page", () => {
+    const script = readFileSync(join(REPO_ROOT, SCRIPTS, "rank-sweep.ts"), "utf8");
+    const guard = /^export const SOURCE_REPAIRS_PER_RANK_GUARD = (\d+);$/m.exec(script);
+
+    expect(Number(guard?.[1])).toBe(SOURCE_REPAIR_LIMIT);
   });
 
   it("separates device mirror primary reads from its derived remote mutation", () => {
