@@ -86,12 +86,26 @@ RUN mkdir -p /opt/hermes-scripts \
 #
 # THE ORDERING LAW (spike-verified on rave-02 CPX32; a mismatch is why the ad-hoc
 # install took four attempts): install the CPU torch TRIO from the pytorch CPU index
-# in its OWN pip step, THEN `muq` (+ numpy) in a SECOND step. If muq installs in the
-# same resolve as torch, it drags in CUDA torchaudio/torchvision and the import fails.
+# in its OWN pip step, THEN `muq` (+ numpy + transformers) in a SECOND step. If muq installs in
+# the same resolve as torch, it drags in CUDA torchaudio/torchvision and the import fails.
 # The `--index-url .../cpu` is what resolves torch==2.12.1 to the +cpu build. Pins are
 # the exact set the spike validated (torch trio + muq 0.1.0 + numpy 2.4.4; ~2.85 GB
 # peak, ~16 s/track). The venv is cp311, so the CPU torch wheels match. World-readable
 # (a+rX) so the non-root cron user reads it.
+#
+# THE TRANSFORMERS PIN: muq 0.1.0 declares `transformers` UNPINNED and builds its conformer from
+# transformers' `Wav2Vec2ConformerEncoder` with a plain `EasyDict` config. transformers 5.16+ reads
+# `config._attn_implementation` inside that encoder's attention, which an EasyDict does not carry,
+# so every embed fails with `'EasyDict' object has no attribute '_attn_implementation'` while
+# `import muq` and `from_pretrained` both still succeed. 5.15.1 is the newest release that runs it.
+# The pin is a compatibility ceiling, not a vector-space choice: the embedding is bit-identical
+# across transformers 4.40.2, 4.57.6, 5.13.1 and 5.15.1 on the same torch, so the RunPod
+# bootstrap's torch-2.1-bound pin (scripts/embed-batch.sh) lands in the same space. Raise it only
+# alongside a muq release that sets `_attn_implementation`, and let the bake smoke prove it.
+#
+# THE BAKE SMOKE: the weights-bake step runs ONE MuQ forward over a second of silence and asserts
+# the 1024-d hidden state, so a dependency that breaks inference past import fails the BUILD (and
+# pin-watch keeps the running image) instead of shipping an embedder that fails every track.
 ENV MUQ_VENV=/opt/muq-venv
 ENV HF_HOME=/opt/muq-cache
 # DURABILITY (RFC Unit B): relocate uv's standalone python OUT of /root (mode 700 — the
@@ -108,9 +122,12 @@ RUN uv python install 3.11.15 \
   && "${MUQ_VENV}/bin/pip" install --no-cache-dir \
        --index-url https://download.pytorch.org/whl/cpu \
        torch==2.12.1 torchaudio==2.11.0 torchvision==0.27.1 \
-  && "${MUQ_VENV}/bin/pip" install --no-cache-dir muq==0.1.0 numpy==2.4.4 \
+  && "${MUQ_VENV}/bin/pip" install --no-cache-dir muq==0.1.0 numpy==2.4.4 transformers==5.15.1 \
   && HF_HOME="${HF_HOME}" "${MUQ_VENV}/bin/python" -c \
-       "from muq import MuQ; MuQ.from_pretrained('OpenMuQ/MuQ-large-msd-iter')" \
+       "import torch; from muq import MuQ; torch.set_grad_enabled(False); \
+        m = MuQ.from_pretrained('OpenMuQ/MuQ-large-msd-iter').eval(); \
+        h = m(torch.zeros(1, 24000), output_hidden_states=True).last_hidden_state; \
+        assert h.shape[-1] == 1024, tuple(h.shape); print('MuQ forward ok', tuple(h.shape))" \
   && chmod -R a+rX "${MUQ_VENV}" "${HF_HOME}" /opt/uv-python
 
 # ── Cluster engine (the `fluncle-cluster` cron) — sklearn + scipy ─────────────

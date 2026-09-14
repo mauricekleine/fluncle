@@ -36,7 +36,7 @@ journalctl -u fluncle-embed.service -n 40 --no-pager  # expect a { "ok": true, "
 systemctl list-timers fluncle-embed.timer
 ```
 
-pin-watch's pre-smoke guards the embed engine on every rebuild — it resolves `/opt/muq-venv/bin/python` and runs `import torch, muq`, so a rebuild that ships a broken MuQ stack fails pre-smoke and rolls back instead of swapping in a dead embedder. **Enabled + live on rave-02 since 2026-07-08.**
+pin-watch's pre-smoke guards the embed engine on every rebuild — it resolves `/opt/muq-venv/bin/python` and runs `import torch, muq`, so a rebuild that ships a broken MuQ stack fails pre-smoke and rolls back instead of swapping in a dead embedder. An import cannot see a dependency that breaks inference past import (transformers 5.16+ against muq 0.1.0 imports and loads weights, then fails every track), so the image build itself runs one MuQ forward over a second of silence — the Dockerfile's bake smoke — and such a rebuild fails at `docker build`, leaving the box on its current image. **Enabled + live on rave-02 since 2026-07-08.**
 
 ## Peak RAM (gate before enabling) — measured 2026-07-08: ~2.5 GiB, PASS
 
