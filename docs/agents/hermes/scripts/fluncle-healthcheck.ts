@@ -737,9 +737,20 @@ const PROJECTION_MAINTENANCE_OUTCOMES = new Set<unknown>([
 
 export type ProjectionMaintenanceState = {
   converged: boolean | null;
+  /**
+   * Milliseconds since the governing marker, the newest retained one carrying a convergence
+   * judgement, was written; null when no retained marker carries one.
+   */
+  judgementAgeMs: number | null;
   oldestDebtAgeMs: number | null;
   outcome: ProjectionMaintenanceOutcome | null;
 };
+
+/**
+ * How many retained markers the projection row searches for a convergence judgement: every marker
+ * cron-output.sh keeps, since it prunes each output dir to the newest 20.
+ */
+export const PROJECTION_JUDGEMENT_LOOKBACK_MARKERS = 20;
 
 /**
  * The cron NAME a given output dir belongs to (from the newest run-file's
@@ -871,30 +882,61 @@ export function findJsonSummary(body: string): Record<string, unknown> | null {
   return null;
 }
 
-/** Read the projection sweep's convergence facts for its public status-row message. */
+/**
+ * Does a projection-maintenance summary judge convergence? An active tick reports a boolean
+ * `converged`; a tick with every cutover dark reports `gateState: "disabled"`, where nothing is
+ * owed. A firing that never read status (an `admission-skipped` handoff, a failed status read)
+ * carries neither and says nothing about debt.
+ */
+function carriesConvergenceJudgement(summary: Record<string, unknown>): boolean {
+  return typeof summary.converged === "boolean" || summary.gateState === "disabled";
+}
+
+/**
+ * Read the projection sweep's convergence facts for its public status-row message.
+ *
+ * The facts come from the newest retained marker that carries a convergence judgement, not simply
+ * the newest marker: an admission-skipped firing writes a marker without debt fields, and reading
+ * only that marker would report a healthy row while earlier debt still stands. `judgementAgeMs`
+ * travels with the facts so cronCheck can age the observed debt and refuse a stale judgement.
+ * Null when the dir holds no marker at all, which judgeCron already grades.
+ */
 export function readProjectionMaintenanceState(
   dir: string | undefined,
+  nowMs: number = Date.now(),
 ): ProjectionMaintenanceState | null {
   if (!dir) {
     return null;
   }
+  let markers: { mtimeMs: number; path: string }[];
   try {
-    const newest = readdirSync(dir)
+    markers = readdirSync(dir)
       .filter((entry) => entry.endsWith(".md"))
       .map((entry) => join(dir, entry))
       .map((path) => ({ mtimeMs: statSync(path).mtimeMs, path }))
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-    if (!newest) {
-      return null;
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .slice(0, PROJECTION_JUDGEMENT_LOOKBACK_MARKERS);
+  } catch {
+    return null;
+  }
+  if (markers.length === 0) {
+    return null;
+  }
+  for (const marker of markers) {
+    let summary: Record<string, unknown> | null;
+    try {
+      summary = findJsonSummary(readFileSync(marker.path, "utf8"));
+    } catch {
+      continue;
     }
-    const summary = findJsonSummary(readFileSync(newest.path, "utf8"));
-    if (summary === null) {
-      return null;
+    if (summary === null || !carriesConvergenceJudgement(summary)) {
+      continue;
     }
     const outcome = summary.outcome;
     const oldestDebtAgeMs = summary.oldestDebtAgeMs;
     return {
       converged: typeof summary.converged === "boolean" ? summary.converged : null,
+      judgementAgeMs: Math.max(0, nowMs - marker.mtimeMs),
       oldestDebtAgeMs:
         typeof oldestDebtAgeMs === "number" &&
         Number.isSafeInteger(oldestDebtAgeMs) &&
@@ -905,9 +947,8 @@ export function readProjectionMaintenanceState(
         ? (outcome as ProjectionMaintenanceOutcome)
         : null,
     };
-  } catch {
-    return null;
   }
+  return { converged: null, judgementAgeMs: null, oldestDebtAgeMs: null, outcome: null };
 }
 
 /** One standing window governs both missing ticks and repair debt that survives healthy ticks. */
@@ -1060,6 +1101,16 @@ export function cronCheck(
   projection: ProjectionMaintenanceState | null = null,
 ): Check {
   const base = { latencyMs: null, service: cron.service };
+  const staleBudgetMs = cronStaleBudgetMs(cron);
+  // The observed debt's age now: its opening age plus the time since its marker was written. Debt
+  // still outstanding when that marker was written has aged at least that long, so this is a
+  // lower bound, never an invented age.
+  const debtAgeMs =
+    projection?.converged === false &&
+    projection.oldestDebtAgeMs !== null &&
+    projection.judgementAgeMs !== null
+      ? projection.oldestDebtAgeMs + projection.judgementAgeMs
+      : null;
   const outcomeMessage = (message: string) => {
     const details = [message];
     if (projection?.outcome !== null && projection?.outcome !== undefined) {
@@ -1067,9 +1118,9 @@ export function cronCheck(
     }
     if (projection?.converged === false) {
       details.push(
-        projection.oldestDebtAgeMs === null
+        debtAgeMs === null
           ? "debt age unavailable"
-          : `oldest observed debt ${formatElapsed(projection.oldestDebtAgeMs)}`,
+          : `oldest observed debt ${formatElapsed(debtAgeMs)}`,
       );
     }
     return msg(details.join("; "));
@@ -1084,6 +1135,21 @@ export function cronCheck(
   if (verdict === "failed") {
     // Two consecutive failed runs — the job is stuck, not unlucky. A real outage.
     return { ...base, message: outcomeMessage("last runs failed"), status: "down" };
+  }
+
+  if (debtAgeMs !== null && debtAgeMs > staleBudgetMs) {
+    // Known debt older than the maintenance window is down whatever the newest marker says: a
+    // skipped, failed, or late firing repairs nothing.
+    return { ...base, message: outcomeMessage("debt persists"), status: "down" };
+  }
+
+  if (projection !== null && projection.judgementAgeMs === null) {
+    // None of the retained markers judges convergence: a five-minute loop has gone its whole
+    // retained history without measuring its debt, which is an outage. A dark gate is itself a
+    // judgement, so this never fires while one is retained. It outranks a late or once-failed
+    // firing because the row then leaves `down` only on a real judgement, never when the last
+    // judging marker ages out of retention.
+    return { ...base, message: outcomeMessage("behind schedule"), status: "down" };
   }
 
   if (verdict === "failed-once") {
@@ -1107,11 +1173,13 @@ export function cronCheck(
   }
 
   if (
-    projection?.converged === false &&
-    projection.oldestDebtAgeMs !== null &&
-    projection.oldestDebtAgeMs > cronStaleBudgetMs(cron)
+    projection !== null &&
+    projection.judgementAgeMs !== null &&
+    projection.judgementAgeMs > staleBudgetMs
   ) {
-    return { ...base, message: outcomeMessage("debt persists"), status: "down" };
+    // Fresh markers over an older judgement, such as a short run of admission-skipped firings,
+    // mean the loop has not measured its debt within its window: behind schedule, never fresh.
+    return { ...base, message: outcomeMessage("behind schedule"), status: "degraded" };
   }
 
   return { ...base, message: outcomeMessage("fresh"), status: "ok" };
