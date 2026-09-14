@@ -820,6 +820,67 @@ describe("anchorTrack — the suspected version mismatch it records on a miss", 
   });
 });
 
+describe("listAnchorReviewRows — the attention-queue read", () => {
+  /** Record a real version-mismatch review on an un-anchored row, through the gate that writes it. */
+  async function seedReviewed(trackId: string): Promise<void> {
+    const { anchorTrack } = await import("./anchor");
+
+    await seedUnanchored({
+      artists: ["Calibre"],
+      durationMs: 394_000,
+      isrc: null,
+      title: "Typical Description",
+      trackId,
+    });
+    await anchorTrack(trackId, [
+      {
+        artists: [{ name: "Calibre" }],
+        durationMs: 394_000,
+        spotifyTrackId: `spot-${trackId}`,
+        title: "Typical Description (Calibre Remix)",
+      },
+    ]);
+  }
+
+  it("lists reviewed rows that are neither anchored nor dismissed, in track_id order", async () => {
+    const { listAnchorReviewRows } = await import("./anchor");
+
+    for (const trackId of ["mb_q2", "mb_q1", "mb_anchored", "mb_dismissed"]) {
+      await seedReviewed(trackId);
+    }
+    await seedUnanchored({ trackId: "mb_unreviewed" });
+    // An anchor that arrived by a path which left the note behind: the trust rule still hides it.
+    await db.execute(
+      "update tracks set spotify_uri = 'spotify:track:anchored' where track_id = 'mb_anchored'",
+    );
+    await db.execute("update tracks set dismissed_at = ? where track_id = 'mb_dismissed'", [NOW]);
+
+    const rows = await listAnchorReviewRows();
+
+    expect(rows.map((row) => row.trackId)).toEqual(["mb_q1", "mb_q2"]);
+    expect(rows[0]?.candidateSpotifyTrackId).toBe("spot-mb_q1");
+  });
+
+  it("walks the partial review index, never the Spotify-URI index or a temp sort", async () => {
+    const { anchorReviewQueueStatement } = await import("./anchor");
+    const statement = anchorReviewQueueStatement();
+
+    // The in-memory schema carries no `sqlite_stat1`, exactly like hosted Turso, so it reproduces
+    // the planner's statistics-free choice between `tracks_spotify_uri_idx` and the partial index.
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    const details = plan.rows
+      .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+      .join("\n");
+
+    expect(details).toContain("tracks_anchor_review_idx");
+    expect(details).not.toContain("tracks_spotify_uri_idx");
+    expect(details).not.toContain("USE TEMP B-TREE");
+  });
+});
+
 describe("the anchor provenance pair, persisted with the link", () => {
   /** The three provenance columns the identity envelope reads (schema.ts § the pair). */
   async function provenance(trackId: string) {

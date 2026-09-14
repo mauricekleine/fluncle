@@ -11,6 +11,7 @@ import {
   runDueWorkRebuildChunk,
   type DueWorkClient,
   type DueWorkProjection,
+  type DueWorkRepairDefinition,
   type DueWorkRepairResult,
   type DueWorkRow,
   type DueWorkStatement,
@@ -27,7 +28,29 @@ import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./pr
 
 const SOURCE_REPAIR_LIMIT = 5;
 export const PHYSICAL_REPAIR_LIMIT = 50;
-const RANK_REBUILD_LIMIT = 100;
+// A rank rebuild page is one indexed `track_id` range read, then one write batch of per-row guarded
+// upserts (14 bound values each, no compound SELECT) plus one guarded checkpoint advance; bounded
+// cleanup deletes at most this many primary keys per call. That is the page shape every other
+// definition's rebuild action already runs at the shared due-work chunk bound.
+export const RANK_REBUILD_LIMIT = MAX_DUE_WORK_CHUNK_SIZE;
+/** Newest rank marker version whose live corpus matched a generation, as `{generation, markerVersion}`. */
+export const CATALOGUE_RANK_CORPUS_CHECK_KEY = "due_work_catalogue_rank_corpus_check_v1";
+
+type CatalogueRankCorpusCheck = { generation: string; markerVersion: string };
+
+function parseCatalogueRankCorpusCheck(value: unknown): CatalogueRankCorpusCheck | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<CatalogueRankCorpusCheck>;
+    return typeof parsed.generation === "string" && typeof parsed.markerVersion === "string"
+      ? { generation: parsed.generation, markerVersion: parsed.markerVersion }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type DueWorkSourceRepairResult = DueWorkRepairResult & {
   expanded: number;
@@ -266,6 +289,7 @@ async function convergeEvaluatedSourceMarkers(
 async function advanceCatalogueRankRebuild(
   client: DueWorkClient,
   marker: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>,
+  corpusCheck: CatalogueRankCorpusCheck | undefined,
   limit: number,
 ): Promise<{ complete: boolean; scanned: number }> {
   const definition = DUE_WORK_BACKFILLS.find(
@@ -275,11 +299,18 @@ async function advanceCatalogueRankRebuild(
     throw new Error("catalogue-rank due-work rebuild definition is missing");
   }
   const checkpoint = await readDueWorkRebuild(client, definition);
-  // A running generation owns its cached corpus and cursor until completion. Once it completes,
-  // re-read the live definition: an equivalent newer marker clears against the durable generation,
-  // while a changed definition starts once from page zero.
+  // Every corpus mutation replaces the rank marker's version in its source transaction. A running
+  // generation already proven current after reading this exact marker version keeps its cursor
+  // without a corpus read. Any other marker version re-derives the live corpus before this page:
+  // an unchanged definition resumes or clears against the durable generation, while a changed one
+  // restarts from page zero at once, because a generation built from a superseded corpus can never
+  // clear the marker.
+  const markerChecked =
+    checkpoint?.state === "running" &&
+    corpusCheck?.generation === checkpoint.generation &&
+    corpusCheck.markerVersion === marker.sourceVersion;
   const materialRevision = dueWorkCatalogueRankMarkerMaterialRevision(marker.sourceVersion);
-  if (checkpoint?.state !== "running" && materialRevision !== undefined) {
+  if (!markerChecked && materialRevision !== undefined) {
     // A marker written before the material-revision protocol may be the only durable proof of an
     // in-place finding-vector replacement. Adopt it exactly once, but only while that exact marker
     // still owns the synthetic subject; a concurrent newer mutation therefore wins both rows.
@@ -301,26 +332,12 @@ async function advanceCatalogueRankRebuild(
         on conflict(key) do update set value = excluded.value`,
     });
   }
-  const validatedCorpus =
-    checkpoint?.state === "running" ? undefined : await refreshDueWorkCatalogueRankCorpus(client);
-  const desiredGeneration = validatedCorpus;
-  const checkpointSatisfiesMarker =
-    checkpoint !== undefined &&
-    desiredGeneration !== undefined &&
-    checkpoint.generation === desiredGeneration;
-  const generation =
-    checkpoint?.state === "running"
-      ? checkpoint.generation
-      : checkpointSatisfiesMarker
-        ? checkpoint.generation
-        : desiredGeneration;
+  const liveCorpus = markerChecked ? undefined : await refreshDueWorkCatalogueRankCorpus(client);
+  const newGeneration = liveCorpus !== undefined && checkpoint?.generation !== liveCorpus;
+  const generation = newGeneration ? liveCorpus : checkpoint?.generation;
   if (generation === undefined) {
     throw new Error("catalogue-rank generation could not be derived");
   }
-  const newGeneration =
-    checkpoint?.state === "running"
-      ? false
-      : checkpoint === undefined || !checkpointSatisfiesMarker;
   const result = await runDueWorkRebuildChunk(client, definition, {
     boundedCleanup: true,
     generation,
@@ -328,8 +345,14 @@ async function advanceCatalogueRankRebuild(
     newGeneration,
   });
 
+  // Clear only a completed generation whose corpus is proven current for this exact marker version,
+  // whether that proof was read in this step or recorded by an earlier one.
   let markerCleared = false;
-  if (result.complete && validatedCorpus !== undefined) {
+  if (
+    result.complete &&
+    result.checkpoint.generation === generation &&
+    (liveCorpus !== undefined || markerChecked)
+  ) {
     const clearResults = await client.batch(
       [
         clearDueWorkSourceRepairStatement(marker),
@@ -339,15 +362,34 @@ async function advanceCatalogueRankRebuild(
     );
     markerCleared = (clearResults[0]?.rowsAffected ?? 0) > 0;
   }
+  if (liveCorpus !== undefined && !markerCleared) {
+    await client.execute({
+      args: [
+        CATALOGUE_RANK_CORPUS_CHECK_KEY,
+        JSON.stringify({ generation, markerVersion: marker.sourceVersion }),
+      ],
+      sql: `insert into settings (key, value) values (?, ?)
+        on conflict(key) do update set value = excluded.value`,
+    });
+  }
   return { complete: result.complete && markerCleared, scanned: result.scanned };
 }
 
-async function readCatalogueRankMarker(
-  client: DueWorkClient,
-): Promise<DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND> | undefined> {
+async function readCatalogueRankMarker(client: DueWorkClient): Promise<
+  | {
+      corpusCheck: CatalogueRankCorpusCheck | undefined;
+      marker: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>;
+    }
+  | undefined
+> {
   const result = await client.execute({
-    args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
-    sql: `select generation, next_due_at, sort_key, source_version, updated_at
+    args: [
+      CATALOGUE_RANK_CORPUS_CHECK_KEY,
+      DUE_WORK_SOURCE_REPAIR_KIND,
+      DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+    ],
+    sql: `select generation, next_due_at, sort_key, source_version, updated_at,
+        (select value from settings where key = ?) as corpus_check
       from due_work where work_kind = ? and subject_type = 'track' and subject_id = ?
         and state = 'repair' limit 1`,
   });
@@ -365,18 +407,21 @@ async function readCatalogueRankMarker(
     throw new Error("catalogue-rank source marker is malformed");
   }
   return {
-    claimExpiresAt: null,
-    claimToken: null,
-    claimedBy: null,
-    generation: row.generation,
-    nextDueAt: row.next_due_at,
-    sortKey: row.sort_key,
-    sourceVersion: row.source_version,
-    state: "repair",
-    subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-    subjectType: "track",
-    updatedAt: row.updated_at,
-    workKind: DUE_WORK_SOURCE_REPAIR_KIND,
+    corpusCheck: parseCatalogueRankCorpusCheck(row.corpus_check),
+    marker: {
+      claimExpiresAt: null,
+      claimToken: null,
+      claimedBy: null,
+      generation: row.generation,
+      nextDueAt: row.next_due_at,
+      sortKey: row.sort_key,
+      sourceVersion: row.source_version,
+      state: "repair",
+      subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+      subjectType: "track",
+      updatedAt: row.updated_at,
+      workKind: DUE_WORK_SOURCE_REPAIR_KIND,
+    },
   };
 }
 
@@ -416,16 +461,17 @@ export async function fanOutDueWorkSourceRepairs(
   const regularOutcomes = await evaluateSourceMarkers(client, regular);
   const cleared = await convergeEvaluatedSourceMarkers(client, regular, regularOutcomes);
   const regularDeferred = regular.length - cleared;
-  const rankMarker =
+  const rank =
     options.includeCatalogueRank === false ||
     (options.subjectType !== undefined && options.subjectType !== "track")
       ? undefined
       : await readCatalogueRankMarker(client);
+  const rankMarker = rank?.marker;
   const rankLimit = Math.min(options.limit ?? RANK_REBUILD_LIMIT, RANK_REBUILD_LIMIT);
   const rankResult =
-    rankMarker === undefined
+    rank === undefined
       ? undefined
-      : await advanceCatalogueRankRebuild(client, rankMarker, rankLimit);
+      : await advanceCatalogueRankRebuild(client, rank.marker, rank.corpusCheck, rankLimit);
   const rankExpanded = rankResult?.complete === true ? 1 : 0;
   const rankDeferred = rankMarker === undefined || rankResult?.complete === true ? 0 : 1;
   const expanded = cleared + rankExpanded;
@@ -440,6 +486,57 @@ export async function fanOutDueWorkSourceRepairs(
     repaired: expanded,
     scanned: page.items.length + (rankMarker === undefined ? 0 : 1),
   };
+}
+
+/**
+ * Locate one registered physical queue holding repair markers in one read. The read seeks
+ * `due_work_repair_idx` on `state` and checks `work_kind` after a row fetch, because no index
+ * carries `work_kind` beside repair state; it therefore walks the source markers that sort ahead of
+ * the first physical marker once. A per-definition probe seeks only `state` and `subject_type` and
+ * repeats that same walk for every definition, so the single read is the cheaper shape under a
+ * source-marker burst as well as in round trips. Which pending definition drains first is
+ * immaterial: each repair page removes its markers, so the next read reaches the next pending
+ * definition. A marker whose queue has no registered definition can never be repaired; it is
+ * excluded from the following read so it cannot hide registered markers behind it in index order,
+ * and the walk stops after as many reads as there are registered definitions.
+ */
+export async function findPendingPhysicalRepairDefinition(
+  client: DueWorkClient,
+): Promise<DueWorkRepairDefinition<string> | undefined> {
+  const definitions = dueWorkRepairDefinitions(client);
+  const identity = (workKind: string, subjectType: string) =>
+    JSON.stringify([workKind, subjectType]);
+  const registered = new Map(
+    definitions.map((definition) => [
+      identity(definition.workKind, definition.subjectType),
+      definition,
+    ]),
+  );
+  const unregistered: Array<[string, string]> = [];
+  for (let read = 0; read < definitions.length; read += 1) {
+    const exclusions = unregistered
+      .map(() => "\n        and not (work_kind = ? and subject_type = ?)")
+      .join("");
+    const result = await client.execute({
+      args: unregistered.flat(),
+      sql: `select work_kind, subject_type from due_work
+        where state = 'repair' and work_kind <> '${DUE_WORK_SOURCE_REPAIR_KIND}'${exclusions}
+        limit 1`,
+    });
+    const row = result.rows[0];
+    if (row === undefined) {
+      return undefined;
+    }
+    if (typeof row.work_kind !== "string" || typeof row.subject_type !== "string") {
+      throw new Error("due-work repair marker identity is malformed");
+    }
+    const definition = registered.get(identity(row.work_kind, row.subject_type));
+    if (definition !== undefined) {
+      return definition;
+    }
+    unregistered.push([row.work_kind, row.subject_type]);
+  }
+  return undefined;
 }
 
 /** Repair generic producers and the requested physical queue before reading its ready index. */

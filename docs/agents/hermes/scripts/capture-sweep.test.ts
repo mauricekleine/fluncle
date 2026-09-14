@@ -21,6 +21,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  authorizeTrackCapture,
+  commitTrackCapture,
+} from "../../../../packages/contracts/src/orpc/admin-tracks";
+import {
   bpmIsMissing,
   buildCaptureConfigFailureSummary,
   buildCaptureDownloadUrl,
@@ -28,6 +32,8 @@ import {
   buildCaptureSearchLadder,
   buildCaptureSearchTarget,
   buildCaptureSummary,
+  captureCommitRequest,
+  captureCommitRequestFromState,
   captureSessionSeed,
   classifyCaptureFailure,
   filterRejectedCandidates,
@@ -64,6 +70,7 @@ import {
   preparedCaptureFinding,
   protectedTrackIdsFromRecovery,
   rankCandidates,
+  receiptCoordinatesFrom,
   recoverCaptureProgress,
   rerollSessionId,
   runJournaledCaptureProvider,
@@ -1060,6 +1067,158 @@ describe("capture reconciliation durability and admission boundaries", () => {
       });
 
       expect(await finishProgress(path, testPorts)).toBe("committed");
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  /** The real contract schemas: the sweep's hand-built bodies are judged by what the Worker parses. */
+  function captureContractSchemas() {
+    const commitInput = commitTrackCapture["~orpc"].inputSchema;
+    const authorizeOutput = authorizeTrackCapture["~orpc"].outputSchema;
+    if (!commitInput || !authorizeOutput) {
+      throw new Error("the capture contracts declare a commit input and an authorize output");
+    }
+    return { authorizeOutput, commitInput };
+  }
+
+  const doneResult = {
+    attemptedAt: "2026-09-08T10:00:00.000Z",
+    bodyBase64: Buffer.from("audio").toString("base64"),
+    bytes: 5,
+    captureVerification: "preview-match",
+    capturedAt: "2026-09-08T10:00:00.000Z",
+    contentType: "audio/webm",
+    kind: "capture",
+    outcome: "done",
+    sourceAudioKey: `001.0.0A/${"c".repeat(64)}.webm`,
+    verifiedAt: "2026-09-08T10:00:00.000Z",
+  } as const;
+
+  test("a commit state carrying response-only keys rebuilds exactly the strict contract body", () => {
+    const { commitInput } = captureContractSchemas();
+    const journaled = { ...receipt, note: "response-only", ok: true, trackId: "track-1" };
+
+    expect(commitInput.safeParse(journaled).success).toBe(false);
+    const body = captureCommitRequestFromState(journaled);
+    expect(body).toEqual({ ...receipt, trackId: "track-1" });
+    expect(Object.keys(body ?? {}).sort()).toEqual(Object.keys(commitInput.shape).sort());
+    expect(commitInput.safeParse(body).success).toBe(true);
+  });
+
+  test("authorize coordinates are the contract output without its envelope", () => {
+    const { authorizeOutput, commitInput } = captureContractSchemas();
+    const response = { ...receipt, ok: true };
+
+    expect(authorizeOutput.safeParse(response).success).toBe(true);
+    const coordinates = receiptCoordinatesFrom(response);
+    expect(coordinates).toEqual(receipt);
+    expect(Object.keys(coordinates ?? {}).sort()).toEqual(
+      Object.keys(authorizeOutput.shape)
+        .filter((key) => key !== "ok")
+        .sort(),
+    );
+    expect(commitInput.safeParse(captureCommitRequest(receipt, "track-1")).success).toBe(true);
+  });
+
+  test("malformed coordinates never become a commit body", () => {
+    const malformed: unknown[] = [
+      "receipt",
+      null,
+      { ...receipt, operationId: "other.operation" },
+      { ...receipt, commitToken: undefined },
+      { ...receipt, requestDigest: "not-a-digest" },
+    ];
+    for (const value of malformed) {
+      const state =
+        typeof value === "object" && value !== null ? { ...value, trackId: "track-1" } : value;
+      expect(receiptCoordinatesFrom(value)).toBeUndefined();
+      expect(captureCommitRequestFromState(state)).toBeUndefined();
+    }
+    expect(captureCommitRequestFromState(receipt)).toBeUndefined();
+    expect(captureCommitRequestFromState({ ...receipt, trackId: "" })).toBeUndefined();
+  });
+
+  test("an authorization carrying response-only keys journals and commits only contract fields", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const { commitInput } = captureContractSchemas();
+    try {
+      writeJsonAtomic(path, {
+        result: doneResult,
+        snapshotToken: "snapshot-token",
+        trackId: "track-1",
+      });
+      const testPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          expect(action).toBe("commit");
+          const body: unknown = JSON.parse(readFileSync(statePath, "utf8"));
+          expect(body).toEqual({ ...receipt, trackId: "track-1" });
+          expect(commitInput.safeParse(body).success).toBe(true);
+          const journal = JSON.parse(readFileSync(path, "utf8")) as { receipt?: unknown };
+          expect(journal.receipt).toEqual(receipt);
+          writePhaseResult(statePath, committedResolution("capture", "done"));
+          return "completed";
+        },
+        authorizeProgress: async (progress) => ({
+          ...progress,
+          receipt: { ...receipt, note: "response-only", ok: true } as ReceiptCoordinates,
+        }),
+      });
+
+      expect(await finishProgress(path, testPorts)).toBe("committed");
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("a journal whose receipt carries the authorize envelope settles by commit, never by provider or storage work", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+    const path = progressFile(directory);
+    const { commitInput } = captureContractSchemas();
+    const phases: string[] = [];
+    let authorizations = 0;
+    try {
+      writeJsonAtomic(path, {
+        receipt: { ...receipt, ok: true },
+        result: doneResult,
+        snapshotToken: "snapshot-token",
+        trackId: "track-1",
+      });
+      writeJsonAtomic(`${path}.commit`, { ...receipt, ok: true, trackId: "track-1" });
+      // The default ports throw on a snapshot refresh and on an R2 PUT, and the provider is not a
+      // port at all: settling this journal can only reconcile, re-authorize, and commit.
+      const testPorts = ports(directory, {
+        admittedPhase: (action, statePath) => {
+          phases.push(action);
+          if (action === "reconcile") {
+            expect(JSON.parse(readFileSync(statePath, "utf8"))).toEqual({
+              operationId: receipt.operationId,
+              operationKey: receipt.operationKey,
+              requestDigest: receipt.requestDigest,
+            });
+            writePhaseResult(statePath, receiptResolution("not-found"));
+            return "completed";
+          }
+          const body: unknown = JSON.parse(readFileSync(statePath, "utf8"));
+          expect(body).toEqual({ ...receipt, trackId: "track-1" });
+          expect(commitInput.safeParse(body).success).toBe(true);
+          writePhaseResult(statePath, committedResolution("capture", "done"));
+          return "completed";
+        },
+        authorizeProgress: async (progress) => {
+          authorizations += 1;
+          expect(progress.receipt).toBeUndefined();
+          return { ...progress, receipt: { ...receipt, ok: true } as ReceiptCoordinates };
+        },
+      });
+
+      expect(await finishProgress(path, testPorts)).toBe("committed");
+      expect(phases).toEqual(["reconcile", "commit"]);
+      expect(authorizations).toBe(1);
+      expect(existsSync(path)).toBe(false);
+      expect(existsSync(`${path}.commit`)).toBe(false);
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }

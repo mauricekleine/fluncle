@@ -50,6 +50,8 @@ Both targets need the same four. **The concrete `op://` item paths and the M5 mu
 
 Plus `PYTHON_BIN` → the muq venv's `python3` (its exact path is in the private runbook; on a RunPod pod the bootstrap script installs muq for you).
 
+That venv must hold `transformers` below 5.16; pin `transformers==5.15.1`, the version the box image bakes. `muq` leaves transformers unpinned, and 5.16+ fails every track with `'EasyDict' object has no attribute '_attn_implementation'` while the import, the weights load, and the `--dry-run` gate all still succeed. Check it before a run: `"$PYTHON_BIN" -c 'import transformers; print(transformers.__version__)'`. The vector is identical across transformers versions below that ceiling, so a pinned venv embeds into the same space as the box and the pod.
+
 Use the source-audio R2 item's custom `account_id`, `access_key_id`, and `secret_access_key` fields. The template fields are unused, and the generic public-bucket key cannot read private source audio.
 
 An agent can run the workflow end to end after the operator approves the first biometric prompt. `op` authenticates through the 1Password desktop-app integration, so an agent runs the real `op read '<ref>'` **directly** (with the sandbox OFF, so `op` reaches the app socket). Follow these two requirements:
@@ -165,7 +167,7 @@ bun docs/agents/hermes/scripts/embed-batch.ts --minutes 540 --dry-run   # gate: 
 nohup bun docs/agents/hermes/scripts/embed-batch.ts --minutes 540 > /workspace/embed-run.log 2>&1 &
 ```
 
-Confirm with `grep -c ': embedded' /workspace/embed-run.log` climbing within ~2 min. Use `embed-batch.sh` (the bootstrap curl) for a cold pod — it installs ffmpeg, bun, muq, clones the repo, and pre-warms the ~1 GB of MuQ weights. If you install by hand instead, **pin `transformers==4.40.2` and `numpy<2`**: `muq` leaves both unpinned, and on this image transformers 5.x (needs torch ≥ 2.2) dies with `NameError: name 'torch' is not defined` while numpy 2.x breaks the decode path with `_ARRAY_API not found`. Neither fails at install time — the run just never embeds. The bootstrap pins them; a hand-rolled `pip install muq` walks into it.
+Confirm with `grep -c ': embedded' /workspace/embed-run.log` climbing within ~2 min. Use `embed-batch.sh` (the bootstrap curl) for a cold pod — it installs ffmpeg, bun, muq, clones the repo, and pre-warms the ~1 GB of MuQ weights. If you install by hand instead, **pin `transformers==4.40.2` and `numpy<2`**: `muq` leaves both unpinned, and on this image transformers 5.x (needs torch ≥ 2.2) dies with `NameError: name 'torch' is not defined` while numpy 2.x breaks the decode path with `_ARRAY_API not found`. Neither fails at install time — the run just never embeds. The bootstrap pins them; a hand-rolled `pip install muq` walks into it. On any torch new enough for 5.x, still hold transformers at 5.15.1 or below: 5.16+ breaks MuQ's attention after a clean import (see the `PYTHON_BIN` note above), which the bootstrap's warm-step forward catches and the import preflight does not.
 
 ### Monitor from the Mac, and make the destroy session-proof
 

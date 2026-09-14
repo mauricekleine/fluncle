@@ -412,6 +412,9 @@ export type ReceiptCoordinates = {
   requestDigest: string;
 };
 
+/** The strict `commitTrackCapture` request body: the receipt coordinates plus the track id. */
+export type CaptureCommitRequest = ReceiptCoordinates & { trackId: string };
+
 export type CaptureAttemptProgress = {
   attempt: {
     attemptedAt: string;
@@ -1777,10 +1780,16 @@ async function runCaptureAdmissionChild(
       request,
     );
   } else if (action === "commit") {
-    const trackId = typeof request.trackId === "string" ? request.trackId : "";
+    // The commit contract is a strict object, so the body is rebuilt field by field from the state
+    // file rather than forwarded: a state file carrying response-only keys still sends exactly the
+    // contract body.
+    const body = captureCommitRequestFromState(request);
+    if (!body) {
+      throw new Error("capture commit phase state does not carry a valid receipt");
+    }
     result = await adminApiPost(
-      `/api/v1/admin/tracks/${encodeURIComponent(trackId)}/capture/commit`,
-      request,
+      `/api/v1/admin/tracks/${encodeURIComponent(body.trackId)}/capture/commit`,
+      body,
     );
   } else {
     result = await adminApiPost("/api/v1/admin/operation-receipts/resolve", request);
@@ -1933,7 +1942,7 @@ async function authorizeProgress(progress: CaptureResultProgress): Promise<Captu
   if (progress.receipt) {
     return progress;
   }
-  const response = await adminApiPost<ReceiptCoordinates>(
+  const response = await adminApiPost<unknown>(
     `/api/v1/admin/tracks/${encodeURIComponent(progress.trackId)}/capture/authorize`,
     {
       result: externalResultForWire(progress.result),
@@ -1941,7 +1950,13 @@ async function authorizeProgress(progress: CaptureResultProgress): Promise<Captu
       trackId: progress.trackId,
     },
   );
-  return { ...progress, receipt: response };
+  // The authorize response wraps the coordinates in its `{ ok }` envelope. The journal keeps the
+  // coordinates alone, because they become a strict commit body.
+  const receipt = receiptCoordinatesFrom(response);
+  if (!receipt) {
+    throw new Error(`capture authorize returned an invalid receipt for ${progress.trackId}`);
+  }
+  return { ...progress, receipt };
 }
 
 export type CaptureProgressPorts = {
@@ -1996,6 +2011,63 @@ function validReceiptCoordinates(receipt: ReceiptCoordinates): boolean {
     receipt.commitToken.length >= 1 &&
     receipt.commitToken.length <= 65_536
   );
+}
+
+/**
+ * The receipt coordinates carried by an authorize response or a journaled receipt, copied field by
+ * field. Every other key, the response's `ok` envelope included, is dropped, so a receipt journaled
+ * with its envelope still yields a body the strict commit contract accepts. Undefined when any
+ * coordinate is missing or malformed.
+ */
+export function receiptCoordinatesFrom(value: unknown): ReceiptCoordinates | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const { commitToken, operationId, operationKey, requestDigest } = value;
+  if (
+    typeof commitToken !== "string" ||
+    operationId !== "track.capture" ||
+    typeof operationKey !== "string" ||
+    typeof requestDigest !== "string"
+  ) {
+    return undefined;
+  }
+  const receipt: ReceiptCoordinates = { commitToken, operationId, operationKey, requestDigest };
+  return validReceiptCoordinates(receipt) ? receipt : undefined;
+}
+
+/**
+ * The exact `commitTrackCapture` body (packages/contracts/src/orpc/admin-tracks.ts), built from
+ * named fields and never spread from a response or a journal: the contract is a strict object that
+ * rejects any extra key. This box script cannot import the workspace, so capture-sweep.test.ts
+ * parses this output with the real contract schema.
+ */
+export function captureCommitRequest(
+  receipt: ReceiptCoordinates,
+  trackId: string,
+): CaptureCommitRequest {
+  return {
+    commitToken: receipt.commitToken,
+    operationId: receipt.operationId,
+    operationKey: receipt.operationKey,
+    requestDigest: receipt.requestDigest,
+    trackId,
+  };
+}
+
+/** The commit body a commit phase state file describes; undefined without a valid receipt. */
+export function captureCommitRequestFromState(state: unknown): CaptureCommitRequest | undefined {
+  const receipt = receiptCoordinatesFrom(state);
+  if (
+    !receipt ||
+    !isRecord(state) ||
+    typeof state.trackId !== "string" ||
+    state.trackId.length < 1 ||
+    state.trackId.length > 256
+  ) {
+    return undefined;
+  }
+  return captureCommitRequest(receipt, state.trackId);
 }
 
 function completeReceiptSummary(response: unknown): Record<string, unknown> | undefined {
@@ -2370,12 +2442,15 @@ export async function finishProgress(
       snapshotToken: refreshed.snapshotToken,
     });
   }
+  // The journal and the commit state keep only contract fields, whatever the authorization carried
+  // beside them.
+  const receipt = receiptCoordinatesFrom(progress.receipt);
+  progress = { ...progress, receipt };
   writeJsonAtomic(path, progress);
-  const receipt = progress.receipt;
   if (!receipt) {
     return "pending";
   }
-  writeJsonAtomic(`${path}.commit`, { ...receipt, trackId: progress.trackId });
+  writeJsonAtomic(`${path}.commit`, captureCommitRequest(receipt, progress.trackId));
   rmSync(`${path}.commit.result`, { force: true });
   if (ports.admittedPhase("commit", `${path}.commit`) === "yielded") {
     return "pending";
