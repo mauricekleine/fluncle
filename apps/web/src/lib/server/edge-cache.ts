@@ -501,9 +501,11 @@ function tagResponse(response: Response, status: string, cachePolicy: EdgeCacheP
 // drop that finding's `/log/<id>` page and the `/log` index from cache so the next
 // request re-renders. Two layers: a local `cache.delete` (instant, this data center
 // only) and a global Cloudflare purge-by-URL (every data center) when the zone token
-// is configured. The global purge is best-effort — if the token is absent or the
-// call fails, the local delete plus the short fresh window still bound staleness, so
-// a write never blocks on it.
+// is configured. The Worker runs under a Placement Hint (wrangler.jsonc), so "this data
+// center" is the placed one that also serves the cache reads; the global purge covers
+// entries held anywhere else. The global purge is best-effort — if the token is absent
+// or the call fails, the local delete plus the short fresh window still bound
+// staleness, so a write never blocks on it.
 
 /** The log paths a finding's change can stale: its own page and the index. */
 function logPathsToPurge(logId: string): string[] {
