@@ -3,7 +3,7 @@
 // header + the api-catalog), so we intercept /llms.txt here and re-serve the SAME
 // bytes with the correct content-type — mirroring llms-full.txt, which already does.
 import llmsTxt from "../../../public/llms.txt?raw";
-import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "../fluncle-links";
+import { siteUrl, spotifyPlaylistCanonicalUrl, telegramUrl } from "../fluncle-links";
 import { findingsCount } from "../format";
 import { fluncleDescription } from "../identity";
 import { type FeedItem } from "../mixtapes";
@@ -351,7 +351,7 @@ ${tracks.join("\n")}
 
 ## Listen
 
-- [Fluncle's Findings on Spotify](${spotifyPlaylistUrl}): the playlist itself
+- [Fluncle's Findings on Spotify](${spotifyPlaylistCanonicalUrl}): the playlist itself
 - [Fluncle on Telegram](${telegramUrl}): one banger per post, most nights
 - [The front door](${siteUrl}/): where a first visit starts, with search over the whole archive, one finding written up, the newest findings, what just came out, and the four ways into the wider index
 - [The archive](${siteUrl}/findings): every certified track with the date Fluncle found it
@@ -441,7 +441,7 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 ## More
 
 - The map: ${siteUrl}/llms.txt
-- The playlist: ${spotifyPlaylistUrl}
+- The playlist: ${spotifyPlaylistCanonicalUrl}
 - The Telegram feed: ${telegramUrl}
 - The JSON API: ${siteUrl}/api/v1/findings
 - The archive search: ${siteUrl}/api/v1/search/archive

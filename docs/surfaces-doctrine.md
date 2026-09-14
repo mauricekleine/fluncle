@@ -110,6 +110,8 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | `discovery.docs-markdown`   | `/docs.md/:slug`                       | `text/markdown`            | one developer-doc page as clean Markdown, at `/docs.md/<slug>`                                                                    | tertiary  |
 | `discovery.openapi`         | `/api/v1/openapi.json`                 | `application/openapi+json` | the public API as an OpenAPI 3.1 document (admin paths excluded)                                                                  | secondary |
 | `discovery.robots`          | `/robots.txt`                          | `text/plain`               | the crawl policy + Content-Signal (search/AI-input/AI-train all yes) + sitemap link                                               | tertiary  |
+| `discovery.security-txt`    | `/.well-known/security.txt`            | `text/plain`               | the RFC 9116 security.txt — where to send a vulnerability report (carries an `Expires` a responder keeps in the future)           | tertiary  |
+| `discovery.humans`          | `/humans.txt`                          | `text/plain`               | humans.txt — who made this, who is thanked, what it is built with (robots.txt's human counterpart)                                | tertiary  |
 | `discovery.mcp-server-card` | `/.well-known/mcp/server-card.json`    | `application/json`         | the SEP-2127 discovery card for the MCP endpoint                                                                                  | tertiary  |
 | `discovery.api-catalog`     | `/.well-known/api-catalog`             | `application/linkset+json` | the RFC 9727 linkset pointing at the machine-readable surfaces                                                                    | tertiary  |
 | `discovery.agent-card`      | `/.well-known/agent-card.json`         | `application/json`         | the A2A agent card — Fluncle's actionable public skills (search, list, read, submit, subscribe)                                   | tertiary  |
@@ -312,6 +314,8 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `discovery.llms-full`         | secondary |           |           |           |
 | `discovery.openapi`           | secondary |           |           |           |
 | `discovery.robots`            | tertiary  |           |           |           |
+| `discovery.security-txt`      | tertiary  |           |           |           |
+| `discovery.humans`            | tertiary  |           |           |           |
 | `discovery.mcp-server-card`   | tertiary  |           |           |           |
 | `discovery.api-catalog`       | tertiary  |           |           |           |
 | `discovery.agent-card`        | tertiary  |           |           |           |

@@ -6,7 +6,7 @@ The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (sour
 
 ## Why 00:40 Amsterdam (once a day)
 
-An entry is authored only once a sector-day is COMPLETE — the gap window excludes the in-progress day (`sector < todaySector`) — so the timer fires shortly after local midnight to write up the day that just ended. One day per tick (`BATCH_CAP=1`); the self-healing gap window backfills history OLDEST-FIRST over successive nights (see the backfill note below).
+An entry is authored only once a sector-day is COMPLETE — the gap window excludes the in-progress day (`sector < todaySector`) — so the timer fires shortly after local midnight to write up the day that just ended. One day per tick is the steady state — a caught-up logbook has exactly one gap a night. When it is behind, a tick authors up to `BATCH_CAP` (4) days, stopped early by its wall-clock budget (`LOGBOOK_BUDGET_MS`, 15m), and the self-healing gap window backfills history OLDEST-FIRST over successive nights (see the backfill note below).
 
 ## Why a host timer + the /status marker
 
@@ -34,4 +34,4 @@ The `--no-agent` runner withholds provider credentials, so `claude -p`'s subscri
 
 ## Backfill — the first runs
 
-On a fresh activation there is a BACKLOG: every past sector-day with findings but no entry. The self-healing window drains it OLDEST-FIRST, one day per nightly tick, so history fills in over successive nights with no manual step. To drain faster, the operator can run extra manual ticks (`sudo systemctl start fluncle-logbook.service`, once per day authored) or temporarily raise `BATCH_CAP` in `logbook-sweep.ts` (re-bake) — but a slow, one-a-night backfill is the intended, quota-cheap default. The gap list IS the durable worklist; nothing is lost between ticks.
+On a fresh activation there is a BACKLOG: every past sector-day with findings but no entry. The self-healing window drains it OLDEST-FIRST with no manual step: each nightly tick keeps authoring while there is room for the slowest pass on record, up to `BATCH_CAP` (4) days, so a backlog closes instead of trailing one day behind forever. To drain faster still, the operator can run extra manual ticks (`sudo systemctl start fluncle-logbook.service`) or widen the tick's budget with `LOGBOOK_BUDGET_MS` — mind that the unit's `TimeoutStartSec` must stay above budget plus `LOGBOOK_SLOWEST_PASS_MS`. The gap list IS the durable worklist; nothing is lost between ticks.

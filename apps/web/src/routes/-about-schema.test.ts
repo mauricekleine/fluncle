@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { fluncleEntityId, fluncleWebsiteId } from "@/lib/fluncle-links";
+import {
+  fluncleEntityId,
+  fluncleWebsiteId,
+  spotifyPlaylistCanonicalUrl,
+  spotifyPlaylistUrl,
+} from "@/lib/fluncle-links";
 import { fluncleDescription, fluncleMetaDescription } from "@/lib/identity";
 import { faqAnchor, Route as AboutRoute } from "./about";
 import { Route as FindingsRoute } from "./findings";
@@ -58,6 +63,22 @@ describe("/about schema", () => {
         expect.stringContaining("discogs.com/user/fluncle"),
       ]),
     );
+  });
+
+  it("claims the Spotify playlist by its BARE URI, never the `?si=` share link", () => {
+    // A `sameAs` is an exact-URI identity claim, and the inbound side of this edge (MusicBrainz,
+    // Wikidata, and Fluncle's own static llms.txt) carries the bare playlist URL — so a share
+    // token in this array quietly fails to match the edge it exists to assert. The human share
+    // link keeps its token; only the identity claim drops it.
+    const entity = aboutSchemas().find((schema) => schema["@type"] === "Person");
+    const sameAs = entity?.sameAs as string[] | undefined;
+    const playlist = sameAs?.find((url) => url.includes("open.spotify.com/playlist/"));
+
+    expect(playlist).toBe(spotifyPlaylistCanonicalUrl);
+    expect(playlist).not.toContain("?si=");
+    // The share link is untouched, and the two really are the same playlist.
+    expect(spotifyPlaylistUrl).toContain("?si=");
+    expect(spotifyPlaylistUrl.startsWith(spotifyPlaylistCanonicalUrl)).toBe(true);
   });
 
   it("emits a FAQPage whose questions mirror the visible crew questions", () => {

@@ -5,6 +5,7 @@ import { definitionalProse } from "./log-prose";
 import {
   artistBreadcrumbsJsonLd,
   breadcrumbsJsonLd,
+  docsBreadcrumbsJsonLd,
   galaxyBreadcrumbsJsonLd,
   logbookBreadcrumbsJsonLd,
   mixtapeAlbumJsonLd,
@@ -431,6 +432,18 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
     expect(serializeJsonLd(evil)).not.toContain("</script>");
     expect(serializeJsonLd(evil)).toContain("\\u003c/script\\u003e");
   });
+
+  it("omits track entirely on an artist with no certified finding (never an empty ItemList)", () => {
+    // The majority shape: a catalogue artist whose quieter rows the unnamed tier keeps unnamed,
+    // so there is nothing to list. An ItemList with no members would assert a track list that
+    // holds nothing, contradicting the page — the same omit-cleanly rule sameAs/description follow.
+    const bare = musicGroupJsonLd(
+      { imageUrl: "https://img/x.jpg", name: "Uncertified", slug: "uncertified", socials: [] },
+      [],
+    );
+
+    expect(bare).not.toHaveProperty("track");
+  });
 });
 
 describe("artistBreadcrumbsJsonLd", () => {
@@ -581,6 +594,19 @@ describe("the detail-page trails that had none", () => {
     ]);
     expect(jsonLd.itemListElement[1]?.item).toBe("https://www.fluncle.com/newsletter");
   });
+
+  // A doc page is the same shape, and the reason it is marked up HERE rather than in the chrome
+  // is the leaf: only the route holds the MDX front matter's real title. The chrome can read the
+  // slug and nothing else, so `/docs/log-id` would have ended the trail on "Log Id".
+  it("walks Fluncle → Docs → the doc's own front-matter title", () => {
+    const jsonLd = docsBreadcrumbsJsonLd("Log ID") as {
+      itemListElement: Array<{ item?: string; name: string }>;
+    };
+
+    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual(["Fluncle", "Docs", "Log ID"]);
+    expect(jsonLd.itemListElement[1]?.item).toBe("https://www.fluncle.com/docs");
+    expect(jsonLd.itemListElement[2]?.item).toBeUndefined();
+  });
 });
 
 describe("recordLabelJsonLd (the label page schema — U2a alternateName)", () => {
@@ -660,6 +686,12 @@ describe("musicAlbumJsonLd (the album page schema)", () => {
     const jsonLd = musicAlbumJsonLd(base);
     expect(jsonLd["@type"]).toBe("MusicAlbum");
     expect(jsonLd.genre).toBe("Drum and Bass");
+  });
+
+  it("omits byArtist on a various-artists record (never `byArtist: []`)", () => {
+    // A compilation resolves no album-level artist entity. An empty array asserts the record was
+    // made by nobody while the track list below names an artist on every line; absence is true.
+    expect(musicAlbumJsonLd({ ...base, artists: [] })).not.toHaveProperty("byArtist");
   });
 
   it("carries the factual bio as description only when one is authored", () => {

@@ -127,19 +127,35 @@ export function NavBreadcrumb({
     return undefined;
   }
 
-  const breadcrumbList = {
-    "@context": "https://schema.org",
-    "@type": "BreadcrumbList",
-    itemListElement: [
-      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
-      ...crumbs.map((crumb, index) => ({
-        "@type": "ListItem",
-        name: crumb.label,
-        position: index + 2,
-        ...(crumb.to ? { item: `${siteUrl}${crumb.to}` } : {}),
-      })),
-    ],
-  };
+  // WHO EMITS THE JSON-LD. Only a HUB trail (one crumb, no leaf) is marked up here. Every LEAF
+  // family already builds its own `BreadcrumbList` in the route's `head` from the entity's REAL
+  // name — `albumBreadcrumbsJsonLd`, `artistBreadcrumbsJsonLd`, `labelBreadcrumbsJsonLd`,
+  // `galaxyBreadcrumbsJsonLd`, `breadcrumbsJsonLd` (a finding), `logbookBreadcrumbsJsonLd`,
+  // `newsletterBreadcrumbsJsonLd`, `trackBreadcrumbsJsonLd`, and `docsHead` — and marking one up
+  // twice put TWO conflicting trails for the same path on the page. They disagreed, because this
+  // component can only ever see the URL: `/album/dub-pack-vol-2` read "Dub Pack Vol 2" here and
+  // "Dub Pack, Vol. 2" in the route's node, and `/log/<id>` read "Log" here against "The log"
+  // there. A crawler handed two trails for one page picks one arbitrarily, so the slug-derived
+  // guess could win the snippet. The route knows the name; the chrome does not. A hub's label IS
+  // fixed chrome ("Labels", "Logbook"), and no route emits one, so the hub trail stays here.
+  //
+  // The VISUAL trail is unchanged on every page — this governs the markup only.
+  const breadcrumbList =
+    crumbs.length > 1
+      ? undefined
+      : {
+          "@context": "https://schema.org",
+          "@type": "BreadcrumbList",
+          itemListElement: [
+            { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+            ...crumbs.map((crumb, index) => ({
+              "@type": "ListItem",
+              name: crumb.label,
+              position: index + 2,
+              ...(crumb.to ? { item: `${siteUrl}${crumb.to}` } : {}),
+            })),
+          ],
+        };
 
   return (
     <nav aria-label="Breadcrumb" className="nav-breadcrumb">
@@ -167,10 +183,12 @@ export function NavBreadcrumb({
       </ol>
       {/* JSON-LD through serializeJsonLd (HTML-escaped) so a `</script>` in a
           Spotify-sourced slug can't break out of the inline block (stored-XSS sink). */}
-      <script
-        dangerouslySetInnerHTML={{ __html: serializeJsonLd(breadcrumbList) }}
-        type="application/ld+json"
-      />
+      {breadcrumbList ? (
+        <script
+          dangerouslySetInnerHTML={{ __html: serializeJsonLd(breadcrumbList) }}
+          type="application/ld+json"
+        />
+      ) : undefined}
     </nav>
   );
 }

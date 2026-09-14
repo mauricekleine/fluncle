@@ -16,8 +16,9 @@
 //      artists, logId, the public note, the internal context_note, the observation
 //      transcript, the poster URL). Empty → fast no-op, exit. This ONE call is both the
 //      worklist AND the fuel, so there is no per-finding round-trip.
-//   2. per DAY (bounded batch, BATCH_CAP=1 — authoring spends subscription quota, and
-//      one long-form entry per tick keeps the run well inside the timer budget):
+//   2. per DAY (bounded batch, BATCH_CAP=4, and the tick's wall-clock budget below is
+//      what actually stops it — one entry is the steady state, the ceiling is what
+//      lets a backlog close):
 //      a. AUTHOR (the ONE agentic step): build the authoring prompt (the logbook voice
 //         rails + the day's findings interpolated inline, each with its `[[logId]]`
 //         figure token) and run `claude -p` — Claude Code, SUBSCRIPTION auth, NOT
@@ -104,7 +105,7 @@ const ECHO_RETRIES = 1;
 // have judged (see `recordAttempt` in ./attempt-ledger.ts).
 //
 // WHY. A rejection was a plain skip that left the day in the gap list with nothing counting the
-// tries, so "retry" meant "forever" — and the list is BATCH_CAP=1 OLDEST FIRST, so an unwritable
+// tries, so "retry" meant "forever" — and the list is OLDEST FIRST, so an unwritable
 // day blocked every later day behind it and the logbook simply stopped backfilling. The gate could
 // genuinely be UNSATISFIABLE: the sweep hands the author each finding's artist and title as its
 // material, and the scan read those names too, so a day that logged a track by "Future Signal"
@@ -244,8 +245,8 @@ type Delivery = { charged: boolean; echoedMove?: string; outcome: Outcome };
 // exactly right and unchanged. But CHARGING the budget on the same loose match would be a bug with
 // teeth: an expired or re-scoped agent token returns 403 on EVERY call, so a healthy draft the
 // Worker never even read would be classified as a gate rejection and cost the item an attempt.
-// With BATCH_CAP=1 and exhausted rows filtered out before the cap, a sustained 403 would march down
-// the queue writing off one item per few ticks — each needing a hand-edit of the box's attempts
+// With exhausted rows filtered out before the cap, a sustained 403 would march down the queue
+// writing items off a few ticks at a time — each needing a hand-edit of the box's attempts
 // file to recover.
 //
 // That is precisely what ./attempt-ledger.ts's `recordAttempt` promises cannot happen ("if flaky

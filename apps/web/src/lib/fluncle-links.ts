@@ -7,9 +7,21 @@ export function logPageUrl(logId: string): string {
   return `${siteUrl}/log/${encodeURIComponent(logId)}`;
 }
 
+// THE SHARE LINK — what a person clicks. It carries Spotify's `?si=` share-source token, which
+// is how Spotify attributes a playlist click back to Fluncle's own surfaces (the `/reach`
+// numbers; docs/reach-tier2-activation.md). Every human-facing link uses this one.
 export const spotifyPlaylistUrl =
   import.meta.env.VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL ??
   "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36";
+
+// THE IDENTITY URI — what a machine reconciles. Sharing and identity are two different jobs and
+// they take two different strings: a `sameAs` is an exact-URI claim, and the inbound side of that
+// edge (MusicBrainz, Wikidata) carries the BARE playlist URL, so a `?si=`-bearing variant does not
+// string-match the same edge. `si` is a share-source token, not part of the resource identity.
+// Derived from the share link rather than written out twice, so an env override cannot reintroduce
+// the drift. Same split the CLI already draws (apps/cli/src/links.ts holds the bare URL and
+// commands/open.ts appends the token at the point of sharing).
+export const spotifyPlaylistCanonicalUrl = spotifyPlaylistUrl.split("?")[0] ?? spotifyPlaylistUrl;
 
 export const telegramUrl = import.meta.env.VITE_FLUNCLE_TELEGRAM_URL ?? "https://t.me/fluncle";
 
@@ -95,7 +107,9 @@ export const fluncleWebsiteId = `${siteUrl}/#website`;
 // of re-declaring these. The order is the entity's canonical reading order, shared so the block
 // never drifts between surfaces.
 export const fluncleSameAs: string[] = [
-  spotifyPlaylistUrl,
+  // The BARE playlist URI, never the share link — this array is an identity claim, and the
+  // inbound MusicBrainz/Wikidata side of the edge carries the bare form.
+  spotifyPlaylistCanonicalUrl,
   telegramUrl,
   tiktokUrl,
   instagramUrl,
