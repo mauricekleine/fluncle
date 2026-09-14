@@ -9,6 +9,13 @@
   // when the path is listed here. This sends the one path through the Worker first; the static
   // file stays as the fallback.
   "assets": { "run_worker_first": ["/llms.txt"] },
+  // Placement Hints: the Worker runs in the data center nearest the Turso primary's cloud region
+  // (`turso db show fluncle` → Locations), because a request issues its database statements in
+  // sequence and each one pays the Worker↔primary round trip. This value names the primary's
+  // region; when the primary moves, it moves with it in the same change. Static assets are still
+  // served from the data center nearest the viewer; the Worker's Cache API store lives where the
+  // Worker runs (docs/database-performance.md § Worker placement).
+  "placement": { "region": "aws:eu-west-1" },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
