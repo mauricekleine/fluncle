@@ -81,6 +81,12 @@ echo "    template's build is the one matched to this pod's CUDA)"
 # Neither surfaces as a clean error at install time; the run just never embeds. Pin both to the
 # versions proven against this image, and never `--upgrade` (that is what drags numpy to 2.x).
 # Measured on an RTX A5000 pod, 2026-07-26.
+#
+# The pin also sits under the ceiling every MuQ install shares: transformers 5.16+ reads
+# `config._attn_implementation`, which muq 0.1.0's EasyDict conformer config lacks, so every track
+# fails after a clean import (the Dockerfile's MuQ layer carries the full note). The embedding is
+# bit-identical across transformers versions below that ceiling on the same torch, so this
+# torch-2.1-bound pin and the box image's transformers==5.15.1 embed into one space.
 python3 -m pip install --quiet muq "transformers==4.40.2" "numpy<2"
 
 # The pins above are load-bearing and they WILL drift again (muq is unpinned upstream, and the
@@ -148,12 +154,19 @@ else
   git clone --depth 1 "${REPO_URL}" "${WORKDIR}"
 fi
 
-echo "==> warming the MuQ weights (a first from_pretrained downloads ~1 GB; do it once, before"
-echo "    the batch, so a slow HF pull is not billed as GPU time inside the run)"
+echo "==> warming the MuQ weights + one forward (a first from_pretrained downloads ~1 GB; do it"
+echo "    once, before the batch, so a slow HF pull is not billed as GPU time inside the run)"
+# The forward is the tripwire the import preflight cannot be: a transformers that breaks MuQ's
+# attention still imports cleanly and loads the weights, then fails every track. One second of
+# silence through the model proves inference before the batch spends any GPU time.
 python3 - <<'PY'
+import torch
 from muq import MuQ
-MuQ.from_pretrained("OpenMuQ/MuQ-large-msd-iter")
-print("MuQ weights cached")
+muq = MuQ.from_pretrained("OpenMuQ/MuQ-large-msd-iter").eval()
+with torch.inference_mode():
+    hidden = muq(torch.zeros(1, 24000), output_hidden_states=True).last_hidden_state
+assert hidden.shape[-1] == 1024, tuple(hidden.shape)
+print(f"MuQ weights cached; forward ok {tuple(hidden.shape)}")
 PY
 
 echo "==> batch (device=${MUQ_DEVICE}, window batch=${MUQ_WINDOW_BATCH})"

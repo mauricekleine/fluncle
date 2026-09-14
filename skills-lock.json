@@ -36,7 +36,7 @@
     "fluncle-embed-batch": {
       "source": "packages/skills/fluncle-embed-batch",
       "sourceType": "local",
-      "computedHash": "4b48c78af755cc50a9f307a1d150575511777bfc340368a30da2b3297148b797"
+      "computedHash": "8afd983eb88f060c286d96f9ccf787760c2f89a9bf49938730ab539273874190"
     },
     "fluncle-goal-writer": {
       "source": "packages/skills/fluncle-goal-writer",
