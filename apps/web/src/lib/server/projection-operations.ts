@@ -7,8 +7,12 @@ import {
 } from "./crawl-due-work";
 import { CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
 import { repairDueWorkChunk, runDueWorkRebuildChunk } from "./due-work";
-import { DUE_WORK_BACKFILLS, dueWorkRepairDefinitions } from "./due-work-registry";
-import { fanOutDueWorkSourceRepairs, PHYSICAL_REPAIR_LIMIT } from "./due-work-source-repair";
+import { DUE_WORK_BACKFILLS } from "./due-work-registry";
+import {
+  fanOutDueWorkSourceRepairs,
+  findPendingPhysicalRepairDefinition,
+  PHYSICAL_REPAIR_LIMIT,
+} from "./due-work-source-repair";
 import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
 import {
   PUBLIC_ANCHOR_FORMAT_VERSION,
@@ -721,19 +725,12 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
     processed += result.scanned;
     scheduled += result.expanded;
   }
-  for (const definition of dueWorkRepairDefinitions(client)) {
-    const pending = await client.execute({
-      args: [definition.workKind, definition.subjectType],
-      sql: `select 1 from due_work where work_kind = ? and subject_type = ? and state = 'repair' limit 1`,
-    });
-    if (pending.rows.length === 0) {
-      continue;
-    }
+  const definition = await findPendingPhysicalRepairDefinition(client);
+  if (definition !== undefined) {
     const result = await repairDueWorkChunk(client, definition, {
       limit: Math.min(limit, PHYSICAL_REPAIR_LIMIT),
     });
     processed += result.scanned;
-    break;
   }
   return { complete: !(await hasRepairDebt()), processed, scheduled };
 }

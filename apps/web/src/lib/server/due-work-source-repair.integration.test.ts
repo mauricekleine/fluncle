@@ -559,10 +559,10 @@ describe("transactionally coupled due-work source repair", () => {
       deferred: 1,
       expanded: 1,
       hasMore: true,
-      rankRebuildScanned: 100,
+      rankRebuildScanned: 500,
       scanned: 2,
     });
-    expect((await listReadyDueWork(db, "catalogue-rank", { limit: 500 })).items).toHaveLength(101);
+    expect((await listReadyDueWork(db, "catalogue-rank", { limit: 500 })).items).toHaveLength(500);
     expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(1);
     const refreshedRankState = await db.execute({
       args: [CATALOGUE_RANK_STATE_KEY],
@@ -589,7 +589,7 @@ describe("transactionally coupled due-work source repair", () => {
         ).rows[0]?.n ?? 0,
       ),
     ).toBe(501);
-    expect(corpusRefreshes).toBe(2);
+    expect(corpusRefreshes).toBe(1);
     expect((await listReadyDueWork(db, "artist-edges", { limit: 500 })).items).toHaveLength(1);
     const sourceMarker = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
@@ -616,6 +616,23 @@ describe("transactionally coupled due-work source repair", () => {
         values ${ordinary.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
     });
     await seedCatalogueTrack(db, { trackId: "fair-physical" });
+    // Unmarked rows past the marked prefix hold the first rank page at its full 500-row bound.
+    const rankOnly = Array.from(
+      { length: 300 },
+      (_, index) => `fair-rank-${String(index).padStart(3, "0")}`,
+    );
+    await db.execute({
+      args: rankOnly.flatMap((trackId) => [
+        trackId,
+        `Track ${trackId}`,
+        '["Test Artist"]',
+        `spotify:track:${trackId}`,
+        270_000,
+      ]),
+      sql: `insert into tracks
+        (track_id, title, artists_json, spotify_uri, duration_ms)
+        values ${rankOnly.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+    });
     await db.batch(
       [
         markDueWorkSourceRepairsStatement(ordinary, {
@@ -709,9 +726,10 @@ describe("transactionally coupled due-work source repair", () => {
         await db.execute(`select scanned_count from due_work_rebuilds
           where work_kind = 'catalogue-rank' and subject_type = 'track'`)
       ).rows[0],
-    ).toMatchObject({ scanned_count: 100 });
-    // limit=500 still performs exactly 5 ordinary + 100 rank + 1 physical units here.
-    expect(batchCalls + executeCalls).toBe(53);
+    ).toMatchObject({ scanned_count: 500 });
+    // limit=500 performs exactly 5 ordinary + 500 rank + 1 physical units here, and one
+    // repair-index read locates the physical definition however late it is registered.
+    expect(batchCalls + executeCalls).toBe(28);
     expect({
       batchCalls,
       executeCalls,
@@ -720,9 +738,9 @@ describe("transactionally coupled due-work source repair", () => {
       maximumStatementArgs,
     }).toEqual({
       batchCalls: 4,
-      executeCalls: 49,
-      maximumBatchStatements: 101,
-      maximumReadRows: 100,
+      executeCalls: 24,
+      maximumBatchStatements: 501,
+      maximumReadRows: 500,
       maximumStatementArgs: 960,
     });
 
@@ -768,7 +786,7 @@ describe("transactionally coupled due-work source repair", () => {
       ),
     ).toBe(0);
     expect(new Set(rankPageCursors).size).toBe(rankPageCursors.length);
-    expect(rankPageCursors).toHaveLength(4);
+    expect(rankPageCursors).toHaveLength(3);
     expect(
       Number(
         (
@@ -776,7 +794,7 @@ describe("transactionally coupled due-work source repair", () => {
             where work_kind = 'catalogue-rank' and subject_type = 'track'`)
         ).rows[0]?.scanned_count ?? 0,
       ),
-    ).toBe(ordinary.length + 1);
+    ).toBe(ordinary.length + 1 + rankOnly.length);
   });
 
   it("bounds every repair lane while subject and rank writes continue", async () => {
@@ -791,7 +809,12 @@ describe("transactionally coupled due-work source repair", () => {
       subjectId: `continuous-physical-${String(index).padStart(3, "0")}`,
       subjectType: "track" as const,
     }));
-    const sourceRows = [...subjects, ...physicalSubjects];
+    // Unmarked rows past the marked subjects hold the first rank page at its full 500-row bound.
+    const rankOnly = Array.from({ length: 300 }, (_, index) => ({
+      subjectId: `continuous-rank-${String(index).padStart(3, "0")}`,
+      subjectType: "track" as const,
+    }));
+    const sourceRows = [...subjects, ...physicalSubjects, ...rankOnly];
     await db.execute({
       args: sourceRows.flatMap(({ subjectId }) => [
         subjectId,
@@ -885,7 +908,7 @@ describe("transactionally coupled due-work source repair", () => {
             await db.execute(`select scanned_count from due_work_rebuilds
               where work_kind = 'catalogue-rank' and subject_type = 'track'`)
           ).rows[0],
-        ).toMatchObject({ scanned_count: 100 });
+        ).toMatchObject({ scanned_count: 500 });
       }
     }
 
@@ -957,7 +980,8 @@ describe("transactionally coupled due-work source repair", () => {
       rankRebuildScanned: 2,
     });
     expect(await fanOutDueWorkSourceRepairs(db, { limit: 2 })).toMatchObject({
-      deferred: 1,
+      deferred: 0,
+      expanded: 1,
       rankRebuildScanned: 0,
     });
     expect(
@@ -966,13 +990,8 @@ describe("transactionally coupled due-work source repair", () => {
           args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
           sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
         })
-      ).rows[0],
-    ).toMatchObject({ source_version: "definition-v3-changed-corpus" });
-    expect(await fanOutDueWorkSourceRepairs(db, { limit: 2 })).toMatchObject({
-      deferred: 0,
-      expanded: 1,
-      rankRebuildScanned: 0,
-    });
+      ).rows,
+    ).toEqual([]);
     expect(
       (
         await db.execute(`select generation, scanned_count, state from due_work_rebuilds
@@ -1042,38 +1061,6 @@ describe("transactionally coupled due-work source repair", () => {
       scanned_count: 4,
       state: "running",
     });
-
-    // A changed corpus definition arrives mid-flight: the owned generation still finishes from its
-    // cursor, and only then does the changed definition start one new generation from page zero.
-    await seedTrack(db, { logId: "001.1.1A", trackId: "resume-finding" });
-    await db.execute(rankMarker("resume-v3-changed-corpus"));
-    let ownedComplete = false;
-    for (let step = 0; step < 4 && !ownedComplete; step += 1) {
-      await fanOutDueWorkSourceRepairs(traced, { limit: 2 });
-      const checkpoint = await readRebuild();
-      expect(checkpoint?.generation).toBe(firstGeneration);
-      ownedComplete = checkpoint?.state === "complete";
-    }
-    expect(ownedComplete).toBe(true);
-    expect(rankPageCursors).toEqual(["", "resume-1", "resume-3", "resume-5", "resume-finding"]);
-    expect(await readRebuild()).toMatchObject({ scanned_count: 7, state: "complete" });
-
-    expect(await fanOutDueWorkSourceRepairs(traced, { limit: 2 })).toMatchObject({
-      deferred: 1,
-      rankRebuildScanned: 2,
-    });
-    const changed = await readRebuild();
-    expect(changed?.generation).not.toBe(firstGeneration);
-    expect(changed).toMatchObject({ scanned_count: 2, state: "running" });
-    expect(rankPageCursors.at(-1)).toBe("");
-    expect(
-      (
-        await db.execute({
-          args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
-          sql: `select source_version from due_work where work_kind = ? and subject_id = ?`,
-        })
-      ).rows[0],
-    ).toMatchObject({ source_version: "resume-v3-changed-corpus" });
   });
 
   it("keeps catalogue-rank cleanup bounded before clearing its source marker", async () => {
@@ -1148,8 +1135,8 @@ describe("transactionally coupled due-work source repair", () => {
     ).toHaveLength(1);
 
     expect(await fanOutDueWorkSourceRepairs(db, { limit: 2 })).toMatchObject({
-      deferred: 1,
-      expanded: 0,
+      deferred: 0,
+      expanded: 1,
       rankRebuildScanned: 1,
     });
     expect(
@@ -1169,7 +1156,7 @@ describe("transactionally coupled due-work source repair", () => {
           sql: `select subject_id from due_work where work_kind = ? and subject_id = ?`,
         })
       ).rows,
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(
       (
         await db.execute({
@@ -1180,7 +1167,7 @@ describe("transactionally coupled due-work source repair", () => {
     ).toMatchObject({ state: "complete" });
     expect(await fanOutDueWorkSourceRepairs(db, { limit: 2 })).toMatchObject({
       deferred: 0,
-      expanded: 1,
+      expanded: 0,
       rankRebuildScanned: 0,
     });
   });
@@ -1268,22 +1255,7 @@ describe("transactionally coupled due-work source repair", () => {
         })
       ).rows[0],
     ).toMatchObject({ source_version: "rank-roll-v2" });
-    expect(corpusRefreshes).toBe(1);
-
-    expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
-      deferred: 1,
-      expanded: 0,
-      rankRebuildScanned: 0,
-    });
-    expect(
-      (
-        await db.execute({
-          args: ["catalogue-rank", "track"],
-          sql: `select generation, scanned_count, state from due_work_rebuilds
-            where work_kind = ? and subject_type = ?`,
-        })
-      ).rows[0],
-    ).toMatchObject({ generation: firstGeneration, scanned_count: 6, state: "complete" });
+    expect(corpusRefreshes).toBe(2);
 
     expect(await fanOutDueWorkSourceRepairs(countedClient, { limit: 5 })).toMatchObject({
       deferred: 0,
@@ -1299,6 +1271,7 @@ describe("transactionally coupled due-work source repair", () => {
         })
       ).rows[0],
     ).toMatchObject({ generation: firstGeneration, scanned_count: 6, state: "complete" });
+
     expect(corpusRefreshes).toBe(2);
     expect(
       (
@@ -1334,7 +1307,7 @@ describe("transactionally coupled due-work source repair", () => {
     ]);
   });
 
-  it("keeps bounded material evidence fresh and adopts a newer marker after the owned generation", async () => {
+  it("keeps bounded material evidence fresh and restarts a running generation for a newer material marker", async () => {
     for (const trackId of Array.from({ length: 6 }, (_, index) => `rank-force-${index}`)) {
       await seedCatalogueTrack(db, { trackId });
     }
@@ -1392,14 +1365,6 @@ describe("transactionally coupled due-work source repair", () => {
     });
 
     await db.execute(marker("track-update:force-v3", "track-update"));
-    expect(await fanOutDueWorkSourceRepairs(db, { limit: 5 })).toMatchObject({
-      deferred: 1,
-      rankRebuildScanned: 1,
-    });
-    expect(await fanOutDueWorkSourceRepairs(db, { limit: 5 })).toMatchObject({
-      deferred: 1,
-      rankRebuildScanned: 0,
-    });
     expect(await fanOutDueWorkSourceRepairs(db, { limit: 5 })).toMatchObject({
       deferred: 1,
       rankRebuildScanned: 5,
@@ -1481,12 +1446,7 @@ describe("transactionally coupled due-work source repair", () => {
       hasMore: true,
       rankRebuildScanned: 0,
     });
-    expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 500 })).toMatchObject({
-      deferred: 1,
-      expanded: 0,
-      hasMore: true,
-      rankRebuildScanned: 0,
-    });
+    expect(raced).toBe(true);
     expect(
       (
         await db.execute({
@@ -1502,10 +1462,6 @@ describe("transactionally coupled due-work source repair", () => {
       expanded: 0,
       hasMore: true,
       rankRebuildScanned: 3,
-    });
-    expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 500 })).toMatchObject({
-      deferred: 1,
-      rankRebuildScanned: 0,
     });
     expect(await fanOutDueWorkSourceRepairs(racingClient, { limit: 500 })).toMatchObject({
       deferred: 0,
@@ -1647,7 +1603,7 @@ describe("transactionally coupled due-work source repair", () => {
         if (
           !addedSourceMarker &&
           typeof statement !== "string" &&
-          sql.includes("select 1 from due_work where work_kind = ?")
+          sql.includes("select work_kind, subject_type from due_work")
         ) {
           addedSourceMarker = true;
           await db.execute(
