@@ -489,13 +489,16 @@ export async function fanOutDueWorkSourceRepairs(
 }
 
 /**
- * Locate one registered physical queue holding repair markers through the repair partial index.
- * Source markers are excluded in SQL, so the whole registry costs one indexed read instead of one
- * probe per definition. Which pending definition drains first is immaterial: each repair page
- * removes its markers, so the next read reaches the next pending definition. A marker whose queue
- * has no registered definition can never be repaired; it is excluded from the following read so it
- * cannot hide registered markers behind it in index order, and the walk stops after as many reads
- * as there are registered definitions.
+ * Locate one registered physical queue holding repair markers in one read. The read seeks
+ * `due_work_repair_idx` on `state` and checks `work_kind` after a row fetch, because no index
+ * carries `work_kind` beside repair state; it therefore walks the source markers that sort ahead of
+ * the first physical marker once. A per-definition probe seeks only `state` and `subject_type` and
+ * repeats that same walk for every definition, so the single read is the cheaper shape under a
+ * source-marker burst as well as in round trips. Which pending definition drains first is
+ * immaterial: each repair page removes its markers, so the next read reaches the next pending
+ * definition. A marker whose queue has no registered definition can never be repaired; it is
+ * excluded from the following read so it cannot hide registered markers behind it in index order,
+ * and the walk stops after as many reads as there are registered definitions.
  */
 export async function findPendingPhysicalRepairDefinition(
   client: DueWorkClient,
