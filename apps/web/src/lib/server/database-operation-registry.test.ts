@@ -1027,6 +1027,23 @@ describe("database operation registry", () => {
     expect(Number(guard?.[1])).toBe(SOURCE_REPAIR_LIMIT);
   });
 
+  it("pins embed's non-retried phased admission around its worklist read and vector write", () => {
+    const embed = DATABASE_OPERATION_REGISTRY.find(
+      (operation) => operation.operationId === "track.embed",
+    );
+
+    expect(embed?.admissionShape).toMatchObject({
+      phaseSource: `${SCRIPTS}/embed-sweep.ts`,
+      shape: "phased",
+      yieldRetries: 0,
+    });
+    expect(embed?.mutationDisposition.kind).toBe("deliberately-non-replayable");
+    expect(embed?.triggers.map((trigger) => trigger.operationId)).toEqual([
+      "track.embed.queue",
+      "track.update.embedding",
+    ]);
+  });
+
   it("separates device mirror primary reads from its derived remote mutation", () => {
     const operation = DATABASE_OPERATION_REGISTRY.find(
       (candidate) => candidate.operationId === "device.mirror",
