@@ -208,7 +208,7 @@ The consumer half shipped in ONE PR because the rewrite alone is plan-neutral (a
 
 **7. Public entity reads that still read a whole table: the label tile cover's per-track order** · **needs a hosted plan proof**
 `tier=design · labels, tracks · T1`
-**STATUS: NARROWED (2026-09-15). Migration `0179` index-serves the hub totals, A–Z lanes, and page slices, plus the album and label name arms. The `/labels` tile cover now picks one winning track per tile. Only a `tracks(label_id, …)` ordering index for that pick stays deferred, and the post-migration hosted proof is still owed.**
+**STATUS: NARROWED (2026-09-15). Migration `0179` index-serves the hub totals, A–Z lanes, and page slices, plus the album and label name arms. The `/labels` tile cover now picks one winning track per tile, and item 15 (`tracks_label_cover_idx`) index-serves that pick. The post-migration hosted proofs are still owed.**
 
 - built (hub totals and name arms, migration `0179`):
   - **Listing indexes.** Each entity table carries a partial UNIQUE `(slug)` index (`albums_hub_listing_idx`, `labels_hub_listing_idx`, `artists_hub_listing_idx`). Its WHERE is exactly `hubInclusionWhere` with the floor inlined as a literal.
@@ -225,7 +225,7 @@ The consumer half shipped in ONE PR because the rewrite alone is plan-neutral (a
   - Uncached first renders: `/albums` 3.57 s, `/labels` 2.79 s, `/search?q=calibre` 0.86 s.
   - Sentry: `/albums` 5,624 ms, with the gated-total statement at 5,187 ms; `/search` 2,919 ms, with the album exact-name statement at 2,876 ms.
   - Before the migration, hosted EXPLAIN of the shipped shapes is `SCAN <entity>` for every total, lane, slice, and name arm. Confirm the listing and name indexes appear once the Cloudflare build applies `0179`.
-- remaining: the winner pick still orders every track of each label on the page (`tracks_label_id_idx`, then a temp b-tree over `release_date` and `track_id`); page 1 carries 3,918 `tracks` rows, 1,044 of them on one label. A `tracks(label_id, …)` ordering index for that order (`release_date is null asc, release_date desc, track_id asc`) would bound it. It needs a hosted plan proof first, and it is a new index on the populated `tracks` table, so measure its build cost on a hosted scratch copy before writing a migration.
+- remaining: the winner pick's per-track order is item 15, which rewrites the pick as two covering seeks on `tracks_label_cover_idx` (its evidence, build-lock estimate, and post-migration plan check live there). This item keeps only the post-migration hosted proof of the listing and name indexes.
 
 ## Owned elsewhere — do NOT touch
 
