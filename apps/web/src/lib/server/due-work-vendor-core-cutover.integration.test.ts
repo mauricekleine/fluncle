@@ -20,7 +20,11 @@ import {
   markDueWorkSourceRepairsStatement,
   upsertDueWork,
 } from "./due-work";
-import { hasPendingTrackSourceMarkers } from "./due-work-source-repair";
+import {
+  DUE_WORK_READ_DRAIN_BUDGET,
+  hasPendingTrackSourceMarkers,
+  SOURCE_REPAIR_LIMIT,
+} from "./due-work-source-repair";
 import { createIntegrationDb, seedArtist, seedCatalogueTrack } from "./integration-db";
 import { advanceProjectionFor } from "./projection-operations";
 import { resolveRecordingMbids } from "./recording-mbids";
@@ -219,9 +223,11 @@ describe("Goal C core vendor selector cutovers", () => {
   });
 
   it("drains rank fanout before advancing to a second full projected page", async () => {
+    // One marker more than a guarded read's drain budget converges, so the next read must pause.
+    const pageSize = SOURCE_REPAIR_LIMIT * DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1;
     const trackIds = Array.from(
-      { length: 13 },
-      (_, index) => `rank_page_${String(index).padStart(2, "0")}`,
+      { length: pageSize * 2 + 1 },
+      (_, index) => `rank_page_${String(index).padStart(3, "0")}`,
     );
     for (const trackId of trackIds) {
       await seedCatalogueTrack(db, { trackId });
@@ -231,17 +237,18 @@ describe("Goal C core vendor selector cutovers", () => {
       await schedule("catalogue-rank", trackId);
     }
 
-    const first = await rankCatalogue(6);
-    expect(first.prioritized).toBe(6);
+    const first = await rankCatalogue(pageSize);
+    expect(first.prioritized).toBe(pageSize);
     expect(first.remaining).toBeGreaterThan(0);
-    await expect(rankCatalogue(6)).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
+    await expect(rankCatalogue(pageSize)).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
 
     const pending = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND],
       sql: `select count(*) as count from due_work where work_kind = ? and state = 'repair'`,
     });
-    // The rejected guarded read still performed its bounded five-marker repair step. The sixth
-    // marker remains durable, so the driver must repair once more before it can read page two.
+    // The rejected guarded read still converged every five-marker page its drain budget allows.
+    // The page's last marker remains durable, so the driver must repair once more before it can
+    // read page two.
     expect(Number(pending.rows[0]?.count ?? 0)).toBe(1);
 
     const firstRepair = await advanceProjectionFor(db, {
@@ -252,23 +259,23 @@ describe("Goal C core vendor selector cutovers", () => {
     });
     expect(firstRepair).toMatchObject({ complete: true, processed: 1 });
     const repairedFirstPage = await db.execute({
-      args: ["catalogue-rank", ...trackIds.slice(0, 6)],
+      args: ["catalogue-rank", ...trackIds.slice(0, pageSize)],
       sql: `select subject_id from due_work where work_kind = ?
         and subject_id in (${trackIds
-          .slice(0, 6)
+          .slice(0, pageSize)
           .map(() => "?")
           .join(", ")})`,
     });
     expect(repairedFirstPage.rows).toEqual([]);
 
-    const second = await rankCatalogue(6);
-    expect(second.prioritized).toBe(6);
+    const second = await rankCatalogue(pageSize);
+    expect(second.prioritized).toBe(pageSize);
     expect(second.remaining).toBeGreaterThan(0);
 
     const rows = await db.execute(
       `select track_id from tracks where catalogue_rank_corpus is not null order by track_id`,
     );
-    expect(rows.rows.map((row) => row.track_id)).toEqual(trackIds.slice(0, 12));
+    expect(rows.rows.map((row) => row.track_id)).toEqual(trackIds.slice(0, pageSize * 2));
   });
 
   it("reads a rank page while unrelated repair debt keeps the shared track repair step incomplete", async () => {
