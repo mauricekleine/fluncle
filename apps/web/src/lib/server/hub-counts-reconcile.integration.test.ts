@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,7 +9,8 @@ import {
   seedLabel,
   seedTrack,
 } from "./integration-db";
-import { DUE_WORK_SOURCE_REPAIR_KIND } from "./due-work";
+import { DUE_WORK_SOURCE_REPAIR_KIND, MAX_DUE_WORK_CHUNK_SIZE } from "./due-work";
+import { hubCountDeltaStatement } from "./hub-counts";
 
 // THE HUB-COUNTS DRIFT BACKSTOP, PROVEN AGAINST THE REAL SCHEMA (docs/db-scale-backlog Wave 2
 // keystone 2, slice C).
@@ -21,19 +22,22 @@ import { DUE_WORK_SOURCE_REPAIR_KIND } from "./due-work";
 // as a missed correction: `corrected` must be the number of rows that were actually WRONG, never
 // the number of rows re-written.
 //
-// Driven against the in-memory libSQL harness with the real migrations applied, so the
-// `UPDATE … FROM (… GROUP BY …)` under test is byte-identical to production's.
+// Driven against the in-memory libSQL harness with the real migrations applied, so the page reads
+// and guarded writes under test are byte-identical to production's.
 
 let db: Client;
+/** When set, the module under test talks to this wrapper instead of `db` (recording, races). */
+let wrapped: Client | undefined;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
 
-  return { ...actual, getDb: () => Promise.resolve(db) };
+  return { ...actual, getDb: () => Promise.resolve(wrapped ?? db) };
 });
 
 // Imported AFTER the mock so the module's `getDb` is the mocked one.
-const { reconcileHubCounts } = await import("./hub-counts-reconcile");
+const { HUB_COUNTS_RECONCILE_PAGE_SIZE, reconcileHubCounts } =
+  await import("./hub-counts-reconcile");
 
 type Counts = { certified: number; renderable: number };
 
@@ -63,6 +67,7 @@ async function setCounts(
 }
 
 beforeEach(async () => {
+  wrapped = undefined;
   db = await createIntegrationDb();
   await seedLabel(db, { id: "lab-1", name: "Hospital Records", slug: "hospital-records" });
   await seedAlbum(db, { id: "alb-1", name: "Sight To Behold", slug: "sight-to-behold" });
@@ -94,16 +99,16 @@ describe("reconcileHubCounts — the grouped correction", () => {
     await db.execute(`update artists set rankable_track_count = 9 where id = 'art-1'`);
     const result = await reconcileHubCounts();
     row = await db.execute(`select rankable_track_count as n from artists where id = 'art-1'`);
-    expect(result.artists).toEqual({ corrected: 1 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
     expect(Number(row.rows[0]?.n ?? -1)).toBe(1);
   });
   it("corrects a drifted counter on all three tables and reports one row each", async () => {
     // The slice-A rollout shape: the edges exist, the counters were never moved for them.
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1 });
-    expect(result.albums).toEqual({ corrected: 1 });
-    expect(result.artists).toEqual({ corrected: 1 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.albums).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 3 });
     expect(await counts("albums", "alb-1")).toEqual({ certified: 2, renderable: 3 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 2, renderable: 3 });
@@ -124,7 +129,7 @@ describe("reconcileHubCounts — the grouped correction", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 3 });
   });
 
@@ -133,7 +138,7 @@ describe("reconcileHubCounts — the grouped correction", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.albums).toEqual({ corrected: 1 });
+    expect(result.albums).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("albums", "alb-1")).toEqual({ certified: 2, renderable: 3 });
   });
 
@@ -141,9 +146,9 @@ describe("reconcileHubCounts — the grouped correction", () => {
     await reconcileHubCounts();
     const second = await reconcileHubCounts();
 
-    expect(second.labels).toEqual({ corrected: 0 });
-    expect(second.albums).toEqual({ corrected: 0 });
-    expect(second.artists).toEqual({ corrected: 0 });
+    expect(second.labels).toEqual({ corrected: 0, deferred: 0 });
+    expect(second.albums).toEqual({ corrected: 0, deferred: 0 });
+    expect(second.artists).toEqual({ corrected: 0, deferred: 0 });
   });
 
   it("is idempotent — a third pass still writes nothing and reports nothing", async () => {
@@ -177,7 +182,7 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 0, renderable: 0 });
   });
 
@@ -187,8 +192,8 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.albums).toEqual({ corrected: 1 });
-    expect(result.artists).toEqual({ corrected: 1 });
+    expect(result.albums).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("albums", "alb-1")).toEqual({ certified: 0, renderable: 0 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 0, renderable: 0 });
   });
@@ -199,7 +204,7 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
     const result = await reconcileHubCounts();
 
     // Only lab-1 drifted; the empty label is already truthful at 0/0 and must not inflate the count.
-    expect(result.labels).toEqual({ corrected: 1 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("labels", "lab-empty")).toEqual({ certified: 0, renderable: 0 });
   });
 
@@ -211,7 +216,7 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 0, renderable: 0 });
   });
 });
@@ -226,7 +231,7 @@ describe("reconcileHubCounts — the pinned artists source (orphaned edges)", ()
 
     const result = await reconcileHubCounts();
 
-    expect(result.artists).toEqual({ corrected: 1 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
     // Two surviving tracks, both certified — the orphan contributes nothing.
     expect(await counts("artists", "art-1")).toEqual({ certified: 2, renderable: 2 });
   });
@@ -241,7 +246,447 @@ describe("reconcileHubCounts — the pinned artists source (orphaned edges)", ()
     // is zeroed rather than pinned at its stale reading.
     const edges = await db.execute(`select count(*) as n from track_artists`);
     expect(Number(edges.rows[0]?.n ?? 0)).toBe(3);
-    expect(result.artists).toEqual({ corrected: 1 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 0, renderable: 0 });
+  });
+});
+
+// ── Parity with the whole-graph correction ─────────────────────────────────────────────────────
+//
+// The oracle is the single-statement reconcile the paged pass replaces: per table a grouped
+// `UPDATE … FROM (… GROUP BY fk)` guarded by counts-differ, then a zero-truth `NOT IN` pass. On an
+// archive drifted in every way production drifts (over- and under-counts, half-drifted pairs,
+// stale non-zero entities with no tracks, orphaned artist edges, dangling pointers, rankable
+// drift), the paged pass must end on byte-identical counters and report identical corrections at
+// every page size, including sizes that land exactly on a table boundary.
+
+type HubTable = "albums" | "artists" | "labels";
+const HUB_TABLES: readonly HubTable[] = ["labels", "albums", "artists"];
+
+const ORACLE_SOURCES: Record<HubTable, string> = {
+  albums: `select album_id as entity_id, count(*) as renderable,
+                  sum(case when is_catalogue = 0 then 1 else 0 end) as certified, 0 as rankable
+           from tracks where album_id is not null group by album_id`,
+  artists: `select ta.artist_id as entity_id, count(*) as renderable,
+                   sum(case when t.is_catalogue = 0 then 1 else 0 end) as certified,
+                   sum(case when t.key is not null and t.has_embedding = 1 then 1 else 0 end) as rankable
+            from track_artists ta join tracks t on t.track_id = ta.track_id group by ta.artist_id`,
+  labels: `select label_id as entity_id, count(*) as renderable,
+                  sum(case when is_catalogue = 0 then 1 else 0 end) as certified, 0 as rankable
+           from tracks where label_id is not null group by label_id`,
+};
+
+async function oracleReconcile(client: Client): Promise<Record<HubTable, number>> {
+  const corrected: Record<HubTable, number> = { albums: 0, artists: 0, labels: 0 };
+
+  for (const table of HUB_TABLES) {
+    const rankable = table === "artists";
+    const source = ORACLE_SOURCES[table];
+    const grouped = await client.execute(
+      `update ${table}
+       set renderable_track_count = src.renderable, certified_finding_count = src.certified
+           ${rankable ? ", rankable_track_count = src.rankable" : ""}
+       from (${source}) src
+       where ${table}.id = src.entity_id
+         and (${table}.renderable_track_count <> src.renderable
+              or ${table}.certified_finding_count <> src.certified
+              ${rankable ? "or artists.rankable_track_count <> src.rankable" : ""})`,
+    );
+    const zeroed = await client.execute(
+      `update ${table}
+       set renderable_track_count = 0, certified_finding_count = 0
+           ${rankable ? ", rankable_track_count = 0" : ""}
+       where (renderable_track_count <> 0 or certified_finding_count <> 0
+              ${rankable ? "or rankable_track_count <> 0" : ""})
+         and id not in (select entity_id from (${source}))`,
+    );
+    corrected[table] = grouped.rowsAffected + zeroed.rowsAffected;
+  }
+
+  return corrected;
+}
+
+/** Deterministic PRNG so every run drifts the same archive. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const ENTITY_COUNT = 23;
+
+function entityId(table: HubTable, index: number): string {
+  return `${table.slice(0, 3)}-${String(index).padStart(2, "0")}`;
+}
+
+/**
+ * Seed a drifted archive. Entity 00 of each table has no tracks and stale non-zero counters; label
+ * and album 01 point only at tracks that are then deleted; artist 01 keeps only orphaned edges.
+ */
+async function seedDriftedArchive(client: Client, seed: number): Promise<void> {
+  const random = mulberry32(seed);
+  const pick = (table: HubTable) => entityId(table, 2 + Math.floor(random() * (ENTITY_COUNT - 2)));
+
+  for (let index = 0; index < ENTITY_COUNT; index += 1) {
+    await seedLabel(client, { id: entityId("labels", index), slug: `label-${index}` });
+    await seedAlbum(client, { id: entityId("albums", index), slug: `album-${index}` });
+    await seedArtist(client, { id: entityId("artists", index), slug: `artist-${index}` });
+  }
+
+  const trackCount = 90;
+  const doomed: string[] = [];
+  const statements: InStatement[] = [];
+
+  for (let index = 0; index < trackCount; index += 1) {
+    const trackId = `t-${String(index).padStart(20, "0")}`;
+    const isDoomed = index % 11 === 0;
+    await seedCatalogueTrack(client, { trackId });
+
+    const pointer = (table: HubTable): null | string => {
+      if (isDoomed && index % 2 === 0) {
+        return entityId(table, 1);
+      }
+      const roll = random();
+      if (roll < 0.15) {
+        return null;
+      }
+      if (roll < 0.2) {
+        return `${table.slice(0, 3)}-dangling`;
+      }
+      return pick(table);
+    };
+
+    statements.push({
+      args: [
+        pointer("labels"),
+        pointer("albums"),
+        random() < 0.4 ? 0 : 1,
+        random() < 0.6 ? "8A" : null,
+        random() < 0.5 ? 1 : 0,
+        trackId,
+      ],
+      sql: `update tracks
+            set label_id = ?, album_id = ?, is_catalogue = ?, key = ?, has_embedding = ?
+            where track_id = ?`,
+    });
+
+    const artists = new Set<string>();
+    if (isDoomed) {
+      artists.add(entityId("artists", 1));
+    }
+    const edgeCount = Math.floor(random() * 4);
+    for (let edge = 0; edge < edgeCount; edge += 1) {
+      artists.add(pick("artists"));
+    }
+    [...artists].forEach((artistId, position) => {
+      statements.push({
+        args: [trackId, artistId, position + 1],
+        sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, ?)`,
+      });
+    });
+
+    if (isDoomed) {
+      doomed.push(trackId);
+    }
+  }
+
+  // Counter drift: random stored values everywhere, stale non-zero on entity 00 and 01.
+  for (const table of HUB_TABLES) {
+    for (let index = 0; index < ENTITY_COUNT; index += 1) {
+      const stale = index < 2;
+      const draw = () => (stale ? 1 + Math.floor(random() * 5) : Math.floor(random() * 6));
+      statements.push({
+        args:
+          table === "artists"
+            ? [draw(), draw(), draw(), entityId(table, index)]
+            : [draw(), draw(), entityId(table, index)],
+        sql:
+          table === "artists"
+            ? `update artists set renderable_track_count = ?, certified_finding_count = ?,
+                 rankable_track_count = ? where id = ?`
+            : `update ${table} set renderable_track_count = ?, certified_finding_count = ?
+               where id = ?`,
+      });
+    }
+  }
+
+  statements.push({
+    args: doomed,
+    sql: `delete from tracks where track_id in (${doomed.map(() => "?").join(", ")})`,
+  });
+  await client.batch(statements, "write");
+}
+
+async function counterSnapshot(client: Client): Promise<Record<HubTable, unknown[]>> {
+  const snapshot = {} as Record<HubTable, unknown[]>;
+
+  for (const table of HUB_TABLES) {
+    const result = await client.execute(
+      `select id, renderable_track_count, certified_finding_count
+              ${table === "artists" ? ", rankable_track_count" : ""}
+       from ${table} order by id`,
+    );
+    snapshot[table] = result.rows.map((row) => ({ ...row }));
+  }
+
+  return snapshot;
+}
+
+/** Wrap a client so every `execute` and `batch` the module issues is recorded, then delegated. */
+function recordingClient(
+  target: Client,
+  onBatch?: (statements: InStatement[]) => Promise<void>,
+): {
+  batches: Array<{ mode: string | undefined; statements: InStatement[] }>;
+  client: Client;
+  executes: InStatement[];
+} {
+  const batches: Array<{ mode: string | undefined; statements: InStatement[] }> = [];
+  const executes: InStatement[] = [];
+  // The module under test issues only `execute` (page reads) and `batch` (guarded writes).
+  const client = {
+    batch: async (statements: InStatement[], mode?: "deferred" | "read" | "write") => {
+      batches.push({ mode, statements });
+      await onBatch?.(statements);
+      return target.batch(statements, mode);
+    },
+    execute: async (statement: InStatement) => {
+      executes.push(statement);
+      return target.execute(statement);
+    },
+  } as unknown as Client;
+
+  return { batches, client, executes };
+}
+
+function sqlOf(statement: InStatement): string {
+  return typeof statement === "string" ? statement : statement.sql;
+}
+
+function argsOf(statement: InStatement): unknown[] {
+  if (typeof statement === "string" || statement.args === undefined) {
+    return [];
+  }
+  return Array.isArray(statement.args) ? statement.args : Object.values(statement.args);
+}
+
+describe("reconcileHubCounts — parity with the whole-graph correction", () => {
+  it.each([1, 7, ENTITY_COUNT, HUB_COUNTS_RECONCILE_PAGE_SIZE])(
+    "ends on identical counters and corrections at page size %i",
+    async (pageSize) => {
+      const oracleDb = await createIntegrationDb();
+      await seedDriftedArchive(oracleDb, 7);
+      db = await createIntegrationDb();
+      await seedDriftedArchive(db, 7);
+      expect(await counterSnapshot(db)).toEqual(await counterSnapshot(oracleDb));
+
+      const expected = await oracleReconcile(oracleDb);
+      const result = await reconcileHubCounts({ pageSize });
+
+      // The fixture really drifts every table, so parity is not vacuous.
+      expect(expected.labels).toBeGreaterThan(0);
+      expect(expected.albums).toBeGreaterThan(0);
+      expect(expected.artists).toBeGreaterThan(0);
+      expect(result.labels).toEqual({ corrected: expected.labels, deferred: 0 });
+      expect(result.albums).toEqual({ corrected: expected.albums, deferred: 0 });
+      expect(result.artists).toEqual({ corrected: expected.artists, deferred: 0 });
+      expect(result.next).toBeNull();
+      expect(await counterSnapshot(db)).toEqual(await counterSnapshot(oracleDb));
+    },
+  );
+
+  it("zeroes the stale entities and ignores orphaned edges exactly as the oracle does", async () => {
+    db = await createIntegrationDb();
+    await seedDriftedArchive(db, 11);
+
+    await reconcileHubCounts({ pageSize: 5 });
+
+    for (const table of HUB_TABLES) {
+      expect(await counts(table, entityId(table, 0))).toEqual({ certified: 0, renderable: 0 });
+      expect(await counts(table, entityId(table, 1))).toEqual({ certified: 0, renderable: 0 });
+    }
+    const edges = await db.execute({
+      args: [entityId("artists", 1)],
+      sql: `select count(*) as n from track_artists where artist_id = ?`,
+    });
+    expect(Number(edges.rows[0]?.n ?? 0)).toBeGreaterThan(0);
+  });
+});
+
+describe("reconcileHubCounts — bounded windows", () => {
+  it("chains windows through `next` to the same end state as one full pass", async () => {
+    const oracleDb = await createIntegrationDb();
+    await seedDriftedArchive(oracleDb, 23);
+    db = await createIntegrationDb();
+    await seedDriftedArchive(db, 23);
+    const expected = await oracleReconcile(oracleDb);
+
+    const totals: Record<HubTable, number> = { albums: 0, artists: 0, labels: 0 };
+    let cursor: Awaited<ReturnType<typeof reconcileHubCounts>>["next"] | undefined;
+    let windows = 0;
+
+    do {
+      const result = await reconcileHubCounts({
+        cursor: cursor ?? undefined,
+        pageLimit: 2,
+        pageSize: 4,
+      });
+      expect(result.pages).toBeLessThanOrEqual(2);
+      for (const table of HUB_TABLES) {
+        totals[table] += result[table].corrected;
+      }
+      cursor = result.next;
+      windows += 1;
+    } while (cursor !== null && windows < 100);
+
+    expect(cursor).toBeNull();
+    expect(windows).toBeGreaterThan(3);
+    expect(totals).toEqual(expected);
+    expect(await counterSnapshot(db)).toEqual(await counterSnapshot(oracleDb));
+  });
+
+  it("resumes a named cursor inside a table and hands the next table its first page", async () => {
+    await seedLabel(db, { id: "lab-2", name: "Second", slug: "second" });
+    await seedLabel(db, { id: "lab-3", name: "Third", slug: "third" });
+
+    const first = await reconcileHubCounts({ pageLimit: 1, pageSize: 2 });
+    expect(first.next).toEqual({ afterId: "lab-2", table: "labels" });
+    expect(first.pages).toBe(1);
+
+    const second = await reconcileHubCounts({
+      cursor: first.next ?? undefined,
+      pageLimit: 1,
+      pageSize: 2,
+    });
+    expect(second.next).toEqual({ afterId: null, table: "albums" });
+  });
+});
+
+describe("reconcileHubCounts — bounded statement shape", () => {
+  it("pins one due-work chunk per page of corrections", () => {
+    expect(HUB_COUNTS_RECONCILE_PAGE_SIZE).toBe(250);
+    expect(2 * HUB_COUNTS_RECONCILE_PAGE_SIZE).toBe(MAX_DUE_WORK_CHUNK_SIZE);
+  });
+
+  it("reads keyset pages and writes only guarded point writes, never an aggregate", async () => {
+    db = await createIntegrationDb();
+    await seedDriftedArchive(db, 5);
+    const pageSize = 6;
+    const recorder = recordingClient(db);
+    wrapped = recorder.client;
+
+    await reconcileHubCounts({ pageSize });
+
+    expect(recorder.executes.length).toBeGreaterThan(3 * Math.floor(ENTITY_COUNT / pageSize));
+    for (const statement of recorder.executes) {
+      const sql = sqlOf(statement).toLowerCase();
+      expect(sql).toMatch(/^\s*with page as \(/);
+      expect(sql).not.toMatch(/\b(insert|update|delete)\b/);
+      expect(sql).toMatch(/where id > \?\s+order by id\s+limit \?/);
+      expect(argsOf(statement).at(-1)).toBe(pageSize);
+    }
+
+    expect(recorder.batches.length).toBeGreaterThan(0);
+    for (const batch of recorder.batches) {
+      expect(batch.mode).toBe("write");
+      expect(batch.statements.length).toBeLessThanOrEqual(2 * pageSize);
+      for (const statement of batch.statements) {
+        const sql = sqlOf(statement).toLowerCase().replace(/\s+/g, " ");
+        expect(sql).not.toMatch(/\btracks\b|\btrack_artists\b|group by/);
+        expect(
+          /^update (labels|albums|artists) set .* where id = \? and renderable_track_count = \? and certified_finding_count = \?/.test(
+            sql.trim(),
+          ) || sql.includes("insert into due_work"),
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("issues no write batch at all on an already-correct archive", async () => {
+    await reconcileHubCounts();
+    const recorder = recordingClient(db);
+    wrapped = recorder.client;
+
+    const result = await reconcileHubCounts();
+
+    expect(recorder.batches).toEqual([]);
+    expect(result).toMatchObject({
+      albums: { corrected: 0, deferred: 0 },
+      artists: { corrected: 0, deferred: 0 },
+      labels: { corrected: 0, deferred: 0 },
+    });
+  });
+});
+
+describe("reconcileHubCounts — a maintained delta between read and write", () => {
+  let lateTracks = 0;
+
+  /** The maintained edge writer's shape: the edge and its counter delta in one write batch. */
+  async function linkLateTrack(): Promise<void> {
+    lateTracks += 1;
+    const trackId = `t-late-${String(lateTracks).padStart(15, "0")}`;
+    await seedCatalogueTrack(db, { trackId });
+    await db.batch(
+      [
+        { args: [trackId], sql: `update tracks set label_id = 'lab-1' where track_id = ?` },
+        hubCountDeltaStatement("labels", "lab-1", { certified: 0, renderable: 1 }),
+      ],
+      "write",
+    );
+  }
+
+  it("keeps the delta, re-reads the page, and converges on truth", async () => {
+    await setCounts("labels", "lab-1", { certified: 9, renderable: 12 });
+    let raced = false;
+    wrapped = recordingClient(db, async () => {
+      if (!raced) {
+        raced = true;
+        await linkLateTrack();
+      }
+    }).client;
+
+    const result = await reconcileHubCounts();
+
+    // A blind write of the page's truth would land 3/2 and lose the late track. The guard misses,
+    // the page is re-read, and the correction includes it.
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 4 });
+  });
+
+  it("defers a row that loses twice without overwriting the moved counters or marking it", async () => {
+    await setCounts("labels", "lab-1", { certified: 9, renderable: 12 });
+    let labelBatches = 0;
+    wrapped = recordingClient(db, async (statements) => {
+      if (
+        labelBatches < 2 &&
+        statements.some((statement) => /update labels/.test(sqlOf(statement)))
+      ) {
+        labelBatches += 1;
+        await linkLateTrack();
+      }
+    }).client;
+
+    const result = await reconcileHubCounts();
+
+    expect(result.labels).toEqual({ corrected: 0, deferred: 1 });
+    // Both late deltas survive on top of the stale reading; nothing clobbered them.
+    expect(await counts("labels", "lab-1")).toEqual({ certified: 9, renderable: 14 });
+    const markers = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND],
+      sql: `select count(*) as n from due_work
+            where work_kind = ? and subject_type = 'label' and subject_id = 'lab-1'`,
+    });
+    expect(Number(markers.rows[0]?.n ?? -1)).toBe(0);
+
+    wrapped = undefined;
+    const next = await reconcileHubCounts();
+    expect(next.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 5 });
   });
 });

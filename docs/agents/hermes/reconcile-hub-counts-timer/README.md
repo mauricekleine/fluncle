@@ -1,6 +1,6 @@
 # fluncle-reconcile-hub-counts-timer — the nightly hub-counts reconciliation on a host timer
 
-The rave-02 host trigger for the `--no-agent` **hub-counts reconciliation** sweep. `fluncle-reconcile-hub-counts` fires one `reconcile_hub_counts` a night: the WORKER recomputes `renderable_track_count` + `certified_finding_count` for every `labels` / `albums` / `artists` row from truth, in SQL, and rewrites **only the rows that disagreed** — then acks the corrected count per table. Zero LLM tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 24h.
+The rave-02 host trigger for the `--no-agent` **hub-counts reconciliation** sweep. `fluncle-reconcile-hub-counts` walks `reconcile_hub_counts` once a night in bounded windows: the WORKER recomputes `renderable_track_count` + `certified_finding_count` (and artists' `rankable_track_count`) for every `labels` / `albums` / `artists` row from truth, page by page, and rewrites **only the rows that disagreed** — then acks the corrected count per table. Zero LLM tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 24h.
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/reconcile-hub-counts.sh`](../scripts/reconcile-hub-counts.sh) → [`../scripts/reconcile-hub-counts.ts`](../scripts/reconcile-hub-counts.ts)) — riding the image and auto-updating from `main` via pin-watch.
 
@@ -14,16 +14,20 @@ The counters are maintained as **deltas** by every edge-writing path ([`apps/web
 
 **Keystone 2's own rollout proved the need on day one (2026-07-26):** the deploy-window skew between the one-time backfill and the first delta-maintained writes left **44 artists, 3 albums and 1 label** reading wrong until a manual reconcile. This tick is that manual reconcile, nightly.
 
-## The model: box triggers, the Worker corrects
+## The model: the box walks windows, the Worker corrects
 
-The box holds no computation authority — it only fires the trigger. Per tick:
+The box holds no computation authority — it walks the pass and logs the numbers. Per tick:
 
-1. **POST** `/api/v1/admin/hub-counts/reconcile` with the box's AGENT token — a bare trigger (no body).
-2. The **Worker** runs two statements per entity table:
-   - the **grouped correction** — `UPDATE <entity> … FROM (SELECT <fk>, count(*), sum(is_catalogue = 0) … GROUP BY <fk>) src WHERE <entity>.id = src.<fk> AND (the stored counts DIFFER)`. The counts-differ guard is what makes `rowsAffected` mean **rows corrected** rather than rows re-written, so the number reported is the drift exactly;
-   - the **zero-truth pass** — an entity whose last track was deleted out of band keeps a stale non-zero count and appears in NO group, so the first statement can never reach it. A small `UPDATE … SET both = 0 WHERE (counts <> 0) AND id NOT IN (<the same source's keys>)` closes it, folding into the same per-table `corrected`.
+1. **POST** `/api/v1/admin/hub-counts/reconcile` with the box's AGENT token and `{ pageLimit: 8 }`, then `{ cursor, pageLimit: 8 }` with each response's `next` until `next` is null. Each window runs inside its own admitted database phase (`database-admission-runner.sh phase fluncle-reconcile-hub-counts -- …`), so the admission lease is held only while one window runs.
+2. Per window, the **Worker** walks at most eight keyset pages across `labels → albums → artists`:
+   - the **page read** — one read statement takes the next 250 entity rows after the cursor (`id > ?`, the primary-key index) and LEFT JOINs each to its own tracks by the entity's index (`tracks_label_id_idx` / `tracks_album_id_idx` / `track_artists_artist_id_idx`), returning the stored counters beside the truth from one snapshot. Its cost is the page's own track mass, never the archive. An entity whose last track was deleted out of band reads zero truth, so no separate zero pass exists;
+   - the **guarded write** — only disagreeing rows are written, each as `update <entity> set <truth> where id = ? and <every counter> = <the value the page read>`, beside its due-work marker, in one write batch of point writes (at most 500 statements). No write transaction ever aggregates the track graph.
 
-**The artists source is pinned** to `track_artists ta JOIN tracks t ON t.track_id = ta.track_id`, never raw `track_artists`: production carries **orphaned edges** (62 of them, measured 2026-07-26, left by out-of-band track deletion) and the hub reads all join `tracks`. Counting raw edges would "correct" the counters into disagreeing with what actually renders. Labels and albums group over `tracks` directly, with `WHERE label_id / album_id IS NOT NULL` — also load-bearing, since a NULL inside the zero-truth `NOT IN` subselect makes the whole predicate NULL and would silently match nothing.
+**Why the guard.** Every edge writer moves the counters in the same transaction as its edge, so a correction that still matches the counters its page read is exactly correct. If a delta landed in between, the guard matches nothing and the delta survives; the page is re-read once and corrected from the fresher snapshot, and a row that loses again is reported as `deferred` for the next night.
+
+**The artists source is pinned** to edges whose track exists (`track_artists` joined to `tracks`, counting `t.track_id`), never raw `track_artists`: production carries **orphaned edges** left by out-of-band track deletion, and the hub reads all join `tracks`. Counting raw edges would "correct" the counters into disagreeing with what actually renders.
+
+**Backpressure.** A yielded window acquisition is retried once (the operation is replay-safe: a window re-read from its cursor rewrites only rows still disagreeing). A second yield stops the run with an exit-zero `gateState: "paused"` summary that keeps the windows already applied, and new windows start only inside a 600-second budget. The next night starts again at the first label.
 
 **It calls the oRPC HTTP endpoint directly** (the `funnel-snapshot.ts` / `anchor-sweep.ts` precedent), never a `fluncle admin …` subcommand — the box's baked CLI is a PINNED release and must not gain a new dependency. **No new secret**: every statement runs Worker-side, so the box is a bare trigger; `FLUNCLE_API_TOKEN` (the box's agent token) is already present.
 
@@ -32,7 +36,7 @@ The box holds no computation authority — it only fires the trigger. Per tick:
 A non-zero `corrected` is a **signal**, not noise: it means a write path is leaking. So the tick logs the per-table numbers on **every** run — a row of zeroes is the evidence the counters are healthy — and journald holds the history:
 
 ```
-[reconcile-hub-counts] AUDIT corrected=48 labels=1 albums=3 artists=44 tookMs=1150
+[reconcile-hub-counts] AUDIT corrected=48 labels=1 albums=3 artists=44 tookMs=1150 deferred=0
 ```
 
 plus the machine-readable last stdout line (also the `/status` prober's run output):
@@ -41,15 +45,20 @@ plus the machine-readable last stdout line (also the `/status` prober's run outp
 {
   "albums": 3,
   "artists": 44,
+  "checked": 3,
   "corrected": 48,
+  "deferred": 0,
   "elapsedMs": 1204,
   "labels": 1,
   "ok": true,
-  "tookMs": 1150
+  "partial": false,
+  "produced": 48,
+  "tookMs": 1150,
+  "windows": 14
 }
 ```
 
-`tookMs` is the Worker's SQL wall clock; `elapsedMs` is the tick's own. A field the op did not send reads `?` in the audit line and `null` in the JSON, and the total is withheld rather than summed from a partial read.
+`tookMs` is the Worker's SQL wall clock summed over every window; `elapsedMs` is the tick's own, admission waits included. A stopped pass (`partial: true`, with `reason` and ` partial=<reason>` on the audit line) keeps `produced` as the rows its applied windows corrected but withholds the `corrected` total, and a table it never reached reads `?` in the audit line and `null` in the JSON. A non-zero `deferred` names rows a concurrent counter move kept away from the pass; the next night owns them.
 
 Read the drift history:
 
@@ -85,5 +94,15 @@ systemctl list-timers fluncle-reconcile-hub-counts.timer
 The first tick on the box may report a non-zero `corrected` — that is the accumulated drift being paid off, not a fault. Expect zeroes from the second night onward.
 
 (A full re-provision restores it automatically — [`../install-host-timers.sh`](../install-host-timers.sh) globs every `*-timer/` dir; the manual pass above is only for the FIRST enable on an already-running box.)
+
+## Rolling out a change to the admission shape
+
+The unit runs `reconcile-hub-counts.sh` directly, and the orchestrator takes a phase per window. Roll a change out in this order:
+
+1. **Deploy the Worker.** An empty body still runs every page in one request, so the image already on the box keeps working.
+2. **Let pin-watch rebake the image.** Under the previously installed unit, the runner exports `FLUNCLE_ADMISSION_RUNNER_PID`, and the new script then runs its windows in-process under that inherited whole-lifetime lease rather than nesting phase admission beneath it.
+3. **Then refresh the unit** from a repo checkout: `sudo install -m 0644 docs/agents/hermes/reconcile-hub-counts-timer/fluncle-reconcile-hub-counts.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
+
+Installing the unit before the image carries the windowed script would run the old bare trigger with no admission at all.
 
 **It is already on /status.** `cron.reconcile-hub-counts` is registered in `@fluncle/registry` and in the `fluncle-healthcheck` prober's `AUTOMATION_CRONS`, so the moment the timer runs its first tick the `/status` row goes live. Nothing further to wire.

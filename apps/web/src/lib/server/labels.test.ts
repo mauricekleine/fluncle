@@ -1427,4 +1427,59 @@ describe("listKnownLabelNames (the /tracks label filter typeahead pool)", () => 
     expect(names).not.toContain("   ");
     expect(names.every((name) => name.trim() !== "")).toBe(true);
   });
+
+  it("drives the join from the certified findings, never from a walk of the label's tracks", async () => {
+    await insertLabel("lbl_big", "Big Imprint", "big-imprint");
+    await insertLabel("lbl_other", "Other Imprint", "other-imprint");
+    await seedFinding("t-big-found", "Big Imprint");
+    await pointTrackAtLabel("t-big-found", "lbl_big");
+    // Uncertified catalogue tracks on both labels: they fill `tracks_label_cover_idx`, and a label
+    // carrying only them is not offered.
+    for (let index = 0; index < 40; index += 1) {
+      await db.execute({
+        args: [`t-cat-${index}`, index % 2 === 0 ? "lbl_big" : "lbl_other"],
+        sql: `insert into tracks
+                (track_id, title, artists_json, duration_ms, label_id, album_image_url, release_date)
+              values (?, 'Tune', '["Artist"]', 0, ?, 'https://covers.example/x.jpg', '2024-01-01')`,
+      });
+    }
+
+    const execute = vi.spyOn(db, "execute");
+    const names = await listKnownLabelNames();
+    // A call's first argument is a SQL string or a `{ sql, args }` statement, whichever shape ran.
+    const sqlOf = (statement: unknown): string => {
+      if (typeof statement === "string") {
+        return statement;
+      }
+
+      return typeof statement === "object" &&
+        statement !== null &&
+        "sql" in statement &&
+        typeof statement.sql === "string"
+        ? statement.sql
+        : "";
+    };
+    const sql = execute.mock.calls
+      .map((call) => sqlOf(call[0] as unknown))
+      .find((text) => text.includes("from findings"));
+    execute.mockRestore();
+
+    expect(names).toEqual(["Big Imprint"]);
+    expect(sql).toBeDefined();
+
+    if (sql === undefined) {
+      return;
+    }
+
+    const plan = await db.execute(`explain query plan ${sql}`);
+    const details = plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
+
+    expect(details[0]).toBe("SCAN findings");
+    expect(details).toContainEqual(
+      expect.stringMatching(
+        /^SEARCH tracks USING INDEX sqlite_autoindex_tracks_1 \(track_id=\?\)$/,
+      ),
+    );
+    expect(details.filter((detail) => detail.startsWith("SCAN tracks"))).toEqual([]);
+  });
 });

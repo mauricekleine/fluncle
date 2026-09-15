@@ -553,37 +553,52 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
  * subqueries could each land on a different track, pairing one record's master with another's
  * fallback; `json_object` keeps them on one picked row by construction, at one subquery's cost.
  *
- * The pick runs alone, then the cover is read once. The inner `limit 1` orders the entity's
- * tracks (`tracks t2`) on `order` and returns only the winner's `track_id`; the outer read fetches
- * that one row by primary key and joins its album. Joining `albums` inside the ordered read would
- * seek an album, and read the late `tracks.album_id` column of a wide row, for EVERY track on the
- * entity before the sort keeps one: a whole label catalogue per tile. `order` ends in the primary
- * key, so it is a total order and the two steps land on exactly the row one ordered join would.
+ * The pick runs alone, then the cover is read once. `pick` is a scalar subquery returning only the
+ * winning `track_id`; the outer read fetches that one row by primary key and joins its album.
+ * Joining `albums` inside the pick would seek an album, and read the late `tracks.album_id` column
+ * of a wide row, for every candidate track before one is kept.
  *
- * `where` and `order` are CONSTANT fragments from the call sites in this file (never reader input)
- * over the alias `t2`. The album join is `left`, so a track with no album entity still yields its
- * raw cover.
+ * `pick` is a CONSTANT fragment from this file (never reader input). The album join is `left`, so
+ * a track with no album entity still yields its raw cover.
  */
-function coverJsonSelect(where: string, order: string): string {
+function coverJsonSelect(pick: string): string {
   return `(select json_object('u', c.album_image_url, 'k', a2.image_key,
                               's', a2.image_state, 'v', a2.image_updated_at)
              from tracks c
              left join albums a2 on a2.id = c.album_id
-            where c.track_id = (select t2.track_id
-                                  from tracks t2
-                                 where ${where}
-                                 order by ${order}
-                                 limit 1))`;
+            where c.track_id = ${pick})`;
 }
 
-/** Any track on the entity, freshest release first — the CATALOGUE tile's cover. */
-const CATALOGUE_COVER_ORDER = `t2.release_date is null asc, t2.release_date desc, t2.track_id asc`;
+/**
+ * The label's cover track: among its tracks with cover art, the freshest release, an undated
+ * release only when no dated release has art, ties to the lower `track_id`. That is the total order
+ * `release_date is null asc, release_date desc, track_id asc`, first row kept.
+ *
+ * It is spelled as two seeks so `tracks_label_cover_idx (label_id, release_date, track_id,
+ * album_image_url)` answers both from index entries alone. The mixed-direction order above cannot
+ * come off a plain ASC index (the index walks `release_date desc` only as `track_id desc`), so
+ * written as one `order by … limit 1` it reads and sorts every track on the label.
+ *   1. `max(release_date)` over the label's tracks with art: the last entry of the label's range
+ *      that carries art. `max` skips NULLs, so it is NULL exactly when no dated track has art.
+ *   2. The lowest `track_id` with art on that date. `is` is null-safe equality, so a NULL maximum
+ *      selects the undated tracks — the order's `release_date is null asc` term — and the seek is
+ *      `(label_id=? AND release_date=?)` walked in `track_id` order, stopping at the first entry.
+ * Both steps compare `release_date` under the column's BINARY collation, the same comparison the
+ * order uses, so the kept row is identical. `label-hub-cover.integration.test.ts` pins the parity
+ * against the single ordered pick and the index-only plan.
+ */
+const LABEL_COVER_PICK = `(select t2.track_id
+                             from tracks t2
+                            where t2.label_id = labels.id and t2.album_image_url is not null
+                              and t2.release_date is (select max(t3.release_date)
+                                                        from tracks t3
+                                                       where t3.label_id = labels.id
+                                                         and t3.album_image_url is not null)
+                            order by t2.track_id asc
+                            limit 1)`;
 
 /** Any track on a label — the `/labels` hub tile's cover and `get_label`'s, certified or not. */
-export const LABEL_CATALOGUE_COVER_JSON = coverJsonSelect(
-  `t2.label_id = labels.id and t2.album_image_url is not null`,
-  CATALOGUE_COVER_ORDER,
-);
+export const LABEL_CATALOGUE_COVER_JSON = coverJsonSelect(LABEL_COVER_PICK);
 
 // An ALBUM needs no packed subquery: it OWNS its master columns (`albums.image_key` and friends
 // sit on the row the hub already selects), so albums.ts pairs them with a plain `album_image_url`
@@ -634,10 +649,15 @@ export async function listKnownLabelNames(): Promise<string[]> {
     // `trim(labels.name) <> ''` drops a blank/whitespace-only (or null) name at the source, so the
     // filter combobox never offers an empty "Any label"-looking row. `trim(null)` is null and
     // `null <> ''` is not true, so a null name falls out the same way.
+    //
+    // `findings cross join tracks` pins the small certified set as the outer loop: each finding
+    // seeks its track by primary key and its label by id. With no statistics the planner otherwise
+    // rates a full walk of `tracks_label_cover_idx` (every catalogue track's `label_id` + `track_id`)
+    // cheaper than scanning `findings`, and probes `findings` once per catalogue track.
     sql: `select labels.name as name
-          from labels
-          join tracks on tracks.label_id = labels.id
-          join findings on findings.track_id = tracks.track_id
+          from findings
+          cross join tracks on tracks.track_id = findings.track_id
+          join labels on labels.id = tracks.label_id
           where findings.log_id is not null
             and trim(labels.name) <> ''
           group by labels.id

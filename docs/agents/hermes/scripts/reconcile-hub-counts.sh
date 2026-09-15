@@ -11,10 +11,11 @@
 # (fluncle-hermes-operator skill). The pair is BAKED into the image at /opt/hermes-scripts/ and
 # auto-updates from main via pin-watch — no docker cp. See ../reconcile-hub-counts-timer/README.md.
 #
-# WHAT IT DOES (docs/db-scale-backlog Wave 2 keystone 2, slice C): POST
-# /api/v1/admin/hub-counts/reconcile with the box's agent token — a bare trigger. The WORKER
-# recomputes truth for `renderable_track_count` / `certified_finding_count` on labels/albums/artists
-# and rewrites ONLY the rows that disagreed, acking the corrected count per table. It is the
+# WHAT IT DOES (docs/db-scale-backlog Wave 2 keystone 2, slice C): walks
+# /api/v1/admin/hub-counts/reconcile in bounded windows with the box's agent token, each window in
+# its own admitted database phase. The WORKER recomputes truth for `renderable_track_count` /
+# `certified_finding_count` on labels/albums/artists page by page and rewrites ONLY the rows that
+# disagreed, acking the corrected count per table. It is the
 # self-healing backstop under the delta-maintained counters, and its corrected-row numbers are the
 # operator's DRIFT AUDIT — the sweep logs them and journalctl holds the history:
 #
