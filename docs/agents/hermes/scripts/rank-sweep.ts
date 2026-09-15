@@ -13,8 +13,9 @@ import { DUE_WORK_REPAIR_PENDING_REASON } from "./due-work-repair-pending";
 
 const BATCH = Number(process.env.FLUNCLE_RANK_BATCH ?? "250");
 const MAX_CALLS = Number(process.env.FLUNCLE_RANK_MAX_CALLS ?? "8");
-// The guarded rank read clears at most this many track source markers per call before it answers
-// `due_work_maintenance_pending`. It equals `SOURCE_REPAIR_LIMIT` in
+// Every guarded rank read converges at least this many track source markers, one server
+// source-repair page, before it can answer `due_work_maintenance_pending`; the Worker's read-drain
+// budget may converge more pages in the same call. It equals `SOURCE_REPAIR_LIMIT` in
 // apps/web/src/lib/server/due-work-source-repair.ts; database-operation-registry.test.ts pins the
 // parity.
 export const SOURCE_REPAIRS_PER_RANK_GUARD = 5;
@@ -25,7 +26,7 @@ const ADMISSION_OWNER = "fluncle-rank";
 
 /**
  * The tick's hard phase bound. A ranked page leaves at most `batch` track source markers. The rank
- * guard alone clears five of them per phase, so the next page becomes readable within
+ * guard alone clears at least five of them per phase, so the next page becomes readable within
  * `ceil(batch / 5)` phases even when the ride-along repair step spends its page on other subjects,
  * and the repair-only drain clears the last page within the same number of phases. A clean tick of
  * `maxCalls` pages plus its drain therefore needs at most `1 + maxCalls * ceil(batch / 5)` phases.
