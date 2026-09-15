@@ -1541,6 +1541,12 @@ async function textFallback(q: string, limit: number, degraded: boolean): Promis
 export async function searchArchive(options: {
   /** Keep the bounded SQL implementation reachable for local parity/integration diagnostics only. */
   allowBoundedSonicForDiagnostics?: boolean;
+  /**
+   * Awaited immediately before the model tier, the one step of a search that spends vendor money.
+   * A metered mount gates that spend here (a limiter verdict that throws refuses it); the
+   * deterministic tiers above it never wait on this.
+   */
+  beforeModel?: () => Promise<void>;
   limit?: number;
   q: string;
 }): Promise<SearchResult> {
@@ -1657,6 +1663,7 @@ export async function searchArchive(options: {
   }
 
   // ── 4 · Language. The model translates; SQL retrieves.
+  await options.beforeModel?.();
   const filters = await translateQuery(q);
 
   if (filters) {

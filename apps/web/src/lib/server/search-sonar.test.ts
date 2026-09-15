@@ -30,6 +30,11 @@ vi.mock("./db", async () => {
   return { ...actual, getDb: async () => ({ execute }) };
 });
 
+// The model tier is a network call; stubbed so the gate in front of it is observable.
+const translateQuery = vi.hoisted(() => vi.fn<(q: string) => Promise<unknown>>());
+
+vi.mock("./search-llm", () => ({ translateQuery }));
+
 import { rankTracksByVector, searchArchive } from "./search";
 
 /** A minimal `SEARCH_SELECT`-shaped row; only the fields the assertions read need be real. */
@@ -235,5 +240,97 @@ describe("rankTracksByVector — the sonar route (dark)", () => {
           : false,
       ),
     ).toBe(false);
+  });
+});
+
+// A metered mount hands `searchArchive` a gate for the one step that spends vendor money. The sonic
+// tier is a regex, an anchor read, a Sonar call, and a hydration read, so it must answer without
+// ever touching that gate, and the answer must be the one an ungated search gives.
+describe("searchArchive — the model-tier gate", () => {
+  const SENTENCE = "rolling tracks for a rainy night drive";
+
+  function sonicDatabase(query: unknown) {
+    const sql = typeof query === "object" && query ? ((query as { sql?: string }).sql ?? "") : "";
+
+    if (sql.includes("emb.embedding_blob")) {
+      return {
+        rows: [
+          {
+            ...row("anchor"),
+            embedding_blob: new Uint8Array(1024 * Float32Array.BYTES_PER_ELEMENT),
+          },
+        ],
+      };
+    }
+
+    if (sql.includes("tracks.track_id in (")) {
+      return { rows: [row("t1"), row("t2")] };
+    }
+
+    return { rows: [] };
+  }
+
+  beforeEach(() => {
+    translateQuery.mockReset();
+    translateQuery.mockResolvedValue(null);
+  });
+
+  it("answers a sonic phrase without consulting the gate, identically to an ungated search", async () => {
+    isSonarSonicEnabled.mockResolvedValue(true);
+    searchSonar.mockResolvedValue([
+      { id: "t2", score: 0.9 },
+      { id: "t1", score: 0.8 },
+    ]);
+    execute.mockImplementation(async (query: unknown) => sonicDatabase(query));
+    const beforeModel = vi.fn(async () => undefined);
+
+    const ungated = await searchArchive({ q: "sounds like anchor" });
+    const gated = await searchArchive({ beforeModel, q: "sounds like anchor" });
+
+    expect(gated).toEqual(ungated);
+    expect(gated).toMatchObject({
+      anchor: { trackId: "anchor" },
+      degraded: false,
+      kind: "sonic",
+      results: [{ trackId: "t2" }, { trackId: "t1" }],
+    });
+    expect(beforeModel).not.toHaveBeenCalled();
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("waits for the gate before the model translates a sentence", async () => {
+    execute.mockResolvedValue({ rows: [] });
+    const order: string[] = [];
+
+    translateQuery.mockImplementation(async () => {
+      order.push("model");
+
+      return null;
+    });
+
+    await searchArchive({
+      beforeModel: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        order.push("gate");
+      },
+      q: SENTENCE,
+    });
+
+    expect(order).toEqual(["gate", "model"]);
+  });
+
+  it("a refused gate stops the model call and refuses the search", async () => {
+    execute.mockResolvedValue({ rows: [] });
+    const refusal = new Error("over the limit");
+
+    await expect(
+      searchArchive({
+        beforeModel: async () => {
+          throw refusal;
+        },
+        q: SENTENCE,
+      }),
+    ).rejects.toBe(refusal);
+    expect(translateQuery).not.toHaveBeenCalled();
   });
 });

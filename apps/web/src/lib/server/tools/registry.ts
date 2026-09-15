@@ -60,7 +60,7 @@ import {
 import { listTracksHubPage, toCatalogueTrackListItem } from "../tracks-hub";
 import { resolveLogPageTarget } from "../log-resolver";
 import { subscribeToNewsletter } from "../newsletter";
-import { assertRateLimit } from "../rate-limit";
+import { chargeRateLimit } from "../rate-limit";
 import { searchArchive } from "../search";
 import { ApiError, searchTrackCandidates } from "../spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "../status";
@@ -985,17 +985,26 @@ const searchArchiveTool = {
     // MCP world-serves the WHOLE SearchResult — both registers, each row certified-tagged (never
     // findings-filtered, exactly like list_fresh). First, the mandatory shared limiter: the
     // anonymous /mcp has no session, and this search's sonic + LLM tiers spend real money, so it
-    // shares the public HTTP twin's per-IP budget (same `action`, same window ⇒ one limiter).
-    if (ctx.request) {
-      await assertRateLimit({
-        action: "search_archive",
-        limit: SEARCH_ARCHIVE_RL_LIMIT,
-        request: ctx.request,
-        windowMs: SEARCH_ARCHIVE_RL_WINDOW_MS,
-      });
-    }
+    // shares the public HTTP twin's per-IP budget (same `action`, same window ⇒ one limiter) and
+    // its bounded wait: the model tier waits for the verdict, the free tiers do not wait on a
+    // charge stalled behind another write on the primary.
+    const charge = ctx.request
+      ? await chargeRateLimit({
+          action: "search_archive",
+          limit: SEARCH_ARCHIVE_RL_LIMIT,
+          request: ctx.request,
+          windowMs: SEARCH_ARCHIVE_RL_WINDOW_MS,
+        })
+      : undefined;
+    const result = await searchArchive({
+      beforeModel: charge?.requireAllowed,
+      limit: MAX_SEARCH,
+      q: query,
+    });
 
-    return { ok: true as const, ...(await searchArchive({ limit: MAX_SEARCH, q: query })) };
+    charge?.throwIfLimited();
+
+    return { ok: true as const, ...result };
   },
 } satisfies ToolDef;
 
