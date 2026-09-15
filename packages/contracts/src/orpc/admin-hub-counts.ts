@@ -10,9 +10,7 @@
 // failure mode is SILENT, and it drifts for reasons the write side cannot fix from inside:
 // a missed write path, a non-atomic bulk op, or an out-of-band write (the operator's
 // catalogue-prune skill deletes tracks straight out of the database; no server path does).
-// SLICE A'S OWN ROLLOUT PROVED IT on day one — the deploy-window skew between the backfill
-// and the first delta-maintained writes left 44 artists, 3 albums and 1 label off until a
-// manual reconcile. That reconcile is this op.
+// This op is the reconcile that repairs that drift.
 //
 // VERIFIED auth tier (enforced in the handler, not the contract):
 //   - `reconcile_hub_counts` — AGENT tier (`adminAuth` only, no `operatorGuard`): the
@@ -29,49 +27,58 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 /**
- * One table's reconciliation outcome. An OBJECT rather than a bare number so the shape has
- * room to grow (a per-table `tookMs`, a sample of corrected ids) without a breaking change.
+ * One table's reconciliation outcome for the pages the call processed. An OBJECT rather than a
+ * bare number so the shape has room to grow without a breaking change.
  */
 const HubCountsTableResultSchema = z
   .object({
     /**
-     * Entity rows whose stored counters DISAGREED with truth and were rewritten this pass.
+     * Entity rows whose stored counters DISAGREED with truth and were rewritten.
      * Zero is the healthy steady state; non-zero means a write path leaked and is the drift
      * signal worth reading.
      */
     corrected: z.number(),
+    /**
+     * Drifted rows left for the next pass because a maintained counter delta moved them between
+     * the page read and the guarded write, twice. The concurrent delta is kept, never overwritten.
+     */
+    deferred: z.number(),
   })
   .meta({ id: "HubCountsTableResult" });
+
+/** Where a windowed reconciliation resumes. */
+const HubCountsReconcileCursorSchema = z
+  .object({
+    /** The last entity id already reconciled in `table`; null starts the table at its first id. */
+    afterId: z.string().min(1).max(512).nullable(),
+    /** The entity table, walked in `labels → albums → artists` order. */
+    table: z.enum(["labels", "albums", "artists"]),
+  })
+  .meta({ id: "HubCountsReconcileCursor" });
 
 /**
  * `reconcile_hub_counts` → `POST /admin/hub-counts/reconcile` (operationId
  * `reconcileHubCounts`).
  *
- * AGENT tier (`adminAuth` only) — a bare trigger, the `record_catalogue_snapshot` shape: the
- * box POSTs an empty body and the WORKER does all the work in SQL.
+ * AGENT tier (`adminAuth` only). The WORKER does all the work in SQL.
  *
- * THE SHAPE. Per table, two statements, and never a row-by-row loop:
+ * THE SHAPE. Per entity table, in `id` order, one read statement takes a bounded keyset page of
+ * entity rows and joins each to its own tracks by the entity's index, returning the stored
+ * counters beside the truth from one snapshot. Only rows that disagree are written, each as a
+ * primary-key compare-and-set on the counters the page read, with its due-work marker, in a write
+ * batch of point writes. No write transaction ever aggregates the track graph, and a maintained
+ * delta that lands between the read and the write is kept (the page is re-read once; a row that
+ * loses again is `deferred`).
  *
- *   1. The GROUPED CORRECTION — `UPDATE <entity> … FROM (SELECT <fk>, count(*), sum(is_catalogue = 0)
- *      … GROUP BY <fk>) src WHERE <entity>.id = src.<fk> AND (counts differ)`. The
- *      counts-differ guard is what makes `rowsAffected` mean "rows CORRECTED" rather than
- *      "rows re-written", so the number reported is the drift, exactly.
- *   2. The ZERO-TRUTH pass — an entity whose last track was deleted out of band keeps a stale
- *      NON-ZERO count and appears in NO group, so statement 1 can never reach it. A second
- *      small `UPDATE … SET both = 0 WHERE counts <> 0 AND id NOT IN (<the grouped source's
- *      keys>)` closes it. Its `rowsAffected` folds into the same per-table `corrected`.
+ * THE ARTISTS SOURCE IS PINNED to edges whose track exists (`track_artists` joined to `tracks`),
+ * never raw `track_artists`: production carries ORPHANED edges from out-of-band track deletion,
+ * and the hub reads join `tracks`. Counting raw edges would "correct" the counters into
+ * disagreeing with what actually renders.
  *
- * THE ARTISTS SOURCE IS PINNED to `track_artists ta JOIN tracks t ON t.track_id = ta.track_id`,
- * never raw `track_artists`: production carries ORPHANED edges (62 of them, from out-of-band
- * track deletion), and the hub reads join `tracks`. Counting raw edges would "correct" the
- * counters into disagreeing with what actually renders — a fix that breaks the page. Labels and
- * albums group over `tracks` directly (`WHERE label_id / album_id IS NOT NULL` — load-bearing:
- * a NULL inside the zero-truth `NOT IN` subselect would make the whole predicate NULL and match
- * nothing).
- *
- * Runs off-peak nightly. The whole recompute pass measured 19.3 s at 150k hosted as three
- * correlated statements; the grouped `UPDATE … FROM` shape is cheaper, and anything under ~30 s
- * is fine at this cadence.
+ * WINDOWS. With `pageLimit` (and, after the first window, the previous response's `next` as
+ * `cursor`) the call processes at most that many pages and returns `next`, null once every table
+ * is done; the nightly box sweep runs one such window per admitted database phase. An empty body
+ * runs every page in one request.
  */
 export const reconcileHubCounts = oc
   .route({
@@ -81,14 +88,25 @@ export const reconcileHubCounts = oc
     summary: "Reconcile the maintained hub counts against truth and report the corrected rows",
     tags: ["Admin"],
   })
-  .input(z.object({}))
+  .input(
+    z.object({
+      /** Resume point from the previous window's `next`; absent starts at the first label. */
+      cursor: HubCountsReconcileCursorSchema.optional(),
+      /** Keyset pages to process in this call; absent with no cursor runs every page. */
+      pageLimit: z.number().int().min(1).max(20).optional(),
+    }),
+  )
   .output(
     z.object({
       albums: HubCountsTableResultSchema,
       artists: HubCountsTableResultSchema,
       labels: HubCountsTableResultSchema,
+      /** The cursor to resume from, or null once every table has been reconciled. */
+      next: HubCountsReconcileCursorSchema.nullable(),
       ok: z.literal(true),
-      /** Wall-clock milliseconds the whole reconciliation took, server-side. */
+      /** Keyset pages this call processed. */
+      pages: z.number(),
+      /** Wall-clock milliseconds the call took, server-side. */
       tookMs: z.number(),
     }),
   );

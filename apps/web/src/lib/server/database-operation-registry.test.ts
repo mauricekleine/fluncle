@@ -1044,6 +1044,22 @@ describe("database operation registry", () => {
     ]);
   });
 
+  it("pins hub-count reconciliation's once-retried phased admission around bounded windows", () => {
+    const reconcile = DATABASE_OPERATION_REGISTRY.find(
+      (operation) => operation.operationId === "catalogue.reconcile-hub-counts",
+    );
+    const script = readFileSync(join(REPO_ROOT, SCRIPTS, "reconcile-hub-counts.ts"), "utf8");
+    const retries = /^export const WINDOW_YIELD_RETRIES = (\d+);$/m.exec(script);
+
+    expect(reconcile?.admissionShape).toMatchObject({
+      phaseSource: `${SCRIPTS}/reconcile-hub-counts.ts`,
+      shape: "phased",
+      yieldRetries: 1,
+    });
+    expect(reconcile?.mutationDisposition.kind).toBe("replay-safe-idempotent");
+    expect(Number(retries?.[1])).toBe(reconcile?.admissionShape?.yieldRetries);
+  });
+
   it("separates device mirror primary reads from its derived remote mutation", () => {
     const operation = DATABASE_OPERATION_REGISTRY.find(
       (candidate) => candidate.operationId === "device.mirror",
