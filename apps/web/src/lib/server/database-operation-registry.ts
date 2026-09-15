@@ -216,8 +216,10 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
     "Each admitted phase advances one due-work repair step, then attempts one guarded rank page; repair-only phases then drain the last page's source markers.",
     0,
   ),
-  "catalogue.reconcile-hub-counts": wholeLifetime(
-    "The database-only projection reconciliation is one bounded command.",
+  "catalogue.reconcile-hub-counts": phased(
+    `${SCRIPTS}/reconcile-hub-counts.ts`,
+    "Each bounded window of keyset page reads and guarded counter writes runs in its own admitted phase; nothing between windows holds the lease.",
+    1,
   ),
   "catalogue.verify-captures": wholeLifetime(
     "Queue reads and per-track verification writes are interleaved with remote object checks.",
@@ -411,7 +413,8 @@ export const DATABASE_MUTATION_POLICIES = {
   "catalogue.reconcile-hub-counts": {
     evidenceSource: "apps/web/src/lib/server/hub-counts-reconcile.ts",
     kind: "replay-safe-idempotent",
-    rationale: "Hub counts are recomputed from source truth, including stale nonzero rows.",
+    rationale:
+      "Each counter write is guarded by the counters its page read, so a replayed window rewrites only rows still disagreeing with source truth.",
     reconciliation: "Repeat the bounded reconciliation; zero corrected rows proves convergence.",
   },
   "catalogue.verify-captures": {
