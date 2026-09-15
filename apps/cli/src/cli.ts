@@ -7239,7 +7239,13 @@ async function runArtistsRank(
   options: CatalogueRankOptions,
   rankArtistsCommand: typeof import("./commands/admin-artists").rankArtistsCommand,
 ): Promise<void> {
-  const { summary } = await rankArtistsCommand({ limit: options.limit });
+  // The human readout shows the true "N still stale" backlog, so it opts into the real COUNT; the
+  // `--json` path (automation, the drain loop) keeps the fast fullness sentinel — its `remaining`
+  // is only ever tested `> 0` / `=== 0`, so it never needs (or pays for) the second stale-set scan.
+  const { summary } = await rankArtistsCommand({
+    countRemaining: !options.json,
+    limit: options.limit,
+  });
 
   if (options.json) {
     printJson({ ok: true, summary });

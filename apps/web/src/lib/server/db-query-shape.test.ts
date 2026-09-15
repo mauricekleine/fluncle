@@ -522,11 +522,11 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
 
   // ── the catalogue anti-join, `not exists (select 1 from findings …)` ────────────
   {
-    count: 6,
+    count: 4,
     file: "lib/server/catalogue.ts",
     pattern: "anti-join:not-exists-findings",
     reason:
-      "Write guards. Four (clearQuarantine, clearDuplicate, setTrackDismissed ×2) are PK-keyed `update tracks … where track_id = ?` — the `not exists` is a self-verifying probe on ONE row, refusing to mutate a certified track. Two (requeueUnmatchedCaptures' veto count + update) sit behind `capture_status = 'unmatched'`, backlog item 14 (DEFERRED).",
+      "PK-keyed write guards (clearQuarantine, clearDuplicate, setTrackDismissed ×2): `update tracks … where track_id = ?`, where the `not exists` is a self-verifying probe on ONE row, refusing to mutate a certified track. Reading TRUTH is the job on a single row, so these keep the anti-join form on purpose. (requeueUnmatchedCaptures' veto count + update were the other two and are gone — their statements are bulk reads of the growing table, where the maintained `is_catalogue = 1` is the right spelling and the one its own due-work maintenance source already used.)",
   },
   {
     count: 1,

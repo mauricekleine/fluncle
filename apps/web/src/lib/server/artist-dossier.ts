@@ -314,9 +314,23 @@ export type RankArtistsSummary = {
   edgesWritten: number;
   /** The staleness-logic version this tick ran (a bump forces a full self-healing re-rank). */
   logicVersion: string;
-  /** Stale/orphan artists still pending after this tick — the "run me again" signal. */
+  /**
+   * Stale/orphan artists still pending after this tick — the "run me again" signal, tested
+   * `> 0` / `=== 0` by every automated caller. By default a FULL batch reports the
+   * {@link ARTIST_RANK_MORE_REMAIN} SENTINEL rather than a real count; `countRemaining` opts into
+   * the exact number. See {@link remainingArtistRankWork}.
+   */
   remaining: number;
 };
+
+/**
+ * The positive DRAIN SENTINEL — "more is stale, run me again", never a count.
+ *
+ * `rankCatalogue`'s `RANK_MORE_REMAIN` (catalogue.ts) with the same reasoning: `remaining` is
+ * consumed as a boolean by every automated caller, and the real number costs a second full pass
+ * over `track_artists ⋈ track_embeddings` (see {@link countStaleArtists}).
+ */
+const ARTIST_RANK_MORE_REMAIN = 1;
 
 type ArtistVectorRow = { artist_id: string; embedding_blob: unknown };
 type StaleArtistRow = { artist_id: string };
@@ -372,6 +386,37 @@ async function countStaleArtists(): Promise<number> {
   });
 
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
+}
+
+/**
+ * The drain signal after a PRODUCTIVE tick — the `remainingCatalogueRankWork` twin (catalogue.ts).
+ *
+ * A FULL batch consumed exactly `limit` stale artists, so more are stale BY CONSTRUCTION: the
+ * positive sentinel answers "run me again" without a second pass over the largest join table in
+ * the database. That is the branch a cold drain takes on every one of its `ceil(artists / limit)`
+ * ticks, which is where this scan was paid most.
+ *
+ * A SHORT batch keeps the real COUNT, and that asymmetry is deliberate — it is NOT the
+ * `rankCatalogue` shape, because the two sweeps differ on one point. `rankCatalogue` stamps its
+ * fingerprint on every row in its batch, including a row that produced no winner, so a short batch
+ * is a drained batch. `rankArtists` sends an artist whose blobs all fail `readEmbeddingBlob` down
+ * the ORPHAN branch instead: it deletes the centroid while the artist still credits embedded
+ * tracks, so the STALE arm re-picks it next tick. A short batch holding such an artist is
+ * therefore NOT drained, and assuming `0` would stop the CLI's drain loop one tick early.
+ *
+ * `countRemaining` opts into the exact number on either arm — the human-facing CLI readout does
+ * (`N still stale.`), the `--json` automation path does not.
+ */
+async function remainingArtistRankWork(options: {
+  batchSize: number;
+  countRemaining: boolean;
+  limit: number;
+}): Promise<number> {
+  if (options.countRemaining || options.batchSize < options.limit) {
+    return countStaleArtists();
+  }
+
+  return ARTIST_RANK_MORE_REMAIN;
 }
 
 /** Split `items` into consecutive chunks of at most `size` (bounds each round trip's payload). */
@@ -441,10 +486,15 @@ const EDGE_RERANK_SQL = `select ac.artist_id as neighbour_id,
  * shape for a browse-adjacent rail. Idempotent and resume-safe: a crash mid-tick leaves the
  * un-stamped artists stale for the next tick; a re-run on a settled graph is a no-op. `now` is
  * injected so the ranking logic carries no `Date.now`.
+ *
+ * `countRemaining` is the drain gauge's opt-in — see {@link remainingArtistRankWork}. It sits
+ * AFTER `now` rather than beside `limit` (where `rankCatalogue` puts its twin) only because `now`
+ * is the older injected test seam; the two knobs mean exactly the same thing on both sweeps.
  */
 export async function rankArtists(
   limit = ARTIST_RANK_BATCH_SIZE,
   now: () => string = () => new Date().toISOString(),
+  countRemaining = false,
 ): Promise<RankArtistsSummary> {
   const db = await getDb();
   const bounded = Math.max(0, limit);
@@ -604,7 +654,14 @@ export async function rankArtists(
     centroidsRemoved,
     edgesWritten,
     logicVersion: ARTIST_RANK_LOGIC_VERSION,
-    remaining: await countStaleArtists(),
+    // The drain signal. A FULL batch answers with the sentinel and NO second scan; a short batch
+    // (or an explicit `countRemaining`) takes the real count — see `remainingArtistRankWork` for
+    // why the short arm cannot assume 0.
+    remaining: await remainingArtistRankWork({
+      batchSize: staleArtists.length,
+      countRemaining,
+      limit: bounded,
+    }),
   };
 }
 

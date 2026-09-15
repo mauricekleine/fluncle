@@ -417,10 +417,14 @@ export function adminArtistsHandlers(os: Implementer) {
   // POST /admin/artists/rank — agent tier (`adminAuth`), the `rank_catalogue` precedent: one
   // tick of the similar-artists precompute sweep (artist centroids + top-K edges). It writes only
   // derived artist-graph artifacts and certifies nothing, so the box's agent-token cron drives it.
-  // `remaining > 0` means run it again.
+  // `remaining > 0` means run it again — the fast fullness sentinel by default, the exact backlog
+  // count only when `countRemaining` asks for it (the `rank_catalogue` precedent again).
   const rankArtistsHandler = os.rank_artists.use(adminAuth).handler(async ({ input }) => {
     try {
-      return { ok: true as const, summary: await rankArtists(input.limit) };
+      return {
+        ok: true as const,
+        summary: await rankArtists(input.limit, undefined, input.countRemaining),
+      };
     } catch (error) {
       throw apiFault(error);
     }

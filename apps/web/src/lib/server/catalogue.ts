@@ -3193,6 +3193,14 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
  * guaranteed-unmatched billed search. Those are counted honestly as `skippedVetoed`.
  * `source_audio_failures` resets so the rescued rows start their retry ledger clean.
  * Catalogue rows only (a finding's unmatched is rescued by its own re-capture flows).
+ *
+ * ALL THREE STATEMENTS SPELL "catalogue" THE SAME WAY — `is_catalogue = 1`, the maintained
+ * discriminator (Keystone 1, docs/db-scale-backlog). The veto count, the due-work maintenance
+ * source, and the UPDATE describe one row set, so one spelling is what makes them provably the
+ * same set rather than two that happen to agree; and on a bulk read of a growing table the mirror
+ * is a column test where the anti-join was a `findings` probe per scanned row. (The PK-keyed write
+ * guards elsewhere in this file keep the `not exists` form ON PURPOSE — a one-row self-verifying
+ * probe reads truth, which is a different job.)
  */
 export async function requeueUnmatchedCaptures(): Promise<{
   requeued: number;
@@ -3203,7 +3211,7 @@ export async function requeueUnmatchedCaptures(): Promise<{
     sql: `select count(*) as vetoed
           from tracks
           where capture_status = 'unmatched'
-            and not exists (select 1 from findings where findings.track_id = tracks.track_id)
+            and is_catalogue = 1
             and (duration_ms is null
                  or duration_ms < ${MIN_TRACK_MS}
                  or duration_ms >= ${LONG_FORM_MS})`,
@@ -3225,7 +3233,7 @@ export async function requeueUnmatchedCaptures(): Promise<{
           set capture_status = 'pending',
               source_audio_failures = 0
           where capture_status = 'unmatched'
-            and not exists (select 1 from findings where findings.track_id = tracks.track_id)
+            and is_catalogue = 1
             and duration_ms >= ${MIN_TRACK_MS}
             and duration_ms < ${LONG_FORM_MS}`,
       },
