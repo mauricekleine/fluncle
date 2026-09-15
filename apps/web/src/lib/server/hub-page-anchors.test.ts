@@ -124,7 +124,9 @@ describe("seek SQL compilation", () => {
     expect(query.sql).not.toContain("gated");
     expect(query.sql).toContain("(e.slug >= ? and (e.slug > ? or e.id > ?))");
     expect(query.sql.toLowerCase()).not.toContain("union all");
-    expect(query.args.slice(0, 4)).toEqual([3, "metalheadz", "metalheadz", "entity-500"]);
+    // The gate inlines its floor, so the seek's own bounds lead the bound arguments.
+    expect(query.sql).toContain("(e.certified_finding_count > 0 or e.renderable_track_count >= 3)");
+    expect(query.args.slice(0, 3)).toEqual(["metalheadz", "metalheadz", "entity-500"]);
   });
 
   it("uses one literal order spelling in every extraction, offset, and seek statement", () => {

@@ -486,11 +486,11 @@ export async function listAlbumsMissingBio(limit: number): Promise<AlbumBioWorkI
 
   // GOAL H: unchanged generic legacy selector retained behind the default-off cutover flag.
   const result = await db.execute({
-    args: [ALBUM_INDEX_MIN_TRACKS, limit],
+    args: [limit],
     sql: `select a.id, a.name, a.slug
           from albums a
           where (a.bio is null or trim(a.bio) = '')
-            and ${hubInclusionWhere("a")}
+            and ${hubInclusionWhere("a", ALBUM_INDEX_MIN_TRACKS)}
           order by a.created_at asc
           limit ?`,
   });

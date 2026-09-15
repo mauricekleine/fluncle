@@ -295,6 +295,22 @@ export function entityMatchStatement(
   return { args: buildArgs(needle, limit), sql };
 }
 
+/**
+ * The tier-2 exact-label probe `resolveEntity` falls back to when no hub-gated entity claims the
+ * query, so a label NAME with no page still becomes the filter it obviously is. `needle` is the
+ * trimmed, lowercased query. Every query that names no entity reaches this probe, so it is spelled
+ * on the bare column (`name = ? collate nocase`) and `labels_name_nocase_idx` seeks it. That is
+ * exactly the `lower(name) = ?` compare for a lowercased needle, and `order by rowid` names the row a
+ * table scan found first, which the bare index yields in order with no sort. Exposed so the
+ * integration suite pins its plan and its parity.
+ */
+export function labelNameProbeStatement(needle: string): { args: string[]; sql: string } {
+  return {
+    args: [needle],
+    sql: `select name from labels where name = ? collate nocase order by labels.rowid asc limit 1`,
+  };
+}
+
 /** The page an entity IS — `/<kind>/<slug>` for most, but a galaxy's segment is plural and a
     mixtape's page is its LOG page. The one place a (kind, slug) becomes a route. */
 function entityUrl(kind: SearchEntity["kind"], slug: string): string {
@@ -377,7 +393,11 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
  * `ensureLabel`'s fold use. A `hint` never resolves either, on the same rule as the artist read.
  * Read as the same uncorrelated id list the artist read uses (`labels.id in (select label_id …)`),
  * so the confirmed aliases are read once per statement rather than once per label row, and the hub
- * gate still applies to whatever the list admits. An ALBUM has no alias table; its read is unchanged.
+ * gate still applies to whatever the list admits.
+ *
+ * THE LABEL AND ALBUM NAME ARMS are spelled on the bare column exactly as the artist arm is, so
+ * `labels_name_nocase_idx` and `albums_name_nocase_idx` answer them with a seek or a range instead
+ * of a scan of the table. An ALBUM has no alias table, so its read is that name arm and the gate.
  */
 function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQuery {
   const predicate = mode === "exact" ? "= ?" : "like ? || '%'";
@@ -441,6 +461,14 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   const pointer = kind === "album" ? "album_id" : "label_id";
   const floor = kind === "album" ? ALBUM_INDEX_MIN_TRACKS : LABEL_INDEX_MIN_TRACKS;
   const isLabel = kind === "label";
+  // The NAME arm is spelled on the bare column, exactly as the artist arm is: `name = ? collate
+  // nocase` for exact, `name like ?` with the `%` bound into its own argument for prefix, so
+  // `albums_name_nocase_idx` / `labels_name_nocase_idx` answers it with a seek or a range. Both
+  // spellings are exactly the `lower(name)` compare (see the artist arm above). The trailing
+  // `rowid` in the order names the tie order a table scan gave equal names, so the read answers
+  // identically whichever index serves it.
+  const nameMatch = mode === "exact" ? `${table}.name = ? collate nocase` : `${table}.name like ?`;
+  const nameArg = (needle: string) => (mode === "exact" ? needle : `${needle}%`);
   // Labels carry their own logo; albums don't (the pointer to the label owns that image).
   const logoSelect = isLabel
     ? "labels.image_key as logo_key, labels.image_updated_at as logo_updated_at,"
@@ -461,11 +489,11 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   const labelRankOrder = isLabel ? "name_rank asc," : "";
 
   return {
-    // A LABEL binds the needle three times, in SQL-TEXT order: the `name_rank` case, the name
-    // predicate, then the alias predicate. An ALBUM binds it once. Then the floor binds the
-    // shared hub gate's `?`.
+    // A LABEL binds, in SQL-TEXT order: the needle for the `name_rank` case, the name arm's own
+    // argument, then the needle for the alias predicate. An ALBUM binds only the name arm's
+    // argument. The shared hub gate inlines its floor, so nothing else binds before the limit.
     buildArgs: (needle, limit) =>
-      isLabel ? [needle, needle, needle, floor, limit] : [needle, floor, limit],
+      isLabel ? [needle, nameArg(needle), needle, limit] : [nameArg(needle), limit],
     // THE GATE, single-sourced with the hubs (`hubInclusionWhere`): it admits exactly the entities
     // `/labels` + `/albums` list — a certified finding OR a page over the thin-content floor — never
     // a bare crawler stub. Two STORED counters on the entity row answer it (keystone 2), so the
@@ -479,9 +507,9 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
                where t.${pointer} = ${table}.id and f.log_id is not null
                order by f.added_at desc limit 1) as image_url
           from ${table}
-          where (lower(${table}.name) ${predicate} ${labelAliasWhere})
-            and ${hubInclusionWhere(table)}
-          order by ${labelRankOrder} length(${table}.name) asc, ${table}.name asc
+          where (${nameMatch} ${labelAliasWhere})
+            and ${hubInclusionWhere(table, floor)}
+          order by ${labelRankOrder} length(${table}.name) asc, ${table}.name asc, ${table}.rowid asc
           limit ?`,
   };
 }
@@ -635,12 +663,7 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
 
   const db = await getDb();
   const label = typedRow<{ name: string }>(
-    (
-      await db.execute({
-        args: [needle],
-        sql: `select name from labels where lower(name) = ? limit 1`,
-      })
-    ).rows,
+    (await db.execute(labelNameProbeStatement(needle))).rows,
   );
 
   if (label) {
