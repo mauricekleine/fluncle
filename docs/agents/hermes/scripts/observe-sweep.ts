@@ -61,6 +61,11 @@ import {
   writeAttemptLedger,
 } from "./attempt-ledger";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
+import {
+  dueWorkRepairPendingSummary,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 import { resolveSweepPrompt } from "./prompt-fetch";
 
 // ---------------------------------------------------------------------------
@@ -330,6 +335,7 @@ function fluncleJson<T>(args: string[]): T {
   const { code, stderr, stdout } = run(fluncleBin(), [...args, "--json"]);
 
   if (code !== 0) {
+    throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
     throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${stderr.trim()}`);
   }
 
@@ -994,14 +1000,30 @@ function pingClaudeAuthFailure(detail: string): void {
 
 async function main(): Promise<void> {
   // `observe --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
-  const response = fluncleJson<{ tracks?: QueueFinding[] }>([
-    "admin",
-    "tracks",
-    "observe",
-    "--queue",
-    "--limit",
-    String(QUEUE_LIMIT),
-  ]);
+  let response: { tracks?: QueueFinding[] };
+
+  try {
+    response = fluncleJson<{ tracks?: QueueFinding[] }>([
+      "admin",
+      "tracks",
+      "observe",
+      "--queue",
+      "--limit",
+      String(QUEUE_LIMIT),
+    ]);
+  } catch (error) {
+    if (!isDueWorkRepairPending(error)) {
+      throw error;
+    }
+
+    // The Worker deferred the queue read while due-work repair converges: nothing was read, so the
+    // tick pauses cleanly and the next tick reads again.
+    log(error.message);
+    console.log(JSON.stringify(dueWorkRepairPendingSummary({ checked: 0, failed: 0 })));
+
+    return;
+  }
+
   const queue = response.tracks ?? [];
 
   const summary = createObserveSummary(queue.length);

@@ -125,6 +125,15 @@ emit_fail() {
   printf '{"ok":false,"summary":"%s","checked":%s,"errors":1,"failed":%s,"produced":%s}\n' \
     "$(json_escape "$*")" "$RUN_CHECKED" "$RUN_FAILED" "$RUN_PRODUCED"
 }
+# emit_repair_pending() records the Worker's typed due-work deferral (`due_work_maintenance_pending`,
+# recognized in due-work-repair-pending.ts): the read was refused while due-work source repair
+# converges, so the tick is exit-zero `paused` backpressure (`due_work_repair_pending`), never a
+# failure, and the next tick reads again.
+emit_repair_pending() {
+  printf '%s\n' "$*"
+  printf '{"ok":true,"summary":"%s","checked":%s,"errors":0,"failed":%s,"gateState":"paused","partial":false,"produced":%s,"reason":"due_work_repair_pending","throttled":true}\n' \
+    "$(json_escape "$*")" "$RUN_CHECKED" "$RUN_FAILED" "$RUN_PRODUCED"
+}
 now() { date +%s; }
 read_or() { cat "$1" 2>/dev/null || printf '%s' "$2"; }
 
@@ -593,6 +602,13 @@ fi
 queue_json="$("$FLUNCLE_BIN" admin tracks queue --limit 25 --json 2>>"$LOG_FILE")"
 queue_read_rc=$?
 if [ "$queue_read_rc" -ne 0 ]; then
+  # The one non-failure: the CLI's JSON failure payload carrying the Worker's typed due-work code.
+  # Any other non-zero read (a generic fault, a crash, a malformed payload) stays a run error.
+  if printf '%s' "$queue_json" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let body;try{body=JSON.parse(s)}catch{process.exit(1)}process.exit(body&&typeof body==="object"&&!Array.isArray(body)&&body.ok===false&&body.code==="due_work_maintenance_pending"?0:1)})' 2>>"$LOG_FILE"; then
+    log "queue read deferred: due-work repair is still converging (rc=$queue_read_rc)"
+    emit_repair_pending "render-conductor: queue read deferred — due-work repair still converging"
+    exit 0
+  fi
   log "queue read failed (rc=$queue_read_rc)"
   emit_fail "render-conductor: queue read failed"
   exit 1

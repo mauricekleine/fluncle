@@ -27,6 +27,11 @@
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
+import {
+  dueWorkRepairPendingGate,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
 // Config — the per-tick cap. Pinned to the Worker's MAX_BATCH (40) so the CLI's internal cursor loop
@@ -93,6 +98,8 @@ export function fluncleJson<T>(args: string[]): T {
     throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
   }
 
+  throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
+
   if (code !== 0 && isCliErrorPayload(parsed)) {
     throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
   }
@@ -155,10 +162,17 @@ export function main(): void {
     summary.skippedNoIdentity = pass.skippedNoIdentity ?? 0;
     summary.rateLimited = pass.rateLimited ?? false;
   } catch (error) {
-    summary.ok = false;
-    summary.errors = 1;
-    summary.error = error instanceof Error ? error.message : String(error);
-    log(`MB credit-sweep pass failed: ${summary.error}`);
+    if (isDueWorkRepairPending(error)) {
+      // The Worker deferred the worklist while due-work repair converges: nothing was read, so the
+      // tick pauses cleanly and the next tick reads again.
+      log(error.message);
+      Object.assign(summary, dueWorkRepairPendingGate(summary));
+    } else {
+      summary.ok = false;
+      summary.errors = 1;
+      summary.error = error instanceof Error ? error.message : String(error);
+      log(`MB credit-sweep pass failed: ${summary.error}`);
+    }
   }
 
   console.log(JSON.stringify(summary));

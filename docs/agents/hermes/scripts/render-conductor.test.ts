@@ -362,6 +362,60 @@ describe("queue read", () => {
   );
 
   test(
+    "the Worker's typed due-work deferral is a paused tick, not a failure",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        queueExitCode: 1,
+        // The CLI pretty-prints its `--json` failure payload.
+        queueResponse: JSON.stringify(
+          {
+            code: "due_work_maintenance_pending",
+            message: "Due-work maintenance is still converging",
+            ok: false,
+          },
+          null,
+          2,
+        ),
+        restoringCalls: 0,
+      });
+
+      expect(tick.exitCode).toBe(0);
+      expect(tick.stdout).toContain("render-conductor: queue read deferred");
+      expect(tick.stdout).not.toContain("queue read failed");
+      expect(tick.state).toBe("idle");
+      expect(lastJsonLine(tick.stdout)).toEqual({
+        checked: 0,
+        errors: 0,
+        failed: 0,
+        gateState: "paused",
+        ok: true,
+        partial: false,
+        produced: 0,
+        reason: "due_work_repair_pending",
+        summary: "render-conductor: queue read deferred — due-work repair still converging",
+        throttled: true,
+      });
+    },
+  );
+
+  test(
+    "a generic Worker fault in the CLI payload stays a queue-read failure",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        queueExitCode: 1,
+        queueResponse: '{"code":"error","message":"Internal error","ok":false}',
+        restoringCalls: 0,
+      });
+
+      expect(tick.exitCode).toBe(1);
+      expect(tick.stdout).toContain("render-conductor: queue read failed");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({ errors: 1, ok: false });
+    },
+  );
+
+  test(
     "a successful error wrapper is a malformed response, not an empty queue",
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {

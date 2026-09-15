@@ -63,6 +63,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type DueWorkRepairPendingGate,
+  dueWorkRepairPendingGate,
+  failureBodyUnlessRepairPending,
+  isDueWorkRepairPending,
+} from "./due-work-repair-pending";
+import {
   fetchPreviewFingerprint,
   fpcalcFingerprint,
   resolveSearchPreviewFingerprint,
@@ -132,7 +138,7 @@ export type VerifySummary = {
   skipped: number;
   unverified: number;
   verified: number;
-};
+} & Partial<DueWorkRepairPendingGate>;
 
 /**
  * Everything the drain loop touches that is not pure — injected so the verdict derivation and the
@@ -212,6 +218,14 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
   try {
     queue = await deps.fetchQueue(batch);
   } catch (error) {
+    if (isDueWorkRepairPending(error)) {
+      // The Worker deferred the read while due-work repair converges: nothing was read, so the tick
+      // pauses cleanly and the next tick reads again.
+      deps.log(error.message);
+
+      return { ...summary, ...dueWorkRepairPendingGate(summary) };
+    }
+
     summary.ok = false;
     summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
@@ -439,9 +453,8 @@ async function fetchVerifyQueue(limit: number): Promise<VerifyQueue> {
   });
 
   if (!res.ok) {
-    throw new Error(
-      `verify queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-    );
+    const body = await failureBodyUnlessRepairPending(res, "verify queue read");
+    throw new Error(`verify queue read failed (${res.status}): ${body.slice(0, 200)}`);
   }
 
   const body = (await res.json()) as { queued?: unknown; tracks?: VerifyWorkItem[] };

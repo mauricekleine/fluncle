@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildContextFailureSummary, buildContextSummary } from "./context-sweep";
 
 describe("context-sweep canonical counters", () => {
@@ -58,5 +61,71 @@ describe("context-sweep canonical counters", () => {
       failed: null,
       produced: null,
     });
+  });
+});
+
+describe("context-sweep queue read outcome", () => {
+  /** Run the real sweep against a stub CLI whose queue read fails with the given JSON payload. */
+  function tick(queuePayload: string): {
+    exitCode: null | number;
+    summary: Record<string, unknown>;
+  } {
+    const rig = mkdtempSync(join(tmpdir(), "context-sweep-queue-"));
+    const payload = join(rig, "payload.json");
+    const fluncle = join(rig, "fluncle");
+    writeFileSync(payload, queuePayload);
+    writeFileSync(fluncle, `#!/usr/bin/env bash\ncat ${JSON.stringify(payload)}\nexit 1\n`);
+    chmodSync(fluncle, 0o755);
+
+    try {
+      const result = spawnSync(process.execPath, [join(import.meta.dir, "context-sweep.ts")], {
+        encoding: "utf8",
+        env: { ...process.env, FLUNCLE_BIN: fluncle, RETRY_EMPTY: "" },
+      });
+
+      return {
+        exitCode: result.status,
+        summary: JSON.parse(result.stdout) as Record<string, unknown>,
+      };
+    } finally {
+      rmSync(rig, { force: true, recursive: true });
+    }
+  }
+
+  test("the Worker's due-work deferral is an exit-zero paused tick", () => {
+    const pending = JSON.stringify(
+      {
+        code: "due_work_maintenance_pending",
+        message: "Due-work maintenance is still converging",
+        ok: false,
+      },
+      null,
+      2,
+    );
+
+    expect(tick(pending)).toMatchObject({
+      exitCode: 0,
+      summary: {
+        checked: 0,
+        errors: 0,
+        failed: 0,
+        gateState: "paused",
+        ok: true,
+        partial: false,
+        produced: 0,
+        reason: "due_work_repair_pending",
+        retryEmpty: false,
+        throttled: true,
+      },
+    });
+  });
+
+  test("a generic Worker fault stays a run error that exits non-zero", () => {
+    const { exitCode, summary } = tick(
+      JSON.stringify({ code: "error", message: "Internal error", ok: false }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(summary).toMatchObject({ errors: 1, ok: false, reason: "context_failed" });
   });
 });

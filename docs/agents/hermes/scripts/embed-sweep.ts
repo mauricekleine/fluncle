@@ -58,6 +58,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
+import {
+  dueWorkRepairPendingSummary,
+  failureBodyUnlessRepairPending,
+  isDueWorkRepairPending,
+} from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
 // Config — BATCH_CAP is 1: a windowed full-song MuQ forward is minutes-scale (each ~30s
@@ -343,7 +348,8 @@ async function fetchEmbedQueue(): Promise<{ queued?: number; tracks: QueueFindin
   });
 
   if (!res.ok) {
-    throw new Error(`embed queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    const body = await failureBodyUnlessRepairPending(res, "embed queue read");
+    throw new Error(`embed queue read failed (${res.status}): ${body.slice(0, 200)}`);
   }
 
   return parseEmbedQueue(await res.json());
@@ -460,7 +466,25 @@ async function main(): Promise<void> {
     return;
   }
 
-  const queuePage = await fetchEmbedQueue();
+  let queuePage: Awaited<ReturnType<typeof fetchEmbedQueue>>;
+
+  try {
+    queuePage = await fetchEmbedQueue();
+  } catch (error) {
+    if (!isDueWorkRepairPending(error)) {
+      throw error;
+    }
+
+    // The Worker deferred the queue read while due-work repair converges: nothing was read, so the
+    // tick pauses cleanly and the next tick reads again.
+    log(error.message);
+    console.log(
+      JSON.stringify(dueWorkRepairPendingSummary({ checked: 0, failed: 0, queueDepth: null })),
+    );
+
+    return;
+  }
+
   const queue = queuePage.tracks;
   const batch = queue.slice(0, BATCH_CAP);
 

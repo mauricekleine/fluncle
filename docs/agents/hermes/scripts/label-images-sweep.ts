@@ -10,6 +10,7 @@ import {
   type DiscogsLabelWork,
   postDiscogsAgentOperation,
 } from "./discogs-fetch";
+import { dueWorkRepairPendingGate, isDueWorkRepairPending } from "./due-work-repair-pending";
 
 const BATCH_LIMIT = Number(process.env.FLUNCLE_LABEL_IMAGES_LIMIT ?? "4");
 const OPERATION_PATH = "/admin/backfill/label-images";
@@ -79,6 +80,8 @@ export async function runLabelImagesSweep(effects: LabelImagesSweepEffects = {})
     query: { boxFetch: true, limit: BATCH_LIMIT },
   };
 
+  let repairPending = false;
+
   try {
     const prepared = await postDiscogsAgentOperation<LabelImagesPass>(
       OPERATION_PATH,
@@ -115,16 +118,23 @@ export async function runLabelImagesSweep(effects: LabelImagesSweepEffects = {})
       }
     }
   } catch (error) {
-    summary.ok = false;
-    summary.errors = 1;
-    summary.error = error instanceof Error ? error.message : String(error);
-    log(`label-image resolve pass failed: ${summary.error}`);
+    if (isDueWorkRepairPending(error)) {
+      // The Worker deferred the label worklist while due-work repair converges: the pass pauses and
+      // keeps whatever the prepare call already settled; the next tick reads again.
+      repairPending = true;
+      log(error.message);
+    } else {
+      summary.ok = false;
+      summary.errors = 1;
+      summary.error = error instanceof Error ? error.message : String(error);
+      log(`label-image resolve pass failed: ${summary.error}`);
+    }
   }
 
   summary.checked = summary.resolved + summary.none + summary.failed;
   summary.produced = summary.resolved + summary.none;
   summary.resolvedCount = summary.resolved;
-  return summary;
+  return repairPending ? { ...summary, ...dueWorkRepairPendingGate(summary) } : summary;
 }
 
 export async function main(): Promise<void> {

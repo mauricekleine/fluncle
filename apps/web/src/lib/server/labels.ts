@@ -553,26 +553,34 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
  * subqueries could each land on a different track, pairing one record's master with another's
  * fallback; `json_object` keeps them on one picked row by construction, at one subquery's cost.
  *
- * `from`, `where`, and `order` are CONSTANT fragments from the call sites in this file (never
- * reader input). The album join is `left`, so a track with no album entity still yields its raw
- * cover.
+ * The pick runs alone, then the cover is read once. The inner `limit 1` orders the entity's
+ * tracks (`tracks t2`) on `order` and returns only the winner's `track_id`; the outer read fetches
+ * that one row by primary key and joins its album. Joining `albums` inside the ordered read would
+ * seek an album, and read the late `tracks.album_id` column of a wide row, for EVERY track on the
+ * entity before the sort keeps one: a whole label catalogue per tile. `order` ends in the primary
+ * key, so it is a total order and the two steps land on exactly the row one ordered join would.
+ *
+ * `where` and `order` are CONSTANT fragments from the call sites in this file (never reader input)
+ * over the alias `t2`. The album join is `left`, so a track with no album entity still yields its
+ * raw cover.
  */
-function coverJsonSelect(from: string, where: string, order: string): string {
-  return `(select json_object('u', t2.album_image_url, 'k', a2.image_key,
+function coverJsonSelect(where: string, order: string): string {
+  return `(select json_object('u', c.album_image_url, 'k', a2.image_key,
                               's', a2.image_state, 'v', a2.image_updated_at)
-             from ${from}
-             left join albums a2 on a2.id = t2.album_id
-            where ${where}
-            order by ${order}
-            limit 1)`;
+             from tracks c
+             left join albums a2 on a2.id = c.album_id
+            where c.track_id = (select t2.track_id
+                                  from tracks t2
+                                 where ${where}
+                                 order by ${order}
+                                 limit 1))`;
 }
 
 /** Any track on the entity, freshest release first — the CATALOGUE tile's cover. */
 const CATALOGUE_COVER_ORDER = `t2.release_date is null asc, t2.release_date desc, t2.track_id asc`;
 
-/** Any track on a label — the `/labels` hub tile's cover, certified or not. */
-const LABEL_CATALOGUE_COVER_JSON = coverJsonSelect(
-  `tracks t2`,
+/** Any track on a label — the `/labels` hub tile's cover and `get_label`'s, certified or not. */
+export const LABEL_CATALOGUE_COVER_JSON = coverJsonSelect(
   `t2.label_id = labels.id and t2.album_image_url is not null`,
   CATALOGUE_COVER_ORDER,
 );

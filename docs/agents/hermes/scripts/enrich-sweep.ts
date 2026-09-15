@@ -60,6 +60,13 @@ import {
   databaseAdmissionYieldSummary,
   runDatabaseAdmissionPhase,
 } from "./database-admission-phase";
+import {
+  dueWorkRepairPendingGate,
+  dueWorkRepairPendingSummary,
+  failureBodyUnlessRepairPending,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
 // Config — bounded batch so a tick stays cheap and a transient failure can't
@@ -142,6 +149,8 @@ type EnrichReadState = Readonly<{
   catalogue: CatalogueWorkItem[];
   findings: QueueFinding[];
   queued: number;
+  /** The guarded queue read the Worker deferred while due-work repair converges, if any. */
+  repairPending: EnrichArm | null;
 }>;
 
 type PreparedEnrich = Readonly<{
@@ -181,6 +190,7 @@ function fluncleJson<T>(args: string[]): T {
   const { code, stderr, stdout } = run(FLUNCLE_BIN, [...args, "--json"]);
 
   if (code !== 0) {
+    throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
     throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${stderr.trim()}`);
   }
 
@@ -406,9 +416,8 @@ async function fetchCatalogueAnalyzeQueue(): Promise<CatalogueWorkItem[]> {
   });
 
   if (!res.ok) {
-    throw new Error(
-      `catalogue analyze queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-    );
+    const body = await failureBodyUnlessRepairPending(res, "catalogue analyze queue read");
+    throw new Error(`catalogue analyze queue read failed (${res.status}): ${body.slice(0, 200)}`);
   }
 
   const body = (await res.json()) as { tracks?: CatalogueWorkItem[] };
@@ -441,14 +450,32 @@ function phaseCommand(phase: "read" | "write", statePath: string): string[] {
 }
 
 async function runEnrichReadPhase(statePath: string): Promise<void> {
-  const response = fluncleJson<{ tracks?: QueueFinding[] }>([
-    "admin",
-    "tracks",
-    "enrich",
-    "--queue",
-    "--limit",
-    String(QUEUE_LIMIT),
-  ]);
+  let response: { tracks?: QueueFinding[] };
+  try {
+    response = fluncleJson<{ tracks?: QueueFinding[] }>([
+      "admin",
+      "tracks",
+      "enrich",
+      "--queue",
+      "--limit",
+      String(QUEUE_LIMIT),
+    ]);
+  } catch (error) {
+    if (!isDueWorkRepairPending(error)) {
+      throw error;
+    }
+    // The deferral crosses the phase boundary as data, so the parent reports a paused tick rather
+    // than a failed phase. The catalogue arm is not read either: the tick stops at the deferral.
+    log(error.message);
+    const deferred: EnrichReadState = {
+      catalogue: [],
+      findings: [],
+      queued: 0,
+      repairPending: "finding",
+    };
+    writeFileSync(statePath, JSON.stringify(deferred), "utf8");
+    return;
+  }
   const queue = response.tracks ?? [];
   const findings: QueueFinding[] = [];
 
@@ -473,15 +500,19 @@ async function runEnrichReadPhase(statePath: string): Promise<void> {
   }
 
   let catalogue: CatalogueWorkItem[] = [];
+  let repairPending: EnrichArm | null = null;
   if (API_TOKEN) {
     try {
       catalogue = (await fetchCatalogueAnalyzeQueue()).slice(0, CATALOGUE_BATCH_CAP);
     } catch (error) {
+      if (isDueWorkRepairPending(error)) {
+        repairPending = "catalogue";
+      }
       log(`catalogue arm skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  const state: EnrichReadState = { catalogue, findings, queued: queue.length };
+  const state: EnrichReadState = { catalogue, findings, queued: queue.length, repairPending };
   writeFileSync(statePath, JSON.stringify(state), "utf8");
 }
 
@@ -725,6 +756,15 @@ async function runPhasedEnrichMain(): Promise<void> {
     }
 
     const state = readJsonFile<EnrichReadState>(readStatePath);
+    if (state.repairPending === "finding") {
+      console.log(
+        JSON.stringify(dueWorkRepairPendingSummary({ checked: 0, queueDepth: null, queued: null })),
+      );
+      return;
+    }
+    // A deferred catalogue arm pauses the tick; the findings arm's measured counts stay real.
+    const withCatalogueDeferral = (line: Record<string, unknown>): Record<string, unknown> =>
+      state.repairPending === "catalogue" ? { ...line, ...dueWorkRepairPendingGate(line) } : line;
     const summary = {
       batch: state.findings.length,
       catalogueDone: 0,
@@ -768,7 +808,9 @@ async function runPhasedEnrichMain(): Promise<void> {
     }
 
     if (prepared.length === 0) {
-      console.log(JSON.stringify({ costWriteFailures: 0, ok: true, ...summary }));
+      console.log(
+        JSON.stringify(withCatalogueDeferral({ costWriteFailures: 0, ok: true, ...summary })),
+      );
       return;
     }
 
@@ -813,7 +855,13 @@ async function runPhasedEnrichMain(): Promise<void> {
       }
     }
     console.log(
-      JSON.stringify({ costWriteFailures: writeResult.costWriteFailures, ok: true, ...summary }),
+      JSON.stringify(
+        withCatalogueDeferral({
+          costWriteFailures: writeResult.costWriteFailures,
+          ok: true,
+          ...summary,
+        }),
+      ),
     );
   } finally {
     rmSync(directory, { force: true, recursive: true });
