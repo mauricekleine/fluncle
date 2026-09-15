@@ -9,6 +9,7 @@ import {
   isCacheableEntityRequest,
   isCacheableHubRequest,
   isCacheableLogPath,
+  isPublicHtmlPagePath,
   logPurgeUrls,
   PAGE_CACHE_POLICY,
   PUBLIC_CACHE_CONTROL,
@@ -351,6 +352,44 @@ describe("edgeCachePolicyFor", () => {
   });
 });
 
+describe("isPublicHtmlPagePath", () => {
+  it("recognizes public HTML pages independently of cache enrolment", () => {
+    for (const path of [
+      "/",
+      "/log",
+      "/log/2026.A.7Q",
+      "/artist/sub-focus",
+      "/artist/sub-focus/",
+      "/album/all-that-jazz",
+      "/album/all-that-jazz/",
+      "/label/hospital-records",
+      "/label/hospital-records/",
+      "/track/mb_2b1c4d5e",
+      "/track/mb_2b1c4d5e/",
+      "/artists",
+      "/artists/",
+      "/docs/api",
+    ]) {
+      expect(isPublicHtmlPagePath(path), path).toBe(true);
+    }
+  });
+
+  it("does not classify non-page surfaces or sitemap documents as HTML pages", () => {
+    for (const path of [
+      "/api/v1/tracks",
+      "/_serverFn/abc",
+      "/assets/app.js",
+      "/rss.xml",
+      "/sitemap.xml",
+      "/sitemap/findings-1.xml",
+      "/artist/sub-focus/tracks",
+      "/search",
+    ]) {
+      expect(isPublicHtmlPagePath(path), path).toBe(false);
+    }
+  });
+});
+
 describe("withEdgeCache", () => {
   // Exercise the store/serve/stale machinery against a fake `caches.default`. The real
   // Workers cache is absent under Node, so the module's `edgeCache()` lookup finds
@@ -685,9 +724,12 @@ describe("isCacheableEntityRequest", () => {
     // uncached crawl is the expensive path this enrolment exists to collapse.
     expect(isCacheableEntityRequest("/track/mb_2b1c4d5e", "")).toBe(true);
     expect(isCacheableEntityRequest("/track/e2e-track-1", "")).toBe(true);
-    // A trailing slash is the same canonical page.
-    expect(isCacheableEntityRequest("/artist/sub-focus/", "")).toBe(true);
-    expect(isCacheableEntityRequest("/track/mb_2b1c4d5e/", "")).toBe(true);
+    // Enrolment is slashless only: the purge builds `/${kind}/${slug}` with no trailing slash,
+    // so a trailing-slash request must not create a cache entry the write path cannot evict.
+    expect(isCacheableEntityRequest("/artist/sub-focus/", "")).toBe(false);
+    expect(isCacheableEntityRequest("/album/all-that-jazz/", "")).toBe(false);
+    expect(isCacheableEntityRequest("/label/hospital-records/", "")).toBe(false);
+    expect(isCacheableEntityRequest("/track/mb_2b1c4d5e/", "")).toBe(false);
   });
 
   it("does NOT cache a paginated/sorted variant (the cache key drops the query)", () => {
