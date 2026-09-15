@@ -9,6 +9,7 @@ import {
   isCacheableEntityRequest,
   isCacheableHubRequest,
   isCacheableLogPath,
+  isPublicHtmlPagePath,
   logPurgeUrls,
   PAGE_CACHE_POLICY,
   PUBLIC_CACHE_CONTROL,
@@ -348,6 +349,44 @@ describe("edgeCachePolicyFor", () => {
     // Any query on a bare-URL-only static/detail page is refused.
     expect(edgeCachePolicyFor("/reach", "?platform=tiktok")).toBeUndefined();
     expect(edgeCachePolicyFor("/galaxies/drift", "?page=2")).toBeUndefined();
+  });
+});
+
+describe("isPublicHtmlPagePath", () => {
+  it("recognizes public HTML pages independently of cache enrolment", () => {
+    for (const path of [
+      "/",
+      "/log",
+      "/log/2026.A.7Q",
+      "/artist/sub-focus",
+      "/artist/sub-focus/",
+      "/album/all-that-jazz",
+      "/album/all-that-jazz/",
+      "/label/hospital-records",
+      "/label/hospital-records/",
+      "/track/mb_2b1c4d5e",
+      "/track/mb_2b1c4d5e/",
+      "/artists",
+      "/artists/",
+      "/docs/api",
+    ]) {
+      expect(isPublicHtmlPagePath(path), path).toBe(true);
+    }
+  });
+
+  it("does not classify non-page surfaces or sitemap documents as HTML pages", () => {
+    for (const path of [
+      "/api/v1/tracks",
+      "/_serverFn/abc",
+      "/assets/app.js",
+      "/rss.xml",
+      "/sitemap.xml",
+      "/sitemap/findings-1.xml",
+      "/artist/sub-focus/tracks",
+      "/search",
+    ]) {
+      expect(isPublicHtmlPagePath(path), path).toBe(false);
+    }
   });
 });
 

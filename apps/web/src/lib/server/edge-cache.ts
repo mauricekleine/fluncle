@@ -170,6 +170,7 @@ export function isCacheableLogPath(pathname: string): boolean {
 // surface with ~122k crawlable URLs behind it, an uncached view pays an exact vector scan for its
 // neighbours (lib/server/track-page.ts), and crawler traffic is uncached-first by definition.
 const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label|track)\/[^/]+$/;
+const PUBLIC_ENTITY_DETAIL_PATH = /^\/(?:artist|album|label|track)\/[^/]+\/?$/;
 
 /**
  * True for a cacheable entity detail page — AND ONLY when it carries no query string. The
@@ -331,6 +332,21 @@ const SITEMAP_PATH = /^\/sitemap(?:\.xml|\/[A-Za-z0-9._-]+)$/;
 /** True for `/sitemap.xml` or one of its `/sitemap/<kind>-<n>.xml` children, query-free. */
 export function isCacheableSitemapRequest(pathname: string, search: string): boolean {
   return search === "" && SITEMAP_PATH.test(pathname);
+}
+
+/**
+ * True for a public HTML page path, independent of whether this particular URL variant earns a
+ * cache entry. A trailing-slash entity URL is still a page request — the router redirects it to
+ * the slashless canonical path — so content negotiation must recognize it even though enrolment
+ * remains slashless-only. Query strings are intentionally ignored: a page variant still answers
+ * the same HTML-vs-JSON question, while the cache policy continues to reject unsafe variants.
+ */
+export function isPublicHtmlPagePath(pathname: string): boolean {
+  return (
+    isCacheableLogPath(pathname) ||
+    PUBLIC_ENTITY_DETAIL_PATH.test(pathname) ||
+    isCacheableHubRequest(pathname, "")
+  );
 }
 
 /**

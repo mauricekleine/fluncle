@@ -6,7 +6,7 @@ import {
   appendOnionLocation,
   handleAgentDiscovery,
 } from "./lib/server/agent-discovery";
-import { edgeCachePolicyFor, withEdgeCache } from "./lib/server/edge-cache";
+import { edgeCachePolicyFor, isPublicHtmlPagePath, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { runWithDatabaseRequestScope } from "./lib/server/database-request-scope";
 import { handleMcp } from "./lib/server/mcp";
@@ -151,7 +151,7 @@ async function dispatch(request: Request): Promise<Response> {
   // surfaces) are negotiated; server functions, assets, feeds, and the API never carry an HTML
   // policy and flow on untouched. `text/markdown` on the homepage was already answered above.
   if (
-    cachePolicy?.contentType === "text/html" &&
+    isPublicHtmlPagePath(url.pathname) &&
     (request.method === "GET" || request.method === "HEAD") &&
     !acceptHeaderAdmitsHtml(request.headers.get("accept"))
   ) {
