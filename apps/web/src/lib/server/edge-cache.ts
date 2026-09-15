@@ -147,9 +147,12 @@ export function isCacheableLogPath(pathname: string): boolean {
 // `/label/<slug>`, `/track/<trackId>` (singular + a single slug segment). The plural index pages
 // are cached too, but under the separate, shorter HUB policy below — they invalidate on any member
 // change, so they ride a 60s fresh window instead of an explicit purge, whereas a detail page is
-// purged by the write paths. A trailing slash is tolerated; a nested path (`/artist/<slug>/x`) is
-// not a detail page. `/tracks` (the plural hub) does not match: the alternation requires a `/`
-// after the segment, so the hub keeps its own HUB-policy enrolment below.
+// purged by the write paths. Enrolment is the slashless canonical path `entityPath` builds —
+// `/artist/<slug>`, never `/artist/<slug>/` — because a cache entry keyed on a path the purge
+// cannot target is unpurgeable. A trailing-slash request keeps its route behaviour and simply
+// bypasses this tier. A nested path (`/artist/<slug>/x`) is not a detail page. `/tracks` (the
+// plural hub) does not match: the alternation requires a `/` after the segment, so the hub keeps
+// its own HUB-policy enrolment below.
 //
 // `/track/<trackId>` belongs on this tier on both halves of the policy:
 //   - The FRESH window. A track destination is a detail page in exactly the sense this policy
@@ -166,7 +169,7 @@ export function isCacheableLogPath(pathname: string): boolean {
 // The enrolment carries more weight here than anywhere else in the alternation: this is the
 // surface with ~122k crawlable URLs behind it, an uncached view pays an exact vector scan for its
 // neighbours (lib/server/track-page.ts), and crawler traffic is uncached-first by definition.
-const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label|track)\/[^/]+\/?$/;
+const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label|track)\/[^/]+$/;
 
 /**
  * True for a cacheable entity detail page — AND ONLY when it carries no query string. The

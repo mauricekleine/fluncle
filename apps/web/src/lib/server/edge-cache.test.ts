@@ -685,9 +685,12 @@ describe("isCacheableEntityRequest", () => {
     // uncached crawl is the expensive path this enrolment exists to collapse.
     expect(isCacheableEntityRequest("/track/mb_2b1c4d5e", "")).toBe(true);
     expect(isCacheableEntityRequest("/track/e2e-track-1", "")).toBe(true);
-    // A trailing slash is the same canonical page.
-    expect(isCacheableEntityRequest("/artist/sub-focus/", "")).toBe(true);
-    expect(isCacheableEntityRequest("/track/mb_2b1c4d5e/", "")).toBe(true);
+    // Enrolment is slashless only: the purge builds `/${kind}/${slug}` with no trailing slash,
+    // so a trailing-slash request must not create a cache entry the write path cannot evict.
+    expect(isCacheableEntityRequest("/artist/sub-focus/", "")).toBe(false);
+    expect(isCacheableEntityRequest("/album/all-that-jazz/", "")).toBe(false);
+    expect(isCacheableEntityRequest("/label/hospital-records/", "")).toBe(false);
+    expect(isCacheableEntityRequest("/track/mb_2b1c4d5e/", "")).toBe(false);
   });
 
   it("does NOT cache a paginated/sorted variant (the cache key drops the query)", () => {
