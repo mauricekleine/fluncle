@@ -31,7 +31,7 @@ describe("production migration journal", () => {
     );
     const entries = parseMigrationJournal(journal);
 
-    expect(entries.at(-1)?.tag).toBe("0179_long_wither");
+    expect(entries.at(-1)?.tag).toBe("0179_ambiguous_blob");
     expect(entries.map((entry) => entry.idx)).toEqual(entries.map((_, index) => index));
   });
 

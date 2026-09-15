@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "88f0952c-00e7-4e88-807c-35db803c64f1",
+  "id": "1e83efda-3262-467a-b668-b49ea4bab73d",
   "prevId": "40cf3b90-16d4-4107-96c5-b8e7632ab102",
   "tables": {
     "account": {
@@ -391,6 +391,17 @@
         "albums_renderable_count_idx": {
           "name": "albums_renderable_count_idx",
           "columns": ["renderable_track_count"],
+          "isUnique": false
+        },
+        "albums_hub_listing_idx": {
+          "name": "albums_hub_listing_idx",
+          "columns": ["slug"],
+          "isUnique": true,
+          "where": "(\"albums\".\"certified_finding_count\" > 0 or \"albums\".\"renderable_track_count\" >= 3)"
+        },
+        "albums_name_nocase_idx": {
+          "name": "albums_name_nocase_idx",
+          "columns": ["\"name\" collate nocase"],
           "isUnique": false
         },
         "albums_bio_review_queue_idx": {
@@ -1837,6 +1848,12 @@
           "name": "artists_renderable_count_idx",
           "columns": ["renderable_track_count"],
           "isUnique": false
+        },
+        "artists_hub_listing_idx": {
+          "name": "artists_hub_listing_idx",
+          "columns": ["slug"],
+          "isUnique": true,
+          "where": "(\"artists\".\"certified_finding_count\" > 0 or \"artists\".\"renderable_track_count\" >= 3)"
         },
         "artists_mbid_idx": {
           "name": "artists_mbid_idx",
@@ -4493,6 +4510,17 @@
         "labels_renderable_count_idx": {
           "name": "labels_renderable_count_idx",
           "columns": ["renderable_track_count"],
+          "isUnique": false
+        },
+        "labels_hub_listing_idx": {
+          "name": "labels_hub_listing_idx",
+          "columns": ["slug"],
+          "isUnique": true,
+          "where": "(\"labels\".\"certified_finding_count\" > 0 or \"labels\".\"renderable_track_count\" >= 3)"
+        },
+        "labels_name_nocase_idx": {
+          "name": "labels_name_nocase_idx",
+          "columns": ["\"name\" collate nocase"],
           "isUnique": false
         },
         "labels_bio_review_queue_idx": {
@@ -8077,11 +8105,6 @@
           "columns": ["label_id"],
           "isUnique": false
         },
-        "tracks_label_cover_idx": {
-          "name": "tracks_label_cover_idx",
-          "columns": ["label_id", "release_date", "track_id", "album_image_url"],
-          "isUnique": false
-        },
         "tracks_is_catalogue_idx": {
           "name": "tracks_is_catalogue_idx",
           "columns": ["is_catalogue"],
@@ -9176,6 +9199,13 @@
   },
   "internal": {
     "indexes": {
+      "albums_name_nocase_idx": {
+        "columns": {
+          "\"name\" collate nocase": {
+            "isExpression": true
+          }
+        }
+      },
       "artists_name_nocase_idx": {
         "columns": {
           "\"name\" collate nocase": {
@@ -9191,6 +9221,13 @@
         }
       },
       "labels_seed_state_name_idx": {
+        "columns": {
+          "\"name\" collate nocase": {
+            "isExpression": true
+          }
+        }
+      },
+      "labels_name_nocase_idx": {
         "columns": {
           "\"name\" collate nocase": {
             "isExpression": true
