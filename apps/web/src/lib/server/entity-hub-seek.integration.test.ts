@@ -3,14 +3,15 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 
 import { createIntegrationDb } from "./integration-db";
 
-// THE ENTITY HUBS PAST THEIR SHALLOW PAGES, against the real migrated schema.
+// THE ENTITY HUBS ON THEIR LISTING INDEX, against the real migrated schema.
 //
 // A numbered `/albums` · `/labels` · `/artists` page past the shallow offset threshold (and the MCP
-// browse twin) is served off persisted boundaries. Only the gated total reads the whole entity
-// table; the fingerprint's first row and the page itself walk the entity's unique slug index. These
-// tests pin both halves of that contract: every page is exactly the slice of the unified
-// alphabetical order the shallow path would serve (with the same total and A–Z lane), and the
-// boundary statements take the slug index with no temp b-tree.
+// browse twin) is served off persisted boundaries, and every unfiltered page, shallow or deep, reads
+// the entity's hub listing index (`<entity>_hub_listing_idx`, keyed on slug and partial on exactly
+// the hub gate) plus the table rows it returns. These tests pin that contract: every page is exactly
+// the slice of the unified alphabetical order the materialized gated CTE computes (with the same
+// total and A–Z lane), and the statements take the listing index with no temp b-tree, count without
+// reading a table row, and read the table only for the rows a page returns.
 
 let db: Client;
 let execute: MockInstance<Client["execute"]>;
@@ -40,14 +41,20 @@ function executedSql(): string[] {
 }
 
 // Imported AFTER the mock so each module's `getDb` reads the fixture database.
-const { ALBUMS_HUB_QUERY, listAlbumsHubPage } = await import("./albums");
-const { ARTISTS_HUB_QUERY, listArtistsHubPage } = await import("./artists");
+const { ALBUMS_HUB_QUERY, ALBUM_INDEX_MIN_TRACKS, listAlbumsHubPage } = await import("./albums");
+const { ARTISTS_HUB_QUERY, ARTIST_INDEX_MIN_FINDINGS, listArtistsHubPage } =
+  await import("./artists");
 const {
   CATALOGUE_BROWSE_PAGE_SIZE,
   CATALOGUE_HUB_DEFAULT_LIMIT,
   LABELS_HUB_QUERY,
+  LABEL_INDEX_MIN_TRACKS,
+  catalogueEntityCountQuery,
+  catalogueEntityLetterCountsQuery,
   catalogueEntityOffsetPageQuery,
   catalogueEntitySeekPageQuery,
+  hubInclusionWhere,
+  letterPages,
   listLabelsBrowsePage,
   listLabelsHubPage,
 } = await import("./labels");
@@ -115,6 +122,115 @@ async function storedFingerprint(hub: string): Promise<string | undefined> {
   return typeof fingerprint === "string" ? fingerprint : undefined;
 }
 
+function bySlugThenId(left: { id: string; slug: string }, right: { id: string; slug: string }) {
+  return left.slug < right.slug ? -1 : left.slug > right.slug ? 1 : left.id < right.id ? -1 : 1;
+}
+
+type ReferenceRow = {
+  cert: number;
+  certified: number;
+  id: string;
+  kind: string;
+  n: number;
+  name: string;
+  slug: string;
+  track_count: number;
+};
+
+/**
+ * One unfiltered hub page as the materialized gated CTE computes it: the gate spelled with a BOUND
+ * floor over a `not indexed` table scan, the total, the slice, and the A–Z lane all read off one
+ * copy of the gated rows.
+ */
+async function referenceHubPage(
+  table: EntityTable,
+  page: number,
+  pageSize: number,
+  withLetters: boolean,
+) {
+  const letterArm = withLetters
+    ? `union all
+       select 'letter' as kind, '' as id, substr(g.slug, 1, 1) as slug, count(*) as n, 0 as cert
+       from gated g group by substr(g.slug, 1, 1)`
+    : "";
+  const result = await db.execute({
+    args: [3, pageSize, (page - 1) * pageSize],
+    sql: `with gated as materialized (
+            select e.id as id, e.slug as slug, e.renderable_track_count as track_count,
+                   (e.certified_finding_count > 0) as certified
+            from ${table} e not indexed
+            where (e.certified_finding_count > 0 or e.renderable_track_count >= ?)
+          )
+          select 'total' as kind, '' as id, '' as slug, (select count(*) from gated) as n, 0 as cert
+          union all
+          select * from (
+            select 'row' as kind, g.id as id, g.slug as slug, g.track_count as n, g.certified as cert
+            from gated g order by g.slug asc, g.id asc limit ? offset ?
+          )
+          ${letterArm}`,
+  });
+  const rows = result.rows as unknown as ReferenceRow[];
+  const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
+
+  return {
+    items: rows
+      .filter((row) => row.kind === "row")
+      .sort(bySlugThenId)
+      .map((row) => ({
+        certified: Number(row.cert) > 0,
+        slug: row.slug,
+        trackCount: Number(row.n),
+      })),
+    letters: letterPages(
+      rows
+        .filter((row) => row.kind === "letter")
+        .map((row) => ({ letter: row.slug, n: Number(row.n) }))
+        .sort((left, right) => (left.letter < right.letter ? -1 : 1)),
+      pageSize,
+    ),
+    pageCount: Math.max(Math.ceil(total / pageSize), 1),
+    total,
+  };
+}
+
+/** One MCP browse page as the materialized gated CTE computes it, with the name riding the row. */
+async function referenceBrowsePage(table: EntityTable, page: number, pageSize: number) {
+  const result = await db.execute({
+    args: [3, pageSize, (page - 1) * pageSize],
+    sql: `with gated as materialized (
+            select e.id as id, e.slug as slug, e.name as name,
+                   e.renderable_track_count as track_count,
+                   (e.certified_finding_count > 0) as certified
+            from ${table} e not indexed
+            where (e.certified_finding_count > 0 or e.renderable_track_count >= ?)
+          )
+          select 'total' as kind, '' as id, '' as slug, '' as name, 0 as track_count, 0 as certified,
+                 (select count(*) from gated) as n
+          union all
+          select * from (
+            select 'row' as kind, g.id as id, g.slug as slug, g.name as name,
+                   g.track_count as track_count, g.certified as certified, 0 as n
+            from gated g order by g.slug asc, g.id asc limit ? offset ?
+          )`,
+  });
+  const rows = result.rows as unknown as ReferenceRow[];
+  const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
+
+  return {
+    items: rows
+      .filter((row) => row.kind === "row")
+      .sort(bySlugThenId)
+      .map((row) => ({
+        certified: Number(row.certified) > 0,
+        name: row.name,
+        slug: row.slug,
+        trackCount: Number(row.track_count),
+      })),
+    pageCount: Math.max(Math.ceil(total / pageSize), 1),
+    total,
+  };
+}
+
 beforeEach(async () => {
   db = await createIntegrationDb();
   execute = vi.spyOn(db, "execute");
@@ -125,20 +241,56 @@ const HUBS = [
     list: (page: number) => listAlbumsHubPage(page),
     name: "albums",
     table: "albums" as const,
+    withLetters: false,
   },
   {
     list: (page: number) => listLabelsHubPage(page),
     name: "labels",
     table: "labels" as const,
+    withLetters: true,
   },
   {
     list: (page: number) => listArtistsHubPage(page),
     name: "artists",
     table: "artists" as const,
+    withLetters: true,
   },
 ];
 
-describe.each(HUBS)("the $name hub past its shallow pages", (hub) => {
+describe.each(HUBS)("the $name hub on its listing index", (hub) => {
+  it("serves every unfiltered page without boundaries exactly as the materialized gated CTE", async () => {
+    const rows = entityWorld(1_100);
+    const pageSize = CATALOGUE_HUB_DEFAULT_LIMIT;
+
+    await seedEntities(hub.table, rows);
+
+    // Pages 1–10 are shallow; page 11 is the first deep page, served directly while no boundaries
+    // are stored yet.
+    for (let page = 1; page <= 11; page += 1) {
+      const expected = await referenceHubPage(hub.table, page, pageSize, hub.withLetters);
+
+      execute.mockClear();
+
+      const served = await hub.list(page);
+
+      expect({
+        items: served.items.map((item) => ({
+          certified: item.certified,
+          slug: item.slug,
+          trackCount: item.trackCount,
+        })),
+        letters: served.letters,
+        pageCount: served.pageCount,
+        total: served.total,
+      }).toEqual(expected);
+      expect(expected.items).toHaveLength(pageSize);
+      expect(executedSql().some((sql) => sql.includes("materialized"))).toBe(false);
+    }
+
+    // Let the boundary build page 11 scheduled finish against this test's database.
+    await vi.waitFor(async () => expect(await storedFingerprint(`${hub.name}-hub`)).toBeDefined());
+  });
+
   it("serves every deep page off persisted boundaries as the exact slice of the unified order", async () => {
     const rows = entityWorld(1_100);
     const order = gatedOrder(rows);
@@ -202,6 +354,27 @@ describe.each(HUBS)("the $name hub past its shallow pages", (hub) => {
 });
 
 describe("the MCP browse past its shallow pages", () => {
+  it("serves every shallow browse page exactly as the materialized gated CTE", async () => {
+    const rows = entityWorld(1_100);
+    const pageSize = CATALOGUE_BROWSE_PAGE_SIZE;
+
+    await seedEntities("labels", rows);
+
+    for (let page = 1; page <= 10; page += 1) {
+      const expected = await referenceBrowsePage("labels", page, pageSize);
+
+      execute.mockClear();
+
+      const served = await listLabelsBrowsePage(page);
+
+      expect({ items: served.items, pageCount: served.pageCount, total: served.total }).toEqual(
+        expected,
+      );
+      expect(expected.items).toHaveLength(pageSize);
+      expect(executedSql().some((sql) => sql.includes("materialized"))).toBe(false);
+    }
+  });
+
   it("serves deep browse pages off boundaries, with the entity name riding the row", async () => {
     const rows = entityWorld(1_100);
     const order = gatedOrder(rows);
@@ -227,14 +400,31 @@ describe("the MCP browse past its shallow pages", () => {
   });
 });
 
-describe("the boundary statements on the real schema", () => {
+describe("the hub listing index on the real schema", () => {
   const QUERIES = [
-    { index: "albums_slug_unique", query: ALBUMS_HUB_QUERY },
-    { index: "labels_slug_unique", query: LABELS_HUB_QUERY },
-    { index: "artists_slug_unique", query: ARTISTS_HUB_QUERY },
+    {
+      floor: ALBUM_INDEX_MIN_TRACKS,
+      index: "albums_hub_listing_idx",
+      query: ALBUMS_HUB_QUERY,
+      table: "albums" as const,
+    },
+    {
+      floor: LABEL_INDEX_MIN_TRACKS,
+      index: "labels_hub_listing_idx",
+      query: LABELS_HUB_QUERY,
+      table: "labels" as const,
+    },
+    {
+      floor: ARTIST_INDEX_MIN_FINDINGS,
+      index: "artists_hub_listing_idx",
+      query: ARTISTS_HUB_QUERY,
+      table: "artists" as const,
+    },
   ];
 
-  async function planDetails(statement: { args: (number | string)[]; sql: string }) {
+  type Statement = { args: (number | string)[]; sql: string };
+
+  async function planDetails(statement: Statement) {
     const plan = await db.execute({
       args: statement.args,
       sql: `explain query plan ${statement.sql}`,
@@ -242,6 +432,104 @@ describe("the boundary statements on the real schema", () => {
 
     return plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : "")).join("\n");
   }
+
+  /**
+   * The statement's bytecode, plus the position of every opcode that reads a column off the entity
+   * TABLE's cursor (never an index cursor). An empty `reads` list means no table row is ever read.
+   */
+  async function tableColumnReads(table: EntityTable, statement: Statement) {
+    const root = await db.execute({
+      args: [table],
+      sql: `select rootpage from sqlite_master where type = 'table' and name = ?`,
+    });
+    const rootPage = Number(root.rows[0]?.rootpage);
+    const program = await db.execute({ args: statement.args, sql: `explain ${statement.sql}` });
+    const ops = program.rows.map((row) => ({
+      opcode: typeof row.opcode === "string" ? row.opcode : "",
+      p1: Number(row.p1),
+      p2: Number(row.p2),
+    }));
+    const tableCursors = new Set(
+      ops.filter((op) => op.opcode === "OpenRead" && op.p2 === rootPage).map((op) => op.p1),
+    );
+
+    return {
+      ops,
+      reads: ops.flatMap((op, position) =>
+        op.opcode === "Column" && tableCursors.has(op.p1) ? [position] : [],
+      ),
+    };
+  }
+
+  it.each(QUERIES)(
+    "spells $index's partial WHERE with the live floor constant",
+    async ({ floor, index, table }) => {
+      const ddl = await db.execute({
+        args: [index],
+        sql: `select sql from sqlite_master where type = 'index' and name = ?`,
+      });
+      const normalize = (value: unknown) =>
+        String(value).replaceAll(/["`]/g, "").replaceAll(/\s+/g, " ").toLowerCase();
+
+      // A floor constant that drifts from the index literal leaves every hub read on a table scan.
+      expect(normalize(ddl.rows[0]?.sql)).toContain(
+        `where ${normalize(hubInclusionWhere(table, floor))}`,
+      );
+    },
+  );
+
+  it.each(QUERIES)(
+    "counts the gated total and the A–Z lane off $index without reading a table row",
+    async ({ index, query, table }) => {
+      for (const statement of [
+        catalogueEntityCountQuery(query),
+        catalogueEntityLetterCountsQuery(query),
+      ]) {
+        expect(await planDetails(statement)).toContain(`INDEX ${index}`);
+        expect((await tableColumnReads(table, statement)).reads).toEqual([]);
+      }
+    },
+  );
+
+  it.each(QUERIES)(
+    "reads a table row per entry when the floor is bound instead (the tripwire fires)",
+    async ({ floor, index, query, table }) => {
+      const bound = {
+        args: [floor],
+        sql: `select count(*) as total
+              from ${query.entity}
+              where (${query.alias}.certified_finding_count > 0
+                     or ${query.alias}.renderable_track_count >= ?)`,
+      };
+
+      expect(await planDetails(bound)).toContain(`INDEX ${index}`);
+      expect((await tableColumnReads(table, bound)).reads.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.each(QUERIES)(
+    "slices a page off $index, reading the table only for the rows it returns",
+    async ({ index, query, table }) => {
+      const statement = catalogueEntityOffsetPageQuery(
+        query,
+        CATALOGUE_HUB_DEFAULT_LIMIT,
+        CATALOGUE_HUB_DEFAULT_LIMIT * 9,
+        `${query.idExpr} as id, ${query.slugExpr} as slug,
+         ${query.alias}.renderable_track_count as n,
+         (${query.alias}.certified_finding_count > 0) as cert`,
+      );
+      const details = await planDetails(statement);
+      const { ops, reads } = await tableColumnReads(table, statement);
+      const offsetCheck = ops.findIndex((op) => op.opcode === "IfPos");
+
+      expect(details).toContain(`USING INDEX ${index}`);
+      expect(details).not.toContain("USE TEMP B-TREE");
+      expect(offsetCheck).toBeGreaterThanOrEqual(0);
+      expect(reads.length).toBeGreaterThan(0);
+      // Every table read sits past the offset check, so a skipped row never reads the table.
+      expect(Math.min(...reads)).toBeGreaterThan(offsetCheck);
+    },
+  );
 
   it.each(QUERIES)(
     "walks $index for the first-row probe and seeks it for the page",

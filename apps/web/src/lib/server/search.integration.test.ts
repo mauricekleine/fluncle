@@ -31,6 +31,7 @@ import {
   compileFilters,
   type EntityMatchMode,
   entityMatchStatement,
+  labelNameProbeStatement,
   resolveFilterEntities,
   searchArchive as searchArchiveLive,
 } from "./search";
@@ -1341,17 +1342,37 @@ describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
 // `exists` reference answered, across ASCII case, LIKE wildcards in the needle, non-ASCII capitals
 // (which neither spelling folds), alias ties, and the label hub gate.
 describe("the entity reads — index-served, and exactly the lower() compare they replace", () => {
-  /** The reference: the `lower()`-wrapped name and the correlated alias `exists`, verbatim. */
-  function referenceStatement(kind: "artist" | "label", query: string, mode: EntityMatchMode) {
+  /**
+   * The reference: the `lower()`-wrapped name and the correlated alias `exists`, verbatim, each over
+   * its table read `not indexed` — the rowid-order scan these statements replace, so equal names tie
+   * exactly where that scan put them.
+   */
+  function referenceStatement(
+    kind: "album" | "artist" | "label",
+    query: string,
+    mode: EntityMatchMode,
+  ) {
     const needle = query.trim().toLowerCase();
     const predicate = mode === "exact" ? "= ?" : "like ? || '%'";
+
+    if (kind === "album") {
+      return {
+        args: [needle, 3, 10],
+        sql: `select albums.name as name, albums.slug as slug
+              from albums not indexed
+              where (lower(albums.name) ${predicate})
+                and (albums.certified_finding_count > 0 or albums.renderable_track_count >= ?)
+              order by length(albums.name) asc, albums.name asc
+              limit ?`,
+      };
+    }
 
     if (kind === "artist") {
       return {
         args: [needle, needle, needle, 10],
         sql: `select artists.name as name, artists.slug as slug,
                 case when lower(artists.name) ${predicate} then 0 else 1 end as name_rank
-              from artists
+              from artists not indexed
               where lower(artists.name) ${predicate}
                  or exists (select 1 from artist_aliases
                             where artist_aliases.artist_id = artists.id
@@ -1367,7 +1388,7 @@ describe("the entity reads — index-served, and exactly the lower() compare the
       args: [needle, needle, needle, 3, 10],
       sql: `select labels.name as name, labels.slug as slug,
               case when lower(labels.name) ${predicate} then 0 else 1 end as name_rank
-            from labels
+            from labels not indexed
             where (lower(labels.name) ${predicate}
                    or exists (select 1 from label_aliases
                               where label_aliases.label_id = labels.id
@@ -1468,37 +1489,85 @@ describe("the entity reads — index-served, and exactly the lower() compare the
               values (?, ?, ?, ?, 'operator', ?, ?, ?)`,
       });
     }
-  });
 
-  it("answers exactly what the lower() + correlated-exists reference answers", async () => {
-    const needles = [
-      "Netsky",
-      "NETSKY",
-      "nets",
-      "net_",
-      "net%",
-      "n",
-      "boris",
-      "Boris Daenen",
-      "origin",
-      "netsky hint",
-      "ëlectron",
-      "ËLECTRON",
-      "electron",
-      "hospital",
-      "Hospital Records",
-      "med",
-      "andromedik",
-      "hospitality",
-      "1991",
-      "walked",
-      "crawled",
-      "zzz",
+    // Albums carry their gate counters directly. Two identical names sit in the opposite slug and
+    // rowid order, beside an all-caps twin, so the name sort's ties are exercised; one album stays
+    // under the floor.
+    const albums: [string, string, string, number, number][] = [
+      ["al1", "Dub Plate", "dub-plate-b", 3, 0],
+      ["al2", "Dub Plate", "dub-plate-a", 4, 0],
+      ["al3", "DUB PLATE", "dub-plate-c", 0, 1],
+      ["al4", "Net_Sky Sessions", "net-sky-sessions", 3, 0],
+      ["al5", "Net%Work Dub", "net-work-dub", 5, 0],
+      ["al6", "Ëlectron", "electron-album", 3, 0],
+      ["al7", "ëlectron dub", "electron-dub-album", 3, 0],
+      ["al8", "Thin Record", "thin-record", 1, 0],
     ];
 
-    for (const kind of ["artist", "label"] as const) {
+    for (const [id, name, slug, renderable, certified] of albums) {
+      await db.execute({
+        args: [id, name, slug, now, now, renderable, certified],
+        sql: `insert into albums
+                (id, name, slug, created_at, updated_at, renderable_track_count,
+                 certified_finding_count)
+              values (?, ?, ?, ?, ?, ?, ?)`,
+      });
+    }
+
+    // A later, ungated label whose name folds to an existing one: the exact-label probe must still
+    // land on the earlier row. Two gated labels share one name in the opposite slug and rowid order,
+    // so the label arm's name sort ties too.
+    const moreLabels: [string, string, string, number][] = [
+      ["l-shout", "HOSPITAL RECORDS", "hospital-records-shout", 0],
+      ["l-dub-b", "Dub Imprint", "dub-imprint-b", 3],
+      ["l-dub-a", "Dub Imprint", "dub-imprint-a", 3],
+    ];
+
+    for (const [id, name, slug, renderable] of moreLabels) {
+      await db.execute({
+        args: [id, name, slug, now, now, renderable],
+        sql: `insert into labels (id, name, slug, created_at, updated_at, renderable_track_count)
+              values (?, ?, ?, ?, ?, ?)`,
+      });
+    }
+  });
+
+  const NEEDLES = [
+    "Netsky",
+    "NETSKY",
+    "nets",
+    "net_",
+    "net%",
+    "n",
+    "boris",
+    "Boris Daenen",
+    "origin",
+    "netsky hint",
+    "ëlectron",
+    "ËLECTRON",
+    "electron",
+    "hospital",
+    "Hospital Records",
+    "med",
+    "andromedik",
+    "hospitality",
+    "1991",
+    "walked",
+    "crawled",
+    "dub plate",
+    "dub imprint",
+    "DUB",
+    "dub p",
+    "thin record",
+    "ëlectron dub",
+    "second nature",
+    "zzz",
+  ];
+
+  it("answers exactly what the lower() + correlated-exists reference answers", async () => {
+    for (const kind of ["album", "artist", "label"] as const) {
       for (const mode of ["exact", "prefix"] as const) {
-        for (const needle of needles) {
+        for (const needle of NEEDLES) {
           const statement = entityMatchStatement(kind, needle, mode, 10);
 
           if (!statement) {
@@ -1528,6 +1597,69 @@ describe("the entity reads — index-served, and exactly the lower() compare the
     expect(rowsOf(await db.execute(referenceStatement("label", "med", "prefix")))).toEqual([
       { name: "Hospital Records", slug: "hospital-records" },
     ]);
+    expect(rowsOf(await db.execute(referenceStatement("label", "dub imprint", "exact")))).toEqual([
+      { name: "Dub Imprint", slug: "dub-imprint-b" },
+      { name: "Dub Imprint", slug: "dub-imprint-a" },
+    ]);
+    expect(rowsOf(await db.execute(referenceStatement("album", "dub plate", "exact")))).toEqual([
+      { name: "DUB PLATE", slug: "dub-plate-c" },
+      { name: "Dub Plate", slug: "dub-plate-b" },
+      { name: "Dub Plate", slug: "dub-plate-a" },
+    ]);
+  });
+
+  it("probes an exact label name exactly as the lower() compare did, and lands on the same row", async () => {
+    for (const query of NEEDLES) {
+      const needle = query.trim().toLowerCase();
+      const expected = await db.execute({
+        args: [needle],
+        sql: `select name from labels not indexed where lower(name) = ? limit 1`,
+      });
+      const actual = await db.execute(labelNameProbeStatement(needle));
+
+      expect({ needle, rows: actual.rows.map((row) => row.name) }).toEqual({
+        needle,
+        rows: expected.rows.map((row) => row.name),
+      });
+    }
+
+    const shouted = await db.execute(labelNameProbeStatement("hospital records"));
+
+    expect(shouted.rows.map((row) => row.name)).toEqual(["Hospital Records"]);
+  });
+
+  it("serves the album name through albums_name_nocase_idx: a seek for exact, a range for prefix", async () => {
+    const exact = (await planRows(entityMatchStatement("album", "Dub Plate", "exact")))
+      .map((row) => row.detail)
+      .join("\n");
+    const prefix = (await planRows(entityMatchStatement("album", "dub", "prefix")))
+      .map((row) => row.detail)
+      .join("\n");
+
+    expect(exact).toContain("SEARCH albums USING INDEX albums_name_nocase_idx (name=?)");
+    expect(prefix).toContain(
+      "SEARCH albums USING INDEX albums_name_nocase_idx (name>? AND name<?)",
+    );
+    expect(`${exact}\n${prefix}`).not.toContain("SCAN albums");
+  });
+
+  it("serves the label name through labels_name_nocase_idx beside the alias list", async () => {
+    for (const mode of ["exact", "prefix"] as const) {
+      const details = (await planRows(entityMatchStatement("label", "Hospital", mode)))
+        .map((row) => row.detail)
+        .join("\n");
+
+      expect(details).toContain("MULTI-INDEX OR");
+      expect(details).toContain("INDEX labels_name_nocase_idx");
+      expect(details).not.toContain("SCAN labels");
+    }
+
+    const probe = (await planRows(labelNameProbeStatement("hospital records")))
+      .map((row) => row.detail)
+      .join("\n");
+
+    expect(probe).toContain("SEARCH labels USING COVERING INDEX labels_name_nocase_idx (name=?)");
+    expect(probe).not.toContain("USE TEMP B-TREE");
   });
 
   it("serves the artist name through artists_name_nocase_idx with the aliases as one list", async () => {
