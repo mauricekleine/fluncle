@@ -7,10 +7,11 @@ import { createIntegrationDb } from "./integration-db";
 //
 // A label borrows its cover from one of its tracks: the freshest release with cover art (an
 // undated release last), ties broken by the lower track id, carrying that track's album master
-// columns. The pick orders the label's tracks alone and reads the one winning cover by primary key.
-// These tests pin that it returns exactly the row the single ordered join (the reference below)
-// returns, for every label shape and through every public read that carries it, and that its plan
-// orders a label's tracks with no album seek inside that ordered read.
+// columns. The pick is two covering seeks on `tracks_label_cover_idx` (the label's newest dated
+// release with art, then the lowest track id with art on it) and reads the one winning cover by
+// primary key. These tests pin that it returns exactly the row both ordered references below return,
+// for every label shape and through every public read that carries it, and that its plan reads index
+// entries only, with no sort and no album seek inside the pick.
 
 let db: Client;
 let execute: MockInstance<Client["execute"]>;
@@ -39,6 +40,18 @@ const REFERENCE_COVER_JSON = `(select json_object('u', t2.album_image_url, 'k', 
             where t2.label_id = labels.id and t2.album_image_url is not null
             order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
             limit 1)`;
+
+/** The ordered pick the two seeks must agree with: the label's tracks alone in the rule's full
+    order, first `track_id` kept, then that one row read by primary key with its album joined. */
+const ORDERED_PICK_COVER_JSON = `(select json_object('u', c.album_image_url, 'k', a2.image_key,
+                              's', a2.image_state, 'v', a2.image_updated_at)
+             from tracks c
+             left join albums a2 on a2.id = c.album_id
+            where c.track_id = (select t2.track_id
+                                  from tracks t2
+                                 where t2.label_id = labels.id and t2.album_image_url is not null
+                                 order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
+                                 limit 1))`;
 
 const NOW = "2026-07-01T00:00:00.000Z";
 
@@ -208,6 +221,42 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     },
   );
 
+  // The dated releases carry no art and the undated ones do: the undated lowest id wins, so the
+  // newest-date seek must only consider tracks with art.
+  const undatedArt = label("undated-art-dated-bare");
+  tracks.push(
+    { albumId: null, art: null, labelId: undatedArt, releaseDate: "2025-01-01", trackId: "uab-0" },
+    { albumId: null, art: null, labelId: undatedArt, releaseDate: "2024-01-01", trackId: "uab-1" },
+    {
+      albumId: "al-owned",
+      art: art("uab-3"),
+      labelId: undatedArt,
+      releaseDate: null,
+      trackId: "uab-3",
+    },
+    { albumId: null, art: art("uab-2"), labelId: undatedArt, releaseDate: null, trackId: "uab-2" },
+  );
+
+  // A dated release with art beats an undated one with a lower id.
+  const datedFirst = label("dated-beats-undated");
+  tracks.push(
+    { albumId: null, art: art("dbu-0"), labelId: datedFirst, releaseDate: null, trackId: "dbu-0" },
+    {
+      albumId: "al-owned-2",
+      art: art("dbu-9"),
+      labelId: datedFirst,
+      releaseDate: "1999-12-31",
+      trackId: "dbu-9",
+    },
+  );
+
+  // An empty-string date is a dated release (it sorts below every other date, above undated).
+  const emptyDate = label("empty-date");
+  tracks.push(
+    { albumId: null, art: art("ed-1"), labelId: emptyDate, releaseDate: null, trackId: "ed-1" },
+    { albumId: null, art: art("ed-2"), labelId: emptyDate, releaseDate: "", trackId: "ed-2" },
+  );
+
   // Fresher tracks on no label: they must never leak into any label's pick.
   tracks.push({
     albumId: "al-owned",
@@ -330,16 +379,18 @@ beforeEach(async () => {
 });
 
 describe("the label tile cover pick", () => {
-  it("returns the ordered join's cover JSON for every label, and the rule's track", async () => {
+  it("returns both ordered references' cover JSON for every label, and the rule's track", async () => {
     const { labels, tracks } = world();
     await seed(labels, tracks);
 
     const picked = await coverColumns(LABEL_CATALOGUE_COVER_JSON);
     const reference = await coverColumns(REFERENCE_COVER_JSON);
+    const orderedPick = await coverColumns(ORDERED_PICK_COVER_JSON);
     const albums = new Map(ALBUMS.map((album) => [album.id, album]));
 
     expect(picked.size).toBe(labels.length);
     expect(picked).toEqual(reference);
+    expect(picked).toEqual(orderedPick);
 
     for (const label of labels) {
       const trackId = expectedPick(label.id, tracks);
@@ -366,6 +417,9 @@ describe("the label tile cover pick", () => {
     expect(expectedPick("lbl-fresh-uncovered", tracks)).toBe("fu-2");
     expect(expectedPick("lbl-date-precision", tracks)).toBe("dp-3");
     expect(expectedPick("lbl-album-less", tracks)).toBe("alb-0");
+    expect(expectedPick("lbl-undated-art-dated-bare", tracks)).toBe("uab-2");
+    expect(expectedPick("lbl-dated-beats-undated", tracks)).toBe("dbu-9");
+    expect(expectedPick("lbl-empty-date", tracks)).toBe("ed-2");
     expect(picked.get("no-art")).toBeNull();
     expect(picked.get("no-tracks")).toBeNull();
   });
@@ -401,47 +455,73 @@ describe("the label tile cover pick", () => {
     expect(expected("no-tracks")).toBeUndefined();
   });
 
-  it("orders a label's tracks with no album seek, then reads the one cover by primary key", async () => {
+  it("picks from covering index entries alone, then reads the one cover by primary key", async () => {
     const { labels, tracks } = world();
     await seed(labels, tracks);
     execute.mockClear();
 
     await listLabelsHubPage(1);
+    await getLabelDetail("big-imprint");
 
-    const tile = execute.mock.calls
+    const statements = execute.mock.calls
       .map((call) => asStatement(call[0]))
-      .find((statement) => statement?.sql.includes("json_object('u'"));
+      .filter((statement) => statement?.sql.includes("json_object('u'") === true);
 
-    expect(tile).toBeDefined();
+    // The hub's batched tile read and the single-label detail read.
+    expect(statements.some((statement) => statement?.sql.includes("labels.slug in"))).toBe(true);
+    expect(statements.some((statement) => statement?.sql.includes("labels.id = ?"))).toBe(true);
 
-    if (tile === undefined) {
-      return;
+    for (const statement of statements) {
+      if (statement === undefined) {
+        continue;
+      }
+
+      const plan = await db.execute({
+        args: statement.args,
+        sql: `explain query plan ${statement.sql}`,
+      });
+      const nodes = plan.rows.map((row) => ({
+        detail: typeof row.detail === "string" ? row.detail : "",
+        id: Number(row.id),
+        parent: Number(row.parent),
+      }));
+      const details = nodes.map((node) => node.detail);
+      const scopeOf = (pattern: RegExp) => nodes.find((node) => pattern.test(node.detail))?.parent;
+
+      // Nothing is sorted and no `tracks` range is scanned: every `tracks` read is a seek.
+      expect(details.filter((detail) => /TEMP B-TREE/.test(detail))).toEqual([]);
+      expect(details.filter((detail) => detail.startsWith("SCAN "))).toEqual([]);
+
+      // The newest dated release with art and the lowest track id with art on it, both answered
+      // from the covering index entries.
+      expect(details).toContainEqual(
+        "SEARCH t3 USING COVERING INDEX tracks_label_cover_idx (label_id=?)",
+      );
+      expect(details).toContainEqual(
+        "SEARCH t2 USING COVERING INDEX tracks_label_cover_idx (label_id=? AND release_date=?)",
+      );
+
+      // No album seek and no `tracks` row read inside the pick; the winner's row and its album are
+      // read once, in the cover scope around it.
+      const pickScope = scopeOf(/^SEARCH t2 /);
+      const newestScope = scopeOf(/^SEARCH t3 /);
+      const coverScope = nodes.find((node) => node.id === pickScope)?.parent;
+      const inCover = nodes.filter((node) => node.parent === coverScope).map((node) => node.detail);
+      const pickReads = nodes
+        .filter((node) => node.parent === pickScope || node.parent === newestScope)
+        .map((node) => node.detail)
+        .filter((detail) => detail.startsWith("SEARCH ") || detail.startsWith("SCAN "));
+
+      expect(pickReads).toHaveLength(2);
+      for (const detail of pickReads) {
+        expect(detail).toContain(" USING COVERING INDEX tracks_label_cover_idx ");
+      }
+      expect(inCover).toContainEqual(
+        expect.stringMatching(/^SEARCH c USING INDEX \S+ \(track_id=\?\)$/),
+      );
+      expect(inCover).toContainEqual(
+        expect.stringMatching(/^SEARCH a2 USING INDEX \S+ \(id=\?\) LEFT-JOIN$/),
+      );
     }
-
-    const plan = await db.execute({ args: tile.args, sql: `explain query plan ${tile.sql}` });
-    const nodes = plan.rows.map((row) => ({
-      detail: typeof row.detail === "string" ? row.detail : "",
-      id: Number(row.id),
-      parent: Number(row.parent),
-    }));
-    const sorts = nodes.filter((node) => node.detail === "USE TEMP B-TREE FOR ORDER BY");
-
-    expect(sorts).toHaveLength(1);
-
-    const pickScope = sorts[0]?.parent;
-    const inPick = nodes.filter((node) => node.parent === pickScope).map((node) => node.detail);
-    const coverScope = nodes.find((node) => node.id === pickScope)?.parent;
-    const inCover = nodes.filter((node) => node.parent === coverScope).map((node) => node.detail);
-
-    expect(inPick).toContainEqual(
-      expect.stringMatching(/^SEARCH t2 USING INDEX tracks_label_id_idx \(label_id=\?\)$/),
-    );
-    expect(inPick.filter((detail) => /\ba2\b|albums/.test(detail))).toEqual([]);
-    expect(inCover).toContainEqual(
-      expect.stringMatching(/^SEARCH c USING INDEX \S+ \(track_id=\?\)$/),
-    );
-    expect(inCover).toContainEqual(
-      expect.stringMatching(/^SEARCH a2 USING INDEX \S+ \(id=\?\) LEFT-JOIN$/),
-    );
   });
 });

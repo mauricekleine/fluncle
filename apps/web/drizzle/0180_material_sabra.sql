@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_label_cover_idx` ON `tracks` (`label_id`,`release_date`,`track_id`,`album_image_url`);
