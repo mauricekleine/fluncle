@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement, type TransactionMode } from "@libsql/client";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
@@ -15,6 +15,7 @@ import { createIntegrationDb } from "./integration-db";
 
 let db: Client;
 let execute: MockInstance<Client["execute"]>;
+let batch: MockInstance<Client["batch"]>;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -22,22 +23,39 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
+function statementText(statement: unknown): string {
+  if (typeof statement === "string") {
+    return statement;
+  }
+
+  return typeof statement === "object" &&
+    statement !== null &&
+    "sql" in statement &&
+    typeof statement.sql === "string"
+    ? statement.sql
+    : "";
+}
+
 /** The SQL of every statement the reads under test have executed since the last reset. */
 function executedSql(): string[] {
-  return execute.mock.calls.map((call) => {
-    const statement: unknown = call[0];
+  return execute.mock.calls.map((call) => statementText(call[0]));
+}
 
-    if (typeof statement === "string") {
-      return statement;
-    }
+/** The SQL of every `"read"` batch since the last reset, one array per batch. */
+function readBatches(): string[][] {
+  return batch.mock.calls
+    .filter((call) => call[1] === "read")
+    .map((call) => call[0].map((statement) => statementText(statement)));
+}
 
-    return typeof statement === "object" &&
-      statement !== null &&
-      "sql" in statement &&
-      typeof statement.sql === "string"
-      ? statement.sql
-      : "";
-  });
+/** Every statement the reads issued since the last reset, executed or batched. */
+function allSql(): string[] {
+  return [...executedSql(), ...readBatches().flat()];
+}
+
+/** A statement that reads through the hub gate (the floor comparison is its signature). */
+function carriesGate(sql: string): boolean {
+  return sql.includes("renderable_track_count >= ");
 }
 
 // Imported AFTER the mock so each module's `getDb` reads the fixture database.
@@ -234,7 +252,66 @@ async function referenceBrowsePage(table: EntityTable, page: number, pageSize: n
 beforeEach(async () => {
   db = await createIntegrationDb();
   execute = vi.spyOn(db, "execute");
+  batch = vi.spyOn(db, "batch");
 });
+
+/**
+ * Arm one write that moves `slug` OUT of the hub gate at the most damaging moment each read shape
+ * allows: just before the SECOND gate-bearing statement issued through `execute`, so two independent
+ * reads straddle it, or just after a `"read"` batch resolves, since nothing can land inside one
+ * read-only transaction. Returns whether the write has landed.
+ */
+function armGateCrossingWrite(table: EntityTable, slug: string): () => boolean {
+  const prototype = Object.getPrototypeOf(db) as Client;
+  const realExecute = prototype.execute.bind(db);
+  const realBatch = prototype.batch.bind(db);
+  let gateStatements = 0;
+  let landed = false;
+  const land = async () => {
+    if (!landed) {
+      landed = true;
+      await realExecute({
+        args: [slug],
+        sql: `update ${table} set renderable_track_count = 0, certified_finding_count = 0
+              where slug = ?`,
+      });
+    }
+  };
+
+  execute.mockImplementation((async (statement: InStatement) => {
+    if (carriesGate(statementText(statement))) {
+      gateStatements += 1;
+
+      if (gateStatements === 2) {
+        await land();
+      }
+    }
+
+    return realExecute(statement);
+  }) as Client["execute"]);
+  batch.mockImplementation((async (statements: InStatement[], mode?: TransactionMode) => {
+    const results = await realBatch(statements, mode);
+
+    if (mode === "read") {
+      await land();
+    }
+
+    return results;
+  }) as Client["batch"]);
+
+  return () => landed;
+}
+
+/** A served page is whole when its rows are exactly what its own total says that page holds. */
+function expectWholePage(
+  served: { items: unknown[]; total: number },
+  page: number,
+  pageSize: number,
+) {
+  expect(served.items).toHaveLength(
+    Math.max(0, Math.min(pageSize, served.total - (page - 1) * pageSize)),
+  );
+}
 
 const HUBS = [
   {
@@ -284,11 +361,76 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
         total: served.total,
       }).toEqual(expected);
       expect(expected.items).toHaveLength(pageSize);
-      expect(executedSql().some((sql) => sql.includes("materialized"))).toBe(false);
+      expect(allSql().some((sql) => sql.includes("materialized"))).toBe(false);
     }
 
     // Let the boundary build page 11 scheduled finish against this test's database.
     await vi.waitFor(async () => expect(await storedFingerprint(`${hub.name}-hub`)).toBeDefined());
+  });
+
+  it("reads a shallow page's total and slice from one read batch", async () => {
+    await seedEntities(hub.table, entityWorld(300));
+    execute.mockClear();
+    batch.mockClear();
+
+    await hub.list(1);
+
+    const batches = readBatches();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(2);
+    expect(batches[0]?.every((sql) => carriesGate(sql))).toBe(true);
+    expect(executedSql().filter((sql) => carriesGate(sql))).toEqual([]);
+  });
+
+  it("reads a deep page's total, first row, and seek from one read batch", async () => {
+    await seedEntities(hub.table, entityWorld(1_100));
+    await hub.list(11);
+    await vi.waitFor(async () => expect(await storedFingerprint(`${hub.name}-hub`)).toBeDefined());
+    execute.mockClear();
+    batch.mockClear();
+
+    await hub.list(12);
+
+    const batches = readBatches();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(3);
+    expect(batches[0]?.every((sql) => carriesGate(sql))).toBe(true);
+    expect(executedSql().filter((sql) => carriesGate(sql))).toEqual([]);
+  });
+
+  it("keeps a shallow page whole when a gate-crossing write lands during the render", async () => {
+    const rows = entityWorld(300);
+    const pageSize = CATALOGUE_HUB_DEFAULT_LIMIT;
+    const order = gatedOrder(rows);
+    const lastPage = Math.ceil(order.length / pageSize);
+
+    await seedEntities(hub.table, rows);
+    expect(lastPage).toBeLessThanOrEqual(10);
+
+    const landed = armGateCrossingWrite(hub.table, order[0] ?? "");
+    const served = await hub.list(lastPage);
+
+    expect(landed()).toBe(true);
+    expectWholePage(served, lastPage, pageSize);
+  });
+
+  it("keeps a deep page whole when a gate-crossing write lands during the render", async () => {
+    const rows = entityWorld(1_100);
+    const pageSize = CATALOGUE_HUB_DEFAULT_LIMIT;
+    const order = gatedOrder(rows);
+    const lastPage = Math.ceil(order.length / pageSize);
+
+    await seedEntities(hub.table, rows);
+    await hub.list(11);
+    await vi.waitFor(async () => expect(await storedFingerprint(`${hub.name}-hub`)).toBeDefined());
+
+    const landed = armGateCrossingWrite(hub.table, order[0] ?? "");
+    const served = await hub.list(lastPage);
+
+    expect(landed()).toBe(true);
+    expectWholePage(served, lastPage, pageSize);
   });
 
   it("serves every deep page off persisted boundaries as the exact slice of the unified order", async () => {
@@ -318,7 +460,7 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
       expect(served.letters).toEqual(shallow.letters);
       // The boundary path answered, and no statement on it materialized the whole gated set.
       expect(executedSql().some((sql) => sql.includes("from hub_page_anchors"))).toBe(true);
-      expect(executedSql().some((sql) => sql.includes("materialized"))).toBe(false);
+      expect(allSql().some((sql) => sql.includes("materialized"))).toBe(false);
     }
   });
 
@@ -353,6 +495,30 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
   });
 });
 
+describe("the gate-crossing write harness", () => {
+  it("tears two independent reads across the write, so a torn page is visible to the tests above", async () => {
+    const rows = entityWorld(300);
+    const pageSize = CATALOGUE_HUB_DEFAULT_LIMIT;
+    const order = gatedOrder(rows);
+    const lastPage = Math.ceil(order.length / pageSize);
+
+    await seedEntities("albums", rows);
+
+    const landed = armGateCrossingWrite("albums", order[0] ?? "");
+    const [count, slice] = await Promise.all([
+      db.execute(catalogueEntityCountQuery(ALBUMS_HUB_QUERY)),
+      db.execute(
+        catalogueEntityOffsetPageQuery(ALBUMS_HUB_QUERY, pageSize, (lastPage - 1) * pageSize),
+      ),
+    ]);
+    const total = Number(count.rows[0]?.total ?? 0);
+
+    expect(landed()).toBe(true);
+    expect(total).toBe(order.length);
+    expect(slice.rows).not.toHaveLength(Math.min(pageSize, total - (lastPage - 1) * pageSize));
+  });
+});
+
 describe("the MCP browse past its shallow pages", () => {
   it("serves every shallow browse page exactly as the materialized gated CTE", async () => {
     const rows = entityWorld(1_100);
@@ -371,7 +537,7 @@ describe("the MCP browse past its shallow pages", () => {
         expected,
       );
       expect(expected.items).toHaveLength(pageSize);
-      expect(executedSql().some((sql) => sql.includes("materialized"))).toBe(false);
+      expect(allSql().some((sql) => sql.includes("materialized"))).toBe(false);
     }
   });
 
@@ -395,7 +561,7 @@ describe("the MCP browse past its shallow pages", () => {
         pageSlugs(order, page, pageSize).map((slug) => `Name ${slug}`),
       );
       expect(served.total).toBe(order.length);
-      expect(executedSql().some((sql) => sql.includes("materialized"))).toBe(false);
+      expect(allSql().some((sql) => sql.includes("materialized"))).toBe(false);
     }
   });
 });

@@ -19,7 +19,7 @@
 // no `slugify`, so the fold happens here in TS over a bounded `GROUP BY label` read
 // (one row per DISTINCT label, never a row per track).
 
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement, type Row } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import {
   type LabelAdminItem,
@@ -1118,27 +1118,46 @@ function entityAnchorAddress(
   };
 }
 
+/**
+ * Every statement one entity-list read needs, as ONE `"read"` batch. libSQL runs a read batch inside
+ * a single read-only transaction, so the gated total, the first row, the boundaries, and the page
+ * slice all see the same snapshot. Independent executes can straddle a counter write that moves a
+ * row across the gate: the page's rows then disagree with its own total (an in-range last page can
+ * even come back empty), boundaries can be stored under a fingerprint they do not match, and the
+ * hubs' edge cache serves such a page to every reader until it revalidates.
+ */
+async function readOneSnapshot(statements: InStatement[]): Promise<Row[][]> {
+  const db = await getDb();
+  const results = await db.batch(statements, "read");
+
+  if (results.length !== statements.length) {
+    throw new Error(
+      `entity list snapshot returned ${results.length} results for ${statements.length} statements`,
+    );
+  }
+
+  return results.map((result) => result.rows);
+}
+
 async function refreshCatalogueEntityAnchors(
   query: CatalogueEntityPageQuery,
   pageSize: number,
   surface: "browse" | "hub",
 ): Promise<void> {
-  const db = await getDb();
-  const anchorQuery = catalogueEntityAnchorExtractionQuery(query, pageSize);
-  const countQuery = catalogueEntityCountQuery(query);
-  const firstQuery = catalogueEntityOffsetPageQuery(query, 1, 0);
-  const [anchorResult, countResult, firstResult] = await Promise.all([
-    db.execute(anchorQuery),
-    db.execute(countQuery),
-    db.execute(firstQuery),
+  // The boundaries and the fingerprint they are stored under come from one snapshot, so a stored
+  // fingerprint always describes the corpus its boundaries were cut from.
+  const [anchorRows = [], countRows = [], firstRows = []] = await readOneSnapshot([
+    catalogueEntityAnchorExtractionQuery(query, pageSize),
+    catalogueEntityCountQuery(query),
+    catalogueEntityOffsetPageQuery(query, 1, 0),
   ]);
   const anchors = hubPageAnchorsFromRows(
-    typedRows<Record<string, unknown>>(anchorResult.rows),
+    typedRows<Record<string, unknown>>(anchorRows),
     "slug",
     pageSize,
   );
-  const total = Number(typedRows<{ total: number }>(countResult.rows)[0]?.total ?? 0);
-  const firstId = typedRows<{ id: string }>(firstResult.rows)[0]?.id;
+  const total = Number(typedRows<{ total: number }>(countRows)[0]?.total ?? 0);
+  const firstId = typedRows<{ id: string }>(firstRows)[0]?.id;
   const address = entityAnchorAddress(query, pageSize, surface);
 
   await persistHubPageAnchors(
@@ -1227,7 +1246,9 @@ function compareSlugThenId(
  * Every statement reads the entity's hub listing index: the gated total that keys the fingerprint
  * (folded from the A–Z lane's per-initial counts when the page carries one) counts it without a
  * table row, and the fingerprint's first row and the page itself walk it in slug order — the first
- * row stops at the first gated entity, and the seek stops after its remainder plus one page.
+ * row stops at the first gated entity, and the seek stops after its remainder plus one page. All
+ * three read one snapshot ({@link readOneSnapshot}); the fingerprint decision only schedules a
+ * refresh, so the seek never waits on it.
  */
 async function anchoredCatalogueEntityRows(
   query: CatalogueEntityPageQuery,
@@ -1247,14 +1268,13 @@ async function anchoredCatalogueEntityRows(
     return undefined;
   }
 
-  const db = await getDb();
-  const firstQuery = catalogueEntityOffsetPageQuery(query, 1, 0);
-  const [totalResult, firstResult] = await Promise.all([
-    db.execute(catalogueEntityTotalQuery(query, withLetters)),
-    db.execute(firstQuery),
+  const [totalRows = [], firstRows = [], pageRows = []] = await readOneSnapshot([
+    catalogueEntityTotalQuery(query, withLetters),
+    catalogueEntityOffsetPageQuery(query, 1, 0),
+    catalogueEntitySeekPageQuery(query, pageSize, page, stored.anchors, projection),
   ]);
-  const { letters, total } = catalogueEntityTotalFromRows(totalResult.rows, withLetters, pageSize);
-  const firstId = typedRows<{ id: string }>(firstResult.rows)[0]?.id;
+  const { letters, total } = catalogueEntityTotalFromRows(totalRows, withLetters, pageSize);
+  const firstId = typedRows<{ id: string }>(firstRows)[0]?.id;
   const decision = persistedAnchorDecision(
     page,
     pageSize,
@@ -1266,12 +1286,9 @@ async function anchoredCatalogueEntityRows(
     scheduleCatalogueEntityAnchorRefresh(query, pageSize, surface);
   }
 
-  const pageQuery = catalogueEntitySeekPageQuery(query, pageSize, page, stored.anchors, projection);
-  const pageResult = await db.execute(pageQuery);
-
   return {
     letters,
-    rows: typedRows<Record<string, unknown>>(pageResult.rows),
+    rows: typedRows<Record<string, unknown>>(pageRows),
     total,
   };
 }
@@ -1281,7 +1298,8 @@ async function anchoredCatalogueEntityRows(
  * them ({@link anchoredCatalogueEntityRows}), otherwise the direct slug-ordered offset slice beside
  * the gated total. Either way every statement reads the entity's hub listing index plus the table
  * rows the page returns, so the shallow and deep pages cannot disagree on the gate, the order, or
- * the counts.
+ * the counts, and a page's statements share one snapshot ({@link readOneSnapshot}), so its rows
+ * cannot disagree with its own total.
  */
 async function unfilteredCatalogueEntityRows(
   query: CatalogueEntityPageQuery,
@@ -1306,15 +1324,14 @@ async function unfilteredCatalogueEntityRows(
     }
   }
 
-  const db = await getDb();
-  const [totalResult, pageResult] = await Promise.all([
-    db.execute(catalogueEntityTotalQuery(query, withLetters)),
-    db.execute(catalogueEntityOffsetPageQuery(query, pageSize, (page - 1) * pageSize, projection)),
+  const [totalRows = [], pageRows = []] = await readOneSnapshot([
+    catalogueEntityTotalQuery(query, withLetters),
+    catalogueEntityOffsetPageQuery(query, pageSize, (page - 1) * pageSize, projection),
   ]);
 
   return {
-    ...catalogueEntityTotalFromRows(totalResult.rows, withLetters, pageSize),
-    rows: typedRows<Record<string, unknown>>(pageResult.rows),
+    ...catalogueEntityTotalFromRows(totalRows, withLetters, pageSize),
+    rows: typedRows<Record<string, unknown>>(pageRows),
   };
 }
 
@@ -1328,7 +1345,8 @@ async function unfilteredCatalogueEntityRows(
  * out of, counts that index without reading a table row, and the page walks it in slug order,
  * reading the table only for the rows it returns. A shallow page, or a deep one with no stored
  * boundaries yet, takes the direct offset slice; a deep page with boundaries seeks from the nearest
- * one (one slug range, no `union all` branches, plus the nearest-anchor offset remainder). Missing
+ * one (one slug range, no `union all` branches, plus the nearest-anchor offset remainder). A page's
+ * total and slice are one read batch, so they describe one snapshot. Missing
  * boundaries schedule a best-effort build; stale boundaries serve and schedule refresh. A
  * NAME-FILTERED page reads the entity table once through a materialized gated CTE, because its
  * `like '%…%'` has to read every gated row's name wherever the rows come from. Every read is over

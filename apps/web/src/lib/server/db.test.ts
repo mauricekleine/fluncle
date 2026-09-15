@@ -738,7 +738,7 @@ describe("getDb transient-gateway retry", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  it("never retries batch, which is one unit and may contain writes", async () => {
+  it("never retries a batch outside read mode, which is one unit and may contain writes", async () => {
     const error = gatewayError(502);
     batch.mockRejectedValue(error);
 
@@ -750,6 +750,31 @@ describe("getDb transient-gateway retry", () => {
       "fluncle.duration_ms": expect.any(Number),
       "fluncle.outcome": "failure",
     });
+  });
+
+  it("retries a read-mode batch whose every statement is a confident read", async () => {
+    const results = [{ rows: [] }, { rows: [] }];
+    batch.mockRejectedValueOnce(gatewayError(503)).mockResolvedValue(results);
+
+    const db = await getDb();
+    const pending = db.batch([{ sql: "select 1" }, { sql: "select 2" }], "read");
+    await flushBackoff();
+
+    await expect(pending).resolves.toBe(results);
+    expect(batch).toHaveBeenCalledTimes(2);
+    expect(batch).toHaveBeenLastCalledWith([{ sql: "select 1" }, { sql: "select 2" }], "read");
+    expect(spanAttributes[0]).toMatchObject({ "db.retry.attempts": 1 });
+  });
+
+  it("never retries a read-mode batch carrying a statement it cannot vouch for as a read", async () => {
+    const error = gatewayError(502);
+    batch.mockRejectedValue(error);
+
+    const db = await getDb();
+    const statements = [{ sql: "select 1" }, { sql: "update tracks set bpm = 1" }];
+
+    expect(await rejectionAfterTimers(db.batch(statements, "read"))).toBe(error);
+    expect(batch).toHaveBeenCalledTimes(1);
   });
 
   it.each([[400], [401], [404], [429]])("does not retry a %i", async (status) => {
