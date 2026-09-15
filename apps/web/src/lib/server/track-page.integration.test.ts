@@ -727,6 +727,28 @@ describe("the tempo pre-filter on close in sound", () => {
     expect(details).toMatch(/SEARCH tracks USING INDEX tracks_bpm_idx \(bpm>\? AND bpm<\?\)/);
   });
 
+  it("keeps the explicit index requirement on the BPM-window statement at the source", async () => {
+    // Standing constraint: the query-plan assertion above cannot distinguish the explicit
+    // requirement from SQLite independently choosing the same index — the plan reads the same
+    // whether or not the requirement is there. The source-level assertion is what retains the
+    // requirement, and the second assertion keeps it conditional on a window being applied.
+    const statement = sonicNeighbourScanStatement(
+      new Uint8Array(EMBEDDING_DIMS * Float32Array.BYTES_PER_ELEMENT),
+      RICH,
+      8,
+      [160, 188],
+    );
+    expect(statement.sql).toContain(" indexed by tracks_bpm_idx");
+
+    const unwindowed = sonicNeighbourScanStatement(
+      new Uint8Array(EMBEDDING_DIMS * Float32Array.BYTES_PER_ELEMENT),
+      RICH,
+      8,
+      undefined,
+    );
+    expect(unwindowed.sql).not.toContain("indexed by");
+  });
+
   it("excludes a NEARER neighbour that sits outside the target's tempo window", async () => {
     // The far row is deliberately the nearest by vector, so only the window can keep it out. RICH
     // and CERTIFIED are both 174 (makeEvidenceRich); the far row is put at half tempo.
