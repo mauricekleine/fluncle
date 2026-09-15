@@ -936,6 +936,27 @@ export const tracks = sqliteTable(
   (table) => [
     index("tracks_album_id_idx").on(table.albumId),
     index("tracks_label_id_idx").on(table.labelId),
+    // THE LABEL COVER PICK (labels.ts `LABEL_COVER_PICK`, the `/labels` tile + `get_label` cover).
+    // The pick is two seeks, `max(release_date)` over a label's tracks with art and then the lowest
+    // `track_id` with art on that date, and this index answers both from its entries alone:
+    // `(label_id=?)` read from the end of the label's range, then `(label_id=? AND release_date=?)`
+    // walked in `track_id` order to the first entry. A label's whole catalogue is never read.
+    //
+    // `album_image_url` is a KEY COLUMN, not a partial `where`, because the pick's own
+    // `album_image_url is not null` term references the column: a partial index on that predicate
+    // still plans as `USING INDEX` and seeks each entry's table row, and a row read for `label_id`
+    // or anything else stored past the legacy inline vector walks the vector's overflow pages. With
+    // the URL in the key the plan is `USING COVERING INDEX` and the pick reads no `tracks` row.
+    //
+    // Plain ASC (a `desc()` index poisons the drizzle snapshot into rebuilding every index), a plain
+    // btree, never `libsql_vector_idx`. Building it reads every `tracks` row, so its migration holds
+    // the write lock for a full table walk.
+    index("tracks_label_cover_idx").on(
+      table.labelId,
+      table.releaseDate,
+      table.trackId,
+      table.albumImageUrl,
+    ),
     // THE CATALOGUE ANTI-JOIN, MATERIALIZED (docs/db-scale-backlog Wave 2 keystone 1). The single
     // most-repeated read shape in the app — `tracks LEFT JOIN findings WHERE findings.track_id IS
     // NULL` — a full left-join scan of the growing `tracks` table with a per-row
