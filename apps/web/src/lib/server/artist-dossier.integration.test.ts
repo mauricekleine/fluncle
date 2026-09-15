@@ -173,9 +173,11 @@ describe("rankArtists — the sweep", () => {
       await seedCatalogueArtist(`ar${index}`, blend(axis(0), axis(index + 1), 0.2));
     }
 
+    // A FULL batch answers with the positive SENTINEL, not a count: more is stale by construction,
+    // so the second pass over `track_artists ⋈ track_embeddings` buys a number nothing reads.
     const first = await rankArtists(2, NOW);
     expect(first.centroidsComputed).toBe(2);
-    expect(first.remaining).toBe(3);
+    expect(first.remaining).toBeGreaterThan(0);
     expect(await centroidCount()).toBe(2);
 
     // Draining the rest converges to zero — the sweep is resumable.
@@ -183,6 +185,31 @@ describe("rankArtists — the sweep", () => {
     const last = await rankArtists(2, NOW);
     expect(last.remaining).toBe(0);
     expect(await centroidCount()).toBe(5);
+  });
+
+  // `countRemaining` is the human readout's opt-in: the exact backlog, at the cost of the scan the
+  // sentinel exists to skip. The `--json` automation path never asks for it.
+  it("reports the EXACT stale backlog on a full batch when countRemaining asks for it", async () => {
+    for (let index = 0; index < 5; index += 1) {
+      await seedCatalogueArtist(`ar${index}`, blend(axis(0), axis(index + 1), 0.2));
+    }
+
+    const counted = await rankArtists(2, NOW, true);
+    expect(counted.centroidsComputed).toBe(2);
+    expect(counted.remaining).toBe(3);
+  });
+
+  // A SHORT batch is where the two sweeps part company. `rankCatalogue` stamps every row it took,
+  // so a short batch is drained; `rankArtists` purges an undecodable artist's centroid while the
+  // artist still credits embedded tracks, so that artist is stale again next tick. The short arm
+  // therefore COUNTS rather than assuming 0 — otherwise the drain loop stops one tick early.
+  it("counts (never assumes zero) after a short batch", async () => {
+    await seedCatalogueArtist("a", axis(0));
+    await seedCatalogueArtist("b", axis(1));
+
+    const short = await rankArtists(100, NOW);
+    expect(short.centroidsComputed).toBe(2);
+    expect(short.remaining).toBe(0);
   });
 
   // THE DRAIN SIGNAL'S TWO BRANCHES. An empty page over a POSITIVE limit proves the stale set is

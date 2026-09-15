@@ -231,12 +231,18 @@ export type RankArtistsSummary = {
  * in SQL, then purges any orphan centroid. Idempotent, resume-safe, a no-op on a settled graph.
  */
 export async function rankArtistsCommand(options: {
+  countRemaining?: boolean;
   limit?: string;
 }): Promise<{ summary: RankArtistsSummary }> {
   const limit = options.limit ? Number.parseInt(options.limit, 10) : undefined;
+  // `countRemaining` opts into the real backlog COUNT for `remaining` (the human-readable readout);
+  // the default sentinel keeps the automation path off the second stale-set scan (server contract).
   const response = await adminApiPost<{ ok: true; summary: RankArtistsSummary }>(
     "/api/v1/admin/artists/rank",
-    limit ? { limit } : {},
+    {
+      ...(limit ? { limit } : {}),
+      ...(options.countRemaining ? { countRemaining: true } : {}),
+    },
   );
 
   return { summary: response.summary };
