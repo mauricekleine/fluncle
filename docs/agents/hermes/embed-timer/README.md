@@ -12,13 +12,32 @@ Embed's per-finding work is **minutes-scale**: the source is the CAPTURED FULL S
 
 ## What a run does
 
-Each tick is one `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/embed-sweep.sh` (the in-container work runs as the unprivileged `hermes` user):
+Each tick is one `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/embed-sweep.sh` (the in-container work runs as the unprivileged `hermes` user). The unit starts the sweep directly, and the orchestrator holds the single database write lease only around its database windows:
 
-1. The container's `embed-sweep.sh` sources the `0600` `${HOME}/.fluncle-secrets.env` (the `fluncle-source-audio` R2 read creds + `R2_ACCOUNT_ID`) and execs the bun orchestrator. The `fluncle` CLI's own admin auth (the queue read + the vector write-back) uses the `FLUNCLE_API_TOKEN` the container env carries.
-2. `embed-sweep.ts` reads the embed queue (`fluncle admin tracks embed --queue --json`), which gates server-side on `source_audio_key IS NOT NULL AND embedding_json IS NULL`. The `sourceAudioKey` reaches the sweep because the **admin** DTO carries it unstripped (public reads run `toPublicTrackListItem` and lose it — see [`apps/web/src/lib/server/tracks.ts`](../../../../apps/web/src/lib/server/tracks.ts)) and the CLI's `mapTrack` passes it through. It takes up to `BATCH_CAP` (1) and per finding: S3-GETs the `source_audio_key` bytes from `fluncle-source-audio` to a temp file, then hands a manifest to ONE `embed-track.py` call. `embed-track.py` decodes with ffmpeg, windows into non-overlapping ~30s chunks, MuQ-forwards each sequentially (freeing its tensors between windows), mean-pools each window over time → 1024-d, mean-pools those across windows, L2-normalizes → one 1024-d vector. The orchestrator writes each vector back via `fluncle admin tracks update <trackId> --embedding-file <tmp>`. It prints one JSON summary line.
-3. `cron.embed`'s `/status` row is read by the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober from the cron output dir under `~/.hermes/cron/output/` — `docker exec … embed-sweep.sh` writes there like any Hermes job, so the prober tracks it by the `fluncle-embed` name in its `AUTOMATION_CRONS` mirror even though the SCHEDULER is a host timer.
+1. The container's `embed-sweep.sh` sources the `0600` `${HOME}/.fluncle-secrets.env` (the `fluncle-source-audio` R2 read creds, `R2_ACCOUNT_ID`, and the agent-scoped `FLUNCLE_API_TOKEN`) and execs the bun orchestrator.
+2. **Worklist window (admitted).** `embed-sweep.ts` runs one `database-admission-runner.sh phase fluncle-embed` window around a direct-HTTP read of `GET /api/v1/admin/tracks/work?kind=embed&scope=all` (the box CLI is a pinned release, so the catalogue-aware worklist stays on HTTP). The queue gates server-side on a captured `source_audio_key`, `has_embedding = 0`, and a capture not quarantined as `wrong-audio`, and the admin DTO carries `sourceAudioKey`. A typed `due_work_maintenance_pending` answer ends the tick inside this window as a paused, exit-zero run with `reason: "due_work_repair_pending"`.
+3. **Fetch and inference (no lease).** For up to `BATCH_CAP` (1) tracks it S3-GETs the `source_audio_key` bytes to a temp file, then hands a manifest to ONE `embed-track.py` call. `embed-track.py` decodes with ffmpeg, windows into non-overlapping ~30s chunks, MuQ-forwards each sequentially (freeing its tensors between windows), mean-pools each window over time → 1024-d, mean-pools those across windows, L2-normalizes → one 1024-d vector. No database lease is held for any of it, so the projection-maintenance timer and every other admitted writer keep their turn while MuQ runs.
+4. **One write window per result (admitted).** Each vector gets its own window: `fluncle admin tracks update <trackId> --embedding-file <tmp>` exactly once, then that result's self-seconds cost row. The run prints one JSON summary line.
+5. `cron.embed`'s `/status` row is read by the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober from the cron output dir under `~/.hermes/cron/output/` — `docker exec … embed-sweep.sh` writes there like any Hermes job, so the prober tracks it by the `fluncle-embed` name in its `AUTOMATION_CRONS` mirror even though the SCHEDULER is a host timer.
+
+**No write is replayed.** `track.embed` is deliberately non-replayable in the [database operation registry](../../../../apps/web/src/lib/server/database-operation-registry.ts): every accepted vector write mints a fresh catalogue-rank material revision and appends a Sonar artifact change, so repeating one is never a no-op. A failed update, including a transport failure whose outcome is unknown, counts as `skipped` and is never re-issued in the tick. A write window that yields (exit 75, whether the command never started or its lease was fenced mid-flight) stops the run with `gateState: "paused"`, `reason: "database_admission"`, `partial: true`, the measured `done` and `embedFailed` counts, and every unapplied result in `writesPending`. The next tick's admitted worklist read is the durable fence: a landed write set `has_embedding = 1` and the track is gone, while an unlanded one is still queued and is recomputed.
 
 We deliberately do **not** embed previews (the blind "quiet piano" vectors are the thing this switch to full audio kills) and do **not** embed the `unmatched` capture tail — so a finding with no `source_audio_key` never reaches this sweep (the server key-gate excludes it), and if one ever slipped through it is skipped, never preview-fetched.
+
+## Rollout order: image first, then the unit
+
+The phased script and this unit ship in one change but reach the box in two steps, and the order matters:
+
+1. **Image first.** Pin-watch rebakes the image from `main`, which puts the phased `embed-sweep.ts` at `/opt/hermes-scripts/`. An installed unit that still wraps the sweep in `database-admission-runner.sh fluncle-embed -- …` exports `FLUNCLE_ADMISSION_RUNNER_PID` to it, and the phased script then runs its windows in-process under that single inherited lease instead of nesting phase admission, so that pairing behaves like the whole-lifetime sweep. Before the next step, confirm the image carries the phased script: `docker exec hermes grep -c runDatabaseAdmissionPhase /opt/hermes-scripts/embed-sweep.ts` prints a non-zero count.
+2. **Then refresh the unit.** Replace exactly the service with the roster-derived installer. Its refresh mode reloads systemd without changing the timer's enabled or active state, and the `.timer` itself is unchanged:
+
+   ```bash
+   sudo bash docs/agents/hermes/install-host-timers.sh --refresh-unit fluncle-embed.service
+   ```
+
+   Confirm with `systemctl cat fluncle-embed.service` that it starts `embed-sweep.sh` directly, then run one attended tick and read its journal: expect `phase_scoped:true` runner events for the worklist and write windows, and no lease spanning the MuQ inference.
+
+Never install this unit before the image: the older script under the new unit would run with no database admission at all.
 
 ## Deploy (on rave-02, one time)
 
@@ -51,4 +70,4 @@ docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/emb
 
 On a real captured full song, **peak container `memory.current` was ~2518 MiB (~2.5 GiB)** against a ~136 MiB idle baseline — well under the box's 8 GB (≈ 7.6 GiB available), leaving ~5 GiB of headroom. Because windows are forwarded sequentially and each window's tensors are freed before the next, peak RSS tracks a single ~30s window's forward plus the model, NOT song length — a 3-min and a 6-min capture peak the same. If a future model or window change ever approaches the ceiling, lower `MUQ_WINDOW_SECONDS`.
 
-The tick is idempotent + newest-first (an embedded finding is already out of the `embedding_json IS NULL` queue; re-running never double-writes), so the timer is safe to run as often as the cadence; if it ever stops, `cron.embed` simply goes stale on `/status`. The queue drains at `BATCH_CAP=1` per 5-minute tick, newest-first, alongside fresh captures.
+The tick is idempotent (an embedded track is already out of the `has_embedding = 0` queue, and no write is replayed within a tick), so the timer is safe to run as often as the cadence; if it ever stops, `cron.embed` simply goes stale on `/status`. The queue drains at `BATCH_CAP=1` per 5-minute tick in the server's drain order (certified first, then The Ear's capture priority), alongside fresh captures.

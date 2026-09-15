@@ -1,20 +1,55 @@
-// Unit tests for the pure helpers in embed-sweep.ts — the box-script sweep is self-contained
-// (it can't import the workspace) and lives outside any package's test runner, so this file
-// uses `bun:test` and is run directly:
+// Tests for embed-sweep.ts. The box-script sweep is self-contained (it can't import the workspace)
+// and lives outside any package's test runner, so this file uses `bun:test`. Run it from the
+// scripts directory so the shared no-network preload is armed:
 //
-//   bun test docs/agents/hermes/scripts/embed-sweep.test.ts
+//   bun test --cwd docs/agents/hermes/scripts embed-sweep.test.ts
 //
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
-// side-effect free (no R2 GET, no embedder spawn, no CLI). Keep this green when touching the
-// source-selection or the temp-file extension logic.
-import { describe, expect, test } from "bun:test";
+// The pure helpers and the injectable `runEmbedSweep` driver run in-process. The phase protocol
+// runs the real script as a child process against a fake admission runner, a fake `fluncle`, a
+// fake embedder, and a loopback fixture serving the worklist, the R2 object, and the cost ledger.
+// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is side-effect
+// free (no R2 GET, no embedder spawn, no CLI).
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildEmbedFatalSummary,
   buildEmbedSummary,
   chooseEmbedSource,
+  type EmbedDatabaseWindows,
+  type EmbedManifestEntry,
+  type EmbedWriteItem,
+  type EmbedWriteWindow,
   parseEmbedQueue,
+  parseQueueWindowEnvelope,
+  parseWriteWindowEnvelope,
+  runEmbedSweep,
   sourceAudioExt,
 } from "./embed-sweep";
+
+const SWEEP = join(import.meta.dir, "embed-sweep.ts");
+// Each protocol test spawns the sweep, the fake runner, bun window children, and the fake embedder.
+const PROCESS_TEST_TIMEOUT_MS = 30_000;
+const temporaryDirectories: string[] = [];
+const servers: { stop: (closeActiveConnections?: boolean) => unknown }[] = [];
+
+afterEach(() => {
+  for (const server of servers.splice(0)) {
+    server.stop(true);
+  }
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 describe("embed-sweep canonical counters", () => {
   test("counts the attempted batch, successful write-backs, and every continued item failure", () => {
@@ -160,4 +195,563 @@ describe("sourceAudioExt", () => {
     // last slash, so those dots never leak into the extension.
     expect(sourceAudioExt("004.7.2I/abcdef.mp3")).toBe(".mp3");
   });
+});
+
+describe("database window envelopes", () => {
+  test("a queue envelope carries the worklist and its authoritative count", () => {
+    expect(
+      parseQueueWindowEnvelope(
+        JSON.stringify({ kind: "queue", queued: 3, tracks: [{ trackId: "track-1" }] }),
+      ),
+    ).toEqual({ kind: "queue", queued: 3, tracks: [{ trackId: "track-1" }] });
+  });
+
+  test("the typed due-work deferral crosses the window boundary as data", () => {
+    expect(
+      parseQueueWindowEnvelope(JSON.stringify({ kind: "repair-pending", message: "deferred" })),
+    ).toEqual({ kind: "repair-pending", message: "deferred" });
+  });
+
+  test("a failed window surfaces the child's own error message", () => {
+    expect(() =>
+      parseWriteWindowEnvelope(
+        JSON.stringify({ error: "queue read failed (500)", kind: "failed" }),
+      ),
+    ).toThrow("queue read failed (500)");
+  });
+
+  test("a malformed write envelope is a run failure, never a counted write", () => {
+    expect(() =>
+      parseWriteWindowEnvelope(JSON.stringify({ costWriteFailures: 0, kind: "write" })),
+    ).toThrow("invalid envelope");
+    expect(() => parseWriteWindowEnvelope("not json")).toThrow("invalid envelope");
+    expect(
+      parseWriteWindowEnvelope('{"costWriteFailures":1,"kind":"write","written":true}'),
+    ).toEqual({ costWriteFailures: 1, written: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The driver, in-process, with fake database windows.
+// ---------------------------------------------------------------------------
+
+type DriverOptions = {
+  batchCap: number;
+  embedCode?: number;
+  embedErrors?: readonly string[];
+  queue?: "tracks" | "yield";
+  queued?: number;
+  trackIds: readonly string[];
+  write: (item: EmbedWriteItem) => EmbedWriteWindow | undefined;
+};
+
+async function driveSweep(options: DriverOptions) {
+  const timeline: string[] = [];
+  const writeCalls: string[] = [];
+  const embedErrors = new Set(options.embedErrors ?? []);
+  const windows: EmbedDatabaseWindows = {
+    readQueue: () => {
+      timeline.push("read");
+      if (options.queue === "yield") {
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve({
+        kind: "queue",
+        ...(options.queued === undefined ? {} : { queued: options.queued }),
+        tracks: options.trackIds.map((trackId) => ({
+          sourceAudioKey: `catalogue/${trackId}.webm`,
+          trackId,
+        })),
+      });
+    },
+    writeResult: (item) => {
+      timeline.push(`write:${item.trackId}`);
+      writeCalls.push(item.trackId);
+      return Promise.resolve(options.write(item));
+    },
+  };
+  const outcome = await runEmbedSweep({
+    batchCap: options.batchCap,
+    embed: (manifest: EmbedManifestEntry[]) => {
+      timeline.push("inference");
+      return {
+        code: options.embedCode ?? 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          errors: manifest
+            .filter(({ id }) => embedErrors.has(id))
+            .map(({ id }) => ({ error: "decode failed", id })),
+          results: manifest
+            .filter(({ id }) => !embedErrors.has(id))
+            .map(({ id }) => ({ embedding: [0.25, 0.5], id })),
+        }),
+      };
+    },
+    fetchSourceAudio: (key) => {
+      timeline.push(`audio:${key}`);
+      return Promise.resolve(new Uint8Array([82, 73, 70, 70]));
+    },
+    windows,
+  });
+
+  return { outcome, timeline, writeCalls };
+}
+
+describe("runEmbedSweep", () => {
+  test("a yield mid-batch keeps measured counts, reports unapplied results, and starts no later write", async () => {
+    const { outcome, timeline, writeCalls } = await driveSweep({
+      batchCap: 4,
+      embedErrors: ["track-d"],
+      queued: 10,
+      trackIds: ["track-a", "track-b", "track-c", "track-d"],
+      write: (item) =>
+        item.trackId === "track-a" ? { costWriteFailures: 0, written: true } : undefined,
+    });
+
+    // Fetch and inference run between the two database windows; the yielded write for track-b is
+    // never re-issued and track-c's write never starts.
+    expect(timeline).toEqual([
+      "read",
+      "audio:catalogue/track-a.webm",
+      "audio:catalogue/track-b.webm",
+      "audio:catalogue/track-c.webm",
+      "audio:catalogue/track-d.webm",
+      "inference",
+      "write:track-a",
+      "write:track-b",
+    ]);
+    expect(writeCalls).toEqual(["track-a", "track-b"]);
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({
+      admissionOutcome: "phase-yielded",
+      checked: 4,
+      done: 1,
+      embedFailed: 1,
+      errors: 0,
+      failed: 1,
+      gateState: "paused",
+      ok: true,
+      partial: true,
+      produced: 1,
+      queue_depth: 9,
+      queued: 10,
+      reason: "database_admission",
+      throttled: true,
+      writesPending: 2,
+    });
+  });
+
+  test("a failed write is counted once and the batch continues without re-issuing it", async () => {
+    const { outcome, writeCalls } = await driveSweep({
+      batchCap: 2,
+      queued: 2,
+      trackIds: ["track-a", "track-b"],
+      write: (item) =>
+        item.trackId === "track-a"
+          ? { costWriteFailures: 1, written: false }
+          : { costWriteFailures: 0, written: true },
+    });
+
+    expect(writeCalls).toEqual(["track-a", "track-b"]);
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({
+      costWriteFailures: 1,
+      done: 1,
+      errors: 0,
+      failed: 1,
+      ok: true,
+      produced: 1,
+      skipped: 1,
+    });
+    expect(outcome.summary).not.toHaveProperty("gateState");
+    expect(outcome.summary).not.toHaveProperty("writesPending");
+  });
+
+  test("a yielded worklist window reads nothing, fetches nothing, and pauses", async () => {
+    const { outcome, timeline, writeCalls } = await driveSweep({
+      batchCap: 1,
+      queue: "yield",
+      trackIds: ["track-a"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(timeline).toEqual(["read"]);
+    expect(writeCalls).toEqual([]);
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({
+      admissionOutcome: "phase-yielded",
+      checked: 0,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      produced: 0,
+      reason: "database_admission",
+    });
+  });
+
+  test("a batch-level embedder failure opens no write window and fails the run", async () => {
+    const { outcome, writeCalls } = await driveSweep({
+      batchCap: 1,
+      embedCode: 1,
+      queued: 4,
+      trackIds: ["track-a"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(writeCalls).toEqual([]);
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.summary).toMatchObject({
+      errors: 1,
+      ok: false,
+      produced: 0,
+      reason: "embed_failed",
+      skipped: 1,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The phase protocol, end to end, against a fake runner and a loopback fixture.
+// ---------------------------------------------------------------------------
+
+type ProtocolOptions = {
+  fluncle?: "ok" | "timeout";
+  inheritedRunner?: boolean;
+  queue?: "pending" | "tracks";
+  runner?: "fence-write" | "run" | "yield-write";
+};
+
+function executable(path: string, body: string): string {
+  writeFileSync(path, `#!/usr/bin/env bash\nset -uo pipefail\n${body}\n`, "utf8");
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function lines(path: string): string[] {
+  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n") : [];
+}
+
+async function runProtocol(options: ProtocolOptions = {}) {
+  const directory = mkdtempSync(join(tmpdir(), "embed-sweep-protocol-"));
+  temporaryDirectories.push(directory);
+  const timeline = join(directory, "timeline");
+  const updates = join(directory, "updates");
+  const mark = (line: string) => appendFileSync(timeline, `${line}\n`);
+
+  const server = Bun.serve({
+    fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/v1/admin/tracks/work") {
+        mark("queue");
+        if (options.queue === "pending") {
+          return Response.json(
+            {
+              code: "due_work_maintenance_pending",
+              message: "Due-work maintenance is still converging",
+              ok: false,
+            },
+            { status: 503 },
+          );
+        }
+        return Response.json({
+          queued: 7,
+          tracks: [
+            {
+              certified: false,
+              logId: null,
+              sourceAudioKey: "catalogue/track-1.webm",
+              trackId: "track-1",
+            },
+          ],
+        });
+      }
+      if (url.pathname === "/fluncle-source-audio/catalogue/track-1.webm") {
+        mark("audio");
+        return new Response(new Uint8Array([82, 73, 70, 70]));
+      }
+      if (url.pathname === "/api/v1/admin/costs/events" && request.method === "POST") {
+        mark("cost");
+        return Response.json({ inserted: 1, ok: true });
+      }
+      return new Response("unexpected fixture request", { status: 404 });
+    },
+    hostname: "127.0.0.1",
+    port: 0,
+  });
+  servers.push(server);
+  const base = `http://127.0.0.1:${server.port}`;
+  const runnerMode = options.runner ?? "run";
+
+  // The fake runner records each lease around its command. `yield-write` exits 75 before a write
+  // window starts; `fence-write` runs the write command and then reports the lease as lost.
+  const runner = executable(
+    join(directory, "runner"),
+    `[ "$1" = "phase" ] && shift
+shift
+[ "\${1:-}" = "--" ] && shift
+case " $* " in
+  *" --admission-phase read "*) label=read ;;
+  *" --admission-phase write "*) label=write ;;
+  *) printf 'unexpected phase: %s\\n' "$*" >&2; exit 2 ;;
+esac
+if [ "$label" = write ] && [ "${runnerMode}" = yield-write ]; then
+  printf 'write-yielded\\n' >> "${timeline}"
+  exit 75
+fi
+printf 'acquire\\n%s\\n' "$label" >> "${timeline}"
+"$@"
+status="$?"
+if [ "$label" = write ] && [ "${runnerMode}" = fence-write ]; then
+  printf 'fenced\\n' >> "${timeline}"
+  exit 75
+fi
+printf 'release\\n' >> "${timeline}"
+exit "$status"`,
+  );
+  const updateOutcome =
+    options.fluncle === "timeout"
+      ? `printf 'The operation timed out\\n' >&2; exit 1`
+      : `printf '{"ok":true}\\n'`;
+  const fluncle = executable(
+    join(directory, "fluncle"),
+    `case " $* " in
+  *" admin tracks update "*)
+    printf 'update\\n' >> "${timeline}"
+    printf '%s\\n' "$4" >> "${updates}"
+    ${updateOutcome}
+    ;;
+  *) printf 'unexpected fluncle call: %s\\n' "$*" >&2; exit 2 ;;
+esac`,
+  );
+  const embedder = join(directory, "embed-track.ts");
+  writeFileSync(
+    embedder,
+    `import { appendFileSync, statSync } from "node:fs";
+const manifest = JSON.parse(await Bun.stdin.text()) as { id: string; path: string }[];
+for (const entry of manifest) {
+  if (statSync(entry.path).size === 0) {
+    process.exit(3);
+  }
+}
+appendFileSync(${JSON.stringify(timeline)}, "inference\\n");
+console.log(JSON.stringify({ errors: [], results: manifest.map(({ id }) => ({ embedding: [0.25, 0.5], id })) }));
+`,
+    "utf8",
+  );
+
+  const sweep = Bun.spawn([process.execPath, SWEEP], {
+    env: {
+      ...process.env,
+      DATABASE_ADMISSION_RUNNER: runner,
+      FLUNCLE_ADMISSION_RUNNER_PID: options.inheritedRunner ? "4242" : "",
+      FLUNCLE_API_BASE_URL: base,
+      FLUNCLE_API_TOKEN: "fixture-token",
+      FLUNCLE_BIN: fluncle,
+      FLUNCLE_EMBED_SCRIPT: embedder,
+      FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID: "fixture-access-key",
+      FLUNCLE_SOURCE_AUDIO_R2_BUCKET: "fluncle-source-audio",
+      FLUNCLE_SOURCE_AUDIO_R2_ENDPOINT: base,
+      FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY: "fixture-secret-key",
+      HOME: join(directory, "home"),
+      PYTHON_BIN: process.execPath,
+      R2_ACCOUNT_ID: "fixture-account",
+    },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(sweep.stdout).text(),
+    new Response(sweep.stderr).text(),
+    sweep.exited,
+  ]);
+  let summary: Record<string, unknown>;
+  try {
+    summary = JSON.parse(stdout) as Record<string, unknown>;
+  } catch {
+    throw new Error(`sweep printed no JSON summary (exit ${exitCode}): ${stderr}`);
+  }
+
+  return { exitCode, stderr, summary, timeline: lines(timeline), writes: lines(updates) };
+}
+
+describe("embed-sweep phased admission protocol", () => {
+  test(
+    "holds admission around the worklist read and the write, never the audio fetch or MuQ inference",
+    async () => {
+      const result = await runProtocol();
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.timeline).toEqual([
+        "acquire",
+        "read",
+        "queue",
+        "release",
+        "audio",
+        "inference",
+        "acquire",
+        "write",
+        "update",
+        "cost",
+        "release",
+      ]);
+      expect(result.writes).toEqual(["track-1"]);
+      expect(result.summary).toMatchObject({
+        checked: 1,
+        costWriteFailures: 0,
+        done: 1,
+        embedFailed: 0,
+        errors: 0,
+        failed: 0,
+        ok: true,
+        produced: 1,
+        queue_depth: 6,
+        queued: 7,
+      });
+      expect(result.summary).not.toHaveProperty("gateState");
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a typed due-work deferral pauses the tick inside the worklist window",
+    async () => {
+      const result = await runProtocol({ queue: "pending" });
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.timeline).toEqual(["acquire", "read", "queue", "release"]);
+      expect(result.writes).toEqual([]);
+      expect(result.summary).toMatchObject({
+        checked: 0,
+        errors: 0,
+        gateState: "paused",
+        ok: true,
+        partial: false,
+        produced: 0,
+        reason: "due_work_repair_pending",
+        throttled: true,
+      });
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a write window fenced after its command leaves the write unproven and never replays it",
+    async () => {
+      const result = await runProtocol({ runner: "fence-write" });
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.timeline).toEqual([
+        "acquire",
+        "read",
+        "queue",
+        "release",
+        "audio",
+        "inference",
+        "acquire",
+        "write",
+        "update",
+        "cost",
+        "fenced",
+      ]);
+      expect(result.writes).toEqual(["track-1"]);
+      expect(result.summary).toMatchObject({
+        admissionOutcome: "phase-yielded",
+        checked: 1,
+        done: 0,
+        errors: 0,
+        gateState: "paused",
+        ok: true,
+        partial: true,
+        produced: 0,
+        queue_depth: 7,
+        reason: "database_admission",
+        throttled: true,
+        writesPending: 1,
+      });
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a write window that yields before starting applies nothing and stops the run",
+    async () => {
+      const result = await runProtocol({ runner: "yield-write" });
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.timeline).toEqual([
+        "acquire",
+        "read",
+        "queue",
+        "release",
+        "audio",
+        "inference",
+        "write-yielded",
+      ]);
+      expect(result.writes).toEqual([]);
+      expect(result.summary).toMatchObject({
+        gateState: "paused",
+        produced: 0,
+        reason: "database_admission",
+        writesPending: 1,
+      });
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "an update with an unknown transport outcome is counted once and never re-issued",
+    async () => {
+      const result = await runProtocol({ fluncle: "timeout" });
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.timeline).toEqual([
+        "acquire",
+        "read",
+        "queue",
+        "release",
+        "audio",
+        "inference",
+        "acquire",
+        "write",
+        "update",
+        "cost",
+        "release",
+      ]);
+      expect(result.writes).toEqual(["track-1"]);
+      expect(result.stderr).toContain("write-back failed");
+      expect(result.summary).toMatchObject({
+        done: 0,
+        errors: 0,
+        failed: 1,
+        ok: true,
+        produced: 0,
+        skipped: 1,
+      });
+      expect(result.summary).not.toHaveProperty("writesPending");
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "an inherited whole-lifetime runner keeps the single-lease path and never nests admission",
+    async () => {
+      const result = await runProtocol({ inheritedRunner: true });
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.timeline).toEqual(["queue", "audio", "inference", "update", "cost"]);
+      expect(result.writes).toEqual(["track-1"]);
+      expect(result.summary).toMatchObject({
+        checked: 1,
+        costWriteFailures: 0,
+        done: 1,
+        errors: 0,
+        ok: true,
+        produced: 1,
+        queue_depth: 6,
+        queued: 7,
+      });
+      expect(result.summary).not.toHaveProperty("admissionOutcome");
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 });

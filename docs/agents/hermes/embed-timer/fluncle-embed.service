@@ -20,8 +20,14 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # cron runner (a ~300s global budget) where an embed tick would starve the latency-sensitive
 # 5-min enrich/context/note sweeps — the same reason capture, the healthcheck prober, and the
 # pin-watch rebuild are host timers.
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-embed -- bash /opt/hermes-scripts/embed-sweep.sh
-# A worst-case tick (one full-song embed, windowed) can run several minutes; give it headroom
+# Database admission is phase-scoped inside the orchestrator: the worklist read and each vector
+# write take their own short lease through database-admission-runner.sh, while the source-audio
+# fetch and MuQ inference hold none. The admission environment rides the `docker exec` so it
+# reaches the runner inside the container. Install this unit only after the image carries the
+# phased script (the README's rollout order).
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/embed-sweep.sh
+# A worst-case tick can wait 120s for its worklist window, spend several minutes on one windowed
+# full-song embed, then wait 120s for its write window; the timeout keeps headroom past that and
 # well past the gateway's ~300s global budget.
 TimeoutStartSec=1030
 # Modest hardening for a root docker-driving oneshot.
