@@ -275,8 +275,10 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "track.context": wholeLifetime(
     "Grounding reads and guarded context writes are interleaved per track.",
   ),
-  "track.embed": wholeLifetime(
-    "Queue claims, audio inference, and non-replayable embedding writes form one per-item state machine.",
+  "track.embed": phased(
+    `${SCRIPTS}/embed-sweep.ts`,
+    "The worklist read and each vector write with its cost row are bounded phases; source-audio fetch and MuQ inference run between leases.",
+    0,
   ),
   "track.enrich": phased(
     `${SCRIPTS}/enrich-sweep.ts`,
@@ -586,8 +588,10 @@ export const DATABASE_MUTATION_POLICIES = {
   "track.embed": {
     evidenceSource: "apps/web/src/lib/server/track-update.ts",
     kind: "deliberately-non-replayable",
-    rationale: "Embedding computation and artifact handling precede the mutable track update.",
-    reconciliation: "Inspect one track's input and artifact fingerprints before recomputing it.",
+    rationale:
+      "Every accepted vector write mints a fresh catalogue-rank material revision and appends a Sonar artifact change, so a repeated write is never a no-op.",
+    reconciliation:
+      "Read the embed worklist again: a landed write set has_embedding and left the queue, and an unlanded one is still queued for recomputation.",
   },
   "track.enrich": {
     evidenceSource: "apps/web/src/lib/server/track-update.ts",

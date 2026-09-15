@@ -176,7 +176,9 @@ function finishSpan(
 // and NEVER writes. A 5xx on a write is ambiguous — the write may well have
 // been applied before the gateway gave up — so re-running it risks
 // double-applying it. The generic path retries only a statement the classifier
-// is CONFIDENT is a read; `batch` and explicit transactions never retry. The
+// is CONFIDENT is a read. A batch retries only in `read` mode with every
+// statement a confident read (one read-only transaction, so nothing in it can
+// apply twice); every other batch and every explicit transaction runs once. The
 // one path-specific write exception is named and justified beside
 // `retryRunEventInsert` below.
 
@@ -243,6 +245,19 @@ function isRetryableGatewayError(error: unknown): boolean {
 // can double-apply it. So when this is unsure, it does not retry.
 function isRetryableRead(sql: string): boolean {
   return classifyDatabaseAccess(sql) === "read";
+}
+
+// A `read` batch is one read-only transaction; when each statement would also have retried on its
+// own, re-running the whole batch can neither apply anything twice nor mix two snapshots.
+function isRetryableReadBatch(
+  stmts: Array<InStatement | [string, InArgs?]>,
+  mode: TransactionMode | undefined,
+): boolean {
+  return (
+    mode === "read" &&
+    stmts.length > 0 &&
+    stmts.every((statement) => isRetryableRead(batchStatementSql(statement)))
+  );
 }
 
 // Created inside the request path only — a module-level timer or promise chain
@@ -529,8 +544,12 @@ function instrument(client: Client): Client {
               const requestOperation = enterDatabaseRequestOperation();
               recordAdmission(span, lease);
 
+              const run = () => target.batch(stmts, mode);
+
               try {
-                const result = await target.batch(stmts, mode);
+                const result = await (isRetryableReadBatch(stmts, mode)
+                  ? runWithRetry(run, span)
+                  : run());
                 finishSpan(span, startedAt, "success", requestOperation);
                 return result;
               } catch (error) {

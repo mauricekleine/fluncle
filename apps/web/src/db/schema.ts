@@ -4317,6 +4317,21 @@ export const artists = sqliteTable(
     // `track_artists`. Plain ASC — SQLite reverse-scans it, and a drizzle `desc()` index poisons
     // the snapshot (the ratified trap).
     index("artists_renderable_count_idx").on(table.renderableTrackCount),
+    // THE HUB LISTING — the canonical shape for all three entity tables. Its key is the hub's
+    // ORDER (`slug`) and its partial WHERE is the hub's MEMBERSHIP, spelled exactly as
+    // `hubInclusionWhere` (lib/server/labels.ts) spells it for `ARTIST_INDEX_MIN_FINDINGS` (3).
+    // SQLite admits a partial index for a statement carrying that same expression, and it drops the
+    // term from the per-row check only when the floor is the same LITERAL: with a bound `?` the
+    // planner still picks the index but seeks the table row for every entry to re-test the
+    // counters. So the gate inlines its floor, and the hub total, the A–Z lane counts, the page
+    // slice, the MCP browse, the boundary extraction, and the deep-page first row + seek all read
+    // this index instead of the whole table; the slice touches the table only for the rows it
+    // returns. UNIQUE because `slug` already is: a distinct key lets `order by slug, id` stream
+    // with no sort. entity-hub-seek.integration.test.ts pins the literal to the constant, so a
+    // floor change fails the build until a migration re-creates the index. Plain ASC.
+    uniqueIndex("artists_hub_listing_idx")
+      .on(table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
     // The identity seek behind the artist-edge HOMONYM SEAL (lib/server/artists.ts). Both of its
     // mbid clauses — "is there a row carrying this credit's mbid" and "does the name-folded row
     // carry a different one" — run per credited artist inside the crawler's per-release link, so
@@ -4758,6 +4773,17 @@ export const labels = sqliteTable(
     // API/MCP list, the sitemap rows and the bio worklist all filter on it instead of grouping
     // `tracks`. Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
     index("labels_renderable_count_idx").on(table.renderableTrackCount),
+    // The hub listing for `LABEL_INDEX_MIN_TRACKS` (3), exactly as `artists_hub_listing_idx` —
+    // see the reasoning there. Plain ASC.
+    uniqueIndex("labels_hub_listing_idx")
+      .on(table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
+    // A label NAME on its own (`name = ? collate nocase`, `name like ?`): search's label name arm
+    // and its tier-2 exact-label probe. `labels_seed_state_name_idx` leads with `seed_state`, so it
+    // cannot serve a name alone. Bare on purpose: both reads take the id and the gate counters off
+    // the row anyway, and a bare key keeps equal names in rowid order, the order a table scan
+    // returns them in, so the probe's `limit 1` still lands on the same row. Plain ASC.
+    index("labels_name_nocase_idx").on(sql`${table.name} collate nocase`),
     // The bio-review attention read (`where bio_gate_bypassed_at is not null order by … asc`).
     // PARTIAL, exactly as `artists_bio_review_queue_idx` — see the reasoning there. Plain ASC.
     index("labels_bio_review_queue_idx")
@@ -5087,6 +5113,16 @@ export const albums = sqliteTable(
     // API/MCP list, the sitemap rows and the bio worklist read it instead of grouping `tracks`.
     // Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
     index("albums_renderable_count_idx").on(table.renderableTrackCount),
+    // The hub listing for `ALBUM_INDEX_MIN_TRACKS` (3), exactly as `artists_hub_listing_idx` —
+    // see the reasoning there. Plain ASC.
+    uniqueIndex("albums_hub_listing_idx")
+      .on(table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
+    // Search's album name arm (`name = ? collate nocase` exact, `name like ?` prefix): no other
+    // index carries the album name. Bare on purpose: the arm reads the id and the gate counters off
+    // the row anyway, and a bare key keeps equal names in rowid order, the order a table scan
+    // returns them in. Plain ASC.
+    index("albums_name_nocase_idx").on(sql`${table.name} collate nocase`),
     // The bio-review attention read (`where bio_gate_bypassed_at is not null order by … asc`).
     // PARTIAL, exactly as `artists_bio_review_queue_idx` — see the reasoning there. Plain ASC.
     index("albums_bio_review_queue_idx")

@@ -14,13 +14,13 @@
 // back through the agent-tier `update_track` path (the box's admin token), exactly like
 // enrich-sweep writes bpm/key/features.
 //
-// SOURCE = the CAPTURED FULL SONG, not the 30s preview. The embed queue gates server-side on
-// `source_audio_key IS NOT NULL AND embedding_json IS NULL`, so a queued track always has a
-// captured full song in the PRIVATE `fluncle-source-audio` R2 bucket. We deliberately do NOT
-// embed previews (the blind "quiet piano" vectors are the thing this whole effort kills), so a
-// track with no `sourceAudioKey` is skipped, never preview-fetched. The S3 GET mirrors
-// capture-sweep.ts's signer (which mirrors apps/web/src/lib/server/aws-sigv4.ts) — keep them
-// in step.
+// SOURCE = the CAPTURED FULL SONG, not the 30s preview. The embed queue gates server-side on a
+// captured `source_audio_key`, `has_embedding = 0`, and a capture not quarantined as wrong audio,
+// so a queued track always has a captured full song in the PRIVATE `fluncle-source-audio` R2
+// bucket. We deliberately do NOT embed previews (the blind "quiet piano" vectors are the thing
+// this whole effort kills), so a track with no `sourceAudioKey` is skipped, never
+// preview-fetched. The S3 GET mirrors capture-sweep.ts's signer (which mirrors
+// apps/web/src/lib/server/aws-sigv4.ts) — keep them in step.
 //
 // THE QUEUE IS CATALOGUE-AWARE (docs/gpu-batch-embed.md). It reads `list_track_work`, NOT the
 // old `admin tracks embed --queue`: that one went through `list_tracks_admin`, which drives
@@ -35,29 +35,49 @@
 // existing command, unchanged), so this sweep ships without touching the pin. Same trick
 // capture-sweep.ts already uses for its queue read.
 //
-// The loop is idempotent by construction (an embedded track is already out of the
-// `embedding_json IS NULL` queue; re-running never double-writes), a fast no-op when the
-// queue is empty:
+// DATABASE ADMISSION IS PHASE-SCOPED (docs/database-performance.md). The host unit starts this
+// sweep directly, and only its database windows hold the single background-writer lease:
 //
-//   1. GET /api/v1/admin/tracks/work?kind=embed          → the worklist, in drain order.
-//   2. S3-GET each track's captured full song (`sourceAudioKey`) → a temp file; build a manifest.
-//   3. ONE `python3 embed-track.py` call over the batch → {results, errors}
+//   1. [admitted window] GET /api/v1/admin/tracks/work?kind=embed → the worklist, in drain order.
+//      The guarded due-work read can advance a bounded repair step, so it is a write-class window.
+//   2. [no lease] S3-GET each track's captured full song (`sourceAudioKey`) → a temp file.
+//   3. [no lease] ONE `python3 embed-track.py` call over the batch → {results, errors}
 //      (the MuQ model load is amortized; embed-track.py WINDOWS the long audio to bound RAM).
-//   4. per result: `fluncle admin tracks update <trackId> --embedding-file <tmp>`.
-//      NO `--status` is ever passed: `enrichment_status` is a CERTIFICATION column, and the
-//      server 409s an uncertified write of one (the certification rail, track-update.ts).
+//   4. [one admitted window per result] `fluncle admin tracks update <trackId> --embedding-file
+//      <tmp>`, then that result's self-seconds cost row. NO `--status` is ever passed:
+//      `enrichment_status` is a CERTIFICATION column, and the server 409s an uncertified write
+//      of one (the certification rail, track-update.ts).
 //
-// The pure helpers below (chooseEmbedSource / sourceAudioExt) are exported + unit-tested in
-// embed-sweep.test.ts; `main()` is guarded behind `import.meta.main` so importing this module
-// for the tests is side-effect free (it does not read R2 or spawn the embedder).
+// NO MUTATION IS REPLAYED. `track.embed` is deliberately non-replayable: every accepted vector
+// write mints a fresh catalogue-rank material revision and appends a Sonar artifact change, so
+// repeating a write is never a no-op. A write window issues its update exactly once. An update
+// whose CLI call fails, including a transport failure whose outcome is unknown, is counted and
+// never re-issued in the tick. A window that yields (exit 75, whether its command never started
+// or was fenced mid-flight) stops the run as paused backpressure and reports every unapplied
+// result as `writesPending`. The durable fence is the next tick's admitted worklist read: a
+// landed write sets `has_embedding = 1` and removes the track, while an unlanded one stays queued.
 //
-// stdout: one JSON summary line (the run output the /status prober reads). Diagnostics → stderr.
+// An inherited whole-lifetime runner (`FLUNCLE_ADMISSION_RUNNER_PID`, exported by an installed
+// unit that still wraps this script in database-admission-runner.sh) already holds the lease for
+// the whole process, so the same windows then run in-process without nesting phase admission.
+//
+// `runEmbedSweep` takes its database windows, source fetch, and embedder as dependencies and is
+// unit-tested with fakes in embed-sweep.test.ts, alongside the pure helpers. `main()` is guarded
+// behind `import.meta.main` so importing this module for the tests is side-effect free (it does
+// not read R2 or spawn the embedder).
+//
+// stdout: one JSON summary line (the run output the /status prober reads); a database window
+// child prints one JSON envelope instead. Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
+import {
+  databaseAdmissionYieldSummary,
+  runDatabaseAdmissionPhase,
+} from "./database-admission-phase";
 import {
   dueWorkRepairPendingSummary,
   failureBodyUnlessRepairPending,
@@ -69,11 +89,13 @@ import {
 // window is a full forward, and a 5-min song is ~10 windows), so one finding per tick keeps
 // the wall-clock bounded. As a host timer the 120s/300s gateway kill no longer applies, but
 // the queue is still the durable worklist — anything not reached this tick is picked up
-// ~5m later, newest-first.
+// ~5m later, in drain order. Every result's write window can wait up to the runner's 120s
+// admission ceiling, so a larger BATCH_CAP must re-derive the unit's TimeoutStartSec.
 // ---------------------------------------------------------------------------
 
 const BATCH_CAP = 1; // findings embedded per tick (a windowed full-song forward is minutes)
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
+const ADMISSION_OWNER = "fluncle-embed";
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const PYTHON_BIN = process.env.PYTHON_BIN ?? "python3";
@@ -291,7 +313,11 @@ async function signS3Request(options: {
 // The GET counterpart to capture-sweep.ts's r2Put: same signer, no body → the empty-payload
 // hash, and the response bytes are the captured full song.
 
-const R2_ENDPOINT = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+// The account S3 endpoint. FLUNCLE_SOURCE_AUDIO_R2_ENDPOINT points the same signed GET at a
+// loopback fixture under test; production leaves it unset.
+const R2_ENDPOINT =
+  process.env.FLUNCLE_SOURCE_AUDIO_R2_ENDPOINT ??
+  `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
 function encodeKey(key: string): string {
   return key.split("/").map(encodeURIComponent).join("/");
@@ -430,89 +456,273 @@ export function buildEmbedFatalSummary(error?: unknown): Record<string, unknown>
 }
 
 // ---------------------------------------------------------------------------
-// Main — drain a bounded batch off the queue.
+// Database windows — the only work that holds database admission.
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
-  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
-    console.log(
-      JSON.stringify(
-        buildEmbedSummary({
-          checked: 0,
-          counts: emptyEmbedCounts(),
-          errors: 1,
-          ok: false,
-          reason: "missing_r2_credentials",
-        }),
-      ),
-    );
-    process.exitCode = 1;
-    return;
-  }
+/** The worklist window's answer. The typed due-work deferral is data, never a failed window. */
+export type EmbedQueueWindow =
+  | { kind: "queue"; queued?: number; tracks: QueueFinding[] }
+  | { kind: "repair-pending"; message: string };
 
-  if (!API_TOKEN) {
-    console.log(
-      JSON.stringify(
-        buildEmbedSummary({
-          checked: 0,
-          counts: emptyEmbedCounts(),
-          errors: 1,
-          ok: false,
-          reason: "missing_api_token",
-        }),
-      ),
-    );
-    process.exitCode = 1;
-    return;
-  }
+/** One vector write and the self-seconds cost row its compute earned. */
+export type EmbedWriteItem = {
+  cost: BoxCostEvent;
+  embedding: number[];
+  trackId: string;
+  vectorPath: string;
+};
 
-  let queuePage: Awaited<ReturnType<typeof fetchEmbedQueue>>;
+/** A completed write window: whether the update landed, and how many cost rows were rejected. */
+export type EmbedWriteWindow = { costWriteFailures: number; written: boolean };
 
+/**
+ * Where the database work runs. Each method resolves `undefined` when its admission window
+ * yielded: a yielded read proved nothing, and a yielded write is unproven and never re-issued.
+ */
+export type EmbedDatabaseWindows = {
+  readQueue(): Promise<EmbedQueueWindow | undefined>;
+  writeResult(item: EmbedWriteItem): Promise<EmbedWriteWindow | undefined>;
+};
+
+/** The worklist window body. */
+export async function readEmbedQueueWindow(
+  fetchQueue: () => Promise<{ queued?: number; tracks: QueueFinding[] }> = fetchEmbedQueue,
+): Promise<EmbedQueueWindow> {
   try {
-    queuePage = await fetchEmbedQueue();
+    const page = await fetchQueue();
+
+    return { kind: "queue", ...page };
   } catch (error) {
     if (!isDueWorkRepairPending(error)) {
       throw error;
     }
 
-    // The Worker deferred the queue read while due-work repair converges: nothing was read, so the
-    // tick pauses cleanly and the next tick reads again.
-    log(error.message);
-    console.log(
-      JSON.stringify(dueWorkRepairPendingSummary({ checked: 0, failed: 0, queueDepth: null })),
-    );
+    return { kind: "repair-pending", message: error.message };
+  }
+}
 
-    return;
+/**
+ * The write window body. The update runs exactly once; a failure, whose outcome may be unknown,
+ * is reported and never retried. The self-seconds row is recorded whether or not the update
+ * landed, because the embed compute was spent either way.
+ */
+async function writeEmbedResultWindow(item: EmbedWriteItem): Promise<EmbedWriteWindow> {
+  let written = false;
+
+  try {
+    // A file arg: a 1024-float array is large for an inline flag.
+    writeFileSync(item.vectorPath, JSON.stringify(item.embedding));
+    fluncleJson(["admin", "tracks", "update", item.trackId, "--embedding-file", item.vectorPath]);
+    written = true;
+    log(`${item.trackId}: embedded + written`);
+  } catch (error) {
+    log(
+      `${item.trackId}: write-back failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
-  const queue = queuePage.tracks;
-  const batch = queue.slice(0, BATCH_CAP);
+  // Best-effort ledger row: a failure cannot kill the sweep, but its count reaches the summary.
+  const costWriteFailures = (await emitCost([item.cost])).failed;
 
+  return { costWriteFailures, written };
+}
+
+/** An inherited whole-lifetime lease already covers this process, so windows run in-process. */
+const inheritedLeaseWindows: EmbedDatabaseWindows = {
+  readQueue: () => readEmbedQueueWindow(),
+  writeResult: (item) => writeEmbedResultWindow(item),
+};
+
+function argumentValue(argv: readonly string[], name: string): string | undefined {
+  const index = argv.indexOf(name);
+
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function windowCommand(window: "read" | "write", statePath?: string): string[] {
+  return [
+    process.execPath,
+    import.meta.path,
+    "--admission-phase",
+    window,
+    ...(statePath === undefined ? [] : ["--phase-state", statePath]),
+  ];
+}
+
+function windowEnvelope(stdout: string, window: string): Record<string, unknown> {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`embed ${window} window returned an invalid envelope`);
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`embed ${window} window returned an invalid envelope`);
+  }
+
+  const envelope = parsed as Record<string, unknown>;
+
+  if (envelope.kind === "failed") {
+    // The child's own error travels as data, so the run's fatal summary keeps its message.
+    const message = envelope.error;
+
+    throw new Error(typeof message === "string" ? message : `embed ${window} window failed`);
+  }
+
+  return envelope;
+}
+
+/** Parse a completed worklist window's stdout envelope. */
+export function parseQueueWindowEnvelope(stdout: string): EmbedQueueWindow {
+  const envelope = windowEnvelope(stdout, "queue");
+
+  if (envelope.kind === "repair-pending") {
+    const message = envelope.message;
+
+    return {
+      kind: "repair-pending",
+      message: typeof message === "string" ? message : "embed queue read deferred",
+    };
+  }
+
+  if (envelope.kind === "queue") {
+    return { kind: "queue", ...parseEmbedQueue(envelope) };
+  }
+
+  throw new Error("embed queue window returned an invalid envelope");
+}
+
+/** Parse a completed write window's stdout envelope. */
+export function parseWriteWindowEnvelope(stdout: string): EmbedWriteWindow {
+  const envelope = windowEnvelope(stdout, "write");
+  const failures = envelope.costWriteFailures;
+  const written = envelope.written;
+
+  if (
+    envelope.kind === "write" &&
+    typeof written === "boolean" &&
+    typeof failures === "number" &&
+    Number.isSafeInteger(failures) &&
+    failures >= 0
+  ) {
+    return { costWriteFailures: failures, written };
+  }
+
+  throw new Error("embed write window returned an invalid envelope");
+}
+
+/** Every database window is its own admission phase; nothing between windows holds the lease. */
+function admittedWindows(): EmbedDatabaseWindows {
+  return {
+    readQueue: async () => {
+      const phase = runDatabaseAdmissionPhase({
+        command: windowCommand("read"),
+        owner: ADMISSION_OWNER,
+        yieldRetries: 0,
+      });
+
+      return phase.kind === "yielded" ? undefined : parseQueueWindowEnvelope(phase.stdout);
+    },
+    writeResult: async (item) => {
+      const statePath = `${item.vectorPath}.window.json`;
+
+      writeFileSync(statePath, JSON.stringify(item), { mode: 0o600 });
+
+      const phase = runDatabaseAdmissionPhase({
+        command: windowCommand("write", statePath),
+        owner: ADMISSION_OWNER,
+        // track.embed is deliberately non-replayable in DATABASE_MUTATION_POLICIES.
+        yieldRetries: 0,
+      });
+
+      return phase.kind === "yielded" ? undefined : parseWriteWindowEnvelope(phase.stdout);
+    },
+  };
+}
+
+/** One database window child. It never throws; it prints exactly one envelope. */
+async function runWindowChild(
+  window: string,
+  statePath: string | undefined,
+): Promise<Record<string, unknown>> {
+  try {
+    if (window === "read") {
+      const queue = await readEmbedQueueWindow();
+
+      return queue;
+    }
+
+    if (window === "write" && statePath !== undefined) {
+      const item = JSON.parse(readFileSync(statePath, "utf8")) as EmbedWriteItem;
+      const write = await writeEmbedResultWindow(item);
+
+      return { kind: "write", ...write };
+    }
+
+    return { error: "invalid embed admission window invocation", kind: "failed" };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error), kind: "failed" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The sweep — drain a bounded batch off the queue.
+// ---------------------------------------------------------------------------
+
+export type EmbedManifestEntry = { id: string; path: string };
+
+export type EmbedSweepDependencies = {
+  batchCap: number;
+  embed: (manifest: EmbedManifestEntry[]) => { code: number; stderr: string; stdout: string };
+  fetchSourceAudio: (key: string) => Promise<Uint8Array>;
+  windows: EmbedDatabaseWindows;
+};
+
+export type EmbedSweepOutcome = { exitCode: 0 | 1; summary: Record<string, unknown> };
+
+export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<EmbedSweepOutcome> {
+  const queueWindow = await deps.windows.readQueue();
+
+  if (queueWindow === undefined) {
+    // The worklist window yielded before proving a read, so the tick pauses and the next reads.
+    return {
+      exitCode: 0,
+      summary: databaseAdmissionYieldSummary({ checked: 0, failed: 0, queueDepth: null }),
+    };
+  }
+
+  if (queueWindow.kind === "repair-pending") {
+    // The Worker deferred the queue read while due-work repair converges: nothing was read, so the
+    // tick pauses cleanly and the next tick reads again.
+    log(queueWindow.message);
+
+    return {
+      exitCode: 0,
+      summary: dueWorkRepairPendingSummary({ checked: 0, failed: 0, queueDepth: null }),
+    };
+  }
+
+  const queued = queueWindow.queued;
+  const batch = queueWindow.tracks.slice(0, deps.batchCap);
   const counts = emptyEmbedCounts();
 
-  if (queue.length === 0) {
-    console.log(
-      JSON.stringify(
-        buildEmbedSummary({
-          checked: 0,
-          counts,
-          errors: 0,
-          ok: true,
-          queued: queuePage.queued,
-        }),
-      ),
-    );
-
-    return; // fast no-op
+  if (batch.length === 0) {
+    // Fast no-op.
+    return {
+      exitCode: 0,
+      summary: buildEmbedSummary({ checked: 0, counts, errors: 0, ok: true, queued }),
+    };
   }
 
   const workdir = mkdtempSync(join(tmpdir(), "fluncle-embed-"));
 
   try {
-    // (1) S3-GET each finding's captured full song; build the MuQ manifest. The queue payload
-    // already carries the canonical trackId + the captured `sourceAudioKey`, so no re-read is
-    // needed. We GET the full key string as stored (never rebuild it).
-    const manifest: { id: string; path: string }[] = [];
+    // (1) No lease: S3-GET each finding's captured full song and build the MuQ manifest. The
+    // queue payload already carries the canonical trackId + the captured `sourceAudioKey`, so
+    // no re-read is needed. We GET the full key string as stored (never rebuild it).
+    const manifest: EmbedManifestEntry[] = [];
 
     for (const finding of batch) {
       const source = chooseEmbedSource(finding);
@@ -533,7 +743,7 @@ async function main(): Promise<void> {
       const audioPath = join(workdir, `${source.trackId}${sourceAudioExt(source.key)}`);
 
       try {
-        writeFileSync(audioPath, await r2Get(source.key));
+        writeFileSync(audioPath, await deps.fetchSourceAudio(source.key));
         manifest.push({ id: source.trackId, path: audioPath });
       } catch (error) {
         // A transient R2 error (or a key whose object went missing) — leave it queued; a later
@@ -546,47 +756,37 @@ async function main(): Promise<void> {
     }
 
     if (manifest.length === 0) {
-      console.log(
-        JSON.stringify(
-          buildEmbedSummary({
-            checked: batch.length,
-            counts,
-            errors: 0,
-            ok: true,
-            queued: queuePage.queued,
-          }),
-        ),
-      );
-      return;
+      return {
+        exitCode: 0,
+        summary: buildEmbedSummary({ checked: batch.length, counts, errors: 0, ok: true, queued }),
+      };
     }
 
-    // (2) ONE python call over the batch — the MuQ model load is amortized. embed-track.py
-    // windows the long audio and mean-pools across windows to bound peak RAM. Time it for
-    // the self-seconds cost row: the model-load is shared, so the wall-time is split evenly
-    // across the findings it embedded (BATCH_CAP is 1, so this is normally one row).
+    // (2) No lease: ONE python call over the batch — the MuQ model load is amortized.
+    // embed-track.py windows the long audio and mean-pools across windows to bound peak RAM.
+    // Time it for the self-seconds cost row: the model-load is shared, so the wall-time is split
+    // evenly across the findings it embedded (BATCH_CAP is 1, so this is normally one row).
     const embedStart = Date.now();
-    const embed = run(PYTHON_BIN, [EMBED_SCRIPT], JSON.stringify(manifest));
+    const embed = deps.embed(manifest);
     const embedSeconds = (Date.now() - embedStart) / 1000;
 
     if (embed.code !== 0) {
       // A batch-level failure (torch import / model load): leave everything queued.
       log(`embed-track exited ${embed.code}: ${embed.stderr.trim().slice(-400)}`);
       counts.skipped += manifest.length;
-      console.log(
-        JSON.stringify(
-          buildEmbedSummary({
-            batchFallout: manifest.length,
-            checked: batch.length,
-            counts,
-            errors: 1,
-            ok: false,
-            queued: queuePage.queued,
-            reason: "embed_failed",
-          }),
-        ),
-      );
-      process.exitCode = 1;
-      return;
+
+      return {
+        exitCode: 1,
+        summary: buildEmbedSummary({
+          batchFallout: manifest.length,
+          checked: batch.length,
+          counts,
+          errors: 1,
+          ok: false,
+          queued,
+          reason: "embed_failed",
+        }),
+      };
     }
 
     let parsed: EmbedOutput;
@@ -596,52 +796,54 @@ async function main(): Promise<void> {
     } catch {
       log(`embed-track did not return JSON: ${embed.stdout.slice(0, 200)}`);
       counts.skipped += manifest.length;
-      console.log(
-        JSON.stringify(
-          buildEmbedSummary({
-            batchFallout: manifest.length,
-            checked: batch.length,
-            counts,
-            errors: 1,
-            ok: false,
-            queued: queuePage.queued,
-            reason: "embed_bad_output",
-          }),
-        ),
-      );
-      process.exitCode = 1;
-      return;
+
+      return {
+        exitCode: 1,
+        summary: buildEmbedSummary({
+          batchFallout: manifest.length,
+          checked: batch.length,
+          counts,
+          errors: 1,
+          ok: false,
+          queued,
+          reason: "embed_bad_output",
+        }),
+      };
     }
 
-    // (3) Write each vector back via the agent-tier update path (a file arg — a
-    // 1024-float array is large for an inline flag). Each embedded result also carries a
-    // self-seconds cost row (its even share of the batch wall-time) — the embed compute
-    // was spent regardless of whether the write-back lands, so the row is recorded here.
+    // (3) One admitted window per result: its vector write and its even share of the batch
+    // wall-time as a self-seconds cost row.
     const results = parsed.results ?? [];
     const perResultSeconds = results.length ? embedSeconds / results.length : 0;
-    const costs: BoxCostEvent[] = [];
+    let costWriteFailures = 0;
+    let writesPending = 0;
 
-    for (const result of results) {
-      costs.push(
-        selfSecondsCost({
+    for (const [index, result] of results.entries()) {
+      const window = await deps.windows.writeResult({
+        cost: selfSecondsCost({
           occurredAt: new Date().toISOString(),
           seconds: perResultSeconds,
           step: "embed",
           trackId: result.id,
         }),
-      );
+        embedding: result.embedding,
+        trackId: result.id,
+        vectorPath: join(workdir, `${result.id}.json`),
+      });
 
-      try {
-        const vectorPath = join(workdir, `${result.id}.json`);
-        writeFileSync(vectorPath, JSON.stringify(result.embedding));
-        fluncleJson(["admin", "tracks", "update", result.id, "--embedding-file", vectorPath]);
+      if (window === undefined) {
+        // The yielded write is unproven: it is never re-issued, and no later write starts.
+        writesPending = results.length - index;
+        log(`${result.id}: write window yielded — ${writesPending} result(s) left unapplied`);
+        break;
+      }
+
+      costWriteFailures += window.costWriteFailures;
+
+      if (window.written) {
         counts.done += 1;
-        log(`${result.id}: embedded + written`);
-      } catch (error) {
+      } else {
         counts.skipped += 1;
-        log(
-          `${result.id}: write-back failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
       }
     }
 
@@ -650,31 +852,98 @@ async function main(): Promise<void> {
       log(`${failure.id}: embed error — ${failure.error}`);
     }
 
-    // Record the tick's compute spend best-effort. A ledger failure cannot kill the
-    // sweep, but its rejected row count belongs in the final status reading.
-    const costWriteFailures = (await emitCost(costs)).failed;
-    console.log(
-      JSON.stringify(
-        buildEmbedSummary({
-          checked: batch.length,
-          costWriteFailures,
-          counts,
-          errors: 0,
-          ok: true,
-          queued: queuePage.queued,
-        }),
-      ),
-    );
+    const summary = buildEmbedSummary({
+      checked: batch.length,
+      costWriteFailures,
+      counts,
+      errors: 0,
+      ok: true,
+      queued,
+    });
+
+    if (writesPending > 0) {
+      // Designed backpressure: the measured counts stay real and the unapplied results are named.
+      return {
+        exitCode: 0,
+        summary: { ...databaseAdmissionYieldSummary(summary), partial: true, writesPending },
+      };
+    }
+
+    return { exitCode: 0, summary };
   } finally {
-    // Temp files (the captured audio + the vector JSON) are cleaned up here regardless of outcome.
+    // Temp files (the captured audio, the vector JSON, window state) are removed regardless.
     rmSync(workdir, { force: true, recursive: true });
   }
 }
 
-if (import.meta.main) {
-  main().catch((error) => {
-    console.error(`[embed-sweep] fatal: ${error instanceof Error ? error.message : String(error)}`);
-    console.log(JSON.stringify(buildEmbedFatalSummary(error)));
-    process.exitCode = 1;
+async function main(): Promise<EmbedSweepOutcome> {
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
+    return {
+      exitCode: 1,
+      summary: buildEmbedSummary({
+        checked: 0,
+        counts: emptyEmbedCounts(),
+        errors: 1,
+        ok: false,
+        reason: "missing_r2_credentials",
+      }),
+    };
+  }
+
+  if (!API_TOKEN) {
+    return {
+      exitCode: 1,
+      summary: buildEmbedSummary({
+        checked: 0,
+        counts: emptyEmbedCounts(),
+        errors: 1,
+        ok: false,
+        reason: "missing_api_token",
+      }),
+    };
+  }
+
+  return runEmbedSweep({
+    batchCap: BATCH_CAP,
+    embed: (manifest) => run(PYTHON_BIN, [EMBED_SCRIPT], JSON.stringify(manifest)),
+    fetchSourceAudio: r2Get,
+    // An installed unit that still wraps this script already owns a whole-lifetime lease. Nesting
+    // phase admission under it would wait on itself, so only that inherited runner context keeps
+    // the in-process windows.
+    windows: process.env.FLUNCLE_ADMISSION_RUNNER_PID ? inheritedLeaseWindows : admittedWindows(),
   });
+}
+
+if (import.meta.main) {
+  const argv = process.argv.slice(2);
+  const admissionWindow = argumentValue(argv, "--admission-phase");
+
+  if (admissionWindow === undefined) {
+    main()
+      .then(({ exitCode, summary }) => {
+        console.log(JSON.stringify(summary));
+        process.exitCode = exitCode;
+      })
+      .catch((error: unknown) => {
+        console.error(
+          `[embed-sweep] fatal: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        console.log(JSON.stringify(buildEmbedFatalSummary(error)));
+        process.exitCode = 1;
+      });
+  } else {
+    // A database window child: its one stdout line is the envelope the parent parses.
+    runWindowChild(admissionWindow, argumentValue(argv, "--phase-state"))
+      .then((envelope) => {
+        console.log(JSON.stringify(envelope));
+      })
+      .catch((error: unknown) => {
+        console.log(
+          JSON.stringify({
+            error: error instanceof Error ? error.message : String(error),
+            kind: "failed",
+          }),
+        );
+      });
+  }
 }
