@@ -1508,7 +1508,7 @@ function RowArt({
     return (
       <img
         alt=""
-        className="size-10 shrink-0 rounded-[6px] border border-border object-cover"
+        className="size-10 shrink-0 rounded-[var(--rounded-artwork)] border border-border object-cover"
         loading="lazy"
         onError={() => setFailed(true)}
         // A load that failed BEFORE hydration never re-fires `error`, so the
@@ -1526,7 +1526,7 @@ function RowArt({
   return (
     <div
       aria-hidden="true"
-      className="flex size-10 shrink-0 items-center justify-center rounded-[6px] border border-border bg-gradient-to-br from-primary/10 via-muted/30 to-destructive/10"
+      className="flex size-10 shrink-0 items-center justify-center rounded-[var(--rounded-artwork)] border border-border bg-gradient-to-br from-primary/10 via-muted/30 to-destructive/10"
     >
       <Icon className="size-4 text-muted-foreground" />
     </div>
@@ -1548,7 +1548,7 @@ function ZeroState({ coverUrl }: { coverUrl?: string }) {
       {coverUrl ? (
         <img
           alt=""
-          className="queue-clear relative size-40 rounded-[6px] border border-primary/30 object-cover sm:size-48"
+          className="queue-clear relative size-40 rounded-[var(--rounded-artwork)] border border-primary/30 object-cover sm:size-48"
           src={coverUrl}
         />
       ) : undefined}
