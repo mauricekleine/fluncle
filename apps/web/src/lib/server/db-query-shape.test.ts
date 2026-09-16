@@ -526,7 +526,7 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
     file: "lib/server/catalogue.ts",
     pattern: "anti-join:not-exists-findings",
     reason:
-      "PK-keyed write guards (clearQuarantine, clearDuplicate, setTrackDismissed ×2): `update tracks … where track_id = ?`, where the `not exists` is a self-verifying probe on ONE row, refusing to mutate a certified track. Reading TRUTH is the job on a single row, so these keep the anti-join form on purpose. (requeueUnmatchedCaptures' veto count + update were the other two and are gone — their statements are bulk reads of the growing table, where the maintained `is_catalogue = 1` is the right spelling and the one its own due-work maintenance source already used.)",
+      "PK-keyed write guards (clearQuarantine, clearDuplicate, setTrackDismissed ×2): `update tracks … where track_id = ?`, where the `not exists` is a self-verifying probe on ONE row, refusing to mutate a certified track. Reading TRUTH is the job on a single row, so these keep the anti-join form on purpose. A BULK read of the growing table never qualifies: it spells the discriminator as the maintained `is_catalogue = 1` (Keystone 1), which is what `requeueUnmatchedCaptures` does across all three of its statements.",
   },
   {
     count: 1,
