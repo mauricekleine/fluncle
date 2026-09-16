@@ -539,7 +539,21 @@ export const rankArtists = oc
     summary: "One tick of the similar-artists sweep (artist centroids + top-K edges)",
     tags: ["Admin"],
   })
-  .input(z.object({ limit: z.coerce.number().int().min(1).max(1000).default(50) }))
+  .input(
+    z.object({
+      /**
+       * Whether to return `remaining` as a real live COUNT of the still-stale backlog, or the fast
+       * fullness SENTINEL — the `rank_catalogue` knob, for the same reason (docs/db-scale-backlog
+       * Wave 1 #1). DEFAULT false = the sentinel: a full batch reports "> 0, run me again" without
+       * a second pass over `track_artists ⋈ track_embeddings`, which is the extra scan a cold
+       * drain otherwise pays on every one of its ticks. The human-facing CLI readout opts IN
+       * (`true`) so a deliberate manual `artists rank` still shows the true backlog size; the
+       * `--json`/automation path keeps the sentinel, which is all it ever tests.
+       */
+      countRemaining: z.coerce.boolean().default(false),
+      limit: z.coerce.number().int().min(1).max(1000).default(50),
+    }),
+  )
   .output(
     z.object({
       ok: z.literal(true),

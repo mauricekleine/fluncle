@@ -58,6 +58,7 @@ Every Wave-1 item that proved out has shipped (see "Shipped (live)" above). What
 - shape: `capture_status in ('wrong-audio','unmatched','failed')` is unindexed → each admin lens load is a full anti-join scan; quarantine also sorts on unindexed catalogue_ranked_at.
 - impact: MEDIUM-HIGH — admin lens loads; but the composite couldn't be selected against the anti-join.
 - fix (deferred): the proposed partial index `on tracks(capture_status, catalogue_ranked_at) where capture_status in ('wrong-audio','unmatched','failed')` does not enable the lens because the catalogue anti-join full-scans first; revisit once Keystone 1 lands and the anti-join is a seek.
+- CODE NOTE (not a status change): both `loc`s spell the discriminator as the maintained `is_catalogue = 1` rather than an anti-join — the lenses and all three of `requeueUnmatchedCaptures`' statements (veto count, due-work maintenance source, UPDATE) describe one row set in one spelling. **This item stays DEFERRED.** Whether the planner now picks the proposed composite is an empirical question about hosted Turso, which keeps no planner statistics; only a fresh `apps/web/scripts/bench-db-scale.ts` run against a scratch hosted clone at 150k can answer it, and nothing here is evidence that it can.
 
 **15. The label cover pick, index-served (`tracks_label_cover_idx`)**
 `tier=cheap · tracks · T5, T9, T6, T3`
