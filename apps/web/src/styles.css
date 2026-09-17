@@ -5178,7 +5178,8 @@ a.catalogue-letter:focus-visible {
   color: var(--nebula-violet);
 }
 
-.live-cta:hover {
+.live-cta:hover,
+.live-cta:focus-visible {
   background-color: var(--nebula-violet);
   border-color: var(--nebula-violet);
   color: var(--deep-field);
@@ -6497,7 +6498,7 @@ a.catalogue-letter:focus-visible {
 .nav-nerd-link {
   border-radius: var(--radius-md, 0.5rem);
   color: var(--muted-foreground);
-  font-family: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   padding: 0.2rem 0.4rem;
   transition:
@@ -7004,7 +7005,7 @@ a.catalogue-letter:focus-visible {
 
 .account-portrait-crew {
   color: var(--foreground);
-  font-family: "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
 }
 
