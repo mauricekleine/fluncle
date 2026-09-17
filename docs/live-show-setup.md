@@ -11,7 +11,7 @@ Your pre-flight before you go live behind the decks with visuals: how to wire th
 Two machines, each with one job. This is the primary rig; the one-Mac fallback is below and `run show --one-mac` flips it.
 
 - **M2 (the mixing machine):** Rekordbox + the DDJ-FLX4 + Rekordbox REC. No OBS, no browser. It plays the set and cuts the belt-and-braces WAV master. For an UNORDERED set it also runs two small scripts — `m2-sender` (reads the mixer's MIDI, decides which deck went live) and `deckwatch` (OCRs the deck header for the track's identity). See below.
-- **M5 (the streaming/recording machine):** the glass (the WebGL runtime), the bridge (plan + fingerprint identity + the watchdog + the phone remote, and — in VJ mode — the UDP transition channel the M2 sends to), OBS (the Twitch stream + the `.mov` master), the mic, and the camera(s). `run show` lives here.
+- **M5 (the streaming/recording machine):** the glass (the WebGL runtime), the bridge (plan + fingerprint identity + the watchdog + the phone remote + the crew wall, and — in VJ mode — the UDP transition channel the M2 sends to), OBS (the Twitch stream + the `.mov` master), the mic, and the camera(s). `run show` lives here.
 
 ### Ordered set vs unordered set
 
@@ -64,7 +64,7 @@ Follow the recording doc's **3-track model** unchanged, with these live-rig subs
 
 ### 3. The glass and the bridge
 
-They come up under `run show` (next section) — you do not launch them by hand. For reference: the glass is a pinned Chromium serving the WebGL page on `http://localhost:4173`; the bridge serves the plan + the state stream on `http://localhost:4180` and hosts the phone remote at `http://<lan-ip>:4180/remote`. Both are LAN-local by design — no public surface, nothing in `@fluncle/registry`, nothing reachable off the network (the never-crash rail: the show has no network dependency mid-set).
+They come up under `run show` (next section) — you do not launch them by hand. For reference: the glass is a pinned Chromium serving the WebGL page on `http://localhost:4173`; the bridge serves the plan + the state stream on `http://localhost:4180`, hosts the phone remote at `http://<lan-ip>:4180/remote`, and hosts the crew wall at `http://<lan-ip>:4180/crew` (see "The crew wall" below). Both are LAN-local by design — no public surface, nothing in `@fluncle/registry`, nothing reachable off the network (the never-crash rail: the show has no network dependency mid-set).
 
 ### 3b. The pinned Chromium
 
@@ -102,6 +102,28 @@ Build one scene collection with two scenes:
 
 The rehearsal is where you feel out the cuts — how long the glass scene holds before the room is missed, whether a drop wants the cut at the impact or a bar early. That is a taste call made on the stream, not in this doc. Whichever scenes you run, the video meter-bounce below applies to each source in them: a scene that composites a silently-black capture looks fine in the preview list and ruins the set.
 
+## The crew wall — the room's logos on the screen
+
+Everyone at the party is on the same WiFi, so they can put their own logo on the screen behind the decks. The bridge serves it; you decide what goes up.
+
+**How it runs.** `run show` prints three URLs and a scannable code in its boot table:
+
+- `http://<lan-ip>:4180/crew` — what the room opens. Read it out, or let the wall's QR card do it.
+- `http://<lan-ip>:4180/crew/moderate` — your queue. Keep it open on your phone: each upload arrives with a thumbnail and a name, and you tap `Approve` or `Reject`. Anything already up has a `Remove`.
+- `http://localhost:4180/crew/wall` — the overlay. Add it in OBS as a **Browser Source** (not a window capture), 1920×1080, over both scenes. Its ground is transparent, so it composites straight over the camera shot and the glass.
+
+**An upload waits for you.** The operator gate is on by default: nothing reaches the wall until you approve it. Only flip that off for a room you know, with `FLUNCLE_CREW_AUTO_APPROVE=1` — anyone on the WiFi then reaches the stream directly.
+
+**Tuning the overlay, without touching code.** The Browser Source URL takes the placement: `?corner=tl|tr|bl|br` (default `br`), `&size=<px>` (the box the logo fits, default 220), `&opacity=<0-1>` (default 0.92), `&dwell=<ms>` (how long one logo holds, default 18000), `&qr-corner=tl|tr|bl|br` (default `bl`), `&qr-size=<px>` (the code scales with the canvas by default, which is sized for the screen in the room; raise it when the stream is the audience you care about), and `&qr=0` to drop the QR card once the room has found it. One logo shows at a time and every logo shows once before any repeats.
+
+**Approving from your phone.** The queue holds its place while you use it: a poll never rebuilds the list under your thumb, and `Reject` and `Remove` both arm on the first tap and act on the second, because they delete for good and they sit next to `Approve`.
+
+**What it refuses.** PNG, JPG, WebP and GIF only, decided by the file's own bytes rather than its name, up to 2 MB and 60 logos a night, 5 uploads a minute per phone. SVG is refused outright: it can carry script, and the overlay is a browser pointed at your stream.
+
+**If you would rather not run it tonight**, simply do not add the Browser Source and do not show the QR. The upload page stays reachable on the LAN, but nothing reaches the screen without your approval and nothing tells the room the address.
+
+The logos live in the gitignored `packages/live/.crew/` and survive a bridge restart mid-set, so clear that directory between shows if you want a clean wall. They are never committed, and the LAN address the QR carries is a private one that means nothing off the network.
+
 ## `run show` — the orchestrator
 
 Canonical invocation (this is a **local orchestration**, not a `fluncle` CLI command — see [naming-conventions.md §7](./naming-conventions.md#7-local-exec-ops-the-registrys-non-http-tail); the registry op is `run_show`):
@@ -137,6 +159,7 @@ Flags: `--plan <handle-or-logId>` loads a planned set — a plan handle (the liv
 11. **VideoToolbox + CBR confirmed** — the recording encoder is the dedicated hardware encoder at CBR (recording doc), not the stream encoder.
 12. **Rekordbox REC armed** on the M2 — the belt-and-braces WAV master, zero routing in its path.
 13. **Cameras live** — the overhead Continuity iPhone (and any second camera) is up and framed.
+14. **The crew wall reads, if you are running it** — the Browser Source shows a logo (or nothing, on an empty wall) rather than a black box, the moderation queue is open on your phone, and the QR card carries the same LAN address the boot table printed.
 
 ## The dress rehearsal protocol (acceptance, not vibes)
 
