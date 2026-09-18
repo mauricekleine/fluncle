@@ -59,7 +59,8 @@
 //     individually instead — the MCP specs and agent-discovery, the entity strings (`identity.ts`), the log page's
 //     definitional prose (`log-prose.ts`), and the three CREW FEEDS (`telegram.ts`,
 //     `bluesky.ts`, `push.ts`), which carry the most voice-load-bearing hand-written copy in
-//     the repo and were outside the net only because of where they live. Drawing
+//     the repo and were outside the net only because of where they live, and the
+//     NEWSLETTER LETTER (`edition-email.ts`), the Email register of §5. Drawing
 //     the real `lib/**` boundary is a follow-up, and it is a canon question before
 //     it is a code one.
 //   - `apps/ssh/main.go` — Go, so oxc cannot parse it. Its em dashes are
@@ -139,6 +140,13 @@ const SCAN_ROOTS = [
   "apps/web/src/lib/server/telegram.ts",
   "apps/web/src/lib/server/bluesky.ts",
   "apps/web/src/lib/server/push.ts",
+  // The NEWSLETTER LETTER. `references/voice.md` §5 names Email as its own surface
+  // register ("a letter from the uncle to the crew"), and this module holds the
+  // hand-written half of it: the "Ahoy cosmonauts," greeting, the "Happy raving,
+  // Fluncle" sign-off, the Frontier teaser, and the compliance footer's sign-off
+  // line. It lands in a subscriber's inbox every Friday, so it belongs beside the
+  // crew feeds above rather than in the unscanned "rest of lib".
+  "apps/web/src/lib/server/edition-email.ts",
 ];
 
 /** The operator workstation — a different register, out of the public net. */

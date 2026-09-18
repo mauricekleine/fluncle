@@ -5,7 +5,7 @@ import { getTracksByLogIds } from "./tracks";
 // The footer sign-off line (the slot CAN-SPAM reserves for a postal address).
 // While the list is friends + family this stays a cosmic sign-off; swap it for a
 // real physical mailing address here once the audience grows past F&F.
-const POSTAL_ADDRESS = "With love, from somewhere deep in the galaxy, Fluncle";
+const POSTAL_ADDRESS = "With love, from somewhere deep in the Galaxy, Fluncle";
 
 // The per-listener Frontier shelf, on the site. The teaser links every recipient
 // here (one HTML for all — no per-recipient personalization).
