@@ -31,6 +31,25 @@ const DEEZER_QUOTA_RETRY_DELAYS_MS = [1_200, 2_500];
 /** Three exhausted searches are enough evidence that the IP, rather than the rows, is blocked. */
 export const DEEZER_QUOTA_ABORT_STREAK = 3;
 
+/**
+ * THE BLIND-SWEEP TRIPWIRE. A Deezer-empty result is the one negative this pass writes down, and it
+ * is indistinguishable from a broken ASK: a query spelling Deezer no longer honours answers
+ * `{"data":[],"total":0}` for every row, and every one of those lands as a durable clean miss on
+ * `isrc_recovery_attempted_at` while the tick reports `ok: true`.
+ *
+ * So the RATE is the alarm. A healthy pass finds something for a large minority of rows; a pass
+ * where essentially every searched row came back empty is a statement about the query, the endpoint,
+ * or the IP — never about the catalogue. Over {@link DEEZER_BLIND_MIN_SEARCHED} searched rows, an
+ * empty share at or above {@link DEEZER_BLIND_EMPTY_SHARE} fails the tick (`ok: false` +
+ * `reason: "deezer_blind"`), which is what the ledger reads and what the unit's OnFailure alert
+ * fires on. The counts stay honest either way — the verdict is added, never substituted.
+ *
+ * The sample floor exists so a short or nearly-drained tick cannot trip it by luck; the share is
+ * just under 1 so a single recovery in a hundred does not excuse a blind run.
+ */
+export const DEEZER_BLIND_MIN_SEARCHED = 25;
+export const DEEZER_BLIND_EMPTY_SHARE = 0.98;
+
 export type IsrcRecoveryWorkItem = {
   deezerQuery?: string;
   trackId?: string;
@@ -84,6 +103,12 @@ export type IsrcRecoverySummary = {
    * after the third consecutive quota outcome aborts the tick.
    */
   quotaBlocked: number;
+  /**
+   * Why the tick failed, when the failure is a VERDICT rather than a thrown error. Currently one
+   * value — `deezer_blind`, the {@link DEEZER_BLIND_EMPTY_SHARE} tripwire. Null on a healthy tick and
+   * on an ordinary error, whose message already rides `errors`.
+   */
+  reason: string | null;
   recovered: number;
   /** Malformed work rows that could not be attempted. */
   skipped: number;
@@ -122,6 +147,7 @@ function emptySummary(): IsrcRecoverySummary {
     produced: 0,
     queueDepth: null,
     quotaBlocked: 0,
+    reason: null,
     recovered: 0,
     skipped: 0,
     transportFailed: 0,
@@ -160,6 +186,10 @@ export async function runIsrcRecoverySweep(
 
   summary.queueDepth = queue.queueDepth;
   let consecutiveQuota = 0;
+  // Rows Deezer actually ANSWERED (an `ok` response, empty or not) — the denominator the blind
+  // tripwire judges on. Quota and transport rows never reached Deezer's index, so they are not
+  // evidence either way and are deliberately excluded.
+  let deezerAnswered = 0;
 
   for (let index = 0; index < queue.rows.length; index += 1) {
     const row = queue.rows[index];
@@ -192,6 +222,7 @@ export async function runIsrcRecoverySweep(
         consecutiveQuota = 0;
       } else {
         consecutiveQuota = 0;
+        deezerAnswered += 1;
         summary.deezerHitsDroppedIncomplete += search.droppedIncomplete;
 
         try {
@@ -230,6 +261,20 @@ export async function runIsrcRecoverySweep(
     if (index < queue.rows.length - 1) {
       await deps.sleep(ISRC_RECOVERY_PACE_MS);
     }
+  }
+
+  // THE TRIPWIRE, read off the tick's own counts (see DEEZER_BLIND_EMPTY_SHARE). A blind pass is
+  // still a pass that wrote durable clean misses, so the verdict is reported rather than the work
+  // undone — the operator clears the stamps with `requeue_isrc_recovery` once the ask is fixed.
+  if (
+    deezerAnswered >= DEEZER_BLIND_MIN_SEARCHED &&
+    summary.deezerEmpty / deezerAnswered >= DEEZER_BLIND_EMPTY_SHARE
+  ) {
+    summary.ok = false;
+    summary.reason = "deezer_blind";
+    deps.log(
+      `Deezer answered empty for ${summary.deezerEmpty}/${deezerAnswered} searched rows — the ask, not the catalogue`,
+    );
   }
 
   return summary;

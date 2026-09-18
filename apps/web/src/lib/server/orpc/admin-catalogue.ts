@@ -39,6 +39,7 @@ import {
   anchorTrack,
   AnchorTrackError,
   requeueAnchorStamps,
+  requeueIsrcRecoveryStamps,
   resolveAnchorFree,
   resolveAnchorReview,
 } from "../anchor";
@@ -252,6 +253,23 @@ export function adminCatalogueHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return { ok: true as const, requeued: await requeueAnchorStamps(input.trackIds) };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/catalogue/isrc-recovery/requeue — OPERATOR tier. Clear the free Deezer pass's
+  // clean-miss watermark on rows it retired from a window where the ASK, not the catalogue, was
+  // empty. Dry-run by default; the count comes back on both paths so the blast radius is read
+  // before it is taken.
+  const requeueIsrcRecoveryHandler = os.requeue_isrc_recovery
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { matched, requeued } = await requeueIsrcRecoveryStamps(input);
+
+        return { dryRun: input.dryRun, matched, ok: true as const, requeued };
       } catch (error) {
         throw apiFault(error);
       }
@@ -645,6 +663,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     rank_catalogue: rankCatalogueHandler,
     record_demand: recordDemandHandler,
     requeue_anchor: requeueAnchorHandler,
+    requeue_isrc_recovery: requeueIsrcRecoveryHandler,
     requeue_unmatched_captures: requeueUnmatchedCapturesHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
     reset_spotify_anchor_breaker: resetSpotifyAnchorBreakerHandler,

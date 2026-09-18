@@ -2927,6 +2927,35 @@ JSON field reference:
       );
     });
 
+  // `requeue_isrc_recovery` → `admin catalogue requeue-isrc-recovery --since <iso>` (operator).
+  // Clear the free Deezer pass's clean-miss watermark on rows it retired at or after `--since`, so
+  // they re-enter the isrc-recovery worklist now. The lever for a window where the ASK came back
+  // empty rather than the catalogue. DRY-RUN by default; `--apply` takes it.
+  catalogue
+    .command("requeue-isrc-recovery")
+    .description("Clear Deezer-empty ISRC-recovery stamps from a window (dry-run; --apply to take)")
+    .requiredOption("--since <iso>", "Inclusive lower bound on the stamp (2026-09-09)")
+    .option("--apply", "Actually clear the stamps (default is a dry-run count)", false)
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions & { apply?: boolean; since: string }) => {
+      const { requeueIsrcRecoveryCommand } = await import("./commands/admin-catalogue");
+      const result = await requeueIsrcRecoveryCommand({
+        dryRun: options.apply !== true,
+        since: options.since,
+      });
+
+      if (options.json) {
+        printJson({ ok: true, ...result });
+        return;
+      }
+
+      console.log(
+        result.dryRun
+          ? `DRY RUN — ${result.matched} row(s) stamped Deezer-empty since ${options.since}. Re-run with --apply to clear them.`
+          : `Cleared ${result.requeued} of ${result.matched} row(s) — the next isrc-recovery tick asks them again.`,
+      );
+    });
+
   catalogue
     .command("requeue-unmatched")
     .description("Re-queue terminal-unmatched captures after a matcher improvement (operator)")

@@ -261,9 +261,9 @@ export type TrackWorkItem = {
   /** True when a `findings` row exists — the certification rail's flag, in the DTO. */
   certified: boolean;
   /**
-   * The ready-made DEEZER search query (`deezerSearchQuery`: Deezer's `artist:"…" track:"…"` field
-   * syntax over the row's first artist + its canonicalized title) — a DIFFERENT spelling from
-   * `anchorQuery`, which is the free-text ask the Spotify rungs use. Attached for every
+   * The ready-made DEEZER search query (`deezerSearchQuery`: free text over the row's credited
+   * artists + its canonicalized title — Deezer's combined field syntax answers empty for every
+   * input, so it is never sent). Attached for every
    * ISRC-RECOVERY row and for an ANCHOR row that carries NO ISRC, because those are exactly the rows
    * the pre-anchor recovery rung acts on; its presence is the server telling the box "search Deezer
    * for this one, from your own IP". Absent for other kinds, for an anchor row that already has an

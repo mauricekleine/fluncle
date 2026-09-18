@@ -106,6 +106,7 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
       "isrc-recovery-empty",
       "isrc-recovery-hit",
       "isrc-recovery-miss",
+      "isrc-recovery-requeue",
     ],
     subjects: ["track"],
   },

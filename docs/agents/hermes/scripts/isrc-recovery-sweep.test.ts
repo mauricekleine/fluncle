@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  DEEZER_BLIND_MIN_SEARCHED,
   DEEZER_QUOTA_ABORT_STREAK,
   ISRC_RECOVERY_EXPECTED_INTERVAL_MS,
   ISRC_RECOVERY_PACE_MS,
@@ -80,8 +81,8 @@ describe("isrc-recovery sweep", () => {
         return Promise.resolve(
           queue(
             [
-              { deezerQuery: 'artist:"Calibre" track:"Mr Right On"', trackId: "mb_recover" },
-              { deezerQuery: 'artist:"A" track:"B"', trackId: "mb_empty" },
+              { deezerQuery: "Calibre Mr Right On", trackId: "mb_recover" },
+              { deezerQuery: "A B", trackId: "mb_empty" },
             ],
             10,
           ),
@@ -115,9 +116,7 @@ describe("isrc-recovery sweep", () => {
     });
 
     const deezerCall = harness.calls.find((call) => call.url.includes("api.deezer.com"));
-    expect(decodeURIComponent(deezerCall?.url ?? "")).toContain(
-      'q=artist:"Calibre" track:"Mr Right On"&limit=5',
-    );
+    expect(decodeURIComponent(deezerCall?.url ?? "")).toContain("q=Calibre Mr Right On&limit=5");
 
     const resolveCalls = harness.calls.filter((call) => call.url.endsWith("/anchor/resolve"));
     expect(resolveCalls.length).toBe(2);
@@ -363,6 +362,67 @@ describe("isrc-recovery due-work repair pause", () => {
       throttled: true,
     });
     expect(JSON.parse(harness.output[0] ?? "{}")).toMatchObject({ gateState: "paused", ok: true });
+  });
+
+  // THE BLIND-SWEEP TRIPWIRE, proven from BOTH sides: it fires on the real shape (every searched
+  // row Deezer-empty over a meaningful sample), and it stays quiet when the same shape carries
+  // genuine signal. A detector that has never been watched fire is unproven by construction.
+  const blindHarness = (rows: number, recoveries: number) => {
+    const work = Array.from({ length: rows }, (_, index) => ({
+      deezerQuery: `artist ${index}`,
+      trackId: `mb_${index}`,
+    }));
+    const recovering = new Set(work.slice(0, recoveries).map((row) => row.trackId));
+
+    return effects((url, init) => {
+      if (url.includes("/tracks/work?")) {
+        return Promise.resolve(queue(work, rows));
+      }
+      if (url.includes("api.deezer.com")) {
+        const index = Number(decodeURIComponent(url).match(/artist (\d+)/)?.[1] ?? -1);
+        return Promise.resolve(Response.json({ data: index < recoveries ? [HIT] : [] }));
+      }
+      if (url.endsWith("/api/v1/admin/catalogue/anchor/resolve")) {
+        const body = JSON.parse(requestBody(init)) as { trackId?: string };
+        return Promise.resolve(
+          Response.json({ isrcRecoveredByDeezer: recovering.has(body.trackId ?? "") }),
+        );
+      }
+      return Promise.resolve(new Response("unexpected", { status: 500 }));
+    });
+  };
+
+  test("fails the tick when Deezer answers empty for every searched row", async () => {
+    const harness = blindHarness(DEEZER_BLIND_MIN_SEARCHED, 0);
+
+    const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
+
+    expect(exitCode).toBe(1);
+    expect(summary).toMatchObject({
+      checked: DEEZER_BLIND_MIN_SEARCHED,
+      deezerEmpty: DEEZER_BLIND_MIN_SEARCHED,
+      ok: false,
+      reason: "deezer_blind",
+      recovered: 0,
+    });
+  });
+
+  test("stays healthy when real signal reaches the same counters", async () => {
+    const harness = blindHarness(DEEZER_BLIND_MIN_SEARCHED, 3);
+
+    const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
+
+    expect(exitCode).toBe(0);
+    expect(summary).toMatchObject({ ok: true, reason: null, recovered: 3 });
+  });
+
+  test("does not trip on a short tick — the sample floor is what makes the rate evidence", async () => {
+    const harness = blindHarness(DEEZER_BLIND_MIN_SEARCHED - 1, 0);
+
+    const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
+
+    expect(exitCode).toBe(0);
+    expect(summary).toMatchObject({ ok: true, reason: null });
   });
 
   test("a generic Worker 500 on the queue read stays a failed run", async () => {

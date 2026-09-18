@@ -427,6 +427,58 @@ export const requeueAnchor = oc
   .output(z.object({ ok: z.literal(true), requeued: z.number() }));
 
 /**
+ * `requeue_isrc_recovery` → `POST /admin/catalogue/isrc-recovery/requeue` (operationId
+ * `requeueIsrcRecovery`).
+ *
+ * OPERATOR tier — clear the free Deezer pass's `isrc_recovery_attempted_at` watermark on rows it
+ * retired as a CLEAN MISS from a window the ask itself was broken in, so they re-enter the
+ * `isrc-recovery` worklist now instead of waiting out `ISRC_RECOVERY_REASK_AFTER_DAYS`.
+ *
+ * The Deezer-empty arm is the only one this op undoes, and the WHERE says so precisely. That arm
+ * writes `isrc_recovery_attempted_at` ALONE; the gate-refused arm writes it together with
+ * `isrc_attempted_at` at the same instant, so `isrc_attempted_at <> isrc_recovery_attempted_at`
+ * separates "Deezer answered nothing" from "Deezer answered and the identity gate refused". A gate
+ * refusal is a real verdict about the row and is deliberately left standing.
+ *
+ * `since` is an inclusive lower bound on the stamp (an ISO date or instant — the column is ISO text,
+ * so the comparison is lexicographic): the operator names the window the ask was broken in rather
+ * than clearing the ledger wholesale. `dryRun` defaults TRUE, and the count comes back either way,
+ * so the blast radius is always read before it is taken.
+ *
+ * It clears NOTHING else. In particular `spotify_anchor_attempted_at` stays untouched: the anchor
+ * worklist is priority-ordered by sunk cost, so bulk-clearing anchor stamps on ISRC-LESS rows walls
+ * the queue head with structurally-unanchorable work. A row whose ISRC this pass then recovers earns
+ * its anchor turn through the ordinary queue.
+ */
+export const requeueIsrcRecovery = oc
+  .route({
+    method: "POST",
+    operationId: "requeueIsrcRecovery",
+    path: "/admin/catalogue/isrc-recovery/requeue",
+    summary: "Clear Deezer-empty ISRC-recovery stamps from a named window (operator)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      dryRun: z.boolean().default(true),
+      since: z
+        .string()
+        .regex(
+          /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z)?$/,
+          "since must be an ISO date (2026-09-09) or instant (2026-09-09T00:00:00.000Z)",
+        ),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      matched: z.number(),
+      ok: z.literal(true),
+      requeued: z.number(),
+    }),
+  );
+
+/**
  * `flag_wrong_audio` → `POST /admin/catalogue/wrong-audio/flag` (operationId `flagWrongAudio`).
  *
  * OPERATOR tier — `clear_wrong_audio`'s counterpart: "the FINDING's capture is the wrong one"
@@ -1513,6 +1565,7 @@ export const adminCatalogueContract = {
   rank_catalogue: rankCatalogue,
   record_demand: recordDemand,
   requeue_anchor: requeueAnchor,
+  requeue_isrc_recovery: requeueIsrcRecovery,
   requeue_unmatched_captures: requeueUnmatchedCaptures,
   reset_apple_breaker: resetAppleBreaker,
   reset_spotify_anchor_breaker: resetSpotifyAnchorBreaker,

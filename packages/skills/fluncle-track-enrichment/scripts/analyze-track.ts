@@ -147,16 +147,22 @@ export async function resolvePreviews(
     }
   }
 
-  // 2. Deezer search by artist + title — VERSION-GATED so a remix finding never
-  //    pulls in the original's preview alongside the ISRC candidate.
+  // 2. Deezer search by artist + title, asked in FREE TEXT — Deezer's combined
+  //    `artist:"…" track:"…"` field syntax answers `{"data":[],"total":0}` for every
+  //    input, so a fielded ask is a permanent silent miss. Gated like the iTunes arm
+  //    below: the ARTIST is checked here rather than left to retrieval, and the VERSION
+  //    must match so a remix finding never pulls in the original's preview.
   try {
-    const query = `artist:"${pArtist}" track:"${pTitle}"`;
+    const query = `${pArtist ?? ""} ${pTitle ?? ""}`.trim();
     const response = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`);
     const body = (await response.json()) as {
       data?: Array<{ artist?: { name?: string }; preview?: string; title?: string }>;
     };
     const hit = (body.data ?? []).find(
-      (item) => item.preview && versionMatches(findingTitle, item.title ?? ""),
+      (item) =>
+        item.preview &&
+        normalize(item.artist?.name ?? "").includes(normalize(pArtist ?? "")) &&
+        versionMatches(findingTitle, item.title ?? ""),
     );
     push("deezer:search", hit?.preview);
   } catch {

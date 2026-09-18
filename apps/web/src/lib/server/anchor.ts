@@ -1391,6 +1391,82 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
 }
 
 /**
+ * The rows `requeue_isrc_recovery` acts on, as ONE predicate shared by the count and the update so a
+ * dry run can never describe a different set than the apply takes.
+ *
+ * `isrc_attempted_at is not isrc_recovery_attempted_at` is the arm discriminator, and it reads
+ * straight off how {@link recoverIsrcViaDeezer} writes: the Deezer-EMPTY branch stamps the recovery
+ * watermark ALONE, while the gate-refused branch stamps it and `isrc_attempted_at` with the SAME
+ * instant in one statement. So an equal pair is a verdict about the row (Deezer answered, nothing
+ * cleared the identity gate) and is left standing; an unequal pair is "Deezer said nothing", which is
+ * exactly what a broken ask also says. SQLite's `is not` is the null-safe form — a row whose
+ * `isrc_attempted_at` is null still qualifies.
+ *
+ * `has_isrc = 0` and `spotify_uri is null` restate the worklist's own scope: a row that has since
+ * won an ISRC or an anchor has nothing to recover and must not be handed back to the pass.
+ */
+const ISRC_RECOVERY_EMPTY_MISS_WHERE = `isrc_recovery_attempted_at is not null
+        and isrc_recovery_attempted_at >= ?
+        and isrc_attempted_at is not isrc_recovery_attempted_at
+        and has_isrc = 0
+        and spotify_uri is null`;
+
+/**
+ * THE OPERATOR REQUEUE FOR THE FREE DEEZER PASS (`requeue_isrc_recovery`) — clear
+ * `isrc_recovery_attempted_at` on the rows the pass retired as a Deezer-EMPTY clean miss at or after
+ * `since`, so they re-enter the `isrc-recovery` worklist on the next tick instead of waiting out
+ * `ISRC_RECOVERY_REASK_AFTER_DAYS`. The lever for "the ask itself was broken in that window": an
+ * empty answer is the one negative this pass writes down, and a query spelling the vendor stops
+ * honouring produces exactly that answer for every row.
+ *
+ * `dryRun` (the contract's default) runs the SAME predicate as a count and writes nothing, so the
+ * blast radius is read before it is taken. `matched` is that count on both paths; `requeued` is 0 on
+ * a dry run and the rows actually cleared on an apply.
+ *
+ * It touches ONE column. `spotify_anchor_attempted_at` in particular is left alone: the anchor
+ * worklist sorts by sunk cost, so bulk-clearing anchor stamps on ISRC-less rows walls its head with
+ * work that cannot conclude. A row whose ISRC this pass then recovers reaches the anchor queue the
+ * ordinary way, at its real priority.
+ */
+export async function requeueIsrcRecoveryStamps(input: {
+  dryRun: boolean;
+  since: string;
+}): Promise<{ matched: number; requeued: number }> {
+  const db = await getDb();
+  const counted = await db.execute({
+    args: [input.since],
+    sql: `select count(*) as matched from tracks where ${ISRC_RECOVERY_EMPTY_MISS_WHERE}`,
+  });
+  const matched = Number(counted.rows[0]?.matched ?? 0);
+
+  if (input.dryRun || matched === 0) {
+    return { matched, requeued: 0 };
+  }
+
+  const results = await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "track",
+        {
+          args: [input.since],
+          sql: `select track_id as subject_id from tracks where ${ISRC_RECOVERY_EMPTY_MISS_WHERE}`,
+        },
+        { producer: "isrc-recovery-requeue" },
+      ),
+      {
+        args: [input.since],
+        sql: `update tracks
+              set isrc_recovery_attempted_at = null
+              where ${ISRC_RECOVERY_EMPTY_MISS_WHERE}`,
+      },
+    ],
+    "write",
+  );
+
+  return { matched, requeued: results.at(-1)?.rowsAffected ?? 0 };
+}
+
+/**
  * THE FREE (non-Apify) RESOLVER RUNGS of the waterfall — try to anchor a catalogue row without any
  * Apify money (docs/catalogue-crawler.md § the anchor). The box's sweep calls this FIRST per row and
  * spends the metered Apify search only when it MISSES.
