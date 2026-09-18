@@ -401,6 +401,96 @@ describe("requeueAnchorStamps — the operator requeue", () => {
   });
 });
 
+describe("requeueIsrcRecoveryStamps — the Deezer-empty window requeue", () => {
+  // Stamp the two arms the way the recovery step writes them: the EMPTY arm moves the recovery
+  // watermark alone, the gate-refused arm moves it together with `isrc_attempted_at` at one instant.
+  const stampEmpty = (trackId: string, at: string) =>
+    db.execute({
+      args: [at, trackId],
+      sql: "update tracks set isrc_recovery_attempted_at = ? where track_id = ?",
+    });
+  const stampRefused = (trackId: string, at: string) =>
+    db.execute({
+      args: [at, at, trackId],
+      sql: "update tracks set isrc_recovery_attempted_at = ?, isrc_attempted_at = ? where track_id = ?",
+    });
+
+  it("clears only the Deezer-EMPTY arm inside the window, and only on still-recoverable rows", async () => {
+    const { requeueIsrcRecoveryStamps } = await import("./anchor");
+
+    await seedUnanchored({ isrc: null, trackId: "mb_ir_empty" });
+    await stampEmpty("mb_ir_empty", "2026-09-10T04:00:00.000Z");
+    // The same arm, but BEFORE the window: a genuine older miss the operator did not name.
+    await seedUnanchored({ isrc: null, trackId: "mb_ir_old" });
+    await stampEmpty("mb_ir_old", "2026-09-01T04:00:00.000Z");
+    // Deezer answered and the identity gate refused — a verdict about the row, left standing.
+    await seedUnanchored({ isrc: null, trackId: "mb_ir_refused" });
+    await stampRefused("mb_ir_refused", "2026-09-10T04:00:00.000Z");
+    // Carries an ISRC now: nothing left for the recovery pass to ask for.
+    await seedUnanchored({ isrc: "GBCJY1300180", trackId: "mb_ir_has_isrc" });
+    await stampEmpty("mb_ir_has_isrc", "2026-09-10T04:00:00.000Z");
+    // Anchored: outside the worklist's scope entirely.
+    await seedUnanchored({ isrc: null, trackId: "mb_ir_anchored" });
+    await stampEmpty("mb_ir_anchored", "2026-09-10T04:00:00.000Z");
+    await db.execute(
+      "update tracks set spotify_uri = 'spotify:track:done' where track_id = 'mb_ir_anchored'",
+    );
+
+    const since = "2026-09-09";
+
+    // The dry run counts the SAME set and writes nothing.
+    expect(await requeueIsrcRecoveryStamps({ dryRun: true, since })).toEqual({
+      matched: 1,
+      requeued: 0,
+    });
+    const untouched = await db.execute(
+      "select isrc_recovery_attempted_at as at from tracks where track_id = 'mb_ir_empty'",
+    );
+    expect(untouched.rows[0]?.at).toBe("2026-09-10T04:00:00.000Z");
+
+    expect(await requeueIsrcRecoveryStamps({ dryRun: false, since })).toEqual({
+      matched: 1,
+      requeued: 1,
+    });
+
+    const after = await db.execute(
+      `select track_id, isrc_recovery_attempted_at as at from tracks
+       where track_id in ('mb_ir_empty', 'mb_ir_old', 'mb_ir_refused', 'mb_ir_has_isrc', 'mb_ir_anchored')`,
+    );
+    expect(Object.fromEntries(after.rows.map((row) => [row.track_id, row.at]))).toEqual({
+      mb_ir_anchored: "2026-09-10T04:00:00.000Z",
+      mb_ir_empty: null,
+      mb_ir_has_isrc: "2026-09-10T04:00:00.000Z",
+      mb_ir_old: "2026-09-01T04:00:00.000Z",
+      mb_ir_refused: "2026-09-10T04:00:00.000Z",
+    });
+
+    // Idempotent: a second apply finds nothing left to clear.
+    expect(await requeueIsrcRecoveryStamps({ dryRun: false, since })).toEqual({
+      matched: 0,
+      requeued: 0,
+    });
+  });
+
+  it("never touches the anchor re-ask stamp — the ISRC-less queue head stays clear", async () => {
+    const { requeueIsrcRecoveryStamps } = await import("./anchor");
+
+    await seedUnanchored({ isrc: null, trackId: "mb_ir_anchor_stamp" });
+    await stampEmpty("mb_ir_anchor_stamp", "2026-09-10T04:00:00.000Z");
+    await db.execute(
+      `update tracks set spotify_anchor_attempted_at = '2026-09-10T05:00:00.000Z'
+       where track_id = 'mb_ir_anchor_stamp'`,
+    );
+
+    await requeueIsrcRecoveryStamps({ dryRun: false, since: "2026-09-09" });
+
+    const row = await db.execute(
+      "select spotify_anchor_attempted_at as at from tracks where track_id = 'mb_ir_anchor_stamp'",
+    );
+    expect(row.rows[0]?.at).toBe("2026-09-10T05:00:00.000Z");
+  });
+});
+
 describe("the anchor worklist (track-work.ts kind: anchor)", () => {
   it("orders embedded rows first, then nearest_finding_score DESC, then track_id", async () => {
     const { listTrackWork } = await import("./track-work");

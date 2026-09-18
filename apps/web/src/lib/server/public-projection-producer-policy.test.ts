@@ -60,7 +60,7 @@ describe("public projection producer policy", () => {
             : "neither";
       expect(policy.impact, policy.producerId).toBe(expected);
     }
-    expect(staticPolicies.filter((policy) => policy.impact === "neither")).toHaveLength(84);
+    expect(staticPolicies.filter((policy) => policy.impact === "neither")).toHaveLength(85);
   });
 
   it("rejects missing, duplicate, unknown, and duplicated inventory producers", () => {

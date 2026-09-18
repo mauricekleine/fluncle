@@ -37,19 +37,22 @@ afterEach(() => {
 // saturated. So this builder has to be exactly one function, exported, with no second spelling
 // anywhere: a sweep that invented its own would silently ask a different question.
 describe("deezerSearchQuery — the one spelling, shared with the box", () => {
-  it("builds Deezer's field syntax over the FIRST artist and the canonicalized title", () => {
-    expect(deezerSearchQuery(["Calibre", "DRS"], "Mr Right On")).toBe(
-      'artist:"Calibre" track:"Mr Right On"',
-    );
+  it("asks in FREE TEXT — every credited artist, then the canonicalized title", () => {
+    expect(deezerSearchQuery(["Calibre", "DRS"], "Mr Right On")).toBe("Calibre DRS Mr Right On");
     expect(deezerSearchQuery(["Minos"], "Feels Like Before (Air.K & Cephei rmx)")).toBe(
-      'artist:"Minos" track:"Feels Like Before (Air.K & Cephei Remix)"',
+      "Minos Feels Like Before (Air.K & Cephei Remix)",
     );
   });
 
-  it("strips quotes, which would otherwise close the field syntax's own", () => {
-    expect(deezerSearchQuery(['The "Boss"'], 'A "Loud" Tune')).toBe(
-      'artist:"The  Boss" track:"A  Loud  Tune"',
-    );
+  it("NEVER emits the combined field syntax, which answers empty for every input", () => {
+    const query = deezerSearchQuery(["Noisia"], "Stigma") ?? "";
+
+    expect(query).not.toContain("artist:");
+    expect(query).not.toContain("track:");
+  });
+
+  it("strips double quotes, which Deezer reads as an unclosed phrase operator", () => {
+    expect(deezerSearchQuery(['The "Boss"'], 'A "Loud" Tune')).toBe("The Boss A Loud Tune");
   });
 
   it("is undefined when there is no usable artist or title to ask with", () => {
@@ -71,7 +74,7 @@ describe("deezerSearchQuery — the one spelling, shared with the box", () => {
 });
 
 describe("searchDeezerCandidates", () => {
-  it("maps a hit to a candidate (duration promoted to ms) and queries the precise field syntax", async () => {
+  it("maps a hit to a candidate (duration promoted to ms) and queries the one free-text spelling", async () => {
     const fetchMock = vi.fn().mockResolvedValue(body([HIT]));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -90,11 +93,11 @@ describe("searchDeezerCandidates", () => {
       },
     ]);
 
-    // It GETs the identified User-Agent to Deezer's `/search/track` with the `artist:"…" track:"…"`
-    // field syntax (the precise query), bounded by an abort signal.
+    // It GETs the identified User-Agent to Deezer's `/search/track` with the one free-text
+    // spelling, bounded by an abort signal.
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).toContain("https://api.deezer.com/search/track?q=");
-    expect(decodeURIComponent(String(url))).toContain('artist:"Calibre" track:"Mr Right On"');
+    expect(decodeURIComponent(String(url))).toContain("q=Calibre Mr Right On");
     expect((init as { headers: Record<string, string> }).headers["User-Agent"]).toBe(
       "Fluncle/1.0 (+https://www.fluncle.com)",
     );
@@ -132,7 +135,7 @@ describe("searchDeezerCandidates", () => {
     // `rmx` → `Remix`: Deezer indexes the canonical spelling, so the raw one recovers no ISRC at all.
     const [url] = fetchMock.mock.calls[0] ?? [];
     expect(decodeURIComponent(String(url))).toContain(
-      'artist:"Minos" track:"Feels Like Before (Air.K & Cephei Remix)"',
+      "q=Minos Feels Like Before (Air.K & Cephei Remix)",
     );
   });
 
@@ -322,6 +325,61 @@ describe("lookupIsrcFromDeezer — the by-name ISRC fallback, and the hit it ret
     ).toBeUndefined();
     // No detail read was even made.
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // THE NAMESAKE. The free-text ask returns another act's recording of the same title, and a
+  // duration-only bar would accept it — the recovered ISRC then mints this finding's Log ID off a
+  // stranger's recording. Identity is checked here rather than left to Deezer's retrieval.
+  it("refuses a same-title, same-duration hit billed to another act", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(body([{ ...HIT, artist: { id: 1, name: "Some Other Act" } }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await lookupIsrcFromDeezer({
+        artists: ["Calibre"],
+        durationMs: 132_000,
+        title: "Mr Right On",
+      }),
+    ).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The other half of the same rail: the right act, the WRONG version. The fold keeps a remix
+  // descriptor distinct, so the original can never recover the remix's ISRC.
+  it("refuses the right act's REMIX when the row is the original", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(body([{ ...HIT, title: "Mr Right On (Sub Focus Remix)" }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await lookupIsrcFromDeezer({
+        artists: ["Calibre"],
+        durationMs: 132_000,
+        title: "Mr Right On",
+      }),
+    ).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the identity-matching hit even when a closer-ranked stranger leads the page", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        body([{ ...HIT, artist: { id: 1, name: "Some Other Act" }, id: 99 }, HIT]),
+      )
+      .mockResolvedValueOnce(Response.json({ isrc: "GBEXH1900314" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await lookupIsrcFromDeezer({
+        artists: ["Calibre"],
+        durationMs: 132_000,
+        title: "Mr Right On",
+      }),
+    ).toMatchObject({ artistName: "Calibre", deezerTrackId: "3263968181" });
   });
 });
 
