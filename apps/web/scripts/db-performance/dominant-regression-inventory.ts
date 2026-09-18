@@ -409,8 +409,6 @@ export const DOMINANT_REGRESSION_INVENTORY = freezeInventory([
   },
 ] as const satisfies readonly DominantRegressionFamily[]);
 
-export type DominantRegressionInventory = typeof DOMINANT_REGRESSION_INVENTORY;
-
 export function dominantRegressionEvidenceKey(evidence: EvidenceLocation): string {
   return JSON.stringify([evidence.file, evidence.marker]);
 }

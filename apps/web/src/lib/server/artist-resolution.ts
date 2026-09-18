@@ -37,6 +37,11 @@
 
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { randomUUID } from "node:crypto";
+// The platform vocabulary and the http(s) guard live in the client-safe ../artist-socials
+// (imported back here exactly as its header prescribes, the way lib/server/artists.ts does).
+// `isHttpUrl` rejects a scraped `javascript:`/`data:` value before it can become a social row
+// — stored-XSS defense at ingestion; the operator confirm + render guards are the second layer.
+import { type ArtistSocialPlatform, isHttpUrl } from "../artist-socials";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
@@ -70,23 +75,6 @@ const YOUTUBE_RESOLVE_TIMEOUT_MS = 10_000;
 export function __setRateLimitForTests(ms: number): void {
   setMusicbrainzRateLimitForTests(ms);
 }
-
-// ── Platform type ─────────────────────────────────────────────────────────────
-
-export type ArtistSocialPlatform =
-  | "spotify"
-  | "youtube"
-  | "mixcloud"
-  | "soundcloud"
-  | "instagram"
-  | "tiktok"
-  | "bluesky"
-  | "bandcamp"
-  | "beatport"
-  | "twitter"
-  | "facebook"
-  | "twitch"
-  | "homepage";
 
 // ── MB types ─────────────────────────────────────────────────────────────────
 
@@ -489,23 +477,11 @@ async function normalizeYouTubeUrl(rawUrl: string): Promise<string | null> {
  * Normalize a social URL to the canonical profile root. Returns null when the
  * URL can't be reduced to a profile page (e.g. a TikTok video URL with no handle).
  */
-// Reject any non-http(s) URL — a scraped `javascript:`/`data:` value must never become a
-// social row (stored-XSS defense at ingestion; the operator confirm + render guards are
-// the second layer).
-function isHttpScheme(raw: string): boolean {
-  try {
-    const { protocol } = new URL(raw.trim());
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 export async function normalizeProfileUrl(
   platform: ArtistSocialPlatform,
   rawUrl: string,
 ): Promise<string | null> {
-  if (!isHttpScheme(rawUrl)) {
+  if (!isHttpUrl(rawUrl)) {
     return null;
   }
 
@@ -648,7 +624,7 @@ export async function validateSocialUrlForPlatform(
     return { ok: false, reason: "A URL is required" };
   }
 
-  if (!isHttpScheme(trimmed)) {
+  if (!isHttpUrl(trimmed)) {
     return { ok: false, reason: "Only http and https links are allowed" };
   }
 

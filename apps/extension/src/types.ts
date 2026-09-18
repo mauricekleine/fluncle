@@ -62,5 +62,3 @@ export type FindingsResponse = { findings: DetectedFinding[] };
 
 /** content script → background: "set the badge to this count for my tab." */
 export type BadgeMessage = { count: number; type: "lens:badge" };
-
-export type LensMessage = BadgeMessage | GetFindingsMessage;

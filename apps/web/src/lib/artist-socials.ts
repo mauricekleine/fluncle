@@ -38,8 +38,9 @@ export const ARTIST_SOCIAL_PLATFORMS: ArtistSocialPlatform[] = [
 ];
 
 // A pure http(s)-scheme guard (self-contained, no server deps). The render side only emits
-// an `<a href>` when this passes; the server WRITE path uses `assertHttpUrl` (which throws)
-// in `lib/server/artists`.
+// an `<a href>` when this passes; `lib/server/artist-resolution` calls the same guard on
+// ingestion, and the server WRITE path uses `assertHttpUrl` (which throws) in
+// `lib/server/artists`.
 export function isHttpUrl(raw: string): boolean {
   try {
     const { protocol } = new URL(raw.trim());

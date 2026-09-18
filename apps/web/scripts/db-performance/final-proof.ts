@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { materializeSelectedTrackIdsSql, selectDeviceRowsSql } from "../lib/device-db-derivation";
-import { PERFORMANCE_REPORT_SCHEMA_VERSION } from "./registry";
 import {
   type ContractContext,
   type ContractExecution,
@@ -1307,5 +1306,3 @@ export function registerFinalProofContracts(registry: PerformanceRegistry): void
     registry.register(contract);
   }
 }
-
-export const FINAL_PROOF_REPORT_SCHEMA_VERSION = PERFORMANCE_REPORT_SCHEMA_VERSION;

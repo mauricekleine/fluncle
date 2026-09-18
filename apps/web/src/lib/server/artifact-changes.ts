@@ -28,7 +28,6 @@ const REVISION_INDEPENDENT_DIGEST_PREFIX = "v2:";
 
 export type ArtifactOperation = "delete" | "upsert";
 export type ArtifactConsumerState = "active" | "inactive" | "rebuilding";
-export type ArtifactSnapshotStream = ArtifactStream;
 
 type JsonScalar = boolean | number | string | null;
 type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };

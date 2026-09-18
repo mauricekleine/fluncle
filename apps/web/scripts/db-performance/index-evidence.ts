@@ -1,11 +1,9 @@
 import {
-  INDEX_AUDIT_PROFILES,
   FINAL_INDEX_INVENTORY,
   type IndexEvidenceDefinition,
   type IndexInventoryEntry,
   allIndexInventoryEntries,
 } from "./index-inventory";
-import { type ScaleProfile } from "./manifest";
 import {
   type ContractContext,
   type ContractExecution,
@@ -2471,5 +2469,3 @@ export function registerIndexEvidenceContracts(registry: {
     registry.register(contract);
   }
 }
-
-export const INDEX_EVIDENCE_REQUIRED_PROFILES: readonly ScaleProfile[] = INDEX_AUDIT_PROFILES;
