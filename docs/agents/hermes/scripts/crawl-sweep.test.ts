@@ -102,6 +102,9 @@ function fixture(): Fixture {
     '      limit=$(sed -n \'s/.*"limit":\\([0-9]*\\).*/\\1/p\' "$phase_file")',
     "      printf 'prepare-limit:%s\\n' \"$limit\" >> " + data.calls,
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
+    "    prepare:repair-pending|fetch:repair-pending-fetch)",
+    '      printf \'%s\\n\' \'{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\'',
+    "      exit 1 ;;",
     "    prepare:throttled-after-failure|prepare:yield-after-work)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
     '    prepare:*) printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token"}],"frontierPending":1}\' ;;',
@@ -329,6 +332,69 @@ describe("crawl-sweep phase protocol", () => {
         throttled: true,
       });
       expect(existsSync(data.calls)).toBe(false);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "reports a due-work repair deferral inside an admitted phase as paused, not failed",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: sweepEnvironment(data, "repair-pending"),
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checked: 0,
+        error: null,
+        errors: 0,
+        gateState: "paused",
+        ok: true,
+        partial: false,
+        produced: 0,
+        reason: "due_work_repair_pending",
+        throttled: true,
+      });
+      const calls = readFileSync(data.calls, "utf8");
+      expect(calls.match(/^prepare:/m)).toBeTruthy();
+      expect(calls.match(/^fetch:/m)).toBeNull();
+      expect(calls.match(/^commit:/m)).toBeNull();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "reports a due-work repair deferral on the direct provider phase as paused, not failed",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: sweepEnvironment(data, "repair-pending-fetch"),
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        error: null,
+        errors: 0,
+        gateState: "paused",
+        ok: true,
+        produced: 0,
+        reason: "due_work_repair_pending",
+        throttled: true,
+      });
+      const calls = readFileSync(data.calls, "utf8");
+      expect(calls.match(/^fetch:/m)).toBeTruthy();
+      expect(calls.match(/^commit:/m)).toBeNull();
     },
     TEST_TIMEOUT_MS,
   );

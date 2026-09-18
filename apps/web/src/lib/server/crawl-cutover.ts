@@ -7,6 +7,7 @@ import {
   repairCrawlDueNodes,
   type CrawlDueClient,
 } from "./crawl-due-work";
+import { DueWorkMaintenancePendingError } from "./due-work";
 import { getSetting } from "./settings";
 
 /** The crawler's claiming-reader flag. Only the exact string `true` opens the cutover. */
@@ -35,6 +36,41 @@ export type ClaimedCrawlFrontierPage = {
   artistsRearmed: number;
   claimToken: string;
   rows: ClaimedCrawlFrontierRow[];
+};
+
+/** The queue name the crawl claim's typed pending answer carries into the server log. */
+const CRAWL_CLAIM_REPAIR_WORK_KIND = "crawl-due-work";
+
+export type CrawlClaimRepairDrainBudget = {
+  /** Repair markers one node chunk may repair. */
+  nodeChunkRows: number;
+  /** Node repair chunks one claim may start. */
+  nodeChunks: number;
+  /** Due rows one source-repair page may fan out. */
+  sourcePageRows: number;
+  /** Source-repair pages one claim may start. */
+  sourcePages: number;
+  /** Cumulative drain time after which no further page or chunk starts. */
+  wallMs: number;
+};
+
+/**
+ * The crawl repair one claim may drain before it answers `due_work_maintenance_pending` instead of
+ * claiming. The first page and the first chunk always run, so a deferred claim has still converged
+ * the repair its budget allowed and the next tick starts from that durable progress. The budget
+ * multiplies bounded transactions and never enlarges one: a unit stays the chunk bound every other
+ * crawl maintenance step already runs at, committing as its own guarded write batch. Hosted, a
+ * page's write batch dominates its cost, so the wall bound is the one that binds and the unit caps
+ * bound the transactions one claim can issue against a fast database. The claim runs inside an
+ * admitted phase clamped to five minutes at the HTTP surface: the drain takes a small slice of that
+ * window and leaves the rest for the paced provider work the phase was admitted for.
+ */
+export const CRAWL_CLAIM_REPAIR_DRAIN_BUDGET: Readonly<CrawlClaimRepairDrainBudget> = {
+  nodeChunkRows: MAX_CRAWL_DUE_CHUNK_SIZE,
+  nodeChunks: 4,
+  sourcePageRows: MAX_CRAWL_DUE_CHUNK_SIZE,
+  sourcePages: 4,
+  wallMs: 5_000,
 };
 
 export async function isCrawlDueCutoverEnabled(): Promise<boolean> {
@@ -73,30 +109,63 @@ function frontierRow(row: Record<string, unknown>): ClaimedCrawlFrontierRow | un
   };
 }
 
-/** Repair only bounded marker pages, then claim and PK-hydrate exactly the ordered claimed IDs. */
+/**
+ * Repair only bounded marker pages, then claim and PK-hydrate exactly the ordered claimed IDs.
+ * Both repair lanes drain under {@link CRAWL_CLAIM_REPAIR_DRAIN_BUDGET}: a source marker wider than
+ * one page is the ordinary shape, not a fault, so the pages keep going until the markers are gone
+ * or the budget stops them. Repair that outlasts the budget is designed backpressure — the claim
+ * answers the typed `due_work_maintenance_pending` 503 that the crawl sweep reports as a paused
+ * tick, never a fault that fails the sweep and leaves the frontier unclaimed.
+ */
 export async function claimCrawlFrontierRows(
   client: CrawlDueClient,
   options: {
+    budget?: CrawlClaimRepairDrainBudget;
     claimedBy: string;
     leaseMs: number;
     limit: number;
+    now?: () => number;
     token: string;
   },
 ): Promise<ClaimedCrawlFrontierPage> {
-  let fanoutBudget = MAX_CRAWL_DUE_CHUNK_SIZE;
-  while (fanoutBudget > 0) {
-    const fanout = await fanOutCrawlProjectionRepairs(client, { limit: fanoutBudget });
-    if (fanout.marker === undefined) {
-      break;
+  const budget = options.budget ?? CRAWL_CLAIM_REPAIR_DRAIN_BUDGET;
+  const now = options.now ?? (() => performance.now());
+  let spentMs = 0;
+  let sourcePages = 0;
+  let nodeChunks = 0;
+  const timed = async <Result>(unit: () => Promise<Result>): Promise<Result> => {
+    const startedAt = now();
+    try {
+      return await unit();
+    } finally {
+      spentMs += now() - startedAt;
     }
-    fanoutBudget -= Math.max(fanout.expanded, 1);
-    if (!fanout.complete) {
-      throw new Error("crawl due-work source repair remains after the bounded maintenance pass");
-    }
+  };
+  const mayStart = (started: number, cap: number): boolean =>
+    started < cap && spentMs < budget.wallMs;
+  const drainSourcePage = () => {
+    sourcePages += 1;
+    return timed(() => fanOutCrawlProjectionRepairs(client, { limit: budget.sourcePageRows }));
+  };
+  const drainNodeChunk = () => {
+    nodeChunks += 1;
+    return timed(() => repairCrawlDueNodes(client, { limit: budget.nodeChunkRows }));
+  };
+
+  let source = await drainSourcePage();
+  while (source.marker !== undefined && mayStart(sourcePages, budget.sourcePages)) {
+    source = await drainSourcePage();
   }
-  const repaired = await repairCrawlDueNodes(client, { limit: MAX_CRAWL_DUE_CHUNK_SIZE });
-  if (repaired.hasMore) {
-    throw new Error("crawl due-work node repair remains after the bounded maintenance pass");
+  // Node repair defers while any source marker still stands, so the node lane is also the source
+  // lane's convergence probe: its first chunk always runs, and further chunks start only once a page
+  // has found no marker left to fan out.
+  const sourceConverged = source.marker === undefined;
+  let nodes = await drainNodeChunk();
+  while (sourceConverged && nodes.hasMore && mayStart(nodeChunks, budget.nodeChunks)) {
+    nodes = await drainNodeChunk();
+  }
+  if (!sourceConverged || nodes.hasMore) {
+    throw new DueWorkMaintenancePendingError(CRAWL_CLAIM_REPAIR_WORK_KIND);
   }
 
   if (options.limit === 0) {
@@ -110,7 +179,12 @@ export async function claimCrawlFrontierRows(
     };
   }
 
-  const claim = await claimCrawlDueWork(client, options);
+  const claim = await claimCrawlDueWork(client, {
+    claimedBy: options.claimedBy,
+    leaseMs: options.leaseMs,
+    limit: options.limit,
+    token: options.token,
+  });
   const ids = claim.items.map((item) => item.nodeId);
   if (ids.length === 0) {
     return {

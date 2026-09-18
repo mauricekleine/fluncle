@@ -8,6 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runDatabaseAdmissionPhase } from "./database-admission-phase";
+import {
+  DUE_WORK_MAINTENANCE_PENDING_CODE,
+  DueWorkRepairPendingError,
+  dueWorkRepairPendingGate,
+  isDueWorkRepairPending,
+  throwIfCliRepairPending,
+} from "./due-work-repair-pending";
 
 const NODES = Number(process.env.FLUNCLE_CRAWL_NODES ?? "10");
 const MAX_HOP = Number(process.env.FLUNCLE_CRAWL_MAX_HOP ?? "2");
@@ -77,6 +84,7 @@ export function fluncleJson<T>(args: string[]): T {
     }
     throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
   }
+  throwIfCliRepairPending(`fluncle ${args.join(" ")}`, code, stdout);
   if (code !== 0 && isCliErrorPayload(parsed)) {
     throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
   }
@@ -109,6 +117,37 @@ function directPhase<T>(directory: string, name: string, body: JsonObject): T {
   ]);
 }
 
+// A non-zero phase exit reads as a failed phase, so a phase the Worker deferred cannot simply fail
+// its child: it carries the typed answer across the admission boundary as this exit-zero envelope,
+// which the parent recognizes on both the kind and the Worker's own body code and re-raises as the
+// shared pending error. Any other envelope stays an ordinary phase result.
+const REPAIR_PENDING_PHASE_KIND = "repair-pending";
+
+function repairPendingEnvelope(): JsonObject {
+  return { code: DUE_WORK_MAINTENANCE_PENDING_CODE, kind: REPAIR_PENDING_PHASE_KIND, ok: false };
+}
+
+function isRepairPendingEnvelope(value: unknown): boolean {
+  const envelope = value as { code?: unknown; kind?: unknown } | null;
+  return (
+    typeof envelope === "object" &&
+    envelope !== null &&
+    envelope.kind === REPAIR_PENDING_PHASE_KIND &&
+    envelope.code === DUE_WORK_MAINTENANCE_PENDING_CODE
+  );
+}
+
+function runCriticalPhase(file: string): JsonObject {
+  try {
+    return fluncleJson<JsonObject>(["admin", "catalogue", "crawl", "--phase-file", file]);
+  } catch (error) {
+    if (isDueWorkRepairPending(error)) {
+      return repairPendingEnvelope();
+    }
+    throw error;
+  }
+}
+
 function admittedPhase<T>(directory: string, name: string, body: JsonObject): T | undefined {
   const result = runDatabaseAdmissionPhase({
     command: [
@@ -120,7 +159,14 @@ function admittedPhase<T>(directory: string, name: string, body: JsonObject): T 
     owner: ADMISSION_OWNER,
     yieldRetries: 0,
   });
-  return result.kind === "yielded" ? undefined : (JSON.parse(result.stdout) as T);
+  if (result.kind === "yielded") {
+    return undefined;
+  }
+  const parsed: unknown = JSON.parse(result.stdout);
+  if (isRepairPendingEnvelope(parsed)) {
+    throw new DueWorkRepairPendingError(`crawl ${name} phase`);
+  }
+  return parsed as T;
 }
 
 function reconcileCommit(
@@ -210,6 +256,20 @@ function recordFailure(summary: SweepSummary, error: unknown): void {
   log(`crawl pass failed: ${summary.error}`);
 }
 
+/**
+ * The Worker deferred a guarded crawl read while due-work repair converges. That is designed
+ * backpressure, never a run failure: the deferred read still advanced the repair its budget allowed,
+ * so the tick stops cleanly, exits zero, and names the cause for the run ledger.
+ */
+function recordRepairPending(summary: SweepSummary): void {
+  const gate = dueWorkRepairPendingGate(summary);
+  summary.gateState = gate.gateState;
+  summary.partial = summary.partial || gate.partial;
+  summary.reason = gate.reason;
+  summary.throttled = gate.throttled;
+  log("crawl pass paused: due-work repair is still converging");
+}
+
 function recordPhaseYield(summary: SweepSummary): void {
   summary.admissionOutcome = "phase-yielded";
   summary.gateState = "paused";
@@ -285,6 +345,10 @@ function commitFetched(
     }
     return committed;
   } catch (error) {
+    // A deferred commit phase never landed a write, so there is no receipt to reconcile.
+    if (isDueWorkRepairPending(error)) {
+      throw error;
+    }
     const reconciliation = reconcileCommit(fetched);
     if (!reconciliation) {
       recordPhaseYield(summary);
@@ -359,7 +423,11 @@ export function main(): void {
     try {
       applyLegacyPass(summary, legacyPass());
     } catch (error) {
-      recordFailure(summary, error);
+      if (isDueWorkRepairPending(error)) {
+        recordRepairPending(summary);
+      } else {
+        recordFailure(summary, error);
+      }
     }
     console.log(JSON.stringify(summary));
     if (!summary.ok) {
@@ -428,7 +496,11 @@ export function main(): void {
       }
     }
   } catch (error) {
-    recordFailure(summary, error);
+    if (isDueWorkRepairPending(error)) {
+      recordRepairPending(summary);
+    } else {
+      recordFailure(summary, error);
+    }
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
@@ -443,8 +515,7 @@ if (import.meta.main) {
   const criticalIndex = process.argv.indexOf("--critical-phase");
   const file = criticalIndex >= 0 ? process.argv[criticalIndex + 1] : undefined;
   if (file) {
-    const result = fluncleJson<JsonObject>(["admin", "catalogue", "crawl", "--phase-file", file]);
-    console.log(JSON.stringify(result));
+    console.log(JSON.stringify(runCriticalPhase(file)));
   } else {
     main();
   }
