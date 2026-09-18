@@ -416,7 +416,7 @@ describe("listTrackWork — the isrc-recovery pass", () => {
 
     const [item] = await listTrackWork({ kind: "isrc-recovery" });
 
-    expect(item?.deezerQuery).toBe('artist:"Fred V & Grafix" track:"Major Happy"');
+    expect(item?.deezerQuery).toBe("Fred V & Grafix Major Happy");
     expect(item?.anchorQuery).toBeUndefined();
   });
 

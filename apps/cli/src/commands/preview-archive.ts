@@ -220,12 +220,15 @@ async function resolveDeezerSearch(track: Track): Promise<ResolvedPreview | unde
   }
 
   try {
-    // Query the bare title (an exact `track:"… - X Remix"` returns nothing) and gate
-    // every hit: same VERSION as the finding (a remix finding never takes the
+    // FREE TEXT, never Deezer's `artist:"…" track:"…"` field syntax: a combined field ask
+    // answers `{"data":[],"total":0}` for every input, which reads as a clean miss forever.
+    // The bare title is asked (a version suffix returns nothing) and every hit is gated the
+    // same way the iTunes arm below gates its own — the ARTIST is checked here rather than
+    // left to retrieval, same VERSION as the finding (a remix finding never takes the
     // original), the base title actually matches, and the duration agrees. The first
     // hit with a preview is NOT trusted — a wrong recording archived here is served
     // as confidence-1 "exact" to every future render. A miss → no archive is better.
-    const query = `artist:"${artist}" track:"${stripVersionSuffix(track.title.trim())}"`;
+    const query = `${artist} ${stripVersionSuffix(track.title.trim())}`;
     const response = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`);
     const body = (await response.json()) as {
       data?: Array<{
@@ -238,6 +241,7 @@ async function resolveDeezerSearch(track: Track): Promise<ResolvedPreview | unde
     const hit = (body.data ?? []).find(
       (item) =>
         item.preview &&
+        normalize(item.artist?.name ?? "").includes(normalize(artist)) &&
         versionMatches(track.title, item.title ?? "") &&
         baseTitleMatches(track.title, item.title ?? "") &&
         durationAgrees(track.durationMs, item.duration),

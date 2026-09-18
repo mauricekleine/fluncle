@@ -127,6 +127,7 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "isrc-recovery-empty",
     "isrc-recovery-hit",
     "isrc-recovery-miss",
+    "isrc-recovery-requeue",
     "label-artist-rules-replace",
     "label-bio-fill",
     "label-image-failure",

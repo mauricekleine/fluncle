@@ -42,7 +42,7 @@
 import { DEEZER_CANDIDATE_LIMIT } from "@fluncle/contracts/orpc";
 
 import { logEvent } from "./log";
-import { canonicalizeSearchTitle } from "./track-match";
+import { canonicalizeSearchTitle, matchKey } from "./track-match";
 
 type DeezerTrack = {
   album?: { id?: number };
@@ -170,30 +170,47 @@ const DEEZER_DATA_EXCEPTION_CODE = 800;
 const DEEZER_QUOTA_RETRY_DELAYS_MS = [1_200, 2_500];
 
 /**
- * THE QUERY SPELLING — Deezer's precise field syntax (`artist:"<first artist>" track:"<title>"`), and
- * the ONE place it is written. It is NOT the `anchorQuery` the Spotify rungs ask with (that one is the
- * row's artists joined onto its title, `anchorSearchQuery` in ./anchor.ts): Deezer indexes by field,
- * and a plain free-text ask returns a different, looser result set.
+ * THE QUERY SPELLING — FREE TEXT (the row's artists joined onto its canonicalized title), and the ONE
+ * place it is written.
+ *
+ * NEVER Deezer's `artist:"…" track:"…"` field syntax. A COMBINED field ask answers `{"data":[],
+ * "total":0}` for every input, which walks past every error check this client has — the body is
+ * well-formed, `data` is a real array, there is no error code — and lands as a clean "Deezer has
+ * never heard of this recording". A single field still answers, and so does plain relevance search,
+ * so the failure is specific to the combined form. Both halves are re-checkable in one request each:
+ *
+ *   curl -sG --data-urlencode 'q=artist:"Noisia" track:"Stigma"' https://api.deezer.com/search/track
+ *   curl -sG --data-urlencode 'q=Noisia Stigma'                  https://api.deezer.com/search/track
+ *
+ * PRECISION IS NOT THIS FUNCTION'S JOB. Free text is LOOSER than a fielded ask — it returns other
+ * acts' same-titled recordings — and that is safe because retrieval never authorises an ISRC:
+ * `recoverIsrcViaDeezer` re-runs every hit through the anchor's own gate (`verifySearchCandidate` —
+ * the folded artist SET, base title, and version descriptor, plus a duration inside ±3s). A wrong
+ * act fails artist-set equality; a wrong version fails the descriptor. A looser ask can only add
+ * candidates the gate then refuses, never widen what it accepts. The one caller that judges on
+ * duration alone ({@link lookupIsrcFromDeezer}) carries its own identity check for this reason.
  *
  * The title is canonicalized (`canonicalizeSearchTitle` in ./track-match: `rmx` → `Remix`, a redundant
  * trailing `mix` dropped — the retrieval twin of the `canonicalizeDescriptor` fold the CALLER verifies
  * with, kept in lockstep there). Deezer's index carries the canonical spelling, so a row asking in its
  * own returns nothing at all and can never recover its ISRC. The caller still verifies against the
- * row's RAW title. Quotes are stripped from both parts — they would close the field syntax's own.
+ * row's RAW title. Double quotes are stripped: Deezer reads them as a phrase operator, and an odd one
+ * left in a title opens a phrase the query never closes.
  *
  * ONE owner, every rung: this is what {@link searchDeezerCandidates} sends, and what `list_track_work`
  * hands the box's anchor sweep as an ISRC-less row's ready-made `deezerQuery` (the sweep never builds
  * one). `undefined` when the row has no usable artist or title to ask with.
  */
 export function deezerSearchQuery(artists: string[], title: string): string | undefined {
-  const artist = artists[0]?.replaceAll('"', " ").trim();
-  const canonical = canonicalizeSearchTitle(title.replaceAll('"', " ")).trim();
+  const collapse = (text: string) => text.replaceAll('"', " ").replace(/\s+/g, " ").trim();
+  const names = artists.map(collapse).filter((artist) => artist.length > 0);
+  const canonical = collapse(canonicalizeSearchTitle(title));
 
-  if (!artist || !canonical) {
+  if (names.length === 0 || !canonical) {
     return undefined;
   }
 
-  return `artist:"${artist}" track:"${canonical}"`;
+  return [...names, canonical].join(" ");
 }
 
 /** One attempt's outcome: candidates, or the reason there are none (so the caller can retry a throttle). */
@@ -209,7 +226,7 @@ type DeezerSearchAttempt =
  * hands `resolve_anchor` the hits, so the Worker fetches nothing for those rows. It still runs here for
  * the certify path's ISRC pre-flight and for any `resolve_anchor` call that supplies no hits.
  *
- * Queries Deezer's precise field syntax ({@link deezerSearchQuery}) and returns each
+ * Queries the one shared free-text spelling ({@link deezerSearchQuery}) and returns each
  * hit that carries a usable `isrc` + numeric `duration` + `title` + `artist.name`, normalized to
  * {@link DeezerIsrcCandidate}. It VERIFIES NOTHING — the caller re-runs the row against the same fold +
  * ±3s duration gate the anchor uses, and trusts an ISRC only on a hard match (a wrong ISRC would seed a
@@ -373,26 +390,28 @@ const DURATION_TOLERANCE_S = 4;
  * any failure resolves to undefined and the Log ID falls back to the Spotify id.
  *
  * RETURNS THE WHOLE HIT, not just the ISRC — the ISRC behaviour is unchanged (read `.isrc`), and
- * the rest is what the caller needs to decide whether the hit's Deezer id is worth KEEPING. This
- * function's own bar is a ±{@link DURATION_TOLERANCE_S}s duration confirm, which is the right bar
- * for an ISRC that then gets re-verified downstream by ISRC EQUALITY; a public link is a stronger
- * claim, so `publish.ts` runs the hit through the anchor's full identity fold before persisting the
- * id, and records which rung cleared. A hit whose billing or title Deezer withheld comes back with
- * those fields empty, which simply fails that fold — the ISRC still lands.
+ * the rest is what the caller needs to decide whether the hit's Deezer id is worth KEEPING.
+ *
+ * ITS BAR IS IDENTITY **AND** DURATION. The `matchKey` fold (folded artist set + base title + version
+ * descriptor) must agree, and the duration must land within ±{@link DURATION_TOLERANCE_S}s. The
+ * identity half is load-bearing precisely because {@link deezerSearchQuery} is free text: Deezer's
+ * relevance search will hand back another act's recording of the same title, and duration alone
+ * cannot tell two three-minute tracks apart. A recovered ISRC mints a Log ID, so a miss beats a
+ * guess. A public link is a stronger claim still, so `publish.ts` additionally runs the hit through
+ * the anchor's own gate before persisting the id, and records which rung cleared.
  */
 export async function lookupIsrcFromDeezer(input: {
   artists: string[];
   durationMs: number;
   title: string;
 }): Promise<DeezerIsrcCandidate | undefined> {
-  const artist = input.artists[0]?.trim();
+  const query = deezerSearchQuery(input.artists, input.title);
 
-  if (!artist || !input.title.trim()) {
+  if (!query) {
     return undefined;
   }
 
   try {
-    const query = `artist:"${artist}" track:"${input.title.trim()}"`;
     const searchResponse = await fetch(
       `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}`,
     );
@@ -408,11 +427,13 @@ export async function lookupIsrcFromDeezer(input: {
     }
 
     const expectedSeconds = input.durationMs / 1000;
+    const rowKey = matchKey(input.artists, input.title);
     const match = search.data.find(
       (candidate) =>
         typeof candidate.id === "number" &&
         typeof candidate.duration === "number" &&
-        Math.abs(candidate.duration - expectedSeconds) <= DURATION_TOLERANCE_S,
+        Math.abs(candidate.duration - expectedSeconds) <= DURATION_TOLERANCE_S &&
+        matchKey([candidate.artist?.name ?? ""], candidate.title ?? "") === rowKey,
     );
 
     if (!match?.id) {

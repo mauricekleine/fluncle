@@ -408,6 +408,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
   // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
   // (the box holds no Postiz key; the Worker owns it). Kill-switch aware, bounded, idempotent.
+  // The free Deezer pass's clean-miss requeue — operator tier. Clear `isrc_recovery_attempted_at`
+  // on rows retired as a Deezer-EMPTY miss inside a named window, so a window where the ASK was
+  // empty rather than the catalogue can be handed back to the sweep. Dry-run by default.
+  "POST /admin/catalogue/isrc-recovery/requeue": "requeue_isrc_recovery",
   // One tick of The Ear's precompute sweep — contract-only oRPC. Agent tier: it writes only
   // DERIVED ranking columns on CATALOGUE rows (a `tracks` row with no `findings` row), so it
   // cannot mint a coordinate or certify anything.

@@ -37,7 +37,7 @@
 //   (a) FETCH the anchor worklist from the Worker with the box's AGENT token
 //       (`GET /api/v1/admin/tracks/work?kind=anchor`). Each row carries a ready-made `anchorQuery`
 //       (the row's artists + title) so this driver stays dumb and never builds the query — and an
-//       ISRC-LESS row also carries a ready-made `deezerQuery` (Deezer's own field syntax), which is
+//       ISRC-LESS row also carries a ready-made `deezerQuery` (the server's one Deezer spelling), which is
 //       the server asking for the search in (b0).
 //   (b0) DEEZER ISRC RECOVERY, the one fetch this box makes on its OWN account. Deezer's public search
 //       takes no token, so its quota is per-IP: from Cloudflare's shared edge it recovered 0 ISRCs out

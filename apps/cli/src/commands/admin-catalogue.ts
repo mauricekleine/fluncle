@@ -171,6 +171,20 @@ export async function requeueAnchorCommand(trackIds: string[]): Promise<{ requeu
   });
 }
 
+// Thin client over the operator-tier `requeue_isrc_recovery` op: clear the free Deezer pass's
+// clean-miss watermark on rows retired at or after `since`, so they re-enter the isrc-recovery
+// worklist now. The lever for a window where the ASK was empty rather than the catalogue. Dry-run
+// by default; `matched` is the same count on both paths, so the blast radius is read before taken.
+export async function requeueIsrcRecoveryCommand(input: {
+  dryRun: boolean;
+  since: string;
+}): Promise<{ dryRun: boolean; matched: number; requeued: number }> {
+  return adminApiPost<{ dryRun: boolean; matched: number; ok: true; requeued: number }>(
+    "/api/v1/admin/catalogue/isrc-recovery/requeue",
+    input,
+  );
+}
+
 /**
  * Overrule the duplicate veto on one catalogue row so it can be captured (operator). `fluncle
  * admin catalogue force-capture <trackId>` — the dupe-veto escape hatch (docs/the-ear.md §
