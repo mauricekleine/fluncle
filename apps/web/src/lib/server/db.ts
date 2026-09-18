@@ -189,12 +189,19 @@ export const DB_RETRY_BACKOFF_MS = [50, 150];
 export const DB_MAX_RETRIES = DB_RETRY_BACKOFF_MS.length;
 const DB_RETRY_JITTER_MS = 50;
 
-// Only transient gateway statuses. 520/522/525 are connection-level failures
-// where the request demonstrably did not complete. 524 is EXCLUDED ON PURPOSE:
-// it is an origin timeout, so the query may well have executed. Retrying is not
-// provably idempotent even for a read: it may be expensive, and the retry doubles
-// the load on an origin already timing out.
-const RETRYABLE_GATEWAY_STATUSES = new Set([502, 503, 504, 520, 522, 525]);
+// Only transient gateway statuses. 520/522/525/530 are connection-level
+// failures where the request demonstrably did not complete; 530 is the edge
+// reporting that it could not reach the origin AT ALL, so the statement never
+// arrived at the database and a read may be re-sent with no ambiguity about
+// what already ran. 524 is EXCLUDED ON PURPOSE: it is an origin timeout, so the
+// query may well have executed. Retrying is not provably idempotent even for a
+// read: it may be expensive, and the retry doubles the load on an origin
+// already timing out.
+//
+// Membership here only makes a status ELIGIBLE. The read-only gate is what
+// makes a retry safe: `execute` retries solely what `isRetryableRead` vouches
+// for, and a batch solely in `read` mode with every statement a confident read.
+const RETRYABLE_GATEWAY_STATUSES = new Set([502, 503, 504, 520, 522, 525, 530]);
 
 // `mapHranaError` wraps the hrana `HttpServerError` (which carries the numeric
 // `status`) as the `LibsqlError`'s `cause`, and a closed stream can wrap it one

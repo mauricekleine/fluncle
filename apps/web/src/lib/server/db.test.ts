@@ -689,6 +689,20 @@ describe("getDb transient-gateway retry", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
+  // 530 is the edge reporting it could not reach the origin AT ALL, so the
+  // statement never arrived at the database and a read may be re-sent.
+  it("retries a read that fails once with a 530 unreachable-origin error", async () => {
+    const result = { rows: [{ slug: "an-album" }] };
+    execute.mockRejectedValueOnce(gatewayError(530)).mockResolvedValue(result);
+
+    const db = await getDb();
+    const pending = db.execute("select slug from albums where slug = ? limit 1");
+    await flushBackoff();
+
+    await expect(pending).resolves.toBe(result);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it("leaves the retry attribute off a query that never retried", async () => {
     execute.mockResolvedValue({ rows: [] });
 
@@ -730,6 +744,23 @@ describe("getDb transient-gateway retry", () => {
     ["with rows as (select 1) insert into tracks (id) select 1 from rows"],
   ])("never retries a write: %s", async (sql) => {
     const error = gatewayError(502);
+    execute.mockRejectedValue(error);
+
+    const db = await getDb();
+
+    expect(await rejectionAfterTimers(db.execute(sql))).toBe(error);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  // Eligibility is the status set; safety is `isRetryableRead`. A 5xx on a
+  // write is ambiguous about whether it applied, so no status admits one.
+  it.each([
+    ["insert into tracks (id) values (1)"],
+    ["update tracks set bpm = 1"],
+    ["delete from tracks"],
+    ["with doomed as (select id from tracks) delete from tracks"],
+  ])("never retries a write on a 530 either: %s", async (sql) => {
+    const error = gatewayError(530);
     execute.mockRejectedValue(error);
 
     const db = await getDb();
@@ -797,6 +828,28 @@ describe("getDb transient-gateway retry", () => {
 
     expect(await rejectionAfterTimers(db.execute("select 1"))).toBe(error);
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  // The boundary the status set draws, on one identical read: a connection-level
+  // failure never reached the origin and is re-sent, an origin timeout may
+  // already have executed and is not.
+  it("retries the did-not-complete class and never the may-have-executed one", async () => {
+    execute.mockRejectedValue(gatewayError(524));
+
+    const db = await getDb();
+
+    await rejectionAfterTimers(db.execute("select 1"));
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    const result = { rows: [] };
+    execute.mockReset();
+    execute.mockRejectedValueOnce(gatewayError(530)).mockResolvedValue(result);
+
+    const pending = db.execute("select 1");
+    await flushBackoff();
+
+    await expect(pending).resolves.toBe(result);
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry an error with no recognizable gateway status", async () => {
