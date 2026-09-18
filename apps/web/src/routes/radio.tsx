@@ -122,7 +122,7 @@ export const Route = createFileRoute("/radio")({
         "@type": "CreativeWork",
         creator: { "@id": fluncleEntityId },
         description,
-        genre: "Drum and bass",
+        genre: "Drum and Bass",
         image: coverUrl,
         inLanguage: "en",
         isAccessibleForFree: true,

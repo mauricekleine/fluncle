@@ -324,7 +324,7 @@ Listeners can submit tracks from fluncle.com or with:
 
 ```bash
 fluncle submit
-fluncle submit "Camo & Crooked"
+fluncle submit "Camo & Krooked"
 fluncle submit "https://open.spotify.com/track/..."
 ```
 

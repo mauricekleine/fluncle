@@ -205,7 +205,7 @@ export function SubmitTrackDialog({
               onChange={(event) =>
                 dispatch({ fields: { query: event.target.value }, type: "patch" })
               }
-              placeholder="Camo & Crooked or https://open.spotify.com/track/..."
+              placeholder="Camo & Krooked or https://open.spotify.com/track/..."
               value={query}
             />
           </Label>
