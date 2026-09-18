@@ -322,6 +322,8 @@ export type CrawlStatusResult = {
   labelsUndecided: number;
   ok: boolean;
   seedLabels: string[];
+  // Claimable release nodes on storable provenance — what the next tick can actually write from.
+  storablePending: number;
 };
 
 /**

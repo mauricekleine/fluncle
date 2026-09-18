@@ -71,6 +71,7 @@
 //
 // See docs/catalogue-crawler.md.
 
+import { MAX_CRAWL_PREPARE_LIMIT } from "@fluncle/contracts/orpc";
 import { type Client, type InStatement } from "@libsql/client";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
@@ -160,6 +161,34 @@ function descendOffset(cursor: number): number {
 
 /** Consecutive failures after which a node is abandoned (stays `failed`, never picked). */
 const MAX_FAILURES = 5;
+
+/**
+ * THE THROTTLE IS NOT A NODE FAULT. A vendor 503 that survived the shared client's `Retry-After`
+ * retries says something about MusicBrainz's current mood, never about this node — the same
+ * request will succeed once the wall lifts. Charging it as a consecutive failure costs the node
+ * the exponential backoff (15min × 2^n) it did nothing to earn and, five throttles apart, ABANDONS
+ * a perfectly good node forever. So a throttled node is returned to `pending` with its browse
+ * cursor and its failure count exactly as they were: nothing is charged, nothing is abandoned, and
+ * the walk resumes where it stood.
+ *
+ * The WAIT that keeps a throttled node from being re-asked into the same wall is the sweep's, not
+ * the frontier's: `crawl-sweep.ts` sleeps a bounded number of times per tick before it claims
+ * again. That is the layer that can see the vendor's state across nodes; a per-node not-before
+ * column could only guess at it.
+ */
+function throttledSettlement(node: { cursor: number; failures: number }): {
+  cursor: number;
+  failures: number;
+  note: string;
+  state: "pending";
+} {
+  return {
+    cursor: node.cursor,
+    failures: node.failures,
+    note: "musicbrainz rate-limited",
+    state: "pending",
+  };
+}
 
 /**
  * THE SEED RE-ARM. An enabled seed label is a SUBSCRIPTION, not a one-shot walk: once its
@@ -307,6 +336,14 @@ export type CrawlStatus = {
   frontierByKind: { artist: number; label: number; release: number };
   /** The operator's enabled seed labels — what the NEXT crawl would seed from. */
   seedLabels: string[];
+  /**
+   * Release nodes that are claimable RIGHT NOW and whose provenance is storable — an enabled
+   * label or an allow-artist parent. This is the head of the claim's release lane, so it answers
+   * the only question the frontier depth cannot: is the next tick going to write tracks, or only
+   * walk discovery? It is a range count on the partial `crawl_due_work_release_ready_idx`, whose
+   * leading columns are exactly this predicate, so it costs an index seek and never a scan.
+   */
+  storablePending: number;
 };
 
 // ── MusicBrainz response shapes (only the fields we consume) ──────────────────
@@ -611,6 +648,9 @@ async function canonicalLabelName(
 
 // ── Seeding ──────────────────────────────────────────────────────────────────
 
+/** How many seed ids one primary-key probe asks for, well inside the bind-variable ceiling. */
+const SEED_PROBE_CHUNK_SIZE = 500;
+
 /**
  * Mint a seed node for every label the operator ENABLED. This is the ONE place the crawl
  * reads `labels.seed_state`, and it reads it for exactly the question the column answers:
@@ -619,23 +659,54 @@ async function canonicalLabelName(
  *
  * Idempotent: re-seeding an already-seeded label is a no-op, so an operator enabling a new
  * label mid-crawl just adds one node to the frontier on the next tick.
+ *
+ * READ FIRST, THEN WRITE ONLY THE MISSING. Seeding runs at the head of EVERY tick, inside the
+ * exclusive writer admission, and the enabled set is the whole seed list — thousands of labels
+ * whose seed nodes were minted long ago. Issuing one `on conflict do nothing` write batch per
+ * label spends the admitted window proving, over and over, that nothing needs writing. So the
+ * seed reads which seed ids the frontier already holds (bounded primary-key probes, the label
+ * count being the bound) and enqueues only the ones it does not. The steady state is therefore
+ * reads and no writes at all, which is also why no repair marker is written: `enqueueMany` marks
+ * a node for repair only when its insert actually changed a row, so a per-label marker per tick —
+ * repair debt that pauses the very claim this tick wanted — was never the behaviour and is not
+ * introduced here.
  */
 async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[] }> {
   const enabled = await listLabels("enabled");
-  let minted = 0;
-
-  for (const label of enabled) {
-    minted += await enqueue({
-      externalId: label.slug,
-      hop: 0,
-      kind: "label",
-      labelSlug: label.slug,
-      parentId: null,
-      source: "fluncle",
-    });
+  const slugs = enabled.map((label) => label.slug);
+  if (slugs.length === 0) {
+    return { minted: 0, slugs };
   }
 
-  return { minted, slugs: enabled.map((label) => label.slug) };
+  const db = await getDb();
+  const held = new Set<string>();
+  for (let offset = 0; offset < slugs.length; offset += SEED_PROBE_CHUNK_SIZE) {
+    const chunk = slugs
+      .slice(offset, offset + SEED_PROBE_CHUNK_SIZE)
+      .map((slug) => frontierId("fluncle", "label", slug));
+    const existing = await db.execute({
+      args: chunk,
+      sql: `select id from crawl_frontier where id in (${chunk.map(() => "?").join(", ")})`,
+    });
+    for (const row of typedRows<{ id: string }>(existing.rows)) {
+      held.add(row.id);
+    }
+  }
+
+  const missing = enabled.filter((label) => !held.has(frontierId("fluncle", "label", label.slug)));
+  const minted = await enqueueMany(
+    missing.map((label) => ({
+      externalId: label.slug,
+      hop: 0,
+      kind: "label" as const,
+      labelSlug: label.slug,
+      parentId: null,
+      source: "fluncle" as const,
+    })),
+    db,
+  );
+
+  return { minted, slugs };
 }
 
 /**
@@ -2436,7 +2507,33 @@ export async function initializeCrawlPhase(): Promise<
   return { ...(await initializeCrawlPhaseState(true)), kind: "initialized" };
 }
 
-/** Claim at most two nearby nodes immediately before their serial provider requests. */
+/**
+ * Claim a few nearby nodes immediately before their serial provider requests.
+ *
+ * HOW MANY NODES ONE CLAIM MAY HOLD, and why it is a small number rather than the tick's whole
+ * budget. A prepare is an admitted phase: it pays a coordinator round trip and a process spawn,
+ * and every node it does NOT claim pays that toll again. So the bound wants to be as large as the
+ * durable guarantees allow — and exactly that large.
+ *
+ * The binding guarantee is the CLAIM LEASE. One prepare stamps `claim_expires_at` on every node it
+ * claims at the same instant, and a commit whose lease has passed is REJECTED (the fence in
+ * `isClaimedCrawlFrontierRowCurrent`), so the last node of a batch must reach its commit inside
+ * {@link CRAWL_CATALOGUE_LEASE_MS}. A node's provider leg is the shared MusicBrainz client's ~1
+ * req/s pacing over at most a few calls, and a slow one (an aborted fetch plus two `Retry-After`
+ * sleeps) runs ~35s; its commit is a bounded write batch. Six nodes therefore consume ~210s of a
+ * 600s lease in the worst provider case, leaving the rest for the admission waiting each commit
+ * may do. A wider batch would spend the lease's margin on nodes it claimed but had no time to
+ * reach, and a claim it cannot honour is worse than a prepare it has to repeat.
+ *
+ * Everything else the batch touches is per node and unchanged by this bound: each node still
+ * commits its own receipt-backed transaction under {@link MAX_CRAWL_DUE_CHUNK_SIZE}, each still
+ * signs its own provider envelope under {@link CRAWL_PHASE_TOKEN_MAX_BYTES}, and the claim's
+ * release/general lane split is `ceil(limit / 2)` at any limit, so acquisition and discovery keep
+ * moving together.
+ *
+ * The number itself is the wire bound, so it lives with the contract that carries it
+ * (`@fluncle/contracts/orpc`) and cannot drift from the schema that validates a prepare request.
+ */
 export async function prepareCrawlPhase({
   limit = 2,
   maxHop = DEFAULT_MAX_HOP,
@@ -2444,8 +2541,10 @@ export async function prepareCrawlPhase({
   limit?: number;
   maxHop?: number;
 } = {}): Promise<CrawlPhasePrepareResult> {
-  if (!Number.isInteger(limit) || limit < 1 || limit > 2) {
-    throw new Error("crawl prepare limit must be an integer from 1 through 2");
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CRAWL_PREPARE_LIMIT) {
+    throw new Error(
+      `crawl prepare limit must be an integer from 1 through ${MAX_CRAWL_PREPARE_LIMIT}`,
+    );
   }
   if (!(await isCrawlDueCutoverEnabled())) {
     return {
@@ -2606,15 +2705,19 @@ export async function commitCrawlPhase(
       }
 
       if (fetched.outcome.kind === "failed") {
+        // A throttle keeps its turn (see `throttledSettlement`); every other provider failure is
+        // the node's own and rides the exponential backoff.
         const settled = await settleClaimedCrawlFrontierRow(transaction, {
           claimToken: fetched.claimToken,
-          cursor: fetched.node.cursor,
-          failures: fetched.node.failures + 1,
           id: fetched.node.id,
-          note: fetched.outcome.rateLimited
-            ? "musicbrainz rate-limited"
-            : fetched.outcome.message.slice(0, 200),
-          state: "failed",
+          ...(fetched.outcome.rateLimited
+            ? throttledSettlement(fetched.node)
+            : {
+                cursor: fetched.node.cursor,
+                failures: fetched.node.failures + 1,
+                note: fetched.outcome.message.slice(0, 200),
+                state: "failed" as const,
+              }),
         });
         if (!settled) {
           throw new Error("crawl claim changed while its provider failure was settling");
@@ -2761,14 +2864,18 @@ export async function crawlCatalogue({
     } catch (error) {
       const throttled = error instanceof ThrottledError;
 
-      const settled = await settleNode(node, "failed", {
-        // Preserve the browse cursor across a transient failure so the retry RESUMES where it was —
-        // a paginated forward drain keeps its offset, and a re-armed node keeps its tail-first state
-        // (`REARM_TAIL`/descent) instead of collapsing to `0`, which would restart it as a full walk.
-        cursor: node.cursor,
-        failures: node.failures + 1,
-        note: throttled ? "musicbrainz rate-limited" : String(error).slice(0, 200),
-      });
+      // Preserve the browse cursor across a transient failure so the retry RESUMES where it was —
+      // a paginated forward drain keeps its offset, and a re-armed node keeps its tail-first state
+      // (`REARM_TAIL`/descent) instead of collapsing to `0`, which would restart it as a full walk.
+      // A throttle additionally keeps its turn and its failure count (see `throttledSettlement`).
+      const { state: throttledState, ...throttledPatch } = throttledSettlement(node);
+      const settled = throttled
+        ? await settleNode(node, throttledState, throttledPatch)
+        : await settleNode(node, "failed", {
+            cursor: node.cursor,
+            failures: node.failures + 1,
+            note: String(error).slice(0, 200),
+          });
 
       if (!settled) {
         continue;
@@ -2891,7 +2998,7 @@ export async function countFrontierPending(): Promise<number> {
  */
 export async function getCrawlStatus(): Promise<CrawlStatus> {
   const db = await getDb();
-  const [frontierCounts, frontierByKind, catalogue, anchors, labels] = await Promise.all([
+  const [frontierCounts, frontierByKind, catalogue, anchors, storable, labels] = await Promise.all([
     // The by-STATE frontier counts (shared with the funnel snapshot's lean read) and the by-KIND
     // breakdown — the latter computed only here, the on-demand admin read (docs/db-scale-backlog
     // Wave 1 #3), never on the recurring crawl pass.
@@ -2911,6 +3018,11 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
     db.execute(`select count(*) as n from tracks indexed by tracks_anchor_queue_idx
                 where isrc is not null and spotify_uri is null
                   and not exists (select 1 from findings where findings.track_id = tracks.track_id)`),
+    // The storable head of the claim's release lane, counted through the SAME partial index the
+    // claim orders by — its `where` clause is the predicate and `storable_rank` its second column,
+    // so this is a bounded range count rather than a walk of the due-work table.
+    db.execute(`select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
+                where state = 'ready' and node_kind = 'release' and storable_rank = 0`),
     listLabels(),
   ]);
 
@@ -2924,5 +3036,6 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
       .filter((label) => label.seedState === "enabled")
       .map((label) => label.name)
       .sort(),
+    storablePending: Number(typedRows<{ n: number }>(storable.rows)[0]?.n ?? 0),
   };
 }

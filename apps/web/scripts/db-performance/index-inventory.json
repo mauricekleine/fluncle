@@ -1412,9 +1412,13 @@
           {
             "file": "apps/web/src/lib/server/crawl-due-work.ts",
             "marker": "readProjectedCrawlSelection"
+          },
+          {
+            "file": "apps/web/src/lib/server/crawl.ts",
+            "marker": "getCrawlStatus"
           }
         ],
-        "query": "crawlReleaseReadyQuery selects CRAWL_DUE_COLUMNS from ready release rows, explicitly INDEXED BY crawl_due_work_release_ready_idx, ordered by storable_rank, hop, demand_rank, created_at, node_id and bounded by limit."
+        "query": "crawlReleaseReadyQuery selects CRAWL_DUE_COLUMNS from ready release rows, explicitly INDEXED BY crawl_due_work_release_ready_idx, ordered by storable_rank, hop, demand_rank, created_at, node_id and bounded by limit. getCrawlStatus counts the same indexed slice narrowed to storable_rank = 0, an equality range on the index's leading columns rather than a row read, reported as storablePending."
       },
       "knownContractMappings": ["projection.crawl-two-lane-claim"],
       "structuralRationale": "Keeps the reserved storable-release lane ordered without a growing-table scan or temporary sort. The 1x and 2x unforced real-consumer plans choose this index too, so removing only the production lock is proposed as a separate code change.",
