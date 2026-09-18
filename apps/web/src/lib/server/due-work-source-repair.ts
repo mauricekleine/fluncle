@@ -18,6 +18,7 @@ import {
   type DueWorkSubjectType,
 } from "./due-work";
 import { CATALOGUE_RANK_MATERIAL_REVISION_KEY } from "./catalogue";
+import { getRequestScopedValue } from "./database-request-scope";
 import {
   DUE_WORK_BACKFILLS,
   dueWorkRepairDefinitions,
@@ -426,6 +427,25 @@ async function readCatalogueRankMarker(client: DueWorkClient): Promise<
 }
 
 /**
+ * Advance the synthetic catalogue-rank corpus marker by one bounded rebuild chunk. There is nothing
+ * to advance while no corpus change awaits a rebuild; `complete` is true only once the marker clears.
+ */
+async function advanceCatalogueRankSourceMarker(
+  client: DueWorkClient,
+  limit: number,
+): Promise<
+  | { complete: boolean; marker: DueWorkRow<typeof DUE_WORK_SOURCE_REPAIR_KIND>; scanned: number }
+  | undefined
+> {
+  const rank = await readCatalogueRankMarker(client);
+  if (rank === undefined) {
+    return undefined;
+  }
+  const result = await advanceCatalogueRankRebuild(client, rank.marker, rank.corpusCheck, limit);
+  return { ...result, marker: rank.marker };
+}
+
+/**
  * Converge a bounded page of transactionally coupled source markers directly into final physical
  * rows. Each generic marker is cleared atomically with all of its eligible upserts and ineligible
  * deletes; its version guard leaves a concurrent producer marker and projection rows intact.
@@ -461,17 +481,13 @@ export async function fanOutDueWorkSourceRepairs(
   const regularOutcomes = await evaluateSourceMarkers(client, regular);
   const cleared = await convergeEvaluatedSourceMarkers(client, regular, regularOutcomes);
   const regularDeferred = regular.length - cleared;
-  const rank =
+  const rankLimit = Math.min(options.limit ?? RANK_REBUILD_LIMIT, RANK_REBUILD_LIMIT);
+  const rankResult =
     options.includeCatalogueRank === false ||
     (options.subjectType !== undefined && options.subjectType !== "track")
       ? undefined
-      : await readCatalogueRankMarker(client);
-  const rankMarker = rank?.marker;
-  const rankLimit = Math.min(options.limit ?? RANK_REBUILD_LIMIT, RANK_REBUILD_LIMIT);
-  const rankResult =
-    rank === undefined
-      ? undefined
-      : await advanceCatalogueRankRebuild(client, rank.marker, rank.corpusCheck, rankLimit);
+      : await advanceCatalogueRankSourceMarker(client, rankLimit);
+  const rankMarker = rankResult?.marker;
   const rankExpanded = rankResult?.complete === true ? 1 : 0;
   const rankDeferred = rankMarker === undefined || rankResult?.complete === true ? 0 : 1;
   const expanded = cleared + rankExpanded;
@@ -554,29 +570,115 @@ export async function hasPendingTrackSourceMarkers(client: DueWorkClient): Promi
   return result.rows.length > 0;
 }
 
-/** Repair generic producers and the requested physical queue before reading its ready index. */
+export type DueWorkReadDrainBudget = {
+  /** Physical repair chunks one request may start across its guarded reads. */
+  physicalChunks: number;
+  /** Source-repair pages one request may start across its guarded reads. */
+  sourcePages: number;
+  /** Cumulative guard drain time after which no further page or chunk starts. */
+  wallMs: number;
+};
+
+/**
+ * The repair one Worker request may drain inside its due-work read guards before a guarded read
+ * answers `due_work_maintenance_pending`. Every guarded read converges one source page and one
+ * physical chunk; a further page or chunk starts only while the whole request stays inside all
+ * three bounds, so a burst of up to `SOURCE_REPAIR_LIMIT * sourcePages` markers converges inside
+ * one read instead of pausing its consumer for a tick. The budget multiplies bounded transactions
+ * and never enlarges one: each page and chunk keeps its own version-guarded write batch. A hosted
+ * page is five indexed reads plus one write batch, so round trips dominate its cost and the wall
+ * bound is the one that binds in production; the unit caps bound the transactions a request can
+ * issue against a fast database.
+ */
+export const DUE_WORK_READ_DRAIN_BUDGET: Readonly<DueWorkReadDrainBudget> = {
+  physicalChunks: 4,
+  sourcePages: 12,
+  wallMs: 1_500,
+};
+
+type DueWorkReadDrain = { physicalChunks: number; sourcePages: number; spentMs: number };
+
+const DUE_WORK_READ_DRAIN_KEY = Symbol("due-work-read-drain");
+
+function freshReadDrain(): DueWorkReadDrain {
+  return { physicalChunks: 0, sourcePages: 0, spentMs: 0 };
+}
+
+function repairConverged(result: DueWorkRepairResult): boolean {
+  return !result.hasMore && result.deferred === 0;
+}
+
+/**
+ * Converge the requested queue's repair before its ready index is read. Ordinary source markers of
+ * the queue's subject family drain in pages, then the queue's own physical markers drain in chunks,
+ * under the request-wide {@link DUE_WORK_READ_DRAIN_BUDGET} shared by every guarded read in one
+ * Worker request. The first page and the first chunk always run, so every refused read still
+ * advances both lanes. Chunks beyond the first start only once the source family is clean, because
+ * the read cannot proceed before then. A catalogue-rank read advances its corpus rebuild by exactly
+ * one chunk after its ordinary pages, whatever the budget allows. Each unit commits or fails as its
+ * own guarded batch and a failed batch propagates without being re-issued. The read answers pending
+ * only while either lane is still unconverged when the budget stops it.
+ */
 export async function repairDueWorkBeforeRead(
   client: DueWorkClient,
   workKind: string,
+  options: { budget?: DueWorkReadDrainBudget; now?: () => number } = {},
 ): Promise<void> {
   const definition = dueWorkRepairDefinitions(client).find(
     (candidate) => candidate.workKind === workKind,
   );
-  if (definition !== undefined) {
-    const sourceRepair = await fanOutDueWorkSourceRepairs(client, {
-      includeCatalogueRank: workKind === "catalogue-rank",
-      subjectType: definition.subjectType,
-    });
-    const physicalRepair = await repairDueWorkChunk(client, definition, {
-      limit: PHYSICAL_REPAIR_LIMIT,
-    });
-    if (
-      sourceRepair.hasMore ||
-      physicalRepair.hasMore ||
-      sourceRepair.deferred > 0 ||
-      physicalRepair.deferred > 0
-    ) {
-      throw new DueWorkMaintenancePendingError(workKind);
+  if (definition === undefined) {
+    return;
+  }
+  const budget = options.budget ?? DUE_WORK_READ_DRAIN_BUDGET;
+  const now = options.now ?? (() => performance.now());
+  const drain = getRequestScopedValue(DUE_WORK_READ_DRAIN_KEY, freshReadDrain) ?? freshReadDrain();
+  const timed = async <Result>(unit: () => Promise<Result>): Promise<Result> => {
+    const startedAt = now();
+    try {
+      return await unit();
+    } finally {
+      drain.spentMs += now() - startedAt;
     }
+  };
+  const mayStart = (started: number, cap: number): boolean =>
+    started < cap && drain.spentMs < budget.wallMs;
+  const drainSourcePage = (): Promise<DueWorkSourceRepairResult> => {
+    drain.sourcePages += 1;
+    return timed(() =>
+      fanOutDueWorkSourceRepairs(client, {
+        includeCatalogueRank: false,
+        subjectType: definition.subjectType,
+      }),
+    );
+  };
+  const drainPhysicalChunk = (): Promise<DueWorkRepairResult> => {
+    drain.physicalChunks += 1;
+    return timed(() => repairDueWorkChunk(client, definition, { limit: PHYSICAL_REPAIR_LIMIT }));
+  };
+
+  let source = await drainSourcePage();
+  while (!repairConverged(source) && mayStart(drain.sourcePages, budget.sourcePages)) {
+    source = await drainSourcePage();
+  }
+  // Only the rank read waits for the corpus marker. It advances that rebuild by exactly one chunk
+  // per read, after its ordinary pages, as a unit outside the page count.
+  const rank =
+    workKind === "catalogue-rank"
+      ? await timed(() => advanceCatalogueRankSourceMarker(client, RANK_REBUILD_LIMIT))
+      : undefined;
+  const sourceConverged = repairConverged(source) && (rank === undefined || rank.complete);
+
+  let physical = await drainPhysicalChunk();
+  while (
+    sourceConverged &&
+    !repairConverged(physical) &&
+    mayStart(drain.physicalChunks, budget.physicalChunks)
+  ) {
+    physical = await drainPhysicalChunk();
+  }
+
+  if (!sourceConverged || !repairConverged(physical)) {
+    throw new DueWorkMaintenancePendingError(workKind);
   }
 }

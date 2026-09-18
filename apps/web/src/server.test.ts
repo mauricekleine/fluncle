@@ -93,8 +93,12 @@ const worker = (await import("./server")).default as unknown as {
   fetch: (request: Request) => Promise<Response>;
 };
 
-function dispatch(url: string, headers: Record<string, string> = {}): Promise<Response> {
-  return worker.fetch(new Request(url, { headers, method: "GET" }));
+function dispatch(
+  url: string,
+  headers: Record<string, string> = {},
+  method: "GET" | "HEAD" = "GET",
+): Promise<Response> {
+  return worker.fetch(new Request(url, { headers, method }));
 }
 
 beforeEach(() => {
@@ -189,6 +193,39 @@ describe("server.ts dispatch spine", () => {
     expect(hoisted.routerFetch).not.toHaveBeenCalled();
   });
 
+  it("negotiates every entity detail path, including trailing-slash redirects", async () => {
+    const entities = [
+      ["artist", "sub-focus"],
+      ["album", "all-that-jazz"],
+      ["label", "hospital-records"],
+      ["track", "mb_2b1c4d5e"],
+    ] as const;
+
+    for (const [kind, slug] of entities) {
+      for (const method of ["GET", "HEAD"] as const) {
+        const trailing = await dispatch(
+          `https://www.fluncle.com/${kind}/${slug}/`,
+          { accept: "application/json" },
+          method,
+        );
+
+        expect(trailing.status, `${method} /${kind}/${slug}/`).toBe(406);
+        expect(trailing.headers.get("vary"), `${method} /${kind}/${slug}/`).toBe("Accept");
+
+        const canonical = await dispatch(
+          `https://www.fluncle.com/${kind}/${slug}`,
+          { accept: "application/json" },
+          method,
+        );
+
+        expect(canonical.status, `${method} /${kind}/${slug}`).toBe(406);
+        expect(canonical.headers.get("vary"), `${method} /${kind}/${slug}`).toBe("Accept");
+      }
+    }
+
+    expect(hoisted.routerFetch).not.toHaveBeenCalled();
+  });
+
   it("still renders a public page for every Accept that admits HTML — including none at all", async () => {
     for (const accept of [
       undefined,
@@ -273,16 +310,104 @@ describe("server.ts shared-cache isolation", () => {
   async function dispatchAndSettle(
     url: string,
     headers: Record<string, string> = {},
-  ): Promise<void> {
-    await dispatch(url, headers);
+    method: "GET" | "HEAD" = "GET",
+  ): Promise<Response> {
+    const response = await dispatch(url, headers, method);
     await Promise.resolve();
     await Promise.resolve();
+
+    return response;
   }
 
   it("shared-caches a public hub GET under its canonical key", async () => {
     await dispatchAndSettle("https://www.fluncle.com/artists", { accept: "text/html" });
 
     expect([...entries.keys()]).toEqual(["https://www.fluncle.com/artists"]);
+  });
+
+  it("redirects trailing-slash entity HTML requests without caching them", async () => {
+    const entities = [
+      ["artist", "sub-focus"],
+      ["album", "all-that-jazz"],
+      ["label", "hospital-records"],
+      ["track", "mb_2b1c4d5e"],
+    ] as const;
+
+    hoisted.routerFetch.mockImplementation(async (request) => {
+      const path = new URL(request.url).pathname;
+
+      return new Response(null, {
+        headers: { Location: path.slice(0, -1) },
+        status: 307,
+      });
+    });
+
+    for (const [kind, slug] of entities) {
+      for (const method of ["GET", "HEAD"] as const) {
+        const response = await dispatchAndSettle(
+          `https://www.fluncle.com/${kind}/${slug}/`,
+          { accept: "text/html" },
+          method,
+        );
+
+        expect(response.status, `${method} /${kind}/${slug}/`).toBe(307);
+        expect(response.headers.get("location"), `${method} /${kind}/${slug}/`).toBe(
+          `/${kind}/${slug}`,
+        );
+      }
+    }
+
+    expect(entries.size).toBe(0);
+  });
+
+  it("serves and caches slashless entity HTML GETs under canonical keys", async () => {
+    const entities = [
+      ["artist", "sub-focus"],
+      ["album", "all-that-jazz"],
+      ["label", "hospital-records"],
+      ["track", "mb_2b1c4d5e"],
+    ] as const;
+
+    for (const [kind, slug] of entities) {
+      const response = await dispatchAndSettle(`https://www.fluncle.com/${kind}/${slug}`, {
+        accept: "text/html",
+      });
+
+      expect(response.status, `/${kind}/${slug}`).toBe(200);
+      expect(response.headers.get("x-edge-cache"), `/${kind}/${slug}`).toBe("miss");
+    }
+
+    expect(new Set(entries.keys())).toEqual(
+      new Set(entities.map(([kind, slug]) => `https://www.fluncle.com/${kind}/${slug}`)),
+    );
+  });
+
+  it("answers 406 for JSON-only entity requests without caching either path shape", async () => {
+    const entities = [
+      ["artist", "sub-focus"],
+      ["album", "all-that-jazz"],
+      ["label", "hospital-records"],
+      ["track", "mb_2b1c4d5e"],
+    ] as const;
+
+    for (const [kind, slug] of entities) {
+      for (const suffix of ["", "/"]) {
+        for (const method of ["GET", "HEAD"] as const) {
+          const response = await dispatch(
+            `https://www.fluncle.com/${kind}/${slug}${suffix}`,
+            { accept: "application/json" },
+            method,
+          );
+
+          expect(response.status, `${method} /${kind}/${slug}${suffix}`).toBe(406);
+          expect(response.headers.get("vary"), `${method} /${kind}/${slug}${suffix}`).toBe(
+            "Accept",
+          );
+        }
+      }
+    }
+
+    expect(entries.size).toBe(0);
   });
 
   it("NEVER shared-caches an admin view", async () => {

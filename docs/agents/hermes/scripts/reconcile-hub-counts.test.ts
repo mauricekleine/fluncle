@@ -1,19 +1,28 @@
 // Unit tests for reconcile-hub-counts.ts — the hub-counts reconciliation cron's orchestrator.
 //
-// The box only fires a bare trigger; the Worker recomputes + corrects. So the contract worth
-// pinning here is the tick's outcome mapping (the op response → the /status JSON summary), its
-// fault handling, and — the reason this cron exists at all — the AUDIT LINE: the corrected-row
-// numbers must reach the journal on EVERY tick, because a run of zeroes is the evidence the
-// counters are healthy and a non-zero reading is the evidence a write path is leaking.
+// The box walks bounded windows; the Worker recomputes + corrects. So the contract worth pinning
+// here is the window chain (cursor hand-off, per-table accumulation, backpressure and budgets),
+// the tick's outcome mapping (the op responses → the /status JSON summary), its fault handling,
+// and — the reason this cron exists at all — the AUDIT LINE: the corrected-row numbers must reach
+// the journal on EVERY tick, because a run of zeroes is the evidence the counters are healthy and a
+// non-zero reading is the evidence a write path is leaking. A response without `next` is the
+// whole-pass answer of a Worker without windows, so the first suite's single responses still map.
 //
 // Runs outside any package's test runner (bun:test), like funnel-snapshot-sweep.test.ts:
 //   bun test docs/agents/hermes/scripts/reconcile-hub-counts.test.ts
 
 import { describe, expect, test } from "bun:test";
 import {
+  MAX_WINDOWS,
+  parseReconcileCursor,
+  parseWindowEnvelope,
+  type ReconcileCursor,
   type ReconcileHubCountsDeps,
   type ReconcileHubCountsResponse,
   runReconcileHubCountsTick,
+  WINDOW_PAGE_LIMIT,
+  WINDOW_START_BUDGET_MS,
+  windowBody,
 } from "./reconcile-hub-counts";
 
 /** The slice-A rollout-day drift, as the op would report it (44 artists / 3 albums / 1 label). */
@@ -175,5 +184,282 @@ describe("runReconcileHubCountsTick", () => {
       produced: null,
     });
     expect(summary.error).toContain("inspected no tables");
+  });
+});
+
+// ── The window chain ─────────────────────────────────────────────────────────────────────────
+
+const ZERO = { corrected: 0, deferred: 0 };
+
+/** A scripted Worker: each call returns the next response and records the cursor it was sent. */
+function scripted(responses: Array<ReconcileHubCountsResponse | undefined>): {
+  cursors: Array<ReconcileCursor | null>;
+  lines: string[];
+  deps: ReconcileHubCountsDeps;
+} {
+  const cursors: Array<ReconcileCursor | null> = [];
+  const lines: string[] = [];
+  let call = 0;
+
+  return {
+    cursors,
+    deps: {
+      log: (message) => lines.push(message),
+      reconcile: (cursor) => {
+        cursors.push(cursor);
+        const response = responses[call];
+        call += 1;
+        return Promise.resolve(response);
+      },
+    },
+    lines,
+  };
+}
+
+describe("runReconcileHubCountsTick — windows", () => {
+  test("hands each window the previous `next` and accumulates only the tables it reached", async () => {
+    const run = scripted([
+      {
+        albums: ZERO,
+        artists: ZERO,
+        labels: { corrected: 1, deferred: 0 },
+        next: { afterId: "lbl_b", table: "labels" },
+        ok: true,
+        pages: 8,
+        tookMs: 100,
+      },
+      {
+        albums: { corrected: 3, deferred: 1 },
+        artists: ZERO,
+        labels: { corrected: 2, deferred: 0 },
+        next: { afterId: null, table: "artists" },
+        ok: true,
+        pages: 8,
+        tookMs: 50,
+      },
+      {
+        albums: ZERO,
+        artists: { corrected: 4, deferred: 0 },
+        labels: ZERO,
+        next: null,
+        ok: true,
+        pages: 3,
+        tookMs: 25,
+      },
+    ]);
+
+    const summary = await runReconcileHubCountsTick(run.deps);
+
+    expect(run.cursors).toEqual([
+      null,
+      { afterId: "lbl_b", table: "labels" },
+      { afterId: null, table: "artists" },
+    ]);
+    expect(summary).toMatchObject({
+      albums: 3,
+      artists: 4,
+      checked: 3,
+      corrected: 10,
+      deferred: 1,
+      errors: 0,
+      labels: 3,
+      ok: true,
+      partial: false,
+      produced: 10,
+      tookMs: 175,
+      windows: 3,
+    });
+    expect(run.lines).toContain(
+      "AUDIT corrected=10 labels=3 albums=3 artists=4 tookMs=175 deferred=1",
+    );
+  });
+
+  test("a yielded window pauses the run and keeps the corrections that already landed", async () => {
+    const run = scripted([
+      {
+        albums: ZERO,
+        artists: ZERO,
+        labels: { corrected: 2, deferred: 0 },
+        next: { afterId: "lbl_b", table: "labels" },
+        ok: true,
+        tookMs: 40,
+      },
+      undefined,
+    ]);
+
+    const summary = await runReconcileHubCountsTick(run.deps);
+
+    expect(summary).toMatchObject({
+      admissionOutcome: "phase-yielded",
+      albums: null,
+      artists: null,
+      checked: 0,
+      corrected: null,
+      errors: 0,
+      gateState: "paused",
+      labels: 2,
+      ok: true,
+      partial: true,
+      produced: 2,
+      reason: "database_admission",
+      throttled: true,
+      windows: 1,
+    });
+    expect(run.lines).toContain(
+      "AUDIT corrected=? labels=2 albums=? artists=? tookMs=40 deferred=0 partial=database_admission",
+    );
+  });
+
+  test("a first window that yields proves nothing and writes no audit line", async () => {
+    const run = scripted([undefined]);
+
+    const summary = await runReconcileHubCountsTick(run.deps);
+
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      partial: true,
+      produced: 0,
+      windows: 0,
+    });
+    expect(run.lines.some((line) => line.startsWith("AUDIT "))).toBe(false);
+  });
+
+  test("counts a table as checked only once the cursor has moved past it", async () => {
+    const run = scripted([
+      {
+        albums: { corrected: 1, deferred: 0 },
+        artists: ZERO,
+        labels: { corrected: 1, deferred: 0 },
+        next: { afterId: "alb_c", table: "albums" },
+        ok: true,
+      },
+      undefined,
+    ]);
+
+    const summary = await runReconcileHubCountsTick(run.deps);
+
+    expect(summary).toMatchObject({ albums: 1, checked: 1, labels: 1, produced: 2 });
+  });
+
+  test("fails a cursor that does not advance instead of looping on it", async () => {
+    const stuck: ReconcileHubCountsResponse = {
+      albums: ZERO,
+      artists: ZERO,
+      labels: ZERO,
+      next: { afterId: "lbl_b", table: "labels" },
+      ok: true,
+    };
+    const run = scripted([stuck, stuck]);
+
+    const summary = await runReconcileHubCountsTick(run.deps);
+
+    expect(summary.ok).toBe(false);
+    expect(summary.error).toContain("did not advance");
+    expect(summary.errors).toBe(1);
+  });
+
+  test("fails a window that omits a table its cursor range covers", async () => {
+    const run = scripted([{ next: { afterId: "lbl_b", table: "labels" }, ok: true }]);
+
+    const summary = await runReconcileHubCountsTick(run.deps);
+
+    expect(summary.ok).toBe(false);
+    expect(summary.error).toContain("omitted labels");
+  });
+
+  test("stops starting windows past the wall budget and reports the stop", async () => {
+    let clock = 0;
+    const run = scripted([
+      {
+        albums: ZERO,
+        artists: ZERO,
+        labels: { corrected: 1, deferred: 0 },
+        next: { afterId: "lbl_b", table: "labels" },
+        ok: true,
+      },
+    ]);
+
+    const summary = await runReconcileHubCountsTick({
+      ...run.deps,
+      now: () => clock,
+      reconcile: (cursor) => {
+        clock += WINDOW_START_BUDGET_MS;
+        return run.deps.reconcile(cursor);
+      },
+    });
+
+    expect(run.cursors).toHaveLength(1);
+    expect(summary).toMatchObject({
+      corrected: null,
+      ok: true,
+      partial: true,
+      produced: 1,
+      reason: "wall_budget",
+    });
+    expect(run.lines).toContain(
+      "AUDIT corrected=? labels=1 albums=? artists=? tookMs=? deferred=0 partial=wall_budget",
+    );
+  });
+
+  test("never starts more than MAX_WINDOWS windows", async () => {
+    let calls = 0;
+
+    const summary = await runReconcileHubCountsTick({
+      log: () => {},
+      reconcile: () => {
+        calls += 1;
+        return Promise.resolve({
+          albums: ZERO,
+          artists: ZERO,
+          labels: ZERO,
+          next: { afterId: `lbl_${String(calls).padStart(4, "0")}`, table: "labels" },
+          ok: true,
+        });
+      },
+    });
+
+    expect(calls).toBe(MAX_WINDOWS);
+    expect(summary).toMatchObject({ ok: true, partial: true, reason: "window_budget" });
+  });
+});
+
+describe("window wire helpers", () => {
+  test("the first window sends only the page limit; later windows send the cursor too", () => {
+    expect(windowBody(null)).toEqual({ pageLimit: WINDOW_PAGE_LIMIT });
+    expect(windowBody({ afterId: "art_9", table: "artists" })).toEqual({
+      cursor: { afterId: "art_9", table: "artists" },
+      pageLimit: WINDOW_PAGE_LIMIT,
+    });
+  });
+
+  test("a window stays inside the op's page-limit bound", () => {
+    expect(WINDOW_PAGE_LIMIT).toBeGreaterThanOrEqual(1);
+    expect(WINDOW_PAGE_LIMIT).toBeLessThanOrEqual(20);
+  });
+
+  test("parses a window envelope and surfaces a child's failure message", () => {
+    expect(parseWindowEnvelope(`{"kind":"window","response":{"ok":true,"next":null}}\n`)).toEqual({
+      next: null,
+      ok: true,
+    });
+    expect(() => parseWindowEnvelope(`{"kind":"failed","error":"reconcile 503"}`)).toThrow(
+      "reconcile 503",
+    );
+    expect(() => parseWindowEnvelope("not json")).toThrow("invalid envelope");
+    expect(() => parseWindowEnvelope(`{"kind":"window"}`)).toThrow("invalid envelope");
+  });
+
+  test("accepts only cursors on the three tables with a non-empty or null afterId", () => {
+    expect(parseReconcileCursor(null)).toBeNull();
+    expect(parseReconcileCursor({ afterId: null, table: "albums" })).toEqual({
+      afterId: null,
+      table: "albums",
+    });
+    expect(() => parseReconcileCursor({ afterId: "x", table: "tracks" })).toThrow("invalid cursor");
+    expect(() => parseReconcileCursor({ afterId: "", table: "labels" })).toThrow("invalid cursor");
+    expect(() => parseReconcileCursor("labels")).toThrow("invalid cursor");
   });
 });

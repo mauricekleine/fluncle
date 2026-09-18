@@ -6,7 +6,7 @@ import {
   appendOnionLocation,
   handleAgentDiscovery,
 } from "./lib/server/agent-discovery";
-import { edgeCachePolicyFor, withEdgeCache } from "./lib/server/edge-cache";
+import { edgeCachePolicyFor, isPublicHtmlPagePath, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { runWithDatabaseRequestScope } from "./lib/server/database-request-scope";
 import { handleMcp } from "./lib/server/mcp";
@@ -147,11 +147,12 @@ async function dispatch(request: Request): Promise<Response> {
   // 500 — which tells an API client or a crawler that asked a /log, /track, or hub URL for JSON
   // that the archive FAULTED, when nothing did. The honest answer is 406: the page exists, it is
   // served as HTML, and the JSON twin of every fact on it lives under /api/v1. `Vary: Accept`
-  // keeps the two answers apart in any cache. Only the HTML cache tiers (the public read
-  // surfaces) are negotiated; server functions, assets, feeds, and the API never carry an HTML
-  // policy and flow on untouched. `text/markdown` on the homepage was already answered above.
+  // keeps the two answers apart in any cache. Only the public HTML PAGE set (`isPublicHtmlPagePath`
+  // in `lib/server/edge-cache.ts`) is negotiated; it is broader than the set that earns a cache
+  // entry, while server functions, assets, feeds, and the API remain outside it and flow on
+  // untouched. `text/markdown` on the homepage was already answered above.
   if (
-    cachePolicy?.contentType === "text/html" &&
+    isPublicHtmlPagePath(url.pathname) &&
     (request.method === "GET" || request.method === "HEAD") &&
     !acceptHeaderAdmitsHtml(request.headers.get("accept"))
   ) {

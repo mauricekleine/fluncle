@@ -2439,6 +2439,8 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     expect(byId.get("unm-nodur")?.status).toBe("unmatched");
     expect(byId.get("unm-long")?.status).toBe("unmatched");
     // A FINDING marked unmatched is never this op's business — its own re-capture flows own it.
+    // All three of the op's statements read the maintained `is_catalogue` discriminator, so this
+    // row is excluded by an indexed column rather than by a per-row `findings` probe.
     expect(byId.get("unm-find")?.status).toBe("unmatched");
 
     // Idempotent: the rescued row is gone from the unmatched set; the vetoed pile is stable.

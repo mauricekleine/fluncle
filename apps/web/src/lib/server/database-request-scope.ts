@@ -7,6 +7,7 @@ type DatabaseRequestScope = {
   clients: Map<DatabaseClientSlot, Promise<Client | undefined>>;
   inFlight: number;
   observedMaximum: number;
+  values: Map<symbol, unknown>;
 };
 
 export type DatabaseRequestOperationLease = {
@@ -22,7 +23,25 @@ export function runWithDatabaseRequestScope<Result>(run: () => Result): Result {
     return run();
   }
 
-  return databaseRequestScope.run({ clients: new Map(), inFlight: 0, observedMaximum: 0 }, run);
+  return databaseRequestScope.run(
+    { clients: new Map(), inFlight: 0, observedMaximum: 0, values: new Map() },
+    run,
+  );
+}
+
+/**
+ * One request-wide value under a caller-owned key, created on first use. Outside a Worker request
+ * there is no request to share it with, so the caller receives `undefined` and keeps its own value.
+ */
+export function getRequestScopedValue<Value>(key: symbol, create: () => Value): Value | undefined {
+  const scope = databaseRequestScope.getStore();
+  if (scope === undefined) {
+    return undefined;
+  }
+  if (!scope.values.has(key)) {
+    scope.values.set(key, create());
+  }
+  return scope.values.get(key) as Value;
 }
 
 /** Memoize creation immediately so concurrent helpers cannot race out extra clients. */

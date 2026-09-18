@@ -4,7 +4,7 @@
 // domain's file is touched.
 
 import { ORPCError } from "@orpc/server";
-import { assertRateLimit } from "../rate-limit";
+import { chargeRateLimit } from "../rate-limit";
 import { searchArchive } from "../search";
 import { searchTracks } from "../track-search";
 import { apiFault, type Implementer } from "./_shared";
@@ -62,7 +62,10 @@ export function searchHandlers(os: Implementer) {
   // it burns no vendor token on a common query: three of its four tiers are pure database
   // reads. The fourth can reach an LLM, so it carries the SAME shared limiter — a script
   // grinding natural-language queries would be spending real money, and the limiter is what
-  // makes that bounded. A short query returns the empty envelope rather than a 400: this
+  // makes that bounded. Every query is charged; the free tiers wait on the charge's verdict only
+  // briefly (`chargeRateLimit`), because the charge is a write that queues behind any long write
+  // on the primary while the reads that answer a search keep flowing. The model tier always
+  // waits for the verdict. A short query returns the empty envelope rather than a 400: this
   // one is typed into a live dialog, so "not enough to go on yet" is a normal state, not an
   // error.
   const searchArchiveHandler = os.search_archive.handler(async ({ context, input }) => {
@@ -73,14 +76,22 @@ export function searchHandlers(os: Implementer) {
     }
 
     try {
-      await assertRateLimit({
+      const charge = await chargeRateLimit({
         action: "search_archive",
         limit: SEARCH_LIMIT,
         request: context.request,
         windowMs: SEARCH_WINDOW_MS,
       });
+      const result = await searchArchive({
+        beforeModel: charge.requireAllowed,
+        limit: input.limit,
+        q: query,
+      });
 
-      return { ok: true, ...(await searchArchive({ limit: input.limit, q: query })) } as const;
+      // A verdict that came back over the limit while the answer was being read still refuses it.
+      charge.throwIfLimited();
+
+      return { ok: true, ...result } as const;
     } catch (error) {
       throw apiFault(error);
     }

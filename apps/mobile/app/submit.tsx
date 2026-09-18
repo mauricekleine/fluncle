@@ -178,7 +178,7 @@ export default function SubmitScreen() {
                 autoFocus
                 onChangeText={setQuery}
                 onSubmitEditing={runSearch}
-                placeholder="Camo & Crooked, or a Spotify link"
+                placeholder="Camo & Krooked, or a Spotify link"
                 placeholderTextColor={color.stardust}
                 returnKeyType="search"
                 selectionColor={color.eclipseGold}

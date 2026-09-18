@@ -1,5 +1,11 @@
-import { type Client, type InStatement } from "@libsql/client";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { createClient, type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 
 import {
   batchDueWorkSourceMutation,
@@ -15,7 +21,13 @@ import {
   CATALOGUE_RANK_STATE_KEY,
   catalogueRankCorpusForTrack,
 } from "./catalogue";
-import { fanOutDueWorkSourceRepairs, repairDueWorkBeforeRead } from "./due-work-source-repair";
+import { runWithDatabaseRequestScope } from "./database-request-scope";
+import {
+  DUE_WORK_READ_DRAIN_BUDGET,
+  fanOutDueWorkSourceRepairs,
+  repairDueWorkBeforeRead,
+  SOURCE_REPAIR_LIMIT,
+} from "./due-work-source-repair";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import { createIntegrationDb, seedAlbum, seedCatalogueTrack, seedTrack } from "./integration-db";
@@ -30,6 +42,41 @@ beforeEach(async () => {
 afterEach(() => {
   db.close();
 });
+
+const BURST_NOW = "2026-01-01T00:00:00.000Z";
+
+/** Seed `count` catalogue tracks, half with captured audio, and mark them in one source burst. */
+async function markTrackBurst(client: Client, prefix: string, count: number): Promise<string[]> {
+  const trackIds = Array.from(
+    { length: count },
+    (_, index) => `${prefix}-${String(index).padStart(3, "0")}`,
+  );
+  for (const [index, trackId] of trackIds.entries()) {
+    await seedCatalogueTrack(client, { trackId });
+    if (index % 2 === 0) {
+      await client.execute({
+        args: [`${trackId}/audio.webm`, trackId],
+        sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
+      });
+    }
+  }
+  await client.execute(
+    markDueWorkSourceRepairsStatement(
+      trackIds.map((subjectId) => ({ subjectId, subjectType: "track" as const })),
+      { markerVersion: `${prefix}-v1`, now: BURST_NOW, producer: "capture-verification" },
+    ),
+  );
+  return trackIds;
+}
+
+async function countPendingTrackSourceMarkers(client: Client): Promise<number> {
+  const result = await client.execute({
+    args: [DUE_WORK_SOURCE_REPAIR_KIND, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID],
+    sql: `select count(*) as pending from due_work
+      where work_kind = ? and subject_type = 'track' and subject_id <> ? and state = 'repair'`,
+  });
+  return Number(result.rows[0]?.pending ?? 0);
+}
 
 describe("transactionally coupled due-work source repair", () => {
   it.each([0, 501, 1.5, Number.POSITIVE_INFINITY])(
@@ -1603,23 +1650,163 @@ describe("transactionally coupled due-work source repair", () => {
     ]);
   });
 
-  it("never exposes a partial queue while a bounded source-marker page is still pending", async () => {
-    for (let index = 0; index < 6; index += 1) {
-      const trackId = `pending-${index}`;
-      await seedCatalogueTrack(db, { trackId });
-      await db.execute(
-        markDueWorkSourceRepairsStatement([{ subjectId: trackId, subjectType: "track" }], {
-          markerVersion: `pending-v${index}`,
-          producer: "capture-verification",
-        }),
-      );
-    }
+  it("converges a burst that fits the source-page budget inside one guarded read", async () => {
+    const capacity = SOURCE_REPAIR_LIMIT * DUE_WORK_READ_DRAIN_BUDGET.sourcePages;
+    const trackIds = await markTrackBurst(db, "burst-fit", capacity);
+
+    await expect(repairDueWorkBeforeRead(db, "artist-edges")).resolves.toBeUndefined();
+
+    expect(await countPendingTrackSourceMarkers(db)).toBe(0);
+    const ready = await listReadyDueWork(db, "artist-edges", { limit: capacity + 1 });
+    expect(ready.items.map((row) => row.subjectId).sort()).toEqual(trackIds);
+  });
+
+  it("never exposes a partial queue while a burst outlasts the source-page budget", async () => {
+    const capacity = SOURCE_REPAIR_LIMIT * DUE_WORK_READ_DRAIN_BUDGET.sourcePages;
+    const trackIds = await markTrackBurst(db, "burst-over", capacity + 1);
 
     await expect(repairDueWorkBeforeRead(db, "artist-edges")).rejects.toBeInstanceOf(
       DueWorkMaintenancePendingError,
     );
+    // The refused read converged every budgeted page; only the burst's last marker remains.
+    expect(await countPendingTrackSourceMarkers(db)).toBe(1);
+
     await expect(repairDueWorkBeforeRead(db, "artist-edges")).resolves.toBeUndefined();
-    expect((await listReadyDueWork(db, "artist-edges")).items).toHaveLength(6);
+    const ready = await listReadyDueWork(db, "artist-edges", { limit: capacity + 2 });
+    expect(ready.items.map((row) => row.subjectId).sort()).toEqual(trackIds);
+  });
+
+  it.each([
+    { remaining: 15, writeMs: 700 },
+    { remaining: 25, writeMs: 10_000 },
+  ])(
+    "starts no page once the drain time is spent yet converges the first page and chunk ($writeMs ms writes)",
+    async ({ remaining, writeMs }) => {
+      await markTrackBurst(db, "slow-burst", 30);
+      await seedCatalogueTrack(db, { trackId: "slow-physical" });
+      await markDueWorkRepair(db, {
+        sourceVersion: "slow-physical-v1",
+        subjectId: "slow-physical",
+        subjectType: "track",
+        workKind: "artist-edges",
+      });
+      let clock = 0;
+      const slowClient = {
+        batch: async (statements: InStatement[], mode?: Parameters<Client["batch"]>[1]) => {
+          clock += writeMs;
+          return db.batch(statements, mode);
+        },
+        execute: db.execute.bind(db),
+      };
+
+      await expect(
+        repairDueWorkBeforeRead(slowClient, "artist-edges", {
+          budget: { ...DUE_WORK_READ_DRAIN_BUDGET, wallMs: 1_500 },
+          now: () => clock,
+        }),
+      ).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
+
+      // With 700 ms writes, pages start at 0, 700, and 1,400 ms and a fourth would start at
+      // 2,100 ms. A 10-second write leaves only the first page.
+      expect(await countPendingTrackSourceMarkers(db)).toBe(remaining);
+      const physical = await db.execute(`select state from due_work
+        where work_kind = 'artist-edges' and subject_id = 'slow-physical'`);
+      expect(physical.rows.map((row) => row.state)).toEqual(["ready"]);
+    },
+  );
+
+  it("shares one drain budget across every guarded read in a Worker request", async () => {
+    const pages = DUE_WORK_READ_DRAIN_BUDGET.sourcePages;
+    await markTrackBurst(db, "shared-first", SOURCE_REPAIR_LIMIT * (pages - 4));
+
+    await runWithDatabaseRequestScope(async () => {
+      await expect(repairDueWorkBeforeRead(db, "artist-edges")).resolves.toBeUndefined();
+      await markTrackBurst(db, "shared-second", SOURCE_REPAIR_LIMIT * 8);
+      // The first read started all but four of the request's pages.
+      await expect(repairDueWorkBeforeRead(db, "embed-catalogue")).rejects.toBeInstanceOf(
+        DueWorkMaintenancePendingError,
+      );
+    });
+    expect(await countPendingTrackSourceMarkers(db)).toBe(SOURCE_REPAIR_LIMIT * 4);
+
+    await runWithDatabaseRequestScope(() => repairDueWorkBeforeRead(db, "embed-catalogue"));
+    expect(await countPendingTrackSourceMarkers(db)).toBe(0);
+  });
+
+  it("projects the same queue rows as a drain of one source page per read", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "due-work-drain-parity-"));
+    const guarded = await createIntegrationDb({ url: `file:${join(directory, "guarded.db")}` });
+    let paged: Client | undefined;
+    try {
+      await markTrackBurst(guarded, "parity", 23);
+      await guarded.execute({ args: [join(directory, "paged.db")], sql: "vacuum into ?" });
+      paged = createClient({
+        concurrency: LOCAL_DB_CONCURRENCY,
+        url: `file:${join(directory, "paged.db")}`,
+      });
+
+      await repairDueWorkBeforeRead(guarded, "embed-catalogue");
+      for (;;) {
+        const page = await fanOutDueWorkSourceRepairs(paged, {
+          includeCatalogueRank: false,
+          subjectType: "track",
+        });
+        if (!page.hasMore && page.deferred === 0) {
+          break;
+        }
+      }
+
+      const projection = async (client: Client) =>
+        (
+          await client.execute(`select work_kind, subject_type, subject_id, state, sort_key,
+              next_due_at, source_version, generation, repair_entered_at
+            from due_work order by work_kind, subject_type, subject_id`)
+        ).rows.map((row) => ({ ...row }));
+      const guardedRows = await projection(guarded);
+      expect(guardedRows.length).toBeGreaterThan(23);
+      expect(guardedRows).toEqual(await projection(paged));
+    } finally {
+      paged?.close();
+      guarded.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("advances the catalogue-rank rebuild exactly once while a rank read drains ordinary pages", async () => {
+    await markTrackBurst(db, "rank-drain", SOURCE_REPAIR_LIMIT * 3);
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }],
+        { markerVersion: "rank-drain-corpus-v1", producer: "catalogue-rank" },
+      ),
+    );
+    let rankMarkerReads = 0;
+    const countingClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("as corpus_check")) {
+          rankMarkerReads += 1;
+        }
+        return typeof statement === "string" ? db.execute(statement) : db.execute(statement);
+      },
+    };
+
+    await repairDueWorkBeforeRead(countingClient, "catalogue-rank").catch((error: unknown) => {
+      if (!(error instanceof DueWorkMaintenancePendingError)) {
+        throw error;
+      }
+    });
+
+    expect(rankMarkerReads).toBe(1);
+    expect(await countPendingTrackSourceMarkers(db)).toBe(0);
+    expect(
+      (
+        await db.execute(
+          `select work_kind from due_work_rebuilds where work_kind = 'catalogue-rank'`,
+        )
+      ).rows,
+    ).toHaveLength(1);
   });
 
   it("keeps a serial maintenance pass open across physical kinds and a concurrent marker", async () => {

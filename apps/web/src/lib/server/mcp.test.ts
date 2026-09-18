@@ -18,6 +18,7 @@ const listFreshMock = vi.hoisted(() => vi.fn());
 // hermetic (no DB, no network, no real rate-limit store).
 const searchArchiveMock = vi.hoisted(() => vi.fn());
 const assertRateLimitMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const chargeRateLimitMock = vi.hoisted(() => vi.fn());
 // The MCP-only Spotify candidate search — the one tool that spends the operator's token.
 const searchTrackCandidatesMock = vi.hoisted(() => vi.fn());
 const getFindingsByArtistMock = vi.hoisted(() => vi.fn());
@@ -75,7 +76,10 @@ vi.mock("./catalogue-groups", () => ({
 }));
 
 vi.mock("./search", () => ({ searchArchive: searchArchiveMock }));
-vi.mock("./rate-limit", () => ({ assertRateLimit: assertRateLimitMock }));
+vi.mock("./rate-limit", () => ({
+  assertRateLimit: assertRateLimitMock,
+  chargeRateLimit: chargeRateLimitMock,
+}));
 // Partial-mock ./spotify so `ApiError` stays the real class (the dispatcher renders a tool
 // error by instanceof) while the Spotify network call is stubbed for search_tracks.
 vi.mock("./spotify", async (importOriginal) => ({
@@ -674,6 +678,11 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
     searchArchiveMock.mockReset();
     assertRateLimitMock.mockReset();
     assertRateLimitMock.mockResolvedValue(undefined);
+    chargeRateLimitMock.mockReset();
+    chargeRateLimitMock.mockResolvedValue({
+      requireAllowed: async () => undefined,
+      throwIfLimited: () => undefined,
+    });
     getFindingsByArtistMock.mockReset();
     getFindingsByArtistMock.mockResolvedValue([]);
     getFindingsByLabelMock.mockReset();
@@ -805,8 +814,12 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
 
     expect(isError).toBe(false);
     // 🔴 MANDATORY: the anonymous /mcp shares the public HTTP twin's per-IP budget.
-    expect(assertRateLimitMock).toHaveBeenCalledWith(
+    expect(chargeRateLimitMock).toHaveBeenCalledWith(
       expect.objectContaining({ action: "search_archive", limit: 30 }),
+    );
+    // The model tier is gated on the same charge's verdict.
+    expect(searchArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({ beforeModel: expect.any(Function), q: "nu:tone" }),
     );
     // Unlike chat's findings-only filter, the MCP serves the WHOLE SearchResult — the uncertified
     // row rides too, tagged certified:false (never findings-filtered).

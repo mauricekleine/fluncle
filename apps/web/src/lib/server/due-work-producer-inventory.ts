@@ -375,17 +375,6 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     ],
   },
   {
-    delegates: ["correctionStatement", "zeroStatement"],
-    disposition: "delegated-atomicity",
-    file: "hub-counts-reconcile.ts",
-    rationale:
-      "Each generated count correction executes beside its selection marker in one write batch.",
-    sites: [
-      "hub-counts-reconcile.ts:update:dynamic:239a77b2",
-      "hub-counts-reconcile.ts:update:dynamic:b3c3aab2",
-    ],
-  },
-  {
     delegates: [
       "artistLinkFollowUpStatements",
       "hubCountArtistDeltaStatement",
@@ -783,15 +772,6 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     rationale:
       "The edge statement builder is called only by the inventoried explicit write transaction.",
     sites: ["artists.ts:insert:track_artists:6430174d"],
-  },
-  {
-    disposition: "derived-projection-write",
-    file: "hub-counts-reconcile.ts",
-    rationale: "Reconciles maintained hub counters on dynamic entity tables only.",
-    sites: [
-      "hub-counts-reconcile.ts:update:dynamic:239a77b2",
-      "hub-counts-reconcile.ts:update:dynamic:b3c3aab2",
-    ],
   },
   {
     disposition: "non-projection-fact",

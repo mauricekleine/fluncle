@@ -23,9 +23,14 @@
 //
 //   3. One durable store. Always the DB (`rate_limit_counters`), never
 //      per-isolate memory.
+//
+// The atomic check is never skipped. What a caller may bound is how long it WAITS
+// for the check's verdict when its own work costs nothing — see `chargeRateLimit`.
 
+import { waitUntil } from "cloudflare:workers";
 import { getDb, typedRow } from "./db";
 import { jsonError } from "./env";
+import { logEvent } from "./log";
 import { hashRequestPart } from "./public-auth";
 import { ApiError } from "./spotify";
 
@@ -220,4 +225,117 @@ export async function assertRateLimit({
   if (!allowed) {
     throw new ApiError("rate_limited", message, 429);
   }
+}
+
+/**
+ * How long {@link chargeRateLimit} holds a free answer for the limiter's verdict. The counter upsert
+ * is a WRITE on the primary: a healthy one lands in tens of milliseconds, but it queues behind any
+ * write holding the database's single write lock (a background batch can hold it for seconds) while
+ * reads on the same database keep answering. So the bound only binds while the primary is stalled.
+ */
+export const RATE_LIMIT_VERDICT_WAIT_MS = 250;
+
+/** A request whose charge has been issued and whose verdict may still be settling. */
+export type RateLimitCharge = {
+  /** Wait for the verdict, then throw the 429 when it is over the limit. Gate a paid step on this. */
+  requireAllowed: () => Promise<void>;
+  /**
+   * Throw the 429 when the verdict has ALREADY come back over the limit, or rethrow the counter
+   * write's failure when that is already known. Never waits.
+   */
+  throwIfLimited: () => void;
+};
+
+type ChargeOutcome = { allowed: boolean } | { error: unknown };
+
+/**
+ * Charge the limiter for a request whose work costs no vendor money until one step that does.
+ *
+ * The charge is the SAME atomic upsert {@link assertRateLimit} issues — same key, same limit, same
+ * window, one unit per request — so the count stays exact and a flood is still refused. What differs
+ * is how long the caller waits for the verdict:
+ *
+ *   - The verdict lands inside `verdictWaitMs` (the healthy primary): it is acted on exactly as
+ *     `assertRateLimit` acts on it. Over the limit throws the 429 before any work runs, and a failed
+ *     write rethrows.
+ *   - The verdict is still pending (the primary's write lock is held elsewhere): the caller
+ *     proceeds, the write finishes under `waitUntil`, and the handle keeps the verdict authoritative
+ *     where it matters. `requireAllowed` in front of the paid step waits for it; `throwIfLimited`
+ *     after the free work refuses the answer when the verdict has come back over the limit by then.
+ *
+ * So the one thing a stalled primary lends an over-limit caller is free work answered while the
+ * charge is still being recorded. The paid step never runs on an unknown verdict.
+ */
+export async function chargeRateLimit({
+  action,
+  limit,
+  message = "Too many requests. Try again later.",
+  request,
+  userId,
+  verdictWaitMs = RATE_LIMIT_VERDICT_WAIT_MS,
+  windowMs,
+}: {
+  action: string;
+  limit: number;
+  message?: string;
+  request: Request;
+  userId?: string;
+  verdictWaitMs?: number;
+  windowMs: number;
+}): Promise<RateLimitCharge> {
+  const bucket = rateLimitBucket(request, userId);
+  let outcome: ChargeOutcome | undefined;
+  // Never rejects: the outcome is recorded instead, so a write that fails after the caller moved on
+  // is an observed fault rather than an unhandled rejection.
+  const settled = consumeRateLimit({ action, bucket, limit, windowMs }).then(
+    (allowed) => {
+      outcome = { allowed };
+    },
+    (error: unknown) => {
+      outcome = { error };
+    },
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  await Promise.race([
+    settled,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, verdictWaitMs);
+    }),
+  ]);
+  clearTimeout(timer);
+
+  const throwIfLimited = () => {
+    if (outcome === undefined) {
+      return;
+    }
+
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+
+    if (!outcome.allowed) {
+      throw new ApiError("rate_limited", message, 429);
+    }
+  };
+
+  throwIfLimited();
+
+  if (outcome === undefined) {
+    waitUntil(
+      settled.then(() => {
+        if (outcome && "error" in outcome) {
+          logEvent("error", "rate-limit.charge-failed", { action, error: outcome.error });
+        }
+      }),
+    );
+  }
+
+  return {
+    requireAllowed: async () => {
+      await settled;
+      throwIfLimited();
+    },
+    throwIfLimited,
+  };
 }
