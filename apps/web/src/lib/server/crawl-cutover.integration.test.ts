@@ -16,9 +16,25 @@ import {
   claimCrawlFrontierRows,
   isCrawlDueCutoverEnabled,
   settleClaimedCrawlFrontierRow,
+  type CrawlClaimRepairDrainBudget,
 } from "./crawl-cutover";
+import { DueWorkMaintenancePendingError } from "./due-work";
 
 const OLD = "2026-01-01T00:00:00.000Z";
+
+/** A drain budget whose units are one row, so a small fixture exercises the multi-unit lanes. */
+function narrowBudget(
+  overrides: Partial<CrawlClaimRepairDrainBudget> = {},
+): CrawlClaimRepairDrainBudget {
+  return {
+    nodeChunkRows: 1,
+    nodeChunks: 8,
+    sourcePageRows: 1,
+    sourcePages: 8,
+    wallMs: 60_000,
+    ...overrides,
+  };
+}
 
 let db: Client;
 
@@ -69,6 +85,39 @@ async function seedNode(options: {
       (id, kind, source, external_id, hop, label_slug, created_at, updated_at)
       values (?, ?, ?, ?, ?, ?, ?, ?)`,
   });
+}
+
+async function markLabelRepair(slug: string): Promise<void> {
+  await db.execute({
+    args: ["label", slug, 1, `source-version:${slug}`, OLD, OLD],
+    sql: `insert into crawl_projection_repairs
+      (source_type, source_id, source_epoch, source_version, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+/** Three ready release nodes on one enabled label, the shape one repair marker fans out across. */
+async function seedRepairableLabel(slug: string): Promise<string[]> {
+  await seedLabel(slug, true);
+  const ids = ["a", "b", "c"].map((suffix) => `release:${slug}-${suffix}`);
+  for (const id of ids) {
+    await seedNode({ externalId: id, hop: 0, id, kind: "release", labelSlug: slug });
+  }
+  await rebuildCrawlDueWork(db, { generation: `crawl-${slug}`, limit: 10 });
+  return ids;
+}
+
+async function countByState(state: string): Promise<number> {
+  const result = await db.execute({
+    args: [state],
+    sql: "select count(*) as n from crawl_due_work where state = ?",
+  });
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+async function countRepairMarkers(): Promise<number> {
+  const result = await db.execute("select count(*) as n from crawl_projection_repairs");
+  return Number(result.rows[0]?.n ?? 0);
 }
 
 async function seedAllowedRule(artistMbid: string, rearmedAt: null | string = OLD): Promise<void> {
@@ -321,6 +370,93 @@ describe("crawl runtime cutover", () => {
           sql.includes("outstanding.rearmed_at is null"),
       ),
     ).toBe(false);
+  });
+
+  it("drains a source marker no single fan-out page can clear, then claims", async () => {
+    const ids = await seedRepairableLabel("wide");
+    await markLabelRepair("wide");
+
+    const claim = await claimCrawlFrontierRows(db, {
+      budget: narrowBudget(),
+      claimedBy: "test-pass",
+      leaseMs: 60_000,
+      limit: ids.length,
+      token: "wide-token",
+    });
+
+    expect(claim.rows.map((row) => row.id).sort()).toEqual([...ids].sort());
+    expect(await countRepairMarkers()).toBe(0);
+    expect(await countByState("repair")).toBe(0);
+  });
+
+  it("defers with the typed maintenance fault when source repair outlasts the drain budget", async () => {
+    await seedRepairableLabel("deferred");
+    await markLabelRepair("deferred");
+
+    await expect(
+      claimCrawlFrontierRows(db, {
+        budget: narrowBudget({ sourcePages: 2 }),
+        claimedBy: "test-pass",
+        leaseMs: 60_000,
+        limit: 3,
+        token: "deferred-token",
+      }),
+    ).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
+
+    // The deferred claim still converged the repair its budget allowed, so the next pass resumes
+    // from that durable progress instead of starting the fan-out over.
+    expect(await countByState("repair")).toBe(2);
+    expect(await countRepairMarkers()).toBe(1);
+  });
+
+  it("drains node repair across chunks and defers when its chunk budget runs out", async () => {
+    const ids = await seedRepairableLabel("nodes");
+    await db.execute("update crawl_due_work set state = 'repair'");
+
+    await expect(
+      claimCrawlFrontierRows(db, {
+        budget: narrowBudget({ nodeChunks: 1 }),
+        claimedBy: "test-pass",
+        leaseMs: 60_000,
+        limit: 3,
+        token: "nodes-deferred",
+      }),
+    ).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
+    expect(await countByState("repair")).toBe(2);
+
+    const claim = await claimCrawlFrontierRows(db, {
+      budget: narrowBudget(),
+      claimedBy: "test-pass",
+      leaseMs: 60_000,
+      limit: ids.length,
+      token: "nodes-token",
+    });
+    expect(claim.rows.map((row) => row.id).sort()).toEqual([...ids].sort());
+    expect(await countByState("repair")).toBe(0);
+  });
+
+  it("stops the drain at the wall bound after the first unit", async () => {
+    await seedRepairableLabel("stalled");
+    await markLabelRepair("stalled");
+    let reading = 0;
+    const stalledClock = (): number => {
+      const current = reading;
+      reading += 1_000;
+      return current;
+    };
+
+    await expect(
+      claimCrawlFrontierRows(db, {
+        budget: narrowBudget({ wallMs: 500 }),
+        claimedBy: "test-pass",
+        leaseMs: 60_000,
+        limit: 3,
+        now: stalledClock,
+        token: "stalled-token",
+      }),
+    ).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
+    // The first page always runs, so even a claim the wall bound stops advances the repair by one.
+    expect(await countByState("repair")).toBe(1);
   });
 
   it("drains multiple bounded rule fanouts before claiming", async () => {
