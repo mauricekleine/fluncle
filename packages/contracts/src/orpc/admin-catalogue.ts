@@ -749,10 +749,19 @@ const CrawlPhaseInitializationSchema = z.object({
   seedsRearmed: z.number(),
 });
 
+/**
+ * How many frontier nodes ONE crawl prepare may claim, and the wire bound on the items it hands
+ * back. The number is set by the claim lease: every node of a batch is leased at the same instant
+ * and a commit past its lease is fenced off, so the batch must be small enough that its last node
+ * still reaches a commit. The reasoning, with the per-node costs it is derived from, lives beside
+ * `prepareCrawlPhase` in `apps/web/src/lib/server/crawl.ts`.
+ */
+export const MAX_CRAWL_PREPARE_LIMIT = 6;
+
 const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("initialize") }),
   z.object({
-    limit: z.number().int().min(1).max(2).default(2),
+    limit: z.number().int().min(1).max(MAX_CRAWL_PREPARE_LIMIT).default(2),
     maxHop: z.number().int().min(0).max(3).default(2),
     phase: z.literal("prepare"),
   }),
@@ -776,7 +785,9 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
   z.object({
     frontierPending: z.number(),
     initialization: CrawlPhaseInitializationSchema,
-    items: z.array(z.object({ nodeId: z.string(), preparedToken: z.string() })).max(2),
+    items: z
+      .array(z.object({ nodeId: z.string(), preparedToken: z.string() }))
+      .max(MAX_CRAWL_PREPARE_LIMIT),
     kind: z.enum(["drained", "prepared", "unavailable"]),
     ok: z.literal(true),
     phase: z.literal("prepare"),
@@ -831,6 +842,8 @@ export const CrawlStatusSchema = z
     labelsUndecided: z.number(),
     /** What the NEXT crawl would seed from. */
     seedLabels: z.array(z.string()),
+    /** Claimable release nodes whose provenance is storable — the head of the claim's release lane. */
+    storablePending: z.number(),
   })
   .meta({ id: "CrawlStatus" });
 

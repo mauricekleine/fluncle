@@ -117,6 +117,18 @@ function fixture(): Fixture {
     '      printf \'%s\\n\' \'{"ok":true,"phase":"fetch","commitToken":"commit-token","operationId":"crawl-op","operationKey":"crawl-key","requestDigest":"digest"}\' ;;',
     "    commit:normal|commit:batch|commit:provider-pause)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}}\' ;;',
+    "    commit:throttle-then-work)",
+    "      count=$(grep -c '^commit:' " + data.calls + ")",
+    '      if [ "$count" -eq 1 ]; then',
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":0,"failed":1,"tracksFound":0,"tracksWritten":0,"tracksSkipped":0,"rateLimited":true}}}\'',
+    "      else",
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":5,"tracksWritten":2,"tracksSkipped":3,"tracksSkippedHeld":1,"tracksSkippedLabelGate":1,"tracksSkippedArtistRule":1,"rateLimited":false}}}\'',
+    "      fi ;;",
+    "    commit:always-throttled)",
+    '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":0,"failed":1,"tracksFound":0,"tracksWritten":0,"tracksSkipped":0,"rateLimited":true}}}\' ;;',
+    "    commit:slow)",
+    "      sleep 1.2",
+    '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}}\' ;;',
     "    commit:throttled)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":0,"failed":1,"tracksFound":0,"tracksWritten":0,"tracksSkipped":0,"rateLimited":true}}}\' ;;',
     "    commit:throttled-after-failure)",
@@ -275,6 +287,146 @@ describe("crawl-sweep phase protocol", () => {
       expect(calls).toContain("prepare-limit:2");
       expect(calls.match(/^fetch:/gm)).toHaveLength(2);
       expect(calls.match(/^commit:/gm)).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "asks one claim for the whole prepare bound so each node does not pay its own admission",
+    async () => {
+      const data = fixture();
+      await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "batch"), FLUNCLE_CRAWL_NODES: "6" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(readFileSync(data.calls, "utf8")).toContain("prepare-limit:6");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "waits out a throttle and keeps working instead of ending the tick on the first one",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: {
+            ...sweepEnvironment(data, "throttle-then-work"),
+            FLUNCLE_CRAWL_NODES: "3",
+            FLUNCLE_CRAWL_THROTTLE_PAUSE_MS: "0",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checked: 3,
+        expanded: 2,
+        failed: 0,
+        ok: true,
+        partial: false,
+        throttled: true,
+        throttles: 1,
+        // The skip breakdown the receipt always carried and the summary used to drop.
+        tracksSkippedArtistRule: 2,
+        tracksSkippedHeld: 2,
+        tracksSkippedLabelGate: 2,
+        tracksWritten: 4,
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "stops on its throttle budget rather than pushing a wall that will not move",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: {
+            ...sweepEnvironment(data, "always-throttled"),
+            FLUNCLE_CRAWL_NODES: "20",
+            FLUNCLE_CRAWL_THROTTLE_PAUSE_MS: "0",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checked: 3,
+        failed: 0,
+        ok: true,
+        partial: true,
+        reason: "musicbrainz_throttle",
+        throttled: true,
+        throttles: 3,
+      });
+      expect(readFileSync(data.calls, "utf8").match(/^commit:/gm)).toHaveLength(3);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "stops itself on its wall-clock budget instead of being killed mid-node by the unit timeout",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: {
+            ...sweepEnvironment(data, "slow"),
+            FLUNCLE_CRAWL_NODES: "10",
+            FLUNCLE_CRAWL_WALL_BUDGET_MS: "1000",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checked: 1,
+        expanded: 1,
+        ok: true,
+        partial: true,
+        reason: "wall_budget",
+        tracksWritten: 3,
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "rejects an out-of-range throttle pause or wall budget before invoking the phase runner",
+    async () => {
+      for (const [name, override] of [
+        ["pause", { FLUNCLE_CRAWL_THROTTLE_PAUSE_MS: "999999" }],
+        ["budget", { FLUNCLE_CRAWL_WALL_BUDGET_MS: "10" }],
+      ] as const) {
+        const data = fixture();
+        const result = await collect(
+          Bun.spawn([process.execPath, SWEEP], {
+            detached: true,
+            env: { ...sweepEnvironment(data, "normal"), ...override },
+            stderr: "pipe",
+            stdout: "pipe",
+          }),
+        );
+        expect(result.exitCode, name).toBe(1);
+        expect(JSON.parse(result.stdout), name).toMatchObject({ errors: 1, ok: false });
+        expect(existsSync(data.calls), name).toBe(false);
+      }
     },
     TEST_TIMEOUT_MS,
   );

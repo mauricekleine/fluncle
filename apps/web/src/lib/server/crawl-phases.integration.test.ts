@@ -6,10 +6,13 @@ import { join } from "node:path";
 
 import { createIntegrationDb } from "./integration-db";
 import { markCrawlNodeRepairStatement, rebuildCrawlDueWork } from "./crawl-due-work";
+import { MAX_CRAWL_PREPARE_LIMIT } from "@fluncle/contracts/orpc";
+
 import {
   commitCrawlPhase,
   CRAWL_PHASE_TOKEN_MAX_BYTES,
   fetchCrawlPhase,
+  initializeCrawlPhase,
   prepareCrawlPhase,
 } from "./crawl";
 import { CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
@@ -188,6 +191,123 @@ describe("crawl admission phases", () => {
     expect(prepared.items.map((item) => item.nodeId)).toEqual([
       "musicbrainz:release:release-phase",
       "musicbrainz:artist:discovery",
+    ]);
+  });
+
+  it("claims up to the prepare bound and refuses a batch wider than the claim lease allows", async () => {
+    for (let index = 0; index < MAX_CRAWL_PREPARE_LIMIT + 2; index += 1) {
+      const nodeId = `musicbrainz:artist:wide-${index}`;
+      await db.execute({
+        args: [nodeId, `wide-${index}`, timestamp, timestamp],
+        sql: `insert into crawl_frontier
+          (id, kind, source, external_id, hop, created_at, updated_at)
+          values (?, 'artist', 'musicbrainz', ?, 1, ?, ?)`,
+      });
+      await db.batch([markCrawlNodeRepairStatement(nodeId, crypto.randomUUID())], "write");
+    }
+
+    const prepared = await prepareCrawlPhase({ limit: MAX_CRAWL_PREPARE_LIMIT, maxHop: 2 });
+    expect(prepared.items).toHaveLength(MAX_CRAWL_PREPARE_LIMIT);
+    // Every node of one claim carries the SAME lease instant, which is the whole reason the bound
+    // exists: the last node of a batch has to reach its commit before that instant passes.
+    await expect(
+      prepareCrawlPhase({ limit: MAX_CRAWL_PREPARE_LIMIT + 1, maxHop: 2 }),
+    ).rejects.toThrow(/crawl prepare limit/);
+  });
+
+  it("returns a throttled node to the frontier without charging it a failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("", { status: 503 }))),
+    );
+
+    const fetched = await prepareAndFetch();
+    const receipt = await commitCrawlPhase(fetched);
+
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { failed: 1, rateLimited: true },
+    });
+
+    // A vendor wall is not this node's fault: it keeps its turn, its cursor, and its unspent
+    // failure count, so five throttles can never abandon a node that never misbehaved.
+    const row = await db.execute(
+      "select state, failures, note from crawl_frontier where id = 'musicbrainz:release:release-phase'",
+    );
+    expect(row.rows[0]?.state).toBe("pending");
+    expect(Number(row.rows[0]?.failures)).toBe(0);
+    expect(row.rows[0]?.note).toBe("musicbrainz rate-limited");
+  });
+
+  it("charges a failure for a provider failure that is not a throttle", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("not json at all", { status: 200 }))),
+    );
+
+    const fetched = await prepareAndFetch();
+    const receipt = await commitCrawlPhase(fetched);
+
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { failed: 1, rateLimited: false },
+    });
+    const row = await db.execute(
+      "select state, failures from crawl_frontier where id = 'musicbrainz:release:release-phase'",
+    );
+    expect(row.rows[0]?.state).toBe("failed");
+    expect(Number(row.rows[0]?.failures)).toBe(1);
+  });
+
+  it("issues no per-label write when every enabled seed already holds its frontier node", async () => {
+    // Seeding runs at the head of every tick inside the exclusive writer admission, so a no-op
+    // seed has to cost reads and nothing else.
+    const first = await initializeCrawlPhase();
+    expect(first.kind).toBe("initialized");
+    expect(first.seeded).toBe(1);
+
+    const issued: string[] = [];
+    const originalBatch = db.batch.bind(db);
+    const originalExecute = db.execute.bind(db);
+    db.batch = (async (...args: Parameters<typeof db.batch>) => {
+      issued.push(JSON.stringify(args[0]));
+      return originalBatch(...args);
+    }) as Client["batch"];
+    db.execute = (async (...args: Parameters<typeof db.execute>) => {
+      issued.push(JSON.stringify(args[0]));
+      return originalExecute(...args);
+    }) as Client["execute"];
+
+    try {
+      const second = await initializeCrawlPhase();
+      expect(second.seeded).toBe(0);
+      expect(
+        issued.filter((statement) => statement.includes("insert into crawl_frontier")),
+      ).toEqual([]);
+    } finally {
+      db.batch = originalBatch;
+      db.execute = originalExecute;
+    }
+  });
+
+  it("mints only the enabled seed labels whose frontier node is missing", async () => {
+    await initializeCrawlPhase();
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into labels
+        (id, name, slug, seed_state, created_at, updated_at)
+        values ('label-late', 'Late Label', 'late-label', 'enabled', ?, ?)`,
+    });
+
+    const seeded = await initializeCrawlPhase();
+
+    expect(seeded.seeded).toBe(1);
+    const nodes = await db.execute(
+      "select id from crawl_frontier where source = 'fluncle' and kind = 'label' order by id",
+    );
+    expect(nodes.rows.map((row) => row["id"])).toEqual([
+      "fluncle:label:late-label",
+      "fluncle:label:phase-label",
     ]);
   });
 

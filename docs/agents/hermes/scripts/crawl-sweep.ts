@@ -20,7 +20,61 @@ const NODES = Number(process.env.FLUNCLE_CRAWL_NODES ?? "10");
 const MAX_HOP = Number(process.env.FLUNCLE_CRAWL_MAX_HOP ?? "2");
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const ADMISSION_OWNER = "fluncle-crawl";
+
+/**
+ * How many nodes one prepare claims. It mirrors the server's `MAX_CRAWL_PREPARE_LIMIT`, which the
+ * request schema also enforces, so the two cannot silently disagree: a sweep asking for more than
+ * the server allows is rejected at the contract rather than half-honoured. Every prepare is an
+ * admitted phase with a coordinator round trip and a process spawn of its own, so the nodes a
+ * single claim covers are the nodes that toll is amortised across.
+ */
+const PREPARE_LIMIT = 6;
+
+/**
+ * THE THROTTLE BUDGET. A MusicBrainz throttle is the vendor's mood, not the tick's verdict: the
+ * old behaviour ended the whole pass on the first one, so a single 503 six seconds into a
+ * ten-minute window spent the rest of that window doing nothing. The tick now waits and carries
+ * on — but only a bounded number of times, because a wall that survives three waits is a wall the
+ * next tick should meet with a fresh rate window rather than one this tick should keep pushing on.
+ */
+const MAX_THROTTLES = 3;
+
+/**
+ * How long the tick waits out a throttle. The shared MusicBrainz client has ALREADY spent this
+ * node's `Retry-After` hints — three attempts of them — before it reports a throttle at all, so
+ * what reaches the sweep is precisely the case where the vendor's own hint was too optimistic.
+ * The pause is therefore a flat, generous wait rather than an echo of a hint that has already
+ * been proven insufficient, and it is bounded so it can never be the reason a tick overruns.
+ */
+const THROTTLE_PAUSE_MS = Number(process.env.FLUNCLE_CRAWL_THROTTLE_PAUSE_MS ?? "45000");
+const THROTTLE_PAUSE_MAX_MS = 120_000;
+
+/**
+ * THE WALL-CLOCK GUARD, and it is a BACKSTOP rather than a target. The unit kills this process at
+ * `TimeoutStartSec=1030`, and a kill leaves no summary, no marker, and a claimed node stranded
+ * until its lease expires — so the tick stops itself first. The budget is checked before every
+ * claim AND before every node inside a claim, which bounds the overshoot to one node rather than
+ * a whole batch: at the shared MusicBrainz client's worst honest latency (~35s for an aborted
+ * fetch plus two `Retry-After` sleeps) plus its commit, that leaves the default a wide margin
+ * under the unit's timeout for the last node and the summary.
+ *
+ * The pause never sits inside an open claim: a throttle abandons the rest of its batch before the
+ * tick waits, so no wait can push a claimed node past its lease. A tick that actually reaches this
+ * budget is already abnormal — the sizing is ~3s of paced provider time per node — and systemd
+ * queues the next firing behind this one rather than overlapping it, so an overrun costs cadence
+ * and never concurrency.
+ */
+const WALL_BUDGET_MS = Number(process.env.FLUNCLE_CRAWL_WALL_BUDGET_MS ?? "840000");
+const WALL_BUDGET_MAX_MS = 1_000_000;
+
 const log = (message: string) => console.error(`[crawl-sweep] ${message}`);
+
+/** Wait without an event loop: every phase this script drives is a synchronous spawn. */
+function sleepSync(ms: number): void {
+  if (ms > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  }
+}
 
 type JsonObject = Record<string, unknown>;
 type PhaseEnvelope = JsonObject & {
@@ -60,8 +114,16 @@ type SweepSummary = {
   reconciledCommits: number;
   staleRejected: number;
   throttled: boolean;
+  /** How many MusicBrainz throttles this tick waited out — the gauge the boolean cannot give. */
+  throttles: number;
   tracksFound: number;
   tracksSkipped: number;
+  /** Tracks the write chokepoint refused because an artist rule blocked their first credit. */
+  tracksSkippedArtistRule: number;
+  /** Tracks already held by the archive — the idempotence layers folding a re-crawl to a no-op. */
+  tracksSkippedHeld: number;
+  /** Tracks refused by the label gate — the operator's rulings doing their job, not a fault. */
+  tracksSkippedLabelGate: number;
   tracksWritten: number;
 };
 
@@ -222,6 +284,24 @@ function validateConfig(): void {
   if (!Number.isInteger(MAX_HOP) || MAX_HOP < 0 || MAX_HOP > 3) {
     throw new Error("FLUNCLE_CRAWL_MAX_HOP must be an integer from 0 through 3");
   }
+  if (
+    !Number.isInteger(THROTTLE_PAUSE_MS) ||
+    THROTTLE_PAUSE_MS < 0 ||
+    THROTTLE_PAUSE_MS > THROTTLE_PAUSE_MAX_MS
+  ) {
+    throw new Error(
+      `FLUNCLE_CRAWL_THROTTLE_PAUSE_MS must be an integer from 0 through ${THROTTLE_PAUSE_MAX_MS}`,
+    );
+  }
+  if (
+    !Number.isInteger(WALL_BUDGET_MS) ||
+    WALL_BUDGET_MS < 1_000 ||
+    WALL_BUDGET_MS > WALL_BUDGET_MAX_MS
+  ) {
+    throw new Error(
+      `FLUNCLE_CRAWL_WALL_BUDGET_MS must be an integer from 1000 through ${WALL_BUDGET_MAX_MS}`,
+    );
+  }
 }
 
 function createSummary(): SweepSummary {
@@ -243,8 +323,12 @@ function createSummary(): SweepSummary {
     reconciledCommits: 0,
     staleRejected: 0,
     throttled: false,
+    throttles: 0,
     tracksFound: 0,
     tracksSkipped: 0,
+    tracksSkippedArtistRule: 0,
+    tracksSkippedHeld: 0,
+    tracksSkippedLabelGate: 0,
     tracksWritten: 0,
   };
 }
@@ -270,6 +354,27 @@ function recordRepairPending(summary: SweepSummary): void {
   log("crawl pass paused: due-work repair is still converging");
 }
 
+/**
+ * The tick met the vendor wall as many times as its budget allows. Everything committed so far
+ * stands, the frontier holds the rest, and the next tick arrives with a fresh rate window — so
+ * this is a partial tick with a named cause, never a failed one.
+ */
+function recordThrottleBudgetStop(summary: SweepSummary): void {
+  summary.partial = true;
+  summary.reason = summary.reason ?? "musicbrainz_throttle";
+  log(`crawl pass stopped: ${summary.throttles} musicbrainz throttles in one tick`);
+}
+
+/**
+ * The tick stopped itself with time to spare rather than being killed mid-node by the unit's
+ * timeout. A kill writes no summary and strands a claim until its lease expires; this writes both.
+ */
+function recordWallBudgetStop(summary: SweepSummary): void {
+  summary.partial = true;
+  summary.reason = summary.reason ?? "wall_budget";
+  log("crawl pass stopped: the tick's wall-clock budget is spent");
+}
+
 function recordPhaseYield(summary: SweepSummary): void {
   summary.admissionOutcome = "phase-yielded";
   summary.gateState = "paused";
@@ -290,17 +395,28 @@ function applyLegacyPass(summary: SweepSummary, pass: JsonObject): void {
   summary.pending = Number(pass.frontierPending ?? 0);
   summary.queueDepth = summary.pending;
   summary.throttled = pass.rateLimited === true;
+  summary.throttles = pass.rateLimited === true ? 1 : 0;
   summary.tracksFound = Number(pass.tracksFound ?? 0);
   summary.tracksWritten = Number(pass.tracksWritten ?? 0);
   summary.tracksSkipped = Number(pass.tracksSkipped ?? 0);
+  summary.tracksSkippedArtistRule = Number(pass.tracksSkippedArtistRule ?? 0);
+  summary.tracksSkippedHeld = Number(pass.tracksSkippedHeld ?? 0);
+  summary.tracksSkippedLabelGate = Number(pass.tracksSkippedLabelGate ?? 0);
 }
 
-function applyReceipt(summary: SweepSummary, committed: ReceiptEnvelope): boolean {
+/**
+ * What one node's commit says about the REST of the tick. Three answers, never a bare boolean: a
+ * throttle is backpressure the tick waits out, a stale claim is a race the tick stops on, and a
+ * commit is work done. Folding the first two together is what made every throttle end the pass.
+ */
+type NodeOutcome = "committed" | "stop" | "throttled";
+
+function applyReceipt(summary: SweepSummary, committed: ReceiptEnvelope): NodeOutcome {
   const receipt = committed.receipt;
   if (receipt?.outcome === "rejected") {
     summary.staleRejected += 1;
     summary.checked += 1;
-    return false;
+    return "stop";
   }
   if (receipt?.outcome !== "committed" || !receipt.result) {
     throw new Error(`crawl commit is ${receipt?.outcome ?? "invalid"}`);
@@ -320,11 +436,14 @@ function applyReceipt(summary: SweepSummary, committed: ReceiptEnvelope): boolea
   summary.tracksFound += Number(result.tracksFound ?? 0);
   summary.tracksWritten += Number(result.tracksWritten ?? 0);
   summary.tracksSkipped += Number(result.tracksSkipped ?? 0);
+  summary.tracksSkippedArtistRule += Number(result.tracksSkippedArtistRule ?? 0);
+  summary.tracksSkippedHeld += Number(result.tracksSkippedHeld ?? 0);
+  summary.tracksSkippedLabelGate += Number(result.tracksSkippedLabelGate ?? 0);
   if (result.rateLimited === true) {
     summary.throttled = true;
-    return false;
+    return "throttled";
   }
-  return true;
+  return "committed";
 }
 
 function commitFetched(
@@ -397,13 +516,98 @@ function processPreparedItem(
   index: number,
   preparedToken: string,
   summary: SweepSummary,
-): boolean {
+): NodeOutcome {
   const fetched = directPhase<FetchEnvelope>(directory, `fetch-${index}`, {
     phase: "fetch",
     preparedToken,
   });
   const committed = commitFetched(directory, index, fetched, summary);
-  return committed === undefined ? false : applyReceipt(summary, committed);
+  return committed === undefined ? "stop" : applyReceipt(summary, committed);
+}
+
+/**
+ * Work one claim's nodes serially. Returns how many nodes were reached and whether the tick should
+ * carry on — a throttle pauses it, a stale claim or an admission yield ends it.
+ */
+function drainPreparedBatch(
+  directory: string,
+  items: readonly { preparedToken: string }[],
+  processed: number,
+  summary: SweepSummary,
+  spentMs: () => number,
+): { done: boolean; processed: number; throttled: boolean } {
+  let reached = processed;
+  for (const item of items) {
+    if (spentMs() >= WALL_BUDGET_MS) {
+      recordWallBudgetStop(summary);
+      return { done: true, processed: reached, throttled: false };
+    }
+    const outcome = processPreparedItem(directory, reached, item.preparedToken, summary);
+    reached += 1;
+    if (outcome === "throttled") {
+      // The rest of THIS claim is abandoned deliberately: its nodes would meet the same wall, and
+      // an unworked claim simply expires back to `ready`. Their turn comes round again.
+      return { done: false, processed: reached, throttled: true };
+    }
+    if (outcome === "stop") {
+      return { done: true, processed: reached, throttled: false };
+    }
+  }
+  return { done: false, processed: reached, throttled: false };
+}
+
+/** Claim, work, and — when the vendor pushes back — wait, until a budget or the frontier says stop. */
+function drainFrontier(directory: string, summary: SweepSummary): void {
+  const startedAt = Date.now();
+  const spentMs = (): number => Date.now() - startedAt;
+  let processed = 0;
+
+  while (processed < NODES) {
+    if (spentMs() >= WALL_BUDGET_MS) {
+      recordWallBudgetStop(summary);
+      return;
+    }
+    const prepared = admittedPhase<PrepareEnvelope>(directory, `prepare-${processed}`, {
+      limit: Math.min(PREPARE_LIMIT, NODES - processed),
+      maxHop: MAX_HOP,
+      phase: "prepare",
+    });
+    if (!prepared) {
+      recordPhaseYield(summary);
+      return;
+    }
+    summary.pending = prepared.frontierPending ?? summary.pending;
+    summary.queueDepth = summary.pending;
+    if (prepared.kind === "drained") {
+      return;
+    }
+    if (prepared.kind !== "prepared" || !prepared.items || prepared.items.length === 0) {
+      throw new Error(`crawl prepare is ${prepared.kind ?? "invalid"}`);
+    }
+
+    const batch = drainPreparedBatch(directory, prepared.items, processed, summary, spentMs);
+    processed = batch.processed;
+    if (batch.done) {
+      return;
+    }
+    if (!batch.throttled) {
+      continue;
+    }
+
+    summary.throttles += 1;
+    if (summary.throttles >= MAX_THROTTLES) {
+      recordThrottleBudgetStop(summary);
+      return;
+    }
+    if (processed >= NODES || spentMs() + THROTTLE_PAUSE_MS >= WALL_BUDGET_MS) {
+      if (processed < NODES) {
+        recordWallBudgetStop(summary);
+      }
+      return;
+    }
+    log(`musicbrainz throttled; waiting ${THROTTLE_PAUSE_MS}ms before the next claim`);
+    sleepSync(THROTTLE_PAUSE_MS);
+  }
 }
 
 export function main(): void {
@@ -462,39 +666,7 @@ export function main(): void {
     }
     summary.gateState = "active";
 
-    let processed = 0;
-    while (processed < NODES) {
-      const prepared = admittedPhase<PrepareEnvelope>(directory, `prepare-${processed}`, {
-        limit: Math.min(2, NODES - processed),
-        maxHop: MAX_HOP,
-        phase: "prepare",
-      });
-      if (!prepared) {
-        recordPhaseYield(summary);
-        break;
-      }
-      summary.pending = prepared.frontierPending ?? summary.pending;
-      summary.queueDepth = summary.pending;
-      if (prepared.kind === "drained") {
-        break;
-      }
-      if (prepared.kind !== "prepared" || !prepared.items || prepared.items.length === 0) {
-        throw new Error(`crawl prepare is ${prepared.kind ?? "invalid"}`);
-      }
-      for (const item of prepared.items) {
-        const shouldContinue = processPreparedItem(
-          directory,
-          processed,
-          item.preparedToken,
-          summary,
-        );
-        processed += 1;
-        if (!shouldContinue) {
-          processed = NODES;
-          break;
-        }
-      }
-    }
+    drainFrontier(directory, summary);
   } catch (error) {
     if (isDueWorkRepairPending(error)) {
       recordRepairPending(summary);

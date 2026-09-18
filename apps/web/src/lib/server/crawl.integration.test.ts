@@ -617,10 +617,14 @@ describe("the catalogue crawler", () => {
     expect(result.rateLimited).toBe(true);
     expect(result.failed).toBe(1); // it stopped after ONE failure, it did not grind ten
 
-    // The node is backed off, not abandoned: a later tick retries it.
-    const row = await db.execute("select state, failures from crawl_frontier limit 1");
-    expect(row.rows[0]?.state).toBe("failed");
-    expect(Number(row.rows[0]?.failures)).toBe(1);
+    // The node keeps its turn: a throttle is the vendor's state, never this node's fault, so it
+    // returns claimable with its failure count unspent rather than backed off toward abandonment.
+    const row = await db.execute(
+      "select state, failures, note from crawl_frontier where id = 'fluncle:label:medschool'",
+    );
+    expect(row.rows[0]?.state).toBe("pending");
+    expect(Number(row.rows[0]?.failures)).toBe(0);
+    expect(row.rows[0]?.note).toBe("musicbrainz rate-limited");
   });
 
   it("stamps `label_id` so a crawled track lands on the public /label/<slug> page", async () => {

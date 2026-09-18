@@ -4594,6 +4594,7 @@ async function runCrawlStatus(
     `Frontier: ${frontier.pending} pending, ${frontier.done} done, ${frontier.failed} failed, ${frontier.skipped} skipped` +
       ` (${frontierByKind.label} label, ${frontierByKind.artist} artist, ${frontierByKind.release} release).`,
   );
+  console.log(`Ready to write: ${result.storablePending} storable release node(s) claimable now.`);
   console.log(
     `Seeds (${result.seedLabels.length}): ${result.seedLabels.join(", ") || "none enabled"}.`,
   );
