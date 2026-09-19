@@ -5,7 +5,7 @@
 # box is a deploy target (fluncle-hermes-operator skill). Deployed onto the Hermes
 # orchestrator box; the `fluncle-render` cron is wired there. See ../cron/README.md.
 #
-# WHAT IT DOES: drives the per-finding video render on a SCALE-TO-ZERO box.ascii
+# WHAT IT DOES: drives the per-finding video render on a SCALE-TO-ZERO boat.dev
 # render box. It wakes the box, triggers the `@fluncle-video` render of
 # exactly one queued finding via `claude -p` (the render-queue prompt), and parks
 # the box when the render finishes. The box renders + SHIPS to R2/the website;
@@ -33,11 +33,18 @@
 #   - FLUNCLE_API_TOKEN — the agent-scoped token; arrives via the CRON ENV (an
 #     unrecognized custom var passes Hermes' provider-cred blocklist, like the
 #     other sweeps). Used for the queue gate here AND injected to the box.
-#   - CLAUDE_CODE_OAUTH_TOKEN + BOX_API_KEY — file-sourced from a 0600
+#   - CLAUDE_CODE_OAUTH_TOKEN + BOAT_API_KEY — file-sourced from a 0600
 #     ${HOME}/.fluncle-secrets.env. CLAUDE_CODE_OAUTH_TOKEN is a RECOGNIZED
 #     provider cred Hermes HARD-BLOCKS from the cron env (GHSA-rhgp-j443-p4rf),
-#     so it can only reach this script via a file; BOX_API_KEY rides along.
+#     so it can only reach this script via a file; the boat.dev key rides along.
 #     Written from the configured 1Password items (see the ops runbook note).
+#     The pre-rename name BOX_API_KEY is still accepted, so a secrets template that
+#     has not been re-cut yet keeps the conductor authenticated.
+#
+# PREFLIGHT: `render-conductor.sh --preflight` performs the READ-ONLY half of a tick —
+# CLI version, config, login, `boat list --all`, and the pick it WOULD make — prints
+# what it would do, and exits before anything is created, resumed, stopped or extended.
+# It is the first thing to run on the box after a CLI cutover.
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../render-timer/, installed by
 # ../install-host-timers.sh), NOT a gateway `hermes cron create`. Per-run output is a
@@ -46,11 +53,44 @@
 set -uo pipefail
 
 # --- PATH + absolute bins: the --no-agent runner strips PATH (../cron/README.md
-#     § Operational gotchas), so a bare bun/fluncle/box is "not found". ---
+#     § Operational gotchas), so a bare bun/fluncle/boat is "not found". ---
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
-BOX_BIN="${BOX_BIN:-/usr/local/bin/box}"
+# The boat.dev CLI (the vendor renamed `box` -> `boat`; same account, same API host,
+# same sandbox ids). `BOX_BIN` stays an accepted alias so an operator invocation written
+# against the pre-rename binary keeps working.
+BOAT_BIN="${BOAT_BIN:-${BOX_BIN:-/usr/local/bin/boat}}"
 BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
+
+# Every CLI call carries `--no-update`. The binary is a checksum-pinned release
+# (../Dockerfile), and the CLI otherwise checks for — and installs — a newer one on each
+# run; that would put this script's verb contract back on a moving target, which is the
+# whole reason the binary is pinned. `--no-update` is a GLOBAL flag, so it goes BEFORE
+# the subcommand: after it, `ssh`'s trailing `[COMMAND]...` would swallow it as part of
+# the remote command line.
+boat_cli() { "$BOAT_BIN" --no-update "$@"; }
+
+# The queue-response parser, shared by the idle pick and --preflight so the two can never
+# disagree about what the queue said. Reads the CLI's `{ok:true,tracks:[…]}` payload on
+# stdin and writes one logId per line; exit 2 on anything outside that contract, which is
+# what makes the queue gate fail-closed rather than reading a malformed body as empty.
+QUEUE_PARSER='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let body;try{body=JSON.parse(s)}catch{process.exit(2)}if(!body||typeof body!=="object"||Array.isArray(body)||body.ok!==true||!Array.isArray(body.tracks)||body.tracks.some(track=>!track||typeof track!=="object"||Array.isArray(track)||typeof track.logId!=="string"||track.logId.length===0))process.exit(2);for(const track of body.tracks)process.stdout.write(track.logId+"\n")})'
+
+# --- --preflight: the read-only half of a tick ---
+# Everything up to and including the queue pick, nothing that creates, resumes, stops,
+# extends or deletes. It is what an operator runs first on a CLI cutover: it proves the
+# binary, the config, the login, and — the question a CLI rename cannot answer offline —
+# whether the sandbox this conductor has been driving is still there under the new CLI.
+PREFLIGHT=0
+for arg in "$@"; do
+  case "$arg" in
+    --preflight | --dry-run) PREFLIGHT=1 ;;
+    *)
+      printf 'usage: render-conductor.sh [--preflight]\n' >&2
+      exit 2
+      ;;
+  esac
+done
 
 # --- file-sourced secrets (provider creds are blocked from the cron env) ---
 CONDUCTOR_ENV="${CONDUCTOR_ENV:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
@@ -65,17 +105,21 @@ fi
 STATE_DIR="${STATE_DIR:-${HOME:-/opt/data/home}/.render-conductor}"
 mkdir -p "$STATE_DIR"
 STATE_FILE="$STATE_DIR/state"          # "idle" | "rendering"
-BOXID_FILE="$STATE_DIR/box-id"         # the current/last box.ascii id
+BOXID_FILE="$STATE_DIR/box-id"         # the current/last boat.dev sandbox id
 STARTED_FILE="$STATE_DIR/started-at"   # epoch of the last render START
 RENDER_LOGID_FILE="$STATE_DIR/render-logid" # logId of the in-flight render (its cost scope)
 FAILS_FILE="$STATE_DIR/fail-counts"    # poison ledger: logId<TAB>count<TAB>lastFailEpoch
-ORPHANS_FILE="$STATE_DIR/orphan-boxes" # box ids condemned but not yet PROVEN deleted (one per line)
+ORPHANS_FILE="$STATE_DIR/orphan-boxes" # sandbox ids condemned but not yet PROVEN deleted (one per line)
 LOCK_DIR="$STATE_DIR/lock.d"           # atomic-mkdir single-flight lock
 LOG_FILE="$STATE_DIR/conductor.log"
 [ -f "$FAILS_FILE" ] || : >"$FAILS_FILE" # keep it present so the awk helpers never error on a first run
 [ -f "$ORPHANS_FILE" ] || : >"$ORPHANS_FILE"
-# The box CLI keeps its auth under $HOME/.ascii; HOME is the mounted, persisted
-# /opt/data/home, so `box login` survives container restarts.
+# The state FILE NAMES are deliberately unchanged across the box -> boat CLI rename:
+# they hold the live sandbox id and the orphan ledger, and renaming them would strand
+# both on the box at cutover (a conductor with no id reprovisions and leaves the running
+# sandbox behind).
+# The CLI keeps its auth under $HOME/.ascii; HOME is the mounted, persisted
+# /opt/data/home, so `boat login` survives container restarts.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROVISION="${PROVISION:-$SCRIPT_DIR/provision-rave-03.sh}"
@@ -88,14 +132,14 @@ MARKER_SKEW="${MARKER_SKEW:-300}"         # clock-skew grace when checking a don
 # stuck) must NOT stay the queue head forever — that is head-of-line blocking, it starves
 # every finding behind it (the 2026-07-16 stall: one finding failed hourly for ~9h while 5
 # waited). After POISON_THRESHOLD consecutive failures, the pick skips it for POISON_TTL,
-# then lets it retry (so a TRANSIENT box.ascii wobble self-heals, an item-specific defect
+# then lets it retry (so a TRANSIENT boat.dev wobble self-heals, an item-specific defect
 # re-poisons). A clean render clears that finding's ledger.
 POISON_THRESHOLD="${POISON_THRESHOLD:-3}" # consecutive render failures before a finding is skipped
 POISON_TTL="${POISON_TTL:-21600}"         # seconds a poisoned finding is skipped before one retry (6h)
-# Condemning a box ends with its id WRITTEN DOWN — box.ascii has no synchronous delete verb
-# (see the box-lifecycle block), only a reclamation TTL, so absence is something a later
+# Condemning a box ends with its id WRITTEN DOWN — the condemn is a reclamation TTL rather
+# than a synchronous delete (see the box-lifecycle block), so absence is something a later
 # tick proves rather than this one.
-CONDEMN_TTL="${CONDEMN_TTL:-60}"              # seconds until box.ascii may reclaim a condemned box
+CONDEMN_TTL="${CONDEMN_TTL:-60}"              # seconds until boat.dev may reclaim a condemned box
 REAP_PER_TICK="${REAP_PER_TICK:-5}"           # max orphans a single tick works through (tick-budget guard)
 ORPHAN_ALERT_AFTER="${ORPHAN_ALERT_AFTER:-21600}" # seconds a condemned box may linger before one alert (6h)
 DONE_MARKER='${HOME:-/home/user}/conductor-run.done'
@@ -177,34 +221,41 @@ discord_alert() {
 }
 
 # --- box lifecycle: condemn + orphan reaping ---------------------------------------
-# THE VERB TRAP (2026-07-28): this block used to run `box delete <id>`. That subcommand
-# NO LONGER EXISTS — box.ascii is pre-1.0 and the CLI tracks a channel rather than a
-# pinned tag (see hermes-agent.md § The image), so the verb was retired under us. Both the
-# Mac and rave-02 run 0.1.135-ascii-prod1, whose verbs are: new info list extend stop
-# resume prompt interrupt events limits fork ssh host desktop scp forward snapshots
-# snapshot. No delete, no rm, no destroy. Because the old call sat under
-# `>/dev/null 2>&1 || true`, every condemn since 2026-07-09 failed on `unrecognized
-# subcommand` and was swallowed — so EVERY wedged box the conductor ever condemned was
-# orphaned, and the 2026-07-27 `box_restoring` 500 only made one visible.
+# THE VERB TRAP: a condemn must never assume a verb the pinned CLI does not expose. The
+# pre-rename `box` binary carried no delete/rm/destroy at all, and because the call sat
+# under `>/dev/null 2>&1 || true` every condemn failed on `unrecognized subcommand` and
+# was swallowed, orphaning every wedged box the conductor ever condemned.
 #
-# The replacement is lifetime-based: `box extend <id> --ttl <seconds>` sets `archiveAfter`,
-# after which box.ascii reclaims the box and its snapshots. So a condemn is now stop (drop
-# the compute) + extend --ttl (mark for reclamation), and reclamation is ASYNCHRONOUS —
-# the box lingers for a short while by design.
+# The condemn is therefore lifetime-based: `boat extend <id> --ttl <seconds>` sets
+# `archiveAfter`, after which boat.dev reclaims the box and its snapshots. So a condemn is
+# stop (drop the compute) + extend --ttl (mark for reclamation), and reclamation is
+# ASYNCHRONOUS — the box lingers for a short while by design.
+#
+# `boat delete <id> --yes` DOES exist on the renamed CLI (docs.boat.dev/cli-reference) and
+# would make a condemn synchronous, but it also destroys the snapshot chain. Switching to
+# it changes what a condemn MEANS, so the CLI migration deliberately leaves this path as
+# it stands: the TTL + ledger rails are unchanged, and adopting `delete` is its own
+# operator decision.
 #
 # That asynchrony is why the orphan ledger is the load-bearing half rather than a fallback:
 # a condemn cannot prove absence in-tick, so every condemned id is written down and later
-# ticks watch it until box.ascii has actually taken it. The rule is unchanged in spirit —
+# ticks watch it until boat.dev has actually taken it. The rule is unchanged in spirit —
 # nothing is ever merely hoped-deleted — but "proven gone" is now something a LATER tick
 # establishes, not this one.
 
-# `0` (success) ONLY when box.ascii PROVES the id is absent. An unreachable API, a failed
+# `0` (success) ONLY when boat.dev PROVES the id is absent. An unreachable API, a failed
 # list, or an empty body returns non-zero — "not proven gone" must never read as "deleted",
 # or one wobble would drop an id from the ledger and orphan that box permanently.
+#
+# NOTE the bare `list`: both the pre-rename and the renamed CLI default to `--filter r`
+# (up/running only), so a condemned-and-stopped box reads as absent here. That is the
+# behaviour this reap rail has always had and the CLI migration keeps it byte for byte;
+# tightening it to `--all` turns the orphan alert from dormant into live and is an
+# operator decision, not a rename (see docs/agents/render-conductor.md § Known issues).
 box_gone() {
   local id="$1" out
   [ -n "$id" ] || return 0
-  out="$("$BOX_BIN" list --json 2>/dev/null)" || return 1
+  out="$(boat_cli list --json 2>/dev/null)" || return 1
   case "$out" in
     '') return 1 ;;                        # empty body is not proof of absence
     *"\"id\":\"$id\""*) return 1 ;;        # exact key match; a substring test could hit a longer id
@@ -212,14 +263,31 @@ box_gone() {
   esac
 }
 
+# `0` when boat.dev POSITIVELY reports the id in ANY state (`--all` spans running, stopped,
+# pending, stopping and error). This is the opposite question to box_gone and it is asked
+# for a different reason: deciding whether a failed/abandoned `resume` may clear the box id
+# and reprovision. Only an id boat.dev does not know about is safe to walk away from —
+# anything else is a sandbox that would be left running with nobody to stop it. A failed
+# list is non-zero, i.e. "cannot tell", which the caller treats as "hold".
+box_present() {
+  local id="$1" out
+  [ -n "$id" ] || return 1
+  out="$(boat_cli list --all --json 2>/dev/null)" || return 1
+  case "$out" in
+    '') return 1 ;;
+    *"\"id\":\"$id\""*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Park a box and mark it for reclamation. Idempotent — safe to re-issue every tick on an
-# id box.ascii has not taken yet. `0` when the CLI accepted the TTL (the box is now on a
+# id boat.dev has not taken yet. `0` when the CLI accepted the TTL (the box is now on a
 # clock), non-zero when it did not (API down, or the verb moved again).
 mark_for_reclaim() {
   local id="$1"
   [ -n "$id" ] || return 1
-  "$BOX_BIN" stop "$id" >>"$LOG_FILE" 2>&1 || true # best-effort: a stopped box errors here
-  "$BOX_BIN" extend "$id" --ttl "$CONDEMN_TTL" >>"$LOG_FILE" 2>&1
+  boat_cli stop "$id" >>"$LOG_FILE" 2>&1 || true # best-effort: a stopped box errors here
+  boat_cli extend "$id" --ttl "$CONDEMN_TTL" >>"$LOG_FILE" 2>&1
 }
 
 # The ledger is `boxId<TAB>firstFiledEpoch<TAB>alerted`, same temp+mv discipline as the
@@ -258,13 +326,13 @@ condemn_box() {
   if mark_for_reclaim "$id"; then
     log "condemned box $id — parked and marked for reclamation in ${CONDEMN_TTL}s"
   else
-    log "condemned box $id — could NOT set its reclamation TTL (box.ascii unreachable?); filed for retry"
+    log "condemned box $id — could NOT set its reclamation TTL (boat.dev unreachable?); filed for retry"
   fi
   add_orphan "$id"
 }
 
 # Drain the ledger, bounded by REAP_PER_TICK so it can never eat the tick budget. Runs every
-# tick: drop the ids box.ascii has taken, re-issue the TTL on the ones it has not (idempotent,
+# tick: drop the ids boat.dev has taken, re-issue the TTL on the ones it has not (idempotent,
 # and it repairs an id filed while the API was down), and alert ONCE on a box still standing
 # after ORPHAN_ALERT_AFTER — the normal reclamation lag stays silent, a stuck box does not.
 # (The `while read` holds an fd on the ledger while drop_orphan rewrites it via temp+mv; the
@@ -341,33 +409,39 @@ render_produced_video() {
   printf '%s' "$out" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const t=JSON.parse(s).track||{};process.exit(t.videoUrl?0:1)}catch(e){process.exit(0)}})'
 }
 
-# --- the restoring window: `box resume` returns before the box can answer -----------
-# MEASURED 2026-07-27, three ticks in a row (17:42Z, 19:44Z, 22:46Z): `box resume` returns
-# SUCCESS immediately, but the box then spends a few seconds RESTORING, and every call
-# against it in that window fails with
-# {"code":"box_restoring","error":"box restoring (500)","status":500} — the freshen ssh, both
-# scp refreshes, and the render trigger itself, a ~6s burst. The trigger's launch-line check
-# read that healthy box as WEDGED and condemned it, so each occurrence cost the hourly slot
-# PLUS a full reprovision (fresh clone + toolchain install).
+# --- the restoring window: a resumed box answers later than its resume returns -------
+# A resume can report success while the box spends the next seconds RESTORING, and every
+# call against it in that window fails with a typed restoring error — the freshen ssh,
+# both scp refreshes, and the render trigger itself, a burst of a few seconds. Without
+# this gate the trigger's launch-line check reads that healthy box as WEDGED and condemns
+# it, costing the hourly slot PLUS a full reprovision (fresh clone + toolchain install).
 #
-# So `box_restoring` is RETRY, never wedge. This gate is a bounded poll of a trivial
-# `box ssh` — the verb the freshen needs next, so answering it IS the readiness that matters,
-# and no new verb is invented against a pre-1.0 channel-tracking CLI. It is bounded by WALL
-# CLOCK (probe latency counts, not just the sleeps) and deliberately well under the unit's
+# So a restoring error is RETRY, never wedge. This gate is a bounded poll of a trivial
+# `ssh` — the verb the freshen needs next, so answering it IS the readiness that matters,
+# and no new verb is invented against the CLI. It is bounded by WALL CLOCK (probe latency
+# counts, not just the sleeps) and deliberately well under the unit's
 # `TimeoutStartSec=180`, so a box that never comes back ends the tick cleanly instead of
 # being killed between resume and trigger.
+#
+# THE CODE IS MATCHED IN THREE SPELLINGS. The code is emitted by the API, not the CLI, so
+# a CLI rename does not settle it: the pre-rename transport returned `box_restoring` (HTTP
+# 500) and the renamed API documents `boat_restoring` (HTTP 409, docs.boat.dev/use-in-code),
+# with `sandbox_restoring` the third spelling the renamed binary carries. Matching all
+# three keeps the gate correct on either side of the cutover and through any further
+# renaming, and the anchored `_restoring` suffix keeps it from matching prose.
 #
 # `0` when the box answers. Non-zero when it never did — a genuine timeout or a different
 # error — and the caller then carries on exactly as before, so the trigger's launch-line
 # check stays the wedge authority and a truly dead box still lands in the condemn path.
-BOX_READY_TIMEOUT="${BOX_READY_TIMEOUT:-75}"  # max seconds to wait out a restoring box
-BOX_READY_INTERVAL="${BOX_READY_INTERVAL:-5}" # seconds between readiness probes
+RESTORING_CODE_RE='(box|boat|sandbox)_restoring'
+BOAT_READY_TIMEOUT="${BOAT_READY_TIMEOUT:-${BOX_READY_TIMEOUT:-75}}"  # max seconds to wait out a restoring box
+BOAT_READY_INTERVAL="${BOAT_READY_INTERVAL:-${BOX_READY_INTERVAL:-5}}" # seconds between readiness probes
 await_box_ready() {
   local id="$1" out rc began waited saw_restore=0
   [ -n "$id" ] || return 1
   began="$(now)"
   while :; do
-    out="$("$BOX_BIN" ssh "$id" 'true' 2>&1)"
+    out="$(boat_cli ssh "$id" 'true' 2>&1)"
     rc=$?
     waited="$(($(now) - began))"
     if [ "$rc" = "0" ]; then
@@ -375,18 +449,47 @@ await_box_ready() {
       return 0
     fi
     printf '%s\n' "$out" >>"$LOG_FILE"
-    if ! printf '%s' "$out" | grep -q 'box_restoring'; then
+    if ! printf '%s' "$out" | grep -qE "$RESTORING_CODE_RE"; then
       log "box $id readiness probe failed with something other than a restore (rc=$rc) — proceeding"
       return 1
     fi
     saw_restore=1
-    if [ "$waited" -ge "$BOX_READY_TIMEOUT" ]; then
+    if [ "$waited" -ge "$BOAT_READY_TIMEOUT" ]; then
       log "box $id still restoring after ${waited}s — giving up the wait"
       return 1
     fi
     log "box $id restoring — waiting (${waited}s elapsed)"
-    sleep "$BOX_READY_INTERVAL"
+    sleep "$BOAT_READY_INTERVAL"
   done
+}
+
+# --- the blocking resume: bound it, and never walk away from a live sandbox ----------
+# The renamed CLI's `resume` no longer returns as soon as the API accepts it: it waits for
+# a ready state and a successful no-op command, bounded at THIRTY MINUTES
+# (docs.boat.dev/cli-reference). The conductor's host unit kills a tick at
+# `TimeoutStartSec=180`, so an unbounded resume can take the whole tick and die silently
+# between resume and trigger. `timeout` caps it well inside the unit's budget; the
+# readiness gate above still runs afterwards, because the CLI's own wait covers command
+# execution, not the restoring window the freshen's ssh hits next.
+#
+# A cap alone is not enough: the caller used to treat ANY non-zero resume as "the box is
+# gone, reprovision". Under a bounded blocking resume that is exactly wrong — the resume
+# is still converging server-side, and reprovisioning would leave a running sandbox with
+# nobody to stop it. So the caller asks `box_present` and only walks away from an id
+# boat.dev does not know about.
+RESUME_TIMEOUT="${RESUME_TIMEOUT:-90}" # max seconds to let a blocking resume run
+# `timeout` is coreutils and present on the box; resolve it once rather than assuming it,
+# so the script still runs (unbounded, and it says so) anywhere it is missing.
+TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || printf '')"
+run_bounded() {
+  local secs="$1"
+  shift
+  if [ -n "$TIMEOUT_BIN" ]; then
+    "$TIMEOUT_BIN" "$secs" "$@"
+    return $?
+  fi
+  log "no timeout(1) on PATH — running '$1' unbounded"
+  "$@"
 }
 
 # Freshen a RESUMED snapshot's stale checkout to current `main`. The render box is
@@ -401,12 +504,12 @@ await_box_ready() {
 # The reprovision branch needs none of this: it clones clean `main` by construction.
 # Returns 0 when the checkout is present (freshened or already current) or when the
 # freshen ssh just hiccups (proceed on the existing checkout). Returns 2 when ~/fluncle
-# is MISSING — box.ascii's snapshot dropped it on resume — so the caller reprovisions
+# is MISSING — boat.dev's snapshot dropped it on resume — so the caller reprovisions
 # instead of rendering nothing and looping forever on a stale done-marker. The remote
 # `exit 42` is the missing-checkout signal.
 freshen_checkout() {
   local out rc=0
-  out="$("$BOX_BIN" ssh "$1" 'bash -s' 2>&1 <<'FRESH'
+  out="$(boat_cli ssh "$1" 'bash -s' 2>&1 <<'FRESH'
 set -u
 cd "$HOME/fluncle" || { echo "[freshen] no ~/fluncle — needs reprovision"; exit 42; }
 git fetch --depth 1 origin main -q 2>/dev/null || { echo "[freshen] fetch failed — keep current"; exit 0; }
@@ -422,7 +525,7 @@ echo "[freshen] updated ${have:0:7} -> $(git rev-parse --short HEAD)"
 FRESH
 )" || rc=$?
   printf '%s\n' "$out" >>"$LOG_FILE"
-  # box.ascii's `ssh` FLATTENS a remote non-zero exit to its OWN exit 1 (the real
+  # boat.dev's `ssh` FLATTENS a remote non-zero exit to its OWN exit 1 (the real
   # remote status lands only in its error JSON), so the in-script `exit 42` never
   # arrives here as rc=42 — detect the missing-checkout signal from the remote's
   # OUTPUT marker instead of the (flattened) exit code.
@@ -450,26 +553,105 @@ fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 # --- box CLI auth (idempotent; persisted under $HOME) ---
-if [ -z "${BOX_API_KEY:-}" ]; then
-  log "BOX_API_KEY missing (place it in $CONDUCTOR_ENV)"
-  emit_fail "render-conductor: no BOX_API_KEY — cannot reach the render box"
+# BOAT_API_KEY is the name the vendor documents; BOX_API_KEY is what a secrets template
+# cut before the rename provides. Prefer the new name, accept the old, so the cutover
+# does not depend on the secret being re-cut first.
+BOAT_API_KEY="${BOAT_API_KEY:-${BOX_API_KEY:-}}"
+if [ -z "$BOAT_API_KEY" ]; then
+  log "BOAT_API_KEY missing (place it in $CONDUCTOR_ENV; BOX_API_KEY is still accepted)"
+  emit_fail "render-conductor: no BOAT_API_KEY — cannot reach the render box"
   exit 1
 fi
-# The installer wrote the box config under ROOT's HOME at build; this cron runs as
-# a non-root user with a different HOME, so re-create the (non-secret) config here.
-# The auth token lands beside it via `box login`. Both persist in the mounted HOME.
-BOX_CFG_DIR="${XDG_CONFIG_HOME:-${HOME:-/opt/data/home}/.config}/ascii/box"
-if [ ! -f "$BOX_CFG_DIR/config.json" ]; then
-  mkdir -p "$BOX_CFG_DIR"
-  printf '{"api_url":"https://ascii.dev","channel":"ascii-prod"}\n' >"$BOX_CFG_DIR/config.json"
+# The image bake wrote the CLI config under ROOT's HOME; this cron runs as a non-root
+# user with a different HOME, so re-create the (non-secret) config here. The auth token
+# lands beside it via `boat login`. Both persist in the mounted HOME. The shape and the
+# values are the vendor's own for a Docker install (docs.boat.dev/use-in-production): the
+# API HOST is unchanged by the rename — only the binary's name, its config directory, and
+# its route prefix moved — which is why an existing sandbox is still the same sandbox.
+BOAT_CFG_DIR="${XDG_CONFIG_HOME:-${HOME:-/opt/data/home}/.config}/ascii/boat"
+if [ ! -f "$BOAT_CFG_DIR/config.json" ]; then
+  mkdir -p "$BOAT_CFG_DIR"
+  printf '{"api_url":"https://ascii.dev","channel":"prod"}\n' >"$BOAT_CFG_DIR/config.json"
 fi
-# `box status` exits 0 even when NOT authenticated, so it can't gate the login.
-# Always (re-)login — `box login <token>` is idempotent + non-interactive; log its
-# output so a real auth failure (bad key, network) is visible, not silent.
-if ! "$BOX_BIN" login "$BOX_API_KEY" >>"$LOG_FILE" 2>&1; then
-  log "box login failed (see output above)"
-  emit_fail "render-conductor: box.ascii auth failed"
+# `status` exits 0 even when NOT authenticated, so it can't gate the login.
+# Always (re-)login — it is idempotent + non-interactive; log its output so a real auth
+# failure (bad key, network) is visible, not silent. The key goes in on STDIN
+# (`--key-stdin`), never on argv where every other process on the host could read it.
+if ! printf '%s' "$BOAT_API_KEY" | boat_cli login --key-stdin --json >>"$LOG_FILE" 2>&1; then
+  log "boat login failed (see output above)"
+  emit_fail "render-conductor: boat.dev auth failed"
   exit 1
+fi
+
+# ============================ PREFLIGHT: report, change nothing ============================
+# Runs AFTER the login (auth is the thing most worth proving) and BEFORE `reap_orphans`,
+# which issues stop/extend. Nothing below this block mutates anything.
+if [ "$PREFLIGHT" = "1" ]; then
+  pf_state="$(read_or "$STATE_FILE" idle)"
+  pf_boxid="$(read_or "$BOXID_FILE" '')"
+  printf 'render-conductor preflight\n'
+  printf '  cli:         %s\n' "$("$BOAT_BIN" --no-update --version 2>&1 | tr -d '\r\n')"
+  printf '  config:      %s/config.json\n' "$BOAT_CFG_DIR"
+  printf '  auth:        login accepted\n'
+  printf '  state:       %s\n' "$pf_state"
+  printf '  recorded id: %s\n' "${pf_boxid:-<none>}"
+
+  # THE CARRY-OVER QUESTION. `--all` spans every state, so a parked render box shows up
+  # here exactly as a running one does. If the id this conductor has been driving is
+  # listed, the sandbox survived the CLI cutover and the next real tick resumes it; if it
+  # is not, the next real tick reprovisions from clean `main`, which is a ~5-minute
+  # non-event but worth knowing BEFORE the render window rather than during it.
+  if pf_list="$(boat_cli list --all --json 2>&1)"; then
+    printf '  sandboxes:   %s known to this account\n' \
+      "$(printf '%s' "$pf_list" | grep -o '"id":"' | wc -l | tr -d ' ')"
+    if [ -z "$pf_boxid" ]; then
+      printf '  carry-over:  nothing recorded — a real tick would provision a fresh box\n'
+    elif printf '%s' "$pf_list" | grep -q "\"id\":\"$pf_boxid\""; then
+      printf '  carry-over:  YES — %s is still there; a real tick would resume it\n' "$pf_boxid"
+    else
+      printf '  carry-over:  NO — %s is not listed; a real tick would provision a fresh box\n' "$pf_boxid"
+    fi
+  else
+    printf '  sandboxes:   list FAILED — %s\n' "$(printf '%s' "$pf_list" | tr '\n' ' ')"
+    printf '  carry-over:  unknown\n'
+  fi
+
+  if [ -s "$ORPHANS_FILE" ]; then
+    printf '  orphans:     %s condemned id(s) a real tick would re-issue a TTL on\n' \
+      "$(wc -l <"$ORPHANS_FILE" | tr -d ' ')"
+  else
+    printf '  orphans:     none\n'
+  fi
+
+  # The pick, computed exactly as the idle branch computes it — same CLI call, same
+  # parser, same poison ledger — so the preflight names the finding a real tick would film.
+  if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
+    printf '  queue:       NO agent token — a real tick would fail here\n'
+  elif ! pf_queue="$("$FLUNCLE_BIN" admin tracks queue --limit 25 --json 2>>"$LOG_FILE")"; then
+    printf '  queue:       read FAILED — a real tick would exit non-zero without waking a box\n'
+  elif ! pf_ids="$(printf '%s' "$pf_queue" | "$BUN_BIN" -e "$QUEUE_PARSER" 2>>"$LOG_FILE")"; then
+    printf '  queue:       response MALFORMED — a real tick would exit non-zero\n'
+  else
+    pf_pick=""
+    pf_skipped=0
+    while IFS= read -r pf_lid; do
+      [ -n "$pf_lid" ] || continue
+      if is_poisoned "$pf_lid"; then
+        pf_skipped=$((pf_skipped + 1))
+        continue
+      fi
+      pf_pick="$pf_lid"
+      break
+    done <<PFQ
+$pf_ids
+PFQ
+    printf '  queue:       %s renderable pick, %s poisoned skip(s)\n' \
+      "${pf_pick:-no}" "$pf_skipped"
+  fi
+
+  printf '  would do:    nothing — preflight creates, resumes, stops and extends NOTHING\n'
+  emit "render-conductor: preflight only — no box was touched"
+  exit 0
 fi
 
 # Drain any box a previous tick condemned but could not delete. Deliberately BEFORE the
@@ -497,7 +679,7 @@ if [ "$state" = "rendering" ]; then
   #
   # FRESHNESS GUARD: the box's /home/user persists across stop/resume snapshots, so a
   # done-marker from a PREVIOUS render can outlive it. render-detached.sh rm's the marker
-  # before forking — but ONLY if its trigger actually ran; a wedged box (box.ascii 5xx on
+  # before forking — but ONLY if its trigger actually ran; a wedged box (boat.dev 5xx on
   # ssh/scp) silently no-ops the trigger, leaving the OLD marker in place. A bare `test -f`
   # then reads that stale marker as "finished", parks, and chains to the SAME never-shipped
   # finding — forever (the 2026-07-09 loop: a 07-08 marker re-picking 039.8.7J every tick).
@@ -506,8 +688,8 @@ if [ "$state" = "rendering" ]; then
   # stuck-guard below force-parks it, rather than a false "finished".
   marker_fresh=0
   result='?'
-  if "$BOX_BIN" ssh "$boxid" "test -f $DONE_MARKER" >/dev/null 2>&1; then
-    result="$("$BOX_BIN" ssh "$boxid" "cat $DONE_MARKER" 2>/dev/null | tr -d '\r\n' || printf '?')"
+  if boat_cli ssh "$boxid" "test -f $DONE_MARKER" >/dev/null 2>&1; then
+    result="$(boat_cli ssh "$boxid" "cat $DONE_MARKER" 2>/dev/null | tr -d '\r\n' || printf '?')"
     marker_iso="${result#*@ }"; marker_iso="${marker_iso%% *}"
     marker_epoch="$(date -u -d "$marker_iso" +%s 2>/dev/null || printf 0)"
     started="$(read_or "$STARTED_FILE" 0)"
@@ -518,7 +700,7 @@ if [ "$state" = "rendering" ]; then
     [ "$marker_fresh" = 1 ] || log "stale done-marker ($result) predates render start ($started) — ignoring, treating as in-flight"
   fi
   if [ "$marker_fresh" = 1 ]; then
-    "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
+    boat_cli stop "$boxid" >/dev/null 2>&1 || true
     printf 'idle' >"$STATE_FILE"
     state=idle
     log "render finished ($result) — box $boxid parked; chaining to the next pick"
@@ -567,7 +749,7 @@ if [ "$state" = "rendering" ]; then
     # Still running -> single-flight: do NOT start another. Stuck guard only.
     started="$(read_or "$STARTED_FILE" 0)"
     if [ "$(( $(now) - started ))" -gt "$MAX_RENDER" ]; then
-      "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
+      boat_cli stop "$boxid" >/dev/null 2>&1 || true
       printf 'idle' >"$STATE_FILE"
       bump_fail "$(read_or "$RENDER_LOGID_FILE" '')" # a stuck render counts against the finding too
       log "render exceeded ${MAX_RENDER}s — force-parked box $boxid"
@@ -613,7 +795,7 @@ if [ "$queue_read_rc" -ne 0 ]; then
   emit_fail "render-conductor: queue read failed"
   exit 1
 fi
-queued_ids="$(printf '%s' "$queue_json" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let body;try{body=JSON.parse(s)}catch{process.exit(2)}if(!body||typeof body!=="object"||Array.isArray(body)||body.ok!==true||!Array.isArray(body.tracks)||body.tracks.some(track=>!track||typeof track!=="object"||Array.isArray(track)||typeof track.logId!=="string"||track.logId.length===0))process.exit(2);for(const track of body.tracks)process.stdout.write(track.logId+"\n")})' 2>>"$LOG_FILE")"
+queued_ids="$(printf '%s' "$queue_json" | "$BUN_BIN" -e "$QUEUE_PARSER" 2>>"$LOG_FILE")"
 queue_parse_rc=$?
 if [ "$queue_parse_rc" -ne 0 ]; then
   log "queue response malformed (parser rc=$queue_parse_rc)"
@@ -640,21 +822,38 @@ fi
 [ "$skipped" -gt 0 ] && log "skipped $skipped poisoned finding(s) at the head"
 log "queue head: $head"
 
-# Ensure the box exists: resume the parked snapshot, or reprovision if box.ascii
+# Ensure the box exists: resume the parked snapshot, or reprovision if boat.dev
 # reclaimed it (idle boxes + snapshots are purged past the archive window).
-if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
+# The resume is BOUNDED (RESUME_TIMEOUT) because the CLI's own resume blocks on readiness
+# for up to half an hour, which would eat the whole tick. A resume that does not finish in
+# time is NOT a dead box: the API keeps converging, so the tick holds the id and lets the
+# next one pick it up. Only an id boat.dev no longer lists is safe to abandon — walking
+# away from a live one would strand a running sandbox nothing will stop.
+resume_rc=0
+if [ -n "$boxid" ]; then
+  run_bounded "$RESUME_TIMEOUT" "$BOAT_BIN" --no-update resume "$boxid" >/dev/null 2>&1 || resume_rc=$?
+else
+  resume_rc=1
+fi
+if [ -n "$boxid" ] && [ "$resume_rc" != "0" ] && box_present "$boxid"; then
+  log "resume of $boxid did not complete (rc=$resume_rc) but boat.dev still lists it — holding the id for the next tick"
+  emit "render-conductor: resume of $boxid still converging — holding"
+  exit 0
+fi
+if [ -n "$boxid" ] && [ "$resume_rc" = "0" ]; then
   log "resumed box $boxid"
-  # WAIT OUT THE RESTORE (see await_box_ready): a resume returns before the box can answer,
-  # and every call inside that window 500s with `box_restoring`. Gate the first contact here
-  # so the burst never reaches the trigger's wedge check as a false condemn.
+  # WAIT OUT THE RESTORE (see await_box_ready): a resume can report ready before the box
+  # serves ssh, and every call inside that window fails with the typed restoring code.
+  # Gate the first contact here so the burst never reaches the trigger's wedge check as a
+  # false condemn.
   await_box_ready "$boxid" || log "no ready signal from $boxid — proceeding; the trigger check decides"
-  # A resume can succeed while box.ascii's snapshot dropped ~/fluncle. freshen_checkout
+  # A resume can succeed while boat.dev's snapshot dropped ~/fluncle. freshen_checkout
   # returns 2 in that case: stop the checkout-less box (it renders nothing) and fall
   # through to a fresh reprovision, so a lost checkout self-heals instead of looping on
   # a stale done-marker.
   if ! freshen_checkout "$boxid"; then
     log "resumed box $boxid lost its ~/fluncle checkout — stopping it + reprovisioning"
-    "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
+    boat_cli stop "$boxid" >/dev/null 2>&1 || true
     boxid=""
   # The checkout freshens above, but the CLI does NOT ride the checkout: provision
   # copies the conductor's bundled binary ONCE, so a resumed snapshot keeps that
@@ -662,7 +861,7 @@ if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
   # binary than the box may have been provisioned with). Re-copy it at every wake —
   # one small scp against an ~85m render — and BEST-EFFORT: a failed copy logs and
   # renders on the existing CLI (the same discipline as freshen itself).
-  elif "$BOX_BIN" scp "$FLUNCLE_BIN" "$boxid:/home/user/.local/lib/fluncle.mjs" >>"$LOG_FILE" 2>&1; then
+  elif boat_cli scp "$FLUNCLE_BIN" "$boxid:/home/user/.local/lib/fluncle.mjs" >>"$LOG_FILE" 2>&1; then
     log "box CLI refreshed from the conductor's bundled fluncle"
   else
     log "box CLI refresh failed — rendering with the existing CLI"
@@ -671,20 +870,24 @@ if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
   # can't update it — re-scp it every wake like the CLI above, or a resumed box keeps the
   # render-detached.sh it was PROVISIONED with (its --model pin, its entry) frozen forever.
   if [ -n "$boxid" ]; then
-    if "$BOX_BIN" scp "$SCRIPT_DIR/render-detached.sh" "$boxid:/home/user/render-detached.sh" >>"$LOG_FILE" 2>&1; then
-      "$BOX_BIN" ssh "$boxid" 'chmod +x ~/render-detached.sh' >/dev/null 2>&1 || true
+    if boat_cli scp "$SCRIPT_DIR/render-detached.sh" "$boxid:/home/user/render-detached.sh" >>"$LOG_FILE" 2>&1; then
+      boat_cli ssh "$boxid" 'chmod +x ~/render-detached.sh' >/dev/null 2>&1 || true
       log "render-detached.sh refreshed from the conductor's bundled copy"
     else
       log "render-detached.sh refresh failed — rendering with the box's existing copy"
     fi
   fi
 else
+  # Either there was no id to begin with, or the resume failed AND boat.dev no longer
+  # lists the id — the sandbox is genuinely gone, so provisioning a fresh one strands
+  # nothing.
+  [ -n "$boxid" ] && log "resume of $boxid failed (rc=$resume_rc) and boat.dev does not list it — reprovisioning"
   boxid=""
 fi
 
 if [ -z "$boxid" ]; then
   log "no usable box — reprovisioning"
-  if ! boxid="$(BOX_BIN="$BOX_BIN" BUN_BIN="$BUN_BIN" FLUNCLE_BIN="$FLUNCLE_BIN" bash "$PROVISION" 2>>"$LOG_FILE")" || [ -z "$boxid" ]; then
+  if ! boxid="$(BOAT_BIN="$BOAT_BIN" BUN_BIN="$BUN_BIN" FLUNCLE_BIN="$FLUNCLE_BIN" bash "$PROVISION" 2>>"$LOG_FILE")" || [ -z "$boxid" ]; then
     log "provision failed"
     emit_fail "render-conductor: provision failed"
     exit 1
@@ -733,25 +936,25 @@ else
   log "video-axis assigner produced no assignment — render falls back to free choice"
 fi
 
-"$BOX_BIN" scp "$creds" "$boxid:/dev/shm/fluncle.env" >/dev/null 2>&1
+boat_cli scp "$creds" "$boxid:/dev/shm/fluncle.env" >/dev/null 2>&1
 rm -f "$creds"
 
 # Trigger the DETACHED render (returns immediately; ~85m on the box). The box is
 # NOT stopped here — a later RENDERING tick parks it when the done-marker appears.
 # VERIFY THE LAUNCH: render-detached.sh echoes "render-detached: launched" and, before
-# forking, rm's any prior done-marker. A wedged box (box.ascii 5xx on ssh) silently
+# forking, rm's any prior done-marker. A wedged box (boat.dev 5xx on ssh) silently
 # no-ops this trigger; marking 'rendering' anyway would leave the OLD marker to be
 # misread as 'finished' next tick — the stale-marker loop. If the launch line doesn't
 # come back, the box is wedged: delete it + stay idle so a FRESH box provisions next
 # tick, rather than looping on the dead one. (The freshness guard above is the second
 # line of defence; this stops the wedge at the source.)
-trigger_out="$("$BOX_BIN" ssh "$boxid" 'bash ~/render-detached.sh' 2>&1)"
+trigger_out="$(boat_cli ssh "$boxid" 'bash ~/render-detached.sh' 2>&1)"
 printf '%s\n' "$trigger_out" >>"$LOG_FILE"
 if ! printf '%s' "$trigger_out" | grep -q 'render-detached: launched'; then
   log "render trigger did not launch on $boxid (wedged box) — deleting it + staying idle to reprovision"
   RUN_FAILED=$((RUN_FAILED + 1))
   emit_fail "render-conductor: render trigger failed on $boxid — box condemned, reprovision next tick"
-  # condemn_box retries the delete and, if box.ascii still will not take it, files the id
+  # condemn_box retries the delete and, if boat.dev still will not take it, files the id
   # to the orphan ledger. Clearing BOXID_FILE below is what makes the next tick provision a
   # fresh box, so the id MUST be written down first or it is lost with this variable.
   condemn_box "$boxid" || true

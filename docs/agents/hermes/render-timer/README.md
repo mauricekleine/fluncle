@@ -1,6 +1,6 @@
 # fluncle-render-timer — the video render conductor on a host timer
 
-The rave-02 host trigger for the `--no-agent` **render conductor**. `fluncle-render` drives the per-finding video render on a SCALE-TO-ZERO box.ascii render box (rave-03): it wakes the box, freshens its checkout to `main`, triggers the `@fluncle-video` render of exactly one queued finding via `claude -p` (DETACHED, ~85m), and parks the box when the render finishes. The conductor is a two-state single-flight machine (`idle` → maybe start; `rendering` → poll + park), so the tick itself returns in seconds. A host systemd timer `docker exec`s the baked conductor inside the `hermes` container every 60m.
+The rave-02 host trigger for the `--no-agent` **render conductor**. `fluncle-render` drives the per-finding video render on a SCALE-TO-ZERO boat.dev render box (rave-03): it wakes the box, freshens its checkout to `main`, triggers the `@fluncle-video` render of exactly one queued finding via `claude -p` (DETACHED, ~85m), and parks the box when the render finishes. The conductor is a two-state single-flight machine (`idle` → maybe start; `rendering` → poll + park), so the tick itself returns in seconds. A host systemd timer `docker exec`s the baked conductor inside the `hermes` container every 60m.
 
 The conductor is BAKED at `/opt/hermes-scripts/render-conductor.sh` (source: [`../scripts/render-conductor.sh`](../scripts/render-conductor.sh)) riding the image and auto-updating from `main` via pin-watch (Unit A). The host timer only triggers it.
 
@@ -10,7 +10,7 @@ Every other sweep is a thin wrapper that sources [`cron-output.sh`](../scripts/c
 
 ## Dependency: provision-rave-03.sh must be baked too
 
-`render-conductor.sh` execs `provision-rave-03.sh` from its own dir (`PROVISION="${PROVISION:-$SCRIPT_DIR/provision-rave-03.sh}"`) whenever box.ascii has reclaimed the render box and it must reprovision. For the conductor to run from `/opt/hermes-scripts/`, the image bake (Unit A) MUST also bake `provision-rave-03.sh` alongside it. If the bake's include list omits it, either add it, or set `-e PROVISION=<baked-path>` on the ExecStart pointing at wherever it is baked. (`render-detached.sh` runs ON rave-03, not here, so it does not need to be at `/opt/hermes-scripts/`.)
+`render-conductor.sh` execs `provision-rave-03.sh` from its own dir (`PROVISION="${PROVISION:-$SCRIPT_DIR/provision-rave-03.sh}"`) whenever boat.dev has reclaimed the render box and it must reprovision. For the conductor to run from `/opt/hermes-scripts/`, the image bake (Unit A) MUST also bake `provision-rave-03.sh` alongside it. If the bake's include list omits it, either add it, or set `-e PROVISION=<baked-path>` on the ExecStart pointing at wherever it is baked. (`render-detached.sh` runs ON rave-03, not here, so it does not need to be at `/opt/hermes-scripts/`.)
 
 ## Deploy (on rave-02, one time)
 
