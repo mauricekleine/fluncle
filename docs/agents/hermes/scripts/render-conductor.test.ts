@@ -37,7 +37,9 @@ import { join } from "node:path";
 
 const CONDUCTOR = join(import.meta.dir, "render-conductor.sh");
 const BOX_ID = "bx_under_test";
+const ORPHAN_ID = "bx_condemned";
 const QUEUE_HEAD = "001.1.1A";
+const ORPHAN_ALERT_AFTER_S = 21_600;
 // The fixture exercises a real shell lifecycle; these process budgets cover harness overhead,
 // not an assertion about the conductor's production performance SLA. Since they assert nothing,
 // they are sized for the worst machine this runs on rather than the best: every wait inside a
@@ -54,7 +56,10 @@ type Tick = {
   initialState?: "idle" | "rendering";
   legacyEnvNames?: boolean;
   listHasBox?: boolean;
+  listHasOrphan?: boolean;
   nowSequence?: readonly number[];
+  /** Raw `orphan-boxes` ledger content: `boxId<TAB>firstFiledEpoch<TAB>alerted` lines. */
+  orphanLedger?: string;
   queueExitCode?: number;
   queueResponse?: string;
   queueStderr?: string;
@@ -69,6 +74,7 @@ type Tick = {
 type TickResult = {
   boxIdFile: string;
   calls: string[];
+  curlCalls: string[];
   exitCode: number;
   log: string;
   noUpdateViolations: string[];
@@ -96,11 +102,21 @@ case "$verb" in
   login) cat >/dev/null 2>&1 || true; exit "\${STUB_LOGIN_EXIT:-0}" ;;
   resume) exit "\${STUB_RESUME_EXIT:-0}" ;;
   list)
-    if [ "\${STUB_LIST_HAS_BOX:-1}" = "1" ]; then
-      printf '{"sandboxes":[{"id":"%s","state":"stopped"}]}\\n' "\${STUB_BOX_ID:-}"
-    else
-      printf '{"sandboxes":[]}\\n'
+    # THE FILTER IS HONOURED, because that is the whole point of the read. Everything this
+    # fixture's platform holds is STOPPED — the state a parked render box and a condemned box
+    # are both in — so a bare \`list\` (which defaults to \`--filter r\`, up/running only) sees
+    # NOTHING, exactly as the real CLI would. Only \`--all\` returns them.
+    entries=""
+    if printf '%s' "$*" | grep -q -- '--all'; then
+      if [ "\${STUB_LIST_HAS_BOX:-1}" = "1" ]; then
+        entries="{\\"id\\":\\"\${STUB_BOX_ID:-}\\",\\"state\\":\\"stopped\\"}"
+      fi
+      if [ "\${STUB_LIST_HAS_ORPHAN:-0}" = "1" ]; then
+        [ -n "$entries" ] && entries="\${entries},"
+        entries="\${entries}{\\"id\\":\\"\${STUB_ORPHAN_ID:-}\\",\\"state\\":\\"stopped\\"}"
+      fi
     fi
+    printf '{"sandboxes":[%s]}\\n' "$entries"
     exit 0 ;;
   ssh | scp)
     remaining="$(cat "$STUB_DIR/restoring" 2>/dev/null || printf 0)"
@@ -184,6 +200,13 @@ const PROVISION_STUB = `#!/usr/bin/env bash
 exit 1
 `;
 
+// `curl` is how the conductor reaches Discord and the cost ledger. The fixture stubs it so no
+// tick makes a real request and so the orphan alert is observable as a recorded call.
+const CURL_STUB = `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"$STUB_DIR/curl-calls"
+exit 0
+`;
+
 function write(path: string, body: string) {
   writeFileSync(path, body);
   chmodSync(path, 0o755);
@@ -203,6 +226,7 @@ function stubEnv(tick: Tick, home: string, stub: string): Record<string, string>
     BOAT_READY_TIMEOUT: String(tick.readyTimeout ?? 2),
     BUN_BIN: process.execPath,
     CONDUCTOR_ENV: "/dev/null",
+    DISCORD_ALERT_WEBHOOK: "http://127.0.0.1:9/hook",
     FLUNCLE_API_TOKEN: "stub-token",
     FLUNCLE_API_URL: "http://127.0.0.1:9",
     FLUNCLE_BIN: join(stub, "fluncle"),
@@ -213,6 +237,8 @@ function stubEnv(tick: Tick, home: string, stub: string): Record<string, string>
     STUB_DIR: stub,
     STUB_DONE_RESULT: tick.doneResult ?? "",
     STUB_LIST_HAS_BOX: (tick.listHasBox ?? true) ? "1" : "0",
+    STUB_LIST_HAS_ORPHAN: tick.listHasOrphan ? "1" : "0",
+    STUB_ORPHAN_ID: ORPHAN_ID,
     STUB_QUEUE_EXIT_CODE: String(tick.queueExitCode ?? 0),
     STUB_QUEUE_RESPONSE: tick.queueResponse ?? `{"ok":true,"tracks":[{"logId":"${QUEUE_HEAD}"}]}`,
     STUB_QUEUE_STDERR: tick.queueStderr ?? "",
@@ -237,6 +263,7 @@ function runTick(tick: Tick): TickResult {
       writeFileSync(join(stub, "now-sequence"), `${nowSequence.join("\n")}\n`);
     }
     write(join(stub, "boat"), BOAT_STUB);
+    write(join(stub, "curl"), CURL_STUB);
     write(join(stub, "date"), DATE_STUB);
     write(join(stub, "sleep"), SLEEP_STUB);
     write(join(stub, "timeout"), TIMEOUT_STUB);
@@ -246,6 +273,9 @@ function runTick(tick: Tick): TickResult {
     // chaining tick lands in right after it parked the box it is about to resume.
     writeFileSync(join(stateDir, "state"), initialState);
     writeFileSync(join(stateDir, "box-id"), BOX_ID);
+    if (tick.orphanLedger !== undefined) {
+      writeFileSync(join(stateDir, "orphan-boxes"), tick.orphanLedger);
+    }
     if (initialState === "rendering") {
       writeFileSync(join(stateDir, "started-at"), "0");
       writeFileSync(join(stateDir, "render-logid"), QUEUE_HEAD);
@@ -279,6 +309,7 @@ function runTick(tick: Tick): TickResult {
     return {
       boxIdFile: read(join(stateDir, "box-id")),
       calls: read(join(stub, "calls")).split("\n").filter(Boolean),
+      curlCalls: read(join(stub, "curl-calls")).split("\n").filter(Boolean),
       exitCode: run.status ?? -1,
       log: read(join(stateDir, "conductor.log")),
       noUpdateViolations: read(join(stub, "no-update-violations")).split("\n").filter(Boolean),
@@ -451,6 +482,98 @@ describe("the CLI contract", () => {
       expect(tick.stdout).not.toContain("no BOAT_API_KEY");
       expect(tick.state).toBe("rendering");
       expect(tick.stdout).toContain(`started render of ${QUEUE_HEAD} on ${BOX_ID}`);
+    },
+  );
+});
+
+// A condemn parks a box and puts it on a reclamation clock; it never deletes. The reap rail's
+// whole job is to keep watching a condemned id until the platform has actually taken it, so the
+// "is it gone?" read has to span STOPPED — a running-only list calls every parked box reclaimed
+// the instant it is condemned, drains the ledger, and leaves the box standing unwatched.
+describe("the reap rail", () => {
+  const EMPTY_QUEUE = '{"ok":true,"tracks":[]}';
+  const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+  test(
+    "a condemned box that still exists STOPPED is not gone, and stays in the ledger",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        listHasOrphan: true,
+        orphanLedger: `${ORPHAN_ID}\t${nowSeconds()}\t0\n`,
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).not.toContain("reclaimed — dropping from the ledger");
+      expect(tick.orphans).toContain(ORPHAN_ID);
+      // The TTL is re-issued every tick, which is what keeps a lingering box on a clock.
+      expect(tick.calls).toContain(`--no-update stop ${ORPHAN_ID}`);
+      expect(tick.calls).toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
+      // Still inside the alert window: watching is silent until a box is genuinely stuck.
+      expect(tick.curlCalls).toEqual([]);
+      // Never destructive, whatever the platform offers.
+      expect(tick.calls.join("\n")).not.toContain("delete");
+    },
+  );
+
+  test(
+    "a condemned box the platform no longer lists at all IS gone, and leaves the ledger",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        listHasOrphan: false,
+        orphanLedger: `${ORPHAN_ID}\t${nowSeconds()}\t0\n`,
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).toContain(`orphan ${ORPHAN_ID} reclaimed — dropping from the ledger`);
+      expect(tick.orphans).not.toContain(ORPHAN_ID);
+      expect(tick.calls).not.toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
+    },
+  );
+
+  test(
+    "a condemned box still standing past the alert window alerts once and is never deleted",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const filed = nowSeconds() - ORPHAN_ALERT_AFTER_S - 60;
+      const tick = runTick({
+        listHasOrphan: true,
+        orphanLedger: `${ORPHAN_ID}\t${filed}\t0\n`,
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).toContain(`orphan ${ORPHAN_ID} still standing after`);
+      expect(tick.curlCalls.join("\n")).toContain(
+        `render conductor: render box ${ORPHAN_ID} has not been reclaimed since it was condemned`,
+      );
+      // The alert is stamped, so the next tick watches on in silence rather than paging again.
+      expect(tick.orphans).toContain(`${ORPHAN_ID}\t${filed}\t1`);
+      // An alert is the whole response. The box is re-parked and re-clocked, never removed.
+      expect(tick.calls).toContain(`--no-update stop ${ORPHAN_ID}`);
+      expect(tick.calls).toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
+      expect(tick.calls.join("\n")).not.toContain("delete");
+    },
+  );
+
+  test(
+    "an already-alerted orphan is watched without a second page",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const filed = nowSeconds() - ORPHAN_ALERT_AFTER_S - 60;
+      const tick = runTick({
+        listHasOrphan: true,
+        orphanLedger: `${ORPHAN_ID}\t${filed}\t1\n`,
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).not.toContain("still standing after");
+      expect(tick.curlCalls).toEqual([]);
+      expect(tick.orphans).toContain(ORPHAN_ID);
     },
   );
 });

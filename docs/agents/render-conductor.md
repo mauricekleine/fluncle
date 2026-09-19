@@ -108,11 +108,14 @@ Reclamation is asynchronous. Every condemned box ID enters the orphan ledger, an
 
 - **`mark_for_reclaim`** parks the box and sets the TTL. Idempotent, so re-issuing it on an id every tick is safe. Return the `extend` call's real exit status so TTL failures are visible.
 - **`condemn_box`** calls it, logs whether the TTL was accepted, and always records the ID because reclamation is asynchronous.
-- **`box_gone`** succeeds ONLY when a `boat list` positively proves absence. An unreachable API or empty body is "not proven gone", never "reclaimed" — otherwise one wobble would drop an id from the ledger and orphan that box for good.
-- **`box_present`** is the opposite question, asked only by the resume path: `boat list --all` spans every state, and only an id the platform does not list at all is safe to walk away from.
+- **`box_list_all`** is the one read both box questions go through, and `--all` is load-bearing. A bare `boat list` defaults to `--filter r` (up/running only), and a condemned box is parked — so the running-only question answers "absent" for every box the conductor has just condemned, drains the ledger before the platform has taken anything, and leaves the box standing unwatched. Every state a box can be in (`r` running, `s` stopped, `p` pending, `t` stopping, `e` error) is in scope.
+- **`box_gone`** succeeds ONLY when that read positively proves absence. An unreachable API or empty body is "not proven gone", never "reclaimed" — otherwise one wobble would drop an id from the ledger and orphan that box for good.
+- **`box_present`** is the opposite question, asked by the resume path: only an id the platform does not list at all is safe to walk away from. The two are **not** negations of each other — a failed list makes both false, so each fails toward holding the id.
 - **`reap_orphans`** works the ledger at the top of **every** tick, idle or rendering, bounded by `REAP_PER_TICK` (default 5). It drops the ids boat.dev has taken, re-issues the TTL on the ones it has not (which also repairs an id filed while the API was down), and alerts **once** on a box still standing after `ORPHAN_ALERT_AFTER` (default 6h). Running it before the state machine is deliberate: a wedged box is precisely the case where the next tick is busy rendering on its replacement, so gating the reap on `idle` would leave the orphan standing for a whole render.
 
 The ledger is `boxId<TAB>firstFiledEpoch<TAB>alerted` at `~/.render-conductor/orphan-boxes`, same temp-then-`mv` discipline as the poison ledger. Log `extend` failures immediately, and alert after six hours when an ID remains unreclaimed.
+
+**The reap's entire response to a stuck box is to say so.** It re-parks the box, re-issues the TTL, and pages once — the conductor never deletes a sandbox, and no amount of lingering changes that. A box the platform will not reclaim is the operator's to look at.
 
 ## Snapshot forensics (read a stopped box without resuming)
 
@@ -129,7 +132,6 @@ For selective extraction of a large file, resume + stream it off (`boat ssh -- "
 The conductor recovers from these known failure modes:
 
 - **`boat ssh` intermittently fails mid-restore.** The readiness gate waits out the restoring code; other intermittent SSH failures leave checkout freshening best-effort. The durable fix for a persistently stale box is the reap recovery above.
-- **`box_gone` cannot see a stopped box.** `boat list` defaults to running-only, so a condemned-and-stopped box reads as "reclaimed" and leaves the orphan ledger the same tick it enters it. That is the behaviour this rail has always had, and the CLI migration kept it byte for byte rather than changing the conductor's alerting posture in the same change. Tightening it to `boat list --all` makes `box_gone` honest and wakes the six-hour orphan alert, which is a live change to what the conductor pages about — an operator decision, one line in `box_gone`.
 - **A cold-wake tick can exceed its time budget.** A cold wake (resume + wait out the restore + freshen + scp) is the longest tick the conductor runs, and the host unit kills it at `TimeoutStartSec=180`. Dying between resume and trigger is silent. Symptom: the box is resumed but no render started and the state is still `idle`. The readiness wait is bounded at 75s precisely to stay inside that budget; the next hourly tick recovers anyway (the box is already warm, so the tick is fast), or the reap recovery forces it.
 
 ## requeue-video (re-render a shipped finding)
@@ -149,7 +151,7 @@ The Dockerfile and conductor scripts implement these boat.dev CLI contracts:
 - **The API key goes in on stdin.** `boat login --key-stdin` keeps the token out of the process arguments every other process on the host can read.
 - **`boat new --ttl` is SECONDS (not a duration string).** The conductor REQUIRES `--no-auto-stop` (it poll-detects done by ssh'ing the RUNNING box; a TTL/auto-stop box would vanish mid-poll) and passes no `--ttl` at all, so there is no box-side lifetime backstop — the conductor is the sole stop authority.
 - **`boat new --json` is JSONL** — `created`, zero or more `state`, then `ready` or `error`. The provision script prefers the `ready` line's id and refuses a run whose last line is an `error`, so a half-born sandbox is never provisioned against.
-- **`boat list` defaults to `--filter r`** (up/running only). A question about a STOPPED box has to pass `--all`, which is why the resume path's `box_present` and the preflight's carry-over check both do.
+- **`boat list` defaults to `--filter r`** (up/running only). Every question the conductor asks is about a box that may be parked — a condemned box, a stopped render box, the carry-over check — so all of them pass `--all`.
 - **`boat status` exits 0 even when unauthenticated**, so it cannot gate the login; the conductor always `boat login`s (idempotent).
 - **`boat ssh` propagates remote pass/fail (0 vs 1) but not the exact exit code** (it prints an error JSON on non-zero, flattening a remote `exit 42` to its own `1`). Load-bearing remote steps therefore assert on an explicit OUTPUT marker the remote command emits (the `~/conductor-run.done` poll and the "needs reprovision" grep are this pattern), not on the wrapper's exit code.
 - **`boat ssh 'bash -s' <<heredoc` feeds the script on stdin, and `npx skills add` reads that stdin**, eating the rest of the script. Every provision step gets `</dev/null` + a post-setup dir check.

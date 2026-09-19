@@ -46,7 +46,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "4764013b80bf1f15abb473bb5c4ed1af0a6af103c7b56bdcbdd3051cf6b3db63"
+      "computedHash": "cca4d4d896a53636a8017711df27e2a90378dd0c9e6ba337454e3f2d92771eb3"
     },
     "fluncle-label-triage": {
       "source": "packages/skills/fluncle-label-triage",
@@ -61,7 +61,7 @@
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "4b224c4475c59ec17a5443881657e6b79aae61b51cc8e696d569b3d917ebf986"
+      "computedHash": "86060ff9f8b52e6097770c81757b3864e1fb1af7c9bb57e494e99e4dfc5bfaff"
     },
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
@@ -111,7 +111,7 @@
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "278ee37b53d51e8e77c1e04753c94eecd4f923cc3d83b62459d2e9aa26576879"
+      "computedHash": "bdad4a21f39118220cdadf4affe4ee801edc39f653f4f227ce34a8ac5300f6c8"
     },
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",

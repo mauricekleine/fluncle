@@ -243,19 +243,23 @@ discord_alert() {
 # nothing is ever merely hoped-deleted — but "proven gone" is now something a LATER tick
 # establishes, not this one.
 
+# THE ONE READ BOTH BOX QUESTIONS GO THROUGH. `--all` is load-bearing: a bare `list`
+# defaults to `--filter r` (up/running only), so a PARKED box — which is exactly what a
+# condemned box is, since a condemn stops it first — comes back absent. Asking the
+# running-only question makes `box_gone` answer "reclaimed" the moment a condemn lands,
+# which drains the orphan ledger before boat.dev has taken anything and leaves the box
+# standing with nobody watching it. Every state the platform can hold a box in
+# (`r` running, `s` stopped, `p` pending, `t` stopping, `e` error) has to be in scope.
+# Echoes the payload; non-zero when the platform could not be read at all.
+box_list_all() { boat_cli list --all --json 2>/dev/null; }
+
 # `0` (success) ONLY when boat.dev PROVES the id is absent. An unreachable API, a failed
 # list, or an empty body returns non-zero — "not proven gone" must never read as "deleted",
 # or one wobble would drop an id from the ledger and orphan that box permanently.
-#
-# NOTE the bare `list`: both the pre-rename and the renamed CLI default to `--filter r`
-# (up/running only), so a condemned-and-stopped box reads as absent here. That is the
-# behaviour this reap rail has always had and the CLI migration keeps it byte for byte;
-# tightening it to `--all` turns the orphan alert from dormant into live and is an
-# operator decision, not a rename (see docs/agents/render-conductor.md § Known issues).
 box_gone() {
   local id="$1" out
   [ -n "$id" ] || return 0
-  out="$(boat_cli list --json 2>/dev/null)" || return 1
+  out="$(box_list_all)" || return 1
   case "$out" in
     '') return 1 ;;                        # empty body is not proof of absence
     *"\"id\":\"$id\""*) return 1 ;;        # exact key match; a substring test could hit a longer id
@@ -263,16 +267,18 @@ box_gone() {
   esac
 }
 
-# `0` when boat.dev POSITIVELY reports the id in ANY state (`--all` spans running, stopped,
-# pending, stopping and error). This is the opposite question to box_gone and it is asked
-# for a different reason: deciding whether a failed/abandoned `resume` may clear the box id
-# and reprovision. Only an id boat.dev does not know about is safe to walk away from —
-# anything else is a sandbox that would be left running with nobody to stop it. A failed
-# list is non-zero, i.e. "cannot tell", which the caller treats as "hold".
+# `0` when boat.dev POSITIVELY reports the id. This is the opposite question to box_gone and
+# it is asked for a different reason: deciding whether a failed/abandoned `resume` may clear
+# the box id and reprovision. Only an id boat.dev does not know about is safe to walk away
+# from — anything else is a sandbox that would be left running with nobody to stop it.
+#
+# The two are NOT negations of each other. A failed list makes BOTH false: box_gone will not
+# call an unreadable platform proof of absence, and box_present will not call it proof of
+# life. Each fails toward "hold the id", which is the safe direction for both callers.
 box_present() {
   local id="$1" out
   [ -n "$id" ] || return 1
-  out="$(boat_cli list --all --json 2>/dev/null)" || return 1
+  out="$(box_list_all)" || return 1
   case "$out" in
     '') return 1 ;;
     *"\"id\":\"$id\""*) return 0 ;;
@@ -316,10 +322,10 @@ mark_orphan_alerted() {
   mv "$ORPHANS_FILE.tmp" "$ORPHANS_FILE" 2>/dev/null || true
 }
 
-# Condemn a box: park it, put it on a reclamation clock, and WRITE THE ID DOWN. There is no
-# synchronous delete to succeed at any more, so this always files — the ledger is how the
-# id survives the `: >"$BOXID_FILE"` that follows, and later ticks are what prove the box
-# actually went away.
+# Condemn a box: park it, put it on a reclamation clock, and WRITE THE ID DOWN. The condemn
+# is never a delete, so it cannot prove absence in-tick and this always files — the ledger is
+# how the id survives the `: >"$BOXID_FILE"` that follows, and later ticks are what prove the
+# box actually went away.
 condemn_box() {
   local id="$1"
   [ -n "$id" ] || return 0
@@ -654,7 +660,7 @@ PFQ
   exit 0
 fi
 
-# Drain any box a previous tick condemned but could not delete. Deliberately BEFORE the
+# Drain any box a previous tick condemned and boat.dev has not yet reclaimed. Deliberately BEFORE the
 # state machine and on every tick (idle or rendering): a wedged box is exactly the case
 # where the next tick is busy rendering on its replacement, so gating this on idle would
 # leave the orphan standing for as long as the render runs. No-ops on an empty ledger.
