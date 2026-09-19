@@ -168,7 +168,9 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
       source: "listenbrainz",
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: "isrc",
     });
     // The row already carried an ISRC, so the Deezer recovery rung is skipped entirely.
@@ -221,7 +223,9 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
       source: "listenbrainz",
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: "search",
     });
     expect(text((await anchorState("mb_search")).uri)).toBe("spotify:track:lbDribble");
@@ -269,7 +273,9 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: null,
     });
     const state = await anchorState("mb_wrong");
@@ -331,7 +337,9 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: null,
     });
     expect(lookupSpotifyIdsByMbid).not.toHaveBeenCalled();
@@ -356,7 +364,9 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: null,
     });
     expect(fetchTrackMetadata).not.toHaveBeenCalled();
@@ -414,10 +424,12 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       // The fixture's failure IS a 429, so the yield law reads it: a throttle on this rung's own
       // by-id read is still a throttle in the anchor path. The outcome stays `metadata-failed`
       // (the read was made and failed — distinct from `yielded-on-breaker`, where it was not made).
       spotifyThrottled: true,
+      stamped: false,
       verifiedBy: null,
     });
     expect((await anchorState("mb_sperr")).attempted).toBeNull();
@@ -448,7 +460,9 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: true,
       verifiedBy: null,
     });
     const state = await anchorState("mb_apify_off");
@@ -478,7 +492,9 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: null,
     });
     // Byte-for-byte the pre-slice-3 behaviour: a free-rung miss does NOT stamp the re-ask backoff.
@@ -512,7 +528,9 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       source: "listenbrainz",
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: "isrc",
     });
     const state = await anchorState("mb_apify_off_hit");
@@ -566,7 +584,9 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       source: "listenbrainz",
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: "isrc",
     });
     const state = await anchorState("mb_dz");
@@ -604,7 +624,9 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: null,
     });
     const state = await anchorState("mb_dzbad");
@@ -674,7 +696,9 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       source: "listenbrainz",
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: "search",
     });
     expect(searchDeezerCandidates).toHaveBeenCalledTimes(1);
@@ -969,5 +993,139 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(result.isrcRecoveredByDeezer).toBe(true);
     expect(searchDeezerCandidates).toHaveBeenCalledTimes(1);
     expect(text((await anchorState("mb_box_absent")).isrc)).toBe("GBSELFDZ0001");
+  });
+});
+
+// ── THE TWO LEDGERS: what PARKS a row, and what CHARGES one of its finite tries ───────────────────
+//
+// `spotify_anchor_attempted_at` rotates the priority-ordered queue head past a row; the separate
+// `spotify_anchor_attempts` counter spends one of its `ANCHOR_MAX_ATTEMPTS` lifetime tries and
+// eventually retires it for good. The rule under test: a row is CHARGED only when a rung capable of
+// concluding (the Spotify SEARCH pair, or the paid Apify fallback) was actually asked and missed.
+// ListenBrainz is a positive-only oracle, so a ListenBrainz-only miss may park a row but never
+// charges it.
+//
+// Each case is asserted from BOTH sides, because every clause here is one that can silently stop
+// firing: the parking rule against the state that must park AND the states that must not, and the
+// charge against the one path that spends a try AND the paths that must not.
+
+/** Read a row's lifetime retry-cap counter — the ledger a free-rung miss must not touch. */
+async function anchorAttempts(trackId: string): Promise<null | number> {
+  const result = await db.execute({
+    args: [trackId],
+    sql: "select spotify_anchor_attempts from tracks where track_id = ?",
+  });
+  const value = result.rows[0]?.spotify_anchor_attempts;
+
+  return value === null || value === undefined ? null : Number(value);
+}
+
+describe("resolveAnchorFree — an attempt is charged only for a real ask", () => {
+  /** A Wednesday noon — well outside the Friday-refresh window, so only the flags decide. */
+  const NON_FRIDAY = new Date("2026-07-22T12:00:00Z");
+
+  it("a ListenBrainz-only miss with NO capable rung armed PARKS the row without charging it", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyEnabled } = await import("./anchor-apify");
+
+    // Apify off, the dark search flag off (its default): nothing that could conclude about this row
+    // is armed, and ListenBrainz — the one rung that ran — has no mapping for it.
+    await setAnchorApifyEnabled(false);
+    await seedCatalogue({ isrc: "ROWISRC00001", mbid: "mbid-unmapped", trackId: "mb_lb_only" });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    const result = await resolveAnchorFree("mb_lb_only", NON_FRIDAY);
+
+    expect(result.listenbrainzOutcome).toBe("no-map");
+    expect(result.stamped).toBe(true);
+    // PARKED so the head rotates…
+    expect((await anchorState("mb_lb_only")).attempted).not.toBeNull();
+    // …but NOT CHARGED: no rung capable of concluding was asked anything about this row.
+    expect(await anchorAttempts("mb_lb_only")).toBeNull();
+  });
+
+  it("the same row is parked outside the box's ask window too — a deferral of disarmed rungs defers nothing", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyEnabled } = await import("./anchor-apify");
+
+    // The box defers the Spotify leg for this row (its night window / ask budget / yield law). With
+    // the search flag OFF those rungs were never going to run, so honouring the deferral would hold
+    // the row at the queue head every tick outside the window while the backlog behind it waits.
+    await setAnchorApifyEnabled(false);
+    await seedCatalogue({ isrc: "ROWISRC00002", mbid: null, trackId: "mb_deferred_off" });
+
+    const result = await resolveAnchorFree("mb_deferred_off", NON_FRIDAY, { spotifySearch: false });
+
+    expect(result.stamped).toBe(true);
+    expect((await anchorState("mb_deferred_off")).attempted).not.toBeNull();
+    expect(await anchorAttempts("mb_deferred_off")).toBeNull();
+  });
+
+  it("but a deferral with the search flag ON keeps the row's turn — a later tick really will ask", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyEnabled } = await import("./anchor-apify");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    // The other side of the same clause: the rungs ARE armed, so the box's tick-level deferral is a
+    // real deferral and the row must come back rather than sit out the re-ask window.
+    await setAnchorApifyEnabled(false);
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC00003", mbid: null, trackId: "mb_deferred_on" });
+
+    const result = await resolveAnchorFree("mb_deferred_on", NON_FRIDAY, { spotifySearch: false });
+
+    expect(result.spotifySearchEnabled).toBe(true);
+    expect(result.stamped).toBe(false);
+    expect((await anchorState("mb_deferred_on")).attempted).toBeNull();
+    expect(await anchorAttempts("mb_deferred_on")).toBeNull();
+  });
+
+  it("a row whose ListenBrainz read YIELDED to the breaker is neither parked nor charged", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyEnabled } = await import("./anchor-apify");
+    const { recordSpotifyThrottle, SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES } =
+      await import("./spotify-anchor-breaker");
+
+    // The rung declined to spend its ONE by-id read into a tripped breaker, so it still owes this row
+    // its free look. Parking it here would retire a row on a question that was never put.
+    await setAnchorApifyEnabled(false);
+    await seedCatalogue({ isrc: "ROWISRC00004", mbid: "mbid-yield", trackId: "mb_yielded" });
+    lookupSpotifyIdsByMbid.mockResolvedValue({
+      artistName: "Etherwood",
+      recordingMbid: "mbid-yield",
+      spotifyTrackIds: ["lbAnchor001"],
+      trackName: "Weightless",
+    });
+
+    for (let index = 0; index < SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES; index += 1) {
+      await recordSpotifyThrottle(NON_FRIDAY.getTime());
+    }
+
+    const result = await resolveAnchorFree("mb_yielded", NON_FRIDAY);
+
+    expect(result.listenbrainzOutcome).toBe("yielded-on-breaker");
+    expect(result.stamped).toBe(false);
+    expect((await anchorState("mb_yielded")).attempted).toBeNull();
+    expect(await anchorAttempts("mb_yielded")).toBeNull();
+  });
+
+  it("a miss AFTER the Spotify search rungs ran is parked AND charged — that ask was real", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyEnabled } = await import("./anchor-apify");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    // The one path that spends a try: the search pair is the rung capable of concluding, it ran, and
+    // it said no. The row carries no ISRC, so the exact rung is skipped and the fuzzy search is the
+    // one issued — `spotifySearchDone` is the proof that a real ask left the building.
+    await setAnchorApifyEnabled(false);
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: null, mbid: null, trackId: "mb_searched" });
+
+    const result = await resolveAnchorFree("mb_searched", NON_FRIDAY);
+
+    expect(result.spotifySearchDone).toBe(true);
+    expect(result.stamped).toBe(true);
+    expect((await anchorState("mb_searched")).attempted).not.toBeNull();
+    expect(await anchorAttempts("mb_searched")).toBe(1);
   });
 });

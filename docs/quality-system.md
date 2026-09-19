@@ -77,6 +77,14 @@ The repository contains an optional Queue consumer in `apps/ci-events`. It accep
 
 Every deployable `main` push retains a bounded 20-minute polling fallback until event delivery is proven externally. Push fallbacks use the exact pushed SHA as their concurrency identity, so a later push — including one that classification skips — cannot cancel an earlier commit's evidence. Back-to-back deployable fallbacks may both complete when production serves the later commit because descendant correlation proves that both changes landed. Event and manual runs instead converge by build UUID, preserving duplicate-delivery and same-build retry deduplication. Event runs use a three-minute correlation bound. The actual public-surface sweep remains unchanged and starts only after commit correlation.
 
+### The probe's vector lane
+
+The public-surface sweep (`apps/web/scripts/post-deploy-probe.ts`) fires ordinary targets through a polite fixed-size pool, and vector-capable ops — the public GET ops whose handler can reach `executeVectorFallback` — alone, one after another, after the pool has drained. Three rules separate that lane, and all three exist because a request-time Turso vector scan is a different kind of work from every other GET in the sweep.
+
+Its budget is `VECTOR_FALLBACK_DEADLINE_MS` plus documented headroom, derived from the constant in `apps/web/src/lib/vector-budget.ts` rather than restated, so the probe can never call an endpoint dead inside the window the server is allowed to spend (see [docs/vector-serving.md](./vector-serving.md)). It runs alone because a Worker isolate admits one heavy read at a time, so two vector-capable targets fired together do not run together — the second waits out the first's whole scan and is then blamed for the total, which measures the probe's own contention rather than production's latency. And it gets exactly one attempt, because libSQL cannot cancel remote work: retrying a timeout does not replace the first scan, it stacks a second one on the database that is already the bottleneck.
+
+A budget generous enough to survive a legitimate vector scan would also swallow a slow drift, so every target reports its measured latency and a served answer above a soft threshold is reported as `WARN` — a PASS that took too long, printed in its own block, never failing the run. Failure stays reserved for a surface that stopped resolving.
+
 ### Operator-only event rollout
 
 Do not perform these steps from an unattended agent session:

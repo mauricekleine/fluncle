@@ -68,10 +68,12 @@
 // the OPERATOR rules with `resolve_anchor_review`. The gate is not loosened by one millisecond: the
 // review is evidence beside a miss, never an anchor. See "THE ANCHOR REVIEW" section at the bottom.
 //
-// The same UPDATE also bumps `spotify_anchor_attempts` (`coalesce(…, 0) + 1`) — the RETRY CAP's
-// counter, which is what makes the backoff terminate rather than re-ask forever: at
-// `ANCHOR_MAX_ATTEMPTS` full attempts the worklist stops offering the row (track-work.ts). The stamp
-// and the counter are written together, always — one attempt, one bump — so neither can drift.
+// `spotify_anchor_attempts` is the SECOND, separate ledger — the RETRY CAP's counter, which is what
+// makes the backoff terminate rather than re-ask forever: at `ANCHOR_MAX_ATTEMPTS` the worklist stops
+// offering the row (track-work.ts). It is bumped only when a rung CAPABLE OF CONCLUDING (the Spotify
+// search pair through `anchorTrack`, or the paid Apify fallback) was actually asked and missed; the
+// free positive-only ListenBrainz rung can park a row without spending one of its finite tries. See
+// `stampAnchorAttempt` for the rule in full.
 
 import { isAnchorApifyEnabled } from "./anchor-apify";
 import {
@@ -729,6 +731,17 @@ export type ListenBrainzAnchorOutcome =
  * YIELD LAW's wire: a throttle is PASS-ENDING (the box stops asking for Spotify rungs for the rest
  * of the tick) and never ROW-FAILING — the row stamps nothing and keeps its turn, the same shape the
  * Deezer quota law already has.
+ *
+ * `spotifySearchEnabled` reflects the `anchor_spotify_search_enabled` dark flag (default OFF,
+ * ./anchor-spotify-search.ts) as read for this call — the FLAG, never the window/breaker/meter gate
+ * around it. With it and `apifyEnabled` both false NO rung in the waterfall can conclude about a row,
+ * which is what lets the box say so in its tick summary instead of reporting a healthy empty run.
+ *
+ * `stamped` is TRUE iff this call wrote the row's re-ask backoff stamp — i.e. the row was settled or
+ * parked and will not be re-offered until the backoff ages out. It is FALSE on an anchor (the row is
+ * done, not backed off) and FALSE whenever the row kept its turn. `!anchored && !stamped` is the box's
+ * one honest test for "this row is coming back", and the reason the tick's `missed` count can stop
+ * claiming rows the server never actually retired.
  */
 export type AnchorResolveResult = {
   anchored: boolean;
@@ -740,7 +753,9 @@ export type AnchorResolveResult = {
   source: AnchorResolveSource | null;
   spotifyIsrcAsked: boolean;
   spotifySearchDone: boolean;
+  spotifySearchEnabled: boolean;
   spotifyThrottled: boolean;
+  stamped: boolean;
   verifiedBy: AnchorGateVerification;
 };
 
@@ -750,7 +765,11 @@ export type AnchorResolveResult = {
  */
 type FreeResolveOutcome = Omit<
   AnchorResolveResult,
-  "apifyEnabled" | "isrcRecoveredByDeezer" | "listenbrainzOutcome"
+  | "apifyEnabled"
+  | "isrcRecoveredByDeezer"
+  | "listenbrainzOutcome"
+  | "spotifySearchEnabled"
+  | "stamped"
 >;
 
 /** A Spotify-rung outcome with every field a miss carries — the shared "nothing happened" shape. */
@@ -1307,20 +1326,32 @@ export async function recoverIsrcViaDeezer(
 }
 
 /**
- * Stamp a catalogue row's re-ask backoff (`spotify_anchor_attempted_at`, plus the retry-cap counter
- * `spotify_anchor_attempts`) — the SAME write `anchorTrack` makes on a stamped miss.
- * `resolveAnchorFree` calls this ONLY when the Apify kill-flag is OFF and the row is a
- * genuinely-exhausted full miss: with no Apify rung coming to stamp it, the row must back itself off
- * (14 days, track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of recirculating every tick.
+ * Stamp a catalogue row's re-ask backoff (`spotify_anchor_attempted_at`) — the rotation clock the
+ * worklist reads (14 days, track-work.ts `ANCHOR_REASK_AFTER_DAYS`) — and, when `chargeAttempt`,
+ * the retry-cap counter `spotify_anchor_attempts` with it. `anchorTrack`'s stamped miss is the same
+ * write with the charge always on, because a candidate list reaching the gate IS a real ask.
  *
- * A stamp written while the kill-flag is OFF is a DEFERRAL rather than a real attempt, and the
- * flip-ON requeue undoes both halves of this write together (anchor-apify.ts) — so the counter never
- * accumulates cap budget against rows Apify never actually got its turn on.
+ * ── THE TWO LEDGERS ARE NOT ONE ──────────────────────────────────────────────────────────────────
+ * The STAMP parks a row so the priority-ordered queue head rotates past it; the COUNTER spends one of
+ * the row's `ANCHOR_MAX_ATTEMPTS` finite tries and eventually retires it for good. They answer
+ * different questions, so they are written on different conditions:
+ *
+ *   - the stamp is written whenever nothing that could conclude about this row is pending for it, so
+ *     that re-offering it on the next tick would ask the same free oracle the same question;
+ *   - the counter is charged ONLY when a rung CAPABLE OF CONCLUDING was actually asked and said no.
+ *
+ * A rung capable of concluding is the Spotify SEARCH pair (exact ISRC, then fuzzy) or the paid Apify
+ * fallback: those look for the row across the whole catalogue and a miss from them is evidence. The
+ * free ListenBrainz rung is a POSITIVE-ONLY oracle — it answers from one MusicBrainz↔Spotify mapping
+ * table, so a hit is proof and a miss says only that the mapping is absent. Charging a lifetime
+ * attempt to a ListenBrainz-only miss retires a row over `ANCHOR_MAX_ATTEMPTS` re-ask windows for a
+ * question that was never put to anything that could have answered it.
  */
 async function stampAnchorAttempt(
   db: Awaited<ReturnType<typeof getDb>>,
   trackId: string,
   now: Date,
+  options: { chargeAttempt: boolean },
 ): Promise<void> {
   await batchDueWorkSourceMutation(
     db,
@@ -1328,8 +1359,8 @@ async function stampAnchorAttempt(
       {
         args: [now.toISOString(), trackId],
         sql: `update tracks
-              set spotify_anchor_attempted_at = ?,
-                  spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
+              set spotify_anchor_attempted_at = ?
+                  ${options.chargeAttempt ? ", spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1" : ""}
               where track_id = ?`,
       },
     ],
@@ -1480,13 +1511,29 @@ export async function requeueIsrcRecoveryStamps(input: {
  * Spotify rungs are SKIPPED ENTIRELY: not one `findSpotifyTrackByIsrc` / `searchTrackCandidates` call
  * is issued — the load-bearing safety property that lets slice 2 ship dark.
  *
+ * ── WHEN A MISS IS PARKED, AND WHEN IT IS CHARGED ────────────────────────────────────────────────
  * Every rung anchors with `stampOnMiss: false`, so a full miss normally leaves the row UNSTAMPED and
- * the Apify fallback (or the next tick) still gets its turn. THE EXCEPTION is the Apify kill-flag
- * (`anchor_apify_enabled`, default ON, ./anchor-apify.ts): when it is OFF (out of budget) NO Apify rung
- * is coming, so a genuinely-exhausted full miss is stamped-and-backed-off HERE (via `stampAnchorAttempt`)
- * — never a HIT, and never a row whose Spotify search is merely deferred by the Friday window (still
- * pending on a later tick). With the flag ON, behaviour is UNCHANGED (a free-rung miss never stamps).
- * The read is reported as `apifyEnabled` so the box can skip the whole Apify actor loop for the tick.
+ * the Apify fallback (or the next tick) still gets its turn. The two exceptions are decided by ONE
+ * question asked twice, in the two ledgers `stampAnchorAttempt` keeps apart:
+ *
+ *   PARK (the `spotify_anchor_attempted_at` stamp) when NOTHING THAT COULD CONCLUDE IS PENDING for
+ *   this row — the Apify kill-flag is OFF *and* the dark search flag is OFF *and* the ListenBrainz
+ *   rung did not yield to the breaker. Re-offering such a row on the next tick would put the same
+ *   question to the same positive-only oracle, so it backs off (14 days) and the priority-ordered
+ *   queue head rotates past it. THE CALLER'S OWN DEFERRAL DOES NOT SUPPRESS THIS: a tick-level
+ *   deferral of rungs that are disarmed anyway defers nothing, and treating it as pending is exactly
+ *   what pinned a day's ticks on one unmoving 250-row head.
+ *
+ *   CHARGE (`spotify_anchor_attempts`, the lifetime cap) only when the Spotify SEARCH rungs actually
+ *   RAN and missed. A ListenBrainz-only miss is parked but never charged: it was never asked of
+ *   anything that could have concluded, and charging it retires the row after
+ *   `ANCHOR_MAX_ATTEMPTS` re-ask windows without a single real ask.
+ *
+ * A HIT is neither parked nor charged here (the anchor write settles it), and a row whose Spotify
+ * search is genuinely merely DEFERRED — the flag is ON and the window/breaker/meter or the caller's
+ * tick budget moved it to a later tick — is left alone, still pending, exactly as before. The Apify
+ * read is reported as `apifyEnabled` so the box can skip the whole actor loop for the tick, and the
+ * dark-flag read as `spotifySearchEnabled` so it can say in its summary that no rung could conclude.
  *
  * Best-effort throughout — a missing MBID, a Deezer outage, a ListenBrainz miss, a throttle, or a
  * Spotify read that throws all fall through to the later rungs without stamping, but the
@@ -1518,6 +1565,11 @@ export async function resolveAnchorFree(
   // must back off their own full misses (no Apify rung will).
   const apifyEnabled = await isAnchorApifyEnabled();
 
+  // The dark SEARCH flag itself — the FLAG, never `anchorSpotifySearchAllowed`'s window/breaker/meter
+  // gate around it. Read ONCE up front for the same reason: every return path reports the same value,
+  // and both the parking rule below and the box's "no rung could conclude" summary read it.
+  const spotifySearchEnabled = await isAnchorSpotifySearchEnabled();
+
   const found = await db.execute({
     args: [trackId],
     sql: `select mb_recording_id, isrc, artists_json, title, duration_ms from tracks where track_id = ? limit 1`,
@@ -1537,6 +1589,8 @@ export async function resolveAnchorFree(
       apifyEnabled,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "not-attempted",
+      spotifySearchEnabled,
+      stamped: false,
     };
   }
 
@@ -1581,6 +1635,8 @@ export async function resolveAnchorFree(
       isrcRecoveredByDeezer,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
+      spotifySearchEnabled,
+      stamped: false,
       verifiedBy: listenbrainz.verifiedBy,
     };
   }
@@ -1596,18 +1652,22 @@ export async function resolveAnchorFree(
   const listenbrainzYielded = listenbrainz.outcome === "yielded-on-breaker";
 
   if (callerDefers || !(await anchorSpotifySearchAllowed(now))) {
-    // The Spotify search rungs will not run this call. With Apify also OFF, this ListenBrainz miss is
-    // terminal for the row — but ONLY when the Spotify search flag is genuinely OFF (nothing pending)
-    // AND the ListenBrainz rung actually ran. If that flag is ON we are merely inside the
-    // Friday-refresh window, out of shared-app budget for the moment, or deferred by the caller's own
-    // tick budget — a later tick WILL search, so the row is NOT exhausted and must keep its turn.
-    if (
-      !apifyEnabled &&
-      !callerDefers &&
-      !listenbrainzYielded &&
-      !(await isAnchorSpotifySearchEnabled())
-    ) {
-      await stampAnchorAttempt(db, trackId, now);
+    // The Spotify search rungs will not run this call, so the ListenBrainz rung is all this row got.
+    //
+    // PARK IT when nothing that could conclude is pending: Apify OFF (no paid rung is coming) AND the
+    // dark search flag OFF (no later tick will search either) AND the ListenBrainz rung did not yield
+    // to the breaker (it still owes this row its free by-id read). The caller's own deferral is NOT a
+    // reason to keep the row at the head here: a tick-level deferral of rungs that are disarmed
+    // anyway defers nothing, and honouring it re-serves the same head every tick outside the night
+    // window while the whole backlog behind it waits. With the flag ON, a deferral is real — the window,
+    // the breaker, the meter or the box's ask budget will come round — so the row keeps its turn.
+    //
+    // NEVER CHARGED. ListenBrainz is a positive-only oracle (see `stampAnchorAttempt`), so no rung
+    // capable of concluding was asked and no lifetime attempt may be spent.
+    const park = !apifyEnabled && !spotifySearchEnabled && !listenbrainzYielded;
+
+    if (park) {
+      await stampAnchorAttempt(db, trackId, now, { chargeAttempt: false });
     }
 
     return {
@@ -1616,9 +1676,11 @@ export async function resolveAnchorFree(
       freeDurationMsOmitted: listenbrainzDurationMsOmitted,
       isrcRecoveredByDeezer,
       listenbrainzOutcome: listenbrainz.outcome,
+      spotifySearchEnabled,
       // A throttle anywhere in the anchor path arms the yield law, including on this rung's own
       // by-id read — the box stops asking for Spotify rungs for the rest of the tick.
       spotifyThrottled: Boolean(listenbrainz.throttled),
+      stamped: park,
     };
   }
 
@@ -1633,16 +1695,18 @@ export async function resolveAnchorFree(
 
   // With Apify OFF, a FULL MISS after the Spotify search rungs is terminal — every rung available to
   // the row this call has now been spent — so back it off. (Apify ON ⇒ UNCHANGED: the miss stays
-  // un-stamped for the Apify fallback's turn.)
+  // un-stamped for the Apify fallback's turn.) This is the one path that CHARGES: the search pair is
+  // the rung capable of concluding, and it ran and said no.
   //
   // A THROTTLE IS THE ONE EXCEPTION, and it is the yield law: a 429 means the question was never
   // actually put to Spotify, so the row is deferred rather than exhausted and stamping it would
   // spend a lifetime attempt on a call that did not happen. A ListenBrainz throttle counts too — the
   // shared app pushed back either way.
   const throttled = searchOutcome.spotifyThrottled || Boolean(listenbrainz.throttled);
+  const settled = !apifyEnabled && !searchOutcome.anchored && !throttled;
 
-  if (!apifyEnabled && !searchOutcome.anchored && !throttled) {
-    await stampAnchorAttempt(db, trackId, now);
+  if (settled) {
+    await stampAnchorAttempt(db, trackId, now, { chargeAttempt: true });
   }
 
   return {
@@ -1651,7 +1715,9 @@ export async function resolveAnchorFree(
     freeDurationMsOmitted: listenbrainzDurationMsOmitted + searchOutcome.freeDurationMsOmitted,
     isrcRecoveredByDeezer,
     listenbrainzOutcome: listenbrainz.outcome,
+    spotifySearchEnabled,
     spotifyThrottled: throttled,
+    stamped: settled,
   };
 }
 

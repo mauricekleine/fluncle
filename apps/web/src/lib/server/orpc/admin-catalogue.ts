@@ -611,7 +611,15 @@ export function adminCatalogueHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async () => {
       try {
-        return { ...(await getSpotifyAnchorBreakerState()), ok: true as const };
+        // `rungs` rides along because a paused breaker and a DISARMED rung look identical from
+        // outside — both are silence — and the two operator flags had no read surface at all.
+        const [breaker, apifyEnabled, spotifySearchEnabled] = await Promise.all([
+          getSpotifyAnchorBreakerState(),
+          isAnchorApifyEnabled(),
+          isAnchorSpotifySearchEnabled(),
+        ]);
+
+        return { ...breaker, ok: true as const, rungs: { apifyEnabled, spotifySearchEnabled } };
       } catch (error) {
         throw apiFault(error);
       }

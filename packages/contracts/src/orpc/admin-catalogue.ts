@@ -1143,9 +1143,15 @@ export const DeezerIsrcCandidateSchema = z
  *
  * SLICE 3 — the APIFY KILL-FLAG (`anchor_apify_enabled`, default ON, `set_anchor_apify`). `apifyEnabled`
  * reflects it for this call — a GLOBAL flag, so every verdict in a tick agrees. When FALSE (out of Apify
- * budget) the box SKIPS the whole Apify actor loop, and this call has already stamped-and-backed-off the
- * row if it was a genuinely-exhausted full miss (so it leaves the recirculating-stall behind for a clean
- * self-managing state). When TRUE (the default) a free-rung miss is NEVER stamped here — unchanged.
+ * budget) the box SKIPS the whole Apify actor loop, and this call has already parked the row if no rung
+ * could conclude about it (so it leaves the recirculating-stall behind for a clean self-managing state).
+ * When TRUE (the default) a free-rung miss is NEVER stamped here — unchanged.
+ *
+ * THE TWO LEDGERS. `stamped` says the row was PARKED on its re-ask backoff; the lifetime retry cap
+ * (`ANCHOR_MAX_ATTEMPTS`) is a separate charge, and it is spent only when a rung capable of CONCLUDING
+ * — the Spotify SEARCH pair, or the paid Apify fallback — was actually asked and missed. ListenBrainz
+ * is a positive-only oracle (a hit is proof, a miss only says its mapping table is silent), so a
+ * ListenBrainz-only miss parks the row without spending one of its finite tries.
  */
 export const resolveAnchor = oc
   .route({
@@ -1220,11 +1226,26 @@ export const resolveAnchor = oc
       /** True iff a Spotify SEARCH was issued this call — the box's pacer signal. OFF flag ⇒ false. */
       spotifySearchDone: z.boolean(),
       /**
+       * The `anchor_spotify_search_enabled` dark flag (default OFF) as read this call — the FLAG
+       * itself, never the window/breaker/meter gate around it. FALSE together with `apifyEnabled`
+       * false means NO rung in the waterfall can conclude about a row, which is what lets the tick
+       * summary say so instead of reading as a healthy empty run.
+       */
+      spotifySearchEnabled: z.boolean(),
+      /**
        * True iff a Spotify call in this call's anchor path came back 429 — the YIELD LAW's wire. A
        * throttle is PASS-ENDING (the box stops asking for Spotify rungs for the rest of the tick) and
        * never ROW-FAILING: the row stamps nothing and keeps its turn.
        */
       spotifyThrottled: z.boolean(),
+      /**
+       * True iff this call wrote the row's re-ask backoff stamp, i.e. the row is parked and will not
+       * be re-offered until the backoff ages out. FALSE on an anchor (the row is done, not backed
+       * off) and FALSE whenever the row kept its turn, so `!anchored && !stamped` is the caller's one
+       * honest test for "this row is coming back" — the difference between a tick that retired rows
+       * and a tick that re-read the same queue head.
+       */
+      stamped: z.boolean(),
       /** Which gate rung matched (`isrc` | `search`), or null on a miss (no MBID / no map / no verify). */
       verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
     }),
@@ -1340,12 +1361,13 @@ export const setAnchorSearch = oc
  * stamp-and-back-off their full misses, so the HIGHER-priority rows skipped during the outage would
  * otherwise wait out the full 14-day re-ask backoff while Apify works lower-priority rows first — a
  * priority inversion. Flipping back ON nulls the `spotify_anchor_attempted_at` stamp on exactly the
- * ISRC-BEARING off-window deferrals (every stamp written while the box made ZERO Apify attempts) and
- * gives their retry-cap attempt back with it, so they re-enter the priority-ordered worklist immediately
- * with their full budget of tries; genuine prior backoffs, which all predate the off-window, are
- * untouched, and so are ISRC-less deferrals (`has_isrc = 1` — anchoring concludes off the ISRC anchor
- * in practice, so a bulk re-arm of rows without one re-bills asks that cannot conclude). `requeued` is
- * `0` for a flip-OFF, or a flip-ON when no off-window was recorded.
+ * ISRC-BEARING off-window deferrals (every stamp written while the box made ZERO Apify attempts), so
+ * they re-enter the priority-ordered worklist immediately; genuine prior backoffs, which all predate
+ * the off-window, are untouched, and so are ISRC-less deferrals (`has_isrc = 1` — anchoring concludes
+ * off the ISRC anchor in practice, so a bulk re-arm of rows without one re-bills asks that cannot
+ * conclude). It moves the STAMP alone: an off-window deferral never charged the row's retry-cap
+ * counter (an attempt is spent only for a real ask by a rung that could conclude), so there is
+ * nothing to give back. `requeued` is `0` for a flip-OFF, or a flip-ON when no off-window was recorded.
  */
 export const setAnchorApify = oc
   .route({
@@ -1464,6 +1486,26 @@ export const SpotifyAnchorBreakerStateSchema = z
   .meta({ id: "SpotifyAnchorBreakerState" });
 
 /**
+ * WHICH ANCHOR RUNGS ARE ARMED AT ALL — the two operator flags the breaker readout carries alongside
+ * its own pause, because the three questions an operator asks about a quiet anchor sweep are the same
+ * question: can anything conclude right now?
+ *
+ * They are the FLAGS as stored (`set_anchor_search` / `set_anchor_apify`), never the window, breaker
+ * or meter gates layered over them — so the pair answers "is the rung armed", and `tripped` above
+ * answers "is the armed rung paused". Both false means no rung in the waterfall can conclude about a
+ * catalogue row: the free ListenBrainz rung still runs and can WIN, but its miss is not a verdict, so
+ * a tick in that state retires nothing and must not read as a healthy empty run.
+ */
+export const AnchorRungFlagsSchema = z
+  .object({
+    /** `anchor_apify_enabled` (DEFAULT ON) — the paid Apify search fallback. */
+    apifyEnabled: z.boolean(),
+    /** `anchor_spotify_search_enabled` (DEFAULT OFF) — the dark Spotify exact-ISRC + fuzzy rungs. */
+    spotifySearchEnabled: z.boolean(),
+  })
+  .meta({ id: "AnchorRungFlags" });
+
+/**
  * `get_spotify_anchor_breaker` → `GET /admin/catalogue/anchor/breaker` (operationId
  * `getSpotifyAnchorBreaker`).
  *
@@ -1476,17 +1518,25 @@ export const SpotifyAnchorBreakerStateSchema = z
  * The read is agent-allowed for the same reason the capture budget's is: the box's `fluncle-anchor`
  * sweep is entitled to know why its free rungs stopped resolving. It reads the SAME state the gate
  * consults — a breaker display that can disagree with the breaker would be worse than none.
+ *
+ * `rungs` rides along for the same reason (`AnchorRungFlagsSchema`): a paused breaker and a disarmed
+ * rung look identical from outside — both are silence — and until this the two operator flags could
+ * only be INFERRED from what the sweep failed to do. The reset op deliberately does NOT carry them:
+ * it reports what it changed, and it changes no flag.
  */
 export const getSpotifyAnchorBreaker = oc
   .route({
     method: "GET",
     operationId: "getSpotifyAnchorBreaker",
     path: "/admin/catalogue/anchor/breaker",
-    summary: "The Spotify anchor-search throttle breaker: tripped, why, and how long left",
+    summary:
+      "The Spotify anchor-search throttle breaker: tripped, why, how long left, and the rungs",
     tags: ["Admin"],
   })
   .input(z.object({}))
-  .output(SpotifyAnchorBreakerStateSchema.extend({ ok: z.literal(true) }));
+  .output(
+    SpotifyAnchorBreakerStateSchema.extend({ ok: z.literal(true), rungs: AnchorRungFlagsSchema }),
+  );
 
 /**
  * `reset_spotify_anchor_breaker` → `POST /admin/catalogue/anchor/breaker/reset` (operationId
