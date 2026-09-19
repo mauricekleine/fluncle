@@ -32,6 +32,8 @@ import {
   buildCaptureSearchLadder,
   buildCaptureSearchTarget,
   buildCaptureSummary,
+  CAPTURE_BLIND_MIN_ATTEMPTS,
+  captureBlindVerdict,
   captureCommitRequest,
   captureCommitRequestFromState,
   captureSessionSeed,
@@ -3020,5 +3022,171 @@ describe("the catalogue tier's budget accounting", () => {
     });
 
     expect(summary).toMatchObject({ provenanceLadderSearched: 0, provenanceLadderTopicServed: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE DEAD-FETCHER TRIPWIRE, from both sides.
+//
+// It must fire on the wall — every attempt failing — and stay silent on the ordinary partial
+// batch this sweep produces all day, on a sample too small to mean anything, and on a tick whose
+// rows the server's budget refused rather than the fetcher.
+// ---------------------------------------------------------------------------
+
+const NO_FAILURES = {
+  failureRecording: 0,
+  proxy: 0,
+  r2: 0,
+  trackUpdate: 0,
+  unknown: 0,
+  ytDlp: 0,
+};
+
+describe("captureBlindVerdict", () => {
+  test("QUIET: the worst honest batch this sweep measures is still a pass", () => {
+    // The widest healthy failure share in a fortnight of attempting ticks was 55%, and the bulk
+    // sat at or under a third. Both are far under the bar.
+    expect(
+      captureBlindVerdict({
+        attempts: 11,
+        botChallengesUncleared: 3,
+        failed: 6,
+        failures: { ...NO_FAILURES, ytDlp: 6 },
+      }),
+    ).toBe(null);
+    expect(
+      captureBlindVerdict({
+        attempts: 12,
+        botChallengesUncleared: 2,
+        failed: 4,
+        failures: { ...NO_FAILURES, ytDlp: 4 },
+      }),
+    ).toBe(null);
+  });
+
+  test("QUIET: a sample under the floor cannot trip it, however it went", () => {
+    expect(
+      captureBlindVerdict({
+        attempts: CAPTURE_BLIND_MIN_ATTEMPTS - 1,
+        botChallengesUncleared: 0,
+        failed: CAPTURE_BLIND_MIN_ATTEMPTS - 1,
+        failures: { ...NO_FAILURES, ytDlp: CAPTURE_BLIND_MIN_ATTEMPTS - 1 },
+      }),
+    ).toBe(null);
+  });
+
+  test("QUIET: an unmatched row proves the fetcher works, so it is never a failure", () => {
+    // Bytes arrived and the fingerprint refused them. Counting it as a failure would let a good
+    // fetcher on a bad-metadata day read as a dead one.
+    expect(
+      captureBlindVerdict({
+        attempts: 10,
+        botChallengesUncleared: 0,
+        failed: 2,
+        failures: { ...NO_FAILURES, ytDlp: 2 },
+      }),
+    ).toBe(null);
+  });
+
+  test("FIRES: every attempt failing names the dominant class", () => {
+    expect(
+      captureBlindVerdict({
+        attempts: 12,
+        botChallengesUncleared: 0,
+        failed: 12,
+        failures: { ...NO_FAILURES, ytDlp: 12 },
+      }),
+    ).toBe("ytdlp_failing");
+    expect(
+      captureBlindVerdict({
+        attempts: 8,
+        botChallengesUncleared: 0,
+        failed: 8,
+        failures: { ...NO_FAILURES, proxy: 7, ytDlp: 1 },
+      }),
+    ).toBe("proxy_failing");
+    // An uncleared challenge also lands as a yt-dlp failure downstream, so naming the challenge
+    // is the more useful truth when every failure carried one.
+    expect(
+      captureBlindVerdict({
+        attempts: 6,
+        botChallengesUncleared: 6,
+        failed: 6,
+        failures: { ...NO_FAILURES, ytDlp: 6 },
+      }),
+    ).toBe("bot_challenged");
+    // Nothing recognisable dominating is still a wall; the reason says only that.
+    expect(
+      captureBlindVerdict({
+        attempts: 5,
+        botChallengesUncleared: 0,
+        failed: 5,
+        failures: { ...NO_FAILURES, unknown: 5 },
+      }),
+    ).toBe("capture_failing");
+  });
+});
+
+describe("the capture summary's added verdict", () => {
+  const base = {
+    botChallenges: 0,
+    elapsedMs: 1,
+    provenance: { failed: 0, found: 0, none: 0 },
+    reverdict: { asked: 0, failed: 0 },
+    writes: { confirmed: 0, failed: 0, pending: 0 },
+  };
+
+  test("FIRES: a wholly failed batch is a failed run with its counts intact", () => {
+    const summary = buildCaptureSummary({
+      ...base,
+      batch: 12,
+      botChallengesUncleared: 0,
+      counts: { done: 0, failed: 12, skipped: 0, unmatched: 0 },
+      failures: { ...NO_FAILURES, ytDlp: 12 },
+    });
+
+    // The exact shape a dead fetcher wrote as a green row for thirteen days.
+    expect(summary).toMatchObject({
+      captureAttempts: 12,
+      checked: 12,
+      errors: 1,
+      failed: 12,
+      ok: false,
+      produced: 0,
+      reason: "ytdlp_failing",
+    });
+  });
+
+  test("QUIET: rows the server's budget refused are not attempts and cannot manufacture a wall", () => {
+    // Twelve rows in, eleven refused before any fetch, and the one real attempt failed. A share
+    // read off the BATCH would be a wall; read off attempts it is one unlucky row.
+    const summary = buildCaptureSummary({
+      ...base,
+      batch: 12,
+      botChallengesUncleared: 0,
+      counts: { done: 0, failed: 1, rejected: 11, skipped: 0, unmatched: 0 },
+      failures: { ...NO_FAILURES, ytDlp: 1 },
+    });
+
+    expect(summary).toMatchObject({
+      captureAttempts: 1,
+      captureRejected: 11,
+      errors: 0,
+      ok: true,
+    });
+    expect(summary).not.toHaveProperty("reason");
+  });
+
+  test("QUIET: an ordinary partial batch keeps reading as the pass it is", () => {
+    const summary = buildCaptureSummary({
+      ...base,
+      batch: 12,
+      botChallengesUncleared: 2,
+      counts: { done: 7, failed: 4, skipped: 0, unmatched: 1 },
+      failures: { ...NO_FAILURES, ytDlp: 4 },
+    });
+
+    expect(summary).toMatchObject({ captureAttempts: 12, errors: 0, ok: true, produced: 7 });
+    expect(summary).not.toHaveProperty("reason");
   });
 });

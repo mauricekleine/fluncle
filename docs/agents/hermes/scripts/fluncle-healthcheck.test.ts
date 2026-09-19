@@ -25,6 +25,7 @@ import { join } from "node:path";
 // `main()` is guarded behind `import.meta.main` in the prober, so importing it here is
 // side-effect free — no probes, no Discord, no POST.
 import {
+  backpressureStallTicks,
   backpressureTotal,
   boxUptimeMs,
   buildEscalationAlert,
@@ -44,6 +45,7 @@ import {
   judgeCron,
   MAX_TIMER_JITTER_MS,
   markerBackpressure,
+  markerSignals,
   markerStrain,
   nextServiceState,
   normalizeState,
@@ -1367,5 +1369,144 @@ describe("the stale budget covers the jitter every timer actually rolls", () => 
 
       expect(Number(rolled[1]) * 1_000).toBeLessThanOrEqual(MAX_TIMER_JITTER_MS);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE STALL BAR — when designed backpressure stops being designed.
+//
+// A paused tick exits 0 with its work counters nulled, so it is invisible in every failure
+// signal: `errors: 0`, `ok: true`, nothing distressed in the body. One of them is correct
+// behaviour. A standing run of them is a sweep that is alive and doing nothing, and that is what
+// this bar exists to say out loud. Both sides are driven here — a short pause must stay quiet.
+// ---------------------------------------------------------------------------
+
+const PAUSED_SUMMARY =
+  '{"checked":0,"errors":0,"failed":0,"gateState":"paused","ok":true,"produced":0,"queueDepth":null,"reason":"due_work_repair_pending","throttled":true}';
+
+describe("the stall bar", () => {
+  const MINUTE = 60_000;
+
+  test("the bar is that cron's OWN ticks: about an hour for a fast sweep, three for a slow one", () => {
+    expect(backpressureStallTicks(5 * MINUTE)).toBe(12);
+    expect(backpressureStallTicks(10 * MINUTE)).toBe(6);
+    expect(backpressureStallTicks(60 * MINUTE)).toBe(3);
+    expect(backpressureStallTicks(24 * 60 * MINUTE)).toBe(3);
+    // An unusable cadence falls back to the tick floor rather than to zero, which would make
+    // every quiet sweep stalled on its first yield.
+    expect(backpressureStallTicks(0)).toBe(3);
+  });
+
+  test("an admission yield carries the runner's finer word behind the axis it qualifies", () => {
+    const body = strainMarker(
+      '{"admissionOutcome":"phase-yielded","admissionYieldReason":"public-latency","checked":0,"errors":0,"gateState":"paused","ok":true,"produced":0,"reason":"database_admission","throttled":true}',
+      [],
+    );
+
+    expect(markerSignals(body)).toMatchObject({
+      backpressure: 1,
+      backpressureReason: "database_admission:public-latency",
+    });
+  });
+
+  test("the newest yielded tick's reason is what the state carries", () => {
+    const now = 3 * 60 * MINUTE;
+    const state = foldStrain(
+      undefined,
+      [
+        { atMs: now - 2000, backpressure: 1, backpressureReason: "database_admission", points: 0 },
+        {
+          atMs: now - 1000,
+          backpressure: 1,
+          backpressureReason: "due_work_repair_pending",
+          points: 0,
+        },
+      ],
+      now,
+    );
+
+    expect(state.backpressureReason).toBe("due_work_repair_pending");
+    expect(backpressureTotal(state, now)).toBe(2);
+    // And it is still not strain: the axes never cross.
+    expect(strainTotals(state, now)).toEqual({ points: 0, ticks: 0 });
+  });
+
+  test("QUIET: a pause under the bar is the backpressure it was designed to be", () => {
+    const dir = markerDir([
+      { ageMs: 48 * 60 * MINUTE, body: strainMarker(PAUSED_SUMMARY, []) },
+      { ageMs: 24 * 60 * MINUTE, body: strainMarker(PAUSED_SUMMARY, []) },
+    ]);
+    const result = probeSweepStrain(new Map([[CRON.service, dir]]), {});
+
+    expect(result.stalled).toEqual([]);
+    expect(result.backpressured).toEqual([CRON.service]);
+    expect(result.check.status).toBe("ok");
+    expect(result.check.message).toContain("yielded cleanly");
+  });
+
+  test("FIRES: a pause that outlasts the bar degrades the row and names the reason", () => {
+    const dir = markerDir([
+      { ageMs: 48 * 60 * MINUTE, body: strainMarker(PAUSED_SUMMARY, []) },
+      { ageMs: 24 * 60 * MINUTE, body: strainMarker(PAUSED_SUMMARY, []) },
+      { ageMs: 60 * MINUTE, body: strainMarker(PAUSED_SUMMARY, []) },
+    ]);
+    const result = probeSweepStrain(new Map([[CRON.service, dir]]), {});
+
+    expect(result.stalled).toEqual([
+      { reason: "due_work_repair_pending", service: CRON.service, ticks: 3 },
+    ]);
+    expect(result.check.status).toBe("degraded");
+    expect(result.check.message).toBe(
+      "1 sweep paused without working: backup (due_work_repair_pending ×3)",
+    );
+    // Edge-triggered, like every other line this prober sends.
+    expect(result.newlyStalled).toEqual(result.stalled);
+    expect(result.next[CRON.service]?.stalled).toBe(true);
+    expect(buildStrainAlert([], [], result.newlyStalled, [])).toContain("due_work_repair_pending");
+  });
+
+  test("a sweep that starts working again says so once, and only once", () => {
+    const stalledBefore = {
+      [CRON.service]: { buckets: {}, stalled: true, strained: false, watermarkMs: 0 },
+    };
+    const result = probeSweepStrain(new Map([[CRON.service, markerDir([])]]), stalledBefore);
+
+    expect(result.stalled).toEqual([]);
+    expect(result.clearedStall).toEqual([CRON.service]);
+    expect(result.next[CRON.service]).not.toHaveProperty("stalled");
+    expect(buildStrainAlert([], [], [], result.clearedStall)).toContain(
+      `working again: ${CRON.service}`,
+    );
+
+    // The next tick has nothing left to announce.
+    const quiet = probeSweepStrain(new Map([[CRON.service, markerDir([])]]), result.next);
+
+    expect(quiet.clearedStall).toEqual([]);
+    expect(
+      buildStrainAlert(quiet.newly, quiet.cleared, quiet.newlyStalled, quiet.clearedStall),
+    ).toBe(null);
+  });
+
+  test("a stalled sweep and a strained one are two claims on one row", () => {
+    const check = sweepStrainCheck(
+      ["cron.capture"],
+      ["cron.crawl"],
+      [{ reason: "database_admission", service: "cron.crawl", ticks: 14 }],
+    );
+
+    expect(check.status).toBe("degraded");
+    expect(check.message).toBe(
+      "1 sweep logging repeat errors: capture; 1 sweep paused without working: crawl (database_admission ×14)",
+    );
+  });
+
+  test("the stalled message stays inside the public-safe cap too", () => {
+    const many = Array.from({ length: 30 }, (_, index) => ({
+      reason: "due_work_repair_pending",
+      service: `cron.sweep-number-${index}`,
+      ticks: 40,
+    }));
+
+    expect((sweepStrainCheck([], [], many).message ?? "").length).toBeLessThanOrEqual(120);
   });
 });

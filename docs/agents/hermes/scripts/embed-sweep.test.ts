@@ -25,12 +25,17 @@ import {
   buildEmbedFatalSummary,
   buildEmbedSummary,
   chooseEmbedSource,
+  classifyEmbedFailure,
   DEFAULT_EMBED_BATCH_CAP,
+  EMBED_SYSTEMIC_STREAK,
   type EmbedDatabaseWindows,
+  type EmbedFailureStreak,
+  type EmbedFailureStreakStore,
   type EmbedManifestEntry,
   type EmbedWriteItem,
   type EmbedWriteWindow,
   MAX_EMBED_BATCH_CAP,
+  nextEmbedFailureStreak,
   parseEmbedQueue,
   parseQueueWindowEnvelope,
   parseWriteWindowEnvelope,
@@ -338,12 +343,33 @@ describe("database window envelopes", () => {
 type DriverOptions = {
   batchCap: number;
   embedCode?: number;
+  /** The message each failing track's embedder error carries; defaults to a decode failure. */
+  embedErrorMessage?: string;
   embedErrors?: readonly string[];
+  /** The streak this tick INHERITS from earlier ticks (the dead-stage tripwire's memory). */
+  failureStreak?: EmbedFailureStreak | null;
+  /** Failing tracks whose error is a DIFFERENT class from `embedErrorMessage`. */
+  mixedErrorTrackIds?: readonly string[];
   queue?: "tracks" | "yield";
   queued?: number;
   trackIds: readonly string[];
   write: (item: EmbedWriteItem) => EmbedWriteWindow | undefined;
 };
+
+/** An in-memory stand-in for the on-disk streak file, so the verdict is testable without a disk. */
+function memoryStreakStore(initial: EmbedFailureStreak | null = null): EmbedFailureStreakStore & {
+  stored: () => EmbedFailureStreak | null;
+} {
+  let value = initial;
+
+  return {
+    read: () => value,
+    stored: () => value,
+    write: (next) => {
+      value = next;
+    },
+  };
+}
 
 async function driveSweep(options: DriverOptions) {
   const timeline: string[] = [];
@@ -370,6 +396,7 @@ async function driveSweep(options: DriverOptions) {
       return Promise.resolve(options.write(item));
     },
   };
+  const failureStreak = memoryStreakStore(options.failureStreak ?? null);
   const outcome = await runEmbedSweep({
     batchCap: options.batchCap,
     embed: (manifest: EmbedManifestEntry[]) => {
@@ -380,13 +407,19 @@ async function driveSweep(options: DriverOptions) {
         stdout: JSON.stringify({
           errors: manifest
             .filter(({ id }) => embedErrors.has(id))
-            .map(({ id }) => ({ error: "decode failed", id })),
+            .map(({ id }) => ({
+              error: (options.mixedErrorTrackIds ?? []).includes(id)
+                ? "decoded audio is empty"
+                : (options.embedErrorMessage ?? "ffmpeg decode failed"),
+              id,
+            })),
           results: manifest
             .filter(({ id }) => !embedErrors.has(id))
             .map(({ id }) => ({ embedding: [0.25, 0.5], id })),
         }),
       };
     },
+    failureStreak,
     fetchSourceAudio: (key) => {
       timeline.push(`audio:${key}`);
       return Promise.resolve(new Uint8Array([82, 73, 70, 70]));
@@ -394,7 +427,7 @@ async function driveSweep(options: DriverOptions) {
     windows,
   });
 
-  return { outcome, timeline, writeCalls };
+  return { outcome, streak: failureStreak.stored(), timeline, writeCalls };
 }
 
 describe("runEmbedSweep", () => {
@@ -854,4 +887,215 @@ describe("embed-sweep phased admission protocol", () => {
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
+});
+
+// ---------------------------------------------------------------------------
+// THE DEAD-STAGE TRIPWIRE, from both sides.
+//
+// The shape it exists for is an embedder that answers, refuses every item the same way, and exits
+// 0 — which reads `ok: true` forever. The shape it must NOT fire on is the ordinary bad file. So
+// both are driven here: the classifier, the fold that carries the streak, and the sweep itself
+// under a live streak and under a healthy one.
+// ---------------------------------------------------------------------------
+
+describe("classifyEmbedFailure", () => {
+  test("a rotted inference dependency is the engine, not the audio", () => {
+    expect(classifyEmbedFailure("No module named 'transformers.models.bert'")).toBe("engine");
+    expect(classifyEmbedFailure("cannot import name 'AutoConfig' from transformers")).toBe(
+      "engine",
+    );
+    expect(classifyEmbedFailure("ffmpeg returned non-zero exit status 1")).toBe("decode");
+    expect(classifyEmbedFailure("decoded audio is empty")).toBe("decode");
+    expect(classifyEmbedFailure("expected 1024 finite dims, got 512")).toBe("vector");
+    // An unrecognised message is its OWN bucket. Folding it into a neighbour would let two
+    // unrelated failures look like one systemic class.
+    expect(classifyEmbedFailure("something nobody has seen before")).toBe("other");
+  });
+});
+
+describe("nextEmbedFailureStreak", () => {
+  test("carries a same-class all-failed tick forward and resets on a different class", () => {
+    const first = nextEmbedFailureStreak({
+      errors: ["No module named muq"],
+      previous: null,
+      results: 0,
+    });
+
+    expect(first).toEqual({ class: "engine", count: 1 });
+    expect(
+      nextEmbedFailureStreak({ errors: ["ImportError: torch"], previous: first, results: 0 }),
+    ).toEqual({ class: "engine", count: 2 });
+    // A different class is a different failure, so the count starts over rather than inheriting
+    // evidence it did not earn.
+    expect(
+      nextEmbedFailureStreak({ errors: ["decoded audio is empty"], previous: first, results: 0 }),
+    ).toEqual({ class: "decode", count: 1 });
+  });
+
+  test("any embedded result clears it, and a tick with no attempts leaves it alone", () => {
+    const live: EmbedFailureStreak = { class: "engine", count: 2 };
+
+    expect(nextEmbedFailureStreak({ errors: ["ImportError"], previous: live, results: 1 })).toBe(
+      null,
+    );
+    expect(nextEmbedFailureStreak({ errors: [], previous: live, results: 0 })).toEqual(live);
+    // Every attempt failed, but for unrelated reasons — a bad batch, not a dead engine.
+    expect(
+      nextEmbedFailureStreak({
+        errors: ["ImportError: torch", "decoded audio is empty"],
+        previous: live,
+        results: 0,
+      }),
+    ).toBe(null);
+  });
+});
+
+describe("the embed dead-stage tripwire", () => {
+  test("QUIET: one failed item is an item failure, and the run stays healthy", async () => {
+    const { outcome, streak } = await driveSweep({
+      batchCap: 1,
+      embedErrorMessage: "ffmpeg decode failed",
+      embedErrors: ["track-a"],
+      queued: 5,
+      trackIds: ["track-a"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ embedFailed: 1, errors: 0, failed: 1, ok: true });
+    expect(outcome.summary).not.toHaveProperty("reason");
+    // The evidence is recorded even while the verdict is quiet — that is what makes the streak
+    // able to reach the bar at all.
+    expect(streak).toEqual({ class: "decode", count: 1 });
+  });
+
+  test("QUIET: the tick that reaches the bar minus one still passes", async () => {
+    const { outcome, streak } = await driveSweep({
+      batchCap: 1,
+      embedErrorMessage: "No module named transformers",
+      embedErrors: ["track-a"],
+      failureStreak: { class: "engine", count: EMBED_SYSTEMIC_STREAK - 2 },
+      trackIds: ["track-a"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ errors: 0, ok: true });
+    expect(streak).toEqual({ class: "engine", count: EMBED_SYSTEMIC_STREAK - 1 });
+  });
+
+  test("FIRES: the same class failing every attempt for the whole streak fails the tick", async () => {
+    const { outcome, streak } = await driveSweep({
+      batchCap: 1,
+      embedErrorMessage: "No module named transformers",
+      embedErrors: ["track-a"],
+      failureStreak: { class: "engine", count: EMBED_SYSTEMIC_STREAK - 1 },
+      queued: 900,
+      trackIds: ["track-a"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(outcome.exitCode).toBe(1);
+    // The COUNTS are untouched — only the verdict is added.
+    expect(outcome.summary).toMatchObject({
+      checked: 1,
+      embedFailed: 1,
+      embedFailureClass: "engine",
+      embedFailureStreak: EMBED_SYSTEMIC_STREAK,
+      errors: 1,
+      failed: 1,
+      ok: false,
+      produced: 0,
+      queue_depth: 900,
+      reason: "embed_systemic",
+    });
+    expect(streak).toEqual({ class: "engine", count: EMBED_SYSTEMIC_STREAK });
+  });
+
+  test("QUIET: a live streak is cleared the moment anything embeds", async () => {
+    const { outcome, streak } = await driveSweep({
+      batchCap: 2,
+      embedErrorMessage: "No module named transformers",
+      embedErrors: ["track-b"],
+      failureStreak: { class: "engine", count: EMBED_SYSTEMIC_STREAK },
+      trackIds: ["track-a", "track-b"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ done: 1, embedFailed: 1, errors: 0, ok: true });
+    expect(streak).toBe(null);
+  });
+
+  test("QUIET: one bad file inside a full batch cannot make an all-failed tick", async () => {
+    // The batch is what closes the tripwire's one false-positive mode. A single unreadable track
+    // rides with batchmates that embed, so the tick is never all-failed and the streak is cleared
+    // however long it was — the poison item can no longer wear a systemic costume.
+    const { outcome, streak } = await driveSweep({
+      batchCap: DEFAULT_EMBED_BATCH_CAP,
+      embedErrorMessage: "No module named transformers",
+      embedErrors: ["track-b"],
+      failureStreak: { class: "engine", count: EMBED_SYSTEMIC_STREAK - 1 },
+      trackIds: ["track-a", "track-b", "track-c"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ done: 2, embedFailed: 1, errors: 0, ok: true });
+    expect(streak).toBe(null);
+  });
+
+  test("a full batch failing as one is ONE tick of evidence, worth three attempts", async () => {
+    // The streak counts TICKS, not attempts, so the bar is unchanged by the batch — what changes
+    // is how much each tick on it is worth. Three ticks of a full batch is nine failed attempts.
+    const { outcome, streak } = await driveSweep({
+      batchCap: DEFAULT_EMBED_BATCH_CAP,
+      embedErrorMessage: "No module named transformers",
+      embedErrors: ["track-a", "track-b", "track-c"],
+      failureStreak: { class: "engine", count: EMBED_SYSTEMIC_STREAK - 1 },
+      trackIds: ["track-a", "track-b", "track-c"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.summary).toMatchObject({
+      checked: 3,
+      embedFailed: 3,
+      embedFailureStreak: EMBED_SYSTEMIC_STREAK,
+      errors: 1,
+      ok: false,
+      produced: 0,
+      reason: "embed_systemic",
+    });
+    expect(streak).toEqual({ class: "engine", count: EMBED_SYSTEMIC_STREAK });
+  });
+
+  test("QUIET: a full batch failing for unrelated reasons is a bad batch, not a dead engine", async () => {
+    const { outcome, streak } = await driveSweep({
+      batchCap: DEFAULT_EMBED_BATCH_CAP,
+      embedErrorMessage: "No module named transformers",
+      embedErrors: ["track-a", "track-b"],
+      failureStreak: { class: "engine", count: EMBED_SYSTEMIC_STREAK - 1 },
+      mixedErrorTrackIds: ["track-b"],
+      trackIds: ["track-a", "track-b"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ embedFailed: 2, errors: 0, ok: true });
+    expect(streak).toBe(null);
+  });
+
+  test("QUIET: an empty queue never accumulates evidence", async () => {
+    const { outcome, streak } = await driveSweep({
+      batchCap: 1,
+      failureStreak: { class: "engine", count: EMBED_SYSTEMIC_STREAK - 1 },
+      trackIds: [],
+      write: () => ({ costWriteFailures: 0, written: true }),
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ checked: 0, errors: 0, ok: true });
+    expect(streak).toEqual({ class: "engine", count: EMBED_SYSTEMIC_STREAK - 1 });
+  });
 });

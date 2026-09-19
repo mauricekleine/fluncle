@@ -73,7 +73,43 @@ case "${1:-}" in
 esac
 
 log() { printf '[pin-watch] %s\n' "$*" >&2; }
-die() { log "FATAL: $*"; exit 1; }
+die() { ERRORS=1; log "FATAL: $*"; exit 1; }
+
+# ── the run ledger ────────────────────────────────────────────────────────────
+# WHY A SELF-DEPLOY REPORTS A RUN AT ALL. This unit already alerts Discord and posts the
+# `self-deploy` /status row, and both are per-attempt signals an operator has to be watching in
+# the moment. What it had no place in was the LEDGER — the durable, queryable record every other
+# rave-02 unit writes and `fluncle admin telemetry read` reads — so a build that failed on every
+# hourly tick for days left nothing behind to ask about after the fact. A self-deploy is the same
+# shape as the watchdog next door: it legitimately produces NOTHING for weeks, so `produced == 0`
+# says nothing about its health and only the denominator and the error count do.
+#
+# So every attempt past the single-flight lock ends with one summary line and one POST:
+# `checked` (1 once this tick actually read the box's versions against main's), `produced` (1 when
+# a new image was deployed), `errors` (1 on any FATAL path), and `queue_depth` (1 while drift is
+# known and undeployed). A build that keeps failing therefore writes the ledger's designed alarm —
+# `produced == 0 AND queue_depth > 0` — every hour, and its exit code makes the derived verdict
+# `ok: false`. A tick that dies before it can even compare versions reports `checked: 0`, which is
+# the one shape a blind run must never be able to hide behind.
+RUN_EVENT_UNIT="fluncle-pin-watch"
+# MIRRORS pin-watch.timer's own `OnUnitActiveSec=1h`; run-events.test.ts pins the pair in lockstep.
+RUN_EVENT_INTERVAL_MS=3600000
+
+CHECKED=0
+DEPLOYED=0
+ERRORS=0
+DRIFT=0
+SUMMARY_EMITTED=0
+STARTED_AT=""
+ENVTMP=""
+
+# Read one KEY out of the LIVE container's env — the credential-free read this script already
+# uses for the webhook and the agent token. Container down ⇒ empty ⇒ the caller degrades.
+container_env() {
+  docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | sed -n "s/^$1=//p" | head -1 || true
+}
+
 
 # ── ceiling arithmetic ────────────────────────────────────────────────────────
 # Held in docker's own integer units — nanocpus (what `HostConfig.NanoCpus` reports) and
@@ -139,6 +175,143 @@ alert() {
     "$WEBHOOK" >/dev/null 2>&1 || true
 }
 
+# >>> BEGIN MIRRORED BLOCK: record_run_event — keep BYTE-IDENTICAL across all four copies >>>
+# The run-ledger emitter. FOUR scripts carry this block verbatim, because they run on two
+# different boxes with no shared bash library between them: the ~41 container sweeps get it by
+# sourcing this file, and the three host units are each laid down as a lone file
+# (install-host-timers.sh copies only the script an ExecStart names; the sonar freshen lives on
+# another box entirely). `run-events.test.ts` compares the four copies byte for byte, so a
+# silent drift fails the build — the same mirror-plus-drift-test posture cost-emit.ts already
+# uses for the cost ledger.
+#
+# THE CONTRACT is owned by the agent-tier `record_run` oRPC op in
+# packages/contracts/src/orpc/admin-telemetry.ts, which a box script cannot import. Mirrored
+# here: the endpoint path, the five body fields, and the Bearer auth. If any of them changes in
+# the workspace, change it in all four copies.
+#
+# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN, and this cost a shipped bug: the four copies once
+# agreed with EACH OTHER on `/api/v1/admin/runs/events` while the contract declared
+# `/admin/telemetry/runs`, so every POST 404'd, the `|| true` swallowed it, the ledger stayed
+# empty, and both test suites were green. Byte-equality is a closed loop. So run-events.test.ts
+# now RESOLVES this path against the workspace's own surfaces (the contract op paths + the
+# `apps/web/src/routes/api/**` file routes) — the assertion that crosses the boundary.
+#
+# THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
+# `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for
+# eleven nights while printing `{"errors":2,"ok":true}` — a hardcoded literal sitting beside
+# the number that contradicted it — so a self-reported `ok` is exactly the thing this ledger
+# must not accept.
+#
+# BEST-EFFORT, ALWAYS: the caller's exit code is never touched and the whole thing is
+# hard-timeout bounded. Delivery failure is returned, not swallowed here: the caller decides
+# how to surface it without turning a telemetry outage into a failed sweep. The reason is a
+# public-safe enum-like string, never a URL, response body, or token.
+RUN_EVENT_PATH='/api/v1/admin/telemetry/runs'
+# 5s, NOT cost-emit.ts's 15s. That budget was sized for a contended `insert into settings`
+# measured at ~8.9s p95 on the PRIMARY database; this is one small insert into the separate
+# `fluncle-telemetry` database, which exists precisely so it never queues behind the primary's
+# single writer. 5s absorbs a cold isolate plus a slow tick and still sits two orders inside
+# the shortest unit TimeoutStartSec on either box.
+RUN_EVENT_TIMEOUT_SECS="${RUN_EVENT_TIMEOUT_SECS:-5}"
+RUN_EVENT_FAILURE_REASON=""
+
+# Escape one line for a JSON string literal, in pure bash parameter expansion — NOT
+# `sed -e 's/\t/\\t/'`, whose `\t` is a GNU extension that silently matches a literal `t` on
+# the BSD sed the tests run under. Capped at 4000 chars so a runaway line cannot inflate the
+# POST, and stripped of any remaining control character (raw ones are illegal in JSON).
+_run_event_json_string() {
+  local s="${1:0:4000}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  printf '%s' "$s" | tr -d '\000-\037'
+}
+
+# record_run_event <unit> <started_at> <ended_at> <exit_code> <summary_raw>
+record_run_event() {
+  local unit="$1" started_at="$2" ended_at="$3" exit_code="$4" summary_raw="$5"
+  local base token body
+  RUN_EVENT_FAILURE_REASON=""
+  # `-` NOT `:-`, deliberately. With the colon an EMPTY base fell back to the production
+  # URL, which made the guard two lines down unreachable and fired a real POST at
+  # www.fluncle.com from every `bun run test:scripts` — in CI and in the deploy gate. An
+  # empty base means THERE IS NO LEDGER HERE, and the guard is the line that says so.
+  base="${FLUNCLE_API_BASE_URL-https://www.fluncle.com}"
+  base="${base%/}"
+  token="${FLUNCLE_API_TOKEN:-}"
+  if [ -z "$token" ]; then
+    RUN_EVENT_FAILURE_REASON="missing-token"
+    return 1
+  fi
+  if [ -z "$base" ]; then
+    RUN_EVENT_FAILURE_REASON="missing-base-url"
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    RUN_EVENT_FAILURE_REASON="curl-unavailable"
+    return 1
+  fi
+  case "$exit_code" in '' | *[!0-9]*) exit_code=0 ;; esac
+  body="$(printf '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}' \
+    "$(_run_event_json_string "$unit")" \
+    "$(_run_event_json_string "$started_at")" \
+    "$(_run_event_json_string "$ended_at")" \
+    "$exit_code" \
+    "$(_run_event_json_string "$summary_raw")")"
+  if ! curl -fsS -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
+    -X POST -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    --data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1; then
+    RUN_EVENT_FAILURE_REASON="post-failed"
+    return 1
+  fi
+  return 0
+}
+
+# The box clock, in the one format every copy sends. DISTINCT from the Worker's own write
+# time: a box row's `occurred_at` legitimately precedes its `created_at` under clock skew, and
+# the ledger keeps both. Seconds precision on purpose — `date +%3N` is GNU-only.
+run_event_now() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+# <<< END MIRRORED BLOCK: record_run_event <<<
+
+# Print the run's summary line and POST its run record, exactly once, whatever exit path got
+# here. Runs from the EXIT trap so a `die` deep in the script cannot skip it — the shape that
+# leaves a ledger row missing is the shape that reads as a missed run.
+#
+# THE LINE CARRIES NO `ok`. The verdict is `exit_code == 0 && errors == 0` and the Worker computes
+# it from the two facts below; a self-reported one is rejected at the edge.
+emit_run_summary() {
+  local rc="${1:-0}" ended summary
+  if [ "$SUMMARY_EMITTED" = "1" ]; then return 0; fi
+  SUMMARY_EMITTED=1
+  case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
+  ended="$(run_event_now)"
+  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queue_depth":%d,"gateState":null,"expectedIntervalMs":%d}' \
+    "$CHECKED" "$DEPLOYED" "$ERRORS" "$DRIFT" "$RUN_EVENT_INTERVAL_MS")"
+  printf '%s\n' "$summary"
+  if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
+    FLUNCLE_API_TOKEN="${APITOKEN:-$(container_env FLUNCLE_API_TOKEN)}"
+  fi
+  record_run_event "$RUN_EVENT_UNIT" "$STARTED_AT" "$ended" "$rc" "$summary" || true
+  return 0
+}
+
+# THE ONE EXIT PATH. Every cleanup this script owes plus the ledger row, composed once and armed
+# once, so there is no later `trap` that can drop one of them: both cleanups are no-ops until the
+# state they release exists, and the row is the last thing written.
+# shellcheck disable=SC2329  # invoked indirectly from the EXIT trap armed after the lock
+pinwatch_on_exit() {
+  local rc=$?
+  cleanup_gateway_smoke
+  restore_sweep_timers
+  [ -n "$ENVTMP" ] && rm -f "$ENVTMP"
+  emit_run_summary "$rc" || true
+  return 0
+}
+
 # ── the baked path set (derived from the Dockerfile's own COPY lines) ─────────────────────────
 # WHAT the image bakes is decided in exactly one place — the COPY lines in $DOCKERFILE — so the
 # fingerprint DERIVES its watch set from them rather than restating it. A hand-kept list drifts:
@@ -190,7 +363,13 @@ validate_baked_paths() {
 }
 
 resolve_baked_paths() {
-  mapfile -t BAKED_PATHS < <(derive_baked_paths)
+  # A while-read loop rather than `mapfile`, which is bash 4+: the box has it and the machine
+  # this script is TESTED on does not, and an untestable self-deploy is how it stayed silent.
+  local line
+  BAKED_PATHS=()
+  while IFS= read -r line; do
+    [ -n "$line" ] && BAKED_PATHS+=("$line")
+  done < <(derive_baked_paths)
   BAKED_PATHS+=("$DOCKERFILE")
   if validate_baked_paths; then
     log "baked paths (derived from the $DOCKERFILE COPY set): ${BAKED_PATHS[*]}"
@@ -307,7 +486,11 @@ quiesce_sweeps() {
   # pin-watch is `pin-watch.timer`, already outside the fluncle-* glob; the exclude is
   # listed defensively in case it is ever renamed to fluncle-pin-watch.timer.
   # --plain drops the leading status glyph so $1 is the bare unit name.
-  mapfile -t STOPPED_TIMERS < <(
+  # A while-read loop, not `mapfile` — see resolve_baked_paths for why this stays bash-3 clean.
+  STOPPED_TIMERS=()
+  while IFS= read -r t; do
+    [ -n "$t" ] && STOPPED_TIMERS+=("$t")
+  done < <(
     systemctl list-units --type=timer --state=active --no-legend --plain 'fluncle-*.timer' 2>/dev/null \
       | awk '{print $1}' \
       | grep -vxF 'fluncle-healthcheck.timer' \
@@ -315,9 +498,9 @@ quiesce_sweeps() {
   )
   [ "${#STOPPED_TIMERS[@]}" -gt 0 ] || { log "no active sweep timers to quiesce"; return 0; }
 
-  # Arm the restart guard BEFORE stopping anything (compose with the ENVTMP cleanup
-  # trap set in step 3), so every exit path from here restores the timers.
-  trap 'cleanup_gateway_smoke; restore_sweep_timers; rm -f "$ENVTMP"' EXIT
+  # The restart guard needs no trap of its own: `pinwatch_on_exit` has been armed since the lock
+  # and already calls restore_sweep_timers, which is a no-op until STOPPED_TIMERS is populated
+  # just above. One trap, armed once, is what makes that guarantee unconditional.
 
   # Drop the rebake lock into the live container's /opt/data mount (resolved from the
   # container, never assumed — the script runs as root, `~` would be /root). Best-effort:
@@ -355,6 +538,11 @@ quiesce_sweeps() {
 # ── single-flight ─────────────────────────────────────────────────────────────
 exec 9>"$LOCK"
 flock -n 9 || { log "another run holds the lock; exiting"; exit 0; }
+
+# From here on this IS the tick, so arm the one exit path: cleanups plus the ledger row. A
+# lock-losing run deliberately reports nothing — the run that holds the lock is the attempt.
+STARTED_AT="$(run_event_now)"
+trap 'pinwatch_on_exit' EXIT
 
 command -v docker >/dev/null || die "docker not found"
 command -v git >/dev/null || die "git not found"
@@ -458,6 +646,11 @@ WANT_FP="$(baked_fingerprint)"
 HAVE_FP="$(docker exec "$CONTAINER" cat /opt/.hermes-baked-fp 2>/dev/null | tr -d '[:space:]' || true)"
 log "baked-fp: have=${HAVE_FP:-<none>} want=$WANT_FP"
 
+# The DENOMINATOR: this tick has now compared what the box runs against what main declares. Set
+# here and nowhere earlier, so a run that died on a missing binary, an unreachable container, or
+# an unparseable Dockerfile cannot report a look it never took.
+CHECKED=1
+
 if [ "$MODE" = "--if-stale" ] \
    && [ "$HAVE_FLUNCLE" = "$WANT_FLUNCLE" ] && [ "$HAVE_CLAUDE" = "$WANT_CLAUDE" ] \
    && [ -n "$HAVE_FP" ] && [ "$HAVE_FP" = "$WANT_FP" ]; then
@@ -465,6 +658,9 @@ if [ "$MODE" = "--if-stale" ] \
   post_health ok "tools + scripts current"
   exit 0
 fi
+# The WORKLIST: drift is known and undeployed. It stays 1 until a swap actually lands, so an
+# hourly run of failed builds reads as `produced == 0 AND queue_depth > 0` in the ledger.
+DRIFT=1
 log "pins or baked content drifted (or --force) — rebuilding"
 
 # ── 3. capture the running container's runtime env (the secrets) into a tmpfs ──
@@ -473,7 +669,6 @@ log "pins or baked content drifted (or --force) — rebuilding"
 OLD_IMAGE="$(docker inspect "$CONTAINER" --format '{{.Config.Image}}')"
 ENVTMP="$(mktemp -p "${XDG_RUNTIME_DIR:-/dev/shm}" pinwatch-env.XXXXXX)"
 chmod 600 "$ENVTMP"
-trap 'cleanup_gateway_smoke; rm -f "$ENVTMP"' EXIT
 comm -23 \
   <(docker inspect "$CONTAINER"  --format '{{range .Config.Env}}{{println .}}{{end}}' | sort) \
   <(docker inspect "$OLD_IMAGE"  --format '{{range .Config.Env}}{{println .}}{{end}}' | sort) \
@@ -637,6 +832,9 @@ docker rm "$CONTAINER" >/dev/null 2>&1 || true
 # ── 7. start new + post-swap smoke (the `if` keeps set -e from bare-exiting) ───
 if run_container "$NEW_IMAGE" && container_healthy; then
   log "post-swap smoke passed — deployed $NEW_IMAGE"
+  # The work this unit exists to do actually landed: the drift is gone and one deploy is produced.
+  DEPLOYED=1
+  DRIFT=0
   # Report only the pins that actually moved — an unchanged pin (claude-code X→X) is noise.
   CHANGES=""
   [ "$HAVE_FLUNCLE" != "$WANT_FLUNCLE" ] && CHANGES="fluncle $HAVE_FLUNCLE→$WANT_FLUNCLE"
