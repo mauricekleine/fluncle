@@ -49,6 +49,7 @@
 
 import { createHash } from "node:crypto";
 import { type InStatement } from "@libsql/client/web";
+import { CAPTURE_TIER, type CapturePriorityKind } from "../capture-tier";
 import { DUPLICATE_SIMILARITY, LONG_FORM_MS } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
@@ -88,44 +89,8 @@ import { matchKey, normalizeIsrc } from "./track-match";
  * still the harder `skipped-label` veto, checked first.
  */
 export type CapturePriorityReason = {
-  kind: "artist" | "label" | "none" | "seed-label" | "skipped-label" | "unauthorized";
+  kind: CapturePriorityKind;
   name: string | null;
-};
-
-/**
- * The numeric tier for each rung — the stored `tracks.capture_priority`, high = capture sooner.
- *
- * THE VETO GETS ITS OWN TIER (−1), and that is load-bearing rather than cosmetic. It first
- * is distinct from `none`'s 0, which keeps it visible to SQL: the capture WORK QUEUE
- * (track-work.ts) could not tell "nothing ties this to the archive, so capture it last" from
- * "the operator ruled this label out, so never spend a metered per-GB byte on it". A veto that
- * only sorts last is not a veto — the queue drains, and last eventually arrives.
- *
- * With its own tier the queue enforces it as a predicate (`capture_priority >= 0`), while every
- * DISPLAY property the-ear.md promises survives untouched: the row keeps its place in the
- * capture lens (`capture_priority is not null`), still sorts last under `order by … desc`, and
- * still carries its honest reason line. Ordered last, kept anyway — and never bought.
- *
- * ── THE NEGATIVE BAND, AND WHY `unauthorized` IS −3 (RFC artist-primary-capture, slice 1) ──
- * Three distinct negatives now share the "never bought, but kept and shown, ranked last"
- * contract, and their ORDER on the board (a DESC read) is by how SPECIFIC the reason is:
- *   −1 `skipped-label` — the operator's explicit ruling ("not your lane"). The hardest NO.
- *   −2 `duplicate`     — an identity fact ("already in the archive"); set outside this map,
- *                        in the sweep (see `DUPLICATE_CAPTURE_TIER`).
- *   −3 `unauthorized`  — the softest: no qualified artist yet, and the label is not `enabled`.
- *                        It reads dead last because it is the DEFAULT withholding, not a
- *                        judgement — and it is the one most likely to FLIP to authorized as the
- *                        `track_artists` graph drains (slice 0) or the operator enables a label.
- * All three are excluded from the capture queue by the single `capture_priority >= 0` predicate
- * (track-work.ts) — no new mechanism, one more value riding a rail that already exists.
- */
-const CAPTURE_TIER: Record<CapturePriorityReason["kind"], number> = {
-  artist: 3,
-  label: 2,
-  none: 0,
-  "seed-label": 1,
-  "skipped-label": -1,
-  unauthorized: -3,
 };
 
 /**
@@ -146,6 +111,13 @@ const CAPTURE_TIER: Record<CapturePriorityReason["kind"], number> = {
  * re-derived. A duplicate row's metadata rung stays truthful; the marker overrides its display.
  */
 export const DUPLICATE_CAPTURE_TIER = -2;
+
+// The ladder's rungs and their stored integers live in the client-safe `lib/capture-tier.ts`, so
+// the two admin stations that NAME a rung read one vocabulary (see that module's header). They are
+// re-exported here because this module is where the ladder is COMPUTED, and a server caller should
+// not have to know the split.
+export { CAPTURE_TIER, CAPTURE_TIER_LABELS, captureTierLabelFor } from "../capture-tier";
+export type { CapturePriorityKind } from "../capture-tier";
 
 /**
  * The cosine-similarity threshold at or above which a SCORED catalogue row is displayed as a

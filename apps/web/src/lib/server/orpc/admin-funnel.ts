@@ -21,9 +21,11 @@ export function adminFunnelHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async () => {
       try {
-        const snapshot = await recordCatalogueSnapshot();
+        // `backfilledDays` names any UTC day this tick healed (a missed snapshot filled inside the
+        // catch-up grace window). Empty on a healthy day; the sweep echoes it into its run summary.
+        const { backfilledDays, snapshot } = await recordCatalogueSnapshot();
 
-        return { ok: true as const, snapshot };
+        return { backfilledDays, ok: true as const, snapshot };
       } catch (error) {
         throw apiFault(error);
       }

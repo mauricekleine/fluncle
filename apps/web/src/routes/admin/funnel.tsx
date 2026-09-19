@@ -1,19 +1,23 @@
 import {
+  AnchorSimpleIcon,
   ArrowDownIcon,
   ArrowRightIcon,
   ArrowUpIcon,
   DiscIcon,
   DownloadSimpleIcon,
   GaugeIcon,
+  LinkBreakIcon,
   MusicNotesIcon,
   StackIcon,
   TagIcon,
+  TrayArrowDownIcon,
   UsersThreeIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
+import { captureTierLabelFor } from "@/lib/capture-tier";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { StatTile } from "@/components/admin/stat-tile";
@@ -32,10 +36,11 @@ import { type FunnelView, getFunnel } from "@/lib/server/funnel";
 
 // The `/admin/funnel` station — the catalogue pipeline (crawl → anchor → capture →
 // analyze/embed → rec-eligible → certified) on one page (docs/admin-shell.md).
-// Three bands: the funnel (proportional stage bars, each a link to its operating
-// surface), the meters (the operator's spend levers — capture budget, anchor bench, frontier
-// depth), and the charts (catalogue growth, eligible-pool growth, and per-stage daily
-// throughput from the snapshot series).
+// Five bands: the funnel (proportional stage bars, each a link to its operating
+// surface), the public surfaces, the meters (the operator's spend levers — capture budget, anchor
+// bench, frontier depth), the capture backlog (what there is to spend the metered budget ON,
+// stated independently of whether the window is open), and the charts (catalogue growth,
+// eligible-pool growth, and per-stage daily throughput from the snapshot series).
 //
 // ── DATA FLOW ─────────────────────────────────────────────────────────────────
 // The admin loader-seeded react-query hybrid (AGENTS.md): a GET server fn reads `getFunnel`
@@ -115,7 +120,10 @@ function FunnelPage() {
   });
 
   const { live, series } = data;
-  const bars = stageBars(live.stages, live.queues);
+  const bars = stageBars(live.stages, {
+    captureBacklog: live.captureBacklog,
+    queues: live.queues,
+  });
   const subtitle = `${formatCount(live.stages.crawled)} crawled · ${formatCount(live.stages.certified)} certified`;
 
   return (
@@ -124,6 +132,7 @@ function FunnelPage() {
         <FunnelBand bars={bars} />
         <PublicSurfacesBand surfaces={live.publicSurfaces} />
         <MetersBand meters={live.meters} />
+        <CaptureBacklogBand backlog={live.captureBacklog} />
         <ChartsBand series={series} />
       </div>
     </AdminShell>
@@ -274,9 +283,12 @@ function MetersBand({ meters }: { meters: FunnelView["live"]["meters"] }) {
   const captureValue = budget.paused
     ? "Paused"
     : `${formatGb(budget.remainingBytes)} · ${formatCount(budget.remainingTracks)}`;
+  // The brake, stated. `open` is the fact the capture queue actually obeys — paused, or spent out
+  // for the window, and nothing drains. It is named here because the backlog band below reports the
+  // work independently of it, and the two only read together if this one says which way it is set.
   const captureHint = budget.paused
     ? "capture is paused — nothing spends today"
-    : `left of ${formatGb(budget.dailyBytes)} · ${formatCount(budget.dailyTracks)} tracks per ${budget.windowHours}h`;
+    : `${budget.open ? "open" : "shut"} · left of ${formatGb(budget.dailyBytes)} · ${formatCount(budget.dailyTracks)} tracks per ${budget.windowHours}h`;
 
   return (
     <section aria-label="The meters" className="space-y-3">
@@ -302,6 +314,90 @@ function MetersBand({ meters }: { meters: FunnelView["live"]["meters"] }) {
           value={formatCount(meters.frontierPending)}
         />
       </div>
+    </section>
+  );
+}
+
+// ── The capture-backlog band ───────────────────────────────────────────────────
+// What the metered capture queue is holding, stated independently of whether the budget window is
+// letting any of it through — the meter above says what is left to spend TODAY, this says what
+// there is to spend it ON. Split the two ways the next spend decision turns: by the Ear's pre-audio
+// tier (the order the queue drains), and by whether the row already carries a Spotify anchor
+// (rec-eligibility requires one, so bytes bought for an unanchored row cannot reach the pool until
+// anchoring catches up). A real table, because the rows are a small labelled matrix and a screen
+// reader should read it as one.
+
+function CaptureBacklogBand({ backlog }: { backlog: FunnelView["live"]["captureBacklog"] }) {
+  const unanchored = backlog.authorized - backlog.authorizedAnchored;
+
+  return (
+    <section aria-label="The capture backlog" className="space-y-3">
+      <BandHeading>Waiting on the capture budget</BandHeading>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <StatTile
+          hint="authorized rows with no audio yet — the meter above says whether any of it drains"
+          icon={<TrayArrowDownIcon aria-hidden="true" className="size-4" />}
+          label="Backlog"
+          value={formatCount(backlog.authorized)}
+        />
+        <StatTile
+          hint="already carry a Spotify anchor — audio here can reach the rec pool"
+          icon={<AnchorSimpleIcon aria-hidden="true" className="size-4" />}
+          label="Anchored"
+          value={formatCount(backlog.authorizedAnchored)}
+        />
+        <StatTile
+          hint="no anchor yet — audio here waits on anchoring before it counts"
+          icon={<LinkBreakIcon aria-hidden="true" className="size-4" />}
+          label="Unanchored"
+          value={formatCount(unanchored)}
+        />
+      </div>
+      {backlog.tiers.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[22rem] text-sm">
+            <caption className="sr-only">
+              The authorized capture backlog by pre-audio tier and anchor state
+            </caption>
+            <thead>
+              <tr className="border-b border-border text-xs text-muted-foreground">
+                <th className="py-1 text-left font-medium" scope="col">
+                  Tier
+                </th>
+                <th className="py-1 text-right font-medium" scope="col">
+                  Anchored
+                </th>
+                <th className="py-1 text-right font-medium" scope="col">
+                  Unanchored
+                </th>
+                <th className="py-1 text-right font-medium" scope="col">
+                  Total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {backlog.tiers.map((row) => (
+                <tr className="border-t border-border" key={row.tier}>
+                  <th className="py-1.5 text-left font-medium" scope="row">
+                    {captureTierLabelFor(row.tier)}
+                  </th>
+                  <td className="py-1.5 text-right tabular-nums">{formatCount(row.anchored)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{formatCount(row.unanchored)}</td>
+                  <td className="py-1.5 text-right tabular-nums">
+                    {formatCount(row.anchored + row.unanchored)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">Nothing authorized is waiting on audio.</p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Highest tier drains first. A ruled-out label, a dismissed row and a long-form mix are not
+        counted here — they are never bought.
+      </p>
     </section>
   );
 }

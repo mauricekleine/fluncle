@@ -109,8 +109,8 @@ describe("recordCatalogueSnapshot (real SQL)", () => {
 
     const first = await recordCatalogueSnapshot({ day: "2026-07-18" });
 
-    expect(first.day).toBe("2026-07-18");
-    expect(first.crawled).toBe(2);
+    expect(first.snapshot.day).toBe("2026-07-18");
+    expect(first.snapshot.crawled).toBe(2);
     expect(await rowCount(db, "catalogue_snapshots")).toBe(1);
 
     // A third catalogue row lands, then a SECOND snapshot the same day.
@@ -119,7 +119,7 @@ describe("recordCatalogueSnapshot (real SQL)", () => {
 
     // Still one row — the day is the primary key — and it now carries the fresh count.
     expect(await rowCount(db, "catalogue_snapshots")).toBe(1);
-    expect(second.crawled).toBe(3);
+    expect(second.snapshot.crawled).toBe(3);
 
     const stored = await db.execute(
       "select crawled from catalogue_snapshots where day = '2026-07-18'",
@@ -600,5 +600,127 @@ describe("the folded funnel scan == its three standalone reference scans (real S
     const detail = plan.rows.map((row) => JSON.stringify(row.detail)).join(" | ");
 
     expect(detail).toContain("COVERING INDEX tracks_funnel_scan_idx");
+  });
+});
+
+// ── The authorized capture backlog — the gauge the brake must not move ───────
+
+describe("the authorized capture backlog (real SQL)", () => {
+  /** Four ranked catalogue capture candidates: two tiers × anchored/unanchored. */
+  async function seedBacklog(): Promise<void> {
+    await seedCatalogueTrack(db, { trackId: "b-t3-anchored" });
+    await patchTrack("b-t3-anchored", "capture_priority = 3");
+    await seedCatalogueTrack(db, { trackId: "b-t3-unanchored" });
+    await patchTrack("b-t3-unanchored", "capture_priority = 3, spotify_uri = null");
+    await seedCatalogueTrack(db, { trackId: "b-t1-unanchored" });
+    await patchTrack("b-t1-unanchored", "capture_priority = 1, spotify_uri = null");
+    // Tier −1 is the operator's ruled-out label. It is NOT backlog — it is never bought — so it
+    // must be absent whichever way the budget is set.
+    await seedCatalogueTrack(db, { trackId: "b-vetoed" });
+    await patchTrack("b-vetoed", "capture_priority = -1");
+  }
+
+  it("reports the same backlog with the budget shut as with it open, while the queue depth follows the brake", async () => {
+    const { getFunnel } = await import("./funnel");
+    const { countTrackWork } = await import("./track-work");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+
+    await seedBacklog();
+
+    // THE BUG THIS PINS. With the budget shut the catalogue capture worklist narrows to the
+    // findings, so `countTrackWork` — and therefore `queues.captureQueue` — is 0. That is right
+    // for a queue depth and wrong for a backlog gauge, so the two must disagree here.
+    await setCatalogueCapturePaused(true);
+    const shut = await getFunnel();
+
+    expect(await countTrackWork({ kind: "capture", scope: "catalogue" })).toBe(0);
+    expect(shut.live.queues.captureQueue).toBe(0);
+    expect(shut.live.captureBacklog.budgetOpen).toBe(false);
+    expect(shut.live.captureBacklog.authorized).toBe(3);
+
+    // Open it: the queue depth catches up to the backlog, which has not moved.
+    await setCatalogueCapturePaused(false);
+    const open = await getFunnel();
+
+    expect(open.live.captureBacklog.budgetOpen).toBe(true);
+    expect(open.live.captureBacklog.authorized).toBe(3);
+    // And the queue depth is still the product's OWN count — derived, never re-spelled.
+    expect(open.live.queues.captureQueue).toBe(
+      await countTrackWork({ kind: "capture", scope: "catalogue" }),
+    );
+    expect(open.live.queues.captureQueue).toBe(3);
+  });
+
+  it("splits the backlog by tier and anchor, highest tier first, summing to the whole", async () => {
+    const { getFunnel } = await import("./funnel");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+
+    await setCatalogueCapturePaused(true);
+    await seedBacklog();
+
+    const { captureBacklog } = (await getFunnel()).live;
+
+    expect(captureBacklog.tiers).toEqual([
+      { anchored: 1, tier: 3, unanchored: 1 },
+      { anchored: 0, tier: 1, unanchored: 1 },
+    ]);
+    expect(captureBacklog.authorizedAnchored).toBe(1);
+    expect(
+      captureBacklog.tiers.reduce((total, row) => total + row.anchored + row.unanchored, 0),
+    ).toBe(captureBacklog.authorized);
+  });
+
+  // The PLAN pin, the sibling of the folded-scan coverage test above. The backlog read runs on
+  // every `/admin/funnel` load over a growing table, and it is affordable only because
+  // `tracks_catalogue_capture_idx` serves BOTH the `(is_catalogue, dismissed_at, capture_priority)`
+  // seek and the grouping key in index order — no temp b-tree for the GROUP BY. Asserted on the
+  // REAL statement so the two cannot drift.
+  it("seeks the catalogue capture index and groups in index order, with no sort", async () => {
+    const { catalogueCaptureBacklogStatement } = await import("./funnel");
+    const statement = catalogueCaptureBacklogStatement();
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    const detail = plan.rows.map((row) => JSON.stringify(row.detail)).join(" | ");
+
+    expect(detail).toContain("tracks_catalogue_capture_idx");
+    expect(detail).not.toContain("TEMP B-TREE");
+  });
+});
+
+// ── The self-healing snapshot ────────────────────────────────────────────────
+
+describe("recordCatalogueSnapshot self-healing (real SQL)", () => {
+  it("fills a missing previous day when it runs inside the catch-up grace window", async () => {
+    const { recordCatalogueSnapshot } = await import("./funnel");
+
+    await seedCatalogueTrack(db, { trackId: "heal-1" });
+
+    // 01:30 UTC on the 19th — inside the grace window, and the 18th has no row because its own
+    // 23:45 firing never landed (an admission yield, a fault, a sleeping box).
+    const write = await recordCatalogueSnapshot({ now: new Date("2026-07-19T01:30:00.000Z") });
+
+    expect(write.snapshot.day).toBe("2026-07-19");
+    expect(write.backfilledDays).toEqual(["2026-07-18"]);
+    expect(await rowCount(db, "catalogue_snapshots")).toBe(2);
+  });
+
+  it("never invents a day outside the grace window, and never overwrites one that exists", async () => {
+    const { recordCatalogueSnapshot } = await import("./funnel");
+
+    await seedCatalogueTrack(db, { trackId: "heal-2" });
+
+    // Late in the day: the previous day's reading is 24h stale, so filling it would invent growth.
+    const late = await recordCatalogueSnapshot({ now: new Date("2026-07-19T23:45:00.000Z") });
+
+    expect(late.backfilledDays).toEqual([]);
+    expect(await rowCount(db, "catalogue_snapshots")).toBe(1);
+
+    // A catch-up run the next morning heals the 19th... once.
+    const healed = await recordCatalogueSnapshot({ now: new Date("2026-07-20T01:00:00.000Z") });
+
+    expect(healed.backfilledDays).toEqual([]);
+    expect(await rowCount(db, "catalogue_snapshots")).toBe(2);
   });
 });

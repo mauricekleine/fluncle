@@ -4642,6 +4642,9 @@ async function runCrawlStatus(
   );
   console.log(`Ready to write: ${result.storablePending} storable release node(s) claimable now.`);
   console.log(
+    `Held by the storage gate: ${result.unstorablePending} claimable release node(s) — ${result.undecidedLabelsQueued} undecided label(s) hold queued work.`,
+  );
+  console.log(
     `Seeds (${result.seedLabels.length}): ${result.seedLabels.join(", ") || "none enabled"}.`,
   );
   console.log(`Awaiting your ruling: ${result.labelsUndecided} label(s).`);

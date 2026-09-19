@@ -1132,3 +1132,39 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
     ]);
   });
 });
+
+// ── The ledger's own JSON must stay parseable ────────────────────────────────
+// `summary_raw` is the one column carrying a string a SWEEP wrote — a box tick's last stdout line,
+// itself a JSON document, routinely quoting a vendor's error text. A raw control character in there
+// survives the ingest schema (`z.string()`) and SQLite, and then breaks the reader: the outer
+// `fluncle admin telemetry read --json` document, and `jq '.rows[].summaryRaw | fromjson'` — the
+// shape every recipe in the fluncle-ledger skill is built on. The escape is the same evidence.
+
+describe("insertRunEvent — the ledger's text stays JSON-safe", () => {
+  it("escapes raw control characters in a summary line rather than storing them", async () => {
+    const poisoned = '{"ok":false,"error":"yt-dlp said:\u0000\u001b[31mboom\u001b[0m\u0007"}';
+
+    await insertRunEvent(envelope({ summary_raw: poisoned, unit: "fluncle-anchor" }));
+
+    const page = await readRunLedger({ limit: 10, unit: "fluncle-anchor" });
+    const summaryRaw = page.rows[0]?.summaryRaw ?? "";
+
+    // Not a control character left — the outer document and the inner one both parse.
+    const controls = summaryRaw.split("").filter((character) => character.charCodeAt(0) < 0x20);
+
+    expect(controls).toEqual([]);
+    expect(summaryRaw).toContain("\\u001b");
+    expect(JSON.parse(JSON.stringify({ summaryRaw }))).toEqual({ summaryRaw });
+    expect(JSON.parse(summaryRaw)).toMatchObject({ ok: false });
+  });
+
+  it("leaves an ordinary summary byte-identical, so the escape costs clean rows nothing", async () => {
+    const clean = '{"checked":12,"ok":true,"produced":8}';
+
+    await insertRunEvent(envelope({ summary_raw: clean, unit: "fluncle-capture" }));
+
+    const page = await readRunLedger({ limit: 10, unit: "fluncle-capture" });
+
+    expect(page.rows[0]?.summaryRaw).toBe(clean);
+  });
+});
