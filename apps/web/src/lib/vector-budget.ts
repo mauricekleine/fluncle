@@ -26,3 +26,24 @@ export const VECTOR_ENDPOINT_PROBE_MARGIN_MS = 5_000;
 /** What an out-of-process caller waits for a vector-capable endpoint before declaring it dead. */
 export const VECTOR_ENDPOINT_PROBE_TIMEOUT_MS =
   VECTOR_FALLBACK_DEADLINE_MS + VECTOR_ENDPOINT_PROBE_MARGIN_MS;
+
+// ── `/mix`'s own, tighter ceilings ────────────────────────────────────────────
+//
+// `VECTOR_FALLBACK_DEADLINE_MS` is a DIAGNOSTIC ceiling: the outer bound on a bounded analytical
+// scan, chosen so a slow answer still beats no answer. `/mix` is not that. It is an interactive
+// public page where a reader is waiting on a rail to pick the next tune, and a correct answer that
+// arrives after twenty seconds is not a better answer than an honest empty one — it is a page that
+// looked broken and then changed its mind. So the rail takes ceilings of its own, below the
+// generic one, and degrades inside them.
+
+/** The rail's candidate scan may occupy the database for at most this long. */
+export const MIX_RAIL_SCAN_DEADLINE_MS = 6_000;
+
+/**
+ * The whole rail — every round trip, not just the scan — may occupy a request for at most this
+ * long. It sits above the scan deadline by the handful of small reads around it (target row, key
+ * spellings, engine flag, hydrate), so a scan that was going to land inside its own budget is
+ * never pre-empted by this one; this is the backstop for time spent ANYWHERE, including a
+ * statement that has no deadline of its own yet.
+ */
+export const MIX_RAIL_DEADLINE_MS = 8_000;

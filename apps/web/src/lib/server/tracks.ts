@@ -26,7 +26,13 @@ import { logEvent } from "./log";
 import { readMixableArtistsProjection } from "./mixable-artists-projection";
 import { isSonarLogEnabled, isSonarMixEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { hydrateRankedSonarMatches } from "./sonar-hydration";
-import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
+import {
+  executeVectorFallback,
+  isVectorDeadlineExpired,
+  raceWithDeadline,
+  vectorFallbackCandidateLimitSql,
+} from "./vector-fallback";
+import { MIX_RAIL_DEADLINE_MS, MIX_RAIL_SCAN_DEADLINE_MS } from "../vector-budget";
 import { isLogId } from "../log-id";
 import { dedupeByRecordingIdentity } from "./track-match";
 import { FINDING_TRACK_OR_LOG_ID_CTE, TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
@@ -1876,6 +1882,28 @@ export async function getMixableTracks(
   idOrLogId: string,
   options: { exclude?: string[]; limit?: number } = {},
 ): Promise<MixCandidateDTO[]> {
+  try {
+    return await raceWithDeadline(mixRail(idOrLogId, options), MIX_RAIL_DEADLINE_MS, "mix.rail");
+  } catch (error) {
+    if (!isVectorDeadlineExpired(error)) {
+      throw error;
+    }
+
+    // AN EMPTY RAIL IS THE DOCUMENTED DEGRADATION, and it is the honest one: the reader is told
+    // "nothing to follow this" instead of watching a page hang. It is not a retry — libSQL cannot
+    // cancel the remote work, so a second attempt would stack a second scan on the database that
+    // is already the reason we are here. The next request meets a warmer database and a warm memo.
+    console.warn(`${error.label} exceeded ${error.deadlineMs}ms — serving an empty rail`);
+
+    return [];
+  }
+}
+
+/** The rail itself. Every path out of here is bounded by its caller above. */
+async function mixRail(
+  idOrLogId: string,
+  options: { exclude?: string[]; limit?: number },
+): Promise<MixCandidateDTO[]> {
   const limit = options.limit ?? RAIL_DEPTH;
 
   if (limit <= 0) {
@@ -2024,9 +2052,22 @@ export async function getMixableTracks(
           left join track_embeddings emb on emb.track_id = tracks.track_id
           order by tracks.rowid`,
   };
-  const candidateResult = probe
-    ? await executeVectorFallback(db, "sonar.fallback.mix", candidateStatement)
-    : await db.execute(candidateStatement);
+  // THE DEADLINE BELONGS TO THE SCAN, NOT TO THE COSINE. Both branches read the same rows — every
+  // key-compatible track in the archive, up to the candidate bound — and the probe only decides
+  // whether a number is computed per row. So both go through the same bounded executor, which is
+  // what attaches the three things this statement must have and cannot be trusted to have by
+  // accident: the absolute deadline, the `heavy-read` admission seat (an isolate runs one of these
+  // at a time), and the `sonar.fallback.mix` cost span. Branching the executor on `probe` made all
+  // three conditional on the TARGET having a vector, which is a property of one row and has
+  // nothing to do with how much work the scan is.
+  const candidateResult = await executeVectorFallback(
+    db,
+    "sonar.fallback.mix",
+    candidateStatement,
+    {
+      deadlineMs: MIX_RAIL_SCAN_DEADLINE_MS,
+    },
+  );
 
   const candidateRows = typedRows<MixCandidateRow>(candidateResult.rows);
   const candidates: RankCandidate<string>[] = candidateRows.map((row) => ({

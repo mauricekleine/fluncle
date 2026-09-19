@@ -228,6 +228,15 @@ The consumer half shipped in ONE PR because the rewrite alone is plan-neutral (a
   - Before the migration, hosted EXPLAIN of the shipped shapes is `SCAN <entity>` for every total, lane, slice, and name arm. Confirm the listing and name indexes appear once the Cloudflare build applies `0179`.
 - remaining: the winner pick's per-track order is item 15, which rewrites the pick as two covering seeks on `tracks_label_cover_idx` (its evidence, build-lock estimate, and post-migration plan check live there). This item keeps only the post-migration hosted proof of the listing and name indexes.
 
+**23. `/mix`: the candidate scan ships the whole key-compatible archive into the isolate to rank it**
+`tier=design · tracks (+ findings, track_embeddings) · /mix`
+**STATUS: DESIGN — open. The scan is now BOUNDED (deadline + heavy-read seat + degradation), which caps the damage; the shape itself is untouched.**
+
+- loc: apps/web/src/lib/server/tracks.ts, `mixRail`'s candidate statement.
+- shape: The scan returns EVERY key-compatible row up to `VECTOR_FALLBACK_CANDIDATE_LIMIT` (50,000), each carrying `features_json`, because mixability (key + BPM + texture, and taste when a probe exists) is ranked in the isolate by `rankMixRail`, not in SQL. Only `limit` rows (`RAIL_DEPTH`, 12) survive. Measured on the audited 1× fixture (122,151 tracks, 8 named-move spellings): **40,717 rows / ~6.81 MiB** shipped per request. That is the "never pull a whole column into the isolate to rank it" rule in substance: local sqld caps a response at 10 MiB so it would throw, while hosted has no cap and grows toward OOMing the 128 MB Worker as the catalogue does.
+- impact: HIGH at catalogue scale — it is the payload behind `/mix`'s cold-answer latency and the one statement on the page that grows with the archive.
+- fix: Needs a ranking decision, which is why it is filed rather than fixed. The sonar route already accepts a SQL-side shortlist (`TASTE_SHORTLIST`, 300) as good enough, so the question is what orders a shortlist on the database path when there is no probe to order by. Do not narrow it with a bare `limit` — that silently changes the rail.
+
 ## Owned elsewhere — do NOT touch
 
 - already-fixed — catalogue.ts:1183 rankCatalogue max-similarity vector cross-scan (finding_vec/candidate_vec CTEs) + the RANK_BATCH_SIZE=250 batch write. CONFIRMED mitigated: both CTE arms carry `as materialized`, the join is a `cross join` pinning findings (small) as the driver with the `embedding_blob is not null` guards moved inside the CTEs, and the batch write is bounded/single-row/PK-keyed/idempotent under the single-writer box sweep. Do NOT re-flag as new.
