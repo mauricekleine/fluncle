@@ -639,6 +639,116 @@ describe("runAnchorTick", () => {
     expect(summary.skipped).toBe(1);
   });
 
+  // ── AN HONEST TICK: `missed` means RETIRED, and a tick that could conclude on nothing says so ────
+  //
+  // `missed` is the tick's claim that a row left the backlog. When the server parks nothing — every
+  // row deferred, or no rung armed to conclude — the queue depth does not move, and a summary that
+  // counts those rows as misses reports a drain that is standing still. Both sides are pinned: the
+  // parked case must still count `missed`, the unparked case must count `deferred`.
+
+  test("a verdict that PARKED the row counts `missed`; one that did not counts `deferred`", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve({
+            queueDepth: 40,
+            rows: [
+              { anchorQuery: "Azuro Hold Tight", trackId: "mb_hold" },
+              { anchorQuery: "Technimatic For All of Us", trackId: "mb_fau" },
+            ],
+          }),
+        resolveFree: (trackId) =>
+          Promise.resolve({
+            anchored: false,
+            apifyEnabled: false,
+            spotifySearchEnabled: false,
+            stamped: trackId === "mb_hold",
+            verifiedBy: null,
+          }),
+      }),
+    );
+
+    expect(summary.missed).toBe(1);
+    expect(summary.deferred).toBe(1);
+    // ONLY the parked row left the backlog — the deferred one is still in it.
+    expect(summary.queueDepth).toBe(39);
+  });
+
+  test("a tick with no rung capable of concluding reports `no_capable_rung`", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        resolveFree: () =>
+          Promise.resolve({
+            anchored: false,
+            apifyEnabled: false,
+            spotifySearchEnabled: false,
+            stamped: true,
+            verifiedBy: null,
+          }),
+      }),
+    );
+
+    expect(summary.ok).toBe(true);
+    expect(summary.produced).toBe(0);
+    expect(summary.reason).toBe("no_capable_rung");
+  });
+
+  test("a rung that CAN conclude, or a win, leaves `reason` null — the tripwire is not always-on", async () => {
+    // Side one: the paid rung is armed, so the tick could have concluded on every row.
+    const armed = await runAnchorTick(
+      50,
+      deps({
+        resolveFree: () =>
+          Promise.resolve({
+            anchored: false,
+            apifyEnabled: true,
+            spotifySearchEnabled: false,
+            verifiedBy: null,
+          }),
+      }),
+    );
+
+    expect(armed.reason).toBeNull();
+
+    // Side two: nothing is armed, but the free ListenBrainz oracle WON — the tick concluded.
+    const won = await runAnchorTick(
+      50,
+      deps({
+        resolveFree: () =>
+          Promise.resolve({
+            anchored: true,
+            apifyEnabled: false,
+            source: "listenbrainz",
+            spotifySearchEnabled: false,
+            stamped: false,
+            verifiedBy: "isrc",
+          }),
+      }),
+    );
+
+    expect(won.produced).toBe(3);
+    expect(won.reason).toBeNull();
+  });
+
+  test("a server that never reports the flags claims no capability verdict", async () => {
+    // The pinned box can outlive a Worker that predates `spotifySearchEnabled`. Silence is not
+    // evidence: the tick must not invent `no_capable_rung` from a field it never received.
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        resolveFree: () =>
+          Promise.resolve({ anchored: false, apifyEnabled: false, verifiedBy: null }),
+      }),
+    );
+
+    expect(summary.reason).toBeNull();
+    // And the older server's misses still settle exactly as they did before `stamped` existed.
+    expect(summary.missed).toBe(3);
+    expect(summary.deferred).toBe(0);
+  });
+
   test("skips a worklist row missing a trackId or query", async () => {
     const summary = await runAnchorTick(
       50,

@@ -40,9 +40,9 @@
 // every un-anchored ISRC-BEARING row stamped at-or-after the moment the flag went OFF (recorded in
 // `ANCHOR_APIFY_DISABLED_AT_KEY`), so those rows re-enter the worklist and re-sort by `ANCHOR_ORDER` at
 // their real priority immediately. ISRC-less deferrals stay stamped — anchoring concludes off the ISRC
-// anchor in practice, so re-arming them re-bills asks that cannot conclude (`requeueOffWindowDeferrals`). It
-// gives the row's RETRY-CAP attempt back at the same time (`spotify_anchor_attempts`, track-work.ts
-// `ANCHOR_MAX_ATTEMPTS`) — a deferral was never a real try, so it must not spend one of the row's finite tries.
+// anchor in practice, so re-arming them re-bills asks that cannot conclude (`requeueOffWindowDeferrals`).
+// It restores the STAMP alone: a deferral never charged the row's RETRY-CAP counter in the first place
+// (`stampAnchorAttempt`'s `chargeAttempt: false`), so there is nothing here to give back.
 //
 // WHY THAT IS PROVABLY SAFE: while the flag is OFF the box makes ZERO Apify attempts, so EVERY stamp
 // written during the off-window is a "deferred, never actually tried" stamp — never a real miss-backoff.
@@ -93,20 +93,18 @@ export async function isAnchorApifyEnabled(): Promise<boolean> {
  * ZERO Apify attempts, so it is a deferral, never a genuine miss-backoff — and genuine backoffs, which all
  * predate the off-window (`attempted_at < disabled_at`), are left untouched.
  *
- * It gives back the RETRY-CAP attempt too (`spotify_anchor_attempts`, track-work.ts
- * `ANCHOR_MAX_ATTEMPTS`): the counter is incremented in the same UPDATE as every stamp, so undoing a
- * deferral's stamp without undoing its bump would spend a row's finite tries on attempts Apify never
- * made — the cap would retire rows the paid rung had never once looked at. `max(… - 1, 0)` floors it,
- * so the arithmetic can never go negative even if a row is somehow re-queued twice.
+ * IT TOUCHES THE STAMP ALONE. The retry-cap counter (`spotify_anchor_attempts`, track-work.ts
+ * `ANCHOR_MAX_ATTEMPTS`) is not given back here because it was never taken: an off-window free-rung
+ * deferral is stamped WITHOUT a charge (`stampAnchorAttempt`'s `chargeAttempt: false` — an attempt is
+ * spent only when a rung capable of concluding was actually asked, and while this flag is OFF none
+ * is). Decrementing here would therefore refund an attempt some EARLIER real ask had honestly spent.
  *
  * ISRC-LESS ROWS ARE EXCLUDED (`has_isrc = 1`, the presence mirror — schema.ts): anchoring
  * concludes off the ISRC anchor in practice, so a bulk re-arm of ISRC-less deferrals would put a
- * wall of asks that cannot conclude straight back on the paid queue. An excluded row keeps BOTH
- * halves of its deferral write — the stamp (it waits out the ordinary re-ask window instead of
- * jumping the queue) AND the counter bump. Keeping the bump is deliberate, and the honest-counter
- * rule above bends for exactly this class: for a row whose asks cannot conclude, every counted
- * deferral walks it toward the retry cap's retirement without another billed look — the cheap end
- * for dead weight, where giving the attempt back would extend its paid treadmill instead.
+ * wall of asks that cannot conclude straight back on the paid queue. An excluded row keeps its
+ * deferral stamp and waits out the ordinary re-ask window instead of jumping the queue; it is held
+ * off the paid rung by `ANCHOR_ORDER`'s `has_isrc` lead key and fed by the free `isrc-recovery`
+ * pass, never by burning its finite tries on asks that could not have concluded.
  */
 async function requeueOffWindowDeferrals(): Promise<number> {
   const disabledAt = await getSetting(ANCHOR_APIFY_DISABLED_AT_KEY);
@@ -131,8 +129,7 @@ async function requeueOffWindowDeferrals(): Promise<number> {
       {
         args: [disabledAt],
         sql: `update tracks
-              set spotify_anchor_attempted_at = null,
-                  spotify_anchor_attempts = max(coalesce(spotify_anchor_attempts, 0) - 1, 0)
+              set spotify_anchor_attempted_at = null
               where spotify_uri is null
                 and spotify_anchor_attempted_at >= ?
                 and has_isrc = 1`,
