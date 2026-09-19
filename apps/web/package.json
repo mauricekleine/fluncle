@@ -98,7 +98,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "~1.53.1",
     "@fluncle/test-support": "workspace:*",
-    "@huggingface/transformers": "~4.2.0",
+    "@huggingface/transformers": "~4.3.0",
     "@playwright/test": "~1.62.1",
     "@sentry/vite-plugin": "~5.4.0",
     "@types/react": "catalog:",
