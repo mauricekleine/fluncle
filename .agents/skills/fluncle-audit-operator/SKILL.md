@@ -27,14 +27,16 @@ this skill is the operator's map of the recurring tasks.
 
 ## Which lever for which change
 
-| You want to…                              | Change this (in the repo)                                                                                                           | How it ships                                                        |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Tune what a domain hunts / fixes-vs-files | `docs/agents/hermes/scripts/audit/prompts/<domain>.md` (or `_preamble.md` for the shared contract; `_reviewer.md` for the reviewer) | push to `main` → baked into the image on the next pin-watch rebuild |
-| Add / remove / reorder a domain           | `audit/rotation.ts` (`DOMAINS` + `DOMAIN_META`) + add `prompts/<key>.md`                                                            | push to `main`; update `rotation.test.ts`                           |
-| Change a schedule                         | `audit-timer/*.timer` / `audit-review-timer/*.timer` (`OnCalendar`)                                                                 | re-run `install-host-timers.sh` on the box                          |
-| Change the driver mechanics               | `scripts/audit-sweep.sh` / `scripts/audit-review-sweep.sh`                                                                          | baked; rebuild                                                      |
-| Bump the pinned `gh`                      | `docs/agents/hermes/Dockerfile` (the `gh` layer — manual-watch tier)                                                                | pin-watch rebuild (its pre-smoke does `gh --version`)               |
-| Rotate / add a secret                     | the host `fluncle-secrets.env.tpl` + `FLUNCLE_GSC_OP_REF` (bootstrap)                                                               | re-run `fluncle-secrets-sync`                                       |
+| You want to…                              | Change this (in the repo)                                                                                                           | How it ships                                                                                                                           |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Tune what a domain hunts / fixes-vs-files | `docs/agents/hermes/scripts/audit/prompts/<domain>.md` (or `_preamble.md` for the shared contract; `_reviewer.md` for the reviewer) | push to `main` → baked into the image on the next pin-watch rebuild                                                                    |
+| Add / remove / reorder a domain           | `audit/rotation.ts` (`DOMAINS` + `DOMAIN_META`) + add `prompts/<key>.md`                                                            | push to `main`; update `rotation.test.ts`                                                                                              |
+| Change a schedule or a unit timeout       | `audit-timer/*` / `audit-review-timer/*` (`OnCalendar`, `TimeoutStartSec`)                                                          | `sudo bash docs/agents/hermes/install-host-timers.sh --refresh-unit fluncle-audit.service --refresh-unit fluncle-audit-review.service` |
+| Change what the agents verify locally     | `scripts/audit/verify.sh` (the ladder) — it runs from the CHECKOUT, so it is live the moment it merges                              | push to `main`; no rebake needed                                                                                                       |
+| Change a pass's wall budget               | `scripts/agent-pass.sh` (`AGENT_PASS_BUDGET_SECS`) — MUST stay under the unit's `TimeoutStartSec`                                   | baked; rebuild — and refresh the unit if you moved the ceiling too                                                                     |
+| Change the driver mechanics               | `scripts/audit-sweep.sh` / `scripts/audit-review-sweep.sh`                                                                          | baked; rebuild                                                                                                                         |
+| Bump the pinned `gh`                      | `docs/agents/hermes/Dockerfile` (the `gh` layer — manual-watch tier)                                                                | pin-watch rebuild (its pre-smoke does `gh --version`)                                                                                  |
+| Rotate / add a secret                     | the host `fluncle-secrets.env.tpl` + `FLUNCLE_GSC_OP_REF` (bootstrap)                                                               | re-run `fluncle-secrets-sync`                                                                                                          |
 
 ## The recurring tasks
 
@@ -83,6 +85,20 @@ sudo systemctl enable  --now fluncle-audit.timer fluncle-audit-review.timer   # 
 - **The auditor fixes by confidence, files by impact.** It never edits secrets/`op://`/auth
   tiers/migrations/`.github/workflows`/CI, never uses the TS `!`, and never drives `main` directly —
   only via the reviewed PR. Keep those rails in `_preamble.md`.
+- **Both agents verify through one command, and it is not `bun run check`.** `scripts/audit/verify.sh`
+  runs formatting plus the lint rules scoped to the changed paths, then each changed package's own
+  typecheck and tests, each behind a wall budget and a cgroup-headroom precondition. The whole-repo
+  type-aware lint, whole-repo typecheck, and `apps/web build` exceed the container's memory cap and
+  are CI's job — they run on the PR and again in `deploy:gate`, and the reviewer merges on green
+  required checks. The measured peaks that settle this are tabled in the audit-timer README.
+- **A unit's `TimeoutStartSec` is a backstop, not a budget.** It kills the host-side `docker exec`
+  client only; the container-side sweep runs on and self-reports. The real budget is
+  `AGENT_PASS_BUDGET_SECS` in `scripts/agent-pass.sh`, and it must stay strictly under the unit's
+  ceiling — change one, check the other.
+- **`ok:false` now has a reason.** Read `reason` + `container_oom_kills` + `verify` on the summary
+  line: `budget-exceeded` means the pass outran its budget, `oom-killed` means the container's cap
+  killed something during it, `verify-failed` means the ladder reported a red check, `unverified`
+  means the night committed work and ran no checks at all.
 - **`/status` is the honesty signal.** `cron.audit` + `cron.audit-review` show freshness (24h
   cadence); a dead PAT or a failed ship shows as stale/degraded there. Watch it after any change.
 - **Public repo.** The prompts + scripts carry no secret values or topology — the concrete `op://`

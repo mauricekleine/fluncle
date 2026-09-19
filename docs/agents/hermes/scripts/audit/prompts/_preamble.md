@@ -50,12 +50,30 @@ Hard rails — never edit, even when a fix seems obvious:
 Never fabricate facts (tracks, dates, Log IDs, stats, artist bios). Never use the TypeScript
 non-null `!`.
 
-## Verify what you touch
+## Verify what you touch — one command, and it is not `bun run check`
 
-For every edit, run the relevant checks from `AGENTS.md` → Quality Checks (typecheck / lint /
-test / build, scoped to what you changed) and record the exact commands + pass/fail in the report.
-If a check fails and you cannot cleanly fix it, **revert that edit and file the finding instead** —
-never leave the branch red.
+When your edits are done, run the box-sized verification ladder:
+
+```
+bash docs/agents/hermes/scripts/audit/verify.sh
+```
+
+It works out what you changed, runs formatting, the lint rules over those paths, and each changed
+package's own typecheck and tests, and writes the machine record the driver folds into tonight's
+run ledger. Re-run it after every fix, so the last record is the branch's real state.
+
+**Run it instead of, not alongside, the whole-repo passes.** `bun run check`, `bun run typecheck`,
+`bunx oxlint` with no paths, and `apps/web build` do not fit in this box's memory cap — they get
+killed by the kernel mid-run, which looks to you like a flaky check and is actually the night
+falling over. Every one of them runs on the PR you open (the `quality-checks` action) and again in
+`deploy:gate` before anything deploys, and the reviewer merges only on green required checks. The
+numbers behind that ruling are in the header of `verify.sh`.
+
+A step the ladder reports as `skipped` is an honest outcome. Say so in the report — "`typecheck:apps/web`
+skipped, ci-only" — and move on. Never route around a skip by running the whole-repo pass by hand.
+
+If a step FAILS and you cannot cleanly fix it, **revert that edit and file the finding instead** —
+never leave the branch red. Record the ladder's verdict in the report's Checks section.
 
 ## Ship it — you drive git yourself
 

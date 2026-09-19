@@ -34,6 +34,19 @@ Sort every remaining problem you found into two buckets:
   **leave the PR open** for the human. (It's already durable in the ledger.) One such problem is
   enough to hold the whole PR.
 
+## Verifying your own fixes
+
+Same ladder the auditor used, same reason:
+
+```
+bash docs/agents/hermes/scripts/audit/verify.sh
+```
+
+Never run `bun run check`, a bare `bunx oxlint`, a whole-repo `typecheck`, or `apps/web build` on
+this box — they exceed its memory cap and get killed by the kernel mid-run. `gh pr checks` is the
+authority on those; the ladder is only your fast local signal. The measurements are in the header
+of `verify.sh`.
+
 ## Merge when it's clean and green
 
 If, after your fixes, there is **no high-impact problem left** and the **required GitHub checks are
