@@ -44,6 +44,15 @@ export class DueWorkMaintenancePendingError extends Error {
   }
 }
 
+/**
+ * BACKPRESSURE IS NOT A FAULT. The one recognizer every wire boundary narrows on, so the oRPC rails
+ * and the server-fn rails answer a deferred read the same way: a typed "come back", never a captured
+ * error and never a 500.
+ */
+export function isDueWorkMaintenancePending(error: unknown): boolean {
+  return error instanceof DueWorkMaintenancePendingError;
+}
+
 export type DueWorkSubjectType = "album" | "artist" | "label" | "track";
 export type DueWorkState = "leased" | "ready" | "repair" | "scheduled";
 export type DueWorkProjectionState = Extract<DueWorkState, "ready" | "scheduled">;

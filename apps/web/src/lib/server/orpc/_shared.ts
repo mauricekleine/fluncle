@@ -6,7 +6,7 @@
 import { contract } from "@fluncle/contracts/orpc";
 import { type implement, ORPCError } from "@orpc/server";
 import * as Sentry from "@sentry/cloudflare";
-import { DueWorkMaintenancePendingError } from "../due-work";
+import { isDueWorkMaintenancePending } from "../due-work";
 import { logEvent } from "../log";
 import { type OrpcContext } from "../orpc-auth";
 import { type TrackListItem, getTrackByIdOrLogId } from "../tracks";
@@ -82,27 +82,39 @@ export function isApiFaultData(data: unknown): data is ApiFaultData {
 }
 
 /**
+ * BACKPRESSURE IS NOT A FAULT. `DueWorkMaintenancePendingError` is a typed "try again": a bounded
+ * maintenance pass converged as far as its budget allowed and the read it fronted is deferred, not
+ * broken. It answers a typed 503 and is never captured into Sentry, so a write burst cannot page as
+ * an error. Every op inherits this through the router-level middleware in ../orpc.ts; this is the
+ * same answer at the `apiFault` chokepoint, so a handler that catches and converts agrees with a
+ * handler that lets the throw fly.
+ */
+export function dueWorkMaintenancePendingFault(): ORPCError<string, ApiFaultData> {
+  return new ORPCError("SERVICE_UNAVAILABLE", {
+    data: {
+      apiCode: "due_work_maintenance_pending",
+      apiMessage: "Due-work maintenance is still converging",
+    },
+    message: "Due-work maintenance is still converging",
+    status: 503,
+  });
+}
+
+/**
  * Convert an unexpected (non-`ORPCError`) fault into an `ORPCError` whose status,
  * code, and message match the legacy `apiErrorResponse` (http-errors.ts). The
- * branch splits by intent: a deliberate `ApiError` keeps its own status/code/
- * message (a client contract the CLI renders to the operator), with the legacy
- * `{ code, message }` riding along in `data` so the rails encoder reproduces the
- * exact `jsonError` body. Anything else is an *unexpected* fault — its raw detail
- * (driver/upstream internals) goes to the server log and the wire gets a generic
- * 500 (`error` / "Internal error"), never the raw message to an unauthenticated
- * caller. Shared so every converted handler's catch can `throw apiFault(error)`
- * for one wire-compatible 500 path.
+ * branch splits by intent: the typed due-work pause answers its 503; a deliberate
+ * `ApiError` keeps its own status/code/message (a client contract the CLI renders
+ * to the operator), with the legacy `{ code, message }` riding along in `data` so
+ * the rails encoder reproduces the exact `jsonError` body. Anything else is an
+ * *unexpected* fault — its raw detail (driver/upstream internals) goes to the
+ * server log and the wire gets a generic 500 (`error` / "Internal error"), never
+ * the raw message to an unauthenticated caller. Shared so every converted
+ * handler's catch can `throw apiFault(error)` for one wire-compatible 500 path.
  */
 export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
-  if (error instanceof DueWorkMaintenancePendingError) {
-    return new ORPCError("SERVICE_UNAVAILABLE", {
-      data: {
-        apiCode: "due_work_maintenance_pending",
-        apiMessage: "Due-work maintenance is still converging",
-      },
-      message: "Due-work maintenance is still converging",
-      status: 503,
-    });
+  if (isDueWorkMaintenancePending(error)) {
+    return dueWorkMaintenancePendingFault();
   }
 
   if (error instanceof ApiError) {

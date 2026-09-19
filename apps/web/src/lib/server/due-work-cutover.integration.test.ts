@@ -325,4 +325,85 @@ describe("listTrackWork Goal C cutover", () => {
     expect(served).not.toContain("zz-vetoed-track");
     expect(served.length).toBeGreaterThan(0);
   });
+
+  // THE SCOPING IS BY SUBJECT, AND A SUBJECT CARRIES ITS TYPE. Withholding is keyed on the marker's
+  // own primary key — `(work_kind, subject_type, subject_id)` — so a label-typed or artist-typed
+  // marker never withholds a track row that happens to share its id. The rulings that DO owe a
+  // track something say so in track-typed markers, in the same transaction.
+  it("serves a track a label-typed marker cannot own", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { markDueWorkSourceRepairsStatement } = await import("./due-work");
+
+    await seedCatalogueTrack(db, { trackId: "shared-id" });
+    await withAudio("shared-id");
+    await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
+
+    // Project the track first, so the queue holds a real ready row for it.
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "shared-id", subjectType: "track" }], {
+        now: NOW,
+        producer: "test-label-scope",
+      }),
+    );
+    expect(
+      (await runWithDatabaseRequestScope(() => listTrackWork({ kind: "embed", limit: 10 }))).map(
+        (item) => item.trackId,
+      ),
+    ).toEqual(["shared-id"]);
+
+    // A label ruling's own entity marker, standing beside that ready track row and wearing the
+    // SAME subject id. It owes the label's projections a repair and owes this track nothing.
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "shared-id", subjectType: "label" }], {
+        now: NOW,
+        producer: "test-label-scope",
+      }),
+    );
+
+    expect(
+      (await runWithDatabaseRequestScope(() => listTrackWork({ kind: "embed", limit: 10 }))).map(
+        (item) => item.trackId,
+      ),
+    ).toEqual(["shared-id"]);
+  });
+
+  it("withholds a ruled label's tracks through the track-typed markers the same ruling mints", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { updateLabelSeedState } = await import("./labels");
+
+    await db.execute({
+      args: [NOW.toISOString(), NOW.toISOString()],
+      sql: `insert into labels (id, slug, name, seed_state, created_at, updated_at)
+            values ('lbl-ruled', 'ruled-imprint', 'Ruled Imprint', 'undecided', ?, ?)`,
+    });
+    for (const trackId of ["ruled-a", "ruled-b"]) {
+      await seedCatalogueTrack(db, { trackId });
+      await withAudio(trackId);
+      await db.execute({
+        args: [trackId],
+        sql: `update tracks set label = 'Ruled Imprint', label_id = 'lbl-ruled' where track_id = ?`,
+      });
+    }
+    await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
+
+    // The ruling itself. It changes what Fluncle may spend on these rows, so it re-stales their
+    // rank AND marks each track individually — a label marker alone would never reach them.
+    await updateLabelSeedState("lbl-ruled", "disabled");
+
+    const marked = await db.execute(
+      `select subject_id from due_work
+       where work_kind = 'source-repair' and subject_type = 'track'
+         and subject_id in ('ruled-a', 'ruled-b')
+       order by subject_id`,
+    );
+    expect(marked.rows.map((row) => row.subject_id)).toEqual(["ruled-a", "ruled-b"]);
+
+    // Those markers are the withholding: a capture worklist read serves neither until the ruling's
+    // repair has converged them.
+    expect(
+      (await runWithDatabaseRequestScope(() => listTrackWork({ kind: "capture", limit: 10 }))).map(
+        (item) => item.trackId,
+      ),
+    ).not.toContain("ruled-a");
+  });
 });

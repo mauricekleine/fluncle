@@ -49,6 +49,10 @@ Staleness combines a qualified-artist-set fingerprint with targeted invalidation
 
 So the sweep **converges on its own after any archive change** — corpus or row — and needs no invalidation call from the publish or capture paths. The fingerprint is compared with `<>`, never `<`, so a _deleted_ finding is caught exactly like an added one. On an unchanged archive the tick is a no-op.
 
+**A restamp is not a change.** The tick's write batch owes repair debt only for rows whose _projected inputs_ moved — `capture_priority`, `duplicate_of_track_id`, `nearest_finding_score`, and on the wrong-audio quarantine `capture_status` and `has_embedding`. The comparison is made in SQL, in the same batch and immediately before the updates, where the old and the new value are both authoritative. The fingerprint itself (`catalogue_rank_corpus`) is read by only one queue's evaluator — the rank queue's own — and the tick settles that one directly, because after its write the row is not due in any branch. So re-stamping the catalogue against a moved corpus, which is most of what the sweep does, mints no repair markers at all; a row that genuinely re-ranks still does.
+
+The settled-row delete carries a fence, because the rank queue's predicate also reads `is_catalogue` and `dismissed_at` and the tick writes neither: another producer can re-project a legitimately-due row between the candidate read and the batch commit, and an unconditional delete would drop it silently. The delete therefore only removes a row older than the instant the tick finished selecting, and both columns ride the changed-row comparison as the values the tick observed, so a concurrent move is a change like any other. See docs/database-performance.md for the full projection-column derivation and the one bounded residue it leaves.
+
 ### The cost model
 
 |                                   |                                                                                                                                                                              |
