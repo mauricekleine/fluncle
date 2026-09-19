@@ -61,6 +61,12 @@
 // unit that still wraps this script in database-admission-runner.sh) already holds the lease for
 // the whole process, so the same windows then run in-process without nesting phase admission.
 //
+// AN ITEM FAILURE IS NOT A TICK FAILURE — until every tick is one. The embedder reports a refused
+// item inside its JSON at exit code 0, so one unreadable file leaves the run `ok`. A broken engine
+// looks identical per item and never stops, so the run verdict is built on the DISTINCTION: see
+// EMBED_SYSTEMIC_STREAK, the consecutive-all-failed-with-one-class tripwire that fails the tick
+// with `reason: "embed_systemic"`. Counts are never altered by it; the verdict is added.
+//
 // `runEmbedSweep` takes its database windows, source fetch, and embedder as dependencies and is
 // unit-tested with fakes in embed-sweep.test.ts, alongside the pure helpers. `main()` is guarded
 // behind `import.meta.main` so importing this module for the tests is side-effect free (it does
@@ -70,9 +76,9 @@
 // child prints one JSON envelope instead. Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 import {
   databaseAdmissionYieldSummary,
@@ -437,12 +443,157 @@ function emptyEmbedCounts(): EmbedCounts {
   };
 }
 
+// ---------------------------------------------------------------------------
+// THE DEAD-STAGE TRIPWIRE — the embedder answering, and failing, every item.
+//
+// An item failure is reported by the embedder as `{errors:[{id,error}]}` with exit code 0, so
+// the tick keeps `errors: 0` and the run reads `ok: true`. That is right for ONE bad file, and
+// wrong for a broken engine: a snapped import in the inference venv fails every item the same
+// way, at exit code 0, forever. The shape is the one a dead embed stage actually wrote —
+// `checked: 1, embedFailed: 1, done: 0, errors: 0, ok: true`, unbroken for ten days.
+//
+// So the DISTINCTION is what the verdict is built on: a per-track data failure is one item, one
+// class, and the next item embeds; a systemic failure is EVERY attempt in a tick failing with the
+// SAME class, tick after tick. Both halves are required, and each covers the other's blind spot.
+// WITHIN a tick, {@link DEFAULT_EMBED_BATCH_CAP} tracks share one embedder process, so one bad
+// file cannot produce an all-failed tick at all — its batchmates embed, and any result clears the
+// streak. ACROSS ticks, the streak is what separates a run of genuinely unreadable audio from an
+// engine that cannot embed anything: three unrelated bad files land in different classes and reset
+// it, while a snapped import fails identically every time. A batch smaller than the cap (a nearly
+// drained queue) leans on the second half alone, which is the right way round — a floor on
+// attempts would blind this exactly when the last few tracks are the ones that matter.
+//
+// {@link EMBED_SYSTEMIC_STREAK} ticks is ~15 minutes at this sweep's 5-minute cadence, and at a
+// full batch it is nine failed attempts, not three. Its margin is the ledger's own: across the
+// five days after an embed outage lifted, no tick reported a single item failure at all, so a run
+// of three is nowhere near the healthy distribution — while the outage itself, which failed every
+// attempt of every tick for ten days, would have tripped it inside the first quarter hour.
+export const EMBED_SYSTEMIC_STREAK = 3;
+
+/** One class of embedder item failure. Two ticks are "the same failure" when these agree. */
+export type EmbedFailureClass = "decode" | "engine" | "memory" | "other" | "vector";
+
+/**
+ * Bucket one embedder error message. Deliberately COARSE: the point is "is every tick failing the
+ * same way", not a taxonomy, and an unrecognised message is its own honest bucket rather than
+ * being folded into a neighbour. `engine` is the import/model/venv family — the one a rotted
+ * inference dependency lands in, and the reason this tripwire exists.
+ */
+export function classifyEmbedFailure(message: string): EmbedFailureClass {
+  if (/No module named|ImportError|cannot import name|from_pretrained|torch|muq/i.test(message)) {
+    return "engine";
+  }
+
+  if (
+    /ffmpeg|decoded audio is empty|no embeddable windows|Invalid data|non-zero exit/i.test(message)
+  ) {
+    return "decode";
+  }
+
+  if (/out of memory|Killed|Cannot allocate/i.test(message)) {
+    return "memory";
+  }
+
+  if (/finite dims/i.test(message)) {
+    return "vector";
+  }
+
+  return "other";
+}
+
+/** The streak carried across ticks: how many consecutive all-failed ticks, and of which class. */
+export type EmbedFailureStreak = { class: EmbedFailureClass; count: number };
+
+/** Where the streak lives between ticks. Injected so the verdict is testable without a disk. */
+export type EmbedFailureStreakStore = {
+  read(): EmbedFailureStreak | null;
+  write(next: EmbedFailureStreak | null): void;
+};
+
+/**
+ * Fold one tick's embedder outcome into the carried streak. `results` is what landed, `errors`
+ * every item the embedder refused. A tick with no attempts at all leaves the streak untouched —
+ * an empty queue is not evidence either way — and any result clears it.
+ */
+export function nextEmbedFailureStreak(options: {
+  errors: readonly string[];
+  previous: EmbedFailureStreak | null;
+  results: number;
+}): EmbedFailureStreak | null {
+  const attempts = options.results + options.errors.length;
+
+  if (attempts === 0) {
+    return options.previous;
+  }
+
+  if (options.results > 0 || options.errors.length === 0) {
+    return null;
+  }
+
+  const classes = new Set(options.errors.map(classifyEmbedFailure));
+  const only = [...classes][0];
+
+  if (classes.size !== 1 || only === undefined) {
+    // Every attempt failed, but for different reasons — that is a bad batch, not a dead engine.
+    return null;
+  }
+
+  return {
+    class: only,
+    count: (options.previous?.class === only ? options.previous.count : 0) + 1,
+  };
+}
+
+/** The tick's own file. `$HOME` is the mounted, backed-up data root, as the attempt ledgers use. */
+export function embedFailureStreakPath(): string {
+  return join(process.env.HOME ?? "/opt/data/home", ".fluncle-embed", "failure-streak");
+}
+
+/** The production store. A missing or corrupt file degrades to "no memory", never to a throw. */
+function fileFailureStreakStore(path: string): EmbedFailureStreakStore {
+  return {
+    read: () => {
+      try {
+        const [className, count] = readFileSync(path, "utf8").trim().split("\t");
+        const parsed = Number.parseInt(count ?? "", 10);
+
+        if (!className || !Number.isFinite(parsed) || parsed <= 0) {
+          return null;
+        }
+
+        return { class: classifyEmbedFailure(className), count: parsed };
+      } catch {
+        return null;
+      }
+    },
+    write: (next) => {
+      try {
+        mkdirSync(dirname(path), { recursive: true });
+
+        if (next === null) {
+          rmSync(path, { force: true });
+
+          return;
+        }
+
+        writeFileSync(path, `${next.class}\t${next.count}\n`);
+      } catch (error) {
+        // A streak we cannot remember costs one late verdict; it must never kill the tick.
+        log(
+          `failure-streak write failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
+  };
+}
+
 export function buildEmbedSummary(options: {
   batchFallout?: number;
   checked: number;
   costWriteFailures?: number;
   counts: EmbedCounts;
   errors: number;
+  failureStreak?: EmbedFailureStreak | null;
   ok: boolean;
   queued?: number;
   reason?: string;
@@ -465,6 +616,12 @@ export function buildEmbedSummary(options: {
     // `failed` used to mean only embedder-reported item failures. Keep that split explicitly
     // while the canonical counter covers every item failure the run continued past.
     embedFailed: options.counts.failed,
+    ...(options.failureStreak == null
+      ? {}
+      : {
+          embedFailureClass: options.failureStreak.class,
+          embedFailureStreak: options.failureStreak.count,
+        }),
     errors: options.errors,
     failed,
     fetchFailed: options.counts.fetchFailed,
@@ -714,6 +871,8 @@ export type EmbedManifestEntry = { id: string; path: string };
 export type EmbedSweepDependencies = {
   batchCap: number;
   embed: (manifest: EmbedManifestEntry[]) => { code: number; stderr: string; stdout: string };
+  /** The cross-tick memory behind the dead-stage tripwire (see {@link EMBED_SYSTEMIC_STREAK}). */
+  failureStreak: EmbedFailureStreakStore;
   fetchSourceAudio: (key: string) => Promise<Uint8Array>;
   windows: EmbedDatabaseWindows;
 };
@@ -885,9 +1044,46 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
       }
     }
 
+    const failureMessages: string[] = [];
+
     for (const failure of parsed.errors ?? []) {
       counts.failed += 1;
+      failureMessages.push(failure.error);
       log(`${failure.id}: embed error — ${failure.error}`);
+    }
+
+    // THE DEAD-STAGE TRIPWIRE (see EMBED_SYSTEMIC_STREAK). Carried across ticks, folded here off
+    // the tick's own outcome, and persisted before any verdict is read off it — so a tick that
+    // crashes after this point still leaves the evidence behind for the next one.
+    const failureStreak = nextEmbedFailureStreak({
+      errors: failureMessages,
+      previous: deps.failureStreak.read(),
+      results: results.length,
+    });
+
+    deps.failureStreak.write(failureStreak);
+
+    if (failureStreak !== null && failureStreak.count >= EMBED_SYSTEMIC_STREAK) {
+      // The counts stay exactly as measured; only the verdict is added. `errors` makes the run's
+      // own failure explicit, and the non-zero exit is what the ledger derives `ok: false` from
+      // and what the unit's OnFailure alert fires on.
+      log(
+        `${failureStreak.count} consecutive ticks failed every attempt with the same '${failureStreak.class}' error — the embedder, not the audio`,
+      );
+
+      return {
+        exitCode: 1,
+        summary: buildEmbedSummary({
+          checked: batch.length,
+          costWriteFailures,
+          counts,
+          errors: 1,
+          failureStreak,
+          ok: false,
+          queued,
+          reason: "embed_systemic",
+        }),
+      };
     }
 
     const summary = buildEmbedSummary({
@@ -895,6 +1091,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
       costWriteFailures,
       counts,
       errors: 0,
+      failureStreak,
       ok: true,
       queued,
     });
@@ -944,6 +1141,7 @@ async function main(): Promise<EmbedSweepOutcome> {
   return runEmbedSweep({
     batchCap: BATCH_CAP,
     embed: (manifest) => run(PYTHON_BIN, [EMBED_SCRIPT], JSON.stringify(manifest)),
+    failureStreak: fileFailureStreakStore(embedFailureStreakPath()),
     fetchSourceAudio: r2Get,
     // An installed unit that still wraps this script already owns a whole-lifetime lease. Nesting
     // phase admission under it would wait on itself, so only that inherited runner context keeps

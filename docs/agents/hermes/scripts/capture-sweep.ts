@@ -4193,6 +4193,76 @@ type CaptureCounts = {
   unmatched: number;
 };
 
+// ---------------------------------------------------------------------------
+// THE DEAD-FETCHER TRIPWIRE.
+//
+// Capture's failures are ITEM-level by construction: a row that cannot be fetched is counted,
+// left queued, and the tick continues — so `errors` stays 0 and the run reads `ok: true` however
+// many rows failed. That is right for the ordinary partial batch (a bot challenge here, a missing
+// upload there) and wrong for a wall: a rotted fetcher pin, a dry proxy, or an exit that stopped
+// clearing challenges fails EVERY row the same way, and a tick of `checked: 12, failed: 12,
+// produced: 0` is a green row in the ledger. That shape once ran for thirteen days.
+//
+// So the RATE is the alarm, over a sample floor. Both numbers are read off the ledger's own
+// distribution: across a fortnight of attempting ticks the worst healthy tick failed 55% of its
+// attempts, and the bulk sat at or under a third, while the outage shape is 100%. The floor is
+// one full default batch ({@link BATCH_CAP}) so a one- or two-row tick cannot trip it by luck.
+//
+// THE DENOMINATOR IS ATTEMPTS THAT REACHED THE FETCHER, never the batch. A row the server's
+// capture budget REFUSED (`captureRejected`), a row whose write yielded (`capturePending`), and a
+// row skipped before any fetch are not attempts and must not dilute — or, worse, manufacture —
+// the share. A tick that never looked (an admission yield, a paused gate) has no attempts at all
+// and reaches this with nothing to judge.
+export const CAPTURE_BLIND_MIN_ATTEMPTS = 4;
+export const CAPTURE_BLIND_FAILURE_SHARE = 0.9;
+
+/** The tick's verdict reason, or null when there is nothing to say. */
+export type CaptureBlindVerdict =
+  | "bot_challenged"
+  | "capture_failing"
+  | "proxy_failing"
+  | "ytdlp_failing";
+
+/**
+ * Judge one tick's capture attempts. `attempts` is done + failed + unmatched: an unmatched row
+ * PROVES the fetcher works (bytes arrived; the fingerprint refused them), so it belongs in the
+ * denominator and never in the numerator.
+ *
+ * The named reason is the dominant class, so the alert says which wall was hit. An uncleared bot
+ * challenge is checked first because it also lands as a yt-dlp failure downstream — naming the
+ * challenge is the more useful truth when every failure carried one.
+ */
+export function captureBlindVerdict(options: {
+  attempts: number;
+  botChallengesUncleared: number;
+  failed: number;
+  failures: CaptureFailureMeter;
+}): CaptureBlindVerdict | null {
+  if (options.attempts < CAPTURE_BLIND_MIN_ATTEMPTS || options.failed <= 0) {
+    return null;
+  }
+
+  if (options.failed / options.attempts < CAPTURE_BLIND_FAILURE_SHARE) {
+    return null;
+  }
+
+  if (options.botChallengesUncleared >= options.failed) {
+    return "bot_challenged";
+  }
+
+  const { proxy, ytDlp } = options.failures;
+
+  if (proxy > ytDlp) {
+    return "proxy_failing";
+  }
+
+  if (ytDlp > 0) {
+    return "ytdlp_failing";
+  }
+
+  return "capture_failing";
+}
+
 export function buildCaptureSummary(options: {
   batch: number;
   botChallenges: number;
@@ -4208,21 +4278,33 @@ export function buildCaptureSummary(options: {
 }): Record<string, unknown> {
   const { counts, ladder, provenance, reverdict } = options;
   const failures = options.failures ?? createCaptureFailureMeter();
+  // Attempts that reached the fetcher. Rejected, pending and skipped rows never did.
+  const attempts = counts.done + counts.failed + counts.unmatched;
+  const blind = captureBlindVerdict({
+    attempts,
+    botChallengesUncleared: options.botChallengesUncleared,
+    failed: counts.failed,
+    failures,
+  });
 
   return {
     batch: options.batch,
     botChallenges: options.botChallenges,
     botChallengesUncleared: options.botChallengesUncleared,
+    // Attempts that reached the fetcher — the tripwire's denominator, published so the verdict
+    // below can be re-derived from the row rather than taken on trust.
+    captureAttempts: attempts,
     capturePending: counts.pending ?? 0,
     captureReconciled: counts.reconciled ?? 0,
     captureRejected: counts.rejected ?? 0,
     checked: options.batch,
     done: counts.done,
     elapsedMs: options.elapsedMs,
-    errors: 0,
+    // The counts above are measured; only this verdict is judged (see captureBlindVerdict).
+    errors: blind === null ? 0 : 1,
     failed: counts.failed,
     failureRecordingFailures: failures.failureRecording,
-    ok: true,
+    ok: blind === null,
     produced: counts.done,
     // THE PROVENANCE PHASE, reported separately from the capture batch it rides. Kept out of
     // `checked`/`failed`/`produced` on purpose: those are the CAPTURE gauges the /status strain
@@ -4246,6 +4328,7 @@ export function buildCaptureSummary(options: {
     provenancePending: provenance.pending ?? 0,
     proxyFailures: failures.proxy,
     r2Failures: failures.r2,
+    ...(blind === null ? {} : { reason: blind }),
     reverdictAsked: reverdict.asked,
     reverdictFailed: reverdict.failed,
     reverdictPending: reverdict.pending ?? 0,
@@ -4539,46 +4622,48 @@ async function main(): Promise<void> {
 
   logBotChallengeRecap(botChallenges);
 
-  console.log(
-    JSON.stringify(
-      buildCaptureSummary({
-        batch: batch.length,
-        // THE CHALLENGE RATE, per tick. Neither key is in the healthcheck's failure vocabulary,
-        // so publishing the number does not by itself make a steady state read as strain.
-        botChallenges: botChallenges.total,
-        botChallengesUncleared: botChallenges.uncleared,
-        counts,
-        elapsedMs: Date.now() - started,
-        failures,
-        // Deliberately NO `queue_depth`. `queue.length` is only the bounded page, while the honest
-        // `count=true` capture predicate scans the growing tracks table plus its findings join on
-        // every hot-path tick (capture has no covering queue index). Until an operator-approved,
-        // hosted-Turso-proven index exists, omission is the only honest and affordable gauge.
-        //
-        // `checked` IS emitted, so item-level `failed` is now judged as a RATE against it rather
-        // than counted. A steady ~4-of-12 tick is ~33%, under the 50% bar, so this sweep's honest
-        // baseline against bot challenges no longer parks it on the public degraded row.
-        ladder: currentProvenance.ladder,
-        provenance,
-        reverdict,
-        writes: {
-          confirmed:
-            captureWrites.confirmed +
-            (provenance.writesConfirmed ?? 0) +
-            (reverdict.writesConfirmed ?? 0),
-          failed:
-            captureWrites.failed +
-            failures.failureRecording +
-            (provenance.writesFailed ?? 0) +
-            (reverdict.writesFailed ?? 0),
-          pending:
-            captureWrites.pending +
-            (provenance.writesPending ?? 0) +
-            (reverdict.writesPending ?? 0),
-        },
-      }),
-    ),
-  );
+  const summary = buildCaptureSummary({
+    batch: batch.length,
+    // THE CHALLENGE RATE, per tick. Neither key is in the healthcheck's failure vocabulary,
+    // so publishing the number does not by itself make a steady state read as strain.
+    botChallenges: botChallenges.total,
+    botChallengesUncleared: botChallenges.uncleared,
+    counts,
+    elapsedMs: Date.now() - started,
+    failures,
+    // Deliberately NO `queue_depth`. `queue.length` is only the bounded page, while the honest
+    // `count=true` capture predicate scans the growing tracks table plus its findings join on
+    // every hot-path tick (capture has no covering queue index). Until an operator-approved,
+    // hosted-Turso-proven index exists, omission is the only honest and affordable gauge.
+    //
+    // `checked` IS emitted, so item-level `failed` is now judged as a RATE against it rather
+    // than counted. A steady ~4-of-12 tick is ~33%, under the 50% bar, so this sweep's honest
+    // baseline against bot challenges no longer parks it on the public degraded row.
+    ladder: currentProvenance.ladder,
+    provenance,
+    reverdict,
+    writes: {
+      confirmed:
+        captureWrites.confirmed +
+        (provenance.writesConfirmed ?? 0) +
+        (reverdict.writesConfirmed ?? 0),
+      failed:
+        captureWrites.failed +
+        failures.failureRecording +
+        (provenance.writesFailed ?? 0) +
+        (reverdict.writesFailed ?? 0),
+      pending:
+        captureWrites.pending + (provenance.writesPending ?? 0) + (reverdict.writesPending ?? 0),
+    },
+  });
+
+  console.log(JSON.stringify(summary));
+
+  if (summary.ok === false) {
+    // The dead-fetcher verdict. A non-zero exit is what the ledger derives `ok: false` from and
+    // what the unit's OnFailure notifier fires on; the summary line above is unchanged by it.
+    process.exitCode = 1;
+  }
 }
 
 if (import.meta.main) {

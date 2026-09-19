@@ -2202,7 +2202,7 @@ export function cronSurfaces(): Surface[] {
  *
  * Most writers are registry crons. `fluncle-healthcheck` is deliberately absent: it
  * writes health snapshots to the separate health ledger and never sources the shared
- * run-event emitter. Three host units also write run events without being public
+ * run-event emitter. Four host units also write run events without being public
  * surfaces, so they are declared here rather than disappearing from an absence diff.
  */
 export function runLedgerWriters(): RunLedgerWriter[] {
@@ -2221,6 +2221,7 @@ export function runLedgerWriters(): RunLedgerWriter[] {
     return [{ expectedIntervalMs: probe.cadenceMs, unit: probe.cronName }];
   });
   const direct: RunLedgerWriter[] = [
+    { expectedIntervalMs: 3_600_000, unit: "fluncle-pin-watch" },
     { expectedIntervalMs: 900_000, unit: "fluncle-secrets-sync" },
     { expectedIntervalMs: 3_600_000, unit: "fluncle-sonar-freshen" },
     { expectedIntervalMs: 900_000, unit: "fluncle-timer-watchdog" },

@@ -3,7 +3,11 @@ import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { markerSignals } from "./fluncle-healthcheck";
-import { runDatabaseAdmissionPhase } from "./database-admission-phase";
+import {
+  ADMISSION_YIELD_REASONS,
+  parseAdmissionYieldReason,
+  runDatabaseAdmissionPhase,
+} from "./database-admission-phase";
 
 const SCRIPTS = import.meta.dir;
 const ENRICH = join(SCRIPTS, "enrich-sweep.ts");
@@ -145,7 +149,13 @@ esac`,
     expect(marker).toContain('"admissionOutcome":"phase-yielded"');
     expect(marker).toContain('"gateState":"paused"');
     expect(marker).toContain('"produced":0');
-    expect(markerSignals(marker)).toEqual({ backpressure: 1, strain: 0 });
+    // One yielded tick on the backpressure axis, never a strain point — and the marker now
+    // names the yield so a run of these can be read as a cause rather than a mood.
+    expect(markerSignals(marker)).toEqual({
+      backpressure: 1,
+      backpressureReason: "database_admission",
+      strain: 0,
+    });
     const ledgerPost = readFileSync(curlLog, "utf8");
     expect(ledgerPost).toContain('"exit_code":0');
     expect(ledgerPost).toContain('\\"gateState\\":\\"paused\\"');
@@ -239,7 +249,47 @@ exit 0`,
       owner: "fluncle-enrich",
       yieldRetries: 0,
     });
-    expect(unsafe).toEqual({ attempts: 1, kind: "yielded" });
+    expect(unsafe).toEqual({ attempts: 1, kind: "yielded", yieldReason: null });
     expect(readFileSync(attempts, "utf8").trim().split("\n")).toEqual(["attempt"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHICH WALL THE TICK HIT.
+//
+// A phase-scoped yield exits before the runner can write a summary, so `database_admission` has
+// been the whole story: an operator reading a paused row cannot tell a long queue from a sick
+// database. The runner already states its reason on stderr; this is the side that reads it.
+// ---------------------------------------------------------------------------
+
+describe("the admission yield reason", () => {
+  const event = (reason: string) =>
+    `{"event":"database.admission.runner","outcome":"wait-expired","yield_reason":"${reason}"}`;
+
+  test("the newest runner event wins", () => {
+    expect(
+      parseAdmissionYieldReason([event("queue"), "noise", event("database-health")].join("\n")),
+    ).toBe("database-health");
+  });
+
+  test("a word outside the runner's own vocabulary reads as unknown, never as a neighbour", () => {
+    // Fail closed: "we could not tell" has to stay distinguishable from "the queue was long",
+    // which is the whole reason this field is worth having.
+    expect(parseAdmissionYieldReason(event("something-new"))).toBe(null);
+    expect(parseAdmissionYieldReason(event(""))).toBe(null);
+    expect(parseAdmissionYieldReason("")).toBe(null);
+    // A line that is not a runner event cannot supply one either.
+    expect(parseAdmissionYieldReason('{"yield_reason":"public-latency"}')).toBe(null);
+  });
+
+  test("every word it accepts is one the runner's own guard accepts", () => {
+    const runner = readFileSync(join(import.meta.dir, "database-admission-runner.sh"), "utf8");
+    const guard = /safe_admission_yield_reason\(\) \{[\s\S]*?\n\}/.exec(runner)?.[0] ?? "";
+
+    expect(guard).not.toBe("");
+
+    for (const reason of ADMISSION_YIELD_REASONS) {
+      expect(guard).toContain(reason);
+    }
   });
 });
