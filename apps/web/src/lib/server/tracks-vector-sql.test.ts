@@ -8,6 +8,29 @@ import {
   seedTrack,
 } from "./integration-db";
 import { resetKeyHistogramCache } from "./key-histogram";
+import { VectorDeadlineExpired } from "./vector-fallback";
+
+/** The SQL text of a statement in either `execute` call form (a bare string or `{ sql, args }`). */
+function sqlOf(statement: unknown): string {
+  if (typeof statement === "string") {
+    return statement;
+  }
+
+  const sql = (statement as { sql?: unknown } | undefined)?.sql;
+
+  return typeof sql === "string" ? sql : "";
+}
+
+/**
+ * The operation metadata `databaseOperationStatement` pins to a statement. It rides on a private
+ * symbol so nothing can collide with a real SQL field; reading it back by symbol is how a test
+ * asserts a statement was sent through the bounded executor rather than plain `execute`.
+ */
+function metadataOf(statement: Record<string | symbol, unknown> | undefined): unknown {
+  const symbol = statement ? Object.getOwnPropertySymbols(statement)[0] : undefined;
+
+  return symbol ? statement?.[symbol] : undefined;
+}
 import { parseKey, toCamelot } from "../key-camelot";
 import {
   applyTaste,
@@ -205,6 +228,62 @@ describe("getMixableTracks", () => {
       expect(fromSql).toEqual(rankInIsolate(rows, "t_00", limit));
       expect(fromSql).toHaveLength(limit);
     }
+  });
+
+  it("bounds the candidate scan whether or not the target carries a vector", async () => {
+    // THE DEADLINE BELONGS TO THE SCAN, NOT TO THE COSINE. Both branches read the same rows — the
+    // whole key-compatible archive up to the candidate bound — so both must arrive under the same
+    // deadline, the same one-at-a-time `heavy-read` seat, and the same cost span. A target with no
+    // vector is a property of ONE row; it says nothing about how much work the scan is, and it
+    // must not be what decides whether the scan is bounded at all.
+    await seed(corpus());
+
+    for (const targetHasVector of [true, false]) {
+      await seedEmbedding(db, "t_00", targetHasVector ? pseudoVector(1) : null);
+      execute.mockClear();
+
+      await getMixableTracks("t_00", { limit: 12 });
+
+      const scan = execute.mock.calls
+        .map(([statement]) => statement as Record<string | symbol, unknown>)
+        .find((statement) => sqlOf(statement).includes("as sonic_dist"));
+
+      expect(scan, `candidate scan issued (target vector: ${targetHasVector})`).toBeDefined();
+      expect(metadataOf(scan)).toEqual({
+        accessClass: "heavy-read",
+        operationId: "sonar.fallback.mix",
+      });
+    }
+  });
+
+  it("serves an empty rail when the scan blows its deadline, and never a fault", async () => {
+    // The public contract is "returns [] (never throws)". A deadline is the database taking too
+    // long, not the query being wrong, so it degrades to the empty rail the callers already handle
+    // — no retry, because libSQL cannot cancel the remote work and a second attempt would stack a
+    // second scan on the database that is already the reason we are here.
+    await seed(corpus());
+
+    const realExecute = execute.getMockImplementation();
+    execute.mockImplementation((query: unknown) => {
+      return sqlOf(query).includes("as sonic_dist")
+        ? Promise.reject(new VectorDeadlineExpired("sonar.fallback.mix", 6_000))
+        : realExecute?.(query);
+    });
+
+    await expect(getMixableTracks("t_00", { limit: 12 })).resolves.toEqual([]);
+  });
+
+  it("still faults on a real database error, so a broken query cannot hide as an empty rail", async () => {
+    await seed(corpus());
+
+    const realExecute = execute.getMockImplementation();
+    execute.mockImplementation((query: unknown) => {
+      return sqlOf(query).includes("as sonic_dist")
+        ? Promise.reject(new Error("no such column: tracks.nope"))
+        : realExecute?.(query);
+    });
+
+    await expect(getMixableTracks("t_00", { limit: 12 })).rejects.toThrow("no such column");
   });
 
   it("answers identically whether or not the candidate scan joins findings", async () => {

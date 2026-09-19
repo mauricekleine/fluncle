@@ -48,12 +48,37 @@ export function vectorFallbackCandidateLimitSql(limit = VECTOR_FALLBACK_CANDIDAT
   return `limit ${limit} ${CANDIDATE_BOUND_MARKER}`;
 }
 
+/**
+ * A deadline expiring, as a TYPE rather than a message.
+ *
+ * A caller that must degrade — return an honest empty answer instead of faulting the request —
+ * has to tell "the database is taking too long" apart from "the query is wrong". Matching on the
+ * message string is how that distinction rots, so the expiry carries its own class and the message
+ * is left exactly as it reads.
+ */
+export class VectorDeadlineExpired extends Error {
+  readonly label: string;
+  readonly deadlineMs: number;
+
+  constructor(label: string, deadlineMs: number) {
+    super(`${label} timed out after ${deadlineMs}ms`);
+    this.name = "VectorDeadlineExpired";
+    this.label = label;
+    this.deadlineMs = deadlineMs;
+  }
+}
+
+/** True when this rejection is a deadline expiring rather than a failed query. */
+export function isVectorDeadlineExpired(error: unknown): error is VectorDeadlineExpired {
+  return error instanceof VectorDeadlineExpired;
+}
+
 /** Resolve work or stop the caller waiting at the fallback deadline. */
 export async function raceWithDeadline<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
   const timeout = new Promise<never>((_resolve, reject) => {
     const signal = AbortSignal.timeout(ms);
 
-    signal.addEventListener("abort", () => reject(new Error(`${label} timed out after ${ms}ms`)), {
+    signal.addEventListener("abort", () => reject(new VectorDeadlineExpired(label, ms)), {
       once: true,
     });
   });
