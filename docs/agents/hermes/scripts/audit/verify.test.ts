@@ -91,8 +91,10 @@ function box(options: { stubExitCode?: number; stubSleepSeconds?: number } = {})
   const callLog = join(root, "calls.log");
   writeFileSync(callLog, "", "utf8");
   // One stub stands in for every check command. It records the invocation, then obeys the
-  // fixture's chosen exit code and delay.
+  // fixture's chosen exit code and delay. The `bun -e` package.json probe is NOT a check and is
+  // passed through to the real interpreter, so the ladder's script detection stays honest.
   const stub = `#!/usr/bin/env bash
+if [ "\${1:-}" = "-e" ]; then exec ${JSON.stringify(process.execPath)} "$@"; fi
 printf '%s %s\\n' "$(basename "$0")" "$*" >>"${callLog}"
 sleep ${options.stubSleepSeconds ?? 0}
 exit ${options.stubExitCode ?? 0}
@@ -181,6 +183,30 @@ describe("the audit verification ladder", () => {
       "test:apps/cli",
     ]);
     expect(fixture.calls()).toContain("bun run --cwd apps/cli typecheck");
+  });
+
+  test("a package that declares no such script records the fact rather than inventing a run", () => {
+    const fixture = box();
+    mkdirSync(join(fixture.repo, "packages", "registry"), { recursive: true });
+    writeFileSync(
+      join(fixture.repo, "packages", "registry", "package.json"),
+      JSON.stringify({ name: "registry", scripts: { typecheck: "y" } }),
+      "utf8",
+    );
+    writeFileSync(
+      join(fixture.repo, "packages", "registry", "index.ts"),
+      "export const a = 1;\n",
+      "utf8",
+    );
+
+    const { record } = fixture.run();
+
+    expect(record.steps).toContainEqual({
+      reason: "no-script",
+      state: "skipped",
+      step: "test:packages/registry",
+    });
+    expect(fixture.calls()).toContain("bun run --cwd packages/registry typecheck");
   });
 
   test("a package whose whole-program pass does not fit the box is left to CI", () => {

@@ -118,7 +118,9 @@ is_ci_only() {
 has_script() {
   local dir="$1" script="$2"
   [ -r "${dir}/package.json" ] || return 1
-  AUDIT_VERIFY_PKG="${dir}/package.json" AUDIT_VERIFY_SCRIPT="${script}" node -e '
+  # `bun`, not `node`: bun is the repo's interpreter and the one this ladder already shells out to
+  # for every package step, so the probe adds no second runtime assumption.
+  AUDIT_VERIFY_PKG="${dir}/package.json" AUDIT_VERIFY_SCRIPT="${script}" bun -e '
     const fs = require("node:fs");
     const pkg = JSON.parse(fs.readFileSync(process.env.AUDIT_VERIFY_PKG, "utf8"));
     process.exit(pkg.scripts?.[process.env.AUDIT_VERIFY_SCRIPT] ? 0 : 1);
