@@ -24,12 +24,15 @@ import { join } from "node:path";
 const AUDIT = join(import.meta.dir, "audit-sweep.sh");
 const REVIEW = join(import.meta.dir, "audit-review-sweep.sh");
 const AGENT_ENV = join(import.meta.dir, "agent-env.sh");
+const AGENT_PASS = join(import.meta.dir, "agent-pass.sh");
 const CRON_OUTPUT = join(import.meta.dir, "cron-output.sh");
 const PROCESS_DEADLINE_MS = 20_000;
 const PROCESS_TEST_BUDGET_MS = 30_000;
 const PROCESS_CLEANUP_GRACE_MS = 1_000;
 const PROCESS_OUTPUT_TAIL_CHARS = 64 * 1024;
 const SCRIPT_PATH_EXPORT = 'export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"';
+// The shape verify.sh writes to `.audit/verify.json` on a night whose checks all passed.
+const CLEAN_VERIFY = '{"ran":3,"skipped":1,"failed":0,"steps":[]}';
 const temporaryDirectories: string[] = [];
 
 function test(name: string, body: () => void | Promise<void>): void {
@@ -153,13 +156,26 @@ function fixture(): Fixture {
   copyAuditScript(AUDIT, join(scripts, "audit-sweep.sh"));
   copyAuditScript(REVIEW, join(scripts, "audit-review-sweep.sh"));
   copyFileSync(AGENT_ENV, join(scripts, "agent-env.sh"));
+  copyFileSync(AGENT_PASS, join(scripts, "agent-pass.sh"));
   copyFileSync(CRON_OUTPUT, join(scripts, "cron-output.sh"));
   writeFileSync(join(prompts, "_preamble.md"), "# fixture audit\n", "utf8");
   writeFileSync(join(prompts, "_reviewer.md"), "# fixture review\n", "utf8");
   writeFileSync(join(prompts, "test.md"), "Inspect the fixture.\n", "utf8");
 
   executable(join(bin, "bun"), "#!/usr/bin/env bash\nexit 0\n");
-  executable(join(bin, "claude"), '#!/usr/bin/env bash\nexit "${STUB_CLAUDE_STATUS:-0}"\n');
+  // The stub stands in for the one bounded judgment call. STUB_CLAUDE_SLEEP drives the wall
+  // budget; STUB_OOM_KILLS rewrites the cgroup event counter the way the kernel would when a
+  // child of this pass is killed by the memory cap.
+  executable(
+    join(bin, "claude"),
+    `#!/usr/bin/env bash
+[ -z "\${STUB_OOM_KILLS:-}" ] || printf 'oom_kill %s\\n' "\${STUB_OOM_KILLS}" >"\${AGENT_PASS_CGROUP_EVENTS}"
+[ -z "\${STUB_VERIFY:-}" ] || { mkdir -p .audit; printf '%s\\n' "\${STUB_VERIFY}" >.audit/verify.json; }
+sleep "\${STUB_CLAUDE_SLEEP:-0}"
+exit "\${STUB_CLAUDE_STATUS:-0}"
+`,
+  );
+  writeFileSync(join(root, "memory.events"), "low 0\nhigh 0\nmax 0\noom_kill 0\n", "utf8");
   executable(
     join(bin, "git"),
     `#!/usr/bin/env bash
@@ -189,6 +205,7 @@ exit 0
   return {
     bin,
     env: {
+      AGENT_PASS_CGROUP_EVENTS: join(root, "memory.events"),
       AUDIT_SECRETS_FILE: join(root, "absent-secrets.env"),
       AUDIT_WORKSPACE: ws,
       BUN_BIN: join(bin, "bun"),
@@ -434,6 +451,7 @@ describe("fluncle-audit canonical counters", () => {
     const result = await run(box, "audit-sweep.sh", ["--domain", "test", "--dry-run"], {
       STUB_CHANGED: "1",
       STUB_CLAUDE_STATUS: "1",
+      STUB_VERIFY: CLEAN_VERIFY,
     });
 
     expect(result.summary).toMatchObject({
@@ -479,6 +497,7 @@ describe("fluncle-audit canonical counters", () => {
     const box = fixture();
     const result = await run(box, "audit-sweep.sh", ["--domain", "test", "--dry-run"], {
       STUB_CHANGED: "1",
+      STUB_VERIFY: CLEAN_VERIFY,
     });
 
     expect(result.status).toBe(0);
@@ -490,6 +509,102 @@ describe("fluncle-audit canonical counters", () => {
       ok: true,
       produced: 1,
     });
+  });
+});
+
+// A sweep that outlives its own supervisor, loses a child to the memory cap, or ships work nobody
+// checked must say so in the summary line the ledger reads. Each of these three was silent: the
+// unit failed on the host while the ledger recorded a healthy night.
+describe("fluncle-audit failure is loud", () => {
+  test("a pass that outruns its wall budget is ok:false with the reason", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      AGENT_PASS_BUDGET_SECS: "1",
+      AGENT_PASS_KILL_GRACE_SECS: "1",
+      STUB_CLAUDE_SLEEP: "30",
+    });
+
+    expect(result.summary).toMatchObject({
+      checked: 1,
+      errors: 1,
+      ok: false,
+      reason: "budget-exceeded",
+    });
+  });
+
+  test("an OOM-killed child fails the run even when the agent itself exits clean", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_OOM_KILLS: "3",
+    });
+
+    expect(result.summary).toMatchObject({
+      container_oom_kills: 3,
+      errors: 1,
+      ok: false,
+      reason: "oom-killed",
+    });
+  });
+
+  test("a clean night reports zero OOM kills and no reason", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"]);
+
+    expect(result.summary).toMatchObject({ container_oom_kills: 0, errors: 0, ok: true });
+    expect("reason" in result.summary).toBe(false);
+  });
+
+  test("a failing verification ladder means the branch was shipped red", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AHEAD: "2",
+      STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+      STUB_VERIFY: '{"ran":2,"skipped":1,"failed":1,"steps":[]}',
+    });
+
+    expect(result.summary).toMatchObject({
+      errors: 1,
+      ok: false,
+      reason: "verify-failed",
+      verify: { failed: 1, ran: 2, skipped: 1 },
+    });
+  });
+
+  test("committed work with no verification record is ok:false", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AHEAD: "2",
+      STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+    });
+
+    expect(result.summary).toMatchObject({ errors: 1, ok: false, reason: "unverified" });
+  });
+
+  test("a verified PR carries its ladder record into the ledger", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AHEAD: "2",
+      STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.summary).toMatchObject({
+      action: "opened",
+      errors: 0,
+      ok: true,
+      verify: { failed: 0, ran: 3, skipped: 1 },
+    });
+  });
+
+  test("the reviewer's pass is bounded by the script, not by its unit", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-review-sweep.sh", ["--pr", "7"], {
+      AGENT_PASS_KILL_GRACE_SECS: "1",
+      AUDIT_REVIEW_PASS_BUDGET_SECS: "1",
+      STUB_CLAUDE_SLEEP: "30",
+    });
+
+    expect(result.summary).toMatchObject({ errors: 1, ok: false, reason: "budget-exceeded" });
   });
 });
 

@@ -32,6 +32,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 AUDIT_DIR="${SCRIPT_DIR}/audit"
 # shellcheck source=./agent-env.sh
 . "${SCRIPT_DIR}/agent-env.sh"
+# shellcheck source=./agent-pass.sh
+. "${SCRIPT_DIR}/agent-pass.sh"
 
 # Provider creds (CLAUDE_CODE_OAUTH_TOKEN, FLUNCLE_AUDIT_GITHUB_PAT, FLUNCLE_BING_WEBMASTER_API_KEY)
 # arrive via the 0600 op-synced shared file, exactly like newsletter/observe. GSC is a separate
@@ -170,12 +172,41 @@ $(cat "${prompt_file}")"
   # does not hand the same credential to sentry-triage.
   agent_env_scrub_args --secrets "${SECRETS_FILE}" --allow GH_TOKEN \
     --scrub GOOGLE_APPLICATION_CREDENTIALS
-  log "invoking claude -p (opus) for ${DOMAIN}…"
-  local run_errors=0
-  FLUNCLE_UNATTENDED=1 env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} "$(command -v claude)" -p "${prompt}" \
+  log "invoking claude -p (opus) for ${DOMAIN} (budget ${AGENT_PASS_BUDGET_SECS}s)…"
+  local run_errors=0 pass_reason=""
+  # Bounded by the SCRIPT, not by the unit: a `TimeoutStartSec` kill only reaches the host-side
+  # `docker exec` client, so the pass would otherwise run on unsupervised and self-report a
+  # healthy night. See ./agent-pass.sh for the full reasoning and the ordering invariant.
+  agent_pass_run env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} FLUNCLE_UNATTENDED=1 \
+    "$(command -v claude)" -p "${prompt}" \
     --model opus \
     --dangerously-skip-permissions \
-    >&2 || { log "claude -p returned nonzero"; run_errors=1; }
+    >&2
+  if [ -n "${AGENT_PASS_REASON}" ]; then
+    log "claude -p ended on ${AGENT_PASS_REASON} after ${AGENT_PASS_SECONDS}s (status ${AGENT_PASS_STATUS}, container oom kills ${AGENT_PASS_OOM_KILLS})"
+    pass_reason="${AGENT_PASS_REASON}"
+    run_errors=1
+  fi
+
+  # What the agent actually verified. verify.sh writes this; its ABSENCE on a night that produced
+  # commits is itself a failure — an unverified branch is exactly what the ledger must not read as
+  # a healthy night. A clean night legitimately runs no checks, so the absence only counts once we
+  # know there are commits (below).
+  local verify_json="" verify_failed=0 verify_present=0
+  if [ -r .audit/verify.json ]; then
+    verify_present=1
+    verify_json="$(tr -d '\000-\037' <.audit/verify.json | tail -n 1)"
+    case "${verify_json}" in
+      *'"failed":0'*) ;;
+      *'"failed":'*) verify_failed=1 ;;
+      *) verify_json="" ;;
+    esac
+  fi
+  if [ "${verify_failed}" = "1" ]; then
+    log "verify.sh reported a failed check — the branch was shipped red"
+    run_errors=$((run_errors + 1))
+    [ -n "${pass_reason}" ] || pass_reason="verify-failed"
+  fi
 
   # 9. Report the outcome as the marker's JSON summary line.
   #
@@ -186,31 +217,57 @@ $(cat "${prompt_file}")"
   # directly beside `errors:${run_errors}` and printed `{"ok":true,…,"errors":1}` on a night the
   # agent failed: /status read the literal and called the sweep healthy while its own counter
   # said otherwise. That contradiction is the exact thing the ledger exists to catch.
+  local changed ahead pr_url
+  changed="$(git status --porcelain | wc -l | tr -d ' ')"
+  ahead="$(git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)"
+
+  # A night that produced work but left no verify record shipped a branch nobody checked. On a
+  # clean night there is nothing to verify, so the absence only counts once work exists.
+  if [ "${verify_present}" = "0" ] && { [ "${ahead}" != "0" ] || [ "${changed:-0}" != "0" ]; }; then
+    log "no .audit/verify.json — the night's work was never verified"
+    run_errors=$((run_errors + 1))
+    [ -n "${pass_reason}" ] || pass_reason="unverified"
+  fi
+
+  # `ok` is DERIVED from this run's own error count, never asserted. The run ledger decides a
+  # run's verdict server-side as `exit_code === 0 && (summary.errors ?? 0) === 0` (see
+  # ./cron-output.sh, THE BODY CARRIES FACTS ONLY), and every branch below returns 0 — so the
+  # error count IS the whole verdict here. A hardcoded `ok:true` sat on each of these lines
+  # directly beside `errors:${run_errors}` and printed `{"ok":true,…,"errors":1}` on a night the
+  # agent failed: /status read the literal and called the sweep healthy while its own counter
+  # said otherwise. That contradiction is the exact thing the ledger exists to catch.
   local ok="true"
   [ "${run_errors}" = "0" ] || ok="false"
 
-  local changed pr_url
-  changed="$(git status --porcelain | wc -l | tr -d ' ')"
+  # The facts every branch below carries: WHY it ended badly, how much of the box's memory cap the
+  # night burned through, how long the agent had, and which checks actually ran. A summary that
+  # only carried a counter could not tell an operator whether the night hit its budget, lost a
+  # child to the cgroup, or simply shipped unverified.
+  local facts
+  facts="$(printf '"pass_seconds":%s,"container_oom_kills":%s' "${AGENT_PASS_SECONDS}" "${AGENT_PASS_OOM_KILLS}")"
+  [ -z "${pass_reason}" ] || facts="${facts},$(printf '"reason":"%s"' "${pass_reason}")"
+  [ -z "${verify_json}" ] || facts="${facts},$(printf '"verify":%s' "${verify_json}")"
+
   if [ "${DRY_RUN}" = "1" ]; then
     local dry_produced=0
     [ "${changed:-0}" = "0" ] || [ "${run_errors}" != "0" ] || dry_produced=1
     log "DRY RUN complete — ${changed} changed path(s) left in ${ws} for inspection"
     [ -r .audit/report.md ] && { log "── report ──"; cat .audit/report.md >&2; }
-    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"dry-run\",\"changed\":${changed:-0},\"checked\":1,\"errors\":${run_errors},\"produced\":${dry_produced}}"
+    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"dry-run\",\"changed\":${changed:-0},${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":${dry_produced}}"
     return 0
   fi
 
   pr_url="$(gh pr list --head "${branch}" --json url --jq '.[0].url // empty' 2>/dev/null || true)"
   if [ -n "${pr_url}" ]; then
-    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"opened\",\"pr\":\"${pr_url}\",\"checked\":1,\"errors\":${run_errors},\"produced\":1}"
+    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"opened\",\"pr\":\"${pr_url}\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":1}"
     return 0
   fi
   # No PR. Either a clean night (no local commits ahead) or the agent failed to ship.
-  if [ "$(git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)" = "0" ]; then
-    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"clean\",\"checked\":1,\"errors\":${run_errors},\"produced\":0}"
+  if [ "${ahead}" = "0" ]; then
+    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"clean\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":0}"
     return 0
   fi
-  echo "{\"ok\":false,\"domain\":\"${DOMAIN}\",\"action\":\"ship-failed\",\"error\":\"commits exist but no PR was opened\",\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}"
+  echo "{\"ok\":false,\"domain\":\"${DOMAIN}\",\"action\":\"ship-failed\",\"error\":\"commits exist but no PR was opened\",${facts},\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}"
   return 1
 }
 

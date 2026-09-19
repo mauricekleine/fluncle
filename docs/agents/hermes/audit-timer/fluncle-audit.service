@@ -15,10 +15,15 @@ Type=oneshot
 # from main via pin-watch); this host unit only TRIGGERS the sweep, which self-writes its /status
 # marker (cron-output.sh).
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/audit-sweep.sh
-# A full agentic `claude -p` audit — freshen an isolated checkout, bun install, audit → edit →
-# run scoped checks → commit → push → open the PR — needs a long budget, unlike the thin
-# Worker-trigger sweeps (300s). One hour is a generous ceiling; a healthy run is far shorter.
-TimeoutStartSec=3600
+# A BACKSTOP, NOT THE BUDGET. This timeout kills the host-side `docker exec` client only — the
+# container-side sweep keeps running, finishes later, and writes its ordinary marker and ledger
+# row, so a unit that reads `Result=timeout` here can still read `ok:true` in the ledger. The real
+# budget therefore lives in the script (`agent-pass.sh`, AGENT_PASS_BUDGET_SECS), which always
+# exits on its own terms and always writes an honest summary. This value must stay ABOVE
+# that budget plus the driver's clone/install/ship time, or the host kill races the script again:
+#
+#     AGENT_PASS_BUDGET_SECS (4800) + kill grace (60) + setup/ship headroom  <  5400
+TimeoutStartSec=5400
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

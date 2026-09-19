@@ -14,9 +14,11 @@ Type=oneshot
 # self-writes its /status marker (cron-output.sh). Merging lands on main → a production deploy,
 # gated on green required checks (the reviewer confirms via `gh pr checks`).
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/audit-review-sweep.sh
-# A full agentic review — re-run scoped checks, maybe fix + push, then merge or comment. Shorter
-# than the auditor but still an agentic session; 45m is a generous ceiling.
-TimeoutStartSec=2700
+# A BACKSTOP, NOT THE BUDGET — same reasoning as the auditor's unit: this kills the host-side
+# `docker exec` client only, so the real budget lives in the script (`agent-pass.sh`). The
+# reviewer's own pass is bounded by AUDIT_REVIEW_PASS_BUDGET_SECS, which must stay strictly under
+# this ceiling plus its kill grace and the driver's checkout/merge time.
+TimeoutStartSec=3000
 NoNewPrivileges=true
 ProtectControlGroups=true
 ProtectKernelTunables=true
