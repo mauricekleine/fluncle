@@ -1883,6 +1883,17 @@ export async function getMixableTracks(
   }
 
   const db = await getDb();
+  // THE COLD PATH IS A CHAIN OF ROUND TRIPS, and the only cure for a round trip is to stop
+  // waiting for it. The archive's key spellings (`namedMoveKeys`, below) depend on nothing this
+  // function reads, so the histogram read is STARTED here and awaited where it is used: on a cold
+  // isolate that overlaps a settings lookup plus an index walk with the target read instead of
+  // queueing them behind it. `readKeyHistogram` shares one in-flight read, so this is the same
+  // read the rail awaits, never a second one. A rejection is re-raised at the real await below;
+  // the no-op handler only keeps the early-return paths from reporting it as unhandled.
+  const warmingKeyHistogram = readKeyHistogram();
+
+  warmingKeyHistogram.catch(() => undefined);
+
   const targetResult = await db.execute({
     args: [idOrLogId, idOrLogId, idOrLogId],
     sql: `with ${TRACK_OR_LOG_ID_CTE}
@@ -1907,6 +1918,13 @@ export async function getMixableTracks(
   if (!targetCamelot) {
     return [];
   }
+
+  // Which engine answers is a `settings` lookup that depends on nothing below it, and it is only
+  // ever asked of a target that HAS a vector — so it is started here, beside the histogram read,
+  // and awaited at the branch that needs it. No path pays a read it would not otherwise have made.
+  const sonarMixEnabled = targetRow.embedding_blob === null ? null : isSonarMixEnabled();
+
+  sonarMixEnabled?.catch(() => undefined);
 
   const keys = await namedMoveKeys(targetCamelot);
 
@@ -1933,7 +1951,7 @@ export async function getMixableTracks(
   // same mixability engine ranks the candidates it returns, so a flag flip is a latency swap
   // rather than a re-ranking. Requires a target vector (there is no probe without one). Falls
   // through to the Turso scan when off / unprovisioned / down / empty.
-  if (targetEmbedding && (await isSonarMixEnabled())) {
+  if (targetEmbedding && (await sonarMixEnabled)) {
     const railed = await mixRailFromSonar({
       excludedLogIds,
       excludedTrackIds,
@@ -1959,6 +1977,19 @@ export async function getMixableTracks(
       ? `and tracks.track_id not in (${excludedTrackIds.map(() => "?").join(", ")})`
       : "";
 
+  // `findings` enters the CANDIDATE scan for exactly one reason: the Log ID exclusion clause. No
+  // other part of the CTE reads a findings column — it selects `tracks.track_id` and filters on
+  // `tracks.key`/`tracks.track_id` — and `findings.track_id` is that table's primary key, so the
+  // LEFT JOIN can neither duplicate a candidate nor drop one. With nothing to exclude by
+  // coordinate the scan therefore drives straight off `tracks`.
+  //
+  // SQLite's omit-noop-join optimization already drops an unused unique LEFT JOIN, so this is not
+  // a saving to claim — it is a refusal to DEPEND on that optimization for the widest statement
+  // the rail issues, on a hosted planner that is a different build from the local one. Stating
+  // the join only where it is read is the version that cannot regress quietly. The hydrating
+  // select below keeps it unconditionally: it reads `findings.log_id`, the rail's only
+  // certification signal.
+  const candidateFrom = excludedLogIds.length > 0 ? MIX_FROM : `tracks`;
   const distanceSql = probe ? `vector_distance_cos(emb.embedding_blob, ?)` : `null`;
   const candidateStatement = {
     // SQL-TEXT order decides the bind order: the ID-only candidate CTE's keys, target and
@@ -1977,7 +2008,7 @@ export async function getMixableTracks(
     // already has rather than off the join, so the coverage gate costs nothing extra.
     sql: `with candidates(track_id) as materialized (
             select tracks.track_id
-            from ${MIX_FROM}
+            from ${candidateFrom}
             where tracks.key in (${keyClause})
               and tracks.track_id != ? ${logIdClause} ${trackIdClause}
             order by tracks.rowid
