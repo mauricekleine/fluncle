@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  VECTOR_ENDPOINT_PROBE_TIMEOUT_MS,
+  VECTOR_FALLBACK_DEADLINE_MS,
+} from "../src/lib/vector-budget";
+import {
+  applySlowWarning,
   buildTargets,
   checkContent,
+  fetchPolicy,
   judge,
   parseArgs,
   promoteTrackParamOps,
   retarget,
   tierOfPath,
+  vectorLane,
 } from "./post-deploy-probe";
 
 // Unit coverage for the post-deploy probe's PURE derivation + judgement logic. The
@@ -248,5 +255,69 @@ describe("promoteTrackParamOps", () => {
     const { promoted, remaining } = promoteTrackParamOps(skipped, null);
     expect(promoted).toHaveLength(0);
     expect(remaining).toEqual(skipped);
+  });
+});
+
+describe("the vector-capable lane", () => {
+  it("waits longer than the server is allowed to spend on a vector scan", () => {
+    // The probe's budget is DERIVED from the fallback deadline, never restated beside it: a
+    // client that gave up first would report a failure the server never committed.
+    expect(VECTOR_ENDPOINT_PROBE_TIMEOUT_MS).toBeGreaterThan(VECTOR_FALLBACK_DEADLINE_MS);
+    expect(fetchPolicy({ vectorCapable: true }).timeoutMs).toBe(VECTOR_ENDPOINT_PROBE_TIMEOUT_MS);
+  });
+
+  it("never stacks a second scan on a timeout", () => {
+    // libSQL cannot cancel remote work, so a retry does not replace the first scan — it adds one
+    // to the database that is already the bottleneck.
+    expect(fetchPolicy({ vectorCapable: true }).attempts).toBe(1);
+    expect(fetchPolicy({}).attempts).toBeGreaterThan(1);
+  });
+
+  it("keeps every ordinary target on the ordinary budget", () => {
+    expect(fetchPolicy({}).timeoutMs).toBeLessThan(VECTOR_ENDPOINT_PROBE_TIMEOUT_MS);
+  });
+
+  it("marks the vector-capable ops and nothing else", () => {
+    const { promoted } = promoteTrackParamOps(buildTargets().skipped, "ABC.1.23");
+
+    expect(promoted.find((target) => target.name === "list_mixable_tracks")?.vectorCapable).toBe(
+      true,
+    );
+    expect(promoted.find((target) => target.name === "list_similar_tracks")?.vectorCapable).toBe(
+      true,
+    );
+    // `get_track` is a plain row read: it must not buy the long budget or leave the fast lane.
+    expect(promoted.find((target) => target.name === "get_track")?.vectorCapable).toBeUndefined();
+    expect(vectorLane("list_findings")).toEqual({});
+  });
+
+  it("puts the worked search examples in the lane too", () => {
+    const examples = buildTargets().targets.filter((target) =>
+      target.name.startsWith("search example"),
+    );
+
+    expect(examples.length).toBeGreaterThan(0);
+    expect(examples.every((target) => target.vectorCapable === true)).toBe(true);
+  });
+});
+
+describe("applySlowWarning", () => {
+  it("warns on a slow PASS without failing it", () => {
+    const warned = applySlowWarning("PASS", "200 served", 9_000);
+
+    expect(warned.verdict).toBe("WARN");
+    expect(warned.detail).toContain("slow");
+  });
+
+  it("leaves a fast PASS alone", () => {
+    expect(applySlowWarning("PASS", "200 served", 400)).toEqual({
+      detail: "200 served",
+      verdict: "PASS",
+    });
+  });
+
+  it("never rescues a failure into a warning", () => {
+    expect(applySlowWarning("FAIL", "404 (expected 2xx)", 30_000).verdict).toBe("FAIL");
+    expect(applySlowWarning("CRIT", "200 (auth gate open)", 30_000).verdict).toBe("CRIT");
   });
 });
