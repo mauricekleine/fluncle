@@ -21,9 +21,12 @@
 #     A major could rename/remove a command a cron calls; the base image's failure
 #     mode is the whole gateway. Those stay the operator's call.
 #
-# Deliberately NOT here: box.ascii (unpinnable, self-updating) and the GitHub
-# Actions digests (Renovate's job — see renovate.json). See the skill's
-# references/version-inventory.md for the full six-item inventory.
+# Deliberately NOT here: box.ascii and the GitHub Actions digests (Renovate's job —
+# see renovate.json). box.ascii IS pinned in the Dockerfile (a checksum-verified
+# release binary, because the vendor's floating installer ships a renamed CLI), but it
+# sits in the MANUAL-watch tier with gh: its verbs are the render conductor's contract,
+# and adopting the renamed CLI is a conductor migration rather than a version bump.
+# See the skill's references/version-inventory.md for the full six-item inventory.
 #
 # Modes:
 #   --check  (default)  read + classify + print the drift table. No edits.

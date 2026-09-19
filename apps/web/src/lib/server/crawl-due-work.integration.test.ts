@@ -28,6 +28,7 @@ import {
   upsertCrawlDueProjectionStatement,
 } from "./crawl-due-work";
 import { CRAWL_DUE_AUDIT_FENCE_KEY, readProjectionFence } from "./projection-fences";
+import { advanceProjectionFor } from "./projection-operations";
 
 const NOW = new Date("2026-01-10T12:00:00.000Z");
 const OLD = "2026-01-01T00:00:00.000Z";
@@ -672,6 +673,67 @@ describe("crawl due-work shadow runtime", () => {
           where node_id = 'release:repair-entry'`)
       ).rows,
     ).toEqual([{ repair_entered_at: null, state: "ready" }]);
+  });
+
+  it("clears a run of empty source markers in one call and reports them as work", async () => {
+    // A marker whose rows are already `repair` fans out nothing, which is the shape every re-arm
+    // mints. One call clears the whole run, so a caller's page budget is never a marker budget.
+    const slugs = ["empty-a", "empty-b", "empty-c", "empty-d", "empty-e"];
+    for (const slug of slugs) {
+      await label(slug, "enabled");
+      await db.execute(
+        markCrawlProjectionRepairStatement("label", slug, {
+          now: OLD,
+          sourceVersion: `empty-${slug}`,
+        }),
+      );
+    }
+
+    expect(await fanOutCrawlProjectionRepairs(db, { limit: 10 })).toMatchObject({
+      complete: true,
+      expanded: 0,
+      markersCleared: slugs.length,
+    });
+    expect(
+      (await db.execute("select count(*) as n from crawl_projection_repairs")).rows[0]?.n,
+    ).toBe(0);
+
+    // The advance step reports that clearing as work, so the maintenance sweep reads a run of empty
+    // markers as progress rather than `no_progress`.
+    for (const slug of slugs) {
+      await db.execute(
+        markCrawlProjectionRepairStatement("label", slug, {
+          now: OLD,
+          sourceVersion: `empty-again-${slug}`,
+        }),
+      );
+    }
+    expect(
+      await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 10,
+        target: "crawl_due_work",
+      }),
+    ).toMatchObject({ complete: true, processed: slugs.length, scheduled: 0 });
+  });
+
+  it("stops a marker run at the caller's marker budget and reports the marker still standing", async () => {
+    for (const slug of ["bounded-a", "bounded-b"]) {
+      await label(slug, "enabled");
+      await db.execute(
+        markCrawlProjectionRepairStatement("label", slug, {
+          now: OLD,
+          sourceVersion: `bounded-${slug}`,
+        }),
+      );
+    }
+
+    expect(await fanOutCrawlProjectionRepairs(db, { limit: 10, markerBudget: 1 })).toMatchObject({
+      complete: false,
+      expanded: 0,
+      markersCleared: 1,
+    });
   });
 
   it("preserves a newer crawl source marker that lands during bounded fanout", async () => {

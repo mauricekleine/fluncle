@@ -33,13 +33,18 @@
 //   2. Then `capture_priority` DESC — the Ear's pre-audio ladder (artist > label >
 //      seed-label > nothing; a ruled-out label is vetoed). Every finding ties at 0 here,
 //      so the rung only ever orders the catalogue.
-//   3. Then `demand_score` DESC — the DEMAND signal (docs/catalogue-crawler.md § Demand): the
+//   3. Then, on the CATALOGUE CAPTURE queue only, ANCHORED FIRST (`spotify_uri is not null`). The
+//      money buys audio, and audio on a row with no Spotify identity cannot become recommendable
+//      (`REC_ELIGIBLE_WHERE` requires the anchor), so within one tier the anchored half drains
+//      first. Like the demand reorder below it, it never lifts a row across a tier and never past
+//      the veto. The other queues are free and keep the shared ladder unchanged.
+//   4. Then `demand_score` DESC — the DEMAND signal (docs/catalogue-crawler.md § Demand): the
 //      pageviews of the artists/labels real visitors looked at, a WITHIN-TIER reorder written by
 //      `record_demand`. It sits below the ladder, so it only ever breaks a tie — it never lifts
 //      a row across a tier and never past the veto (the `>= 0` exclusion runs first, in
 //      `kindClause`). A finding ties at 0 here too, so it never reorders the findings.
-//   4. Then newest-first within the findings (today's behaviour), and the track id as a
-//      deterministic tiebreak so a tick is reproducible.
+//   5. Then newest-first within the findings, and the track id as a deterministic tiebreak so a
+//      tick is reproducible.
 //
 // Never alphabetical, never insertion order.
 //
@@ -333,14 +338,36 @@ const WORK_SELECT = `t.track_id, t.title, t.artists_json, t.isrc, t.label, t.dur
  * lifted across the ladder, and NEVER past the `capture_priority >= 0` veto. No kind predicate
  * excludes a NULL demand score, so that coalesce stays. The added-at expression stays for the same
  * reason; these deep tie-breaks may still need a TEMP B-TREE, but only after the indexed half seek.
+ *
+ * `(t.spotify_uri is not null) desc` is THE ANCHORED PREFERENCE, and it exists on the CATALOGUE
+ * CAPTURE half alone. Capture is the queue that spends the metered proxy budget, and an
+ * un-anchored row's bytes cannot become recommendable: `REC_ELIGIBLE_WHERE`
+ * (lib/catalogue-eligibility.ts) requires `spotify_uri is not null`, so audio bought for a row with
+ * no Spotify identity waits on a separate billed anchor search before it can earn anything. Half a
+ * queue head with no anchor is therefore half the spend deferred. Its POSITION carries the same
+ * contract the demand reorder does: it sits AFTER `capture_priority`, so it only reorders rows of
+ * the SAME tier — the operator's ladder (docs/the-ear.md) still decides WHICH tier drains first, and
+ * nothing is lifted across a tier or past the `capture_priority >= 0` veto. It sits ABOVE demand so
+ * the anchored half of a tier drains before its un-anchored half. The term is DERIVED AT QUERY TIME
+ * rather than mirrored on a column: a row anchored later needs no backfill, its next read simply
+ * places it correctly.
+ *
+ * It costs no plan change. `coalesce(t.demand_score, 0)` already sits outside
+ * `tracks_catalogue_capture_idx`, so this read is already an indexed seek on
+ * `(is_catalogue, dismissed_at, capture_priority)` plus a block sort of the remaining terms within
+ * each tier (`USE TEMP B-TREE FOR RIGHT PART OF ORDER BY`). Adding one comparison key to that sorted
+ * suffix leaves the plan, and the measured wall time, exactly as they were — an index whose leading
+ * keys matched the new order would have to carry `demand_score`, a column `record_demand` rewrites
+ * constantly, to buy nothing.
  */
 function workOrder(kind: TrackWorkKind, half: Exclude<TrackWorkScope, "all">): string {
-  const capturePriority =
-    kind === "capture" && half === "catalogue"
-      ? "t.capture_priority"
-      : "coalesce(t.capture_priority, 0)";
+  const catalogueCapture = kind === "capture" && half === "catalogue";
+  const capturePriority = catalogueCapture
+    ? "t.capture_priority"
+    : "coalesce(t.capture_priority, 0)";
+  const anchored = catalogueCapture ? "\n  (t.spotify_uri is not null) desc," : "";
 
-  return `order by ${capturePriority} desc,
+  return `order by ${capturePriority} desc,${anchored}
   coalesce(t.demand_score, 0) desc,
   coalesce(f.added_at, '') desc,
   t.track_id desc`;

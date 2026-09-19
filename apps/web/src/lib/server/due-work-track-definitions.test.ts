@@ -270,6 +270,64 @@ describe("due-work track definitions", () => {
     ).toEqual(["never", "old"]);
   });
 
+  it("drains an anchored catalogue row first inside its capture tier, never across tiers", () => {
+    expect(
+      queue("capture", [
+        source({ capturePriority: 2, demandScore: 10, spotifyUri: null, trackId: "unanchored" }),
+        source({
+          capturePriority: 2,
+          demandScore: 0,
+          spotifyUri: "spotify:track:anchored",
+          trackId: "anchored",
+        }),
+        source({
+          capturePriority: 3,
+          demandScore: 0,
+          spotifyUri: null,
+          trackId: "higher-tier",
+        }),
+      ]).map((row) => row.trackId),
+    ).toEqual(["higher-tier", "anchored", "unanchored"]);
+  });
+
+  it("keeps the anchored preference out of the certified half and the free queues", () => {
+    const captureFindings = queue("capture", [
+      source({
+        capturePriority: 0,
+        certified: true,
+        demandScore: 1,
+        logId: "F-01",
+        trackId: "no-anchor",
+      }),
+      source({
+        capturePriority: 0,
+        certified: true,
+        demandScore: 0,
+        logId: "F-02",
+        spotifyUri: "spotify:track:anchored",
+        trackId: "anchored",
+      }),
+    ]);
+    expect(captureFindings.map((row) => row.trackId)).toEqual(["no-anchor", "anchored"]);
+
+    for (const kind of ["analyze", "embed", "youtube-provenance"] as const) {
+      const audio = { captureStatus: "done", sourceAudioKey: "audio" } as const;
+      expect(
+        queue(kind, [
+          source({ ...audio, capturePriority: 1, demandScore: 10, trackId: "demanded" }),
+          source({
+            ...audio,
+            capturePriority: 1,
+            demandScore: 0,
+            spotifyUri: "spotify:track:anchored",
+            trackId: "anchored",
+          }),
+        ]).map((row) => row.trackId),
+        kind,
+      ).toEqual(["demanded", "anchored"]);
+    }
+  });
+
   it("changes the source version for every declared source column", () => {
     const base = source({ captureStatus: "pending", sourceAudioKey: "audio" });
     const baseline = dueWorkTrackSourceVersion(base);

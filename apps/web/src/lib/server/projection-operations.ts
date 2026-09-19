@@ -1910,16 +1910,24 @@ export async function advanceProjectionFor(
       });
       outcome = { complete: result.complete, processed: result.scanned, scheduled: 0 };
     } else {
+      // `processed` counts the markers this step CLEARED as well as the rows it fanned out: a
+      // marker whose rows a re-arm already moved to `repair` expands nothing, and a step that
+      // reports only `expanded` reads as `no_progress` to the maintenance sweep while it is in
+      // fact draining the queue. `scheduled` stays the rows, which is what it names.
       const fanout = await fanOutCrawlProjectionRepairs(client, { limit: input.limit });
       if (!fanout.complete || fanout.expanded > 0) {
         outcome = {
           complete: false,
-          processed: fanout.expanded,
+          processed: fanout.expanded + fanout.markersCleared,
           scheduled: fanout.expanded,
         };
       } else {
         const repair = await repairCrawlDueNodes(client, { limit: input.limit });
-        outcome = { complete: !repair.hasMore, processed: repair.scanned, scheduled: 0 };
+        outcome = {
+          complete: !repair.hasMore,
+          processed: repair.scanned + fanout.markersCleared,
+          scheduled: 0,
+        };
       }
     }
   } else {
