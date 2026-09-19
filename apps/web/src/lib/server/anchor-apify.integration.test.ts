@@ -52,7 +52,7 @@ async function seedRow(row: {
   });
 }
 
-/** Read a row's `spotify_anchor_attempts` (the retry-cap counter the requeue gives back). */
+/** Read a row's `spotify_anchor_attempts` (the retry-cap counter the requeue must NOT touch). */
 async function attempts(trackId: string): Promise<null | number> {
   const result = await db.execute({
     args: [trackId],
@@ -198,16 +198,18 @@ describe("anchor_apify_disabled_at — the off-window marker + flip-ON requeue",
     expect(await attemptedAt("genuine")).toBe("2026-05-01T00:00:00.000Z");
   });
 
-  it("(e) flip ON gives the RETRY-CAP attempt back with the stamp — a deferral was never a real try", async () => {
+  it("(e) flip ON restores the STAMP ALONE — a deferral charged no attempt, so there is none to refund", async () => {
     const { ANCHOR_APIFY_DISABLED_AT_KEY, setAnchorApifyEnabled } = await import("./anchor-apify");
     const { getSetting } = await import("./settings");
 
     await setAnchorApifyEnabled(false);
     const during = (await getSetting(ANCHOR_APIFY_DISABLED_AT_KEY)) ?? "";
 
-    // Deferred during the outage, having really been attempted 3 times before it.
+    // Deferred during the outage, having really been attempted 3 times before it. Those three were
+    // real asks by a rung that could conclude, and an off-window deferral never spent a fourth —
+    // `stampAnchorAttempt`'s `chargeAttempt: false` — so a refund here would erase honest history.
     await seedRow({ attemptedAt: during, attempts: 3, spotifyUri: null, trackId: "deferred" });
-    // A never-attempted row deferred during the outage — its NULL counter must FLOOR at 0, never -1.
+    // A never-attempted row deferred during the outage — still never attempted afterwards.
     await seedRow({ attemptedAt: during, attempts: null, spotifyUri: null, trackId: "unstamped" });
     // A genuine pre-off backoff keeps every one of its counted attempts.
     await seedRow({
@@ -219,12 +221,14 @@ describe("anchor_apify_disabled_at — the off-window marker + flip-ON requeue",
 
     await setAnchorApifyEnabled(true);
 
-    expect(await attempts("deferred")).toBe(2);
-    expect(await attempts("unstamped")).toBe(0);
+    // The stamps are what moved; every counter stands exactly where the real asks left it.
+    expect(await attemptedAt("deferred")).toBeNull();
+    expect(await attempts("deferred")).toBe(3);
+    expect(await attempts("unstamped")).toBeNull();
     expect(await attempts("genuine-count")).toBe(2);
   });
 
-  it("(f) an ISRC-less previously-attempted deferral SURVIVES the flip-ON — stamp AND counter stand", async () => {
+  it("(f) an ISRC-less previously-attempted deferral SURVIVES the flip-ON — its stamp stands", async () => {
     const { ANCHOR_APIFY_DISABLED_AT_KEY, setAnchorApifyEnabled } = await import("./anchor-apify");
     const { getSetting } = await import("./settings");
 
@@ -233,8 +237,7 @@ describe("anchor_apify_disabled_at — the off-window marker + flip-ON requeue",
 
     // Deferred during the outage after real prior attempts, but ISRC-LESS: anchoring concludes off
     // the ISRC anchor, so the bulk re-arm must NOT put this row back on the paid queue. Its stamp
-    // stands (the ordinary re-ask window paces it) and its counter keeps the deferral bump (each
-    // one walks dead weight toward the retry cap's retirement without another billed look).
+    // stands and the ordinary re-ask window paces it; the free `isrc-recovery` pass is what moves it.
     await seedRow({
       attemptedAt: during,
       attempts: 2,
@@ -251,6 +254,6 @@ describe("anchor_apify_disabled_at — the off-window marker + flip-ON requeue",
     expect(await attemptedAt("isrcless")).toBe(during);
     expect(await attempts("isrcless")).toBe(2);
     expect(await attemptedAt("isrc-sibling")).toBeNull();
-    expect(await attempts("isrc-sibling")).toBe(1);
+    expect(await attempts("isrc-sibling")).toBe(2);
   });
 });
