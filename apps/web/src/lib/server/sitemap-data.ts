@@ -48,6 +48,7 @@ import {
   type SitemapPages,
   type SitemapSqlWindowedKind,
   sitemapPagesStats,
+  shardPath,
 } from "../sitemap";
 import {
   ALBUM_INDEX_MIN_TRACKS,
@@ -64,6 +65,7 @@ import {
   maxArtistSitemapLastmod,
   parseArtistsJson,
 } from "./artists";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import {
   countPublicIndexableGalaxies,
@@ -77,7 +79,7 @@ import {
   listLabelSitemapRows,
   maxLabelSitemapLastmod,
 } from "./labels";
-import { SITEMAP_CACHE_POLICY } from "./edge-cache";
+import { purgePathsNow, SITEMAP_CACHE_POLICY } from "./edge-cache";
 import {
   countIndexableTrackPages,
   listTrackSitemapRows,
@@ -112,11 +114,17 @@ export function sitemapBoundaryStatement(
               )`,
       };
     case "artists":
+      // The visibility gate rides here TOO, and it is not optional: this probe's membership must
+      // be the same set the row reader emits, or the boundary lands short by however many hidden
+      // artists fall inside the window and the next shard re-emits the slugs it skipped. Three
+      // legs, one predicate — the probe, `artistSitemapWindowStatement`, and
+      // `countIndexableArtists`.
       return {
         args: [start, ARTIST_INDEX_MIN_FINDINGS, limit],
         sql: `select max(slug) as boundary, count(*) as n from (
                 select slug from artists
                 where slug ${operator} ? and renderable_track_count >= ?
+                  and ${listedArtistWhere("artists")}
                 order by slug asc limit ?
               )`,
       };
@@ -567,6 +575,29 @@ function sitemapPagesFrom(aggregates: SitemapPageInputs): SitemapPages {
  * `sitemapIndexStatsFromBags` over the real rows, so the cheap read can never quietly promise a
  * different index than the children serve.
  */
+/**
+ * Drop the artist sitemap documents after a write that changes which artists are indexable — the
+ * global `unlisted` visibility ruling (lib/server/artist-visibility.ts).
+ *
+ * The detail-page purge alone is not enough: a sitemap child stays fresh far longer than a page, so
+ * without this a newly unlisted artist keeps being ADVERTISED for indexing at a URL that now 404s.
+ * The index goes too, because its per-child count moves with the same write.
+ *
+ * Bounded by construction: the artist child count comes off the same gated `countIndexableArtists`
+ * the index itself reports, so this purges exactly the shards that exist and never a guessed range.
+ */
+export async function purgeArtistSitemapCachesNow(): Promise<void> {
+  const total = await countIndexableArtists();
+  const shards = Math.max(1, Math.ceil(total / sitemapMaxUrls("artists")));
+  const paths = ["/sitemap.xml"];
+
+  for (let page = 1; page <= shards; page += 1) {
+    paths.push(shardPath("artists", page));
+  }
+
+  await purgePathsNow(paths);
+}
+
 export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
   const aggregates = await readSitemapAggregates();
 

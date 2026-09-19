@@ -108,6 +108,7 @@ import {
   GRAPH_GROUP_TRACK_LIMIT,
 } from "../catalogue";
 import { parseArtistsJson } from "./artists";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import { dedupeByRecordingIdentity, type RecordingIdentity } from "./track-match";
 import { type CatalogueTrackItem } from "./tracks";
@@ -357,8 +358,9 @@ export async function listArtistCatalogue(
  * name is always on the track; the page groups by it regardless. The `/artist/<slug>` link is a
  * SEPARATE question: the `artists a` name-fold join lights the link whenever that artist has an
  * entity — a crawl-minted, findings-free artist has a public catalogue page now, so its heading is a
- * live link, exactly as the album heading is. A credited name with no entity renders as plain text.
- * Nothing vanishes either way.
+ * live link, exactly as the album heading is. A credited name with no entity renders as plain text,
+ * and so does one whose entity a global `unlisted` rule has taken off the site. Nothing vanishes
+ * either way.
  *
  * The `json_each` explosion is safe here because `tracks.label_id` is indexed: the scan is
  * bounded to ONE label's rows before the JSON is ever touched, and the aggregation happens
@@ -420,6 +422,7 @@ export async function listLabelCatalogue(
             select lc.name as name, min(a.slug) as slug
             from label_credits lc
             join artists a on a.name = lc.name collate nocase
+            where ${listedArtistWhere("a")}
             group by lc.name collate nocase
           ),
           base as (

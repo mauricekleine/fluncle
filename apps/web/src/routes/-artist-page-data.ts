@@ -18,7 +18,7 @@ import {
   ARTIST_INDEX_MIN_FINDINGS,
   type ArtistSocialLink,
   countArtistFindings,
-  getArtistBySlug,
+  getPublicArtistBySlug,
   getPublicArtistAliasNames,
   getPublicArtistSocials,
 } from "@/lib/server/artists";
@@ -81,7 +81,7 @@ export type ArtistPageData =
 
 // Resolve the artist page's data. Extracted from the server fn so the indexability decision is
 // unit-testable (see -artist-page.test.ts). An artist earns a page on its CONTENT, exactly as a
-// label/album does: a `getArtistBySlug` row renders, and the thin-content gate below (not a
+// label/album does: a `getPublicArtistBySlug` row renders, and the thin-content gate below (not a
 // certified-finding gate) decides whether it indexes. The grid's `findings` come from
 // `getFindingsByArtist` (which has an `artists_json` fallback so a pre-backfill artist still shows
 // its covers), but the `indexable` gate keys off `countArtistFindings` + the catalogue's
@@ -92,7 +92,7 @@ export async function resolveArtistPageData(
   sort: CatalogueSort,
   page: number,
 ): Promise<ArtistPageData> {
-  const artist = await getArtistBySlug(slug);
+  const artist = await getPublicArtistBySlug(slug);
 
   if (!artist) {
     return { status: "missing" };

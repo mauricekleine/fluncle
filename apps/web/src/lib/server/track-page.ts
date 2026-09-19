@@ -60,6 +60,7 @@ import { bestAlbumCoverUrl } from "../media";
 import { type ListenKind } from "../track-page";
 import { discogsReleaseUrl } from "./discogs";
 import { parseArtistsJson } from "./artists";
+import { listedArtistWhere } from "./artist-visibility";
 import {
   TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX,
   trackPageIdentityWhere,
@@ -194,11 +195,12 @@ type DestinationRow = {
 /**
  * The `track_artists → artists` JSON subquery — `[{name, slug}]` for the row's credits, one
  * indexed seek. Lifted verbatim from the `/tracks` hub read (`tracks-hub.ts`), so an artist name
- * resolves to its `/artist/<slug>` page the same way on the hub and on the destination.
+ * resolves to its `/artist/<slug>` page the same way on the hub and on the destination. An artist
+ * a global `unlisted` rule has taken off the site is absent, so the credit renders as plain text.
  */
 const ARTIST_SLUGS_SELECT = `(select json_group_array(json_object('name', a.name, 'slug', a.slug))
      from track_artists ta join artists a on a.id = ta.artist_id
-     where ta.track_id = tracks.track_id) as artist_slugs_json`;
+     where ta.track_id = tracks.track_id and ${listedArtistWhere("a")}) as artist_slugs_json`;
 
 const DESTINATION_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
   tracks.bpm, tracks.key, tracks.duration_ms, tracks.release_date, tracks.isrc, tracks.mb_recording_id,

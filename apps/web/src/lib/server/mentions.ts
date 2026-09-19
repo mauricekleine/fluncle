@@ -1,3 +1,4 @@
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb } from "./db";
 import { logEvent } from "./log";
 
@@ -65,6 +66,10 @@ export function parseMentionHandle(url: string): string | undefined {
  * null`, `status in ('auto','confirmed')`), so a candidate row can never leak in; the parse
  * gate drops any row without a `/@handle` form. Best-effort by contract: a failed read
  * returns [] (the caption stays byte-identical) — a mention lookup must never block a push.
+ *
+ * An UNLISTED artist carries no handle out of here. An @mention is a link by another spelling, and
+ * the visibility rule is the same everywhere: the artist's plain name still rides the caption, it
+ * simply stops pointing anywhere (lib/server/artist-visibility.ts).
  */
 export async function mentionHandlesFor(
   trackId: string,
@@ -78,11 +83,13 @@ export async function mentionHandlesFor(
       args: [trackId, platform],
       sql: `select s.url as url
             from track_artists ta
+            join artists on artists.id = ta.artist_id
             join artist_socials s on s.artist_id = ta.artist_id
             where ta.track_id = ?
               and ta.role is null
               and s.platform = ?
               and s.status in ('auto', 'confirmed')
+              and ${listedArtistWhere()}
             order by ta.position asc`,
     });
 

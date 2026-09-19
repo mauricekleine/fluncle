@@ -10,7 +10,7 @@ import {
   parseOembedTarget,
 } from "@/lib/oembed";
 import { getAlbumBySlug } from "@/lib/server/albums";
-import { getArtistBySlug } from "@/lib/server/artists";
+import { getPublicArtistBySlug } from "@/lib/server/artists";
 import { getLabelBySlug } from "@/lib/server/labels";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import { getFindingsByAlbum, getFindingsByArtist, getFindingsByLabel } from "@/lib/server/tracks";
@@ -105,7 +105,7 @@ async function resolveOembed(
   }
 
   if (target.kind === "artist") {
-    const artist = await getArtistBySlug(target.slug);
+    const artist = await getPublicArtistBySlug(target.slug);
 
     if (!artist) {
       return undefined;

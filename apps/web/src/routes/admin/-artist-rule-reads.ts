@@ -15,9 +15,12 @@
 // with blocks reads "everything except these artists"; a skipped label with allows reads "only
 // these artists". Both are ACQUISITION scope: they change what the next crawl takes and never
 // touch a row already stored.
+//
+// The third verdict, `unlisted`, is a different axis entirely: GLOBAL only, inert at crawl time,
+// and it decides one thing — whether the artist entity has a public page.
 
 import { getDb, typedRows } from "@/lib/server/db";
-import { type ArtistRuleVerdict } from "@/lib/server/artist-rules";
+import { type ArtistRuleVerdict, type LabelArtistRuleVerdict } from "@/lib/server/artist-rules";
 import { isMbid } from "./-artist-rule-identity";
 
 /** The rule counts for one label, split by verdict — the board's chip reads the live half. */
@@ -58,9 +61,13 @@ export async function labelRuleCounts(
   const db = await getDb();
   const result = await db.execute({
     args: [...labelIds],
+    // The two acquisition verdicts are named in the query rather than assumed: a per-label rule
+    // cannot carry `unlisted`, and the chip must never silently count a verdict it has no column
+    // for should that ever change.
     sql: `select label_id, verdict, count(*) as total
           from artist_rules
           where label_id in (${placeholders(labelIds.length)})
+            and verdict in ('allow', 'block')
           group by label_id, verdict`,
   });
   const counts: Record<string, LabelRuleCounts> = {};
@@ -68,7 +75,7 @@ export async function labelRuleCounts(
   for (const row of typedRows<{
     label_id: string;
     total: number;
-    verdict: ArtistRuleVerdict;
+    verdict: LabelArtistRuleVerdict;
   }>(result.rows)) {
     const entry = (counts[row.label_id] ??= { allow: 0, block: 0 });
     entry[row.verdict] = Number(row.total);

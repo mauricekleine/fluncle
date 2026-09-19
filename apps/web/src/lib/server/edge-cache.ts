@@ -564,7 +564,7 @@ async function purgeLogCacheNow(logId: string): Promise<void> {
  * zone purge-by-URL REST API). Every purge — log surfaces and entity pages alike — funnels
  * through here so the two-layer behaviour and the canonical-origin keying are defined once.
  */
-async function purgePathsNow(paths: string[]): Promise<void> {
+export async function purgePathsNow(paths: string[]): Promise<void> {
   if (paths.length === 0) {
     return;
   }

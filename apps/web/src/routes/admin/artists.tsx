@@ -991,9 +991,16 @@ function RuleBadge({ rule }: { rule: ArtistRuleState["rule"] }) {
     return null;
   }
 
+  const label =
+    rule.verdict === "block"
+      ? "Never take"
+      : rule.verdict === "unlisted"
+        ? "No page"
+        : "Always take";
+
   return (
     <Badge className="shrink-0 text-muted-foreground" variant="outline">
-      {rule.verdict === "block" ? "Never take" : "Always take"}
+      {label}
     </Badge>
   );
 }
@@ -1035,7 +1042,8 @@ function ArtistRuleMenu({
             {/* The boundary leads, because it is what makes the action below safe to take —
                 the same clause the labels station's rules dialog carries. */}
             <DropdownMenuLabel className="font-normal text-wrap">
-              Rules change what the next crawl takes. Everything already here stays.
+              Rules change what the next crawl takes, or whether this artist gets a page. Everything
+              already here stays.
             </DropdownMenuLabel>
             {rule ? (
               <DropdownMenuItem disabled={busy} onClick={() => onUnrule(rule.id)}>
@@ -1048,6 +1056,11 @@ function ArtistRuleMenu({
                 </DropdownMenuItem>
                 <DropdownMenuItem disabled={busy} onClick={() => onRule(mbid, "allow")}>
                   Always take their records
+                </DropdownMenuItem>
+                {/* The visibility verdict, last because it is the other axis: the records stay,
+                    the page goes. The disposition for a pop act billed a DnB remix. */}
+                <DropdownMenuItem disabled={busy} onClick={() => onRule(mbid, "unlisted")}>
+                  Keep their records, drop their page
                 </DropdownMenuItem>
               </>
             )}

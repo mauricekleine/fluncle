@@ -415,8 +415,12 @@ type LabelArtistsOptions = {
 export const ARTIST_RULE_BOUNDARY =
   "Rules change what the next crawl takes. Everything already here stays.";
 
-function artistRuleWriteLine(prefix: string): string {
-  return `${prefix} — ${ARTIST_RULE_BOUNDARY.replace(/^R/, "r")}`;
+/** The visibility verdict moves no acquisition scope, so it states the other boundary. */
+export const UNLISTED_RULE_BOUNDARY =
+  "Unlisted takes the artist page down. The crawl and everything already here stay.";
+
+function artistRuleWriteLine(prefix: string, boundary = ARTIST_RULE_BOUNDARY): string {
+  return `${prefix} — ${boundary.charAt(0).toLowerCase()}${boundary.slice(1)}`;
 }
 
 /** A compact fixed-width table shared by the global and per-label artist-rule reads. */
@@ -3555,9 +3559,12 @@ JSON field reference:
 
   artists
     .command("rule")
-    .description("Always or never take one MusicBrainz artist's records (operator)")
+    .description("Rule one MusicBrainz artist: what the crawl takes, or whether they get a page")
     .argument("<artist-mbid>", "The MusicBrainz artist MBID")
-    .requiredOption("--verdict <verdict>", "The ruling: allow or block")
+    .requiredOption(
+      "--verdict <verdict>",
+      "The ruling: allow, block, or unlisted (no public artist page)",
+    )
     .option("--name <name>", "Artist name (optional; the server resolves it when omitted)")
     .option("--json", "Print JSON", false)
     .action(async (artistMbid: string, options: ArtistRuleOptions) => {
@@ -3574,6 +3581,7 @@ JSON field reference:
       console.log(
         artistRuleWriteLine(
           `Rule set for ${rule.resolvedName ?? rule.artistName}: ${rule.verdict.toUpperCase()}`,
+          rule.verdict === "unlisted" ? UNLISTED_RULE_BOUNDARY : ARTIST_RULE_BOUNDARY,
         ),
       );
     });

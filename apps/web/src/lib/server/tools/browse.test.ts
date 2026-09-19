@@ -6,7 +6,7 @@ import { type ToolCtx, type ToolDef } from "./registry";
 // each module stays real, so registry.ts's other imports resolve) so the executes run hermetically.
 
 const listArtistsBrowsePageMock = vi.hoisted(() => vi.fn());
-const getArtistBySlugMock = vi.hoisted(() => vi.fn());
+const getPublicArtistBySlugMock = vi.hoisted(() => vi.fn());
 const listAlbumsBrowsePageMock = vi.hoisted(() => vi.fn());
 const getAlbumBySlugMock = vi.hoisted(() => vi.fn());
 const listLabelsBrowsePageMock = vi.hoisted(() => vi.fn());
@@ -17,7 +17,7 @@ const listCatalogueTracksByAlbumMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../artists")>()),
-  getArtistBySlug: getArtistBySlugMock,
+  getPublicArtistBySlug: getPublicArtistBySlugMock,
   listArtistsBrowsePage: listArtistsBrowsePageMock,
   toArtistSlug: (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
 }));
@@ -71,7 +71,7 @@ function catTrack(id: string) {
 beforeEach(() => {
   for (const m of [
     listArtistsBrowsePageMock,
-    getArtistBySlugMock,
+    getPublicArtistBySlugMock,
     listAlbumsBrowsePageMock,
     getAlbumBySlugMock,
     listLabelsBrowsePageMock,
@@ -155,7 +155,7 @@ describe("list_artists / list_albums / list_labels — the A–Z browse index", 
 
 describe("list_artist_catalogue — pagination over the grouped read", () => {
   it("passes page to the grouped read and returns the whole flattened group page", async () => {
-    getArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    getPublicArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
     // A group page whose flattened rows exceed the per-page row cap — all must survive.
     const tracks = Array.from({ length: 30 }, (_, i) => catTrack(`t${i}`));
     listArtistCatalogueMock.mockResolvedValue({
@@ -182,7 +182,7 @@ describe("list_artist_catalogue — pagination over the grouped read", () => {
   });
 
   it("an unresolved name is the honest empty, never an error", async () => {
-    getArtistBySlugMock.mockResolvedValue(undefined);
+    getPublicArtistBySlugMock.mockResolvedValue(undefined);
 
     const result = (await tool("list_artist_catalogue").execute({ name: "Nobody" }, MCP)) as {
       catalogue: unknown[];
