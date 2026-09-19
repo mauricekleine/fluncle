@@ -16,8 +16,8 @@ Needs the `turso` CLI **and** `sqld` on PATH: `turso dev` is only a launcher and
 
 One Bun orchestrator, `scripts/e2e-stack.ts`, is Playwright's `webServer`. It builds everything in order, then runs Vite in the foreground:
 
-1. refuses to start if either dedicated port is taken — Vite **:3140**, libSQL **:9440** (chosen to collide with nothing: not dev `:3000`, not the smoke routine `:3120`/`:8899`, not the per-worktree libSQL range `:8100–:8999`)
-2. materializes the committed `.dev.vars.e2e.tpl` (all-fake values) into `.dev.vars`, backing up a real one
+1. refuses to start if either dedicated port is taken — Vite **:3140**, libSQL **:9440** (chosen to collide with nothing: not dev `:3000`, not the smoke routine `:3120`/`:8899`, not the per-worktree libSQL range `:8100–:8999`). That pair is the base; each checkout takes a deterministic slot above it, derived from its own path (Vite `:3140–:3339`, libSQL `:9440–:9639`), so two worktrees running their suites at once do not refuse each other. CI checks out one copy per runner and stays on the base pair.
+2. materializes the committed `.dev.vars.e2e.tpl` (all-fake values) into `.dev.vars`, filling its `__E2E_VITE_PORT__` / `__E2E_LIBSQL_PORT__` placeholders with this checkout's pair, and backing up a real one
 3. boots `turso dev` over a **fresh empty** db file
 4. runs `db:migrate` — the real generated migrations plus the FTS5 index
 5. applies the synthetic seed (`seed.ts`)

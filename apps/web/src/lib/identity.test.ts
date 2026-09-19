@@ -111,8 +111,14 @@ const SKIPPED_DIRECTORIES = new Set([
   "dist",
   "node_modules",
   "out",
+  // Playwright's two artifact trees (both gitignored). Neither starts with a dot, so the rule
+  // above misses them — and an e2e run drops report and error-context files here that QUOTE the
+  // rendered page, tagline and all. That is this comment's own scenario: a red on a machine
+  // where the suite has run once, green in CI where it never has.
+  "playwright-report",
   "skills",
   "target",
+  "test-results",
 ]);
 
 const SCANNED_EXTENSIONS = [

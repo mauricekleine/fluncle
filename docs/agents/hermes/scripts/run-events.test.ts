@@ -1382,6 +1382,32 @@ const SHA_A = "a".repeat(40);
 // commit keeps one fixture's healthy listener from satisfying another fixture's identity check.
 const SHA_B = new Bun.CryptoHasher("sha1").update(`run-events:${process.pid}`).digest("hex");
 
+// THE BOOT BUDGET IS A FIXTURE KNOB, AND THE PATHS THAT EXPIRE IT PAY IT IN REAL SECONDS.
+//
+// Every stub here answers instantly, so a large budget buys a case nothing — except on the paths
+// that are SUPPOSED to run it out (a live listener that never reports the expected commit, a
+// candidate that never serves /health), where the script spends the whole budget in `sleep 1`.
+// A budget close to the harness limit below therefore makes a deliberate-failure case fail for
+// the wrong reason as soon as anything else is running on the machine. Small keeps the expiry
+// exercised and the wait honest.
+//
+// The bounded port walk is the one scenario that needs room INSIDE the budget rather than at the
+// end of it: it confirms a collision per candidate across five candidates, and a budget that
+// expires mid-confirmation leaves the run looking like an ordinary unhealthy boot instead of the
+// infrastructure failure it is. It states the larger number it actually needs.
+const BOOT_BUDGET_SECS = 6;
+const PORT_WALK_BOOT_BUDGET_SECS = 25;
+
+// The pre-smoke's five candidate ports are the one resource in this file that belongs to the
+// MACHINE rather than to a run — a second process running these same cases walks the same five
+// and can find none free, which reads as an infrastructure failure the case never staged. Each
+// process takes its own five-port window instead, the same reason `SHA_B` is process-unique.
+const SMOKE_PORT_BASE = String(42_480 + (process.pid % 100) * 5);
+
+function bootBudgetSecs(fixture: SonarFixture): string {
+  return String(fixture.presmokeBindCollisions ? PORT_WALK_BOOT_BUDGET_SECS : BOOT_BUDGET_SECS);
+}
+
 /** A stand-in `sonar` binary: boots on SONAR_PORT and serves the one thing the smoke reads. */
 const SONAR_STUB = [
   "#!/usr/bin/env bash",
@@ -1662,9 +1688,10 @@ async function runSonar(
       SF_STATE_ROLLBACK: rollbackState,
       SONARFRESHEN_APP_DIR: appDir,
       SONARFRESHEN_ASSET_BASE: assetBase,
-      SONARFRESHEN_BOOT_TIMEOUT_SECS: "25",
+      SONARFRESHEN_BOOT_TIMEOUT_SECS: bootBudgetSecs(fixture),
       SONARFRESHEN_LOCK: join(root, "lock"),
       SONARFRESHEN_SERVICE_ENV: serviceEnv,
+      SONARFRESHEN_SMOKE_PORT_BASE: SMOKE_PORT_BASE,
       SONARFRESHEN_STATE_DIR: stateDir,
       SONARFRESHEN_WORKER_URL: base ?? "http://127.0.0.1:1",
       SONAR_TEST_BIND_ATTEMPTS: bindAttempts,

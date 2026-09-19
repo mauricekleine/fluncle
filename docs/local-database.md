@@ -52,6 +52,10 @@ Superset provisions each worktree automatically (`.superset/config.json`): after
 
 So a new worktree comes up with its own isolated, prod-shaped database and a private port. Run several in parallel and their migrations stay independent.
 
+The E2E stack derives its own pair the same way — Vite `:3140–:3339` and libSQL `:9440–:9639`, from the worktree path (`apps/web/tests/e2e/stack.ts`) — so two worktrees can run their suites at once instead of refusing each other's ports.
+
+**`bun install` is the first step for a reason, and the guard says so.** A worktree lives under the main checkout, and Node resolves bare specifiers by walking `node_modules` upwards — so a worktree that skips the install does not fail to resolve `@fluncle/*`, it resolves them from the main checkout. Typecheck, lint, and tests then go green against another branch's code with nothing to show for it. `scripts/quality/workspace-install.mjs` asserts the opposite — that a workspace package resolves _inside_ this checkout — and both `bun run typecheck` and the quality preflight refuse until it does.
+
 > One caveat for _simultaneous_ dev servers: Vite (and `BETTER_AUTH_URL` / the Spotify redirect) is pinned to `:3000`, so only one `bun run dev` can serve at a time. The database isolation holds regardless — `db:migrate`, tests, and scripts in each worktree hit that worktree's own database whether or not its dev server is running.
 
 ### Previewing a worktree's DB-backed routes on localhost

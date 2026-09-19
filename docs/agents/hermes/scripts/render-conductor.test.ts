@@ -27,9 +27,13 @@ const CONDUCTOR = join(import.meta.dir, "render-conductor.sh");
 const BOX_ID = "box-under-test";
 const QUEUE_HEAD = "001.1.1A";
 // The fixture exercises a real shell lifecycle; these process budgets cover harness overhead,
-// not an assertion about the conductor's production performance SLA.
-const SUBPROCESS_TIMEOUT_MS = 10_000;
-const PROCESS_FIXTURE_TIMEOUT_MS = 15_000;
+// not an assertion about the conductor's production performance SLA. Since they assert nothing,
+// they are sized for the worst machine this runs on rather than the best: every wait inside a
+// tick is a stubbed `sleep`, so the wall clock here is spawn cost, and spawn cost is exactly what
+// the rest of the lane running beside this file inflates. A budget that only fits an idle machine
+// turns that contention into a red that says nothing about the conductor.
+const SUBPROCESS_TIMEOUT_MS = 40_000;
+const PROCESS_FIXTURE_TIMEOUT_MS = 60_000;
 
 /** `-1` means "restoring forever"; any other count is how many calls 500 before the box answers. */
 type Tick = {

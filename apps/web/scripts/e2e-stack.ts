@@ -4,14 +4,14 @@
  * (see `playwright.config.ts`). It builds the whole isolated stack in order, then
  * runs Vite in the FOREGROUND so it becomes the long-lived server Playwright owns:
  *
- *   1. preflight the dedicated ports (refuse, never kill, if either is taken)
+ *   1. preflight this checkout's port pair (refuse, never kill, if either is taken)
  *   2. materialize `.dev.vars` from the committed dummy template (backing up a
  *      real one) — the file the Cloudflare vite plugin AND the scripts below read
- *   3. boot `turso dev` on :9440 over a FRESH empty db file
+ *   3. boot `turso dev` on the libSQL port over a FRESH empty db file
  *   4. `db:migrate` — the real generated migrations + the FTS5 index (the exact
  *      step prod / dev / the integration harness all run)
  *   5. seed the committed synthetic dataset
- *   6. boot Vite on :3140 (foreground) and stay alive as its parent
+ *   6. boot Vite on the Vite port (foreground) and stay alive as its parent
  *
  * Playwright waits for `/api/v1/health`, runs the suite, then SIGTERMs this process
  * on teardown. The signal traps below kill turso + Vite and restore `.dev.vars`,
@@ -66,8 +66,9 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 }
 
 async function main(): Promise<void> {
-  // Refuse (never kill) if either dedicated port is already taken — that is
-  // another stack, and clobbering it would be worse than a clear failure.
+  // Refuse (never kill) if either port is already taken — that is another stack, and
+  // clobbering it would be worse than a clear failure. The pair is per checkout (see
+  // `tests/e2e/stack.ts`), so a neighbouring worktree is not what lands here.
   for (const port of [VITE_PORT, LIBSQL_PORT]) {
     if (await isPortListening(port)) {
       throw new Error(
