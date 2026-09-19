@@ -35,6 +35,24 @@ LOCK="${PINWATCH_LOCK:-/run/lock/fluncle-pin-watch.lock}"
 KEEP_IMAGES="${PINWATCH_KEEP_IMAGES:-2}"  # running + 1 rollback; each hermes image is ~10GB, so 4 fills the 38GB box
 SWEEP_DRAIN_TIMEOUT="${PINWATCH_SWEEP_DRAIN_TIMEOUT:-300}"  # max seconds to wait for an in-flight sweep to finish before the rebuild proceeds anyway
 
+# ── the container resource ceiling (ONE source of truth) ──────────────────────
+# Every path that (re)creates the live container — the swap AND the rollback — goes
+# through `run_container`, which reads only these. A recreate must never quietly hand
+# the agent a smaller box than the operator gave it: a ceiling that lives in the
+# `docker run` line is re-applied verbatim on every rebake, so a hand-raised limit is
+# erased by the next tick and the agent is back to throttled CPU periods and cgroup OOM
+# kills with the host sitting idle.
+#
+# Two rails keep the ceiling durable:
+#   1. These defaults (env-overridable, validated below — a bad value refuses loudly
+#      rather than silently falling back to something smaller).
+#   2. `preserve_live_ceiling`, which reads the LIVE container's own limits before the
+#      swap and keeps whichever is higher. An operator `docker update --cpus … --memory …`
+#      therefore survives every later rebake without editing this file.
+# The host runs with no swap, so `--memory-swap` always equals `--memory`.
+HERMES_CPUS="${PINWATCH_CPUS:-3}"
+HERMES_MEMORY_GIB="${PINWATCH_MEMORY_GIB:-6}"
+
 # The inherited s6 bootstrap needs CHOWN/DAC_OVERRIDE/FOWNER for /opt/data, SETUID/SETGID to enter hermes, and KILL to supervise that uid.
 CONTAINER_SECURITY_ARGS=(
   --security-opt no-new-privileges
@@ -56,6 +74,58 @@ esac
 
 log() { printf '[pin-watch] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
+
+# ── ceiling arithmetic ────────────────────────────────────────────────────────
+# Held in docker's own integer units — nanocpus (what `HostConfig.NanoCpus` reports) and
+# bytes (`HostConfig.Memory`) — so comparing the configured ceiling against the live one
+# is exact integer arithmetic. bash has no floats, and `--cpus` is allowed a decimal.
+to_nanocpus() {
+  local whole="${1%%.*}" frac=""
+  case "$1" in *.*) frac="${1#*.}" ;; esac
+  frac="${frac}000000000"
+  printf '%d' "$((10#${whole:-0} * 1000000000 + 10#${frac:0:9}))"
+}
+
+# Back to a `--cpus` argument. Three decimals is docker's own resolution for the flag.
+from_nanocpus() { printf '%d.%03d' "$(($1 / 1000000000))" "$((($1 % 1000000000) / 1000000))"; }
+
+validate_ceiling() {
+  case "$HERMES_CPUS" in
+    '' | *[!0-9.]* | *.*.* | .* | *.) die "PINWATCH_CPUS='$HERMES_CPUS' is not a CPU count (a positive number, e.g. 3 or 2.5)" ;;
+  esac
+  case "$HERMES_MEMORY_GIB" in
+    '' | *[!0-9]*) die "PINWATCH_MEMORY_GIB='$HERMES_MEMORY_GIB' is not a whole number of GiB (e.g. 6)" ;;
+  esac
+  CEILING_NANOCPUS="$(to_nanocpus "$HERMES_CPUS")"
+  CEILING_MEMORY_BYTES="$((10#$HERMES_MEMORY_GIB * 1073741824))"
+  # Docker itself refuses below these; refusing here names the variable instead of
+  # failing deep inside the swap, where a refusal costs a rollback.
+  [ "$CEILING_NANOCPUS" -ge 1000000000 ] || die "PINWATCH_CPUS='$HERMES_CPUS' is below docker's 1 CPU floor"
+  [ "$CEILING_MEMORY_BYTES" -ge 1073741824 ] || die "PINWATCH_MEMORY_GIB='$HERMES_MEMORY_GIB' is below the 1 GiB floor the gateway needs"
+}
+
+# Keep whichever ceiling is HIGHER: the configured default, or what the live container is
+# already running with. Read while the old container still exists (before the swap), so an
+# operator raise made with `docker update` is carried into the new container rather than
+# erased. A lower live value is NOT adopted — the defaults above are the floor.
+preserve_live_ceiling() {
+  local live_nanocpus live_memory
+  live_nanocpus="$(docker inspect "$CONTAINER" --format '{{.HostConfig.NanoCpus}}' 2>/dev/null || true)"
+  live_memory="$(docker inspect "$CONTAINER" --format '{{.HostConfig.Memory}}' 2>/dev/null || true)"
+  case "$live_nanocpus" in '' | *[!0-9]*) live_nanocpus=0 ;; esac
+  case "$live_memory" in '' | *[!0-9]*) live_memory=0 ;; esac
+  if [ "$live_nanocpus" -gt "$CEILING_NANOCPUS" ]; then
+    log "keeping the live CPU ceiling ($(from_nanocpus "$live_nanocpus")) — higher than the configured $(from_nanocpus "$CEILING_NANOCPUS")"
+    CEILING_NANOCPUS="$live_nanocpus"
+  fi
+  if [ "$live_memory" -gt "$CEILING_MEMORY_BYTES" ]; then
+    log "keeping the live memory ceiling ($((live_memory / 1073741824)) GiB) — higher than the configured $((CEILING_MEMORY_BYTES / 1073741824)) GiB"
+    CEILING_MEMORY_BYTES="$live_memory"
+  fi
+  log "container ceiling: --cpus=$(from_nanocpus "$CEILING_NANOCPUS") --memory=${CEILING_MEMORY_BYTES}b (no swap)"
+}
+
+validate_ceiling
 
 # Discord alert (best-effort; never throws). Defined UP HERE — ahead of the path-set
 # resolution below, which alerts when it has to fall back — while $WEBHOOK is still read
@@ -416,6 +486,9 @@ comm -23 \
 RESTART="$(docker inspect "$CONTAINER" --format '{{.HostConfig.RestartPolicy.Name}}')"
 MOUNT_SRC="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/opt/data"}}{{.Source}}{{end}}{{end}}')"
 [ -n "$MOUNT_SRC" ] || die "could not find the /opt/data mount source on the running container"
+# Read the live resource ceiling while the old container is still here — the swap below
+# removes it, and the rollback path recreates from the same values.
+preserve_live_ceiling
 
 # ── 3b. PRE-BUILD prune — guarantee headroom BEFORE building the new image ─────
 # The post-swap prune (step 7) only runs on a SUCCESSFUL rebuild, so it never helps
@@ -525,9 +598,14 @@ run_container() {
   # at 15:00 in the BOX CLOCK's zone. Without this the rebuilt container defaults to UTC
   # and the newsletter slips to 17:00 Amsterdam (summer). Keep it pinned so every
   # auto-rebuild preserves 15:00 Amsterdam across the DST flip (see cron/README.md).
+  #
+  # The resource ceiling comes from the resolved globals, never a literal — this is the
+  # ONE creation path, shared by the swap and the rollback, so both land the same box.
   docker run -d --name "$CONTAINER" --restart "${RESTART:-unless-stopped}" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
-    --memory=4g --cpus=2 --shm-size=1g \
+    --cpus="$(from_nanocpus "$CEILING_NANOCPUS")" \
+    --memory="${CEILING_MEMORY_BYTES}b" --memory-swap="${CEILING_MEMORY_BYTES}b" \
+    --shm-size=1g \
     -e TZ=Europe/Amsterdam \
     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
     -v "$MOUNT_SRC":/opt/data \
