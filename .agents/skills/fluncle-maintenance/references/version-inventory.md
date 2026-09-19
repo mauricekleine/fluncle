@@ -4,7 +4,7 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
-**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (box.ascii) is pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (boat.dev) is pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
 
 **A pin absent from this inventory is a pin nobody watches.** yt-dlp was baked and pinned but listed nowhere here, so no sweep ever asked about it. It fell behind a YouTube player change and `fluncle-capture` failed every single download for thirteen days while reporting a healthy tick each time — the failure is item-level (`ytDlpFailures`), so the run verdict stayed true and nothing escalated. Adding a baked binary to the Dockerfile without adding a row here is how that happens again.
 
@@ -106,15 +106,15 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 
 ---
 
-## 5. box.ascii CLI (the render box transport) — PINNED, MANUAL-WATCH TIER
+## 5. boat.dev CLI (the render box transport) — PINNED, MANUAL-WATCH TIER
 
-- **File:** `docs/agents/hermes/Dockerfile`, the `box-cli-v<ver>` install block.
-- **Marker:** `releases/download/box-cli-v<ver>/box-linux-` — an arch-aware release binary installed straight to `/usr/local/bin/box`, checksum-verified against the release's published `SHA256SUMS` and smoked at bake time (`box --version` must report the pin).
-- **Current pin:** `grep 'box-cli-v' docs/agents/hermes/Dockerfile`.
-- **Why pinned rather than installed:** the vendor's `box.ascii.dev/install` script tracks whatever it currently ships, and the vendor has renamed the product — that script now installs a `boat` binary against a different API host and leaves no `box` behind, which fails the image build outright and freezes every merge out of the box. A pinned binary also stops a self-updating CLI from changing the conductor's verbs under it.
-- **Check latest:** the vendor's release list (`ariana-dot-dev/agent-server`, tags `box-cli-v*`). Read it; do not auto-apply.
-- **Action on a sweep:** **never bump automatically** — MANUAL-watch tier like gh, deliberately outside `hermes-pin-drift.sh`. Report drift, and keep the standing note that the conductor is re-verified after a rebuild (a `box status` → authed, then a conductor dry-run) — operator / `fluncle-healthcheck` work, NOT the pin-watch post-swap smoke (that smoke is only `fluncle version` + container-running).
-- **Safety:** always **brake**. The CLI is pre-1.0 and its verbs are the conductor's contract (`login`/`list`/`new`/`ssh`/`scp`/`resume`/`stop`/`extend`, the `box_restoring` retry code), so a bump can silently re-shape the render path. Adopting the renamed CLI is a **conductor migration** (new verbs, new `api_url`, `sandbox_*` error codes, `render-conductor.sh` + `provision-rave-03.sh` + their tests), never a pin bump — an operator decision with its own PR.
+- **File:** `docs/agents/hermes/Dockerfile`, the `boat-cli-v<ver>` install block.
+- **Marker:** `releases/download/boat-cli-v<ver>/boat-linux-` — an arch-aware release binary installed straight to `/usr/local/bin/boat`, checksum-verified against the release's published `SHA256SUMS` and smoked at bake time (`boat --version` must report the pin).
+- **Current pin:** `grep 'boat-cli-v' docs/agents/hermes/Dockerfile`.
+- **Why pinned rather than installed:** the vendor's `boat.dev/install` script tracks whatever it currently ships and ends in an interactive `onboard` no build can answer. A pin also stops a self-updating CLI from changing the conductor's verbs under it — but only together with the global `--no-update` every conductor call passes, because the binary still checks for a newer release on each run.
+- **Check latest:** the vendor's release list (`ariana-dot-dev/agent-server`, tags `boat-cli-v*`). The plain `boat-cli-vX.Y.Z` tags are the prod releases; a suffixed tag (`-staging1`, `-amsterdam1`, …) is a region or staging build and is not the pin. Read it; do not auto-apply.
+- **Action on a sweep:** **never bump automatically** — MANUAL-watch tier like gh, deliberately outside `hermes-pin-drift.sh`. Report drift, and keep the standing note that the conductor is re-verified after a rebuild (`render-conductor.sh --preflight` — it logs in, lists, and prints the pick without touching a box) — operator / `fluncle-healthcheck` work, NOT the pin-watch post-swap smoke (that smoke is only `fluncle version` + container-running).
+- **Safety:** always **brake**. The CLI's verbs and their blocking/non-blocking behaviour are the conductor's contract (`login`/`list`/`new`/`ssh`/`scp`/`resume`/`stop`/`extend`, the restoring retry code, and `resume`'s readiness wait), so a bump can silently re-shape the render path. A bump ships as its own PR with `render-conductor.sh` + `provision-rave-03.sh` + their tests re-read, a `--preflight` run on the box, and one attended render behind it.
 
 ---
 
@@ -171,6 +171,6 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 | 2   | bun (×3)            | `Dockerfile` `bun-v` + `package.json` `packageManager` + workflows `bun-version:` | the three greps above          | bun GH `releases/latest`                          | patch/minor yes, major brake      |
 | 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)        | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                        | patch/minor yes, major brake      |
 | 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version`      | patch/minor yes, major/auth brake |
-| 5   | box.ascii CLI       | `Dockerfile` `releases/download/box-cli-v<ver>/box-linux-`                        | `grep 'box-cli-v'`             | vendor release list (`box-cli-v*` tags)           | **Never** (manual watch)          |
+| 5   | boat.dev CLI        | `Dockerfile` `releases/download/boat-cli-v<ver>/boat-linux-`                      | `grep 'boat-cli-v'`            | vendor release list (`boat-cli-v*` tags)          | **Never** (manual watch)          |
 | 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                    | `grep 'uses:.*@'`              | Renovate PRs (`gh pr list --author app/renovate`) | **Renovate (auto-pins + tracks)** |
 | 7   | yt-dlp              | `Dockerfile` `yt-dlp/releases/download/<ver>/yt-dlp_linux`                        | `grep 'yt-dlp/releases/down'`  | yt-dlp GH `releases/latest`                       | **Always** (staleness = outage)   |

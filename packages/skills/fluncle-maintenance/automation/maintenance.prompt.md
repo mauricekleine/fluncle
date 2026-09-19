@@ -8,7 +8,7 @@ This is the entire task. Do not chase the whole dependency tree. Do not "catch u
 
 ## What you own (and what you don't)
 
-You own the **six runtime pins** in `@fluncle-maintenance`'s inventory: the Nous Research Hermes base image, bun (three places), the `fluncle` CLI, the Claude Code CLI, the box.ascii CLI (pinned, manual-watch), and the GitHub Actions tags. You do **not** own the workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) or the agent's model/voice/permissions — if you notice drift there, mention it as "out of scope" and leave it.
+You own the **six runtime pins** in `@fluncle-maintenance`'s inventory: the Nous Research Hermes base image, bun (three places), the `fluncle` CLI, the Claude Code CLI, the boat.dev CLI (pinned, manual-watch), and the GitHub Actions tags. You do **not** own the workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) or the agent's model/voice/permissions — if you notice drift there, mention it as "out of scope" and leave it.
 
 Load the `@fluncle-maintenance` skill and follow it. `references/version-inventory.md` is the drift surface; `references/safety-doctrine.md` is the SHIP-vs-BRAKE decision; `references/bump-procedure.md` is the edit-PR-merge procedure. After a baked-pin merge you are DONE — the box self-deploys via the on-box `fluncle-pin-watch` timer (rebuild → pre-smoke → swap → auto-rollback; see `docs/agents/hermes/pin-watch/`). You never SSH to the box, never run `docker`, never touch `op`.
 
@@ -29,14 +29,14 @@ Walk `references/version-inventory.md` and record the **current** pin for each o
 
 ### 2. Check latest for each
 
-Run each inventory "check latest" one-liner. Compute the **drift class**: none / patch / minor / major (semver: the leading digit = major). Base image = report-only; box.ascii = re-verify-only. If a "check latest" fails or returns something you can't parse, treat that item as **BRAKE** ("could not check") — never guess a version.
+Run each inventory "check latest" one-liner. Compute the **drift class**: none / patch / minor / major (semver: the leading digit = major). Base image = report-only; boat.dev = re-verify-only. If a "check latest" fails or returns something you can't parse, treat that item as **BRAKE** ("could not check") — never guess a version.
 
 ### 3. Judge per item
 
 Apply `references/safety-doctrine.md`. Classify each drifted item as **SHIP** or **BRAKE**:
 
 - **SHIP** (clearly safe, take end-to-end): a patch/minor `fluncle` or Claude Code CLI bump; a patch/minor bun bump (all three places); SHA-pinning a GitHub Action **at its current major**.
-- **BRAKE** (report, never ship): any MAJOR bump anywhere; the Hermes base image (any change — pre-1.0); box.ascii (pinned, manual-watch — re-verify note only; the vendor's renamed CLI is a conductor migration, not a bump); anything touching auth/runtime/the model; a release note flagging an auth/credential change even on a patch; an already-inconsistent pin set.
+- **BRAKE** (report, never ship): any MAJOR bump anywhere; the Hermes base image (any change — pre-1.0); boat.dev (pinned, manual-watch — re-verify note only; a CLI bump can move a verb or a blocking boundary under the render conductor); anything touching auth/runtime/the model; a release note flagging an auth/credential change even on a patch; an already-inconsistent pin set.
 - **When in doubt → BRAKE.**
 
 ### 4a. If there are SHIP items — carry them all the way
@@ -52,7 +52,7 @@ Apply `references/safety-doctrine.md`. Classify each drifted item as **SHIP** or
 
 ### 4b. Report the BRAKE items
 
-In the run output (and the PR body if one exists, under "Pulled the brake"): each braked item with the current pin, the latest, the drift class, the **reason** (major / pre-1.0 base / auth-runtime-model / unparseable / inconsistent), and the `references/bump-procedure.md` pointer so the operator can ship it themselves. Add the one-line box.ascii "pinned, manual watch — re-verify the conductor after the next base rebuild" note.
+In the run output (and the PR body if one exists, under "Pulled the brake"): each braked item with the current pin, the latest, the drift class, the **reason** (major / pre-1.0 base / auth-runtime-model / unparseable / inconsistent), and the `references/bump-procedure.md` pointer so the operator can ship it themselves. Add the one-line boat.dev "pinned, manual watch — re-verify the conductor with `render-conductor.sh --preflight` after the next base rebuild" note.
 
 ### 5. Stop
 
@@ -62,7 +62,7 @@ Output a tight report: the pins read, the drift found, what you **shipped** (PR 
 
 - **One bounded sweep per run.** No catching up the whole tree; no second pass.
 - **Opus is the gate — when in doubt, STOP.** Take only what the safety doctrine calls _clearly_ safe all the way; everything else is a report.
-- **Never ship: a major bump, the Hermes base image, box.ascii, or anything touching auth/runtime/the model.** Report them; never merge them.
+- **Never ship: a major bump, the Hermes base image, boat.dev, or anything touching auth/runtime/the model.** Report them; never merge them.
 - **Never merge a red PR.** Wait for green; a failing check means report-and-leave, not merge.
 - **You never touch the box.** The deploy, smoke, rollback, and single-flight for a baked-pin merge are all the on-box `fluncle-pin-watch` timer's job (`docs/agents/hermes/pin-watch/`). Your job ends at the merge — do not SSH, rebuild, or `op`.
 - **Branch + PR, then merge-on-green** — never commit to `main` directly. The PR is the audit trail + the CI gate; the merge is gated on green.

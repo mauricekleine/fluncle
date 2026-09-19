@@ -1,31 +1,45 @@
-// THE RESTORING WINDOW — the conductor's readiness gate, driven through the REAL script.
+// THE CONDUCTOR'S TRANSPORT CONTRACT — driven through the REAL script against a stubbed CLI.
 //
-// WHY THIS TEST EXISTS. `box resume` returns success immediately, but the box then spends a
-// few seconds RESTORING, and every call against it in that window 500s with
-// `{"code":"box_restoring",…}` — the freshen ssh, both scp refreshes, and the render trigger.
-// `await_box_ready` waits the window out before the launch-line check can judge the box.
+// WHY THIS TEST EXISTS. The render conductor talks to its render box through one vendor CLI,
+// and three of its rails live entirely inside that conversation:
 //
-// A gate like that is unproven until a synthetic failure makes it fire, so all three cases run
-// `render-conductor.sh` itself against a stubbed `box`/`fluncle` in a temp HOME — no network,
-// no box.ascii — and assert on what the tick DID:
+//   1. THE RESTORING WINDOW. A resume can report success while the box spends the next
+//      seconds restoring, and every call in that window fails with a typed restoring code —
+//      the freshen ssh, both scp refreshes, and the render trigger. `await_box_ready` waits
+//      that window out before the launch-line check can judge the box. The code is emitted by
+//      the API, not the CLI, so it is matched in all three spellings the platform has used
+//      (`box_restoring`, `boat_restoring`, `sandbox_restoring`).
+//   2. THE BOUNDED RESUME. The CLI's resume blocks on readiness for up to half an hour, well
+//      past the host unit's kill. It is bounded, and a resume that does not finish holds the
+//      sandbox id instead of reprovisioning on top of a live box.
+//   3. THE PIN. Every CLI call carries `--no-update`, or the checksum-pinned binary replaces
+//      itself and the verb contract moves.
 //
-//   1. A box that restores for two probes and then answers → the render starts, nothing is
-//      condemned (this is the bug).
-//   2. A box that never stops restoring → the wait gives up and the CONDEMN PATH still fires
-//      (the wedge authority is unchanged; the gate only buys time).
-//   3. A box that answers straight away → no waiting, no noise in the log.
+// A gate like that is unproven until a synthetic failure makes it fire, so every case runs
+// `render-conductor.sh` itself against a stubbed `boat`/`fluncle` in a temp HOME — no network,
+// no sandbox — and asserts on what the tick DID.
 //
 //   bun test docs/agents/hermes/scripts/render-conductor.test.ts
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CONDUCTOR = join(import.meta.dir, "render-conductor.sh");
-const BOX_ID = "box-under-test";
+const BOX_ID = "bx_under_test";
+const ORPHAN_ID = "bx_condemned";
 const QUEUE_HEAD = "001.1.1A";
+const ORPHAN_ALERT_AFTER_S = 21_600;
 // The fixture exercises a real shell lifecycle; these process budgets cover harness overhead,
 // not an assertion about the conductor's production performance SLA. Since they assert nothing,
 // they are sized for the worst machine this runs on rather than the best: every wait inside a
@@ -35,42 +49,80 @@ const QUEUE_HEAD = "001.1.1A";
 const SUBPROCESS_TIMEOUT_MS = 40_000;
 const PROCESS_FIXTURE_TIMEOUT_MS = 60_000;
 
-/** `-1` means "restoring forever"; any other count is how many calls 500 before the box answers. */
+/** `-1` means "restoring forever"; any other count is how many calls fail before the box answers. */
 type Tick = {
+  args?: readonly string[];
   doneResult?: string;
   initialState?: "idle" | "rendering";
+  legacyEnvNames?: boolean;
+  listHasBox?: boolean;
+  listHasOrphan?: boolean;
   nowSequence?: readonly number[];
+  /** Raw `orphan-boxes` ledger content: `boxId<TAB>firstFiledEpoch<TAB>alerted` lines. */
+  orphanLedger?: string;
   queueExitCode?: number;
   queueResponse?: string;
   queueStderr?: string;
   readyTimeout?: number;
+  restoringCode?: string;
   restoringCalls: number;
+  resumeExitCode?: number;
+  timeoutExitCode?: number;
   trackHasVideo?: boolean;
 };
 
 type TickResult = {
   boxIdFile: string;
+  calls: string[];
+  curlCalls: string[];
   exitCode: number;
   log: string;
+  noUpdateViolations: string[];
   orphans: string;
   sleepCalls: string[];
   state: string;
   stdout: string;
 };
 
-// The stub box CLI. It answers the read-only verbs the tick needs (`login`, `list`, `resume`,
-// `stop`, `extend`) and fails `ssh`/`scp` with box.ascii's real restoring body until the
-// countdown runs out — the same shape the conductor greps for.
-const BOX_STUB = `#!/usr/bin/env bash
+// The stub CLI. It answers the read-only verbs the tick needs (`login`, `list`, `resume`,
+// `stop`, `extend`) and fails `ssh`/`scp` with the platform's real restoring body until the
+// countdown runs out — the same shape the conductor greps for. It also records every call and
+// flags any that arrived WITHOUT the global `--no-update`, which is what keeps the pinned
+// binary pinned.
+const BOAT_STUB = `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"$STUB_DIR/calls"
+if [ "\${1:-}" = "--no-update" ]; then
+  shift
+else
+  printf '%s\\n' "$*" >>"$STUB_DIR/no-update-violations"
+fi
 verb="\${1:-}"; shift || true
-printf '%s %s\\n' "$verb" "$*" >>"$STUB_DIR/calls"
 case "$verb" in
-  list) printf '[]\\n'; exit 0 ;;
+  --version) printf 'boat 1.0.9\\n'; exit 0 ;;
+  login) cat >/dev/null 2>&1 || true; exit "\${STUB_LOGIN_EXIT:-0}" ;;
+  resume) exit "\${STUB_RESUME_EXIT:-0}" ;;
+  list)
+    # THE FILTER IS HONOURED, because that is the whole point of the read. Everything this
+    # fixture's platform holds is STOPPED — the state a parked render box and a condemned box
+    # are both in — so a bare \`list\` (which defaults to \`--filter r\`, up/running only) sees
+    # NOTHING, exactly as the real CLI would. Only \`--all\` returns them.
+    entries=""
+    if printf '%s' "$*" | grep -q -- '--all'; then
+      if [ "\${STUB_LIST_HAS_BOX:-1}" = "1" ]; then
+        entries="{\\"id\\":\\"\${STUB_BOX_ID:-}\\",\\"state\\":\\"stopped\\"}"
+      fi
+      if [ "\${STUB_LIST_HAS_ORPHAN:-0}" = "1" ]; then
+        [ -n "$entries" ] && entries="\${entries},"
+        entries="\${entries}{\\"id\\":\\"\${STUB_ORPHAN_ID:-}\\",\\"state\\":\\"stopped\\"}"
+      fi
+    fi
+    printf '{"sandboxes":[%s]}\\n' "$entries"
+    exit 0 ;;
   ssh | scp)
     remaining="$(cat "$STUB_DIR/restoring" 2>/dev/null || printf 0)"
     if [ "$remaining" != "0" ]; then
       [ "$remaining" -gt 0 ] && printf '%s' "$((remaining - 1))" >"$STUB_DIR/restoring"
-      printf '{"code":"box_restoring","error":"box restoring (500)","status":500}\\n' >&2
+      printf '{"code":"%s","error":"restoring","status":409}\\n' "\${STUB_RESTORING_CODE:-boat_restoring}" >&2
       exit 1
     fi
     if [ "$verb" = "ssh" ] && printf '%s' "$*" | grep -q 'test -f.*conductor-run.done'; then
@@ -130,10 +182,29 @@ const SLEEP_STUB = `#!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_DIR/sleep-calls"
 `;
 
-// A provision that always fails: this tick must never reach for a fresh box, and if it does the
+// `timeout` is coreutils and not on every macOS host, so the fixture supplies its own: it runs
+// the bounded command normally, or reports the given exit code WITHOUT running it, which is how
+// a resume that outlives its budget is exercised.
+const TIMEOUT_STUB = `#!/usr/bin/env bash
+secs="\${1:-}"; shift || true
+if [ -n "\${STUB_TIMEOUT_EXIT:-}" ]; then
+  printf 'timeout %s %s\\n' "$secs" "$*" >>"$STUB_DIR/calls"
+  exit "$STUB_TIMEOUT_EXIT"
+fi
+exec "$@"
+`;
+
+// A provision that always fails: most ticks must never reach for a fresh box, and if they do the
 // assertions see "provision failed" rather than a silently different path.
 const PROVISION_STUB = `#!/usr/bin/env bash
 exit 1
+`;
+
+// `curl` is how the conductor reaches Discord and the cost ledger. The fixture stubs it so no
+// tick makes a real request and so the orphan alert is observable as a recorded call.
+const CURL_STUB = `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"$STUB_DIR/curl-calls"
+exit 0
 `;
 
 function write(path: string, body: string) {
@@ -141,17 +212,45 @@ function write(path: string, body: string) {
   chmodSync(path, 0o755);
 }
 
-function runTick({
-  doneResult = "",
-  initialState = "idle",
-  nowSequence = [],
-  queueExitCode = 0,
-  queueResponse = `{"ok":true,"tracks":[{"logId":"${QUEUE_HEAD}"}]}`,
-  queueStderr = "",
-  readyTimeout = 2,
-  restoringCalls,
-  trackHasVideo = false,
-}: Tick): TickResult {
+/** The stub-driving half of the environment: everything the fixture varies per case. */
+function stubEnv(tick: Tick, home: string, stub: string): Record<string, string> {
+  // The conductor prefers the BOAT_* names and falls back to the pre-rename BOX_* ones, so a
+  // secrets template or operator command cut before the CLI rename keeps working.
+  const binAndKey = tick.legacyEnvNames
+    ? { BOX_API_KEY: "stub-key", BOX_BIN: join(stub, "boat") }
+    : { BOAT_API_KEY: "stub-key", BOAT_BIN: join(stub, "boat") };
+  const timeoutExit = tick.timeoutExitCode;
+  return {
+    ...binAndKey,
+    BOAT_READY_INTERVAL: "1",
+    BOAT_READY_TIMEOUT: String(tick.readyTimeout ?? 2),
+    BUN_BIN: process.execPath,
+    CONDUCTOR_ENV: "/dev/null",
+    DISCORD_ALERT_WEBHOOK: "http://127.0.0.1:9/hook",
+    FLUNCLE_API_TOKEN: "stub-token",
+    FLUNCLE_API_URL: "http://127.0.0.1:9",
+    FLUNCLE_BIN: join(stub, "fluncle"),
+    HOME: home,
+    PATH: `${stub}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+    PROVISION: join(stub, "provision.sh"),
+    STUB_BOX_ID: BOX_ID,
+    STUB_DIR: stub,
+    STUB_DONE_RESULT: tick.doneResult ?? "",
+    STUB_LIST_HAS_BOX: (tick.listHasBox ?? true) ? "1" : "0",
+    STUB_LIST_HAS_ORPHAN: tick.listHasOrphan ? "1" : "0",
+    STUB_ORPHAN_ID: ORPHAN_ID,
+    STUB_QUEUE_EXIT_CODE: String(tick.queueExitCode ?? 0),
+    STUB_QUEUE_RESPONSE: tick.queueResponse ?? `{"ok":true,"tracks":[{"logId":"${QUEUE_HEAD}"}]}`,
+    STUB_QUEUE_STDERR: tick.queueStderr ?? "",
+    STUB_RESTORING_CODE: tick.restoringCode ?? "boat_restoring",
+    STUB_RESUME_EXIT: String(tick.resumeExitCode ?? 0),
+    STUB_TRACK_HAS_VIDEO: tick.trackHasVideo ? "1" : "0",
+    ...(timeoutExit === undefined ? {} : { STUB_TIMEOUT_EXIT: String(timeoutExit) }),
+  };
+}
+
+function runTick(tick: Tick): TickResult {
+  const { args = [], initialState = "idle", nowSequence = [], restoringCalls } = tick;
   const root = mkdtempSync(join(tmpdir(), "render-conductor-"));
   try {
     const home = join(root, "home");
@@ -163,42 +262,28 @@ function runTick({
     if (nowSequence.length > 0) {
       writeFileSync(join(stub, "now-sequence"), `${nowSequence.join("\n")}\n`);
     }
-    write(join(stub, "box"), BOX_STUB);
+    write(join(stub, "boat"), BOAT_STUB);
+    write(join(stub, "curl"), CURL_STUB);
     write(join(stub, "date"), DATE_STUB);
     write(join(stub, "sleep"), SLEEP_STUB);
+    write(join(stub, "timeout"), TIMEOUT_STUB);
     write(join(stub, "fluncle"), FLUNCLE_STUB);
     write(join(stub, "provision.sh"), PROVISION_STUB);
     // idle, with a box parked from the last render and no start on the clock — the state a
     // chaining tick lands in right after it parked the box it is about to resume.
     writeFileSync(join(stateDir, "state"), initialState);
     writeFileSync(join(stateDir, "box-id"), BOX_ID);
+    if (tick.orphanLedger !== undefined) {
+      writeFileSync(join(stateDir, "orphan-boxes"), tick.orphanLedger);
+    }
     if (initialState === "rendering") {
       writeFileSync(join(stateDir, "started-at"), "0");
       writeFileSync(join(stateDir, "render-logid"), QUEUE_HEAD);
     }
 
-    const run = spawnSync("bash", [CONDUCTOR], {
+    const run = spawnSync("bash", [CONDUCTOR, ...args], {
       encoding: "utf8",
-      env: {
-        BOX_API_KEY: "stub-key",
-        BOX_BIN: join(stub, "box"),
-        BOX_READY_INTERVAL: "1",
-        BOX_READY_TIMEOUT: String(readyTimeout),
-        BUN_BIN: process.execPath,
-        CONDUCTOR_ENV: "/dev/null",
-        FLUNCLE_API_TOKEN: "stub-token",
-        FLUNCLE_API_URL: "http://127.0.0.1:9",
-        FLUNCLE_BIN: join(stub, "fluncle"),
-        HOME: home,
-        PATH: `${stub}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-        PROVISION: join(stub, "provision.sh"),
-        STUB_DIR: stub,
-        STUB_DONE_RESULT: doneResult,
-        STUB_QUEUE_EXIT_CODE: String(queueExitCode),
-        STUB_QUEUE_RESPONSE: queueResponse,
-        STUB_QUEUE_STDERR: queueStderr,
-        STUB_TRACK_HAS_VIDEO: trackHasVideo ? "1" : "0",
-      },
+      env: stubEnv(tick, home, stub),
       timeout: SUBPROCESS_TIMEOUT_MS,
     });
 
@@ -223,8 +308,11 @@ function runTick({
     };
     return {
       boxIdFile: read(join(stateDir, "box-id")),
+      calls: read(join(stub, "calls")).split("\n").filter(Boolean),
+      curlCalls: read(join(stub, "curl-calls")).split("\n").filter(Boolean),
       exitCode: run.status ?? -1,
       log: read(join(stateDir, "conductor.log")),
+      noUpdateViolations: read(join(stub, "no-update-violations")).split("\n").filter(Boolean),
       orphans: read(join(stateDir, "orphan-boxes")),
       sleepCalls: read(join(stub, "sleep-calls")).split("\n").filter(Boolean),
       state: read(join(stateDir, "state")),
@@ -279,6 +367,46 @@ describe("await_box_ready", () => {
     },
   );
 
+  // The restoring code is the API's, not the CLI's, so the gate must not be tied to one
+  // spelling of it. Each of the three the platform has used has to drive the same wait.
+  for (const restoringCode of ["box_restoring", "boat_restoring", "sandbox_restoring"]) {
+    test(
+      `a box restoring with ${restoringCode} is waited out, not condemned`,
+      { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+      () => {
+        const tick = runTick({
+          nowSequence: [4070908800, 4070908800, 4070908800, 4070908801, 4070908802, 4070908802],
+          readyTimeout: 30,
+          restoringCalls: 2,
+          restoringCode,
+        });
+
+        expect(tick.log.match(/restoring — waiting/g)).toHaveLength(2);
+        expect(tick.log).not.toContain("something other than a restore");
+        expect(tick.log).not.toContain("condemned");
+        expect(tick.state).toBe("rendering");
+      },
+    );
+  }
+
+  test(
+    "an error that is not a restore ends the wait immediately",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        nowSequence: [4070908800, 4070908800, 4070908800, 4070908801],
+        readyTimeout: 30,
+        restoringCalls: -1,
+        restoringCode: "machine_not_running",
+      });
+
+      expect(tick.log).toContain("something other than a restore");
+      expect(tick.sleepCalls).toEqual([]);
+      expect(tick.log).toContain(`condemned box ${BOX_ID}`);
+      expect(tick.state).toBe("idle");
+    },
+  );
+
   test(
     "a box that never stops restoring times out from elapsed time and reaches the condemn path",
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
@@ -289,7 +417,7 @@ describe("await_box_ready", () => {
         restoringCalls: -1,
       });
 
-      expect(tick.log).toMatch(/box box-under-test still restoring after \d+s — giving up/);
+      expect(tick.log).toMatch(new RegExp(`box ${BOX_ID} still restoring after \\d+s — giving up`));
       expect(tick.sleepCalls).toEqual(["1"]);
       expect(tick.log).toContain(`condemned box ${BOX_ID}`);
       expect(tick.orphans).toContain(BOX_ID);
@@ -319,6 +447,218 @@ describe("await_box_ready", () => {
       expect(tick.state).toBe("rendering");
     },
   );
+});
+
+describe("the CLI contract", () => {
+  test(
+    "every CLI call carries --no-update, so the checksum-pinned binary stays pinned",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ restoringCalls: 0 });
+
+      expect(tick.noUpdateViolations).toEqual([]);
+      expect(tick.calls.length).toBeGreaterThan(0);
+      expect(tick.calls.every((call) => call.startsWith("--no-update "))).toBe(true);
+    },
+  );
+
+  test(
+    "the API key goes in on stdin, never on the command line",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ restoringCalls: 0 });
+
+      expect(tick.calls).toContain("--no-update login --key-stdin --json");
+      expect(tick.calls.join("\n")).not.toContain("stub-key");
+    },
+  );
+
+  test(
+    "the pre-rename BOX_BIN and BOX_API_KEY names still drive a full tick",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ legacyEnvNames: true, restoringCalls: 0 });
+
+      expect(tick.stdout).not.toContain("no BOAT_API_KEY");
+      expect(tick.state).toBe("rendering");
+      expect(tick.stdout).toContain(`started render of ${QUEUE_HEAD} on ${BOX_ID}`);
+    },
+  );
+});
+
+// A condemn parks a box and puts it on a reclamation clock; it never deletes. The reap rail's
+// whole job is to keep watching a condemned id until the platform has actually taken it, so the
+// "is it gone?" read has to span STOPPED — a running-only list calls every parked box reclaimed
+// the instant it is condemned, drains the ledger, and leaves the box standing unwatched.
+describe("the reap rail", () => {
+  const EMPTY_QUEUE = '{"ok":true,"tracks":[]}';
+  const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+  test(
+    "a condemned box that still exists STOPPED is not gone, and stays in the ledger",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        listHasOrphan: true,
+        orphanLedger: `${ORPHAN_ID}\t${nowSeconds()}\t0\n`,
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).not.toContain("reclaimed — dropping from the ledger");
+      expect(tick.orphans).toContain(ORPHAN_ID);
+      // The TTL is re-issued every tick, which is what keeps a lingering box on a clock.
+      expect(tick.calls).toContain(`--no-update stop ${ORPHAN_ID}`);
+      expect(tick.calls).toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
+      // Still inside the alert window: watching is silent until a box is genuinely stuck.
+      expect(tick.curlCalls).toEqual([]);
+      // Never destructive, whatever the platform offers.
+      expect(tick.calls.join("\n")).not.toContain("delete");
+    },
+  );
+
+  test(
+    "a condemned box the platform no longer lists at all IS gone, and leaves the ledger",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        listHasOrphan: false,
+        orphanLedger: `${ORPHAN_ID}\t${nowSeconds()}\t0\n`,
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).toContain(`orphan ${ORPHAN_ID} reclaimed — dropping from the ledger`);
+      expect(tick.orphans).not.toContain(ORPHAN_ID);
+      expect(tick.calls).not.toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
+    },
+  );
+
+  test(
+    "a condemned box still standing past the alert window alerts once and is never deleted",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const filed = nowSeconds() - ORPHAN_ALERT_AFTER_S - 60;
+      const tick = runTick({
+        listHasOrphan: true,
+        orphanLedger: `${ORPHAN_ID}\t${filed}\t0\n`,
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).toContain(`orphan ${ORPHAN_ID} still standing after`);
+      expect(tick.curlCalls.join("\n")).toContain(
+        `render conductor: render box ${ORPHAN_ID} has not been reclaimed since it was condemned`,
+      );
+      // The alert is stamped, so the next tick watches on in silence rather than paging again.
+      expect(tick.orphans).toContain(`${ORPHAN_ID}\t${filed}\t1`);
+      // An alert is the whole response. The box is re-parked and re-clocked, never removed.
+      expect(tick.calls).toContain(`--no-update stop ${ORPHAN_ID}`);
+      expect(tick.calls).toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
+      expect(tick.calls.join("\n")).not.toContain("delete");
+    },
+  );
+
+  test(
+    "an already-alerted orphan is watched without a second page",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const filed = nowSeconds() - ORPHAN_ALERT_AFTER_S - 60;
+      const tick = runTick({
+        listHasOrphan: true,
+        orphanLedger: `${ORPHAN_ID}\t${filed}\t1\n`,
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).not.toContain("still standing after");
+      expect(tick.curlCalls).toEqual([]);
+      expect(tick.orphans).toContain(ORPHAN_ID);
+    },
+  );
+});
+
+describe("the bounded resume", () => {
+  test(
+    "a resume that outlives its budget holds the sandbox id instead of reprovisioning",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      // 124 is what `timeout` reports when it kills the command. The sandbox is still listed,
+      // so the resume is converging server-side and abandoning the id would strand it.
+      const tick = runTick({ listHasBox: true, restoringCalls: 0, timeoutExitCode: 124 });
+
+      expect(tick.exitCode).toBe(0);
+      expect(tick.log).toContain(`resume of ${BOX_ID} did not complete (rc=124)`);
+      expect(tick.stdout).toContain(`resume of ${BOX_ID} still converging`);
+      expect(tick.boxIdFile).toBe(BOX_ID);
+      expect(tick.state).toBe("idle");
+      expect(tick.log).not.toContain("reprovisioning");
+      expect(tick.calls.join("\n")).not.toContain("--no-update new");
+    },
+  );
+
+  test(
+    "a failed resume on a sandbox boat.dev no longer lists reprovisions",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ listHasBox: false, restoringCalls: 0, resumeExitCode: 1 });
+
+      expect(tick.log).toContain(`resume of ${BOX_ID} failed (rc=1)`);
+      expect(tick.log).toContain("no usable box — reprovisioning");
+      // The provision stub always fails, so the tick ends as a run error rather than silently
+      // taking some other path.
+      expect(tick.exitCode).toBe(1);
+      expect(tick.stdout).toContain("render-conductor: provision failed");
+    },
+  );
+});
+
+describe("--preflight", () => {
+  test(
+    "reports the CLI, the carry-over answer and the pick, and touches nothing",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ args: ["--preflight"], restoringCalls: 0 });
+
+      expect(tick.exitCode).toBe(0);
+      expect(tick.stdout).toContain("boat 1.0.9");
+      expect(tick.stdout).toContain(`carry-over:  YES — ${BOX_ID} is still there`);
+      expect(tick.stdout).toContain(
+        `queue:       ${QUEUE_HEAD} renderable pick, 0 poisoned skip(s)`,
+      );
+      expect(tick.stdout).toContain("would do:    nothing");
+
+      // The whole point: read-only. Login and an --all list are the only calls allowed, and the
+      // state machine has not moved.
+      expect(tick.calls).toEqual([
+        "--no-update login --key-stdin --json",
+        "--no-update --version",
+        "--no-update list --all --json",
+      ]);
+      expect(tick.state).toBe("idle");
+      expect(tick.boxIdFile).toBe(BOX_ID);
+    },
+  );
+
+  test(
+    "says so when the recorded sandbox did not survive the cutover",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ args: ["--preflight"], listHasBox: false, restoringCalls: 0 });
+
+      expect(tick.exitCode).toBe(0);
+      expect(tick.stdout).toContain(`carry-over:  NO — ${BOX_ID} is not listed`);
+      expect(tick.boxIdFile).toBe(BOX_ID);
+      expect(tick.state).toBe("idle");
+    },
+  );
+
+  test("an unknown argument is refused", { timeout: PROCESS_FIXTURE_TIMEOUT_MS }, () => {
+    const tick = runTick({ args: ["--wat"], restoringCalls: 0 });
+
+    expect(tick.exitCode).toBe(2);
+    expect(tick.calls).toEqual([]);
+  });
 });
 
 describe("queue read", () => {
@@ -480,4 +820,78 @@ describe("render state counters", () => {
       });
     },
   );
+});
+
+describe("the provision parser", () => {
+  // `boat new --json` is JSONL: `created`, zero or more `state`, then `ready` or `error`
+  // (docs.boat.dev/use-in-code). provision-rave-03.sh prefers the `ready` line's id and
+  // refuses a run whose last line is an error, so a half-born sandbox is never provisioned
+  // against. These fixtures are the documented shapes, verbatim.
+  const PROVISION = join(import.meta.dir, "provision-rave-03.sh");
+
+  function parseId(newJson: string): string {
+    const root = mkdtempSync(join(tmpdir(), "provision-parse-"));
+    try {
+      const stub = join(root, "stub");
+      mkdirSync(stub, { recursive: true });
+      // A `new` that replays the fixture; every other verb succeeds without doing anything, so
+      // the script runs to its end and its stdout is exactly the id it resolved — empty when
+      // the parse refused the run, because the script then exits before printing anything.
+      write(
+        join(stub, "boat"),
+        `#!/usr/bin/env bash\n[ "\${1:-}" = "--no-update" ] && shift\ncase "\${1:-}" in\n  new) cat "$STUB_DIR/new-json"; exit 0 ;;\n  *) cat >/dev/null 2>&1 || true; exit 0 ;;\nesac\n`,
+      );
+      writeFileSync(join(stub, "new-json"), newJson);
+      const run = spawnSync("bash", [PROVISION], {
+        encoding: "utf8",
+        env: {
+          BOAT_BIN: join(stub, "boat"),
+          BUN_BIN: process.execPath,
+          PATH: `${stub}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+          STUB_DIR: stub,
+        },
+        timeout: SUBPROCESS_TIMEOUT_MS,
+      });
+      return run.stdout ?? "";
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  }
+
+  test("prefers the ready line's id", { timeout: PROCESS_FIXTURE_TIMEOUT_MS }, () => {
+    expect(
+      parseId(
+        [
+          '{"event":"created","id":"bx_8pqt6dup","ttlSeconds":3600}',
+          '{"event":"state","id":"bx_8pqt6dup","state":"provisioning"}',
+          '{"event":"ready","id":"bx_8pqt6dup","state":"ready","ip":"203.0.113.10"}',
+        ].join("\n"),
+      ),
+    ).toBe("bx_8pqt6dup");
+  });
+
+  test("refuses a run that ends in an error event", { timeout: PROCESS_FIXTURE_TIMEOUT_MS }, () => {
+    expect(
+      parseId(
+        [
+          '{"event":"created","id":"bx_8pqt6dup","ttlSeconds":3600}',
+          '{"event":"error","error":"backend could not provision (409)","code":"resume_failed","status":409}',
+        ].join("\n"),
+      ),
+    ).toBe("");
+  });
+});
+
+// The conductor is the only consumer of these scripts, and both must stay executable and
+// syntactically valid — a bake copies them verbatim to the box.
+describe("the scripts themselves", () => {
+  for (const script of ["render-conductor.sh", "provision-rave-03.sh"]) {
+    test(`${script} parses`, () => {
+      const path = join(import.meta.dir, script);
+      expect(existsSync(path)).toBe(true);
+      const parsed = spawnSync("bash", ["-n", path], { encoding: "utf8" });
+      expect(parsed.stderr).toBe("");
+      expect(parsed.status).toBe(0);
+    });
+  }
 });

@@ -136,9 +136,10 @@ const CRON_OUTPUT_DIR =
 // The render conductor's state file (idle | rendering).
 const RENDER_STATE_FILE = join(HOME, ".render-conductor", "state");
 
-// The box.ascii CLI (render-box plan usage is a best-effort extra). Resolved via
-// PATH with an absolute fallback, like the other sweeps' bins.
-const BOX_BIN = process.env.BOX_BIN ?? "box";
+// The boat.dev CLI (render-box plan usage is a best-effort extra). Resolved via
+// PATH with an absolute fallback, like the other sweeps' bins. `BOX_BIN` stays an
+// accepted alias so a box env written against the pre-rename binary keeps working.
+const BOAT_BIN = process.env.BOAT_BIN ?? process.env.BOX_BIN ?? "boat";
 
 // onion — OUT OF SCOPE for v1: Tor reachability needs a SOCKS proxy the box may not
 // have, so the status page simply won't show the onion until a later pass.
@@ -1890,7 +1891,7 @@ export function probeSweepStrain(
 // PROBE: render-box — read the render conductor's state file (idle | rendering,
 // both ok). A missing file = "not yet provisioned" (ok — the conductor simply
 // hasn't run). We NEVER wake/ssh the box (it's scale-to-zero). Optionally append
-// box.ascii plan usage if `box limits --json` returns it (best-effort; `box status`
+// boat.dev plan usage if `boat limits --json` returns it (best-effort; `boat status`
 // exits 0 even unauthed, so we don't trust an exit code — only parse JSON usage).
 // ---------------------------------------------------------------------------
 
@@ -1914,13 +1915,14 @@ function probeRenderBox(): Check {
         ? "unknown state"
         : "not yet provisioned";
 
-  // Best-effort plan usage. `box limits --json` is the documented command (an earlier
-  // scan wrongly said `box list`/`box limits` don't exist — they do). We DON'T gate
-  // on `box status` (it exits 0 even unauthed); we only enrich the message if limits
+  // Best-effort plan usage. `boat limits --json` is the documented command. We DON'T gate
+  // on `boat status` (it exits 0 even unauthed); we only enrich the message if limits
   // returns parseable usage. A missing CLI / non-JSON output is silently skipped.
+  // `--no-update` because the binary is a checksum-pinned release: a health probe must
+  // never be the thing that swaps the render conductor's transport out from under it.
   let usageSuffix = "";
 
-  const limits = runQuiet(BOX_BIN, ["limits", "--json"], PROBE_TIMEOUT_MS);
+  const limits = runQuiet(BOAT_BIN, ["--no-update", "limits", "--json"], PROBE_TIMEOUT_MS);
 
   if (limits.code === 0 && limits.stdout.trim()) {
     try {

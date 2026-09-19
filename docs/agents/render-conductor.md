@@ -6,9 +6,9 @@ The end-to-end doctrine for Fluncle's per-finding VIDEO render pipeline: how a q
 
 ## The shape
 
-`fluncle-render` is unlike every other Hermes sweep. The other sweeps run their whole job inside the Hermes orchestrator box; this one is a **conductor**. The Hermes box carries no Remotion toolchain, and a render is a ~75–90 minute CPU hog that would both blow the runner's ~120s kill and starve the 5-minute sweeps it shares the box with — so the conductor wakes a separate **scale-to-zero box.ascii render box (rave-03)**, triggers the `@fluncle-video` render of exactly one queued finding _there_, and parks the box when the render finishes.
+`fluncle-render` is unlike every other Hermes sweep. The other sweeps run their whole job inside the Hermes orchestrator box; this one is a **conductor**. The Hermes box carries no Remotion toolchain, and a render is a ~75–90 minute CPU hog that would both blow the runner's ~120s kill and starve the 5-minute sweeps it shares the box with — so the conductor wakes a separate **scale-to-zero boat.dev render box (rave-03)**, triggers the `@fluncle-video` render of exactly one queued finding _there_, and parks the box when the render finishes.
 
-**There is no GPU anywhere in this pipeline, and that is deliberate.** The conductor pins `FLUNCLE_GL=swangle` — software GL — into every render's environment, so frames rasterize on the CPU. That is what makes the render box disposable: any box.ascii box can run it, a purge is a ~5-minute reprovision from `main`, and there is no accelerator to match or driver to pin. The cost is wall-clock (hence the ~75–90 minute renders and the detached, two-state design below), which the hourly cadence absorbs. The render box ships to R2/the website. Its agent-scoped token cannot access operator-tier social-publishing routes.
+**There is no GPU anywhere in this pipeline, and that is deliberate.** The conductor pins `FLUNCLE_GL=swangle` — software GL — into every render's environment, so frames rasterize on the CPU. That is what makes the render box disposable: any boat.dev box can run it, a purge is a ~5-minute reprovision from `main`, and there is no accelerator to match or driver to pin. The cost is wall-clock (hence the ~75–90 minute renders and the detached, two-state design below), which the hourly cadence absorbs. The render box ships to R2/the website. Its agent-scoped token cannot access operator-tier social-publishing routes.
 
 The conductor is a rave-02 HOST systemd timer (`fluncle-render.timer`/`.service`, every 60m — installed by [`hermes/install-host-timers.sh`](./hermes/), unit dir [`hermes/render-timer/`](./hermes/render-timer/)) that runs [`hermes/scripts/render-conductor.sh`](./hermes/scripts/render-conductor.sh). The script bakes into the Hermes image at `/opt/hermes-scripts` and auto-redeploys on merge to `main` via the on-box `pin-watch` self-deploy timer (`pin-watch` is the one host unit off the `fluncle-*` naming pattern). Its two companion scripts: [`provision-rave-03.sh`](./hermes/scripts/provision-rave-03.sh) reproduces the render box from clean `main`, and [`render-detached.sh`](./hermes/scripts/render-detached.sh) runs on the render box.
 
@@ -17,7 +17,7 @@ The conductor is a rave-02 HOST systemd timer (`fluncle-render.timer`/`.service`
 A swangle (software-GL) render runs ~85 min, but the Hermes `--no-agent` runner kills any job at ~120s. So the conductor cannot block on the render. Instead the render runs **detached on the render box** (via `setsid` in `render-detached.sh`, so it survives the short triggering SSH and a Hermes container restart — the render is decoupled from the conductor), and each conductor tick is a quick (<120s) step in a two-state machine persisted under the conductor's `~/.render-conductor/`:
 
 - **RENDERING** → poll the box for its `~/conductor-run.done` marker; when present, STOP (snapshot) the box and return to idle. Still running → NO-OP. Past `MAX_RENDER` → force-park (the stuck guard).
-- **IDLE** → if past the hourly start gate AND the queue has a renderable finding: resume the parked box (or reprovision if box.ascii reclaimed it), freshen its checkout to `main`, inject creds, and trigger one detached render → rendering.
+- **IDLE** → if past the hourly start gate AND the queue has a renderable finding: resume the parked box (or reprovision if boat.dev reclaimed it), freshen its checkout to `main`, inject creds, and trigger one detached render → rendering.
 
 **Single-flight is the hard requirement — never two renders at once.** The STATE enforces it (only `idle` starts a render; a `rendering` tick only polls), and an atomic `mkdir` lock is a second guard so two ticks never race the state file (with a stale-lock breaker for a tick the ~120s runner killed mid-hold — `flock` is deliberately avoided as non-portable). Because a render (~85m) outlasts the hourly tick, the `rendering` no-op branch fires every cycle: it is the primary safety, exercised continuously, not a rare net.
 
@@ -29,7 +29,7 @@ A swangle (software-GL) render runs ~85 min, but the Hermes `--no-agent` runner 
 
 The pick reads a **window** of the queue (`admin tracks queue --limit 25 --json`, oldest-first), not just the head — so a poisoned head can be stepped over without starving the findings behind it. The pick is the oldest finding that is NOT currently poisoned; 25 is far past any realistic simultaneous-poison count. The queue gate is fail-closed: only a successful `{ "ok": true, "tracks": [] }` response is a healthy empty queue; a non-zero CLI exit or a response outside the expected shape is a run-level `errors: 1` failure and exits non-zero so the unit's `OnFailure=` hook and run ledger see it.
 
-**The poison ledger** (a tab-separated `logId  count  lastFailEpoch` file, awk-manipulated write-to-temp-then-mv) is the head-of-line-block guard. After `POISON_THRESHOLD` (default 3) consecutive failures a finding is skipped for `POISON_TTL` (default 6h), then allowed one retry — so a TRANSIENT box.ascii wobble self-heals while an item-specific defect re-poisons. A clean render clears that finding's ledger. The poison ledger prevents one repeatedly failing finding from blocking later queue entries.
+**The poison ledger** (a tab-separated `logId  count  lastFailEpoch` file, awk-manipulated write-to-temp-then-mv) is the head-of-line-block guard. After `POISON_THRESHOLD` (default 3) consecutive failures a finding is skipped for `POISON_TTL` (default 6h), then allowed one retry — so a TRANSIENT boat.dev wobble self-heals while an item-specific defect re-poisons. A clean render clears that finding's ledger. The poison ledger prevents one repeatedly failing finding from blocking later queue entries.
 
 **A clean EXIT is not proof — the video has to actually land.** An `EXIT=0` is successful only when the finding has a shipped `videoUrl`; otherwise it counts as a false-success failure. A non-zero exit (e.g. the ~13s stale-version crash) counts directly. The ledger read is best-effort: any API/parse hiccup assumes shipped, so a transient read glitch never wrongly poisons a good render.
 
@@ -69,57 +69,69 @@ The conductor mitigates by re-copying both the bundled CLI (to `~/.local/lib/flu
 
 ## Snapshot freshness (the checkout freshen)
 
-A resumed snapshot carries a stale `fluncle` checkout — the clone from whenever the box was last provisioned — so a `packages/video` / `fluncle-video`-skill fix would otherwise not reach the render box until box.ascii purged the snapshot and forced a reprovision. The render box is scale-to-zero (asleep but for a render), so it can't watch `main` itself like the rave-02 `pin-watch` timer; instead the conductor freshens it **at wake**, right after a successful `box resume`, via `freshen_checkout`: a drift-gated `git fetch --depth 1` + `git reset --hard origin/main`, running `bun install` and re-adding the `fluncle-video` skill ONLY when the lockfile / skill subtree actually moved. It is best-effort — a fetch/reset failure logs and renders on the existing checkout — and the common case (a code change, no dep change) is a few seconds against an ~85m render. So every render runs current `main`; a fix lands on the next render, not at the next purge. The reprovision path needs none of this — it clones clean `main` by construction. When a resume succeeds but box.ascii's snapshot dropped `~/fluncle` entirely, `freshen_checkout` signals the missing checkout so the conductor stops that box and reprovisions rather than looping on a stale done-marker.
+A resumed snapshot carries a stale `fluncle` checkout — the clone from whenever the box was last provisioned — so a `packages/video` / `fluncle-video`-skill fix would otherwise not reach the render box until boat.dev purged the snapshot and forced a reprovision. The render box is scale-to-zero (asleep but for a render), so it can't watch `main` itself like the rave-02 `pin-watch` timer; instead the conductor freshens it **at wake**, right after a successful `boat resume`, via `freshen_checkout`: a drift-gated `git fetch --depth 1` + `git reset --hard origin/main`, running `bun install` and re-adding the `fluncle-video` skill ONLY when the lockfile / skill subtree actually moved. It is best-effort — a fetch/reset failure logs and renders on the existing checkout — and the common case (a code change, no dep change) is a few seconds against an ~85m render. So every render runs current `main`; a fix lands on the next render, not at the next purge. The reprovision path needs none of this — it clones clean `main` by construction. When a resume succeeds but boat.dev's snapshot dropped `~/fluncle` entirely, `freshen_checkout` signals the missing checkout so the conductor stops that box and reprovisions rather than looping on a stale done-marker.
 
 ## Reap recovery (stale/wedged box → cold provision)
 
-When a box goes stale or wedged — the checkout freshen silently failing on flaky box.ascii `box ssh` 500s, `machine_not_running` loops, a resume that keeps producing no render — the recovery is **reap → cold provision**, and it always converges because a fresh box clones current `main` by construction:
+When a box goes stale or wedged — the checkout freshen silently failing on flaky boat.dev `boat ssh` 500s, `machine_not_running` loops, a resume that keeps producing no render — the recovery is **reap → cold provision**, and it always converges because a fresh box clones current `main` by construction:
 
-1. `box stop <id>` then `box extend <id> --ttl 60` — park the wedged box and put it on a reclamation clock (there is **no `box delete`**; see the verb trap below).
+1. `boat stop <id>` then `boat extend <id> --ttl 60` — park the wedged box and put it on a reclamation clock (the conductor never deletes; see the verb trap below).
 2. Clear the conductor's box-id state file — so the next tick has no box to resume.
 3. Set the conductor state to `idle`.
 4. Trigger the render service — the conductor cold-provisions a fresh box from clean `main`.
 
 The conductor already condemns a box that fails to launch a render (it deletes the box, clears the box-id, and stays idle so a fresh box provisions next tick). The manual reap is for the cases its own guards do not catch. The exact commands (box IDs, state-file path) are the ops runbook in the private companion repo.
 
-### The restoring window: `box resume` returns before the box can answer
+### The restoring window: a resumed box answers later than its resume returns
 
-`box resume` may return while the box is still `RESTORING`. Poll `box ssh <id> true` until `BOX_READY_TIMEOUT`; allow other errors and timeouts to proceed to the launch-line check. `await_box_ready` retries only while the output carries `box_restoring`, logs `box <id> restoring — waiting (Ns elapsed)` each pass and `box <id> ready after Ns` when the box comes back, and is bounded by wall clock (`BOX_READY_TIMEOUT`, default 75s at `BOX_READY_INTERVAL` 5s) so probe latency counts and the tick stays well inside the unit's `TimeoutStartSec=180`. `render-conductor.test.ts` drives all three cases (restores-then-answers, never-answers, answers-immediately) through the real script against a stubbed `box`; its test-only `sleep` stub records retry intervals while the scripted `date +%s` sequence advances elapsed time, so the retry, sleep, and timeout assertions run without real-second delays.
+A resume can report ready while the box is still `RESTORING`, and every call inside that window fails with a typed restoring error. Poll `boat ssh <id> true` until `BOAT_READY_TIMEOUT`; allow other errors and timeouts to proceed to the launch-line check. `await_box_ready` retries only while the output carries the restoring code, logs `box <id> restoring — waiting (Ns elapsed)` each pass and `box <id> ready after Ns` when the box comes back, and is bounded by wall clock (`BOAT_READY_TIMEOUT`, default 75s at `BOAT_READY_INTERVAL` 5s) so probe latency counts and the tick stays well inside the unit's `TimeoutStartSec=180`.
 
-### The verb trap: there is no `box delete`
+**The restoring code is matched in three spellings** — `box_restoring`, `boat_restoring`, `sandbox_restoring`. The code comes from the API, not the CLI, so a CLI rename does not settle which one arrives: the pre-rename transport returned `box_restoring` (HTTP 500) and the renamed API documents `boat_restoring` (HTTP 409), with `sandbox_restoring` the third spelling the binary carries. Matching all three keeps the gate correct on either side of a rename, and `render-conductor.test.ts` drives each of them plus the non-restore error, the never-answers timeout, and the answers-immediately case through the real script against a stubbed CLI; its test-only `sleep` stub records retry intervals while the scripted `date +%s` sequence advances elapsed time, so the retry, sleep, and timeout assertions run without real-second delays.
 
-`box delete` is unavailable. Retire a box with `box stop` followed by `box extend --ttl`; verify supported lifecycle verbs because the CLI tracks a channel.
+### The bounded resume: `boat resume` blocks
 
-Propagate and log failures from lifecycle commands issued through a channel-tracking CLI.
+The renamed CLI's `resume` waits for a ready state and a successful no-op command before it returns, **bounded at thirty minutes**. The conductor's host unit kills a tick at `TimeoutStartSec=180`, so an unbounded resume can consume the whole tick and die silently between resume and trigger. The conductor therefore runs the resume under `timeout` (`RESUME_TIMEOUT`, default 90s).
+
+A cap alone is not enough. A resume that ran out of budget is **not** a dead box — the API keeps converging — so the old rule "any non-zero resume means reprovision" would build a second box on top of a live one and leave the first running with nobody to stop it. The conductor asks `box_present` (a `boat list --all` that spans every state) and only abandons an id the platform no longer lists; anything else holds the id and the next tick picks it up.
+
+### The verb trap: check the verb before you rely on it
+
+The pre-rename CLI carried no `delete`/`rm`/`destroy` at all, and because the condemn call sat under `|| true` every condemn failed silently and orphaned its box. Retire a box with `boat stop` followed by `boat extend --ttl`, and propagate and log failures from lifecycle commands rather than swallowing them.
+
+`boat delete <id> --yes` **does** exist on the renamed CLI and would make a condemn synchronous — but it also destroys the snapshot chain, so adopting it changes what a condemn means. The conductor deliberately keeps the stop + TTL + ledger path; switching is its own operator decision, not part of a CLI migration.
 
 ### A condemn ends with the box parked, on a clock, and written down
 
-`box extend <id> --ttl <seconds>` sets `archiveAfter`; reclamation completes asynchronously.
+`boat extend <id> --ttl <seconds>` sets `archiveAfter`; reclamation completes asynchronously.
 
 Reclamation is asynchronous. Every condemned box ID enters the orphan ledger, and later ticks confirm reclamation. Four pieces, all in `render-conductor.sh`:
 
 - **`mark_for_reclaim`** parks the box and sets the TTL. Idempotent, so re-issuing it on an id every tick is safe. Return the `extend` call's real exit status so TTL failures are visible.
 - **`condemn_box`** calls it, logs whether the TTL was accepted, and always records the ID because reclamation is asynchronous.
-- **`box_gone`** succeeds ONLY when a `box list` positively proves absence. An unreachable API or empty body is "not proven gone", never "reclaimed" — otherwise one wobble would drop an id from the ledger and orphan that box for good.
-- **`reap_orphans`** works the ledger at the top of **every** tick, idle or rendering, bounded by `REAP_PER_TICK` (default 5). It drops the ids box.ascii has taken, re-issues the TTL on the ones it has not (which also repairs an id filed while the API was down), and alerts **once** on a box still standing after `ORPHAN_ALERT_AFTER` (default 6h). Running it before the state machine is deliberate: a wedged box is precisely the case where the next tick is busy rendering on its replacement, so gating the reap on `idle` would leave the orphan standing for a whole render.
+- **`box_list_all`** is the one read both box questions go through, and `--all` is load-bearing. A bare `boat list` defaults to `--filter r` (up/running only), and a condemned box is parked — so the running-only question answers "absent" for every box the conductor has just condemned, drains the ledger before the platform has taken anything, and leaves the box standing unwatched. Every state a box can be in (`r` running, `s` stopped, `p` pending, `t` stopping, `e` error) is in scope.
+- **`box_gone`** succeeds ONLY when that read positively proves absence. An unreachable API or empty body is "not proven gone", never "reclaimed" — otherwise one wobble would drop an id from the ledger and orphan that box for good.
+- **`box_present`** is the opposite question, asked by the resume path: only an id the platform does not list at all is safe to walk away from. The two are **not** negations of each other — a failed list makes both false, so each fails toward holding the id.
+- **`reap_orphans`** works the ledger at the top of **every** tick, idle or rendering, bounded by `REAP_PER_TICK` (default 5). It drops the ids boat.dev has taken, re-issues the TTL on the ones it has not (which also repairs an id filed while the API was down), and alerts **once** on a box still standing after `ORPHAN_ALERT_AFTER` (default 6h). Running it before the state machine is deliberate: a wedged box is precisely the case where the next tick is busy rendering on its replacement, so gating the reap on `idle` would leave the orphan standing for a whole render.
 
 The ledger is `boxId<TAB>firstFiledEpoch<TAB>alerted` at `~/.render-conductor/orphan-boxes`, same temp-then-`mv` discipline as the poison ledger. Log `extend` failures immediately, and alert after six hours when an ID remains unreclaimed.
+
+**The reap's entire response to a stuck box is to say so.** It re-parks the box, re-issues the TTL, and pages once — the conductor never deletes a sandbox, and no amount of lingering changes that. A box the platform will not reclaim is the operator's to look at.
 
 ## Snapshot forensics (read a stopped box without resuming)
 
 A stopped box's filesystem is readable WITHOUT resuming it (no billing for a running box, no risk of racing the conductor):
 
-- `box snapshots <id>` — list the box's snapshots.
-- `box snapshot tree <id>` — browse the snapshot's filesystem.
-- `box snapshot pull <id>` — pull snapshot files to the operator machine.
+- `boat snapshots <id>` — list the box's snapshots.
+- `boat snapshot tree <id>` — browse the snapshot's filesystem.
+- `boat snapshot pull <id>` — pull snapshot files to the operator machine.
 
-For selective extraction of a large file, resume + stream it off (`box ssh -- "gzip -c <file>"` piped to the operator machine), then stop the box. Use `resume` to wake a parked box, the provisioning script to create one, and `stop` plus `extend --ttl` to retire one. Check the current CLI's supported verbs before operating it.
+For selective extraction of a large file, resume + stream it off (`boat ssh -- "gzip -c <file>"` piped to the operator machine), then stop the box. Use `resume` to wake a parked box, the provisioning script to create one, and `stop` plus `extend --ttl` to retire one. Check the current CLI's supported verbs before operating it.
 
 ## Known issues (documented as such)
 
 The conductor recovers from these known failure modes:
 
-- **`box ssh` intermittently 500s.** The readiness gate waits out `box_restoring`; other intermittent SSH failures leave checkout freshening best-effort. The durable fix for a persistently stale box is the reap recovery above.
+- **`boat ssh` intermittently fails mid-restore.** The readiness gate waits out the restoring code; other intermittent SSH failures leave checkout freshening best-effort. The durable fix for a persistently stale box is the reap recovery above.
 - **A cold-wake tick can exceed its time budget.** A cold wake (resume + wait out the restore + freshen + scp) is the longest tick the conductor runs, and the host unit kills it at `TimeoutStartSec=180`. Dying between resume and trigger is silent. Symptom: the box is resumed but no render started and the state is still `idle`. The readiness wait is bounded at 75s precisely to stay inside that budget; the next hourly tick recovers anyway (the box is already warm, so the tick is fast), or the reap recovery forces it.
 
 ## requeue-video (re-render a shipped finding)
@@ -130,15 +142,27 @@ The conductor recovers from these known failure modes:
 
 The conductor emits the render's self-seconds compute to the cost ledger (`video` · `self` · `seconds` · `subsidized`, the render's own wall-clock DURATION from the done-marker, scoped to the rendered logId). It is best-effort and never fails a tick — a dropped emit only understates the ledger.
 
-## box.ascii CLI quirks (handled)
+## boat.dev CLI quirks (handled)
 
-The Dockerfile and conductor scripts implement these box.ascii CLI contracts:
+The Dockerfile and conductor scripts implement these boat.dev CLI contracts:
 
-- **The vendor's install script is never used.** It tracks whatever the vendor currently ships and now installs a RENAMED CLI (`boat`, pointed at a different API host) with no `box` left behind, so a floating install fails the image build and freezes every merge out of the box — it also needed `$SHELL` set and ended in an interactive `onboard` that no build can answer. The Dockerfile instead pins the arch-matched release binary straight into `/usr/local/bin/box`, verifies it against the release's published `SHA256SUMS`, and smokes `box --version` at bake time. The pinned binary never self-updates, so the verbs below stay the contract; runtime auth is `box login`, never baked. Adopting the renamed CLI is a conductor migration (new verbs, new `api_url`, `sandbox_*` error codes), not a pin bump.
-- **`box new --ttl` is SECONDS (not a duration string) and is mutually exclusive with `--no-auto-stop`.** The conductor REQUIRES `--no-auto-stop` (it poll-detects done by ssh'ing the RUNNING box; a TTL/auto-stop box would vanish mid-poll), so there is no box-side lifetime backstop — the conductor is the sole stop authority.
-- **`box status` exits 0 even when unauthenticated**, so it cannot gate the login; the conductor always `box login`s (idempotent).
-- **`box ssh` propagates remote pass/fail (0 vs 1) but not the exact exit code** (it prints an error JSON on non-zero, flattening a remote `exit 42` to its own `1`). Load-bearing remote steps therefore assert on an explicit OUTPUT marker the remote command emits (the `~/conductor-run.done` poll and the "needs reprovision" grep are this pattern), not on the wrapper's exit code.
-- **`box ssh 'bash -s' <<heredoc` feeds the script on stdin, and `npx skills add` reads that stdin**, eating the rest of the script. Every provision step gets `</dev/null` + a post-setup dir check.
+- **The vendor's install script is never used.** It tracks whatever the vendor currently ships, ends in an interactive `onboard` no build can answer, and would let a self-updating CLI change the conductor's verbs at any time. The Dockerfile instead pins the arch-matched release binary straight into `/usr/local/bin/boat`, verifies it against the release's published `SHA256SUMS`, and smokes `boat --version` at bake time. Runtime auth is `boat login`, never baked.
+- **A pinned binary still tries to update itself.** The CLI checks for a newer release on every run, so **every** conductor call passes the global `--no-update` — the pin is only as good as that flag. It is a global option, so it goes BEFORE the subcommand: after it, `ssh`'s trailing `[COMMAND]...` swallows it into the remote command line. `render-conductor.test.ts` fails the build if any call reaches the CLI without it.
+- **The API key goes in on stdin.** `boat login --key-stdin` keeps the token out of the process arguments every other process on the host can read.
+- **`boat new --ttl` is SECONDS (not a duration string).** The conductor REQUIRES `--no-auto-stop` (it poll-detects done by ssh'ing the RUNNING box; a TTL/auto-stop box would vanish mid-poll) and passes no `--ttl` at all, so there is no box-side lifetime backstop — the conductor is the sole stop authority.
+- **`boat new --json` is JSONL** — `created`, zero or more `state`, then `ready` or `error`. The provision script prefers the `ready` line's id and refuses a run whose last line is an `error`, so a half-born sandbox is never provisioned against.
+- **`boat list` defaults to `--filter r`** (up/running only). Every question the conductor asks is about a box that may be parked — a condemned box, a stopped render box, the carry-over check — so all of them pass `--all`.
+- **`boat status` exits 0 even when unauthenticated**, so it cannot gate the login; the conductor always `boat login`s (idempotent).
+- **`boat ssh` propagates remote pass/fail (0 vs 1) but not the exact exit code** (it prints an error JSON on non-zero, flattening a remote `exit 42` to its own `1`). Load-bearing remote steps therefore assert on an explicit OUTPUT marker the remote command emits (the `~/conductor-run.done` poll and the "needs reprovision" grep are this pattern), not on the wrapper's exit code.
+- **`boat ssh 'bash -s' <<heredoc` feeds the script on stdin, and `npx skills add` reads that stdin**, eating the rest of the script. Every provision step gets `</dev/null` + a post-setup dir check.
+
+## Preflight (`--preflight`)
+
+`render-conductor.sh --preflight` runs the READ-ONLY half of a tick and stops: it reports the CLI version, the config path, whether the login was accepted, how many sandboxes the account holds, whether the sandbox id in the conductor's state file is still one of them, how many condemned ids the orphan ledger is watching, and which finding the pick WOULD choose. It creates, resumes, stops, extends and deletes **nothing** — the only calls it makes are a login and one `boat list --all`, and `render-conductor.test.ts` asserts exactly that call list, so the guarantee cannot rot.
+
+Its `recorded id:` and `carry-over:` lines name the live sandbox, so redact them before pasting preflight output into anything public — the sibling count line is already a number rather than a list.
+
+It exists because some questions about the transport cannot be answered from a repository. The load-bearing one is **carry-over**: whether the parked render box is still reachable after a CLI change. The preflight answers it without spending a render window, and either answer is fine — a listed id is resumed on the next real tick, an unlisted one costs a ~5-minute cold provision from clean `main`. Run it first after any change to the pinned CLI, then run one attended render.
 
 ## Operator ops
 
