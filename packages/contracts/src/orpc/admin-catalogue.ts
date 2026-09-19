@@ -719,10 +719,10 @@ export const CrawlPassSchema = z
     /** Seed nodes minted from the operator's `enabled` labels this pass. */
     seeded: z.number(),
     /**
-     * Stale seed-label browse nodes re-armed this pass — an enabled label is a subscription,
-     * re-reading the TAIL of its release list past the re-arm threshold so its later releases (a
-     * Friday drop, which lands at the unsorted list's end) surface. Bounded per pass so a mass
-     * re-arm spreads over ticks. See docs/catalogue-crawler.md § the seed re-arm.
+     * Due seed-label browse nodes re-armed this pass — an enabled label is a subscription,
+     * re-reading the TAIL of its release list on each release-week pass boundary so its later
+     * releases (a Friday drop, which lands at the unsorted list's end) surface. Bounded per pass
+     * so a mass re-arm spreads over ticks. See docs/catalogue-crawler.md § the re-arms.
      */
     seedsRearmed: z.number(),
     /** Tracks admitted by an artist allow rule over a non-enabled label default. */

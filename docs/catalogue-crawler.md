@@ -136,7 +136,15 @@ A catalogue track's `track_id` is `mb_<musicbrainz-recording-id>` — determinis
 
 ## The re-arms (release freshness + scope changes)
 
-Enabled seed labels are recurring subscriptions. Each pass re-arms eligible MusicBrainz label nodes older than `REARM_AFTER_DAYS`, probes the tail, pages backward, and stops when a page adds no release nodes. `REARM_BATCH` bounds each pass.
+Enabled seed labels are recurring subscriptions, and the subscription runs on a **release-week schedule** rather than an interval. Three pass boundaries a week, all UTC: **Friday 12:00, Sunday 00:00, Tuesday 00:00**. Drum & bass drops on Friday and MusicBrainz is editor-entered with an hours-to-days lag, so the Friday-noon pass catches release-day entries, Sunday sweeps the weekend's late ones, and Tuesday the stragglers. The schedule is data — one array of `{ weekday, hourUtc }` in `apps/web/src/lib/server/crawl-rearm-schedule.ts` — and UTC by construction, so no DST shift moves a pass.
+
+A label's seed node is **due** when the most recent boundary at or before now is newer than the node's last drain (`done_at`). That one comparison is self-healing with no special cases: a missed pass, a paused crawl, a label enabled mid-week and a node that drained slowly all converge on the next boundary, and a node drained after the boundary waits for the following one. It needs no schema column — `done_at` already carries the answer, and the `crawl_frontier_label_node_idx` partial index over `(state, done_at)` serves the pick.
+
+The cadence is a budget decision, not a taste one. Every enabled label costs about one browse page per pass, and at the enabled-label count the crawl now carries, a daily pass consumed more of the shared 1 req/s MusicBrainz budget than the whole general walk, starving artist-hop discovery. Three passes cut that to three sevenths while still landing a Friday drop on the day — all MusicBrainz's own editorial lag can deliver anyway.
+
+Each due pass re-arms eligible MusicBrainz label nodes, probes the tail, pages backward, and stops when a page adds no release nodes. `REARM_BATCH` bounds each tick, oldest-done-first; a label the tick skips stays due and comes round on the next one.
+
+The **allowed-artist tail re-arm** is deliberately NOT on this schedule. It is a much narrower population — one node per identity carrying an allow rule, minted by the operator rather than by the crawl — so its daily cadence (`ALLOWED_ARTIST_REARM_AFTER_DAYS`) is a rounding error against the same budget. The scoped label re-arm and the allow-rule re-arm are watermark-driven, not cadence-driven, and are likewise untouched by the schedule.
 
 Scope changes get their own re-arm legs, because a `done` frontier node never revives on its own and a widened scope would otherwise silently strand the back catalogue that was walked-and-refused under the old rules:
 

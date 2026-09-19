@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { mostRecentSeedRearmBoundary, setSeedRearmClockForTests } from "./crawl-rearm-schedule";
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
 
@@ -17,6 +18,17 @@ import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
 
 let db: Client;
 let fixtureDirectory: string | undefined;
+
+/**
+ * A `done_at` that is DUE under the seed re-arm's release-week schedule, whenever the suite runs.
+ *
+ * The rule is `done_at < <the most recent pass boundary>`, so "N days ago" is not a fixture: at the
+ * wrong minute of the week a three-day-old node sits on the right side of the boundary. Anchoring
+ * one second BEFORE the boundary itself is due by construction, on every day of every week.
+ */
+function drainedBeforeLastPass(): string {
+  return new Date(mostRecentSeedRearmBoundary(new Date()).getTime() - 1000).toISOString();
+}
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -2211,7 +2223,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   // list (where MB's unsorted browse appends new pressings): a genuinely new release mints rows, a
   // known one is a cheap on-conflict no-op, and the two-layer idempotence folds any re-pressed track.
   const NEW_RELEASE = "release-new";
-  const DAY_MS = 24 * 60 * 60 * 1000;
 
   /** Re-point the Med School browse at a wider release list to model a later drop. */
   function stubMedschool(releaseIds: string[]): void {
@@ -2257,9 +2268,9 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
     );
   }
 
-  /** Age every done MB-label browse node so it crosses the re-arm threshold. */
-  async function ageSeedLabelNodes(daysAgo: number): Promise<void> {
-    const old = new Date(Date.now() - daysAgo * DAY_MS).toISOString();
+  /** Age every done MB-label browse node back past the most recent pass boundary. */
+  async function ageSeedLabelNodes(): Promise<void> {
+    const old = drainedBeforeLastPass();
 
     await db.execute({
       args: [old],
@@ -2269,7 +2280,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   }
 
   it("re-arms a stale enabled label, discovers its NEW release, and re-walks the known one for nothing", async () => {
-    const { REARM_AFTER_DAYS } = await import("./crawl");
     const { crawlCatalogue } = await import("./crawl");
 
     // First drain (hop 0 keeps it to the seed label's own releases): rec-1 + rec-2 land.
@@ -2281,9 +2291,9 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
       "mb_rec-2",
     ]);
 
-    // Time passes; the label drops a new release. Its done browse node is now past the threshold.
+    // Time passes; the label drops a new release. Its done browse node now predates the last pass.
     stubMedschool([SEED_RELEASE, NEW_RELEASE]);
-    await ageSeedLabelNodes(REARM_AFTER_DAYS + 1);
+    await ageSeedLabelNodes();
 
     // The re-arm rides this pass: it flips the MB label browse node back to pending (REARM_TAIL).
     const rearmPass = await crawlCatalogue({ limit: 10, maxHop: 0 });
@@ -2306,13 +2316,13 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
     expect(Number(findings.rows[0]?.n)).toBe(0);
   });
 
-  it("does NOT re-arm a freshly-drained label (done_at < threshold)", async () => {
+  it("does NOT re-arm a label drained since the last pass boundary", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
     stubMedschool([SEED_RELEASE]);
     await drain(0);
 
-    // done_at is just now — well inside the window. No re-arm, the node stays done.
+    // done_at is just now, which is at or after the most recent boundary. No re-arm until the next.
     const pass = await crawlCatalogue({ limit: 10, maxHop: 0 });
     expect(pass.seedsRearmed).toBe(0);
 
@@ -2323,13 +2333,13 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   });
 
   it("never re-arms a DISABLED label's done node, nor a FAILED node", async () => {
-    const { REARM_AFTER_DAYS, crawlCatalogue } = await import("./crawl");
+    const { crawlCatalogue } = await import("./crawl");
 
     // Silence the walk itself (nothing enabled to seed), then plant two aged nodes by hand.
     await db.execute("update labels set seed_state = 'disabled'");
-    const old = new Date(Date.now() - (REARM_AFTER_DAYS + 5) * DAY_MS).toISOString();
+    const old = drainedBeforeLastPass();
 
-    // A DISABLED label's done browse node, well past the threshold — re-arm is crawl SCOPE, so it
+    // A DISABLED label's done browse node, well past the boundary — re-arm is crawl SCOPE, so it
     // must stay done: a label the operator ruled OUT is not re-subscribed.
     await db.execute({
       args: ["musicbrainz:label:mb-anjuna", "mb-anjuna", old, old, old],
@@ -2338,7 +2348,7 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
             values (?, 'label', 'musicbrainz', ?, 0, null, 'anjunabeats', 'done', ?, ?, ?)`,
     });
 
-    // A FAILED node whose label IS enabled and IS past the threshold — the exponential backoff
+    // A FAILED node whose label IS enabled and IS past the boundary — the exponential backoff
     // owns a failed node, so the re-arm must never disturb it.
     await db.execute("update labels set seed_state = 'enabled' where slug = 'medschool'");
     await db.execute({
@@ -2363,12 +2373,12 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   });
 
   it("re-arms at most REARM_BATCH per pass (oldest-done-first), spreading a mass re-arm over ticks", async () => {
-    const { REARM_AFTER_DAYS, REARM_BATCH, crawlCatalogue } = await import("./crawl");
+    const { REARM_BATCH, crawlCatalogue } = await import("./crawl");
 
-    // The '88 enabled labels cross the threshold in one window' shape, shrunk to REARM_BATCH + 2.
+    // The 'every enabled label comes due on the same boundary' shape, shrunk to REARM_BATCH + 2.
     // Every node is a done, aged, enabled-label browse node — so all are re-arm-eligible.
     await db.execute("update labels set seed_state = 'disabled'"); // silence the seed walk
-    const old = new Date(Date.now() - (REARM_AFTER_DAYS + 2) * DAY_MS).toISOString();
+    const old = drainedBeforeLastPass();
     const cohort = REARM_BATCH + 2;
 
     for (let i = 0; i < cohort; i += 1) {
@@ -2391,6 +2401,63 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
     const second = await crawlCatalogue({ limit: 1, maxHop: 0 });
     expect(second.seedsRearmed).toBe(cohort - REARM_BATCH);
   });
+
+  it("comes due ON a pass boundary and not again until the next one", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    // The clock moves through one release week on the RE-ARM'S OWN seam, never globally: the
+    // crawl's claim measures its wall budget with `Date.now()`, so a faked global clock strands it
+    // with zero elapsed time forever. 2026-09-17 is a Thursday, 09-18 the Friday, 09-20 the Sunday.
+    const MB_NODE = `musicbrainz:label:${LABEL_MBID}`;
+
+    /** Put the seed label's browse node back to drained, with a chosen `done_at`. */
+    async function drainedAt(doneAt: string): Promise<void> {
+      await db.execute({
+        args: [doneAt, doneAt, MB_NODE],
+        sql: `update crawl_frontier set state = 'done', cursor = 0, done_at = ?, updated_at = ?
+              where id = ?`,
+      });
+    }
+
+    /** One tick with the re-arm's clock parked on `instant`; answers how many seeds it re-armed. */
+    async function passAt(instant: string): Promise<number> {
+      setSeedRearmClockForTests(new Date(instant));
+      return (await crawlCatalogue({ limit: 1, maxHop: 0 })).seedsRearmed;
+    }
+
+    try {
+      stubMedschool([SEED_RELEASE]);
+      await drain(0);
+
+      // The label last drained on the Thursday — after Tuesday's pass, before Friday's. A minute
+      // short of Friday noon the most recent boundary is still Tuesday's, and the Thursday drain
+      // is NEWER than it. Not due.
+      await drainedAt("2026-09-17T09:00:00.000Z");
+      expect(await passAt("2026-09-18T11:59:00.000Z")).toBe(0);
+
+      // Friday noon opens the release-day pass and the Thursday drain falls behind it. Due.
+      await drainedAt("2026-09-17T09:00:00.000Z");
+      expect(await passAt("2026-09-18T12:00:00.000Z")).toBe(1);
+
+      // Served: the node is walked and drains again, inside Friday's pass. The rest of Friday and
+      // all of Saturday belong to that same pass, so it is never due twice for one boundary.
+      for (const instant of [
+        "2026-09-18T12:05:01.000Z",
+        "2026-09-18T23:59:59.000Z",
+        "2026-09-19T15:00:00.000Z",
+        "2026-09-19T23:59:59.999Z",
+      ]) {
+        await drainedAt("2026-09-18T12:05:00.000Z");
+        expect(await passAt(instant)).toBe(0);
+      }
+
+      // Sunday midnight opens the weekend's late-entry pass. Due again.
+      await drainedAt("2026-09-18T12:05:00.000Z");
+      expect(await passAt("2026-09-20T00:00:00.000Z")).toBe(1);
+    } finally {
+      setSeedRearmClockForTests(null);
+    }
+  });
 });
 
 // ── THE NAMESAKE SEAL: a ruled identity beats a name ────────────────────────────────────────────
@@ -2405,7 +2472,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
 describe("the namesake seal — the ruled mb_label_id is the resolver's authority", () => {
   const RIGHT_MBID = "label-radar-dnb";
   const WRONG_MBID = "label-radar-punk";
-  const DAY_MS = 24 * 60 * 60 * 1000;
 
   /**
    * MusicBrainz over a namesake pair, with the search calls COUNTED. The punk label outranks the
@@ -2534,10 +2600,10 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
   });
 
   it("re-arms a node that IS the ruled identity, never a namesake node wearing the right slug", async () => {
-    const { REARM_AFTER_DAYS, crawlCatalogue } = await import("./crawl");
+    const { crawlCatalogue } = await import("./crawl");
     await db.execute("update labels set seed_state = 'disabled'"); // silence the Medschool walk
 
-    const old = new Date(Date.now() - (REARM_AFTER_DAYS + 2) * DAY_MS).toISOString();
+    const old = drainedBeforeLastPass();
 
     /** An aged, drained MusicBrainz label browse node under one seed slug. */
     const plantNode = async (slug: string, mbid: string): Promise<void> => {
@@ -2758,7 +2824,7 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
     );
   }
 
-  /** Plant a DONE MB-label browse node (aged past the re-arm threshold) plus its walked releases. */
+  /** Plant a DONE MB-label browse node (drained before the last pass) plus its walked releases. */
   async function planDrainedLabel(knownCount: number): Promise<void> {
     await db.execute({
       args: [MB_LABEL_NODE, LABEL_MBID, "medschool", AGED, AGED, AGED],
@@ -2915,8 +2981,8 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
     expect(Number(node.rows[0]?.cursor)).toBe(100);
   });
 
-  it("re-arms daily — REARM_AFTER_DAYS is 1", async () => {
-    const { REARM_AFTER_DAYS } = await import("./crawl");
-    expect(REARM_AFTER_DAYS).toBe(1);
+  it("keeps the allowed-artist tail on its own DAILY cadence, not the labels' schedule", async () => {
+    const { ALLOWED_ARTIST_REARM_AFTER_DAYS } = await import("./crawl");
+    expect(ALLOWED_ARTIST_REARM_AFTER_DAYS).toBe(1);
   });
 });
