@@ -165,29 +165,39 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2" \
 # box.ascii CLI — the `fluncle-render` `--no-agent` conductor cron drives a
 # SCALE-TO-ZERO box.ascii render box: wake it, trigger the render via a
 # remote `claude -p`, park it (docs/agents/hermes/cron/README.md § the render
-# conductor). The installer drops the binary in $HOME/.ascii/bin (/root, mode 700);
-# the non-root cron runner can't traverse /root, so COPY it to /usr/local/bin like
-# bun. Run under `sh` it skips the .bashrc/.zshrc shell-integration (writes only the
-# binary + a ~/.config/ascii/box/config.json — non-secret api_url/channel, which
-# render-conductor.sh re-creates at the cron user's own HOME). Auth is NOT baked:
-# the conductor `box login`s from BOX_API_KEY (the configured 1Password item — see
-# the ops runbook note) at run, persisting under the cron user's $HOME (the mounted
-# agent state dir).
-# NOTE: box.ascii is pre-1.0 and its installer offers no version pin — it tracks
-# the `ascii-prod` channel (the CLI also self-updates), so this is the one image
-# dependency not version-pinned. Re-verify the conductor after a base rebuild.
-# Two install-in-Docker quirks the installer trips on: (1) it runs `basename "$SHELL"`
-# under `set -u` and $SHELL is unset in a build (→ "parameter not set", exit 2), so set
-# SHELL=/bin/sh — which also makes it skip the .bashrc/.zshrc integration (binary +
-# config only, clean); (2) it ENDS with an interactive `box onboard` (sign-in) that
-# needs a tty and fails in a build (cannot open /dev/tty). The binary is installed
-# BEFORE that step and runtime auth is `box login $BOX_API_KEY` (the conductor), so
-# ignore the onboard exit (|| true) and assert the binary actually landed (test -x).
-RUN export SHELL=/bin/sh \
-  && (curl -fsSL https://box.ascii.dev/install | sh || true) \
-  && test -x /root/.ascii/bin/box \
-  && cp /root/.ascii/bin/box /usr/local/bin/box \
-  && chmod 755 /usr/local/bin/box
+# conductor). The conductor runs as a NON-root cron user that cannot traverse /root,
+# so the binary is installed straight to world-traversable /usr/local/bin — a real
+# file outside /root, like bun. Nothing else is baked: the CLI's non-secret config
+# (api_url/channel) is re-created by render-conductor.sh at the cron user's own HOME,
+# and auth is runtime-only — the conductor `box login`s from BOX_API_KEY (the
+# configured 1Password item — see the ops runbook note), persisting under that HOME
+# (the mounted agent state dir).
+#
+# PINNED to a release binary rather than installed by the vendor's `box.ascii.dev/install`
+# script. That script tracks whatever the vendor currently ships, and the vendor has
+# renamed the product: it now installs a `boat` binary pointed at a different API host
+# and leaves no `box` behind at all, so a floating install fails the build outright —
+# and a self-updating CLI can change the conductor's verbs under it at any time. The
+# pinned binary is the contract: it speaks the ascii.dev API and the verbs
+# render-conductor.sh is written against (`login`/`list`/`new`/`ssh`/`scp`/`resume`/
+# `stop`/`extend`, the `box_restoring` retry code), and it never updates itself.
+# MANUAL-watch tier like gh — never in hermes-pin-drift's auto-bump. Moving to the
+# renamed CLI is a conductor migration (new verbs, new api_url, `sandbox_*` error
+# codes), not a pin bump, so both stay operator decisions.
+# The download is checksum-verified against the release's published SHA256SUMS, and
+# the bake-time smoke asserts the binary runs and reports the pinned version.
+RUN ver="0.1.228-ascii-prod1" \
+  && arch="$(uname -m)" \
+  && case "$arch" in \
+       aarch64|arm64) cpu="arm64"; sha="6b958c8698a34e10617eb1e473d53804ef787bbf0a21ba679f2d9b807d6f0971" ;; \
+       x86_64|amd64)  cpu="x64";   sha="4bf298049987078c50cff6f15478deb2def6e477a23d1cf75978382bd19505b0" ;; \
+       *) echo "unsupported arch for the box.ascii CLI: $arch" >&2; exit 1 ;; \
+     esac \
+  && curl -fsSL "https://github.com/ariana-dot-dev/agent-server/releases/download/box-cli-v${ver}/box-linux-${cpu}" \
+       -o /usr/local/bin/box \
+  && printf '%s  %s\n' "$sha" /usr/local/bin/box | sha256sum -c - \
+  && chmod 755 /usr/local/bin/box \
+  && /usr/local/bin/box --version | grep -qF "$ver"
 
 # Install the Fluncle CLI — the agent's only path to read/write the archive. There
 # is no local command gate: the box holds an `agent`-scoped token and the Worker

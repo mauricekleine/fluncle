@@ -17,7 +17,7 @@ This file is the doctrine and the decision map. The drift surface (file:line + c
 - **bun** — baked into the image AND mirrored in the repo's `package.json` `packageManager` (and the CI workflows). One version, three places; they move together.
 - The **`fluncle` CLI** baked into the image (the standalone bun-compiled binary, pinned by release-asset URL — the Bun-runtime commands need it; the `npm -g` thin client runs under node and can't).
 - The **Claude Code CLI** baked into the image (`npm -g`).
-- **box.ascii CLI** — the render box's transport. Pre-1.0, self-updating, **unpinnable** (the installer offers no version). Not a pin to bump; a thing to **re-verify** after a base rebuild.
+- **box.ascii CLI** — the render box's transport. Pre-1.0 and pinned to a checksum-verified release binary (the vendor's floating installer now ships a renamed CLI, so it cannot be trusted to produce a `box`). **MANUAL-watch tier**: never auto-bumped, and adopting the renamed CLI is a conductor migration rather than a pin bump. Still a thing to **re-verify** after a base rebuild.
 - The **GitHub Actions** mutable tags in `.github/workflows/` (`actions/checkout@v6`, `oven-sh/setup-bun@v2`, …) — a `.deepsec` scan flags these as a supply-chain risk and recommends SHA-pinning.
 
 **Out of scope (separate flows — reference, do not duplicate):**
