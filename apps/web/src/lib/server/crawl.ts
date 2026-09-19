@@ -1875,6 +1875,7 @@ type ScopeMemo = {
 type ArtistRuleMemoRow = {
   artist_mbid: string;
   label_id: string | null;
+  // The memo read filters to the two ACQUISITION verdicts, so `unlisted` never reaches this type.
   verdict: "allow" | "block";
 };
 type ReleaseLabelScope = { enabled: boolean; labelId: string | null; rulesAllowed: boolean };
@@ -1889,9 +1890,14 @@ function addLabelRule(map: Map<string, Set<string>>, labelId: string, artistMbid
 async function getScopeMemo(client?: Pick<Client, "execute">): Promise<ScopeMemo> {
   const labels = await listLabels(undefined, client);
   const db = client ?? (await getDb());
+  // ONLY the acquisition verdicts. `unlisted` is a VISIBILITY ruling and is inert here — an
+  // unlisted artist's records store exactly as the label seed state decides, as if no rule
+  // existed — so it is filtered in SQL rather than in the fold below, which also keeps it from
+  // spending the memo budget.
   const result = await db.execute({
     args: [ARTIST_RULE_MEMO_LIMIT + 1],
     sql: `select artist_mbid, label_id, verdict from artist_rules
+          where verdict in ('allow', 'block')
           order by id asc limit ?`,
   });
   const rules = typedRows<ArtistRuleMemoRow>(result.rows);
@@ -1938,16 +1944,26 @@ async function getScopeMemo(client?: Pick<Client, "execute">): Promise<ScopeMemo
   }
 
   for (const rule of rules) {
-    if (!rule.label_id) {
-      (rule.verdict === "allow" ? memo.globalAllow : memo.globalBlock).add(rule.artist_mbid);
+    // Exhaustive by construction: a verdict the memo does not model is DROPPED, never folded into
+    // block. "Carries a global rule" must never read as "is blocked" — the visibility verdict is
+    // exactly the rule that would break that way.
+    const scoped =
+      rule.verdict === "allow"
+        ? { global: memo.globalAllow, label: memo.labelAllow }
+        : rule.verdict === "block"
+          ? { global: memo.globalBlock, label: memo.labelBlock }
+          : null;
+
+    if (!scoped) {
       continue;
     }
 
-    addLabelRule(
-      rule.verdict === "allow" ? memo.labelAllow : memo.labelBlock,
-      rule.label_id,
-      rule.artist_mbid,
-    );
+    if (!rule.label_id) {
+      scoped.global.add(rule.artist_mbid);
+      continue;
+    }
+
+    addLabelRule(scoped.label, rule.label_id, rule.artist_mbid);
   }
 
   return memo;

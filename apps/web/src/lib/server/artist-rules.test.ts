@@ -22,7 +22,9 @@ import { createIntegrationDb } from "./integration-db";
 import {
   addArtistRule,
   ArtistRuleNotFoundError,
+  artistSlugsForMbid,
   DuplicateGlobalArtistRuleError,
+  LabelScopedUnlistedRuleError,
   listArtistRules,
   listLabelArtistRules,
   MissingArtistRuleNameError,
@@ -449,5 +451,71 @@ describe("global artist rules", () => {
     await expect(
       updateArtistRule("arl_missing", { checkedAt: "2026-08-02T18:00:00.000Z" }),
     ).rejects.toBeInstanceOf(ArtistRuleNotFoundError);
+  });
+});
+
+// ── THE VISIBILITY VERDICT ──────────────────────────────────────────────────────────────────
+// `unlisted` hides one public artist PAGE. A page is not per-label, so the verdict exists only at
+// global scope, and both write paths have to say so rather than storing a rule nothing reads.
+describe("the unlisted verdict is global-only", () => {
+  it("refuses a label-scoped unlisted rule before any MusicBrainz call or write", async () => {
+    await seedLabel("lbl_unlisted_scope");
+
+    await expect(
+      replaceLabelArtistRules("lbl_unlisted_scope", [
+        { artistMbid: "mbid-pop-original", artistName: "Pop Original", verdict: "block" },
+        {
+          artistMbid: "mbid-unlisted",
+          artistName: "Unlisted",
+          // The contract's per-label enum refuses this at the boundary; the server keeps its own
+          // closed door for a body that reaches it another way.
+          verdict: "unlisted" as unknown as "allow",
+        },
+      ]),
+    ).rejects.toBeInstanceOf(LabelScopedUnlistedRuleError);
+
+    expect(mocks.mbFetch).not.toHaveBeenCalled();
+    expect(await listLabelArtistRules("lbl_unlisted_scope")).toEqual([]);
+  });
+
+  it("stores a global unlisted rule and reads it back with its verdict", async () => {
+    mbMiss();
+
+    const rule = await addArtistRule({
+      artistMbid: "mbid-pop-original",
+      artistName: "Pop Original",
+      verdict: "unlisted",
+    });
+
+    expect(rule.verdict).toBe("unlisted");
+    expect(await listArtistRules()).toMatchObject([{ verdict: "unlisted" }]);
+  });
+
+  it("reports the removed rule's identity and verdict so the caller can flip the page back", async () => {
+    mbMiss();
+    const rule = await addArtistRule({
+      artistMbid: "mbid-pop-original",
+      artistName: "Pop Original",
+      verdict: "unlisted",
+    });
+
+    await expect(removeArtistRule(rule.id)).resolves.toEqual({
+      artistMbid: "mbid-pop-original",
+      verdict: "unlisted",
+    });
+    await expect(removeArtistRule(rule.id)).resolves.toBeUndefined();
+    expect(await listArtistRules()).toEqual([]);
+  });
+
+  it("lists every `/artist/<slug>` page one MusicBrainz identity owns", async () => {
+    await seedLocalArtist({ id: "artist-one", mbid: "mbid-pop-original", name: "Pop Original" });
+    await seedLocalArtist({ id: "artist-two", mbid: "mbid-pop-original", name: "Pop Original" });
+    await seedLocalArtist({ id: "artist-other", mbid: "mbid-other", name: "Someone Else" });
+
+    expect(await artistSlugsForMbid("mbid-pop-original")).toEqual([
+      "artist-artist-one",
+      "artist-artist-two",
+    ]);
+    expect(await artistSlugsForMbid("mbid-nobody")).toEqual([]);
   });
 });

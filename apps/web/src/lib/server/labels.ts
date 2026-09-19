@@ -888,6 +888,25 @@ function hubGateSql(alias: string, floor: string): string {
   return `(${alias}.certified_finding_count > 0 or ${alias}.renderable_track_count >= ${floor})`;
 }
 
+/**
+ * The WHOLE gate for one entity read: the stored-count inclusion gate above, plus that hub's own
+ * visibility term when it carries one. Every gated statement below compiles from this single
+ * function, so the total, the A–Z lane, the page slice, the seek boundaries and the name filter
+ * cannot disagree about which entities the hub contains.
+ *
+ * The visibility term is a per-row check on top of the entity's hub listing index rather than part
+ * of it: the index still serves the scan and the order, and the term probes a tiny operator-authored
+ * table. Changing it changes `hubClauseHash`, so cached page anchors recompute rather than serve a
+ * stale membership.
+ */
+function entityGateWhere(
+  query: Pick<CatalogueEntityPageQuery, "alias" | "floor" | "visibilityWhere">,
+): string {
+  const gate = hubInclusionWhere(query.alias, query.floor);
+
+  return query.visibilityWhere ? `${gate} and ${query.visibilityWhere}` : gate;
+}
+
 /** The stored RENDERABLE count, qualified by an entity read's table name/alias — the thin-content
     floor's own term (`>= floor`), which is the SITEMAP's narrower gate, not the browsable index's. */
 function hubRenderableColumn(alias: string): string {
@@ -926,6 +945,12 @@ export type CatalogueEntityPageQuery = {
   idExpr: string;
   nameExpr: string;
   slugExpr: string;
+  /**
+   * An extra CONSTANT term ANDed onto the gate for hubs whose entity can be hidden independently of
+   * its counts — today only `artists`, which a global `unlisted` rule takes off the site
+   * (lib/server/artist-visibility.ts). Absent on a hub with nothing to hide.
+   */
+  visibilityWhere?: string;
 };
 
 export type CatalogueHubQuery<Entry> = CatalogueEntityPageQuery & {
@@ -952,14 +977,17 @@ export type CatalogueHubQuery<Entry> = CatalogueEntityPageQuery & {
  * growing table is touched at all now.
  */
 export async function countIndexableHubEntities(
-  query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "floor">,
+  query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "floor" | "visibilityWhere">,
 ): Promise<number> {
   const db = await getDb();
+  // The hub's visibility term rides here too: a hidden entity is absent from the sitemap, so the
+  // card's number and the sitemap's membership stay the same set.
+  const visibility = query.visibilityWhere ? ` and ${query.visibilityWhere}` : "";
   const result = await db.execute({
     args: [query.floor],
     sql: `select count(*) as n
           from ${query.entity}
-          where ${hubRenderableColumn(query.alias)} >= ?`,
+          where ${hubRenderableColumn(query.alias)} >= ?${visibility}`,
   });
 
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
@@ -1055,7 +1083,7 @@ function catalogueEntityPageShape(
   projection: string,
 ): HubOrderedPageShape {
   return {
-    clauses: [{ args: [], sql: hubInclusionWhere(query.alias, query.floor) }],
+    clauses: [{ args: [], sql: entityGateWhere(query) }],
     from: query.entity,
     idExpr: query.idExpr,
     keyAlias: "slug",
@@ -1112,7 +1140,7 @@ export function catalogueEntityCountQuery(query: CatalogueEntityPageQuery) {
     args: [],
     sql: `select count(*) as total
           from ${query.entity}
-          where ${hubInclusionWhere(query.alias, query.floor)}`,
+          where ${entityGateWhere(query)}`,
   };
 }
 
@@ -1211,7 +1239,7 @@ export function catalogueEntityLetterCountsQuery(query: CatalogueEntityPageQuery
     args: [],
     sql: `select substr(${query.slugExpr}, 1, 1) as letter, count(*) as n
           from ${query.entity}
-          where ${hubInclusionWhere(query.alias, query.floor)}
+          where ${entityGateWhere(query)}
           group by substr(${query.slugExpr}, 1, 1)
           order by substr(${query.slugExpr}, 1, 1) asc`,
   };
@@ -1449,7 +1477,7 @@ export async function listHubPage<Entry>(
                    ${query.alias}.renderable_track_count as track_count,
                    (${query.alias}.certified_finding_count > 0) as certified
             from ${query.entity}
-            where ${query.nameExpr} like ? escape '\\' and ${hubInclusionWhere(query.alias, query.floor)}
+            where ${query.nameExpr} like ? escape '\\' and ${entityGateWhere(query)}
           )
           select 'total' as kind, '' as id, '' as slug, (select count(*) from gated) as n, 0 as cert
           union all

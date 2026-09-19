@@ -77,6 +77,7 @@ import {
 import { bestArtistAvatarUrl, labelLogoUrl } from "../media";
 import { ALBUM_INDEX_MIN_TRACKS } from "./albums";
 import { MAX_SIMILAR_ARTISTS_INPUT, meanEmbedding } from "./artist-dossier";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
 import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS, resolveConfirmedAliasLabelId } from "./labels";
@@ -405,6 +406,8 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   if (kind === "artist") {
     // The name arm binds its own argument: the bare needle for the NOCASE equality, the needle
     // with its `%` for the prefix `LIKE` (a bound pattern is what lets the index range serve it).
+    // The two arms are parenthesized so the VISIBILITY term below binds over both: an artist a
+    // global `unlisted` rule has taken off the site must not be reachable by its alias either.
     const nameMatch = mode === "exact" ? "artists.name = ? collate nocase" : "artists.name like ?";
 
     return {
@@ -419,11 +422,12 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
               artists.image_updated_at as image_updated_at,
               case when lower(artists.name) ${predicate} then 0 else 1 end as name_rank
             from artists
-            where ${nameMatch}
+            where (${nameMatch}
                or artists.id in (select artist_aliases.artist_id from artist_aliases
                                  where artist_aliases.kind = 'name'
                                    and artist_aliases.status in ('auto', 'confirmed')
-                                   and lower(artist_aliases.alias) ${predicate})
+                                   and lower(artist_aliases.alias) ${predicate}))
+              and ${listedArtistWhere()}
             order by name_rank asc, length(artists.name) asc, artists.name asc
             limit ?`,
     };

@@ -61,6 +61,7 @@
 import { type CatalogueTrackListItem, type SearchFilters } from "@fluncle/contracts/orpc";
 import { type Client } from "@libsql/client";
 import { parseArtistsJson } from "./artists";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import {
   type FreshCatalogueItem,
@@ -384,10 +385,11 @@ function aggregateKey(kind: string, clauses: Clause[]): string {
 }
 
 /** The `track_artists → artists` JSON subquery: `[{name, slug}]` for the row's artists, one indexed
-    seek (`track_artists_track_id_idx` + the `artists` PK), the lead-artist subquery's sibling. */
+    seek (`track_artists_track_id_idx` + the `artists` PK), the lead-artist subquery's sibling. An
+    artist a global `unlisted` rule has taken off the site is absent, so the credit is plain text. */
 const ARTIST_SLUGS_SELECT = `(select json_group_array(json_object('name', a.name, 'slug', a.slug))
      from track_artists ta join artists a on a.id = ta.artist_id
-     where ta.track_id = tracks.track_id) as artist_slugs_json`;
+     where ta.track_id = tracks.track_id and ${listedArtistWhere("a")}) as artist_slugs_json`;
 
 /** Fold a row's artist-slug JSON into a `fold(name) → slug` map (the `getArtistSlugMap` shape),
     keyed by the NORMALIZED name so a casing/accent drift between the canonical `artists.name` and

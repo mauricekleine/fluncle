@@ -127,6 +127,17 @@ def test_a_verdict_may_only_carry_its_own_rule_verdict():
     assert any(note.startswith("REFUSED gutterfunk") for note in notes)
 
 
+def test_the_global_only_unlisted_verdict_never_reaches_a_label_put():
+    """`unlisted` is a VISIBILITY ruling, global-only. A round may never write one per label."""
+    staged = triage_fixture()
+    staged["dnb_partial"][0]["rules"] = [rule(mbid=MBID_B, name="Ourman", verdict="unlisted")]
+    plan, notes = apply_rulings.build_plan(staged)
+
+    assert "yuku" not in {entry["slug"] for entry in plan}
+    assert any("not a label-scoped verdict" in note for note in notes)
+    assert all("unlisted" not in json.dumps(entry.get("rules", [])) for entry in plan)
+
+
 def test_dnb_partial_without_an_applicable_rule_is_left_alone():
     staged = triage_fixture()
     staged["dnb_partial"][0]["rules"] = [rule(mbid=MBID_B, verdict="allow", count=0)]

@@ -60,11 +60,18 @@ API_RETRY_BACKOFF_SECONDS = 5
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 # verdict bucket -> (seed state to write or None, the only rule verdict the bucket may carry)
+#
+# Only the two ACQUISITION verdicts appear here. `unlisted` is a global-only VISIBILITY ruling (no
+# public /artist/<slug> page) and the per-label PUT refuses it at the API boundary, so this script
+# never proposes or writes one — `LABEL_SCOPED_VERDICTS` below is the explicit door.
 BUCKETS = {
     "dnb": ("enabled", "block"),
     "not_dnb": ("disabled", None),
     "dnb_partial": (None, "allow"),
 }
+
+# The only verdicts a label-scoped whole-set PUT accepts.
+LABEL_SCOPED_VERDICTS = {"allow", "block"}
 
 
 # ── HTTP ────────────────────────────────────────────────────────────────────────────────────
@@ -157,6 +164,12 @@ def normalize_rules(row: dict, want_verdict: str | None) -> tuple[list[dict], li
         if not name:
             notes.append(f"dropped {mbid}: blank artistName (the API rejects it)")
             continue
+        if verdict not in LABEL_SCOPED_VERDICTS:
+            return [], [
+                f"REFUSED {row['slug']}: rule for {who} is {verdict!r}, which is not a "
+                f"label-scoped verdict (the operator authors an unlisted ruling by hand, "
+                f"globally, with `fluncle admin artists rule`)"
+            ]
         if verdict != want_verdict:
             return [], [
                 f"REFUSED {row['slug']}: rule for {who} is {verdict!r}, "

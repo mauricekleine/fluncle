@@ -1,18 +1,31 @@
-// The global artist-rule admin surface. These rules are acquisition scope: they change
-// what a future crawl takes and never mutate tracks already in the archive.
+// The global artist-rule admin surface. `allow`/`block` are acquisition scope: they change
+// what a future crawl takes and never mutate tracks already in the archive. `unlisted` is the
+// one visibility verdict: it hides the artist ENTITY's public page and is inert at crawl time.
 //
 //   - `list_artist_rules` — admin tier (agent-allowed read).
-//   - `add_artist_rule` — operator tier: add one global allow/block exception.
+//   - `add_artist_rule` — operator tier: add one global allow/block/unlisted exception.
 //   - `update_artist_rule` — operator tier: stamp drift-audit bookkeeping by global id.
 //   - `remove_artist_rule` — operator tier: remove one global exception.
 
 // Per-label rules live beside their label in `./admin-labels.ts`; both surfaces share the
-// exact rule and input schemas below so their wire vocabulary cannot drift.
+// exact rule and input schemas below so their wire vocabulary cannot drift — except the
+// verdict, which is deliberately narrower per label (see `LabelArtistRuleVerdictSchema`).
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-export const ArtistRuleVerdictSchema = z.enum(["allow", "block"]).meta({ id: "ArtistRuleVerdict" });
+export const ArtistRuleVerdictSchema = z
+  .enum(["allow", "block", "unlisted"])
+  .meta({ id: "ArtistRuleVerdict" });
+
+/**
+ * The verdicts a PER-LABEL rule may carry. `unlisted` is absent by construction: it hides one
+ * public artist page, and a page is not per-label, so a label-scoped `unlisted` could only ever
+ * be a silent no-op. The whole-set PUT rejects it at this boundary.
+ */
+export const LabelArtistRuleVerdictSchema = z
+  .enum(["allow", "block"])
+  .meta({ id: "LabelArtistRuleVerdict" });
 export const ArtistRuleSourceSchema = z
   .enum(["operator", "triage"])
   .meta({ id: "ArtistRuleSource" });
@@ -36,21 +49,27 @@ export const ArtistRuleSchema = z
   })
   .meta({ id: "ArtistRule" });
 
-/** A per-label whole-set member. Bare MBIDs and blank names are rejected at the boundary. */
+/**
+ * A per-label whole-set member. Bare MBIDs and blank names are rejected at the boundary, and so
+ * is `unlisted` — a per-label rule carries acquisition scope only.
+ */
 export const ArtistRuleInputSchema = z
   .object({
     artistMbid: ArtistMbidSchema,
     artistName: ArtistNameSchema,
-    verdict: ArtistRuleVerdictSchema,
+    verdict: LabelArtistRuleVerdictSchema,
   })
   .meta({ id: "ArtistRuleInput" });
 
 /**
  * A global add accepts an omitted name so the server may fill it from the local artist row or
- * MusicBrainz payload. When supplied, it is still required to contain non-whitespace text.
+ * MusicBrainz payload. When supplied, it is still required to contain non-whitespace text. This
+ * is the one write path that accepts `unlisted`, because a global rule is the only scope that
+ * can carry it.
  */
 export const AddArtistRuleInputSchema = ArtistRuleInputSchema.extend({
   artistName: ArtistNameSchema.optional(),
+  verdict: ArtistRuleVerdictSchema,
 }).meta({ id: "AddArtistRuleInput" });
 
 /** `list_artist_rules` → `GET /admin/artist-rules` (operationId `listArtistRules`). */

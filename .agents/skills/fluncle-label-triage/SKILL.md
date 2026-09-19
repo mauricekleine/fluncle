@@ -13,11 +13,14 @@ The ruling itself is an OPERATOR act (`update_label` is operator-tier — crawl 
 
 `seed_state` is the label-level DEFAULT. An **artist rule** is an exception to it, and it fires on the **FIRST credited MusicBrainz artist** of a track — never a guest credit, never a name:
 
-|                | label `enabled`                                     | label `disabled` / `undecided`                 |
-| -------------- | --------------------------------------------------- | ---------------------------------------------- |
-| no rule        | store                                               | skip                                           |
-| artist `block` | **skip their own records** (their guest spots stay) | inert                                          |
-| artist `allow` | inert                                               | **store their own records**, and nobody else's |
+|                   | label `enabled`                                     | label `disabled` / `undecided`                 |
+| ----------------- | --------------------------------------------------- | ---------------------------------------------- |
+| no rule           | store                                               | skip                                           |
+| artist `block`    | **skip their own records** (their guest spots stay) | inert                                          |
+| artist `allow`    | inert                                               | **store their own records**, and nobody else's |
+| artist `unlisted` | inert                                               | inert                                          |
+
+**The third verdict is a different axis.** `unlisted` is GLOBAL-ONLY and VISIBILITY-ONLY: it takes the artist's public `/artist/<slug>` page off the site and changes nothing about what the crawl stores (the row above is inert on both sides by design). It is the disposition for a pop act MusicBrainz billed a drum & bass remix to — the remix stays in the archive, the pop act gets no page. A round never proposes one: the per-label PUT refuses it at the API boundary, `apply-rulings.py` refuses it before the wire, and the operator authors it by hand with `fluncle admin artists rule <mbid> --verdict unlisted`. `pull-undecided.sh` still reports existing unlisted rules in `calib-rules.txt` so the rescope round can drift-check them.
 
 A round has two shapes beyond the plain buckets, and both change what the NEXT crawl takes while touching nothing already stored:
 

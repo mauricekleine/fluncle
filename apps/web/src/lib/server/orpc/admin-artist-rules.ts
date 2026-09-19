@@ -5,14 +5,42 @@ import { ORPCError } from "@orpc/server";
 import {
   addArtistRule,
   ArtistRuleNotFoundError,
+  type ArtistRuleVerdict,
+  artistSlugsForMbid,
   DuplicateGlobalArtistRuleError,
   listArtistRules,
   MissingArtistRuleNameError,
   removeArtistRule,
   updateArtistRule,
 } from "../artist-rules";
+import { purgeEntityCaches } from "../edge-cache";
+import { logEvent } from "../log";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer } from "./_shared";
+
+/**
+ * A VISIBILITY ruling changes what `/artist/<slug>` serves, so the edge-cached page has to be
+ * dropped — the same purge a bio write or a label merge performs. Acquisition verdicts change
+ * nothing a reader can see, so they purge nothing. Best-effort, exactly like every other purge:
+ * the hub indexes are not purged at all (they ride a 60s freshness window by design).
+ */
+async function purgeArtistVisibility(verdict: ArtistRuleVerdict, artistMbid: string) {
+  if (verdict !== "unlisted") {
+    return;
+  }
+
+  // Never fatal: the ruling is already written and correct at the origin, and a cache that is one
+  // freshness window behind is not a reason to fail the operator's write.
+  try {
+    const slugs = await artistSlugsForMbid(artistMbid);
+    purgeEntityCaches(slugs.map((slug) => ({ kind: "artist" as const, slug })));
+  } catch (error) {
+    logEvent("warn", "artist-rule.visibility-purge-failed", {
+      artistMbid,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 export function adminArtistRulesHandlers(os: Implementer) {
   // GET /admin/artist-rules — ADMIN tier: a pure read for the board and operator scripts.
@@ -30,7 +58,10 @@ export function adminArtistRulesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        return { ok: true as const, rule: await addArtistRule(input) };
+        const rule = await addArtistRule(input);
+        await purgeArtistVisibility(rule.verdict, rule.artistMbid);
+
+        return { ok: true as const, rule };
       } catch (error) {
         if (error instanceof DuplicateGlobalArtistRuleError) {
           throw new ORPCError("CONFLICT", {
@@ -59,7 +90,11 @@ export function adminArtistRulesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        await removeArtistRule(input.id);
+        const removed = await removeArtistRule(input.id);
+
+        if (removed) {
+          await purgeArtistVisibility(removed.verdict, removed.artistMbid);
+        }
 
         return { ok: true as const };
       } catch (error) {

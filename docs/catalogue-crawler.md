@@ -26,6 +26,8 @@ The operator already drew the boundary when he ruled on the labels. Every label 
 2. **Per-label artist exceptions** (`artist_rules` rows carrying a `label_id`). A **block** drops an act's own records from an enabled label; an **allow** admits an act's billed records from a disabled one.
 3. **Global artist exceptions** (`artist_rules` rows with a NULL `label_id`), consulted only when no per-label rule matches. Same two verdicts, any label.
 
+The third verdict, `unlisted`, is **INERT here**: it is a VISIBILITY ruling ([label-entity.md](./label-entity.md)), so the gate reads it as if no rule existed and the label default alone decides. The memo the gate builds names its two acquisition verdicts explicitly (`where verdict in ('allow', 'block')`, and an exhaustive fold), so "carries a global rule" can never be read as "is blocked".
+
 The quantifier is the **FIRST credited MusicBrainz artist MBID** in both directions — a blocked act's own record is refused while their guest feature on someone else's record stays; an allowed act's billed record is taken while their guest credit is not. A credit with no usable MBID falls to the label default: no rule ever fires on a guess, so the gate fails safe both ways. A release on a non-enabled label with no matching allow stores **nothing** — no tracks, no album row, no `label_id`/`album_id`/artist edges — even when the walk reached it. There is still no genre inference anywhere in this: every rule is an operator ruling (or a triage proposal the operator ratified), keyed on identity.
 
 **Discovery.** The walk still ranges outward by graph distance, because that is how the crawler finds the next labels worth ruling on:

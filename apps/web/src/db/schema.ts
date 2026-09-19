@@ -4337,8 +4337,15 @@ export const artists = sqliteTable(
     // carry a different one" — run per credited artist inside the crawler's per-release link, so
     // without an index each one scans the whole artists table. Not unique on purpose: `mbid` is
     // nullable and overwhelmingly null today, and a UNIQUE index would turn the credit sweep's
-    // rare double-mint into a write error rather than a row for the operator to merge. Plain ASC.
-    index("artists_mbid_idx").on(table.mbid),
+    // rare double-mint into a write error rather than a row for the operator to merge.
+    //
+    // `slug` RIDES ALONG as a trailing column so the index also COVERS the visibility read: the
+    // global `unlisted` artist rule is keyed on the MBID, and every public artist read resolves it
+    // to the slugs it hides through exactly this seek (lib/server/artist-visibility.ts). Without
+    // the trailing column that resolution seeks a table row per hidden artist; with it the whole
+    // subquery is index-only, which is what keeps the hub's aggregate reads off the table. It costs
+    // the seal nothing: `mbid` still leads. Plain ASC.
+    index("artists_mbid_idx").on(table.mbid, table.slug),
     // THE BIO-REVIEW ATTENTION READ — the canonical shape for all three entity tables.
     // `where bio_gate_bypassed_at is not null order by bio_gate_bypassed_at asc limit 25`
     // (listBioReviewRows, lib/server/bio-review.ts). PARTIAL, on the `labels_undecided_queue_idx`
@@ -4792,6 +4799,18 @@ export const labels = sqliteTable(
   ],
 );
 
+// ARTIST RULES — the exact-MBID exceptions, on two axes that never mix.
+//
+//   - ACQUISITION (`allow` / `block`): what a future crawl takes. Per-label (`label_id` set) or
+//     global (`label_id` null); per-label beats global, and both beat the label's seed state.
+//   - VISIBILITY (`unlisted`): whether the artist ENTITY has a public page. GLOBAL ONLY — a page
+//     is not per-label — and inert at crawl time, so an `unlisted` act's records still store
+//     exactly as the label seed state decides. This is the DnB-remix-of-a-pop-song disposition:
+//     MusicBrainz bills the remix to the original artist, so the remix belongs in the archive
+//     while the pop act never earns a `/artist/<slug>` page.
+//
+// Visibility is derived at read time from this row, never stamped onto `artists`, so authoring or
+// removing the rule flips the page with no backfill.
 export const artistRules = sqliteTable(
   "artist_rules",
   {
@@ -4807,7 +4826,7 @@ export const artistRules = sqliteTable(
     resolvedName: text("resolved_name"),
     source: text("source", { enum: ["operator", "triage"] }).notNull(),
     updatedAt: text("updated_at").notNull(),
-    verdict: text("verdict", { enum: ["allow", "block"] }).notNull(),
+    verdict: text("verdict", { enum: ["allow", "block", "unlisted"] }).notNull(),
   },
   (table) => [
     uniqueIndex("artist_rules_label_artist_idx")

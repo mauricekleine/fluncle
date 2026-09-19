@@ -26,7 +26,7 @@ const getFindingsByLabelMock = vi.hoisted(() => vi.fn());
 const getMixableTracksMock = vi.hoisted(() => vi.fn());
 const getMixChainDepthMock = vi.hoisted(() => vi.fn());
 const getTracksByLogIdsMock = vi.hoisted(() => vi.fn());
-const getArtistBySlugMock = vi.hoisted(() => vi.fn());
+const getPublicArtistBySlugMock = vi.hoisted(() => vi.fn());
 const countArtistFindingsMock = vi.hoisted(() => vi.fn());
 const getPublicArtistSocialsMock = vi.hoisted(() => vi.fn());
 const getLabelBySlugMock = vi.hoisted(() => vi.fn());
@@ -88,7 +88,7 @@ vi.mock("./spotify", async (importOriginal) => ({
 }));
 vi.mock("./artists", () => ({
   countArtistFindings: countArtistFindingsMock,
-  getArtistBySlug: getArtistBySlugMock,
+  getPublicArtistBySlug: getPublicArtistBySlugMock,
   getPublicArtistSocials: getPublicArtistSocialsMock,
   toArtistSlug: toSlug,
 }));
@@ -693,8 +693,8 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
     getMixChainDepthMock.mockResolvedValue({ median: 40, open: true, rankable: 100 });
     getTracksByLogIdsMock.mockReset();
     getTracksByLogIdsMock.mockResolvedValue({});
-    getArtistBySlugMock.mockReset();
-    getArtistBySlugMock.mockResolvedValue(undefined);
+    getPublicArtistBySlugMock.mockReset();
+    getPublicArtistBySlugMock.mockResolvedValue(undefined);
     countArtistFindingsMock.mockReset();
     countArtistFindingsMock.mockResolvedValue(0);
     getPublicArtistSocialsMock.mockReset();
@@ -784,7 +784,7 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
   });
 
   it("list_artist_catalogue returns an empty catalogue for an unlogged name (never an error)", async () => {
-    getArtistBySlugMock.mockResolvedValue(undefined);
+    getPublicArtistBySlugMock.mockResolvedValue(undefined);
 
     const { data, isError } = await callTool("list_artist_catalogue", { name: "Nobody" });
 
@@ -831,7 +831,7 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
   });
 
   it("get_artist reads an artist's dossier by name", async () => {
-    getArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    getPublicArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
     countArtistFindingsMock.mockResolvedValue(1);
     getFindingsByArtistMock.mockResolvedValue([
       { artists: ["Netsky"], logId: "004.7.2I", title: "Rio" },
@@ -883,7 +883,7 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
   });
 
   it("list_similar_artists returns the nearest artists by name", async () => {
-    getArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Koven", slug: "koven" });
+    getPublicArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Koven", slug: "koven" });
     getArtistNeighboursMock.mockResolvedValue([
       { name: "Camo & Krooked", slug: "camo-krooked" },
       { name: "Metrik", slug: "metrik" },
@@ -898,7 +898,7 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
   });
 
   it("list_similar_artists returns found:false for an unlogged name", async () => {
-    getArtistBySlugMock.mockResolvedValue(undefined);
+    getPublicArtistBySlugMock.mockResolvedValue(undefined);
 
     const { data } = await callTool("list_similar_artists", { name: "Nobody" });
 
