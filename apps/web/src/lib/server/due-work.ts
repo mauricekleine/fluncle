@@ -752,6 +752,80 @@ export async function listReadyDueWork<WorkKind extends string>(
   return { hasMore: rows.length > limit, items: rows.slice(0, limit) };
 }
 
+/** True while an outstanding source marker still owns the ready row this correlates against. */
+const DUE_WORK_SOURCE_MARKED_SQL = `exists (
+        select 1 from due_work marker
+        where marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
+          and marker.subject_type = ready.subject_type
+          and marker.subject_id = ready.subject_id
+          and marker.state = 'repair')`;
+
+/**
+ * How many ready rows one servable page may look at per row it may return, and the hard ceiling on
+ * that window. The multiple gives a page room to see past withheld rows; the ceiling keeps the read
+ * one bounded page rather than a walk of the ready index when a whole queue head is withheld.
+ */
+export const DUE_WORK_READY_SCAN_MULTIPLE = 4;
+export const DUE_WORK_READY_SCAN_CAP = 1_000;
+
+export function dueWorkReadyScanWindow(limit: number): number {
+  return Math.min(limit * DUE_WORK_READY_SCAN_MULTIPLE + 1, DUE_WORK_READY_SCAN_CAP);
+}
+
+// A page must be able to see past a full page of withheld rows, or one burst of markers landing on
+// the head of a queue would hide every servable row behind it.
+if (DUE_WORK_READY_SCAN_MULTIPLE < 2) {
+  throw new Error("due-work ready scan window must exceed one page");
+}
+
+/**
+ * One ready page that withholds every subject still carrying an outstanding source-repair marker.
+ *
+ * A source marker is transactionally coupled proof that the subject's eligibility moved and its
+ * physical rows have not been re-projected yet, so a row it covers may be stale in membership, in
+ * sort position, or in both. Withholding it is exactly the rail the guarded read's refusal exists
+ * to hold: a worklist must never serve a row whose eligibility changed and is not yet projected,
+ * because the storage and capture budgets behind it spend real money. The marker says nothing about
+ * any OTHER subject, though, so refusing the whole read is far wider than the rail requires; this
+ * read keeps the rail per subject and serves the rest of the page.
+ *
+ * A physical repair marker needs nothing here. It IS the queue row, held in `state = 'repair'`,
+ * which no ready read reaches.
+ *
+ * The withholding test seeks the source marker's own primary key once per scanned row, and the scan
+ * window is bounded, so a queue whose whole head is withheld costs one bounded read and serves
+ * nothing — which is the honest answer for that queue, and the one its caller reports as paused.
+ */
+export async function listServableDueWork<WorkKind extends string>(
+  client: DueWorkClient,
+  workKind: WorkKind,
+  options: { limit?: number } = {},
+): Promise<DueWorkPage<WorkKind> & { withheld: number }> {
+  const limit = options.limit ?? 100;
+  assertLimit(limit);
+  const scanWindow = dueWorkReadyScanWindow(limit);
+  const result = await client.execute({
+    args: [workKind, scanWindow],
+    sql: `select ${DUE_WORK_COLUMNS}, ${DUE_WORK_SOURCE_MARKED_SQL} as source_marked
+      from due_work ready
+      where work_kind = ? and state = 'ready'
+      order by sort_key, subject_id
+      limit ?`,
+  });
+  const withheldFlags = (result.rows as unknown as { source_marked: bigint | number }[]).map(
+    (row) => Number(row.source_marked) === 1,
+  );
+  const servable = dueWorkRows<WorkKind>(result).filter(
+    (_, index) => withheldFlags[index] !== true,
+  );
+
+  return {
+    hasMore: servable.length > limit || withheldFlags.length >= scanWindow,
+    items: servable.slice(0, limit),
+    withheld: withheldFlags.filter(Boolean).length,
+  };
+}
+
 export async function hasReadyDueWork(client: DueWorkClient, workKind: string): Promise<boolean> {
   const result = await client.execute({
     args: [workKind],
