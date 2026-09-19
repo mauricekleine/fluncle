@@ -207,6 +207,7 @@ export {
   ArtistRuleSchema,
   ArtistRuleSourceSchema,
   ArtistRuleVerdictSchema,
+  LabelArtistRuleVerdictSchema,
   listArtistRules,
   removeArtistRule,
   updateArtistRule,

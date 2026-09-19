@@ -77,6 +77,7 @@ import {
 import { bestArtistAvatarUrl, labelLogoUrl } from "../media";
 import { ALBUM_INDEX_MIN_TRACKS } from "./albums";
 import { MAX_SIMILAR_ARTISTS_INPUT, meanEmbedding } from "./artist-dossier";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
 import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS, resolveConfirmedAliasLabelId } from "./labels";
@@ -405,6 +406,8 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   if (kind === "artist") {
     // The name arm binds its own argument: the bare needle for the NOCASE equality, the needle
     // with its `%` for the prefix `LIKE` (a bound pattern is what lets the index range serve it).
+    // The two arms are parenthesized so the VISIBILITY term below binds over both: an artist a
+    // global `unlisted` rule has taken off the site must not be reachable by its alias either.
     const nameMatch = mode === "exact" ? "artists.name = ? collate nocase" : "artists.name like ?";
 
     return {
@@ -419,11 +422,12 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
               artists.image_updated_at as image_updated_at,
               case when lower(artists.name) ${predicate} then 0 else 1 end as name_rank
             from artists
-            where ${nameMatch}
+            where (${nameMatch}
                or artists.id in (select artist_aliases.artist_id from artist_aliases
                                  where artist_aliases.kind = 'name'
                                    and artist_aliases.status in ('auto', 'confirmed')
-                                   and lower(artist_aliases.alias) ${predicate})
+                                   and lower(artist_aliases.alias) ${predicate}))
+              and ${listedArtistWhere()}
             order by name_rank asc, length(artists.name) asc, artists.name asc
             limit ?`,
     };
@@ -1381,6 +1385,11 @@ const CENTROID_TIEBREAK = `order by length(artists.name) asc, artists.name asc l
  * `name = ? collate nocase` is exactly `lower(name) = ?` for this needle, not an approximation of
  * it: SQLite's `lower()` and its NOCASE collation both fold ASCII A–Z and nothing else, so the two
  * agree character for character on every input (a non-ASCII capital matches under neither).
+ *
+ * BOTH RANKS CARRY THE VISIBILITY GATE, and rank 0's two arms are parenthesized so it binds over
+ * the pair. This read is not internal: it echoes Fluncle's canonical `artists.name` back as
+ * `soundsLikeArtists`, so an ungated resolve would confirm an unlisted artist exists and print its
+ * canonical name for anyone who typed a name or a trusted alias. Same rule as the entity tier.
  */
 async function resolveArtistCentroids(
   inputs: string[],
@@ -1409,7 +1418,8 @@ async function resolveArtistCentroids(
       sql: `${CENTROID_SELECT}
             from artists
             join artist_centroids ac on ac.artist_id = artists.id
-            where artists.name = ? collate nocase or artists.slug = ?
+            where (artists.name = ? collate nocase or artists.slug = ?)
+              and ${listedArtistWhere()}
             ${CENTROID_TIEBREAK}`,
     });
     let row = typedRow<CentroidRow>(primary.rows);
@@ -1428,6 +1438,7 @@ async function resolveArtistCentroids(
               where artist_aliases.kind = 'name'
                 and artist_aliases.status in ('auto', 'confirmed')
                 and lower(artist_aliases.alias) = ?
+                and ${listedArtistWhere()}
               ${CENTROID_TIEBREAK}`,
       });
 

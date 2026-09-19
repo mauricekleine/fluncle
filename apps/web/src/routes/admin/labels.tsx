@@ -14,9 +14,9 @@ import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "
 import {
   type ArtistRule,
   type ArtistRuleInput,
-  type ArtistRuleVerdict,
   type LabelAdminItem,
   type LabelAliasCandidate,
+  type LabelArtistRuleVerdict,
   type LabelSeedState,
 } from "@fluncle/contracts";
 import { readError } from "@/lib/read-error";
@@ -786,7 +786,7 @@ function LabelRulesDialog({
   onSaved: () => void;
 }) {
   const queryClient = useQueryClient();
-  const verdict: ArtistRuleVerdict = label.seedState === "enabled" ? "block" : "allow";
+  const verdict: LabelArtistRuleVerdict = label.seedState === "enabled" ? "block" : "allow";
 
   const {
     data: saved,
@@ -803,12 +803,20 @@ function LabelRulesDialog({
   const [draft, setDraft] = useState<ArtistRuleInput[] | undefined>();
   useEffect(() => {
     if (saved && !draft) {
+      // A per-label rule carries acquisition scope only — the `unlisted` visibility verdict is
+      // global-only and the boundary refuses it here, so the draft never models one.
       setDraft(
-        saved.map((rule) => ({
-          artistMbid: rule.artistMbid,
-          artistName: rule.artistName,
-          verdict: rule.verdict,
-        })),
+        saved.flatMap((rule) =>
+          rule.verdict === "unlisted"
+            ? []
+            : [
+                {
+                  artistMbid: rule.artistMbid,
+                  artistName: rule.artistName,
+                  verdict: rule.verdict,
+                },
+              ],
+        ),
       );
     }
   }, [draft, saved]);
@@ -1007,7 +1015,7 @@ function AddRuleForm({
 }: {
   disabled: boolean;
   onAdd: (match: RuleArtistMatch) => void;
-  verdict: ArtistRuleVerdict;
+  verdict: LabelArtistRuleVerdict;
 }) {
   const [open, setOpen] = useState(false);
   const [term, setTerm] = useState("");

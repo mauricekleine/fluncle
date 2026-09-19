@@ -28,6 +28,7 @@
 // `meanEmbedding` for each centroid and ranks the edges IN SQL (never in the isolate).
 
 import { type InStatement } from "@libsql/client/web";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import {
   type EmbeddingCandidate,
@@ -684,7 +685,7 @@ export const ARTIST_NEIGHBOURS_SQL = `select a.name as name, a.slug as slug, a.i
              (a.certified_finding_count > 0) as certified
       from artist_similar s
       join artists a on a.id = s.neighbour_artist_id
-      where s.artist_id = ?
+      where s.artist_id = ? and ${listedArtistWhere("a")}
       order by s.rank asc
       limit ?`;
 
@@ -858,6 +859,7 @@ export async function listSimilarArtistNeighbours(
                  a.image_updated_at as image_updated_at
           from winners
           cross join artists a on a.id = winners.artist_id
+          where ${listedArtistWhere("a")}
           order by winners.dist asc, winners.artist_id asc`,
   });
 
@@ -896,7 +898,7 @@ async function hydrateArtistNeighbours(matches: SonarMatch[]): Promise<SimilarAr
                  a.image_key as image_key, a.image_state as image_state,
                  a.image_updated_at as image_updated_at
           from artists a
-          where a.id in (${placeholders})`,
+          where a.id in (${placeholders}) and ${listedArtistWhere("a")}`,
   });
   const byId = new Map(typedRows<SimilarArtistRow>(result.rows).map((row) => [row.artist_id, row]));
 

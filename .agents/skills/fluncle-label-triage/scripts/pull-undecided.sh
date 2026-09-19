@@ -67,7 +67,10 @@ where l.seed_state = 'undecided'
 group by l.id order by l.name")"
 
 # Every artist rule Fluncle holds — global (label_id is null) and per-label — with the label it is
-# scoped to. This is the ratified precedent AND the rescope round's worklist.
+# scoped to. This is the ratified precedent AND the rescope round's worklist. It carries all three
+# verdicts: a global `unlisted` is a VISIBILITY ruling (no public artist page), not acquisition
+# scope, so it rides along for the rescope's MusicBrainz drift check and is never proposed for a
+# label — `apply-rulings.py` refuses a label-scoped one outright.
 RULES="$(query "select r.id, r.artist_mbid, r.artist_name, r.artist_spotify_id, r.verdict,
   r.source, r.resolved_mbid, r.resolved_name, r.checked_at, r.label_id,
   l.name as label_name, l.slug as label_slug, l.seed_state as label_seed_state
@@ -94,7 +97,7 @@ lines = []
 for r in rules:
     scope = f\"{r['label_name']} [{r['label_seed_state']}]\" if r['label_id'] else 'GLOBAL'
     bridge = 'tap-bridged' if r['artist_spotify_id'] else 'TAP-BLIND'
-    lines.append(f\"{r['verdict']:5} | {scope} | {r['artist_name']} ({r['artist_mbid']}) | {bridge} | source={r['source']}\")
+    lines.append(f\"{r['verdict']:8} | {scope} | {r['artist_name']} ({r['artist_mbid']}) | {bridge} | source={r['source']}\")
 open('calib-rules.txt', 'w').write('\n'.join(lines) + ('\n' if lines else ''))
 json.dump(rules, open('calib-rules.json', 'w'), indent=0)
 g = sum(1 for r in rules if not r['label_id'])

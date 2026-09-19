@@ -10,6 +10,7 @@ import {
 import { bestAlbumCoverUrl } from "../media";
 import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "../mix-set";
 import { parseArtistsJson } from "./artists";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
 // Type-only: the runtime import of recommendations.ts is lazy (see exportAccountData).
 import { type RecSeedItem } from "./recommendations";
@@ -982,6 +983,10 @@ const WATCH_KINDS = new Set(["artist", "label"]);
  * renamed entity always reads current and nothing is denormalized onto the watch. A watch
  * whose entity has vanished (no join match) is dropped from the read rather than rendered
  * nameless.
+ *
+ * An UNLISTED artist does not join either, so it drops the same way: the door must never hand back
+ * a row whose link 404s. The stored `user_watches` row is untouched, so removing the rule brings
+ * the watch straight back (lib/server/artist-visibility.ts).
  */
 export async function listWatches(user: PublicUser): Promise<{ ok: true; watches: WatchItem[] }> {
   const result = await (
@@ -993,6 +998,7 @@ export async function listWatches(user: PublicUser): Promise<{ ok: true; watches
         coalesce(a.slug, l.slug) as slug
       from user_watches w
       left join artists a on w.kind = 'artist' and a.id = w.entity_id
+        and ${listedArtistWhere("a")}
       left join labels l on w.kind = 'label' and l.id = w.entity_id
       where w.user_id = ?
       order by w.created_at desc`,

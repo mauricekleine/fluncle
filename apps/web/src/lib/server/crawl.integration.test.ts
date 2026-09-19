@@ -186,7 +186,7 @@ async function seedArtistRule(rule: {
   artistMbid: string;
   labelId?: null | string;
   rearmedAt?: null | string;
-  verdict: "allow" | "block";
+  verdict: "allow" | "block" | "unlisted";
 }): Promise<void> {
   const labelKey = rule.labelId ?? "global";
   await db.execute({
@@ -1199,6 +1199,101 @@ describe("the artist exception gate", () => {
       "release-counter-in:stored=0 skipped_held=1 skipped_label=0 skipped_rule=1",
       "release-counter-out:stored=1 skipped_held=0 skipped_label=1 skipped_rule=0",
     ]);
+  });
+
+  // The `unlisted` verdict is a VISIBILITY ruling. At the storage gate it must be indistinguishable
+  // from no rule at all, on both sides of the label default — that is the whole point of the remix
+  // disposition: the record stays in the archive, only the artist's page goes.
+  it("an unlisted first credit stores from an ENABLED label exactly as an unruled one does", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-unlisted-enabled",
+      seedState: "enabled",
+      tracks: [
+        {
+          credits: [
+            { id: "artist-unlisted", name: "Unlisted Original" },
+            { id: "artist-keeper", name: "Keeper" },
+          ],
+          id: "rec-unlisted-remix",
+          title: "Remix billed to the original",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-unlisted", verdict: "unlisted" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksSkippedArtistRule).toBe(0);
+    expect(pass.tracksWritten).toBe(1);
+    const tracks = await db.execute("select title from tracks");
+    expect(tracks.rows.map((row) => text(row.title))).toEqual(["Remix billed to the original"]);
+  });
+
+  // The two axes live in different slots: the global one holds the visibility ruling, a per-label
+  // one holds acquisition. So an act can be off the site AND still have its records taken from a
+  // label the operator carved for it — the gate reads the per-label allow and never sees the other.
+  it("a global unlisted and a PER-LABEL allow coexist: the record stores, the page is another axis", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-unlisted-allowed",
+      seedState: "disabled",
+      tracks: [
+        {
+          credits: [{ id: "artist-unlisted", name: "Unlisted Original" }],
+          id: "rec-unlisted-allowed",
+          title: "Allowed off a disabled label",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-unlisted", verdict: "unlisted" });
+    await seedArtistRule({
+      artistMbid: "artist-unlisted",
+      labelId: "lbl_scope",
+      verdict: "allow",
+    });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksSkippedArtistRule).toBe(0);
+    expect(pass.tracksAllowedIn).toBe(1);
+    expect(pass.tracksWritten).toBe(1);
+  });
+
+  it("an unlisted first credit is skipped by a DISABLED label exactly as an unruled one is", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-unlisted-disabled",
+      seedState: "disabled",
+      tracks: [
+        {
+          credits: [{ id: "artist-unlisted", name: "Unlisted Original" }],
+          id: "rec-unlisted-refused",
+          title: "Refused by the label default",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-unlisted", verdict: "unlisted" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksSkippedArtistRule).toBe(0);
+    expect(pass.tracksSkippedLabelGate).toBe(1);
+    expect(pass.tracksWritten).toBe(0);
+    const tracks = await db.execute("select count(*) as n from tracks");
+    expect(Number(tracks.rows[0]?.n)).toBe(0);
   });
 });
 

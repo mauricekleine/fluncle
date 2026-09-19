@@ -1,3 +1,4 @@
+import { listedArtistWhere } from "../../src/lib/server/artist-visibility";
 import { DEVICE_DB_COLUMNS, type DeviceSourceTable } from "./device-db-schema";
 
 export {
@@ -180,24 +181,45 @@ function selectedSourceSql(
   const sourceTable = `${schema}.${quoteDeviceDbIdentifier(table)}`;
   const selected = `temp.${quoteDeviceDbIdentifier(DEVICE_SELECTED_TRACKS_TABLE)}`;
 
-  if (table === "tracks" || table === "findings" || table === "track_artists") {
+  // The visibility rule the public web reads at request time, applied HERE instead: a replica
+  // leaves the server and carries no `artist_rules`, so it cannot be evaluated device-side. The
+  // artifact therefore ships only listed artists — and only the edges into them, because an edge to
+  // a row the artifact does not carry fails its own `track_artists.artist_id -> artists.id` closure
+  // check. A track's CREDIT is untouched: the device reads it from `tracks.artists_json`.
+  const listedArtist = (alias: string) => listedArtistWhere(alias, `${schema}.`);
+
+  if (table === "track_artists") {
+    return `SELECT source_row.*
+      FROM ${sourceTable} AS source_row
+      JOIN ${selected} AS selected ON selected.track_id = source_row.track_id
+      WHERE EXISTS (
+        SELECT 1
+        FROM ${schema}.${quoteDeviceDbIdentifier("artists")} AS edge_artist
+        WHERE edge_artist.id = source_row.artist_id AND ${listedArtist("edge_artist")}
+      )`;
+  }
+
+  if (table === "tracks" || table === "findings") {
     return `SELECT source_row.*
       FROM ${sourceTable} AS source_row
       JOIN ${selected} AS selected ON selected.track_id = source_row.track_id`;
   }
 
-  if (cut === "full") {
-    return `SELECT source_row.* FROM ${sourceTable} AS source_row`;
-  }
-
   if (table === "artists") {
-    return `SELECT source_row.*
+    return cut === "full"
+      ? `SELECT source_row.* FROM ${sourceTable} AS source_row
+         WHERE ${listedArtist("source_row")}`
+      : `SELECT source_row.*
       FROM ${sourceTable} AS source_row
       WHERE source_row.id IN (
         SELECT track_artist.artist_id
         FROM ${schema}.${quoteDeviceDbIdentifier("track_artists")} AS track_artist
         JOIN ${selected} AS selected ON selected.track_id = track_artist.track_id
-      )`;
+      ) AND ${listedArtist("source_row")}`;
+  }
+
+  if (cut === "full") {
+    return `SELECT source_row.* FROM ${sourceTable} AS source_row`;
   }
 
   if (table === "labels") {

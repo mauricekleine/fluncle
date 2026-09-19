@@ -12,7 +12,7 @@ import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FindingsGrid } from "@/components/graph-sections";
 
-// The artist page earns its page on CONTENT, exactly as a label/album does: a `getArtistBySlug` row
+// The artist page earns its page on CONTENT, exactly as a label/album does: a `getPublicArtistBySlug` row
 // renders, and the thin-content gate (NOT a certified-finding gate) decides whether it indexes.
 //
 //   · REACHABILITY: any artist ROW renders 200 (a crawl-minted, findings-free artist has a public
@@ -26,7 +26,7 @@ import { FindingsGrid } from "@/components/graph-sections";
 //
 // These tests pin that contract.
 
-const getArtistBySlug = vi.hoisted(() => vi.fn());
+const getPublicArtistBySlug = vi.hoisted(() => vi.fn());
 const getPublicArtistSocials = vi.hoisted(() => vi.fn());
 const getPublicArtistAliasNames = vi.hoisted(() => vi.fn());
 const countArtistFindings = vi.hoisted(() => vi.fn());
@@ -37,8 +37,8 @@ const listArtistCatalogue = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/server/artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artists")>()),
   countArtistFindings,
-  getArtistBySlug,
   getPublicArtistAliasNames,
+  getPublicArtistBySlug,
   getPublicArtistSocials,
 }));
 
@@ -151,7 +151,7 @@ describe("the artist page catalogue default (latest release first)", () => {
 
 describe("resolveArtistPageData (the artist page indexability gate)", () => {
   beforeEach(() => {
-    getArtistBySlug.mockReset();
+    getPublicArtistBySlug.mockReset();
     getPublicArtistSocials.mockReset();
     getPublicArtistAliasNames.mockReset();
     countArtistFindings.mockReset();
@@ -162,14 +162,14 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getPublicArtistAliasNames.mockResolvedValue([]);
     getArtistNeighbours.mockResolvedValue([]);
     listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
-    getArtistBySlug.mockResolvedValue(ARTIST);
+    getPublicArtistBySlug.mockResolvedValue(ARTIST);
   });
 
   it("renders (noindex) a findings-free artist with no catalogue — a thin crawl-minted page", async () => {
     // The artist ROW exists (the crawler minted it off a crawled track's Spotify anchor) and has no
     // certified finding and no catalogue tracks yet. It renders 200 — a public page, like a label —
     // but below the renderable-track floor, so it is noindex + out of the sitemap.
-    getArtistBySlug.mockResolvedValue(ARTIST);
+    getPublicArtistBySlug.mockResolvedValue(ARTIST);
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
 
@@ -247,7 +247,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   it("carries the Discogs + Last.fm anchors from the record into the MusicGroup's sameAs", async () => {
     // The KG anchors are schema-only — nothing on the page links to them — so the loader
     // carrying them into `sameAs` IS the whole surface. Ranked directly under MusicBrainz.
-    getArtistBySlug.mockResolvedValue({
+    getPublicArtistBySlug.mockResolvedValue({
       ...ARTIST,
       discogsUrl: "https://www.discogs.com/artist/4321-Drift",
       lastfmUrl: "https://www.last.fm/music/Drift",
@@ -280,7 +280,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("reports a missing artist without touching the finding counts", async () => {
-    getArtistBySlug.mockResolvedValue(undefined);
+    getPublicArtistBySlug.mockResolvedValue(undefined);
 
     const data = await resolveArtistPageData("nobody", "name", 1);
 
@@ -319,14 +319,17 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
     countArtistFindings.mockResolvedValue(1);
 
-    getArtistBySlug.mockResolvedValue({ ...ARTIST, bio: "Drift makes rollers for the deep end." });
+    getPublicArtistBySlug.mockResolvedValue({
+      ...ARTIST,
+      bio: "Drift makes rollers for the deep end.",
+    });
     const withBio = await resolveArtistPageData("drift", "name", 1);
     if (withBio.status !== "found") {
       throw new Error("expected the artist to be found");
     }
     expect(withBio.bio).toBe("Drift makes rollers for the deep end.");
 
-    getArtistBySlug.mockResolvedValue(ARTIST);
+    getPublicArtistBySlug.mockResolvedValue(ARTIST);
     const withoutBio = await resolveArtistPageData("drift", "name", 1);
     if (withoutBio.status !== "found") {
       throw new Error("expected the artist to be found");
@@ -343,7 +346,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     const bio =
       "Drift is a British drum and bass producer known for deep, rolling liquid cuts and a run " +
       "of releases across the scene's most respected labels over the past decade of the sound.";
-    getArtistBySlug.mockResolvedValue({ ...ARTIST, bio });
+    getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, bio });
     const withBio = await resolveArtistPageData("drift", "name", 1);
 
     const desc = metaDescription(withBio);
@@ -353,7 +356,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(desc?.startsWith("Drift is a British drum and bass producer")).toBe(true);
 
     // No bio ⇒ the original template is preserved verbatim (no regression).
-    getArtistBySlug.mockResolvedValue(ARTIST);
+    getPublicArtistBySlug.mockResolvedValue(ARTIST);
     const withoutBio = await resolveArtistPageData("drift", "name", 1);
     expect(metaDescription(withoutBio)).toBe(
       "Drum & bass tracks by Drift that Fluncle recommends, 1 so far, with the labels and releases behind them.",
@@ -366,7 +369,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     // records band the pager actually moves, and the bio never rides a page past the first.
     getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
     countArtistFindings.mockResolvedValue(1);
-    getArtistBySlug.mockResolvedValue({
+    getPublicArtistBySlug.mockResolvedValue({
       ...ARTIST,
       bio: "Drift is a British drum and bass producer known for deep, rolling liquid cuts.",
     });

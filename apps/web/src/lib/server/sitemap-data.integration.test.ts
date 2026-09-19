@@ -300,6 +300,45 @@ beforeEach(async () => {
   // would hold edges with counters at the DDL default of 0.
   await syncHubCounts(db);
 
+  // AN UNLISTED ARTIST INSIDE THE WINDOW, seeded after the counter backfill so its counters stand
+  // as stated. It clears the thin-content floor and sorts FIRST, so it is exactly the row that
+  // splits the artists child's three legs apart if any one of them forgets the visibility gate:
+  // an ungated boundary probe hands back `adele` while the gated row reader emits `dimension`, so
+  // the next shard restarts after `adele` and re-emits `dimension`. The union-equality law below
+  // is what catches it. It shares an existing track, so no album, label or track bag moves.
+  await db.execute({
+    args: ["artist-adele", "Adele", "adele", "11111111-1111-4111-8111-111111111111"],
+    sql: `insert into artists
+            (id, name, slug, mbid, renderable_track_count, certified_finding_count,
+             created_at, updated_at)
+          values (?, ?, ?, ?, 3, 0, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+  });
+  await db.execute({
+    args: ["track-3", "artist-adele"],
+    sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
+  });
+  // A SECOND visible artist, so the artists child is genuinely multi-shard at shard size 1 and the
+  // boundary probe actually runs. Without it the gated total is 1 and every page past the first is
+  // short-circuited as past-end, which is how an ungated probe hid.
+  await db.execute({
+    args: ["artist-eleven", "Eleven", "eleven"],
+    sql: `insert into artists
+            (id, name, slug, renderable_track_count, certified_finding_count,
+             created_at, updated_at)
+          values (?, ?, ?, 3, 0, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+  });
+  await db.execute({
+    args: ["track-3", "artist-eleven"],
+    sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
+  });
+  await db.execute({
+    args: ["11111111-1111-4111-8111-111111111111"],
+    sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+          values ('arl_adele', ?, 'Adele', 'unlisted', null, 'operator',
+                  '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+  });
+
   await db.execute({
     args: ["2026-06-01", "https://open.spotify.com/track/example"],
     sql: `update tracks set release_date = ?, spotify_url = ? where is_catalogue = 1`,
@@ -332,8 +371,9 @@ describe("the sitemap index reads aggregates that match the rows", () => {
     // The freshest `/log` date is the SQUARED VIDEO's, not the newest `added_at` — the scalar
     // three-argument max() inside the aggregate one-argument max(), the shape the row read uses.
     expect(stats.findings.lastmod).toBe("2026-07-14T09:00:00.000Z");
-    // One artist / label / album clears the floor; the thin family does not.
-    expect(stats.artists.count).toBe(1);
+    // Two VISIBLE artists clear the floor; one label / album does, and the thin family does not.
+    // The third floor-clearing artist is unlisted, so it is counted by nothing and emitted nowhere.
+    expect(stats.artists.count).toBe(2);
     expect(stats.labels.count).toBe(1);
     expect(stats.albums.count).toBe(1);
     // An entity dates from its freshest CERTIFIED finding (`added_at`), never from a catalogue row.
