@@ -27,7 +27,7 @@ The rebuild, smoke, rollback, and single-flight for a baked-pin merge are all th
 
 - **A BRAKE item** never reaches merge, so it never reaches the box — it's a report.
 - **A base-image bump** is always a BRAKE: report the newer tag, let the operator pull it (the rebuild's failure mode there is the whole gateway, too coarse and too consequential to ship unattended even with pin-watch's pre-smoke safety).
-- **box.ascii** is unpinnable; the pin-watch post-smoke re-verifies the conductor after any rebuild it does, but never bumps it.
+- **box.ascii** is pinned but MANUAL-watch: the routine never bumps it, and the pin-watch post-smoke re-verifies the conductor after any rebuild it does.
 
 ## Public-repo rule (applies to every file in this skill)
 
