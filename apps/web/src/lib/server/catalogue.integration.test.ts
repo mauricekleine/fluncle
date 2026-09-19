@@ -442,7 +442,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
       .map((statement) =>
         typeof statement === "string" || Array.isArray(statement)
           ? 0
-          : statement.sql.split("(?, ?, ?, ?, ?, ?)").length - 1,
+          : statement.sql.split("(?, ?, ?, ?, ?, ?, ?, ?)").length - 1,
       );
     expect(sourceRepairRows).toEqual([500, 1]);
     expect(
@@ -2722,6 +2722,56 @@ describe("the rank tick's repair markers — minted by real change", () => {
     await rankCatalogue();
     expect((await rankingOf("cat-moved")).nearest_finding_track_id).toBe("find-nr3");
     expect(await sourceMarkersFor("cat-moved")).toBe(1);
+  });
+
+  it("keeps a catalogue-rank row another producer wrote after this tick selected its candidates", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedCatalogue("cat-raced");
+    // THE INTERLEAVING. `is_catalogue` and `dismissed_at` belong to other producers, so between the
+    // candidate read and this batch's commit one of them can legitimately re-project a DUE
+    // catalogue-rank row (a restore, an is_catalogue flip). A row stamped AFTER this tick's
+    // selection instant stands for exactly that write. An unconditional delete would drop it and
+    // mint nothing, taking the track out of the rank queue with no marker to bring it back.
+    await db.execute(`insert into due_work
+      (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+       source_version, generation, updated_at)
+      values ('catalogue-rank', 'track', 'cat-raced', 'ready', 'k',
+        '2999-01-01T00:00:00.000Z', 'v-fresh', 'live', '2999-01-01T00:00:00.000Z')`);
+
+    await rankCatalogue();
+
+    const survived = await db.execute(
+      `select source_version from due_work
+       where work_kind = 'catalogue-rank' and subject_id = 'cat-raced'`,
+    );
+    expect(survived.rows.map((row) => row.source_version)).toEqual(["v-fresh"]);
+  });
+
+  it("mints a marker when another producer moves an input this tick never writes", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedCatalogue("cat-flipped");
+    await clearSourceMarkers();
+
+    // The real interleaving, in the one window that matters: a dismiss that lands AFTER the
+    // candidate read (so the row was a legitimate candidate, `dismissed_at` null) and BEFORE the
+    // batch commits. `dismissed_at` is not a rank write, so the five stamped columns are blind to
+    // it; it rides the comparison as the value OBSERVED at selection, which is what turns the
+    // concurrent change into a marker instead of letting the settled-row delete absorb it.
+    const batchSpy = vi.spyOn(db, "batch").mockImplementation(async (statements, mode) => {
+      batchSpy.mockRestore();
+      await db.execute({
+        args: ["2026-01-01T00:00:00.000Z", "cat-flipped"],
+        sql: `update tracks set dismissed_at = ? where track_id = ?`,
+      });
+
+      return db.batch(statements, mode);
+    });
+
+    await rankCatalogue();
+
+    expect(await sourceMarkersFor("cat-flipped")).toBe(1);
   });
 
   it("settles its own catalogue-rank due row instead of paying a source repair for it", async () => {
