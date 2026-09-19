@@ -11,11 +11,12 @@ import { MAX_CRAWL_PREPARE_LIMIT } from "@fluncle/contracts/orpc";
 import {
   commitCrawlPhase,
   CRAWL_PHASE_TOKEN_MAX_BYTES,
+  type CrawlPhasePrepareResult,
   fetchCrawlPhase,
   initializeCrawlPhase,
   prepareCrawlPhase,
 } from "./crawl";
-import { CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
+import { CRAWL_BOX_FETCH_ENABLED_KEY, CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
 import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
 
 let db: Client;
@@ -617,5 +618,319 @@ describe("crawl admission phases", () => {
       outcome: "committed",
       result: { expanded: 1, tracksFound: 0 },
     });
+  });
+});
+
+// ── THE BOX-FETCHED PROVIDER BODY ────────────────────────────────────────────────────────────────
+//
+// MusicBrainz rate-limits per source IP and a Worker's egress address is shared with strangers, so
+// the crawl's provider reads are made from the box's own address and the bytes are handed to the
+// Worker. What makes that safe is not trust in the box: it is that the Worker issues the url, reads
+// a body only under a url it itself asks for, and parses it with the parser its own fetch feeds.
+describe("crawl provider bodies fetched by the box", () => {
+  const RELEASE_URL =
+    "https://musicbrainz.org/ws/2/release/release-phase" +
+    "?inc=recordings+artist-credits+isrcs+labels+release-groups+url-rels&fmt=json";
+
+  async function prepareOne(): Promise<CrawlPhasePrepareResult["items"][number]> {
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    const item = prepared.items[0];
+    if (!item) {
+      throw new Error("test expected a prepared crawl token");
+    }
+    return item;
+  }
+
+  function refuseWorkerFetch(): ReturnType<typeof vi.fn> {
+    const spy = vi.fn(() => {
+      throw new Error("the Worker must not reach MusicBrainz when the box supplied the body");
+    });
+    vi.stubGlobal("fetch", spy);
+    return spy;
+  }
+
+  it("issues the exact url the box may fetch, host pinned to MusicBrainz", async () => {
+    const item = await prepareOne();
+    expect(item.fetchPlan).toEqual({ kind: "single", url: RELEASE_URL });
+    expect(new URL(RELEASE_URL).host).toBe("musicbrainz.org");
+  });
+
+  it("commits a box-fetched release without the Worker reaching MusicBrainz at all", async () => {
+    const spy = refuseWorkerFetch();
+    const item = await prepareOne();
+    const fetched = await fetchCrawlPhase(item.preparedToken, [
+      { body: providerRelease(6), outcome: "body", url: RELEASE_URL },
+    ]);
+
+    expect(await commitCrawlPhase(fetched)).toMatchObject({
+      outcome: "committed",
+      result: { expanded: 1, failed: 0, tracksFound: 6, tracksWritten: 6 },
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("yields a receipt identical to the Worker's own fetch of the same bytes", async () => {
+    // Parser parity is the whole safety argument for moving the request: the body reaches exactly
+    // the same `applyCrawlProvider` branch either way, so the two paths cannot disagree on meaning.
+    const fixture = providerRelease(9);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 }))),
+    );
+    const workerReceipt = await commitCrawlPhase(await prepareAndFetch());
+
+    const workerDb = db;
+    const boxDirectory = await mkdtemp(join(tmpdir(), "fluncle-crawl-parity-"));
+    try {
+      db = await createIntegrationDb({ url: `file:${join(boxDirectory, "parity.db")}` });
+      await seedRelease();
+      refuseWorkerFetch();
+      const item = await prepareOne();
+      const boxReceipt = await commitCrawlPhase(
+        await fetchCrawlPhase(item.preparedToken, [
+          { body: fixture, outcome: "body", url: RELEASE_URL },
+        ]),
+      );
+      expect(boxReceipt).toEqual(workerReceipt);
+    } finally {
+      db.close();
+      db = workerDb;
+      await rm(boxDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses a body for a url this claim did not issue", async () => {
+    const item = await prepareOne();
+    await expect(
+      fetchCrawlPhase(item.preparedToken, [
+        {
+          body: providerRelease(1),
+          outcome: "body",
+          url: "https://musicbrainz.org/ws/2/release/some-other-release?fmt=json",
+        },
+      ]),
+    ).rejects.toThrow(/not for a url this claim issued/);
+  });
+
+  it("refuses a body from any host but MusicBrainz", async () => {
+    const item = await prepareOne();
+    for (const url of [
+      RELEASE_URL.replace("https://musicbrainz.org", "https://musicbrainz.org.evil.example"),
+      RELEASE_URL.replace("https://", "http://"),
+      "not a url at all",
+    ]) {
+      await expect(
+        fetchCrawlPhase(item.preparedToken, [{ body: providerRelease(1), outcome: "body", url }]),
+      ).rejects.toThrow(/crawl fetch body carries a url/);
+    }
+  });
+
+  it("refuses a body prepared for a DIFFERENT node's claim", async () => {
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, created_at, updated_at)
+        values ('musicbrainz:release:other-release', 'release', 'musicbrainz',
+          'other-release', 0, 'phase-label', ?, ?)`,
+    });
+    await db.batch(
+      [markCrawlNodeRepairStatement("musicbrainz:release:other-release", crypto.randomUUID())],
+      "write",
+    );
+    const prepared = await prepareCrawlPhase({ limit: 2, maxHop: 2 });
+    const [first, second] = prepared.items;
+    if (!first || !second) {
+      throw new Error("test expected two prepared crawl tokens");
+    }
+    const foreignUrl = second.fetchPlan.kind === "single" ? second.fetchPlan.url : "";
+
+    // The claim is the binding: the plan and node inside the SIGNED token decide which urls exist,
+    // so a sibling node's body is unreachable rather than merely unwelcome.
+    await expect(
+      fetchCrawlPhase(first.preparedToken, [
+        { body: providerRelease(1), outcome: "body", url: foreignUrl },
+      ]),
+    ).rejects.toThrow(/not for a url this claim issued/);
+  });
+
+  it("refuses a repeated url", async () => {
+    const item = await prepareOne();
+    await expect(
+      fetchCrawlPhase(item.preparedToken, [
+        { body: providerRelease(1), outcome: "body", url: RELEASE_URL },
+        { body: providerRelease(2), outcome: "body", url: RELEASE_URL },
+      ]),
+    ).rejects.toThrow(/repeat a url/);
+  });
+
+  it("settles a supplied body past the envelope bound as a failed node, never a truncated one", async () => {
+    refuseWorkerFetch();
+    const item = await prepareOne();
+    const receipt = await commitCrawlPhase(
+      await fetchCrawlPhase(item.preparedToken, [
+        {
+          body: providerRelease(4, CRAWL_PHASE_TOKEN_MAX_BYTES),
+          outcome: "body",
+          url: RELEASE_URL,
+        },
+      ]),
+    );
+
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { failed: 1, rateLimited: false },
+    });
+    const row = await db.execute(
+      "select state, cursor from crawl_frontier where id = 'musicbrainz:release:release-phase'",
+    );
+    expect(row.rows[0]?.state).toBe("failed");
+    expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(0);
+  });
+
+  it("returns a box-side throttle to the frontier without charging it a failure", async () => {
+    refuseWorkerFetch();
+    const item = await prepareOne();
+    const receipt = await commitCrawlPhase(
+      await fetchCrawlPhase(item.preparedToken, [{ outcome: "throttled", url: RELEASE_URL }]),
+    );
+
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { failed: 1, rateLimited: true },
+    });
+    const row = await db.execute(
+      "select state, failures from crawl_frontier where id = 'musicbrainz:release:release-phase'",
+    );
+    expect(row.rows[0]?.state).toBe("pending");
+    expect(Number(row.rows[0]?.failures)).toBe(0);
+  });
+
+  it("charges a failure for a box-side body that is not JSON, exactly as a Worker fetch does", async () => {
+    refuseWorkerFetch();
+    const item = await prepareOne();
+    const receipt = await commitCrawlPhase(
+      await fetchCrawlPhase(item.preparedToken, [{ outcome: "invalid", url: RELEASE_URL }]),
+    );
+
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { failed: 1, rateLimited: false },
+    });
+  });
+
+  it("falls back to Worker egress for a url the box did not supply", async () => {
+    const spy = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify(providerRelease(3)), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", spy);
+    const item = await prepareOne();
+
+    // An old pinned sweep supplies nothing, and a new one that guessed a tail offset wrong supplies
+    // the wrong url. Both cost one Worker request, never a wrong answer.
+    const receipt = await commitCrawlPhase(await fetchCrawlPhase(item.preparedToken, []));
+    expect(receipt).toMatchObject({ outcome: "committed", result: { tracksWritten: 3 } });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores supplied bodies entirely once the flag is flipped off", async () => {
+    await db.execute({
+      args: [CRAWL_BOX_FETCH_ENABLED_KEY, "false"],
+      sql: "insert into settings (key, value) values (?, ?)",
+    });
+    const spy = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify(providerRelease(2)), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", spy);
+
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    // The box asks BEFORE it spends a request, so the rollback costs the vendor nothing.
+    expect(prepared.boxFetch).toBe(false);
+    const item = prepared.items[0];
+    if (!item) {
+      throw new Error("test expected a prepared crawl token");
+    }
+
+    const receipt = await commitCrawlPhase(
+      await fetchCrawlPhase(item.preparedToken, [
+        { body: providerRelease(60), outcome: "body", url: RELEASE_URL },
+      ]),
+    );
+    expect(receipt).toMatchObject({ outcome: "committed", result: { tracksWritten: 2 } });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts box-fetched bodies by default, so a new Worker and an old sweep agree", async () => {
+    expect((await prepareCrawlPhase({ limit: 1, maxHop: 2 })).boxFetch).toBe(true);
+  });
+
+  it("issues a probe and a bounded offset slot for a re-armed browse tail", async () => {
+    await seedBrowseNode();
+    await db.execute(
+      "update crawl_frontier set cursor = -1 where id = 'musicbrainz:artist:browse-artist'",
+    );
+    const item = await prepareOne();
+
+    expect(item.fetchPlan).toEqual({
+      countField: "release-count",
+      kind: "tail",
+      pageSize: 100,
+      pageUrlTemplate:
+        "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset={offset}&fmt=json",
+      probeUrl:
+        "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=1&offset=0&fmt=json",
+    });
+
+    refuseWorkerFetch();
+    const receipt = await commitCrawlPhase(
+      await fetchCrawlPhase(item.preparedToken, [
+        {
+          body: { "release-count": 250, releases: [] },
+          outcome: "body",
+          url: "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=1&offset=0&fmt=json",
+        },
+        {
+          body: providerBrowse(2),
+          outcome: "body",
+          url: "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset=150&fmt=json",
+        },
+      ]),
+    );
+    expect(receipt).toMatchObject({ outcome: "committed", result: { expanded: 1 } });
+  });
+
+  it("refuses a tail page url whose offset slot is not a bounded integer", async () => {
+    await seedBrowseNode();
+    await db.execute(
+      "update crawl_frontier set cursor = -1 where id = 'musicbrainz:artist:browse-artist'",
+    );
+    const item = await prepareOne();
+
+    for (const offset of ["-1", "1e9", "150%20", "", "0150"]) {
+      await expect(
+        fetchCrawlPhase(item.preparedToken, [
+          {
+            body: providerBrowse(1),
+            outcome: "body",
+            url: `https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset=${offset}&fmt=json`,
+          },
+        ]),
+      ).rejects.toThrow(/not for a url this claim issued/);
+    }
+  });
+
+  it("rejects a body submitted under an expired claim", async () => {
+    const item = await prepareOne();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 60 * 60 * 1000);
+      await expect(
+        fetchCrawlPhase(item.preparedToken, [
+          { body: providerRelease(1), outcome: "body", url: RELEASE_URL },
+        ]),
+      ).rejects.toThrow(/expired crawl phase token/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

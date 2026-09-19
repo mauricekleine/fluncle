@@ -758,6 +758,42 @@ const CrawlPhaseInitializationSchema = z.object({
  */
 export const MAX_CRAWL_PREPARE_LIMIT = 6;
 
+/**
+ * WHAT THE BOX MAY FETCH FOR ONE NODE, issued by the prepare that claimed it.
+ *
+ * MusicBrainz rate-limits per source IP, and Cloudflare's egress is shared with strangers, so the
+ * crawl's provider reads are made from the box's own address under one shared budget. The box never
+ * composes a MusicBrainz URL: it receives the exact string(s) this claim allows. `tail` is the one
+ * two-step read (locate a browse list's end, then page it), and its only free parameter is the
+ * offset — which the Worker re-derives from the probe body before it will read the page.
+ */
+const CrawlFetchPlanSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("none") }),
+  z.object({ kind: z.literal("single"), url: z.string().max(2_048) }),
+  z.object({
+    countField: z.literal("release-count"),
+    kind: z.literal("tail"),
+    pageSize: z.number().int().positive(),
+    pageUrlTemplate: z.string().max(2_048),
+    probeUrl: z.string().max(2_048),
+  }),
+]);
+
+/**
+ * One MusicBrainz read the box already made. The outcomes mirror the Worker's own transport one for
+ * one, so a box-fetched node settles exactly as a Worker-fetched one: `throttled` keeps the node's
+ * turn, everything else settles as that node's own outcome. A url the claim did not issue is
+ * refused, and a url the box omits is simply fetched by the Worker.
+ *
+ * The unit here is ONE NODE — its claim (carried by `preparedToken`), its urls, its bodies — so a
+ * later batched phase is a list of these rather than a different shape.
+ */
+const SuppliedCrawlBodySchema = z.object({
+  body: z.json().optional(),
+  outcome: z.enum(["body", "empty", "invalid", "oversize", "throttled"]),
+  url: z.string().max(2_048),
+});
+
 const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("initialize") }),
   z.object({
@@ -765,7 +801,12 @@ const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
     maxHop: z.number().int().min(0).max(3).default(2),
     phase: z.literal("prepare"),
   }),
-  z.object({ phase: z.literal("fetch"), preparedToken: z.string().max(2 * 1024 * 1024) }),
+  z.object({
+    phase: z.literal("fetch"),
+    preparedToken: z.string().max(2 * 1024 * 1024),
+    /** At most the probe and its page: no node's provider leg reads more than two urls. */
+    supplied: z.array(SuppliedCrawlBodySchema).max(2).optional(),
+  }),
   z.object({
     commitToken: z.string().max(2 * 1024 * 1024),
     operationId: z.literal("catalogue.crawl"),
@@ -783,10 +824,18 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
     phase: z.literal("initialize"),
   }),
   z.object({
+    /** Whether this Worker will read box-fetched bodies — asked before the box spends a request. */
+    boxFetch: z.boolean(),
     frontierPending: z.number(),
     initialization: CrawlPhaseInitializationSchema,
     items: z
-      .array(z.object({ nodeId: z.string(), preparedToken: z.string() }))
+      .array(
+        z.object({
+          fetchPlan: CrawlFetchPlanSchema,
+          nodeId: z.string(),
+          preparedToken: z.string(),
+        }),
+      )
       .max(MAX_CRAWL_PREPARE_LIMIT),
     kind: z.enum(["drained", "prepared", "unavailable"]),
     ok: z.literal(true),

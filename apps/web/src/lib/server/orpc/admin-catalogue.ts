@@ -366,7 +366,7 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
       if (phase?.phase === "fetch") {
         return {
-          ...(await fetchCrawlPhase(phase.preparedToken)),
+          ...(await fetchCrawlPhase(phase.preparedToken, phase.supplied)),
           ok: true as const,
           phase: phase.phase,
         };

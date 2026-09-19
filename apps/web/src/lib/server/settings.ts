@@ -22,8 +22,8 @@
 //      `clip_drip_paused` (./clip-social.ts), `publish_advance_paused` (./publish-advance.ts),
 //      `catalogue_capture_paused` (./capture-budget.ts), `anchor_apify_enabled`
 //      (./anchor-apify.ts), `anchor_spotify_search_enabled` (./anchor-spotify-search.ts),
-//      `frontier.minting` (./frontier-playlist.ts), `crawl_due_cutover_enabled`
-//      (./crawl-cutover.ts), `public_projection_cutover_enabled`
+//      `frontier.minting` (./frontier-playlist.ts), `crawl_due_cutover_enabled` and
+//      `crawl_box_fetch_enabled` (./crawl-cutover.ts), `public_projection_cutover_enabled`
 //      (./public-projection-cutover.ts), `health_snapshot_receipts_enabled`
 //      (./health-receipt-cutover.ts), and `database_admission_enforced`
 //      (./database-admission.ts). These cutovers are DEFAULT-DENY and only the exact literal

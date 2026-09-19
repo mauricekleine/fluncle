@@ -93,6 +93,7 @@ import {
   type ClaimedCrawlFrontierRow,
   claimCrawlFrontierRows,
   isClaimedCrawlFrontierRowCurrent,
+  isCrawlBoxFetchEnabled,
   isCrawlDueCutoverEnabled,
   settleClaimedCrawlFrontierRow,
 } from "./crawl-cutover";
@@ -110,7 +111,7 @@ import { hasIsrc } from "./isrc";
 import { setLabelMbLabelId } from "./label-images";
 import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
-import { mbFetch } from "./musicbrainz";
+import { MUSICBRAINZ_API_HOST, mbFetch, musicbrainzUrl } from "./musicbrainz";
 import {
   canonicalOperationJson,
   digestOperationRequest,
@@ -1444,7 +1445,15 @@ type CrawlProviderOutcome =
 /** Thrown when MusicBrainz is actively throttling — the pass's circuit breaker. */
 class ThrottledError extends Error {}
 
-/** One MB call, with the run-level breaker wired in. */
+/**
+ * One MusicBrainz read the provider leg needs, however it is made. The seam exists so a body the
+ * BOX fetched can be consumed by exactly the code path a Worker-fetched body goes through — one
+ * parser, one set of `applyCrawlProvider` branches, one meaning for null. A transport may only
+ * decide WHERE the bytes come from; it can never decide what they mean.
+ */
+export type CrawlProviderTransport = <T>(path: string) => Promise<T | null>;
+
+/** One MB call over Worker egress, with the run-level breaker wired in. */
 async function mb<T>(path: string): Promise<T | null> {
   const { data, rateLimited } = await mbFetch<T>(path);
 
@@ -1453,6 +1462,23 @@ async function mb<T>(path: string): Promise<T | null> {
   }
 
   return data;
+}
+
+function releasePath(externalId: string): string {
+  return `/release/${externalId}?inc=recordings+artist-credits+isrcs+labels+release-groups+url-rels`;
+}
+
+function seedSearchPath(name: string): string {
+  return `/label?query=${encodeURIComponent(name)}&limit=5`;
+}
+
+function browsePath(
+  key: string,
+  externalId: string,
+  limit: number,
+  offset: number | string,
+): string {
+  return `/release?${key}=${externalId}&limit=${limit}&offset=${offset}`;
 }
 
 async function planCrawlNode(
@@ -1494,6 +1520,7 @@ async function planCrawlNode(
 async function fetchCrawlProvider(
   plan: CrawlProviderPlan,
   node: FrontierRow,
+  read: CrawlProviderTransport = mb,
 ): Promise<CrawlProviderData> {
   if (plan.kind === "terminal") {
     return { kind: "terminal" };
@@ -1501,9 +1528,7 @@ async function fetchCrawlProvider(
   if (plan.kind === "release") {
     return {
       kind: "release",
-      release: await mb<MbReleaseDetail>(
-        `/release/${node.external_id}?inc=recordings+artist-credits+isrcs+labels+release-groups+url-rels`,
-      ),
+      release: await read<MbReleaseDetail>(releasePath(node.external_id)),
     };
   }
   if (plan.kind === "seed") {
@@ -1512,22 +1537,20 @@ async function fetchCrawlProvider(
     }
     return {
       kind: "seed",
-      search: await mb<MbLabelSearch>(
-        `/label?query=${encodeURIComponent(plan.label.name)}&limit=5`,
-      ),
+      search: await read<MbLabelSearch>(seedSearchPath(plan.label.name)),
     };
   }
   if (plan.kind === "browse-forward") {
     return {
-      browse: await mb<MbReleaseBrowse>(
-        `/release?${plan.key}=${node.external_id}&limit=${BROWSE_PAGE_SIZE}&offset=${node.cursor}`,
+      browse: await read<MbReleaseBrowse>(
+        browsePath(plan.key, node.external_id, BROWSE_PAGE_SIZE, node.cursor),
       ),
       kind: "browse-forward",
     };
   }
 
   const browse = (offset: number, limit: number): Promise<MbReleaseBrowse | null> =>
-    mb<MbReleaseBrowse>(`/release?${plan.key}=${node.external_id}&limit=${limit}&offset=${offset}`);
+    read<MbReleaseBrowse>(browsePath(plan.key, node.external_id, limit, offset));
   let offset: number;
   let staleTotal: null | number = null;
   if (node.cursor === REARM_TAIL) {
@@ -1546,6 +1569,190 @@ async function fetchCrawlProvider(
   return {
     browse: { offset, page: await browse(offset, BROWSE_PAGE_SIZE), staleTotal },
     kind: "browse-rearmed",
+  };
+}
+
+/**
+ * THE URL(S) ONE CLAIM MAY FETCH — everything the box is allowed to ask MusicBrainz for this node,
+ * composed here and nowhere else.
+ *
+ * The box never builds a MusicBrainz URL. It receives one, or a probe plus a template whose only
+ * free slot is a bounded offset, and the Worker re-derives the same strings at commit from the
+ * SIGNED plan and node. A submitted body is read only under a URL the Worker itself asks for, so a
+ * body for anything else — another entity, another host — is unreachable rather than merely
+ * rejected. The `{offset}` slot is the one exception, and it is not a hole: the Worker computes the
+ * offset from the probe body it accepted and looks up only that one substitution.
+ */
+export type CrawlFetchPlan =
+  | { kind: "none" }
+  | { kind: "single"; url: string }
+  | {
+      countField: "release-count";
+      kind: "tail";
+      pageSize: number;
+      pageUrlTemplate: string;
+      probeUrl: string;
+    };
+
+/** The literal the tail template's offset slot is spelled with, on both sides of the wire. */
+export const CRAWL_FETCH_OFFSET_SLOT = "{offset}";
+
+export function crawlFetchPlan(plan: CrawlProviderPlan, node: FrontierRow): CrawlFetchPlan {
+  if (plan.kind === "terminal") {
+    return { kind: "none" };
+  }
+  if (plan.kind === "release") {
+    return { kind: "single", url: musicbrainzUrl(releasePath(node.external_id)) };
+  }
+  if (plan.kind === "seed") {
+    // A ruled identity answers without a search, and a slug MusicBrainz has no label row for has
+    // nothing to ask about. Either way the provider leg makes no request at all.
+    return !plan.label || plan.label.mbLabelId
+      ? { kind: "none" }
+      : { kind: "single", url: musicbrainzUrl(seedSearchPath(plan.label.name)) };
+  }
+  if (plan.kind === "browse-forward") {
+    return {
+      kind: "single",
+      url: musicbrainzUrl(browsePath(plan.key, node.external_id, BROWSE_PAGE_SIZE, node.cursor)),
+    };
+  }
+  if (node.cursor === REARM_TAIL) {
+    return {
+      countField: "release-count",
+      kind: "tail",
+      pageSize: BROWSE_PAGE_SIZE,
+      pageUrlTemplate: musicbrainzUrl(
+        browsePath(plan.key, node.external_id, BROWSE_PAGE_SIZE, CRAWL_FETCH_OFFSET_SLOT),
+      ),
+      probeUrl: musicbrainzUrl(browsePath(plan.key, node.external_id, 1, 0)),
+    };
+  }
+  return {
+    kind: "single",
+    url: musicbrainzUrl(
+      browsePath(plan.key, node.external_id, BROWSE_PAGE_SIZE, descendOffset(node.cursor)),
+    ),
+  };
+}
+
+/**
+ * One MusicBrainz read the box already made, as it crosses back to the Worker. The outcomes are the
+ * Worker transport's own vocabulary, one for one, so a box-fetched node settles exactly as a
+ * Worker-fetched one does: a body, an empty answer (network error, timeout, or a non-503 status a
+ * Worker fetch would also have swallowed), a body that is not JSON, a body past the envelope bound,
+ * and the vendor's throttle — which keeps the node's turn rather than charging it.
+ */
+export type SuppliedCrawlBody = {
+  body?: unknown;
+  outcome: "body" | "empty" | "invalid" | "oversize" | "throttled";
+  url: string;
+};
+
+function assertMusicbrainzUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("crawl fetch body carries a url that is not a url");
+  }
+  if (parsed.protocol !== "https:" || parsed.host !== MUSICBRAINZ_API_HOST) {
+    throw new Error("crawl fetch body carries a url outside MusicBrainz");
+  }
+}
+
+/** Does `url` differ from the tail template only by a non-negative integer in its offset slot? */
+function matchesOffsetTemplate(template: string, url: string): boolean {
+  const slot = template.indexOf(CRAWL_FETCH_OFFSET_SLOT);
+  if (slot < 0) {
+    return false;
+  }
+  const head = template.slice(0, slot);
+  const tail = template.slice(slot + CRAWL_FETCH_OFFSET_SLOT.length);
+  if (!url.startsWith(head) || !url.endsWith(tail) || url.length <= head.length + tail.length) {
+    return false;
+  }
+  const offset = url.slice(head.length, url.length - tail.length);
+  return /^(0|[1-9][0-9]{0,15})$/.test(offset) && Number.isSafeInteger(Number(offset));
+}
+
+/**
+ * Bind submitted bodies to the claim. A body survives only when its url is one THIS node's signed
+ * plan issues; anything else is a bug or a forgery and is refused loudly rather than ignored, so a
+ * box that has drifted from the Worker's derivation is visible in the run ledger instead of quietly
+ * spending Worker egress.
+ */
+export function suppliedCrawlBodies(
+  plan: CrawlProviderPlan,
+  node: FrontierRow,
+  supplied: readonly SuppliedCrawlBody[],
+): Map<string, SuppliedCrawlBody> {
+  const fetchPlan = crawlFetchPlan(plan, node);
+  const accepted = new Map<string, SuppliedCrawlBody>();
+  for (const entry of supplied) {
+    assertMusicbrainzUrl(entry.url);
+    const issued =
+      fetchPlan.kind === "single"
+        ? entry.url === fetchPlan.url
+        : fetchPlan.kind === "tail" &&
+          (entry.url === fetchPlan.probeUrl ||
+            matchesOffsetTemplate(fetchPlan.pageUrlTemplate, entry.url));
+    if (!issued) {
+      throw new Error("crawl fetch body is not for a url this claim issued");
+    }
+    if (accepted.has(entry.url)) {
+      throw new Error("crawl fetch bodies repeat a url");
+    }
+    accepted.set(entry.url, boundedSuppliedBody(entry));
+  }
+  return accepted;
+}
+
+/**
+ * The submitted body rides the same 2 MiB bound as the envelope it is about to be signed into, and
+ * it is measured rather than trusted: a body over the bound could never be signed, so it settles as
+ * the oversize provider failure a Worker fetch of the same response settles as.
+ */
+function boundedSuppliedBody(entry: SuppliedCrawlBody): SuppliedCrawlBody {
+  if (entry.outcome !== "body") {
+    return { outcome: entry.outcome, url: entry.url };
+  }
+  let bytes: number;
+  try {
+    bytes = Buffer.byteLength(JSON.stringify(entry.body ?? null), "utf8");
+  } catch {
+    return { outcome: "invalid", url: entry.url };
+  }
+  return bytes > CRAWL_PHASE_TOKEN_MAX_BYTES
+    ? { outcome: "oversize", url: entry.url }
+    : { body: entry.body ?? null, outcome: "body", url: entry.url };
+}
+
+/**
+ * Read a node's provider bytes from what the box brought back, falling through to Worker egress for
+ * any url the box did not supply. The fall-through is what makes the whole change version-tolerant
+ * in both directions: an old sweep supplies nothing and every read is a Worker fetch, and a new
+ * sweep that guessed the tail offset wrong costs one Worker request rather than a wrong answer.
+ */
+function suppliedCrawlProviderTransport(
+  supplied: Map<string, SuppliedCrawlBody>,
+  live: CrawlProviderTransport,
+): CrawlProviderTransport {
+  return async <T>(path: string): Promise<T | null> => {
+    const entry = supplied.get(musicbrainzUrl(path));
+    if (entry === undefined) {
+      return live<T>(path);
+    }
+    if (entry.outcome === "throttled") {
+      throw new ThrottledError(`MusicBrainz is rate-limiting (${path})`);
+    }
+    if (entry.outcome === "oversize") {
+      throw new Error("MusicBrainz response exceeded the bounded crawl provider envelope");
+    }
+    if (entry.outcome === "invalid") {
+      throw new Error(`MusicBrainz returned a body that is not JSON (${path})`);
+    }
+    return entry.outcome === "empty" ? null : (entry.body as T);
   };
 }
 
@@ -2417,9 +2624,15 @@ export type CrawlPhaseInitialization = Pick<
 >;
 
 export type CrawlPhasePrepareResult = {
+  /**
+   * Whether this Worker will consume a MusicBrainz body the box fetched. The box asks BEFORE it
+   * spends a request, so a flag flip cannot leave a sweep fetching bodies nobody will read — the
+   * rollback costs the vendor nothing and the box nothing.
+   */
+  boxFetch: boolean;
   frontierPending: number;
   initialization: CrawlPhaseInitialization;
-  items: { nodeId: string; preparedToken: string }[];
+  items: { fetchPlan: CrawlFetchPlan; nodeId: string; preparedToken: string }[];
   kind: "drained" | "prepared" | "unavailable";
 };
 
@@ -2617,8 +2830,10 @@ export async function prepareCrawlPhase({
       `crawl prepare limit must be an integer from 1 through ${MAX_CRAWL_PREPARE_LIMIT}`,
     );
   }
+  const boxFetch = await isCrawlBoxFetchEnabled();
   if (!(await isCrawlDueCutoverEnabled())) {
     return {
+      boxFetch,
       frontierPending: await countFrontierPending(),
       initialization: emptyCrawlPhaseInitialization(),
       items: [],
@@ -2635,6 +2850,7 @@ export async function prepareCrawlPhase({
   });
   if (claimed.rows.length === 0) {
     return {
+      boxFetch,
       frontierPending: await countFrontierPending(),
       initialization: {
         ...emptyCrawlPhaseInitialization(),
@@ -2648,7 +2864,9 @@ export async function prepareCrawlPhase({
   const hopLimit = Math.max(0, Math.min(maxHop, MAX_HOP_CEILING));
   const items: CrawlPhasePrepareResult["items"] = [];
   for (const claimedNode of claimed.rows) {
+    const plan = await planCrawlNode(claimedNode, hopLimit, db);
     items.push({
+      fetchPlan: crawlFetchPlan(plan, claimedNode),
       nodeId: claimedNode.id,
       preparedToken: await signCrawlPhaseToken({
         claimToken: claimed.claimToken,
@@ -2656,12 +2874,13 @@ export async function prepareCrawlPhase({
         iat: Date.now(),
         maxHop: hopLimit,
         node: claimedNode,
-        plan: await planCrawlNode(claimedNode, hopLimit, db),
+        plan,
         stage: "prepared",
       }),
     });
   }
   return {
+    boxFetch,
     frontierPending: await countFrontierPending(),
     initialization: {
       ...emptyCrawlPhaseInitialization(),
@@ -2687,12 +2906,25 @@ function crawlCommitCoordinates(commitToken: string): Promise<{
 }
 
 /** Perform only provider I/O. The returned bytes are signed before crossing back into admission. */
-export async function fetchCrawlPhase(preparedToken: string): Promise<CrawlPhaseFetchResult> {
+export async function fetchCrawlPhase(
+  preparedToken: string,
+  supplied?: readonly SuppliedCrawlBody[],
+): Promise<CrawlPhaseFetchResult> {
   const prepared = await verifyCrawlPhaseToken<PreparedCrawlPhaseToken>(preparedToken, "prepared");
+  // Binding runs OUTSIDE the provider try: a body for a url this claim never issued is a drift or a
+  // forgery, and it must surface as a fault rather than settle quietly as one node's bad luck.
+  const accepted =
+    supplied !== undefined && supplied.length > 0 && (await isCrawlBoxFetchEnabled())
+      ? suppliedCrawlBodies(prepared.plan, prepared.node, supplied)
+      : undefined;
   let outcome: CrawlProviderOutcome;
   try {
     outcome = {
-      data: await fetchCrawlProvider(prepared.plan, prepared.node),
+      data: await fetchCrawlProvider(
+        prepared.plan,
+        prepared.node,
+        accepted === undefined ? mb : suppliedCrawlProviderTransport(accepted, mb),
+      ),
       kind: "success",
     };
   } catch (error) {
