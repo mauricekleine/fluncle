@@ -25,11 +25,22 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # fetch and MuQ inference hold none. The admission environment rides the `docker exec` so it
 # reaches the runner inside the container. Install this unit only after the image carries the
 # phased script (the README's rollout order).
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/embed-sweep.sh
-# A worst-case tick can wait 120s for its worklist window, spend several minutes on one windowed
-# full-song embed, then wait 120s for its write window; the timeout keeps headroom past that and
-# well past the gateway's ~300s global budget.
-TimeoutStartSec=1030
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home -e FLUNCLE_EMBED_BATCH=3 hermes bash /opt/hermes-scripts/embed-sweep.sh
+# The batch cap and this timeout are ONE decision, re-derived whenever FLUNCLE_EMBED_BATCH moves:
+#
+#   TimeoutStartSec = 120 (the worklist window's admission ceiling, paid ONCE per tick)
+#                   + batch × 300 (fetch + windowed full-song forward per track)
+#                   + batch × 120 (each result's own write-window admission ceiling)
+#                   + 30 (wrapper, CLI, and cost-row overhead)
+#
+# At batch 3: 120 + 900 + 360 + 30 = 1410.
+#
+# The 300s per-track term is deliberately generous. The ledger's slowest single-track tick runs
+# ~294s wall, and that number already carries a whole torch import + MuQ model load plus its
+# admission wait — costs a batch pays ONCE for the manifest, not once per track. So 300s per
+# MARGINAL track over-counts, which is the right direction for a kill that wastes a finished
+# forward. (Typical ticks sit far below it: p90 ~230s, median ~174s for a whole single-track tick.)
+TimeoutStartSec=1410
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

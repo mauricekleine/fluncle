@@ -21,7 +21,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # one. The admission environment rides the `docker exec` so it reaches the runner inside the
 # container. Install this unit only after the image carries the phased script (the README's
 # rollout order).
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=5 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/reconcile-hub-counts.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/reconcile-hub-counts.sh
 # Windows start only inside a 600s budget; the last one can wait 120s for its lease, retry one
 # yielded acquisition, and run a 120s request. The timeout keeps headroom past that worst case, and
 # an over-long tick self-heals on the next night (the pass is idempotent).

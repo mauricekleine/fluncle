@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 // embed-batch.ts — the GPU BATCH embed path (docs/gpu-batch-embed.md).
 //
-// The on-box sweep (embed-sweep.ts) embeds ONE track per 5-minute tick on rave-02, which is
-// CPU-only: a windowed full-song MuQ forward is minutes-scale there, so the box does roughly
-// a dozen tracks a day. That is fine for the certified archive — Fluncle finds ~15 tracks a
+// The on-box sweep (embed-sweep.ts) embeds a small batch (`FLUNCLE_EMBED_BATCH`) per 5-minute
+// tick on rave-02, which is CPU-only: a windowed full-song MuQ forward is minutes-scale there,
+// so the box does a few dozen tracks a day at most. That is fine for the certified archive — Fluncle finds ~15 tracks a
 // WEEK — and hopeless for the catalogue, which the crawler will land in the thousands. At a
 // dozen a day, a 10k catalogue is two years, and The Ear ranks by embedding, so a catalogue
 // track with no vector is a track The Ear cannot hear at all.

@@ -798,7 +798,7 @@ ${ACQUIRED_RESPONSE}`);
   );
 
   it(
-    "uses the five-second default when the polling interval is absent",
+    "uses the two-second default when the polling interval is absent",
     PROCESS_TEST_OPTIONS,
     async () => {
       const sleepLog = join(directory, "sleep.log");
@@ -819,7 +819,7 @@ fi
 
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(true);
-      expect(readFileSync(sleepLog, "utf8").split("\n")[0]).toBe("5.000");
+      expect(readFileSync(sleepLog, "utf8").split("\n")[0]).toBe("2.000");
       expect(result.stderr).toContain('"outcome":"released"');
       expect(readFileSync(curlLog, "utf8")).toContain('"action":"release"');
     },
