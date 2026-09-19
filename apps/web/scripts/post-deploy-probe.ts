@@ -45,6 +45,12 @@ import { liveSurfaces, statusProbes, type Surface } from "@fluncle/registry";
 // anti-drift rule the registry and the contract get. A pure, dependency-free module (it is shared
 // with the browser), so a standalone Bun script can read it.
 import { SEARCH_EXAMPLES } from "../src/lib/search-results";
+// The vector budget, imported from the ONE module that owns it rather than restated here. A probe
+// that gave up before the deadline the server is allowed to spend would report a failure the
+// server never committed; deriving the budget makes that drift impossible. Pure and
+// dependency-free for exactly this reason (a `lib/server/**` module cannot be read from a
+// standalone Bun script).
+import { VECTOR_ENDPOINT_PROBE_TIMEOUT_MS } from "../src/lib/vector-budget";
 
 // The canonical production origin — the ONE piece of topology this probe hardcodes,
 // and it is fully public (this repo is open source). `--base-url` retargets it for a
@@ -83,6 +89,40 @@ const CONCURRENCY = 4;
 const TIMEOUT_MS = 10_000;
 const NETWORK_RETRIES = 1; // one retry, on a thrown/timeout error only (never on an HTTP status).
 
+// ── The vector-capable lane ───────────────────────────────────────────────────
+//
+// Three rules, and all three exist because a request-time Turso vector scan is a DIFFERENT KIND
+// OF WORK from every other GET here:
+//
+//  1. BUDGET. `VECTOR_FALLBACK_DEADLINE_MS` is how long the server is permitted to spend on one,
+//     so a shorter client timeout would fail a request the server was still legitimately serving.
+//     The budget is that deadline plus documented headroom (`VECTOR_ENDPOINT_PROBE_TIMEOUT_MS`).
+//  2. SOLITUDE. A Worker isolate admits ONE heavy read at a time
+//     (`WORKER_DB_HEAVY_READ_CONCURRENCY`), so two vector-capable targets fired together do not
+//     run together — the second waits out the first's whole scan and then gets blamed for the
+//     total. The probe would be measuring its own contention. They run alone, last.
+//  3. NO RETRY. libSQL cannot cancel remote work, so retrying a timeout does not replace the
+//     first scan, it STACKS a second one on a database that is already the bottleneck. A
+//     vector-capable target gets exactly one attempt.
+//
+// The membership list is the set of PUBLIC GET ops whose handler can reach `executeVectorFallback`
+// (`lib/server/vector-fallback.ts` — grep its call sites). It is a probe-side judgement about
+// cost, never about correctness: an op wrongly left out is merely probed on the ordinary budget.
+const VECTOR_CAPABLE_OPERATIONS = new Set<string>([
+  "list_mixable_tracks",
+  "list_similar_artists",
+  "list_similar_tracks",
+  "search_archive",
+]);
+
+/**
+ * A served target slower than this is REPORTED, never failed. The generous budget above is what
+ * keeps a working endpoint from being called dead; this is what keeps a working endpoint from
+ * quietly sliding toward that budget unnoticed. Comfortably under the deadline, so a drift shows
+ * up here long before it shows up as a failure.
+ */
+const SLOW_WARNING_MS = 5_000;
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 /** The body shape a served (2xx) response must satisfy for its class. */
@@ -117,6 +157,8 @@ type Target = {
   expect: Expectation;
   /** True when the URL is on the primary www origin, so `--base-url` can retarget it. */
   rewritable: boolean;
+  /** True for a vector-capable op: the long budget, the solitary lane, and no retry (see above). */
+  vectorCapable?: true;
 };
 
 /** A GET target we deliberately did NOT fire, with the reason (shown in the report). */
@@ -126,7 +168,11 @@ type SkippedTarget = {
   reason: string;
 };
 
-type Verdict = "CRIT" | "FAIL" | "PASS" | "SKIP";
+// WARN is a PASS that took too long: the surface resolved and answered correctly, so it never
+// fails the run, but the report says so out loud and names the latency. It is the probe's
+// regression sensitivity — without it, a budget generous enough to survive a legitimate vector
+// scan would also swallow a slow drift right up to the moment it became an outage.
+type Verdict = "CRIT" | "FAIL" | "PASS" | "SKIP" | "WARN";
 
 type ProbeResult = {
   name: string;
@@ -135,6 +181,8 @@ type ProbeResult = {
   verdict: Verdict;
   status: number | null;
   detail: string;
+  /** Wall-clock milliseconds for the attempt that answered; null for a target never fired. */
+  durationMs: number | null;
 };
 
 // ── Tier / classification (pure) ──────────────────────────────────────────────
@@ -374,6 +422,7 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
       name,
       rewritable: true,
       url: `${PROD_BASE_URL}${API_PREFIX}${path}`,
+      ...vectorLane(name),
     });
   }
 
@@ -390,10 +439,16 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
       name: `search example · ${example.query}`,
       rewritable: true,
       url: `${PROD_BASE_URL}${API_PREFIX}/search/archive?q=${encodeURIComponent(example.query)}`,
+      ...vectorLane("search_archive"),
     });
   }
 
   return { skipped, targets };
+}
+
+/** The vector lane's marker, spread into a target so the flag is set in exactly one place. */
+export function vectorLane(operation: string): { vectorCapable?: true } {
+  return VECTOR_CAPABLE_OPERATIONS.has(operation) ? { vectorCapable: true } : {};
 }
 
 // The param names that identify a finding/mixtape by id or Log ID — the one family
@@ -435,6 +490,7 @@ export function promoteTrackParamOps(
         name: skip.name,
         rewritable: true,
         url: `${PROD_BASE_URL}${API_PREFIX}${resolvedPath}`,
+        ...vectorLane(skip.name),
       });
 
       continue;
@@ -604,13 +660,27 @@ export function judge(
 
 type FetchLike = typeof fetch;
 
-/** GET a URL with a timeout and one retry on a thrown/timeout error (never on a status). */
-async function fetchWithRetry(url: string, fetchImpl: FetchLike): Promise<Response> {
+/** How long this target may take before it is called dead, and how many attempts it gets. */
+export function fetchPolicy(target: Pick<Target, "vectorCapable">): {
+  attempts: number;
+  timeoutMs: number;
+} {
+  return target.vectorCapable === true
+    ? { attempts: 1, timeoutMs: VECTOR_ENDPOINT_PROBE_TIMEOUT_MS }
+    : { attempts: NETWORK_RETRIES + 1, timeoutMs: TIMEOUT_MS };
+}
+
+/** GET a URL with a timeout and the target's retry budget (never a retry on an HTTP status). */
+async function fetchWithRetry(
+  url: string,
+  fetchImpl: FetchLike,
+  policy: { attempts: number; timeoutMs: number } = fetchPolicy({}),
+): Promise<Response> {
   let lastError: unknown;
 
-  for (let attempt = 0; attempt <= NETWORK_RETRIES; attempt += 1) {
+  for (let attempt = 0; attempt < policy.attempts; attempt += 1) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), policy.timeoutMs);
 
     try {
       return await fetchImpl(url, {
@@ -628,28 +698,48 @@ async function fetchWithRetry(url: string, fetchImpl: FetchLike): Promise<Respon
   throw lastError;
 }
 
+/** Downgrade a clean PASS to WARN when it took longer than the soft threshold. */
+export function applySlowWarning(
+  verdict: Verdict,
+  detail: string,
+  durationMs: number,
+): { detail: string; verdict: Verdict } {
+  if (verdict !== "PASS" || durationMs <= SLOW_WARNING_MS) {
+    return { detail, verdict };
+  }
+
+  return { detail: `${detail} — slow (>${Math.round(SLOW_WARNING_MS / 1000)}s)`, verdict: "WARN" };
+}
+
 async function probeOne(target: Target, url: string, fetchImpl: FetchLike): Promise<ProbeResult> {
+  const startedAt = Date.now();
+
   try {
-    const response = await fetchWithRetry(url, fetchImpl);
+    const response = await fetchWithRetry(url, fetchImpl, fetchPolicy(target));
     const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
     const body = await response.text();
-    const { verdict, detail } = judge(target.expect, response.status, contentType, body);
+    const judged = judge(target.expect, response.status, contentType, body);
+    const durationMs = Date.now() - startedAt;
+    const { verdict, detail } = applySlowWarning(judged.verdict, judged.detail, durationMs);
 
     return {
       className: target.className,
-      detail,
+      detail: `${detail} · ${formatDuration(durationMs)}`,
+      durationMs,
       name: target.name,
       status: response.status,
       url,
       verdict,
     };
   } catch (error) {
+    const durationMs = Date.now() - startedAt;
     const reason =
       error instanceof Error && error.name === "AbortError" ? "timeout" : "network error";
 
     return {
       className: target.className,
-      detail: reason,
+      detail: `${reason} · ${formatDuration(durationMs)}`,
+      durationMs,
       name: target.name,
       status: null,
       url,
@@ -658,28 +748,49 @@ async function probeOne(target: Target, url: string, fetchImpl: FetchLike): Prom
   }
 }
 
-/** Run `targets` through a fixed-size worker pool (polite concurrency). */
-async function runPool(
+function formatDuration(durationMs: number): string {
+  return durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(2)}s`;
+}
+
+/**
+ * Fire every target: the ordinary ones through a polite fixed-size pool, then the vector-capable
+ * ones ALONE, one after another. That ordering is the whole point — the Worker serializes heavy
+ * reads per isolate, so anything fired alongside a vector scan is not being measured, it is being
+ * queued behind one. The report keeps the derived target order regardless of run order.
+ */
+async function runProbes(
   targets: { target: Target; url: string }[],
   fetchImpl: FetchLike,
 ): Promise<ProbeResult[]> {
-  // Filled by index so the report keeps the derived target order regardless of which
-  // worker finishes first; every index is assigned, so it ends up dense.
   const results: ProbeResult[] = [];
+  const indexed = targets.map((entry, index) => ({ ...entry, index }));
+  const ordinary = indexed.filter((entry) => entry.target.vectorCapable !== true);
+  const vectorCapable = indexed.filter((entry) => entry.target.vectorCapable === true);
+
+  await runPool(ordinary, results, fetchImpl, CONCURRENCY);
+  await runPool(vectorCapable, results, fetchImpl, 1);
+
+  return results;
+}
+
+/** Run `entries` through a fixed-size worker pool, writing each result at its derived index. */
+async function runPool(
+  entries: { index: number; target: Target; url: string }[],
+  results: ProbeResult[],
+  fetchImpl: FetchLike,
+  concurrency: number,
+): Promise<void> {
   let cursor = 0;
 
   async function worker(): Promise<void> {
-    while (cursor < targets.length) {
-      const index = cursor;
+    while (cursor < entries.length) {
+      const entry = entries[cursor];
       cursor += 1;
-      const { target, url } = targets[index];
-      results[index] = await probeOne(target, url, fetchImpl);
+      results[entry.index] = await probeOne(entry.target, entry.url, fetchImpl);
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker()));
-
-  return results;
+  await Promise.all(Array.from({ length: Math.min(concurrency, entries.length) }, () => worker()));
 }
 
 // ── Bootstrap a real Log ID (I/O) ─────────────────────────────────────────────
@@ -704,7 +815,7 @@ async function bootstrapSampleLogId(baseUrl: string, fetchImpl: FetchLike): Prom
 
 // ── Report (pure) ─────────────────────────────────────────────────────────────
 
-const VERDICT_ORDER: Record<Verdict, number> = { CRIT: 0, FAIL: 1, PASS: 2, SKIP: 3 };
+const VERDICT_ORDER: Record<Verdict, number> = { CRIT: 0, FAIL: 1, PASS: 3, SKIP: 4, WARN: 2 };
 
 export function formatTable(results: ProbeResult[]): string {
   const sorted = [...results].sort(
@@ -770,6 +881,7 @@ async function main(): Promise<void> {
       crossOriginSkips.push({
         className: target.className,
         detail: "cross-origin subdomain — only probed against prod",
+        durationMs: null,
         name: target.name,
         status: null,
         url: target.url,
@@ -782,11 +894,12 @@ async function main(): Promise<void> {
     toRun.push({ target, url });
   }
 
-  const probed = await runPool(toRun, fetchImpl);
+  const probed = await runProbes(toRun, fetchImpl);
 
   const skipResults: ProbeResult[] = remaining.map((skip) => ({
     className: skip.className,
     detail: skip.reason,
+    durationMs: null,
     name: skip.name,
     status: null,
     url: "",
@@ -801,7 +914,7 @@ async function main(): Promise<void> {
 
       return acc;
     },
-    { CRIT: 0, FAIL: 0, PASS: 0, SKIP: 0 },
+    { CRIT: 0, FAIL: 0, PASS: 0, SKIP: 0, WARN: 0 },
   );
   const failed = counts.CRIT + counts.FAIL;
 
@@ -817,8 +930,17 @@ async function main(): Promise<void> {
       `\n  (+ ${counts.SKIP - visible.filter((r) => r.verdict === "SKIP").length} write ops catalogued, not fired)`,
     );
     console.log(
-      `\nSummary: ${counts.PASS} passed · ${counts.FAIL} failed · ${counts.CRIT} critical · ${counts.SKIP} skipped · ${results.length} total`,
+      `\nSummary: ${counts.PASS} passed · ${counts.WARN} slow · ${counts.FAIL} failed · ${counts.CRIT} critical · ${counts.SKIP} skipped · ${results.length} total`,
     );
+
+    // Non-fatal, and deliberately printed as its own block: a slow surface that never fails is
+    // exactly the signal a table this long buries.
+    if (counts.WARN > 0) {
+      console.log("\nSLOW (passed, but above the soft threshold):");
+      for (const result of results.filter((r) => r.verdict === "WARN")) {
+        console.log(`  WARN ${result.name} — ${result.detail}\n    ${result.url}`);
+      }
+    }
 
     if (failed > 0) {
       console.log("\nFAILURES:");

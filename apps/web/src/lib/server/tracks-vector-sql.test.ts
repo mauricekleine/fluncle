@@ -1,7 +1,13 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob, toVectorProbe } from "./embedding";
-import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
+import { resetKeyHistogramCache } from "./key-histogram";
 import { parseKey, toCamelot } from "../key-camelot";
 import {
   applyTaste,
@@ -199,6 +205,81 @@ describe("getMixableTracks", () => {
       expect(fromSql).toEqual(rankInIsolate(rows, "t_00", limit));
       expect(fromSql).toHaveLength(limit);
     }
+  });
+
+  it("answers identically whether or not the candidate scan joins findings", async () => {
+    // THE CONDITIONAL `FROM`, PINNED. The candidate CTE joins `findings` only to evaluate the
+    // Log ID exclusion clause; with nothing to exclude by coordinate it drives straight off
+    // `tracks`. `findings.track_id` is that table's primary key, so the LEFT JOIN can neither
+    // duplicate a candidate nor drop one — and the rail must be the same rail either way, down to
+    // each row's certification, which is read off the hydrating join that is always present.
+    const rows = corpus();
+
+    await seed(rows);
+
+    const withoutJoin = await getMixableTracks("t_00", { limit: 12 });
+    // A real, well-formed coordinate that matches nothing in the fixture: the exclusion clause —
+    // and with it the findings join — is compiled into the scan, and removes no candidate.
+    const withJoin = await getMixableTracks("t_00", { exclude: ["999.9.9Z"], limit: 12 });
+
+    expect(withJoin).toEqual(withoutJoin);
+    expect(withoutJoin.every((candidate) => candidate.certified)).toBe(true);
+    expect(withoutJoin.every((candidate) => typeof candidate.logId === "string")).toBe(true);
+  });
+
+  it("keeps an uncertified candidate on the rail on both sides of that branch", async () => {
+    // The unlit register is the half most easily broken by touching the candidate scan's FROM: a
+    // catalogue row has NO findings row at all, so an inner join (or a dropped one) would silently
+    // change who is eligible. It is the same rail with and without the exclusion clause.
+    await seed(corpus());
+    await seedCatalogueTrack(db, { trackId: "t_unlit" });
+    await db.execute({
+      args: ["A minor", 172, JSON.stringify({ centroidHz: 1200, highRatio: 0.2, onsetRate: 9 })],
+      sql: `update tracks set key = ?1, bpm = ?2, features_json = ?3 where track_id = 't_unlit'`,
+    });
+    await seedEmbedding(db, "t_unlit", pseudoVector(99));
+
+    const withoutJoin = await getMixableTracks("t_00", { limit: 30 });
+    const withJoin = await getMixableTracks("t_00", { exclude: ["999.9.9Z"], limit: 30 });
+
+    expect(withoutJoin.map((candidate) => candidate.trackId)).toContain("t_unlit");
+    expect(withJoin).toEqual(withoutJoin);
+    expect(withoutJoin.find((candidate) => candidate.trackId === "t_unlit")).toMatchObject({
+      certified: false,
+      logId: undefined,
+    });
+  });
+
+  it("starts the archive's key-spelling read without waiting for the target row", async () => {
+    // THE COLD PATH IS A CHAIN OF ROUND TRIPS. The histogram read depends on nothing the target
+    // read returns, so it must be in flight while the target read is outstanding — on a cold
+    // isolate that is a whole round trip removed from the rail rather than queued behind it.
+    await seed(corpus());
+    resetKeyHistogramCache();
+
+    const started: string[] = [];
+    let resolveTarget: (() => void) | undefined;
+    const targetGate = new Promise<void>((resolve) => {
+      resolveTarget = resolve;
+    });
+
+    execute.mockImplementation(async (query: unknown) => {
+      const sql = String((query as { sql?: string }).sql ?? query);
+      started.push(sql);
+
+      if (sql.includes("resolved_track")) {
+        await targetGate;
+      }
+
+      return db.execute(query as never);
+    });
+
+    const rail = getMixableTracks("t_00", { limit: 12 });
+
+    await vi.waitFor(() => expect(started.some((sql) => sql.includes("group by key"))).toBe(true));
+    resolveTarget?.();
+
+    expect(await rail).not.toHaveLength(0);
   });
 
   it("keeps the reason chip the engine picked", async () => {
