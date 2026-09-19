@@ -222,8 +222,8 @@ describe("Goal C core vendor selector cutovers", () => {
     ]);
   });
 
-  it("drains rank fanout before advancing to a second full projected page", async () => {
-    // One marker more than a guarded read's drain budget converges, so the next read must pause.
+  it("serves the rows a rank page's own residual fanout cannot touch", async () => {
+    // One marker more than a guarded read's drain budget converges, so a marker survives the read.
     const pageSize = SOURCE_REPAIR_LIMIT * DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1;
     const trackIds = Array.from(
       { length: pageSize * 2 + 1 },
@@ -240,42 +240,26 @@ describe("Goal C core vendor selector cutovers", () => {
     const first = await rankCatalogue(pageSize);
     expect(first.prioritized).toBe(pageSize);
     expect(first.remaining).toBeGreaterThan(0);
-    await expect(rankCatalogue(pageSize)).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
 
-    const pending = await db.execute({
-      args: [DUE_WORK_SOURCE_REPAIR_KIND],
-      sql: `select count(*) as count from due_work where work_kind = ? and state = 'repair'`,
-    });
-    // The rejected guarded read still converged every five-marker page its drain budget allows.
-    // The page's last marker remains durable, so the driver must repair once more before it can
-    // read page two.
-    expect(Number(pending.rows[0]?.count ?? 0)).toBe(1);
-
-    const firstRepair = await advanceProjectionFor(db, {
-      action: "repair",
-      includeStatus: false,
-      limit: 500,
-      target: "track_due_work",
-    });
-    expect(firstRepair).toMatchObject({ complete: true, processed: 1 });
-    const repairedFirstPage = await db.execute({
-      args: ["catalogue-rank", ...trackIds.slice(0, pageSize)],
-      sql: `select subject_id from due_work where work_kind = ?
-        and subject_id in (${trackIds
-          .slice(0, pageSize)
-          .map(() => "?")
-          .join(", ")})`,
-    });
-    expect(repairedFirstPage.rows).toEqual([]);
-
+    // The page's own write-back left one marker per ranked subject. The next read's drain budget
+    // converges every five-marker page it allows and still cannot reach the last one, which is the
+    // shape that used to refuse the read outright. A marker owns its own subject and no other, so
+    // the read serves a full page instead.
     const second = await rankCatalogue(pageSize);
     expect(second.prioritized).toBe(pageSize);
     expect(second.remaining).toBeGreaterThan(0);
 
-    const rows = await db.execute(
+    // Residual debt survives the read, which is what makes this the paused-tick shape.
+    const pending = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND],
+      sql: `select subject_id from due_work where work_kind = ? and state = 'repair'`,
+    });
+    expect(pending.rows).not.toHaveLength(0);
+
+    const ranked = await db.execute(
       `select track_id from tracks where catalogue_rank_corpus is not null order by track_id`,
     );
-    expect(rows.rows.map((row) => row.track_id)).toEqual(trackIds.slice(0, pageSize * 2));
+    expect(ranked.rows.map((row) => row.track_id)).toEqual(trackIds.slice(0, pageSize * 2));
   });
 
   it("reads a rank page while unrelated repair debt keeps the shared track repair step incomplete", async () => {

@@ -6,19 +6,30 @@ import {
 } from "./due-work-track-definitions";
 import {
   countDueWorkNow,
+  DUE_WORK_SOURCE_REPAIR_KIND,
   DueWorkMaintenancePendingError,
+  dueWorkReadyScanWindow,
   hasDueScheduledWork,
-  listReadyDueWork,
+  listServableDueWork,
   MAX_DUE_WORK_CHUNK_SIZE,
   promoteDueWork,
   type DueWorkClient,
   type DueWorkRow,
 } from "./due-work";
+import { type DueWorkReadRepairOutcome } from "./due-work-source-repair";
 import { getSetting } from "./settings";
 
-async function maintainDueWork(client: DueWorkClient, workKind: string): Promise<void> {
-  const { repairDueWorkBeforeRead } = await import("./due-work-source-repair");
-  await repairDueWorkBeforeRead(client, workKind);
+/**
+ * Drain this queue's repair and report what converged. A ready read that finds servable rows serves
+ * them whatever the drain left behind: a source marker withholds its own subject and nothing else,
+ * and a physical marker holds its row out of `ready` by itself.
+ */
+async function maintainDueWork(
+  client: DueWorkClient,
+  workKind: string,
+): Promise<DueWorkReadRepairOutcome> {
+  const { drainDueWorkBeforeRead } = await import("./due-work-source-repair");
+  return drainDueWorkBeforeRead(client, workKind);
 }
 
 /** The Goal C read flag. Only the exact string "true" opens the cutover. */
@@ -77,7 +88,7 @@ export async function readPromotedDueWorkPage(
   }
 
   const promotionLimit = MAX_DUE_WORK_CHUNK_SIZE;
-  await maintainDueWork(client, workKind);
+  const repair = await maintainDueWork(client, workKind);
   await promoteDueWork(client, workKind, { limit: promotionLimit, now: options.now });
   if (await hasDueScheduledWork(client, workKind, { now: options.now })) {
     throw new DueWorkMaintenancePendingError(workKind);
@@ -101,18 +112,37 @@ export async function readPromotedDueWorkPage(
     args.push(...options.subjectIds);
   }
 
-  args.push(options.limit + 1);
+  // The bounded window is scanned in ready order, then every subject an outstanding source marker
+  // still owns is withheld by that marker's own primary key. Withholding is per subject, so the
+  // rest of the window is exactly as servable as it was before the marker landed.
+  args.push(dueWorkReadyScanWindow(options.limit), options.limit + 1);
   const result = await client.execute({
     args,
-    sql: `select subject_id
-          from due_work
-          where ${clauses.join(" and ")}
+    sql: `select subject_id from (
+            select subject_id, subject_type, sort_key
+            from due_work
+            where ${clauses.join(" and ")}
+            order by sort_key, subject_id
+            limit ?
+          ) ready
+          where not exists (
+            select 1 from due_work marker
+            where marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
+              and marker.subject_type = ready.subject_type
+              and marker.subject_id = ready.subject_id
+              and marker.state = 'repair')
           order by sort_key, subject_id
           limit ?`,
   });
   const subjectIds = result.rows.flatMap((row) =>
     typeof row.subject_id === "string" ? [row.subject_id] : [],
   );
+
+  // Nothing servable while the subject family still owes repair is not an empty queue: the debt may
+  // own every row this read would have returned, or rows it has not projected yet.
+  if (subjectIds.length === 0 && !repair.sourceConverged) {
+    throw new DueWorkMaintenancePendingError(workKind);
+  }
 
   return {
     hasMore: subjectIds.length > options.limit,
@@ -138,9 +168,12 @@ async function readReadyPage(
   entry: TrackWorkInventoryEntry,
   limit: number,
 ): Promise<ReadyTrackRow[]> {
-  await maintainDueWork(client, entry.workKind);
+  const repair = await maintainDueWork(client, entry.workKind);
   await promoteDueWork(client, entry.workKind, { limit: Math.max(limit, 100) });
-  const page = await listReadyDueWork(client, entry.workKind, { limit });
+  const page = await listServableDueWork(client, entry.workKind, { limit });
+  if (page.items.length === 0 && !repair.sourceConverged) {
+    throw new DueWorkMaintenancePendingError(entry.workKind);
+  }
   return page.items;
 }
 
@@ -189,15 +222,43 @@ export async function readTrackWorkDueIds(
   // certification halves. Its two physical projections therefore need a bounded merge. All other
   // shared queues preserve listTrackWork's findings-first concatenation, while anchor/recovery are
   // catalogue-only and have one physical queue.
+  // A scope spanning both certification halves reads two physical queues. One of them having
+  // nothing servable while its family still owes repair does not make the other's rows unservable,
+  // so a pending answer is carried and raised only if the whole request ends up with nothing.
+  let pending: DueWorkMaintenancePendingError | undefined;
+  const readOrDefer = async (
+    entry: TrackWorkInventoryEntry,
+    limit: number,
+  ): Promise<ReadyTrackRow[]> => {
+    try {
+      return await readReadyPage(client, entry, limit);
+    } catch (error) {
+      if (!(error instanceof DueWorkMaintenancePendingError)) {
+        throw error;
+      }
+      pending ??= error;
+      return [];
+    }
+  };
+  const answer = (ids: string[]): string[] => {
+    if (ids.length === 0 && pending !== undefined) {
+      throw pending;
+    }
+    return ids;
+  };
+
   if (options.kind === "youtube-reverdict" && options.scope === "all") {
-    const pages = await Promise.all(
-      entries.map((entry) => readReadyPage(client, entry, options.limit)),
+    const pages: ReadyTrackRow[][] = [];
+    for (const entry of entries) {
+      pages.push(await readOrDefer(entry, options.limit));
+    }
+    return answer(
+      pages
+        .flat()
+        .sort(compareReadyRows)
+        .slice(0, options.limit)
+        .map((row) => row.subjectId),
     );
-    return pages
-      .flat()
-      .sort(compareReadyRows)
-      .slice(0, options.limit)
-      .map((row) => row.subjectId);
   }
 
   const ids: string[] = [];
@@ -207,11 +268,10 @@ export async function readTrackWorkDueIds(
       break;
     }
 
-    const rows = await readReadyPage(client, entry, remaining);
-    ids.push(...rows.map((row) => row.subjectId));
+    ids.push(...(await readOrDefer(entry, remaining)).map((row) => row.subjectId));
   }
 
-  return ids;
+  return answer(ids);
 }
 
 /** Count only the projected backlog that is due now, preserving the physical scope split. */
