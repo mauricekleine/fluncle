@@ -31,6 +31,7 @@
 // dotenv) read.
 
 import { type Subprocess } from "bun";
+import { createHash } from "node:crypto";
 import { connect } from "node:net";
 import {
   appendFileSync,
@@ -47,10 +48,39 @@ import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 /** apps/web — every path below is resolved against it, so the stack works from any cwd. */
 export const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-// Dedicated, distinctive ports. Kept in sync with `.dev.vars.e2e.tpl` (which
-// hardcodes the libSQL URL) and `playwright.config.ts` (which waits on Vite here).
-export const VITE_PORT = 3140;
-export const LIBSQL_PORT = 9440;
+// Dedicated, distinctive ports — and one PAIR PER CHECKOUT.
+//
+// The base pair is the documented one, chosen to collide with nothing else in the repo: not dev
+// (:3000), not the smoke routine (:3120/:8899), not the per-worktree libSQL range (:8100–:8999).
+// But one Mac runs several worktrees at once, and this stack REFUSES rather than clobbers when a
+// port is taken — so a single fixed pair means the second worktree to start its suite simply
+// cannot run, and two agents fail each other's preflight for no reason of their own.
+//
+// So each checkout takes a deterministic slot above the base, derived from its own absolute path.
+// Deterministic matters twice over: the same worktree always lands on the same pair (a straggler
+// listening there is recognisably ours, and `reapPorts` still finds it), and `playwright.config.ts`
+// — a separate Node process — derives the identical `BASE_URL` without anything being passed
+// between them. CI checks out one copy per runner and has no neighbours to avoid, so it stays on
+// the base pair exactly as documented. Two worktrees can still hash to one slot; that surfaces as
+// the same honest refusal below, naming the port.
+const VITE_PORT_BASE = 3140;
+const LIBSQL_PORT_BASE = 9440;
+const PORT_SLOTS = 200;
+
+function portSlot(): number {
+  if (process.env.CI) {
+    return 0;
+  }
+
+  return createHash("sha256").update(WEB_ROOT).digest().readUInt16BE(0) % PORT_SLOTS;
+}
+
+const PORT_SLOT = portSlot();
+
+// Kept in sync with `.dev.vars.e2e.tpl` (whose port placeholders `materializeDevVars` fills) and
+// `playwright.config.ts` (which waits on Vite here).
+export const VITE_PORT = VITE_PORT_BASE + PORT_SLOT;
+export const LIBSQL_PORT = LIBSQL_PORT_BASE + PORT_SLOT;
 export const BASE_URL = `http://127.0.0.1:${VITE_PORT}`;
 export const LIBSQL_URL = `http://127.0.0.1:${LIBSQL_PORT}`;
 
@@ -106,7 +136,30 @@ export function materializeDevVars(): void {
     writeFileSync(DEV_VARS_OWNED, "");
   }
 
-  writeFileSync(DEV_VARS, readFileSync(DEV_VARS_TEMPLATE));
+  writeFileSync(DEV_VARS, renderDevVarsTemplate());
+}
+
+/**
+ * The template with this checkout's ports filled in. The URLs it carries have to name the ports
+ * this run actually boots on, and those move per worktree — so the template holds placeholders
+ * and this is the one place they are resolved. An unresolved placeholder would reach the worker
+ * as a nonsense URL and fail somewhere far from here, so it fails here instead.
+ */
+function renderDevVarsTemplate(): string {
+  const rendered = readFileSync(DEV_VARS_TEMPLATE, "utf8")
+    .replaceAll("__E2E_VITE_PORT__", String(VITE_PORT))
+    .replaceAll("__E2E_LIBSQL_PORT__", String(LIBSQL_PORT));
+  const unresolved = rendered.match(/__E2E_[A-Z_]+__/g);
+
+  if (unresolved) {
+    throw new Error(
+      `${DEV_VARS_TEMPLATE} carries placeholders this stack does not fill: ${[
+        ...new Set(unresolved),
+      ].join(", ")}`,
+    );
+  }
+
+  return rendered;
 }
 
 /** Restore the original `.dev.vars` (or remove the one we created). Idempotent. */

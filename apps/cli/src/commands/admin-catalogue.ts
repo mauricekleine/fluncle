@@ -337,8 +337,9 @@ export type CrawlPassResult = {
   // Scoped label-browse nodes re-armed from a newer label-scope watermark this pass.
   releasesRearmed: number;
   seeded: number;
-  // Stale enabled seed labels re-armed this pass — an enabled label is a subscription, so its
-  // later releases surface. Bounded per pass so a mass re-arm spreads over ticks.
+  // Due enabled seed labels re-armed this pass — an enabled label is a subscription on a
+  // release-week schedule, so its later releases surface. Bounded per pass so a mass re-arm
+  // spreads over ticks.
   seedsRearmed: number;
   tracksFound: number;
   tracksSkipped: number;

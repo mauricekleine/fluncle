@@ -7,9 +7,10 @@
 # deliberately invalid, so nothing real can ever fire from a test run. If a spec
 # needs an integration to actually respond, that is a mock's job, never a real key.
 
-# The isolated libSQL server the e2e stack boots (tests/e2e/stack.ts, port 9440).
+# The isolated libSQL server the e2e stack boots (tests/e2e/stack.ts). The port is per checkout,
+# so it is a placeholder `materializeDevVars` fills — never a literal.
 # The @cloudflare/vite-plugin injects THIS as the worker's DB binding.
-TURSO_DATABASE_URL=http://127.0.0.1:9440
+TURSO_DATABASE_URL=http://127.0.0.1:__E2E_LIBSQL_PORT__
 TURSO_AUTH_TOKEN=e2e-local-token
 
 # Admin identity + signing. Fake — the e2e suite exercises PUBLIC surfaces, and the
@@ -20,7 +21,7 @@ ADMIN_ALLOWED_EMAILS=e2e-admin@example.invalid
 ADMIN_ALLOWED_SPOTIFY_IDS=e2efakespotifyid
 ADMIN_SESSION_SECRET=e2e-fake-admin-session-secret-do-not-use
 BETTER_AUTH_SECRET=e2e-fake-better-auth-secret-do-not-use
-BETTER_AUTH_URL=http://127.0.0.1:3140
+BETTER_AUTH_URL=http://127.0.0.1:__E2E_VITE_PORT__
 
 # Outbound integrations — all fake, all invalid on purpose.
 FIRECRAWL_API_KEY=e2e-fake-firecrawl-key
@@ -30,12 +31,12 @@ POSTIZ_API_URL=http://127.0.0.1:9/postiz-not-real
 
 SPOTIFY_CLIENT_ID=e2e-fake-spotify-client-id
 SPOTIFY_CLIENT_SECRET=e2e-fake-spotify-client-secret
-SPOTIFY_REDIRECT_URI=http://127.0.0.1:3140/api/admin/spotify/auth/callback
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:__E2E_VITE_PORT__/api/admin/spotify/auth/callback
 SPOTIFY_PLAYLIST_ID=e2efakeplaylistid
 
 YOUTUBE_CLIENT_ID=e2e-fake-youtube-client-id
 YOUTUBE_CLIENT_SECRET=e2e-fake-youtube-client-secret
-YOUTUBE_REDIRECT_URI=http://127.0.0.1:3140/api/admin/youtube/auth/callback
+YOUTUBE_REDIRECT_URI=http://127.0.0.1:__E2E_VITE_PORT__/api/admin/youtube/auth/callback
 
 MIXCLOUD_CLIENT_ID=e2e-fake-mixcloud-client-id
 MIXCLOUD_CLIENT_SECRET=e2e-fake-mixcloud-client-secret

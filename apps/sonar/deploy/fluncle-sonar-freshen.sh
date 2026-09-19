@@ -87,6 +87,16 @@ SERVICE_ENV="${SONARFRESHEN_SERVICE_ENV:-/etc/sonar.env}"
 # both the isolated pre-smoke and the post-swap wait.
 BOOT_TIMEOUT_SECS="${SONARFRESHEN_BOOT_TIMEOUT_SECS:-180}"
 
+# The isolated pre-smoke walks five consecutive loopback ports from this base. One box runs one
+# of these at a time, so the default is a fixed, distinctive range. It is overridable because the
+# range is the one thing in this script that is global to the MACHINE rather than to the run:
+# anywhere two of these run side by side — a test fixture spawning several in parallel — they
+# would otherwise contend for the same five ports and one would run out of candidates.
+SMOKE_PORT_BASE="${SONARFRESHEN_SMOKE_PORT_BASE:-42480}"
+case "$SMOKE_PORT_BASE" in
+  '' | *[!0-9]*) SMOKE_PORT_BASE=42480 ;;
+esac
+
 # Optional alert/status inputs (operator EnvironmentFile; all best-effort, all optional).
 WORKER_URL="${SONARFRESHEN_WORKER_URL:-https://www.fluncle.com}"
 # The run ledger reads the Worker base from the name every other box script uses. Point it at
@@ -840,7 +850,8 @@ if [ "$SMOKE_STATE_PRESENT" = "1" ]; then
   SMOKE_INFRA_FAILURE=0
   smoke_failure=""
   SMOKE_DEADLINE=$((SECONDS + BOOT_TIMEOUT_SECS))
-  for p in 42480 42481 42482 42483 42484; do
+  for offset in 0 1 2 3 4; do
+    p=$((SMOKE_PORT_BASE + offset))
     [ "$SECONDS" -lt "$SMOKE_DEADLINE" ] || break
     port_free "$p" || continue
     SMOKE_FREE_CANDIDATES=$((SMOKE_FREE_CANDIDATES + 1))

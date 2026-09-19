@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,10 +11,34 @@ const SCRIPT = join(REPO, "apps/ssh/deploy/fluncle-ssh-freshen.sh");
 const PROCESS_TEST_TIMEOUT_MS = 20_000;
 const roots: string[] = [];
 
+// ONE Go cache for the whole file, warmed before the first case.
+//
+// The public-source fallback resolves the ref with a compiled Go parser. On a box that binary is
+// built once and reused forever, so its cost belongs to provisioning — but a fixture that handed
+// every case a fresh state dir made each case pay a full toolchain compile instead, and a run
+// under load then blew the per-run budget below before the script under test did anything at
+// all. Sharing the cache reproduces the box, and `beforeAll` moves the one compile out of any
+// case's budget, so what each `run()` measures is the script rather than the Go toolchain.
+const GO_CACHE = mkdtempSync(join(tmpdir(), "fluncle-ssh-freshen-gocache-"));
+const GO_CACHE_WARM_TIMEOUT_MS = 120_000;
+
+beforeAll(() => {
+  const box = fixture();
+  writeFileSync(join(box.stateDir, "deployed-sha"), `${box.sha}\n`);
+  const warm = run(box.env, GO_CACHE_WARM_TIMEOUT_MS);
+  if (warm.status !== 0) {
+    throw new Error(`could not warm the shared Go cache: ${warm.stderr}`);
+  }
+}, GO_CACHE_WARM_TIMEOUT_MS);
+
 afterEach(() => {
   for (const root of roots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
   }
+});
+
+afterAll(() => {
+  rmSync(GO_CACHE, { force: true, recursive: true });
 });
 
 function fixture(
@@ -64,6 +88,7 @@ function fixture(
   const env = {
     ...process.env,
     PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    SSHFRESHEN_GO_CACHE: GO_CACHE,
     SSHFRESHEN_LOCK: join(root, "freshen.lock"),
     SSHFRESHEN_PUBLIC_ARCHIVE_BASE: pathToFileURL(archiveDir).href.replace(/\/$/, ""),
     SSHFRESHEN_PUBLIC_REF_URL: pathToFileURL(join(root, "ref.json")).href,
@@ -74,8 +99,8 @@ function fixture(
   return { env, gitLog, repoDir, root, sha, stateDir, tree };
 }
 
-function run(env: NodeJS.ProcessEnv, ...args: string[]) {
-  return spawnSync("bash", [SCRIPT, ...args], { encoding: "utf8", env, timeout: 15_000 });
+function run(env: NodeJS.ProcessEnv, timeout = 15_000) {
+  return spawnSync("bash", [SCRIPT], { encoding: "utf8", env, timeout });
 }
 
 function manifest(tree: string) {
