@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # embed-batch.sh — bootstrap a rented GPU pod and run the batch embed (docs/gpu-batch-embed.md).
 #
-# NOT A CRON, and deliberately not one. The on-box `fluncle-embed` host timer embeds ONE track
-# per 5-minute tick on rave-02, which is CPU-only; this is the same job on a rented GPU, for the
+# NOT A CRON, and deliberately not one. The on-box `fluncle-embed` host timer embeds a small
+# batch per 5-minute tick on rave-02, which is CPU-only; this is the same job on a rented GPU, for the
 # catalogue-scale backfill the box would take years to do. A GPU pod bills by the minute, so it
 # is an OPERATOR act from first to last: the operator rents the pod, runs this, and destroys it.
 # Nothing in this repo can start one.

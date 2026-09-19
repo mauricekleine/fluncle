@@ -25,13 +25,16 @@ import {
   buildEmbedFatalSummary,
   buildEmbedSummary,
   chooseEmbedSource,
+  DEFAULT_EMBED_BATCH_CAP,
   type EmbedDatabaseWindows,
   type EmbedManifestEntry,
   type EmbedWriteItem,
   type EmbedWriteWindow,
+  MAX_EMBED_BATCH_CAP,
   parseEmbedQueue,
   parseQueueWindowEnvelope,
   parseWriteWindowEnvelope,
+  resolveEmbedBatchCap,
   runEmbedSweep,
   sourceAudioExt,
 } from "./embed-sweep";
@@ -49,6 +52,103 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
   }
+});
+
+describe("the batch cap env knob", () => {
+  test("takes the default when the knob is absent or blank", () => {
+    expect(resolveEmbedBatchCap(undefined)).toBe(DEFAULT_EMBED_BATCH_CAP);
+    expect(resolveEmbedBatchCap("")).toBe(DEFAULT_EMBED_BATCH_CAP);
+    expect(resolveEmbedBatchCap("   ")).toBe(DEFAULT_EMBED_BATCH_CAP);
+  });
+
+  test("accepts every integer inside the validated range", () => {
+    for (let cap = 1; cap <= MAX_EMBED_BATCH_CAP; cap += 1) {
+      expect(resolveEmbedBatchCap(String(cap))).toBe(cap);
+    }
+
+    expect(resolveEmbedBatchCap(" 2 ")).toBe(2);
+  });
+
+  test("refuses a value that would unbound or empty the batch, keeping the default", () => {
+    // Each of these once reached the sweep as a silent `Number()`: a zero-width batch embeds
+    // nothing forever, and an unbounded one outruns the unit's derived TimeoutStartSec and is
+    // killed mid-forward.
+    for (const raw of ["0", "-1", "7", "99", "2.5", "three", "1e3", "NaN", "Infinity"]) {
+      expect(resolveEmbedBatchCap(raw), raw).toBe(DEFAULT_EMBED_BATCH_CAP);
+    }
+  });
+
+  test("keeps the unit's committed batch inside the range its timeout was derived for", () => {
+    const unit = readFileSync(
+      join(import.meta.dir, "..", "embed-timer", "fluncle-embed.service"),
+      "utf8",
+    );
+    const committed = /-e FLUNCLE_EMBED_BATCH=(\d+)/.exec(unit)?.[1];
+
+    expect(committed).toBeDefined();
+    expect(resolveEmbedBatchCap(committed)).toBe(Number(committed));
+
+    // The timeout is the cap's other half: one 120s worklist window, then per track a 300s
+    // fetch-and-forward budget plus its own 120s write window, plus 30s of overhead.
+    const timeout = Number(/^TimeoutStartSec=(\d+)$/m.exec(unit)?.[1]);
+
+    expect(timeout).toBeGreaterThanOrEqual(120 + Number(committed) * (300 + 120) + 30);
+  });
+});
+
+describe("the inference script's cgroup-sized thread pool", () => {
+  // embed-track.py's module scope is import-safe (torch and muq are imported inside main), so the
+  // quota arithmetic can be read back through a real interpreter. Skipped where python3 is absent.
+  const python = Bun.which("python3");
+  const threadsFor = (cpuMax: string | null): number => {
+    if (python === null) {
+      throw new Error("python3 unavailable");
+    }
+
+    const directory = mkdtempSync(join(tmpdir(), "fluncle-embed-cgroup-"));
+    temporaryDirectories.push(directory);
+    const cpuMaxPath = join(directory, "cpu.max");
+
+    if (cpuMax !== null) {
+      writeFileSync(cpuMaxPath, cpuMax);
+    }
+
+    const result = Bun.spawnSync({
+      cmd: [
+        python,
+        "-c",
+        [
+          "import importlib.util, os",
+          `spec = importlib.util.spec_from_file_location("embed_track", ${JSON.stringify(join(import.meta.dir, "embed-track.py"))})`,
+          "module = importlib.util.module_from_spec(spec)",
+          "spec.loader.exec_module(module)",
+          "print(module.torch_thread_count(), os.cpu_count())",
+        ].join("\n"),
+      ],
+      env: { ...process.env, MUQ_CPU_MAX_PATH: cpuMaxPath },
+    });
+
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    const [threads] = result.stdout.toString().trim().split(" ");
+
+    return Number(threads);
+  };
+
+  test.skipIf(python === null)("floors a fractional quota into whole CPUs", () => {
+    expect(threadsFor("250000 100000")).toBe(2);
+    expect(threadsFor("300000 100000")).toBe(3);
+    // A sub-1.0 quota still gets one thread — there is no half a thread.
+    expect(threadsFor("50000 100000")).toBe(1);
+  });
+
+  test.skipIf(python === null)("falls back to the host count when uncapped or unreadable", () => {
+    const hostThreads = threadsFor("max 100000");
+
+    expect(hostThreads).toBeGreaterThanOrEqual(1);
+    // A missing file (a bare host, a GPU pod, macOS) reads the same as an uncapped one.
+    expect(threadsFor(null)).toBe(hostThreads);
+    expect(threadsFor("not-a-quota 100000")).toBe(hostThreads);
+  });
 });
 
 describe("embed-sweep canonical counters", () => {

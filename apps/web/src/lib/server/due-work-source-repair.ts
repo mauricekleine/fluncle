@@ -609,6 +609,15 @@ function repairConverged(result: DueWorkRepairResult): boolean {
 }
 
 /**
+ * What one guarded read's drain converged. `sourceConverged` is the only lane a ready read must
+ * consult: an unconverged source family may still owe this queue rows it cannot see, so a read that
+ * finds nothing servable is paused rather than empty. Physical debt is reported for callers that
+ * want it, but it can never make a ready read unsafe — a physical marker IS the queue row, held in
+ * `state = 'repair'`, which no ready read reaches.
+ */
+export type DueWorkReadRepairOutcome = { physicalConverged: boolean; sourceConverged: boolean };
+
+/**
  * Converge the requested queue's repair before its ready index is read. Ordinary source markers of
  * the queue's subject family drain in pages, then the queue's own physical markers drain in chunks,
  * under the request-wide {@link DUE_WORK_READ_DRAIN_BUDGET} shared by every guarded read in one
@@ -616,19 +625,20 @@ function repairConverged(result: DueWorkRepairResult): boolean {
  * advances both lanes. Chunks beyond the first start only once the source family is clean, because
  * the read cannot proceed before then. A catalogue-rank read advances its corpus rebuild by exactly
  * one chunk after its ordinary pages, whatever the budget allows. Each unit commits or fails as its
- * own guarded batch and a failed batch propagates without being re-issued. The read answers pending
- * only while either lane is still unconverged when the budget stops it.
+ * own guarded batch and a failed batch propagates without being re-issued. The drain reports each
+ * lane's convergence; it never decides on its own that a read must be refused, because the debt it
+ * could not converge may be debt the read can serve around.
  */
-export async function repairDueWorkBeforeRead(
+export async function drainDueWorkBeforeRead(
   client: DueWorkClient,
   workKind: string,
   options: { budget?: DueWorkReadDrainBudget; now?: () => number } = {},
-): Promise<void> {
+): Promise<DueWorkReadRepairOutcome> {
   const definition = dueWorkRepairDefinitions(client).find(
     (candidate) => candidate.workKind === workKind,
   );
   if (definition === undefined) {
-    return;
+    return { physicalConverged: true, sourceConverged: true };
   }
   const budget = options.budget ?? DUE_WORK_READ_DRAIN_BUDGET;
   const now = options.now ?? (() => performance.now());
@@ -678,7 +688,21 @@ export async function repairDueWorkBeforeRead(
     physical = await drainPhysicalChunk();
   }
 
-  if (!sourceConverged || !repairConverged(physical)) {
+  return { physicalConverged: repairConverged(physical), sourceConverged };
+}
+
+/**
+ * The drain for a caller whose own read cannot withhold a marked subject. It refuses on any residual
+ * debt, which is the widest possible answer; every marker-aware reader calls
+ * {@link drainDueWorkBeforeRead} and decides for itself.
+ */
+export async function repairDueWorkBeforeRead(
+  client: DueWorkClient,
+  workKind: string,
+  options: { budget?: DueWorkReadDrainBudget; now?: () => number } = {},
+): Promise<void> {
+  const outcome = await drainDueWorkBeforeRead(client, workKind, options);
+  if (!outcome.sourceConverged || !outcome.physicalConverged) {
     throw new DueWorkMaintenancePendingError(workKind);
   }
 }
