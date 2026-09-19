@@ -112,7 +112,7 @@ assert.equal(
   ledgerWriterNames.length,
   "ledger writers are unique",
 );
-assert.equal(ledgerWriters.length, 47, "the run-ledger roster has 44 cron + 3 direct writers");
+assert.equal(ledgerWriters.length, 48, "the run-ledger roster has 44 cron + 4 direct writers");
 assert.ok(
   !ledgerWriterNames.includes("fluncle-healthcheck"),
   "the non-ledger healthcheck is excluded from the run-ledger roster",

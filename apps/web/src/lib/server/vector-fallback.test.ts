@@ -3,7 +3,13 @@ import { readFileSync } from "node:fs";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { describe, expect, it } from "vitest";
 import {
+  MIX_RAIL_DEADLINE_MS,
+  MIX_RAIL_SCAN_DEADLINE_MS,
+  VECTOR_ENDPOINT_PROBE_TIMEOUT_MS,
+} from "../vector-budget";
+import {
   executeVectorFallback,
+  isVectorDeadlineExpired,
   VECTOR_FALLBACK_CANDIDATE_LIMIT,
   VECTOR_FALLBACK_DEADLINE_MS,
   VECTOR_FALLBACK_OPERATION_IDS,
@@ -110,6 +116,35 @@ describe("Sonar's Turso fallback cost contract", () => {
       ),
     ).rejects.toThrow("sonar.fallback.log timed out after 10ms");
     expect(VECTOR_FALLBACK_DEADLINE_MS).toBe(12_000);
+  });
+
+  it("types the expiry so a caller can degrade without reading the message", async () => {
+    // A surface that must answer honestly rather than fault has to tell "the database is taking
+    // too long" apart from "the query is wrong". Matching the message string is how that rots.
+    const never = new Promise<never>(() => undefined);
+    const db = { execute: () => never };
+    const expiry = await executeVectorFallback(
+      db as never,
+      "sonar.fallback.mix",
+      `select 1 ${vectorFallbackCandidateLimitSql()}`,
+      { deadlineMs: 10 },
+    ).catch((error: unknown) => error);
+
+    expect(isVectorDeadlineExpired(expiry)).toBe(true);
+    expect(isVectorDeadlineExpired(new Error("sonar.fallback.mix timed out after 10ms"))).toBe(
+      false,
+    );
+    expect(expiry).toMatchObject({ deadlineMs: 10, label: "sonar.fallback.mix" });
+  });
+
+  it("keeps `/mix`'s own ceilings inside the generic one, and the rail's inside the probe's", () => {
+    // `/mix` is an interactive public page, not a diagnostic: it degrades sooner than the generic
+    // analytical ceiling. The ordering is the contract — a scan that would land inside its own
+    // budget is never pre-empted by the whole-rail backstop, and the out-of-process probe outlasts
+    // both, so a bounded degradation can never read to it as a dead endpoint.
+    expect(MIX_RAIL_SCAN_DEADLINE_MS).toBeLessThan(MIX_RAIL_DEADLINE_MS);
+    expect(MIX_RAIL_DEADLINE_MS).toBeLessThan(VECTOR_FALLBACK_DEADLINE_MS);
+    expect(VECTOR_FALLBACK_DEADLINE_MS).toBeLessThan(VECTOR_ENDPOINT_PROBE_TIMEOUT_MS);
   });
 
   it("attaches the existing operation_id and heavy-read access_class vocabulary", async () => {

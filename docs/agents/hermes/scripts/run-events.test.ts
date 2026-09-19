@@ -51,6 +51,8 @@ const SECRETS_SYNC = join(REPO, "docs/agents/hermes/secrets/fluncle-secrets-sync
 const SECRETS_SYNC_TIMER = join(REPO, "docs/agents/hermes/secrets/fluncle-secrets-sync.timer");
 const SONAR_FRESHEN = join(REPO, "apps/sonar/deploy/fluncle-sonar-freshen.sh");
 const SONAR_FRESHEN_TIMER = join(REPO, "apps/sonar/deploy/fluncle-sonar-freshen.timer");
+const PIN_WATCH = join(REPO, "docs/agents/hermes/pin-watch/rebuild-hermes.sh");
+const PIN_WATCH_TIMER = join(REPO, "docs/agents/hermes/pin-watch/pin-watch.timer");
 const temporaryDirectories: string[] = [];
 const SCRIPT_CHILD_EXIT_TIMEOUT_MS = 30_000;
 // Outer process-test budgets include the bounded child work plus time to reap its fixture group.
@@ -121,6 +123,7 @@ describe("record_run_event is mirrored, not re-implemented", () => {
     ["timer-watchdog.sh", WATCHDOG],
     ["fluncle-secrets-sync.sh", SECRETS_SYNC],
     ["fluncle-sonar-freshen.sh", SONAR_FRESHEN],
+    ["rebuild-hermes.sh", PIN_WATCH],
   ])("%s carries the block byte for byte", (_name, path) => {
     expect(mirroredBlock(path)).toBe(canonical);
   });
@@ -158,6 +161,7 @@ describe("record_run_event is mirrored, not re-implemented", () => {
     ["timer-watchdog.sh", WATCHDOG],
     ["fluncle-secrets-sync.sh", SECRETS_SYNC],
     ["fluncle-sonar-freshen.sh", SONAR_FRESHEN],
+    ["rebuild-hermes.sh", PIN_WATCH],
   ])("%s actually CALLS it — carrying the block is not the same as using it", (_name, path) => {
     const body = readFileSync(path, "utf8");
     const [, afterBlock = ""] = body.split(END);
@@ -248,6 +252,7 @@ const EMITTERS: [string, string][] = [
   ["timer-watchdog.sh", WATCHDOG],
   ["fluncle-secrets-sync.sh", SECRETS_SYNC],
   ["fluncle-sonar-freshen.sh", SONAR_FRESHEN],
+  ["rebuild-hermes.sh", PIN_WATCH],
 ];
 
 /**
@@ -386,6 +391,7 @@ describe("no doc calls a reporting unit silent", () => {
   test("the three units really are reporting units", () => {
     // The premise, checked first: without this the assertions below are about nothing.
     expect(reportingUnits().sort()).toEqual([
+      "fluncle-pin-watch",
       "fluncle-secrets-sync",
       "fluncle-sonar-freshen",
       "fluncle-timer-watchdog",
@@ -474,6 +480,7 @@ describe("each unit's declared interval matches its own .timer", () => {
     ["timer-watchdog", WATCHDOG, WATCHDOG_TIMER],
     ["secrets-sync", SECRETS_SYNC, SECRETS_SYNC_TIMER],
     ["sonar-freshen", SONAR_FRESHEN, SONAR_FRESHEN_TIMER],
+    ["pin-watch", PIN_WATCH, PIN_WATCH_TIMER],
   ])("%s", (_name, script, timer) => {
     const unitMatch = /^RUN_EVENT_UNIT="([^"]+)"$/m.exec(readFileSync(script, "utf8"));
     const unit = unitMatch?.[1];
@@ -1382,6 +1389,32 @@ const SHA_A = "a".repeat(40);
 // commit keeps one fixture's healthy listener from satisfying another fixture's identity check.
 const SHA_B = new Bun.CryptoHasher("sha1").update(`run-events:${process.pid}`).digest("hex");
 
+// THE BOOT BUDGET IS A FIXTURE KNOB, AND THE PATHS THAT EXPIRE IT PAY IT IN REAL SECONDS.
+//
+// Every stub here answers instantly, so a large budget buys a case nothing — except on the paths
+// that are SUPPOSED to run it out (a live listener that never reports the expected commit, a
+// candidate that never serves /health), where the script spends the whole budget in `sleep 1`.
+// A budget close to the harness limit below therefore makes a deliberate-failure case fail for
+// the wrong reason as soon as anything else is running on the machine. Small keeps the expiry
+// exercised and the wait honest.
+//
+// The bounded port walk is the one scenario that needs room INSIDE the budget rather than at the
+// end of it: it confirms a collision per candidate across five candidates, and a budget that
+// expires mid-confirmation leaves the run looking like an ordinary unhealthy boot instead of the
+// infrastructure failure it is. It states the larger number it actually needs.
+const BOOT_BUDGET_SECS = 6;
+const PORT_WALK_BOOT_BUDGET_SECS = 25;
+
+// The pre-smoke's five candidate ports are the one resource in this file that belongs to the
+// MACHINE rather than to a run — a second process running these same cases walks the same five
+// and can find none free, which reads as an infrastructure failure the case never staged. Each
+// process takes its own five-port window instead, the same reason `SHA_B` is process-unique.
+const SMOKE_PORT_BASE = String(42_480 + (process.pid % 100) * 5);
+
+function bootBudgetSecs(fixture: SonarFixture): string {
+  return String(fixture.presmokeBindCollisions ? PORT_WALK_BOOT_BUDGET_SECS : BOOT_BUDGET_SECS);
+}
+
 /** A stand-in `sonar` binary: boots on SONAR_PORT and serves the one thing the smoke reads. */
 const SONAR_STUB = [
   "#!/usr/bin/env bash",
@@ -1662,9 +1695,10 @@ async function runSonar(
       SF_STATE_ROLLBACK: rollbackState,
       SONARFRESHEN_APP_DIR: appDir,
       SONARFRESHEN_ASSET_BASE: assetBase,
-      SONARFRESHEN_BOOT_TIMEOUT_SECS: "25",
+      SONARFRESHEN_BOOT_TIMEOUT_SECS: bootBudgetSecs(fixture),
       SONARFRESHEN_LOCK: join(root, "lock"),
       SONARFRESHEN_SERVICE_ENV: serviceEnv,
+      SONARFRESHEN_SMOKE_PORT_BASE: SMOKE_PORT_BASE,
       SONARFRESHEN_STATE_DIR: stateDir,
       SONARFRESHEN_WORKER_URL: base ?? "http://127.0.0.1:1",
       SONAR_TEST_BIND_ATTEMPTS: bindAttempts,
@@ -2300,4 +2334,219 @@ describe("sonar-freshen reports a run", () => {
     });
     expect(derivedOk(code, summary.errors)).toBe(true);
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// pin-watch — the self-deploy that alerted and still left no record.
+//
+// Same shape as the watchdog and the sonar freshen: it legitimately deploys NOTHING for weeks, so
+// `produced` says nothing about its health, and the failure it hides is the opposite of loud — a
+// build that fails on every hourly tick. Its Discord line and its `self-deploy` /status row are
+// both moment-in-time signals; the ledger row is the durable one. These tests drive the REAL
+// script through three shapes: a clean no-op, a failed build, and a tick that died before it
+// could compare anything at all.
+// ---------------------------------------------------------------------------
+
+type PinWatchFixture = {
+  /** Non-zero makes `docker build` fail, taking the script down its BUILD FAILED path. */
+  buildExit?: number;
+  /** False makes `docker inspect <container>` fail — the die before any version is read. */
+  containerRunning?: boolean;
+  /** False makes the running image's baked fingerprint stale, which is drift. */
+  fingerprintCurrent?: boolean;
+};
+
+const PIN_WATCH_LS_TREE = [
+  "100644 blob aaaa\tdocs/agents/hermes/scripts/capture-sweep.ts",
+  "100644 blob bbbb\tpackages/skills/fluncle-ledger/SKILL.md",
+].join("\n");
+
+async function runPinWatch(
+  fixture: PinWatchFixture,
+  responseStatus?: number,
+): Promise<{ calls: LedgerCall[]; code: number; stderr: string; summary: Summary }> {
+  const root = mkdtempSync(join(tmpdir(), "fluncle-pin-watch-"));
+  temporaryDirectories.push(root);
+  const bin = join(root, "bin");
+  const repoDir = join(root, "build");
+  const mountSource = join(root, "mount");
+  const envTmp = join(root, "env-capture");
+
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(join(repoDir, ".git"), { recursive: true });
+  mkdirSync(join(repoDir, "docs/agents/hermes"), { recursive: true });
+  mkdirSync(mountSource, { recursive: true });
+  writeFileSync(
+    join(repoDir, "docs/agents/hermes/Dockerfile"),
+    [
+      "FROM example/base:1",
+      "RUN curl -fsSL https://example.test/releases/download/v9.9.9/fluncle-linux -o /usr/local/bin/fluncle",
+      "RUN bun install -g @anthropic-ai/claude-code@8.8.8",
+      "COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/",
+      "COPY packages/skills /opt/skills",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  // `flock` is util-linux and absent on macOS: without the stub every run would take the
+  // lock-held branch, exit 0 before arming anything, and prove nothing.
+  writeStub(bin, "flock", "exit 0");
+  // BSD `mktemp` has no `-p`, and the captured env file must land where the fixture can see it.
+  writeStub(bin, "mktemp", 'printf "%s\\n" "$PW_ENVTMP"\n: >"$PW_ENVTMP"');
+  // `sha256sum` is GNU; the fingerprint only has to be STABLE, and both sides use this one.
+  writeStub(bin, "sha256sum", 'exec shasum -a 256 "$@"');
+  // No sweep timers to quiesce keeps the run on the path under test.
+  writeStub(bin, "systemctl", "exit 0");
+  writeStub(
+    bin,
+    "git",
+    [
+      'for arg in "$@"; do',
+      '  case "$arg" in',
+      '    ls-tree) printf "%s\\n" "$PW_LS_TREE"; exit 0 ;;',
+      '    rev-parse) printf "abc1234\\n"; exit 0 ;;',
+      "  esac",
+      "done",
+      "exit 0",
+    ].join("\n"),
+  );
+  writeStub(
+    bin,
+    "docker",
+    [
+      'case "$1" in',
+      "  inspect)",
+      '    case "${4:-}" in',
+      '      *Mounts*) printf "%s\\n" "$PW_MOUNT_SRC"; exit 0 ;;',
+      '      *Config.Image*) printf "%s\\n" "$PW_OLD_IMAGE"; exit 0 ;;',
+      "      *Config.Env*)",
+      '        if [ "$2" = "$PW_CONTAINER" ]; then',
+      '          printf "FLUNCLE_API_TOKEN=%s\\nPW_RUNTIME=1\\n" "$PW_TOKEN"',
+      "        else",
+      '          printf "PW_BAKED=1\\n"',
+      "        fi",
+      "        exit 0",
+      "        ;;",
+      "    esac",
+      '    [ "${PW_CONTAINER_RUNNING:-1}" = "1" ] || exit 1',
+      "    exit 0",
+      "    ;;",
+      "  exec)",
+      '    case "$3" in',
+      '      fluncle) printf "fluncle 9.9.9\\n"; exit 0 ;;',
+      '      claude) printf "8.8.8 (Claude Code)\\n"; exit 0 ;;',
+      "      cat)",
+      '        if [ "${PW_FINGERPRINT_CURRENT:-1}" = "1" ]; then',
+      '          printf "%s\\n" "$PW_LS_TREE" | LC_ALL=C sort | shasum -a 256 | cut -d" " -f1',
+      "        else",
+      '          printf "stale-fingerprint\\n"',
+      "        fi",
+      "        exit 0",
+      "        ;;",
+      "    esac",
+      "    exit 0",
+      "    ;;",
+      '  build) exit "${PW_BUILD_EXIT:-0}" ;;',
+      "esac",
+      "exit 0",
+    ].join("\n"),
+  );
+
+  return withLedger(
+    async (base, calls) => {
+      const run = await runScript(PIN_WATCH, {
+        FLUNCLE_API_BASE_URL: base,
+        PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
+        PINWATCH_CONTAINER: "hermes-fixture",
+        PINWATCH_LOCK: join(root, "lock"),
+        PINWATCH_REPO_DIR: repoDir,
+        PINWATCH_WORKER_URL: base,
+        PW_BUILD_EXIT: String(fixture.buildExit ?? 0),
+        PW_CONTAINER: "hermes-fixture",
+        PW_CONTAINER_RUNNING: fixture.containerRunning === false ? "0" : "1",
+        PW_ENVTMP: envTmp,
+        PW_FINGERPRINT_CURRENT: fixture.fingerprintCurrent === false ? "0" : "1",
+        PW_LS_TREE: PIN_WATCH_LS_TREE,
+        PW_MOUNT_SRC: mountSource,
+        PW_OLD_IMAGE: "fluncle-hermes:v2026.01.01-old",
+        PW_TOKEN: "pin-watch-fixture-token",
+      });
+
+      return { calls, code: run.code, stderr: run.stderr, summary: lastJsonLine(run.stdout) };
+    },
+    responseStatus === undefined ? {} : { responseStatus },
+  );
+}
+
+describe("pin-watch reports a run", () => {
+  test(
+    "QUIET: a tick with nothing to deploy posts a clean row",
+    async () => {
+      const { calls, code, summary } = await runPinWatch({});
+      const { posted } = received(calls);
+
+      expect(code).toBe(0);
+      expect(posted.unit).toBe("fluncle-pin-watch");
+      expect(posted.exit_code).toBe(0);
+      // It LOOKED (checked) and had nothing to do (produced 0, no backlog). The three facts
+      // together are what separate a healthy idle self-deploy from a blind one.
+      expect(summary).toMatchObject({
+        checked: 1,
+        errors: 0,
+        expectedIntervalMs: 3_600_000,
+        produced: 0,
+        queue_depth: 0,
+      });
+      expect(derivedOk(code, summary.errors)).toBe(true);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "FIRES: a failed build is a failed run, with the undeployed drift still on the worklist",
+    async () => {
+      const { calls, code, stderr, summary } = await runPinWatch({
+        buildExit: 1,
+        fingerprintCurrent: false,
+      });
+      const { posted } = received(calls);
+
+      expect(stderr).toContain("FATAL: build failed");
+      expect(code).toBe(1);
+      expect(posted.exit_code).toBe(1);
+      // The shape an unwatched run of hourly build failures would have written: it looked, it
+      // deployed nothing, and the drift it found is still standing.
+      expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queue_depth: 1 });
+      expect(derivedOk(code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "FIRES: a tick that died before comparing anything reports no look at all",
+    async () => {
+      const { calls, code, summary } = await runPinWatch({ containerRunning: false });
+      const { posted } = received(calls);
+
+      expect(code).toBe(1);
+      expect(posted.exit_code).toBe(1);
+      // `checked: 0` is the point. A run that never reached the comparison must not be able to
+      // report one, and the denominator is the only field that can say so.
+      expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0, queue_depth: 0 });
+      expect(derivedOk(code, summary.errors)).toBe(false);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a ledger the box cannot reach never changes the run's own verdict",
+    async () => {
+      const { code, summary } = await runPinWatch({}, 503);
+
+      expect(code).toBe(0);
+      expect(derivedOk(code, summary.errors)).toBe(true);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
 });

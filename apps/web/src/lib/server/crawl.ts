@@ -85,6 +85,7 @@ import {
   markCrawlNodeRepairsByUpdatedAtStatement,
   markCrawlProjectionRepairStatement,
 } from "./crawl-due-work";
+import { currentSeedRearmBoundary } from "./crawl-rearm-schedule";
 import {
   CRAWL_CATALOGUE_CLAIM_OWNER,
   CRAWL_CATALOGUE_LEASE_MS,
@@ -192,23 +193,21 @@ function throttledSettlement(node: { cursor: number; failures: number }): {
 }
 
 /**
- * THE SEED RE-ARM. An enabled seed label is a SUBSCRIPTION, not a one-shot walk: once its
- * MusicBrainz browse node finishes paginating it goes `done`, and without this it would stay
- * done forever — so a release the label pressed AFTER that first drain (a Friday drop) would
- * never surface. `REARM_AFTER_DAYS` is how stale a `done` seed-label node may get before the
- * re-arm flips it back to `pending` to re-check its list. Now that a re-arm reads only the
- * TAIL of the list (`expandRearmedBrowse`, ~1 browse page) instead of re-walking the whole
- * thing forward, the cadence is DAILY — ~1 page per re-armed label costs ~99 nodes/day of the
- * ~1,400-node budget — so a Friday drop lands by Saturday, bounded only by MusicBrainz's own
- * ingest lag (the sweep ticks every ~10 min).
+ * THE ALLOWED-ARTIST TAIL CADENCE. How stale a `done` allowed-artist browse node may get before
+ * `rearmStaleAllowedArtists` re-reads its tail. An allowed artist is a narrow, operator-minted
+ * population — one node per identity carrying an allow rule — so a daily tail read stays a
+ * rounding error against the MusicBrainz budget, and the seed labels' release-week schedule
+ * (`crawl-rearm-schedule.ts`) deliberately does not govern it.
  */
-export const REARM_AFTER_DAYS = 1;
+export const ALLOWED_ARTIST_REARM_AFTER_DAYS = 1;
 
 /**
- * How many stale seed-label nodes one pass re-arms, oldest-done-first. Bounded so a mass re-arm
- * — every enabled label crossing the threshold in the same window (88 of them, one deploy-day
- * cohort) — spreads over passes instead of flooding the frontier head and starving the deep
- * walk it SHARES the 1 req/s MusicBrainz budget with. A row this pass skips comes round next.
+ * How many due seed-label nodes one pass re-arms, oldest-done-first. Bounded so a mass re-arm —
+ * every enabled label coming due on the same pass boundary, which is the NORMAL shape of a
+ * weekday-anchored schedule rather than a rare cohort — spreads over passes instead of flooding
+ * the frontier head and starving the deep walk it SHARES the 1 req/s MusicBrainz budget with. A
+ * row this pass skips comes round on the next tick, and the boundary comparison keeps it due
+ * until it is actually served, so nothing is dropped.
  */
 export const REARM_BATCH = 10;
 
@@ -325,8 +324,9 @@ export type CrawlPass = {
   /** Seed nodes minted from the operator's `enabled` labels this pass. */
   seeded: number;
   /**
-   * Stale seed-label browse nodes re-armed this pass (bounded by `REARM_BATCH`) — an enabled
-   * label re-paginates on the re-arm threshold so its later releases surface. See `rearmSeedLabels`.
+   * Due seed-label browse nodes re-armed this pass (bounded by `REARM_BATCH`) — an enabled label
+   * re-paginates on each release-week pass boundary so its later releases surface. See
+   * `rearmSeedLabels`.
    */
   seedsRearmed: number;
   /** Catalogue tracks the walk SAW on the releases it expanded. */
@@ -366,6 +366,27 @@ export type CrawlStatus = {
    * leading columns are exactly this predicate, so it costs an index seek and never a scan.
    */
   storablePending: number;
+  /**
+   * Distinct `undecided` labels that already hold at least one due-work node — the rulings standing
+   * between the walk and the lane above. `labelsUndecided` counts every unruled label the walk has
+   * ever minted, including ones with nothing queued behind them; this counts the ones a ruling would
+   * actually move. An `exists` probe per undecided label on the covering
+   * `crawl_due_work_label_slug_node_id_idx`, so it reads index entries and never a due-work row.
+   */
+  undecidedLabelsQueued: number;
+  /**
+   * Claimable release nodes whose provenance CANNOT store — the exact complement of
+   * `storablePending` on the same partial index (`storable_rank = 1`). It is the size of the lane a
+   * label round would unlock: the walk has these nodes in hand and ready, and the storage gate is
+   * the only thing between them and written tracks. Read together with `storablePending`, a deep
+   * frontier splits into "the crawl is behind" and "the rulings are behind" without guessing.
+   *
+   * It does NOT attribute each node to an `undecided` label, deliberately: `label_slug` is not in
+   * `crawl_due_work_release_ready_idx`, so per-node attribution costs a table row for every blocked
+   * node — a growing-table read on a status command. `undecidedLabelsQueued` answers the same
+   * question from the small side of the graph instead, and stays index-only.
+   */
+  unstorablePending: number;
 };
 
 // ── MusicBrainz response shapes (only the fields we consume) ──────────────────
@@ -754,9 +775,18 @@ async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[
  * list from the head — `expandRearmedBrowse` starts at the LAST page and pages backward, stopping
  * at the first page that adds nothing new (every release node already present ⇒ the territory
  * below is already walked). In steady state that is ONE browse page (probe + tail) per label with
- * no drop, so the DAILY cadence (`REARM_AFTER_DAYS = 1`) costs ~99 nodes/day of the ~1,400 budget.
- * A genuinely new release still mints a `pending` node and gets walked, and the two-layer
+ * no drop. A genuinely new release still mints a `pending` node and gets walked, and the two-layer
  * idempotence in `writeCatalogueTracks` folds any already-held track (a re-press) to a cheap skip.
+ *
+ * WHEN — the RELEASE-WEEK SCHEDULE, not an interval. Three pass boundaries a week, all UTC
+ * (`crawl-rearm-schedule.ts` holds the schedule and the rationale: Friday 12:00, Sunday 00:00,
+ * Tuesday 00:00). A node is due when the most recent boundary at or before now is NEWER than its
+ * last drain — one comparison, self-healing, no catch-up backlog and no schema column. The cost
+ * is what makes it a schedule rather than a daily sweep: every enabled label is one browse page,
+ * and at the enabled-label count the crawl carries a daily pass consumed more of the shared
+ * 1 req/s MusicBrainz budget than the whole general walk, starving artist-hop discovery. Three
+ * passes cut that to three sevenths of it while still landing a Friday drop on the day, which is
+ * all MusicBrainz's own hours-to-days editorial lag can deliver anyway.
  *
  * THE GUARDS, all load-bearing:
  *   - `seed_state = 'enabled'` (joined on the node's `label_slug`) — a subscription is only for
@@ -770,15 +800,16 @@ async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[
  *     mismatched node simply stops being re-armed; nothing it already stored is touched here.
  *   - `kind = 'label'` — never an artist or release node (those are re-reached BY the browse).
  *   - `state = 'done'` — a `failed` node is owned by its own exponential backoff; never disturb it.
- *   - `done_at < now − REARM_AFTER_DAYS` — a freshly-drained label is not re-walked immediately.
+ *   - `done_at < <the most recent pass boundary>` — a label drained since the boundary is not
+ *     re-walked again until the next one.
  *
- * BOUNDED. At most `REARM_BATCH` per pass, oldest-done-first, so a cohort of labels all crossing
- * the threshold together spreads across passes rather than flooding the frontier head. Returns
- * the count and logs it, so a re-arm wave is visible rather than silent.
+ * BOUNDED. At most `REARM_BATCH` per pass, oldest-done-first, so the labels coming due together
+ * on a boundary spread across ticks rather than flooding the frontier head. Returns the count and
+ * logs it, so a re-arm wave is visible rather than silent.
  */
 async function rearmSeedLabels(): Promise<number> {
   const db = await getDb();
-  const cutoff = new Date(Date.now() - REARM_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const cutoff = currentSeedRearmBoundary().toISOString();
   const now = new Date().toISOString();
   const selected = await db.execute({
     args: [cutoff, REARM_BATCH],
@@ -983,7 +1014,9 @@ async function rearmAllowedArtists(): Promise<number> {
 /** Daily tail-first subscription for artists carrying any allow rule. */
 async function rearmStaleAllowedArtists(): Promise<number> {
   const db = await getDb();
-  const cutoff = new Date(Date.now() - REARM_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const cutoff = new Date(
+    Date.now() - ALLOWED_ARTIST_REARM_AFTER_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
   const now = new Date().toISOString();
   const selected = await db.execute({
     args: [cutoff, REARM_ALLOWED_BATCH],
@@ -3036,7 +3069,16 @@ export async function countFrontierPending(): Promise<number> {
  */
 export async function getCrawlStatus(): Promise<CrawlStatus> {
   const db = await getDb();
-  const [frontierCounts, frontierByKind, catalogue, anchors, storable, labels] = await Promise.all([
+  const [
+    frontierCounts,
+    frontierByKind,
+    catalogue,
+    anchors,
+    storable,
+    unstorable,
+    undecidedQueued,
+    labels,
+  ] = await Promise.all([
     // The by-STATE frontier counts (shared with the funnel snapshot's lean read) and the by-KIND
     // breakdown — the latter computed only here, the on-demand admin read (docs/db-scale-backlog
     // Wave 1 #3), never on the recurring crawl pass.
@@ -3061,6 +3103,18 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
     // so this is a bounded range count rather than a walk of the due-work table.
     db.execute(`select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
                 where state = 'ready' and node_kind = 'release' and storable_rank = 0`),
+    // THE HELD LANE — the same partial index, the other rank. `storable_rank` is the index's SECOND
+    // column, so `= 1` is the neighbouring equality range and this costs exactly what the read above
+    // costs: an index seek, never a row and never a scan. It is what a label round would unlock.
+    db.execute(`select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
+                where state = 'ready' and node_kind = 'release' and storable_rank = 1`),
+    // HOW MANY RULINGS STAND IN FRONT OF IT — driven from the SMALL side (a few thousand `labels`
+    // rows, already read below by `listLabels`), with an existence probe per undecided label on the
+    // covering `(label_slug, node_id)` index. Uncorrelated attribution the other way round would
+    // need `label_slug` on every blocked due-work row, which that index does not carry.
+    db.execute(`select count(*) as n from labels l
+                where l.seed_state = 'undecided'
+                  and exists (select 1 from crawl_due_work d where d.label_slug = l.slug)`),
     listLabels(),
   ]);
 
@@ -3075,5 +3129,7 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
       .map((label) => label.name)
       .sort(),
     storablePending: Number(typedRows<{ n: number }>(storable.rows)[0]?.n ?? 0),
+    undecidedLabelsQueued: Number(typedRows<{ n: number }>(undecidedQueued.rows)[0]?.n ?? 0),
+    unstorablePending: Number(typedRows<{ n: number }>(unstorable.rows)[0]?.n ?? 0),
   };
 }

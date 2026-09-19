@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyPaths, repositoryRoot } from "./classifier.mjs";
+import { workspaceInstallProblem } from "./workspace-install.mjs";
 
 const LANES = [
   "static",
@@ -432,6 +433,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   const root = parseRoot(argv);
 
   try {
+    // A worktree that has not installed resolves `@fluncle/*` from the main checkout it sits
+    // inside, so every lane below would grade another branch's code and hand back a green nobody
+    // should trust. Refuse before a result is produced rather than after one is believed.
+    const installProblem = operation === "status" ? null : workspaceInstallProblem(root);
+    if (installProblem) {
+      throw new Error(
+        `${installProblem} Run \`bun install --frozen-lockfile\` in this checkout first.`,
+      );
+    }
+
     if (operation === "worker") {
       await workerLoop(root);
     } else if (operation === "start") {

@@ -13,6 +13,7 @@ import {
   readPromotedDueWorkPage,
   TRACK_WORK_DUE_CUTOVER_ENABLED_KEY,
 } from "./due-work-cutover";
+import { runWithDatabaseRequestScope } from "./database-request-scope";
 import { setSetting } from "./settings";
 
 let db: Client;
@@ -218,5 +219,191 @@ describe("listTrackWork Goal C cutover", () => {
     await expect(
       readPromotedDueWorkPage(db, "promotion-order", { limit: 1, now: () => NOW }),
     ).resolves.toEqual({ hasMore: true, subjectIds: ["scheduled-500"] });
+  });
+
+  it("serves the subjects a burst of repair markers does not own, and withholds the ones it does", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { markDueWorkSourceRepairsStatement } = await import("./due-work");
+    const { DUE_WORK_READ_DRAIN_BUDGET, SOURCE_REPAIR_LIMIT } =
+      await import("./due-work-source-repair");
+
+    // One subject more than a single guarded read's whole drain budget converges. Every steady
+    // track writer — the rank sweep, the demand rewrite, the crawl, an operator requeue, and the
+    // sweeps' own write-backs — mints markers at this shape, so this is the ordinary steady state,
+    // not an incident.
+    // A scope spanning both certification halves reads two physical queues, and every guarded read
+    // always runs its first page whatever the shared budget has left, so one request converges
+    // `sourcePages + 1` pages in all.
+    const burst = SOURCE_REPAIR_LIMIT * (DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1) + 1;
+    const trackIds = Array.from(
+      { length: burst },
+      (_, index) => `burst-${String(index).padStart(3, "0")}`,
+    );
+    for (const trackId of trackIds) {
+      await seedCatalogueTrack(db, { trackId });
+      await withAudio(trackId);
+    }
+    await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
+    for (let start = 0; start < trackIds.length; start += 100) {
+      await db.execute(
+        markDueWorkSourceRepairsStatement(
+          trackIds
+            .slice(start, start + 100)
+            .map((subjectId) => ({ subjectId, subjectType: "track" })),
+          { now: NOW, producer: "test-burst" },
+        ),
+      );
+    }
+
+    // One Worker request, so the drain budget is shared by both physical embed queues exactly as
+    // it is in production.
+    const served = (
+      await runWithDatabaseRequestScope(() => listTrackWork({ kind: "embed", limit: burst }))
+    ).map((item) => item.trackId);
+
+    // The read drains what its budget allows and answers with it. Debt it could not reach belongs
+    // to other subjects, and withholding those is the whole of the rail it used to refuse over.
+    expect(served.length).toBeGreaterThan(0);
+    const outstanding = await db.execute({
+      args: ["source-repair"],
+      sql: `select subject_id from due_work where work_kind = ? and state = 'repair'`,
+    });
+    const withheld = new Set(outstanding.rows.map((row) => row.subject_id));
+    expect(withheld.size).toBeGreaterThan(0);
+    expect(served.filter((trackId) => withheld.has(trackId))).toEqual([]);
+    expect(served.length + withheld.size).toBe(burst);
+  });
+
+  it("never serves a row a repair marker still owns, even when its projection is stale-eligible", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { markDueWorkSourceRepairsStatement } = await import("./due-work");
+
+    const { DUE_WORK_READ_DRAIN_BUDGET, SOURCE_REPAIR_LIMIT } =
+      await import("./due-work-source-repair");
+
+    // Source markers drain in subject order, so a subject that sorts behind a full drain budget
+    // still carries its marker when the read answers. That is the row the money rail is about.
+    const fillers = Array.from(
+      { length: SOURCE_REPAIR_LIMIT * (DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1) },
+      (_, index) => `aa-filler-${String(index).padStart(3, "0")}`,
+    );
+    for (const trackId of [...fillers, "zz-vetoed-track"]) {
+      await seedCatalogueTrack(db, { trackId });
+      await withAudio(trackId);
+    }
+    await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
+
+    // Project the row and serve it once, so the queue holds a real ready row for it.
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "zz-vetoed-track", subjectType: "track" }], {
+        now: NOW,
+        producer: "test-veto",
+      }),
+    );
+    expect(
+      (await runWithDatabaseRequestScope(() => listTrackWork({ kind: "embed", limit: 100 }))).map(
+        (item) => item.trackId,
+      ),
+    ).toEqual(["zz-vetoed-track"]);
+
+    // Move that row's eligibility behind a burst its marker sorts last in. Its projected row still
+    // reads as eligible; the marker is the only thing that knows better, and it survives the drain.
+    await db.execute({
+      args: [NOW.toISOString(), "zz-vetoed-track"],
+      sql: `update tracks set dismissed_at = ? where track_id = ?`,
+    });
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [...fillers, "zz-vetoed-track"].map((subjectId) => ({ subjectId, subjectType: "track" })),
+        { now: NOW, producer: "test-veto" },
+      ),
+    );
+
+    const served = (
+      await runWithDatabaseRequestScope(() => listTrackWork({ kind: "embed", limit: 100 }))
+    ).map((item) => item.trackId);
+    expect(served).not.toContain("zz-vetoed-track");
+    expect(served.length).toBeGreaterThan(0);
+  });
+
+  // THE SCOPING IS BY SUBJECT, AND A SUBJECT CARRIES ITS TYPE. Withholding is keyed on the marker's
+  // own primary key — `(work_kind, subject_type, subject_id)` — so a label-typed or artist-typed
+  // marker never withholds a track row that happens to share its id. The rulings that DO owe a
+  // track something say so in track-typed markers, in the same transaction.
+  it("serves a track a label-typed marker cannot own", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { markDueWorkSourceRepairsStatement } = await import("./due-work");
+
+    await seedCatalogueTrack(db, { trackId: "shared-id" });
+    await withAudio("shared-id");
+    await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
+
+    // Project the track first, so the queue holds a real ready row for it.
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "shared-id", subjectType: "track" }], {
+        now: NOW,
+        producer: "test-label-scope",
+      }),
+    );
+    expect(
+      (await runWithDatabaseRequestScope(() => listTrackWork({ kind: "embed", limit: 10 }))).map(
+        (item) => item.trackId,
+      ),
+    ).toEqual(["shared-id"]);
+
+    // A label ruling's own entity marker, standing beside that ready track row and wearing the
+    // SAME subject id. It owes the label's projections a repair and owes this track nothing.
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "shared-id", subjectType: "label" }], {
+        now: NOW,
+        producer: "test-label-scope",
+      }),
+    );
+
+    expect(
+      (await runWithDatabaseRequestScope(() => listTrackWork({ kind: "embed", limit: 10 }))).map(
+        (item) => item.trackId,
+      ),
+    ).toEqual(["shared-id"]);
+  });
+
+  it("withholds a ruled label's tracks through the track-typed markers the same ruling mints", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { updateLabelSeedState } = await import("./labels");
+
+    await db.execute({
+      args: [NOW.toISOString(), NOW.toISOString()],
+      sql: `insert into labels (id, slug, name, seed_state, created_at, updated_at)
+            values ('lbl-ruled', 'ruled-imprint', 'Ruled Imprint', 'undecided', ?, ?)`,
+    });
+    for (const trackId of ["ruled-a", "ruled-b"]) {
+      await seedCatalogueTrack(db, { trackId });
+      await withAudio(trackId);
+      await db.execute({
+        args: [trackId],
+        sql: `update tracks set label = 'Ruled Imprint', label_id = 'lbl-ruled' where track_id = ?`,
+      });
+    }
+    await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
+
+    // The ruling itself. It changes what Fluncle may spend on these rows, so it re-stales their
+    // rank AND marks each track individually — a label marker alone would never reach them.
+    await updateLabelSeedState("lbl-ruled", "disabled");
+
+    const marked = await db.execute(
+      `select subject_id from due_work
+       where work_kind = 'source-repair' and subject_type = 'track'
+         and subject_id in ('ruled-a', 'ruled-b')
+       order by subject_id`,
+    );
+    expect(marked.rows.map((row) => row.subject_id)).toEqual(["ruled-a", "ruled-b"]);
+
+    // Those markers are the withholding: a capture worklist read serves neither until the ruling's
+    // repair has converged them.
+    expect(
+      (await runWithDatabaseRequestScope(() => listTrackWork({ kind: "capture", limit: 10 }))).map(
+        (item) => item.trackId,
+      ),
+    ).not.toContain("ruled-a");
   });
 });

@@ -10,6 +10,13 @@ const SWEEP = resolve(import.meta.dirname, "crawl-sweep.ts");
 const REAL_PHASE_RUNNER = resolve(import.meta.dirname, "database-admission-runner.sh");
 const TEST_TIMEOUT_MS = 20_000;
 const PROCESS_TIMEOUT_MS = 8_000;
+// One case is a CHOREOGRAPHY, not a sweep: it holds a sweep paused mid-fetch, drives a second
+// process through the real phase runner, then releases and drains the first. Three process waits
+// in series cannot each be given the budget a one-process case is sized for — three independent
+// `PROCESS_TIMEOUT_MS` deadlines sum past the harness limit, so the inner one stops being a guard
+// and merely fires before the budget the case actually has. It spends ONE budget across its three
+// waits instead, stated here because the choreography is what the number is sized for.
+const CHOREOGRAPHY_TEST_TIMEOUT_MS = 45_000;
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
@@ -204,6 +211,21 @@ async function collect(
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * ONE budget, shared, for a case that waits on several processes in SERIES.
+ *
+ * `PROCESS_TIMEOUT_MS` is sized for the shape almost every case here has: spawn one sweep, wait
+ * for it. A case that waits on three processes cannot hand each of them that same budget — three
+ * independent deadlines sum well past `TEST_TIMEOUT_MS`, so the inner deadline is not a guard at
+ * all: it merely fires before the budget the case actually has, and under load turns "this took a
+ * while" into a failure while the harness still had seconds in hand. A shared deadline spends the
+ * case's real budget across its waits and leaves the harness as the outer bound it already is.
+ */
+function sharedDeadline(budgetMs: number): () => number {
+  const expiresAt = Date.now() + budgetMs;
+  return () => Math.max(1, expiresAt - Date.now());
 }
 
 async function waitForFile(path: string, timeoutMs = PROCESS_TIMEOUT_MS): Promise<void> {
@@ -651,6 +673,14 @@ describe("crawl-sweep phase protocol", () => {
           "      printf held > " + lock,
           '      printf \'%s\\n200\\n\' \'{"enforced":true,"fencingToken":7,"heartbeatAfterMs":1000,"lane":"write","operationId":"fixture","outcome":"acquired","queueAgeMs":0,"recovered":false,"waitMs":0,"yieldReason":null}\'',
           "    fi ;;",
+          // A HEARTBEAT IS PART OF THE PROTOCOL, NOT AN EXTRA. The runner starts heartbeating
+          // `heartbeatAfterMs` into the payload, and treats any answer that is not an enforced
+          // `acquired` as a lost fence — it yields the whole run. Falling through to `{}` below
+          // therefore made this fixture depend on the payload finishing inside one second: fine
+          // on an idle machine, and a fenced run at `initialize` (never reaching fetch at all)
+          // the moment anything else is competing for the CPU.
+          '  *\'"action":"heartbeat"\'*)',
+          '    printf \'%s\\n200\\n\' \'{"enforced":true,"fencingToken":7,"heartbeatAfterMs":1000,"lane":"write","operationId":"fixture","outcome":"acquired","queueAgeMs":0,"recovered":false,"waitMs":0,"yieldReason":null}\' ;;',
           '  *\'"action":"release"\'*) rm -f ' + lock + "; printf '%s\\n200\\n' '{\"ok\":true}' ;;",
           '  *\'"action":"cancel"\'*) rm -f ' + lock + "; printf '%s\\n200\\n' '{\"ok\":true}' ;;",
           "  *) printf '%s\\n200\\n' '{}' ;;",
@@ -676,9 +706,11 @@ describe("crawl-sweep phase protocol", () => {
         stderr: "pipe",
         stdout: "pipe",
       });
+      // Three waits, one budget: the paused provider, the unrelated writer, then the sweep.
+      const remaining = sharedDeadline(CHOREOGRAPHY_TEST_TIMEOUT_MS - 5_000);
       let writer: Bun.Subprocess | undefined;
       try {
-        await waitForFile(data.fetchStarted);
+        await waitForFile(data.fetchStarted, remaining());
         writer = Bun.spawn(
           [
             "bash",
@@ -692,11 +724,11 @@ describe("crawl-sweep phase protocol", () => {
           ],
           { detached: true, env: environment, stderr: "pipe", stdout: "pipe" },
         );
-        const writerResult = await collect(writer);
+        const writerResult = await collect(writer, remaining());
         expect(writerResult.exitCode).toBe(0);
         expect(readFileSync(data.timeline, "utf8")).toContain("writer-completed");
         writeFileSync(data.fetchRelease, "release");
-        const sweepResult = await collect(sweep);
+        const sweepResult = await collect(sweep, remaining());
         expect(sweepResult.exitCode, sweepResult.stderr).toBe(0);
         expect(JSON.parse(sweepResult.stdout)).toMatchObject({ ok: true, tracksWritten: 3 });
         const timeline = readFileSync(data.timeline, "utf8");
@@ -704,6 +736,28 @@ describe("crawl-sweep phase protocol", () => {
         expect(timeline).toContain("phase-lock:prepare:held");
         expect(timeline).toContain("phase-lock:fetch:free");
         expect(timeline).toContain("phase-lock:commit:held");
+      } catch (cause) {
+        // A WAIT THAT TIMES OUT SAYS ONLY THAT NOTHING ARRIVED, WHICH IS THE ONE THING ALREADY
+        // KNOWN. The sweep is a child process holding its own account of why — it yields with a
+        // reason on stderr — and without this that account is killed unread in the `finally`
+        // below, leaving a bare deadline to be misread as slowness. Release the paused provider
+        // first so the sweep can finish talking, then hand its own words to the failure.
+        writeFileSync(data.fetchRelease, "release");
+        const account = await Promise.race([
+          Promise.all([new Response(sweep.stdout).text(), new Response(sweep.stderr).text()]),
+          new Promise<[string, string]>((settle) =>
+            setTimeout(() => settle(["<not drained>", "<not drained>"]), 5_000),
+          ),
+        ]);
+        const read = (path: string): string =>
+          existsSync(path) ? readFileSync(path, "utf8") : "<none>";
+
+        throw new Error(
+          `${cause instanceof Error ? cause.message : String(cause)}\n` +
+            `sweep stdout: ${account[0]}\nsweep stderr: ${account[1]}\n` +
+            `phase timeline: ${read(data.timeline)}\nCLI calls: ${read(data.calls)}`,
+          { cause },
+        );
       } finally {
         writeFileSync(data.fetchRelease, "release");
         if (writer?.exitCode === null) {
@@ -714,7 +768,7 @@ describe("crawl-sweep phase protocol", () => {
         }
       }
     },
-    TEST_TIMEOUT_MS,
+    CHOREOGRAPHY_TEST_TIMEOUT_MS,
   );
 
   test(

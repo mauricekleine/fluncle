@@ -337,8 +337,9 @@ export type CrawlPassResult = {
   // Scoped label-browse nodes re-armed from a newer label-scope watermark this pass.
   releasesRearmed: number;
   seeded: number;
-  // Stale enabled seed labels re-armed this pass — an enabled label is a subscription, so its
-  // later releases surface. Bounded per pass so a mass re-arm spreads over ticks.
+  // Due enabled seed labels re-armed this pass — an enabled label is a subscription on a
+  // release-week schedule, so its later releases surface. Bounded per pass so a mass re-arm
+  // spreads over ticks.
   seedsRearmed: number;
   tracksFound: number;
   tracksSkipped: number;
@@ -358,6 +359,10 @@ export type CrawlStatusResult = {
   seedLabels: string[];
   // Claimable release nodes on storable provenance — what the next tick can actually write from.
   storablePending: number;
+  // Undecided labels that already hold queued work — the rulings a label round would actually move.
+  undecidedLabelsQueued: number;
+  // Claimable release nodes the storage gate is holding — the lane a label round would unlock.
+  unstorablePending: number;
 };
 
 /**

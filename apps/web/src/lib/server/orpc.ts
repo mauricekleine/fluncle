@@ -30,6 +30,7 @@ import { implement, ORPCError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { type OrpcContext } from "./orpc-auth";
 import { applyPublicCors, buildPublicCorsMatcher, corsPreflightResponse } from "./orpc-cors";
+import { dueWorkMaintenancePendingMiddleware } from "./orpc-backpressure";
 import { isApiFaultData } from "./orpc/_shared";
 import { adminAlbumsHandlers } from "./orpc/admin-albums";
 import { adminArtifactsHandlers } from "./orpc/admin-artifacts";
@@ -100,6 +101,8 @@ import { tracksHandlers } from "./orpc/tracks";
 // domain module); admin ops (later wave) build on `operatorProcedure` first.
 const os = implement(contract).$context<OrpcContext>();
 
+// The router-level backpressure middleware (./orpc-backpressure) is applied here, and ONLY here,
+// so every op inherits the typed due-work 503 exactly once and no procedure runs it twice.
 // ── Router ───────────────────────────────────────────────────────────────────
 // Composed from the per-domain handler factories. The spec, the validators, and
 // the typed client all derive from this object, so they cannot disagree with the
@@ -108,7 +111,7 @@ const os = implement(contract).$context<OrpcContext>();
 // promise — that is the drift-proofing the migration is for.
 //
 // Add a domain: import its `*Handlers(os)` factory and spread it here.
-export const router = os.router({
+export const router = os.use(dueWorkMaintenancePendingMiddleware).router({
   ...adminAlbumsHandlers(os),
   ...adminArtifactsHandlers(os),
   ...adminArtistRulesHandlers(os),

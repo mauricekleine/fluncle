@@ -493,7 +493,7 @@ describe("every in-container script a unit execs is baked from scripts/", () => 
           "/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED ",
         );
         expect(execStart, `${entry.dir}/${service}`).toContain(
-          "-e DATABASE_ADMISSION_POLL_SECS=5 ",
+          "-e DATABASE_ADMISSION_POLL_SECS=2 ",
         );
       }
     }

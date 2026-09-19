@@ -2041,7 +2041,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.funnel-snapshot",
     operatorNotes:
-      "23:45 UTC daily (end of the UTC day the snapshot is keyed on). A bare trigger (the reach/anchor shape): fires the AGENT-tier record_catalogue_snapshot op once — the Worker computes every stage total + queue depth + frontier count through the SAME predicates the sweeps run (lib/server/funnel.ts) and UPSERTS one idempotent row per UTC day (a same-day re-run overwrites, never doubles a bar). Zero LLM tokens; the box's agent token drives it and calls the oRPC HTTP endpoint directly (no new CLI command the pinned box CLI would lack), so no new secret. Source: docs/agents/hermes/scripts/funnel-snapshot-sweep.*. See docs/admin-shell.md.",
+      "23:45 UTC daily (end of the UTC day the snapshot is keyed on), with a retry slot at 23:57 UTC still inside that day. A bare trigger (the reach/anchor shape): fires the AGENT-tier record_catalogue_snapshot op once — the Worker computes every stage total + queue depth + frontier count through the SAME predicates the sweeps run (lib/server/funnel.ts) and UPSERTS one idempotent row per UTC day (a same-day re-run overwrites, never doubles a bar). A missed day cannot be recomputed later, so the tick is defended three ways: an in-tick retry ladder for a transient Worker fault, the second timer slot for a database-admission yield, and the Worker's catch-up grace window for a box that slept through the slot (it fills a missing previous day and names it as backfilledDays). Zero LLM tokens; the box's agent token drives it and calls the oRPC HTTP endpoint directly (no new CLI command the pinned box CLI would lack), so no new secret. Source: docs/agents/hermes/scripts/funnel-snapshot-sweep.*. See docs/admin-shell.md.",
     probeConfig: {
       cadenceMs: 24 * 60 * MINUTE_MS,
       cronName: "fluncle-funnel-snapshot",
@@ -2202,7 +2202,7 @@ export function cronSurfaces(): Surface[] {
  *
  * Most writers are registry crons. `fluncle-healthcheck` is deliberately absent: it
  * writes health snapshots to the separate health ledger and never sources the shared
- * run-event emitter. Three host units also write run events without being public
+ * run-event emitter. Four host units also write run events without being public
  * surfaces, so they are declared here rather than disappearing from an absence diff.
  */
 export function runLedgerWriters(): RunLedgerWriter[] {
@@ -2221,6 +2221,7 @@ export function runLedgerWriters(): RunLedgerWriter[] {
     return [{ expectedIntervalMs: probe.cadenceMs, unit: probe.cronName }];
   });
   const direct: RunLedgerWriter[] = [
+    { expectedIntervalMs: 3_600_000, unit: "fluncle-pin-watch" },
     { expectedIntervalMs: 900_000, unit: "fluncle-secrets-sync" },
     { expectedIntervalMs: 3_600_000, unit: "fluncle-sonar-freshen" },
     { expectedIntervalMs: 900_000, unit: "fluncle-timer-watchdog" },

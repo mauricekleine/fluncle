@@ -793,7 +793,12 @@ export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun>
         release,
         runDurationMs(input.started_at, input.ended_at),
         summary.selfAssertedOk === null ? null : Number(summary.selfAssertedOk),
-        input.summary_raw ?? null,
+        // Stored JSON-SAFE (`jsonSafeLedgerText`): a raw control character in a sweep's summary
+        // line is never the evidence, and it is what makes the ledger's own `--json` read
+        // unparseable. The parse above (`normalizeRunSummary`) already ran on the untouched input.
+        input.summary_raw === undefined || input.summary_raw === null
+          ? null
+          : jsonSafeLedgerText(input.summary_raw),
         summary.summaryStatus,
         input.unit,
         JSON.stringify(summary.unrecognisedFields),
@@ -864,6 +869,34 @@ function ledgerText(value: unknown, field: string): string {
   }
 
   return value;
+}
+
+/**
+ * MAKE ONE LEDGER STRING SAFE TO SERIALIZE — every raw C0 control character replaced by its
+ * `\uXXXX` escape, byte for byte the sequence JSON already uses for them.
+ *
+ * WHY THE LEDGER NEEDS THIS AND OTHER TEXT DOES NOT. `summary_raw` is the one column that carries a
+ * string a sweep wrote rather than a value this server chose: a box tick's last stdout line, which
+ * is itself a JSON document, and which routinely quotes a vendor's error text. Anything that lands
+ * in there lands verbatim. A raw control character survives the trip — the ingest schema is a plain
+ * `z.string()`, and SQLite stores what it is handed — and then breaks the reader in both places it
+ * matters. The outer document only holds because `JSON.stringify` escapes on the way out, which is
+ * a guarantee about THIS serializer rather than about the value; the INNER document has no such
+ * cover, so `fluncle admin telemetry read --json | jq '.rows[].summaryRaw | fromjson'` — the shape
+ * every recipe in the fluncle-ledger skill is built on — rejects the run outright. A control
+ * character is never the evidence; the escape is readable, reversible, and the same length-bounded
+ * text, so normalizing costs nothing that triage wants.
+ *
+ * It runs on BOTH sides on purpose: at ingest, so a stored row is clean from the day it is written,
+ * and on read, so the rows already in the ledger are answered safely without a migration.
+ */
+export function jsonSafeLedgerText(value: string): string {
+  // Matching the control range IS this function's job — the literal class is the specification.
+  return value.replace(/[ -]/g, (character) => {
+    const code = character.charCodeAt(0);
+
+    return `\\u${code.toString(16).padStart(4, "0")}`;
+  });
 }
 
 function ledgerNumber(value: unknown, field: string): number {
@@ -1020,7 +1053,13 @@ function toRunLedgerRow(row: RunLedgerDbRow): RunLedgerRow {
     release: ledgerRelease(row.release),
     runDurationMs: nullableLedgerNumber(row.run_duration_ms, "run_duration_ms"),
     selfAssertedOk: nullableLedgerBoolean(row.self_asserted_ok, "self_asserted_ok"),
-    summaryRaw: row.summary_raw === null ? null : ledgerText(row.summary_raw, "summary_raw"),
+    // Escaped on the way out as well as at ingest, so rows already in the ledger are answered
+    // safely without a migration (see `jsonSafeLedgerText`). Idempotent: an already-escaped value
+    // carries no control characters left to escape.
+    summaryRaw:
+      row.summary_raw === null
+        ? null
+        : jsonSafeLedgerText(ledgerText(row.summary_raw, "summary_raw")),
     summaryStatus: ledgerSummaryStatus(row.summary_status),
     unit: ledgerText(row.unit, "unit"),
     unrecognisedFields: ledgerStringArray(row.unrecognised_fields, "unrecognised_fields"),
