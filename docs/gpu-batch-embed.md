@@ -27,7 +27,9 @@ A read is a **page**, capped at 200 rows, so its length answers "how many did I 
 
 Audio capture is metered — a residential proxy bills **per GB** — so the order this queue drains in literally decides what the money buys. SQL evaluates the same total order as two limited reads: the tiny findings half first, then only enough catalogue rows to fill the page. Concatenating those halves is exactly the leading certification-first term, while letting the catalogue half seek its capture-priority index instead of sorting the growing table:
 
-Order capture work by certification first, then `capture_priority DESC`, then newest finding and track ID for determinism.
+Order capture work by certification first, then `capture_priority DESC`, then — on the catalogue half — anchored rows first (`spotify_uri is not null`), then demand, then newest finding and track ID for determinism.
+
+The anchored term is the metered queue's alone. Audio bought for a row with no Spotify identity cannot become recommendable — `REC_ELIGIBLE_WHERE` requires the anchor — so it waits on a separate billed anchor search before it earns anything, while an anchored sibling at the same tier becomes recommendable the moment it is embedded. It reorders **within** a tier only: the ladder still decides which rows drain first, and nothing moves across a tier or past the veto. The free queues (`analyze`, `embed`) keep the shared ladder unchanged — capture already hands them an anchored-first population, so the yield is raised once, where the money is spent.
 
 ### The veto is a predicate, not a sort
 

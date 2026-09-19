@@ -465,8 +465,16 @@ describe("listTrackWork — the order is the budget", () => {
               t.track_id desc`
           : kind === "youtube-reverdict"
             ? "order by t.youtube_verified_at asc, t.track_id asc"
-            : `order by (f.track_id is not null) desc,
+            : // The anchored preference is CAPTURE's and the CATALOGUE half's alone, so the oracle
+              // spells it as a disjunction with certification: on a finding the term is the constant
+              // 1 and orders nothing, on a catalogue row it is the anchor test itself.
+              `order by (f.track_id is not null) desc,
                 coalesce(t.capture_priority, 0) desc,
+                ${
+                  kind === "capture"
+                    ? "(f.track_id is not null or t.spotify_uri is not null) desc,"
+                    : ""
+                }
                 coalesce(t.demand_score, 0) desc,
                 coalesce(f.added_at, '') desc,
                 t.track_id desc`;
@@ -528,6 +536,18 @@ describe("listTrackWork — the order is the budget", () => {
       await makeIsrcRecoveryCandidate(trackId);
     }
 
+    // One of the catalogue capture pair keeps its Spotify anchor, so the capture ladder's anchored
+    // preference is a DECIDING term in this oracle rather than a tie: the row it lifts is the one
+    // the final `track_id desc` tiebreak would otherwise have put last.
+    await db.execute({
+      args: [
+        `spotify:track:${catalogueCaptureIds[0]}`,
+        `https://open.spotify.com/track/${catalogueCaptureIds[0]}`,
+        catalogueCaptureIds[0],
+      ],
+      sql: `update tracks set spotify_uri = ?, spotify_url = ? where track_id = ?`,
+    });
+
     // The re-verdict queue deliberately has candidates in BOTH halves. Its order never led with
     // certification, so the split implementation must leave this specialist query alone.
     for (const trackId of [...findingReverdictIds, ...catalogueReverdictIds]) {
@@ -569,6 +589,15 @@ describe("listTrackWork — the order is the budget", () => {
     expect(shape.rows.some((row) => row.capture_priority !== null)).toBe(true);
     expect(shape.rows.some((row) => row.demand_score === null)).toBe(true);
     expect(shape.rows.some((row) => row.demand_score !== null)).toBe(true);
+
+    // …and that the catalogue capture queue holds one anchored and one un-anchored row, which is
+    // what makes the anchored preference a term this oracle can disagree about.
+    const anchors = await db.execute(`select t.spotify_uri
+                                      from tracks t
+                                      left join findings f on f.track_id = t.track_id
+                                      where f.track_id is null and t.source_audio_key is null`);
+    expect(anchors.rows.some((row) => row.spotify_uri === null)).toBe(true);
+    expect(anchors.rows.some((row) => row.spotify_uri !== null)).toBe(true);
 
     const kinds = [
       "analyze",
@@ -665,6 +694,48 @@ describe("listTrackWork — the order is the budget", () => {
       "cat1000000000000000000", // nothing
     ]);
     expect(work.map((item) => item.capturePriority)).toEqual([3, 2, 1, 0]);
+  });
+
+  it("spends a tier's metered capture on its ANCHORED rows first", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await openCaptureBudget();
+
+    // Two tiers, each holding an anchored and an un-anchored row. The un-anchored rows also carry
+    // the higher demand score and the later track id, so a queue that ignored the anchor — or that
+    // let demand outrank it — would hand back a different sequence.
+    for (const trackId of [
+      "cat1000000000000000000",
+      "cat2000000000000000000",
+      "cat3000000000000000000",
+      "cat4000000000000000000",
+    ]) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+
+    await withWorkOrder("cat4000000000000000000", 2, 0); // tier 2, anchored
+    await withWorkOrder("cat3000000000000000000", 2, 9); // tier 2, no anchor
+    await withWorkOrder("cat2000000000000000000", 1, 0); // tier 1, anchored
+    await withWorkOrder("cat1000000000000000000", 1, 9); // tier 1, no anchor
+
+    for (const trackId of ["cat3000000000000000000", "cat1000000000000000000"]) {
+      await db.execute({
+        args: [trackId],
+        sql: `update tracks set spotify_uri = null, spotify_url = null where track_id = ?`,
+      });
+    }
+
+    const work = await listTrackWork({ kind: "capture" });
+
+    // The ladder still decides WHICH tier drains: tier 2 comes out whole before tier 1, and the
+    // anchor only ever reorders siblings inside a tier. `REC_ELIGIBLE_WHERE` needs the anchor, so
+    // this is the half of the spend that can become recommendable without a second billed search.
+    expect(work.map((item) => item.trackId)).toEqual([
+      "cat4000000000000000000",
+      "cat3000000000000000000",
+      "cat2000000000000000000",
+      "cat1000000000000000000",
+    ]);
   });
 
   it("never hands a VETOED label to the capture queue — the money is never spent", async () => {
