@@ -35,7 +35,7 @@
 # docs/agents/hermes/embed-timer/README.md.
 #
 # ── THE GPU PATH (docs/gpu-batch-embed.md) ────────────────────────────────────────────────
-# The same script runs the on-box CPU sweep (one track a tick) AND the operator-fired GPU
+# The same script runs the on-box CPU sweep (a small batch a tick) AND the operator-fired GPU
 # BATCH (hundreds of tracks in one pass, on a rented RunPod pod). It is ONE script on purpose:
 # the decode → window → pool → L2-normalize pipeline IS the embedding contract, and a second
 # copy of it on a different device is how two vectors of the "same" track silently stop being
@@ -68,6 +68,9 @@ MODEL_ID = os.environ.get("MUQ_MODEL", "OpenMuQ/MuQ-large-msd-iter")
 DEVICE_PREF = os.environ.get("MUQ_DEVICE", "auto").strip().lower()
 WINDOW_BATCH = max(1, int(os.environ.get("MUQ_WINDOW_BATCH", "1")))
 
+# cgroup v2's CPU quota file — see torch_thread_count(). Overridable for verification only.
+CPU_MAX_PATH = os.environ.get("MUQ_CPU_MAX_PATH", "/sys/fs/cgroup/cpu.max")
+
 # Windowing (bounds peak RAM to a single window's forward):
 #   WINDOW_SECONDS — the length of audio fed to ONE MuQ forward. ~30s matches the memory the
 #                    box already tolerated on a 30s preview (~2.85 GB); larger windows risk the
@@ -91,6 +94,39 @@ MIN_TAIL_SAMPLES = max(1, int(MIN_TAIL_SECONDS * SAMPLE_RATE))
 
 def log(message: str) -> None:
     print(f"[embed-track] {message}", file=sys.stderr, flush=True)
+
+
+def torch_thread_count() -> int:
+    """How many CPU threads torch may use: the CGROUP's quota, not the host's core count.
+
+    `os.cpu_count()` reports the HOST's cores, which inside a CPU-capped container is a lie —
+    asking for 4 threads inside a 2-CPU quota does not buy 4 CPUs, it buys the same CPU time
+    split across more threads that then fight each other and burn the quota on context
+    switching. cgroup v2 publishes the real ceiling as `cpu.max` ("<quota> <period>", or
+    "max <period>" when uncapped), so the quota FLOORED into whole CPUs is the honest thread
+    count. Anything unreadable or uncapped falls back to `os.cpu_count()`, which is right on a
+    bare host and on a GPU pod. `MUQ_CPU_MAX_PATH` only moves the file it reads, which is how
+    the quota arithmetic is exercised off a box that has no cgroup at all.
+    """
+    host_threads = max(1, os.cpu_count() or 1)
+
+    try:
+        with open(CPU_MAX_PATH, encoding="utf-8") as handle:
+            quota_text, period_text = handle.read().split()[:2]
+
+        if quota_text == "max":
+            return host_threads
+
+        quota, period = int(quota_text), int(period_text)
+
+        if quota <= 0 or period <= 0:
+            return host_threads
+
+        # Floor, never ceil: 2.5 CPUs of quota is 2 threads that each get a whole CPU, not 3
+        # that oversubscribe it. A sub-1.0 quota still gets one thread — there is no half.
+        return max(1, min(host_threads, quota // period))
+    except (OSError, ValueError):
+        return host_threads
 
 
 def decode_audio(path: str):
@@ -220,8 +256,9 @@ def main() -> int:
     import torch
     from muq import MuQ
 
-    # Use every core the box grants (CPX32 = 4) for CPU inference.
-    torch.set_num_threads(max(1, os.cpu_count() or 1))
+    # Use every core the CONTAINER is granted for CPU inference — see torch_thread_count().
+    threads = torch_thread_count()
+    torch.set_num_threads(threads)
 
     # The device. `auto` (the default) takes CUDA when torch can see it and CPU otherwise, so
     # the SAME command is right on the box and on a rented GPU pod; `MUQ_DEVICE` forces either.
@@ -230,7 +267,10 @@ def main() -> int:
     else:
         device = torch.device("cpu")
 
-    log(f"loading {MODEL_ID} on {device} (window batch {WINDOW_BATCH})")
+    log(
+        f"loading {MODEL_ID} on {device} "
+        f"(window batch {WINDOW_BATCH}, {threads} thread(s), {len(manifest)} item(s))"
+    )
     muq = MuQ.from_pretrained(MODEL_ID)
     muq = muq.to(device).eval()
 

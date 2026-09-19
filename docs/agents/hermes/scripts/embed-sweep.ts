@@ -85,15 +85,53 @@ import {
 } from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
-// Config — BATCH_CAP is 1: a windowed full-song MuQ forward is minutes-scale (each ~30s
-// window is a full forward, and a 5-min song is ~10 windows), so one finding per tick keeps
-// the wall-clock bounded. As a host timer the 120s/300s gateway kill no longer applies, but
-// the queue is still the durable worklist — anything not reached this tick is picked up
-// ~5m later, in drain order. Every result's write window can wait up to the runner's 120s
-// admission ceiling, so a larger BATCH_CAP must re-derive the unit's TimeoutStartSec.
+// Config — the batch cap is how many tracks one tick embeds. A windowed full-song MuQ forward
+// is minutes-scale (each ~30s window is a full forward, and a 5-min song is ~10 windows), so
+// the cap is what bounds the tick's wall-clock. As a host timer the 120s/300s gateway kill no
+// longer applies, but the queue is still the durable worklist — anything not reached this tick
+// is picked up ~5m later, in drain order.
+//
+// WHY A BATCH BEATS ITS OWN ITEM COUNT: the manifest goes to ONE `embed-track.py` process, so
+// the multi-second torch import + MuQ model load is paid once for the whole batch instead of
+// once per track, and the tick pays ONE admitted worklist window instead of one per track.
+// Only the per-result write windows still scale with the batch.
+//
+// THE CAP AND THE UNIT'S `TimeoutStartSec` ARE ONE DECISION. Each result's write window can
+// wait up to the runner's 120s admission ceiling, so a raised cap must re-derive that timeout;
+// the arithmetic lives beside it in ../embed-timer/fluncle-embed.service. `MAX_EMBED_BATCH_CAP`
+// is the typo guard on the env knob, not a licence — a value above the default still needs the
+// unit's timeout re-derived before it is set.
 // ---------------------------------------------------------------------------
 
-const BATCH_CAP = 1; // findings embedded per tick (a windowed full-song forward is minutes)
+export const DEFAULT_EMBED_BATCH_CAP = 3;
+export const MAX_EMBED_BATCH_CAP = 6;
+
+/**
+ * `FLUNCLE_EMBED_BATCH` — tracks embedded per tick. Absent or empty takes the default; a value
+ * that is not an integer within 1..MAX_EMBED_BATCH_CAP is refused loudly and the default stands,
+ * so a fat-fingered unit env can never hand the sweep an unbounded or zero-width batch.
+ */
+export const resolveEmbedBatchCap = (raw: string | undefined): number => {
+  const trimmed = raw?.trim() ?? "";
+
+  if (trimmed === "") {
+    return DEFAULT_EMBED_BATCH_CAP;
+  }
+
+  const parsed = Number(trimmed);
+
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_EMBED_BATCH_CAP) {
+    console.error(
+      `[embed-sweep] FLUNCLE_EMBED_BATCH=${JSON.stringify(raw)} is not an integer 1-${MAX_EMBED_BATCH_CAP} — using ${DEFAULT_EMBED_BATCH_CAP}`,
+    );
+
+    return DEFAULT_EMBED_BATCH_CAP;
+  }
+
+  return parsed;
+};
+
+const BATCH_CAP = resolveEmbedBatchCap(process.env.FLUNCLE_EMBED_BATCH);
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
 const ADMISSION_OWNER = "fluncle-embed";
 
@@ -765,7 +803,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
     // (2) No lease: ONE python call over the batch — the MuQ model load is amortized.
     // embed-track.py windows the long audio and mean-pools across windows to bound peak RAM.
     // Time it for the self-seconds cost row: the model-load is shared, so the wall-time is split
-    // evenly across the findings it embedded (BATCH_CAP is 1, so this is normally one row).
+    // evenly across the findings it embedded, so a batch's shared load is never billed twice.
     const embedStart = Date.now();
     const embed = deps.embed(manifest);
     const embedSeconds = (Date.now() - embedStart) / 1000;
