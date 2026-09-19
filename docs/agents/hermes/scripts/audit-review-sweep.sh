@@ -25,6 +25,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 AUDIT_DIR="${SCRIPT_DIR}/audit"
 # shellcheck source=./agent-env.sh
 . "${SCRIPT_DIR}/agent-env.sh"
+# The reviewer's pass is shorter than the auditor's — it reads one diff rather than hunting a whole
+# domain — so it takes its own budget, which must stay under its unit's TimeoutStartSec backstop
+# (../audit-review-timer/fluncle-audit-review.service) the same way the auditor's does.
+AGENT_PASS_BUDGET_SECS="${AUDIT_REVIEW_PASS_BUDGET_SECS:-${AGENT_PASS_BUDGET_SECS:-2400}}"
+# shellcheck source=./agent-pass.sh
+. "${SCRIPT_DIR}/agent-pass.sh"
 
 SECRETS_FILE="${AUDIT_SECRETS_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${SECRETS_FILE}" ]; then
@@ -117,12 +123,21 @@ ${runtime_note}"
   # write, and the reviewer holds the same PAT as the author it is reviewing.
   # Declares GH_TOKEN — the reviewer reads the PR, comments, and holds it open or lets it merge.
   agent_env_scrub_args --secrets "${SECRETS_FILE}" --allow GH_TOKEN
-  log "invoking claude -p (opus) reviewer for PR #${PR_NUM}…"
-  local run_errors=0
-  FLUNCLE_UNATTENDED=1 env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} "$(command -v claude)" -p "${prompt}" \
+  log "invoking claude -p (opus) reviewer for PR #${PR_NUM} (budget ${AGENT_PASS_BUDGET_SECS}s)…"
+  local run_errors=0 pass_reason=""
+  # Bounded by the SCRIPT, for the same reason the auditor's pass is: a unit `TimeoutStartSec`
+  # kill reaches only the host-side `docker exec` client, so the pass would otherwise outlive its
+  # own supervisor and self-report a healthy night. See ./agent-pass.sh.
+  agent_pass_run env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} FLUNCLE_UNATTENDED=1 \
+    "$(command -v claude)" -p "${prompt}" \
     --model opus \
     --dangerously-skip-permissions \
-    >&2 || { log "claude -p returned nonzero"; run_errors=1; }
+    >&2
+  if [ -n "${AGENT_PASS_REASON}" ]; then
+    log "claude -p ended on ${AGENT_PASS_REASON} after ${AGENT_PASS_SECONDS}s (status ${AGENT_PASS_STATUS}, container oom kills ${AGENT_PASS_OOM_KILLS})"
+    pass_reason="${AGENT_PASS_REASON}"
+    run_errors=1
+  fi
 
   # Report the outcome from the PR's final state.
   #
@@ -131,14 +146,16 @@ ${runtime_note}"
   # `exit_code === 0 && (summary.errors ?? 0) === 0`. Both branches below return 0, so the error
   # count is the whole verdict. A literal `ok:true` here sat beside `errors:${run_errors}` and
   # reported a reviewer whose `claude -p` had failed as a healthy night.
-  local held_produced=1 ok="true" state
+  local held_produced=1 ok="true" state facts
   [ "${run_errors}" = "0" ] || held_produced=0
   [ "${run_errors}" = "0" ] || ok="false"
+  facts="$(printf '"pass_seconds":%s,"container_oom_kills":%s' "${AGENT_PASS_SECONDS}" "${AGENT_PASS_OOM_KILLS}")"
+  [ -z "${pass_reason}" ] || facts="${facts},$(printf '"reason":"%s"' "${pass_reason}")"
   state="$(gh pr view "${PR_NUM}" --repo "${repo}" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)"
   case "${state}" in
-    MERGED) echo "{\"ok\":${ok},\"action\":\"merged\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"checked\":1,\"errors\":${run_errors},\"produced\":1}" ;;
-    OPEN)   echo "{\"ok\":${ok},\"action\":\"held\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"note\":\"left open with a comment\",\"checked\":1,\"errors\":${run_errors},\"produced\":${held_produced}}" ;;
-    *)      echo "{\"ok\":false,\"action\":\"unknown\",\"pr\":${PR_NUM},\"state\":\"${state}\",\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}" ;;
+    MERGED) echo "{\"ok\":${ok},\"action\":\"merged\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":1}" ;;
+    OPEN)   echo "{\"ok\":${ok},\"action\":\"held\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"note\":\"left open with a comment\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":${held_produced}}" ;;
+    *)      echo "{\"ok\":false,\"action\":\"unknown\",\"pr\":${PR_NUM},\"state\":\"${state}\",${facts},\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}" ;;
   esac
 }
 

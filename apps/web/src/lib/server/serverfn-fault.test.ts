@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { signGrant } from "./admin-auth";
 import { ADMIN_COOKIE_NAME } from "./env";
 import { GENERIC_SERVERFN_FAULT_MESSAGE, redactServerFnFault } from "./serverfn-fault";
+import { DueWorkMaintenancePendingError } from "./due-work";
 import { ApiError } from "./spotify";
 
 // `redactServerFnFault` is the wire-redaction discipline for TanStack Start server
@@ -211,6 +212,21 @@ describe("redactServerFnFault", () => {
       pageRequest("/log/x"),
     );
 
+    expect(logEvent).not.toHaveBeenCalled();
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  // BACKPRESSURE IS NOT A FAULT, on this path too. An `/admin` loader's server fn reaches the same
+  // guarded due-work read the API ops do (`fetchRenders` → `listTracks` → `listProjectedTracks` →
+  // `readPromotedDueWorkPage`), and a deferred read there is a typed "come back", not a break. This
+  // path never touches `apiFault`, so the recognizer has to be here as well or every paused read on
+  // an admin board pages as an error.
+  it("does NOT log or capture a deferred due-work read", async () => {
+    const pending = new DueWorkMaintenancePendingError("finding.render");
+
+    const redacted = await redactServerFnFault(pending, pageRequest("/admin/renders"));
+
+    expect(redacted).toBe(pending);
     expect(logEvent).not.toHaveBeenCalled();
     expect(captureException).not.toHaveBeenCalled();
   });

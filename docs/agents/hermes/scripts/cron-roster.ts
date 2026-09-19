@@ -287,6 +287,13 @@ function directiveValues(body: string, key: string): string[] {
  * in its absence. `OnBootSec=` is deliberately never consulted — it is the FIRST fire, and
  * reading it as a period is how a 30-second boot offset would become a 30-second staleness
  * budget for a sweep that actually runs every minute.
+ *
+ * SEVERAL `OnCalendar=` LINES ARE READ, on one condition: they must all declare the SAME period.
+ * A timer may carry a RETRY FIRING — a second slot inside the same period, so a skipped or failed
+ * run gets another shot before the window it is keyed on closes (the funnel snapshot's 23:45 +
+ * 23:57 pair). That changes WHEN the unit fires, never HOW OFTEN the window comes round, so the
+ * cadence — which is a staleness budget, the longest a marker may legitimately go unwritten —
+ * remains the shared period. Mixed periods stay ambiguous and are refused, exactly as before.
  */
 export function parseTimerCadenceMs(body: string): number | null {
   const active = directiveValues(body, "OnUnitActiveSec");
@@ -301,11 +308,18 @@ export function parseTimerCadenceMs(body: string): number | null {
 
   const calendar = directiveValues(body, "OnCalendar");
 
-  if (calendar.length === 1) {
-    return parseOnCalendarMs(calendar[0] ?? "");
+  if (calendar.length === 0) {
+    return null;
   }
 
-  return null;
+  const periods = calendar.map((value) => parseOnCalendarMs(value));
+  const [first] = periods;
+
+  if (first === undefined || first === null) {
+    return null;
+  }
+
+  return periods.every((period) => period === first) ? first : null;
 }
 
 // ---------------------------------------------------------------------------

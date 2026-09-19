@@ -359,6 +359,10 @@ export type CrawlStatusResult = {
   seedLabels: string[];
   // Claimable release nodes on storable provenance — what the next tick can actually write from.
   storablePending: number;
+  // Undecided labels that already hold queued work — the rulings a label round would actually move.
+  undecidedLabelsQueued: number;
+  // Claimable release nodes the storage gate is holding — the lane a label round would unlock.
+  unstorablePending: number;
 };
 
 /**

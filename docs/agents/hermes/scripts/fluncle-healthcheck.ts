@@ -1316,6 +1316,25 @@ export const STRAIN_RATE_COUNTERS = [{ denominator: "checked", numerator: "faile
 /** Summary fields that record designed backpressure, not failed work. One yielded tick each. */
 export const BACKPRESSURE_FLAG_KEYS: readonly string[] = ["throttled"];
 
+/**
+ * The reason a yielded tick names for itself, when it names one. Reported, never scored.
+ *
+ * A database-admission yield also carries the runner's own finer word (`queue`, `public-latency`,
+ * `database-health`), and that is the one an operator can act on — so it rides along behind the
+ * axis it qualifies rather than replacing it.
+ */
+export function summaryBackpressureReason(summary: Record<string, unknown> | null): string | null {
+  const reason = summary?.reason;
+
+  if (typeof reason !== "string" || reason.length === 0) {
+    return null;
+  }
+
+  const admission = summary?.admissionYieldReason;
+
+  return typeof admission === "string" && admission.length > 0 ? `${reason}:${admission}` : reason;
+}
+
 type DistressEvidence = { itemFailures: number; runFailures: number };
 
 /** Classified evidence from a marker's stderr tail: at most one observation per line. */
@@ -1421,7 +1440,11 @@ export function countSummaryBackpressure(summary: Record<string, unknown> | null
  * scorer and the summary's `checked` denominator. Run-level prose always scores directly.
  * Designed backpressure has its own axis and cannot leak into `strain`.
  */
-export function markerSignals(body: string): { backpressure: number; strain: number } {
+export function markerSignals(body: string): {
+  backpressure: number;
+  backpressureReason: string | null;
+  strain: number;
+} {
   const summary = findJsonSummary(body);
   const distress = countDistressEvidence(splitMarker(body).stderr);
   const hasStructuredItemFailures =
@@ -1431,8 +1454,11 @@ export function markerSignals(body: string): { backpressure: number; strain: num
     ? 0
     : countItemFailureRateStrain(distress.itemFailures, summary?.checked);
 
+  const backpressure = countSummaryBackpressure(summary);
+
   return {
-    backpressure: countSummaryBackpressure(summary),
+    backpressure,
+    backpressureReason: backpressure > 0 ? summaryBackpressureReason(summary) : null,
     strain: distress.runFailures + proseItemStrain + countSummaryStrain(summary),
   };
 }
@@ -1510,11 +1536,46 @@ export function strainMinimumPoints(
   return Math.max(1, Math.ceil((windowMs / cadenceMs) * failureRate));
 }
 
+// ── THE STALL BAR — when designed backpressure stops being designed. ──────────
+//
+// A `throttled` tick is correct behaviour: the Worker deferred a guarded read, the sweep paused
+// cleanly, and the next tick reads again. Exactly one tick of it says nothing is wrong. An
+// INDEFINITE run of them is a different claim — the sweep is alive, green, and doing no work —
+// and it is indistinguishable from health in every signal the box publishes, because a paused
+// tick has its work counters nulled and `errors: 0`. So the rate is measured on its own axis and
+// gets its own bar, here.
+//
+// The bar is TIME, expressed in that cron's own ticks: roughly an hour of pausing for the fast
+// sweeps, and never fewer than three ticks for the slow ones (an hourly sweep needs three hours;
+// a daily one, three days). An hour was chosen because it is longer than any single deferral this
+// backpressure is designed for and short enough that a stalled pipeline is found the same
+// morning. Both numbers are env-overridable on the box, like every other dial here.
+const BACKPRESSURE_STALL_FLOOR_MS =
+  Number.parseInt(process.env.HEALTHCHECK_BACKPRESSURE_STALL_MS ?? "", 10) || 60 * 60_000;
+const BACKPRESSURE_STALL_MIN_TICKS =
+  Number.parseInt(process.env.HEALTHCHECK_BACKPRESSURE_STALL_TICKS ?? "", 10) || 3;
+
+/** How many yielded ticks of this cron's own cadence amount to a stall. */
+export function backpressureStallTicks(
+  cadenceMs: number,
+  floorMs: number = BACKPRESSURE_STALL_FLOOR_MS,
+  minTicks: number = BACKPRESSURE_STALL_MIN_TICKS,
+): number {
+  if (!Number.isFinite(cadenceMs) || cadenceMs <= 0) {
+    return minTicks;
+  }
+
+  return Math.max(minTicks, Math.ceil(floorMs / cadenceMs));
+}
+
 /** Bucket granularity for the rolling window. Sparse buckets keep slow-cron windows tiny too. */
 const STRAIN_BUCKET_MS = 60 * 60_000;
 
 /** One hour of accrued strain for one cron. */
 export type StrainBucket = { backpressure?: number; points: number; ticks: number };
+
+/** A sweep that has been yielding cleanly for long enough that "cleanly" stopped being true. */
+export type StalledSweep = { reason: string; service: string; ticks: number };
 
 /**
  * What the prober remembers about one cron's strain between ticks: the hourly buckets inside
@@ -1522,7 +1583,11 @@ export type StrainBucket = { backpressure?: number; points: number; ticks: numbe
  * and the newest marker mtime already folded in (so no marker is ever counted twice).
  */
 export type StrainState = {
+  /** The reason the newest yielded tick named, carried so the alarm can say WHY it is stalled. */
+  backpressureReason?: string;
   buckets: Record<string, StrainBucket>;
+  /** Whether it was already reported stalled, so that line is edge-triggered too. */
+  stalled?: boolean;
   strained: boolean;
   watermarkMs: number;
 };
@@ -1539,15 +1604,26 @@ type StrainMap = Record<string, StrainState>;
  */
 export function foldStrain(
   prev: StrainState | undefined,
-  samples: { atMs: number; backpressure?: number; points: number }[],
+  samples: {
+    atMs: number;
+    backpressure?: number;
+    backpressureReason?: string | null;
+    points: number;
+  }[],
   now: number,
   windowMs: number = STRAIN_WINDOW_FLOOR_MS,
 ): StrainState {
   const buckets: Record<string, StrainBucket> = { ...prev?.buckets };
   let watermarkMs = prev?.watermarkMs ?? 0;
+  let backpressureReason = prev?.backpressureReason;
 
-  for (const sample of samples) {
+  for (const sample of [...samples].sort((left, right) => left.atMs - right.atMs)) {
     watermarkMs = Math.max(watermarkMs, sample.atMs);
+
+    if ((sample.backpressure ?? 0) > 0 && sample.backpressureReason) {
+      // The NEWEST yielded tick's own word, so the alarm names the cause rather than the axis.
+      backpressureReason = sample.backpressureReason;
+    }
 
     if (sample.points <= 0 && (sample.backpressure ?? 0) <= 0) {
       continue; // An entirely clean tick advances the watermark and nothing else.
@@ -1575,7 +1651,13 @@ export function foldStrain(
     }
   }
 
-  return { buckets: kept, strained: prev?.strained ?? false, watermarkMs };
+  return {
+    ...(backpressureReason === undefined ? {} : { backpressureReason }),
+    buckets: kept,
+    ...(prev?.stalled === true ? { stalled: true } : {}),
+    strained: prev?.strained ?? false,
+    watermarkMs,
+  };
 }
 
 /** A cron's totals across the buckets still inside the window. */
@@ -1633,11 +1715,16 @@ export function isStrained(
  * reporting for itself on its own row, so calling the box down would be a lie the /status
  * headline would then repeat. The operator's loud channel is the Discord line below.
  */
-export function sweepStrainCheck(strained: string[], backpressured: string[] = []): Check {
+export function sweepStrainCheck(
+  strained: string[],
+  backpressured: string[] = [],
+  stalled: StalledSweep[] = [],
+): Check {
   const service = "sweep-errors";
+  const bare = (id: string) => id.replace(/^cron\./, "");
 
-  if (strained.length === 0) {
-    const names = backpressured.map((id) => id.replace(/^cron\./, "")).join(", ");
+  if (strained.length === 0 && stalled.length === 0) {
+    const names = backpressured.map(bare).join(", ");
     const message =
       backpressured.length === 0
         ? "no repeat errors"
@@ -1646,16 +1733,25 @@ export function sweepStrainCheck(strained: string[], backpressured: string[] = [
     return { latencyMs: null, message: msg(message), service, status: "ok" };
   }
 
-  const names = strained.map((id) => id.replace(/^cron\./, "")).join(", ");
+  const parts: string[] = [];
 
-  return {
-    latencyMs: null,
-    message: msg(
-      `${strained.length} sweep${strained.length === 1 ? "" : "s"} logging repeat errors: ${names}`,
-    ),
-    service,
-    status: "degraded",
-  };
+  if (strained.length > 0) {
+    parts.push(
+      `${strained.length} sweep${strained.length === 1 ? "" : "s"} logging repeat errors: ${strained.map(bare).join(", ")}`,
+    );
+  }
+
+  if (stalled.length > 0) {
+    // The streak and the reason travel WITH the name: "paused" alone would send an operator to
+    // the ledger to find out how long and why, which is the trip this row exists to save.
+    parts.push(
+      `${stalled.length} sweep${stalled.length === 1 ? "" : "s"} paused without working: ${stalled
+        .map((sweep) => `${bare(sweep.service)} (${sweep.reason} ×${sweep.ticks})`)
+        .join(", ")}`,
+    );
+  }
+
+  return { latencyMs: null, message: msg(parts.join("; ")), service, status: "degraded" };
 }
 
 /**
@@ -1670,7 +1766,7 @@ export function sweepStrainCheck(strained: string[], backpressured: string[] = [
 function readStrainSamples(
   dir: string | undefined,
   watermarkMs: number,
-): { atMs: number; backpressure: number; points: number }[] {
+): { atMs: number; backpressure: number; backpressureReason: string | null; points: number }[] {
   if (!dir) {
     return [];
   }
@@ -1687,6 +1783,7 @@ function readStrainSamples(
         return {
           atMs: file.mtimeMs,
           backpressure: signals.backpressure,
+          backpressureReason: signals.backpressureReason,
           points: signals.strain,
         };
       });
@@ -1708,15 +1805,21 @@ export function probeSweepStrain(
   backpressured: string[];
   check: Check;
   cleared: string[];
+  clearedStall: string[];
   newly: string[];
+  newlyStalled: StalledSweep[];
   next: StrainMap;
+  stalled: StalledSweep[];
   strained: string[];
 } {
   const next: StrainMap = {};
   const strained: string[] = [];
   const backpressured: string[] = [];
+  const stalled: StalledSweep[] = [];
   const newly: string[] = [];
+  const newlyStalled: StalledSweep[] = [];
   const cleared: string[] = [];
+  const clearedStall: string[] = [];
 
   for (const cron of AUTOMATION_CRONS) {
     const before = prev[cron.service];
@@ -1727,9 +1830,27 @@ export function probeSweepStrain(
       strainTotals(state, now, windowMs),
       strainMinimumPoints(cron.cadenceMs, windowMs),
     );
+    const yielded = backpressureTotal(state, now, windowMs);
+    const nowStalled = yielded >= backpressureStallTicks(cron.cadenceMs);
 
-    if (backpressureTotal(state, now, windowMs) > 0) {
+    if (yielded > 0) {
       backpressured.push(cron.service);
+    }
+
+    if (nowStalled) {
+      const sweep: StalledSweep = {
+        reason: state.backpressureReason ?? "throttled",
+        service: cron.service,
+        ticks: yielded,
+      };
+
+      stalled.push(sweep);
+
+      if (before?.stalled !== true) {
+        newlyStalled.push(sweep);
+      }
+    } else if (before?.stalled === true) {
+      clearedStall.push(cron.service);
     }
 
     if (nowStrained) {
@@ -1742,15 +1863,26 @@ export function probeSweepStrain(
       cleared.push(cron.service);
     }
 
-    next[cron.service] = { ...state, strained: nowStrained };
+    // `stalled` is recorded only while true, so a state file that has never stalled keeps the
+    // exact shape it had before this flag existed.
+    const { stalled: _wasStalled, ...carried } = state;
+
+    next[cron.service] = {
+      ...carried,
+      ...(nowStalled ? { stalled: true } : {}),
+      strained: nowStrained,
+    };
   }
 
   return {
     backpressured,
-    check: sweepStrainCheck(strained, backpressured),
+    check: sweepStrainCheck(strained, backpressured, stalled),
     cleared,
+    clearedStall,
     newly,
+    newlyStalled,
     next,
+    stalled,
     strained,
   };
 }
@@ -1968,6 +2100,7 @@ export function normalizeStrain(parsed: unknown): StrainMap {
     if (resetsOldScoring) {
       strain[service] = {
         buckets: {},
+        ...(entry.stalled === true ? { stalled: true } : {}),
         strained: entry.strained === true,
         watermarkMs: 0,
       };
@@ -1996,8 +2129,12 @@ export function normalizeStrain(parsed: unknown): StrainMap {
       }
     }
 
+    const reason = entry.backpressureReason;
+
     strain[service] = {
+      ...(typeof reason === "string" && reason.length > 0 ? { backpressureReason: reason } : {}),
       buckets,
+      ...(entry.stalled === true ? { stalled: true } : {}),
       strained: entry.strained === true,
       watermarkMs: asCount(entry.watermarkMs),
     };
@@ -2259,8 +2396,18 @@ export function buildEscalationAlert(
  * detector exists to avoid. The standing visibility is the /status row, which stays degraded
  * for as long as it is true.
  */
-export function buildStrainAlert(newly: string[], cleared: string[]): string | null {
-  if (newly.length === 0 && cleared.length === 0) {
+export function buildStrainAlert(
+  newly: string[],
+  cleared: string[],
+  newlyStalled: StalledSweep[] = [],
+  clearedStall: string[] = [],
+): string | null {
+  if (
+    newly.length === 0 &&
+    cleared.length === 0 &&
+    newlyStalled.length === 0 &&
+    clearedStall.length === 0
+  ) {
     return null;
   }
 
@@ -2272,8 +2419,21 @@ export function buildStrainAlert(newly: string[], cleared: string[]): string | n
     );
   }
 
+  if (newlyStalled.length > 0) {
+    // The other half of the same claim: nothing failed, and nothing is getting done either.
+    parts.push(
+      `⏸️ paused long enough to stop counting as backpressure: ${newlyStalled
+        .map((sweep) => `${sweep.service} (${sweep.reason} ×${sweep.ticks})`)
+        .join(", ")}. Every tick exits clean and does no work.`,
+    );
+  }
+
   if (cleared.length > 0) {
     parts.push(`🟢 quiet again: ${cleared.join(", ")}`);
+  }
+
+  if (clearedStall.length > 0) {
+    parts.push(`🟢 working again: ${clearedStall.join(", ")}`);
   }
 
   return parts.join("\n");
@@ -2552,7 +2712,12 @@ async function main(): Promise<void> {
   // … and, separately again, on STRAIN: a sweep whose own summary still says ok but whose
   // marker body has been carrying errors for hours. Its own post because it is a different
   // claim — nothing is down, something is not getting done.
-  const strainAlert = buildStrainAlert(sweepStrain.newly, sweepStrain.cleared);
+  const strainAlert = buildStrainAlert(
+    sweepStrain.newly,
+    sweepStrain.cleared,
+    sweepStrain.newlyStalled,
+    sweepStrain.clearedStall,
+  );
 
   if (strainAlert) {
     pingDiscord(strainAlert);
@@ -2587,6 +2752,9 @@ async function main(): Promise<void> {
       status: c.status,
       transitioned: c.transitioned,
     })),
+    // The sweeps whose clean yields have become a standing stall, each with the reason it named
+    // and how many ticks it has now spent paused.
+    stalled: sweepStrain.stalled,
     // The sweeps whose marker bodies are carrying repeat errors — separate from `down` by
     // construction, since every one of them is reporting itself healthy.
     strained: sweepStrain.strained,

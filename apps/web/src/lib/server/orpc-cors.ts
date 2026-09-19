@@ -26,6 +26,8 @@
 // conditions, so an admin op, an authenticated op, a write, or a path this module cannot parse gets
 // no header by construction rather than by anyone remembering.
 
+import { authMiddlewaresOf } from "./orpc-backpressure";
+
 /** The exclusions: public-unauth GET ops that still must not answer a cross-origin browser. */
 const CORS_EXCLUDED_OPERATIONS = new Set<string>([
   // Mints a short-lived read-only replica credential for the requesting device. It carries no auth
@@ -100,7 +102,10 @@ export function buildPublicCorsMatcher(router: Record<string, unknown>): (path: 
     if (
       path === undefined ||
       method !== "GET" ||
-      (meta?.middlewares ?? []).length > 0 ||
+      // "Carries no middleware" is this matcher's proxy for "unauthenticated public read". The
+      // router-level backpressure middleware carries no authority and rides on every op, so it is
+      // removed before that test; any other middleware still closes the door.
+      authMiddlewaresOf(meta?.middlewares ?? []).length > 0 ||
       CORS_EXCLUDED_OPERATIONS.has(name)
     ) {
       continue;

@@ -21,7 +21,7 @@
     "fluncle-audit-operator": {
       "source": "packages/skills/fluncle-audit-operator",
       "sourceType": "local",
-      "computedHash": "372324889a7f16cdce15e05383809e597100da1c47b607f80ebd4b90d42e73e3"
+      "computedHash": "e9f3bf0f3a0a136196400aeb7979e69532bad05ffe0f3333dfc29caccff22d9c"
     },
     "fluncle-box-restore": {
       "source": "packages/skills/fluncle-box-restore",
@@ -56,7 +56,7 @@
     "fluncle-ledger": {
       "source": "packages/skills/fluncle-ledger",
       "sourceType": "local",
-      "computedHash": "6e45bee383bd3163a2d68f77aab3dcb28700c40f0fced84c328b142bb72c8c5a"
+      "computedHash": "ec0b20e8c4ffeee89f5481c9637090db2db22e64d4f43e26890ad19326381ade"
     },
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",

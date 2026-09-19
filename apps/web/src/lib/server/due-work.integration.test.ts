@@ -13,8 +13,12 @@ import {
   DUE_WORK_SOURCE_REPAIR_KIND,
   dueWorkCleanupPageStatement,
   dueWorkSourceMutationStatements,
+  DUE_WORK_READY_SCAN_CAP,
+  DUE_WORK_READY_SCAN_MULTIPLE,
+  dueWorkReadyScanWindow,
   hasReadyDueWork,
   listReadyDueWork,
+  listServableDueWork,
   MAX_DUE_WORK_CHUNK_SIZE,
   markDueWorkRepair,
   markDueWorkRepairStatement,
@@ -1296,5 +1300,85 @@ describe("due-work rebuild", () => {
         newGeneration: true,
       }),
     ).rejects.toThrow("reserved");
+  });
+});
+
+describe("servable ready pages", () => {
+  async function seedReady(subjectId: string, sortKey: string): Promise<void> {
+    await upsertDueWork(
+      db,
+      {
+        nextDueAt: T0.toISOString(),
+        sortKey,
+        sourceVersion: `v-${subjectId}`,
+        state: "ready",
+        subjectId,
+        subjectType: "track",
+        workKind: "servable",
+      },
+      { now: T0 },
+    );
+  }
+
+  it("bounds its scan window and keeps room to see past a full page of withheld rows", () => {
+    // A window no wider than the page would hide every servable row behind one burst of markers.
+    expect(DUE_WORK_READY_SCAN_MULTIPLE).toBeGreaterThanOrEqual(2);
+    expect(dueWorkReadyScanWindow(10)).toBe(41);
+    expect(dueWorkReadyScanWindow(MAX_DUE_WORK_CHUNK_SIZE)).toBe(DUE_WORK_READY_SCAN_CAP);
+  });
+
+  it("withholds exactly the subjects an outstanding source marker owns", async () => {
+    for (const index of [0, 1, 2, 3]) {
+      await seedReady(`subject-${index}`, `0${index}`);
+    }
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        [
+          { subjectId: "subject-1", subjectType: "track" },
+          { subjectId: "subject-2", subjectType: "track" },
+        ],
+        { now: T0, producer: "test" },
+      ),
+    );
+
+    const page = await listServableDueWork(db, "servable", { limit: 10 });
+    expect(page.items.map((row) => row.subjectId)).toEqual(["subject-0", "subject-3"]);
+    expect(page.withheld).toBe(2);
+    expect(page.hasMore).toBe(false);
+
+    // A marker on another subject type never withholds a track row.
+    await db.execute(
+      markDueWorkSourceRepairsStatement([{ subjectId: "subject-0", subjectType: "label" }], {
+        now: T0,
+        producer: "test",
+      }),
+    );
+    expect(
+      (await listServableDueWork(db, "servable", { limit: 10 })).items.map((row) => row.subjectId),
+    ).toEqual(["subject-0", "subject-3"]);
+  });
+
+  it("serves nothing rather than walking the index when a whole window is withheld", async () => {
+    const subjectIds = Array.from(
+      { length: dueWorkReadyScanWindow(1) + 2 },
+      (_, index) => `head-${String(index).padStart(3, "0")}`,
+    );
+    for (const [index, subjectId] of subjectIds.entries()) {
+      await seedReady(subjectId, String(index).padStart(3, "0"));
+    }
+    await db.execute(
+      markDueWorkSourceRepairsStatement(
+        subjectIds.slice(0, dueWorkReadyScanWindow(1)).map((subjectId) => ({
+          subjectId,
+          subjectType: "track",
+        })),
+        { now: T0, producer: "test" },
+      ),
+    );
+
+    const page = await listServableDueWork(db, "servable", { limit: 1 });
+    expect(page.items).toEqual([]);
+    expect(page.withheld).toBe(dueWorkReadyScanWindow(1));
+    expect(page.hasMore).toBe(true);
   });
 });

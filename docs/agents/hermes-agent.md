@@ -97,13 +97,14 @@ docker run -d --name hermes --restart unless-stopped \
   --security-opt no-new-privileges --cap-drop ALL \
   --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add KILL --cap-add SETGID --cap-add SETUID \
-  --memory=4g --cpus=2 --shm-size=1g \
+  --cpus=3 --memory=6g --memory-swap=6g --shm-size=1g \
   --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
   -v ~/.hermes:/opt/data \
   --env-file <secret-env-file> \
   fluncle-hermes:v2026.7.7.2 gateway run
 ```
 
+- **The resource ceiling is `--cpus=3 --memory=6g`, and `--memory-swap` always equals `--memory`** (the host has no swap, so they must match or the cgroup gets unbounded swap it cannot use). A tighter cap throttles CPU periods and OOM-kills the agent while the host sits idle. The same ceiling is the default in [`pin-watch/rebuild-hermes.sh`](./hermes/pin-watch/rebuild-hermes.sh) (`PINWATCH_CPUS` / `PINWATCH_MEMORY_GIB`), which is the only other place a live container is created — and a rebake keeps a HIGHER live ceiling if the operator raised one by hand with `docker update`, so a manual raise is never undone. Change both together.
 - **Never mount the Docker socket** — it would hand the agent host root and moot every file-permission control. No in-scope job needs it.
 - The capability allow-list is for the inherited s6 entrypoint only: it repairs `/opt/data` ownership, drops the main program to `hermes`, and supervises that process. The gateway needs no network, mount, setcap, or raw-socket capability.
 - For a Discord-only bot, publish **no** ports (the gateway dials out over the Discord WebSocket). If the API (`8642`) or dashboard (`9119`) is ever needed, bind to `127.0.0.1`/`tailscale0` only.

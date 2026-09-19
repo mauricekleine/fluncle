@@ -37,6 +37,7 @@
 import * as Sentry from "@sentry/cloudflare";
 import { adminRole } from "./env";
 import { logEvent } from "./log";
+import { isDueWorkMaintenancePending } from "./due-work";
 import { ApiError } from "./spotify";
 
 /**
@@ -68,6 +69,14 @@ export async function redactServerFnFault(
   // A deliberate typed error is a client contract — its message is safe to echo,
   // exactly as the oRPC fault path echoes an ApiError.
   if (error instanceof ApiError) {
+    return error;
+  }
+
+  // BACKPRESSURE IS NOT A FAULT. The server-fn twin of the oRPC rail (orpc/_shared
+  // `dueWorkMaintenancePendingFault`): a bounded due-work maintenance pass that has not finished
+  // converging is a typed "come back", so it is echoed like any deliberate typed error and never
+  // captured. A write burst must not page, on this path either.
+  if (isDueWorkMaintenancePending(error)) {
     return error;
   }
 

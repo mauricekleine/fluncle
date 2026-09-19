@@ -14,7 +14,9 @@ units), the work is a baked script (`/opt/hermes-scripts/audit-sweep.sh` +
 `audit-review-sweep.sh` + the `audit/` tree, Unit A), and each run self-writes the `/status`
 freshness marker via `cron-output.sh`. Unlike the thin Worker-trigger sweeps, each of these is a
 full agentic `claude -p` session (subscription auth via `CLAUDE_CODE_OAUTH_TOKEN`, zero
-OpenRouter tokens), so the `.service` `TimeoutStartSec` is an hour, not 300s.
+OpenRouter tokens), so each pass carries a long wall budget rather than the thin sweeps' 300s —
+owned by the script, with the unit's `TimeoutStartSec` as the outer backstop (see _Failure is
+loud_ below).
 
 ## The rotation
 
@@ -36,6 +38,36 @@ from `docs/db-scale-backlog.md` — it hunts recompute-by-full-scan on the four 
 (`tracks`, `crawl_frontier`, `track_artists`, `findings`-as-anti-join) that the static build-fail net
 `apps/web/src/lib/server/db-query-shape.test.ts` cannot see. It fixes hoists and rewrites; an index
 or a stored column is always filed, gated on an operator-run hosted-Turso proof.
+
+## The box-fit contract (why the audit runs less than `bun run check`)
+
+The hermes container's memory cap is shared by ~40 sweeps, the paid capture lane, and the MuQ embed trickle that holds torch resident. The repo's whole-repo passes do not fit in what is left, and no knob makes them fit — the peak is one TypeScript program graph, not parallelism:
+
+| pass                             | peak RSS | note                                                                    |
+| -------------------------------- | -------- | ----------------------------------------------------------------------- |
+| whole-repo type-aware lint       | 3.34 GB  | 3.55 GB at `--threads=2` — the thread pool is not what holds the memory |
+| whole-repo `turbo run typecheck` | 2.81 GB  | 2.91 GB at `--concurrency=1` — serializing does not lower it either     |
+| `apps/web typecheck` alone       | 2.80 GB  | one package IS the whole-repo figure                                    |
+| `apps/cli typecheck`             | 0.36 GB  | a normal package fits comfortably                                       |
+| **path-scoped type-aware lint**  | 1.50 GB  | what the ladder actually runs                                           |
+
+`tsgolint` is a Go binary, so a Node heap cap (`--max-old-space-size`) never reaches the process doing the allocating — which is why there is no heap-cap knob here.
+
+So both agents verify through **one command**, [`../scripts/audit/verify.sh`](../scripts/audit/verify.sh), which derives the changed paths, runs formatting and the lint rules scoped to them, then each changed package's own `typecheck` and `test`, each behind a wall budget and a cgroup-headroom precondition. A step it cannot afford is recorded as `skipped` with a reason (`no-headroom`, `ci-only`, `no-script`) rather than started into an OOM kill. The record lands in `.audit/verify.json` and the driver folds it into the summary line, so "which checks ran" is a fact in the run ledger instead of a claim in a report.
+
+Nothing is lost by not running the whole-repo passes here: every one of them runs on the PR the audit opens (the `quality-checks` action) and again in `deploy:gate` before Cloudflare deploys, and the reviewer merges only on green required checks. Running them a third time on the smallest machine in the chain gated nothing.
+
+`verify.sh` lives in the CHECKOUT the agents audit, not only in the baked image, so a change to the ladder reaches the next night the moment it merges — no rebake.
+
+## Failure is loud (how a bad night reaches the ledger)
+
+Three failure shapes used to reach the run ledger as healthy nights. Each now writes `ok:false` with a `reason`:
+
+- **The unit timeout is a backstop, not a budget.** `TimeoutStartSec` kills the host-side `docker exec` CLIENT; the container-side sweep keeps running, finishes minutes later, and writes its ordinary marker and ledger row. A unit reading `Result=timeout` on the host therefore sat beside an `ok:true` ledger row. The real budget now lives in the script ([`../scripts/agent-pass.sh`](../scripts/agent-pass.sh), `AGENT_PASS_BUDGET_SECS`), which always exits on its own terms. **The ordering invariant:** the script's budget plus its kill grace plus the driver's clone/install/ship time must stay strictly under the unit's `TimeoutStartSec`, or the host kill races the script again. Both `.service` files restate it.
+- **An OOM-killed child does not fail its parent.** The agent survives, reports "that check did not run", and exits 0. The helper samples the cgroup's own `memory.events` `oom_kill` counter either side of the pass and reports the delta as `container_oom_kills`; any delta fails the run. The counter is container-wide, so a neighbour sweep's kill also fails the audit night — deliberately: on one shared cap that is the same capacity problem, and the operator needs to see the night it happened.
+- **Work nobody checked.** A night with commits and no `.audit/verify.json` is `reason:"unverified"`; a ladder record carrying `failed > 0` is `reason:"verify-failed"`.
+
+The unit's `OnFailure=fluncle-sweep-failure@%n.service` still posts the Discord line for a death so hard the script never runs at all (see [../sweep-failure/README.md](../sweep-failure/README.md)); the script-side budget is what makes every softer failure visible in the ledger.
 
 ## The contract (why it's safe to run unattended)
 
@@ -87,9 +119,26 @@ but like `embed`/`capture` they are **gated at first deploy** behind a pilot:
   ledger applies server-side (`exit_code === 0 && (summary.errors ?? 0) === 0`). So a night whose
   `claude -p` returned nonzero reads `ok:false` on the marker even when the branch was otherwise
   clean or the PR did open — read `errors` and `action` together, not `action` alone.
+- Every summary carries `pass_seconds` and `container_oom_kills`; a bad night adds `reason`
+  (`budget-exceeded` · `oom-killed` · `nonzero-exit` · `verify-failed` · `unverified`) and the
+  auditor's carries `verify` — the ladder's `{ran, skipped, failed, steps}` record. `pass_seconds`
+  creeping toward `AGENT_PASS_BUDGET_SECS`, or a nonzero `container_oom_kills`, is the box telling
+  you it is at its cap before a night actually fails.
 - Per-run logs: `journalctl -u fluncle-audit` / `-u fluncle-audit-review`, and the markers under
   `~/.hermes/cron/output/fluncle-audit{,-review}/`.
 - The findings ledger accumulates at `docs/audit-backlog.md`; the operator triages from it.
+
+## What ships how
+
+- **BAKED** (into the image, self-deploys from `main` via the on-box `fluncle-pin-watch` rebuild + swap; no operator step): `../scripts/audit-sweep.sh`, `../scripts/audit-review-sweep.sh`, `../scripts/agent-pass.sh`, `../scripts/audit/` (the prompts, the rotation, `verify.sh`).
+- **HOST-INSTALLED** (the `.service` / `.timer` units; a change needs the operator to refresh them):
+
+  ```
+  sudo bash docs/agents/hermes/install-host-timers.sh \
+    --refresh-unit fluncle-audit.service --refresh-unit fluncle-audit-review.service
+  ```
+
+  Run it from a checkout of `main` on the box after a unit change — `TimeoutStartSec` in particular, since the script-budget ordering invariant above depends on it.
 
 ## Reset boundary
 
