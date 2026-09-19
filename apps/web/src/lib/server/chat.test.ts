@@ -15,7 +15,7 @@ const getMixChainDepth = vi.hoisted(() =>
   vi.fn<() => Promise<{ median: number; open: boolean; rankable: number }>>(),
 );
 const toArtistSlug = vi.hoisted(() => vi.fn<(name: string) => string>());
-const getArtistBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>>());
+const getPublicArtistBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>>());
 const getPublicArtistSocials = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
 const countArtistFindings = vi.hoisted(() => vi.fn<() => Promise<number>>());
 const labelSlug = vi.hoisted(() => vi.fn<(name: string) => string | undefined>());
@@ -52,7 +52,7 @@ vi.mock("./log-resolver", () => ({ resolveLogPageTarget: vi.fn() }));
 vi.mock("./status", () => ({ getServiceStatuses: vi.fn() }));
 vi.mock("./artists", () => ({
   countArtistFindings,
-  getArtistBySlug,
+  getPublicArtistBySlug,
   getPublicArtistSocials,
   toArtistSlug,
 }));
@@ -117,8 +117,8 @@ beforeEach(() => {
   getMixChainDepth.mockResolvedValue({ median: 40, open: true, rankable: 100 });
   toArtistSlug.mockReset();
   toArtistSlug.mockImplementation(toSlug);
-  getArtistBySlug.mockReset();
-  getArtistBySlug.mockResolvedValue(undefined);
+  getPublicArtistBySlug.mockReset();
+  getPublicArtistBySlug.mockResolvedValue(undefined);
   getPublicArtistSocials.mockReset();
   getPublicArtistSocials.mockResolvedValue([]);
   countArtistFindings.mockReset();
@@ -717,7 +717,7 @@ describe("list_similar_artists — the artist-discovery read", () => {
   }
 
   it("resolves a NAME through the slug helper and passes the artist id to getArtistNeighbours", async () => {
-    getArtistBySlug.mockResolvedValue({ id: "art-1", name: "Koven", slug: "koven" });
+    getPublicArtistBySlug.mockResolvedValue({ id: "art-1", name: "Koven", slug: "koven" });
     getArtistNeighbours.mockResolvedValue([
       { imageUrl: "https://cover.example/a.jpg", name: "Camo & Krooked", slug: "camo-krooked" },
       { name: "Metrik", slug: "metrik" },
@@ -728,9 +728,9 @@ describe("list_similar_artists — the artist-discovery read", () => {
       similar: { name: string; slug: string }[];
     };
 
-    // name → slug helper → getArtistBySlug(slug) — the same resolution get_artist uses.
+    // name → slug helper → getPublicArtistBySlug(slug) — the same resolution get_artist uses.
     expect(toArtistSlug).toHaveBeenCalledWith("Koven");
-    expect(getArtistBySlug).toHaveBeenCalledWith("koven");
+    expect(getPublicArtistBySlug).toHaveBeenCalledWith("koven");
     // A thin pass-through: the id goes to getArtistNeighbours, and its list rides back unchanged.
     expect(getArtistNeighbours).toHaveBeenCalledWith("art-1", expect.any(Number));
     expect(result.of).toEqual({ name: "Koven", slug: "koven" });
@@ -738,7 +738,7 @@ describe("list_similar_artists — the artist-discovery read", () => {
   });
 
   it("returns found:false when the name resolves to no artist he has logged", async () => {
-    getArtistBySlug.mockResolvedValue(undefined);
+    getPublicArtistBySlug.mockResolvedValue(undefined);
 
     const result = await similarExecutor()({ name: "Nobody At All" }, {} as never);
 
@@ -747,7 +747,7 @@ describe("list_similar_artists — the artist-discovery read", () => {
   });
 
   it("returns an honest empty list when the artist has no neighbours yet (not found:false)", async () => {
-    getArtistBySlug.mockResolvedValue({ id: "art-2", name: "Quiet One", slug: "quiet-one" });
+    getPublicArtistBySlug.mockResolvedValue({ id: "art-2", name: "Quiet One", slug: "quiet-one" });
     getArtistNeighbours.mockResolvedValue([]);
 
     const result = (await similarExecutor()({ name: "Quiet One" }, {} as never)) as {
@@ -819,7 +819,7 @@ describe("the catalogue browse tools — name → the unlit catalogue bucket (PR
   });
 
   it("list_artist_catalogue flattens the grouped page into catalogue rows", async () => {
-    getArtistBySlug.mockResolvedValue({ id: "art-9", name: "Netsky", slug: "netsky" });
+    getPublicArtistBySlug.mockResolvedValue({ id: "art-9", name: "Netsky", slug: "netsky" });
     listArtistCatalogue.mockResolvedValue({
       groups: [
         {
@@ -843,7 +843,7 @@ describe("the catalogue browse tools — name → the unlit catalogue bucket (PR
       findings: unknown[];
     };
 
-    expect(getArtistBySlug).toHaveBeenCalledWith("netsky");
+    expect(getPublicArtistBySlug).toHaveBeenCalledWith("netsky");
     expect(listArtistCatalogue).toHaveBeenCalledWith("art-9", "name", 1);
     expect(result.findings).toEqual([]);
     expect(result.catalogue).toEqual([
@@ -896,7 +896,7 @@ describe("the catalogue browse tools — name → the unlit catalogue bucket (PR
 
   it("an unresolved name is the honest empty catalogue bucket, never an error", async () => {
     getAlbumBySlug.mockResolvedValue(undefined);
-    getArtistBySlug.mockResolvedValue(undefined);
+    getPublicArtistBySlug.mockResolvedValue(undefined);
     getLabelBySlug.mockResolvedValue(undefined);
 
     for (const name of [
@@ -943,7 +943,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
   }
 
   it("get_artist resolves a NAME through the slug helper and returns the artist's findings", async () => {
-    getArtistBySlug.mockResolvedValue({
+    getPublicArtistBySlug.mockResolvedValue({
       id: "art-1",
       name: "Netsky",
       slug: "netsky",
@@ -973,9 +973,9 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       };
     };
 
-    // name → slug helper → getArtistBySlug(slug) is the resolution the /artist page uses.
+    // name → slug helper → getPublicArtistBySlug(slug) is the resolution the /artist page uses.
     expect(toArtistSlug).toHaveBeenCalledWith("Netsky");
-    expect(getArtistBySlug).toHaveBeenCalledWith("netsky");
+    expect(getPublicArtistBySlug).toHaveBeenCalledWith("netsky");
     expect(result.artist.slug).toBe("netsky");
     expect(result.artist.findingCount).toBe(2);
     expect(result.artist.findings.map((finding) => finding.coordinate)).toEqual([
@@ -990,7 +990,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
   });
 
   it("get_artist returns found:false when the name resolves to no artist he has logged", async () => {
-    getArtistBySlug.mockResolvedValue(undefined);
+    getPublicArtistBySlug.mockResolvedValue(undefined);
 
     const result = await artistExecutor()({ name: "Nobody At All" }, {} as never);
 
@@ -1001,7 +1001,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     // He has certified nothing from this artist, but the artist row EXISTS and carries records in
     // the catalogue. The Unlit Rule silences uncertified TRACKS, never artists — so instead of the
     // old found:false, get_artist names the artist and lists their records in the unlit register.
-    getArtistBySlug.mockResolvedValue({
+    getPublicArtistBySlug.mockResolvedValue({
       bio: "A quiet one from the far sectors.",
       id: "art-2",
       name: "Quiet One",
@@ -1068,7 +1068,11 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
   it("get_artist still names a resolved artist even with an empty catalogue (never found:false)", async () => {
     // A resolved artist with neither findings nor catalogue is still NAMED — the entity carries his
     // name (and socials/bio when present), never found:false. Naming an artist is allowed.
-    getArtistBySlug.mockResolvedValue({ id: "art-3", name: "Faint Trace", slug: "faint-trace" });
+    getPublicArtistBySlug.mockResolvedValue({
+      id: "art-3",
+      name: "Faint Trace",
+      slug: "faint-trace",
+    });
     countArtistFindings.mockResolvedValue(0);
     getFindingsByArtist.mockResolvedValue([]);
     // listArtistCatalogue defaults to empty groups (beforeEach).
@@ -1083,7 +1087,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
   });
 
   it("drops an entity finding with no coordinate before it reaches the model (the wire boundary)", async () => {
-    getArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    getPublicArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
     countArtistFindings.mockResolvedValue(1);
     getFindingsByArtist.mockResolvedValue([
       { artists: ["Netsky"], logId: "004.7.2I", title: "Rio" },
@@ -1106,7 +1110,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     ]);
     getPublicArtistSocials.mockResolvedValue([]);
 
-    getArtistBySlug.mockResolvedValue({
+    getPublicArtistBySlug.mockResolvedValue({
       bio: "Belgian producer who bends liquid drum and bass toward daylight.",
       id: "art-1",
       name: "Netsky",
@@ -1120,7 +1124,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     );
 
     // No bio on the record → `dropEmpty` strips the key entirely (not a null / empty string).
-    getArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    getPublicArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
     const withoutBio = await artistExecutor()({ name: "Netsky" }, {} as never);
     expect(hasKeyDeep(withoutBio, "bio")).toBe(false);
   });
@@ -1284,7 +1288,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
   });
 
   it("never leaks a previewUrl onto a get_artist or get_label output (the token stays server-side)", async () => {
-    getArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    getPublicArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
     countArtistFindings.mockResolvedValue(1);
     getFindingsByArtist.mockResolvedValue([
       {

@@ -56,12 +56,18 @@
 //       map each to a candidate, and POST each row's candidates to `anchor_track`.
 //       BUT the operator kill-flag `anchor_apify_enabled` (default ON) gates this whole step: when it
 //       is OFF (out of Apify budget), `resolve_anchor` reports `apifyEnabled:false` on every verdict AND
-//       has already stamped-and-backed-off each genuinely-exhausted full miss, so the sweep SKIPS the
-//       actor loop entirely (zero wasted 403s) and counts those stamped misses honestly as `missed`.
+//       has already PARKED each row it could settle, so the sweep SKIPS the actor loop entirely (zero
+//       wasted 403s) and counts by the server's own `stamped`: parked rows are `missed`, rows that
+//       kept their turn are `deferred`, a thrown free rung is `skipped`.
 //   The WORKER re-runs the full verification on BOTH rungs (no source's match is EVER trusted) and,
 //   on a hit, writes the anchor. Every FULL attempt stamps the row's re-ask backoff (a free-rung
 //   miss does NOT — it leaves the Apify rung its turn — UNLESS Apify is disabled, when the free rung
 //   backs the row off itself), so a missed row is not re-billed for weeks.
+//
+// AND THE TICK SAYS WHAT IT COULD NOT DO. With the Apify fallback OFF and the dark Spotify-search
+// flag OFF, no rung in the waterfall can CONCLUDE about a row: the free ListenBrainz rung still runs
+// and can win, but its miss is not a verdict. Such a tick reports `reason: "no_capable_rung"` rather
+// than reading as a healthy empty run, and `missed` is reserved for rows the server actually retired.
 //
 // THE BOX DEPENDS ON NO NEW CLI COMMAND. The baked `fluncle` CLI is a PINNED release, so this
 // sweep calls the oRPC HTTP endpoints DIRECTLY with the agent token (the verify-captures.ts
@@ -77,6 +83,7 @@
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import {
+  DUE_WORK_REPAIR_PENDING_REASON,
   type DueWorkRepairPendingGate,
   dueWorkRepairPendingGate,
   failureBodyUnlessRepairPending,
@@ -242,10 +249,25 @@ export type AnchorVerdict = {
   /** True iff `resolve_anchor` issued a Spotify SEARCH this call — the box's pacer signal (slice 2). */
   spotifySearchDone?: boolean;
   /**
+   * The `anchor_spotify_search_enabled` dark flag (default OFF) as the server read it — the FLAG, not
+   * the window/breaker/meter gate over it. With `apifyEnabled` also false, NO rung in the waterfall
+   * can conclude about a row, which is what {@link AnchorSummary.reason} reports. Optional: an older
+   * server omits it, and the tick then simply never claims a capability verdict it cannot know.
+   */
+  spotifySearchEnabled?: boolean;
+  /**
    * True iff a Spotify call in the server's anchor path came back 429. THE YIELD LAW: one of these
    * ends every remaining Spotify ask in the tick — a throttle is pass-ending, never row-failing.
    */
   spotifyThrottled?: boolean;
+  /**
+   * True iff the server PARKED this row on its re-ask backoff. `!anchored && !stamped` is the one
+   * honest test for "this row is coming back", and the only way the tick can tell a retired row from
+   * one it merely re-read: a caller-deferred row settles nothing, so counting it as `missed` reports
+   * a queue draining that is standing still. Optional: an older server omits it, and the tick falls
+   * back to the pre-existing assumption that a full miss under a disabled Apify rung was stamped.
+   */
+  stamped?: boolean;
   /**
    * Which gate rung matched. `search-subset` is the ±1s proper-subset fallback — a DIFFERENT
    * confidence from `search`, which is why the server persists them apart. The tally below folds it
@@ -372,6 +394,21 @@ export type AnchorSummary = {
   produced: number;
   /** Canonical real backlog left after this tick; null only when the queue read itself failed. */
   queueDepth: null | number;
+  /**
+   * Rows the server returned a verdict on that it did NOT anchor and did NOT park — they keep their
+   * turn and the next tick reads them again. Its own counter because `missed` means RETIRED (stamped,
+   * backed off) and folding the two together is how a tick that moved the queue not one row read as a
+   * tick that cleared 250: the queue depth never falls, and nothing in the summary says why.
+   */
+  deferred: number;
+  /**
+   * Why this tick could settle nothing, or null when that is not the story.
+   * `"no_capable_rung"` — rows were pulled and NOTHING that can conclude about them was armed: the
+   * paid Apify fallback is off and the dark Spotify search flag is off, so the only rung that ran was
+   * the positive-only ListenBrainz oracle and it won nothing. A run that is ok, honest, and useless
+   * must not be indistinguishable from a healthy empty queue.
+   */
+  reason: "no_capable_rung" | null | typeof DUE_WORK_REPAIR_PENDING_REASON;
   /** Rows this tick could not settle (a bad worklist row, or an anchor POST that threw). */
   skipped: number;
   /** EXACT-ISRC asks the server reported spending this tick — what {@link ISRC_ASK_LIMIT} meters. */
@@ -386,7 +423,9 @@ export type AnchorSummary = {
    * back early and the tick correctly got out of the way.
    */
   spotifyDeferredYield: number;
-} & Partial<DueWorkRepairPendingGate>;
+  // `reason` is declared above rather than inherited, because this summary carries its OWN reason
+  // vocabulary alongside the shared due-work one; the rest of the gate is merged as before.
+} & Partial<Omit<DueWorkRepairPendingGate, "reason">>;
 
 /** The injected effects — so the tick's mapping + routing are provable with stubs (no network). */
 export type AnchorDeps = {
@@ -730,21 +769,39 @@ function actionableAnchorRows(queue: AnchorWorkItem[]): {
   return { invalidRows: queue.length - rows.length, rows };
 }
 
+/**
+ * Settle the free-rung misses when the paid Apify rung is DISABLED — the only path on which nothing
+ * further will be asked about these rows this tick.
+ *
+ * A row is `missed` — retired, backed off, one fewer in the backlog — ONLY when the server says it
+ * PARKED it (`stamped`). A verdict that stamped nothing leaves the row exactly where it was, so it is
+ * `deferred` and the queue depth is not decremented: counting it as a miss is how a tick that re-read
+ * the same 250-row head reported clearing 250 of them. A free-rung call that THREW got no verdict at
+ * all and stays `skipped` (it retries next tick).
+ *
+ * An older server omits `stamped`; that row falls back to the pre-existing reading (a full miss under
+ * a disabled Apify rung was stamped), so a lagging Worker degrades to today's numbers, never worse.
+ */
 function settleDisabledApify(
   apifyEnabled: boolean,
-  apifyRows: readonly { anchorQuery: string; trackId: string }[],
-  freeRungThrew: number,
+  apifyRows: readonly { stamped?: boolean; threw: boolean }[],
   summary: AnchorSummary,
 ): boolean {
   if (apifyEnabled) {
     return false;
   }
-  const settledMisses = apifyRows.length - freeRungThrew;
-  summary.missed += settledMisses;
-  summary.skipped += freeRungThrew;
-  for (let index = 0; index < settledMisses; index += 1) {
-    settleQueueRow(summary);
+
+  for (const row of apifyRows) {
+    if (row.threw) {
+      summary.skipped += 1;
+    } else if (row.stamped === false) {
+      summary.deferred += 1;
+    } else {
+      summary.missed += 1;
+      settleQueueRow(summary);
+    }
   }
+
   return true;
 }
 
@@ -800,6 +857,63 @@ async function runApifyFallback(
   }
 }
 
+/**
+ * Fold ONE `resolve_anchor` verdict into the tick's tally and its live ask state: the exact-ISRC ask
+ * budget, the yield law, the per-rung diagnostics, and the anchor itself. Returns TRUE when the row
+ * ANCHORED — i.e. it is settled and never reaches the paid fallback.
+ *
+ * The two GLOBAL flags stay with the caller, because they are properties of the tick rather than of
+ * a row; everything here is this row's own accounting.
+ */
+function tallyFreeVerdict(
+  verdict: AnchorVerdict,
+  summary: AnchorSummary,
+  askState: SpotifyAskState,
+  deps: AnchorDeps,
+): boolean {
+  if (verdict.spotifyIsrcAsked) {
+    askState.asksSpent += 1;
+    summary.spotifyIsrcAsks += 1;
+  }
+
+  // THE YIELD LAW. A throttle ends the tick's remaining Spotify asks — it says nothing about this
+  // row, which stamps nothing and keeps its turn.
+  if (verdict.spotifyThrottled && !askState.yielded) {
+    askState.yielded = true;
+    deps.log("spotify throttled — yielding the rest of the tick's Spotify asks");
+  }
+
+  if (typeof verdict.freeDurationMsOmitted === "number") {
+    summary.freeDurationMsOmitted += verdict.freeDurationMsOmitted;
+  }
+
+  // Recovery is orthogonal to anchoring — count it whether or not this row then anchored (a
+  // recovered ISRC that still missed every rung this tick is persisted and helps the next one).
+  if (verdict.isrcRecoveredByDeezer) {
+    summary.isrcRecoveredByDeezer += 1;
+  }
+
+  tallyListenBrainzOutcome(summary, verdict);
+
+  if (!verdict.anchored) {
+    return false;
+  }
+
+  if (verdict.source === "spotify-isrc") {
+    summary.anchoredBySpotifyIsrc += 1;
+  } else if (verdict.source === "spotify-search") {
+    summary.anchoredBySpotifySearch += 1;
+  } else {
+    // "listenbrainz" (or a pre-slice-2 server that omits `source`) — the free ListenBrainz rung.
+    summary.anchoredByListenbrainz += 1;
+  }
+
+  summary.produced += 1;
+  settleQueueRow(summary);
+
+  return true;
+}
+
 export async function runAnchorTick(
   limit: number,
   deps: AnchorDeps,
@@ -818,6 +932,7 @@ export async function runAnchorTick(
     checked: 0,
     deezerHitsDroppedIncomplete: 0,
     deezerSearchFailed: 0,
+    deferred: 0,
     error: null,
     errors: 0,
     expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
@@ -837,6 +952,7 @@ export async function runAnchorTick(
     ok: true,
     produced: 0,
     queueDepth: null,
+    reason: null,
     skipped: 0,
     spotifyDeferredBudget: 0,
     spotifyDeferredWindow: 0,
@@ -873,14 +989,15 @@ export async function runAnchorTick(
   // the night window (asked once per row off the injected clock), the exact-ISRC ask budget, and the
   // yield law. None of them can ARM the rungs — the server's dark flag is the only thing that does —
   // so a tick where the flag is off spends the guards' bookkeeping and nothing else.
-  const apifyRows: { anchorQuery: string; trackId: string }[] = [];
+  const apifyRows: { anchorQuery: string; stamped?: boolean; threw: boolean; trackId: string }[] =
+    [];
   let lastSearchStartMs: null | number = null;
   // The GLOBAL Apify kill-flag, learned from any verdict (all agree). Default true ⇒ a pre-slice-3
   // server that omits it keeps the current Apify-runs behaviour. When false, the Apify loop is skipped.
   let apifyEnabled = true;
-  // Free-rung calls that THREW (no verdict, so the server stamped nothing). When Apify is disabled they
-  // are honestly `skipped` (they retry next tick), NOT `missed` (which implies stamped-and-backed-off).
-  let freeRungThrew = 0;
+  // The GLOBAL dark Spotify-search flag, learned the same way. `undefined` ⇒ the server never said, so
+  // this tick makes NO claim about what could have concluded (see the `reason` verdict below).
+  let spotifySearchEnabled: boolean | undefined;
 
   for (const row of rows) {
     // ── RUNG 0's FETCH, and the reason it lives here. Deezer's public search takes no token, so its
@@ -933,6 +1050,11 @@ export async function runAnchorTick(
       summary.spotifyDeferredYield += 1;
     }
 
+    // What the server said about this row's fate, so the settle below can tell a RETIRED row from one
+    // that merely kept its turn. Undefined until a verdict says.
+    let rowStamped: boolean | undefined;
+    let rowThrew = false;
+
     try {
       const verdict = await deps.resolveFree(
         row.trackId,
@@ -942,63 +1064,37 @@ export async function runAnchorTick(
         deferral === null ? undefined : { spotifySearch: false },
       );
 
+      rowStamped = verdict.stamped;
+
       if (verdict.spotifySearchDone) {
         lastSearchStartMs = startMs;
       }
 
-      if (verdict.spotifyIsrcAsked) {
-        askState.asksSpent += 1;
-        summary.spotifyIsrcAsks += 1;
-      }
+      // Both flags are global, so any verdict tells the whole tick's answer.
+      apifyEnabled = verdict.apifyEnabled ?? apifyEnabled;
+      spotifySearchEnabled = verdict.spotifySearchEnabled ?? spotifySearchEnabled;
 
-      // THE YIELD LAW. A throttle ends the tick's remaining Spotify asks — it says nothing about
-      // this row, which stamps nothing and keeps its turn.
-      if (verdict.spotifyThrottled && !askState.yielded) {
-        askState.yielded = true;
-        deps.log("spotify throttled — yielding the rest of the tick's Spotify asks");
-      }
-
-      // The kill-flag is global, so any verdict tells the whole tick's answer.
-      if (typeof verdict.apifyEnabled === "boolean") {
-        apifyEnabled = verdict.apifyEnabled;
-      }
-
-      if (typeof verdict.freeDurationMsOmitted === "number") {
-        summary.freeDurationMsOmitted += verdict.freeDurationMsOmitted;
-      }
-
-      // Recovery is orthogonal to anchoring — count it whether or not this row then anchored (a
-      // recovered ISRC that still missed every rung this tick is persisted and helps the next one).
-      if (verdict.isrcRecoveredByDeezer) {
-        summary.isrcRecoveredByDeezer += 1;
-      }
-
-      tallyListenBrainzOutcome(summary, verdict);
-
-      if (verdict.anchored) {
-        if (verdict.source === "spotify-isrc") {
-          summary.anchoredBySpotifyIsrc += 1;
-        } else if (verdict.source === "spotify-search") {
-          summary.anchoredBySpotifySearch += 1;
-        } else {
-          // "listenbrainz" (or a pre-slice-2 server that omits `source`) — the free ListenBrainz rung.
-          summary.anchoredByListenbrainz += 1;
-        }
-
-        summary.produced += 1;
-        settleQueueRow(summary);
+      if (tallyFreeVerdict(verdict, summary, askState, deps)) {
         continue;
       }
     } catch (error) {
       deps.log(
         `free rung ${row.trackId}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      freeRungThrew += 1;
+      rowThrew = true;
       summary.freeRungErrors += 1;
       recordFailure(summary);
     }
 
-    apifyRows.push(row);
+    apifyRows.push({ ...row, stamped: rowStamped, threw: rowThrew });
+  }
+
+  // THE CAPABILITY VERDICT. Neither the paid Apify fallback nor the dark Spotify search rungs are
+  // armed, so the only rung that ran was the positive-only ListenBrainz oracle — and it won nothing.
+  // The tick is honest, `ok`, and settled no row's question; saying so is the difference between this
+  // and a healthy empty queue. Claimed only when the server actually reported both flags.
+  if (apifyEnabled === false && spotifySearchEnabled === false && summary.produced === 0) {
+    summary.reason = "no_capable_rung";
   }
 
   // Every row the free rung anchored is done; only the misses cost Apify money.
@@ -1007,11 +1103,11 @@ export async function runAnchorTick(
   }
 
   // ── THE APIFY KILL-FLAG (slice 3). When Apify is out of budget the operator flips `anchor_apify_enabled`
-  // OFF; `resolve_anchor` reports it on every verdict AND has already stamped-and-backed-off each
-  // genuinely-exhausted full miss. So we skip the whole actor loop — ZERO wasted 403s — and count those
-  // stamped misses HONESTLY as `missed` (terminal, backed off), not skipped-for-retry. Rows whose free
-  // rung THREW got no verdict and no stamp, so they stay `skipped` (they retry next tick).
-  if (settleDisabledApify(apifyEnabled, apifyRows, freeRungThrew, summary)) {
+  // OFF; `resolve_anchor` reports it on every verdict AND has already parked each row it could settle.
+  // So we skip the whole actor loop — ZERO wasted 403s — and count per the server's own `stamped`:
+  // parked rows are `missed` (terminal, backed off), rows that kept their turn are `deferred`, and a
+  // free rung that THREW got no verdict at all and stays `skipped`.
+  if (settleDisabledApify(apifyEnabled, apifyRows, summary)) {
     return summary;
   }
 
@@ -1376,6 +1472,7 @@ export async function runAnchorSweep(
     checked: 0,
     deezerHitsDroppedIncomplete: 0,
     deezerSearchFailed: 0,
+    deferred: 0,
     error: null as null | string,
     errors: 0,
     expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
@@ -1397,6 +1494,7 @@ export async function runAnchorSweep(
     produced: 0,
     pulled: 0,
     queueDepth: null as null | number,
+    reason: null as AnchorSummary["reason"],
     skipped: 0,
     spotifyDeferredBudget: 0,
     spotifyDeferredWindow: 0,
@@ -1405,6 +1503,9 @@ export async function runAnchorSweep(
   };
 
   let remaining = Math.max(0, Math.trunc(total));
+  // Whether any page found no rung capable of concluding. Folded into the firing's `reason` only if
+  // the firing as a whole settled nothing — one page's win makes the sweep useful.
+  let noCapableRung = false;
   // ONE ask state for the whole firing. The budget and the yield law are per-TICK, and a sweep's
   // pages are internal bookkeeping — a per-page state would hand a `--limit 200` burn eight fresh
   // budgets and defeat the ceiling entirely.
@@ -1450,7 +1551,13 @@ export async function runAnchorSweep(
     merged.freeRungErrors += page.freeRungErrors;
     merged.errors += page.errors;
     merged.missed += page.missed;
+    merged.deferred += page.deferred;
     merged.skipped += page.skipped;
+
+    if (page.reason === "no_capable_rung") {
+      noCapableRung = true;
+    }
+
     merged.spotifyDeferredBudget += page.spotifyDeferredBudget;
     merged.spotifyDeferredWindow += page.spotifyDeferredWindow;
     merged.spotifyDeferredYield += page.spotifyDeferredYield;
@@ -1474,6 +1581,11 @@ export async function runAnchorSweep(
     }
 
     remaining -= pulled;
+  }
+
+  // The due-work pause already owns `reason` when it fired; never overwrite a gate's own account.
+  if (merged.reason === null && noCapableRung && merged.produced === 0) {
+    merged.reason = "no_capable_rung";
   }
 
   return merged;

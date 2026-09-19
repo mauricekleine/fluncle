@@ -14,7 +14,11 @@
 
 import { buildEntityBioPrompt, fetchEntityFacts, gateOrAcceptBio } from "../bio";
 import { purgeEntityCache } from "../edge-cache";
-import { listLabelArtistRules, replaceLabelArtistRules } from "../artist-rules";
+import {
+  LabelScopedUnlistedRuleError,
+  listLabelArtistRules,
+  replaceLabelArtistRules,
+} from "../artist-rules";
 import {
   confirmLabelAlias,
   fillEmptyLabelBio,
@@ -108,6 +112,14 @@ export function adminLabelsHandlers(os: Implementer) {
       } catch (error) {
         if (error instanceof LabelNotFoundError) {
           throw new ORPCError("NOT_FOUND", { message: error.message });
+        }
+
+        if (error instanceof LabelScopedUnlistedRuleError) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: { apiCode: "artist_rule_unlisted_is_global", apiMessage: error.message },
+            message: error.message,
+            status: 400,
+          });
         }
 
         throw apiFault(error);

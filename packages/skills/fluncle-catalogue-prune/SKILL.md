@@ -104,7 +104,15 @@ for s in miles-davis bob-marley-the-wailers loxy degs; do
 
 ### 6 — The original-of-remix residual (human judgement, optional)
 
-The scan's last section lists non-DnB artists kept alive by a _token_ DnB remix (MusicBrainz bills a remix to the original artist). These are a small, slow-growing tail — handle sporadically, by hand. For each, decide: strip the off-genre back-catalogue but **keep the DnB remix track** (often on a multi-genre disabled label like fabric/StreetBeat — do NOT blanket-delete by label). Or leave it: a page showing only "Song (DnB Producer remix)" is on-brand and useful long-tail SEO. There is no `--confirm` for this step on purpose; it is per-track judgement. See `references/traps.md` § "original-of-remix".
+The scan's last section lists non-DnB artists kept alive by a _token_ DnB remix (MusicBrainz bills a remix to the original artist). These are a small, slow-growing tail — handle sporadically.
+
+**The disposition is a global `unlisted` artist rule, not a prune:**
+
+```bash
+fluncle admin artists rule <artist-mbid> --verdict unlisted
+```
+
+That takes the pop act's `/artist/<slug>` page off the site (404, out of the `/artists` hub and the sitemap, out of search, credit renders as plain text everywhere) and leaves the DnB remix stored, playable and indexed. It is read-time derived, so it covers rows already crawled and `fluncle admin artists unrule <id>` puts the page back. No backup, no dry run, no per-track judgement. Strip the off-genre back-catalogue only when you actually want those rows gone (often on a multi-genre disabled label like fabric/StreetBeat — do NOT blanket-delete by label), and leaving it alone is still fine: a page showing only "Song (DnB Producer remix)" is on-brand and useful long-tail SEO. See `references/traps.md` § "original-of-remix".
 
 ### 7 — Repair orphaned edges
 

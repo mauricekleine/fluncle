@@ -415,8 +415,12 @@ type LabelArtistsOptions = {
 export const ARTIST_RULE_BOUNDARY =
   "Rules change what the next crawl takes. Everything already here stays.";
 
-function artistRuleWriteLine(prefix: string): string {
-  return `${prefix} — ${ARTIST_RULE_BOUNDARY.replace(/^R/, "r")}`;
+/** The visibility verdict moves no acquisition scope, so it states the other boundary. */
+export const UNLISTED_RULE_BOUNDARY =
+  "Unlisted takes the artist page down. The crawl and everything already here stay.";
+
+function artistRuleWriteLine(prefix: string, boundary = ARTIST_RULE_BOUNDARY): string {
+  return `${prefix} — ${boundary.charAt(0).toLowerCase()}${boundary.slice(1)}`;
 }
 
 /** A compact fixed-width table shared by the global and per-label artist-rule reads. */
@@ -2927,6 +2931,44 @@ JSON field reference:
       );
     });
 
+  // `get_spotify_anchor_breaker` → `admin catalogue anchor-breaker`. Why the anchor waterfall is
+  // quiet. Two causes look identical from outside — the shared-app throttle breaker PAUSING the
+  // Spotify search rungs, and the operator flags leaving the rungs DISARMED — so this reads both at
+  // once. Both flags off means nothing in the waterfall can conclude about a catalogue row: the free
+  // ListenBrainz rung still runs and can win, but its miss is not a verdict.
+  catalogue
+    .command("anchor-breaker")
+    .description("Why the anchor rungs are quiet: the throttle breaker, and which rungs are armed")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { anchorBreakerCommand } = await import("./commands/admin-catalogue");
+      const state = await anchorBreakerCommand();
+
+      if (options.json) {
+        printJson({ ...state, ok: true });
+        return;
+      }
+
+      const minutes = Math.ceil(state.cooldownRemainingMs / 60_000);
+
+      console.log(
+        state.tripped
+          ? `BREAKER TRIPPED — ${state.reason ?? "unknown"}, ~${minutes}m left (${state.throttlesInWindow} throttle(s) in window)`
+          : `BREAKER CLEAR — ${state.throttlesInWindow} throttle(s) in window`,
+      );
+      console.log(
+        `RUNGS — spotify search ${state.rungs.spotifySearchEnabled ? "ARMED" : "OFF"} · apify fallback ${
+          state.rungs.apifyEnabled ? "ARMED" : "OFF"
+        }`,
+      );
+
+      if (!state.rungs.spotifySearchEnabled && !state.rungs.apifyEnabled) {
+        console.log(
+          "No rung can conclude — ListenBrainz still runs and can win, but its miss settles nothing.",
+        );
+      }
+    });
+
   // `requeue_isrc_recovery` → `admin catalogue requeue-isrc-recovery --since <iso>` (operator).
   // Clear the free Deezer pass's clean-miss watermark on rows it retired at or after `--since`, so
   // they re-enter the isrc-recovery worklist now. The lever for a window where the ASK came back
@@ -3555,9 +3597,12 @@ JSON field reference:
 
   artists
     .command("rule")
-    .description("Always or never take one MusicBrainz artist's records (operator)")
+    .description("Rule one MusicBrainz artist: what the crawl takes, or whether they get a page")
     .argument("<artist-mbid>", "The MusicBrainz artist MBID")
-    .requiredOption("--verdict <verdict>", "The ruling: allow or block")
+    .requiredOption(
+      "--verdict <verdict>",
+      "The ruling: allow, block, or unlisted (no public artist page)",
+    )
     .option("--name <name>", "Artist name (optional; the server resolves it when omitted)")
     .option("--json", "Print JSON", false)
     .action(async (artistMbid: string, options: ArtistRuleOptions) => {
@@ -3574,6 +3619,7 @@ JSON field reference:
       console.log(
         artistRuleWriteLine(
           `Rule set for ${rule.resolvedName ?? rule.artistName}: ${rule.verdict.toUpperCase()}`,
+          rule.verdict === "unlisted" ? UNLISTED_RULE_BOUNDARY : ARTIST_RULE_BOUNDARY,
         ),
       );
     });

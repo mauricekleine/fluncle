@@ -1,5 +1,12 @@
 import { type Client, type InStatement, type ResultSet } from "@libsql/client/web";
+import { VECTOR_FALLBACK_DEADLINE_MS } from "../vector-budget";
 import { databaseOperationStatement } from "./db";
+
+// Re-exported so every server-side reader keeps importing the deadline from the module that
+// spends it. Its definition lives in `lib/vector-budget.ts` because the post-deploy probe — a
+// standalone script that cannot import a `lib/server/**` module — has to derive its own budget
+// from the same number.
+export { VECTOR_FALLBACK_DEADLINE_MS };
 
 /**
  * The largest deterministic candidate window a request-time Turso vector fallback may score.
@@ -8,9 +15,6 @@ import { databaseOperationStatement } from "./db";
  * Worker/database request.
  */
 export const VECTOR_FALLBACK_CANDIDATE_LIMIT = 50_000;
-
-/** A fallback may occupy a request for at most this long. libSQL cannot cancel the remote work. */
-export const VECTOR_FALLBACK_DEADLINE_MS = 12_000;
 
 const CANDIDATE_BOUND_MARKER = "/* vector-fallback-candidate-bound */";
 

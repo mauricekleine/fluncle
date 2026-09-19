@@ -11,7 +11,14 @@ import { mbFetch } from "./musicbrainz";
 
 export const ARTIST_RULE_LIMIT = 100;
 
-export type ArtistRuleVerdict = "allow" | "block";
+/**
+ * Two axes in one column. `allow`/`block` are ACQUISITION scope (what a future crawl takes);
+ * `unlisted` is the one VISIBILITY verdict (the artist entity has no public page) and is inert at
+ * crawl time. `unlisted` is valid only on a GLOBAL rule — see `LabelScopedUnlistedRuleError`.
+ */
+export type ArtistRuleVerdict = "allow" | "block" | "unlisted";
+/** The verdicts a per-label rule may carry: acquisition scope only. */
+export type LabelArtistRuleVerdict = "allow" | "block";
 export type ArtistRuleSource = "operator" | "triage";
 
 export type ArtistRule = {
@@ -30,7 +37,7 @@ export type ArtistRule = {
 export type LabelArtistRuleInput = {
   artistMbid: string;
   artistName: string;
-  verdict: ArtistRuleVerdict;
+  verdict: LabelArtistRuleVerdict;
 };
 
 export type GlobalArtistRuleInput = {
@@ -85,6 +92,13 @@ export class MissingArtistRuleNameError extends Error {}
 
 /** No global or per-label artist rule carries the requested globally unique id. */
 export class ArtistRuleNotFoundError extends Error {}
+
+/**
+ * A per-label rule was handed the `unlisted` verdict. Visibility is a property of the artist's one
+ * public page, not of any label, so a label-scoped `unlisted` could only ever be a silent no-op.
+ * The contract's narrower per-label enum rejects it first; this is the server's own closed door.
+ */
+export class LabelScopedUnlistedRuleError extends Error {}
 
 function toArtistRule(row: ArtistRuleRow): ArtistRule {
   return {
@@ -212,6 +226,15 @@ export async function replaceLabelArtistRules(
     throw new RangeError(`A label may carry at most ${ARTIST_RULE_LIMIT} artist rules.`);
   }
 
+  // The input type forbids it; a JSON body decoded at the edge does not, so the check is runtime.
+  const unlisted = rules.find((rule) => (rule.verdict as ArtistRuleVerdict) === "unlisted");
+
+  if (unlisted) {
+    throw new LabelScopedUnlistedRuleError(
+      `The unlisted verdict is global-only; ${unlisted.artistMbid} cannot carry it under a label.`,
+    );
+  }
+
   const db = await getDb();
   await assertLabelExists(labelId);
   const prepared = await Promise.all(
@@ -296,16 +319,26 @@ export async function listArtistRules(): Promise<ArtistRule[]> {
   return typedRows<ArtistRuleRow>(result.rows).map(toArtistRule);
 }
 
+/**
+ * Add ONE global rule. `artist_rules_global_artist_idx` is unique on `artist_mbid` where `label_id`
+ * is null, so an artist carries at most ONE GLOBAL RULING and all three verdicts share that slot —
+ * `unlisted` and a global `allow`/`block` are mutually exclusive today. Per-label rules are a
+ * separate slot and coexist with any of them. The conflict names the verdict already holding the
+ * slot, because "clear it first" is only actionable once the operator knows what he is clearing.
+ */
 export async function addArtistRule(input: GlobalArtistRuleInput): Promise<ArtistRule> {
   const db = await getDb();
   const existing = await db.execute({
     args: [input.artistMbid],
-    sql: `select id from artist_rules where label_id is null and artist_mbid = ? limit 1`,
+    sql: `select id, verdict from artist_rules
+          where label_id is null and artist_mbid = ? limit 1`,
   });
+  const held = typedRows<{ id: string; verdict: ArtistRuleVerdict }>(existing.rows)[0];
 
-  if (existing.rows[0]) {
+  if (held) {
     throw new DuplicateGlobalArtistRuleError(
-      `A global artist rule already exists for ${input.artistMbid}.`,
+      `A global artist rule already exists for ${input.artistMbid}: ${held.verdict}. ` +
+        `An artist carries one global ruling — clear ${held.id} before setting another.`,
     );
   }
 
@@ -351,8 +384,11 @@ export async function addArtistRule(input: GlobalArtistRuleInput): Promise<Artis
     );
   } catch (error) {
     if (isGlobalArtistRuleCollision(error)) {
+      // The unique index caught a ruling written between the read above and this insert. It cannot
+      // name the verdict without a second read on a failed path, so it states the law instead.
       throw new DuplicateGlobalArtistRuleError(
-        `A global artist rule already exists for ${input.artistMbid}.`,
+        `A global artist rule already exists for ${input.artistMbid}. ` +
+          `An artist carries one global ruling — clear it before setting another.`,
       );
     }
 
@@ -372,8 +408,39 @@ export async function addArtistRule(input: GlobalArtistRuleInput): Promise<Artis
   return toArtistRule(row);
 }
 
-export async function removeArtistRule(id: string): Promise<void> {
+/**
+ * Every `/artist/<slug>` page one MusicBrainz identity owns.
+ *
+ * A visibility ruling flips exactly these pages, so it is exactly what the edge cache has to be
+ * told to drop. One indexed read (`artists_mbid_idx`); the mbid is deliberately not unique on
+ * `artists` (a double-mint is a row for the operator to merge, not a write error), so this can
+ * legitimately return more than one slug.
+ */
+export async function artistSlugsForMbid(artistMbid: string): Promise<string[]> {
   const db = await getDb();
+  const result = await db.execute({
+    args: [artistMbid],
+    sql: `select slug from artists where mbid = ? order by slug asc`,
+  });
+
+  return typedRows<{ slug: string }>(result.rows).map((row) => row.slug);
+}
+
+/**
+ * Remove one global rule, returning what it was so the caller can act on the removal — a removed
+ * `unlisted` rule puts a page back on the site, which the edge cache has to be told about. The
+ * delete stays idempotent: an already-absent id returns undefined rather than throwing.
+ */
+export async function removeArtistRule(
+  id: string,
+): Promise<undefined | { artistMbid: string; verdict: ArtistRuleVerdict }> {
+  const db = await getDb();
+  const existing = await db.execute({
+    args: [id],
+    sql: `select artist_mbid, verdict from artist_rules
+          where id = ? and label_id is null limit 1`,
+  });
+  const removed = typedRows<{ artist_mbid: string; verdict: ArtistRuleVerdict }>(existing.rows)[0];
   const now = new Date().toISOString();
   const sourceVersion = `artist-rule-remove:${randomUUID()}`;
   await db.batch(
@@ -394,6 +461,8 @@ export async function removeArtistRule(id: string): Promise<void> {
     ],
     "write",
   );
+
+  return removed ? { artistMbid: removed.artist_mbid, verdict: removed.verdict } : undefined;
 }
 
 /**

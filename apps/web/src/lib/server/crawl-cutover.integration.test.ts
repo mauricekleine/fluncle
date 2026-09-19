@@ -9,9 +9,15 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { createIntegrationDb } from "./integration-db";
-import { crawlCatalogue } from "./crawl";
+import {
+  CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND,
+  crawlCatalogue,
+  initializeCrawlPhase,
+} from "./crawl";
 import { rebuildCrawlDueWork } from "./crawl-due-work";
 import {
+  CRAWL_CLAIM_REPAIR_DRAIN_BUDGET,
+  CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY,
   CRAWL_DUE_CUTOVER_ENABLED_KEY,
   claimCrawlFrontierRows,
   isCrawlDueCutoverEnabled,
@@ -29,6 +35,7 @@ function narrowBudget(
   return {
     nodeChunkRows: 1,
     nodeChunks: 8,
+    sourcePageMarkers: 1,
     sourcePageRows: 1,
     sourcePages: 8,
     wallMs: 60_000,
@@ -479,5 +486,39 @@ describe("crawl runtime cutover", () => {
     expect(
       (await db.execute("select count(*) as n from crawl_projection_repairs")).rows[0]?.n,
     ).toBe(0);
+  });
+
+  it("absorbs more admission-minted source markers than its page budget and still claims", async () => {
+    // THE ADMISSION INVARIANT, end to end: an operator ruling that lands many allow rules at once
+    // makes one admission phase mint more source markers than the claim has pages. The claim must
+    // clear all of them and go on to claim, or every tick after it answers pending instead.
+    const rules = CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.sourcePages + 2;
+    expect(rules).toBeLessThanOrEqual(CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND);
+    for (let index = 0; index < rules; index += 1) {
+      await seedAllowedRule(`absorb-${index}`, null);
+    }
+    const ids = await seedRepairableLabel("absorb");
+    await setCutover("true");
+
+    const initialization = await initializeCrawlPhase();
+    expect(initialization.artistsRearmed).toBe(rules);
+    expect(await countRepairMarkers()).toBe(rules);
+
+    const claim = await claimCrawlFrontierRows(db, {
+      claimedBy: "test-pass",
+      leaseMs: 60_000,
+      limit: ids.length,
+      token: "absorb-token",
+    });
+
+    expect(claim.rows.map((row) => row.id).sort()).toEqual([...ids].sort());
+    expect(await countRepairMarkers()).toBe(0);
+    expect(await countByState("repair")).toBe(0);
+  });
+
+  it("drains every source marker one admission phase can mint", () => {
+    expect(CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND).toBeLessThan(
+      CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY,
+    );
   });
 });

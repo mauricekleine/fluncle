@@ -4,6 +4,7 @@ import { type ArtistListItem } from "@fluncle/contracts";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { SIMILAR_ARTISTS_LIMIT, listSimilarArtistNeighbours } from "./artist-dossier";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
+import { listedArtistWhere } from "./artist-visibility";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
@@ -113,14 +114,36 @@ function optionalText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-/** Resolve one artist by its public slug (null = no such artist). */
+/**
+ * Resolve one artist by its public slug (undefined = no such artist).
+ *
+ * The RAW resolve: it answers "does this row exist", which is what the operator surfaces ask. A
+ * PUBLIC reader asks a narrower question — see {@link getPublicArtistBySlug}.
+ */
 export async function getArtistBySlug(slug: string): Promise<ArtistRecord | undefined> {
+  return resolveArtistBySlug(slug, "");
+}
+
+/**
+ * Resolve one artist for a PUBLIC surface: the row, unless a global `unlisted` rule takes it off
+ * the site, in which case this is indistinguishable from a slug that never existed. That is the
+ * point — the page 404s down the same path a missing row does, rather than serving a `noindex`
+ * shell. The predicate rides the same statement, so the read stays one round trip.
+ */
+export async function getPublicArtistBySlug(slug: string): Promise<ArtistRecord | undefined> {
+  return resolveArtistBySlug(slug, ` and ${listedArtistWhere()}`);
+}
+
+async function resolveArtistBySlug(
+  slug: string,
+  visibility: string,
+): Promise<ArtistRecord | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
     sql: `select id, name, slug, spotify_url, mbid, wikidata_qid, discogs_url, lastfm_url, bio,
                  image_url, image_key, image_state, image_updated_at
-          from artists where slug = ? limit 1`,
+          from artists where slug = ?${visibility} limit 1`,
   });
 
   const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -242,10 +265,13 @@ export async function listArtistsMissingBio(limit: number): Promise<EntityBioWor
       return [];
     }
 
+    // An unlisted artist has no page, so there is nothing to author a bio for — the filter sits on
+    // the hydration rather than on the promoted queue, which is keyed by subject id alone.
     const result = await db.execute({
       args: page.subjectIds,
       sql: `select id, name, slug from artists
-            where id in (${page.subjectIds.map(() => "?").join(", ")})`,
+            where id in (${page.subjectIds.map(() => "?").join(", ")})
+              and ${listedArtistWhere()}`,
     });
     const hydratedById = new Map(
       typedRows<EntityBioWorkItem>(result.rows).map((row) => [row.id, row] as const),
@@ -263,6 +289,7 @@ export async function listArtistsMissingBio(limit: number): Promise<EntityBioWor
           from artists a
           where (a.bio is null or trim(a.bio) = '')
             and ${hubInclusionWhere("a", ARTIST_INDEX_MIN_FINDINGS)}
+            and ${listedArtistWhere("a")}
           order by a.created_at asc
           limit ?`,
   });
@@ -340,6 +367,10 @@ export async function getPublicArtistAliasNames(artistId: string): Promise<strin
  * AND the `@id` on any drift. Lookups (`byArtistNode`, the log link) fold the
  * display name the same way. A name with no resolved entity is simply absent
  * (the link/`@id` degrades to plain text).
+ *
+ * An UNLISTED artist is absent for the same reason and degrades the same way: the credit is still
+ * spoken, it just stops being a link and stops asserting a URL, because there is no page to send
+ * anyone to.
  */
 export async function getArtistSlugMap(trackId: string): Promise<Record<string, string>> {
   const db = await getDb();
@@ -348,7 +379,7 @@ export async function getArtistSlugMap(trackId: string): Promise<Record<string, 
     sql: `select a.name, a.slug
           from artists a
           join track_artists ta on ta.artist_id = a.id
-          where ta.track_id = ?`,
+          where ta.track_id = ? and ${listedArtistWhere("a")}`,
   });
 
   const map: Record<string, string> = {};
@@ -429,6 +460,7 @@ export function artistSitemapWindowStatement(minTracks: number, limit: number, a
                     limit 1) as cover_url
           from artists a
           where ${seek} and a.renderable_track_count >= ?
+            and ${listedArtistWhere("a")}
           order by a.slug asc
           limit ?`,
   };
@@ -455,7 +487,7 @@ export async function listArtistSitemapRows(
           join track_artists ta on ta.artist_id = a.id
           join tracks on tracks.track_id = ta.track_id
           left join findings on findings.track_id = tracks.track_id
-          where a.renderable_track_count >= ?
+          where a.renderable_track_count >= ? and ${listedArtistWhere("a")}
           group by a.id
           order by a.slug asc`,
         },
@@ -488,7 +520,7 @@ export async function maxArtistSitemapLastmod(minTracks: number): Promise<string
           cross join tracks on tracks.track_id = findings.track_id
           cross join track_artists ta on ta.track_id = tracks.track_id
           cross join artists a on a.id = ta.artist_id
-          where a.renderable_track_count >= ?`,
+          where a.renderable_track_count >= ? and ${listedArtistWhere("a")}`,
   });
 
   return typedRows<{ lastmod: string | null }>(result.rows)[0]?.lastmod ?? undefined;
@@ -531,6 +563,10 @@ export const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
   select: `a.name as name, a.image_url as image_url, a.image_key as image_key,
            a.image_state as image_state, a.image_updated_at as image_updated_at`,
   slugExpr: "a.slug",
+  // The one hub whose entity can be hidden independently of its counts: a global `unlisted` rule
+  // takes the artist off the site, so every read compiled from this descriptor — the hub page, the
+  // A–Z lane, the total, the seek boundaries, the MCP browse, the API list — drops it at once.
+  visibilityWhere: listedArtistWhere("a"),
 };
 
 /** The count of INDEXABLE `/artist/<slug>` pages — the floor-clearing set `listArtistSitemapRows`
@@ -564,6 +600,7 @@ const ARTISTS_BROWSE_QUERY: CatalogueBrowseQuery = {
   idExpr: ARTISTS_HUB_QUERY.idExpr,
   nameExpr: "a.name",
   slugExpr: ARTISTS_HUB_QUERY.slugExpr,
+  visibilityWhere: ARTISTS_HUB_QUERY.visibilityWhere,
 };
 
 export function listArtistsBrowsePage(page: number): Promise<CatalogueBrowsePage> {
@@ -582,6 +619,8 @@ export type ArtistChip = {
  * the artist row that cross-links a graph page back into the artist half of the graph.
  * Alphabetical; an artist appears once however many findings they have here.
  *
+ * A chip IS a link, so an unlisted artist has no chip: there is no page to cross-link to.
+ *
  * `column` is a CONSTANT from the call sites below (never user input); the id is bound.
  */
 async function listArtistsByEntity(
@@ -599,6 +638,7 @@ async function listArtistsByEntity(
           join tracks on tracks.track_id = ta.track_id
           join findings on findings.track_id = tracks.track_id
           where ${column} = ? and findings.log_id is not null
+            and ${listedArtistWhere("a")}
           order by a.name collate nocase asc`,
   });
 
@@ -699,10 +739,11 @@ export async function listArtistsApiPage(page: number): Promise<CatalogueListPag
  * has a page (a below-floor, crawled artist the browse index omits still renders on `/artist/<slug>`,
  * just noindex), so get is intentionally wider than the list. Counts come from `hubCountsBySlug`
  * (the same aggregates the hub gate uses), so a certified artist's list row and get read agree.
- * Undefined only when no artist carries the slug (the caller turns that into a 404).
+ * Undefined when no artist carries the slug, and equally when a global `unlisted` rule takes that
+ * artist off the site — the caller turns either into a 404, which is the whole point.
  */
 export async function getArtistListItemBySlug(slug: string): Promise<ArtistListItem | undefined> {
-  const record = await getArtistBySlug(slug);
+  const record = await getPublicArtistBySlug(slug);
 
   if (!record) {
     return undefined;
@@ -807,7 +848,8 @@ export async function artistNamesBySlugs(slugs: string[]): Promise<string[]> {
   const placeholders = slugs.map(() => "?").join(", ");
   const result = await db.execute({
     args: slugs,
-    sql: `select slug, name from artists where slug in (${placeholders})`,
+    sql: `select slug, name from artists where slug in (${placeholders})
+            and ${listedArtistWhere()}`,
   });
 
   const bySlug = new Map(

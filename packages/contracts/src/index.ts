@@ -33,6 +33,7 @@ import {
   type ArtistRuleInputSchema,
   type ArtistRuleSchema,
   type ArtistRuleVerdictSchema,
+  type LabelArtistRuleVerdictSchema,
 } from "./orpc/admin-artist-rules.js";
 import { type LabelDetailSchema, type LabelListItemSchema } from "./orpc/labels.js";
 import {
@@ -205,7 +206,10 @@ export type LabelSeedState = z.infer<typeof LabelSeedStateSchema>;
  */
 export type LabelAdminItem = z.infer<typeof LabelAdminItemSchema>;
 
-/** An exact-MBID allow/block rule controlling what a future crawl may acquire. */
+/**
+ * An exact-MBID rule on one artist: `allow`/`block` control what a future crawl may acquire,
+ * `unlisted` (global scope only) hides the artist's public page.
+ */
 export type ArtistRule = z.infer<typeof ArtistRuleSchema>;
 
 /** One member of a per-label whole-set replacement; a nonblank artist name is required. */
@@ -215,6 +219,9 @@ export type ArtistRuleInput = z.infer<typeof ArtistRuleInputSchema>;
 export type AddArtistRuleInput = z.infer<typeof AddArtistRuleInputSchema>;
 
 export type ArtistRuleVerdict = z.infer<typeof ArtistRuleVerdictSchema>;
+
+/** The narrower verdict set a per-label rule may carry: acquisition scope, never visibility. */
+export type LabelArtistRuleVerdict = z.infer<typeof LabelArtistRuleVerdictSchema>;
 
 /** List or whole-set replacement response for label-scoped and global artist rules. */
 export type ArtistRulesResponse = Ok<{ rules: ArtistRule[] }>;

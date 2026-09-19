@@ -27,7 +27,7 @@ import {
 } from "../graph-prose";
 import { albumCoverAtSize } from "../media";
 import { getAlbumBySlug } from "./albums";
-import { getArtistBySlug } from "./artists";
+import { getPublicArtistBySlug } from "./artists";
 import { getPublicGalaxyBySlug } from "./galaxies-map";
 import { getLabelBySlug } from "./labels";
 import { getFindingsByAlbum, getFindingsByArtist, getFindingsByLabel } from "./tracks";
@@ -123,7 +123,7 @@ async function resolveEntity(
   | undefined
 > {
   if (kind === "artist") {
-    const artist = await getArtistBySlug(slug);
+    const artist = await getPublicArtistBySlug(slug);
 
     return artist
       ? {

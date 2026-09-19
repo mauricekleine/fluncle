@@ -22,7 +22,7 @@
 // `tracks_release_date_track_id_idx` btree, and every query is LIMIT-capped, so nothing unbounded
 // crosses into the isolate however big the catalogue grows.
 
-import { getArtistBySlug, parseArtistsJson } from "./artists";
+import { getPublicArtistBySlug, parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import { clampFreshLimit, FRESH_WINDOW_DAYS, type FreshTrack } from "./fresh";
 import { getLabelBySlug } from "./labels";
@@ -171,7 +171,7 @@ export async function listArtistFreshTracks(
   slug: string,
   options?: { limit?: number; now?: Date },
 ): Promise<EntityFreshFeed | undefined> {
-  const artist = await getArtistBySlug(slug);
+  const artist = await getPublicArtistBySlug(slug);
   if (!artist) {
     return undefined;
   }

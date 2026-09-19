@@ -19,8 +19,10 @@ export function artistRuleInput(
     throw new Error("Artist MBID must be a MusicBrainz artist MBID");
   }
 
-  if (verdict !== "allow" && verdict !== "block") {
-    throw new Error("Pass --verdict allow|block");
+  // `unlisted` is accepted here and nowhere else: it is a GLOBAL visibility ruling (no public
+  // artist page), and this command is the only global-rule write path.
+  if (verdict !== "allow" && verdict !== "block" && verdict !== "unlisted") {
+    throw new Error("Pass --verdict allow|block|unlisted");
   }
 
   const cleanName = artistName?.trim();

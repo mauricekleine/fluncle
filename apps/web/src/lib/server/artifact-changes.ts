@@ -6,6 +6,7 @@ import {
   DEVICE_DB_PRIMARY_KEYS,
   type DeviceSourceTable,
 } from "../../../scripts/lib/device-db-derivation";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
 import { ApiError } from "./spotify";
 
@@ -1524,15 +1525,25 @@ export function buildArtifactSnapshotStatement(
     predicate = "1 = 1";
   } else if (table === "track_artists") {
     from = "track_artists ta";
+    // The edge ships only when BOTH its endpoints do. `artists` below refuses an unlisted artist,
+    // and an edge pointing at a row the artifact does not carry would fail the artifact's own
+    // `track_artists.artist_id -> artists.id` closure check (scripts/lib/device-db-derivation.ts).
     predicate = `exists (
       select 1
       from tracks t
       left join findings f on f.track_id = t.track_id
       left join track_embeddings emb on emb.track_id = t.track_id
       where t.track_id = ta.track_id and ${deviceSelectedTrackPredicate()}
+    ) and exists (
+      select 1 from artists
+      where artists.id = ta.artist_id and ${listedArtistWhere()}
     )`;
   } else if (table === "artists") {
     from = "artists source_row";
+    // A replica is a public artifact: it leaves the server and is reachable through an
+    // unauthenticated replica token, so the visibility rule binds here exactly as it does on the
+    // web. A track's CREDIT is unaffected — the device renders it from `tracks.artists_json`, not
+    // from this table (apps/mobile/src/lib/replica-rows.ts).
     predicate = `exists (
       select 1
       from track_artists ta
@@ -1540,7 +1551,7 @@ export function buildArtifactSnapshotStatement(
       left join findings f on f.track_id = t.track_id
       left join track_embeddings emb on emb.track_id = t.track_id
       where ta.artist_id = source_row.id and ${deviceSelectedTrackPredicate()}
-    )`;
+    ) and ${listedArtistWhere("source_row")}`;
   } else {
     const pointer = table === "labels" ? "label_id" : "album_id";
     from = `${table} source_row`;

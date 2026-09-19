@@ -123,4 +123,79 @@ describe("replace_label_artist_rules — PUT /admin/labels/{id}/artists", () => 
     expect(response?.status).toBe(200);
     expect(replaceLabelArtistRules).toHaveBeenCalledWith("lbl_test", body.rules, expectedSource);
   });
+
+  // `unlisted` hides one public artist PAGE, and a page is not per-label. The whole-set PUT has to
+  // refuse it outright rather than store a rule no read consults.
+  it("refuses the global-only unlisted verdict at the contract boundary", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/labels/lbl_test/artists", "PUT", OPERATOR_TOKEN, {
+        rules: [
+          {
+            artistMbid: "12345678-1234-4234-8234-123456789abc",
+            artistName: "Pop Original",
+            verdict: "unlisted",
+          },
+        ],
+      }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(replaceLabelArtistRules).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the server's own refusal as a 400 when a body reaches it another way", async () => {
+    const { LabelScopedUnlistedRuleError } = await import("./artist-rules");
+    replaceLabelArtistRules.mockRejectedValueOnce(
+      new LabelScopedUnlistedRuleError(
+        "The unlisted verdict is global-only; 12345678-1234-4234-8234-123456789abc cannot carry it under a label.",
+      ),
+    );
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/labels/lbl_test/artists", "PUT", OPERATOR_TOKEN, {
+        rules: [
+          {
+            artistMbid: "12345678-1234-4234-8234-123456789abc",
+            artistName: "Pop Original",
+            verdict: "block",
+          },
+        ],
+      }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(await readJson(response)).toMatchObject({
+      code: "artist_rule_unlisted_is_global",
+      ok: false,
+    });
+  });
+});
+
+describe("add_artist_rule — the global-only visibility verdict", () => {
+  it("accepts `unlisted` on the global write path", async () => {
+    addArtistRule.mockResolvedValueOnce({
+      artistMbid: "12345678-1234-4234-8234-123456789abc",
+      artistName: "Pop Original",
+      artistSpotifyId: null,
+      checkedAt: null,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      id: "arl_unlisted",
+      resolvedMbid: null,
+      resolvedName: null,
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      verdict: "unlisted",
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/artist-rules", "POST", OPERATOR_TOKEN, {
+        artistMbid: "12345678-1234-4234-8234-123456789abc",
+        artistName: "Pop Original",
+        verdict: "unlisted",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toMatchObject({ rule: { verdict: "unlisted" } });
+  });
 });

@@ -167,7 +167,9 @@ describe("resolveAnchorFree — the dark flag is the load-bearing gate", () => {
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: false,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: null,
     });
     // THE LOAD-BEARING ASSERTION: not one Spotify SEARCH request while the flag is off.
@@ -230,7 +232,9 @@ describe("resolveAnchorFree — the Spotify ISRC rung (flag on, outside the wind
       // The EXACT rung was spent — the narrower signal the box's per-tick ask budget meters.
       spotifyIsrcAsked: true,
       spotifySearchDone: true,
+      spotifySearchEnabled: true,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: "isrc",
     });
     expect(text((await anchorState("mb_isrc")).uri)).toBe("spotify:track:spISRC");
@@ -282,7 +286,9 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
       source: "spotify-search",
       spotifyIsrcAsked: false,
       spotifySearchDone: true,
+      spotifySearchEnabled: true,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: "search",
     });
     expect(text((await anchorState("mb_fuzzy")).uri)).toBe("spotify:track:spFuzzy");
@@ -341,7 +347,9 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
       source: null,
       spotifyIsrcAsked: false,
       spotifySearchDone: true,
+      spotifySearchEnabled: true,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: null,
     });
     const state = await anchorState("mb_gate_fail");
@@ -401,7 +409,9 @@ describe("resolveAnchorFree — ListenBrainz still wins first, even with the fla
       source: "listenbrainz",
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifySearchEnabled: true,
       spotifyThrottled: false,
+      stamped: false,
       verifiedBy: "isrc",
     });
     expect(text((await anchorState("mb_lb")).uri)).toBe("spotify:track:lbId");

@@ -37,7 +37,7 @@ import { albumSlug, getAlbumBySlug, listAlbumsBrowsePage } from "../albums";
 import { getArtistNeighbours } from "../artist-dossier";
 import {
   countArtistFindings,
-  getArtistBySlug,
+  getPublicArtistBySlug,
   getPublicArtistSocials,
   listArtistsBrowsePage,
   toArtistSlug,
@@ -1013,7 +1013,7 @@ const getArtistTool = {
   execute: async (args) => {
     const name = asTrimmedString((args as { name?: unknown }).name);
     const slug = name ? toArtistSlug(name) : "";
-    const artist = slug ? await getArtistBySlug(slug) : undefined;
+    const artist = slug ? await getPublicArtistBySlug(slug) : undefined;
 
     if (!artist) {
       return { found: false, ok: true };
@@ -1201,7 +1201,7 @@ const listSimilarArtistsTool = {
     const source = args as { limit?: unknown; name?: unknown };
     const name = asTrimmedString(source.name);
     const slug = name ? toArtistSlug(name) : "";
-    const artist = slug ? await getArtistBySlug(slug) : undefined;
+    const artist = slug ? await getPublicArtistBySlug(slug) : undefined;
 
     // An unresolved name is the honest "he has not logged them" — same as get_artist.
     if (!artist) {
@@ -1257,7 +1257,7 @@ const listArtistCatalogueTool = {
     const name = asTrimmedString((args as { name?: unknown }).name);
     const page = clampPage((args as { page?: unknown }).page);
     const slug = name ? toArtistSlug(name) : "";
-    const artist = slug ? await getArtistBySlug(slug) : undefined;
+    const artist = slug ? await getPublicArtistBySlug(slug) : undefined;
 
     if (!artist) {
       return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);

@@ -185,6 +185,26 @@ export async function requeueIsrcRecoveryCommand(input: {
   );
 }
 
+/** What `get_spotify_anchor_breaker` answers: the pause, and whether the rungs are armed at all. */
+export type AnchorBreakerState = {
+  cooldownRemainingMs: number;
+  reason: null | string;
+  rungs: { apifyEnabled: boolean; spotifySearchEnabled: boolean };
+  throttlesInWindow: number;
+  tripped: boolean;
+  trippedAt: null | string;
+};
+
+/**
+ * Read why the anchor waterfall is quiet (`fluncle admin catalogue anchor-breaker`). Thin client
+ * over the admin-tier `get_spotify_anchor_breaker` op. Silence has two causes that look identical
+ * from outside — the shared-app throttle breaker PAUSING the Spotify search rungs, and the operator
+ * flags leaving those rungs (or the paid Apify fallback) DISARMED — so one read answers both.
+ */
+export async function anchorBreakerCommand(): Promise<AnchorBreakerState> {
+  return adminApiGet<AnchorBreakerState & { ok: true }>("/api/v1/admin/catalogue/anchor/breaker");
+}
+
 /**
  * Overrule the duplicate veto on one catalogue row so it can be captured (operator). `fluncle
  * admin catalogue force-capture <trackId>` — the dupe-veto escape hatch (docs/the-ear.md §
@@ -317,8 +337,9 @@ export type CrawlPassResult = {
   // Scoped label-browse nodes re-armed from a newer label-scope watermark this pass.
   releasesRearmed: number;
   seeded: number;
-  // Stale enabled seed labels re-armed this pass — an enabled label is a subscription, so its
-  // later releases surface. Bounded per pass so a mass re-arm spreads over ticks.
+  // Due enabled seed labels re-armed this pass — an enabled label is a subscription on a
+  // release-week schedule, so its later releases surface. Bounded per pass so a mass re-arm
+  // spreads over ticks.
   seedsRearmed: number;
   tracksFound: number;
   tracksSkipped: number;
