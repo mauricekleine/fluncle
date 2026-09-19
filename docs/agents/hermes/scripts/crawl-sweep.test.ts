@@ -36,6 +36,7 @@ type Fixture = {
   calls: string;
   directory: string;
   effects: string;
+  fetchBody: string;
   fetchRelease: string;
   fetchStarted: string;
   mode: string;
@@ -53,6 +54,7 @@ function fixture(): Fixture {
     calls: join(directory, "calls"),
     directory,
     effects: join(directory, "effects"),
+    fetchBody: join(directory, "fetch-body"),
     fetchRelease: join(directory, "fetch-release"),
     fetchStarted: join(directory, "fetch-started"),
     mode: join(directory, "mode"),
@@ -114,15 +116,18 @@ function fixture(): Fixture {
     "      exit 1 ;;",
     "    prepare:throttled-after-failure|prepare:yield-after-work)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
+    "    prepare:box-fetch|prepare:box-fetch-off)",
+    '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token","fetchPlan":{"kind":"none"}}],"frontierPending":1,"boxFetch":true}\' ;;',
     '    prepare:*) printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token"}],"frontierPending":1}\' ;;',
     "    fetch:*)",
+    '      cat "$phase_file" >> ' + data.fetchBody,
     '      if [ "$mode" = provider-pause ]; then',
     "        printf provider-started >> " + data.timeline,
     "        printf started > " + data.fetchStarted,
     "        while [ ! -e " + data.fetchRelease + " ]; do sleep 0.01; done",
     "      fi",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"fetch","commitToken":"commit-token","operationId":"crawl-op","operationKey":"crawl-key","requestDigest":"digest"}\' ;;',
-    "    commit:normal|commit:batch|commit:provider-pause)",
+    "    commit:normal|commit:batch|commit:provider-pause|commit:box-fetch|commit:box-fetch-off)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}}\' ;;',
     "    commit:throttle-then-work)",
     "      count=$(grep -c '^commit:' " + data.calls + ")",
@@ -870,6 +875,55 @@ describe("crawl-sweep phase protocol", () => {
         expect(existsSync(data.calls), name).toBe(false);
         expect(existsSync(data.effects), name).toBe(false);
       }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // MusicBrainz rate-limits per source IP, so the crawl's provider reads move to the box's own
+  // address. Both halves of the switch have to agree before a single request is spent.
+  test(
+    "reads the server's box-fetch answer and reports it, supplying nothing for a node with no url",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: sweepEnvironment(data, "box-fetch"),
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        boxFetch: true,
+        boxFetched: 0,
+        ok: true,
+      });
+      // A terminal node's provider leg reads nothing at all, so no MusicBrainz request exists to
+      // move anywhere and the fetch phase carries no bodies.
+      expect(readFileSync(data.fetchBody, "utf8")).not.toContain('"supplied"');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "leaves every read on Worker egress when the box-side switch is off",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "box-fetch-off"), FLUNCLE_CRAWL_BOX_FETCH: "0" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      // The server said yes; this box said no. Either side is enough to put the reads back.
+      expect(JSON.parse(result.stdout)).toMatchObject({ boxFetch: false, boxFetched: 0, ok: true });
+      expect(readFileSync(data.fetchBody, "utf8")).not.toContain('"supplied"');
     },
     TEST_TIMEOUT_MS,
   );

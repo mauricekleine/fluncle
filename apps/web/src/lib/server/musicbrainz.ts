@@ -21,7 +21,19 @@
 
 import { logEvent } from "./log";
 
-const MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2";
+/** The one host any MusicBrainz read may reach. Pinned, so no caller can redirect the budget. */
+export const MUSICBRAINZ_API_HOST = "musicbrainz.org";
+const MUSICBRAINZ_API_ROOT = `https://${MUSICBRAINZ_API_HOST}/ws/2`;
+
+/**
+ * The absolute URL for a `/ws/2` path. It is the ONE place a MusicBrainz URL is composed, because
+ * a box-fetched body is bound to the claim by URL EQUALITY: the Worker builds the URL it wants and
+ * reads a submitted body only under that exact string. Two builders would be two answers.
+ */
+export function musicbrainzUrl(path: string): string {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${MUSICBRAINZ_API_ROOT}${path}${separator}fmt=json`;
+}
 
 /**
  * The identifiable User-Agent MusicBrainz (and Discogs) require. Generic agents are
@@ -125,8 +137,7 @@ export type MbResult<T> = { data: T | null; rateLimited: boolean };
  * that survived its Retry-After retries): the caller must stop its run, not retry.
  */
 export function mbFetch<T>(path: string): Promise<MbResult<T>> {
-  const separator = path.includes("?") ? "&" : "?";
-  const url = `${MUSICBRAINZ_API_ROOT}${path}${separator}fmt=json`;
+  const url = musicbrainzUrl(path);
 
   return throttle(async () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {

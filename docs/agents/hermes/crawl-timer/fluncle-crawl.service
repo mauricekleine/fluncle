@@ -23,8 +23,10 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # serialized budget feeds the sibling MB sweeps, and the ledger's throttled-tick ratio is the gauge
 # that says the value is too high. 60 nodes ≈ 180s (~30% duty cycle).
 ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home -e FLUNCLE_CRAWL_NODES=60 hermes bash /opt/hermes-scripts/crawl-sweep.sh
-# A PURE trigger — zero LLM tokens. One pass is ~3 MusicBrainz calls per node paced at ~1 req/s in
-# the Worker (measured ~3s/node, so ≈180s at 60 nodes), plus headroom for Retry-After'd 503s.
+# A PURE trigger — zero LLM tokens. One pass is ~3 MusicBrainz calls per node paced at ~1 req/s from
+# THIS box's own IP (MusicBrainz counts per source address; measured ~3s/node, so ≈180s at 60
+# nodes), plus headroom for Retry-After'd 503s. The pacing state is a lock-guarded file under the
+# container HOME, which is why every sweep shares it.
 # Each node's provider request is outside database admission; only its prepare and atomic commit
 # phases hold the writer lease. The timeout remains a process backstop, never an admission window.
 TimeoutStartSec=1030

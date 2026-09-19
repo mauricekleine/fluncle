@@ -9,6 +9,11 @@ import { join } from "node:path";
 
 import { runDatabaseAdmissionPhase } from "./database-admission-phase";
 import {
+  type CrawlFetchPlan,
+  type MusicbrainzFetchResult,
+  runCrawlFetchPlan,
+} from "./musicbrainz-fetch";
+import {
   DUE_WORK_MAINTENANCE_PENDING_CODE,
   DueWorkRepairPendingError,
   dueWorkRepairPendingGate,
@@ -20,6 +25,16 @@ const NODES = Number(process.env.FLUNCLE_CRAWL_NODES ?? "10");
 const MAX_HOP = Number(process.env.FLUNCLE_CRAWL_MAX_HOP ?? "2");
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const ADMISSION_OWNER = "fluncle-crawl";
+
+/**
+ * THE BOX-SIDE HALF OF THE BOX-FETCH SWITCH. MusicBrainz rate-limits per source IP, so the crawl's
+ * provider reads are made from this machine's address under the one shared budget in
+ * `musicbrainz-fetch.ts`. Set it to `0` and the tick supplies nothing, which puts every read back on
+ * Worker egress with no other change; the Worker's own `crawl_box_fetch_enabled` flag is the other
+ * half and either side saying no is enough. The tick asks the SERVER first (`prepare` answers
+ * `boxFetch`), so a flag flip can never leave this sweep spending requests nobody will read.
+ */
+const BOX_FETCH = process.env.FLUNCLE_CRAWL_BOX_FETCH !== "0";
 
 /**
  * How many nodes one prepare claims. It mirrors the server's `MAX_CRAWL_PREPARE_LIMIT`, which the
@@ -83,8 +98,9 @@ type PhaseEnvelope = JsonObject & {
   phase?: string;
 };
 type PrepareEnvelope = PhaseEnvelope & {
+  boxFetch?: boolean;
   frontierPending?: number;
-  items?: { nodeId: string; preparedToken: string }[];
+  items?: { fetchPlan?: CrawlFetchPlan; nodeId: string; preparedToken: string }[];
   kind?: "drained" | "prepared" | "unavailable";
 };
 type FetchEnvelope = PhaseEnvelope & {
@@ -98,6 +114,10 @@ type ReceiptEnvelope = PhaseEnvelope & {
 };
 type SweepSummary = {
   admissionOutcome: string;
+  /** Whether this tick read MusicBrainz from the box's own IP — both halves of the switch agreeing. */
+  boxFetch: boolean;
+  /** MusicBrainz reads this tick made from the box's own IP, under the one shared budget. */
+  boxFetched: number;
   checked: number;
   error: string | null;
   errors: number;
@@ -307,6 +327,8 @@ function validateConfig(): void {
 function createSummary(): SweepSummary {
   return {
     admissionOutcome: "completed",
+    boxFetch: false,
+    boxFetched: 0,
     checked: 0,
     error: null,
     errors: 0,
@@ -511,15 +533,47 @@ function commitFetched(
   }
 }
 
-function processPreparedItem(
+/**
+ * The provider leg for one claimed node. When both halves of the switch agree, the MusicBrainz reads
+ * happen HERE — from this machine's address, paced by the shared budget — and the bodies ride into
+ * the Worker's unadmitted fetch phase, which binds them to the claim by url and parses them with the
+ * parser its own fetch feeds. A url the box omits is simply fetched by the Worker, so a failure here
+ * costs latency and never correctness.
+ */
+async function supplyProviderBodies(
+  plan: CrawlFetchPlan | undefined,
+  boxFetch: boolean,
+  summary: SweepSummary,
+): Promise<MusicbrainzFetchResult[]> {
+  if (!boxFetch || plan === undefined || plan.kind === "none") {
+    return [];
+  }
+  try {
+    const supplied = await runCrawlFetchPlan(plan);
+    summary.boxFetched += supplied.length;
+    return supplied;
+  } catch (error) {
+    // A budget lock this tick could not take, or a drifted url. Neither is the node's fault and
+    // neither needs to end the tick: the Worker fetches the node itself this once.
+    log(
+      `box musicbrainz read unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return [];
+  }
+}
+
+async function processPreparedItem(
   directory: string,
   index: number,
-  preparedToken: string,
+  item: { fetchPlan?: CrawlFetchPlan; preparedToken: string },
+  boxFetch: boolean,
   summary: SweepSummary,
-): NodeOutcome {
+): Promise<NodeOutcome> {
+  const supplied = await supplyProviderBodies(item.fetchPlan, boxFetch, summary);
   const fetched = directPhase<FetchEnvelope>(directory, `fetch-${index}`, {
     phase: "fetch",
-    preparedToken,
+    preparedToken: item.preparedToken,
+    ...(supplied.length > 0 ? { supplied } : {}),
   });
   const committed = commitFetched(directory, index, fetched, summary);
   return committed === undefined ? "stop" : applyReceipt(summary, committed);
@@ -529,20 +583,21 @@ function processPreparedItem(
  * Work one claim's nodes serially. Returns how many nodes were reached and whether the tick should
  * carry on — a throttle pauses it, a stale claim or an admission yield ends it.
  */
-function drainPreparedBatch(
+async function drainPreparedBatch(
   directory: string,
-  items: readonly { preparedToken: string }[],
+  items: readonly { fetchPlan?: CrawlFetchPlan; preparedToken: string }[],
   processed: number,
+  boxFetch: boolean,
   summary: SweepSummary,
   spentMs: () => number,
-): { done: boolean; processed: number; throttled: boolean } {
+): Promise<{ done: boolean; processed: number; throttled: boolean }> {
   let reached = processed;
   for (const item of items) {
     if (spentMs() >= WALL_BUDGET_MS) {
       recordWallBudgetStop(summary);
       return { done: true, processed: reached, throttled: false };
     }
-    const outcome = processPreparedItem(directory, reached, item.preparedToken, summary);
+    const outcome = await processPreparedItem(directory, reached, item, boxFetch, summary);
     reached += 1;
     if (outcome === "throttled") {
       // The rest of THIS claim is abandoned deliberately: its nodes would meet the same wall, and
@@ -557,7 +612,7 @@ function drainPreparedBatch(
 }
 
 /** Claim, work, and — when the vendor pushes back — wait, until a budget or the frontier says stop. */
-function drainFrontier(directory: string, summary: SweepSummary): void {
+async function drainFrontier(directory: string, summary: SweepSummary): Promise<void> {
   const startedAt = Date.now();
   const spentMs = (): number => Date.now() - startedAt;
   let processed = 0;
@@ -578,6 +633,10 @@ function drainFrontier(directory: string, summary: SweepSummary): void {
     }
     summary.pending = prepared.frontierPending ?? summary.pending;
     summary.queueDepth = summary.pending;
+    // The server's half of the switch, read fresh each claim: a flag flip takes effect on the very
+    // next prepare, with no deploy and no rebake.
+    const boxFetch = BOX_FETCH && prepared.boxFetch === true;
+    summary.boxFetch = boxFetch;
     if (prepared.kind === "drained") {
       return;
     }
@@ -585,7 +644,14 @@ function drainFrontier(directory: string, summary: SweepSummary): void {
       throw new Error(`crawl prepare is ${prepared.kind ?? "invalid"}`);
     }
 
-    const batch = drainPreparedBatch(directory, prepared.items, processed, summary, spentMs);
+    const batch = await drainPreparedBatch(
+      directory,
+      prepared.items,
+      processed,
+      boxFetch,
+      summary,
+      spentMs,
+    );
     processed = batch.processed;
     if (batch.done) {
       return;
@@ -610,7 +676,7 @@ function drainFrontier(directory: string, summary: SweepSummary): void {
   }
 }
 
-export function main(): void {
+export async function main(): Promise<void> {
   const summary = createSummary();
   try {
     validateConfig();
@@ -666,7 +732,7 @@ export function main(): void {
     }
     summary.gateState = "active";
 
-    drainFrontier(directory, summary);
+    await drainFrontier(directory, summary);
   } catch (error) {
     if (isDueWorkRepairPending(error)) {
       recordRepairPending(summary);
@@ -689,6 +755,6 @@ if (import.meta.main) {
   if (file) {
     console.log(JSON.stringify(runCriticalPhase(file)));
   } else {
-    main();
+    await main();
   }
 }

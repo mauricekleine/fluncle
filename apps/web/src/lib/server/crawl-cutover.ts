@@ -14,6 +14,29 @@ import { getSetting } from "./settings";
 /** The crawler's claiming-reader flag. Only the exact string `true` opens the cutover. */
 export const CRAWL_DUE_CUTOVER_ENABLED_KEY = "crawl_due_cutover_enabled";
 
+/**
+ * THE BOX-FETCH ACCEPTANCE FLAG — whether the Worker will consume a MusicBrainz body the box
+ * fetched from its own IP instead of making the request itself.
+ *
+ * It is the rollback lever, and it is a KV flip rather than a deploy because the thing it protects
+ * against is a vendor- or trust-shaped surprise that wants answering in seconds. It reads
+ * DEFAULT-ON and inert: a box that supplies nothing gets the Worker's own fetch either way, so an
+ * old pinned sweep and a new Worker agree without anyone flipping anything. Flip it to the exact
+ * string `false` and every crawl provider read goes back over Worker egress on the next tick.
+ *
+ * An unreadable setting reads as OFF. Being unable to decide is not a reason to start trusting a
+ * submitted body, and the Worker's own fetch is always the correct answer.
+ */
+export const CRAWL_BOX_FETCH_ENABLED_KEY = "crawl_box_fetch_enabled";
+
+export async function isCrawlBoxFetchEnabled(): Promise<boolean> {
+  try {
+    return (await getSetting(CRAWL_BOX_FETCH_ENABLED_KEY)) !== "false";
+  } catch {
+    return false;
+  }
+}
+
 /** One pass is clamped to five minutes at the HTTP surface; the lease clears that whole window. */
 export const CRAWL_CATALOGUE_LEASE_MS = 10 * 60 * 1000;
 export const CRAWL_CATALOGUE_CLAIM_OWNER = "crawl-catalogue";
