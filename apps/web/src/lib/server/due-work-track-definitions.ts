@@ -275,9 +275,26 @@ function usesCatalogueCaptureBudget(workKind: DueWorkQueueKind): boolean {
   throw new RangeError(`No due-work queue inventory entry for ${workKind}`);
 }
 
-function sharedOrder(source: DueWorkTrackSource): string {
+/**
+ * The shared ladder's key, component for component with the legacy selector's ORDER BY
+ * (track-work.ts § `workOrder`).
+ *
+ * The ANCHORED component belongs to the catalogue capture queue alone and sits between the ladder
+ * tier and the demand reorder, exactly where the selector spells it: capture is the metered queue,
+ * and audio bought for a row with no Spotify anchor cannot become recommendable until a separate
+ * billed search gives it one (`REC_ELIGIBLE_WHERE`, lib/catalogue-eligibility.ts). Tier order stays
+ * dominant, so the preference only ever reorders rows within one tier. `spotifyUri` is already part
+ * of the source-column contract and therefore of `dueWorkTrackSourceVersion`, so anchoring a row
+ * later changes its source version, and the ordinary marker repair recomputes this key with the row
+ * in its new place.
+ */
+function sharedOrder(source: DueWorkTrackSource, kind: DueWorkKind): string {
+  const anchoredFirst = kind === "capture" && !source.certified;
   const components: DueWorkOrderComponent[] = [
     { direction: "desc", kind: "number", value: source.capturePriority ?? 0 },
+    ...(anchoredFirst
+      ? [{ direction: "desc", kind: "boolean", value: source.spotifyUri !== null } as const]
+      : []),
     { direction: "desc", kind: "number", value: source.demandScore ?? 0 },
     { direction: "desc", kind: "text", value: source.findingAddedAt ?? "" },
     { direction: "desc", kind: "text", value: source.trackId },
@@ -447,7 +464,7 @@ function orderFor(kind: DueWorkKind, source: DueWorkTrackSource): string {
   if (kind === "anchor" || kind === "isrc-recovery") {
     return anchorOrder(source);
   }
-  return kind === "youtube-reverdict" ? reverdictOrder(source) : sharedOrder(source);
+  return kind === "youtube-reverdict" ? reverdictOrder(source) : sharedOrder(source, kind);
 }
 
 function compareRows(left: DueWorkTrackRow, right: DueWorkTrackRow): number {
