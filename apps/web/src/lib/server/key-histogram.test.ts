@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readKeyHistogram, resetKeyHistogramCache } from "./key-histogram";
 
@@ -20,10 +20,22 @@ const HISTOGRAM = [
   { count: 7, key: "F major" },
 ];
 
+/** How many times the archive's `group by key` walk was actually issued. */
+function histogramReads(): number {
+  return execute.mock.calls.filter(([statement]) => String(statement).includes("group by key"))
+    .length;
+}
+
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
   resetKeyHistogramCache();
   execute.mockReset();
   execute.mockResolvedValue({ rows: HISTOGRAM });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("readKeyHistogram", () => {
@@ -40,18 +52,48 @@ describe("readKeyHistogram", () => {
       readKeyHistogram(),
     ]);
 
-    // Concurrent callers may each miss a cold cache; what must never happen is a fresh walk of a
-    // growing index on every LATER ask, which is what the rail must avoid per `/mix` load.
     await readKeyHistogram();
     await readKeyHistogram();
 
-    const legacyReads = execute.mock.calls.filter(([statement]) =>
-      String(statement).includes("group by key"),
-    );
-    expect(legacyReads.length).toBeLessThanOrEqual(3);
+    // Concurrent cold callers share ONE in-flight read. A burst of `/mix` rails arriving at a
+    // fresh isolate together is exactly the shape that would otherwise multiply a walk of an
+    // index that grows with the catalogue, once per rail.
+    expect(histogramReads()).toBe(1);
     expect(first).toEqual(HISTOGRAM);
     expect(second).toEqual(HISTOGRAM);
     expect(third).toEqual(HISTOGRAM);
+  });
+
+  it("answers from the stale memo and refreshes behind the reader", async () => {
+    await readKeyHistogram();
+    execute.mockClear();
+    execute.mockResolvedValue({ rows: [{ count: 3, key: "G minor" }] });
+
+    // Past the window. The reader is not made to wait for the walk: it gets the remembered
+    // spellings, and only the NEXT reader sees the refreshed ones. Exactly one caller per isolate
+    // ever pays this read — the first.
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+
+    expect(await readKeyHistogram()).toEqual(HISTOGRAM);
+    await vi.waitFor(() => expect(histogramReads()).toBe(1));
+    expect(await readKeyHistogram()).toEqual([{ count: 3, key: "G minor" }]);
+  });
+
+  it("keeps the remembered spellings when a refresh fails, and retries on the next ask", async () => {
+    await readKeyHistogram();
+    execute.mockClear();
+    execute.mockRejectedValue(new Error("database unavailable"));
+
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+
+    // A failed background refresh is never the reader's problem: the rail keeps its pre-filter.
+    expect(await readKeyHistogram()).toEqual(HISTOGRAM);
+    await vi.waitFor(() => expect(histogramReads()).toBe(1));
+
+    execute.mockResolvedValue({ rows: [{ count: 3, key: "G minor" }] });
+    expect(await readKeyHistogram()).toEqual(HISTOGRAM);
+    await vi.waitFor(() => expect(histogramReads()).toBe(2));
+    expect(await readKeyHistogram()).toEqual([{ count: 3, key: "G minor" }]);
   });
 
   it("re-reads after the cache is dropped, so a fresh fixture never answers with a stale archive", async () => {

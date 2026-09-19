@@ -45,6 +45,13 @@ PUBLIC_REF_URL="${SSHFRESHEN_PUBLIC_REF_URL:-https://api.github.com/repos/mauric
 PUBLIC_ARCHIVE_BASE="${SSHFRESHEN_PUBLIC_ARCHIVE_BASE:-https://codeload.github.com/mauricekleine/fluncle/tar.gz}"
 GIT_TIMEOUT_SECS="${SSHFRESHEN_GIT_TIMEOUT_SECS:-60}"
 
+# The persistent Go caches. `go build` runs under a ROOT systemd oneshot, which sets no $HOME —
+# so Go can derive neither a module cache nor a build cache and dies without touching the box.
+# Both are needed: GOPATH covers the module cache, GOCACHE the build cache. They live outside
+# the git checkout so `git reset` never wipes them, which is also what lets the compiled ref
+# parser below be reused instead of recompiled on every tick.
+GO_CACHE_ROOT="${SSHFRESHEN_GO_CACHE:-$STATE_DIR/go}"
+
 # The live service contract (must match deploy-ssh-app-service.sh + the .service unit).
 SERVICE="${SSHFRESHEN_SERVICE:-fluncle-ssh}"
 APP_DIR="${SSHFRESHEN_APP_DIR:-/opt/fluncle-ssh}"
@@ -66,6 +73,15 @@ esac
 
 log() { printf '[ssh-freshen] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
+# sha256 of one file, on either a box (sha256sum) or a Mac (shasum) — the same pair
+# `compiled_manifest` picks between, kept in one place because the parser cache uses it too.
+file_digest() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
 case "$GIT_TIMEOUT_SECS" in
   '' | *[!0-9]* | 0) die "SSHFRESHEN_GIT_TIMEOUT_SECS must be a positive integer" ;;
 esac
@@ -234,7 +250,24 @@ func main() {
 	fmt.Print(ref.Object.SHA)
 }
 GO
-  NEW_SHA="$(go run "$REF_PARSER" "$REF_JSON" 2>/dev/null || true)"
+  # COMPILE ONCE, NOT EVERY TICK. `go run` links a fresh binary on every invocation — seconds of
+  # toolchain work, and against a cold build cache it is the slowest step in this whole fallback.
+  # The parser's bytes are fixed by the heredoc above, so its digest names a reusable artifact:
+  # build it into the persistent cache the first time and execute it directly from then on. The
+  # explicit GOPATH/GOCACHE is the same one `go build` needs under a $HOME-less root oneshot.
+  mkdir -p "$GO_CACHE_ROOT/path" "$GO_CACHE_ROOT/build" "$GO_CACHE_ROOT/bin"
+  REF_PARSER_BIN="$GO_CACHE_ROOT/bin/parse-ref-$(file_digest "$REF_PARSER")"
+  if [ ! -x "$REF_PARSER_BIN" ]; then
+    if ! ( cd "$ARCHIVE_WORK" \
+        && CGO_ENABLED=0 GOPATH="$GO_CACHE_ROOT/path" GOCACHE="$GO_CACHE_ROOT/build" \
+           go build -o "$REF_PARSER_BIN.$$" "$REF_PARSER" ) \
+      || ! mv -f "$REF_PARSER_BIN.$$" "$REF_PARSER_BIN"; then
+      rm -f "$REF_PARSER_BIN.$$"
+      rm -rf "$ARCHIVE_WORK"
+      die "could not build the public ref parser"
+    fi
+  fi
+  NEW_SHA="$("$REF_PARSER_BIN" "$REF_JSON" 2>/dev/null || true)"
   if ! printf '%s' "$NEW_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
     rm -rf "$ARCHIVE_WORK"
     die "the public main ref did not resolve to a commit SHA"
@@ -344,13 +377,9 @@ fi
 BUILD_OUT="$(mktemp -d "${TMPDIR:-/tmp}/ssh-freshen.XXXXXX")"
 trap 'rm -rf "$BUILD_OUT"' EXIT
 NEW_BIN="$BUILD_OUT/fluncle-ssh"
-# `go build` runs under a ROOT systemd oneshot, which sets no $HOME — so Go cannot derive
-# a module/build cache path and dies with "module cache not found: neither GOMODCACHE nor
-# GOPATH is set", never touching the box. Point Go at an explicit, persistent cache under
-# the state dir (outside the git checkout, so `git reset` never wipes it, and modules are
-# not re-downloaded every tick). Both are needed: GOPATH covers the module cache, GOCACHE
-# the build cache — with $HOME unset, GOCACHE would otherwise resolve under a missing home.
-GO_CACHE_ROOT="${SSHFRESHEN_GO_CACHE:-$STATE_DIR/go}"
+# `$GO_CACHE_ROOT` (declared with the rest of the config) is what keeps this `go build` from
+# dying with "module cache not found: neither GOMODCACHE nor GOPATH is set" under a $HOME-less
+# root oneshot, and what keeps modules from being re-downloaded every tick.
 mkdir -p "$GO_CACHE_ROOT/path" "$GO_CACHE_ROOT/build"
 log "building $NEW_BIN from $SOURCE_DIR/$APP_SRC (commit ${NEW_SHA:0:12})"
 if ! ( cd "$SOURCE_DIR/$APP_SRC" \

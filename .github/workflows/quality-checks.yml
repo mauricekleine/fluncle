@@ -225,7 +225,11 @@ jobs:
       - name: Install Turso CLI
         if: steps.classify.outputs.e2e == 'true'
         run: |
-          curl -sSfL -o /tmp/turso-cli.tar.gz "https://github.com/tursodatabase/turso-cli/releases/download/${TURSO_CLI_VERSION}/turso-cli_Linux_x86_64.tar.gz"
+          # A release download is a network call on the way to the tests, so a reset peer must
+          # not be able to fail the run before a single test has executed. The retry is bounded
+          # and the pinned version + SHA256 check below stay the actual gate on these bytes.
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
+            -o /tmp/turso-cli.tar.gz "https://github.com/tursodatabase/turso-cli/releases/download/${TURSO_CLI_VERSION}/turso-cli_Linux_x86_64.tar.gz"
           echo "${TURSO_CLI_SHA256}  /tmp/turso-cli.tar.gz" | sha256sum -c -
           tar -xzf /tmp/turso-cli.tar.gz -C /tmp turso
           sudo install -m 0755 /tmp/turso /usr/local/bin/turso
@@ -233,7 +237,9 @@ jobs:
       - name: Install sqld
         if: steps.classify.outputs.e2e == 'true'
         run: |
-          curl -sSfL -o /tmp/sqld.tar.xz "https://github.com/tursodatabase/libsql/releases/download/libsql-server-${SQLD_VERSION}/libsql-server-x86_64-unknown-linux-gnu.tar.xz"
+          # Same shape as the Turso CLI download above: bounded retry ahead of the SHA256 gate.
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
+            -o /tmp/sqld.tar.xz "https://github.com/tursodatabase/libsql/releases/download/libsql-server-${SQLD_VERSION}/libsql-server-x86_64-unknown-linux-gnu.tar.xz"
           echo "${SQLD_SHA256}  /tmp/sqld.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sqld.tar.xz -C /tmp
           sudo install -m 0755 /tmp/libsql-server-x86_64-unknown-linux-gnu/sqld /usr/local/bin/sqld
