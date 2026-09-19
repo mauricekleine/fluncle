@@ -2931,6 +2931,44 @@ JSON field reference:
       );
     });
 
+  // `get_spotify_anchor_breaker` → `admin catalogue anchor-breaker`. Why the anchor waterfall is
+  // quiet. Two causes look identical from outside — the shared-app throttle breaker PAUSING the
+  // Spotify search rungs, and the operator flags leaving the rungs DISARMED — so this reads both at
+  // once. Both flags off means nothing in the waterfall can conclude about a catalogue row: the free
+  // ListenBrainz rung still runs and can win, but its miss is not a verdict.
+  catalogue
+    .command("anchor-breaker")
+    .description("Why the anchor rungs are quiet: the throttle breaker, and which rungs are armed")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { anchorBreakerCommand } = await import("./commands/admin-catalogue");
+      const state = await anchorBreakerCommand();
+
+      if (options.json) {
+        printJson({ ...state, ok: true });
+        return;
+      }
+
+      const minutes = Math.ceil(state.cooldownRemainingMs / 60_000);
+
+      console.log(
+        state.tripped
+          ? `BREAKER TRIPPED — ${state.reason ?? "unknown"}, ~${minutes}m left (${state.throttlesInWindow} throttle(s) in window)`
+          : `BREAKER CLEAR — ${state.throttlesInWindow} throttle(s) in window`,
+      );
+      console.log(
+        `RUNGS — spotify search ${state.rungs.spotifySearchEnabled ? "ARMED" : "OFF"} · apify fallback ${
+          state.rungs.apifyEnabled ? "ARMED" : "OFF"
+        }`,
+      );
+
+      if (!state.rungs.spotifySearchEnabled && !state.rungs.apifyEnabled) {
+        console.log(
+          "No rung can conclude — ListenBrainz still runs and can win, but its miss settles nothing.",
+        );
+      }
+    });
+
   // `requeue_isrc_recovery` → `admin catalogue requeue-isrc-recovery --since <iso>` (operator).
   // Clear the free Deezer pass's clean-miss watermark on rows it retired at or after `--since`, so
   // they re-enter the isrc-recovery worklist now. The lever for a window where the ASK came back

@@ -538,8 +538,14 @@ else
 fi
 `);
       const payloadMarker = join(directory, "payload-started");
+      // The assertion is STICKINESS — that the second firing's shadow answer cannot undo the
+      // enforcement the first one established. Reaching that second firing costs one poll
+      // interval, so a two-second budget left the case racing its own wait: expire first and the
+      // run yields `wait-expired` and never forms an opinion about stickiness at all. The budget
+      // is not what is under test here (`maxWaitSecs: 0` and `1` above cover expiry), so it is
+      // sized to let the firing that IS under test happen.
       const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
-        maxWaitSecs: 2,
+        maxWaitSecs: 10,
       });
 
       expect(result.status).toBe(0);
