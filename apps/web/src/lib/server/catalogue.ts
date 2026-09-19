@@ -59,7 +59,6 @@ import {
   DueWorkMaintenancePendingError,
   MAX_DUE_WORK_CHUNK_SIZE,
   markDueWorkSourceMaintenanceFromSelectStatements,
-  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
@@ -820,25 +819,130 @@ export async function refreshCatalogueRankStateCache(): Promise<CatalogueRankSta
 export const RANK_BATCH_SIZE = 250;
 
 /**
+ * The values a rank write leaves on the `tracks` row for the columns a track source marker's
+ * projections actually read. One entry per candidate, captured in the branch that wrote it.
+ */
+type RankProjectionInputs = {
+  capturePriority: null | number;
+  captureStatus: null | string;
+  duplicateOfTrackId: null | string;
+  hasEmbedding: boolean;
+  nearestFindingScore: null | number;
+  trackId: string;
+};
+
+/**
+ * THE CHANGED-ROW PREDICATE, and why it is exactly these five columns.
+ *
+ * A `track` source marker fans out to three projection families, each reading one declared column
+ * contract: the track queues (`DUE_WORK_TRACK_SOURCE_COLUMNS`), the vendor queues
+ * (`DUE_WORK_VENDOR_SOURCE_COLUMNS`, with `catalogue-rank` narrowed to
+ * `CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS`), and the finding queues (`FINDING_SOURCE_SELECT`, which
+ * reads the `findings` table the rank tick never writes). Intersect those contracts with the six
+ * `tracks` columns a rank write can move and exactly five remain:
+ *
+ *   capture_priority        track (`capturePriority`) + vendor
+ *   duplicate_of_track_id   track (`duplicateOfTrackId`)
+ *   nearest_finding_score   track (`nearestFindingScore`)
+ *   capture_status          track (`captureStatus`) + vendor — only the wrong-audio quarantine
+ *   has_embedding           track (`hasEmbedding`) + vendor — only the wrong-audio quarantine
+ *
+ * `nearest_finding_track_id`, `catalogue_ranked_at` and `source_audio_rejected` are read by NO
+ * projection, so moving them alone owes nothing. `catalogue_rank_corpus` is read only by the
+ * `catalogue-rank` vendor projection, and this tick settles that projection itself
+ * (`rankSettledStatements`) rather than paying a whole source repair for it — which is what makes
+ * the CORPUS-FINGERPRINT RESTAMP free: a restamp moves the stamp and nothing else, so a tick that
+ * only re-stamps rows at their existing rank mints zero source markers.
+ *
+ * The comparison is made HERE, in SQL, inside the same write batch and immediately BEFORE the
+ * updates, because that is the only place where the old value and the new value are both
+ * authoritative. `IS NOT` is the null-safe form, and the scores are compared as the exact stored
+ * representation with NO epsilon: the winner distance is a deterministic function of the same two
+ * stored vectors, so an identical rank re-binds an identical double, while a real move — however
+ * small — is a real move. An epsilon could only ever hide one, and a missed mark is a permanently
+ * stale projection row that nothing repairs.
+ */
+function rankChangedSubjectSelection(chunk: readonly RankProjectionInputs[]): {
+  args: (null | number | string)[];
+  sql: string;
+} {
+  return {
+    args: chunk.flatMap((row) => [
+      row.trackId,
+      row.capturePriority,
+      row.duplicateOfTrackId,
+      row.nearestFindingScore,
+      row.captureStatus,
+      row.hasEmbedding ? 1 : 0,
+    ]),
+    // A `values` row constructor, not `union all` arms: hosted Turso caps a compound SELECT at 50
+    // terms (AGENTS.md § Database), and this carries the helper's full 500-subject bound.
+    sql: `select written.column1 as subject_id
+      from (values ${chunk.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}) as written
+      join tracks on tracks.track_id = written.column1
+      where tracks.capture_priority is not written.column2
+         or tracks.duplicate_of_track_id is not written.column3
+         or tracks.nearest_finding_score is not written.column4
+         or tracks.capture_status is not written.column5
+         or tracks.has_embedding is not written.column6`,
+  };
+}
+
+/**
  * Shape ranked-track maintenance to the due-work helper's 500-subject API bound while the public
  * rank contract deliberately accepts up to 1,000 candidates. Every returned statement still joins
  * the source writes in one transaction; later chunks may advance the shadow epochs again, and every
  * moved subject carries the epoch it entered under so reconciliation remains complete and
  * race-token safe.
+ *
+ * These statements belong BEFORE the writes they describe (see `rankChangedSubjectSelection`).
  */
-function rankMaintenanceStatements(movedIds: string[], now: string): InStatement[] {
+function rankMaintenanceStatements(
+  projected: readonly RankProjectionInputs[],
+  now: string,
+): InStatement[] {
   const maintenance: InStatement[] = [];
-  for (let start = 0; start < movedIds.length; start += MAX_DUE_WORK_CHUNK_SIZE) {
+  for (let start = 0; start < projected.length; start += MAX_DUE_WORK_CHUNK_SIZE) {
+    const chunk = projected.slice(start, start + MAX_DUE_WORK_CHUNK_SIZE);
+    if (chunk.length === 0) {
+      continue;
+    }
     maintenance.push(
-      ...markDueWorkSourceMaintenanceStatements(
-        movedIds
-          .slice(start, start + MAX_DUE_WORK_CHUNK_SIZE)
-          .map((subjectId) => ({ subjectId, subjectType: "track" })),
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
+        "track",
+        rankChangedSubjectSelection(chunk),
         { now, producer: "catalogue-rank" },
       ),
     );
   }
   return maintenance;
+}
+
+/**
+ * THE ONE PROJECTION THIS TICK OWNS. After a rank write the row's `catalogue-rank` due row is
+ * `undefined` in every branch, by construction of `catalogueRankDueAt`: a scored row carries the
+ * current corpus with a cleared tier, a duplicate carries it with a NEGATIVE tier, and the
+ * quarantine and pre-audio branches carry the unembedded corpus with `has_embedding = 0`, which
+ * takes the re-pick arm off the table. `is_catalogue` and `dismissed_at` are the candidate
+ * predicate and this tick never moves them. So the repair a source marker would buy for this
+ * projection is known here, exactly, and is written here instead. Nothing claims a `catalogue-rank`
+ * row — the rank batch reads the projection, it does not lease it — so the delete races nothing.
+ */
+function rankSettledStatements(movedIds: readonly string[]): InStatement[] {
+  const settled: InStatement[] = [];
+  for (let start = 0; start < movedIds.length; start += MAX_DUE_WORK_CHUNK_SIZE) {
+    const chunk = movedIds.slice(start, start + MAX_DUE_WORK_CHUNK_SIZE);
+    if (chunk.length === 0) {
+      continue;
+    }
+    settled.push({
+      args: [...chunk],
+      sql: `delete from due_work
+        where work_kind = 'catalogue-rank' and subject_type = 'track'
+          and subject_id in (${chunk.map(() => "?").join(", ")})`,
+    });
+  }
+  return settled;
 }
 
 /**
@@ -1680,6 +1784,8 @@ async function rankCatalogueBatch(
   const { unvectored, vectored } = splitCandidateVectors(candidates);
   const now = new Date().toISOString();
   const writes: InStatement[] = [];
+  // What each write leaves on the row, for the changed-row predicate (`rankMaintenanceStatements`).
+  const projected: RankProjectionInputs[] = [];
   const rankableRepairs: InStatement[] = [];
 
   // ── The scored half: max-similarity to ANY finding, computed in SQL ────────────────
@@ -1794,6 +1900,14 @@ async function rankCatalogueBatch(
                     catalogue_ranked_at = ?
                 where track_id = ?`,
         });
+        projected.push({
+          capturePriority: DUPLICATE_CAPTURE_TIER,
+          captureStatus: candidate.capture_status,
+          duplicateOfTrackId: winner.fid,
+          hasEmbedding: candidate.has_vector === 1,
+          nearestFindingScore: score,
+          trackId: candidate.track_id,
+        });
         continue;
       }
 
@@ -1851,6 +1965,14 @@ async function rankCatalogueBatch(
                   catalogue_ranked_at = ?
               where track_id = ?`,
         });
+        projected.push({
+          capturePriority: preAudio.priority,
+          captureStatus: WRONG_AUDIO_STATUS,
+          duplicateOfTrackId: preAudio.duplicateOf,
+          hasEmbedding: false,
+          nearestFindingScore: null,
+          trackId: candidate.track_id,
+        });
         // The satellite half of the clear, in the SAME batch and immediately after its update —
         // the delete reads the `has_embedding = 0` that update just wrote (embedding.ts).
         writes.push(clearEmbeddingSatellite(candidate.track_id));
@@ -1898,6 +2020,14 @@ async function rankCatalogueBatch(
                   catalogue_ranked_at = ?
               where track_id = ?`,
       });
+      projected.push({
+        capturePriority: DUPLICATE_CAPTURE_TIER,
+        captureStatus: candidate.capture_status,
+        duplicateOfTrackId: findingDuplicate,
+        hasEmbedding: candidate.has_vector === 1,
+        nearestFindingScore: score,
+        trackId: candidate.track_id,
+      });
       continue;
     }
 
@@ -1933,6 +2063,14 @@ async function rankCatalogueBatch(
                   catalogue_ranked_at = ?
               where track_id = ?`,
       });
+      projected.push({
+        capturePriority: DUPLICATE_CAPTURE_TIER,
+        captureStatus: candidate.capture_status,
+        duplicateOfTrackId: canonical,
+        hasEmbedding: candidate.has_vector === 1,
+        nearestFindingScore: score,
+        trackId: candidate.track_id,
+      });
       continue;
     }
 
@@ -1956,6 +2094,14 @@ async function rankCatalogueBatch(
                 capture_priority = null,
                 duplicate_of_track_id = null
             where track_id = ?`,
+    });
+    projected.push({
+      capturePriority: null,
+      captureStatus: candidate.capture_status,
+      duplicateOfTrackId: null,
+      hasEmbedding: candidate.has_vector === 1,
+      nearestFindingScore: score,
+      trackId: candidate.track_id,
     });
   }
 
@@ -2008,6 +2154,14 @@ async function rankCatalogueBatch(
                   nearest_finding_track_id = null
               where track_id = ?`,
       });
+      projected.push({
+        capturePriority: priority,
+        captureStatus: candidate.capture_status,
+        duplicateOfTrackId: duplicateOf,
+        hasEmbedding: false,
+        nearestFindingScore: null,
+        trackId: candidate.track_id,
+      });
     }
   }
 
@@ -2018,11 +2172,14 @@ async function rankCatalogueBatch(
   const before = await readBatchRowBuckets(movedIds);
 
   // One implicit write transaction. Every statement is PK-keyed and idempotent, so a retry
-  // after a partial failure converges on the same rows.
+  // after a partial failure converges on the same rows. The repair markers come FIRST because
+  // their changed-row predicate reads the values the writes are about to replace; the whole batch
+  // is one transaction, so no other reader sees the intermediate order.
   await db.batch(
     [
+      ...rankMaintenanceStatements(projected, new Date().toISOString()),
       ...writes,
-      ...rankMaintenanceStatements(movedIds, new Date().toISOString()),
+      ...rankSettledStatements(movedIds),
       ...rankableRepairs,
     ],
     "write",

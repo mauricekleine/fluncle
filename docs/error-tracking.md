@@ -40,6 +40,8 @@ The Team plan's 5M spans/mo is the budget the sampler is tuned against. The **p9
 
 `apiFault` logs unexpected non-`ApiError` 500s and calls `captureException` with `source: orpc.apiFault`, while returning the generic wire response.
 
+**Backpressure is not a fault.** A `DueWorkMaintenancePendingError` is a typed "come back": a bounded due-work maintenance pass converged as far as its budget allowed and the read it fronted is deferred, not broken. Every oRPC op answers it as a `due_work_maintenance_pending` 503 with no capture, guaranteed in one place by the router-level middleware in `lib/server/orpc.ts` rather than by each handler's catch, so an op with no catch — or a throw from a middleware or an input validator — cannot surface a deferred read as a 500. `apiFault` gives the same answer for the handlers that do catch, and `redactServerFnFault` gives it on the TanStack server-fn path. The box sweeps read that code as an exit-zero pause (`due_work_repair_pending` in the run ledger), so a write burst never pages.
+
 Both SDKs initialize **only in a production build** (`import.meta.env.PROD`, statically `false` under `vite dev` / `bun run dev` / the smoke routine, `true` in the deployed Worker bundle). A dev session sends nothing, and when the DSN is absent the SDK is inert.
 
 ## CSP violation reports — the report sink

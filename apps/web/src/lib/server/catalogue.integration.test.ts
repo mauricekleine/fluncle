@@ -429,18 +429,20 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     )?.[0];
     expect(rankBatch).toBeDefined();
 
+    // The marker is now a changed-row selection over a `values` row constructor, still chunked at
+    // the helper's 500-subject API bound: one 500-row selection, then one 1-row selection.
     const sourceRepairRows = (rankBatch ?? [])
       .filter(
         (statement) =>
           typeof statement !== "string" &&
           !Array.isArray(statement) &&
           statement.sql.includes("insert into due_work") &&
-          statement.sql.includes("with source"),
+          statement.sql.includes("tracks.capture_priority is not written.column2"),
       )
       .map((statement) =>
         typeof statement === "string" || Array.isArray(statement)
           ? 0
-          : statement.sql.split("(?, ?, ?, 'repair', '', ?, ?, ?, ?, ?)").length - 1,
+          : statement.sql.split("(?, ?, ?, ?, ?, ?)").length - 1,
       );
     expect(sourceRepairRows).toEqual([500, 1]);
     expect(
@@ -2656,5 +2658,90 @@ describe("the staleness fingerprint — v5 targeted re-staling", () => {
     expect((await rankingOf("cat-major")).capture_priority).toBe(3);
     // Sanity: the fingerprint genuinely moved (a global re-stale was warranted here).
     expect((await rankingOf("cat-major")).catalogue_rank_corpus).not.toBe(majorCorpusBefore);
+  });
+});
+
+// THE CHANGED-ROW RAIL. Repair debt is minted by real change, never by a visit. The rank tick
+// touches every candidate it ranks, but one track source marker buys a repair of three projection
+// families, and only five `tracks` columns feed any of them (`rankChangedSubjectSelection`). The
+// `catalogue-rank` projection is the exception the tick owns outright: it settles that row itself,
+// which is what makes a pure corpus restamp free.
+describe("the rank tick's repair markers — minted by real change", () => {
+  async function sourceMarkersFor(trackId: string): Promise<number> {
+    const result = await db.execute({
+      args: [trackId],
+      sql: `select count(*) as n from due_work
+        where work_kind = 'source-repair' and subject_type = 'track' and subject_id = ?`,
+    });
+
+    return Number(result.rows[0]?.n ?? 0);
+  }
+
+  async function clearSourceMarkers(): Promise<void> {
+    await db.execute(`delete from due_work where work_kind = 'source-repair'`);
+  }
+
+  it("mints nothing for a corpus restamp that moves no projected input", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("find-nr1", { vector: axis(0) });
+    await seedCatalogue("cat-steady", { vector: unit([1, 0.02, ...axis(2).slice(2)]) });
+
+    await rankCatalogue();
+    const ranked = await rankingOf("cat-steady");
+    expect(ranked.nearest_finding_track_id).toBe("find-nr1");
+    await clearSourceMarkers();
+
+    // A second finding lands FAR from this row. The corpus fingerprint moves (the findings count is
+    // in it), so the row goes stale and is re-ranked — but its nearest finding, its score, its tier,
+    // its duplicate marker, its capture status and its embedding flag are all exactly where they
+    // were. Nothing any projection reads moved, so the tick owes no repair.
+    await seedFinding("find-fr2", { vector: axis(7) });
+
+    const restamp = await rankCatalogue();
+    expect(restamp.scored).toBe(1);
+    const afterRestamp = await rankingOf("cat-steady");
+    expect(afterRestamp.catalogue_rank_corpus).not.toBe(ranked.catalogue_rank_corpus);
+    expect(afterRestamp.nearest_finding_score).toBe(ranked.nearest_finding_score);
+    expect(await sourceMarkersFor("cat-steady")).toBe(0);
+  });
+
+  it("mints a marker when a projected input really moves", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("find-nr1", { vector: axis(0) });
+    await seedCatalogue("cat-moved", { vector: unit([1, 0.4, ...axis(2).slice(2)]) });
+
+    await rankCatalogue();
+    await clearSourceMarkers();
+
+    // A NEARER finding lands: the row's `nearest_finding_score` moves, and the score is a declared
+    // track-source column, so the marker is owed.
+    await seedFinding("find-nr3", { vector: unit([1, 0.4, ...axis(2).slice(2)]) });
+
+    await rankCatalogue();
+    expect((await rankingOf("cat-moved")).nearest_finding_track_id).toBe("find-nr3");
+    expect(await sourceMarkersFor("cat-moved")).toBe(1);
+  });
+
+  it("settles its own catalogue-rank due row instead of paying a source repair for it", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedCatalogue("cat-settled");
+    // The projection row the rank batch reads from. After the tick's write the row is not due by
+    // construction, so the tick deletes it rather than marking the whole track for repair.
+    await db.execute(`insert into due_work
+      (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+       source_version, generation, updated_at)
+      values ('catalogue-rank', 'track', 'cat-settled', 'ready', 'k',
+        '2026-01-01T00:00:00.000Z', 'v1', 'live', '2026-01-01T00:00:00.000Z')`);
+
+    await rankCatalogue();
+
+    const remaining = await db.execute(
+      `select count(*) as n from due_work
+       where work_kind = 'catalogue-rank' and subject_id = 'cat-settled'`,
+    );
+    expect(Number(remaining.rows[0]?.n ?? 0)).toBe(0);
   });
 });

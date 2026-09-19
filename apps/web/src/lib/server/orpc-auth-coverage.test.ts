@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { dueWorkMaintenancePendingMiddleware } from "./orpc-backpressure";
 import { router } from "./orpc";
 import { adminAuth, operatorGuard, privateUserAuth } from "./orpc-auth";
 
@@ -58,11 +59,18 @@ const STATIC_MIDDLEWARE_TIERS = new Map<unknown, "admin" | "operator" | "private
 
 // Read the middleware chain oRPC composed onto a router op. Typed loosely because
 // oRPC's `~orpc` internals are not part of its public type surface.
+// The router-level middleware that carries no authority: it narrows the typed due-work backpressure
+// answer to a 503 and is applied to EVERY op, so it says nothing about a tier. Listed by reference,
+// not skipped by shape, so an unrecognised middleware still fails this guard loudly.
+const NON_AUTH_MIDDLEWARES = new Set<unknown>([dueWorkMaintenancePendingMiddleware]);
+
 function middlewaresOf(op: unknown): unknown[] {
   const orpc = (op as Record<string, unknown>)["~orpc"] as Record<string, unknown> | undefined;
   const middlewares = orpc?.middlewares;
 
-  return Array.isArray(middlewares) ? middlewares : [];
+  return Array.isArray(middlewares)
+    ? middlewares.filter((middleware) => !NON_AUTH_MIDDLEWARES.has(middleware))
+    : [];
 }
 
 // Derive an op's auth tier from its middleware chain.
