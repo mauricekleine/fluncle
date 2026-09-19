@@ -223,11 +223,20 @@ export async function fetchMusicbrainz(
     try {
       response = await fetchFn(url, {
         headers: { "User-Agent": MB_USER_AGENT },
+        // NEVER follow a redirect. The host guard above is checked once, on the url the Worker
+        // issued, and a followed 3xx would walk straight past it — off-host, and from a machine
+        // whose network reach is not the public internet's. A redirect is therefore not a hop to
+        // take but an answer this read did not get.
+        redirect: "manual",
         signal: AbortSignal.timeout(MB_REQUEST_TIMEOUT_MS),
       });
     } catch {
       // A network error or a stalled socket yielded nothing. That is an empty answer, never a
       // throttle: a stall says nothing about the vendor's mood.
+      return { outcome: "empty", url };
+    }
+
+    if (response.status >= 300 && response.status < 400) {
       return { outcome: "empty", url };
     }
 

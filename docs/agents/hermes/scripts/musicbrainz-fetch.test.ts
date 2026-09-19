@@ -202,6 +202,30 @@ describe("what one read comes back as", () => {
     expect(await read(huge)).toMatchObject({ outcome: "oversize" });
   });
 
+  it("never follows a redirect off the pinned host", async () => {
+    // The host guard runs once, on the url the Worker issued. A followed 3xx would walk straight
+    // past it from a machine whose network reach is not the public internet's, so a redirect is an
+    // answer this read did not get rather than a hop to take.
+    const inits: (RequestInit | undefined)[] = [];
+    for (const status of [301, 302, 307, 308]) {
+      const result = await fetchMusicbrainz("https://musicbrainz.org/ws/2/release/x?fmt=json", {
+        fetch: (_url, init) => {
+          inits.push(init);
+          return Promise.resolve(
+            new Response("", { headers: { Location: "http://169.254.169.254/" }, status }),
+          );
+        },
+        intervalMs: 0,
+        stateDir,
+      });
+      expect(result, String(status)).toEqual({ outcome: "empty", url: expect.any(String) });
+    }
+    expect(inits).toHaveLength(4);
+    for (const init of inits) {
+      expect(init?.redirect).toBe("manual");
+    }
+  });
+
   it("reports a network error as empty rather than a throttle", async () => {
     expect(
       await fetchMusicbrainz("https://musicbrainz.org/ws/2/release/x?fmt=json", {
