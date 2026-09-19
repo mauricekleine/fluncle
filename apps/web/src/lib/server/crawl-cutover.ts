@@ -1,5 +1,6 @@
 import {
   claimCrawlDueWork,
+  CRAWL_REPAIR_MARKER_BUDGET,
   fanOutCrawlProjectionRepairs,
   markCrawlNodeRepairStatement,
   MAX_CRAWL_DUE_CHUNK_SIZE,
@@ -48,6 +49,8 @@ export type CrawlClaimRepairDrainBudget = {
   nodeChunks: number;
   /** Due rows one source-repair page may fan out. */
   sourcePageRows: number;
+  /** Source markers one source-repair page may clear while none of them expands a row. */
+  sourcePageMarkers: number;
   /** Source-repair pages one claim may start. */
   sourcePages: number;
   /** Cumulative drain time after which no further page or chunk starts. */
@@ -68,10 +71,23 @@ export type CrawlClaimRepairDrainBudget = {
 export const CRAWL_CLAIM_REPAIR_DRAIN_BUDGET: Readonly<CrawlClaimRepairDrainBudget> = {
   nodeChunkRows: MAX_CRAWL_DUE_CHUNK_SIZE,
   nodeChunks: 4,
+  sourcePageMarkers: CRAWL_REPAIR_MARKER_BUDGET,
   sourcePageRows: MAX_CRAWL_DUE_CHUNK_SIZE,
   sourcePages: 4,
   wallMs: 5_000,
 };
+
+/**
+ * SOURCE MARKERS ONE CLAIM MAY CLEAR — the capacity side of the admission invariant.
+ *
+ * Every tick runs its admission phase and THEN this claim, and the admission phase mints source
+ * repair markers of its own. A claim that cannot clear every marker its own tick minted defers with
+ * `due_work_maintenance_pending` forever: the next tick mints the same number again, so the crawl
+ * stops claiming rows entirely. The capacity therefore has to exceed the mint bound with margin,
+ * and `crawl.ts` asserts exactly that against {@link CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND}.
+ */
+export const CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY =
+  CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.sourcePages * CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.sourcePageMarkers;
 
 export async function isCrawlDueCutoverEnabled(): Promise<boolean> {
   try {
@@ -143,9 +159,19 @@ export async function claimCrawlFrontierRows(
   };
   const mayStart = (started: number, cap: number): boolean =>
     started < cap && spentMs < budget.wallMs;
+  // A page's own marker run is wall-bounded too: `spentMs` only advances once the page returns, so
+  // the page carries the remaining wall budget in with it and stops clearing markers when it is out.
   const drainSourcePage = () => {
     sourcePages += 1;
-    return timed(() => fanOutCrawlProjectionRepairs(client, { limit: budget.sourcePageRows }));
+    const startedAt = now();
+    const remainingMs = budget.wallMs - spentMs;
+    return timed(() =>
+      fanOutCrawlProjectionRepairs(client, {
+        limit: budget.sourcePageRows,
+        markerBudget: budget.sourcePageMarkers,
+        mayContinue: () => now() - startedAt < remainingMs,
+      }),
+    );
   };
   const drainNodeChunk = () => {
     nodeChunks += 1;
