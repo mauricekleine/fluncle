@@ -69,6 +69,37 @@ const PublicSurfaceCountsSchema = z
   })
   .meta({ id: "PublicSurfaceCounts" });
 
+/**
+ * THE AUTHORIZED CAPTURE BACKLOG — the work the metered capture queue holds, stated INDEPENDENTLY of
+ * whether the budget window is letting any of it through.
+ *
+ * `queues.captureQueue` is the sweep's own depth, brake and all: the capture worklist narrows itself
+ * to the findings while the budget is shut, so the catalogue-scoped queue reads 0 on a closed day
+ * and the whole backlog the moment it opens. That is right for a queue depth and wrong for a gauge,
+ * so the gauge is here: `authorized` counts the same predicate with the budget dropped and every
+ * other guard (the ladder veto, the dismissal, the duration gates, the failure cap, the cooldown)
+ * intact, and `budgetOpen` states the brake as its own fact.
+ *
+ * `tiers` splits that backlog by the Ear's pre-audio tier and by whether the row already carries a
+ * `spotify_uri`, because rec-eligibility requires the anchor: bytes bought for an unanchored row
+ * cannot reach the recommendation pool until anchoring catches up. Highest tier first — the order
+ * the metered queue drains them in — and the buckets sum to `authorized`.
+ */
+const CaptureBacklogSchema = z
+  .object({
+    authorized: z.number().int(),
+    authorizedAnchored: z.number().int(),
+    budgetOpen: z.boolean(),
+    tiers: z.array(
+      z.object({
+        anchored: z.number().int(),
+        tier: z.number().int(),
+        unanchored: z.number().int(),
+      }),
+    ),
+  })
+  .meta({ id: "CaptureBacklog" });
+
 /** The operator's spend levers, surfaced as gauges. */
 const FunnelMetersSchema = z
   .object({
@@ -126,7 +157,19 @@ export const recordCatalogueSnapshot = oc
     tags: ["Admin"],
   })
   .input(z.object({}))
-  .output(z.object({ ok: z.literal(true), snapshot: CatalogueSnapshotRowSchema }));
+  .output(
+    z.object({
+      /**
+       * Any UTC day this tick HEALED — a day whose own firing never landed (a Worker fault, an
+       * admission yield, a sleeping box) and which this run filled from its own counts inside the
+       * catch-up grace window. Empty on a healthy day; the box sweep echoes it into its run summary
+       * so a silently-patched hole is still visible in the ledger.
+       */
+      backfilledDays: z.array(z.string()),
+      ok: z.literal(true),
+      snapshot: CatalogueSnapshotRowSchema,
+    }),
+  );
 
 /**
  * `get_funnel` → `GET /admin/funnel` (operationId `getFunnel`).
@@ -150,6 +193,7 @@ export const getFunnel = oc
   .output(
     z.object({
       live: z.object({
+        captureBacklog: CaptureBacklogSchema,
         meters: FunnelMetersSchema,
         publicSurfaces: PublicSurfaceCountsSchema,
         queues: FunnelLiveQueuesSchema,

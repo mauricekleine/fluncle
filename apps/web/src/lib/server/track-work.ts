@@ -448,8 +448,12 @@ export function scopeClause(scope: TrackWorkScope): string {
  * repetition changes no predicate: under `f.track_id is null`, the other OR arm is impossible. It
  * does expose the complete `(is_catalogue, dismissed_at, capture_priority)` seek to SQLite, which
  * does not simplify those terms out of the nested findings/catalogue OR by itself.
+ *
+ * EXPORTED for the funnel's AUTHORIZED capture backlog (funnel.ts
+ * `catalogueCaptureBacklogStatement`), which must count the same half this selects — the brake
+ * is what that read deliberately drops, never the predicate.
  */
-function workHalfClause(kind: TrackWorkKind, half: Exclude<TrackWorkScope, "all">): string {
+export function workHalfClause(kind: TrackWorkKind, half: Exclude<TrackWorkScope, "all">): string {
   const captureSeek =
     kind === "capture" && half === "catalogue"
       ? " and t.dismissed_at is null and t.capture_priority >= 0"

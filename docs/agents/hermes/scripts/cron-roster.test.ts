@@ -295,6 +295,24 @@ describe("reading a timer's cadence", () => {
   test("two periods are ambiguous, so neither wins", () => {
     expect(parseTimerCadenceMs("[Timer]\nOnUnitActiveSec=5min\nOnUnitActiveSec=1h\n")).toBeNull();
   });
+
+  test("a retry firing inside the same period keeps the period", () => {
+    // The funnel snapshot's shape: a nightly slot plus a second slot the same UTC day, so a
+    // skipped or failed run gets another shot before the day it is keyed on closes. The unit fires
+    // twice; the WINDOW still comes round daily, and the cadence is a staleness budget — the
+    // longest a marker may legitimately go unwritten — so it stays 24h.
+    expect(
+      parseTimerCadenceMs(
+        "[Timer]\nOnCalendar=*-*-* 23:45:00 UTC\nOnCalendar=*-*-* 23:57:00 UTC\n",
+      ),
+    ).toBe(24 * 60 * 60_000);
+  });
+
+  test("calendar slots of DIFFERENT periods stay ambiguous", () => {
+    expect(parseTimerCadenceMs("[Timer]\nOnCalendar=*:0/15\nOnCalendar=*-*-* 23:45:00 UTC\n")).toBe(
+      null,
+    );
+  });
 });
 
 describe("finding the emit_cron_output token", () => {

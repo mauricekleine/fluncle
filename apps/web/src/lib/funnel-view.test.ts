@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  type CaptureBacklog,
   type CatalogueSnapshotRow,
   type FunnelLiveQueues,
   type FunnelStages,
@@ -11,6 +12,7 @@ import {
   growthPoints,
   latestThroughput,
   stageBars,
+  type StageLiveCounts,
 } from "@/lib/funnel-view";
 
 // A fully-populated stage set, biggest at the top of the funnel and tapering to the exit —
@@ -38,6 +40,21 @@ const QUEUES: FunnelLiveQueues = {
   embedQueue: 20,
 };
 
+// The capture stage reads the BUDGET-INDEPENDENT backlog, never `queues.captureQueue` — so the
+// fixture deliberately disagrees with it (90 vs 140) and the assertions below pin which one the
+// bar shows. That is the whole point of the split: the queue obeys the brake, the backlog does not.
+const CAPTURE_BACKLOG: CaptureBacklog = {
+  authorized: 140,
+  authorizedAnchored: 55,
+  budgetOpen: false,
+  tiers: [
+    { anchored: 40, tier: 3, unanchored: 60 },
+    { anchored: 15, tier: 1, unanchored: 25 },
+  ],
+};
+
+const LIVE: StageLiveCounts = { captureBacklog: CAPTURE_BACKLOG, queues: QUEUES };
+
 /** A snapshot row from a fixed base, so a test can add just the deltas it cares about. */
 function snapshot(day: string, over: Partial<CatalogueSnapshotRow>): CatalogueSnapshotRow {
   return {
@@ -64,7 +81,7 @@ function snapshot(day: string, over: Partial<CatalogueSnapshotRow>): CatalogueSn
 
 describe("stageBars", () => {
   it("orders the stages biggest-first and links each to its operating surface", () => {
-    const bars = stageBars(STAGES, QUEUES);
+    const bars = stageBars(STAGES, LIVE);
 
     // Descending by total, so the band tapers: anchored (500) outranks captured (400) even though
     // it sits later in flow order.
@@ -87,7 +104,7 @@ describe("stageBars", () => {
 
   it("keeps flow order between stages that tie on total", () => {
     const tied: FunnelStages = { ...STAGES, analyzed: 400, anchored: 400, captured: 400 };
-    const bars = stageBars(tied, QUEUES);
+    const bars = stageBars(tied, LIVE);
 
     expect(bars.map((bar) => bar.key)).toEqual([
       "crawled",
@@ -101,7 +118,7 @@ describe("stageBars", () => {
   });
 
   it("gives honest proportional widths against the widest stage", () => {
-    const bars = stageBars(STAGES, QUEUES);
+    const bars = stageBars(STAGES, LIVE);
     const byKey = Object.fromEntries(bars.map((bar) => [bar.key, bar]));
 
     // Crawled is the widest, so it reads full width; the rest are its fraction.
@@ -111,10 +128,13 @@ describe("stageBars", () => {
   });
 
   it("carries the drain queue behind the stages that have one and undefined elsewhere", () => {
-    const bars = stageBars(STAGES, QUEUES);
+    const bars = stageBars(STAGES, LIVE);
     const byKey = Object.fromEntries(bars.map((bar) => [bar.key, bar]));
 
-    expect(byKey.captured?.queued).toBe(90);
+    // THE CAPTURE ROW READS THE BACKLOG, NOT THE BRAKE. `queues.captureQueue` is 90 in this
+    // fixture and the budget is shut; the bar must still show the 140 authorized rows that are
+    // genuinely waiting, or the gauge reports budget state where the operator reads work.
+    expect(byKey.captured?.queued).toBe(140);
     expect(byKey.analyzed?.queued).toBe(30);
     expect(byKey.embedded?.queued).toBe(20);
     // Crawled, rec-eligible and certified have no drain worklist behind them.
@@ -126,7 +146,7 @@ describe("stageBars", () => {
   });
 
   it("splits the anchor stage's queued-behind into ready vs awaiting audio, summing to the whole queue", () => {
-    const bars = stageBars(STAGES, QUEUES);
+    const bars = stageBars(STAGES, LIVE);
     const byKey = Object.fromEntries(bars.map((bar) => [bar.key, bar]));
 
     // The anchor row is the only one carrying a split; every other stage leaves it undefined.
@@ -150,7 +170,7 @@ describe("stageBars", () => {
       embedded: 0,
       recEligible: 0,
     };
-    const bars = stageBars(empty, QUEUES);
+    const bars = stageBars(empty, LIVE);
 
     for (const bar of bars) {
       expect(bar.widthPct).toBe(0);

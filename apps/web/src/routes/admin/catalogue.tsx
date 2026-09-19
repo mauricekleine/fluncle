@@ -19,6 +19,7 @@ import {
   type CatalogueLens,
   type CatalogueMatch,
 } from "@fluncle/contracts";
+import { CAPTURE_TIER_LABELS } from "@/lib/capture-tier";
 import { readError } from "@/lib/read-error";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -899,28 +900,13 @@ function captureWhy(reason: CapturePriorityReason | null): string {
   }
 }
 
-/** The rung, as a chip — quiet data, never an alarm. A cold track is not a failure. */
+/**
+ * The rung, as a chip — quiet data, never an alarm. A cold track is not a failure. The words come
+ * from the shared ladder vocabulary (`@/lib/capture-tier`), because `/admin/funnel`'s capture
+ * backlog names the same rungs and two stations in one nav group must not name a column two ways.
+ */
 function captureTierLabel(reason: CapturePriorityReason | null): string {
-  switch (reason?.kind) {
-    case "artist": {
-      return "Known artist";
-    }
-    case "label": {
-      return "Known label";
-    }
-    case "seed-label": {
-      return "Seed label";
-    }
-    case "skipped-label": {
-      return "Not our lane";
-    }
-    case "unauthorized": {
-      return "Not qualified";
-    }
-    default: {
-      return "Cold";
-    }
-  }
+  return CAPTURE_TIER_LABELS[reason?.kind ?? "none"];
 }
 
 /** Cosine similarity, to two places. The number the whole list is sorted by. */

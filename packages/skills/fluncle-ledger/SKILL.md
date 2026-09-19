@@ -181,6 +181,8 @@ Standing ruling: the command selects evidence and computes factual rollups and r
 
 **Row (20 columns, lossless under `--json`):** `unit`, `id`, `occurredAt` (box start time), `endedAt`, `createdAt` (Worker write time), `runDurationMs`, `exitCode`, `ok` (the derived run verdict), `selfAssertedOk` (claimed, never obeyed), `checked`, `produced`, `queueDepth`, `errors`, `vendorCalls`, `expectedIntervalMs`, `gateState`, `missingFields`, `unrecognisedFields`, `summaryStatus`, `summaryRaw`.
 
+**`summaryRaw` is always valid JSON text.** It carries a string the SWEEP wrote — a tick's last stdout line, itself a JSON document, often quoting a vendor's error — so a raw control character can reach it. The Worker escapes the C0 range to `\uXXXX` on the way in and on the way out, which is what keeps both the `--json` document and `jq '.rows[].summaryRaw | fromjson'` parseable. The escape is the same evidence, readable and reversible; a `\u001b` in a message is an ANSI sequence the sweep quoted, not corruption.
+
 **Counter vocabulary:** `errors` says the run itself failed; domain counters such as `failed` remain readable in `summaryRaw` and say individual work items failed while the run continued. The run verdict remains `exitCode === 0 && (errors ?? 0) === 0`. Historical rows written before the vocabulary change keep their earlier interpretation; do not read them as current-vocabulary evidence.
 
 **`summaryStatus`** — `parsed` (a JSON object the Worker read), `absent` (the tick printed nothing: a crash before output), `malformed` (present but not JSON), `not_object` (JSON, but an array or a scalar).

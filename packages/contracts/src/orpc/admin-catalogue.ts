@@ -844,6 +844,10 @@ export const CrawlStatusSchema = z
     seedLabels: z.array(z.string()),
     /** Claimable release nodes whose provenance is storable — the head of the claim's release lane. */
     storablePending: z.number(),
+    /** Undecided labels that already hold queued work — the rulings a round would actually move. */
+    undecidedLabelsQueued: z.number(),
+    /** Claimable release nodes the STORAGE gate is holding — the lane a label round would unlock. */
+    unstorablePending: z.number(),
   })
   .meta({ id: "CrawlStatus" });
 
