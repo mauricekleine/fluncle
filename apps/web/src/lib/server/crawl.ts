@@ -88,6 +88,7 @@ import {
 import {
   CRAWL_CATALOGUE_CLAIM_OWNER,
   CRAWL_CATALOGUE_LEASE_MS,
+  CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY,
   type ClaimedCrawlFrontierRow,
   claimCrawlFrontierRows,
   isClaimedCrawlFrontierRowCurrent,
@@ -216,6 +217,27 @@ export const REARM_SCOPED_BATCH = 10;
 
 /** Allow-rule artist nodes minted/revived per pass, and stale allowed-artist subscriptions re-armed. */
 export const REARM_ALLOWED_BATCH = CRAWL_STALE_ARTIST_REARM_LIMIT;
+
+/**
+ * SOURCE REPAIR MARKERS ONE ADMITTED TICK MINTS — the mint side of the admission invariant.
+ *
+ * A tick is admission then claim, and the claim must be able to clear every source marker the
+ * admission it follows minted; a marker it cannot reach defers the claim, and a tick that mints as
+ * fast as it drains never claims a frontier row again. `rearmAllowedArtists` is the only re-arm
+ * that mints SOURCE markers — one per selected identity, bounded by `REARM_ALLOWED_BATCH`. Its
+ * siblings (`seedFromEnabledLabels`, `rearmScopedLabelReleases`, `rearmSeedLabels`,
+ * `rearmStaleAllowedArtists`) mint NODE markers only, which drain on the claim's other lane.
+ */
+export const CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND = REARM_ALLOWED_BATCH;
+
+// The invariant itself, checked where both constants are literal so a future change to either one
+// fails the build instead of stalling the production crawl.
+if (CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND >= CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY) {
+  throw new Error(
+    `crawl admission mints up to ${CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND} source repair markers ` +
+      `per tick, above the claim's drain capacity of ${CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY}`,
+  );
+}
 
 /** Hard ceiling on the one per-tick rules read; overflow fails the pass instead of losing a rule. */
 const ARTIST_RULE_MEMO_LIMIT = 10_000;

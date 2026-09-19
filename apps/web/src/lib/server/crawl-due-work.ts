@@ -799,16 +799,72 @@ async function firstCrawlRepairMarker(
 }
 
 /**
- * Expand one source marker into a bounded physical repair page. Rows already marked `repair` are
- * the durable cursor: they remain excluded until the source marker is cleared, then the direct
- * repair pass consumes them. No unbounded source walk or extra cursor column is needed.
+ * Source markers one fan-out call may clear when each of them expands NO rows.
+ *
+ * A marker whose rows are already `repair` — the shape every re-arm mints, because the re-arm sets
+ * the row's state and the marker in the same write — costs one small guarded write batch to clear
+ * and fans out nothing. Draining those one call at a time makes a caller's page budget a MARKER
+ * budget, so an admission phase that mints more markers than the caller has pages can never
+ * converge. This budget decouples the two: one call clears a run of empty markers, and stops the
+ * moment a marker expands rows so the physical page bound still binds every row-moving marker.
+ */
+export const CRAWL_REPAIR_MARKER_BUDGET = 25;
+
+/**
+ * Expand source markers into bounded physical repair pages, oldest marker first.
+ *
+ * One marker that expands rows ends the call: rows already marked `repair` are the durable cursor,
+ * they remain excluded until the source marker is cleared, and the direct repair pass then consumes
+ * them. No unbounded source walk or extra cursor column is needed. A marker that clears WITHOUT
+ * expanding a row moved no work, so the call continues to the next marker under
+ * {@link CRAWL_REPAIR_MARKER_BUDGET} and `mayContinue`; every iteration is its own bounded batch,
+ * so no transaction grows.
+ *
+ * `markersCleared` is the other half of the work this call did: a caller that reports only
+ * `expanded` reads a run of cleared empty markers as no progress at all.
  */
 export async function fanOutCrawlProjectionRepairs(
   client: CrawlDueClient,
-  options: { limit?: number } = {},
-): Promise<{ complete: boolean; expanded: number; marker?: CrawlRepairMarker }> {
+  options: { limit?: number; markerBudget?: number; mayContinue?: () => boolean } = {},
+): Promise<{
+  complete: boolean;
+  expanded: number;
+  marker?: CrawlRepairMarker;
+  markersCleared: number;
+}> {
   const limit = options.limit ?? 100;
   assertLimit(limit);
+  const markerBudget = Math.max(1, options.markerBudget ?? CRAWL_REPAIR_MARKER_BUDGET);
+  let markersCleared = 0;
+  for (;;) {
+    const page = await fanOutOneCrawlProjectionRepair(client, limit);
+    if (page.marker === undefined) {
+      return { complete: true, expanded: 0, markersCleared };
+    }
+    if (page.expanded > 0 || !page.complete) {
+      return {
+        complete: page.complete,
+        expanded: page.expanded,
+        marker: page.marker,
+        markersCleared,
+      };
+    }
+    markersCleared += 1;
+    if (markersCleared >= markerBudget || options.mayContinue?.() === false) {
+      break;
+    }
+  }
+  const remaining = await firstCrawlRepairMarker(client);
+  return remaining === undefined
+    ? { complete: true, expanded: 0, markersCleared }
+    : { complete: false, expanded: 0, marker: remaining, markersCleared };
+}
+
+/** Expand the oldest source marker into ONE bounded physical repair page. */
+async function fanOutOneCrawlProjectionRepair(
+  client: CrawlDueClient,
+  limit: number,
+): Promise<{ complete: boolean; expanded: number; marker?: CrawlRepairMarker }> {
   const marker = await firstCrawlRepairMarker(client);
   if (marker === undefined) {
     return { complete: true, expanded: 0 };
