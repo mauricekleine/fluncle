@@ -597,7 +597,7 @@ describe("database operation registry", () => {
             "/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED ",
           );
           expect(execStart, operation.owner.service).toContain(
-            "-e DATABASE_ADMISSION_POLL_SECS=5 ",
+            "-e DATABASE_ADMISSION_POLL_SECS=2 ",
           );
           expect(shape.phaseSource, operation.operationId).toBeDefined();
           const phaseSource = shape.phaseSource ?? "";

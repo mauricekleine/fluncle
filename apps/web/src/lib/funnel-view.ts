@@ -11,6 +11,7 @@
 
 import { type ChartGeometry, chartGeometry as computeChartGeometry } from "@/lib/chart-geometry";
 import {
+  type CaptureBacklog,
   type CatalogueSnapshotRow,
   type FunnelLiveQueues,
   type FunnelStages,
@@ -42,15 +43,24 @@ type StageDef = {
   key: StageKey;
   label: string;
   link: StageLink;
-  /** The queue depth waiting behind this stage, from the live queues (undefined = no queue). */
-  queued?: (queues: FunnelLiveQueues) => number;
+  /**
+   * The queue depth waiting behind this stage (undefined = no queue). It reads the LIVE view —
+   * queues plus the capture backlog — because the capture stage's honest backlog is NOT
+   * `queues.captureQueue`: that number obeys the metered brake and reads 0 for a whole closed
+   * budget day (funnel.ts § CaptureBacklog). A bar that shows the brake where the operator reads
+   * work is the gauge lying, so this stage reads `captureBacklog.authorized` instead.
+   */
+  queued?: (live: StageLiveCounts) => number;
   /**
    * A two-population split of the queued-behind, for a stage where the single figure hides two
    * things that mean different things (the anchor worklist: embedded-and-ready vs awaiting audio).
    * When present the page renders this in place of the plain `queued` figure.
    */
-  queuedSplit?: (queues: FunnelLiveQueues) => StageQueueSplit;
+  queuedSplit?: (live: StageLiveCounts) => StageQueueSplit;
 };
+
+/** Everything the stage rows read: the drain worklists plus the budget-independent capture backlog. */
+export type StageLiveCounts = { captureBacklog: CaptureBacklog; queues: FunnelLiveQueues };
 
 // The flow order and each stage's operating surface. The crawled rows and every mid-flight
 // uncertified stage live on The Ear (`/admin/catalogue`, the default `ear` lens); the capture
@@ -62,19 +72,19 @@ const STAGE_DEFS: StageDef[] = [
     key: "captured",
     label: "Captured",
     link: { lens: "capture", to: "/admin/catalogue" },
-    queued: (q) => q.captureQueue,
+    queued: (live) => live.captureBacklog.authorized,
   },
   {
     key: "analyzed",
     label: "Analyzed",
     link: { lens: "ear", to: "/admin/catalogue" },
-    queued: (q) => q.analyzeQueue,
+    queued: (live) => live.queues.analyzeQueue,
   },
   {
     key: "embedded",
     label: "Embedded",
     link: { lens: "ear", to: "/admin/catalogue" },
-    queued: (q) => q.embedQueue,
+    queued: (live) => live.queues.embedQueue,
   },
   {
     // Anchoring sits HERE, after embed, because it is the LAGGING step: capture → analyze → embed
@@ -87,7 +97,10 @@ const STAGE_DEFS: StageDef[] = [
     // The anchor queue splits into the embedded head the sweep works now (ready) and the crawler
     // metadata still awaiting audio — two populations that mean different things, so the page shows
     // both rather than one folded figure. The split sums to `anchorQueueIsrc + anchorQueueNoIsrc`.
-    queuedSplit: (q) => ({ awaitingAudio: q.anchorQueueAwaitingAudio, ready: q.anchorQueueReady }),
+    queuedSplit: (live) => ({
+      awaitingAudio: live.queues.anchorQueueAwaitingAudio,
+      ready: live.queues.anchorQueueReady,
+    }),
   },
   { key: "recEligible", label: "Rec-eligible", link: { lens: "ear", to: "/admin/catalogue" } },
   { key: "certified", label: "Certified", link: { to: "/admin/findings" } },
@@ -116,7 +129,7 @@ export type FunnelStageBar = {
  * stable, and `STAGE_DEFS` is crawl → certified). When every stage is empty the widest total is
  * 0, so every width is 0 — the guard that keeps an empty pipeline from dividing by zero.
  */
-export function stageBars(stages: FunnelStages, queues: FunnelLiveQueues): FunnelStageBar[] {
+export function stageBars(stages: FunnelStages, live: StageLiveCounts): FunnelStageBar[] {
   const maxTotal = STAGE_DEFS.reduce((max, def) => Math.max(max, stages[def.key]), 0);
 
   return STAGE_DEFS.map((def) => {
@@ -126,8 +139,8 @@ export function stageBars(stages: FunnelStages, queues: FunnelLiveQueues): Funne
       key: def.key,
       label: def.label,
       link: def.link,
-      queued: def.queued ? def.queued(queues) : undefined,
-      queuedSplit: def.queuedSplit ? def.queuedSplit(queues) : undefined,
+      queued: def.queued ? def.queued(live) : undefined,
+      queuedSplit: def.queuedSplit ? def.queuedSplit(live) : undefined,
       total,
       widthPct: maxTotal === 0 ? 0 : (total / maxTotal) * 100,
     };
