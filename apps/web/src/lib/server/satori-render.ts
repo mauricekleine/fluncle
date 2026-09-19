@@ -127,12 +127,84 @@ export function cardFonts(): OgFont[] {
 }
 
 /**
+ * THE CEILING ON ONE INLINED HERO.
+ *
+ * A card's picture is a cover or a drop frame, and this repo already states what one of those
+ * may weigh: `MAX_IMAGE_BYTES` in lib/server/cover-masters.ts bounds a fetched cover at
+ * 5,000,000 bytes, and lib/server/label-images.ts + lib/server/discogs.ts repeat the same number
+ * for a fetched logo. This sits at 2× that, so no source those paths would accept can be refused
+ * here, while a response with no honest end cannot spend the isolate.
+ *
+ * It matters MORE on this path than on those: the OG/cover routes are anonymous GETs, the bytes
+ * are base64'd (×1.33) and then handed to Satori as markup to parse again, and a `?v=` query
+ * makes a hit a fresh origin render rather than a CDN answer — so one oversized upstream is three
+ * copies of itself inside a 128 MB Worker, on a path any stranger can aim.
+ */
+export const MAX_INLINE_IMAGE_BYTES = 10_000_000;
+
+/**
+ * Read a response body, refusing it the moment it runs past {@link MAX_INLINE_IMAGE_BYTES}.
+ *
+ * Bounded AS IT STREAMS rather than measured after `arrayBuffer()`: a chunked response declares
+ * no `content-length`, so a cap applied to the finished buffer has already paid for the bytes it
+ * is about to reject. The declared length is still consulted first, because an honest oversized
+ * source should cost no transfer at all.
+ */
+async function readBoundedBody(response: Response): Promise<undefined | Uint8Array> {
+  const declared = Number(response.headers.get("content-length"));
+
+  if (Number.isFinite(declared) && declared > MAX_INLINE_IMAGE_BYTES) {
+    return undefined;
+  }
+
+  const body = response.body;
+
+  if (!body) {
+    return undefined;
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  for (;;) {
+    const chunk = await reader.read();
+
+    if (chunk.done || !chunk.value) {
+      break;
+    }
+
+    total += chunk.value.byteLength;
+
+    if (total > MAX_INLINE_IMAGE_BYTES) {
+      await reader.cancel();
+
+      return undefined;
+    }
+
+    chunks.push(chunk.value);
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return bytes;
+}
+
+/**
  * Fetch an image and inline it as a base64 data-URI, because SATORI DOES NOT FETCH REMOTE
  * `<img>` — every picture a render shows has to arrive in the markup as bytes.
  *
- * Returns `undefined` on any failure (non-2xx, network, abort) so a card degrades to its bare
- * background rather than 500ing: a link preview that renders without the cover still tells the
- * reader what the page is, and a missing hero is not worth failing an unfurl over.
+ * Returns `undefined` on any failure (non-2xx, network, abort, or a body past
+ * {@link MAX_INLINE_IMAGE_BYTES}) so a card degrades to its bare background rather than 500ing:
+ * a link preview that renders without the cover still tells the reader what the page is, and a
+ * missing hero is not worth failing an unfurl over. That degradation is why the ceiling REFUSES
+ * rather than truncates — half an image is a broken render, no image is a quieter card.
  *
  * `fallbackContentType` is only consulted when the response omits `content-type`. It defaults
  * to the photographic case (`image/jpeg` — album art, drop frames); the mixtape cover passes
@@ -152,9 +224,13 @@ export async function fetchImageDataUri(
     }
 
     const contentType = response.headers.get("content-type") ?? fallbackContentType;
-    const buffer = await response.arrayBuffer();
+    const bytes = await readBoundedBody(response);
 
-    return `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
+    if (!bytes) {
+      return undefined;
+    }
+
+    return `data:${contentType};base64,${Buffer.from(bytes).toString("base64")}`;
   } catch {
     return undefined;
   }
