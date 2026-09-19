@@ -1234,6 +1234,40 @@ describe("the artist exception gate", () => {
     expect(tracks.rows.map((row) => text(row.title))).toEqual(["Remix billed to the original"]);
   });
 
+  // The two axes live in different slots: the global one holds the visibility ruling, a per-label
+  // one holds acquisition. So an act can be off the site AND still have its records taken from a
+  // label the operator carved for it — the gate reads the per-label allow and never sees the other.
+  it("a global unlisted and a PER-LABEL allow coexist: the record stores, the page is another axis", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-unlisted-allowed",
+      seedState: "disabled",
+      tracks: [
+        {
+          credits: [{ id: "artist-unlisted", name: "Unlisted Original" }],
+          id: "rec-unlisted-allowed",
+          title: "Allowed off a disabled label",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-unlisted", verdict: "unlisted" });
+    await seedArtistRule({
+      artistMbid: "artist-unlisted",
+      labelId: "lbl_scope",
+      verdict: "allow",
+    });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksSkippedArtistRule).toBe(0);
+    expect(pass.tracksAllowedIn).toBe(1);
+    expect(pass.tracksWritten).toBe(1);
+  });
+
   it("an unlisted first credit is skipped by a DISABLED label exactly as an unruled one is", async () => {
     await prepareRuleRelease({
       labelId: "lbl_scope",

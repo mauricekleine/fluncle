@@ -1,5 +1,6 @@
 import { type MixArtist } from "@fluncle/contracts";
 import { type Client } from "@libsql/client/web";
+import { listedArtistWhere } from "./artist-visibility";
 import { typedRows } from "./db";
 
 export const MIXABLE_ARTISTS_PROJECTION_STATE_KEY = "mixable_artists_projection_v1_state";
@@ -20,6 +21,14 @@ async function isProjectionReady(client: Client): Promise<boolean> {
   return Number(result.rows[0]?.["ready"] ?? 0) === 1;
 }
 
+// BOTH ARMS CARRY THE VISIBILITY GATE. The picker is a PUBLIC name search that renders an
+// artist's name and photo and writes the picked slug into a shareable URL, so an artist a global
+// `unlisted` rule has taken off the site must not appear in either. The gate also decides what a
+// URL that already carries an unlisted slug shows: the picker pre-selects by filtering THIS list
+// (`taste-picker.tsx`), so an unlisted slug resolves to no tile at all rather than a named one.
+// The set seeded from it still opens — `getMixOpeners` returns TRACKS, and a track is untouched
+// by a visibility ruling.
+
 function legacyQuery(q: string): string {
   return `select artists.name as name, artists.slug as slug, artists.image_url as image_url,
                  count(*) as track_count
@@ -28,6 +37,7 @@ function legacyQuery(q: string): string {
           join tracks on tracks.track_id = track_artists.track_id
           where tracks.key is not null
             and tracks.has_embedding = 1
+            and ${listedArtistWhere("artists")}
             ${q ? "and artists.name like ? collate nocase" : ""}
           group by artists.id
           order by track_count desc, artists.name asc
@@ -35,10 +45,14 @@ function legacyQuery(q: string): string {
 }
 
 export function mixableArtistsProjectionQuery(q: string): string {
+  // The gate tests `slug`, which `artists_mixable_order_idx` carries, so the pinned
+  // `indexed by` access path still serves the order and the scan
+  // (`mixable-artists-projection.integration.test.ts` EXPLAINs it).
   return `select artists.name, artists.slug, artists.image_url,
                  artists.rankable_track_count as track_count
           from artists indexed by artists_mixable_order_idx
           where artists.rankable_track_count > 0
+            and ${listedArtistWhere("artists")}
             ${q ? "and artists.name like ? collate nocase" : ""}
           order by -artists.rankable_track_count asc, artists.name asc
           limit ?`;

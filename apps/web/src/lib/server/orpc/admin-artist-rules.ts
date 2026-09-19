@@ -15,6 +15,7 @@ import {
 } from "../artist-rules";
 import { purgeEntityCaches } from "../edge-cache";
 import { logEvent } from "../log";
+import { purgeArtistSitemapCachesNow } from "../sitemap-data";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -34,6 +35,10 @@ async function purgeArtistVisibility(verdict: ArtistRuleVerdict, artistMbid: str
   try {
     const slugs = await artistSlugsForMbid(artistMbid);
     purgeEntityCaches(slugs.map((slug) => ({ kind: "artist" as const, slug })));
+    // The pages AND the documents that advertise them: a sitemap child outlives a detail page in
+    // cache by an order of magnitude, so without this the archive keeps submitting a URL that now
+    // 404s for the rest of that window.
+    await purgeArtistSitemapCachesNow();
   } catch (error) {
     logEvent("warn", "artist-rule.visibility-purge-failed", {
       artistMbid,

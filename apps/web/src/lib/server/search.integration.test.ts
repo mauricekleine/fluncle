@@ -1853,6 +1853,36 @@ describe("the compound sonic tier — sound like several artists", () => {
     expect(result.filters?.soundsLikeArtists).toEqual(["Koven"]);
   });
 
+  // The sonic tier ECHOES Fluncle's canonical `artists.name` back to the reader, so an ungated
+  // resolve would confirm an unlisted artist exists and print its name for anyone who typed it —
+  // or one of its trusted aliases. Both ranks carry the visibility gate, so neither resolves and
+  // the tier declines exactly as it does for a name nobody claims.
+  it("refuses an unlisted artist through BOTH its name and its trusted AKA", async () => {
+    await db.execute({
+      args: ["al-unlisted", "a-koven", "Kovenn", "kovenn"],
+      sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, kind, source, status, created_at)
+            values (?, ?, ?, ?, 'name', 'musicbrainz', 'auto', '2026-07-01')`,
+    });
+    await db.execute(
+      `update artists set mbid = '11111111-1111-4111-8111-111111111111' where id = 'a-koven'`,
+    );
+    await db.execute(
+      `insert into artist_rules
+         (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+       values ('arl_koven', '11111111-1111-4111-8111-111111111111', 'Koven', 'unlisted', null,
+               'operator', '2026-07-01', '2026-07-01')`,
+    );
+
+    for (const typed of ["Koven", "koven", "Kovenn"]) {
+      translateQuery.mockResolvedValue({ soundsLikeArtists: [typed] });
+
+      const result = await searchArchive({ q: `artists that sound like ${typed}` });
+
+      expect(result.kind, typed).not.toBe("sonic");
+      expect(result.filters?.soundsLikeArtists ?? [], typed).not.toContain("Koven");
+    }
+  });
+
   it("lets a primary name beat another artist's AKA on the same spelling", async () => {
     // Maduk carries "Koven" as a trusted AKA. Koven claims it as its own name, so rank 0 wins.
     await db.execute({

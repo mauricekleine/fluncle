@@ -34,8 +34,16 @@ import {
   listArtistsMissingBio,
   listArtistSitemapRows,
 } from "./artists";
+import { listWatches } from "./account-data";
 import { createIntegrationDb } from "./integration-db";
+import { mentionHandlesFor } from "./mentions";
+import {
+  MIXABLE_ARTISTS_PROJECTION_COMPLETE_VALUE,
+  MIXABLE_ARTISTS_PROJECTION_STATE_KEY,
+} from "./mixable-artists-projection";
+import { type PublicUser } from "./public-auth";
 import { searchArchive } from "./search";
+import { listMixableArtists } from "./tracks";
 
 const NOW = "2026-07-01T00:00:00.000Z";
 const UNLISTED_MBID = "11111111-1111-4111-8111-111111111111";
@@ -87,6 +95,28 @@ async function seedFinding(options: {
     args: [options.trackId, options.logId, NOW],
     sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
   });
+}
+
+const TEST_USER = {
+  createdAt: NOW,
+  email: "listener@example.com",
+  emailVerified: true,
+  id: "user-1",
+  name: "Listener",
+} satisfies PublicUser;
+
+/** One watch on each artist — the signed-in door's own read, not a public one. */
+async function seedWatchedArtists(): Promise<void> {
+  for (const [id, artistId] of [
+    ["watch-pop", "R_pop"],
+    ["watch-dnb", "R_dnb"],
+  ] as const) {
+    await db.execute({
+      args: [id, TEST_USER.id, artistId, NOW],
+      sql: `insert into user_watches (id, user_id, kind, entity_id, created_at)
+            values (?, ?, 'artist', ?, ?)`,
+    });
+  }
 }
 
 async function ruleUnlisted(artistMbid: string): Promise<void> {
@@ -203,6 +233,58 @@ describe("a global unlisted rule takes the artist's PAGE off the site", () => {
 
   it("drops out of the bio worklist, since there is no page to author a bio for", async () => {
     expect((await listArtistsMissingBio(10)).map((item) => item.slug)).toEqual(["remixer"]);
+  });
+
+  // The `/mix` taste picker is a PUBLIC name search that prints a name and a face and writes the
+  // picked slug into a shareable URL. Both arms of the read gate, and the picker pre-selects by
+  // filtering this same list, so a URL that already carries an unlisted slug resolves to no tile.
+  it.each(["legacy", "projection"] as const)(
+    "drops out of the /mix taste picker on the %s arm, by name and by slug",
+    async (arm) => {
+      await db.execute(`update artists set rankable_track_count = 3`);
+      await db.execute(
+        `update tracks set key = '5A', has_embedding = 1 where track_id in ('track-remix', 'track-dnb')`,
+      );
+
+      if (arm === "projection") {
+        await db.execute({
+          args: [MIXABLE_ARTISTS_PROJECTION_STATE_KEY, MIXABLE_ARTISTS_PROJECTION_COMPLETE_VALUE],
+          sql: `insert into settings (key, value) values (?, ?)`,
+        });
+      }
+
+      expect((await listMixableArtists()).map((artist) => artist.slug)).toEqual(["remixer"]);
+      expect(await listMixableArtists({ q: "Pop" })).toEqual([]);
+    },
+  );
+
+  it("carries no @handle into a social caption, because an @mention is a link", async () => {
+    for (const artistId of ["R_pop", "R_dnb"]) {
+      await db.execute({
+        args: [`soc-${artistId}`, artistId, `https://www.tiktok.com/@${artistId}`, NOW, NOW],
+        sql: `insert into artist_socials
+                (id, artist_id, platform, url, source, status, created_at, updated_at)
+              values (?, ?, 'tiktok', ?, 'operator', 'confirmed', ?, ?)`,
+      });
+    }
+
+    expect(await mentionHandlesFor("track-remix", "tiktok")).toEqual([]);
+    expect(await mentionHandlesFor("track-dnb", "tiktok")).toEqual(["@R_dnb"]);
+  });
+
+  it("drops out of a signed-in listener's watch list without touching the stored row", async () => {
+    await seedWatchedArtists();
+
+    expect((await listWatches(TEST_USER)).watches.map((watch) => watch.slug)).toEqual(["remixer"]);
+    // The watch itself stands, so clearing the rule brings it straight back.
+    const stored = await db.execute(`select count(*) as n from user_watches`);
+    expect(Number(stored.rows[0]?.n)).toBe(2);
+
+    await db.execute(`delete from artist_rules where artist_mbid = '${UNLISTED_MBID}'`);
+    expect((await listWatches(TEST_USER)).watches.map((watch) => watch.slug).sort()).toEqual([
+      "pop-original",
+      "remixer",
+    ]);
   });
 });
 

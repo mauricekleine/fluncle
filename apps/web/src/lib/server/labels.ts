@@ -896,8 +896,8 @@ function hubGateSql(alias: string, floor: string): string {
  *
  * The visibility term is a per-row check on top of the entity's hub listing index rather than part
  * of it: the index still serves the scan and the order, and the term probes a tiny operator-authored
- * table. Changing it changes `hubClauseHash`, so cached page anchors recompute rather than serve a
- * stale membership.
+ * table. It is keyed into {@link entityAnchorAddress} beside the gate, so changing it changes the
+ * clause hash and cached page anchors recompute rather than serve a stale membership.
  */
 function entityGateWhere(
   query: Pick<CatalogueEntityPageQuery, "alias" | "floor" | "visibilityWhere">,
@@ -1160,6 +1160,11 @@ function entityAnchorAddress(
         // the same membership however a statement spells the literal, and boundaries already
         // persisted under this address stay valid.
         where: hubGateSql(query.alias, "?"),
+        // The hub's own visibility term, keyed SEPARATELY so it is part of the address rather than
+        // invisible to it. It is a membership predicate like the gate: a persisted boundary
+        // computed under one spelling of it is wrong under another, so changing it has to
+        // recompute the anchors rather than serve a stale window.
+        whereVisibility: query.visibilityWhere ?? null,
       }),
     ),
     hub: `${query.hub}-${surface}`,

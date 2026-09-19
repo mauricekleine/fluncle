@@ -37,17 +37,19 @@
 /**
  * The public-artist predicate, for splicing into a `where` clause.
  *
- * `alias` is the SQL name the `artists` table carries in the calling query, and is always a
- * literal written at the call site — never user input, so the interpolation is closed.
+ * `alias` is the SQL name the `artists` table carries in the calling query, and `tablePrefix` is
+ * the schema the two source tables live under WITH ITS TRAILING DOT (the device derivation reads a
+ * snapshot attached as `source`). Both are literals written at the call site — never user input,
+ * so the interpolation is closed.
  *
  * An artist whose `mbid` is still null can carry no rule, so it stays public — the honest answer,
  * since nothing identifies it as the ruled act.
  */
-export function listedArtistWhere(alias = "artists"): string {
+export function listedArtistWhere(alias = "artists", tablePrefix = ""): string {
   return `${alias}.slug not in (
     select unlisted_artist.slug
-    from artist_rules
-    join artists as unlisted_artist on unlisted_artist.mbid = artist_rules.artist_mbid
-    where artist_rules.label_id is null and artist_rules.verdict = 'unlisted'
+    from ${tablePrefix}artist_rules as unlisted_rule
+    join ${tablePrefix}artists as unlisted_artist on unlisted_artist.mbid = unlisted_rule.artist_mbid
+    where unlisted_rule.label_id is null and unlisted_rule.verdict = 'unlisted'
   )`;
 }

@@ -28,6 +28,7 @@
 
 import { bestAlbumCoverUrl, bestArtistAvatarUrl } from "../media";
 import { parseArtistsJson } from "./artists";
+import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import {
   type CatalogueTrackItem,
@@ -47,10 +48,16 @@ import {
 // EXPORTED so the `/tracks` hub (`tracks-hub.ts`) can hang the SAME lead-artist avatar on its rows
 // without re-deriving the join — it renders through the identical `FreshStreamRow`, so it wants the
 // identical avatar (dimmed into the unlit register on a catalogue row).
+// The join carries the VISIBILITY gate as part of its ON clause, so an unlisted lead artist simply
+// does not join and every image column comes back null — which is the row's existing "this artist
+// has no picture" state, already handled by the monogram/cover fallback. The row still names the
+// artist: the name comes off the track, not from here. A face is a page's face, and that page is
+// gone (lib/server/artist-visibility.ts).
 export const LEAD_ARTIST_JOIN = `left join artists fresh_lead_artist on fresh_lead_artist.id = (
         select ta.artist_id from track_artists ta
         where ta.track_id = tracks.track_id
-        order by ta.position asc limit 1)`;
+        order by ta.position asc limit 1)
+      and ${listedArtistWhere("fresh_lead_artist")}`;
 export const LEAD_ARTIST_SELECT = `fresh_lead_artist.image_url as artist_image_url,
        fresh_lead_artist.image_key as artist_image_key,
        fresh_lead_artist.image_state as artist_image_state,

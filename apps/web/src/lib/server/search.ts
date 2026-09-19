@@ -1385,6 +1385,11 @@ const CENTROID_TIEBREAK = `order by length(artists.name) asc, artists.name asc l
  * `name = ? collate nocase` is exactly `lower(name) = ?` for this needle, not an approximation of
  * it: SQLite's `lower()` and its NOCASE collation both fold ASCII A–Z and nothing else, so the two
  * agree character for character on every input (a non-ASCII capital matches under neither).
+ *
+ * BOTH RANKS CARRY THE VISIBILITY GATE, and rank 0's two arms are parenthesized so it binds over
+ * the pair. This read is not internal: it echoes Fluncle's canonical `artists.name` back as
+ * `soundsLikeArtists`, so an ungated resolve would confirm an unlisted artist exists and print its
+ * canonical name for anyone who typed a name or a trusted alias. Same rule as the entity tier.
  */
 async function resolveArtistCentroids(
   inputs: string[],
@@ -1413,7 +1418,8 @@ async function resolveArtistCentroids(
       sql: `${CENTROID_SELECT}
             from artists
             join artist_centroids ac on ac.artist_id = artists.id
-            where artists.name = ? collate nocase or artists.slug = ?
+            where (artists.name = ? collate nocase or artists.slug = ?)
+              and ${listedArtistWhere()}
             ${CENTROID_TIEBREAK}`,
     });
     let row = typedRow<CentroidRow>(primary.rows);
@@ -1432,6 +1438,7 @@ async function resolveArtistCentroids(
               where artist_aliases.kind = 'name'
                 and artist_aliases.status in ('auto', 'confirmed')
                 and lower(artist_aliases.alias) = ?
+                and ${listedArtistWhere()}
               ${CENTROID_TIEBREAK}`,
       });
 

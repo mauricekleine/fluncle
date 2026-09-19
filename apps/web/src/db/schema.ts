@@ -4799,7 +4799,7 @@ export const labels = sqliteTable(
   ],
 );
 
-// ARTIST RULES — the exact-MBID exceptions, on two axes that never mix.
+// ARTIST RULES — the exact-MBID exceptions, on two axes that are read independently.
 //
 //   - ACQUISITION (`allow` / `block`): what a future crawl takes. Per-label (`label_id` set) or
 //     global (`label_id` null); per-label beats global, and both beat the label's seed state.
@@ -4808,6 +4808,15 @@ export const labels = sqliteTable(
 //     exactly as the label seed state decides. This is the DnB-remix-of-a-pop-song disposition:
 //     MusicBrainz bills the remix to the original artist, so the remix belongs in the archive
 //     while the pop act never earns a `/artist/<slug>` page.
+//
+// THE TWO AXES SHARE ONE GLOBAL SLOT. `artist_rules_global_artist_idx` is unique on `artist_mbid`
+// where `label_id` is null, so an artist carries at most ONE global ruling and all three verdicts
+// compete for it: `unlisted` and a global `allow`/`block` are mutually exclusive, and a second
+// global add is a 409 naming the verdict already held. A PER-LABEL `allow`/`block` is a different
+// slot and coexists with a global `unlisted` freely — which is the combination that matters, since
+// visibility and acquisition are then both expressible at once. "Global allow AND no page" is the
+// one combination the storage cannot express; splitting visibility onto its own column would be
+// the fix, and is deliberately not this table's shape today.
 //
 // Visibility is derived at read time from this row, never stamped onto `artists`, so authoring or
 // removing the rule flips the page with no backfill.

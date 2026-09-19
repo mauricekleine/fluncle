@@ -319,16 +319,26 @@ export async function listArtistRules(): Promise<ArtistRule[]> {
   return typedRows<ArtistRuleRow>(result.rows).map(toArtistRule);
 }
 
+/**
+ * Add ONE global rule. `artist_rules_global_artist_idx` is unique on `artist_mbid` where `label_id`
+ * is null, so an artist carries at most ONE GLOBAL RULING and all three verdicts share that slot —
+ * `unlisted` and a global `allow`/`block` are mutually exclusive today. Per-label rules are a
+ * separate slot and coexist with any of them. The conflict names the verdict already holding the
+ * slot, because "clear it first" is only actionable once the operator knows what he is clearing.
+ */
 export async function addArtistRule(input: GlobalArtistRuleInput): Promise<ArtistRule> {
   const db = await getDb();
   const existing = await db.execute({
     args: [input.artistMbid],
-    sql: `select id from artist_rules where label_id is null and artist_mbid = ? limit 1`,
+    sql: `select id, verdict from artist_rules
+          where label_id is null and artist_mbid = ? limit 1`,
   });
+  const held = typedRows<{ id: string; verdict: ArtistRuleVerdict }>(existing.rows)[0];
 
-  if (existing.rows[0]) {
+  if (held) {
     throw new DuplicateGlobalArtistRuleError(
-      `A global artist rule already exists for ${input.artistMbid}.`,
+      `A global artist rule already exists for ${input.artistMbid}: ${held.verdict}. ` +
+        `An artist carries one global ruling — clear ${held.id} before setting another.`,
     );
   }
 
@@ -374,8 +384,11 @@ export async function addArtistRule(input: GlobalArtistRuleInput): Promise<Artis
     );
   } catch (error) {
     if (isGlobalArtistRuleCollision(error)) {
+      // The unique index caught a ruling written between the read above and this insert. It cannot
+      // name the verdict without a second read on a failed path, so it states the law instead.
       throw new DuplicateGlobalArtistRuleError(
-        `A global artist rule already exists for ${input.artistMbid}.`,
+        `A global artist rule already exists for ${input.artistMbid}. ` +
+          `An artist carries one global ruling — clear it before setting another.`,
       );
     }
 

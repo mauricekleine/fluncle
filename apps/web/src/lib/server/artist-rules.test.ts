@@ -507,6 +507,43 @@ describe("the unlisted verdict is global-only", () => {
     expect(await listArtistRules()).toEqual([]);
   });
 
+  // `artist_rules_global_artist_idx` is one row per MBID, so all three verdicts share ONE global
+  // slot. The refusal has to name the verdict already in it — "clear it first" is only actionable
+  // once the operator knows what he is clearing.
+  it.each([
+    ["allow", "unlisted"],
+    ["unlisted", "block"],
+  ] as const)("refuses a second global %s→%s ruling and names the verdict held", async (a, b) => {
+    mbMiss();
+    await addArtistRule({ artistMbid: "mbid-slot", artistName: "Slot Artist", verdict: a });
+    mbMiss();
+
+    await expect(
+      addArtistRule({ artistMbid: "mbid-slot", artistName: "Slot Artist", verdict: b }),
+    ).rejects.toThrow(new RegExp(`already exists for mbid-slot: ${a}`));
+    await expect(
+      addArtistRule({ artistMbid: "mbid-slot", artistName: "Slot Artist", verdict: b }),
+    ).rejects.toBeInstanceOf(DuplicateGlobalArtistRuleError);
+    expect(await listArtistRules()).toMatchObject([{ verdict: a }]);
+  });
+
+  it("lets a per-label allow coexist with the global unlisted — they are different slots", async () => {
+    mbMiss();
+    await addArtistRule({
+      artistMbid: "mbid-both",
+      artistName: "Both Axes",
+      verdict: "unlisted",
+    });
+    await seedLabel("lbl_both");
+    mbMiss();
+    await replaceLabelArtistRules("lbl_both", [
+      { artistMbid: "mbid-both", artistName: "Both Axes", verdict: "allow" },
+    ]);
+
+    expect(await listArtistRules()).toMatchObject([{ verdict: "unlisted" }]);
+    expect(await listLabelArtistRules("lbl_both")).toMatchObject([{ verdict: "allow" }]);
+  });
+
   it("lists every `/artist/<slug>` page one MusicBrainz identity owns", async () => {
     await seedLocalArtist({ id: "artist-one", mbid: "mbid-pop-original", name: "Pop Original" });
     await seedLocalArtist({ id: "artist-two", mbid: "mbid-pop-original", name: "Pop Original" });
