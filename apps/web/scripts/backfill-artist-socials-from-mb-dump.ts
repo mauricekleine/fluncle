@@ -37,8 +37,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { type ArtistSocialPlatform } from "../src/lib/artist-socials";
 import {
-  type ArtistSocialPlatform,
   classifyMbUrl,
   isLinkHubUrl,
   normalizeProfileUrl,

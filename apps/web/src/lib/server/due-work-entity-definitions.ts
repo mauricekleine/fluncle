@@ -44,8 +44,6 @@ export const DUE_WORK_SOURCE_COLUMNS = {
   "label.image": ["slug", "image_state", "image_attempted_at"],
 } as const satisfies Record<DueWorkKind, readonly string[]>;
 
-export type DueWorkSourceColumn = (typeof DUE_WORK_SOURCE_COLUMNS)[DueWorkKind][number];
-
 /** One materialized due-work row. `nextDueAt` is the frozen evaluation instant for eligible work. */
 export type DueWorkRow = {
   entityId: string;

@@ -12,12 +12,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  beatportSearchUrl,
-  parseSearchTracks,
-  parseTrackLinks,
-  pickBeatportUrl,
-} from "./beatport-resolve";
+import { beatportSearchUrl } from "../beatport";
+import { parseSearchTracks, parseTrackLinks, pickBeatportUrl } from "./beatport-resolve";
 
 function fixture(name: string): string {
   return readFileSync(join(import.meta.dirname, "__fixtures__", "beatport", name), "utf8");
@@ -28,7 +24,8 @@ const VENUS_FLY = fixture("search-venus-fly.html");
 
 describe("beatportSearchUrl", () => {
   it("builds the same query the buy-then-mix link already uses", () => {
-    // Shared shape with lib/beatport.ts's client-side link so the two surfaces search alike.
+    // The resolver scrapes the SAME lib/beatport.ts link the buy-then-mix UI offers, so the
+    // two surfaces cannot search differently.
     expect(beatportSearchUrl(["Rizzle"], "Pluto")).toBe(
       "https://www.beatport.com/search?q=Rizzle%20Pluto",
     );

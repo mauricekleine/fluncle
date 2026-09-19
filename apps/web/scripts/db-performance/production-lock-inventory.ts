@@ -434,19 +434,3 @@ const productionLockFailures = validateProductionLockInventory();
 if (productionLockFailures.length > 0) {
   throw new Error(`invalid production-lock inventory: ${productionLockFailures.join("; ")}`);
 }
-
-export function productionLockIndex(name: string): ProductionLockIndex {
-  const index = PRODUCTION_LOCK_INVENTORY.indexes.find((candidate) => candidate.name === name);
-  if (index === undefined) {
-    throw new Error(`no production-lock inventory index ${name}`);
-  }
-  return index;
-}
-
-export function productionLockContract(id: string): ProductionLockContract {
-  const contract = PRODUCTION_LOCK_INVENTORY.contracts.find((candidate) => candidate.id === id);
-  if (contract === undefined) {
-    throw new Error(`no production-lock inventory contract ${id}`);
-  }
-  return contract;
-}

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const QUALITY_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -367,8 +367,4 @@ export function classifyPaths(paths, options = {}) {
 
 export function repositoryRoot() {
   return DEFAULT_ROOT;
-}
-
-export function relativeToRepository(path, root = DEFAULT_ROOT) {
-  return relative(root, path).split(sep).join("/");
 }

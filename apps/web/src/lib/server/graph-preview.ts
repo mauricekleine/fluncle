@@ -19,7 +19,12 @@
 // findings), and the card is fetched lazily — on card OPEN, once per entity per session,
 // shared across every link that names it (see the contract's note on why this is not an N+1).
 
-import { type GraphEntityKind, type GraphPreview, graphSignatureLine } from "../graph-prose";
+import {
+  firstFoundAt,
+  type GraphEntityKind,
+  type GraphPreview,
+  graphSignatureLine,
+} from "../graph-prose";
 import { albumCoverAtSize } from "../media";
 import { getAlbumBySlug } from "./albums";
 import { getArtistBySlug } from "./artists";
@@ -53,14 +58,6 @@ function coversOf(findings: TrackListItem[], leadCover?: string): string[] {
   const ordered = lead ? [lead, ...covers.filter((cover) => cover !== lead)] : covers;
 
   return ordered.slice(0, PREVIEW_COVER_CAP);
-}
-
-/** The earliest `addedAt` across the findings — the date the signature lines open on. */
-function firstFoundAt(findings: TrackListItem[]): string | undefined {
-  return findings
-    .map((finding) => finding.addedAt)
-    .filter((addedAt): addedAt is string => Boolean(addedAt))
-    .sort()[0];
 }
 
 /**

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type ArtistSocialPlatform } from "@/lib/artist-socials";
 import {
   __setRateLimitForTests,
-  type ArtistSocialPlatform,
   classifyMbAnchorUrl,
   classifyMbUrl,
   luceneEscapePhrase,

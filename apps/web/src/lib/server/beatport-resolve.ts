@@ -42,6 +42,7 @@
 // reach the FTS5 index, the LLM search tier, or any embedding — see the rail written onto
 // `tracks.beatport_url` in db/schema.ts.
 
+import { beatportSearchUrl } from "../beatport";
 import { logEvent } from "./log";
 import { readOptionalEnv } from "./env";
 
@@ -75,13 +76,6 @@ export type BeatportResolveOutcome =
   | { configured: false }
   | { configured: true; ok: true; url: null | string }
   | { configured: true; error: string; ok: false };
-
-/** The Beatport search URL for a recording. */
-export function beatportSearchUrl(artists: string[], title: string): string {
-  const query = `${artists.join(" ")} ${title}`.trim();
-
-  return `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
-}
 
 /** The fields this module reads off a Beatport search result. Everything else is dropped (§F). */
 type BeatportSearchTrack = { isrc?: null | string; track_id?: number | string };

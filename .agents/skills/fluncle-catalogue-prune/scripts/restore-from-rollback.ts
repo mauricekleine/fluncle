@@ -132,8 +132,6 @@ async function existingIds(
   return out;
 }
 
-export type InsertBatch = { args: (null | number | string)[]; sql: string }[];
-
 /**
  * `insert or ignore` statements for one table, built from the columns the snapshot and the LIVE
  * table BOTH have. `or ignore` is the idempotence: a row already present is left untouched rather

@@ -154,9 +154,6 @@ export const PERFORMANCE_RESOURCE_WARNING_THRESHOLDS: Record<
   },
 };
 
-export const PERFORMANCE_4X_RESOURCE_WARNING_THRESHOLDS =
-  PERFORMANCE_RESOURCE_WARNING_THRESHOLDS["4x"];
-
 export type Distribution = {
   max: number;
   p50: number;
