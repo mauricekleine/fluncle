@@ -13,6 +13,7 @@ import { AGENT_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./
 // response envelope are real.
 
 const breakerStateMock = vi.fn();
+const apifyBudgetMock = vi.fn();
 const apifyEnabledMock = vi.fn();
 const spotifySearchEnabledMock = vi.fn();
 
@@ -25,7 +26,11 @@ vi.mock("./spotify-anchor-breaker", async (importOriginal) => {
 vi.mock("./anchor-apify", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./anchor-apify")>();
 
-  return { ...actual, isAnchorApifyEnabled: () => apifyEnabledMock() };
+  return {
+    ...actual,
+    getAnchorApifyBudget: () => apifyBudgetMock(),
+    isAnchorApifyEnabled: () => apifyEnabledMock(),
+  };
 });
 
 vi.mock("./anchor-spotify-search", async (importOriginal) => {
@@ -44,6 +49,15 @@ const CLEAR = {
   trippedAt: null,
 };
 
+/** A brake with the whole day still ahead of it. */
+const BUDGET_OPEN = {
+  dailyRows: 300,
+  day: "2026-09-20",
+  remainingRows: 300,
+  rowsSent: 0,
+  spent: false,
+};
+
 beforeAll(() => {
   setAdminTokenEnv();
 });
@@ -52,9 +66,11 @@ warmOrpcRouter();
 
 beforeEach(() => {
   breakerStateMock.mockReset();
+  apifyBudgetMock.mockReset();
   apifyEnabledMock.mockReset();
   spotifySearchEnabledMock.mockReset();
   breakerStateMock.mockResolvedValue(CLEAR);
+  apifyBudgetMock.mockResolvedValue(BUDGET_OPEN);
   apifyEnabledMock.mockResolvedValue(true);
   spotifySearchEnabledMock.mockResolvedValue(false);
 });
@@ -77,7 +93,7 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
     expect(await readJson(response)).toEqual({
       ...CLEAR,
       ok: true,
-      rungs: { apifyEnabled: true, spotifySearchEnabled: false },
+      rungs: { apifyBudget: BUDGET_OPEN, apifyEnabled: true, spotifySearchEnabled: false },
     });
   });
 
@@ -92,6 +108,26 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
 
     expect(body).toMatchObject({
       rungs: { apifyEnabled: false, spotifySearchEnabled: false },
+      tripped: false,
+    });
+  });
+
+  it("carries the paid rung's DAILY ROW BRAKE — the fourth reason for silence", async () => {
+    // A tripped breaker, a disarmed rung and a spent day all look identical from outside: nothing
+    // happens. The brake had no read surface at all until it rode along here.
+    apifyBudgetMock.mockResolvedValue({
+      dailyRows: 300,
+      day: "2026-09-20",
+      remainingRows: 0,
+      rowsSent: 300,
+      spent: true,
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const body = await readJson(await handleOrpc(req(PATH, "GET", AGENT_TOKEN)));
+
+    expect(body).toMatchObject({
+      rungs: { apifyBudget: { remainingRows: 0, rowsSent: 300, spent: true }, apifyEnabled: true },
       tripped: false,
     });
   });

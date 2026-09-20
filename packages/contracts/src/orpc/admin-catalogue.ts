@@ -1175,10 +1175,19 @@ export const AnchorCandidateSchema = z
  * `spotify_anchor_attempts` — a hit AND a miss — so the worklist's re-ask backoff can fire and its
  * retry cap (`ANCHOR_MAX_ATTEMPTS`) can eventually retire a row that is simply not on Spotify.
  *
+ * THE ADMISSION RAIL (409 `awaiting_free_ask`). The free exact-ISRC rung answers the same question
+ * this paid one does, and cheaper, so an ISRC-bearing row is refused here unless the free rung has
+ * actually asked Spotify about it and missed (`tracks.spotify_isrc_asked_at`) — the rule
+ * `resolve_anchor` reports as `apifyEligible`, re-checked at the write boundary so a lagging box
+ * cannot talk the Worker into an anchor it declined to authorise. It REFUSES rather than parks: a row
+ * never asked is not a row that missed, so it stamps nothing and keeps its turn. The refusal does not
+ * stop the spend (by the time candidates arrive they are bought) — the operator keeps the kill-flag
+ * OFF across a box rebake for that, and the box already honours it.
+ *
  * It writes only catalogue-identity columns and never certifies (the `rank_catalogue`/`verify_capture`
  * class), so the box's agent token drives it. 404 when the track does not exist; 409 when it is
- * certified (a finding's Spotify id is its identity, not an anchor to fill) or already anchored (a
- * race with a user add). `{ ok, anchored, verifiedBy }` — `verifiedBy` is the rung that matched
+ * certified (a finding's Spotify id is its identity, not an anchor to fill), already anchored (a
+ * race with a user add), or not yet admitted to the paid rung. `{ ok, anchored, verifiedBy }` — `verifiedBy` is the rung that matched
  * (`isrc` | `search` | `search-subset` — the ±1s proper-subset fallback, a distinct confidence),
  * or null on a clean miss.
  */
@@ -1380,10 +1389,36 @@ export const resolveAnchor = oc
       /** True when a free rung verified a candidate and the anchor was written. */
       anchored: z.boolean(),
       /**
+       * Rows the metered Apify rung may still be sent TODAY under the operator's daily cap
+       * (`get_anchor_apify_budget`), as it stands AFTER this call's own authorisation. The sweep
+       * reports it and stops pulling work at 0; the brake itself is server-side.
+       */
+      apifyBudgetRemaining: z.number().int().nonnegative(),
+      /**
+       * THE PAID RUNG'S ADMISSION VERDICT for this row — the server telling the box whether it may
+       * spend Apify money on it. The free exact-ISRC rung and the paid Apify search answer the SAME
+       * question about an ISRC-bearing row, and the free one answers ~4 asks in 5, so the paid rung
+       * is admitted only once the free one actually ASKED Spotify about THIS row and got a clean miss
+       * (`tracks.spotify_isrc_asked_at`). A deferral, a 429, a dead grant, a tripped breaker and a
+       * failed metadata read all leave the row un-admitted and KEEPING ITS TURN — none of them put
+       * the question. An ISRC-LESS row is admitted once the free FUZZY rung ran un-throttled.
+       *
+       * THE EXEMPTION: when the free search rungs are DISARMED (`spotifySearchEnabled` false, the
+       * default) no receipt can ever be written, so the row is admitted immediately — otherwise the
+       * rule would close the only rung it has left.
+       *
+       * FALSE also when the row ANCHORED (nothing left to buy) or the daily cap has no room
+       * (`apifyIneligibleReason`). The box is TOLD, never trusted: `anchor_track` re-checks the rule
+       * at the write boundary and 409s (`awaiting_free_ask`) on a row that was never asked.
+       */
+      apifyEligible: z.boolean(),
+      /**
        * The `anchor_apify_enabled` kill-flag (default ON) as read this call. FALSE ⇒ the box skips the
        * Apify actor loop this tick, and a genuinely-exhausted full miss was already stamped-and-backed-off.
        */
       apifyEnabled: z.boolean(),
+      /** Why `apifyEligible` is false, or null (an anchor, or an admitted row). */
+      apifyIneligibleReason: z.enum(["apify_budget_spent", "awaiting_free_ask"]).nullable(),
       /** Free-rung candidates that arrived without a numeric duration; observation only. */
       freeDurationMsOmitted: z.number().int().nonnegative(),
       /** True iff this call recovered a verified ISRC from Deezer into a previously ISRC-less row (orthogonal to `anchored`). */
@@ -1656,6 +1691,82 @@ export const setCaptureBudget = oc
 // (RFC musickit-second-authority, Cross-cutting). docs/track-lifecycle.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE APIFY ROW BRAKE — the daily cap under the kill-flag. docs/catalogue-crawler.md § the anchor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The Apify row brake's whole readout: the operator's cap, the UTC day's spend, and what is left.
+ *
+ * `rowsSent` counts AUTHORISATIONS — the moments the server told the box a row was Apify-eligible,
+ * which is the only point it is in the loop ahead of the money. A sweep that dies between the
+ * authorisation and the actor over-counts by one row, the conservative direction: the brake reads
+ * the spend it authorised, never less than what was billed.
+ */
+export const AnchorApifyBudgetSchema = z
+  .object({
+    /** The operator's cap on rows sent to the metered actor per UTC day. */
+    dailyRows: z.number(),
+    /** The UTC calendar day the tally belongs to (`YYYY-MM-DD`); it rolls implicitly at midnight. */
+    day: z.string(),
+    /** Rows left before the brake bites. Never negative. */
+    remainingRows: z.number(),
+    /** Rows the server has authorised for the actor today. */
+    rowsSent: z.number(),
+    /** True ⇒ the cap is reached and no further row may be sent to the actor today. */
+    spent: z.boolean(),
+  })
+  .meta({ id: "AnchorApifyBudget" });
+
+/**
+ * `get_anchor_apify_budget` → `GET /admin/catalogue/anchor/apify-budget` (operationId
+ * `getAnchorApifyBudget`).
+ *
+ * Admin tier (AGENT-allowed READ, the `get_capture_budget` precedent) — the paid anchor rung's spend
+ * readout. A metered thing the operator cannot see is a thing he cannot control, and the box's
+ * `fluncle-anchor` sweep is entitled to know why it may not spend: it reads this in its preflight and
+ * stops pulling rows it has no budget for, rather than pulling them and refusing them one at a time.
+ *
+ * It is the SAME state the resolver's own charge reads — a budget display that can disagree with the
+ * budget is worse than no display at all.
+ */
+export const getAnchorApifyBudget = oc
+  .route({
+    method: "GET",
+    operationId: "getAnchorApifyBudget",
+    path: "/admin/catalogue/anchor/apify-budget",
+    summary: "The metered Apify anchor rung's daily row cap, today's spend, and what is left",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(AnchorApifyBudgetSchema.extend({ ok: z.literal(true) }));
+
+/**
+ * `set_anchor_apify_budget` → `PUT /admin/catalogue/anchor/apify-budget` (operationId
+ * `setAnchorApifyBudget`).
+ *
+ * OPERATOR tier — the `set_capture_budget` rule, which is the reason this exists at all: a machine
+ * does not get to raise its own spend cap. The kill-flag beside it is a switch, on or off; this is the
+ * NUMBER between those two states, so "Apify runs" stops meaning "Apify runs without limit".
+ *
+ * `dailyRows` is a non-negative integer. `0` is legal and means "send nothing", which is a different
+ * statement from the kill-flag being off — the cap can be raised back without touching the switch.
+ * Returns the brake as stored, so one call both writes and reads back, and the day's tally is left
+ * alone: raising the cap mid-day releases the rows it was holding rather than pretending the day
+ * started over. The change takes effect on the next `resolve_anchor` — no deploy, the kill-switch
+ * discipline.
+ */
+export const setAnchorApifyBudget = oc
+  .route({
+    method: "PUT",
+    operationId: "setAnchorApifyBudget",
+    path: "/admin/catalogue/anchor/apify-budget",
+    summary: "Set the metered Apify anchor rung's daily row cap (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ dailyRows: z.number().int().min(0) }))
+  .output(AnchorApifyBudgetSchema.extend({ ok: z.literal(true) }));
+
 /** The Spotify anchor breaker's readout — what both ops below return. */
 export const SpotifyAnchorBreakerStateSchema = z
   .object({
@@ -1685,6 +1796,13 @@ export const SpotifyAnchorBreakerStateSchema = z
  */
 export const AnchorRungFlagsSchema = z
   .object({
+    /**
+     * THE DAILY ROW BRAKE under the kill-flag — what the paid rung has spent today and what is left
+     * (`get_anchor_apify_budget`, the same state that op and the resolver's own charge read). It
+     * rides HERE because "why is the anchor sweep quiet" has a fourth answer beside a tripped
+     * breaker and two disarmed rungs: the day's rows are gone.
+     */
+    apifyBudget: AnchorApifyBudgetSchema,
     /** `anchor_apify_enabled` (DEFAULT ON) — the paid Apify search fallback. */
     apifyEnabled: z.boolean(),
     /** `anchor_spotify_search_enabled` (DEFAULT OFF) — the dark Spotify exact-ISRC + fuzzy rungs. */
@@ -1795,6 +1913,7 @@ export const adminCatalogueContract = {
   crawl_catalogue: crawlCatalogue,
   flag_wrong_audio: flagWrongAudio,
   force_capture: forceCapture,
+  get_anchor_apify_budget: getAnchorApifyBudget,
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
   get_spotify_anchor_breaker: getSpotifyAnchorBreaker,
@@ -1810,6 +1929,7 @@ export const adminCatalogueContract = {
   resolve_anchor: resolveAnchor,
   resolve_anchor_review: resolveAnchorReview,
   set_anchor_apify: setAnchorApify,
+  set_anchor_apify_budget: setAnchorApifyBudget,
   set_anchor_search: setAnchorSearch,
   set_capture_budget: setCaptureBudget,
   set_track_dismissed: setTrackDismissed,

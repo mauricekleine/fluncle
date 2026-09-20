@@ -99,6 +99,7 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
     file: "anchor.ts",
     producers: [
       "anchor-hit",
+      "anchor-isrc-asked",
       "anchor-miss",
       "anchor-requeue",
       "anchor-review-accept",

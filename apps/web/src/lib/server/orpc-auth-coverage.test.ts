@@ -411,6 +411,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // operatorGuard), the list_*_admin precedent: it composes the same admin-tier reads
   // the snapshot draws from and publishes nothing, so the operator's CLI + Raycast
   // menu bar (and the box) read it with the agent token.
+  // The paid anchor rung's daily row brake — admin tier (AGENT-allowed READ), the
+  // `get_capture_budget` precedent: the box's anchor sweep reads it in its preflight so it stops
+  // PULLING rows it cannot spend on. Its WRITE sibling is operator-only — see below.
+  get_anchor_apify_budget: "admin",
   get_artifact_consumer: "admin",
   get_attention: "admin",
   // The capture budget's spend readout — admin tier (agent-allowed READ), the
@@ -797,6 +801,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // catalogue's paid last-resort spend rail. A machine does not get to disable (or re-enable) its own
   // spend rail — the `set_capture_budget` / `set_anchor_search` rule.
   set_anchor_apify: "operator",
+  // The `set_capture_budget` rule, exactly: a machine does not raise its own spend cap.
+  set_anchor_apify_budget: "operator",
   // The dark flag for slice 2's Spotify anchor-search rungs — operator tier: it arms the shared
   // official Spotify app (mints/publish) against the catalogue, which starved under 429s. A machine
   // does not get to point that token at the catalogue — the `set_capture_budget` rule.

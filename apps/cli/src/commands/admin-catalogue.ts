@@ -185,15 +185,53 @@ export async function requeueIsrcRecoveryCommand(input: {
   );
 }
 
+/** The metered Apify anchor rung's daily row brake, as `get_anchor_apify_budget` answers it. */
+export type AnchorApifyBudgetState = {
+  day: string;
+  dailyRows: number;
+  remainingRows: number;
+  rowsSent: number;
+  spent: boolean;
+};
+
 /** What `get_spotify_anchor_breaker` answers: the pause, and whether the rungs are armed at all. */
 export type AnchorBreakerState = {
   cooldownRemainingMs: number;
   reason: null | string;
-  rungs: { apifyEnabled: boolean; spotifySearchEnabled: boolean };
+  rungs: {
+    apifyBudget: AnchorApifyBudgetState;
+    apifyEnabled: boolean;
+    spotifySearchEnabled: boolean;
+  };
   throttlesInWindow: number;
   tripped: boolean;
   trippedAt: null | string;
 };
+
+/**
+ * Read the paid anchor rung's daily row brake (`fluncle admin catalogue anchor-apify-budget`). Thin
+ * client over the admin-tier `get_anchor_apify_budget` op — the same state the resolver charges, so
+ * the readout can never disagree with the budget it describes.
+ */
+export async function anchorApifyBudgetCommand(): Promise<AnchorApifyBudgetState> {
+  return adminApiGet<AnchorApifyBudgetState & { ok: true }>(
+    "/api/v1/admin/catalogue/anchor/apify-budget",
+  );
+}
+
+/**
+ * Set that brake (`fluncle admin catalogue anchor-apify-budget set --rows N`). Thin client over the
+ * OPERATOR-tier `set_anchor_apify_budget` op — a machine does not raise its own spend cap. Returns
+ * the brake as stored, so one call writes and reads back.
+ */
+export async function setAnchorApifyBudgetCommand(
+  dailyRows: number,
+): Promise<AnchorApifyBudgetState> {
+  return adminApiPut<AnchorApifyBudgetState & { ok: true }>(
+    "/api/v1/admin/catalogue/anchor/apify-budget",
+    { dailyRows },
+  );
+}
 
 /**
  * Read why the anchor waterfall is quiet (`fluncle admin catalogue anchor-breaker`). Thin client

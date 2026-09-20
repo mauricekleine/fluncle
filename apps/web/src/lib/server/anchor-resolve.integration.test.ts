@@ -161,7 +161,10 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
 
     expect(result).toEqual({
       anchored: true,
+      apifyBudgetRemaining: 300,
+      apifyEligible: false,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
@@ -216,7 +219,10 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
 
     expect(result).toEqual({
       anchored: true,
+      apifyBudgetRemaining: 300,
+      apifyEligible: false,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
@@ -266,7 +272,10 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
 
     expect(result).toEqual({
       anchored: false,
+      apifyBudgetRemaining: 299,
+      apifyEligible: true,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "gate-rejected",
@@ -330,7 +339,10 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      apifyBudgetRemaining: 299,
+      apifyEligible: true,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
@@ -357,7 +369,10 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      apifyBudgetRemaining: 299,
+      apifyEligible: true,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
@@ -417,7 +432,10 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      apifyBudgetRemaining: 299,
+      apifyEligible: true,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "metadata-failed",
@@ -453,7 +471,12 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
 
     expect(result).toEqual({
       anchored: false,
+      // The kill-flag is OFF, so no actor run is coming and the day's tally is NOT charged — the
+      // brake meters money, and with the paid rung disarmed there is none to meter.
+      apifyBudgetRemaining: 300,
+      apifyEligible: true,
       apifyEnabled: false,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
@@ -485,7 +508,10 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
 
     expect(result).toEqual({
       anchored: false,
+      apifyBudgetRemaining: 299,
+      apifyEligible: true,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
@@ -521,7 +547,10 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
 
     expect(result).toEqual({
       anchored: true,
+      apifyBudgetRemaining: 300,
+      apifyEligible: false,
       apifyEnabled: false,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
@@ -577,7 +606,10 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
 
     expect(result).toEqual({
       anchored: true,
+      apifyBudgetRemaining: 300,
+      apifyEligible: false,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: true,
       listenbrainzOutcome: "anchored",
@@ -617,7 +649,10 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
 
     expect(result).toEqual({
       anchored: false,
+      apifyBudgetRemaining: 299,
+      apifyEligible: true,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
@@ -689,7 +724,10 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
 
     expect(result).toEqual({
       anchored: true,
+      apifyBudgetRemaining: 300,
+      apifyEligible: false,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
