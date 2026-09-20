@@ -209,7 +209,7 @@ function EntityRow({
 
 // ── The dialog ───────────────────────────────────────────────────────────────────────
 
-export function SearchDialog({
+function SearchDialog({
   onOpenChange,
   open,
   seed,

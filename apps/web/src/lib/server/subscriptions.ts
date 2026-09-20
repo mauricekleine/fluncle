@@ -233,7 +233,7 @@ export async function deleteSubscription(id: string): Promise<{ id: string }> {
 }
 
 /** A single cost line by id, or a 404. */
-export async function getSubscriptionById(id: string): Promise<SubscriptionDTO> {
+async function getSubscriptionById(id: string): Promise<SubscriptionDTO> {
   const db = await getDb();
   const result = await db.execute({
     args: [id],

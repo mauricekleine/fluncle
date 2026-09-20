@@ -6,7 +6,7 @@ import { LOCAL_DB_CONCURRENCY } from "../lib/database-concurrency";
  * The projection control-plane schema as the integration suites see it: every table the bounded
  * maintenance, repair, audit, and anchor paths touch, in an in-memory libSQL client.
  */
-export const PROJECTION_TEST_SCHEMA = `
+const PROJECTION_TEST_SCHEMA = `
 create table settings (key text primary key, value text not null);
 create table due_work (
   work_kind text not null, subject_type text not null, subject_id text not null default '',

@@ -8,9 +8,8 @@
 // It is deliberately free of React, of `lib/server/**`, and of any I/O: the `/search` route's
 // `validateSearch` / `loaderDeps` / `head` are EAGERLY bundled into the client entry chunk
 // (docs/client-bundle.md, Rule 1, build-enforced by the `fluncle-eager-chunk-purity` gate), so
-// anything they reach has to be free of the `getDb` → `@libsql/client` chain. The wire types are
-// restated here rather than imported from `@fluncle/contracts` for the same reason the dialog
-// restated them: a type-only shape, with no schema and no zod, is what a client needs.
+// anything they reach has to be free of the `getDb` → `@libsql/client` chain. Type-only imports
+// from `@fluncle/contracts` erase at compile time, so the canonical wire shapes stay safe here.
 //
 // ── WHY THE DIALOG AND THE PAGE ARE BOTH REAL ────────────────────────────────────────────
 // A palette is the fastest way to reach one known thing and the worst way to hold a result set:
@@ -18,61 +17,21 @@
 // the dialog stays the accelerator and HANDS OFF to the page ({@link searchPagePath}) rather than
 // being replaced by it, and the page carries the whole query state in its URL.
 
+import {
+  type SearchEntity,
+  type SearchFilters,
+  type SearchHit,
+  type SearchKind,
+} from "@fluncle/contracts";
 import { hasTrackPageIdentity, trackPagePath } from "./track-page";
 
+export type { SearchEntity, SearchFilters, SearchHit, SearchKind };
+
 /** The five graph nodes that have a page of their own — a jump target, not a result row. */
-export type SearchEntityKind = "album" | "artist" | "galaxy" | "label" | "mixtape";
+export type SearchEntityKind = SearchEntity["kind"];
 
-/** An entity the query named or prefixed. `url` overrides the `/<kind>/<slug>` default. */
-export type SearchEntity = {
-  imageUrl?: string;
-  kind: SearchEntityKind;
-  name: string;
-  slug: string;
-  url?: string;
-};
-
-/**
- * One archive row as search returns it — and the object that carries THE CATALOGUE RULE.
- *
- * `certified` is the one bit a renderer needs to pick the register: a finding carries its
- * coordinate and lights gold, a track Fluncle never certified stays cold and links OUT. The
- * uncertified tier is never named, never badged, never given a noun (DESIGN.md's Unlit Rule).
- */
-export type SearchHit = {
-  album?: string;
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  certified: boolean;
-  galaxy?: string;
-  key?: string;
-  label?: string;
-  logId?: string;
-  releaseDate?: string;
-  spotifyUrl?: string;
-  title: string;
-  trackId: string;
-};
-
-/** What the language tier understood, echoed back so a reader can see it and correct it. */
-export type SearchFilters = {
-  album?: string;
-  artist?: string;
-  bpmMax?: number;
-  bpmMin?: number;
-  key?: string;
-  label?: string;
-  soundsLike?: string;
-  soundsLikeArtists?: string[];
-  text?: string;
-  yearMax?: number;
-  yearMin?: number;
-};
-
-/** Which of the resolver's tiers answered. Not a debug detail: it decides what renders. */
-export type SearchKind = "coordinate" | "empty" | "entity" | "filters" | "sonic" | "token";
-
+// SearchHit carries the catalogue rule: `certified` selects the lit finding register or the
+// unnamed, outbound-linking unlit register (DESIGN.md's Unlit Rule).
 /** The whole answer, exactly as `search_archive` puts it on the wire. */
 export type SearchResponse = {
   anchor?: SearchHit;

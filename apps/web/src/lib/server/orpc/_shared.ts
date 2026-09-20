@@ -8,7 +8,7 @@ import { type implement, ORPCError } from "@orpc/server";
 import * as Sentry from "@sentry/cloudflare";
 import { isDueWorkMaintenancePending } from "../due-work";
 import { logEvent } from "../log";
-import { type OrpcContext } from "../orpc-auth";
+import { type OrpcContext } from "../orpc-context";
 import { type TrackListItem, getTrackByIdOrLogId } from "../tracks";
 import { ApiError } from "../spotify";
 

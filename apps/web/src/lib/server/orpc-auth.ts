@@ -29,13 +29,7 @@ import { requireAccountMutation } from "./account-data";
 import { type AdminRole, adminRole, requireAdminMutationOrigin } from "./env";
 import { type PublicUser, requirePublicUser } from "./public-auth";
 
-// The initial context every oRPC request is handled with. The Worker seam
-// (./orpc.ts) passes the raw `Request` in; auth middleware derives `role` from
-// it. Public procedures read neither; admin procedures `.use(adminAuth)` to lift
-// `request` into a non-null `role`.
-export type OrpcContext = {
-  request: Request;
-};
+import { type OrpcContext } from "./orpc-context";
 
 // The context an admin procedure's handler sees: the resolved role is guaranteed
 // non-null past `adminAuth`.

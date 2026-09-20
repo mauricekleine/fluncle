@@ -342,7 +342,7 @@ async function finishSync(db: SQLiteDatabase): Promise<void> {
  * Consider a pull. The gates, in the order a wasted call is cheapest to avoid: a terminal
  * verdict about this launch, then the dark latch, then freshness and single-flight.
  */
-export function syncReplica(trigger: SyncTrigger): Promise<void> {
+function syncReplica(trigger: SyncTrigger): Promise<void> {
   if (clearsDarkLatch(trigger)) {
     darkLatched = false;
   }

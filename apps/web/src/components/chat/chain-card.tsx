@@ -29,7 +29,7 @@ import { Badge } from "@fluncle/ui/components/badge";
  * optional (the tool output rides through `dropEmpty`), and there is no `previewUrl` here, same
  * as the Finding Card: playback goes through the live `/api/preview/<logId>` relay.
  */
-export type ChatStep = ChatFinding & { reason?: string };
+type ChatStep = ChatFinding & { reason?: string };
 
 /**
  * A mixable set as `build_set` emits it: the seed finding, the ordered steps that mix in after

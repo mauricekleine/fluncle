@@ -34,7 +34,7 @@ export const TELESCOPE_PLAYLIST_SETTING = "telescope.spotify_playlist_id";
 export const TELESCOPE_MIRROR_SETTING = "telescope.last_mirror";
 
 /** How many anchored rows the playlist mirrors. */
-export const TELESCOPE_PLAYLIST_SIZE = 50;
+const TELESCOPE_PLAYLIST_SIZE = 50;
 
 /**
  * How deep down the diversified ranking the sync walks to find them. The telescope's best

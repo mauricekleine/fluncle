@@ -20,7 +20,7 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { csrfJsonHeaders, fetchCsrfToken } from "./authed-fetch";
 import { keyToCamelotCode } from "./key-camelot";
 
-export const KEY_NOTATIONS = ["scales", "camelot"] as const;
+const KEY_NOTATIONS = ["scales", "camelot"] as const;
 export type KeyNotation = (typeof KEY_NOTATIONS)[number];
 
 const DEFAULT_NOTATION: KeyNotation = "scales";

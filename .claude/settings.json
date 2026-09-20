@@ -43,7 +43,7 @@
           },
           {
             "type": "command",
-            "command": "bun run quality:preflight -- start --quiet",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/preflight-on-edit.sh",
             "statusMessage": "Starting affected quality lanes"
           }
         ]

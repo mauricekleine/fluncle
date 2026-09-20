@@ -375,7 +375,7 @@ export async function searchTrackCandidates(query: string): Promise<TrackSearchR
 }
 
 /** What the catalogue crawler wants from Spotify: the anchor, plus the artists riding on it. */
-export type SpotifyIsrcMatch = {
+type SpotifyIsrcMatch = {
   albumImageUrl?: string;
   /**
    * The track's Spotify artists, each with its stable `id` — carried straight off the SAME
