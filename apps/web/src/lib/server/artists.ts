@@ -1,3 +1,4 @@
+import { parseArtistsJson } from "./artist-names";
 import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { type ArtistListItem } from "@fluncle/contracts";
@@ -863,20 +864,7 @@ export async function artistNamesBySlugs(slugs: string[]): Promise<string[]> {
   });
 }
 
-export function parseArtistsJson(value: string): string[] {
-  try {
-    const artists = JSON.parse(value) as unknown;
-
-    if (Array.isArray(artists)) {
-      return artists.filter((artist): artist is string => typeof artist === "string");
-    }
-  } catch (error) {
-    logEvent("warn", "artists.parse-artists-json-failed", { error });
-    return [];
-  }
-
-  return [];
-}
+export { parseArtistsJson } from "./artist-names";
 
 // ── Artist entity ────────────────────────────────────────────────────────────
 // A canonical artist slug: real-name kebab-cased, lowercase, diacritics stripped,

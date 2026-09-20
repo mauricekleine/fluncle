@@ -1,4 +1,4 @@
-import { type DueWorkSubjectType } from "./due-work";
+import { type DueWorkSubjectType } from "./due-work-types";
 
 export type DueWorkProducerInventoryEntry = {
   file: `${string}.ts`;

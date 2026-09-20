@@ -16,7 +16,7 @@ import {
   type DueWorkClient,
   type DueWorkRow,
 } from "./due-work";
-import { type DueWorkReadRepairOutcome } from "./due-work-source-repair";
+import { type DueWorkReadRepairOutcome } from "./due-work-types";
 import { getSetting } from "./settings";
 
 /**
