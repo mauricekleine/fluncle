@@ -66,6 +66,7 @@ type AdminProjectionStepOptions = JsonOptions & {
   maxSteps?: string;
   target: string;
   terminalStatus: boolean;
+  wallMs?: string;
 };
 
 type AdminProjectionCutoverOptions = JsonOptions & {
@@ -1027,6 +1028,10 @@ JSON field reference:
     .option("--limit <limit>", "Maximum rows or repairs in this request (1-500)", "100")
     .option("--max-steps <steps>", "Maximum sequential advance calls (1-100)")
     .option(
+      "--wall-ms <ms>",
+      "Stop issuing further steps once this many milliseconds have elapsed (1000-600000)",
+    )
+    .option(
       "--no-terminal-status",
       "Omit the terminal readiness snapshot (JSON repair automation only)",
     )
@@ -1046,13 +1051,17 @@ JSON field reference:
             ? undefined
             : projections.parseProjectionMaxSteps(options.maxSteps),
         target: projections.parseProjectionTarget(options.target),
+        wallMs:
+          options.wallMs === undefined
+            ? undefined
+            : projections.parseProjectionWallMs(options.wallMs),
       });
       if (options.json) {
         printJson(result);
         return;
       }
       console.log(
-        `${result.target} ${result.action}: steps ${result.steps}, processed ${result.processed}, scheduled ${result.scheduled}, ${result.complete ? "complete" : "more work remains"}.`,
+        `${result.target} ${result.action}: steps ${result.steps}, processed ${result.processed}, scheduled ${result.scheduled}, ${result.complete ? "complete" : result.wallStopped ? "wall budget spent, more work remains" : "more work remains"}.`,
       );
     });
 
@@ -8915,6 +8924,7 @@ const stringOptions = new Set([
   "--video-url",
   "--view",
   "--voice-id",
+  "--wall-ms",
   "--window-since",
   "--window-until",
 ]);

@@ -135,6 +135,7 @@ describe("projection operator commands", () => {
       status,
       steps: 1,
       target: "crawl_due_work",
+      wallStopped: false,
     });
     expect(calls).toEqual([
       {
@@ -231,6 +232,7 @@ describe("projection operator commands", () => {
       status,
       steps: 3,
       target: "track_due_work",
+      wallStopped: false,
     });
     expect(calls).toHaveLength(4);
     expect(calls.map((call) => call.body)).toEqual([
@@ -240,6 +242,74 @@ describe("projection operator commands", () => {
       undefined,
     ]);
     expect(calls[3]).toEqual({ method: "GET", path: "/api/v1/admin/projections/status" });
+  });
+
+  // A step is one HTTP round trip whose cost the caller cannot know, so a caller with a deadline
+  // of its own states the deadline. The step ceiling stays the hard cap on requests issued.
+  test("stops issuing steps once the wall budget is spent and says so", async () => {
+    for (let step = 0; step < 5; step += 1) {
+      postResponses.push({
+        action: "repair",
+        complete: false,
+        ok: true,
+        processed: 1,
+        scheduled: 0,
+        target: "track_due_work",
+      });
+    }
+    let clock = 0;
+
+    const result = await projections.advanceProjectionCommand({
+      action: "repair",
+      includeTerminalStatus: false,
+      limit: 500,
+      maxSteps: 100,
+      now: () => {
+        const reading = clock;
+        clock += 4_000;
+        return reading;
+      },
+      target: "track_due_work",
+      wallMs: 10_000,
+    });
+
+    // The reading at entry is 0, so the budget is spent after the readings at 4s and 8s: three
+    // steps ran, the fourth was never issued, and the ceiling of 100 never came into it.
+    expect(result).toMatchObject({ complete: false, processed: 3, steps: 3, wallStopped: true });
+    expect(calls).toHaveLength(3);
+  });
+
+  test("the first step always runs, whatever the budget, and completion beats the budget", async () => {
+    postResponses.push({
+      action: "repair",
+      complete: true,
+      ok: true,
+      processed: 4,
+      scheduled: 0,
+      target: "track_due_work",
+    });
+
+    const result = await projections.advanceProjectionCommand({
+      action: "repair",
+      includeTerminalStatus: false,
+      limit: 500,
+      maxSteps: 100,
+      now: () => 10_000_000,
+      target: "track_due_work",
+      wallMs: 1_000,
+    });
+
+    // A call that issued no request at all would report a step sequence it never attempted, and its
+    // caller would read zero progress as a drained family.
+    expect(result).toMatchObject({ complete: true, processed: 4, steps: 1, wallStopped: false });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("rejects a wall budget outside the supported range", () => {
+    expect(() => projections.parseProjectionWallMs("30000")).not.toThrow();
+    expect(() => projections.parseProjectionWallMs("999")).toThrow(/--wall-ms/);
+    expect(() => projections.parseProjectionWallMs("600001")).toThrow(/--wall-ms/);
+    expect(() => projections.parseProjectionWallMs("30_000")).toThrow(/--wall-ms/);
   });
 
   test("lets repair automation omit the terminal global status read", async () => {
@@ -269,6 +339,7 @@ describe("projection operator commands", () => {
       scheduled: 2,
       steps: 1,
       target: "track_due_work",
+      wallStopped: false,
     });
     expect(calls).toEqual([
       {

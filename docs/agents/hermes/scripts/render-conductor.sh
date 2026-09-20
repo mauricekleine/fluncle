@@ -18,8 +18,12 @@
 # container restart — it's decoupled), and the conductor is a quick (<120s) tick
 # that drives a two-state machine persisted under ~/.hermes:
 #
-#   RENDERING -> poll the box for the done-marker; STOP the box when present.
-#                still running -> NO-OP (this is the single-flight: never a 2nd).
+#   RENDERING -> ONE remote probe answers both the done-marker (as the word MARKER-PRESENT
+#                or MARKER-ABSENT) and the liveness question (a claude process, the run log's
+#                and the session JSONL's mtimes, free memory). Marker present -> STOP the box.
+#                Marker absent + something alive -> NO-OP (the single-flight: never a 2nd).
+#                Marker absent + nothing alive + nothing written -> the render is DEAD: park
+#                it in this tick and page. Neither word -> transport failure, counted.
 #   IDLE      -> if past the hourly start gate AND the queue is non-empty:
 #                resume-or-reprovision the box, inject creds, trigger one render.
 #
@@ -110,6 +114,7 @@ STARTED_FILE="$STATE_DIR/started-at"   # epoch of the last render START
 RENDER_LOGID_FILE="$STATE_DIR/render-logid" # logId of the in-flight render (its cost scope)
 FAILS_FILE="$STATE_DIR/fail-counts"    # poison ledger: logId<TAB>count<TAB>lastFailEpoch
 ORPHANS_FILE="$STATE_DIR/orphan-boxes" # sandbox ids condemned but not yet PROVEN deleted (one per line)
+PROBE_FAILS_FILE="$STATE_DIR/probe-failures" # consecutive done-marker probes that answered neither word
 LOCK_DIR="$STATE_DIR/lock.d"           # atomic-mkdir single-flight lock
 LOG_FILE="$STATE_DIR/conductor.log"
 [ -f "$FAILS_FILE" ] || : >"$FAILS_FILE" # keep it present so the awk helpers never error on a first run
@@ -142,7 +147,16 @@ POISON_TTL="${POISON_TTL:-21600}"         # seconds a poisoned finding is skippe
 CONDEMN_TTL="${CONDEMN_TTL:-60}"              # seconds until boat.dev may reclaim a condemned box
 REAP_PER_TICK="${REAP_PER_TICK:-5}"           # max orphans a single tick works through (tick-budget guard)
 ORPHAN_ALERT_AFTER="${ORPHAN_ALERT_AFTER:-21600}" # seconds a condemned box may linger before one alert (6h)
-DONE_MARKER='${HOME:-/home/user}/conductor-run.done'
+# THE LIVENESS VERDICT (the one-tick death test). MAX_RENDER is the OUTER cap and stays: it
+# answers "this has gone on too long". It cannot answer "this is already dead", and a render
+# whose process group dies leaves NO done-marker (render-detached.sh writes the marker after
+# `claude -p` returns, whatever the exit code), so the poll alone reads a corpse as in-flight
+# and bills the box for every hour until the cap. The probe below therefore asks the box, in
+# the SAME remote command as the marker, whether anything is still rendering: a marker-absent
+# tick with ZERO `claude -p` processes AND no write to the run log or the session JSONL for
+# LIVENESS_IDLE seconds is a dead render, force-parked in that tick.
+LIVENESS_IDLE="${LIVENESS_IDLE:-600}"         # seconds of log/session silence that, with no claude process, means dead
+PROBE_FAIL_LIMIT="${PROBE_FAIL_LIMIT:-3}"     # consecutive transport failures on the probe before the box is treated as wedged
 API_URL="${FLUNCLE_API_URL:-https://www.fluncle.com}"
 
 log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
@@ -164,10 +178,16 @@ emit() {
   printf '{"ok":true,"summary":"%s","checked":%s,"errors":0,"failed":%s,"produced":%s}\n' \
     "$(json_escape "$*")" "$RUN_CHECKED" "$RUN_FAILED" "$RUN_PRODUCED"
 }
+# EMIT_REASON names the failure class on the run-ledger row when there is one worth naming (a
+# lost render window, a wedged box, a refused launch). Without it a force-park is just another
+# `ok:false` and the ledger cannot tell a lost four-hour window from a queue-read hiccup.
+EMIT_REASON=""
 emit_fail() {
+  local reason=""
+  [ -n "$EMIT_REASON" ] && reason="$(printf ',"reason":"%s"' "$(json_escape "$EMIT_REASON")")"
   printf '%s\n' "$*"
-  printf '{"ok":false,"summary":"%s","checked":%s,"errors":1,"failed":%s,"produced":%s}\n' \
-    "$(json_escape "$*")" "$RUN_CHECKED" "$RUN_FAILED" "$RUN_PRODUCED"
+  printf '{"ok":false,"summary":"%s","checked":%s,"errors":1,"failed":%s,"produced":%s%s}\n' \
+    "$(json_escape "$*")" "$RUN_CHECKED" "$RUN_FAILED" "$RUN_PRODUCED" "$reason"
 }
 # emit_repair_pending() records the Worker's typed due-work deferral (`due_work_maintenance_pending`,
 # recognized in due-work-repair-pending.ts): the read was refused while due-work source repair
@@ -218,6 +238,76 @@ discord_alert() {
   curl -sS -o /dev/null --max-time 10 -H 'Content-Type: application/json' \
     -d "$(printf '{"content":"%s"}' "$1")" \
     "$DISCORD_ALERT_WEBHOOK" 2>>"$LOG_FILE" || true
+}
+
+# --- the one remote probe the rendering tick makes ---------------------------------
+# ONE remote command answers both questions the rendering branch has: is the done-marker
+# there, and is anything still rendering. It follows the doc's standing rule for load-bearing
+# remote steps — `boat ssh` flattens a remote non-zero exit to its own 1, so the probe asserts
+# on explicit OUTPUT MARKERS the remote command emits, never on the wrapper's exit code:
+#
+#   MARKER-PRESENT <marker text> | MARKER-ABSENT   the done-marker question, as a WORD
+#   CLAUDE-PROCS <n>                               `pgrep -c -f 'claude -p'` — is a render alive
+#   LOG-MTIME <epoch> · SESSION-MTIME <epoch>      last write to the run log / newest session JSONL
+#   NOW <epoch>                                    the BOX's clock, so idle is one clock's arithmetic
+#   MEM-AVAILABLE-MB <n> · OOM-KILLS <n|unknown>   names an OOM-killed render as such in the log
+#
+# NEITHER marker word coming back is a TRANSPORT failure, which is a third answer and must never
+# read as "in flight": a box that cannot be asked is a box nobody is watching.
+probe_box() {
+  boat_cli ssh "$1" 'bash -s' 2>&1 <<'PROBE'
+set -u
+marker="$HOME/conductor-run.done"
+if [ -f "$marker" ]; then
+  printf 'MARKER-PRESENT %s\n' "$(tr -d '\r\n' <"$marker")"
+else
+  printf 'MARKER-ABSENT\n'
+fi
+printf 'CLAUDE-PROCS %s\n' "$(pgrep -c -f 'claude -p' 2>/dev/null || printf 0)"
+printf 'LOG-MTIME %s\n' "$(stat -c %Y "$HOME/conductor-run.log" 2>/dev/null || printf 0)"
+newest=0
+for session in "$HOME"/.claude/projects/*/*.jsonl; do
+  [ -f "$session" ] || continue
+  seen="$(stat -c %Y "$session" 2>/dev/null || printf 0)"
+  [ "$seen" -gt "$newest" ] && newest="$seen"
+done
+printf 'SESSION-MTIME %s\n' "$newest"
+printf 'NOW %s\n' "$(date +%s)"
+printf 'MEM-AVAILABLE-MB %s\n' "$(free -m 2>/dev/null | awk '/^Mem:/{print $7+0; found=1} END{if(!found)print 0}')"
+ooms="$(dmesg 2>/dev/null | grep -ci 'out of memory' || printf '')"
+printf 'OOM-KILLS %s\n' "${ooms:-unknown}"
+PROBE
+}
+
+# One field out of the probe's output, by its marker word. Empty when the probe never said it.
+probe_field() { printf '%s\n' "$1" | awk -v key="$2" '$1==key{print $2; exit}'; }
+
+# A non-negative integer, or the fallback — every probe field crosses a transport and a stat
+# that can answer anything, so nothing derived from one is trusted as a number unguarded.
+numeric_or() { case "$1" in '' | *[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
+
+# END A RENDER THE CONDUCTOR DID NOT SEE FINISH. Every path here has lost a render window, so
+# all three of these happen together or the window is lost silently: the box's run-log tail is
+# pulled into the conductor log FIRST (the box is still up at this moment — after `boat stop`
+# the next incident needs a paid wake to read it), the operator is PAGED, and the run-ledger row
+# says `ok:false` with a named reason so /status cannot stay green over the hole.
+#   $1 the ledger reason · $2 the human summary (used for both the page and the row)
+force_park() {
+  local reason="$1" summary="$2" tail_out
+  tail_out="$(boat_cli ssh "$boxid" 'tail -c 4000 ~/conductor-run.log' 2>&1 || printf '')"
+  if [ -n "$tail_out" ]; then
+    log "conductor-run.log tail from $boxid (last 4000 bytes):"
+    printf '%s\n' "$tail_out" >>"$LOG_FILE"
+  else
+    log "no conductor-run.log tail available from $boxid"
+  fi
+  boat_cli stop "$boxid" >/dev/null 2>&1 || true
+  printf 'idle' >"$STATE_FILE"
+  bump_fail "$(read_or "$RENDER_LOGID_FILE" '')"
+  log "force-parked box $boxid — $summary"
+  discord_alert "render conductor: $summary ($API_URL/admin)"
+  EMIT_REASON="$reason"
+  emit_fail "render-conductor: $summary"
 }
 
 # --- box lifecycle: condemn + orphan reaping ---------------------------------------
@@ -504,27 +594,60 @@ run_bounded() {
 # render, so a `packages/video` fix lands on the very next render instead of waiting
 # for a snapshot purge + reprovision. Drift-gated + BEST-EFFORT: a fetch/reset failure
 # logs and renders on the existing checkout (the queue is idempotent, the next tick
-# retries; a broken render just re-queues). `bun install` + the fluncle-video skill
-# re-add run ONLY when the lockfile / skill subtree actually moved (the common case —
-# a code change — is just a shallow fetch + reset, seconds against an ~85m render).
+# retries; a broken render just re-queues). The fluncle-video skill re-add runs ONLY
+# when its subtree actually moved (the common case — a code change — is just a shallow
+# fetch + reset, seconds against an ~85m render).
 # The reprovision branch needs none of this: it clones clean `main` by construction.
+# THE DEPENDENCY INSTALL IS THE ONE STEP THAT IS NOT BEST-EFFORT — rendering into a
+# half-installed workspace is what the install exists to prevent, so a failed install
+# must stop the render rather than hand it to the agent.
 # Returns 0 when the checkout is present (freshened or already current) or when the
 # freshen ssh just hiccups (proceed on the existing checkout). Returns 2 when ~/fluncle
 # is MISSING — boat.dev's snapshot dropped it on resume — so the caller reprovisions
-# instead of rendering nothing and looping forever on a stale done-marker. The remote
-# `exit 42` is the missing-checkout signal.
+# instead of rendering nothing and looping forever on a stale done-marker. Returns 3 when
+# the dependency install FAILED. Every signal is an OUTPUT MARKER, never an exit code:
+# `boat ssh` flattens the remote `exit 42` to its own 1.
 freshen_checkout() {
   local out rc=0
   out="$(boat_cli ssh "$1" 'bash -s' 2>&1 <<'FRESH'
 set -u
 cd "$HOME/fluncle" || { echo "[freshen] no ~/fluncle — needs reprovision"; exit 42; }
+
+# THE CHECKOUT AND ITS DEPENDENCIES MOVE TOGETHER, and this runs on EVERY wake — a tree that
+# is already at `main` can still be missing modules, which is the same hole. Advancing the
+# checkout without installing leaves the workspace short of whatever the new head added, the
+# render's first build step dies on a missing module, and the agent — the only thing awake —
+# improvises a full-workspace install BESIDE its own session on a small box, which is how a
+# render's process group gets OOM-killed with no marker and no trace. So the conductor
+# installs here, at wake, while nothing else heavy is running and before `claude -p` starts.
+# Bounded, and it ASSERTS: the deps-ok / deps-failed marker is what the caller reads, because
+# `boat ssh` flattens the remote exit code. The agent NEVER installs (render-detached.sh
+# refuses to launch into an incomplete workspace instead).
+install_deps() {
+  if timeout 900 bun install --frozen-lockfile </dev/null >/tmp/freshen-install.log 2>&1; then
+    echo "[freshen] deps-ok"
+    return 0
+  fi
+  echo "[freshen] deps-failed"
+  tail -c 1000 /tmp/freshen-install.log 2>/dev/null
+  return 1
+}
+# `browserslist` is a transitive dependency of the render's webpack bundling step, so its
+# absence is the cheapest honest proof that the workspace tree is incomplete.
+deps_incomplete() { [ -d node_modules ] && [ -d node_modules/browserslist ] && return 1; return 0; }
+
 git fetch --depth 1 origin main -q 2>/dev/null || { echo "[freshen] fetch failed — keep current"; exit 0; }
 have="$(git rev-parse HEAD 2>/dev/null)"; want="$(git rev-parse FETCH_HEAD 2>/dev/null)"
-[ -n "$want" ] && [ "$have" != "$want" ] || { echo "[freshen] current at ${have:0:7}"; exit 0; }
-before_lock="$(sha256sum bun.lock 2>/dev/null)"
+if [ -z "$want" ] || [ "$have" = "$want" ]; then
+  echo "[freshen] current at ${have:0:7}"
+  deps_incomplete && { install_deps || exit 0; }
+  exit 0
+fi
 before_skill="$(git rev-parse HEAD:packages/skills/fluncle-video 2>/dev/null)"
 git reset --hard FETCH_HEAD -q || { echo "[freshen] reset failed — keep current"; exit 0; }
-[ "$(sha256sum bun.lock 2>/dev/null)" != "$before_lock" ] && bun install </dev/null >/dev/null 2>&1
+if git diff --name-only "$have" HEAD -- bun.lock package.json '*/package.json' 2>/dev/null | grep -q . || deps_incomplete; then
+  install_deps || exit 0
+fi
 [ "$(git rev-parse HEAD:packages/skills/fluncle-video 2>/dev/null)" != "$before_skill" ] \
   && npx -y skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
 echo "[freshen] updated ${have:0:7} -> $(git rev-parse --short HEAD)"
@@ -537,6 +660,9 @@ FRESH
   # OUTPUT marker instead of the (flattened) exit code.
   if printf '%s' "$out" | grep -q 'needs reprovision'; then
     return 2 # ~/fluncle missing on resume — caller must reprovision
+  fi
+  if printf '%s' "$out" | grep -q '\[freshen\] deps-failed'; then
+    return 3 # the workspace is incomplete and could not be repaired — do NOT render into it
   fi
   [ "$rc" = "0" ] || log "freshen: ssh rc=$rc — rendering on the existing checkout"
   return 0
@@ -692,10 +818,40 @@ if [ "$state" = "rendering" ]; then
   # So trust the marker only when its finish time (`@ <iso>`) is at/after this render's
   # start (minus clock skew). A stale/undated marker is treated as still-in-flight and the
   # stuck-guard below force-parks it, rather than a false "finished".
+  #
+  # THE POLL IS A WORD, NOT AN EXIT CODE. One probe answers the marker question AND the
+  # liveness question (see probe_box); the branch is taken on the WORD it printed. Neither
+  # word is a transport failure — a third answer, counted, never "in flight".
+  probe_out="$(probe_box "$boxid")"
+  printf '%s\n' "$probe_out" >>"$LOG_FILE"
+  probe_fails="$(numeric_or "$(read_or "$PROBE_FAILS_FILE" 0)" 0)"
+  case "$probe_out" in
+    *MARKER-PRESENT*) marker_word=present ;;
+    *MARKER-ABSENT*) marker_word=absent ;;
+    *) marker_word='' ;;
+  esac
+  if [ -z "$marker_word" ]; then
+    probe_fails=$((probe_fails + 1))
+    printf '%s' "$probe_fails" >"$PROBE_FAILS_FILE"
+    log "done-marker probe on $boxid answered neither MARKER-PRESENT nor MARKER-ABSENT — transport failure #$probe_fails"
+    if [ "$probe_fails" -ge "$PROBE_FAIL_LIMIT" ]; then
+      : >"$PROBE_FAILS_FILE"
+      force_park render_box_wedged \
+        "render box $boxid did not answer the done-marker probe $probe_fails ticks running — wedged, force-parked"
+      exit 1
+    fi
+    EMIT_REASON=render_probe_transport
+    emit_fail "render-conductor: done-marker probe failed on $boxid (transport failure $probe_fails of $PROBE_FAIL_LIMIT) — holding"
+    exit 1
+  fi
+  : >"$PROBE_FAILS_FILE"
+  log "done-marker probe on $boxid: MARKER-$(printf '%s' "$marker_word" | tr '[:lower:]' '[:upper:]')"
+
   marker_fresh=0
   result='?'
-  if boat_cli ssh "$boxid" "test -f $DONE_MARKER" >/dev/null 2>&1; then
-    result="$(boat_cli ssh "$boxid" "cat $DONE_MARKER" 2>/dev/null | tr -d '\r\n' || printf '?')"
+  if [ "$marker_word" = present ]; then
+    result="$(printf '%s\n' "$probe_out" | sed -n 's/^MARKER-PRESENT //p' | head -n 1)"
+    [ -n "$result" ] || result='?'
     marker_iso="${result#*@ }"; marker_iso="${marker_iso%% *}"
     marker_epoch="$(date -u -d "$marker_iso" +%s 2>/dev/null || printf 0)"
     started="$(read_or "$STARTED_FILE" 0)"
@@ -745,22 +901,53 @@ if [ "$state" = "rendering" ]; then
           fi
         fi
         ;;
-      '' | *[!0-9]*) RUN_FAILED=$((RUN_FAILED + 1)) ;; # unparseable exit — leave the poison ledger untouched
+      # A NAMED launcher fault (render-detached.sh refused to start: `EXIT=deps-missing`,
+      # `EXIT=trust-denied`) is a BOX fault, not this finding's, so the poison ledger is left
+      # alone — but it is never silent, because nothing rendered this window.
+      '' | *[!0-9]*)
+        RUN_FAILED=$((RUN_FAILED + 1))
+        log "render marker carries a named launcher fault ($result) — the box refused to render"
+        discord_alert "render conductor: the render launcher refused on $boxid ($result) — nothing rendered ($API_URL/admin)"
+        ;;
       *) bump_fail "$rendered_logid" ;;
     esac
     # Chain: fall out of the rendering block to the idle pick in THIS tick — a
     # finished render must not cost a dead hour. The hourly START gate below
     # still holds (the last start is over an hour old once a render finishes).
   else
-    # Still running -> single-flight: do NOT start another. Stuck guard only.
+    # No usable marker. Before the single-flight hold, READ THE LIVENESS VERDICT out of the
+    # same probe: a marker-absent tick is "in flight" ONLY while something is actually
+    # rendering. Zero `claude -p` processes plus a run log and a session JSONL that have not
+    # been written for LIVENESS_IDLE seconds is a render whose process group is gone, and it
+    # is force-parked in THIS tick rather than billed until MAX_RENDER.
     started="$(read_or "$STARTED_FILE" 0)"
+    claude_procs="$(numeric_or "$(probe_field "$probe_out" CLAUDE-PROCS)" '')"
+    box_now="$(numeric_or "$(probe_field "$probe_out" NOW)" "$(now)")"
+    log_mtime="$(numeric_or "$(probe_field "$probe_out" LOG-MTIME)" 0)"
+    session_mtime="$(numeric_or "$(probe_field "$probe_out" SESSION-MTIME)" 0)"
+    mem_available="$(probe_field "$probe_out" MEM-AVAILABLE-MB)"
+    oom_kills="$(probe_field "$probe_out" OOM-KILLS)"
+    newest="$log_mtime"
+    [ "$session_mtime" -gt "$newest" ] && newest="$session_mtime"
+    # Nothing has been written yet (a render that only just launched) -> measure from the
+    # start stamp, so a box whose clocks read zero cannot look infinitely idle.
+    [ "$newest" -gt 0 ] || newest="$(numeric_or "$started" "$box_now")"
+    idle_for=$((box_now - newest))
+    [ "$idle_for" -ge 0 ] || idle_for=0
+    log "liveness on $boxid: claude=${claude_procs:-unknown} idle=${idle_for}s mem_available=${mem_available:-unknown}MB oom_kills=${oom_kills:-unknown}"
+    # `claude_procs` empty means the probe did not answer that field — an unknown is never a
+    # death sentence, so the tick holds and MAX_RENDER remains the outer cap.
+    if [ "$claude_procs" = "0" ] && [ "$idle_for" -gt "$LIVENESS_IDLE" ]; then
+      force_park render_died \
+        "the render of $(read_or "$RENDER_LOGID_FILE" '?') on $boxid is DEAD — no done-marker, no claude process, nothing written for ${idle_for}s (${mem_available:-unknown}MB available, oom kills: ${oom_kills:-unknown})"
+      exit 1
+    fi
+    # The outer cap. A render still holding a process past MAX_RENDER is stuck rather than
+    # dead, and ends the same way: parked, paged, and an honest row.
     if [ "$(( $(now) - started ))" -gt "$MAX_RENDER" ]; then
-      boat_cli stop "$boxid" >/dev/null 2>&1 || true
-      printf 'idle' >"$STATE_FILE"
-      bump_fail "$(read_or "$RENDER_LOGID_FILE" '')" # a stuck render counts against the finding too
-      log "render exceeded ${MAX_RENDER}s — force-parked box $boxid"
-      emit "render-conductor: render stuck >${MAX_RENDER}s, force-parked"
-      exit 0
+      force_park render_stuck \
+        "the render of $(read_or "$RENDER_LOGID_FILE" '?') on $boxid ran past ${MAX_RENDER}s — force-parked"
+      exit 1
     fi
     emit "render-conductor: render in flight on $boxid — single-flight hold"
     exit 0
@@ -857,7 +1044,23 @@ if [ -n "$boxid" ] && [ "$resume_rc" = "0" ]; then
   # returns 2 in that case: stop the checkout-less box (it renders nothing) and fall
   # through to a fresh reprovision, so a lost checkout self-heals instead of looping on
   # a stale done-marker.
-  if ! freshen_checkout "$boxid"; then
+  freshen_rc=0
+  freshen_checkout "$boxid" || freshen_rc=$?
+  # A FAILED DEPENDENCY INSTALL IS NOT A RENDER. The workspace is incomplete and the
+  # conductor could not repair it, so the one thing that must not happen is handing it to the
+  # agent to improvise around. Park the box, page, stay idle — no condemn, because the box is
+  # not wedged and a reprovision would throw away a perfectly good snapshot over what may be
+  # a transient registry failure. The next tick tries again on the same box.
+  if [ "$freshen_rc" = "3" ]; then
+    boat_cli stop "$boxid" >/dev/null 2>&1 || true
+    RUN_FAILED=$((RUN_FAILED + 1))
+    log "dependency install failed on $boxid — parked without rendering; the workspace is incomplete"
+    discord_alert "render conductor: the dependency install failed on render box $boxid — nothing rendered this window, and the box is parked until it installs ($API_URL/admin)"
+    EMIT_REASON=render_deps_install_failed
+    emit_fail "render-conductor: dependency install failed on $boxid — box parked, nothing rendered"
+    exit 1
+  fi
+  if [ "$freshen_rc" != "0" ]; then
     log "resumed box $boxid lost its ~/fluncle checkout — stopping it + reprovisioning"
     boat_cli stop "$boxid" >/dev/null 2>&1 || true
     boxid=""
@@ -956,6 +1159,21 @@ rm -f "$creds"
 # line of defence; this stops the wedge at the source.)
 trigger_out="$(boat_cli ssh "$boxid" 'bash ~/render-detached.sh' 2>&1)"
 printf '%s\n' "$trigger_out" >>"$LOG_FILE"
+# A REFUSAL IS NOT A WEDGE. The launcher checks its own preconditions (the workspace's
+# modules, the trust setting the headless allowlist depends on) and refuses rather than
+# letting a starved agent burn a window. That is a box the conductor can still talk to, so
+# it is parked and paged, never condemned — the state stays idle and the next tick retries.
+if printf '%s' "$trigger_out" | grep -q 'render-detached: refused'; then
+  refusal="$(printf '%s\n' "$trigger_out" | sed -n 's/.*render-detached: refused //p' | head -n 1)"
+  boat_cli stop "$boxid" >/dev/null 2>&1 || true
+  printf 'idle' >"$STATE_FILE"
+  RUN_FAILED=$((RUN_FAILED + 1))
+  log "render launcher refused to start on $boxid: ${refusal:-unstated}"
+  discord_alert "render conductor: the render launcher refused to start on $boxid (${refusal:-unstated}) — nothing rendered this window ($API_URL/admin)"
+  EMIT_REASON=render_launch_refused
+  emit_fail "render-conductor: render launcher refused on $boxid (${refusal:-unstated}) — box parked, staying idle"
+  exit 1
+fi
 if ! printf '%s' "$trigger_out" | grep -q 'render-detached: launched'; then
   log "render trigger did not launch on $boxid (wedged box) — deleting it + staying idle to reprovision"
   RUN_FAILED=$((RUN_FAILED + 1))
@@ -970,6 +1188,7 @@ if ! printf '%s' "$trigger_out" | grep -q 'render-detached: launched'; then
 fi
 printf 'rendering' >"$STATE_FILE"
 now >"$STARTED_FILE"
+: >"$PROBE_FAILS_FILE" # a new render starts the transport-failure count over
 printf '%s' "$head" >"$RENDER_LOGID_FILE" # the finding this render is spending on (cost scope)
 log "started detached render of $head on box $boxid"
 RUN_PRODUCED=$((RUN_PRODUCED + 1))

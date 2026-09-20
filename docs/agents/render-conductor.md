@@ -16,12 +16,38 @@ The conductor is a rave-02 HOST systemd timer (`fluncle-render.timer`/`.service`
 
 A swangle (software-GL) render runs ~85 min, but the Hermes `--no-agent` runner kills any job at ~120s. So the conductor cannot block on the render. Instead the render runs **detached on the render box** (via `setsid` in `render-detached.sh`, so it survives the short triggering SSH and a Hermes container restart — the render is decoupled from the conductor), and each conductor tick is a quick (<120s) step in a two-state machine persisted under the conductor's `~/.render-conductor/`:
 
-- **RENDERING** → poll the box for its `~/conductor-run.done` marker; when present, STOP (snapshot) the box and return to idle. Still running → NO-OP. Past `MAX_RENDER` → force-park (the stuck guard).
+- **RENDERING** → one remote probe answers the done-marker question and the liveness question together (below); marker present → STOP (snapshot) the box and return to idle. Marker absent with a render alive → NO-OP. Marker absent with nothing alive → force-park in that tick. Past `MAX_RENDER` → force-park (the outer stuck guard).
 - **IDLE** → if past the hourly start gate AND the queue has a renderable finding: resume the parked box (or reprovision if boat.dev reclaimed it), freshen its checkout to `main`, inject creds, and trigger one detached render → rendering.
 
 **Single-flight is the hard requirement — never two renders at once.** The STATE enforces it (only `idle` starts a render; a `rendering` tick only polls), and an atomic `mkdir` lock is a second guard so two ticks never race the state file (with a stale-lock breaker for a tick the ~120s runner killed mid-hold — `flock` is deliberately avoided as non-portable). Because a render (~85m) outlasts the hourly tick, the `rendering` no-op branch fires every cycle: it is the primary safety, exercised continuously, not a rare net.
 
 **The force-park cap is `MAX_RENDER=12600s` (3.5h).** Plate-lane authoring can exceed two hours, so `MAX_RENDER=12600s` allows 3.5 hours before treating a render as stuck. A render past the cap is force-parked and the finding takes a poison-ledger failure.
+
+### The poll contract: a word, not an exit code
+
+`boat ssh` flattens a remote non-zero exit to its own `1`, so the done-marker poll asserts on an explicit OUTPUT MARKER the remote command emits (the doc's standing rule for every load-bearing remote step). One probe per rendering tick answers everything the branch needs, in one command:
+
+- `MARKER-PRESENT <marker text>` or `MARKER-ABSENT` — the marker question, as a word, with the marker's own text so no second call is needed.
+- `CLAUDE-PROCS <n>` — `pgrep -c -f 'claude -p'`, whether a render is still alive.
+- `LOG-MTIME <epoch>` and `SESSION-MTIME <epoch>` — the last write to `~/conductor-run.log` and to the newest session JSONL.
+- `NOW <epoch>` — the box's own clock, so idle time is one clock's arithmetic.
+- `MEM-AVAILABLE-MB <n>` and `OOM-KILLS <n|unknown>` — so an OOM-killed render is named as such in the conductor log rather than inferred later.
+
+**Neither word coming back is a THIRD answer, not "in flight".** A box that cannot be asked is a box nobody is watching, so the tick logs a transport failure, counts it, and reports `ok:false` with `reason: render_probe_transport`. After `PROBE_FAIL_LIMIT` (default 3) consecutive failures the box is treated as wedged and force-parked.
+
+### The liveness verdict: see a dead render in one tick
+
+`render-detached.sh` writes the done-marker **after** `claude -p` returns, whatever the exit code — so a render whose process group dies writes no marker at all, and a marker-only poll reads the corpse exactly like a healthy render and bills the box until the cap. `MAX_RENDER` remains the outer cap, but it answers "this has gone on too long", never "this is already dead".
+
+So a marker-absent tick reads the verdict out of the same probe. **Zero `claude -p` processes AND no write to the run log or the session JSONL for `LIVENESS_IDLE` (default 600s) is a dead render**, force-parked in that tick. An unanswered process count is an unknown and never a death sentence — the tick holds and the outer cap still applies.
+
+### A force-park is never quiet
+
+Every path that ends a render the conductor did not see finish does all three of these together, or the window is lost silently:
+
+1. **The box's `~/conductor-run.log` tail is pulled into the conductor log FIRST**, while the box is still up — after `boat stop` reading it again costs a paid wake.
+2. **The operator is PAGED** on Discord with the log id, the box, the elapsed time, and the liveness verdict.
+3. **The run-ledger row says `ok:false` with a named reason** — `render_died`, `render_stuck`, `render_box_wedged`, `render_probe_transport`, `render_deps_install_failed`, `render_launch_refused` — so `/status` cannot stay green over a lost window.
 
 **The done-marker freshness guard.** The render box's home persists across stop/resume snapshots, so a done-marker from a PREVIOUS render can outlive it. `render-detached.sh` removes the marker before forking — but only if its trigger actually ran; a wedged box silently no-ops the trigger and leaves the OLD marker in place, which a bare `test -f` would misread as "finished" and chain to the same never-shipped finding forever. So the conductor trusts a marker only when its finish timestamp (`@ <iso>`) is at/after this render's start (minus a clock-skew grace). A stale/undated marker is treated as still-in-flight and the stuck-guard force-parks it, rather than a false "finished".
 
@@ -58,6 +84,18 @@ The assigner is **fail-open by contract**: any hiccup (malformed ledger, a missi
 - `--max-turns 150` — bounds a wedged run (healthy renders measure 76–98 turns) so a stall fails fast and the next hourly tick retries.
 - `--model opus` — the render is pinned to Opus, never the CLI default (which is whatever the box token resolves to). Video authoring is held to the Opus bar everywhere; pinning it here stops a shifting CLI default from silently re-tiering the render.
 
+### The trust setting: a headless run with an ignored allowlist is a wasted window
+
+Claude Code ignores a workspace's `.claude/settings.json` `permissions.allow` entries until that workspace is trusted, and says so on its first lines (`Ignoring N permissions.allow entries … this workspace has not been trusted`). A headless `claude -p` in that state has its tool calls denied: it cannot render, and it burns the window finding that out.
+
+The launcher therefore sets `projects["<workspace>"].hasTrustDialogAccepted = true` in the box user's `~/.claude.json` before every render, idempotently, through a read-modify-write that preserves every other key. **The setting is PER PROJECT**, so it targets the render workspace's exact path and leaves every other entry's own answer alone. If it cannot be written, the launcher refuses to start.
+
+The warning is also its own detector: for the first `TRUST_GUARD_SECONDS` (default 120) the launcher watches its own run log for that line and, if it appears anyway, kills the run and writes `EXIT=trust-denied` on the marker instead of paying out the window.
+
+### The launcher refuses rather than starving a render
+
+Two preconditions are checked before `claude -p` is spawned, because each costs a whole window when it is discovered from the inside: the **workspace's modules** (below) and the **trust setting** (above). A refusal prints `render-detached: refused <reason>` in place of the launch line and writes the done-marker with that reason, so whichever of the two a given tick reads, it agrees. The conductor then parks the box and pages — a refusal is **not** a wedge, so it is never a condemn, and the next tick retries on the same box.
+
 ## The version trap has two faces
 
 The bundled `fluncle` CLI + `render-detached.sh` do not ride the checkout, so a resumed snapshot can carry a stale vintage while the pin moves on — and the drift bites in both directions:
@@ -69,7 +107,9 @@ The conductor mitigates by re-copying both the bundled CLI (to `~/.local/lib/flu
 
 ## Snapshot freshness (the checkout freshen)
 
-A resumed snapshot carries a stale `fluncle` checkout — the clone from whenever the box was last provisioned — so a `packages/video` / `fluncle-video`-skill fix would otherwise not reach the render box until boat.dev purged the snapshot and forced a reprovision. The render box is scale-to-zero (asleep but for a render), so it can't watch `main` itself like the rave-02 `pin-watch` timer; instead the conductor freshens it **at wake**, right after a successful `boat resume`, via `freshen_checkout`: a drift-gated `git fetch --depth 1` + `git reset --hard origin/main`, running `bun install` and re-adding the `fluncle-video` skill ONLY when the lockfile / skill subtree actually moved. It is best-effort — a fetch/reset failure logs and renders on the existing checkout — and the common case (a code change, no dep change) is a few seconds against an ~85m render. So every render runs current `main`; a fix lands on the next render, not at the next purge. The reprovision path needs none of this — it clones clean `main` by construction. When a resume succeeds but boat.dev's snapshot dropped `~/fluncle` entirely, `freshen_checkout` signals the missing checkout so the conductor stops that box and reprovisions rather than looping on a stale done-marker.
+A resumed snapshot carries a stale `fluncle` checkout — the clone from whenever the box was last provisioned — so a `packages/video` / `fluncle-video`-skill fix would otherwise not reach the render box until boat.dev purged the snapshot and forced a reprovision. The render box is scale-to-zero (asleep but for a render), so it can't watch `main` itself like the rave-02 `pin-watch` timer; instead the conductor freshens it **at wake**, right after a successful `boat resume`, via `freshen_checkout`: a drift-gated `git fetch --depth 1` + `git reset --hard origin/main`, re-adding the `fluncle-video` skill ONLY when its subtree actually moved. It is best-effort — a fetch/reset failure logs and renders on the existing checkout — and the common case (a code change, no dep change) is a few seconds against an ~85m render. So every render runs current `main`; a fix lands on the next render, not at the next purge. The reprovision path needs none of this — it clones clean `main` by construction. When a resume succeeds but boat.dev's snapshot dropped `~/fluncle` entirely, `freshen_checkout` signals the missing checkout so the conductor stops that box and reprovisions rather than looping on a stale done-marker.
+
+**The checkout and its dependencies move together, and the agent never installs.** A tree advanced without an install dies on a missing module at the render's first build step, and the only thing awake to fix it is the render agent — which improvises a full-workspace `bun install` beside its own live session on a small box, exactly the way a render's process group gets OOM-killed leaving no marker and no trace. So the install is the conductor's, at wake, while nothing else heavy is running and before `claude -p` starts: on every wake, when the manifests (`bun.lock`, any `package.json`) moved against the previous head **or** the tree is visibly incomplete, `freshen_checkout` runs a bounded `bun install --frozen-lockfile` on the box and asserts on its `[freshen] deps-ok` / `[freshen] deps-failed` output marker. This is the one freshen step that is **not** best-effort: a failed install parks the box, pages, and reports `render_deps_install_failed` rather than handing an incomplete workspace to the agent. It is not a condemn — the box is fine, the install was not — so the next tick retries on the same box. `render-detached.sh` is the rail behind it, refusing to launch into a workspace whose modules are missing.
 
 ## Reap recovery (stale/wedged box → cold provision)
 

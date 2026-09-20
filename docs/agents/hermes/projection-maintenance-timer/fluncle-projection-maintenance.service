@@ -10,9 +10,11 @@ Type=oneshot
 EnvironmentFile=-/etc/fluncle/database-admission.env
 ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-projection-maintenance -- bash /opt/hermes-scripts/projection-maintenance-sweep.sh
 # Admission may wait for 120s. The payload has at most five serial CLI processes (one status and
-# one bounded advance per family), each with a 120s deadline. Ten seconds cover process overhead;
-# the next timer firing resumes every honest timeout or incomplete result from durable markers.
-TimeoutStartSec=730
+# one bounded advance per family), each with a 60s child deadline. Ten seconds cover process
+# overhead; the next timer firing resumes every honest timeout or incomplete result from durable
+# markers. An ordinary tick is far shorter: each advance is handed a 30s wall budget it honours and
+# the whole run spends at most 120s inside advances, so this bounds the pathological case only.
+TimeoutStartSec=430
 NoNewPrivileges=true
 ProtectControlGroups=true
 ProtectKernelTunables=true
