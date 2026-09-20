@@ -3,6 +3,7 @@ import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 import {
   crawlDueDefinitionVersion,
   fanOutCrawlProjectionRepairs,
+  readCrawlDueRebuild,
   repairCrawlDueNodes,
   runCrawlDueRebuildChunk,
 } from "./crawl-due-work";
@@ -794,6 +795,100 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
     return { complete: false, processed: result.scanned, scheduled: 0 };
   }
   return { complete: true, processed: 0, scheduled: 0 };
+}
+
+type StaleRebuildOutcome = { complete: boolean; rowsWalked: number; staleFamilies: number };
+
+/**
+ * The self-driving half of the definition version.
+ *
+ * `--action rebuild` is operator-only and no cron runs it, so a mechanism that waited for a human
+ * to walk 41 families would be the ceremony the definition version exists to remove. This runs on
+ * the agent-eligible REPAIR path instead, and only ever for a family whose stored definition
+ * version is not the running code's — which `startDueWorkRebuild`'s own conditional upsert enforces
+ * in SQL, not merely here: a complete family on today's definition cannot be restarted by this path
+ * at all, because the `where ? = 1 or definition_version is not ?` clause is false for it.
+ *
+ * Oldest-stale-first, one bounded page per call, and only with the budget ordinary repair left
+ * behind, so the walk paces itself across ticks and can never starve the repair it follows.
+ */
+async function staleTrackRebuildDefinitions(client: ProjectionClient) {
+  const checkpoints = await client.execute(
+    `select work_kind, subject_type, definition_version, state, updated_at from due_work_rebuilds`,
+  );
+  const rows = checkpoints.rows as unknown as {
+    definition_version: null | string;
+    state: string;
+    subject_type: string;
+    updated_at: string;
+    work_kind: string;
+  }[];
+  const byIdentity = new Map(rows.map((row) => [`${row.work_kind} ${row.subject_type}`, row]));
+  return DUE_WORK_BACKFILLS.map((definition) => ({
+    definition,
+    row: byIdentity.get(`${definition.workKind} ${definition.subjectType}`),
+  }))
+    .filter(({ definition, row }) => {
+      if (row === undefined || row.definition_version !== definition.definitionVersion) {
+        // Never built, or built under an older definition: this walk's whole reason to exist.
+        return true;
+      }
+      // A generation this walk opened writes today's version immediately, so it has to be able to
+      // FINISH a running checkpoint or it would strand every family at page one. The exception is a
+      // family that resolves its own generation (catalogue-rank, off the ranking corpus): its own
+      // driver inside repair owns that walk, and two drivers on one checkpoint double-count it.
+      return row.state !== "complete" && definition.resolveGeneration === undefined;
+    })
+    .sort((left, right) => {
+      const leftAt = left.row?.updated_at ?? "";
+      const rightAt = right.row?.updated_at ?? "";
+      return (
+        leftAt.localeCompare(rightAt) ||
+        left.definition.workKind.localeCompare(right.definition.workKind)
+      );
+    });
+}
+
+async function advanceStaleTrackRebuild(
+  client: ProjectionClient,
+  limit: number,
+): Promise<StaleRebuildOutcome> {
+  const stale = await staleTrackRebuildDefinitions(client);
+  const next = stale[0];
+  if (next === undefined) {
+    return { complete: true, rowsWalked: 0, staleFamilies: 0 };
+  }
+  if (limit < 1) {
+    return { complete: false, rowsWalked: 0, staleFamilies: stale.length };
+  }
+  const result = await runDueWorkRebuildChunk(client, next.definition, {
+    boundedCleanup: true,
+    limit,
+  });
+  return {
+    complete: result.complete && stale.length === 1,
+    rowsWalked: result.scanned,
+    staleFamilies: stale.length,
+  };
+}
+
+async function advanceStaleCrawlRebuild(
+  client: ProjectionClient,
+  limit: number,
+): Promise<StaleRebuildOutcome> {
+  const checkpoint = await readCrawlDueRebuild(client);
+  const stale =
+    checkpoint === undefined ||
+    checkpoint.state !== "complete" ||
+    checkpoint.definitionVersion !== crawlDueDefinitionVersion();
+  if (!stale) {
+    return { complete: true, rowsWalked: 0, staleFamilies: 0 };
+  }
+  if (limit < 1) {
+    return { complete: false, rowsWalked: 0, staleFamilies: 1 };
+  }
+  const result = await runCrawlDueRebuildChunk(client, { boundedCleanup: true, limit });
+  return { complete: result.complete, rowsWalked: result.scanned, staleFamilies: 1 };
 }
 
 async function advanceTrackRepair(client: ProjectionClient, limit: number) {
@@ -1929,6 +2024,10 @@ type ProjectionAdvanceInput = {
 type ProjectionAdvanceOutcome = {
   complete: boolean;
   processed: number;
+  /** Due-work repair only: source rows the stale-definition rebuild walk covered this step. */
+  rebuildRowsWalked?: number;
+  /** Due-work repair only: families still carrying an older definition version after this step. */
+  rebuildStaleFamilies?: number;
   scheduled: number;
   // Track repair only: whether an ordinary track source marker still awaits fanout.
   trackSourceMarkersPending?: boolean;
@@ -1986,10 +2085,24 @@ export async function advanceProjectionFor(
     return advanceAuditProjection(client, input, includeStatus);
   }
   if (input.target === "track_due_work") {
-    outcome =
-      input.action === "rebuild"
-        ? await advanceTrackRebuild(client, input.limit, previousAudit?.complete === true)
-        : await advanceTrackRepair(client, input.limit);
+    if (input.action === "rebuild") {
+      outcome = await advanceTrackRebuild(client, input.limit, previousAudit?.complete === true);
+    } else {
+      const repair = await advanceTrackRepair(client, input.limit);
+      // Repair has first claim on the page; the stale-definition walk spends what it left.
+      const rebuild = await advanceStaleTrackRebuild(
+        client,
+        Math.max(0, input.limit - repair.processed),
+      );
+      outcome = {
+        complete: repair.complete && rebuild.complete,
+        processed: repair.processed + rebuild.rowsWalked,
+        rebuildRowsWalked: rebuild.rowsWalked,
+        rebuildStaleFamilies: rebuild.staleFamilies,
+        scheduled: repair.scheduled,
+        trackSourceMarkersPending: repair.trackSourceMarkersPending,
+      };
+    }
   } else if (input.target === "crawl_due_work") {
     if (input.action === "rebuild") {
       const result = await runCrawlDueRebuildChunk(client, {
@@ -2012,9 +2125,17 @@ export async function advanceProjectionFor(
         };
       } else {
         const repair = await repairCrawlDueNodes(client, { limit: input.limit });
+        // Same contract as the track family: repair first, then the stale-definition walk on
+        // whatever page budget repair did not spend.
+        const rebuild = await advanceStaleCrawlRebuild(
+          client,
+          Math.max(0, input.limit - repair.scanned),
+        );
         outcome = {
-          complete: !repair.hasMore,
-          processed: repair.scanned + fanout.markersCleared,
+          complete: !repair.hasMore && rebuild.complete,
+          processed: repair.scanned + fanout.markersCleared + rebuild.rowsWalked,
+          rebuildRowsWalked: rebuild.rowsWalked,
+          rebuildStaleFamilies: rebuild.staleFamilies,
           scheduled: 0,
         };
       }

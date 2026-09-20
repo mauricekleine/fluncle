@@ -25,7 +25,12 @@ import {
   hasPendingTrackSourceMarkers,
   SOURCE_REPAIR_LIMIT,
 } from "./due-work-source-repair";
-import { createIntegrationDb, seedArtist, seedCatalogueTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedArtist,
+  seedCatalogueTrack,
+  seedConvergedDueWorkRebuilds,
+} from "./integration-db";
 import { advanceProjectionFor } from "./projection-operations";
 import { resolveRecordingMbids } from "./recording-mbids";
 
@@ -65,6 +70,7 @@ async function schedule(workKind: string, subjectId: string, sortKey?: string): 
 
 beforeEach(async () => {
   db = await createIntegrationDb();
+  await seedConvergedDueWorkRebuilds(db);
 });
 
 afterEach(() => {

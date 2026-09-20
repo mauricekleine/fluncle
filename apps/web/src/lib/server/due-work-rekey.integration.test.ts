@@ -126,6 +126,73 @@ describe("a due-work queue whose order definition changed", () => {
     );
   });
 
+  it("re-projects itself on the agent-eligible repair path, with no operator rebuild", async () => {
+    await seedCaptureQueue(4);
+    await rebuildCaptureQueue();
+    const before = await readSortKeys();
+    const staleGeneration = String((await readCheckpoint())?.generation);
+
+    // A deploy that changed this queue's order: the stored version is older and the projected
+    // rows carry the older definition's keys.
+    await db.execute({
+      args: [CAPTURE_CATALOGUE],
+      sql: `update due_work_rebuilds set definition_version = 'dv1-previous'
+        where work_kind = ? and subject_type = 'track'`,
+    });
+    await db.execute({
+      args: [CAPTURE_CATALOGUE],
+      sql: `update due_work set sort_key = 'stale' where work_kind = ? and subject_type = 'track'`,
+    });
+
+    // `--action repair` is the ONLY action the box's agent token may invoke. Nothing here asks for
+    // a rebuild, opens a cutover, or writes audit evidence.
+    let reportedStale = 0;
+    let reportedRows = 0;
+    let complete = false;
+    for (let step = 0; step < 400 && !complete; step += 1) {
+      const outcome = await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+        target: "track_due_work",
+      });
+      reportedStale = Math.max(reportedStale, outcome.rebuildStaleFamilies ?? 0);
+      reportedRows += outcome.rebuildRowsWalked ?? 0;
+      complete = outcome.complete;
+    }
+
+    expect(complete).toBe(true);
+    expect(reportedStale).toBeGreaterThan(0);
+    expect(reportedRows).toBeGreaterThan(0);
+    const after = await readCheckpoint();
+    expect(after?.state).toBe("complete");
+    expect(after?.definition_version).toBe(captureDefinition().definitionVersion);
+    expect(after?.generation).not.toBe(staleGeneration);
+    expect(await readSortKeys()).toEqual(before);
+  });
+
+  it("leaves a family that is complete on today's definition alone", async () => {
+    await seedCaptureQueue(2);
+    await rebuildCaptureQueue();
+    const before = await readCheckpoint();
+
+    // Drive the repair path to convergence, then prove this family's generation never moved: the
+    // conditional upsert in `startDueWorkRebuild` refuses to restart a current checkpoint at all.
+    for (let step = 0; step < 400; step += 1) {
+      const outcome = await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 500,
+        target: "track_due_work",
+      });
+      if (outcome.complete) {
+        break;
+      }
+    }
+
+    expect((await readCheckpoint())?.generation).toBe(before?.generation);
+  });
+
   it("holds its checkpoint complete while the definition is unchanged", async () => {
     await seedCaptureQueue(2);
     await rebuildCaptureQueue();

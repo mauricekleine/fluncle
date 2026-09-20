@@ -31,13 +31,20 @@ import {
 } from "./due-work-source-repair";
 import { DueWorkMaintenancePendingError, MAX_DUE_WORK_CHUNK_SIZE } from "./due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
-import { createIntegrationDb, seedAlbum, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedAlbum,
+  seedCatalogueTrack,
+  seedConvergedDueWorkRebuilds,
+  seedTrack,
+} from "./integration-db";
 import { advanceProjectionFor } from "./projection-operations";
 
 let db: Client;
 
 beforeEach(async () => {
   db = await createIntegrationDb();
+  await seedConvergedDueWorkRebuilds(db);
 });
 
 afterEach(() => {
@@ -878,8 +885,10 @@ describe("transactionally coupled due-work source repair", () => {
     // limit=500 performs exactly one ordinary source page + 500 rank + 1 physical units here, and
     // one repair-index read locates the physical definition however late it is registered. The
     // round trips are a property of the page, not of its width, so raising the marker bound widens
-    // only the write batch — and that batch stays inside the shared projection chunk bound.
-    expect(batchCalls + executeCalls).toBe(28);
+    // only the write batch — and that batch stays inside the shared projection chunk bound. The
+    // last read is the stale-definition probe: one scan of the 41-row checkpoint table, which every
+    // repair step pays so a definition change re-projects without an operator.
+    expect(batchCalls + executeCalls).toBe(29);
     // These fixture tracks reach 16 of the registered physical queues, at 12 bound values each.
     const projectedRowsPerMarker = 16;
     expect({
@@ -890,7 +899,7 @@ describe("transactionally coupled due-work source repair", () => {
       maximumStatementArgs,
     }).toEqual({
       batchCalls: 4,
-      executeCalls: 24,
+      executeCalls: 25,
       maximumBatchStatements: 501,
       maximumReadRows: 500,
       maximumStatementArgs: SOURCE_REPAIR_LIMIT * projectedRowsPerMarker * 12,

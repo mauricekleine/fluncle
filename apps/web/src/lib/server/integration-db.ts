@@ -15,6 +15,8 @@ import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
 import { backfillHubCounts } from "../../../scripts/backfill-hub-counts";
+import { crawlDueDefinitionVersion } from "./crawl-due-work";
+import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import { ensureSearchIndex } from "../../db/search-index";
 import {
   CLEAR_EMBEDDING_SQL,
@@ -408,4 +410,49 @@ export async function seedSubmission(client: Client, submission: SeedSubmission)
        submitter_hash, created_at, user_id)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
+}
+
+const EMPTY_DIGEST = "0".repeat(64);
+
+/**
+ * Declare every due-work family converged on TODAY'S definition.
+ *
+ * A repair step also drives the stale-definition re-projection walk, and a fixture that populates
+ * `due_work` directly has no rebuild checkpoints at all — which reads, correctly, as a projection
+ * that was never built. A test about repair drain accounting starts from a converged projection, so
+ * it says so here instead of absorbing a rebuild page into its counts.
+ */
+export async function seedConvergedDueWorkRebuilds(client: Client): Promise<void> {
+  const now = new Date().toISOString();
+  await client.batch(
+    [
+      ...DUE_WORK_BACKFILLS.map((definition) => ({
+        args: [
+          definition.workKind,
+          definition.subjectType,
+          definition.definitionVersion,
+          `converged-${definition.workKind}`,
+          now,
+          now,
+          now,
+        ],
+        sql: `insert into due_work_rebuilds
+          (work_kind, subject_type, definition_version, generation, cursor, scanned_count,
+           projected_count, state, started_at, updated_at, completed_at)
+          values (?, ?, ?, ?, null, 0, 0, 'complete', ?, ?, ?)
+          on conflict(work_kind, subject_type) do update set
+            definition_version = excluded.definition_version, state = 'complete'`,
+      })),
+      {
+        args: [crawlDueDefinitionVersion(), now, now, now, EMPTY_DIGEST, EMPTY_DIGEST],
+        sql: `insert into crawl_due_work_rebuilds
+          (scope, definition_version, generation, cursor, scanned_count, projected_count, state,
+           started_at, updated_at, completed_at, source_digest, projected_digest)
+          values ('frontier', ?, 'converged-crawl', null, 0, 0, 'complete', ?, ?, ?, ?, ?)
+          on conflict(scope) do update set
+            definition_version = excluded.definition_version, state = 'complete'`,
+      },
+    ],
+    "write",
+  );
 }

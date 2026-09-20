@@ -5,6 +5,7 @@ import {
   definitionFingerprint,
   memoizedDefinitionVersion,
   probeAnswer,
+  probeLadderCrossing,
   probeMatrix,
   PROBE_BEFORE,
 } from "./due-work-definition-fingerprint";
@@ -369,12 +370,15 @@ const CRAWL_PROBE_BASES: readonly Record<string, unknown>[] = [
 ];
 
 const CRAWL_PROBE_COLUMNS: readonly string[] = Object.keys(CRAWL_PROBE_BASES[0] ?? {}).sort();
+/** The one constant this projector COMPARES against; the retry windows it ADDS reach the
+ * transcript through the `nextDueAt` they compute, which base 2 above makes reachable. */
+const CRAWL_PROBE_LADDER = probeLadderCrossing([MAX_FAILURES]);
 const crawlDefinitionVersionCache = new Map<string, string>();
 
 /** The crawl frontier family's definition version; see `due-work-definition-fingerprint.ts`. */
 export function crawlDueDefinitionVersion(): string {
   return memoizedDefinitionVersion(crawlDefinitionVersionCache, CRAWL_DUE_WORK_FRONTIER, () => {
-    const probes = probeMatrix(CRAWL_PROBE_BASES, CRAWL_PROBE_COLUMNS);
+    const probes = probeMatrix(CRAWL_PROBE_BASES, CRAWL_PROBE_COLUMNS, CRAWL_PROBE_LADDER);
     const transcript = probes.map(
       (row, index) => `${index}:${probeAnswer(() => describeCrawlDueDecision(row))}`,
     );

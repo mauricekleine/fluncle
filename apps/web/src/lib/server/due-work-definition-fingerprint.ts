@@ -21,44 +21,97 @@ export const PROBE_BEFORE = "2025-11-02T03:04:05.000Z";
 export const PROBE_AFTER = "2026-02-02T03:04:05.000Z";
 
 /**
- * One ladder of values applied to EVERY probed column regardless of its declared type. Crossing a
- * threshold constant, a null test, or a status literal is what makes a predicate change visible, so
- * the ladder deliberately spans nulls, empties, both boolean faces, the failure-cap neighbourhood,
- * three ordered instants, and the status words the evaluators branch on.
+ * The shape-independent half of the ladder: nulls, empties, both boolean faces, three ordered
+ * instants, and the status words the evaluators branch on.
+ *
+ * A constant an evaluator ADDS to a timestamp (every cooldown and re-ask window) needs no ladder
+ * value at all — it lands in the computed `nextDueAt` and therefore in the transcript, provided a
+ * BASE reaches that branch with the companion stamp set. A constant an evaluator COMPARES against
+ * is the opposite: it is invisible unless the ladder straddles it, which is what
+ * `probeLadderCrossing` derives.
  */
-export const PROBE_LADDER: readonly unknown[] = [
+export const PROBE_LADDER_BASE: readonly unknown[] = [
   null,
   "",
   "probe",
   0,
   1,
-  8,
   PROBE_BEFORE,
   PROBE_AFTER,
   true,
   false,
   "pending",
   "failed",
+  "processing",
   "complete",
+  "empty",
+  "duplicate-cleared",
   "wrong-audio",
   "full",
   "disabled",
 ];
 
-/** The probe matrix: every base, then each base with one column replaced by each ladder value. */
+/**
+ * The ladder, DERIVED from the thresholds the caller's evaluators compare against: each one
+ * contributes its own value plus both neighbours, so a retune of any size — including by one —
+ * moves a probe answer and therefore the version. Deriving it is the point: a hand-listed ladder
+ * silently stops straddling a constant the moment someone retunes it, which is the same
+ * hand-maintenance trap the definition version exists to remove.
+ */
+export function probeLadderCrossing(thresholds: readonly number[]): readonly unknown[] {
+  const crossings = new Set<number>();
+  for (const threshold of thresholds) {
+    if (!Number.isFinite(threshold)) {
+      throw new Error("a probe threshold must be a finite number");
+    }
+    crossings.add(threshold - 1);
+    crossings.add(threshold);
+    crossings.add(threshold + 1);
+  }
+  return [...PROBE_LADDER_BASE, ...[...crossings].sort((left, right) => left - right)];
+}
+
+/**
+ * The probe matrix: every base, then each base with one column replaced by each ladder value.
+ *
+ * ONE COLUMN MOVES AT A TIME, which is the matrix's blind spot and the reason the base set carries
+ * weight: a branch that needs two columns together (a `failed` capture AND a non-null attempt
+ * timestamp; a vendor cooldown that only runs once its `*_attempted_at` is set) is unreachable
+ * unless some BASE already carries the companion column. Adding a branch that depends on a
+ * companion column means adding a base that satisfies it, not only a ladder value.
+ */
 export function probeMatrix<Base extends Record<string, unknown>>(
   bases: readonly Base[],
   columns: readonly string[],
+  ladder: readonly unknown[],
 ): Base[] {
   const probes: Base[] = [...bases];
   for (const base of bases) {
     for (const column of columns) {
-      for (const value of PROBE_LADDER) {
+      for (const value of ladder) {
         probes.push({ ...base, [column]: value });
       }
     }
   }
   return probes;
+}
+
+/**
+ * A matrix is shared by every family that probes the same source shape, so build it once. The
+ * caller's key names that shape; the matrix is pure, so the memo is safe for the isolate.
+ */
+export function memoizedProbeMatrix<Base extends Record<string, unknown>>(
+  cache: Map<string, unknown>,
+  key: string,
+  build: () => Base[],
+): Base[] {
+  const cached = cache.get(key);
+  if (cached !== undefined) {
+    return cached as Base[];
+  }
+  const built = build();
+  cache.set(key, built);
+  return built;
 }
 
 /** An evaluator may reject a probe's deliberately ill-typed value; the refusal is the answer. */

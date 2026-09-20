@@ -130,6 +130,10 @@ export const advanceProjection = oc
       complete: z.boolean(),
       ok: z.literal(true),
       processed: CountSchema,
+      // Due-work repair only: the stale-definition rebuild walk this step drove with the page
+      // budget repair left behind, and how many families still carry an older definition version.
+      rebuildRowsWalked: CountSchema.optional(),
+      rebuildStaleFamilies: CountSchema.optional(),
       scheduled: CountSchema,
       status: ProjectionStatusSchema.optional(),
       target: ProjectionTargetSchema,

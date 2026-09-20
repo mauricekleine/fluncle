@@ -33,6 +33,11 @@ export function adminProjectionHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async ({ context, input }) => {
       try {
+        // The agent keeps exactly one action: bounded repair of the four runtime families. A due-work
+        // repair step also drives the stale-definition re-projection, which is server-side and
+        // narrower than a rebuild: `startDueWorkRebuild`'s conditional upsert cannot open a
+        // generation for a family that is complete on today's definition, so this grants the ability
+        // to FINISH an out-of-date projection, never to start a needless one.
         if (
           context.role !== "operator" &&
           (input.action !== "repair" || !AGENT_REPAIR_TARGETS.has(input.target))

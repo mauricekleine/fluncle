@@ -16,13 +16,19 @@ import {
   findPendingPhysicalRepairDefinition,
   RANK_REBUILD_LIMIT,
 } from "./due-work-source-repair";
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedConvergedDueWorkRebuilds,
+  seedTrack,
+} from "./integration-db";
 import { advanceProjectionFor } from "./projection-operations";
 
 let db: Client;
 
 beforeEach(async () => {
   db = await createIntegrationDb();
+  await seedConvergedDueWorkRebuilds(db);
 });
 
 afterEach(() => {

@@ -86,6 +86,9 @@ export type ProjectionStepResponse = {
   complete: boolean;
   ok: true;
   processed: number;
+  /** Due-work repair only: the stale-definition rebuild walk this step drove. */
+  rebuildRowsWalked?: number;
+  rebuildStaleFamilies?: number;
   scheduled: number;
   status?: ProjectionStatus;
   target: ProjectionTarget;
@@ -155,6 +158,7 @@ export async function advanceProjectionCommand(
   let processed = response.processed;
   let scheduled = response.scheduled;
   let wallStopped = false;
+  let rebuildRowsWalked = response.rebuildRowsWalked ?? 0;
 
   while (!response.complete && steps < maxSteps) {
     if (wallMs !== undefined && now() - startedAt >= wallMs) {
@@ -168,14 +172,20 @@ export async function advanceProjectionCommand(
     steps += 1;
     processed += response.processed;
     scheduled += response.scheduled;
+    rebuildRowsWalked += response.rebuildRowsWalked ?? 0;
   }
 
+  // The walk total is the sum across steps; the stale-family count is the terminal reading.
+  const rebuild =
+    response.rebuildStaleFamilies === undefined
+      ? {}
+      : { rebuildRowsWalked, rebuildStaleFamilies: response.rebuildStaleFamilies };
   if (!includeTerminalStatus) {
     const { status: _status, ...withoutStatus } = response;
-    return { ...withoutStatus, processed, scheduled, steps, wallStopped };
+    return { ...withoutStatus, ...rebuild, processed, scheduled, steps, wallStopped };
   }
   const status = response.status ?? (await getProjectionStatusCommand()).status;
-  return { ...response, processed, scheduled, status, steps, wallStopped };
+  return { ...response, ...rebuild, processed, scheduled, status, steps, wallStopped };
 }
 
 export async function setProjectionCutoverCommand(input: {
