@@ -633,7 +633,29 @@ empty_packages() {
   find node_modules -mindepth 1 -maxdepth 1 -type d -empty ! -name '.*' 2>/dev/null
   find node_modules -mindepth 2 -maxdepth 2 -type d -empty -path 'node_modules/@*/*' 2>/dev/null
 }
+# THE TOOLCHAIN MOVES WITH THE CHECKOUT TOO. The lockfile format follows the bun release the
+# repo pins (`packageManager` in package.json); a box whose bun predates it fails every frozen
+# install with "Unknown lockfile version" no matter how complete the tree is. So the wake step
+# holds the box's bun at that pin before it installs — the PINNED release, never `bun upgrade`
+# (which tracks latest and puts the toolchain on a moving target).
+bun_pin() { sed -n 's/.*"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' package.json | head -1; }
+bun_stale() { local want; want="$(bun_pin)"; [ -n "$want" ] && [ "$want" != "$(bun --version 2>/dev/null)" ]; }
+sync_bun() {
+  bun_stale || return 0
+  local want have
+  want="$(bun_pin)"; have="$(bun --version 2>/dev/null || echo none)"
+  if curl -fsSL https://bun.sh/install | BUN_INSTALL="$HOME/.bun" bash -s "bun-v$want" </dev/null >/tmp/freshen-bun.log 2>&1 \
+    && [ -x "$HOME/.bun/bin/bun" ] && install -m 0755 "$HOME/.bun/bin/bun" /usr/local/bin/bun; then
+    echo "[freshen] bun $have -> $(bun --version)"
+    return 0
+  fi
+  echo "[freshen] deps-failed"
+  echo "bun toolchain: the repo pins $want, the box has $have, and the pinned install failed"
+  tail -c 600 /tmp/freshen-bun.log 2>/dev/null
+  return 1
+}
 install_deps() {
+  sync_bun || return 1
   # Two passes: pruning a scope's last package leaves the scope directory itself empty.
   empty_packages | xargs -r rmdir 2>/dev/null
   empty_packages | xargs -r rmdir 2>/dev/null
@@ -650,6 +672,7 @@ install_deps() {
 # missing manifest is the cheapest honest proof that the workspace tree is incomplete; an empty
 # package directory anywhere is the other face of the same hole.
 deps_incomplete() {
+  bun_stale && return 0
   [ -f node_modules/browserslist/package.json ] || return 0
   [ -n "$(empty_packages | head -1)" ] && return 0
   return 1

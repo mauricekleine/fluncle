@@ -74,7 +74,15 @@ if ! boat_cli ssh "$id" 'bash -s' >&2 <<PROV
 set -e
 cd ~ && rm -rf fluncle
 git clone --depth 1 $REPO fluncle </dev/null
-cd fluncle && bun install </dev/null >/dev/null 2>&1
+cd fluncle
+# The box image's bun may predate the lockfile format the repo pins (packageManager in
+# package.json); hold it at the pin before the install, as the conductor's freshen does.
+want=\$(sed -n 's/.*"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' package.json | head -1)
+if [ -n "\$want" ] && [ "\$want" != "\$(bun --version)" ]; then
+  curl -fsSL https://bun.sh/install | BUN_INSTALL="\$HOME/.bun" bash -s "bun-v\$want" </dev/null >/dev/null 2>&1
+  install -m 0755 "\$HOME/.bun/bin/bun" /usr/local/bin/bun
+fi
+bun install --frozen-lockfile </dev/null >/dev/null 2>&1
 npx -y skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
 # Native, self-updating claude into ~/.local/bin (shadows the un-updatable global base
 # claude; render-detached.sh's PATH puts ~/.local/bin first). set -e aborts provisioning
