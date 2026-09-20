@@ -10,7 +10,12 @@
     "./orpc": "./src/orpc/index.ts",
     "./util": "./src/util.ts",
     "./util/galaxy-slug": "./src/util/galaxy-slug.ts",
+    "./util/hash": "./src/util/hash.ts",
+    "./util/key-camelot": "./src/util/key-camelot.ts",
+    "./util/mix-set": "./src/util/mix-set.ts",
+    "./util/mixtape-cover": "./src/util/mixtape-cover.ts",
     "./util/multipart": "./src/util/multipart.ts",
+    "./util/radio-clock": "./src/util/radio-clock.ts",
     "./util/tracklist-export": "./src/util/tracklist-export.ts"
   },
   "scripts": {

@@ -5,18 +5,11 @@ import {
   type MixtapeMember,
   type MixtapeStatus,
 } from "@fluncle/contracts";
+import { buildMixtapeCoverUrl, type MixtapeCoverSize } from "@fluncle/contracts/util/mixtape-cover";
 import { siteUrl } from "./fluncle-links";
 
 export type { FeedItem, MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
-
-/**
- * The renditions the on-the-fly cover endpoint serves (api/mixtape-cover.$logId.ts).
- * Aspects for distribution/link-previews: `square` (1500², the uploaded artwork),
- * `og` (the /log card), `wide` (the YouTube thumbnail). Display-only square
- * renditions for the on-site cover slots, right-sized to keep a 1 MB render out of
- * a 52px row: `card` (the /log plate), `thumb` (the feed + /mixtapes rows).
- */
-export type MixtapeCoverSize = "card" | "og" | "square" | "thumb" | "wide";
+export { type MixtapeCoverSize } from "@fluncle/contracts/util/mixtape-cover";
 
 /**
  * The title for on-site display (feed row, /mixtapes index, /log plate): the
@@ -30,21 +23,13 @@ export function mixtapeDisplayTitle(title: string): string {
 }
 
 /**
- * Bumped whenever the shared cover background or the stamp layout changes. The
- * cover endpoint serves `immutable, max-age=1y`, so this `?v=` is the cache key —
- * raise it to bust every cached cover after a re-bake (e.g. the R2-background
- * fetch fix that replaced the black render).
- */
-const COVER_VERSION = 2;
-
-/**
  * The cover URL for a published mixtape, rendered on the fly by the cover
  * endpoint (Satori over the baked Deep-Field background). square backs the
  * coverImageUrl + Mixcloud/SoundCloud artwork, og the /log link-preview, wide
  * the YouTube thumbnail. There's no render step — the cover just exists here.
  */
 export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
-  return `${siteUrl}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}&v=${COVER_VERSION}`;
+  return buildMixtapeCoverUrl(siteUrl, logId, size);
 }
 
 export type MixtapeRowLike = {

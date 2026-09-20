@@ -93,10 +93,7 @@ export function sliceObservationWords(words: ObservationWord[]): ObservationSlic
 // stays lit rather than flickering off, so the read never strobes. -1 before the
 // first word. Linear scan is fine — observations are ~40 words. (Mirrors the
 // previous full-transcript activeWordIndex so the per-word highlight is identical.)
-export function activeWordIndex(
-  words: { endMs: number; startMs: number }[],
-  offsetMs: number,
-): number {
+function activeWordIndex(words: { endMs: number; startMs: number }[], offsetMs: number): number {
   let index = -1;
 
   for (let i = 0; i < words.length; i += 1) {

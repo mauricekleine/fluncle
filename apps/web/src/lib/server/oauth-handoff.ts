@@ -37,7 +37,7 @@ import { buildTwitchAuthUrl, twitchRedirectUri } from "./twitch";
 import { buildYouTubeAuthUrl } from "./youtube";
 
 /** Where the handoff link points. Canonical `/api/v1`, like every other CLI call. */
-export const OAUTH_HANDOFF_PATH = "/api/v1/admin/oauth/handoff";
+const OAUTH_HANDOFF_PATH = "/api/v1/admin/oauth/handoff";
 
 /**
  * The six platform connects, each mapped to the provider authorize URL it builds.

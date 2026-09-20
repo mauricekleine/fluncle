@@ -1,3 +1,5 @@
+import { fnv1a32 } from "@fluncle/contracts/util/hash";
+
 /**
  * Public-safe vocabulary shared by database spans, the recurring-operation
  * registry, and fleet run telemetry.
@@ -49,14 +51,7 @@ export function canonicalSqlShape(sql: string): string {
 
 /** FNV-1a expressed as an unsigned, fixed-width base36 token. */
 function stableToken(value: string): string {
-  let hash = 0x811c9dc5;
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-
-  return (hash >>> 0).toString(36).padStart(7, "0");
+  return fnv1a32(value).toString(36).padStart(7, "0");
 }
 
 /**

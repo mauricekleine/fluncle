@@ -194,7 +194,7 @@ export function gateOrAcceptBio(input: {
 }
 
 /** The `voice_gate` 422 message, shared so a bypassed acceptance logs the same words it would have thrown. */
-export function voiceGateMessage(violations: readonly VoiceGateViolation[]): string {
+function voiceGateMessage(violations: readonly VoiceGateViolation[]): string {
   return `The bio fails the voice gate: ${violations.map((violation) => violation.reason).join("; ")}`;
 }
 

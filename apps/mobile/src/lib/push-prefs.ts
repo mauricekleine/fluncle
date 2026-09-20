@@ -14,7 +14,7 @@ export type { PushCategory };
  * (notifyNewFinding → "findings", notifyNewMixtape → "mixtapes") and the contract's
  * `PushCategorySchema` enum — kept as a const so the muted-array element type is
  * exactly the `register_device` input's `mutedCategories` element type. */
-export const PUSH_CATEGORIES = ["findings", "mixtapes"] as const satisfies readonly PushCategory[];
+const PUSH_CATEGORIES = ["findings", "mixtapes"] as const satisfies readonly PushCategory[];
 
 /** Which categories the device WANTS (the toggles). ON ⇔ delivered; default both on. */
 export type PushPrefs = { findings: boolean; mixtapes: boolean };

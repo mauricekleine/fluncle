@@ -17,7 +17,7 @@ import { type DueWorkStatement, markDueWorkSourceMaintenanceStatements } from ".
 import { LabelNotFoundError } from "./labels";
 import { mbFetch } from "./musicbrainz";
 
-export const ARTIST_RULE_LIMIT = 100;
+const ARTIST_RULE_LIMIT = 100;
 
 /**
  * Two axes in one column. `allow`/`block` are ACQUISITION scope (what a future crawl takes);

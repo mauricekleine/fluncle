@@ -36,7 +36,7 @@ import { ApiError } from "./spotify";
  * coat. They are OPERATOR-TUNABLE at runtime (the `settings` KV keys below), because the
  * honest threshold moves as the logbook grows and finding that out must never need a deploy.
  */
-export const LOGBOOK_ECHO_DEFAULTS: NoteEchoThresholds = {
+const LOGBOOK_ECHO_DEFAULTS: NoteEchoThresholds = {
   maxOverlap: 0.3,
   minPhraseWords: 4,
 };

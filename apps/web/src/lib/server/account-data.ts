@@ -607,7 +607,7 @@ export async function listGalaxyCollection(user: PublicUser): Promise<{
   return { collection, galaxies, ok: true };
 }
 
-export async function incrementGalaxyCounters(
+async function incrementGalaxyCounters(
   userId: string,
   counters: { deaths?: number; wins?: number },
 ) {

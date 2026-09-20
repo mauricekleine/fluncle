@@ -1,4 +1,5 @@
 import { parseSync, visitorKeys } from "oxc-parser";
+import { fnv1a32 } from "@fluncle/contracts/util/hash";
 
 export const DUE_WORK_ELIGIBILITY_TABLES = [
   "albums",
@@ -226,12 +227,7 @@ function operation(value: string): DueWorkMutationOperation {
 
 function fingerprint(value: string): string {
   const normalized = value.toLowerCase().replaceAll(/\s+/g, " ").trim();
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < normalized.length; index += 1) {
-    hash ^= normalized.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  return fnv1a32(normalized).toString(16).padStart(8, "0");
 }
 
 function enclosingScope(node: AstNode, parents: WeakMap<AstNode, AstNode>): AstNode {
@@ -554,19 +550,23 @@ function lineAndColumn(sourceText: string, offset: number): { column: number; li
   return { column: (lines.at(-1)?.length ?? 0) + 1, line: lines.length };
 }
 
-function auditMutationSites(
-  file: string,
-  sourceText: string,
-  mutationPattern: RegExp,
-  projectionMarkerHelpers: ReadonlySet<string>,
-): DueWorkMutationSite[] {
+function parseProgram(file: string, sourceText: string): AstNode {
   const parsed = parseSync(file, sourceText, { astType: "ts", lang: "ts", range: false });
   if (parsed.errors.some((error) => error.severity === "Error")) {
     throw new Error(
       `could not parse ${file}: ${parsed.errors.map((error) => error.message).join("; ")}`,
     );
   }
-  const program = parsed.program as unknown as AstNode;
+  return parsed.program as unknown as AstNode;
+}
+
+function auditMutationSites(
+  file: string,
+  sourceText: string,
+  mutationPattern: RegExp,
+  projectionMarkerHelpers: ReadonlySet<string>,
+): DueWorkMutationSite[] {
+  const program = parseProgram(file, sourceText);
   const parents = buildParents(program);
   const rawSites: Array<
     Omit<DueWorkMutationSite, "coupling" | "id" | "projectionCoupling"> & {
@@ -631,13 +631,7 @@ export function auditDueWorkDelegatedCallSites(
   sourceText: string,
   names: ReadonlySet<string>,
 ): DueWorkDelegatedCallSite[] {
-  const parsed = parseSync(file, sourceText, { astType: "ts", lang: "ts", range: false });
-  if (parsed.errors.some((error) => error.severity === "Error")) {
-    throw new Error(
-      `could not parse ${file}: ${parsed.errors.map((error) => error.message).join("; ")}`,
-    );
-  }
-  const program = parsed.program as unknown as AstNode;
+  const program = parseProgram(file, sourceText);
   const parents = buildParents(program);
   const calls: DueWorkDelegatedCallSite[] = [];
   const counts = new Map<string, number>();
