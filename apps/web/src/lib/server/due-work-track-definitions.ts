@@ -467,6 +467,23 @@ function orderFor(kind: DueWorkKind, source: DueWorkTrackSource): string {
   return kind === "youtube-reverdict" ? reverdictOrder(source) : sharedOrder(source, kind);
 }
 
+/**
+ * The eligibility-and-order decision for one source, with no source-version hash and no sort.
+ * This is the exact pair of pure functions that decide whether a row is in a queue and where it
+ * sits in it, so a definition fingerprint taken over it moves whenever either one moves
+ * (`due-work-definition-version.ts`).
+ */
+export function describeDueWorkTrackDecision(
+  kind: DueWorkKind,
+  source: DueWorkTrackSource,
+  now: string,
+): string {
+  const nextDueAt = eligibleAt(kind, source, now);
+  return nextDueAt === undefined
+    ? "-"
+    : `${scopeFor(source)}|${nextDueAt}|${orderFor(kind, source)}`;
+}
+
 function compareRows(left: DueWorkTrackRow, right: DueWorkTrackRow): number {
   if (left.orderKey < right.orderKey) {
     return -1;

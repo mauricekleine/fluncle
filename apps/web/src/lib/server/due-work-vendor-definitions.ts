@@ -448,6 +448,21 @@ function orderFor(kind: DueWorkVendorKind, source: DueWorkVendorSource): string 
   }
 }
 
+/**
+ * The eligibility-and-order decision for one source, with no source-version hash and no sort.
+ * The definition fingerprint (`due-work-definition-version.ts`) is taken over this, so it moves
+ * whenever a vendor queue's membership predicate or order components move.
+ */
+export function describeDueWorkVendorDecision(
+  kind: DueWorkVendorKind,
+  source: DueWorkVendorSource,
+  now: string,
+  rankCorpus?: string,
+): string {
+  const nextDueAt = dueAt(kind, source, now, rankCorpus);
+  return nextDueAt === undefined ? "-" : `${nextDueAt}|${orderFor(kind, source)}`;
+}
+
 /** Evaluate one legacy selector over a stable, caller-supplied source snapshot. */
 export function evaluateDueWorkVendorQueue(
   options: DueWorkVendorEvaluationOptions & { kind: DueWorkVendorKind },

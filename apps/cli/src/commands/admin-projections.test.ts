@@ -424,6 +424,69 @@ describe("projection operator commands", () => {
     expect(() => projections.parseProjectionEnabled("yes")).toThrow(/true or false/);
   });
 
+  test("walks re-key pages only while applying, and resumes from the server's cursor", async () => {
+    const page = (cursor: string, hasMore: boolean) => ({
+      applied: true,
+      cursor,
+      definitionVersion: "dv1-current",
+      hasMore,
+      marked: 2,
+      matched: 2,
+      ok: true,
+      remaining: { count: hasMore ? 2 : 0, truncated: false },
+      subjectType: "track",
+      workKind: "capture-catalogue",
+    });
+    postResponses.push(page("t-002", true), page("t-004", false));
+
+    const applied = await projections.rekeyDueWorkQueueCommand({
+      apply: true,
+      cursor: null,
+      limit: 2,
+      maxPages: 10,
+      workKind: "capture-catalogue",
+    });
+
+    expect(applied.pages).toBe(2);
+    expect(applied.marked).toBe(4);
+    expect(applied.cursor).toBe("t-004");
+    expect(calls).toEqual([
+      {
+        body: { apply: true, cursor: null, limit: 2 },
+        method: "POST",
+        path: "/api/v1/admin/projections/due-work/capture-catalogue/rekey",
+      },
+      {
+        body: { apply: true, cursor: "t-002", limit: 2 },
+        method: "POST",
+        path: "/api/v1/admin/projections/due-work/capture-catalogue/rekey",
+      },
+    ]);
+
+    calls.length = 0;
+    postResponses.push({ ...page("t-002", true), applied: false, marked: 0 });
+    const dryRun = await projections.rekeyDueWorkQueueCommand({
+      apply: false,
+      cursor: null,
+      limit: 2,
+      maxPages: 10,
+      workKind: "capture-catalogue",
+    });
+
+    expect(dryRun.pages).toBe(1);
+    expect(dryRun.marked).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(projections.dueWorkRekeyLine(dryRun)).toContain("would mark 2");
+  });
+
+  test("bounds the re-key page size and page budget", () => {
+    expect(projections.parseDueWorkRekeyLimit("500")).toBe(500);
+    expect(() => projections.parseDueWorkRekeyLimit("501")).toThrow(/1 through 500/);
+    expect(projections.parseDueWorkRekeyMaxPages("200")).toBe(200);
+    expect(() => projections.parseDueWorkRekeyMaxPages("201")).toThrow(/1 through 200/);
+    expect(() => projections.parseDueWorkRekeyMaxPages("0")).toThrow(/1 through 200/);
+  });
+
   test("prints readiness without leaking digests or raw source coordinates", () => {
     const lines = projections.projectionStatusLines(status);
     expect(lines).toHaveLength(4);

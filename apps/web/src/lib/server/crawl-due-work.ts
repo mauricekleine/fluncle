@@ -1,8 +1,17 @@
 import { type Client, type InStatement, type InValue, type ResultSet } from "@libsql/client";
 import { createHash } from "node:crypto";
 
+import {
+  definitionFingerprint,
+  memoizedDefinitionVersion,
+  probeAnswer,
+  probeMatrix,
+  PROBE_BEFORE,
+} from "./due-work-definition-fingerprint";
 import { advanceProjectionFenceStatement, CRAWL_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
+/** The crawl frontier is one due-work family, named once for its checkpoint and its version. */
+export const CRAWL_DUE_WORK_FRONTIER = "crawl_due_work:frontier";
 export const CRAWL_DUE_LIVE_GENERATION = "live";
 export const CRAWL_REARM_TAIL_CURSOR = -1;
 export const CRAWL_STALE_ARTIST_REARM_LIMIT = 10;
@@ -69,6 +78,8 @@ export type CrawlDueDriftAudit = {
 export type CrawlDueRebuildCheckpoint = {
   completedAt: null | string;
   cursor: null | string;
+  /** The definition version this generation was projected under; null predates the mechanism. */
+  definitionVersion: null | string;
   generation: string;
   projectedCount: number;
   projectedDigest: null | string;
@@ -270,6 +281,105 @@ function projectCrawlSource(row: CrawlSourceSqlRow): CrawlDueProjection | null {
           : 1
         : null,
   };
+}
+
+/**
+ * The membership-and-order decision for one frontier row, with no source-version hash. The crawl
+ * definition version is a fingerprint over this, so it moves whenever this family's eligibility
+ * predicate, retry ladder, or rank components move.
+ */
+function describeCrawlDueDecision(row: Record<string, unknown>): string {
+  const projection = projectCrawlSource(row as unknown as CrawlSourceSqlRow);
+  return projection === null
+    ? "-"
+    : [
+        projection.state,
+        projection.nextDueAt ?? "",
+        projection.demandRank,
+        projection.hop,
+        projection.storableRank ?? "",
+        projection.nodeKind,
+        projection.labelSlug ?? "",
+        projection.parentId ?? "",
+      ].join("|");
+}
+
+/** One frontier row per state the projector branches on. */
+const CRAWL_PROBE_BASES: readonly Record<string, unknown>[] = [
+  {
+    attempted_at: null,
+    created_at: PROBE_BEFORE,
+    demand_rank: 2,
+    done_at: null,
+    external_id: "probe-external",
+    failures: 0,
+    hop: 1,
+    id: "probe-node",
+    kind: "release",
+    label_enabled: 1,
+    label_slug: "probe-label",
+    outstanding_allow: 0,
+    parent_allowed: 1,
+    parent_id: "probe-parent",
+    self_allowed: 1,
+    source: "musicbrainz",
+    state: "pending",
+    updated_at: PROBE_BEFORE,
+  },
+  {
+    attempted_at: PROBE_BEFORE,
+    created_at: PROBE_BEFORE,
+    demand_rank: 1,
+    done_at: null,
+    external_id: "probe-external",
+    failures: 2,
+    hop: 2,
+    id: "probe-node",
+    kind: "artist",
+    label_enabled: 0,
+    label_slug: null,
+    outstanding_allow: 0,
+    parent_allowed: 0,
+    parent_id: null,
+    self_allowed: 1,
+    source: "musicbrainz",
+    state: "failed",
+    updated_at: PROBE_BEFORE,
+  },
+  {
+    attempted_at: PROBE_BEFORE,
+    created_at: PROBE_BEFORE,
+    demand_rank: 0,
+    done_at: PROBE_BEFORE,
+    external_id: "probe-external",
+    failures: 0,
+    hop: 0,
+    id: "probe-node",
+    kind: "artist",
+    label_enabled: 1,
+    label_slug: "probe-label",
+    outstanding_allow: 0,
+    parent_allowed: 1,
+    parent_id: null,
+    self_allowed: 1,
+    source: "musicbrainz",
+    state: "done",
+    updated_at: PROBE_BEFORE,
+  },
+];
+
+const CRAWL_PROBE_COLUMNS: readonly string[] = Object.keys(CRAWL_PROBE_BASES[0] ?? {}).sort();
+const crawlDefinitionVersionCache = new Map<string, string>();
+
+/** The crawl frontier family's definition version; see `due-work-definition-fingerprint.ts`. */
+export function crawlDueDefinitionVersion(): string {
+  return memoizedDefinitionVersion(crawlDefinitionVersionCache, CRAWL_DUE_WORK_FRONTIER, () => {
+    const probes = probeMatrix(CRAWL_PROBE_BASES, CRAWL_PROBE_COLUMNS);
+    const transcript = probes.map(
+      (row, index) => `${index}:${probeAnswer(() => describeCrawlDueDecision(row))}`,
+    );
+    return definitionFingerprint(CRAWL_DUE_WORK_FRONTIER, transcript);
+  });
 }
 
 function crawlDueRow(row: CrawlDueSqlRow): CrawlDueRow {
@@ -1370,6 +1480,7 @@ function rebuildRow(row: Record<string, unknown>): CrawlDueRebuildCheckpoint {
   return {
     completedAt: (row["completed_at"] as null | string) ?? null,
     cursor: (row["cursor"] as null | string) ?? null,
+    definitionVersion: (row["definition_version"] as null | string) ?? null,
     generation: String(row["generation"]),
     projectedCount: Number(row["projected_count"]),
     projectedDigest: (row["projected_digest"] as null | string) ?? null,
@@ -1381,14 +1492,14 @@ function rebuildRow(row: Record<string, unknown>): CrawlDueRebuildCheckpoint {
   };
 }
 
+const CRAWL_REBUILD_SELECT = `select completed_at, cursor, definition_version, generation,
+   projected_count, projected_digest, scanned_count, source_digest, started_at, state, updated_at
+ from crawl_due_work_rebuilds where scope = 'frontier'`;
+
 export async function readCrawlDueRebuild(
   client: CrawlDueClient,
 ): Promise<CrawlDueRebuildCheckpoint | undefined> {
-  const result = await client.execute(
-    `select completed_at, cursor, generation, projected_count, projected_digest,
-       scanned_count, source_digest, started_at, state, updated_at
-     from crawl_due_work_rebuilds where scope = 'frontier'`,
-  );
+  const result = await client.execute(CRAWL_REBUILD_SELECT);
   const row = result.rows[0] as Record<string, unknown> | undefined;
   return row === undefined ? undefined : rebuildRow(row);
 }
@@ -1402,27 +1513,35 @@ export async function startCrawlDueRebuild(
   if (generation === CRAWL_DUE_LIVE_GENERATION) {
     throw new Error("crawl rebuild generation 'live' is reserved for transactional repair");
   }
+  const definitionVersion = crawlDueDefinitionVersion();
   const results = await client.batch(
     [
       {
-        args: [generation, now, now, options.newGeneration === true ? 1 : 0],
+        // The restart is either asked for or FORCED by a definition change: a stored version that
+        // is not the running code's means this family's projected order was computed by an older
+        // definition. `is not` is the null-safe comparison, so a checkpoint written before this
+        // column existed is stale exactly once.
+        args: [
+          definitionVersion,
+          generation,
+          now,
+          now,
+          options.newGeneration === true ? 1 : 0,
+          definitionVersion,
+        ],
         sql: `insert into crawl_due_work_rebuilds
-          (scope, generation, cursor, scanned_count, projected_count, state,
+          (scope, definition_version, generation, cursor, scanned_count, projected_count, state,
            started_at, updated_at, completed_at, source_digest, projected_digest)
-          values ('frontier', ?, null, 0, 0, 'running', ?, ?, null, null, null)
+          values ('frontier', ?, ?, null, 0, 0, 'running', ?, ?, null, null, null)
           on conflict(scope) do update set
+            definition_version = excluded.definition_version,
             generation = excluded.generation, cursor = null, scanned_count = 0,
             projected_count = 0, state = 'running', started_at = excluded.started_at,
             updated_at = excluded.updated_at, completed_at = null,
             source_digest = null, projected_digest = null
-          where ? = 1`,
+          where ? = 1 or crawl_due_work_rebuilds.definition_version is not ?`,
       },
-      {
-        args: [],
-        sql: `select completed_at, cursor, generation, projected_count, projected_digest,
-           scanned_count, source_digest, started_at, state, updated_at
-         from crawl_due_work_rebuilds where scope = 'frontier'`,
-      },
+      { args: [], sql: CRAWL_REBUILD_SELECT },
     ],
     "write",
   );
@@ -1443,7 +1562,12 @@ async function resumeOrStartCrawlDueRebuild(
   if (options.newGeneration === true) {
     return startCrawlDueRebuild(client, options);
   }
-  return (await readCrawlDueRebuild(client)) ?? startCrawlDueRebuild(client, options);
+  const existing = await readCrawlDueRebuild(client);
+  // A stored definition version that is not the running code's re-opens the generation on the
+  // ordinary rebuild path — the resume would otherwise carry an older definition's order forward.
+  return existing === undefined || existing.definitionVersion !== crawlDueDefinitionVersion()
+    ? startCrawlDueRebuild(client, options)
+    : existing;
 }
 
 /** Seek only rows a running rebuild may remove; current-generation rows never enter the page. */

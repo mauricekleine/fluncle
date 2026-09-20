@@ -117,6 +117,14 @@ const APPROVED_VERBS = new Set<string>([
   // The sibling of `requeue` on the video lifecycle:
   // `requeue_video` clears the render gates, `purge_video` clears the edge cache.
   "purge",
+  // `rekey` (recompute the projected ORDER KEY of every row in one due-work queue, because the
+  // definition that decides that key changed) — added deliberately with `rekey_due_work_queue`.
+  // Distinct from every verb here: not `rebuild` (that is the whole-family generation walk this
+  // one deliberately narrows to a single queue), not `reconcile` (compare a derived value against
+  // source truth and correct the disagreements — here nothing disagrees, the definition moved
+  // under rows that are all individually consistent), and not `requeue` (put one subject back on a
+  // queue). It re-derives a queue's POSITIONS.
+  "rekey",
   // `rank` (precompute each catalogue track's nearest finding + its capture priority) —
   // added deliberately with The Ear's `rank_catalogue` sweep. Distinct from every verb
   // already here: it neither fills missing data (`backfill`) nor moves it (`migrate`) nor

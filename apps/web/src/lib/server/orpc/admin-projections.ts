@@ -3,6 +3,7 @@
 // Writes are fixed-target steps and never accept SQL, table names, or database coordinates.
 
 import { getDb } from "../db";
+import { rekeyDueWorkQueue, UnknownDueWorkQueueError } from "../due-work-rekey";
 import {
   advanceProjectionFor,
   getProjectionStatusFor,
@@ -77,9 +78,36 @@ export function adminProjectionHandlers(os: Implementer) {
       }
     });
 
+  const rekeyDueWorkQueueHandler = os.rekey_due_work_queue
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const result = await rekeyDueWorkQueue(await getDb(), {
+          apply: input.apply,
+          cursor: input.cursor,
+          limit: input.limit,
+          workKind: input.workKind,
+        });
+        return { ...result, ok: true as const };
+      } catch (error) {
+        if (error instanceof UnknownDueWorkQueueError) {
+          throw toFault(
+            new ApiError(
+              "unknown_due_work_queue",
+              `${error.message}; queues: ${error.workKinds.join(", ")}`,
+              400,
+            ),
+          );
+        }
+        throw toFault(error);
+      }
+    });
+
   return {
     advance_projection: advanceProjectionHandler,
     get_projection_status: getProjectionStatusHandler,
+    rekey_due_work_queue: rekeyDueWorkQueueHandler,
     set_projection_cutover: setProjectionCutoverHandler,
   };
 }

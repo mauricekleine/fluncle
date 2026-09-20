@@ -1587,6 +1587,10 @@ export const dueWorkRebuilds = sqliteTable(
   {
     completedAt: text("completed_at"),
     cursor: text("cursor"),
+    // The DEFINITION version this generation was projected under. A stored value that differs from
+    // the running code's means the projected `sort_key`s were computed by an older definition, so
+    // the next rebuild step restarts the generation (lib/server/due-work-definition-fingerprint.ts).
+    definitionVersion: text("definition_version"),
     generation: text("generation").notNull(),
     projectedCount: integer("projected_count").notNull().default(0),
     scannedCount: integer("scanned_count").notNull().default(0),
@@ -1727,6 +1731,8 @@ export const crawlDueWorkRebuilds = sqliteTable(
   {
     completedAt: text("completed_at"),
     cursor: text("cursor"),
+    // See `due_work_rebuilds.definition_version`: the frontier family carries the same contract.
+    definitionVersion: text("definition_version"),
     generation: text("generation").notNull(),
     projectedCount: integer("projected_count").notNull(),
     projectedDigest: text("projected_digest"),

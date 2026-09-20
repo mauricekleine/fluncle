@@ -530,6 +530,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
+  // Contract-only oRPC (no TanStack route file). The operator's lever for forcing one due-work
+  // queue back onto today's order definition; the automatic path is the stored definition version.
+  "POST /admin/projections/due-work/{workKind}/rekey": "rekey_due_work_queue",
   "POST /admin/projections/{target}/advance": "advance_projection",
   // Appending a prompt version — an edit, a rollback, or a reset (they are one op, because
   // the history is append-only). OPERATOR tier: a prompt IS code, so an agent token 403s.

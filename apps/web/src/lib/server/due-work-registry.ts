@@ -11,6 +11,7 @@ import {
   qualifiedArtistsDigest,
   rankCorpus,
 } from "./catalogue";
+import { dueWorkDefinitionVersion } from "./due-work-definition-version";
 import { readQualifiedArtistIds } from "./public-projection-cutover";
 import {
   DUE_WORK_KINDS,
@@ -280,6 +281,11 @@ function trackBackfillDefinition(
   entry: TrackWorkInventoryEntry,
 ): DueWorkRebuildDefinition<string, TrackDueWorkSource> {
   return {
+    // A getter, so the probe matrix behind a definition version is paid on the first rebuild step
+    // that needs it rather than at module load.
+    get definitionVersion() {
+      return dueWorkDefinitionVersion(entry.workKind);
+    },
     project: (source, context) => projectTrackSource(entry, source, context),
     readSourceChunk: ({ after, client, limit }) =>
       readTrackDueWorkSourceChunk(client, { after, limit }),
@@ -560,6 +566,9 @@ function vendorBackfillDefinition(
   entry: VendorInventoryEntry,
 ): DueWorkRebuildDefinition<string, VendorDueWorkSource> {
   return {
+    get definitionVersion() {
+      return dueWorkDefinitionVersion(entry.workKind);
+    },
     project: (source, context) => projectVendorSource(entry, source, context),
     // Rebuild pages derive rank staleness from their owned generation rather than the mutable
     // cache. This keeps source identity and projection evaluation fixed across every cursor page.
@@ -789,6 +798,9 @@ function entityDefinition<Kind extends DueWorkEntityKind>(
   };
   return {
     backfill: {
+      get definitionVersion() {
+        return dueWorkDefinitionVersion(config.kind);
+      },
       project,
       ...(readAuditSourceChunk === undefined
         ? {}
@@ -1178,6 +1190,9 @@ function registeredDefinition<Source extends DueWorkRebuildSource>(
   definition: DueWorkRebuildDefinition<string, Source>,
 ): DueWorkRebuildDefinition<string, DueWorkRebuildSource> {
   return {
+    get definitionVersion() {
+      return definition.definitionVersion;
+    },
     project: (source, context) => definition.project(source as Source, context),
     ...(definition.readAuditSourceChunk === undefined
       ? {}

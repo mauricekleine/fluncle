@@ -25,7 +25,7 @@ create index due_work_lease_idx on due_work(state, claim_expires_at, work_kind, 
 create table due_work_rebuilds (
   work_kind text not null, subject_type text not null, state text not null,
   scanned_count integer not null, projected_count integer not null,
-  generation text not null default 'complete', cursor text,
+  generation text not null default 'complete', cursor text, definition_version text,
   started_at text not null default '', updated_at text not null default '', completed_at text,
   primary key (work_kind, subject_type)
 );
@@ -60,7 +60,7 @@ create index crawl_projection_repairs_order_idx
 create table crawl_due_work_rebuilds (
   scope text primary key, state text not null, scanned_count integer not null,
   projected_count integer not null, source_digest text, projected_digest text,
-  generation text not null default 'complete', cursor text,
+  generation text not null default 'complete', cursor text, definition_version text,
   started_at text not null default '', updated_at text not null default '', completed_at text
 );
 create table projection_repairs (

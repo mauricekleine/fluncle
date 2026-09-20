@@ -831,6 +831,7 @@ type SampleSource = DueWorkRebuildSource & { due: number; sort_key: string };
 
 function sampleDefinition(): DueWorkRebuildDefinition<"sample-rebuild", SampleSource> {
   return {
+    definitionVersion: "dv1-sample",
     project(source, context) {
       return source.due === 0
         ? null
@@ -875,6 +876,7 @@ function sampleDefinition(): DueWorkRebuildDefinition<"sample-rebuild", SampleSo
 describe("due-work rebuild", () => {
   it("pages only removable generations and resumes bounded cleanup without advancing the rollback cursor", async () => {
     const definition: DueWorkRebuildDefinition<"candidate-cleanup", SampleSource> = {
+      definitionVersion: "dv1-test",
       project: () => null,
       readSourceChunk: async () => [],
       subjectType: "track",
@@ -991,6 +993,7 @@ describe("due-work rebuild", () => {
 
   it("restarts candidate cleanup safely when the persisted cursor uses the legacy scalar shape", async () => {
     const definition: DueWorkRebuildDefinition<"legacy-cleanup", SampleSource> = {
+      definitionVersion: "dv1-test",
       project: () => null,
       readSourceChunk: async () => [],
       subjectType: "track",
@@ -1202,6 +1205,7 @@ describe("due-work rebuild", () => {
   it("never overwrites or prunes a live repair that wins after the rebuild source read", async () => {
     let sourceReads = 0;
     const definition: DueWorkRebuildDefinition<"raced-rebuild", SampleSource> = {
+      definitionVersion: "dv1-test",
       project(source, context) {
         return {
           generation: context.generation,

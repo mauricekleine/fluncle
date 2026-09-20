@@ -78,6 +78,7 @@ describe("bounded projection cleanup plans", () => {
       {
         completedAt: null,
         cursor: "source-cursor",
+        definitionVersion: "dv1-test",
         generation: "generation-current",
         projectedCount: 10,
         scannedCount: 10,

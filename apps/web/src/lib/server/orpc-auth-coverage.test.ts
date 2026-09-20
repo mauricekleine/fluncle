@@ -709,6 +709,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // is an editorial act (the remove_artist_social / confirm_label_alias precedent).
   reject_label_alias: "operator",
   reject_submission: "operator",
+  // Re-key one due-work queue — operator tier: the marked rows are withheld from that queue's
+  // reads until the sweep drains them, which is a deliberate pause on a live queue, never a
+  // schedule the box may decide for itself.
+  rekey_due_work_queue: "operator",
   // Global artist acquisition rules are editorial scope changes.
   remove_artist_rule: "operator",
   // The review queue's inline remove of a social — operator tier.

@@ -122,6 +122,8 @@ export type DueWorkRepairResult = {
 export type DueWorkRebuildCheckpoint<WorkKind extends string = string> = {
   completedAt: null | string;
   cursor: null | string;
+  /** The definition version this generation was projected under; null predates the mechanism. */
+  definitionVersion: null | string;
   generation: string;
   projectedCount: number;
   scannedCount: number;
@@ -142,6 +144,11 @@ export type DueWorkRebuildDefinition<
   WorkKind extends string,
   Source extends DueWorkRebuildSource,
 > = {
+  /**
+   * The fingerprint of the code that decides this family's eligibility and `sort_key`. Stored with
+   * the checkpoint; a mismatch restarts the generation without any audit or cutover ceremony.
+   */
+  definitionVersion: string;
   project: (
     source: Source,
     context: { generation: string; now: string },
@@ -198,6 +205,7 @@ type DueWorkSqlRow = {
 type RebuildSqlRow = {
   completed_at: null | string;
   cursor: null | string;
+  definition_version: null | string;
   generation: string;
   projected_count: number;
   scanned_count: number;
@@ -208,8 +216,8 @@ type RebuildSqlRow = {
   work_kind: string;
 };
 
-const REBUILD_COLUMNS = `completed_at, cursor, generation, projected_count, scanned_count,
-  started_at, state, subject_type, updated_at, work_kind`;
+const REBUILD_COLUMNS = `completed_at, cursor, definition_version, generation, projected_count,
+  scanned_count, started_at, state, subject_type, updated_at, work_kind`;
 
 function assertNonEmpty(value: string, name: string): void {
   if (!value.trim()) {
@@ -295,6 +303,7 @@ function rebuildRow<WorkKind extends string>(
   return {
     completedAt: row.completed_at,
     cursor: row.cursor,
+    definitionVersion: row.definition_version,
     generation: row.generation,
     projectedCount: Number(row.projected_count),
     scannedCount: Number(row.scanned_count),
@@ -1269,6 +1278,7 @@ export async function readDueWorkRebuild<WorkKind extends string>(
 export async function startDueWorkRebuild<WorkKind extends string>(
   client: DueWorkClient,
   identity: Pick<DueWorkIdentity<WorkKind>, "subjectType" | "workKind"> & {
+    definitionVersion: string;
     resolveGeneration?: (client: DueWorkClient) => Promise<string>;
   },
   options: { generation?: string; newGeneration?: boolean; now?: () => Date } = {},
@@ -1282,16 +1292,32 @@ export async function startDueWorkRebuild<WorkKind extends string>(
   if (generation === DUE_WORK_LIVE_GENERATION) {
     throw new Error("due-work rebuild generation 'live' is reserved for transactional repairs");
   }
+  assertNonEmpty(identity.definitionVersion, "definition version");
   const restart = options.newGeneration === true ? 1 : 0;
   const results = await client.batch(
     [
       {
-        args: [identity.workKind, identity.subjectType, generation, now, now, restart],
+        // The restart is either asked for (a completed audit) or FORCED by a definition change:
+        // a stored version that is not the running code's means every projected `sort_key` in this
+        // family was computed by an older definition, so the generation starts over. `is not` is
+        // the null-safe comparison, which makes a checkpoint written before this column existed
+        // stale exactly once.
+        args: [
+          identity.workKind,
+          identity.subjectType,
+          identity.definitionVersion,
+          generation,
+          now,
+          now,
+          restart,
+          identity.definitionVersion,
+        ],
         sql: `insert into due_work_rebuilds
-          (work_kind, subject_type, generation, cursor, scanned_count, projected_count,
-           state, started_at, updated_at, completed_at)
-          values (?, ?, ?, null, 0, 0, 'running', ?, ?, null)
+          (work_kind, subject_type, definition_version, generation, cursor, scanned_count,
+           projected_count, state, started_at, updated_at, completed_at)
+          values (?, ?, ?, ?, null, 0, 0, 'running', ?, ?, null)
           on conflict(work_kind, subject_type) do update set
+            definition_version = excluded.definition_version,
             generation = excluded.generation,
             cursor = null,
             scanned_count = 0,
@@ -1300,7 +1326,7 @@ export async function startDueWorkRebuild<WorkKind extends string>(
             started_at = excluded.started_at,
             updated_at = excluded.updated_at,
             completed_at = null
-          where ? = 1`,
+          where ? = 1 or due_work_rebuilds.definition_version is not ?`,
       },
       {
         args: [identity.workKind, identity.subjectType],

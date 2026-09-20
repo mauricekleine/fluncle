@@ -1,6 +1,7 @@
 import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 
 import {
+  crawlDueDefinitionVersion,
   fanOutCrawlProjectionRepairs,
   repairCrawlDueNodes,
   runCrawlDueRebuildChunk,
@@ -293,6 +294,18 @@ async function publicProjectionEpochMatched(
   return result.rows.length > 0;
 }
 
+/** The running definition version for one registered `due_work` family, by its rebuild identity. */
+function trackDefinitionVersionFor(workKind: unknown, subjectType: unknown): string | undefined {
+  return DUE_WORK_BACKFILLS.find(
+    (definition) => definition.workKind === workKind && definition.subjectType === subjectType,
+  )?.definitionVersion;
+}
+
+function trackCheckpointDefinitionCurrent(row: Record<string, unknown>): boolean {
+  const current = trackDefinitionVersionFor(row.work_kind, row.subject_type);
+  return current !== undefined && row.definition_version === current;
+}
+
 async function assertProjectionAuditReady(
   client: ProjectionClient,
   target: ProjectionTarget,
@@ -311,7 +324,10 @@ async function assertProjectionAuditReady(
   ];
   if (target === "track_due_work") {
     statements.push(
-      { args: [], sql: `select state from due_work_rebuilds` },
+      {
+        args: [],
+        sql: `select state, work_kind, subject_type, definition_version from due_work_rebuilds`,
+      },
       {
         args: [],
         sql: `select 1 from due_work indexed by due_work_repair_idx
@@ -322,7 +338,8 @@ async function assertProjectionAuditReady(
     statements.push(
       {
         args: [],
-        sql: `select state from crawl_due_work_rebuilds where scope = 'frontier' limit 1`,
+        sql: `select state, definition_version from crawl_due_work_rebuilds
+          where scope = 'frontier' limit 1`,
       },
       {
         args: [],
@@ -354,11 +371,18 @@ async function assertProjectionAuditReady(
   const results = await client.batch(statements);
   const cutoverOpen = results[0]?.rows[0]?.value === "true";
   const rebuildRows = results[1]?.rows ?? [];
+  // A checkpoint whose stored definition version is not the running code's projected its rows under
+  // an older definition, so it is not complete however its `state` column reads.
   const rebuildComplete =
     target === "track_due_work"
       ? rebuildRows.length === DUE_WORK_BACKFILLS.length &&
-        rebuildRows.every((row) => row.state === "complete")
-      : rebuildRows[0]?.state === "complete";
+        rebuildRows.every(
+          (row) => row.state === "complete" && trackCheckpointDefinitionCurrent(row),
+        )
+      : target === "crawl_due_work"
+        ? rebuildRows[0]?.state === "complete" &&
+          rebuildRows[0]?.definition_version === crawlDueDefinitionVersion()
+        : rebuildRows[0]?.state === "complete";
   const repairDebt = results.slice(2).some((result) => result.rows.length > 0);
   if (cutoverOpen || !rebuildComplete || repairDebt) {
     throw new Error("projection audit requires a dark, rebuilt target with no repair debt");
@@ -402,9 +426,20 @@ function trackFamilyStatus(
   rankMarkerAgeMs: number | null,
 ): FamilyStatus & { catalogueRankMarkerAgeMs: number | null } {
   const rows = results[12]?.rows as unknown as
-    | { projected_count: number; scanned_count: number; state: string }[]
+    | {
+        definition_version: null | string;
+        projected_count: number;
+        scanned_count: number;
+        state: string;
+        subject_type: string;
+        work_kind: string;
+      }[]
     | undefined;
-  const completed = rows?.filter((row) => row.state === "complete").length ?? 0;
+  // A checkpoint that says `complete` under an older definition version has not projected today's
+  // `sort_key`s, so it counts as outstanding rebuild work here too.
+  const completed =
+    rows?.filter((row) => row.state === "complete" && trackCheckpointDefinitionCurrent(row))
+      .length ?? 0;
   const running = rows?.filter((row) => row.state === "running").length ?? 0;
   const repairRows = results[4]?.rows ?? [];
   const repairTruncated = repairRows.length > PROJECTION_STATUS_COUNT_LIMIT;
@@ -476,7 +511,8 @@ function crawlFamilyStatus(
     sourceDigest !== null &&
     sourceDigest === projectedDigest &&
     audit.sourceFence === sourceFence;
-  const complete = row?.["state"] === "complete";
+  const complete =
+    row?.["state"] === "complete" && row["definition_version"] === crawlDueDefinitionVersion();
   return {
     backlog: {
       leased: boundedCount(results[7]?.rows ?? []),
@@ -587,10 +623,15 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
         where projection = 'artist_qualification'
         order by projection, source_epoch, subject_type, subject_id limit ?`,
     },
-    { args: [], sql: `select state, scanned_count, projected_count from due_work_rebuilds` },
     {
       args: [],
-      sql: `select state, scanned_count, projected_count, source_digest, projected_digest
+      sql: `select state, scanned_count, projected_count, work_kind, subject_type,
+        definition_version from due_work_rebuilds`,
+    },
+    {
+      args: [],
+      sql: `select state, scanned_count, projected_count, source_digest, projected_digest,
+        definition_version
         from crawl_due_work_rebuilds where scope = 'frontier'`,
     },
     {
@@ -709,7 +750,8 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
     }
     const checkpoint = await client.execute({
       args: [definition.workKind, definition.subjectType],
-      sql: `select state from due_work_rebuilds where work_kind = ? and subject_type = ?`,
+      sql: `select state, definition_version from due_work_rebuilds
+        where work_kind = ? and subject_type = ?`,
     });
     const result = await runDueWorkRebuildChunk(client, definition, {
       boundedCleanup: true,
@@ -735,9 +777,14 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
   for (const definition of DUE_WORK_BACKFILLS) {
     const checkpoint = await client.execute({
       args: [definition.workKind, definition.subjectType],
-      sql: `select state from due_work_rebuilds where work_kind = ? and subject_type = ?`,
+      sql: `select state, definition_version from due_work_rebuilds
+        where work_kind = ? and subject_type = ?`,
     });
-    if (checkpoint.rows[0]?.state === "complete") {
+    // A complete checkpoint is skipped only while it is complete UNDER TODAY'S DEFINITION. When an
+    // order or eligibility change moved the version, this step falls through and `startDueWorkRebuild`
+    // opens a fresh generation for it — no audit, no cutover flip, no operator ceremony.
+    const row = checkpoint.rows[0];
+    if (row?.state === "complete" && row.definition_version === definition.definitionVersion) {
       continue;
     }
     const result = await runDueWorkRebuildChunk(client, definition, {
@@ -2064,7 +2111,8 @@ function openCutoverStatement(target: ProjectionCutover) {
     const rebuildProof = DUE_WORK_BACKFILLS.map(
       () =>
         `exists (select 1 from due_work_rebuilds
-          where work_kind = ? and subject_type = ? and state = 'complete')`,
+          where work_kind = ? and subject_type = ? and state = 'complete'
+            and definition_version = ?)`,
     ).join(" and ");
     return {
       args: [
@@ -2073,6 +2121,7 @@ function openCutoverStatement(target: ProjectionCutover) {
         ...DUE_WORK_BACKFILLS.flatMap((definition) => [
           definition.workKind,
           definition.subjectType,
+          definition.definitionVersion,
         ]),
       ],
       sql: `insert into settings (key, value)
@@ -2088,13 +2137,13 @@ function openCutoverStatement(target: ProjectionCutover) {
   }
   if (target === "crawl_due_work") {
     return {
-      args: [key, PROJECTION_AUDIT_SETTING_KEYS.crawl_due_work],
+      args: [key, PROJECTION_AUDIT_SETTING_KEYS.crawl_due_work, crawlDueDefinitionVersion()],
       sql: `insert into settings (key, value)
         select ?, 'true' where
           exists (select 1 from settings audit where audit.key = ?
             and ${matchingAuditSql("audit", "crawl_due_work")})
           and exists (select 1 from crawl_due_work_rebuilds
-            where scope = 'frontier' and state = 'complete')
+            where scope = 'frontier' and state = 'complete' and definition_version = ?)
           and not exists (select 1 from crawl_due_work indexed by crawl_due_work_repair_idx
             where state = 'repair')
           and not exists (select 1 from crawl_projection_repairs
