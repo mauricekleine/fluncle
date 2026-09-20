@@ -85,6 +85,24 @@ const MIN_FAMILY_CALL_BUDGET_MS = 5_000;
  */
 const CLI_CALL_TIMEOUT_MS = 60_000;
 
+/**
+ * The step ceiling used against a CLI that does not accept `--wall-ms`.
+ *
+ * This script and the `fluncle` CLI are baked into the same image but their pins do NOT move
+ * together: a change here rebakes within the hour, while the CLI pin only moves once the release is
+ * cut and the pin-drift bump merges. There is therefore a real window where the new sweep runs
+ * against the old CLI, and sending it an unknown flag would fail every family — a self-inflicted
+ * outage on the drain this bound exists to protect. In that window the sweep falls back to the
+ * step-count bound, with a ceiling low enough that even a slow round trip cannot reach
+ * {@link CLI_CALL_TIMEOUT_MS}: 30 steps is roughly 36 seconds at the hosted round trip, against a
+ * 60-second child deadline. It is the safe mode, not the good one — it is deliberately well short
+ * of what the wall budget affords, because an old CLI cannot report how long it has spent.
+ */
+const LEGACY_SAFE_MAX_STEPS = 30;
+
+/** Probe deadline. Printing one help page is local work; anything slower is a broken binary. */
+const CLI_PROBE_TIMEOUT_MS = 15_000;
+
 export type FamilyName =
   | "artist_qualification"
   | "crawl_due_work"
@@ -153,6 +171,14 @@ export type FamilySummary = {
   processed: number | null;
   scheduled: number | null;
   steps: number | null;
+  /**
+   * Which bound this family's call was issued under: `wall-ms` when the CLI honours a wall budget,
+   * `steps` when the sweep is running against a CLI that predates the flag and falls back to the
+   * safe step ceiling. Null when the family was not advanced. The ledger needs this because the two
+   * modes have different drain rates, so a sudden throughput drop should read as a pin window
+   * rather than as a stalling queue.
+   */
+  wallBound: "steps" | "wall-ms" | null;
   /** Whether the family's own wall budget, rather than completion or the step ceiling, ended it. */
   wallStopped: boolean | null;
 };
@@ -349,6 +375,29 @@ export function fluncleJson(args: string[], timeoutMs: number = CLI_CALL_TIMEOUT
   return parsed;
 }
 
+/**
+ * Whether the bundled CLI accepts `--wall-ms`, read from its own help page.
+ *
+ * The help page is the binary's own statement of what it accepts, printed locally with no token,
+ * no network, and no mutation, which makes it the one probe that is free to run on a box whose CLI
+ * version this script cannot otherwise know. It FAILS CLOSED: a missing binary, a nonzero exit, or
+ * anything unreadable answers false and the caller takes the safe step-count bound, because sending
+ * an unknown flag to an old CLI fails every family while an unnecessary fallback only drains
+ * slower.
+ */
+export function cliAcceptsWallMs(): boolean {
+  const fluncleBin = process.env.FLUNCLE_BIN ?? "fluncle";
+  const result = spawnSync(fluncleBin, ["admin", "projections", "advance", "--help"], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    timeout: CLI_PROBE_TIMEOUT_MS,
+  });
+  if (result.error || (result.status ?? 1) !== 0) {
+    return false;
+  }
+  return `${result.stdout ?? ""}${result.stderr ?? ""}`.includes("--wall-ms");
+}
+
 function emptyFamily(): FamilySummary {
   return {
     attempted: false,
@@ -360,6 +409,7 @@ function emptyFamily(): FamilySummary {
     processed: 0,
     scheduled: 0,
     steps: 0,
+    wallBound: null,
     wallStopped: null,
   };
 }
@@ -440,14 +490,16 @@ function wallDeferredFamily(oldestOutstandingMarkerAge: OldestOutstandingMarkerA
   return { ...emptyFamily(), complete: false, oldestOutstandingMarkerAge };
 }
 
+/** `wallMs` null means the CLI cannot honour a budget, so the step ceiling is the only bound. */
 function advanceFamily(
   run: RunCommand,
   target: FamilyName,
   maxSteps: number,
-  wallMs: number,
+  wallMs: number | null,
   oldestOutstandingMarkerAge: OldestOutstandingMarkerAge,
   now: () => number,
 ): FamilySummary {
+  const wallBound = wallMs === null ? "steps" : "wall-ms";
   // Measured around the call rather than derived from the step count: a step's cost is a round
   // trip, and the whole point of reporting it is that the assumed cost is an assumption.
   const startedAt = now();
@@ -465,8 +517,7 @@ function advanceFamily(
         String(REPAIR_LIMIT),
         "--max-steps",
         String(maxSteps),
-        "--wall-ms",
-        String(wallMs),
+        ...(wallMs === null ? [] : ["--wall-ms", String(wallMs)]),
         "--no-terminal-status",
       ]),
       target,
@@ -486,7 +537,10 @@ function advanceFamily(
       processed: response.processed,
       scheduled: response.scheduled,
       steps: response.steps,
-      wallStopped: response.wallStopped ?? false,
+      wallBound,
+      // An old CLI reports no `wallStopped` and honours no budget, so the field is null there
+      // rather than a false that would read as "the budget was not reached".
+      wallStopped: wallMs === null ? null : (response.wallStopped ?? false),
     };
   } catch (error) {
     return {
@@ -502,6 +556,7 @@ function advanceFamily(
       processed: null,
       scheduled: null,
       steps: null,
+      wallBound,
       wallStopped: null,
     };
   }
@@ -513,7 +568,7 @@ function maintainFamily(
   enabled: boolean,
   repairNeeded: boolean,
   maxSteps: number,
-  wallMs: number,
+  wallMs: number | null,
   oldestOutstandingMarkerAge: OldestOutstandingMarkerAge,
   now: () => number,
 ): FamilySummary {
@@ -560,10 +615,18 @@ function worstOutcome(families: readonly FamilySummary[]): ProjectionMaintenance
  */
 export function runProjectionMaintenanceTick(
   run: RunCommand = fluncleJson,
-  options: { now?: () => number } = {},
+  options: { acceptsWallMs?: () => boolean; now?: () => number } = {},
 ): ProjectionMaintenanceSummary {
   const now = options.now ?? (() => Date.now());
   const startedAt = now();
+  // Probed at most ONCE per run, and only on a tick that will actually advance something: the
+  // answer cannot change mid-run, and a dark or debt-free tick should spawn nothing at all.
+  const probe = options.acceptsWallMs ?? cliAcceptsWallMs;
+  let probed: boolean | undefined;
+  const acceptsWallMs = (): boolean => {
+    probed ??= probe();
+    return probed;
+  };
   const summary: ProjectionMaintenanceSummary = {
     artistQualification: emptyFamily(),
     budgetExhaustedFamilies: [],
@@ -664,23 +727,25 @@ export function runProjectionMaintenanceTick(
     if (!plan.enabled || !plan.repairNeeded) {
       results.set(
         plan.target,
-        maintainFamily(run, plan.target, plan.enabled, false, 1, FAMILY_CALL_BUDGET_MS, age, now),
+        maintainFamily(run, plan.target, plan.enabled, false, 1, null, age, now),
       );
       continue;
     }
-    const wallMs = familyWallBudgetMs(RUN_WALL_BUDGET_MS - (now() - startedAt));
-    if (wallMs === 0) {
+    const budget = familyWallBudgetMs(RUN_WALL_BUDGET_MS - (now() - startedAt));
+    if (budget === 0) {
       summary.wallDeferredFamilies.push(plan.target);
       results.set(plan.target, wallDeferredFamily(age));
       continue;
     }
     // The step ceiling stays a HARD cap on requests issued; the wall budget is what actually ends
     // an ordinary busy call, so an escalated family asking for the ceiling can no longer run the
-    // child past its deadline.
+    // child past its deadline. Against a CLI that cannot honour a budget there is no such backstop,
+    // so the ceiling itself has to be short enough to stay inside the child deadline.
+    const wallMs = acceptsWallMs() ? budget : null;
     const steps = adaptiveSteps(
       plan.status,
       plan.subjectsPerStep,
-      PROJECTION_MAX_STEPS,
+      wallMs === null ? LEGACY_SAFE_MAX_STEPS : PROJECTION_MAX_STEPS,
       plan.minSteps,
     );
     results.set(plan.target, maintainFamily(run, plan.target, true, true, steps, wallMs, age, now));

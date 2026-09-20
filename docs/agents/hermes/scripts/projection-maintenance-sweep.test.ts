@@ -1,13 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  cliAcceptsWallMs,
   type FamilyName,
   fluncleJson,
   runProjectionMaintenanceTick,
 } from "./projection-maintenance-sweep";
+
+/**
+ * A tick against a CLI that accepts `--wall-ms`, which is the ordinary steady state. The capability
+ * probe is stubbed rather than spawned so these cases exercise the tick and not the binary; the
+ * probe itself, and the fallback it selects, have their own cases against a real stub CLI below.
+ */
+const runTick = (
+  run: Parameters<typeof runProjectionMaintenanceTick>[0],
+  options: Parameters<typeof runProjectionMaintenanceTick>[1] = {},
+) => runProjectionMaintenanceTick(run, { acceptsWallMs: () => true, ...options });
 
 const family = (overrides: Record<string, unknown> = {}) => ({
   convergence: { epochMatched: true },
@@ -62,7 +73,7 @@ const advance = (target: FamilyName, complete = true, processed = 1, steps = 1) 
 describe("projection maintenance status gate", () => {
   test("dark means one status read and zero advances", () => {
     const calls: string[][] = [];
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       calls.push(args);
       return status({});
     });
@@ -83,7 +94,7 @@ describe("projection maintenance status gate", () => {
 
   test("open idle cutovers prove zero debt without a mutation call", () => {
     const calls: string[][] = [];
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       calls.push(args);
       return status({ crawlDueWork: true, publicProjections: true, trackDueWork: true });
     });
@@ -107,7 +118,7 @@ describe("projection maintenance status gate", () => {
 
 describe("projection maintenance bounded family repair", () => {
   test("reports no_debt when an enabled family has nothing to repair", () => {
-    const summary = runProjectionMaintenanceTick(() => status({ trackDueWork: true }));
+    const summary = runTick(() => status({ trackDueWork: true }));
 
     expect(summary.trackDueWork).toMatchObject({
       attempted: false,
@@ -133,7 +144,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 1, truncated: false },
       },
     });
-    const summary = runProjectionMaintenanceTick((args) =>
+    const summary = runTick((args) =>
       args[2] === "get"
         ? status({ trackDueWork: true }, { track: debt })
         : advance("track_due_work"),
@@ -161,7 +172,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 1, truncated: false },
       },
     });
-    const summary = runProjectionMaintenanceTick((args) =>
+    const summary = runTick((args) =>
       args[2] === "get"
         ? status({ trackDueWork: true }, { track: debt })
         : advance("track_due_work", true, 3),
@@ -192,7 +203,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 1, truncated: false },
       },
     });
-    const summary = runProjectionMaintenanceTick((args) =>
+    const summary = runTick((args) =>
       args[2] === "get"
         ? status({ crawlDueWork: true }, { crawl: debt })
         : advance("crawl_due_work", false, 50, 20),
@@ -223,7 +234,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 1, truncated: false },
       },
     });
-    const summary = runProjectionMaintenanceTick((args) =>
+    const summary = runTick((args) =>
       args[2] === "get"
         ? status({ trackDueWork: true }, { track: debt })
         : advance("track_due_work", false, 0, 2),
@@ -253,7 +264,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 1, truncated: false },
       },
     });
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       if (args[2] === "get") {
         return status(
           { crawlDueWork: true, publicProjections: true, trackDueWork: true },
@@ -294,7 +305,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 1, truncated: false },
       },
     });
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       if (args[2] === "get") {
         return status(
           { crawlDueWork: true, publicProjections: true, trackDueWork: true },
@@ -329,7 +340,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 1, truncated: false },
       },
     });
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       calls.push(args);
       if (args[2] === "get") {
         return status(
@@ -419,7 +430,7 @@ describe("projection maintenance bounded family repair", () => {
 
   test("an invalid aggregate anchor is repair work even without marker debt", () => {
     const calls: string[][] = [];
-    runProjectionMaintenanceTick((args) => {
+    runTick((args) => {
       calls.push(args);
       if (args[2] === "get") {
         const response = status({ publicProjections: true });
@@ -443,7 +454,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 2, truncated: false },
       },
     });
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       calls.push(args);
       if (args[2] === "get") {
         return status(
@@ -498,7 +509,7 @@ describe("projection maintenance bounded family repair", () => {
       return advance("track_due_work", tick > 1, tick > 1 ? 1 : 100, tick > 1 ? 1 : 2);
     };
 
-    const incomplete = runProjectionMaintenanceTick(run);
+    const incomplete = runTick(run);
     expect(incomplete.trackDueWork).toMatchObject({
       attempted: true,
       complete: false,
@@ -507,7 +518,7 @@ describe("projection maintenance bounded family repair", () => {
     });
     expect(calls).toHaveLength(2);
 
-    const resumed = runProjectionMaintenanceTick(run);
+    const resumed = runTick(run);
     expect(resumed.trackDueWork).toMatchObject({
       attempted: true,
       complete: true,
@@ -526,7 +537,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 100, truncated: true },
       },
     });
-    runProjectionMaintenanceTick((args) => {
+    runTick((args) => {
       calls.push(args);
       return args[2] === "get"
         ? status({ trackDueWork: true }, { track: truncated })
@@ -546,7 +557,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 3, truncated: false },
       },
     });
-    runProjectionMaintenanceTick((args) => {
+    runTick((args) => {
       calls.push(args);
       return args[2] === "get"
         ? status({ trackDueWork: true }, { track: old })
@@ -565,7 +576,7 @@ describe("projection maintenance bounded family repair", () => {
         total: { count: 40, truncated: false },
       },
     });
-    runProjectionMaintenanceTick((args) => {
+    runTick((args) => {
       calls.push(args);
       return args[2] === "get"
         ? status({ trackDueWork: true }, { track: bounded })
@@ -580,7 +591,7 @@ describe("projection maintenance bounded family repair", () => {
     const calls: string[][] = [];
     // Zero repair markers, so the count measures none of the work: the epoch mismatch IS the work.
     const epochOnly = family({ convergence: { epochMatched: false } });
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       calls.push(args);
       if (args[2] === "get") {
         return status({ publicProjections: true }, { aggregate: epochOnly, artists: epochOnly });
@@ -608,7 +619,7 @@ describe("projection maintenance bounded family repair", () => {
       },
     });
     let clock = 0;
-    const summary = runProjectionMaintenanceTick(
+    const summary = runTick(
       (args) => {
         if (args[2] === "get") {
           return status({ crawlDueWork: true, trackDueWork: true }, { crawl: debt, track: debt });
@@ -636,7 +647,7 @@ describe("projection maintenance bounded family repair", () => {
       },
     });
     let clock = 0;
-    const summary = runProjectionMaintenanceTick(
+    const summary = runTick(
       (args) => {
         if (args[2] === "get") {
           return status({ trackDueWork: true }, { track: debt });
@@ -663,7 +674,7 @@ describe("projection maintenance bounded family repair", () => {
         },
       });
     const targets: FamilyName[] = [];
-    runProjectionMaintenanceTick((args) => {
+    runTick((args) => {
       if (args[2] === "get") {
         return status(
           { crawlDueWork: true, publicProjections: true, trackDueWork: true },
@@ -708,7 +719,7 @@ describe("projection maintenance bounded family repair", () => {
     const targets: FamilyName[] = [];
     // The clock jumps past the run's wall budget the moment the first family's advance returns.
     let clock = 0;
-    const summary = runProjectionMaintenanceTick(
+    const summary = runTick(
       (args) => {
         if (args[2] === "get") {
           return status({ crawlDueWork: true, trackDueWork: true }, { crawl: debt, track: older });
@@ -763,7 +774,7 @@ esac
       status({ crawlDueWork: true, trackDueWork: true }, { crawl: debt(10_000), track: debt(0) }),
     );
     try {
-      const summary = runProjectionMaintenanceTick((args) =>
+      const summary = runTick((args) =>
         // Only the crawl family reaches the real stub; the track family is answered in-process, so
         // one test proves both halves: a timeout stays contained and its neighbour still reports.
         args[args.indexOf("--target") + 1] === "track_due_work"
@@ -816,7 +827,7 @@ esac
       });
     const calls: string[][] = [];
     let clock = 0;
-    const summary = runProjectionMaintenanceTick(
+    const summary = runTick(
       (args) => {
         calls.push(args);
         if (args[2] === "get") {
@@ -850,7 +861,7 @@ esac
       },
     });
     let clock = 0;
-    const summary = runProjectionMaintenanceTick(
+    const summary = runTick(
       (args) => {
         if (args[2] === "get") {
           return status({ trackDueWork: true }, { track: debt });
@@ -889,7 +900,7 @@ esac
       },
     });
     const calls: string[][] = [];
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       calls.push(args);
       return args[2] === "get"
         ? status({ trackDueWork: true }, { track })
@@ -904,15 +915,172 @@ esac
   });
 
   test("a server that does not report the rank marker is not a malformed status", () => {
-    const summary = runProjectionMaintenanceTick(() => status({ trackDueWork: true }));
+    const summary = runTick(() => status({ trackDueWork: true }));
 
     expect(summary.catalogueRankMarkerAgeMs).toBeNull();
     expect(summary.errors).toBe(0);
   });
 
+  // THE PIN WINDOW IS REAL. This script and the `fluncle` CLI are baked into the same image, but
+  // their pins do not move together: a change here rebakes within the hour, while the CLI pin only
+  // moves once the release is cut and the pin-drift bump merges. Sending an unknown flag to the old
+  // CLI in that window would fail every family — an outage on the drain the flag exists to protect.
+  describe("against the CLI pin it is actually bundled with", () => {
+    const debt = family({
+      // Escalated: an age-driven ask would reach for the 100-step ceiling.
+      oldestOutstandingMarkerAge: { ageMs: 10 * 60 * 60_000, reason: null, truncated: false },
+      repairs: {
+        direct: { count: 0, truncated: true },
+        fanout: { count: 100, truncated: true },
+        total: { count: 100, truncated: true },
+      },
+    });
+
+    /** Run one real tick against a stub binary whose help page decides the mode. */
+    const withStubCli = <Result>(
+      help: string,
+      body: (readArgv: () => string[]) => Result,
+    ): Result => {
+      const directory = mkdtempSync(join(tmpdir(), "projection-maintenance-pin-"));
+      const executable = join(directory, "fluncle");
+      const argvLog = join(directory, "argv.log");
+      const previous = process.env.FLUNCLE_BIN;
+      writeFileSync(
+        executable,
+        `#!/bin/sh
+case "$*" in
+  *--help*) printf '%s\\n' "$FLUNCLE_STUB_HELP"; exit 0 ;;
+esac
+case "$3" in
+  get) printf '%s\\n' "$FLUNCLE_STUB_STATUS"; exit 0 ;;
+esac
+printf '%s\\n' "$*" >> "$FLUNCLE_STUB_ARGV"
+printf '%s\\n' "$FLUNCLE_STUB_ADVANCE"
+`,
+      );
+      chmodSync(executable, 0o755);
+      process.env.FLUNCLE_BIN = executable;
+      process.env.FLUNCLE_STUB_HELP = help;
+      process.env.FLUNCLE_STUB_ARGV = argvLog;
+      process.env.FLUNCLE_STUB_STATUS = JSON.stringify(
+        status({ trackDueWork: true }, { track: debt }),
+      );
+      process.env.FLUNCLE_STUB_ADVANCE = JSON.stringify(advance("track_due_work", false, 12, 2));
+      try {
+        return body(() =>
+          existsSync(argvLog) ? readFileSync(argvLog, "utf8").split("\n").filter(Boolean) : [],
+        );
+      } finally {
+        if (previous === undefined) {
+          delete process.env.FLUNCLE_BIN;
+        } else {
+          process.env.FLUNCLE_BIN = previous;
+        }
+        delete process.env.FLUNCLE_STUB_HELP;
+        delete process.env.FLUNCLE_STUB_ARGV;
+        delete process.env.FLUNCLE_STUB_STATUS;
+        delete process.env.FLUNCLE_STUB_ADVANCE;
+        rmSync(directory, { force: true, recursive: true });
+      }
+    };
+
+    const MODERN_HELP = "Options:\n  --max-steps <steps>\n  --wall-ms <ms>  Stop issuing steps\n";
+    const OLD_HELP = "Options:\n  --max-steps <steps>\n  --no-terminal-status\n";
+
+    test("a CLI that accepts the budget is handed it, and asks for the full ceiling", () => {
+      withStubCli(MODERN_HELP, (readArgv) => {
+        expect(cliAcceptsWallMs()).toBe(true);
+        const summary = runProjectionMaintenanceTick();
+
+        const issued = readArgv();
+        expect(issued).toHaveLength(1);
+        expect(issued[0]).toContain("--wall-ms 30000");
+        expect(issued[0]).toContain("--max-steps 100");
+        expect(summary.trackDueWork).toMatchObject({
+          attempted: true,
+          processed: 12,
+          steps: 2,
+          wallBound: "wall-ms",
+          wallStopped: false,
+        });
+        expect(summary.errors).toBe(0);
+      });
+    });
+
+    test("a CLI that predates the budget gets the safe step bound and no unknown flag", () => {
+      withStubCli(OLD_HELP, (readArgv) => {
+        expect(cliAcceptsWallMs()).toBe(false);
+        const summary = runProjectionMaintenanceTick();
+
+        const issued = readArgv();
+        expect(issued).toHaveLength(1);
+        // The unknown flag would have failed the family outright.
+        expect(issued[0]).not.toContain("--wall-ms");
+        // Escalation still applies, but to a ceiling that cannot reach the child deadline: 30
+        // steps is roughly 36s at the hosted round trip against a 60s deadline.
+        expect(issued[0]).toContain("--max-steps 30");
+        expect(summary.trackDueWork).toMatchObject({
+          attempted: true,
+          processed: 12,
+          steps: 2,
+          wallBound: "steps",
+          // An old CLI honours no budget, so this is unknown rather than a false that would read
+          // as "the budget was not reached".
+          wallStopped: null,
+        });
+        // The fallback is a slower drain, never an error.
+        expect(summary.errors).toBe(0);
+        expect(summary.ok).toBe(true);
+      });
+    });
+
+    test("an unreadable or missing binary falls back rather than guessing forward", () => {
+      const previous = process.env.FLUNCLE_BIN;
+      process.env.FLUNCLE_BIN = join(tmpdir(), "fluncle-does-not-exist-projection-maintenance");
+      try {
+        expect(cliAcceptsWallMs()).toBe(false);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.FLUNCLE_BIN;
+        } else {
+          process.env.FLUNCLE_BIN = previous;
+        }
+      }
+    });
+  });
+
+  test("the capability is probed once per run, and never on a tick that advances nothing", () => {
+    const debt = family({
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    let probes = 0;
+    const acceptsWallMs = () => {
+      probes += 1;
+      return true;
+    };
+
+    runProjectionMaintenanceTick(
+      (args) =>
+        args[2] === "get"
+          ? status({ crawlDueWork: true, trackDueWork: true }, { crawl: debt, track: debt })
+          : advance(args[args.indexOf("--target") + 1] as FamilyName, true, 1),
+      { acceptsWallMs },
+    );
+    // Two families advanced; the answer cannot change mid-run, so one probe covers both.
+    expect(probes).toBe(1);
+
+    runProjectionMaintenanceTick(() => status({ trackDueWork: true }), { acceptsWallMs });
+    // A debt-free tick issues no advance, so it must spawn nothing at all.
+    expect(probes).toBe(1);
+  });
+
   test("malformed status fails before mutation and malformed advances fail their family", () => {
     const statusCalls: string[][] = [];
-    const badStatus = runProjectionMaintenanceTick((args) => {
+    const badStatus = runTick((args) => {
       statusCalls.push(args);
       return { ok: true, status: {} };
     });
@@ -920,7 +1088,7 @@ esac
     expect(badStatus).toMatchObject({ checked: null, errors: 1, ok: false, produced: null });
 
     const behind = family({ convergence: { epochMatched: false } });
-    const badAdvance = runProjectionMaintenanceTick((args) =>
+    const badAdvance = runTick((args) =>
       args[2] === "get" ? status({ publicProjections: true }, { aggregate: behind }) : { ok: true },
     );
     expect(badAdvance).toMatchObject({ errors: 1, ok: false });
