@@ -591,10 +591,10 @@ describe("staged target publication", () => {
     client.close();
   });
 
-  test("upload, pre-cutover, and in-transaction failures leave the old live artifact intact", async () => {
-    const generation = generationFixture(4);
-
-    for (const failure of ["upload", "before", "during"] as const) {
+  test.each(["upload", "before", "during"] as const)(
+    "failure at %s leaves the old live artifact intact",
+    async (failure) => {
+      const generation = generationFixture(4);
       const { client } = targetFixture();
       let injected = false;
 
@@ -624,8 +624,8 @@ describe("staged target publication", () => {
       expect(await rejectionMessage(publication)).not.toBe("");
       expect(liveTracks(client), failure).toEqual(["old-track"]);
       client.close();
-    }
-  });
+    },
+  );
 
   test("a lost response after cutover is a complete generation and restart is a no-op replay", async () => {
     const generation = generationFixture(3);
