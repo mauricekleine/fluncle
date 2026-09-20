@@ -52,14 +52,23 @@ const PROCESS_FIXTURE_TIMEOUT_MS = 60_000;
 /** `-1` means "restoring forever"; any other count is how many calls fail before the box answers. */
 type Tick = {
   args?: readonly string[];
+  boxNow?: number;
+  claudeProcs?: number;
   doneResult?: string;
+  freshenOut?: string;
   initialState?: "idle" | "rendering";
   legacyEnvNames?: boolean;
   listHasBox?: boolean;
   listHasOrphan?: boolean;
+  logMtime?: number;
+  logTail?: string;
+  /** What the one remote probe answers: the marker word, or a transport failure. */
+  markerState?: "absent" | "present" | "transport";
   nowSequence?: readonly number[];
   /** Raw `orphan-boxes` ledger content: `boxId<TAB>firstFiledEpoch<TAB>alerted` lines. */
   orphanLedger?: string;
+  /** Consecutive probe transport failures already on the ledger when the tick starts. */
+  probeFailures?: number;
   queueExitCode?: number;
   queueResponse?: string;
   queueStderr?: string;
@@ -67,8 +76,11 @@ type Tick = {
   restoringCode?: string;
   restoringCalls: number;
   resumeExitCode?: number;
+  sessionMtime?: number;
+  startedAt?: number;
   timeoutExitCode?: number;
   trackHasVideo?: boolean;
+  triggerOut?: string;
 };
 
 type TickResult = {
@@ -79,6 +91,7 @@ type TickResult = {
   log: string;
   noUpdateViolations: string[];
   orphans: string;
+  probeFailures: string;
   sleepCalls: string[];
   state: string;
   stdout: string;
@@ -125,16 +138,37 @@ case "$verb" in
       printf '{"code":"%s","error":"restoring","status":409}\\n' "\${STUB_RESTORING_CODE:-boat_restoring}" >&2
       exit 1
     fi
-    if [ "$verb" = "ssh" ] && printf '%s' "$*" | grep -q 'test -f.*conductor-run.done'; then
-      [ -n "\${STUB_DONE_RESULT:-}" ]
-      exit $?
+    # The two remote scripts both arrive as \`ssh <id> bash -s\` with the body on stdin, so the
+    # stub reads stdin ONLY for those (reading it for any other verb would block on the
+    # inherited descriptor) and tells them apart by what the body says.
+    if [ "$verb" = "ssh" ] && printf '%s' "$*" | grep -q 'bash -s'; then
+      payload="$(cat)"
+      if printf '%s' "$payload" | grep -q 'MARKER-PRESENT'; then
+        case "\${STUB_MARKER_STATE:-}" in
+          transport)
+            # A box that cannot be asked: the CLI fails and says nothing either word matches.
+            printf '{"code":"machine_not_running","error":"ssh failed","status":500}\\n' >&2
+            exit 1 ;;
+          present) printf 'MARKER-PRESENT %s\\n' "\${STUB_DONE_RESULT:-}" ;;
+          *) printf 'MARKER-ABSENT\\n' ;;
+        esac
+        printf 'CLAUDE-PROCS %s\\n' "\${STUB_CLAUDE_PROCS:-0}"
+        printf 'LOG-MTIME %s\\n' "\${STUB_LOG_MTIME:-0}"
+        printf 'SESSION-MTIME %s\\n' "\${STUB_SESSION_MTIME:-0}"
+        printf 'NOW %s\\n' "\${STUB_BOX_NOW:-0}"
+        printf 'MEM-AVAILABLE-MB %s\\n' "\${STUB_MEM_MB:-4096}"
+        printf 'OOM-KILLS %s\\n' "\${STUB_OOM_KILLS:-0}"
+        exit 0
+      fi
+      printf '%s\\n' "\${STUB_FRESHEN_OUT:-}"
+      exit 0
     fi
-    if [ "$verb" = "ssh" ] && printf '%s' "$*" | grep -q 'cat.*conductor-run.done'; then
-      printf '%s\\n' "\${STUB_DONE_RESULT:-}"
+    if [ "$verb" = "ssh" ] && printf '%s' "$*" | grep -q 'tail -c 4000'; then
+      printf '%s\\n' "\${STUB_LOG_TAIL:-}"
       exit 0
     fi
     if [ "$verb" = "ssh" ] && printf '%s' "$*" | grep -q 'render-detached.sh'; then
-      printf 'render-detached: launched\\n'
+      printf '%s\\n' "\${STUB_TRIGGER_OUT:-render-detached: launched}"
     fi
     exit 0 ;;
   *) exit 0 ;;
@@ -234,17 +268,25 @@ function stubEnv(tick: Tick, home: string, stub: string): Record<string, string>
     PATH: `${stub}:${process.env.PATH ?? "/usr/bin:/bin"}`,
     PROVISION: join(stub, "provision.sh"),
     STUB_BOX_ID: BOX_ID,
+    STUB_BOX_NOW: String(tick.boxNow ?? 0),
+    STUB_CLAUDE_PROCS: String(tick.claudeProcs ?? 0),
     STUB_DIR: stub,
     STUB_DONE_RESULT: tick.doneResult ?? "",
+    STUB_FRESHEN_OUT: tick.freshenOut ?? "",
     STUB_LIST_HAS_BOX: (tick.listHasBox ?? true) ? "1" : "0",
     STUB_LIST_HAS_ORPHAN: tick.listHasOrphan ? "1" : "0",
+    STUB_LOG_MTIME: String(tick.logMtime ?? 0),
+    STUB_LOG_TAIL: tick.logTail ?? "",
+    STUB_MARKER_STATE: tick.markerState ?? (tick.doneResult ? "present" : "absent"),
     STUB_ORPHAN_ID: ORPHAN_ID,
     STUB_QUEUE_EXIT_CODE: String(tick.queueExitCode ?? 0),
     STUB_QUEUE_RESPONSE: tick.queueResponse ?? `{"ok":true,"tracks":[{"logId":"${QUEUE_HEAD}"}]}`,
     STUB_QUEUE_STDERR: tick.queueStderr ?? "",
     STUB_RESTORING_CODE: tick.restoringCode ?? "boat_restoring",
     STUB_RESUME_EXIT: String(tick.resumeExitCode ?? 0),
+    STUB_SESSION_MTIME: String(tick.sessionMtime ?? 0),
     STUB_TRACK_HAS_VIDEO: tick.trackHasVideo ? "1" : "0",
+    STUB_TRIGGER_OUT: tick.triggerOut ?? "render-detached: launched",
     ...(timeoutExit === undefined ? {} : { STUB_TIMEOUT_EXIT: String(timeoutExit) }),
   };
 }
@@ -276,8 +318,11 @@ function runTick(tick: Tick): TickResult {
     if (tick.orphanLedger !== undefined) {
       writeFileSync(join(stateDir, "orphan-boxes"), tick.orphanLedger);
     }
+    if (tick.probeFailures !== undefined) {
+      writeFileSync(join(stateDir, "probe-failures"), String(tick.probeFailures));
+    }
     if (initialState === "rendering") {
-      writeFileSync(join(stateDir, "started-at"), "0");
+      writeFileSync(join(stateDir, "started-at"), String(tick.startedAt ?? 0));
       writeFileSync(join(stateDir, "render-logid"), QUEUE_HEAD);
     }
 
@@ -314,6 +359,7 @@ function runTick(tick: Tick): TickResult {
       log: read(join(stateDir, "conductor.log")),
       noUpdateViolations: read(join(stub, "no-update-violations")).split("\n").filter(Boolean),
       orphans: read(join(stateDir, "orphan-boxes")),
+      probeFailures: read(join(stateDir, "probe-failures")),
       sleepCalls: read(join(stub, "sleep-calls")).split("\n").filter(Boolean),
       state: read(join(stateDir, "state")),
       stdout: run.stdout ?? "",
@@ -822,6 +868,241 @@ describe("render state counters", () => {
   );
 });
 
+// A render whose process group dies writes NO done-marker — render-detached.sh writes the
+// marker after `claude -p` returns, whatever the exit code — so the marker poll alone reads a
+// corpse exactly like a healthy render and bills the box until MAX_RENDER. The probe therefore
+// answers the marker question as a WORD and carries the liveness evidence in the same command,
+// and a lost window has to end loudly: parked, paged, and an honest ledger row.
+describe("the done-marker probe and the liveness verdict", () => {
+  const EMPTY_QUEUE = '{"ok":true,"tracks":[]}';
+  const ALIVE_AT = 4_070_908_800;
+
+  test(
+    "MARKER-PRESENT parks the box and takes the completion path",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        doneResult: "EXIT=0 @ 2099-01-01T00:00:00Z DURATION=5",
+        initialState: "rendering",
+        markerState: "present",
+        queueResponse: EMPTY_QUEUE,
+        restoringCalls: 0,
+        trackHasVideo: true,
+      });
+
+      expect(tick.log).toContain(`done-marker probe on ${BOX_ID}: MARKER-PRESENT`);
+      expect(tick.stdout).toContain("render finished");
+      expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
+      expect(tick.state).toBe("idle");
+      // One probe answers both questions; the old test-then-cat pair is gone.
+      expect(tick.calls.filter((call) => call.includes("conductor-run.done"))).toEqual([]);
+    },
+  );
+
+  test(
+    "MARKER-ABSENT with a live claude process is a single-flight hold",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        boxNow: ALIVE_AT,
+        claudeProcs: 1,
+        initialState: "rendering",
+        logMtime: ALIVE_AT - 30,
+        markerState: "absent",
+        restoringCalls: 0,
+        sessionMtime: ALIVE_AT - 5,
+        startedAt: Math.floor(Date.now() / 1000) - 120,
+      });
+
+      expect(tick.exitCode).toBe(0);
+      expect(tick.stdout).toContain(`render in flight on ${BOX_ID} — single-flight hold`);
+      expect(tick.log).toContain(`liveness on ${BOX_ID}: claude=1 idle=5s`);
+      expect(tick.state).toBe("rendering");
+      expect(tick.calls).not.toContain(`--no-update stop ${BOX_ID}`);
+      expect(tick.curlCalls).toEqual([]);
+    },
+  );
+
+  test(
+    "MARKER-ABSENT with no claude process and a silent log is force-parked in one tick",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        boxNow: ALIVE_AT,
+        claudeProcs: 0,
+        initialState: "rendering",
+        logMtime: ALIVE_AT - 8000,
+        logTail: "Error: Cannot find module 'browserslist'",
+        markerState: "absent",
+        restoringCalls: 0,
+        sessionMtime: ALIVE_AT - 7000,
+        // Well inside MAX_RENDER: the verdict is what ends this render, not the outer cap.
+        startedAt: Math.floor(Date.now() / 1000) - 600,
+      });
+
+      expect(tick.log).toContain(`liveness on ${BOX_ID}: claude=0 idle=7000s`);
+      expect(tick.log).toContain("is DEAD");
+      // The box is still up at force-park time, so the run log is pulled before the stop —
+      // the next incident is diagnosable without a paid wake.
+      expect(tick.log).toContain("conductor-run.log tail from");
+      expect(tick.log).toContain("Cannot find module 'browserslist'");
+      expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
+      expect(tick.state).toBe("idle");
+      // A lost window PAGES and says so on the ledger row.
+      expect(tick.curlCalls.join("\n")).toContain("is DEAD");
+      expect(tick.exitCode).toBe(1);
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        errors: 1,
+        failed: 1,
+        ok: false,
+        reason: "render_died",
+      });
+    },
+  );
+
+  test(
+    "a render past MAX_RENDER is force-parked with an honest ledger row and a page",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        boxNow: ALIVE_AT,
+        // Still holding a process, so it is stuck rather than dead — the outer cap ends it.
+        claudeProcs: 1,
+        initialState: "rendering",
+        logMtime: ALIVE_AT - 10,
+        markerState: "absent",
+        restoringCalls: 0,
+        sessionMtime: ALIVE_AT - 10,
+        startedAt: 0,
+      });
+
+      expect(tick.log).toContain("ran past 12600s — force-parked");
+      expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
+      expect(tick.state).toBe("idle");
+      expect(tick.curlCalls.join("\n")).toContain("force-parked");
+      expect(tick.exitCode).toBe(1);
+      expect(lastJsonLine(tick.stdout)).toMatchObject({ ok: false, reason: "render_stuck" });
+    },
+  );
+
+  test(
+    "a probe that answers neither word is a counted transport failure, never 'in flight'",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        initialState: "rendering",
+        markerState: "transport",
+        restoringCalls: 0,
+        startedAt: Math.floor(Date.now() / 1000) - 60,
+      });
+
+      expect(tick.log).toContain("answered neither MARKER-PRESENT nor MARKER-ABSENT");
+      expect(tick.log).toContain("transport failure #1");
+      expect(tick.stdout).not.toContain("single-flight hold");
+      expect(tick.probeFailures).toBe("1");
+      expect(tick.state).toBe("rendering");
+      expect(tick.calls).not.toContain(`--no-update stop ${BOX_ID}`);
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        ok: false,
+        reason: "render_probe_transport",
+      });
+    },
+  );
+
+  test(
+    "three consecutive transport failures treat the box as wedged and force-park it",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        initialState: "rendering",
+        markerState: "transport",
+        probeFailures: 2,
+        restoringCalls: 0,
+        startedAt: Math.floor(Date.now() / 1000) - 60,
+      });
+
+      expect(tick.log).toContain("transport failure #3");
+      expect(tick.log).toContain("wedged, force-parked");
+      expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
+      expect(tick.state).toBe("idle");
+      expect(tick.probeFailures.trim()).toBe("");
+      expect(tick.curlCalls.join("\n")).toContain("did not answer the done-marker probe");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        ok: false,
+        reason: "render_box_wedged",
+      });
+    },
+  );
+});
+
+// The render box is the only thing awake at render time, so whatever it is short of, the agent
+// is the one that improvises around it. Both of these end the window before that can happen.
+describe("the wake-time preconditions", () => {
+  test(
+    "a failed dependency install parks the box and refuses to render into it",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        freshenOut: "[freshen] deps-failed\nerror: lockfile had changes",
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).toContain(`dependency install failed on ${BOX_ID}`);
+      expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
+      // Parked, not condemned: the box is fine, the install was not.
+      expect(tick.log).not.toContain("condemned");
+      expect(tick.boxIdFile).toBe(BOX_ID);
+      expect(tick.state).toBe("idle");
+      expect(tick.calls.join("\n")).not.toContain("render-detached.sh");
+      expect(tick.curlCalls.join("\n")).toContain("dependency install failed");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        ok: false,
+        reason: "render_deps_install_failed",
+      });
+    },
+  );
+
+  test(
+    "a launcher refusal parks the box, pages, and is never a condemn",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        restoringCalls: 0,
+        triggerOut: "render-detached: refused deps-missing (the workspace has no node_modules)",
+      });
+
+      expect(tick.log).toContain("render launcher refused to start");
+      expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
+      expect(tick.log).not.toContain("condemned");
+      expect(tick.boxIdFile).toBe(BOX_ID);
+      expect(tick.state).toBe("idle");
+      expect(tick.curlCalls.join("\n")).toContain("refused to start");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        ok: false,
+        reason: "render_launch_refused",
+      });
+    },
+  );
+
+  test(
+    "a named launcher fault on the marker is reported, and never poisons the finding",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({
+        doneResult: "EXIT=deps-missing @ 2099-01-01T00:00:00Z DURATION=0",
+        initialState: "rendering",
+        markerState: "present",
+        queueResponse: '{"ok":true,"tracks":[]}',
+        restoringCalls: 0,
+      });
+
+      expect(tick.log).toContain("named launcher fault");
+      expect(tick.curlCalls.join("\n")).toContain("the render launcher refused");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({ failed: 1 });
+    },
+  );
+});
+
 describe("the provision parser", () => {
   // `boat new --json` is JSONL: `created`, zero or more `state`, then `ready` or `error`
   // (docs.boat.dev/use-in-code). provision-rave-03.sh prefers the `ready` line's id and
@@ -885,7 +1166,7 @@ describe("the provision parser", () => {
 // The conductor is the only consumer of these scripts, and both must stay executable and
 // syntactically valid — a bake copies them verbatim to the box.
 describe("the scripts themselves", () => {
-  for (const script of ["render-conductor.sh", "provision-rave-03.sh"]) {
+  for (const script of ["render-conductor.sh", "provision-rave-03.sh", "render-detached.sh"]) {
     test(`${script} parses`, () => {
       const path = join(import.meta.dir, script);
       expect(existsSync(path)).toBe(true);
