@@ -4,6 +4,7 @@ import {
   type ArtistRulesResponse,
   type LabelAdminItem,
   type LabelSeedState,
+  type LabelTakeOverResult,
   type MergeLabelResult,
   type MintLabelOutcome,
 } from "@fluncle/contracts";
@@ -168,11 +169,14 @@ export async function updateLabelCommand(
 // new row `undecided` and an existing row's ruling untouched. See docs/label-entity.md.
 
 // The op is keyed by the MusicBrainz MBID itself — there is no Fluncle id to resolve yet, so unlike
-// `update`/`artists` this one makes no seed-set round trip first.
+// `update`/`artists` this one makes no seed-set round trip first. `takeOverSlug` rides straight
+// through: the SERVER decides whether the named row is the one the mint collided with and whether
+// it may give up its identity, so the CLI never pre-resolves a slug it would only re-check.
 export async function mintLabelCommand(
   mbLabelId: string,
   seedState?: LabelSeedState,
-): Promise<{ label: LabelAdminItem; outcome: MintLabelOutcome }> {
+  takeOverSlug?: string,
+): Promise<{ label: LabelAdminItem; outcome: MintLabelOutcome; takenOver?: LabelTakeOverResult }> {
   const mbid = mbLabelId.trim().toLowerCase();
 
   // The server validates the same shape; catching it here spends no request on a typo.
@@ -184,12 +188,14 @@ export async function mintLabelCommand(
     label: LabelAdminItem;
     ok: boolean;
     outcome: MintLabelOutcome;
+    takenOver?: LabelTakeOverResult;
   }>("/api/v1/admin/labels", {
     mbLabelId: mbid,
     ...(seedState === undefined ? {} : { seedState }),
+    ...(takeOverSlug === undefined ? {} : { takeOverSlug: takeOverSlug.trim().toLowerCase() }),
   });
 
-  return { label: response.label, outcome: response.outcome };
+  return { label: response.label, outcome: response.outcome, takenOver: response.takenOver };
 }
 
 // ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────

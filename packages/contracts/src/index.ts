@@ -63,6 +63,7 @@ import {
   type LabelAliasKindSchema,
   type LabelAliasSourceSchema,
   type LabelSeedStateSchema,
+  type LabelTakeOverResultSchema,
   type MergeLabelResultSchema,
   type MintLabelOutcomeSchema,
 } from "./orpc/admin-labels.js";
@@ -239,10 +240,19 @@ export type MergeLabelResult = z.infer<typeof MergeLabelResultSchema>;
 
 /**
  * What `mint_label` (`POST /api/v1/admin/labels`) did with the MusicBrainz identity it was handed:
- * `minted` a new row, `adopted` the MBID onto a row that already carried the spelling, or found the
- * MBID already `known`. Inferred from `MintLabelOutcomeSchema` (./orpc/admin-labels.ts).
+ * `minted` a new row, `adopted` the MBID onto a row that already carried the spelling, found the
+ * MBID already `known`, or `taken_over` — re-pointed the conflicting row's identity onto the minted
+ * entity, which happens only on the operator's explicit `takeOverSlug`. Inferred from
+ * `MintLabelOutcomeSchema` (./orpc/admin-labels.ts).
  */
 export type MintLabelOutcome = z.infer<typeof MintLabelOutcomeSchema>;
+
+/**
+ * What a `mint_label` TAKE-OVER moved: the replaced MBID, the identity-derived facts cleared off the
+ * row, the label-scoped artist rules dropped, and the crawl-frontier nodes retired or re-armed.
+ * Inferred from `LabelTakeOverResultSchema` (./orpc/admin-labels.ts).
+ */
+export type LabelTakeOverResult = z.infer<typeof LabelTakeOverResultSchema>;
 
 // ── Users (the account roster — the operator's read-only rollout window) ───────
 
