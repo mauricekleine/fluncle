@@ -182,7 +182,7 @@ record_run_event() {
   RUN_EVENT_FAILURE_REASON=""
   # `-` NOT `:-`, deliberately. With the colon an EMPTY base fell back to the production
   # URL, which made the guard two lines down unreachable and fired a real POST at
-  # www.fluncle.com from every `bun run test:scripts` — in CI and in the deploy gate. An
+  # www.fluncle.com from every `bun run test:scripts` run in CI. An
   # empty base means THERE IS NO LEDGER HERE, and the guard is the line that says so.
   base="${FLUNCLE_API_BASE_URL-https://www.fluncle.com}"
   base="${base%/}"
