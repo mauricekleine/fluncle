@@ -98,8 +98,8 @@ export function entityWebPath(entity: Pick<SearchEntity, "kind" | "slug" | "url"
 export type TrackGroup = { certified: boolean; heading: string; hits: SearchHit[] };
 
 /**
- * Split the track results into the two named groups the mobile archive renders (operator
- * ruling 2026-07-12): "Fluncle's Findings" (certified, coordinate rows) ALWAYS before
+ * Split the track results into the mobile archive's two named groups: "Fluncle's Findings"
+ * (certified, coordinate rows) ALWAYS before
  * "Tracks" (uncertified, link-out rows). This differs from the web palette, which heads
  * neither track group — the operator asked for the split on mobile so the two registers
  * read as two lists, not one interleaved run.

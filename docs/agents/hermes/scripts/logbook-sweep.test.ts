@@ -306,7 +306,7 @@ describe("authorOne (the bounded re-author, across ticks)", () => {
     expect(authorings()).toBe(MAX_LOGBOOK_ATTEMPTS);
   });
 
-  // THE OPERATOR'S RULING (2026-07-30): no final-attempt bypass. A gap is a perfectly good state,
+  // THE OPERATOR'S RULING: no final-attempt bypass. A gap is a perfectly good state,
   // so an exhausted day simply stays one rather than publishing copy the gates refused.
   test("NOTHING is ever stored for a day whose drafts the gates refused", async () => {
     verdict("voice");

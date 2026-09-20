@@ -95,7 +95,7 @@ test("the cover backdrop can paint: body stays transparent under the z:-2 pseudo
 }) => {
   // The regression this pins: an opaque body background paints ABOVE a negative
   // z-index fixed child in the root stacking context, erasing the sitewide cover
-  // backdrop while every rule still "applies" in devtools (2026-07-27; the
+  // backdrop while every rule still "applies" in devtools (the
   // Fumadocs preflight's body background won the cascade once #920 scoped
   // Scalar's sheet away). See the paint contract beside `body::before` in
   // src/styles.css.

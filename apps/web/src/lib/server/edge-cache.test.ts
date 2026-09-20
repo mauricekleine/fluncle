@@ -147,7 +147,7 @@ describe("isCacheableHubRequest", () => {
   });
 
   it("matches the stable public pages enrolled at the hub policy on their bare URL", () => {
-    // FIX 2: the index/static/legal/docs pages that previously emitted no Cache-Control.
+    // Stable index, static, legal, and docs pages all carry the hub cache policy.
     for (const path of [
       // The front door and the archive feed: bare-URL-only, so no query is ever shared-cached.
       "/",
@@ -177,7 +177,7 @@ describe("isCacheableHubRequest", () => {
   });
 
   it("caches a LONE numeric ?page=N on a paginated hub (folded into the key)", () => {
-    // FIX 1: the documented crawler pager into the catalogue long tail. A lone positive
+    // A lone positive
     // integer is cacheable; the key folds the parsed page so N never collides onto page 1.
     expect(isCacheableHubRequest("/artists", "?page=2")).toBe(true);
     expect(isCacheableHubRequest("/albums", "?page=3")).toBe(true);
@@ -446,7 +446,7 @@ describe("withEdgeCache", () => {
   });
 
   it("keys a paginated hub's ?page=N under its OWN entry — never colliding onto page 1", async () => {
-    // THE sacred collision-safety property (FIX 1): page 1 (`/artists`), page 2, and page 3 each
+    // THE sacred collision-safety property: page 1 (`/artists`), page 2, and page 3 each
     // get a distinct `caches.default` key, and a repeat hit on any of them serves ITS body — so
     // the query-dropping key can never serve page 2's body back for page 1.
     const fake = installFakeCache();

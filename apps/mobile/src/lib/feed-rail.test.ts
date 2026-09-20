@@ -3,7 +3,7 @@
 // Run via `bun test` (reports "0 pass" — no describe/it blocks — but throws and fails
 // the process on any failed assertion) or `bun src/lib/feed-rail.test.ts`.
 //
-// This pins the Chrome Rule (voice.md §4, ratified 2026-07-11): a control's visible
+// This pins the Chrome Rule (voice.md §4): a control's visible
 // label is ONE stable literal across state; the icon + the gold tint carry the state,
 // never the word. It guards the exact regression that motivated the rule — a rail
 // label that flipped per press ("Sound"→"Muted").

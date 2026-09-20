@@ -27,9 +27,8 @@ import { partitionEntities, partitionTracks, searchView } from "@/lib/search-sta
 import { color, font } from "@/theme/tokens";
 
 // The archive (RFC Unit 3): browse + a device-local Saved view + SEARCH (the catalogue
-// sprint's public `search_archive` op). The filter row is two chips, All and Saved — the
-// sonic-galaxy lens chips were removed (operator ruling 2026-07-12: with Saved added, the
-// galaxy chips crowded the row to the device edge and read wonky). Galaxy names still
+// sprint's public `search_archive` op). The filter row is limited to All and Saved so it does not
+// crowd the device edge. Galaxy names still
 // render in each finding row's meta line; only the chip lens is gone. Search is a quiet
 // magnifier in the header, mirroring the web palette's stance: the quietest surface
 // doesn't get a permanent form field, it gets a glyph that opens one. Searching REPLACES
@@ -222,7 +221,7 @@ function pickHit(hit: SearchHit, router: ReturnType<typeof useRouter>): void {
 }
 
 // The search pane: one `search_archive` op behind a debounced query, rendered in the
-// archive row idiom. Results render in three heading groups (operator ruling 2026-07-12):
+// archive row idiom. Results render in three heading groups:
 // entity jump targets first (Artists / Labels / Albums, opened on the web — the app has
 // no such page), then the tracks split into "Fluncle's Findings" (certified, coordinate
 // rows) ALWAYS before "Tracks" (uncertified, link-out rows). Empty/error states are

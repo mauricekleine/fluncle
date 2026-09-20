@@ -175,11 +175,9 @@ function emit(opts: ScaleSeedOptions, line: string): void {
 
 /**
  * One chunk's batch write, retried through TRANSIENT transport failures. A ~45-minute hosted seed
- * crosses thousands of HTTP round trips, and a single timed-out one used to kill the whole run —
- * measured twice in one evening (2026-07-27: dead at 94k/148k, then at 147.5k/148k), each costing
- * a full re-run that only survived because the inserts are idempotent. Three attempts with a short
- * backoff absorbs the blip; a chunk that fails all three throws, because a PERSISTENTLY failing
- * write path is a real signal the run must surface, not ride over.
+ * crosses thousands of HTTP round trips, so one timed-out request must not kill the whole run.
+ * Three attempts with a short backoff absorb the blip. A chunk that fails all three throws because
+ * a PERSISTENTLY failing write path is a real signal the run must surface, not ride over.
  */
 async function batchWithRetry(client: Client, statements: SeedStatement[]): Promise<void> {
   const attempts = 3;

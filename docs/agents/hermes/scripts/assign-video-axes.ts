@@ -4,10 +4,8 @@
 // § Homogenisation): sequential/parallel generation converges on a shared attractor, so
 // diversity has to be DESIGNED IN UP FRONT — assign the family before generation;
 // prescriptive mid-flight coaching increases convergence instead of fixing it. Today the
-// render brief fires one static prompt every tick and all diversity pressure is the agent
-// eyeballing recent posters, which produced the attractor anyway (07-13: four of five
-// consecutive renders one amber/halftone look; 07-14: register collapsed to 24/26
-// representational).
+// render brief fires one static prompt every tick, so agent judgment alone can converge on a shared
+// palette and register.
 //
 // This computes the NEXT render's cell — grain family, register, and a palette-avoid
 // directive — from the vehicles ledger alone, so the assignment is fixed before the agent
@@ -40,14 +38,12 @@ export const BAKED_GRAIN_FAMILIES = [
 // immediate neighbourhood's grain). Among the rest, the least-recently-used wins.
 const GRAIN_RECENT_WINDOW = 3;
 
-// The register — RETIRED from rotation by operator ruling 2026-07-20: representational
-// is a PREREQUISITE, not a quota. The TikTok read is unambiguous (the plate-lane pieces
-// with real shapes, figures, artifacts consistently outperform; abstract consistently
-// underperforms — "when it's lacking, we're back to the videos we used to render"), so
+// The register is excluded from rotation: representational
+// is a PREREQUISITE, not a quota. The TikTok read is unambiguous: plate-lane pieces with real
+// shapes, figures, and artifacts consistently outperform while abstract pieces underperform. Thus,
 // every render stages a presence. Diversity now lives entirely in the grain family, the
-// palette-avoid directive, the plate subject-kind rotation (judge:diversity enforces it),
-// and the vehicle — the axes that vary WITHIN representational. The 07-14 anti-collapse
-// quota this replaces is preserved in git history should the ruling ever soften.
+// palette-avoid directive, the plate subject-kind rotation (judge:diversity enforces it), and the
+// vehicle — the axes that vary WITHIN representational.
 export const ASSIGNED_REGISTER: VideoRegister = "representational";
 
 // The palette-avoid directive looks at this many recent renders.
@@ -168,8 +164,8 @@ function topRepeat<T>(values: (T | null)[]): { value: T; count: number } | null 
  * in (piece 3 of the diversity slice records it):
  *   - DATA-DRIVEN: when the last PALETTE_RECENT_WINDOW renders carry palette buckets and one
  *     bucket dominates (≥2), direct the next render OFF that hue bucket.
- *   - FALLBACK (no palette recorded yet): the amber/halftone basin is what we know is worn
- *     (07-13), so when the recent window is amber-textured — a halftone/dither grain
+ *   - FALLBACK (no palette recorded yet): when the recent window is amber-textured — a
+ *     halftone/dither grain
  *     appears, or ≥2 of the last three share ANY grain family — name it spent.
  */
 export function assignPaletteAvoid(entries: LedgerEntry[]): string | null {

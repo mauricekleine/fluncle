@@ -157,7 +157,7 @@ describe("Cache-Control on the edge-cached HTML surfaces", () => {
       "/labels",
       "/tracks",
       "/fresh",
-      // The stable public pages enrolled at the hub policy (previously emitted no directive).
+      // The stable public pages enrolled at the hub policy.
       "/",
       "/findings",
       "/galaxies",

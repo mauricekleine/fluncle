@@ -263,11 +263,7 @@ describe("bioCostEvent (the COST-01 §5 `bio` row)", () => {
 
 // ── THE ATTEMPT BUDGET ─────────────────────────────────────────────────────────────────
 //
-// The bug this replaced: a voice-gate rejection was a plain skip that left the entity queued,
-// with nothing anywhere counting the attempts — so "retry" meant "forever". Three entities were
-// re-authored ~90 times each over two days, ~270 model calls, and it would never have stopped.
-//
-// The ruling: an entity gets THREE authoring attempts, ever — the initial draft plus two
+// An entity gets THREE authoring attempts, ever — the initial draft plus two
 // rewrites — and the third draft LANDS rather than being discarded. The count persists across
 // ticks, because each tick is a fresh process with nothing in memory.
 
@@ -415,8 +411,7 @@ describe("shared bio sweep canonical counters", () => {
   });
 
   // The dry-run path increments `errors` on a ClaudeAuthError and then keeps going, so its
-  // summary line has to be able to say no. It used to carry a hardcoded `ok: true` beside that
-  // very counter — the same contradiction the run ledger refuses to accept from any caller.
+  // summary line must derive `ok` from that counter.
   test("a tick that recorded an error reports ok:false", () => {
     const summary = createBioSweepSummary("artist");
 
@@ -579,7 +574,7 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
 
       const result = await tick("future-signal");
 
-      // Unchanged from before this slice: one author, one describe, no --final-attempt, no marker.
+      // A passing first draft needs one author, one describe, no --final-attempt, and no marker.
       expect(result.outcome).toBe("authored");
       expect(result.gateBypassed).toBe(false);
       expect(authorings()).toBe(1);
@@ -750,8 +745,7 @@ describe("the transport/model failure never spends an attempt", () => {
       mkdirSync(STATE_DIR, { recursive: true });
       writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
 
-      // The model falls over on the final attempt. Before this rule that was a permanent
-      // write-off: no draft to accept, and no budget left to try again.
+      // A model failure produces no draft, so it cannot spend the final attempt.
       claudeVerdict("down");
       expect((await tick("future-signal")).outcome).toBe("skipped");
       expect(loadLedger().get(attemptKey("artist", "future-signal"))?.attempts).toBe(2);

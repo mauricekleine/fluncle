@@ -4,13 +4,13 @@
 //
 // WHY THIS EXISTS. A catalogue track (a `tracks` row with no `findings` row) is resolved from
 // MusicBrainz, so it may land with no Spotify presence — the nullable `spotify_uri`/`spotify_url`.
-// Filling that anchor used to run IN THE WORKER against the official dev-mode Spotify app, and at
-// catalogue scale it starved under sustained 429s (the official app must stay for user-facing paths
-// — adds, publish, the Frontier playlist mints). So ALL catalogue anchor-filling moved onto THIS
+// Catalogue-scale anchor filling cannot use the official dev-mode Spotify app because sustained
+// 429s would starve it; that app stays reserved for user-facing adds, publish, and Frontier playlist
+// mints. ALL catalogue anchor-filling therefore runs in THIS
 // box sweep. See docs/catalogue-crawler.md § the anchor.
 //
-// THE RESOLVER WATERFALL (slices 1-2). Apify used to be the SOLE candidate source, so an Apify outage
-// stopped anchoring dead. This sweep runs a waterfall per row, all resolved through ONE `resolve_anchor`
+// THE RESOLVER WATERFALL (slices 1-2). No single candidate source may stop anchoring. This sweep
+// runs a waterfall per row, all resolved through ONE `resolve_anchor`
 // call the box makes FIRST: the FREE ListenBrainz rung, then — when the server's dark flag
 // `anchor_spotify_search_enabled` is on (slice 2) — the free Spotify SEARCH rungs (exact ISRC, then
 // fuzzy), and the metered Apify search only as the LAST resort. Any earlier hit spends no Apify money,
@@ -84,10 +84,9 @@
 // default 300). The firing reads that cap and the two rung flags ONCE up front (`readPreflight`) and
 // pulls NOTHING when nothing it pulled could conclude: outside the night window with the paid rung
 // armed, or once the day's cap is spent. Every query it does send is the free-text `anchorQuery` —
-// there is no ISRC query shape here, so `searchKeywordLimit` stays at 3 (the gate needs candidates). A 2026-07-30 sample of 20 REAL anchor-worklist MBIDs found 11 mapping rows and
-// 4 non-empty Spotify id lists: ~20% carried a free candidate. The realised anchor rate is measured,
-// never assumed, by the per-outcome `lb*` counters below. Pause = stop the timer. Attended burn =
-// `--limit N`. Full cost math: ../anchor-timer/README.md.
+// there is no ISRC query shape here, so `searchKeywordLimit` stays at 3 because the gate needs
+// candidates. The per-outcome `lb*` counters below measure the realised anchor rate. Pause = stop
+// the timer. Attended burn = `--limit N`. Full cost math: ../anchor-timer/README.md.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -109,7 +108,7 @@ const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 // concrete op:// path lives in the private companion + the timer README's activation section.
 const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN ?? "";
 
-// The working actor (verified live 2026-07-18). Overridable for a pinned/forked actor id.
+// The working actor. Overridable for a pinned/forked actor id.
 const APIFY_ACTOR = process.env.FLUNCLE_ANCHOR_ACTOR ?? "musicae~spotify-extended-scraper";
 
 /** Rows per tick. Small on purpose — each is a billed Apify search (~$0.015). `--limit` overrides it. */
@@ -135,9 +134,8 @@ const SEARCH_KEYWORD_LIMIT = Number(process.env.FLUNCLE_ANCHOR_KEYWORD_LIMIT ?? 
 // `spotifySearch: false` on the rows it covers — a request field the server ANDs into its own gate,
 // so the box can only ever ask for LESS.
 //
-// The reason all three exist: the rungs draw on the ONE official Spotify app that also serves
-// publishing and user playlist flows, and a sustained sweep DID starve it (2026-07-18), which is why
-// they went dark in the first place. They come back as the app's SUBORDINATE consumer or not at all.
+// The rungs share the ONE official Spotify app with publishing and user playlist flows. The sweep
+// must remain the app's SUBORDINATE consumer.
 
 /**
  * The tick's ceiling on EXACT-ISRC asks (`findSpotifyTrackByIsrc`) — the Class-B lever, and the only
@@ -321,8 +319,8 @@ export type AnchorVerdict = {
 
 /**
  * One rung-0 Deezer search's result: the hits that carried all four gate signals, plus how many the
- * response held that did NOT and so were withheld. The count exists because the drop used to be
- * invisible — an all-unusable response and an empty one both reached the Worker as `[]`.
+ * response held that did NOT and so were withheld. The count distinguishes an all-unusable response
+ * from an empty one; both otherwise reach the Worker as `[]`.
  */
 export type DeezerSearchResult = {
   candidates: DeezerCandidatePayload[];
@@ -470,9 +468,9 @@ export type AnchorSummary = {
   /**
    * Rows where the ListenBrainz rung DECLINED to spend its by-id Spotify read because the shared-app
    * throttle breaker was tripped. Its own counter rather than more `lbMetadataFailed`, because the
-   * two mean opposite things: a failure is the rung breaking, a yield is the rung working. This is
-   * the number that used to hide inside `lbMetadataFailed` during Spotify's throttle windows and made
-   * a healthy rung under backpressure look like a dead one. NOT a `failed` — nothing went wrong.
+   * two mean opposite things: a failure is the rung breaking, a yield is the rung working. Keep
+   * yields out of `lbMetadataFailed`, or healthy backpressure looks like a dead rung. NOT a
+   * `failed` — nothing went wrong.
    */
   lbYieldedOnBreaker: number;
   /** Rows that verified nothing on ANY rung (a clean full miss — stamped, backed off). */

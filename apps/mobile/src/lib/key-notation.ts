@@ -92,7 +92,7 @@ export function setKeyNotation(next: KeyNotation): void {
 // ── The account (profile-sync) layer ─────────────────────────────────────────
 // Present ONLY once a session is confirmed. It never touches the device path above:
 // `signedIn` stays false for a stranger (and `meFetch` may be unwired), so `setKeyNotation`
-// behaves exactly as it did before this layer existed.
+// remains isolated from account sync.
 
 let meFetch: MeFetch | null = null;
 let signedIn = false;

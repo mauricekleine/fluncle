@@ -9,7 +9,7 @@
  * `--dry-run`); this runs the SAME measures across the WRITTEN families — notes, spoken
  * observations, logbook entries, and the newsletter's per-finding why-lines — off the live
  * archive and prints a ranked report. It also cuts the upstream context-note `Texture:`
- * vocabulary (the seed the 07-14 audit named), the stored video axes (vehicle / grain /
+ * vocabulary, the stored video axes (vehicle / grain /
  * register / palette, with the palette NULL share reported honestly), and — behind `--embed`
  * — a SEMANTIC cut: it embeds the written corpora with a local bge-class text model and
  * measures pairwise embedding distance, the one automated layer that sees MOVES not words.
@@ -56,9 +56,9 @@ import {
 } from "../src/lib/server/artifact-diversity";
 import { contentOverlap } from "../src/lib/server/note";
 
-// The crutch words the 2026-07-14 audit tracked on the observations — the closer formula
+// The crutch words tracked on observations — the closer formula
 // ("enjoy"/"cosmonaut"), the "hope" reflex, and the "shoulders" body-image tic. Tracked in a
-// fixed order so a re-measure lines up column-for-column against the audit's numbers.
+// fixed order so repeated reports remain column-for-column comparable.
 const CRUTCH_WORDS = ["hope", "enjoy", "cosmonaut", "cosmonauts", "shoulders"] as const;
 
 /** A family's diversity reading plus its register cut (openers/closers/crutches). */

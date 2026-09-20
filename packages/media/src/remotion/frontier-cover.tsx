@@ -7,7 +7,7 @@ import { OXANIUM_STACK } from "./fonts";
 // public recommendation machine), rendered at 640×640.
 //
 // ── THIS IS THE DESIGN MASTER, NOT THE SHIPPING PATH ─────────────────────────
-// The cover that actually lands on Spotify is now rendered IN THE WORKER, at mint time,
+// The cover that lands on Spotify is rendered IN THE WORKER at mint time,
 // by a Satori TWIN of this composition: apps/web/src/lib/server/frontier-cover-html.ts
 // (`buildFrontierCoverHtml`) + frontier-cover.ts. Remotion needs a real headless Chromium
 // and cannot run in a Cloudflare Worker, so a Remotion render could only ever be an
@@ -28,7 +28,7 @@ import { OXANIUM_STACK } from "./fonts";
 // no-text master, `fluncle-cover-no-text.png`): the floating figure, the burning
 // eclipse, the tower blocks, the Discman — the image every visual in the system
 // descends from (DESIGN.md §1). No invented sun, no synthetic starfield: the operator
-// ruled the v1 diamond off the board (2026-07-17) — we own the real artifact, use it.
+// uses the owned founding image rather than an invented geometric substitute.
 //
 // TWO overlays only, both sized for the SPOTIFY THUMBNAIL (a cover spends its life at
 // ~64px in a library list, so every glyph must survive that):

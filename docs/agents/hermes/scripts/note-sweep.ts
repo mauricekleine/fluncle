@@ -144,7 +144,7 @@ const ECHO_RETRIES = 1;
 // "Future Signal" could never be noted however it was rewritten. THE NAME EXEMPTION
 // (apps/web/src/lib/server/observation.ts) fixes that at the source; this bounds whatever is next.
 //
-// NO BYPASS. The operator's ruling (2026-07-30): a note is optional editorial and an absent one is
+// NO BYPASS. A note is optional editorial and an absent one is
 // a good state, so an exhausted finding is simply left NOTE-LESS. Gate-failed copy is never stored
 // on a public surface to close a queue — the bio's final-attempt acceptance exists because an empty
 // bio slot leaves a page half-built, and a note has no such hole to fill.
@@ -494,8 +494,7 @@ export function buildAuthoringPrompt(
 }
 
 // ---------------------------------------------------------------------------
-// THE PROMPT VARIABLES — the facts `buildAuthoringPrompt` used to interpolate in TS,
-// handed to the REGISTRY template instead. The prose all lives in the template now (so
+// THE PROMPT VARIABLES — facts handed to the REGISTRY template. The prose lives in the template so
 // the operator can tune every rail, including the anti-sameness ones), and the sweep
 // supplies only the data.
 //
@@ -836,7 +835,7 @@ function logExhausted(id: string): void {
  * is now permanently out of this sweep's reach and the summary has to say so. Returns null when the
  * caller should keep the delivery's own outcome.
  *
- * There is no publish-anyway branch here, on purpose (the operator's 2026-07-30 ruling). The last
+ * There is no publish-anyway branch here, on purpose. The last
  * refused draft is discarded exactly like the first two: a gate-failed note never reaches /log.
  */
 function settleBudget(

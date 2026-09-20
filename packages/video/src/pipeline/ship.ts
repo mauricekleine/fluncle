@@ -257,10 +257,9 @@ export type ExtraVariantSource = {
 };
 
 /**
- * The extra (non-default) variant renders ship packages when present — closing
- * the "no ship pointer / no R2 key scheme yet" thread social-preview.ts used to
- * leave open. Each entry's `suffix` is exactly the variantSuffix social-preview
- * computes from `--no-overlay`/`--aspect landscape`; `.notext.landscape` is the
+ * Extra non-default variant renders ship when present. Each entry's `suffix` is exactly the
+ * variantSuffix that social-preview computes from `--no-overlay`/`--aspect landscape`;
+ * `.notext.landscape` is the
  * documented clean-landscape escape hatch (docs/video-variants.md "The
  * square-crop quality dial") — footage.mp4 (square, clean) already covers the
  * plain `.notext`/`.square` cases via MT crop once a finding is squared, so
@@ -693,8 +692,7 @@ async function main(argv: string[]): Promise<void> {
   // not in the re-render contract (it's a derived thumbnail the diversity/calibrate
   // gates read from the public host), so — like cover.jpg, intent.json, and scene.json
   // below — a failure WARNS and is surfaced in the ship summary rather than failing
-  // the ship. Previously this ran with stdio all-ignored and no status check, so a
-  // silent ffmpeg failure shipped a posterless bundle that read as "ready".
+  // the ship. A silent ffmpeg failure must not ship a posterless bundle that reads as "ready".
   posterMissing = renderPoster(paths, log);
 
   log("note.txt");

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # render-conductor.sh — the `fluncle-render` `--no-agent` Hermes cron.
 #
-# LIVE (wired 2026-06-24). Version-controlled source; the repo is canonical and the
+# LIVE. Version-controlled source; the repo is canonical and the
 # box is a deploy target (fluncle-hermes-operator skill). Deployed onto the Hermes
 # orchestrator box; the `fluncle-render` cron is wired there. See ../cron/README.md.
 #
@@ -135,8 +135,8 @@ MAX_RENDER="${MAX_RENDER:-12600}"         # a render past 3.5h is stuck -> force
 MARKER_SKEW="${MARKER_SKEW:-300}"         # clock-skew grace when checking a done-marker's finish time against this render's start
 # Poison-skip: a finding whose render keeps failing (non-zero exit, or force-parked as
 # stuck) must NOT stay the queue head forever — that is head-of-line blocking, it starves
-# every finding behind it (the 2026-07-16 stall: one finding failed hourly for ~9h while 5
-# waited). After POISON_THRESHOLD consecutive failures, the pick skips it for POISON_TTL,
+# every finding behind it. After POISON_THRESHOLD consecutive failures, the pick skips it for
+# POISON_TTL,
 # then lets it retry (so a TRANSIENT boat.dev wobble self-heals, an item-specific defect
 # re-poisons). A clean render clears that finding's ledger.
 POISON_THRESHOLD="${POISON_THRESHOLD:-3}" # consecutive render failures before a finding is skipped
@@ -493,8 +493,7 @@ clear_fail() {
 # worked, as opposed to a bare EXIT=0. A render can exit clean without shipping a video: the
 # `claude -p` agent gets cut off mid-render by a usage limit (a clean exit, no video), or it
 # renders a video the quality gates reject and withholds it. Treating that EXIT=0 as success
-# clears the poison ledger and re-picks the SAME finding forever — the head-of-line loop
-# (2026-07-17: 047.8.6J, then 047.6.6P, each spent hours false-succeeding). Best-effort: on
+# clears the poison ledger and re-picks the SAME finding forever. Best-effort: on
 # any API/parse failure it returns 0 (assume shipped) so a transient read glitch NEVER wrongly
 # poisons a good render — a real success is the norm, the no-video false-success the exception.
 render_produced_video() {
@@ -568,10 +567,9 @@ await_box_ready() {
 # readiness gate above still runs afterwards, because the CLI's own wait covers command
 # execution, not the restoring window the freshen's ssh hits next.
 #
-# A cap alone is not enough: the caller used to treat ANY non-zero resume as "the box is
-# gone, reprovision". Under a bounded blocking resume that is exactly wrong — the resume
-# is still converging server-side, and reprovisioning would leave a running sandbox with
-# nobody to stop it. So the caller asks `box_present` and only walks away from an id
+# A cap alone is not enough: a non-zero resume may still be converging server-side, and
+# reprovisioning would leave a running sandbox with nobody to stop it. The caller therefore asks
+# `box_present` and only walks away from an id
 # boat.dev does not know about.
 RESUME_TIMEOUT="${RESUME_TIMEOUT:-90}" # max seconds to let a blocking resume run
 # `timeout` is coreutils and present on the box; resolve it once rather than assuming it,
@@ -856,7 +854,7 @@ if [ "$state" = "rendering" ]; then
   # before forking — but ONLY if its trigger actually ran; a wedged box (boat.dev 5xx on
   # ssh/scp) silently no-ops the trigger, leaving the OLD marker in place. A bare `test -f`
   # then reads that stale marker as "finished", parks, and chains to the SAME never-shipped
-  # finding — forever (the 2026-07-09 loop: a 07-08 marker re-picking 039.8.7J every tick).
+  # finding forever.
   # So trust the marker only when its finish time (`@ <iso>`) is at/after this render's
   # start (minus clock skew). A stale/undated marker is treated as still-in-flight and the
   # stuck-guard below force-parks it, rather than a false "finished".
@@ -922,7 +920,7 @@ if [ "$state" = "rendering" ]; then
     # clean without shipping a video (a usage-limit cutoff, or a gate-rejected video withheld).
     # So an EXIT=0 clears the ledger ONLY when the video actually landed; a no-video EXIT=0 is
     # a FALSE success and counts as a failure, so a serially-false-succeeding finding poisons
-    # and is skipped (2026-07-17 loop). The idle pick below then skips a poisoned head.
+    # and is skipped. The idle pick below then skips a poisoned head.
     rendered_logid="$(read_or "$RENDER_LOGID_FILE" '')"
     render_exit="${result#EXIT=}"; render_exit="${render_exit%% *}"
     case "$render_exit" in
@@ -1157,10 +1155,8 @@ creds="$(mktemp)"
   printf 'export FLUNCLE_API_URL=%s\n' "$API_URL"
   printf 'export FLUNCLE_GL=swangle\n'
   # THE ASSIGNED FINDING (poison↔queue coherence): the render agent must film the
-  # SAME finding this conductor accounts for. Before this, the agent re-read the
-  # queue itself and could re-pick a head the conductor had just poison-skipped —
-  # the fail counter then bumped an innocent finding while the offender burned
-  # tokens uncounted (2026-07-19: 049.4.4G took fail #2 for 049.7.6B's renders).
+  # SAME finding this conductor accounts for. Letting the agent re-read the queue could re-pick a
+  # head the conductor just poison-skipped and charge a different finding for the failure.
   # The prompt treats this as THE pick when set; its videoUrl guard keeps re-runs safe.
   printf 'export FLUNCLE_RENDER_LOG_ID=%s\n' "$head"
   # The plate lane: the render agent authors photographic plates via Gemini. The key

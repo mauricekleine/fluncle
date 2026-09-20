@@ -77,9 +77,8 @@ export function StoryView({
 
   // When a rendition is coming there is NO source until the pane is measured —
   // the master is never the speculative first request. Holding it for the first
-  // paint (as this surface used to) opened a range request on the heaviest object
-  // we have and aborted it a tick later when the measurement landed: head-of-line
-  // bytes a phone pays for and never sees, spent on the reel it just opened. The
+  // paint would open a range request on the heaviest object and abort it a tick later when the
+  // measurement landed, wasting head-of-line bytes on the reel the phone just opened. The
   // poster holds the frame for that tick, which is what a poster is for. The
   // master remains the source in the two cases it is genuinely the right one: a
   // finding with no Log ID (no rendition can be derived — the master is the only

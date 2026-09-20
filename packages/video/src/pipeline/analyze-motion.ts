@@ -1424,7 +1424,7 @@ const ARC_FLOOR = 0.29;
 // presence exemplar (see calibration/verdicts.json). The window is ~1/3 of each
 // dimension so a quadrant-scale subject reads without a single hot pixel dominating.
 const ARC_REGION_FLOOR = 0.5;
-// The presence-quiet relief band (pilot 033.0.1O "The Passing Hull", 2026-07-04). A
+// The presence-quiet relief band (pilot 033.0.1O "The Passing Hull"). A
 // QUIET presence render is structurally UNABLE to reach the whole-frame floor — most
 // of the frame is intentional dark sky that breathes with the bass, so the mean of
 // the adjacent changes stays low by design (the pilot: wholeClipChange 0.136). The

@@ -41,7 +41,7 @@ export default function FeedScreen() {
     isPending,
     refetch,
   } = useFindingsFeed();
-  // FEED-ONLY, by operator ruling (2026-07-24): the full-screen Feed shows only findings
+  // FEED-ONLY: the full-screen Feed shows only findings
   // with a Fluncle-rendered (first-party) video. An un-rendered finding would fall to the
   // album-art cover placeholder, which is off-brand and raises third-party-artwork /
   // copyright questions in this surface. The Archive tab (archive.tsx) reads the SAME

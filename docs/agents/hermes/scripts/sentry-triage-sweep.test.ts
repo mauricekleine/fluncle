@@ -300,11 +300,7 @@ describe("listUnresolvedIssues — pagination + compaction against an injected f
     expect(calls[0]).toContain("is%3Aunresolved");
   });
 
-  // THE ASSERTION THIS SUITE WAS MISSING. It used to check the path and `is%3Aunresolved` and
-  // stop — so the request could carry ANY other parameter and the deploy gate stayed green. It
-  // carried `statsPeriod=90d`, which this endpoint rejects outright (`Invalid stats_period. Valid
-  // choices are '', '24h', and '14d'`), and every nightly fetch 400'd for 11 nights unnoticed.
-  // Pinning the WHOLE parameter set, not a subset, is what makes that unrepeatable: a new
+  // Pin the WHOLE parameter set, not a subset: this endpoint rejects unsupported stats periods. A new
   // parameter — valid or not — has to be added here deliberately.
   test("sends exactly query + limit, and never a stats period", async () => {
     const calls: string[] = [];
@@ -538,15 +534,9 @@ describe("the env scrub (the real driver + a real secrets file) — what claude 
   /**
    * The load-bearing test of this file.
    *
-   * Three files used to claim the Sentry token "never enters the claude process". It did: the
-   * driver loads the shared secrets file under `set -a`, which EXPORTS every key in it, and the
-   * `claude -p` child inherits the lot. The claim was true of the ARGUMENT list and false of the
-   * ENVIRONMENT, and `printenv` does not know the difference.
-   *
-   * So this does not test the wrapper in isolation — it runs the REAL driver with a REAL secrets
+   * This does not test the wrapper in isolation — it runs the REAL driver with a REAL secrets
    * file and a stub `claude` that writes its own environment to disk, then reads back what the
-   * child actually got. That is the only form of this test that could have failed against the
-   * broken version.
+   * child actually got. The assertion covers the environment inherited by the subprocess.
    */
   function runWithSecrets(): { env: Record<string, string>; invoked: boolean } {
     const root = mkdtempSync(join(tmpdir(), "fluncle-sentry-scrub-"));

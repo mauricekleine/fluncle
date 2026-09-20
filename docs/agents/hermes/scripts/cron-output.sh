@@ -1,9 +1,7 @@
 # shellcheck shell=bash
 # cron-output.sh — the shared `/status` freshness-marker helper for the HOST-TIMER sweeps.
 #
-# WHY THIS EXISTS (the honest reason, worth reading before you touch it).
-# Fluncle's automation sweeps used to run under the Hermes GATEWAY cron runner, which
-# captured each run's stdout to a run file:
+# Fluncle's automation sweeps need the same run-file contract as the Hermes GATEWAY cron runner:
 #     <data-root>/cron/output/<job-dir>/<ts>.md
 # The `/status` prober (fluncle-healthcheck.ts, `probeCrons()` + `AUTOMATION_CRONS`) reads
 # those files to decide whether each cron is fresh + healthy: it claims each dir by the
@@ -34,14 +32,12 @@
 # markers; re-emits the captured stdout for journald; and PRESERVES the command's exit code
 # (so a real failure still fails the systemd unit).
 #
-# ── THE STDERR TAIL (added 2026-07-29; the strain detector's fuel) ─────────────
+# ── THE STDERR TAIL (the strain detector's fuel) ──────────────────────────────
 # Every sweep's `log()` is `console.error` — the per-row errors, the retries, the gate
-# rejections, all of it on STDERR. This wrapper used to capture STDOUT only, so the marker
-# held the JSON summary and NOTHING ELSE, and every error a sweep reported while still
-# ending `{"ok":true}` died in journald where nothing reads it. Measured over two days of
-# real box output: 610 capture bot-challenges, and the same three entity slugs rejected ~90
-# times EACH by the bio voice gate — a stuck loop nobody had seen, green on /status the whole
-# time, because the prober only ever read `.ok` off the last stdout line.
+# rejections, all of it on STDERR. The marker must carry that tail beside the JSON summary;
+# otherwise a sweep can report errors, end `{"ok":true}`, and leave the diagnostics only in
+# journald where nothing reads them. The prober reads `.ok` from the last stdout line while the
+# tail supplies the item-level failures needed to detect a stuck loop.
 #
 # So the marker now carries a BOUNDED, DELIMITED, PREFIXED tail of stderr as well, which the
 # prober's strain detector reads (fluncle-healthcheck.ts, `markerStrain`). Three properties,
@@ -63,7 +59,7 @@
 # open, which would hold the pipe open too; no sweep does (`setsid`/`nohup`/`&` appear only in
 # render-detached.sh, which runs on the render box, not under this wrapper).
 #
-# ── THE RUN LEDGER (added 2026-07-29; RUN-01) ──────────────────────────────────
+# ── THE RUN LEDGER ─────────────────────────────────────────────────────────────
 # The marker answers "is this sweep fresh and did its last line say ok". It does NOT answer
 # "how much did it produce, out of how much backlog, over how many runs" — and that is the
 # question seven days of a silently-broken Deezer rung went unanswered on, with
@@ -82,9 +78,8 @@
 # `verify-captures` / `reconcile-hub-counts` / `fluncle-live` / `clip-sweep` (job `studio-clip`).
 
 # ── THE REBAKE GUARD (runs at source time, before any sweep work) ──────────────
-# A pin-watch rebuild+swap TERMs every in-flight `docker exec` when the container swaps —
-# measured twice as an exit-143 sweep killed mid-tick (2026-07-26 12:27, 2026-07-27 04:34),
-# both MANUALLY-started sweeps: the rebuild's quiesce stops the TIMERS, but nothing stops a
+# A pin-watch rebuild+swap TERMs every in-flight `docker exec` when the container swaps. The
+# rebuild's quiesce stops the TIMERS, but nothing stops a
 # `systemctl start fluncle-<job>.service` from walking into the build/swap window, and a
 # look-before-you-start check just races the swap. So the rebuild holds a lock file in the
 # /opt/data mount (rebuild-hermes.sh, quiesce_sweeps) and every sweep — sourced through this
@@ -136,12 +131,9 @@ CRON_OUTPUT_STDERR_LINES="${CRON_OUTPUT_STDERR_LINES:-200}"
 # here: the endpoint path, the five body fields, and the Bearer auth. If any of them changes in
 # the workspace, change it in all four copies.
 #
-# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN, and this cost a shipped bug: the four copies once
-# agreed with EACH OTHER on `/api/v1/admin/runs/events` while the contract declared
-# `/admin/telemetry/runs`, so every POST 404'd, the `|| true` swallowed it, the ledger stayed
-# empty, and both test suites were green. Byte-equality is a closed loop. So run-events.test.ts
-# now RESOLVES this path against the workspace's own surfaces (the contract op paths + the
-# `apps/web/src/routes/api/**` file routes) — the assertion that crosses the boundary.
+# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN. Byte-equality among four copies is a closed loop, so
+# run-events.test.ts RESOLVES this path against the workspace's own surfaces: the contract op paths
+# and the `apps/web/src/routes/api/**` file routes.
 #
 # THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
 # `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for

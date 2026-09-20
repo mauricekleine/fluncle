@@ -2,8 +2,7 @@
 //
 // No DOM, no GL, no timers: a value-in/value-out state machine imported by BOTH
 // the glass client (source-side scalar + output-side monitor) and bun:test. This
-// is the crown of Unit L (RFC §3): the crude luma-slew the seed shipped is
-// replaced by first-principles flash safety.
+// implements first-principles flash safety.
 //
 // The three nets, all built from ONE counter primitive:
 //   1. source-side general-luminance limiter — a 1s ring buffer of OPPOSING PAIRS

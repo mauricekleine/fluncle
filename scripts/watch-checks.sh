@@ -6,9 +6,8 @@
 #
 # Exits 0 when everything relevant is green, 1 on any real failure, 2 when polling
 # exhausted without a verdict (treat as NOT green). The FINAL line is machine-readable.
-# This replaces hand-rolled loops, which produced two watcher defects in one day
-# (2026-07-27): a padded-SHA poll that read empty forever, and a moving-HEAD watcher
-# that expired mid-build. The caller DECIDES on the output — never chain a merge
+# The target is normalized once so padded-SHA polls cannot read empty forever and a moving HEAD
+# cannot expire mid-build. The caller DECIDES on the output — never chain a merge
 # after this in one command.
 set -u
 

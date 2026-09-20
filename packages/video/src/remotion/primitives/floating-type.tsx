@@ -19,10 +19,8 @@ export type FloatingTypeVariant = "brandMark" | "trackLine" | "meta" | "body" | 
 //   shadows stack into a soft glow-out that bleeds the warm dark a few px past
 //   each glyph edge, lifting the ink off any bright wisp directly behind it.
 //
-// (There used to be a second mechanism — a radial scrim pooled behind the line —
-// but over bright passages its rectangular footprint read as a smudged backdrop
-// box, so it died. The halo carries the contrast alone, helped upstream by the
-// TypePlate's calm fixed corners and its text-free drop window.)
+// The halo carries contrast alone, without a backdrop box, helped upstream by the
+// TypePlate's calm fixed corners and its text-free drop window.
 //
 // The halo scales with font size so the 24px date and the 72px mark feather
 // alike. It never recolors or dims the ink; the type stays full-strength in

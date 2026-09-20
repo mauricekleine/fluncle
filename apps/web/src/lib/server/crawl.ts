@@ -248,8 +248,8 @@ if (CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND >= CRAWL_CLAIM_SOURCE_MARKER_DRAIN_
 /**
  * NODE REPAIR MARKERS ONE BATCHED COMMIT MINTS — the batched shape's side of the same invariant.
  *
- * Batching moved K nodes' commits inside ONE admitted phase, so one phase now mints K nodes' worth
- * of markers where it used to mint one. The markers a commit mints are NODE markers, not the crawl
+ * One admitted phase batches K node commits and therefore mints K nodes' worth of markers. The
+ * markers a commit mints are NODE markers, not the crawl
  * PROJECTION source markers {@link CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND} bounds: a node's
  * settlement marks the node it settled, and each newly enqueued neighbour is marked with it. The
  * enqueue side is already bounded per node by the browse page (`BROWSE_PAGE_SIZE`), and a batch's

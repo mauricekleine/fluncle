@@ -249,7 +249,7 @@ describe("Goal C core vendor selector cutovers", () => {
 
     // The page's own write-back left one marker per ranked subject. The next read's drain budget
     // converges every five-marker page it allows and still cannot reach the last one, which is the
-    // shape that used to refuse the read outright. A marker owns its own subject and no other, so
+    // bounded-maintenance shape. A marker owns its own subject and no other, so
     // the read serves a full page instead.
     const second = await rankCatalogue(pageSize);
     expect(second.prioritized).toBe(pageSize);

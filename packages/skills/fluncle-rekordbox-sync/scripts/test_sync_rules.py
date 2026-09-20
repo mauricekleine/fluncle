@@ -94,7 +94,7 @@ def test_remix_is_not_matched_to_original():
 @pytest.mark.parametrize(
     "title,expected",
     [
-        # The two measured anchor false-misses (2026-07-26): same recording, two spellings.
+        # The measured anchor false-misses: same recording, two spellings.
         ("Feels Like Before (Air.K & Cephei rmx)", ("feels like before", "air k and cephei remix")),
         ("Feels Like Before (Air.K & Cephei Remix)", ("feels like before", "air k and cephei remix")),
         ("Feels Like Before - Air.K & Cephei rmx", ("feels like before", "air k and cephei remix")),
@@ -111,7 +111,7 @@ def test_remix_is_not_matched_to_original():
         ("Song (Extended Mix)", ("song", "")),
         ("Song - Original Mix", ("song", "")),
         # "(Original Version)" is neutral too — the TS port had it first, a parity run
-        # over _split_title caught the drift (2026-07-27).
+        # over _split_title catches the drift.
         ("Song (Original Version)", ("song", "")),
         ("Song - Original Version", ("song", "")),
         # A BARE trailing `rmx` canonicalizes too.

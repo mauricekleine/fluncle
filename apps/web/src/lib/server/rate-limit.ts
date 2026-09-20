@@ -1,9 +1,6 @@
-// The ONE shared rate limiter. Collapses three weaker limiters that used to
-// live in account-data.ts (DB-backed, but TOCTOU count-then-insert + a spoofable
-// x-forwarded-for fallback), submissions.ts (DB count keyed on `${ip}:${ua}` —
-// rotate the UA to bypass), and newsletter.ts (a per-isolate in-memory array
-// that resets on every redeploy — effectively no limit) into one durable,
-// atomic, hard-to-forge check.
+// The ONE shared rate limiter: a durable, atomic, hard-to-forge check. It avoids DB-backed TOCTOU
+// count-then-insert, spoofable x-forwarded-for fallback, user-agent buckets that clients can rotate,
+// and per-isolate state that resets on redeploy.
 //
 // THREE invariants, one per deepsec finding:
 //

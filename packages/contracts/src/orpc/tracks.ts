@@ -413,8 +413,8 @@ export const listSimilarTracks = oc
  * (`exclude`) is what lets the set drift as it goes. Every candidate still mixes clean;
  * adjacency only chooses among the clean ones.
  *
- * `taste` — a comma-separated list of artist slugs (`list_mixable_artists`) — is ACCEPTED and
- * no longer orders this rail; it used to seed a multi-artist taste fold. It remains meaningful
+ * `taste` — a comma-separated list of artist slugs (`list_mixable_artists`) — remains ACCEPTED but
+ * does not order this rail. It is meaningful
  * where a seed genuinely decides something: `list_mix_openers` picks what a set OPENS with. The
  * parameter stays on the wire so existing `/mix` links, the web builder and the mobile app all
  * keep working unchanged.

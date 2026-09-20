@@ -1,9 +1,7 @@
-// PLAIN CommonJS ON PURPOSE (2026-07-13, after a failed EAS "Read app config" step): the
-// freshness pass broke BOTH ways of evaluating an app.config.ts here. expo ≥56.0.15's
-// loader evaluates a TS config as an ES module, where the `expo/config*` subpaths (CJS
-// directory shims with no `exports` entry) throw "Directory import … is not supported";
-// and the TS transpile path crashes outright under typescript@7, whose native compiler
-// dropped the legacy JS API (`ts.ModuleKind`/`transpileModule`) that expo's loader calls.
+// PLAIN CommonJS ON PURPOSE. Expo ≥56.0.15 evaluates a TS config as an ES module, where the
+// `expo/config*` subpaths (CJS directory shims with no `exports` entry) throw "Directory import …
+// is not supported". The TS transpile path also calls the legacy JavaScript compiler API
+// (`ts.ModuleKind`/`transpileModule`) that TypeScript 7 does not expose.
 // A .js config in a no-"type" package takes the boring require() path: no transpile, no
 // ESM resolution, nothing to break. Types ride JSDoc off the same expo type entries.
 
@@ -58,8 +56,8 @@ const config = {
       projectId: "4db7808b-9463-4411-af2a-d0d2c5af72e9",
     },
   },
-  // The app icon: the drifting traveler on plain Deep Field (operator's pick,
-  // 2026-07-12), a 1024×1024 opaque PNG rendered from @fluncle/media.
+  // The app icon: the operator's drifting-traveler pick on plain Deep Field,
+  // rendered as a 1024×1024 opaque PNG by @fluncle/media.
   icon: "./assets/icon.png",
   ios: {
     bundleIdentifier: "com.fluncle.app",
@@ -118,7 +116,7 @@ if (FREE_TEAM) {
   config.plugins.push(withFreeTeamSigning);
 }
 
-// The libSQL ENGINE, unconditional (the flip, ruled 2026-07-31): the expo-sqlite config
+// The libSQL ENGINE is unconditional: the expo-sqlite config
 // plugin writes expo.sqlite.useLibSQL=true at prebuild, and the podspec swaps the whole
 // implementation — SQLiteModule.swift + bundled sqlite3 out, SQLiteModuleLibSQL.swift +
 // libsql.xcframework in — so ALL of the app's SQLite (the kv-store device stores included)

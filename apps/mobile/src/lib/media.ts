@@ -53,7 +53,7 @@ function previewProxy(idOrLogId: string) {
  * Legacy findings (videoUrl set but videoSquaredAt absent) deliberately take the
  * cover rung, NOT the baked-text portrait, so the native overlay never double-prints.
  *
- * ALL IN-APP AUDIO IS THE OFFICIAL PREVIEW (operator ruling 2026-07-21, App Store
+ * ALL IN-APP AUDIO IS THE OFFICIAL PREVIEW (App Store
  * Guideline 5.2.3). The feed video is our own first-party Remotion render, but it bakes
  * an excerpt of the commercial recording into its own track — so it plays MUTED, as a
  * visual only, and NEVER contributes audio. The card's sound is the 30s preview relayed
@@ -63,7 +63,7 @@ function previewProxy(idOrLogId: string) {
  * typecheck. Both kinds carry the same `previewUrl`, so there is ONE audio path — a video
  * with no preview is a silent visual, never a fallback to its own track.
  *
- * NATIVE PLAYBACK NOTE (verified 2026-06-21): iOS AVPlayer requires HTTP Range
+ * NATIVE PLAYBACK NOTE: iOS AVPlayer requires HTTP Range
  * (it probes a 2-byte range first). Cloudflare Media Transformations video URLs
  * (videoCrop / videoRendition) return 200 with the FULL body — no range — so
  * AVPlayer fails with CoreMediaError -12939 "byte range length mismatch / server
@@ -103,7 +103,7 @@ export function resolveCardMedia(f: TrackListItem): CardMedia {
   const id = f.logId ?? f.trackId;
   // The one audio path for BOTH kinds: the 30s official preview, relayed by the proxy.
   //
-  // GATE ON IDENTITY, NOT THE STORED URL (fixed 2026-07-24). `/api/v1/preview/<id>` is a
+  // GATE ON IDENTITY, NOT THE STORED URL. `/api/v1/preview/<id>` is a
   // re-resolving WATERFALL — stored Deezer token → fresh Deezer by ISRC → exact Apple by
   // ISRC → fuzzy iTunes by artist+title (apps/web/src/lib/server/preview-live.ts) — so it
   // sounds essentially any finding whether or not `f.previewUrl` is set. That stored field

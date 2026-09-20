@@ -225,9 +225,7 @@ console.log(
   `stories: ${spec.stories.length} · cells: yes=${totals.yes} partial=${totals.partial} planned=${totals.planned} no=${totals.no} n/a=${totals["n/a"]}`,
 );
 
-// Format the emitted artifacts so they pass `oxfmt --check .` however they reach a commit —
-// the pre-commit hook only covers staged commits, and API-pushed files bypass it entirely
-// (learned 2026-07-21: an unformatted generated HTML failed the deploy gate).
+// Format emitted artifacts here because API-pushed files bypass the staged-file pre-commit hook.
 Bun.spawnSync(["bunx", "oxfmt", HTML_PATH, CSV_PATH, SPEC_PATH], { stdout: "ignore" });
 
 console.log(`wrote ${HTML_PATH} + ${CSV_PATH} (oxfmt applied)`);

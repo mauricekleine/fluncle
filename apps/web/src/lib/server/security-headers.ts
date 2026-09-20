@@ -62,9 +62,7 @@ const HSTS_VALUE = "max-age=31536000";
 /**
  * The clickjacking directive. `frame-ancestors` is the modern, iframe-scoped successor
  * to X-Frame-Options, and it is inert in a report-only header (report-only never
- * blocks) — which is why it was the ONE directive enforced on its own during the
- * report-only rollout, while everything else was still advisory. It is now folded into
- * the one enforced policy below and no longer ships as a header of its own.
+ * blocks). It belongs in the one enforced policy below and does not ship as a header of its own.
  *
  * Nothing on this site frames itself cross-origin (the oEmbed card is the one framed
  * surface, and it declares its own `frame-ancestors *` — see the structural exemption

@@ -85,8 +85,7 @@ describe("the stale-definition re-projection the repair path carries", () => {
       };
     });
 
-    // Without the rebuild arm of the gate this tick would have reported `no_debt` and issued
-    // nothing, which is exactly how a definition change used to sit un-projected forever.
+    // The rebuild arm prevents a definition change from remaining un-projected behind `no_debt`.
     expect(calls.some((args) => args.includes("advance"))).toBe(true);
     expect(summary.trackDueWork).toMatchObject({
       attempted: true,

@@ -23,7 +23,7 @@
 // quietly opens a PLAIN LOCAL FILE and the first `syncLibSQL()` throws "syncLibSQL is
 // not supported in the current environment" — which this screen recognises and explains
 // on the glass rather than leaving as a bare native message.
-// app.config.js sets the prop UNCONDITIONALLY since the engine flip (ruled 2026-07-31):
+// app.config.js sets the prop UNCONDITIONALLY:
 // every build — dev, TestFlight, store — rides the libSQL engine, kv-store included.
 //
 // ── RUN RECIPE ───────────────────────────────────────────────────────────────

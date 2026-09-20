@@ -1,6 +1,6 @@
 // The one no-network rail, shared by every suite in the repo.
 //
-// Why it exists: on 2026-07-20 the `apps/web` vitest suite was found POSTing REAL
+// The `apps/web` vitest suite must never POST to real
 // messages to the crew's Discord channel — ~15 per run, for many runs. `createSubmission`
 // calls `notifyDiscord`, which reads `DISCORD_WEBHOOK_URL` through a `.dev.vars` load
 // gated only on "are we in dev?" — true under a test runner. So the suite ran with the

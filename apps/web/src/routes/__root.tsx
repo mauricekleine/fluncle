@@ -200,7 +200,7 @@ export const Route = createRootRoute({
       // surface that outranks it, which is how /about, /mixtapes, /log and the rest came to
       // unfurl under the site's title instead of their own. Omitting the three lets X fall back
       // to `og:title` / `og:description` / `og:image` — per page, by construction. The homepage
-      // is unaffected: its fallback resolves to the very strings this block used to repeat.
+      // is unaffected because its fallback resolves to the same page-specific strings.
       {
         content: "summary",
         name: "twitter:card",

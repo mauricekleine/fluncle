@@ -2784,9 +2784,8 @@ JSON field reference:
     });
 
   // THE ECHO GATE'S LEDGER — the auto-notes the gate refused to store, kept rather than
-  // binned (docs/agents/note-agent.md). The gate is unchanged and still strict; what changed
-  // is that its rejections are now READABLE, so the operator can tell a good rejection from a
-  // badly-tuned one. `held` reads them; `gate` reads or retunes the dials (a `settings` KV
+  // binned (docs/agents/note-agent.md). Rejections remain readable so the operator can tell a good
+  // rejection from a badly-tuned one. `held` reads them; `gate` reads or retunes the dials (a `settings` KV
   // flip the next sweep tick picks up — never a deploy). Ruling on a held note (keep it / bin
   // it) is OPERATOR-tier and lives on the web admin, per the persona law.
   const notes = configureCommand(
@@ -4799,7 +4798,7 @@ async function runBackfillLastfm(
 // cron, not a sprint paced by a CLI, and every scrap of its state is durable — so "run
 // again" and "resume" are the same command. (`--limit` sizes the pass; the sweep sets the
 // cadence.) A pass that stops on the rate-limit breaker exits 1 so the cron sees it. The
-// Spotify anchor is filled off this path entirely now — the box's Apify anchor sweep, not
+// Spotify anchor is filled off this path entirely — the box's Apify anchor sweep, not
 // the crawl (docs/catalogue-crawler.md § the anchor).
 async function runCrawlCatalogue(
   options: CrawlOptions,
@@ -8528,8 +8527,8 @@ async function runAdminRequeueAnalysis(
     console.log(result.withoutSourceAudio.map(describe).join("\n"));
   }
 
-  // The gate: the dry-run diff review. Keys previously written by the operator's Rekordbox
-  // sync carry NO legacy provenance (they predate these columns → analyzedFrom NULL),
+  // The gate: the dry-run diff review. Keys with no provenance may come from the operator's
+  // Rekordbox sync (analyzedFrom NULL),
   // so they read as preview-grade here and a re-enrich MAY overwrite them. Eyeball the list.
   console.log(
     "\nCaveat: keys backfilled from Rekordbox are indistinguishable from DSP keys (no legacy" +

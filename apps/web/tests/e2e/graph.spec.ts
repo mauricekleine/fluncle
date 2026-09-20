@@ -48,7 +48,7 @@ async function serverHtml(page: Page, path: string): Promise<string> {
  *
  * THE THIRD CHECK RETRIES, and only the third. `page.request.get` against the local dev server
  * intermittently THROWS on the transport rather than answering — `ECONNRESET` / `socket hang up`,
- * seen three times on 2026-07-29 across otherwise-clean runs — which failed the test with a
+ * can occur across otherwise-clean runs and fail the test with a
  * network error rather than a status code. A dropped socket says nothing about whether the edge
  * resolves, so `toPass` re-asks until it gets an actual answer; a genuinely dead edge answers 404
  * every time and still fails, just a few seconds later. The first two checks are pure assertions

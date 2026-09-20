@@ -7,8 +7,7 @@
 // arrival.
 //
 // ── THE EXAMPLES ARE LINKS, NOT SEEDS ────────────────────────────────────────────────────────
-// The four pills used to open the dialog pre-filled. They are now real anchors to `/search?q=…`,
-// the persistent surface, and that is a deliberate upgrade rather than a change of mind: an example
+// The four pills are real anchors to the persistent `/search?q=…` surface: an example
 // query is the best thing on this page for a crawler to follow, a reader to open in a new tab, and
 // anyone to send to a mate. A dialog can do none of those. The field beside them still opens the
 // palette, so the fast way in is untouched.

@@ -99,9 +99,7 @@ const POST_ATTEMPTS = Number.parseInt(process.env.HEALTHCHECK_POST_ATTEMPTS ?? "
 
 // ESCALATION — the counterpart to edge-triggered alerting. The transition alert fires
 // ONCE, when a service flips to down; a service that then STAYS down is silent forever
-// after by construction. (Measured 2026-07-27: one sweep failed every hour for ~20 hours
-// and every single tick read `transitioned: false ⇒ alerted: false`. The prober was right
-// the whole time and never said so twice.) So the prober also counts CONSECUTIVE down
+// after by construction. The prober also counts CONSECUTIVE down
 // ticks per service and speaks again once that count crosses a threshold — which turns
 // DURATION into its own signal, the one thing neither notification path could express.
 //
@@ -668,12 +666,9 @@ export const AUTOMATION_CRONS: CronDef[] = [
   // a self-read would be circular. Its /status row is emitted self-evidently by
   // probeHealthcheck() below instead.
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
-  // The Frontier playlist drain (E2) — every 15m. It USED to be a Friday-07:00 burst, and this
-  // entry kept saying so for as long as the burst had been gone: a 7-day cadence means a 21-day
-  // staleness budget, so a dead drain would have read `fresh` on /status for three weeks.
-  // @fluncle/registry's probeConfig had already been corrected; only this copy was left behind,
-  // which is precisely why cron-roster.test.ts now binds both to the timer unit. The crew still
-  // sees a ~weekly refresh — the pacing is in the sweep's due-gate, never in the cadence here.
+  // The Frontier playlist drain (E2) runs every 15m. cron-roster.test.ts binds this cadence and
+  // @fluncle/registry's probeConfig to the timer unit. The crew still sees a ~weekly refresh — the
+  // pacing is in the sweep's due-gate, never in the cadence here.
   // No token collision: no other cron token contains "frontier-refresh".
   { cadenceMs: 15 * 60_000, match: "frontier-refresh", service: "cron.frontier-refresh" },
   { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" }, // daily DB backup → private R2
@@ -843,8 +838,7 @@ function claimCronDirs(crons: CronDef[]): Map<string, string> {
  * stdout, and writes the header + whatever it captured. So a sweep that is SIGKILLed (an OOM,
  * the runner's ~120s budget) still leaves a marker — a 28-byte file whose only line is the
  * `# Cron Job: …` header. Reading just the LAST non-empty line and shrugging when it isn't
- * JSON therefore graded a totally dead run as healthy: `fluncle-backup` was OOM-killed three
- * nights running (2026-07-24/25/26, status=137) and `cron.backup` read GREEN throughout.
+ * JSON therefore grades a dead run as healthy.
  *
  * So: scan UPWARDS for the last line that parses as a JSON object. That keeps the two
  * legitimate shapes healthy — a clean summary on the last line, and a summary followed by
@@ -972,7 +966,7 @@ function formatElapsed(elapsedMs: number): string {
 
 /**
  * How long this box has been up, in ms — or null where that can't be known (no procfs).
- * Used to age a never-ran cron out of "no runs yet": on a box that has been up for days, a
+ * Ages a never-ran cron out of "no runs yet": on a box that has been up for days, a
  * cron with no output has not "not started yet", it has never fired.
  */
 export function boxUptimeMs(): number | null {
@@ -990,8 +984,7 @@ export function boxUptimeMs(): number | null {
  * that doesn't say `ok: false`.
  *
  * `uptimeMs` is the box's uptime (null = unknown). It only matters for the no-runs-at-all
- * case: a timer that never installed, or never fired, used to read "no runs yet / ok" FOREVER.
- * Once the box has been up longer than this cron's own stale budget, that silence is the same
+ * case: once the box has been up longer than this cron's stale budget, "no runs yet" is the same
  * signal as a stale marker — `lagging`.
  */
 export function judgeCron(
@@ -1066,8 +1059,7 @@ export function judgeCron(
   if (summary.ok === false) {
     // ONE failed run is not an outage — every sweep retries on its own cadence, and a
     // transient (a MusicBrainz slow day timing out one crawl tick) self-heals on the next
-    // tick. Alarming DOWN on a single miss made /status + Discord flap all morning
-    // (2026-07-13). So: the newest run failed AND the one before it also failed ⇒ the job
+    // tick. The newest run failed AND the one before it also failed ⇒ the job
     // is genuinely stuck ⇒ "failed" (down). A lone failure ⇒ "failed-once" (degraded,
     // "watching the retry") — visible, never silent, but not a page.
     return runFailed(runFiles[1]?.path) ? "failed" : "failed-once";
@@ -1254,8 +1246,7 @@ export const STDERR_DELIMITER = "<!-- fluncle-cron-output: stderr tail -->";
 
 /**
  * Split a marker into its stdout region (the summary lives here) and its stderr tail (the
- * errors live here). A marker written before the tail existed has no delimiter and is all
- * stdout — which is exactly how it used to read, so nothing about the old shape changes.
+ * errors live here). A marker with no delimiter is an older compatible shape containing stdout.
  */
 export function splitMarker(body: string): { stderr: string; stdout: string } {
   const index = body.indexOf(STDERR_DELIMITER);

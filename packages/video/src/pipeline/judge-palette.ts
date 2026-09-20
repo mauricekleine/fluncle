@@ -1,8 +1,8 @@
 // The PALETTE gate — the axis judge-diversity is deliberately blind to. The diversity
 // metric is STRUCTURE-dominant (edge 0.60, colour 0.20) by design, so a shared-palette
 // pair passes it whenever the two primitives differ (docs/planning/homogenisation-
-// evidence.md, 07-13: four consecutive amber/halftone renders, all structurally
-// distinct-enough to clear the poster gate). This gate closes exactly that hole: it
+// evidence.md: consecutive amber/halftone renders can all be structurally distinct enough to
+// clear the poster gate). This gate covers that axis: it
 // compares ONLY the fresh poster's HSV colour histogram against the last three published
 // posters and FAILS when the palette is too close to ANY of them — the same
 // laundering-by-recolor law the diversity metric enforces, run the other way round.
@@ -27,9 +27,8 @@ const DEFAULT_NEIGHBOURS = 3;
 
 // The FAIL floor: the palette must sit at least this far (12×4×4 HSV Bhattacharyya) from
 // EVERY one of the last three posters. This gate is a NEAR-DUPLICATE BACKSTOP, and the
-// threshold is set from measured reality, not aspiration. Measured 2026-07-18 on real
-// posters (found.fluncle.com/<logId>/poster.jpg, 160²):
-//   - the 07-13 amber-strip "twins" the operator flagged by eye read 0.358–0.929 apart
+// threshold is set from measured reality, not aspiration, using real posters at 160²:
+//   - the amber-strip "twins" the operator flagged by eye read 0.358–0.929 apart
 //     on this histogram (the halftone texture + background move the fine bins a lot even
 //     when a human reads "same amber");
 //   - a DELIBERATE recolor (same primitive, new palette — the GOOD outcome) reads 0.359;

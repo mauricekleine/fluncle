@@ -5,9 +5,8 @@ import { describe, expect, it } from "vitest";
 // The enforcement net for the `/api/v1` ↔ `/api` DUAL MOUNT (see
 // ../../routes/api/-alias.ts). Every file-route carve-out that survived the oRPC
 // migration is served canonically under `/api/v1/*` with the bare `/api/*` path kept
-// as a back-compat alias — the SAME handler object mounted at both paths. That
-// invariant was previously enforced by nothing: five routes (the admin chat spike and
-// the Instagram + Twitch OAuth pairs) can drift bare-only because a mirror is a
+// as a back-compat alias — the SAME handler object mounted at both paths. Five routes (the admin
+// chat spike and the Instagram + Twitch OAuth pairs) can drift bare-only because a mirror is a
 // separate file somebody has to remember to write. This test remembers.
 //
 // The discriminator for "this route is dual-mounted" is the `aliasHandlers` import:

@@ -308,7 +308,7 @@ describe("listTrackWork Goal C cutover", () => {
     ).map((item) => item.trackId);
 
     // The read drains what its budget allows and answers with it. Debt it could not reach belongs
-    // to other subjects, and withholding those is the whole of the rail it used to refuse over.
+    // to other subjects, so they cannot withhold the rows this read completed.
     expect(served.length).toBeGreaterThan(0);
     const outstanding = await db.execute({
       args: ["source-repair"],

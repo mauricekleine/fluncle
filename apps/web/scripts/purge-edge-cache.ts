@@ -3,8 +3,8 @@
 // Why: every deploy replaces the hashed /assets/* files, but edge-cached HTML keeps
 // referencing the OLD hashes until its TTL runs out (fresh + stale-while-revalidate,
 // see lib/server/edge-cache.ts). In that window a cached page loads a 404 stylesheet
-// and renders unstyled — observed live on 2026-07-26 after a rapid deploy train. The
-// purge closes the window: new HTML and new assets go live together.
+// and renders unstyled after a rapid deploy train. The purge closes the window so new HTML and new
+// assets go live together.
 //
 // Credentials: the zone id is the committed public identifier in wrangler.jsonc (it
 // grants nothing alone); the token must come from the Cloudflare BUILD environment as

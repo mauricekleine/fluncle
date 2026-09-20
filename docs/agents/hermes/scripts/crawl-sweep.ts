@@ -818,12 +818,12 @@ function commitFetchedBatch(
  *
  * ONE CLAIM, TWO LEASES. The nodes' MusicBrainz fetches are unadmitted and stay that way; what
  * changed is that their commits ride ONE admitted phase for the whole claim instead of one each.
- * A claim of six therefore costs two leases (its prepare and its commit) rather than seven, and the
- * ~15-30s of pure lease toll a node used to pay is paid once for the batch.
+ * A claim of six therefore costs two leases (its prepare and its commit) rather than seven, paying
+ * the ~15-30s lease toll once for the batch.
  *
  * A THROTTLE STILL ABANDONS THE REST OF THE CLAIM. The fetch response says so directly
- * (`rateLimited`), so the sweep learns it before it spends the next node's provider leg — the same
- * moment it used to learn it from that node's commit. What it has already fetched is committed
+ * (`rateLimited`), so the sweep learns it before it spends the next node's provider leg. What it
+ * has already fetched is committed
  * rather than discarded: those nodes' provider work is done and their claim is live.
  */
 async function drainPreparedBatch(

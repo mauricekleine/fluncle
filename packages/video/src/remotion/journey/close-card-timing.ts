@@ -2,12 +2,11 @@
 // timing is unit-testable without React / Remotion, and so the "arc trap" fix has
 // a regression home.
 //
-// THE ARC TRAP (fixed here): the card used to drive its reveal from `arc ??
-// progress`. Callers reach for the journey's GLOBAL `arc` (useJourney().arc) — an
-// eased 0..1 that is already NON-ZERO through most of the clip — so the sign-off
-// printed mid-clip instead of at the arrival. The reveal is driven ONLY by
-// `progress` (the "arrive" phase's phaseProgress, ~0 until the close begins), and
-// the legacy `arc` prop is gone — never reintroduce it as a fallback driver.
+// THE ARC TRAP: the card must never drive its reveal from the journey's GLOBAL `arc`
+// (`useJourney().arc`), an eased 0..1 that is already NON-ZERO through most of the clip, because
+// that would print the sign-off mid-clip instead of at the arrival. The reveal is driven ONLY by
+// `progress` (the "arrive" phase's phaseProgress, ~0 until the close begins); `arc` is deliberately
+// unavailable as a fallback driver.
 
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 

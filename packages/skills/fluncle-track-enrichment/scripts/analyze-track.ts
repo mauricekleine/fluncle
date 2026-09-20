@@ -1189,8 +1189,7 @@ export function estimateBpm(samples: Float32Array): {
 
   // Lag→BPM MUST use the TRUE envelope rate SAMPLE_RATE / hopSamples, not
   // 1000 / BPM_HOP_MS: hopSamples is rounded (round(220.5) = 221 at 22050 Hz), so an
-  // assumed 100 Hz rate is 0.23% off — a constant +0.40 BPM bias at 174 (measured
-  // before this correction).
+  // assumed 100 Hz rate is 0.23% off — a constant +0.40 BPM bias at 174.
   const envRate = SAMPLE_RATE / hopSamples;
 
   // Full autocorrelation out to 8 beats at the slowest candidate tempo.
@@ -1284,7 +1283,7 @@ export function estimateBpm(samples: Float32Array): {
 // Run
 // ---------------------------------------------------------------------------
 
-// Key confidence is now the segment-vote AGREEMENT FRACTION (0..1), not a Pearson
+// Key confidence is the segment-vote AGREEMENT FRACTION (0..1), not a Pearson
 // correlation. 0.6 = a clear majority of the whole-track segments landed on the same
 // key. On the Rekordbox ground-truth eval this floor nulled exactly the two
 // low-agreement (0.5) reads — both wrong — so precision on non-null outputs rose from

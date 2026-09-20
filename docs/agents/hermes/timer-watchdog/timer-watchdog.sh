@@ -2,7 +2,7 @@
 # fluncle-timer-watchdog — the rave-02 host guard against a systemd timer that reports
 # `active` but will never fire again.
 #
-# ── THE FAILURE IT CATCHES (observed 2026-07-28: seven sweeps dead 13h, zero alerts) ──
+# ── THE FAILURE IT CATCHES ────────────────────────────────────────────────────
 # Every sweep timer on this box fires ONCE on `OnBootSec` and then rides
 # `OnUnitActiveSec=<period>`, which systemd measures from the SERVICE's last activation.
 # Stop such a timer before its one-shot boot fire and start it again afterwards and it can
@@ -13,27 +13,21 @@
 # stamp file, and on a fresh start systemd reads that stamp as the last trigger and so
 # treats the one-shot `OnBootSec` as already satisfied, declining to re-fire it.
 # `OnUnitActiveSec` then waits on a service activation that only the timer could produce.
-# Reproduced all three ways on the box 2026-07-29 — see the README table.
+# The README table covers all three reproduction paths.
 #
-# It happened when an unattended kernel-upgrade reboot (12:19 UTC) landed inside the
-# pin-watch rebake quiesce window (timers stopped 12:29, restored 12:35): every timer
-# whose boot fire was due in that gap came back active-but-dead. `systemctl is-active`
-# said active, the last service result said success, and all 43 timers looked healthy —
-# the damage was visible ONLY in `NextElapse`, which nothing read. rebuild-hermes.sh now
-# re-arms on the restore path (prevention); this is the independent net (detection), and
+# `systemctl is-active` and the last service result cannot detect this state; only `NextElapse`
+# exposes it. rebuild-hermes.sh re-arms on the restore path; this is the independent detector, and
 # it catches the same stranding from ANY cause — an installer re-run shortly after boot,
 # a manual `systemctl stop`, a crash mid-quiesce.
 #
 # Runs on `OnCalendar`, deliberately: a calendar timer always carries a realtime next
 # elapse, so the watchdog cannot itself fall into the hole it is watching for.
 #
-# ── WHY IT REPORTS A `checked` COUNT (added 2026-07-29; RUN-01) ────────────────
-# This unit wrote no run record of any kind, which made it invisible in exactly the way it
-# exists to prevent. A watchdog is a DETECTOR: it legitimately re-arms nothing for months, so
+# ── WHY IT REPORTS A `checked` COUNT ───────────────────────────────────────────
+# A watchdog is a DETECTOR: it legitimately re-arms nothing for months, so
 # `produced == 0` says nothing about its health. Only the DENOMINATOR does. A watchdog that
-# enumerates ZERO timers and reports a clean pass is the precise shape of a real past
-# incident on the other box — 897 consecutive runs, zero checks, green the whole way. So
-# every pass now ends with a JSON summary line carrying `checked` (timers examined) beside
+# enumerates ZERO timers must not report a clean pass. Every pass ends with a JSON summary line
+# carrying `checked` (timers examined) beside
 # `produced` (re-arms), `errors`, and `queue_depth` (stranded timers found), and POSTs that
 # line to the run ledger. The line states NO `ok`: the Worker derives the verdict from the exit
 # code and the error count, and a summary that grades itself is rejected outright — a sweep
@@ -89,12 +83,9 @@ container_env() {
 # here: the endpoint path, the five body fields, and the Bearer auth. If any of them changes in
 # the workspace, change it in all four copies.
 #
-# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN, and this cost a shipped bug: the four copies once
-# agreed with EACH OTHER on `/api/v1/admin/runs/events` while the contract declared
-# `/admin/telemetry/runs`, so every POST 404'd, the `|| true` swallowed it, the ledger stayed
-# empty, and both test suites were green. Byte-equality is a closed loop. So run-events.test.ts
-# now RESOLVES this path against the workspace's own surfaces (the contract op paths + the
-# `apps/web/src/routes/api/**` file routes) — the assertion that crosses the boundary.
+# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN. Byte-equality among four copies is a closed loop, so
+# run-events.test.ts RESOLVES this path against the workspace's own surfaces: the contract op paths
+# and the `apps/web/src/routes/api/**` file routes.
 #
 # THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
 # `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for

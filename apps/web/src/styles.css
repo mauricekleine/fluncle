@@ -111,10 +111,8 @@
    that voices the terminal surfaces ("for the nerds", the CLI/SSH dialogs).
    Latin subset, two static weights — Regular for commands, Bold for the
    faceplate legend. */
-/* Space Grotesk — the BODY face (DESIGN.md). Self-hosted deliberately: we previously
-   shipped no body font at all and rode the system stack, which meant the type metrics
-   (and therefore every mixed-font alignment) were different on macOS, Windows and
-   Android — three renderings, one of which we had ever actually looked at. Normalised to
+/* Space Grotesk — the BODY face (DESIGN.md). Self-hosted so the type metrics
+   (and therefore every mixed-font alignment) match across macOS, Windows and Android. Normalised to
    the same 1.25em box as Oxanium above, so the two sit on one optical centre line. */
 @font-face {
   font-family: "Space Grotesk";

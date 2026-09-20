@@ -336,8 +336,8 @@ export function estimateBpm(env: Float32Array): number {
 /**
  * Best-phase beat grid: choose the phase offset maximizing onset energy on
  * beats. Exported for tests. Each candidate phase is accumulated by stepping
- * the TRUE fractional beat period in ms (previously the step was rounded to
- * whole hops, which aliased against fractional beat lags — 174 BPM is 17.24
+ * the TRUE fractional beat period in ms. Rounding the step to whole hops aliases against
+ * fractional beat lags — 174 BPM is 17.24
  * hops — and smeared the phase scoring into near-noise on long envelopes).
  */
 export function bestPhaseGrid(env: Float32Array, bpm: number, totalMs: number): number[] {
@@ -678,9 +678,8 @@ export async function analyzeAudio(
   const endHop = Math.min(bands.hopCount, Math.round(endMs / HOP_MS));
 
   // WINDOW normalization: slice the RAW per-hop arrays to the chosen window and
-  // normalize within it (previously curves were normalized over the FULL preview
-  // then trimmed, so a clip cut from anywhere but the preview's own global peak
-  // never reached 1.0 — u_energy under-read and the docs' "0..1" lied). The
+  // normalize within it. A clip outside the preview's global peak must still reach
+  // 1.0 so u_energy honors its documented range. The
   // clip's own peak now reads 1.0 by construction. Deliberate trade-off: a flat
   // window is lifted to full range too — the shipped `rawDynamicsHint` (raw
   // crest, computed above) is exactly the signal that tells that case apart.

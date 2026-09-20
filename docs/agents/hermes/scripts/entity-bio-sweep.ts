@@ -51,9 +51,8 @@
 // ticks in a small on-box ledger, an exhausted entity is skipped without consuming the batch cap,
 // and a bio that landed only because it was the final attempt is logged under its own
 // `FINAL-ATTEMPT ACCEPTANCE` marker AND raises a `bio-review` row on the /admin attention queue
-// (the Worker stamps the entity as it stores the bio). This replaced an unbounded loop:
-// a gate rejection used to leave the entity queued with nothing counting, which re-authored three
-// entities ~90 times each over two days.
+// (the Worker stamps the entity as it stores the bio). The durable cap prevents a rejected entity
+// from remaining in an unbounded authoring loop.
 //
 // GROUNDING IS WORKER-PACED (the gap is CLOSED). The box is a thin CLI client and holds
 // NEITHER a `FIRECRAWL_API_KEY` (by convention — the Worker owns it; context-sweep.ts) NOR a
@@ -109,22 +108,15 @@ const QUEUE_LIMIT = 200; // the server's `parseLimit` ceiling for the bio queue
 // ---------------------------------------------------------------------------
 // THE ATTEMPT BUDGET — the end of the rewrite loop.
 //
-// The operator's ruling (2026-07-29): "two re-writes max and at most, the third one becomes the
-// note." So an entity gets THREE authoring attempts, ever — the initial draft plus two rewrites —
+// An entity gets THREE authoring attempts, ever — the initial draft plus two rewrites —
 // and the third draft LANDS (`--final-attempt`) instead of being discarded. A fourth authoring
 // never happens.
 //
 // It is a hard constant, not an env knob: the number is a product decision, and a box env that
 // could quietly raise it is exactly how a bounded loop becomes an unbounded one again.
 //
-// WHY THIS EXISTS. A gate rejection used to be a plain skip that left the entity queued, with no
-// counter anywhere — so "retry" meant "forever". Three slugs were re-authored ~90 times each over
-// two days (~270 model calls on three entities) because their rejections were UNSATISFIABLE: the
-// gate scanned the whole bio, and a bio necessarily names its subject, so an artist called "Future
-// Signal", a label called "Invaderz Transmissions", and an album called "Jungle Sound: The Bassline
-// Strikes Back!" could not be written at all. That root cause is fixed at the source by the gate's
-// name exemption (apps/web/src/lib/server/bio.ts `maskEntityName`), so those three now clear on
-// attempt 1. This budget is the BACKSTOP that makes "keeps failing" bounded no matter the reason.
+// The gate ignores the entity's own name (`apps/web/src/lib/server/bio.ts` `maskEntityName`) because
+// a bio necessarily names its subject. The attempt budget bounds every other persistent rejection.
 //
 // THE THREE ATTEMPTS ARE NORMALLY SPENT IN ONE TICK, logbook-sweep style: a rejection is fed BACK
 // into the next authoring pass as the thing to fix, so the rewrite is aimed rather than blind
@@ -269,9 +261,7 @@ export function createBioSweepSummary(kind: EntityKind): BioSweepSummary {
  * The tick's verdict, DERIVED from its own error count rather than asserted. Mirrors the rule the
  * run ledger applies server-side — `exit_code === 0 && (summary.errors ?? 0) === 0` (cron-output.sh,
  * THE BODY CARRIES FACTS ONLY) — and every emission that calls this one exits 0, so the error count
- * is the whole verdict. The dry-run path used to print a hardcoded `ok: true` beside a summary whose
- * `errors` it had just incremented on a `ClaudeAuthError`, which is the one shape a summary must
- * never take: a green line sitting next to the counter that contradicts it.
+ * is the whole verdict. A summary must never report green beside a nonzero error counter.
  */
 export function bioSweepOk(summary: Pick<BioSweepSummary, "errors">): boolean {
   return summary.errors === 0;
@@ -638,8 +628,7 @@ function fetchBioDraft(group: "artists" | "labels" | "albums", slug: string): Bi
 //
 // THE GROUNDING RAIL. The Worker ALWAYS renders a non-empty prompt (the template has an
 // "author from the finding titles" fallback), so `prompt` alone is not proof of material.
-// Before #643 every queued entity carried ≥1 CERTIFIED finding, so the fallback always had
-// real titles; now the queue also holds indexable findings-free CATALOGUE entities, and one
+// The queue also holds indexable findings-free CATALOGUE entities, and one
 // can arrive with `hasFacts:false AND findingCount:0` — a prompt with NOTHING to ground on.
 // Authoring that risks a confabulated bio on a public page (VOICE.md's every-claim-is-real
 // rule), so we refuse: a groundless entity is a clean skip (stays queued, retried; if

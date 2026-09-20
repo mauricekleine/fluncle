@@ -357,12 +357,7 @@ describe("the summary line states facts, never a verdict", () => {
 // ---------------------------------------------------------------------------
 // AND NOBODY GETS TO CALL THEM SILENT.
 //
-// Third face of the same failure: two committed statements that contradict each other. These
-// three units used to report nothing, several docs said so, and the sentence outlives the fact
-// the moment they start reporting — a reader (or an agent) trusting the prose then "knows" the
-// watchdog is invisible on /status while it is posting every 15 minutes.
-//
-// So the claim is derived from the SCRIPTS: a unit that carries the emitter and calls it is a
+// The claim is derived from the SCRIPTS: a unit that carries the emitter and calls it is a
 // reporting unit, and no doc beside it may say otherwise. Prose cannot go stale against a build.
 // ---------------------------------------------------------------------------
 
@@ -379,7 +374,7 @@ function reportingUnits(): string[] {
   });
 }
 
-/** The claims that were TRUE before the ledger and are false for a reporting unit now. */
+/** Claims that are false for a reporting unit. */
 const SILENCE_CLAIMS = [
   /reports nowhere/i,
   /reports to nothing/i,

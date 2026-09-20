@@ -306,10 +306,8 @@ describe("mapTrack — faithful sourceAudioKey passthrough", () => {
     expect((mapped as TrackListItem).analyzedFrom).toBe("full");
   });
 
-  // THE STRUCTURAL GUARD. The two tests above are one-off patches for a hole that reopened
-  // twice: mapTrack used to re-copy fields from a hand-maintained whitelist, so every new
-  // server field was silently dropped until a consumer broke. mapTrack is now a PASSTHROUGH,
-  // and this test enforces it — it fails if anyone reintroduces a field-by-field rebuild,
+  // THE STRUCTURAL GUARD. mapTrack must remain a PASSTHROUGH: a field-by-field rebuild silently
+  // drops every server field its whitelist does not know. This test fails if that rebuild returns,
   // no matter WHICH field they forget. Add nothing to mapTrack and this stays green.
   test("loses NO field — passthrough, not a whitelist (fails if a re-projection returns)", () => {
     const rich: Record<string, unknown> = {

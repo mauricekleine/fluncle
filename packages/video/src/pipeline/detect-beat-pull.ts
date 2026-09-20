@@ -109,7 +109,7 @@ const DEFAULTS = {
   // Hardened, clean clips cluster at ~0.10 and operator-confirmed motion pulls sit
   // at 0.24+.
   //
-  // PROVISIONAL re-calibration (2026-06-23, n=3 beat-having tracks, advisory): the
+  // PROVISIONAL re-calibration (n=3 beat-having tracks, advisory): the
   // global-vs-internal motion law (out/overnight/INSIGHTS.md) showed beat-pull is
   // the right detector for the whole-vehicle JUMP, but 0.17 under-caught by ~0.01 —
   // operator-labelled jumpers ("DJ scratch" / uncapped-swell drift surge) sat at

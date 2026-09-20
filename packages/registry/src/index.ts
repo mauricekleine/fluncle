@@ -1384,8 +1384,7 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "extension",
     name: "extension.lens",
-    // LIVE on the Chrome Web Store (published 2026-06-29, extension id
-    // efkkceaofendabikblfjhoepgejfpakk). A `secondary` web surface: advertised on
+    // LIVE on the Chrome Web Store. A `secondary` web surface: advertised on
     // the homepage dev-row and the /about page, not a homepage headline. No
     // probeConfig — a vendor store listing is not one of our own health-probeable
     // endpoints (the on-box healthcheck walks web/r2/dns/ssh + the crons, never an
@@ -1404,12 +1403,8 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "app",
     name: "app.ios",
-    // LIVE on the App Store (approved 2026-07-29 after two review rounds: Guideline 5.2.3
-    // remediated in-binary, then a 5.2.1 screenshot objection answered by the operator).
-    // Pre-staged `pending: true` through review (the extension.lens flow, one kind over) and
-    // flipped by exactly the planned one-field flip: `pending` dropped, the placeholder
-    // search URL swapped for the assigned listing, the §2/§3 doctrine rows added. No
-    // probeConfig — a vendor store listing is not one of our own health-probeable endpoints
+    // LIVE on the App Store. No probeConfig: a vendor store listing is not one of our own
+    // health-probeable endpoints
     // (the extension.lens ruling). Source: apps/mobile (Expo / expo-router, bundle id
     // com.fluncle.app, ascAppId 6790080540 in apps/mobile/eas.json).
     operatorNotes:

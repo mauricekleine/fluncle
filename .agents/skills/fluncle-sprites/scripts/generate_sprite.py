@@ -225,7 +225,7 @@ SPRITES = {
         ),
     },
     # The probes set — figure-tier (wider than the game sprites; they illustrate the
-    # /about probes beat, not a playfield). Ratified winners 2026-07-13: probe_voyager
+    # /about probes beat, not a playfield). Ratified winners: probe_voyager
     # and telescope_reflector, picked from a three-variant contact sheet.
     "probe": {
         "collection": "probes",

@@ -263,9 +263,8 @@ async function main(): Promise<void> {
   };
   console.log(`[social-preview] summary:\n${JSON.stringify(summary, null, 2)}`);
 
-  // The BPM is HONEST now (never clamped into [160,185] — the old hard fold
-  // fabricated grids), so an out-of-family tempo or a weak estimate is a loud
-  // WARNING to verify by ear, never a failure.
+  // The BPM is never clamped into [160,185], because that fabricates grids. An out-of-family tempo
+  // or a weak estimate is a loud WARNING to verify by ear, never a failure.
   const bpmConfidence = audio.bpmConfidence ?? 0;
   if (audio.bpm < 150 || audio.bpm > 190) {
     console.warn(
