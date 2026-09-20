@@ -9,12 +9,25 @@
 #
 #   pull-undecided.sh > undecided.json
 #
-# THE ONE EXCLUSION, AND WHY IT IS THE ONLY ONE:
-# An `undecided` label that CARRIES ARTIST RULES is a settled `dnb_partial` — the operator ruled it
-# by writing allows and leaving the seed state alone, which is that verdict's whole shape. Those are
-# skipped: re-triaging one spends tokens to re-derive a ruling that already exists, and applying the
-# result would re-PUT a WHOLE-SET SWAP over rules he may have since hand-tuned. The check is exact,
-# not a heuristic — an undecided label has no other way to acquire per-label rules.
+# THE TWO EXCLUSIONS, AND WHY THERE ARE ONLY TWO:
+#
+#   1. RULE-CARRYING — an `undecided` label that CARRIES ARTIST RULES is a settled `dnb_partial`:
+#      the operator ruled it by writing allows and leaving the seed state alone, which is that
+#      verdict's whole shape. Re-triaging one spends tokens to re-derive a ruling that already
+#      exists, and applying the result would re-PUT a WHOLE-SET SWAP over rules he may have since
+#      hand-tuned. The check is exact, not a heuristic — an undecided label has no other way to
+#      acquire per-label rules.
+#   2. NO `mb_label_id` — a research agent cannot identify which same-named MusicBrainz entity a
+#      row without an MBID means, and label names are not unique (Radar Records is a Belgian DnB
+#      label AND a 1978 UK punk one), so handing it to a batch invites a confident ruling on the
+#      wrong label — the namesake class, and the one failure mode a round cannot detect afterwards.
+#      An ENABLED label without one self-resolves on its first crawl tick (`expandSeedLabel`'s
+#      exact-fold search with its ambiguity guard); an UNDECIDED one never gets that tick, because
+#      nothing crawls it until the operator rules, so it is HIS to resolve by hand. Named on stderr
+#      for exactly that: one `mb_label_id` write and the next round picks the label up untouched.
+#
+# Both exclusions are applied by `partition-undecided.py` beside this script rather than inline,
+# so they are unit-tested with no database and no credentials (scripts/tests/test_partition_undecided.py).
 #
 # Everything else undecided is triaged EVERY round, including labels a prior round returned
 # `unclear`. There is deliberately NO hold list. A hold is a snapshot of a judgment, and a
@@ -25,7 +38,7 @@
 # the first round after the fix lands instead of waiting for someone to remember it.
 #
 # THE ARTIST-RULE OUTPUTS (the exception model, docs/label-entity.md):
-#   - each emitted row carries `rules: [...]`, empty by construction while the exclusion above
+#   - each emitted row carries `rules: [...]`, empty by construction while exclusion 1 above
 #     holds — it is what that exclusion is decided ON, and it stays on the row so a deliberate
 #     re-triage of a partial has the standing exceptions in hand before proposing more.
 #   - calib-rules.txt — the operator's RATIFIED rule precedent, one line per rule, for the
@@ -104,22 +117,4 @@ g = sum(1 for r in rules if not r['label_id'])
 print(f'rules: {len(rules)} total ({g} global / {len(rules)-g} per-label)', file=sys.stderr)
 "
 
-printf '%s' "$UNDECIDED" | python3 -c "
-import json, sys
-rows = json.load(sys.stdin)
-rules = json.load(open('calib-rules.json'))
-by_label = {}
-for r in rules:
-    if r['label_id']:
-        by_label.setdefault(r['label_id'], []).append(
-            {'artistMbid': r['artist_mbid'], 'artistName': r['artist_name'], 'verdict': r['verdict']})
-fresh, settled = [], []
-for r in rows:
-    r['rules'] = by_label.get(r['id'], [])
-    # Rule-carrying + undecided == a settled dnb_partial. The only exclusion; see the header.
-    (settled if r['rules'] else fresh).append(r)
-print(f'undecided: {len(rows)} | settled dnb_partial (skipped): {len(settled)} | to triage: {len(fresh)}', file=sys.stderr)
-if settled:
-    print('  skipped: ' + ', '.join(sorted(r['slug'] for r in settled)), file=sys.stderr)
-json.dump(fresh, sys.stdout, indent=0)
-"
+printf '%s' "$UNDECIDED" | python3 "$(dirname "${BASH_SOURCE[0]}")/partition-undecided.py"

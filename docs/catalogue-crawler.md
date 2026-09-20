@@ -55,6 +55,8 @@ Write the archive's canonical label spelling onto crawled tracks. This preserves
 
 A genuinely new label is minted from MusicBrainz's spelling and the track carries that same spelling, so the two agree by construction there too.
 
+The walk proposes only what it can IDENTIFY: a release whose `label-info` names a label but carries no `label.id` mints nothing and enters no queue, and a release naming a label the archive already knows hands its MBID over to be adopted fill-empty-only rather than dropping it. Publish mints on a string and the crawler mints on an MBID — the difference is deliberate, and it is written out in [label-entity.md](./label-entity.md#how-a-label-gets-a-row).
+
 ## Why MusicBrainz carries the walk
 
 | source          | role                                                                                             |

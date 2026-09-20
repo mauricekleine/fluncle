@@ -155,6 +155,32 @@ function stubMusicbrainz(): void {
   );
 }
 
+/**
+ * The same graph, except the hop-2 release's `label-info` names its label and carries NO
+ * `label.id`. MusicBrainz returns this shape for a label string it has not linked to an entity,
+ * and it is the one the crawler's discovery path must decline: a name identifies nothing.
+ */
+function stubMusicbrainzWithUnidentifiedHop2Label(): void {
+  stubMusicbrainz();
+  const inner = globalThis.fetch as unknown as (url: string) => Promise<Response>;
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const response = await inner(url);
+
+      if (!url.includes(`/release/${HOP2_RELEASE}`)) {
+        return response;
+      }
+
+      const body = (await response.json()) as { "label-info"?: { label?: { name?: string } }[] };
+      body["label-info"] = [{ label: { name: "Hospital Records" } }];
+
+      return new Response(JSON.stringify(body), { status: 200 });
+    }),
+  );
+}
+
 /** Drain the frontier — the sweep's job, compressed into a loop. */
 async function drain(maxHop = 2): Promise<{
   labelsDiscovered: string[];
@@ -533,6 +559,53 @@ describe("the catalogue crawler", () => {
       "select count(*) as n from crawl_frontier where source = 'fluncle'",
     );
     expect(Number(seeds.rows[0]?.n)).toBe(1); // medschool, and only medschool
+  });
+
+  it("ADOPTS the release's label MBID onto a label the archive already knows without one", async () => {
+    // The publish path mints a label off Deezer's bare string, so a `labels` row can legitimately
+    // carry no `mb_label_id` (docs/label-entity.md). A release is MusicBrainz STATING which label
+    // this is, so the crawler hands that identity over instead of dropping it on the floor.
+    await seedLabel("Hospital Records", "hospital-records", "undecided");
+
+    const totals = await drain();
+
+    const label = await db.execute(
+      "select mb_label_id, seed_state from labels where slug = 'hospital-records'",
+    );
+    expect(label.rows[0]?.mb_label_id).toBe(HOSPITAL_MBID);
+    // Adoption is not discovery: the operator is not asked to rule on a label he already has.
+    expect(totals.labelsDiscovered).toEqual([]);
+    // And it is an identity write, never a ruling — the seed state is untouched.
+    expect(label.rows[0]?.seed_state).toBe("undecided");
+  });
+
+  it("never rewrites an identity the label already carries — adoption is fill-empty-only", async () => {
+    await db.execute({
+      args: ["lbl_hospital-records", "Hospital Records", "hospital-records", "enabled", NOW, NOW],
+      sql: `insert into labels (id, name, slug, seed_state, mb_label_id, created_at, updated_at)
+            values (?, ?, ?, ?, 'label-hospital-impostor', ?, ?)`,
+    });
+
+    await drain();
+
+    const label = await db.execute(
+      "select mb_label_id from labels where slug = 'hospital-records'",
+    );
+    expect(label.rows[0]?.mb_label_id).toBe("label-hospital-impostor");
+  });
+
+  it("REFUSES to discover a label the release names but does not identify", async () => {
+    // A `label-info` entry with a name and no `label.id` identifies NOTHING, and the crawler walks
+    // by identity — proposing a row whose MusicBrainz entity nobody can name is the namesake class
+    // (packages/skills/fluncle-catalogue-prune, references/traps.md). Publish mints on a string
+    // because a certified finding must have its label page; the crawler does not.
+    stubMusicbrainzWithUnidentifiedHop2Label();
+
+    const totals = await drain();
+
+    expect(totals.labelsDiscovered).toEqual([]);
+    const rows = await db.execute("select slug from labels order by slug");
+    expect(rows.rows.map((row) => text(row.slug))).toEqual(["anjunabeats", "medschool"]);
   });
 
   it("does not re-ask the operator to rule on a label he has already ruled on, under MB's spelling", async () => {
