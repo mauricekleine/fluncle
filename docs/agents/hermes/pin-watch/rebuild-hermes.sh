@@ -35,6 +35,48 @@ LOCK="${PINWATCH_LOCK:-/run/lock/fluncle-pin-watch.lock}"
 KEEP_IMAGES="${PINWATCH_KEEP_IMAGES:-2}"  # running + 1 rollback; each hermes image is ~10GB, so 4 fills the 38GB box
 SWEEP_DRAIN_TIMEOUT="${PINWATCH_SWEEP_DRAIN_TIMEOUT:-300}"  # max seconds to wait for an in-flight sweep to finish before the rebuild proceeds anyway
 
+# ── the post-deploy release stagger (the write-lane rail) ─────────────────────
+# The quiesce stops the whole sweep roster for the rebuild, so the release has to put it back —
+# and putting it back ALL AT ONCE is its own incident. A timer whose slot went by during the
+# build comes back with an elapse already in the past, and systemd fires it AT the moment the
+# timer unit is started: the monotonic sweeps because `OnUnitActiveSec` is measured from their
+# SERVICE's last activation, which the stop/start does not move, and the `OnCalendar=` units
+# because `Persistent=true` is exactly the documented catch-up. Release the whole fleet in one
+# instant and the whole fleet arrives at the ONE database write lane together: measured holds of
+# 174s (fluncle-label-releases), 71s (projection-maintenance), 60s (cover-masters), 37s
+# (artist-sweep), eight units giving up after the 120s admission wait, and an attended render
+# tick losing its lease twice.
+#
+# The per-timer `RandomizedDelaySec=90` cannot fix this, and it is worth being precise about
+# why: systemd rolls that delay from the restart instant, so the whole fleet still lands inside
+# one 90-second window. Jitter dissolves phase alignment over a long run; it cannot widen a
+# burst that starts from a single instant. The spread has to come from the release itself.
+#
+# Because the missed elapse fires AT `systemctl start`, spacing the STARTS is the stagger. No
+# timer state is cleared, no stamp file is touched, and `Persistent=` stays exactly as the unit
+# files declare it (see ../timer-watchdog/README.md for why that flag must not be poked at).
+#
+# The window is an env knob. Empty means "size it from the roster" — PER_TIMER seconds each,
+# clamped to the bounds below — and an explicit 0 collapses the release back to one instant.
+RELEASE_STAGGER_SECS="${PINWATCH_RELEASE_STAGGER_SECS:-}"
+RELEASE_STAGGER_PER_TIMER_SECS=9  # a ~46-timer roster ⇒ a ~7-minute window, ~9s apart
+RELEASE_STAGGER_MIN_SECS=60
+RELEASE_STAGGER_MAX_SECS=900      # stays inside pin-watch.service's TimeoutStartSec beside a slow rebuild
+RELEASE_STAGGER_CEILING_SECS=3600 # the largest window an operator may ask for
+
+# The units measured holding the single write lane longest once released. They are spread ACROSS
+# the window instead of being left adjacent, so two long holds never queue back to back; the rest
+# are short enough to cluster between them. Membership is a measurement, not a taxonomy — add a
+# unit here when the run ledger shows it holding the lane for tens of seconds.
+RELEASE_HEAVY_TIMERS=(
+  fluncle-artist-sweep.timer
+  fluncle-capture.timer
+  fluncle-cover-masters.timer
+  fluncle-crawl.timer
+  fluncle-label-releases.timer
+  fluncle-projection-maintenance.timer
+)
+
 # ── the container resource ceiling (ONE source of truth) ──────────────────────
 # Every path that (re)creates the live container — the swap AND the rollback — goes
 # through `run_container`, which reads only these. A recreate must never quietly hand
@@ -161,7 +203,37 @@ preserve_live_ceiling() {
   log "container ceiling: --cpus=$(from_nanocpus "$CEILING_NANOCPUS") --memory=${CEILING_MEMORY_BYTES}b (no swap)"
 }
 
+# Refuse a bad release window HERE — beside the ceiling, before a single byte is built — rather
+# than at the end of a successful rebuild, where the refusal would land after the swap and strand
+# the roster stopped. `0` is legal and means "no stagger"; an empty value means "size it from the
+# roster". Leading zeros are normalised so `010` is ten seconds, never an octal surprise.
+validate_release_stagger() {
+  case "$RELEASE_STAGGER_SECS" in
+    '') return 0 ;;
+    *[!0-9]*) die "PINWATCH_RELEASE_STAGGER_SECS='$RELEASE_STAGGER_SECS' is not a whole number of seconds (0 disables the stagger)" ;;
+  esac
+  RELEASE_STAGGER_SECS="$((10#$RELEASE_STAGGER_SECS))"
+  [ "$RELEASE_STAGGER_SECS" -le "$RELEASE_STAGGER_CEILING_SECS" ] \
+    || die "PINWATCH_RELEASE_STAGGER_SECS='$RELEASE_STAGGER_SECS' is above the ${RELEASE_STAGGER_CEILING_SECS}s ceiling (the unit's TimeoutStartSec has to hold the rebuild AND the window)"
+}
+
+# The window this release will spread over, in seconds. An operator value wins verbatim (it was
+# validated above); otherwise it is derived from the roster so a box that grows a sweep widens
+# its own window, bounded at both ends.
+resolve_release_window() {
+  local count="$1" window
+  if [ -n "$RELEASE_STAGGER_SECS" ]; then
+    printf '%d' "$RELEASE_STAGGER_SECS"
+    return 0
+  fi
+  window=$((count * RELEASE_STAGGER_PER_TIMER_SECS))
+  if [ "$window" -lt "$RELEASE_STAGGER_MIN_SECS" ]; then window="$RELEASE_STAGGER_MIN_SECS"; fi
+  if [ "$window" -gt "$RELEASE_STAGGER_MAX_SECS" ]; then window="$RELEASE_STAGGER_MAX_SECS"; fi
+  printf '%d' "$window"
+}
+
 validate_ceiling
+validate_release_stagger
 
 # Discord alert (best-effort; never throws). Defined UP HERE — ahead of the path-set
 # resolution below, which alerts when it has to fall back — while $WEBHOOK is still read
@@ -452,28 +524,125 @@ rearm_stalled_timer() {
   log "re-armed ${timer} (restored with no next elapse; kicked ${service} once)"
 }
 
+# Is this unit one of the measured long holders of the write lane?
+# shellcheck disable=SC2329  # invoked indirectly from restore_sweep_timers
+release_is_heavy() {
+  local candidate
+  for candidate in "${RELEASE_HEAVY_TIMERS[@]}"; do
+    if [ "$1" = "$candidate" ]; then return 0; fi
+  done
+  return 1
+}
+
+# Emit STOPPED_TIMERS in the release order, one unit per line: the heavy write-lane holders
+# spread evenly across the roster with the light units filling the gaps between them.
+#
+# Both groups are SORTED first, so the order is a pure function of the roster — the same box
+# releases in the same order on every rebake, which is what makes a bad release reproducible
+# and a regression in this ordering testable rather than a coin flip. The order is logged.
+# shellcheck disable=SC2329  # invoked indirectly from restore_sweep_timers
+release_order() {
+  local t gap slot filled
+  local heavy=() light=() ordered=()
+
+  while IFS= read -r t; do
+    if [ -n "$t" ]; then
+      if release_is_heavy "$t"; then heavy+=("$t"); else light+=("$t"); fi
+    fi
+  done < <(printf '%s\n' "${STOPPED_TIMERS[@]}" | LC_ALL=C sort)
+
+  # Empty-array expansion under `set -u` is fatal on bash 3.2 (the machine this is TESTED on),
+  # so each degenerate roster returns through its own branch rather than one shared printf.
+  if [ "${#heavy[@]}" -eq 0 ]; then
+    if [ "${#light[@]}" -gt 0 ]; then printf '%s\n' "${light[@]}"; fi
+    return 0
+  fi
+  if [ "${#light[@]}" -eq 0 ]; then
+    printf '%s\n' "${heavy[@]}"
+    return 0
+  fi
+
+  # One heavy unit, then a run of light ones, repeated. The heavy holders land `gap` slots
+  # (≈ gap × spacing seconds) apart and are never adjacent; the light units left over tail the
+  # sequence. A floor of 2 keeps the non-adjacency guarantee on a roster with few light units.
+  gap=$(( ${#STOPPED_TIMERS[@]} / ${#heavy[@]} ))
+  if [ "$gap" -lt 2 ]; then gap=2; fi
+  slot=0
+  for t in "${heavy[@]}"; do
+    ordered+=("$t")
+    filled=0
+    while [ "$filled" -lt "$((gap - 1))" ] && [ "$slot" -lt "${#light[@]}" ]; do
+      ordered+=("${light[$slot]}")
+      slot=$((slot + 1))
+      filled=$((filled + 1))
+    done
+  done
+  while [ "$slot" -lt "${#light[@]}" ]; do
+    ordered+=("${light[$slot]}")
+    slot=$((slot + 1))
+  done
+  printf '%s\n' "${ordered[@]}"
+}
+
 # Restart EXACTLY the timers we stopped, best-effort so one failing start never strands
-# the rest. Runs from the EXIT trap, so it fires on success, on die(), on a build/smoke
-# failure, AND on the rollback path — a failed rebuild must never leave sweeps disabled.
+# the rest. Two speeds, and WHICH one is a safety decision, not a preference:
+#
+#   restore_sweep_timers              — IMMEDIATE. What the EXIT trap calls, so it fires on
+#                                       success, on die(), on a build/smoke failure, AND on the
+#                                       rollback path. A rebuild that aborted must get its sweeps
+#                                       back NOW; making a failure path wait out a window would
+#                                       trade the convoy for a roster stopped for minutes.
+#   restore_sweep_timers staggered    — the RELEASE, spread over the window. Only a run that
+#                                       reached a clean end calls this, after the post-swap smoke
+#                                       passed and the rollback decision is behind it.
+#
+# Either way the roster is emptied at the end, so the EXIT trap's later call is a no-op and no
+# timer is started twice by the two paths.
 # shellcheck disable=SC2329  # invoked indirectly from the EXIT trap set in quiesce_sweeps
 restore_sweep_timers() {
+  local mode="${1:-immediate}"
   if [ -n "$REBAKE_LOCK" ]; then
     rm -f "$REBAKE_LOCK" 2>/dev/null || true
     REBAKE_LOCK=""
   fi
   [ "${#STOPPED_TIMERS[@]}" -gt 0 ] || return 0
-  local t rearmed=0
-  for t in "${STOPPED_TIMERS[@]}"; do
+
+  local t rearmed=0 count started=0 window=0 spacing=0
+  local order=()
+  count="${#STOPPED_TIMERS[@]}"
+  while IFS= read -r t; do
+    if [ -n "$t" ]; then order+=("$t"); fi
+  done < <(release_order)
+
+  if [ "$mode" = "staggered" ]; then
+    window="$(resolve_release_window "$count")"
+    if [ "$window" -le 0 ]; then
+      mode="immediate"
+      log "release stagger disabled (PINWATCH_RELEASE_STAGGER_SECS=0) — restoring ${count} sweep timer(s) at once"
+    else
+      spacing=$((window / count))
+      if [ "$spacing" -lt 1 ]; then spacing=1; fi
+      log "releasing ${count} sweep timer(s) over ~$((spacing * (count - 1)))s of a ${window}s window, ${spacing}s apart, in order: ${order[*]}"
+    fi
+  fi
+
+  for t in "${order[@]}"; do
+    if [ "$mode" = "staggered" ] && [ "$started" -gt 0 ]; then
+      sleep "$spacing"
+    fi
+    started=$((started + 1))
     systemctl start "$t" >/dev/null 2>&1 || true
     # `if` so the common not-stranded return of 1 can never trip `set -e` from the EXIT trap.
+    # The re-arm's own `systemctl start` of the SERVICE fires that sweep immediately, which is
+    # exactly why it lives inside this loop: it rides the same spacing as the timer start.
     if rearm_stalled_timer "$t"; then
       rearmed=$((rearmed + 1))
     fi
   done
   if [ "$rearmed" -gt 0 ]; then
-    log "restored ${#STOPPED_TIMERS[@]} sweep timer(s); re-armed ${rearmed} that came back with no next elapse"
+    log "restored ${count} sweep timer(s); re-armed ${rearmed} that came back with no next elapse"
   else
-    log "restored ${#STOPPED_TIMERS[@]} sweep timer(s)"
+    log "restored ${count} sweep timer(s)"
   fi
   STOPPED_TIMERS=()
 }
@@ -543,6 +712,11 @@ flock -n 9 || { log "another run holds the lock; exiting"; exit 0; }
 # lock-losing run deliberately reports nothing — the run that holds the lock is the attempt.
 STARTED_AT="$(run_event_now)"
 trap 'pinwatch_on_exit' EXIT
+# A bash EXIT trap does not run on a signal unless the signal is trapped, and the staggered
+# release means this process now legitimately lives for minutes past the swap. Turning a
+# TimeoutStartSec kill (or an operator's ^C) into an ordinary exit is what keeps the guarantee
+# above unconditional: the roster is restored — immediately, mid-stagger — instead of stranded.
+trap 'exit 143' INT TERM
 
 command -v docker >/dev/null || die "docker not found"
 command -v git >/dev/null || die "git not found"
@@ -784,6 +958,10 @@ log "pre-smoke passed"
 
 if [ "$MODE" = "--dry-run" ]; then
   log "dry-run: $NEW_IMAGE built and pre-smoke passed; leaving the live container untouched"
+  # A clean end, so the roster is released over the window like any other: the live container
+  # was untouched, but the timers were stopped for the whole build and their elapses went by
+  # regardless. The database does not care that this run was attended.
+  restore_sweep_timers staggered
   exit 0
 fi
 
@@ -850,6 +1028,11 @@ if run_container "$NEW_IMAGE" && container_healthy; then
   # "no space left on device" (seen 2026-07-09: the box hit 99% mid-base-bump). Keep a small
   # working set so incremental rebuilds stay fast.
   docker builder prune -f --keep-storage=3GB >/dev/null 2>&1 || true
+  # LAST, and only here: the deploy landed, the rollback decision is behind us, and the docker
+  # churn is finished — so the fleet can come back over a window instead of in one instant.
+  # Every other exit from this point (rollback, die) leaves the release to the EXIT trap, which
+  # restores immediately.
+  restore_sweep_timers staggered
   exit 0
 fi
 
