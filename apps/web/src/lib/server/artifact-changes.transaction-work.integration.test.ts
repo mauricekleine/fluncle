@@ -199,14 +199,23 @@ async function seedChangePage(count: number): Promise<void> {
 
 /** A full maximum-size sonar.track snapshot page: every track carries one exact vector. */
 async function seedSnapshotPage(count: number): Promise<void> {
-  for (let index = 0; index < count; index += 1) {
-    const trackId = `track:snapshot-${String(index).padStart(4, "0")}`;
-    await seedTrack(db, { logId: `${String(index + 1).padStart(3, "0")}.A.AA`, trackId });
-    await seedEmbedding(
-      db,
-      trackId,
-      Array.from({ length: 1024 }, (_, position) => index + position / 1024),
-    );
+  const transaction = await db.transaction("write");
+  try {
+    for (let index = 0; index < count; index += 1) {
+      const trackId = `track:snapshot-${String(index).padStart(4, "0")}`;
+      await seedTrack(transaction, {
+        logId: `${String(index + 1).padStart(3, "0")}.A.AA`,
+        trackId,
+      });
+      await seedEmbedding(
+        transaction,
+        trackId,
+        Array.from({ length: 1024 }, (_, position) => index + position / 1024),
+      );
+    }
+    await transaction.commit();
+  } finally {
+    transaction.close();
   }
 }
 

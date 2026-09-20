@@ -406,8 +406,19 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     // due-work helper's 500-subject API contract. Keep the fixture unvectored so each candidate
     // contributes exactly one source update; this isolates the maintenance cardinality.
     const batchSize = 501;
-    for (let index = 0; index < batchSize; index += 1) {
-      await seedCatalogue(`cat-wide-${String(index).padStart(3, "0")}`);
+    const transaction = await db.transaction("write");
+    try {
+      for (let index = 0; index < batchSize; index += 1) {
+        const trackId = `cat-wide-${String(index).padStart(3, "0")}`;
+        await seedCatalogueTrack(transaction, {
+          artists: ["Catalogue Artist"],
+          title: `Catalogue ${trackId}`,
+          trackId,
+        });
+      }
+      await transaction.commit();
+    } finally {
+      transaction.close();
     }
 
     const batchSpy = vi.spyOn(db, "batch");
