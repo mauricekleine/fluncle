@@ -40,7 +40,7 @@ export function loadDevVars(): void {
 }
 
 /** Mint a real admin grant cookie value with the production signing path. */
-export async function mintAdminGrant(): Promise<string> {
+async function mintAdminGrant(): Promise<string> {
   loadDevVars();
 
   return signGrant();

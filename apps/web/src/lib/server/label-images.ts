@@ -74,7 +74,7 @@ function extensionForMime(mime: string): string {
 }
 
 /** The R2 key a label's logo is stored at — served world-readable from found.fluncle.com. */
-export function labelLogoKey(slug: string, mime: string): string {
+function labelLogoKey(slug: string, mime: string): string {
   return `labels/${slug}.${extensionForMime(mime)}`;
 }
 

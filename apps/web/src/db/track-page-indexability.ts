@@ -21,7 +21,7 @@ export function trackPageIdentityWhere(table?: string): string {
 }
 
 /** The exact, disjoint destination partition used by the two count branches. */
-export function trackPageIndexableDestinationWhere(
+function trackPageIndexableDestinationWhere(
   destination: TrackPageIndexableDestination,
   table?: string,
 ): string {

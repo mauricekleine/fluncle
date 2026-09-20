@@ -10,7 +10,7 @@
  * (notifyNewFinding → "findings", notifyNewMixtape → "mixtapes") and the contract's
  * `PushCategorySchema` enum — kept as a const so the muted-array element type is
  * exactly the `register_device` input's `mutedCategories` element type. */
-export const PUSH_CATEGORIES = ["findings", "mixtapes"] as const;
+const PUSH_CATEGORIES = ["findings", "mixtapes"] as const;
 
 /** One push category — `"findings" | "mixtapes"`, matching the contract enum. */
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];

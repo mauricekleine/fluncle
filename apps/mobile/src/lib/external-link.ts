@@ -17,7 +17,7 @@
 
 // A response, structurally. Only the final url is read, so the real `fetch` satisfies
 // this and a test fake is three lines.
-export type HopFetchResponse = { readonly url: string };
+type HopFetchResponse = { readonly url: string };
 export type HopFetcher = (url: string) => Promise<HopFetchResponse>;
 
 // The hosts that serve hops. Fluncle's own apex and www, nothing else — a hop is minted

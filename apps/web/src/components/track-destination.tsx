@@ -70,7 +70,7 @@ const LISTEN_META: Record<ListenDestination["kind"], { icon: SimpleIcon; label: 
  * `play()` rejection returns it to idle, so a dead preview stops rather than erroring, and the page
  * is otherwise untouched.
  */
-export function TrackPreviewButton({ trackId }: { trackId: string }) {
+function TrackPreviewButton({ trackId }: { trackId: string }) {
   const preview = usePreviewPlayer(trackId, { publicPreview: true });
 
   return (

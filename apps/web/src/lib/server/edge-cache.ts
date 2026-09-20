@@ -330,7 +330,7 @@ export function isCacheableHubRequest(pathname: string, search: string): boolean
 const SITEMAP_PATH = /^\/sitemap(?:\.xml|\/[A-Za-z0-9._-]+)$/;
 
 /** True for `/sitemap.xml` or one of its `/sitemap/<kind>-<n>.xml` children, query-free. */
-export function isCacheableSitemapRequest(pathname: string, search: string): boolean {
+function isCacheableSitemapRequest(pathname: string, search: string): boolean {
   return search === "" && SITEMAP_PATH.test(pathname);
 }
 

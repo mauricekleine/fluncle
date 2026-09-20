@@ -86,7 +86,7 @@ function dotClass(tone: PillState["tone"]): string {
 // home page (the cover column's link hub AND the colophon), and react-query dedupes by
 // key — so the two mounts read the same heartbeat from ONE /api/status round-trip
 // instead of racing two identical requests at the origin on every home load.
-export const STATUS_PILL_QUERY_KEY = ["home-status-pill"] as const;
+const STATUS_PILL_QUERY_KEY = ["home-status-pill"] as const;
 
 /** Read /api/status and hand back its services list. Throws on anything unusable. */
 async function fetchStatusServices(signal: AbortSignal): Promise<StatusService[]> {

@@ -9,7 +9,7 @@ import { type Implementer, toFault } from "./_shared";
 type AdmissionInput = InferContractRouterInputs<typeof contract>["coordinate_database_admission"];
 
 /** Execute the agent endpoint against an injected client for compatibility tests. */
-export async function coordinateDatabaseAdmissionRequestFor(
+async function coordinateDatabaseAdmissionRequestFor(
   client: Parameters<typeof coordinateDatabaseAdmissionFor>[0],
   input: AdmissionInput,
 ) {

@@ -29,7 +29,7 @@ export type SavableFinding = {
 export type SavedFinding = SavableFinding & { savedAt: number };
 
 /** The storage envelope. Versioned so a future shape change can migrate or discard. */
-export type SavedEnvelope = { items: SavedFinding[]; version: 1 };
+type SavedEnvelope = { items: SavedFinding[]; version: 1 };
 
 const CURRENT_VERSION = 1 as const;
 
