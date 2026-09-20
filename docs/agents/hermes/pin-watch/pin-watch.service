@@ -11,8 +11,10 @@ Type=oneshot
 # a public repo. Its optional /status telemetry reuses the live container's agent-scoped token.
 # Self-deploy is database-independent control-plane work and must not wait for admission.
 ExecStart=/opt/fluncle-pin-watch/rebuild-hermes.sh
-# A full image rebuild (~6 GB base) can take several minutes; give it room.
-TimeoutStartSec=1810
+# A full image rebuild (~6 GB base) can take several minutes, and a run that deploys then holds
+# the process open for the staggered sweep release (bounded by the script's own 900s window
+# ceiling, 3600s when an operator raises it). Room for the slowest rebuild plus the widest window.
+TimeoutStartSec=5400
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
