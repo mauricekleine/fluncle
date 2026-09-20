@@ -302,8 +302,12 @@ export async function ensureLabel(
  * is null`). A rare concurrent adoption of the same MBID onto two slugs loses the unique-index
  * race harmlessly; the id is already in the caller's hand, so a throw here must not lose it (the
  * `.catch()` keeps it). A no-op when there is no MBID to adopt.
+ *
+ * EXPORTED for the crawler, which already holds the row it would adopt onto (`canonicalLabelRow`,
+ * crawl.ts) and so reaches the write directly rather than paying {@link ensureLabel}'s resolve to
+ * find it again — the crawl commits inside a bounded transaction-op budget.
  */
-async function adoptLabelMbLabelId(
+export async function adoptLabelMbLabelId(
   labelId: string,
   mbid: null | string,
   client?: Pick<Client, "execute">,
