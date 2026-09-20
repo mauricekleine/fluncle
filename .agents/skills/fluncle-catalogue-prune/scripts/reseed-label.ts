@@ -28,7 +28,7 @@
 // Dry-run by default. Writes a rollback of the prior node rows before touching anything.
 import { writeFileSync } from "node:fs";
 
-import { type Client } from "@libsql/client/web";
+import { type Client, type Value } from "@libsql/client/web";
 
 import { getDb } from "./lib";
 
@@ -59,8 +59,8 @@ export type FrontierLabelNode = {
 };
 
 /** A libSQL cell is a union (text/blob/number/null); take it as text only when it IS text. */
-const text = (v: unknown): string => (typeof v === "string" ? v : "");
-const textOrNull = (v: unknown): string | null => (typeof v === "string" ? v : null);
+const text = (v: Value): string => (typeof v === "string" ? v : "");
+const textOrNull = (v: Value): string | null => (typeof v === "string" ? v : null);
 
 export async function readLabelSeed(db: Client, slug: string): Promise<LabelSeedRow | undefined> {
   const result = await db.execute({

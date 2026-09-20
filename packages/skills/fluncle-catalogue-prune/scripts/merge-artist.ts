@@ -50,9 +50,9 @@
 //   - the findings rule above.
 import { writeFileSync } from "node:fs";
 
-import { type Client } from "@libsql/client/web";
+import { type Client, type Row } from "@libsql/client/web";
 
-import { type Catalogue, loadCatalogue } from "./lib";
+import { type Catalogue, loadCatalogue, rowString } from "./lib";
 
 // ── The reference map: EVERY table that carries an `artists.id` ──────────────────────────────────
 //
@@ -269,7 +269,7 @@ export function reconcile(
 ): Reconciliation {
   const set: ArtistRow = {};
   const filled: string[] = [];
-  const empty = (v: unknown) => v === null || v === undefined || v === "";
+  const empty = (v: ArtistRow[string] | undefined) => v === null || v === undefined || v === "";
 
   for (const field of RECONCILED_FIELDS) {
     if (empty(canonical[field]) && !empty(duplicate[field])) {
@@ -361,11 +361,7 @@ function validateResolvedArtists(
 }
 
 /** `select *` of one reference's rows for the artist — the rollback + the report read this. */
-async function selectRefRows(
-  db: Client,
-  ref: ArtistReference,
-  artistId: string,
-): Promise<unknown[]> {
+async function selectRefRows(db: Client, ref: ArtistReference, artistId: string): Promise<Row[]> {
   const result = await db.execute({
     args: [artistId],
     sql: `select * from ${ref.table} where ${refWhere(ref)}`,
@@ -466,7 +462,7 @@ function mergePlanFor(
 function reportReconciledIdentity(
   canonRow: ArtistRow,
   dupRow: ArtistRow,
-  dupSocials: unknown[],
+  dupSocials: Row[],
   dropSocials: boolean,
   setMbid: string | undefined,
 ): ReturnType<typeof reconcile> {
@@ -549,8 +545,8 @@ export async function main(
 
   // ── the reference sweep, its rows read for the report AND the rollback ────────────────────────
   const references = referencesForMerge(dropSocials);
-  const duplicateRefRows = new Map<string, unknown[]>();
-  const canonicalRefRows = new Map<string, unknown[]>();
+  const duplicateRefRows = new Map<string, Row[]>();
+  const canonicalRefRows = new Map<string, Row[]>();
 
   const readReferenceRows = async (): Promise<void> => {
     if (duplicate) {
@@ -574,9 +570,9 @@ export async function main(
 
   const dupSocials = duplicateRefRows.get("artist_socials.artist_id") ?? [];
 
-  for (const row of dupSocials as { platform?: unknown; url?: unknown }[]) {
+  for (const row of dupSocials) {
     console.log(
-      `    ${dropSocials ? "DROP" : "MOVE"} social ${String(row.platform)} ${String(row.url)}`,
+      `    ${dropSocials ? "DROP" : "MOVE"} social ${rowString(row, "platform")} ${rowString(row, "url")}`,
     );
   }
 

@@ -25,7 +25,7 @@ async function referenceAuth(
   contentType?: string,
 ): Promise<string | null> {
   const enc = new TextEncoder();
-  const digestInput = (body ?? enc.encode("")) as unknown as ArrayBuffer;
+  const digestInput = new Uint8Array(body ?? enc.encode(""));
   const payloadHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", digestInput))]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
@@ -42,7 +42,7 @@ async function referenceAuth(
   const client = new AwsClient(CREDS);
   const signed = await client.sign(url, {
     aws: { allHeaders: true, datetime: amzDate(NOW) },
-    body: body as BodyInit | undefined,
+    body: body === undefined ? undefined : new Uint8Array(body),
     headers,
     method,
   });
@@ -69,6 +69,23 @@ describe("signS3Request", () => {
     expect(signed.host).toBeUndefined();
     expect(signed["x-amz-date"]).toBe("20260706T123456Z");
     expect(signed["content-type"]).toBe("application/gzip");
+  });
+
+  it("hashes only a subarray's byte window", async () => {
+    const url = `${ENDPOINT}/fluncle-backups/db-backups/daily/2026-07-06/fluncle.sql.gz`;
+    const storage = new Uint8Array([90, 91, 1, 2, 3, 4, 5, 92]);
+    const body = storage.subarray(2, 7);
+
+    const signed = await signS3Request({
+      ...CREDS,
+      body,
+      contentType: "application/gzip",
+      method: "PUT",
+      now: NOW,
+      url,
+    });
+
+    expect(signed.authorization).toBe(await referenceAuth("PUT", url, body, "application/gzip"));
   });
 
   it("matches aws4fetch for a GET list request with a query string", async () => {

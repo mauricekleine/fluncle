@@ -214,9 +214,7 @@ describe("buildBoxStateArchive", () => {
 
     expect(plaintext.byteLength).toBe(manifest.archiveBytes);
     expect(
-      Buffer.from(
-        await crypto.subtle.digest("SHA-256", plaintext as unknown as ArrayBuffer),
-      ).toString("hex"),
+      Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(plaintext))).toString("hex"),
     ).toBe(manifest.sha256);
 
     const restored = mkdtempSync(join(tmpdir(), "fluncle-boxstate-restore-"));
