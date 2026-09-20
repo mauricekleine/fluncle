@@ -1,3 +1,13 @@
+import { SEGMENT_FLOOR_MS } from "@fluncle/contracts/util/radio-clock";
+
+export {
+  BOUNDARY_COMMIT_MS,
+  type RadioBoundaryDecision,
+  radioBoundaryDecision,
+  SEGMENT_FLOOR_MS,
+  SEGMENT_STALE_AFTER_MS,
+} from "@fluncle/contracts/util/radio-clock";
+
 // The radio.fluncle.com shared-clock math (the radio-broadcast RFC, Unit A).
 //
 // The broadcast is a PURE FUNCTION of `(deterministic eligible list, per-segment
@@ -21,15 +31,6 @@ export type RadioScheduleEntry = {
   observationDurationMs: number;
   trackId: string;
 };
-
-/**
- * A floor on any segment's length. The eligibility predicate already excludes a
- * null `observation_duration_ms`, but a corrupt zero (or a sub-second sliver)
- * would produce a zero/near-zero-width slot that breaks the cumulative walk and
- * makes the client thrash through segments. A few seconds is comfortably below
- * any real observation, so it only ever guards garbage.
- */
-export const SEGMENT_FLOOR_MS = 3000;
 
 /**
  * The offset-snap grid (RFC Decision #4 / §3.3). A fresh joiner's offset is
@@ -230,79 +231,6 @@ function clamp01(value: number): number {
   }
 
   return value > 1 ? 1 : value;
-}
-
-/**
- * How long after a segment's scheduled END the controller waits before COMMITTING
- * the advance to the next finding (Bug A hysteresis). The seam is the one place
- * clock skew + rounding can flip the resolved index between N and N+1; committing
- * only once `now` is past the end by this margin means a sub-margin overshoot on
- * one client (or a tiny negative skew on another) can't oscillate the surface back
- * to the previous finding. Kept small so the audio swap still lands inside the dark
- * hold (under cover of the fade).
- */
-export const BOUNDARY_COMMIT_MS = 250;
-
-/**
- * How far past a segment's scheduled END the on-screen finding may be before the
- * controller treats it as STALE and re-asks the server (Bug A self-heal). A healthy
- * client advances at the boundary; a wedged one (a missed `ended`, a slept tab, a
- * dropped preload) sits frozen while the shared clock moves on. Once the on-screen
- * segment is this far past its end with no committed advance, the watchdog hard-
- * resyncs — no manual refresh.
- */
-export const SEGMENT_STALE_AFTER_MS = 4000;
-
-/** What the schedule-clock controller decides on each tick for the on-screen finding. */
-export type RadioBoundaryDecision = "advance" | "hold" | "resync";
-
-/**
- * The schedule-clock-driven boundary decision — the source of truth for advancing
- * findings (Bug A root-cause fix). The on-screen finding is modelled by its
- * scheduled START in server-clock ms and its (observation) duration. Given `now` in
- * the same server clock, decide whether to hold, advance to the preloaded next
- * finding, or resync to the server.
- *
- * - Before the segment even starts (a negative skew correction overshooting the
- *   seam) → resync (don't advance off a segment that isn't current).
- * - Inside the segment, or within BOUNDARY_COMMIT_MS past its end → hold (the
- *   hysteresis band: the seam can't flip back to the previous finding, and a tiny
- *   overshoot rides instead of advancing).
- * - Past the end by ≥ BOUNDARY_COMMIT_MS but < SEGMENT_STALE_AFTER_MS → advance
- *   (the normal scheduled hand-off).
- * - Past the end by ≥ SEGMENT_STALE_AFTER_MS → resync (a wedge: the advance never
- *   happened, the surface is frozen, re-ask the server).
- *
- * Pure and isomorphic-friendly so it is unit-tested in isolation (the load-bearing
- * advance logic must not live only inside a React effect).
- */
-export function radioBoundaryDecision(
-  segmentStartServerMs: number,
-  segmentDurationMs: number,
-  nowServerMs: number,
-): RadioBoundaryDecision {
-  const sinceStart = nowServerMs - segmentStartServerMs;
-
-  // The on-screen segment hasn't started yet (only reachable via a clock-skew
-  // overshoot) — don't advance off a segment that isn't current; re-ask the server.
-  if (sinceStart < -BOUNDARY_COMMIT_MS) {
-    return "resync";
-  }
-
-  const pastEnd = sinceStart - segmentDurationMs;
-
-  // Still inside the segment, or only a hair past the end → hold (hysteresis: no flip).
-  if (pastEnd < BOUNDARY_COMMIT_MS) {
-    return "hold";
-  }
-
-  // Far past the end with no advance → the surface is wedged; re-ask the server.
-  if (pastEnd >= SEGMENT_STALE_AFTER_MS) {
-    return "resync";
-  }
-
-  // Past the end, within the healthy window → the normal scheduled advance.
-  return "advance";
 }
 
 /**

@@ -3,7 +3,10 @@
 // the consolidation into @fluncle/contracts is the Phase-1 cleanup. Keep this in
 // step with apps/web/src/lib/media.ts.
 import { type TrackListItem } from "@fluncle/contracts";
+import { buildMixtapeCoverUrl, type MixtapeCoverSize } from "@fluncle/contracts/util/mixtape-cover";
 import { API_BASE, FOUND_BASE } from "@/config";
+
+export { type MixtapeCoverSize } from "@fluncle/contracts/util/mixtape-cover";
 
 const MT = `${FOUND_BASE}/cdn-cgi/media`;
 
@@ -147,14 +150,10 @@ export function radioArtworkUrl(f: TrackListItem): string | undefined {
   return f.logId && f.videoSquaredAt ? videoPoster(f.logId, f.videoSquaredAt) : undefined;
 }
 
-/** The mixtape cover renditions the on-the-fly cover endpoint serves (mirrors apps/web/src/lib/mixtapes.ts). */
-export type MixtapeCoverSize = "card" | "og" | "square" | "thumb" | "wide";
-
 /**
  * The cover URL for a published mixtape, rendered on the fly by the web cover endpoint
- * (Satori over the baked Deep-Field background). Keep the `?v=` version in step with
- * apps/web/src/lib/mixtapes.ts `COVER_VERSION` so a re-bake busts both surfaces' caches.
+ * (Satori over the baked Deep-Field background). The shared builder keeps cache versions aligned.
  */
 export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
-  return `${API_BASE}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}&v=2`;
+  return buildMixtapeCoverUrl(API_BASE, logId, size);
 }

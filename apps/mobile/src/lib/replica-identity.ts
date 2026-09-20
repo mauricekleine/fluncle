@@ -1,3 +1,5 @@
+import { fnv1a32 } from "@fluncle/contracts/util/hash";
+
 // WHICH replica file this build is allowed to read — the pure half of the device replica's
 // identity rules (offline-first mobile, slice 2). Framework-free and native-free: no
 // expo-sqlite import, no RN tree, so every rule below is pinned by a test.
@@ -43,17 +45,6 @@ export const REPLICA_DB_NAME_STORAGE_KEY = "fluncle.replica.db-name.v1";
  */
 export function normalizeRemoteUrl(url: string): string {
   return url.trim().toLowerCase().replace(/\/+$/, "");
-}
-
-// FNV-1a over 32 bits with `Math.imul` for the wrap — deterministic, dependency-free, and
-// no BigInt (which would tie the key to a Hermes capability it does not need).
-function fnv1a32(input: string, seed: number): number {
-  let hash = seed >>> 0;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
 }
 
 /**
