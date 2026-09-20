@@ -7,7 +7,7 @@
 // `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
 // side-effect free (no yt-dlp spawn, no R2, no network). Keep this green when touching
 // the sticky-proxy builder, the duration guard, the key builder, or the candidate ranker.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -90,6 +90,13 @@ import {
 // sweep's stderr is teed into the marker and scored by these two functions, so the only
 // honest way to pin the wording contract is to run the real lines through them.
 import { countDistressLines, countSummaryStrain } from "./fluncle-healthcheck";
+import {
+  type CollectedCaptureCommit,
+  isDeferredOutcome,
+  parseCaptureCapabilities,
+  resolveDeferredOutcome,
+  settleCollectedCommits,
+} from "./capture-sweep";
 
 describe("capture sweep canonical counters", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
@@ -164,7 +171,10 @@ describe("capture sweep canonical counters", () => {
     expect(captureFindingSource).toContain("noteCaptureFailure(failures, error);");
     expect(captureFindingSource).toContain('if (failureDisposition === "failed")');
     expect(captureFindingSource).toContain("failures.failureRecording += 1;");
-    expect(captureFindingSource).toContain('? "unrecorded-failure"');
+    // The verdict mapping is shared by all three of a capture's exits (`captureOutcomeFor`), so
+    // the unrecorded-failure branch is asserted where it now lives rather than inlined three times.
+    expect(captureFindingSource).toContain('captureOutcomeFor(failureDisposition, "failed")');
+    expect(source).toContain('return disposition === "failed" ? "unrecorded-failure" : "pending";');
   });
 
   test("separates confirmed, failed, and pending reconciliation outcomes", () => {
@@ -3188,5 +3198,229 @@ describe("the capture summary's added verdict", () => {
 
     expect(summary).toMatchObject({ captureAttempts: 12, errors: 0, ok: true, produced: 7 });
     expect(summary).not.toHaveProperty("reason");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE BATCHED COMMIT PHASE — one admitted lease per run of authorized rows.
+// ---------------------------------------------------------------------------
+
+describe("the batched capture commit", () => {
+  const batchDirectory = mkdtempSync(join(tmpdir(), "fluncle-capture-batch-"));
+
+  afterAll(() => {
+    rmSync(batchDirectory, { force: true, recursive: true });
+  });
+
+  const collected = (trackId: string, outcome: "done" | "unmatched"): CollectedCaptureCommit => ({
+    path: join(batchDirectory, trackId),
+    request: {
+      commitToken: `commit-${trackId}`,
+      operationId: "track.capture",
+      operationKey: `track.capture:${trackId}`,
+      requestDigest: "0".repeat(64),
+      trackId,
+    },
+    result:
+      outcome === "done"
+        ? {
+            attemptedAt: "2026-01-01T00:00:00.000Z",
+            bytes: 1,
+            captureVerification: "unverified",
+            capturedAt: "2026-01-01T00:00:00.000Z",
+            kind: "capture",
+            outcome: "done",
+            sourceAudioKey: `catalogue/${trackId}/x.webm`,
+            verifiedAt: "2026-01-01T00:00:00.000Z",
+          }
+        : { attemptedAt: "2026-01-01T00:00:00.000Z", kind: "capture", outcome: "unmatched" },
+  });
+
+  /** A fake admitted phase that writes the batch's response where the real child would. */
+  function phaseWriting(receipts: (statePath: string) => unknown): {
+    calls: string[];
+    phase: (action: string, statePath: string) => "completed" | "yielded";
+  } {
+    const calls: string[] = [];
+
+    return {
+      calls,
+      phase: (action, statePath) => {
+        calls.push(action);
+        writeFileSync(`${statePath}.result`, JSON.stringify(receipts(statePath)));
+
+        return "completed";
+      },
+    };
+  }
+
+  test("settles six rows in ONE admitted phase, with a receipt per row", () => {
+    const rows = ["a", "b", "c", "d", "e", "f"].map((id) => collected(`track-${id}`, "done"));
+    const { calls, phase } = phaseWriting((statePath) => {
+      const body = JSON.parse(readFileSync(statePath, "utf8")) as {
+        items: { trackId: string }[];
+      };
+
+      return {
+        deferred: 0,
+        ok: true,
+        receipts: body.items.map((item) => ({
+          outcome: "committed",
+          replayed: false,
+          result: { applied: true, kind: "capture", outcome: "done" },
+          trackId: item.trackId,
+        })),
+      };
+    });
+
+    const dispositions = settleCollectedCommits(rows, 6, phase as never);
+
+    // ONE lease for six rows; the pre-batching shape was six.
+    expect(calls).toEqual(["commit-batch"]);
+    expect([...dispositions.values()]).toEqual(Array.from({ length: 6 }, () => "committed"));
+  });
+
+  test("answers per item, so a stale row rejects alone while its neighbours commit", () => {
+    const rows = [
+      collected("track-a", "done"),
+      collected("track-b", "done"),
+      collected("track-c", "done"),
+    ];
+    const { phase } = phaseWriting((statePath) => {
+      const body = JSON.parse(readFileSync(statePath, "utf8")) as {
+        items: { trackId: string }[];
+      };
+
+      return {
+        deferred: 0,
+        ok: true,
+        receipts: body.items.map((item) =>
+          item.trackId === "track-b"
+            ? {
+                outcome: "rejected",
+                replayed: false,
+                result: { applied: false, reason: "stale" },
+                trackId: item.trackId,
+              }
+            : {
+                outcome: "committed",
+                replayed: false,
+                result: { applied: true, kind: "capture", outcome: "done" },
+                trackId: item.trackId,
+              },
+        ),
+      };
+    });
+
+    const dispositions = settleCollectedCommits(rows, 6, phase as never);
+
+    expect(dispositions.get("track-a")).toBe("committed");
+    expect(dispositions.get("track-b")).toBe("rejected");
+    expect(dispositions.get("track-c")).toBe("committed");
+  });
+
+  test("reads a wall-budgeted tail as pending, which the next tick reconciles", () => {
+    const rows = [collected("track-a", "done"), collected("track-b", "done")];
+    const { phase } = phaseWriting((statePath) => {
+      const body = JSON.parse(readFileSync(statePath, "utf8")) as {
+        items: { trackId: string }[];
+      };
+
+      return {
+        deferred: 1,
+        ok: true,
+        receipts: body.items.map((item, index) =>
+          index === 0
+            ? {
+                outcome: "committed",
+                replayed: false,
+                result: { applied: true, kind: "capture", outcome: "done" },
+                trackId: item.trackId,
+              }
+            : { outcome: "safely-retryable", replayed: false, trackId: item.trackId },
+        ),
+      };
+    });
+
+    const dispositions = settleCollectedCommits(rows, 6, phase as never);
+
+    expect(dispositions.get("track-a")).toBe("committed");
+    // The journal keeps its receipt, so the row is reconciled rather than re-written.
+    expect(dispositions.get("track-b")).toBe("pending");
+  });
+
+  test("splits a run wider than the batch into consecutive phases", () => {
+    const rows = ["a", "b", "c", "d", "e", "f", "g"].map((id) => collected(`track-${id}`, "done"));
+    const { calls, phase } = phaseWriting((statePath) => {
+      const body = JSON.parse(readFileSync(statePath, "utf8")) as {
+        items: { trackId: string }[];
+      };
+
+      return {
+        deferred: 0,
+        ok: true,
+        receipts: body.items.map((item) => ({
+          outcome: "committed",
+          replayed: false,
+          result: { applied: true, kind: "capture", outcome: "done" },
+          trackId: item.trackId,
+        })),
+      };
+    });
+
+    settleCollectedCommits(rows, 6, phase as never);
+
+    // A twelve-row tick therefore commits in two phases, which is the K the watchdog window sets.
+    expect(calls).toEqual(["commit-batch", "commit-batch"]);
+  });
+
+  test("reads a yielded phase as pending for every row it held", () => {
+    const rows = [collected("track-a", "done"), collected("track-b", "done")];
+
+    const dispositions = settleCollectedCommits(rows, 6, (() => "yielded") as never);
+
+    expect([...dispositions.values()]).toEqual(["pending", "pending"]);
+  });
+});
+
+describe("the deferred outcome a batched commit resolves", () => {
+  test("carries the verdict the row earns, and never counts it before its receipt", () => {
+    expect(isDeferredOutcome("deferred:done")).toBe(true);
+    expect(isDeferredOutcome("done")).toBe(false);
+    expect(resolveDeferredOutcome("deferred:done", "committed")).toBe("done");
+    expect(resolveDeferredOutcome("deferred:unmatched", "committed")).toBe("unmatched");
+    expect(resolveDeferredOutcome("deferred:failed", "committed")).toBe("failed");
+    expect(resolveDeferredOutcome("deferred:done", "rejected")).toBe("rejected");
+    // Anything the batch could not settle is unproven, never a landed write.
+    expect(resolveDeferredOutcome("deferred:done", "pending")).toBe("pending");
+    expect(resolveDeferredOutcome("deferred:done", undefined)).toBe("pending");
+  });
+});
+
+describe("the capture batch's version tolerance", () => {
+  test("takes the per-row phases against a Worker that advertises no widths", () => {
+    // New sweep, OLD Worker: the missing op must never be discovered as a 404 halfway through a
+    // batch whose downloads are already paid for.
+    expect(parseCaptureCapabilities(undefined)).toBeUndefined();
+    expect(parseCaptureCapabilities({})).toBeUndefined();
+    expect(parseCaptureCapabilities({ prepareTrackCaptures: 0 })).toBeUndefined();
+  });
+
+  test("reads the widths a batched Worker advertises", () => {
+    expect(parseCaptureCapabilities({ commitTrackCaptures: 6, prepareTrackCaptures: 12 })).toEqual({
+      commitTrackCaptures: 6,
+      prepareTrackCaptures: 12,
+    });
+  });
+
+  test("takes the per-row phases when the kill switch is set", () => {
+    process.env.FLUNCLE_CAPTURE_BATCH_PHASES = "0";
+    try {
+      expect(
+        parseCaptureCapabilities({ commitTrackCaptures: 6, prepareTrackCaptures: 12 }),
+      ).toBeUndefined();
+    } finally {
+      delete process.env.FLUNCLE_CAPTURE_BATCH_PHASES;
+    }
   });
 });

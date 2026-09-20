@@ -35,6 +35,13 @@ ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADM
 #
 # At batch 3: 120 + 900 + 360 + 30 = 1410.
 #
+# The third term is the SHRINKING one. Against a Worker that offers `update_track_embeddings` the
+# tick takes ONE write window for the whole batch, so that term is 120 rather than batch × 120 and
+# the same timeout carries a wider margin than it was sized for. The number is deliberately left
+# where it is: a backstop that got more generous needs no host change, and a Worker without the
+# batched op (or the `FLUNCLE_EMBED_WRITE_BATCH=0` kill switch) still spends the per-result windows
+# this arithmetic was derived against.
+#
 # The 300s per-track term is deliberately generous. The ledger's slowest single-track tick runs
 # ~294s wall, and that number already carries a whole torch import + MuQ model load plus its
 # admission wait — costs a batch pays ONCE for the manifest, not once per track. So 300s per

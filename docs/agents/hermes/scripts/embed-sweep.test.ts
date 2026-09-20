@@ -33,6 +33,7 @@ import {
   type EmbedFailureStreakStore,
   type EmbedManifestEntry,
   type EmbedWriteItem,
+  type EmbedWriteBatchWindow,
   type EmbedWriteWindow,
   MAX_EMBED_BATCH_CAP,
   nextEmbedFailureStreak,
@@ -354,6 +355,12 @@ type DriverOptions = {
   queued?: number;
   trackIds: readonly string[];
   write: (item: EmbedWriteItem) => EmbedWriteWindow | undefined;
+  /**
+   * The BATCHED write window, and the width the Worker advertises for it. Absent is an older
+   * Worker: the sweep then takes the per-result windows, which is the version-tolerance contract.
+   */
+  writeBatch?: (items: readonly EmbedWriteItem[]) => EmbedWriteBatchWindow | undefined;
+  writeBatchWidth?: number;
 };
 
 /** An in-memory stand-in for the on-disk streak file, so the verdict is testable without a disk. */
@@ -382,6 +389,9 @@ async function driveSweep(options: DriverOptions) {
         return Promise.resolve(undefined);
       }
       return Promise.resolve({
+        ...(options.writeBatchWidth === undefined
+          ? {}
+          : { capabilities: { updateTrackEmbeddings: options.writeBatchWidth } }),
         kind: "queue",
         ...(options.queued === undefined ? {} : { queued: options.queued }),
         tracks: options.trackIds.map((trackId) => ({
@@ -395,6 +405,17 @@ async function driveSweep(options: DriverOptions) {
       writeCalls.push(item.trackId);
       return Promise.resolve(options.write(item));
     },
+    ...(options.writeBatch === undefined
+      ? {}
+      : {
+          writeResults: (items: readonly EmbedWriteItem[]) => {
+            timeline.push(`write-batch:${items.map((item) => item.trackId).join(",")}`);
+            for (const item of items) {
+              writeCalls.push(item.trackId);
+            }
+            return Promise.resolve(options.writeBatch?.(items));
+          },
+        }),
   };
   const failureStreak = memoryStreakStore(options.failureStreak ?? null);
   const outcome = await runEmbedSweep({
@@ -1097,5 +1118,126 @@ describe("the embed dead-stage tripwire", () => {
     expect(outcome.exitCode).toBe(0);
     expect(outcome.summary).toMatchObject({ checked: 0, errors: 0, ok: true });
     expect(streak).toEqual({ class: "engine", count: EMBED_SYSTEMIC_STREAK - 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE BATCHED WRITE — one admitted lease for the tick's vectors, not one per result.
+// ---------------------------------------------------------------------------
+
+describe("the batched vector write", () => {
+  test("writes the whole tick in ONE window when the Worker advertises the batch", async () => {
+    const { outcome, timeline } = await driveSweep({
+      batchCap: 3,
+      trackIds: ["track-a", "track-b", "track-c"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+      writeBatch: (items) => ({
+        costWriteFailures: 0,
+        results: items.map((item) => ({ outcome: "updated" as const, trackId: item.trackId })),
+      }),
+      writeBatchWidth: 6,
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ checked: 3, done: 3, errors: 0, ok: true });
+    // ONE write window, and it is the batched one.
+    expect(timeline.filter((entry) => entry.startsWith("write:"))).toEqual([]);
+    expect(timeline.filter((entry) => entry.startsWith("write-batch:"))).toEqual([
+      "write-batch:track-a,track-b,track-c",
+    ]);
+    // THE LEASES PER TICK: the worklist read and the one write.
+    expect(outcome.summary.leases).toBe(2);
+  });
+
+  test("answers per item, so a rejected vector never costs its neighbours their write", async () => {
+    const { outcome } = await driveSweep({
+      batchCap: 3,
+      trackIds: ["track-a", "track-b", "track-c"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+      writeBatch: (items) => ({
+        costWriteFailures: 0,
+        results: items.map((item) => ({
+          outcome: item.trackId === "track-b" ? ("failed" as const) : ("updated" as const),
+          trackId: item.trackId,
+        })),
+      }),
+      writeBatchWidth: 6,
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ checked: 3, done: 2, ok: true, skipped: 1 });
+  });
+
+  test("reports the Worker's deferred tail as unapplied rather than as a landed write", async () => {
+    // `deferred` is the Worker's own wall budget stopping inside the admission watchdog window.
+    // Those items never reached a write, so they stay queued and the tick reads as partial.
+    const { outcome } = await driveSweep({
+      batchCap: 3,
+      trackIds: ["track-a", "track-b", "track-c"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+      writeBatch: (items) => ({
+        costWriteFailures: 0,
+        results: items.map((item, index) => ({
+          outcome: index === 0 ? ("updated" as const) : ("deferred" as const),
+          trackId: item.trackId,
+        })),
+      }),
+      writeBatchWidth: 6,
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ done: 1, partial: true, writesPending: 2 });
+  });
+
+  test("falls back to per-result windows against a Worker that advertises no batch", async () => {
+    // New sweep, OLD Worker: the pinned box CLI leads the Worker as often as it lags it, and the
+    // missing op must never be discovered as a 404 after the GPU work is already paid for.
+    const { outcome, timeline } = await driveSweep({
+      batchCap: 2,
+      trackIds: ["track-a", "track-b"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+      writeBatch: () => ({ costWriteFailures: 0, results: [] }),
+      // No advertised width.
+    });
+
+    expect(outcome.summary).toMatchObject({ done: 2, ok: true });
+    expect(timeline.filter((entry) => entry.startsWith("write-batch:"))).toEqual([]);
+    expect(timeline.filter((entry) => entry.startsWith("write:"))).toHaveLength(2);
+    // Two write leases plus the worklist read — the shape the batch exists to collapse.
+    expect(outcome.summary.leases).toBe(3);
+  });
+
+  test("falls back to per-result windows when the kill switch is set", async () => {
+    process.env.FLUNCLE_EMBED_WRITE_BATCH = "0";
+    try {
+      const { timeline } = await driveSweep({
+        batchCap: 2,
+        trackIds: ["track-a", "track-b"],
+        write: () => ({ costWriteFailures: 0, written: true }),
+        writeBatch: (items) => ({
+          costWriteFailures: 0,
+          results: items.map((item) => ({ outcome: "updated" as const, trackId: item.trackId })),
+        }),
+        writeBatchWidth: 6,
+      });
+
+      expect(timeline.filter((entry) => entry.startsWith("write-batch:"))).toEqual([]);
+      expect(timeline.filter((entry) => entry.startsWith("write:"))).toHaveLength(2);
+    } finally {
+      delete process.env.FLUNCLE_EMBED_WRITE_BATCH;
+    }
+  });
+
+  test("keeps the whole tick unapplied when the batched window yields", async () => {
+    const { outcome } = await driveSweep({
+      batchCap: 2,
+      trackIds: ["track-a", "track-b"],
+      write: () => ({ costWriteFailures: 0, written: true }),
+      writeBatch: () => undefined,
+      writeBatchWidth: 6,
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.summary).toMatchObject({ done: 0, partial: true, writesPending: 2 });
   });
 });

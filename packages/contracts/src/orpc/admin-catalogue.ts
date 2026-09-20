@@ -794,6 +794,89 @@ const SuppliedCrawlBodySchema = z.object({
   url: z.string().max(2_048),
 });
 
+/**
+ * THE BATCHED COMMIT'S WIDTH. One claim, one commit phase: the batch is exactly the claim, so the
+ * bound is {@link MAX_CRAWL_PREPARE_LIMIT} and cannot drift from it. Widening the claim widens this
+ * with it, and both stay under the wall budget the server enforces per request
+ * (`CRAWL_COMMIT_BATCH_WALL_BUDGET_MS` in `apps/web/src/lib/server/crawl.ts`).
+ */
+export const MAX_CRAWL_COMMIT_BATCH = MAX_CRAWL_PREPARE_LIMIT;
+
+/** One signed provider envelope's wire cap, unchanged from the single-node commit. */
+export const CRAWL_COMMIT_TOKEN_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * THE BATCH'S TOTAL WIRE CAP. A node's signed provider envelope is bounded at
+ * {@link CRAWL_COMMIT_TOKEN_MAX_BYTES}, so six of them could in principle carry 12 MiB — a body the
+ * Worker would have to hold in its 128 MiB isolate alongside everything the commit itself allocates.
+ * The total is therefore capped well below that, and the sweep splits a claim whose envelopes do not
+ * fit into consecutive batches rather than sending an oversized one. Ordinary MusicBrainz envelopes
+ * are kilobytes, so the split is the pathological path, never the normal one.
+ *
+ * THE BOX-SUPPLIED BODIES DO NOT ENTER THIS BOUND, and the reason is which phase carries them. A
+ * body the box fetched rides the `fetch` phase, which is UNADMITTED and still strictly ONE NODE per
+ * request: {@link SuppliedCrawlBodySchema} is capped at two entries (a probe and its page), each
+ * bounded by the box's own 2 MiB read cap, beside that node's ≤2 MiB `preparedToken` — so a fetch
+ * request peaks near 6 MiB and batching multiplies none of it. What the batch aggregates is the
+ * COMMIT token, whose 2 MiB bound is enforced where it is signed, on the parsed outcome, identically
+ * for a Worker-fetched and a box-fetched body. The two phases are separate requests, so the largest
+ * body one isolate ever holds is this cap rather than the sum of both.
+ */
+export const CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+
+const CrawlCommitItemSchema = z.strictObject({
+  commitToken: z.string().max(CRAWL_COMMIT_TOKEN_MAX_BYTES),
+  operationId: z.literal("catalogue.crawl"),
+  operationKey: z.string().max(128),
+  requestDigest: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+/**
+ * ONE ITEM'S RECEIPT inside a batched commit — never a collapsed verdict for the batch.
+ *
+ * `operationKey` echoes the item it answers, so the caller maps receipts back by identity rather
+ * than by position alone. `failed` is this item's own error and says nothing about its neighbours;
+ * `safely-retryable` is both the receipt rail's own verdict and what the unprocessed tail of a
+ * wall-budgeted request carries, so a caller that retries or reconciles a tail item is doing exactly
+ * what it already does for a single-node commit.
+ */
+const CrawlCommitReceiptSchema = z
+  .object({
+    /** This item's own failure message, bounded. Present only for `failed`. */
+    error: z.string().max(500).optional(),
+    operationKey: z.string().max(128),
+    outcome: z.enum([
+      "committed",
+      "conflict",
+      "failed",
+      "in-progress",
+      "lookup-failed",
+      "rejected",
+      "safely-retryable",
+    ]),
+    replayed: z.boolean(),
+    result: z.json().optional(),
+    resultIdentity: z.string().optional(),
+    state: z.enum(["accepted", "committed", "rejected"]).optional(),
+  })
+  .meta({ id: "CrawlCommitReceipt" });
+
+/**
+ * WHAT THIS WORKER CAN DO, answered inside a response the sweep already reads.
+ *
+ * The box CLI is a pinned release and lags the Worker in both directions. A NEW sweep must never
+ * discover a missing batched op by catching a 404 halfway through a claim, so it feature-detects
+ * here, on the prepare it runs before any commit: the field's absence is an OLD Worker and the
+ * per-node commit path is taken. An OLD sweep ignores the field and keeps committing node by node,
+ * which is why {@link crawlCatalogue}'s single-node `commit` phase is not going anywhere.
+ */
+const CrawlPhaseCapabilitiesSchema = z.strictObject({
+  /** How many nodes one `commit_crawl_nodes` request accepts. Absent ⇒ the op does not exist. */
+  commitBatchLimit: z.number().int().min(1).max(MAX_CRAWL_COMMIT_BATCH),
+  /** The batch's total signed-envelope budget, so the sweep splits at the same number the server does. */
+  commitBatchMaxTotalBytes: z.number().int().min(1),
+});
+
 const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("initialize") }),
   z.object({
@@ -826,6 +909,7 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
   z.object({
     /** Whether this Worker will read box-fetched bodies — asked before the box spends a request. */
     boxFetch: z.boolean(),
+    capabilities: CrawlPhaseCapabilitiesSchema.optional(),
     frontierPending: z.number(),
     initialization: CrawlPhaseInitializationSchema,
     items: z
@@ -847,6 +931,13 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
     operationId: z.literal("catalogue.crawl"),
     operationKey: z.string(),
     phase: z.literal("fetch"),
+    /**
+     * The vendor pushed back on THIS node. It rides the fetch response, not only the signed
+     * envelope, because a caller that batches its commits has to decide whether to keep fetching
+     * the rest of its claim BEFORE it learns any commit's verdict. Absent on an older Worker,
+     * which is exactly the Worker whose commits are per node anyway.
+     */
+    rateLimited: z.boolean().optional(),
     requestDigest: z.string(),
   }),
   z.object({
@@ -931,6 +1022,43 @@ export const crawlCatalogue = oc
     }),
   )
   .output(z.union([CrawlPassSchema.extend({ ok: z.literal(true) }), CrawlPhaseOutputSchema]));
+
+/**
+ * `commit_crawl_nodes` → `POST /admin/catalogue/crawl/commits` (operationId `commitCrawlNodes`).
+ *
+ * Admin tier (agent-allowed). ONE admitted database phase settles a whole claim's fetched nodes.
+ * Each item carries exactly what the single-node `commit` phase carries — its own signed provider
+ * envelope and its own receipt coordinates — and gets its own receipt back, so a poisoned node
+ * rejects alone while its neighbours commit. Nothing is collapsed: there is no batch-wide operation
+ * id, the receipt rail still keys on each item's own `operationKey`, and `catalogue.crawl` stays
+ * non-replayable (`phased(…, 0)`).
+ *
+ * The request is wall-budgeted server side. When the budget is spent the unprocessed tail comes back
+ * as `safely-retryable` rather than the request running past the admission watchdog window, and the
+ * caller reissues exactly those items.
+ */
+export const commitCrawlNodes = oc
+  .route({
+    method: "POST",
+    operationId: "commitCrawlNodes",
+    path: "/admin/catalogue/crawl/commits",
+    summary: "Commit one claim's fetched crawl nodes in a single admitted phase",
+    tags: ["Admin"],
+  })
+  .input(
+    z.strictObject({
+      items: z.array(CrawlCommitItemSchema).min(1).max(MAX_CRAWL_COMMIT_BATCH),
+    }),
+  )
+  .output(
+    z.strictObject({
+      /** How many trailing items the wall budget left unprocessed. They read `safely-retryable`. */
+      deferred: z.number().int().min(0),
+      ok: z.literal(true),
+      /** One receipt per request item, in request order. */
+      receipts: z.array(CrawlCommitReceiptSchema).max(MAX_CRAWL_COMMIT_BATCH),
+    }),
+  );
 
 /**
  * `get_crawl_status` → `GET /admin/catalogue/crawl` (operationId `getCrawlStatus`).
@@ -1657,6 +1785,7 @@ export const adminCatalogueContract = {
   anchor_track: anchorTrack,
   certify_track: certifyTrack,
   clear_wrong_audio: clearWrongAudio,
+  commit_crawl_nodes: commitCrawlNodes,
   crawl_catalogue: crawlCatalogue,
   flag_wrong_audio: flagWrongAudio,
   force_capture: forceCapture,

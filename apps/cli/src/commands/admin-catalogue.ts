@@ -389,6 +389,15 @@ export async function crawlCataloguePhaseCommand<T>(body: unknown): Promise<T> {
   return adminApiPost<T>("/api/v1/admin/catalogue/crawl", body);
 }
 
+/**
+ * Settle one claim's fetched crawl nodes in a single admitted database phase. Each item carries its
+ * own signed provider envelope and its own receipt coordinates, and comes back with its own receipt,
+ * so one node's rejection never costs its neighbours theirs.
+ */
+export async function commitCrawlNodesCommand<T>(body: unknown): Promise<T> {
+  return adminApiPost<T>("/api/v1/admin/catalogue/crawl/commits", body);
+}
+
 /** Read the crawl frontier's state, the catalogue's size, and the seed set. */
 export async function crawlStatusCommand(): Promise<CrawlStatusResult> {
   return adminApiGet<CrawlStatusResult>("/api/v1/admin/catalogue/crawl");

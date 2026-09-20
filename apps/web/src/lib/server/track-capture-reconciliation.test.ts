@@ -128,7 +128,8 @@ describe("capture reconciliation transaction and provider boundaries", () => {
 
     const application = source.slice(
       source.indexOf("async function applyCaptureResult("),
-      source.indexOf("export async function commitCaptureReconciliation"),
+      // The exact single-row commit, not its batched sibling `commitCaptureReconciliations`.
+      source.indexOf("export async function commitCaptureReconciliation(options: {"),
     );
     expect(application).toContain("source_audio_failures = coalesce(source_audio_failures, 0) + 1");
     expect(application).toContain(

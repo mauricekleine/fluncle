@@ -850,3 +850,22 @@ export async function mixableOrderCommand(
 
   return adminApiGet<MixableOrderResult>(`/api/v1/admin/tracks/mixable-order?${params.toString()}`);
 }
+
+// ── The batched pipeline phases ──────────────────────────────────────────────
+// Thin HTTP over the three batched ops. Each takes ONE admitted database lease for a whole batch
+// instead of one per row, and answers per item so a poisoned row never costs its neighbours theirs.
+
+/** Freeze a batch of capture reconciliation snapshots in one admitted phase. */
+export async function prepareTrackCapturesCommand<T>(body: unknown): Promise<T> {
+  return adminApiPost<T>("/api/v1/admin/tracks/captures/prepare", body);
+}
+
+/** Commit a batch of prepared capture results in one admitted phase. */
+export async function commitTrackCapturesCommand<T>(body: unknown): Promise<T> {
+  return adminApiPost<T>("/api/v1/admin/tracks/captures/commit", body);
+}
+
+/** Write a batch of MuQ audio embeddings in one admitted phase. */
+export async function updateTrackEmbeddingsCommand<T>(body: unknown): Promise<T> {
+  return adminApiPost<T>("/api/v1/admin/tracks/embeddings", body);
+}

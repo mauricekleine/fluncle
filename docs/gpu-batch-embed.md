@@ -43,9 +43,15 @@ The order decides **what** the metered GB buy. It says nothing about **how much*
 
 It is applied here, at the queue, because this function is the only door a catalogue row can reach a metered download through — so every client obeys it. When the budget is shut the capture worklist **narrows to the findings**, never to nothing: the archive is not starved by the telescope. And like the veto, it gates **capture alone** — bytes already bought are free to analyse and embed.
 
+### The queue also says what the Worker can do
+
+`list_track_work` answers a second question beside "what is there to do": an optional `capabilities` object naming the batched ops this Worker offers and how wide each takes a batch. The box CLI is a pinned release and lags the Worker in both directions, so a sweep must choose its path from a response it already reads rather than discover a missing op as a 404 halfway through work it has already paid for — a batch of downloads, or a GPU tick's vectors. An absent field is an older Worker and the per-row ops are taken; the per-row ops are therefore never removed. Each sweep also carries an environment kill switch that forces the per-row path without a rebake.
+
 ## The certification rail
 
 One rule, and it is canon: **Fluncle does not speak about a track he has not been to.**
+
+The rail is applied per item, batched or not. `update_track_embeddings` writes a tick's vectors in ONE admitted database phase, and each item takes the same `updateTrack` path a single write takes — the certification gate included — and gets its own verdict back. `track.embed` stays deliberately non-replayable: a vector write mints a fresh catalogue-rank material revision and appends a Sonar artifact change, so the request is issued exactly once, an item whose outcome is unknown is reported rather than retried, and only the Worker's own wall-budgeted `deferred` tail — which never reached a write at all — is left for the next tick.
 
 The danger is that `update_track` is a single generic endpoint. The analysis fields (`bpm`, `key`, `features`, `embedding`, the capture side-channel) and the fields that make Fluncle _speak_ (`note`, `contextNote`, the observation, the video, `galaxyId`, `enrichmentStatus`, `logId`) go through the very same call. So `updateTrack` gates on certification:
 

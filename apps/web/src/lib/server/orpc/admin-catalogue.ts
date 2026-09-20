@@ -72,6 +72,7 @@ import { getSpotifyAnchorBreakerState, resetSpotifyAnchorBreaker } from "../spot
 import { syncTelescopePlaylist } from "../telescope-playlist";
 import {
   commitCrawlPhase,
+  commitCrawlNodes,
   crawlCatalogue,
   DEFAULT_MAX_HOP,
   fetchCrawlPhase,
@@ -392,6 +393,21 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/catalogue/crawl/commits — one claim's fetched nodes, settled in ONE admitted
+  // phase. Per-item receipts keep `catalogue.crawl` non-replayable and keep a poisoned node's
+  // failure to itself; the wall-budgeted tail comes back `safely-retryable`.
+  const commitCrawlNodesHandler = os.commit_crawl_nodes
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { deferred, receipts } = await commitCrawlNodes(input.items);
+
+        return { deferred, ok: true as const, receipts };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // GET /admin/catalogue/crawl — the frontier's state.
   const getCrawlStatusHandler = os.get_crawl_status.use(adminAuth).handler(async () => {
     try {
@@ -660,6 +676,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     anchor_track: anchorTrackHandler,
     certify_track: certifyTrackHandler,
     clear_wrong_audio: clearWrongAudioHandler,
+    commit_crawl_nodes: commitCrawlNodesHandler,
     crawl_catalogue: crawlCatalogueHandler,
     flag_wrong_audio: flagWrongAudioHandler,
     force_capture: forceCaptureHandler,

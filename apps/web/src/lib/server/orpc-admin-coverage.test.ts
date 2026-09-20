@@ -397,6 +397,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the one act the catalogue domain forbids a machine (docs/the-ear.md § The operator's actions).
   "POST /admin/catalogue/certify": "certify_track",
   "POST /admin/catalogue/crawl": "crawl_catalogue",
+  "POST /admin/catalogue/crawl/commits": "commit_crawl_nodes",
   // The demand reorder tick — contract-only oRPC (no TanStack route file). ADMIN tier
   // (agent-allowed): the on-box `fluncle-demand` cron triggers it with the agent token. The
   // Worker reads Simple Analytics + rewrites only the two derived reorder columns
@@ -573,6 +574,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/tracks": "publish_track",
   // Capture is an agent-driven, snapshot-bound state machine. The server prepares current
   // eligibility, owns the external officialness verdict, and commits through an atomic receipt.
+  // The BATCHED phases beside them: one admitted database lease per batch, per-item answers.
+  "POST /admin/tracks/captures/commit": "commit_track_captures",
+  "POST /admin/tracks/captures/prepare": "prepare_track_captures",
+  "POST /admin/tracks/embeddings": "update_track_embeddings",
   "POST /admin/tracks/{trackId}/capture/authorize": "authorize_track_capture",
   "POST /admin/tracks/{trackId}/capture/commit": "commit_track_capture",
   "POST /admin/tracks/{trackId}/capture/prepare": "prepare_track_capture",

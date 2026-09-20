@@ -392,7 +392,18 @@ async function r2Get(key: string): Promise<Uint8Array> {
 // with the server's drain order (certified first, then the Ear's capture-priority ladder)
 // means the catalogue can never starve the findings' backlog.
 
+/**
+ * WHAT THIS WORKER OFFERS, read off the worklist the sweep already asks for.
+ *
+ * The box CLI is a pinned release and lags the Worker in both directions, so the sweep must learn
+ * whether the batched write exists BEFORE it commits to a path — never by catching a 404 halfway
+ * through a batch of vectors it has already paid the GPU for. An absent number is an older Worker
+ * and the per-result write windows are taken instead.
+ */
+export type EmbedCapabilities = { updateTrackEmbeddings?: number };
+
 export function parseEmbedQueue(body: unknown): {
+  capabilities?: EmbedCapabilities;
   queued?: number;
   tracks: QueueFinding[];
 } {
@@ -400,17 +411,59 @@ export function parseEmbedQueue(body: unknown): {
     return { tracks: [] };
   }
 
-  const page = body as { queued?: unknown; tracks?: unknown };
+  const page = body as { capabilities?: unknown; queued?: unknown; tracks?: unknown };
   const tracks = Array.isArray(page.tracks) ? (page.tracks as QueueFinding[]) : [];
   const queued =
     typeof page.queued === "number" && Number.isSafeInteger(page.queued) && page.queued >= 0
       ? page.queued
       : undefined;
+  const limit =
+    typeof page.capabilities === "object" && page.capabilities !== null
+      ? (page.capabilities as EmbedCapabilities).updateTrackEmbeddings
+      : undefined;
+  const capabilities =
+    typeof limit === "number" && Number.isInteger(limit) && limit >= 1
+      ? { updateTrackEmbeddings: limit }
+      : undefined;
 
-  return queued === undefined ? { tracks } : { queued, tracks };
+  return {
+    ...(capabilities === undefined ? {} : { capabilities }),
+    ...(queued === undefined ? {} : { queued }),
+    tracks,
+  };
 }
 
-async function fetchEmbedQueue(): Promise<{ queued?: number; tracks: QueueFinding[] }> {
+/**
+ * The authenticated admin POST. DIRECT HTTP, for exactly the reason the queue read above is: the
+ * box's `fluncle` binary is a PINNED release, so routing a new op through a new CLI command would
+ * gate this sweep behind a pin bump. The per-result write still uses the existing
+ * `tracks update --embedding-file` command, which is why that path needs no pin either.
+ */
+async function adminApiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    body: JSON.stringify(body),
+    headers: {
+      Authorization: `Bearer ${API_TOKEN}`,
+      "content-type": "application/json",
+    },
+    method: "POST",
+    signal: AbortSignal.timeout(120_000),
+  });
+
+  if (!res.ok) {
+    const text = await failureBodyUnlessRepairPending(res, "embed batched write");
+
+    throw new Error(`embed batched write failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+
+  return (await res.json()) as T;
+}
+
+async function fetchEmbedQueue(): Promise<{
+  capabilities?: EmbedCapabilities;
+  queued?: number;
+  tracks: QueueFinding[];
+}> {
   const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=embed&scope=all&limit=${QUEUE_LIMIT}&count=true`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
@@ -594,6 +647,12 @@ export function buildEmbedSummary(options: {
   counts: EmbedCounts;
   errors: number;
   failureStreak?: EmbedFailureStreak | null;
+  /**
+   * How many ADMITTED DATABASE PHASES this tick took — the shared write lane's acquisitions. A tick
+   * that batches its writes costs two (its worklist read and its one write) where it used to cost
+   * one per result. It is a counter, never a model.
+   */
+  leases?: number;
   ok: boolean;
   queued?: number;
   reason?: string;
@@ -625,6 +684,7 @@ export function buildEmbedSummary(options: {
     errors: options.errors,
     failed,
     fetchFailed: options.counts.fetchFailed,
+    ...(options.leases === undefined ? {} : { leases: options.leases }),
     noSource: options.counts.noSource,
     ok: options.ok,
     produced: options.counts.done,
@@ -656,7 +716,12 @@ export function buildEmbedFatalSummary(error?: unknown): Record<string, unknown>
 
 /** The worklist window's answer. The typed due-work deferral is data, never a failed window. */
 export type EmbedQueueWindow =
-  | { kind: "queue"; queued?: number; tracks: QueueFinding[] }
+  | {
+      capabilities?: EmbedCapabilities;
+      kind: "queue";
+      queued?: number;
+      tracks: QueueFinding[];
+    }
   | { kind: "repair-pending"; message: string };
 
 /** One vector write and the self-seconds cost row its compute earned. */
@@ -671,12 +736,29 @@ export type EmbedWriteItem = {
 export type EmbedWriteWindow = { costWriteFailures: number; written: boolean };
 
 /**
+ * A completed BATCHED write window: one verdict per item, in request order, plus the cost rows the
+ * whole batch's ledger write rejected. `written` is per item because `track.embed` is non-replayable
+ * — a vector that did not land is reported, never quietly retried — and `deferred` is the one
+ * verdict the caller may reissue, because a deferred item never reached a write at all.
+ */
+export type EmbedWriteBatchWindow = {
+  costWriteFailures: number;
+  results: { outcome: "deferred" | "failed" | "updated"; trackId: string }[];
+};
+
+/**
  * Where the database work runs. Each method resolves `undefined` when its admission window
  * yielded: a yielded read proved nothing, and a yielded write is unproven and never re-issued.
  */
 export type EmbedDatabaseWindows = {
   readQueue(): Promise<EmbedQueueWindow | undefined>;
   writeResult(item: EmbedWriteItem): Promise<EmbedWriteWindow | undefined>;
+  /**
+   * THE TICK'S WHOLE WRITE, IN ONE LEASE. Present only when the Worker offers the batched op; the
+   * caller falls back to {@link EmbedDatabaseWindows.writeResult} otherwise, which is what keeps a
+   * new sweep working against an old Worker.
+   */
+  writeResults?(items: readonly EmbedWriteItem[]): Promise<EmbedWriteBatchWindow | undefined>;
 };
 
 /** The worklist window body. */
@@ -722,10 +804,79 @@ async function writeEmbedResultWindow(item: EmbedWriteItem): Promise<EmbedWriteW
   return { costWriteFailures, written };
 }
 
+/**
+ * THE BATCHED WRITE WINDOW'S BODY — the tick's whole write, in ONE lease.
+ *
+ * The vectors go through `update_track_embeddings`, which takes the same per-row `updateTrack` path
+ * (certification rail included) and answers per item. `track.embed` is non-replayable, so the
+ * request is issued exactly once: an item the Worker reports `failed` is counted and never
+ * re-issued, and one it reports `deferred` never reached a write and stays queued for the next tick.
+ * A transport failure, whose outcome is unknown, is likewise counted rather than retried.
+ *
+ * The self-seconds cost rows are written in the same window, as one ledger call rather than one per
+ * result, because the compute was spent whether or not each vector landed.
+ */
+async function writeEmbedResultsWindow(
+  items: readonly EmbedWriteItem[],
+): Promise<EmbedWriteBatchWindow> {
+  let results: EmbedWriteBatchWindow["results"];
+
+  try {
+    const response = await adminApiPost<unknown>("/api/v1/admin/tracks/embeddings", {
+      items: items.map((item) => ({ embedding: item.embedding, trackId: item.trackId })),
+    });
+
+    results = parseEmbedWriteBatchResults(response, items);
+  } catch (error) {
+    // The whole request's outcome is unknown. Every item is reported as failed and none is
+    // re-issued; the durable fence is the next tick's worklist read, which still holds any track
+    // whose vector did not land.
+    log(`batched write-back failed: ${error instanceof Error ? error.message : String(error)}`);
+    results = items.map((item) => ({ outcome: "failed" as const, trackId: item.trackId }));
+  }
+
+  const costWriteFailures = (await emitCost(items.map((item) => item.cost))).failed;
+
+  return { costWriteFailures, results };
+}
+
+/** Map a batched write response back onto its request items, in request order. */
+export function parseEmbedWriteBatchResults(
+  response: unknown,
+  items: readonly { trackId: string }[],
+): EmbedWriteBatchWindow["results"] {
+  const rows =
+    typeof response === "object" &&
+    response !== null &&
+    Array.isArray((response as { results?: unknown }).results)
+      ? ((response as { results: unknown[] }).results as {
+          outcome?: unknown;
+          trackId?: unknown;
+        }[])
+      : [];
+
+  return items.map((item, index) => {
+    const row = rows[index];
+    const outcome = row?.outcome;
+
+    if (row?.trackId !== item.trackId) {
+      // A response that does not line up with its request is not evidence about any item, so
+      // every item reads as unproven rather than as landed.
+      return { outcome: "failed" as const, trackId: item.trackId };
+    }
+
+    return {
+      outcome: outcome === "updated" || outcome === "deferred" ? outcome : ("failed" as const),
+      trackId: item.trackId,
+    };
+  });
+}
+
 /** An inherited whole-lifetime lease already covers this process, so windows run in-process. */
 const inheritedLeaseWindows: EmbedDatabaseWindows = {
   readQueue: () => readEmbedQueueWindow(),
   writeResult: (item) => writeEmbedResultWindow(item),
+  writeResults: (items) => writeEmbedResultsWindow(items),
 };
 
 function argumentValue(argv: readonly string[], name: string): string | undefined {
@@ -734,7 +885,7 @@ function argumentValue(argv: readonly string[], name: string): string | undefine
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
-function windowCommand(window: "read" | "write", statePath?: string): string[] {
+function windowCommand(window: "read" | "write" | "write-batch", statePath?: string): string[] {
   return [
     process.execPath,
     import.meta.path,
@@ -808,6 +959,41 @@ export function parseWriteWindowEnvelope(stdout: string): EmbedWriteWindow {
   throw new Error("embed write window returned an invalid envelope");
 }
 
+/** Parse a completed BATCHED write window's stdout envelope. */
+export function parseWriteBatchWindowEnvelope(stdout: string): EmbedWriteBatchWindow {
+  const envelope = windowEnvelope(stdout, "write-batch");
+  const failures = envelope.costWriteFailures;
+  const results = envelope.results;
+
+  if (
+    envelope.kind !== "write-batch" ||
+    typeof failures !== "number" ||
+    !Number.isSafeInteger(failures) ||
+    failures < 0 ||
+    !Array.isArray(results)
+  ) {
+    throw new Error("embed write-batch window returned an invalid envelope");
+  }
+
+  return {
+    costWriteFailures: failures,
+    results: results.map((row) => {
+      const record = row as { outcome?: unknown; trackId?: unknown };
+
+      if (
+        typeof record.trackId !== "string" ||
+        (record.outcome !== "deferred" &&
+          record.outcome !== "failed" &&
+          record.outcome !== "updated")
+      ) {
+        throw new Error("embed write-batch window returned an invalid envelope");
+      }
+
+      return { outcome: record.outcome, trackId: record.trackId };
+    }),
+  };
+}
+
 /** Every database window is its own admission phase; nothing between windows holds the lease. */
 function admittedWindows(): EmbedDatabaseWindows {
   return {
@@ -834,6 +1020,26 @@ function admittedWindows(): EmbedDatabaseWindows {
 
       return phase.kind === "yielded" ? undefined : parseWriteWindowEnvelope(phase.stdout);
     },
+    writeResults: async (items) => {
+      const first = items[0];
+
+      if (first === undefined) {
+        return { costWriteFailures: 0, results: [] };
+      }
+
+      const statePath = `${first.vectorPath}.batch.json`;
+
+      writeFileSync(statePath, JSON.stringify(items), { mode: 0o600 });
+
+      const phase = runDatabaseAdmissionPhase({
+        command: windowCommand("write-batch", statePath),
+        owner: ADMISSION_OWNER,
+        // track.embed is deliberately non-replayable in DATABASE_MUTATION_POLICIES.
+        yieldRetries: 0,
+      });
+
+      return phase.kind === "yielded" ? undefined : parseWriteBatchWindowEnvelope(phase.stdout);
+    },
   };
 }
 
@@ -856,6 +1062,13 @@ async function runWindowChild(
       return { kind: "write", ...write };
     }
 
+    if (window === "write-batch" && statePath !== undefined) {
+      const items = JSON.parse(readFileSync(statePath, "utf8")) as EmbedWriteItem[];
+      const write = await writeEmbedResultsWindow(items);
+
+      return { kind: "write-batch", ...write };
+    }
+
     return { error: "invalid embed admission window invocation", kind: "failed" };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), kind: "failed" };
@@ -870,6 +1083,11 @@ export type EmbedManifestEntry = { id: string; path: string };
 
 export type EmbedSweepDependencies = {
   batchCap: number;
+  /**
+   * The Worker's batched-write width, read off the worklist response. `undefined` is a Worker
+   * without `update_track_embeddings`, which is exactly the Worker whose writes are per result.
+   */
+  capabilities?: EmbedCapabilities;
   embed: (manifest: EmbedManifestEntry[]) => { code: number; stderr: string; stdout: string };
   /** The cross-tick memory behind the dead-stage tripwire (see {@link EMBED_SYSTEMIC_STREAK}). */
   failureStreak: EmbedFailureStreakStore;
@@ -879,7 +1097,31 @@ export type EmbedSweepDependencies = {
 
 export type EmbedSweepOutcome = { exitCode: 0 | 1; summary: Record<string, unknown> };
 
+/**
+ * THE BATCHED WRITE'S KILL SWITCH and its feature detection, in one place.
+ *
+ * `FLUNCLE_EMBED_WRITE_BATCH=0` in the unit's environment puts every vector back on its own write
+ * window without a rebake — the lever an operator reaches for when the batched write is the suspect.
+ * Otherwise the answer is the WORKER's: no advertised width, no batched op, per-result windows.
+ */
+export function batchedWrites(deps: EmbedSweepDependencies, itemCount: number): boolean {
+  if ((process.env.FLUNCLE_EMBED_WRITE_BATCH ?? "1") === "0") {
+    return false;
+  }
+
+  const limit = deps.capabilities?.updateTrackEmbeddings;
+
+  return (
+    deps.windows.writeResults !== undefined &&
+    itemCount > 0 &&
+    typeof limit === "number" &&
+    itemCount <= limit
+  );
+}
+
 export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<EmbedSweepOutcome> {
+  // Every admitted database window this tick opens, counted where it is opened.
+  let leases = 1;
   const queueWindow = await deps.windows.readQueue();
 
   if (queueWindow === undefined) {
@@ -902,6 +1144,12 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
   }
 
   const queued = queueWindow.queued;
+  // The Worker answered on the read the sweep already made, so the write path is chosen before a
+  // single vector is computed rather than discovered mid-batch.
+  const capable: EmbedSweepDependencies = {
+    ...deps,
+    ...(queueWindow.capabilities === undefined ? {} : { capabilities: queueWindow.capabilities }),
+  };
   const batch = queueWindow.tracks.slice(0, deps.batchCap);
   const counts = emptyEmbedCounts();
 
@@ -909,7 +1157,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
     // Fast no-op.
     return {
       exitCode: 0,
-      summary: buildEmbedSummary({ checked: 0, counts, errors: 0, ok: true, queued }),
+      summary: buildEmbedSummary({ checked: 0, counts, errors: 0, leases, ok: true, queued }),
     };
   }
 
@@ -955,7 +1203,14 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
     if (manifest.length === 0) {
       return {
         exitCode: 0,
-        summary: buildEmbedSummary({ checked: batch.length, counts, errors: 0, ok: true, queued }),
+        summary: buildEmbedSummary({
+          checked: batch.length,
+          counts,
+          errors: 0,
+          leases,
+          ok: true,
+          queued,
+        }),
       };
     }
 
@@ -979,6 +1234,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
           checked: batch.length,
           counts,
           errors: 1,
+          leases,
           ok: false,
           queued,
           reason: "embed_failed",
@@ -1001,6 +1257,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
           checked: batch.length,
           counts,
           errors: 1,
+          leases,
           ok: false,
           queued,
           reason: "embed_bad_output",
@@ -1008,39 +1265,70 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
       };
     }
 
-    // (3) One admitted window per result: its vector write and its even share of the batch
-    // wall-time as a self-seconds cost row.
+    // (3) THE WRITE. One admitted window for the WHOLE tick when the Worker offers the batched
+    // op — the vectors and their even share of the batch wall-time as self-seconds cost rows —
+    // and one window per result otherwise. Either way a vector is written exactly once:
+    // `track.embed` is non-replayable, so an unproven write is counted and never re-issued.
     const results = parsed.results ?? [];
     const perResultSeconds = results.length ? embedSeconds / results.length : 0;
+    const writeItems: EmbedWriteItem[] = results.map((result) => ({
+      cost: selfSecondsCost({
+        occurredAt: new Date().toISOString(),
+        seconds: perResultSeconds,
+        step: "embed",
+        trackId: result.id,
+      }),
+      embedding: result.embedding,
+      trackId: result.id,
+      vectorPath: join(workdir, `${result.id}.json`),
+    }));
     let costWriteFailures = 0;
     let writesPending = 0;
 
-    for (const [index, result] of results.entries()) {
-      const window = await deps.windows.writeResult({
-        cost: selfSecondsCost({
-          occurredAt: new Date().toISOString(),
-          seconds: perResultSeconds,
-          step: "embed",
-          trackId: result.id,
-        }),
-        embedding: result.embedding,
-        trackId: result.id,
-        vectorPath: join(workdir, `${result.id}.json`),
-      });
+    if (batchedWrites(capable, writeItems.length)) {
+      leases += 1;
+
+      const window = await capable.windows.writeResults?.(writeItems);
 
       if (window === undefined) {
-        // The yielded write is unproven: it is never re-issued, and no later write starts.
-        writesPending = results.length - index;
-        log(`${result.id}: write window yielded — ${writesPending} result(s) left unapplied`);
-        break;
-      }
-
-      costWriteFailures += window.costWriteFailures;
-
-      if (window.written) {
-        counts.done += 1;
+        // The yielded batch is unproven: nothing is re-issued, and the whole tick's results are
+        // reported as unapplied. The durable fence is the next tick's worklist read.
+        writesPending = writeItems.length;
+        log(`write window yielded — ${writesPending} result(s) left unapplied`);
       } else {
-        counts.skipped += 1;
+        costWriteFailures += window.costWriteFailures;
+
+        for (const result of window.results) {
+          if (result.outcome === "updated") {
+            counts.done += 1;
+          } else if (result.outcome === "deferred") {
+            // The Worker's own wall budget stopped before this item, so it never reached a write.
+            writesPending += 1;
+          } else {
+            counts.skipped += 1;
+          }
+        }
+      }
+    } else {
+      for (const [index, item] of writeItems.entries()) {
+        leases += 1;
+
+        const window = await capable.windows.writeResult(item);
+
+        if (window === undefined) {
+          // The yielded write is unproven: it is never re-issued, and no later write starts.
+          writesPending = writeItems.length - index;
+          log(`${item.trackId}: write window yielded — ${writesPending} result(s) left unapplied`);
+          break;
+        }
+
+        costWriteFailures += window.costWriteFailures;
+
+        if (window.written) {
+          counts.done += 1;
+        } else {
+          counts.skipped += 1;
+        }
       }
     }
 
@@ -1079,6 +1367,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
           counts,
           errors: 1,
           failureStreak,
+          leases,
           ok: false,
           queued,
           reason: "embed_systemic",
@@ -1092,6 +1381,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
       counts,
       errors: 0,
       failureStreak,
+      leases,
       ok: true,
       queued,
     });

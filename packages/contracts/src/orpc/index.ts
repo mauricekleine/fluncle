@@ -266,6 +266,9 @@ export {
   CatalogueMatchSchema,
   CatalogueSummarySchema,
   CatalogueTrackItemSchema,
+  commitCrawlNodes,
+  CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES,
+  CRAWL_COMMIT_TOKEN_MAX_BYTES,
   crawlCatalogue,
   CrawlPassSchema,
   CrawlStatusSchema,
@@ -274,6 +277,7 @@ export {
   getCaptureBudget,
   getCrawlStatus,
   listCatalogueTracks,
+  MAX_CRAWL_COMMIT_BATCH,
   MAX_CRAWL_PREPARE_LIMIT,
   rankCatalogue,
   setCaptureBudget,
@@ -420,14 +424,20 @@ export {
   startLastfmAuth,
 } from "./admin-tokens";
 export {
+  commitTrackCaptures,
   contextTrack,
+  EMBEDDING_DIMENSIONS,
   finalizeTrackVideo,
   getMixableOrder,
   getTrackAdmin,
   listTracksAdmin,
   listTrackWork,
+  MAX_CAPTURE_COMMIT_BATCH,
+  MAX_CAPTURE_PREPARE_BATCH,
+  MAX_EMBEDDING_WRITE_BATCH,
   noteTrack,
   observeTrack,
+  prepareTrackCaptures,
   presignTrackVideoUploads,
   publishTrack,
   purgeVideo,
@@ -436,6 +446,7 @@ export {
   TrackWorkKindSchema,
   TrackWorkScopeSchema,
   updateTrack,
+  updateTrackEmbeddings,
 } from "./admin-tracks";
 export { adminFrontierContract, refreshFrontierPlaylists } from "./admin-frontier";
 export { adminFunnelContract, getFunnel, recordCatalogueSnapshot } from "./admin-funnel";

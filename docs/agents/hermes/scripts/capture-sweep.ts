@@ -469,7 +469,15 @@ export type PreparedSnapshot =
   | { prepared: false; reason: "ineligible" | "not-found" | "stale" }
   | { prepared: true; snapshotToken: string; track: CaptureFinding };
 
-export type ProgressDisposition = "committed" | "failed" | "pending" | "rejected";
+/**
+ * One row's settlement.
+ *
+ * `deferred` is not a verdict. It says the row is AUTHORIZED and its commit was handed to the tick's
+ * batched commit phase, which resolves it into `committed` / `rejected` / `pending` before the
+ * tick's counters are built. The journal on disk still holds its receipt while it waits, so a crash
+ * between the two leaves exactly the reconcilable state a per-row commit would have left.
+ */
+export type ProgressDisposition = "committed" | "deferred" | "failed" | "pending" | "rejected";
 
 export function preparedCaptureFinding(
   queued: CaptureFinding,
@@ -1573,7 +1581,9 @@ async function fetchTrackWork(options: {
   kind: "capture" | "youtube-provenance" | "youtube-reverdict";
   limit: number;
   scope: "all" | "catalogue" | "findings";
-}): Promise<CaptureFinding[]> {
+  /** Keep the response's `capabilities` — the caller is about to choose a per-row or batched path. */
+  withCapabilities?: boolean;
+}): Promise<CaptureFinding[] | { capabilities?: unknown; tracks: CaptureFinding[] }> {
   const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=${options.kind}&scope=${options.scope}&limit=${options.limit}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
@@ -1586,8 +1596,9 @@ async function fetchTrackWork(options: {
     const failure = await failureBodyUnlessRepairPending(res, `${options.kind} queue read`);
     throw new Error(`${options.kind} queue read failed (${res.status}): ${failure.slice(0, 200)}`);
   }
-  const body = (await res.json()) as { tracks?: CaptureFinding[] };
-  return Array.isArray(body.tracks) ? body.tracks : [];
+  const body = (await res.json()) as { capabilities?: unknown; tracks?: CaptureFinding[] };
+  const tracks = Array.isArray(body.tracks) ? body.tracks : [];
+  return options.withCapabilities === true ? { capabilities: body.capabilities, tracks } : tracks;
 }
 
 /**
@@ -1599,7 +1610,8 @@ async function fetchTrackWork(options: {
  * this queue's order is fixed by the budget.
  */
 async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
-  return fetchTrackWork({ kind: "capture", limit: QUEUE_LIMIT, scope: "all" });
+  const page = await fetchTrackWork({ kind: "capture", limit: QUEUE_LIMIT, scope: "all" });
+  return Array.isArray(page) ? page : page.tracks;
 }
 
 async function adminApiPost<T>(path: string, body: unknown): Promise<T> {
@@ -1746,18 +1758,69 @@ function externalResultForWire(result: CaptureExternalResult): Record<string, un
   return wire;
 }
 
-type CaptureAdmissionAction = "commit" | "prepare" | "queue" | "reconcile";
+type CaptureAdmissionAction =
+  | "commit"
+  | "commit-batch"
+  | "prepare"
+  | "prepare-batch"
+  | "queue"
+  | "reconcile";
 
 function phaseCommand(action: CaptureAdmissionAction, statePath: string): string[] {
   return [BUN_BIN, import.meta.filename, "--admission-phase", action, "--phase-state", statePath];
 }
 
+/**
+ * HOW MANY LEASES THIS TICK TOOK — the shared write lane's acquisitions, each one a coordinator
+ * round trip and a process spawn of its own. It is a counter, never a model: every admitted phase
+ * increments it here, so the ledger's `leases` measures the batching rather than asserting it.
+ */
+let admittedPhaseCount = 0;
+
 function admittedPhase(action: CaptureAdmissionAction, statePath: string): "completed" | "yielded" {
+  admittedPhaseCount += 1;
+
   return runDatabaseAdmissionPhase({
     command: phaseCommand(action, statePath),
     owner: "fluncle-capture",
     yieldRetries: 0,
   }).kind;
+}
+
+/**
+ * WHAT THIS WORKER OFFERS, read off the worklist the sweep already asks for.
+ *
+ * The box CLI is a pinned release and lags the Worker in both directions, so the sweep must learn
+ * whether the batched phases exist BEFORE it commits to a path — never by catching a 404 halfway
+ * through a batch whose downloads are already paid for. An absent width is an older Worker and the
+ * per-row phases are taken instead, which is why those are not going anywhere.
+ */
+export type CaptureCapabilities = {
+  commitTrackCaptures?: number;
+  prepareTrackCaptures?: number;
+};
+
+/** The batched phases' kill switch: `FLUNCLE_CAPTURE_BATCH_PHASES=0` restores per-row leases. */
+export function captureBatchPhasesEnabled(): boolean {
+  return (process.env.FLUNCLE_CAPTURE_BATCH_PHASES ?? "1") !== "0";
+}
+
+export function parseCaptureCapabilities(value: unknown): CaptureCapabilities | undefined {
+  if (!captureBatchPhasesEnabled() || !isRecord(value)) {
+    return undefined;
+  }
+  const width = (key: "commitTrackCaptures" | "prepareTrackCaptures"): number | undefined => {
+    const raw = value[key];
+    return typeof raw === "number" && Number.isInteger(raw) && raw >= 1 ? raw : undefined;
+  };
+  const commitTrackCaptures = width("commitTrackCaptures");
+  const prepareTrackCaptures = width("prepareTrackCaptures");
+  return commitTrackCaptures === undefined && prepareTrackCaptures === undefined
+    ? undefined
+    : {
+        ...(commitTrackCaptures === undefined ? {} : { commitTrackCaptures }),
+        ...(prepareTrackCaptures === undefined ? {} : { prepareTrackCaptures }),
+      };
 }
 
 async function runCaptureAdmissionChild(
@@ -1768,16 +1831,16 @@ async function runCaptureAdmissionChild(
   let result: unknown;
   if (action === "queue") {
     try {
-      result = {
-        tracks:
-          typeof request.kind === "string"
-            ? await fetchTrackWork({
-                kind: request.kind as "capture" | "youtube-provenance" | "youtube-reverdict",
-                limit: Number(request.limit),
-                scope: request.scope as "all" | "catalogue" | "findings",
-              })
-            : await fetchCaptureQueue(),
-      };
+      const page =
+        typeof request.kind === "string"
+          ? await fetchTrackWork({
+              kind: request.kind as "capture" | "youtube-provenance" | "youtube-reverdict",
+              limit: Number(request.limit),
+              scope: request.scope as "all" | "catalogue" | "findings",
+              withCapabilities: true,
+            })
+          : { tracks: await fetchCaptureQueue() };
+      result = page;
     } catch (error) {
       if (!isDueWorkRepairPending(error)) {
         throw error;
@@ -1793,6 +1856,10 @@ async function runCaptureAdmissionChild(
       `/api/v1/admin/tracks/${encodeURIComponent(trackId)}/capture/prepare`,
       request,
     );
+  } else if (action === "prepare-batch") {
+    result = await adminApiPost("/api/v1/admin/tracks/captures/prepare", request);
+  } else if (action === "commit-batch") {
+    result = await adminApiPost("/api/v1/admin/tracks/captures/commit", request);
   } else if (action === "commit") {
     // The commit contract is a strict object, so the body is rebuilt field by field from the state
     // file rather than forwarded: a state file carrying response-only keys still sends exactly the
@@ -1930,7 +1997,58 @@ function prepareCurrentSnapshot(
   return response;
 }
 
+/**
+ * Freeze a WHOLE BATCH of capture rows in ONE admitted phase.
+ *
+ * Twelve rows used to cost twelve prepare leases before a single byte moved. They now cost one, and
+ * the batch is what makes the CATALOGUE CAPTURE BUDGET exact rather than approximate: the server
+ * consumes its rolling count cap cumulatively in request order, so a batch can never authorize more
+ * downloads than the budget has left (the per-row prepare could, because each row re-read a ledger
+ * the batch had not yet spent).
+ *
+ * Returns `undefined` when the phase yielded — no row was frozen, and the tick pauses.
+ */
+function prepareBatchSnapshots(
+  trackIds: readonly string[],
+  kind: CaptureReconciliationKind,
+): Map<string, PreparedSnapshot> | undefined {
+  const path = join(CAPTURE_PROGRESS_DIR, `prepare-batch-${kind}-${process.pid}.json`);
+  writeJsonAtomic(path, { items: trackIds.map((trackId) => ({ kind, trackId })) });
+  rmSync(`${path}.result`, { force: true });
+  if (admittedPhase("prepare-batch", path) === "yielded") {
+    return undefined;
+  }
+  let response: unknown;
+  try {
+    response = JSON.parse(readFileSync(`${path}.result`, "utf8"));
+  } finally {
+    rmSync(path, { force: true });
+    rmSync(`${path}.result`, { force: true });
+  }
+  if (!isRecord(response) || response.ok !== true || !Array.isArray(response.results)) {
+    throw new Error("capture batch prepare returned an invalid response");
+  }
+  const prepared = new Map<string, PreparedSnapshot>();
+  for (const row of response.results) {
+    if (!isRecord(row) || typeof row.trackId !== "string") {
+      throw new Error("capture batch prepare returned an invalid response");
+    }
+    const { trackId, ...rest } = row;
+    // `deferred` is the batch's own wall budget stopping before this row. Nothing was frozen and
+    // nothing was charged, so the row is simply left for the next tick rather than refused.
+    if (rest.prepared === false && rest.reason === "deferred") {
+      continue;
+    }
+    if (!validPreparedSnapshotValue(rest, trackId)) {
+      throw new Error(`capture batch prepare returned an invalid answer for ${trackId}`);
+    }
+    prepared.set(trackId, rest);
+  }
+  return prepared;
+}
+
 function admittedWorkList(options: {
+  capabilities?: { value?: CaptureCapabilities };
   kind: "capture" | "youtube-provenance" | "youtube-reverdict";
   limit: number;
   scope: "all" | "catalogue" | "findings";
@@ -1945,11 +2063,15 @@ function admittedWorkList(options: {
     return "yielded";
   }
   const response = JSON.parse(readFileSync(`${path}.result`, "utf8")) as {
+    capabilities?: unknown;
     dueWorkRepairPending?: boolean;
     tracks?: CaptureFinding[];
   };
   rmSync(path, { force: true });
   rmSync(`${path}.result`, { force: true });
+  if (options.capabilities) {
+    options.capabilities.value = parseCaptureCapabilities(response.capabilities);
+  }
   // The Worker deferred this worklist while due-work repair converges: the queue was not read, so it
   // is neither empty nor a failure.
   if (response.dueWorkRepairPending === true) {
@@ -1979,8 +2101,22 @@ async function authorizeProgress(progress: CaptureResultProgress): Promise<Captu
   return { ...progress, receipt };
 }
 
+/** One authorized commit, waiting for the tick's batched commit phase. */
+export type CollectedCaptureCommit = {
+  path: string;
+  request: CaptureCommitRequest;
+  result: CaptureExternalResult;
+};
+
 export type CaptureProgressPorts = {
   admittedPhase: typeof admittedPhase;
+  /**
+   * Take one authorized commit for the tick's BATCHED commit phase. Returns true when it took it —
+   * `finishProgress` then stops at the authorized stage and answers `deferred`, and the batch
+   * resolves that row before the tick's counters are built. Returns false (or is absent) when the
+   * tick is committing per row, which is what an old Worker and the kill switch both produce.
+   */
+  collectCommit?: (collected: CollectedCaptureCommit) => boolean;
   authorizeProgress: typeof authorizeProgress;
   prepareCurrentSnapshot: typeof prepareCurrentSnapshot;
   progressPath: typeof progressPath;
@@ -1988,9 +2124,25 @@ export type CaptureProgressPorts = {
   r2Put: typeof r2Put;
 };
 
+/**
+ * The tick's commit collector, set for exactly as long as the capture batch is downloading. It is a
+ * module hook rather than a threaded parameter because `persistAndCommit` is reached from three
+ * places inside one per-row capture and from the provenance and re-verdict phases beside it; making
+ * every one of them carry a ports object would be a wider change than the batching it serves, and
+ * the hook is set and cleared around one `await Promise.all` in `main()`.
+ */
+let activeCommitCollector: ((collected: CollectedCaptureCommit) => void) | undefined;
+
 const CAPTURE_PROGRESS_PORTS: CaptureProgressPorts = {
   admittedPhase,
   authorizeProgress,
+  collectCommit: (collected) => {
+    if (activeCommitCollector === undefined) {
+      return false;
+    }
+    activeCommitCollector(collected);
+    return true;
+  },
   prepareCurrentSnapshot,
   progressPath,
   r2Exists,
@@ -2470,7 +2622,13 @@ export async function finishProgress(
   if (!receipt) {
     return "pending";
   }
-  writeJsonAtomic(`${path}.commit`, captureCommitRequest(receipt, progress.trackId));
+  const commitRequest = captureCommitRequest(receipt, progress.trackId);
+  // The journal already holds the receipt, so the row is reconcilable from disk whatever happens to
+  // the batch. Nothing is committed here.
+  if (ports.collectCommit?.({ path, request: commitRequest, result: progress.result }) === true) {
+    return "deferred";
+  }
+  writeJsonAtomic(`${path}.commit`, commitRequest);
   rmSync(`${path}.commit.result`, { force: true });
   if (ports.admittedPhase("commit", `${path}.commit`) === "yielded") {
     return "pending";
@@ -2488,6 +2646,77 @@ export async function finishProgress(
     return "rejected";
   }
   return "pending";
+}
+
+/**
+ * Settle a run of authorized rows in ONE admitted commit phase, then apply their receipts item by
+ * item.
+ *
+ * PER-ITEM RECEIPTS ARE WHAT MAKE THIS SAFE. `track.capture` is deliberately non-replayable, and
+ * batching does not change that: every item carries its own commit token and its own receipt
+ * coordinates, gets its own verdict, and a stale row rejects alone while its neighbours commit.
+ * `resolve_operation_receipt` can still be asked about exactly one row, which is what the recovery
+ * path does on the next tick for anything this phase left `pending`.
+ *
+ * A yielded phase, a failed request, or an unrecognised item verdict all resolve to `pending`: the
+ * journal keeps its receipt, so the next tick reconciles that row rather than re-issuing its write.
+ */
+export function settleCollectedCommits(
+  collected: readonly CollectedCaptureCommit[],
+  width: number,
+  /** The admitted phase runner. Injectable so the batch's own contract is testable in-process. */
+  phase: typeof admittedPhase = admittedPhase,
+): Map<string, ProgressDisposition> {
+  const dispositions = new Map<string, ProgressDisposition>();
+
+  for (let start = 0; start < collected.length; start += width) {
+    const chunk = collected.slice(start, start + width);
+    const first = chunk[0];
+    if (first === undefined) {
+      continue;
+    }
+    const path = `${first.path}.commit-batch`;
+    writeJsonAtomic(path, { items: chunk.map((entry) => entry.request) });
+    rmSync(`${path}.result`, { force: true });
+
+    let response: unknown;
+    if (phase("commit-batch", path) === "yielded") {
+      response = undefined;
+    } else {
+      try {
+        response = JSON.parse(readFileSync(`${path}.result`, "utf8"));
+      } catch {
+        response = undefined;
+      }
+    }
+    rmSync(path, { force: true });
+    rmSync(`${path}.result`, { force: true });
+
+    const receipts =
+      isRecord(response) && Array.isArray(response.receipts) ? response.receipts : undefined;
+
+    for (const [index, entry] of chunk.entries()) {
+      const receipt = receipts?.[index];
+      const disposition =
+        isRecord(receipt) && receipt.trackId === entry.request.trackId
+          ? (parsedCommitDisposition(
+              {
+                ok: true,
+                outcome: receipt.outcome,
+                replayed: receipt.replayed,
+                ...("result" in receipt ? { result: receipt.result } : {}),
+              },
+              entry.result,
+            ) ?? "pending")
+          : "pending";
+      if (disposition === "committed" || disposition === "rejected") {
+        rmSync(entry.path, { force: true });
+      }
+      dispositions.set(entry.request.trackId, disposition);
+    }
+  }
+
+  return dispositions;
 }
 
 export async function persistAndCommit(
@@ -3205,7 +3434,18 @@ async function findVerifiedUpload(options: {
 
 // ── Per-finding capture ────────────────────────────────────────────────────
 
+/**
+ * What one row's capture came to.
+ *
+ * The three `deferred:*` variants are NOT verdicts. They say "this row is authorized and its commit
+ * is in the tick's batch", and they carry the verdict the row earns IF that commit lands, so the
+ * batched commit's per-item receipt resolves each one with exactly the mapping the per-row commit
+ * applies. A row is counted once, after its receipt, never twice and never on a guess.
+ */
 type FindingOutcome =
+  | "deferred:done"
+  | "deferred:failed"
+  | "deferred:unmatched"
   | "done"
   | "unmatched"
   | "failed"
@@ -3213,6 +3453,54 @@ type FindingOutcome =
   | "rejected"
   | "skipped"
   | "unrecorded-failure";
+
+/** The verdict a deferred row earns once its batched commit lands. */
+const DEFERRED_OUTCOMES = {
+  "deferred:done": "done",
+  "deferred:failed": "failed",
+  "deferred:unmatched": "unmatched",
+} as const satisfies Record<string, FindingOutcome>;
+
+export function isDeferredOutcome(
+  outcome: FindingOutcome,
+): outcome is keyof typeof DEFERRED_OUTCOMES {
+  return outcome in DEFERRED_OUTCOMES;
+}
+
+/**
+ * ONE mapping from a row's settlement to its verdict, shared by all three of a capture's exits.
+ *
+ * `committed` is the verdict the row earns when the write lands; `deferred` says the write is in
+ * the tick's batch and carries that same verdict forward for the batch's receipt to confirm.
+ */
+function captureOutcomeFor(
+  disposition: ProgressDisposition,
+  landed: "done" | "failed" | "unmatched",
+): FindingOutcome {
+  if (disposition === "deferred") {
+    return `deferred:${landed}`;
+  }
+  if (disposition === "committed") {
+    return landed;
+  }
+  if (disposition === "rejected") {
+    return "rejected";
+  }
+
+  return disposition === "failed" ? "unrecorded-failure" : "pending";
+}
+
+/** Resolve a deferred row against its batched commit's own receipt. */
+export function resolveDeferredOutcome(
+  outcome: keyof typeof DEFERRED_OUTCOMES,
+  disposition: ProgressDisposition | undefined,
+): FindingOutcome {
+  if (disposition === "committed") {
+    return DEFERRED_OUTCOMES[outcome];
+  }
+
+  return disposition === "rejected" ? "rejected" : "pending";
+}
 
 async function captureFinding(
   finding: CaptureFinding,
@@ -3301,11 +3589,7 @@ async function captureFinding(
           ? { sourceAudioRejected: update.sourceAudioRejected }
           : {}),
       });
-      return disposition === "committed"
-        ? "unmatched"
-        : disposition === "rejected"
-          ? "rejected"
-          : "pending";
+      return captureOutcomeFor(disposition, "unmatched");
     }
 
     // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain). Store the
@@ -3374,11 +3658,7 @@ async function captureFinding(
         : {}),
     });
 
-    return disposition === "committed"
-      ? "done"
-      : disposition === "rejected"
-        ? "rejected"
-        : "pending";
+    return captureOutcomeFor(disposition, "done");
   } catch (error) {
     // A yt-dlp / proxy / R2 error → failed (retriable under backoff). ACCUMULATE the
     // consecutive-failure count + stamp the attempt: the capture queue holds a `failed`
@@ -3413,13 +3693,7 @@ async function captureFinding(
     log(
       `capture failed for ${logId ?? "catalogue"} (${trackId}): ${error instanceof Error ? error.message : String(error)}`,
     );
-    return failureDisposition === "committed"
-      ? "failed"
-      : failureDisposition === "rejected"
-        ? "rejected"
-        : failureDisposition === "failed"
-          ? "unrecorded-failure"
-          : "pending";
+    return captureOutcomeFor(failureDisposition, "failed");
   } finally {
     cleanupProviderWorkDirectory(attemptPath, workDirectory);
   }
@@ -4272,6 +4546,8 @@ export function buildCaptureSummary(options: {
   failures?: CaptureFailureMeter;
   /** The catalogue ladder's per-rung tally. Absent on a tick whose catalogue budget was shut. */
   ladder?: ProvenanceLadderCounts;
+  /** Admitted database phases this tick took. A batched tick spends far fewer than its rows. */
+  leases?: number;
   provenance: ProvenanceCounts;
   reverdict: ReverdictCounts;
   writes: { confirmed: number; failed: number; pending: number };
@@ -4304,6 +4580,7 @@ export function buildCaptureSummary(options: {
     errors: blind === null ? 0 : 1,
     failed: counts.failed,
     failureRecordingFailures: failures.failureRecording,
+    ...(options.leases === undefined ? {} : { leases: options.leases }),
     ok: blind === null,
     produced: counts.done,
     // THE PROVENANCE PHASE, reported separately from the capture batch it rides. Kept out of
@@ -4474,7 +4751,15 @@ async function main(): Promise<void> {
     }
   }
 
-  const queue = admittedWorkList({ kind: "capture", limit: QUEUE_LIMIT, scope: "all" });
+  // The worklist read answers WHAT this Worker can do beside what there is to do, so the tick
+  // chooses its prepare and commit paths before it spends a download.
+  const capabilities: { value?: CaptureCapabilities } = {};
+  const queue = admittedWorkList({
+    capabilities,
+    kind: "capture",
+    limit: QUEUE_LIMIT,
+    scope: "all",
+  });
   if (queue === "due-work-repair-pending") {
     console.log(
       JSON.stringify(
@@ -4506,6 +4791,22 @@ async function main(): Promise<void> {
     Number.isFinite(BATCH_CAP) && BATCH_CAP > 0 ? BATCH_CAP : 4,
   );
 
+  // ── THE BATCH PREPARE: ONE lease for the whole batch, not one per row ──────────────────────
+  // A yielded prepare froze nothing, so the tick pauses and the next one asks again. A Worker that
+  // advertises no width (or the `FLUNCLE_CAPTURE_BATCH_PHASES=0` kill switch) leaves this undefined
+  // and every row prepares on its own, exactly as it always did.
+  const prepareWidth = capabilities.value?.prepareTrackCaptures;
+  let batchPrepared: Map<string, PreparedSnapshot> | undefined;
+  let batchPrepareYielded = false;
+
+  if (prepareWidth !== undefined && batch.length > 0) {
+    batchPrepared = prepareBatchSnapshots(
+      batch.slice(0, prepareWidth).map((finding) => finding.trackId),
+      "capture",
+    );
+    batchPrepareYielded = batchPrepared === undefined;
+  }
+
   const counts = {
     done: 0,
     failed: 0,
@@ -4526,6 +4827,35 @@ async function main(): Promise<void> {
   const botChallenges = createBotChallengeMeter();
   const failures = createCaptureFailureMeter();
 
+  // ONE counting rule for a row's verdict, applied to a row that settled inside its worker AND to
+  // a row the batched commit resolved afterwards. Keeping it in one place is what stops the two
+  // paths from drifting on the denominators the loud-failure tripwires read.
+  const countOutcome = (outcome: FindingOutcome, trackId: string): void => {
+    if (outcome === "unrecorded-failure") {
+      counts.failed += 1;
+    } else if (!isDeferredOutcome(outcome)) {
+      counts[outcome] += 1;
+    }
+    if (outcome === "pending") {
+      captureWrites.pending += 1;
+      protectedTrackIds.add(trackId);
+    } else if (outcome === "rejected") {
+      captureWrites.failed += 1;
+    } else if (
+      outcome !== "skipped" &&
+      outcome !== "unrecorded-failure" &&
+      !isDeferredOutcome(outcome)
+    ) {
+      captureWrites.confirmed += 1;
+    }
+  };
+
+  // Rows whose commit is riding the tick's batched commit phase, with the verdict each earns if it
+  // lands. They are counted after that phase's own per-item receipts, never before.
+  const deferredRows: { outcome: keyof typeof DEFERRED_OUTCOMES; trackId: string }[] = [];
+  const collected: CollectedCaptureCommit[] = [];
+  const commitWidth = capabilities.value?.commitTrackCaptures;
+
   // A fixed worker pool over the batch: `CONCURRENCY` workers each pull the next index. Catch
   // per-finding inside the worker — one failure must never abort the tick or starve a worker.
   let cursor = 0;
@@ -4539,7 +4869,11 @@ async function main(): Promise<void> {
       }
 
       try {
-        const prepared = prepareCurrentSnapshot(finding.trackId, "capture");
+        // The batch prepare already froze this row; a row it left out (the batch's own wall budget,
+        // or a batch narrower than the queue page) still prepares on its own.
+        const prepared =
+          batchPrepared?.get(finding.trackId) ??
+          (batchPrepareYielded ? "yielded" : prepareCurrentSnapshot(finding.trackId, "capture"));
         if (prepared === "yielded") {
           counts.pending += 1;
           continue;
@@ -4554,19 +4888,11 @@ async function main(): Promise<void> {
           botChallenges,
           failures,
         );
-        if (outcome === "unrecorded-failure") {
-          counts.failed += 1;
-        } else {
-          counts[outcome] += 1;
+        if (isDeferredOutcome(outcome)) {
+          deferredRows.push({ outcome, trackId: finding.trackId });
+          continue;
         }
-        if (outcome === "pending") {
-          captureWrites.pending += 1;
-          protectedTrackIds.add(finding.trackId);
-        } else if (outcome === "rejected") {
-          captureWrites.failed += 1;
-        } else if (outcome !== "skipped" && outcome !== "unrecorded-failure") {
-          captureWrites.confirmed += 1;
-        }
+        countOutcome(outcome, finding.trackId);
       } catch (error) {
         counts.failed += 1;
         noteCaptureFailure(failures, error);
@@ -4577,9 +4903,37 @@ async function main(): Promise<void> {
     }
   };
 
-  await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, batch.length) || 1 }, () => worker()),
-  );
+  // THE DOWNLOADS RUN UNLEASED, exactly as before, and their commits are collected instead of
+  // taken one lease at a time. The hook is live for precisely this stretch: the provenance and
+  // re-verdict phases below run after it is cleared, so their commits stay per row.
+  if (commitWidth !== undefined) {
+    activeCommitCollector = (entry) => {
+      collected.push(entry);
+    };
+  }
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, batch.length) || 1 }, () => worker()),
+    );
+  } finally {
+    activeCommitCollector = undefined;
+  }
+
+  // ── THE BATCH COMMIT: ONE lease per `commitWidth` rows ─────────────────────────────────────
+  // Per-item receipts resolve each deferred row with the same mapping its own commit would have
+  // applied. Anything the batch could not settle reads `pending`, which leaves the row's journal —
+  // receipt included — for the next tick's recovery pass to reconcile.
+  if (collected.length > 0 && commitWidth !== undefined) {
+    const dispositions = settleCollectedCommits(collected, commitWidth);
+    for (const row of deferredRows) {
+      countOutcome(resolveDeferredOutcome(row.outcome, dispositions.get(row.trackId)), row.trackId);
+    }
+  } else {
+    // The collector never ran, so a deferred row cannot exist. Count defensively as unproven.
+    for (const row of deferredRows) {
+      countOutcome("pending", row.trackId);
+    }
+  }
 
   // ── THE PROVENANCE PHASE, after the capture batch and never instead of it ──────────────────
   // Ordered last on purpose: acquisition is the sweep's job and a backfill must never be able to
@@ -4640,6 +4994,7 @@ async function main(): Promise<void> {
     // than counted. A steady ~4-of-12 tick is ~33%, under the 50% bar, so this sweep's honest
     // baseline against bot challenges no longer parks it on the public degraded row.
     ladder: currentProvenance.ladder,
+    leases: admittedPhaseCount,
     provenance,
     reverdict,
     writes: {

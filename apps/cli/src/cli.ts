@@ -1513,6 +1513,49 @@ JSON field reference:
       await runAdminTrackWork(options, trackWorkCommand);
     });
 
+  // THE BATCHED PIPELINE PHASES. Each of these is ONE admitted database lease for a whole batch
+  // instead of one per row (docs/database-performance.md). The body is a file because a batch
+  // carries per-item snapshot and commit tokens; the response carries one verdict per item, so a
+  // poisoned row never costs its neighbours theirs.
+  adminTracks
+    .command("prepare-captures")
+    .description("Freeze a batch of capture snapshots in one admitted phase")
+    .requiredOption("--file <path>", "JSON file holding the batch body ({ items: [...] })")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { file: string }) => {
+      const { prepareTrackCapturesCommand } = await import("./commands/admin-tracks");
+
+      printJson(
+        await prepareTrackCapturesCommand<unknown>(JSON.parse(readFileSync(options.file, "utf8"))),
+      );
+    });
+
+  adminTracks
+    .command("commit-captures")
+    .description("Commit a batch of prepared capture results in one admitted phase")
+    .requiredOption("--file <path>", "JSON file holding the batch body ({ items: [...] })")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { file: string }) => {
+      const { commitTrackCapturesCommand } = await import("./commands/admin-tracks");
+
+      printJson(
+        await commitTrackCapturesCommand<unknown>(JSON.parse(readFileSync(options.file, "utf8"))),
+      );
+    });
+
+  adminTracks
+    .command("update-embeddings")
+    .description("Write a batch of audio embeddings in one admitted phase")
+    .requiredOption("--file <path>", "JSON file holding the batch body ({ items: [...] })")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { file: string }) => {
+      const { updateTrackEmbeddingsCommand } = await import("./commands/admin-tracks");
+
+      printJson(
+        await updateTrackEmbeddingsCommand<unknown>(JSON.parse(readFileSync(options.file, "utf8"))),
+      );
+    });
+
   // `requeue_analysis` → `admin tracks requeue-analysis` (Convention B; the `requeue` verb is
   // shared with `requeue_video`). The archive-wide analysis-provenance repair (RFC
   // bpm-key-accuracy): re-queue every finding whose BPM/key are preview-grade (`analyzedFrom
@@ -3207,6 +3250,21 @@ JSON field reference:
         return;
       }
       await runCrawlCatalogue(options, crawlCatalogueCommand);
+    });
+
+  // One claim's fetched nodes, settled in ONE admitted database phase instead of one per node.
+  // The body is a file because a node's signed MusicBrainz envelope is measured in megabytes; the
+  // response carries one receipt per item, so the caller maps verdicts back node by node.
+  catalogue
+    .command("commit-nodes")
+    .description("Commit one claim's fetched crawl nodes in a single admitted phase")
+    .requiredOption("--file <path>", "JSON file holding the batch body ({ items: [...] })")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { file: string }) => {
+      const { commitCrawlNodesCommand } = await import("./commands/admin-catalogue");
+      const body: unknown = JSON.parse(readFileSync(options.file, "utf8"));
+
+      printJson(await commitCrawlNodesCommand<unknown>(body));
     });
 
   catalogue

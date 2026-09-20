@@ -71,7 +71,11 @@
 //
 // See docs/catalogue-crawler.md.
 
-import { MAX_CRAWL_PREPARE_LIMIT } from "@fluncle/contracts/orpc";
+import {
+  CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES,
+  MAX_CRAWL_COMMIT_BATCH,
+  MAX_CRAWL_PREPARE_LIMIT,
+} from "@fluncle/contracts/orpc";
 import { type Client, type InStatement } from "@libsql/client";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
@@ -89,6 +93,7 @@ import { currentSeedRearmBoundary } from "./crawl-rearm-schedule";
 import {
   CRAWL_CATALOGUE_CLAIM_OWNER,
   CRAWL_CATALOGUE_LEASE_MS,
+  CRAWL_CLAIM_REPAIR_DRAIN_BUDGET,
   CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY,
   type ClaimedCrawlFrontierRow,
   claimCrawlFrontierRows,
@@ -121,6 +126,7 @@ import {
   type OperationReceiptOutcome,
 } from "./operation-receipts";
 import { readEnv } from "./env";
+import { ApiError } from "./spotify";
 import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
@@ -236,6 +242,40 @@ if (CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND >= CRAWL_CLAIM_SOURCE_MARKER_DRAIN_
   throw new Error(
     `crawl admission mints up to ${CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND} source repair markers ` +
       `per tick, above the claim's drain capacity of ${CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY}`,
+  );
+}
+
+/**
+ * NODE REPAIR MARKERS ONE BATCHED COMMIT MINTS — the batched shape's side of the same invariant.
+ *
+ * Batching moved K nodes' commits inside ONE admitted phase, so one phase now mints K nodes' worth
+ * of markers where it used to mint one. The markers a commit mints are NODE markers, not the crawl
+ * PROJECTION source markers {@link CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND} bounds: a node's
+ * settlement marks the node it settled, and each newly enqueued neighbour is marked with it. The
+ * enqueue side is already bounded per node by the browse page (`BROWSE_PAGE_SIZE`), and a batch's
+ * worst case is therefore K pages of them.
+ *
+ * They drain on the claim's NODE lane, whose capacity is
+ * `CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.nodeChunks × .nodeChunkRows`. The assertion below is the same
+ * shape as the source-marker one and for the same reason: a tick that mints faster than its claim
+ * drains never claims a frontier row again, so a future change to the claim width, the browse page,
+ * or the drain budget fails the build instead of stalling the production crawl.
+ *
+ * The TRACK side needs no bound of its own. A commit that discovers a label mints one track-side
+ * source marker per new label, and a track-side source marker withholds ITS OWN SUBJECT and nothing
+ * else (`due-work-cutover.ts`): the rest of every worklist stays exactly as servable as it was, so K
+ * labels' markers delay at most those K labels' own rows rather than the queue they sit in.
+ */
+export const CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND =
+  MAX_CRAWL_COMMIT_BATCH * (BROWSE_PAGE_SIZE + 1);
+
+const CRAWL_CLAIM_NODE_MARKER_DRAIN_CAPACITY =
+  CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.nodeChunks * CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.nodeChunkRows;
+
+if (CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND >= CRAWL_CLAIM_NODE_MARKER_DRAIN_CAPACITY) {
+  throw new Error(
+    `a batched crawl commit mints up to ${CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND} node repair ` +
+      `markers per phase, above the claim's drain capacity of ${CRAWL_CLAIM_NODE_MARKER_DRAIN_CAPACITY}`,
   );
 }
 
@@ -2623,6 +2663,11 @@ export type CrawlPhaseInitialization = Pick<
   "artistsRearmed" | "releasesRearmed" | "seeded" | "seedsRearmed"
 >;
 
+export type CrawlPhaseCapabilities = {
+  commitBatchLimit: number;
+  commitBatchMaxTotalBytes: number;
+};
+
 export type CrawlPhasePrepareResult = {
   /**
    * Whether this Worker will consume a MusicBrainz body the box fetched. The box asks BEFORE it
@@ -2630,16 +2675,28 @@ export type CrawlPhasePrepareResult = {
    * rollback costs the vendor nothing and the box nothing.
    */
   boxFetch: boolean;
+  capabilities?: CrawlPhaseCapabilities;
   frontierPending: number;
   initialization: CrawlPhaseInitialization;
   items: { fetchPlan: CrawlFetchPlan; nodeId: string; preparedToken: string }[];
   kind: "drained" | "prepared" | "unavailable";
 };
 
+/**
+ * What this Worker offers the sweep, answered on the prepare it already runs before any commit. A
+ * sweep that does not see this field is talking to a Worker without {@link commitCrawlNodes} and
+ * commits node by node; see the contract's `CrawlPhaseCapabilitiesSchema`.
+ */
+export const CRAWL_PHASE_CAPABILITIES: CrawlPhaseCapabilities = {
+  commitBatchLimit: MAX_CRAWL_COMMIT_BATCH,
+  commitBatchMaxTotalBytes: CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES,
+};
+
 export type CrawlPhaseFetchResult = {
   commitToken: string;
   operationId: "catalogue.crawl";
   operationKey: string;
+  rateLimited?: boolean;
   requestDigest: string;
 };
 
@@ -2881,6 +2938,7 @@ export async function prepareCrawlPhase({
   }
   return {
     boxFetch,
+    capabilities: CRAWL_PHASE_CAPABILITIES,
     frontierPending: await countFrontierPending(),
     initialization: {
       ...emptyCrawlPhaseInitialization(),
@@ -2953,7 +3011,11 @@ export async function fetchCrawlPhase(
       stage: "fetched",
     });
   }
-  return { commitToken, ...(await crawlCommitCoordinates(commitToken)) };
+  return {
+    commitToken,
+    ...(await crawlCommitCoordinates(commitToken)),
+    rateLimited: outcome.kind === "failed" && outcome.rateLimited,
+  };
 }
 
 function expansionResult(expansion: Expansion): JsonValue {
@@ -3070,6 +3132,124 @@ export async function commitCrawlPhase(
     },
     ...coordinates,
   });
+}
+
+/**
+ * THE BATCHED COMMIT'S WALL BUDGET, and why a batch needs one at all.
+ *
+ * An admitted phase holds the single `write` lane under a 90s lease, renewed by a 30s heartbeat and
+ * reaped by a watchdog that allows roughly a 75s window. A per-node commit could never approach that
+ * — one node, one bounded transaction. A batch multiplies the same transaction by K, so the request
+ * has to be able to stop itself: K × p99(per-node commit) must stay inside the window, and when a
+ * slow database makes that untrue the request must return rather than run long and lose its fence
+ * mid-transaction.
+ *
+ * So the budget is checked BEFORE each item and the first item always runs: the batch can overshoot
+ * by at most one node's commit, exactly as the sweep's own tick budget overshoots by at most one
+ * node's provider leg. Everything past the budget comes back `safely-retryable`, which is the same
+ * verdict the receipt rail already hands a caller that must reconcile.
+ */
+export const CRAWL_COMMIT_BATCH_WALL_BUDGET_MS = 45_000;
+
+export type CrawlCommitBatchItem = CrawlPhaseFetchResult;
+
+export type CrawlCommitBatchReceipt = {
+  error?: string;
+  operationKey: string;
+  outcome:
+    | "committed"
+    | "conflict"
+    | "failed"
+    | "in-progress"
+    | "lookup-failed"
+    | "rejected"
+    | "safely-retryable";
+  replayed: boolean;
+  result?: JsonValue;
+  resultIdentity?: string;
+  state?: "accepted" | "committed" | "rejected";
+};
+
+export type CrawlCommitBatchResult = {
+  deferred: number;
+  receipts: CrawlCommitBatchReceipt[];
+};
+
+/**
+ * Settle one claim's fetched nodes inside a single admitted phase.
+ *
+ * PER-ITEM RECEIPTS ARE THE WHOLE POINT. Every item is committed through the same
+ * {@link commitCrawlPhase} the single-node phase calls, with its own signed envelope and its own
+ * receipt coordinates, and its answer is recorded on its own. Nothing is collapsed into a batch-wide
+ * operation id, so `catalogue.crawl` keeps its `phased(…, 0)` non-replayable shape and a caller can
+ * still ask `resolve_operation_receipt` about exactly one node.
+ *
+ * ONE NODE'S FAILURE IS ONE NODE'S FAILURE. A throw is caught, bounded, and recorded as this item's
+ * `failed`; the loop carries on. That is what makes the poisoned-middle-item case behave: the nodes
+ * on either side of it commit, and the caller reconciles only the one that failed.
+ *
+ * ADMISSION MARKERS. A node's commit mints CRAWL NODE repair markers (`markCrawlNodeRepairStatement`)
+ * and, when it discovers a label, one TRACK-side source marker per new label. Neither is the
+ * quantity {@link CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND} bounds — that is the crawl PROJECTION
+ * source marker, minted only by the re-arms in the initialize phase, which batching does not touch.
+ * The node markers a batch mints are bounded by
+ * {@link CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND} and drain on the claim's node lane; the
+ * assertion beside that constant is what keeps the two in step.
+ */
+export async function commitCrawlNodes(
+  items: readonly CrawlCommitBatchItem[],
+  options: {
+    /** The per-node commit. Injectable so the batch's own contract is provable without a database. */
+    commit?: (item: CrawlCommitBatchItem) => Promise<OperationReceiptOutcome>;
+    now?: () => number;
+    wallBudgetMs?: number;
+  } = {},
+): Promise<CrawlCommitBatchResult> {
+  if (items.length === 0 || items.length > MAX_CRAWL_COMMIT_BATCH) {
+    throw new Error(`crawl commit batches must carry 1 through ${MAX_CRAWL_COMMIT_BATCH} nodes`);
+  }
+  const totalBytes = items.reduce(
+    (sum, item) => sum + Buffer.byteLength(item.commitToken, "utf8"),
+    0,
+  );
+  if (totalBytes > CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES) {
+    throw new ApiError(
+      "crawl_commit_batch_too_large",
+      `A crawl commit batch may carry at most ${CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES} bytes of signed provider envelopes.`,
+      413,
+    );
+  }
+
+  const now = options.now ?? (() => performance.now());
+  const budgetMs = options.wallBudgetMs ?? CRAWL_COMMIT_BATCH_WALL_BUDGET_MS;
+  const startedAt = now();
+  const receipts: CrawlCommitBatchReceipt[] = [];
+  let deferred = 0;
+
+  for (const [index, item] of items.entries()) {
+    if (index > 0 && now() - startedAt >= budgetMs) {
+      deferred += 1;
+      receipts.push({
+        operationKey: item.operationKey,
+        outcome: "safely-retryable",
+        replayed: false,
+      });
+      continue;
+    }
+    try {
+      const receipt = await (options.commit ?? commitCrawlPhase)(item);
+      receipts.push({ operationKey: item.operationKey, ...receipt });
+    } catch (error) {
+      receipts.push({
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+        operationKey: item.operationKey,
+        outcome: "failed",
+        replayed: false,
+      });
+    }
+  }
+
+  return { deferred, receipts };
 }
 
 // ── The pass ─────────────────────────────────────────────────────────────────
