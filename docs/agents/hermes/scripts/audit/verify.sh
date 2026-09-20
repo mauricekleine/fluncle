@@ -154,8 +154,19 @@ else
   # ── 2. Formatting, then the lint rules, both scoped to the changed paths ─────────────────────
   # Path-scoped keeps the type-aware pass inside the box's headroom (1.50 GB measured against the
   # 3.34 GB whole-repo run) while still checking every line this night wrote.
-  step format 256 -- bunx oxfmt --check "${CHANGED[@]}"
-  step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- bunx oxlint "${CHANGED[@]}"
+  # `bunx` is a SEPARATE binary the bun installer symlinks beside `bun`, and a container that
+  # copied only `bun` onto its PATH has one and not the other — where this read `bunx` outright,
+  # both steps died `exit-126` (permission denied) and the night's record said FAILED about two
+  # checks that never ran. `bun x` is the same dispatcher spelled as a subcommand, so it is there
+  # whenever `bun` is; prefer the binary when it exists and fall back to the subcommand.
+  if command -v bunx >/dev/null 2>&1; then
+    BUNX=(bunx)
+  else
+    BUNX=(bun x)
+  fi
+
+  step format 256 -- "${BUNX[@]}" oxfmt --check "${CHANGED[@]}"
+  step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUNX[@]}" oxlint "${CHANGED[@]}"
 
   # ── 3. The changed packages' own typecheck + tests ───────────────────────────────────────────
   PACKAGES=()

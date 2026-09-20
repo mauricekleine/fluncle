@@ -4,7 +4,15 @@ import oxanium400 from "./fonts/oxanium-400.ttf?inline";
 import oxanium800 from "./fonts/oxanium-800.ttf?inline";
 import spaceGrotesk400 from "./fonts/space-grotesk-400.ttf?inline";
 import spaceGrotesk700 from "./fonts/space-grotesk-700.ttf?inline";
-import { BODY, BRAND, brandFonts, cardFonts, satoriText } from "./satori-render";
+import {
+  BODY,
+  BRAND,
+  brandFonts,
+  cardFonts,
+  fetchImageDataUri,
+  MAX_INLINE_IMAGE_BYTES,
+  satoriText,
+} from "./satori-render";
 
 // The card contract has two build-gate checks: markup may ask only for registered weights,
 // because Satori synthesizes no missing face; and every TTF must carry the One Box metrics,
@@ -208,5 +216,99 @@ describe("satoriText", () => {
 
   it("leaves the archive's real glyphs alone", () => {
     expect(satoriText("Kraść — Ærø · ¾")).toBe("Kraść — Ærø · ¾");
+  });
+});
+
+describe("fetchImageDataUri's inline ceiling", () => {
+  // The OG/cover routes are ANONYMOUS GETs whose hero URL comes off a database row, and the
+  // fetched bytes are base64'd and then parsed again as markup inside a 128 MB Worker. So the
+  // ceiling is asserted AT the cap and one byte past it, and the refusal is the module's own
+  // documented degradation (`undefined` → a card with a bare background), never a truncation:
+  // half an image is a broken render. The number is 2× the fetched-cover bound this repo already
+  // states in lib/server/cover-masters.ts.
+
+  /** A body delivered in chunks with NO `content-length` — the shape a declared-length cap misses. */
+  function chunkedImage(bytes: number): Response {
+    const chunkSize = 64 * 1024;
+    let sent = 0;
+
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent >= bytes) {
+            controller.close();
+
+            return;
+          }
+
+          const size = Math.min(chunkSize, bytes - sent);
+          sent += size;
+          controller.enqueue(new Uint8Array(size));
+        },
+      }),
+      { headers: { "content-type": "image/jpeg" } },
+    );
+  }
+
+  function withFetch<T>(response: () => Response, run: () => Promise<T>): Promise<T> {
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => Promise.resolve(response())) as unknown as typeof fetch;
+
+    return run().finally(() => {
+      globalThis.fetch = original;
+    });
+  }
+
+  it("inlines a body exactly at the cap", async () => {
+    const inlined = await withFetch(
+      () => chunkedImage(MAX_INLINE_IMAGE_BYTES),
+      () => fetchImageDataUri("https://found.fluncle.com/at-the-cap.jpg"),
+    );
+
+    expect(inlined?.startsWith("data:image/jpeg;base64,")).toBe(true);
+  });
+
+  it("refuses a body one byte past the cap rather than truncating it", async () => {
+    const inlined = await withFetch(
+      () => chunkedImage(MAX_INLINE_IMAGE_BYTES + 1),
+      () => fetchImageDataUri("https://found.fluncle.com/over-the-cap.jpg"),
+    );
+
+    expect(inlined).toBeUndefined();
+  });
+
+  it("refuses an honestly-declared oversized body without transferring it", async () => {
+    // The body here is three bytes — it would inline fine. Only the DECLARED length is over the
+    // cap, so a refusal proves the header is consulted first and the transfer is never spent.
+    const declaredOversize = () =>
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          "content-length": String(MAX_INLINE_IMAGE_BYTES + 1),
+          "content-type": "image/jpeg",
+        },
+      });
+
+    const inlined = await withFetch(declaredOversize, () =>
+      fetchImageDataUri("https://found.fluncle.com/declared-huge.jpg"),
+    );
+
+    expect(inlined).toBeUndefined();
+  });
+
+  it("still inlines an ordinary cover, and still falls back on the missing content type", async () => {
+    const png = () =>
+      new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        headers: { "content-type": "image/png" },
+      });
+    const typeless = () => new Response(new Uint8Array([1, 2, 3]));
+
+    expect(
+      await withFetch(png, () => fetchImageDataUri("https://found.fluncle.com/cover.png")),
+    ).toBe("data:image/png;base64,iVBORw==");
+    expect(
+      await withFetch(typeless, () =>
+        fetchImageDataUri("https://found.fluncle.com/ground", "image/png"),
+      ),
+    ).toBe("data:image/png;base64,AQID");
   });
 });
