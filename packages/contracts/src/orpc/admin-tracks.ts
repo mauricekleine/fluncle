@@ -1246,6 +1246,23 @@ export const TrackWorkItemSchema = z
  * batch whether to rent another hour. Tolerant string ("true"; anything else is false), and
  * OPT-IN so page-only consumers do not pay for it; a consumer that publishes a backlog gauge
  * asks for the authoritative count explicitly.
+ *
+ * A COUNT IS A GAUGE, NOT A WORK HANDOUT — BUT THE CALLER ASKS FOR THAT READING. With
+ * `count=true&debtAware=true`, a page the due-work drain withheld answers the count anyway, with an
+ * EMPTY page and `debtPending: true`, instead of the typed `due_work_maintenance_pending` refusal.
+ * The money rail is untouched: no row is handed out, so nothing downstream can spend a budget on an
+ * ordering repair has not caught up with, and `debtPending` is what the caller keys its pause on.
+ *
+ * `debtAware` exists because the box CLI is a pinned release that lags the Worker, exactly as
+ * `capabilities` does in the other direction. An OLD sweep does not know the flag, does not send
+ * it, and keeps getting the typed 503 it already pauses on — it can never read a withheld page as
+ * a drained queue and report "no work" against a real backlog, which matters most for the reads
+ * that size PAID capture and GPU rental. A NEW caller opts in and gets the number. A new caller
+ * against an OLD Worker sends a flag that Worker ignores, so it receives the 503 and pauses through
+ * its existing path. Tolerant string ("true"; anything else is false), like `count`.
+ *
+ * A page-only read (no `count`) always refuses, whatever `debtAware` says, because there the page
+ * IS the answer.
  */
 export const listTrackWork = oc
   .route({
@@ -1258,6 +1275,8 @@ export const listTrackWork = oc
   .input(
     z.object({
       count: z.string().optional(),
+      /** Opt in to the gauge reading of a withheld page. Tolerant string, like `count`. */
+      debtAware: z.string().optional(),
       kind: TrackWorkKindSchema,
       limit: z.coerce.number().int().min(1).max(250).default(50),
       scope: TrackWorkScopeSchema.default("all"),
@@ -1275,6 +1294,15 @@ export const listTrackWork = oc
        * per-item ops it calls are not going anywhere.
        */
       capabilities: TrackWorkCapabilitiesSchema.optional(),
+      /**
+       * True when the page was withheld because due-work repair is still converging, so `tracks` is
+       * empty and says nothing about the backlog.
+       *
+       * Present on every `count=true&debtAware=true` read and on no other, so its PRESENCE is also
+       * the caller's proof that this Worker understood the flag: an older Worker omits it, which is
+       * how a new caller tells a genuinely complete page from a flag that was ignored.
+       */
+      debtPending: z.boolean().optional(),
       ok: z.literal(true),
       /** The whole backlog for this kind+scope. Present only when `count=true` was asked for. */
       queued: z.number().optional(),

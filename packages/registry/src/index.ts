@@ -1979,7 +1979,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command:
-      "fluncle admin projections get --json; fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --no-terminal-status --json; fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --no-terminal-status --json",
+      "fluncle admin projections get --json; fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps <adaptive> --no-terminal-status --json; fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps <adaptive> --no-terminal-status --json",
     exposedContent: [
       "keep all four runtime projection families converged after their cutovers with one-read, serial, bounded repair (--no-agent)",
     ],

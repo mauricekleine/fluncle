@@ -13,6 +13,7 @@ import {
   dueWorkRepairPendingGate,
   failureBodyUnlessRepairPending,
   isDueWorkRepairPending,
+  throwIfPageRepairPending,
 } from "./due-work-repair-pending";
 
 const DEFAULT_API_BASE_URL = "https://www.fluncle.com";
@@ -405,7 +406,7 @@ function productionDeps(effects: RuntimeEffects): IsrcRecoveryDeps {
   return {
     fetchQueue: async (limit) => {
       const response = await effects.fetch(
-        `${baseUrl}/api/v1/admin/tracks/work?kind=isrc-recovery&limit=${limit}&count=true`,
+        `${baseUrl}/api/v1/admin/tracks/work?kind=isrc-recovery&limit=${limit}&count=true&debtAware=true`,
         {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(30_000),
@@ -420,6 +421,10 @@ function productionDeps(effects: RuntimeEffects): IsrcRecoveryDeps {
       }
 
       const body = (await response.json()) as { queued?: unknown; tracks?: unknown };
+      // A `count=true` read answers the backlog size even while repair converges, reporting the
+      // withheld page as `debtPending`. This sweep consumes the PAGE, so it pauses on it exactly
+      // as it pauses on the typed refusal.
+      throwIfPageRepairPending("isrc-recovery queue read", body);
       if (!Array.isArray(body.tracks)) {
         throw new Error("isrc-recovery queue read returned a non-array tracks body");
       }

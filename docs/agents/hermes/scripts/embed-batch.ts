@@ -210,6 +210,8 @@ export type PageAudio = {
 };
 
 export type QueuePage = {
+  /** The page was withheld while due-work repair converges; `tracks` is empty and means nothing. */
+  debtPending?: boolean;
   /** The size of the WHOLE backlog — only when the read asked for it. */
   queued?: number;
   tracks: WorkItem[];
@@ -846,8 +848,12 @@ async function fetchEmbedQueue(
 
   // `count=true` costs the server a COUNT over the (partial-indexed) embed backlog, so it is
   // asked ONCE per run — at the end, for the honest `remaining`. The paging reads do not pay it.
+  // `debtAware` rides with it: this run rents GPU time off what it reads, so it wants to be told
+  // "the page was withheld" as a fact rather than to have the whole read refused. It stops either
+  // way; the difference is that it gets the honest `remaining` with it.
   if (options.count) {
     params.set("count", "true");
+    params.set("debtAware", "true");
   }
 
   const res = await fetch(`${API_BASE_URL}/api/v1/admin/tracks/work?${params.toString()}`, {
@@ -860,6 +866,13 @@ async function fetchEmbedQueue(
   }
 
   const body = (await res.json()) as QueuePage;
+
+  // A `count=true` read answers the backlog size even while due-work repair converges, reporting
+  // the withheld page as `debtPending`. An empty page under debt is not a drained queue, and this
+  // batch rents GPU time off what it reads, so it stops rather than calling the run done.
+  if (body.debtPending === true) {
+    throw new Error("embed queue read deferred: due-work repair is still converging");
+  }
 
   return { queued: body.queued, tracks: Array.isArray(body.tracks) ? body.tracks : [] };
 }

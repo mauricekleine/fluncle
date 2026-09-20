@@ -88,6 +88,7 @@ import {
   dueWorkRepairPendingGate,
   failureBodyUnlessRepairPending,
   isDueWorkRepairPending,
+  throwIfPageRepairPending,
 } from "./due-work-repair-pending";
 
 // ── Config (env; the shared ~/.fluncle-secrets.env supplies the secrets on the box) ──
@@ -1126,10 +1127,13 @@ async function fetchAnchorQueue(limit: number): Promise<AnchorQueuePage> {
   // Discord alert the on-failure restart then self-heals — pure noise. A PERSISTENT
   // failure still throws (and alerts) on the second miss.
   const attempt = () =>
-    fetch(`${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}&count=true`, {
-      headers: { Authorization: `Bearer ${API_TOKEN}` },
-      signal: AbortSignal.timeout(30_000),
-    });
+    fetch(
+      `${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}&count=true&debtAware=true`,
+      {
+        headers: { Authorization: `Bearer ${API_TOKEN}` },
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
   let res = await attempt().catch(() => undefined);
 
   // The Worker's typed due-work deferral is never retried in-tick: the refused read already advanced
@@ -1149,6 +1153,11 @@ async function fetchAnchorQueue(limit: number): Promise<AnchorQueuePage> {
   }
 
   const body = (await res.json()) as { queued?: unknown; tracks?: unknown };
+
+  // A `count=true` read answers the backlog size even while repair converges, reporting the
+  // withheld page as `debtPending`. This sweep consumes the PAGE, so it pauses on it exactly as
+  // it pauses on the typed refusal.
+  throwIfPageRepairPending("anchor queue read", body);
 
   if (!Array.isArray(body.tracks)) {
     throw new Error("anchor queue read returned a non-array tracks body");

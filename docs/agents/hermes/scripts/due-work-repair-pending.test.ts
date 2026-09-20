@@ -17,6 +17,7 @@ import {
   isDueWorkMaintenancePendingResponse,
   isDueWorkRepairPending,
   throwIfCliRepairPending,
+  throwIfPageRepairPending,
 } from "./due-work-repair-pending";
 
 /** The exact envelope the Worker's rails encoder emits for the typed pending fault. */
@@ -152,6 +153,43 @@ describe("the paused outcome", () => {
     expect(dueWorkRepairPendingGate({ checked: 0, produced: 0 }).partial).toBe(false);
     expect(dueWorkRepairPendingGate({ checked: 2, produced: 0 }).partial).toBe(true);
     expect(dueWorkRepairPendingGate({ checked: null, produced: 1 }).partial).toBe(true);
+  });
+});
+
+// THE GAUGE'S OK-RESPONSE TWIN. A `count=true` worklist read answers the backlog size while repair
+// converges and reports the withheld page as `debtPending`, so a sweep consuming the PAGE must
+// pause on that exactly as it paused on the typed 503 — otherwise it reports "no work" against a
+// real backlog, which is a detector that has gone blind.
+describe("a withheld page inside an OK response", () => {
+  test("pauses on debtPending, whatever the count beside it says", () => {
+    expect(() =>
+      throwIfPageRepairPending("embed queue read", {
+        debtPending: true,
+        queued: 4_812,
+        tracks: [],
+      }),
+    ).toThrow(DueWorkRepairPendingError);
+  });
+
+  test("an honestly empty page is not a pause", () => {
+    expect(() =>
+      throwIfPageRepairPending("embed queue read", { queued: 0, tracks: [] }),
+    ).not.toThrow();
+    expect(() =>
+      throwIfPageRepairPending("embed queue read", { debtPending: false, queued: 0, tracks: [] }),
+    ).not.toThrow();
+  });
+
+  test("a served page is not a pause even when debt exists elsewhere", () => {
+    expect(() =>
+      throwIfPageRepairPending("embed queue read", { queued: 4_812, tracks: [{ trackId: "t" }] }),
+    ).not.toThrow();
+  });
+
+  test("a malformed or non-object body stays an ordinary read, never a pause", () => {
+    for (const payload of [undefined, null, "not-json", 7, []]) {
+      expect(() => throwIfPageRepairPending("embed queue read", payload)).not.toThrow();
+    }
   });
 });
 

@@ -221,6 +221,52 @@ describe("listTrackWork Goal C cutover", () => {
     ).resolves.toEqual({ hasMore: true, subjectIds: ["scheduled-500"] });
   });
 
+  // AN EMPTY PAGE HANDS OUT NO ROW. The deferral over an empty page under residual source debt is
+  // what turned the render conductor's near-always-empty queue into a deferral on every tick while
+  // the track family carried permanent debt. A queue may opt out of it; the metered queues do not.
+  it("answers an honest empty page under debt only for a queue that opted in", async () => {
+    const { markDueWorkSourceRepairsStatement } = await import("./due-work");
+    const { DUE_WORK_READ_DRAIN_BUDGET, SOURCE_REPAIR_LIMIT } =
+      await import("./due-work-source-repair");
+
+    // More track source debt than one request's whole drain budget can converge, and no row in the
+    // queue being read — the conductor's ordinary overnight shape.
+    const burst = SOURCE_REPAIR_LIMIT * (DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1) + 1;
+    const trackIds = Array.from(
+      { length: burst },
+      (_, index) => `debt-${String(index).padStart(4, "0")}`,
+    );
+    for (const trackId of trackIds) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+    for (let start = 0; start < trackIds.length; start += 100) {
+      await db.execute(
+        markDueWorkSourceRepairsStatement(
+          trackIds
+            .slice(start, start + 100)
+            .map((subjectId) => ({ subjectId, subjectType: "track" })),
+          { now: NOW, producer: "test-burst" },
+        ),
+      );
+    }
+
+    await expect(
+      runWithDatabaseRequestScope(() =>
+        readPromotedDueWorkPage(db, "finding.render", { limit: 1, now: () => NOW }),
+      ),
+    ).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
+
+    await expect(
+      runWithDatabaseRequestScope(() =>
+        readPromotedDueWorkPage(db, "finding.render", {
+          emptyPageUnderDebt: "serve",
+          limit: 1,
+          now: () => NOW,
+        }),
+      ),
+    ).resolves.toEqual({ hasMore: false, subjectIds: [] });
+  });
+
   it("serves the subjects a burst of repair markers does not own, and withholds the ones it does", async () => {
     const { listTrackWork } = await import("./track-work");
     const { markDueWorkSourceRepairsStatement } = await import("./due-work");
