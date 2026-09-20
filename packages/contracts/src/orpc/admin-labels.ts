@@ -265,18 +265,50 @@ export const MB_LABEL_MBID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * What the mint actually did — a discriminated outcome, never a bare boolean, because the three
- * cases are three different facts about the archive:
+ * What the mint actually did — a discriminated outcome, never a bare boolean, because the four
+ * cases are four different facts about the archive:
  *
- *   - `minted`  — no row carried this identity or this spelling; a new `labels` row was created.
- *   - `adopted` — a row already existed under the MusicBrainz name's slug (or a confirmed alias of
- *                 it) carrying NO MBID, so the MBID was adopted onto it fill-empty-only. Nothing
- *                 was duplicated; the publish-minted row simply gained its identity.
- *   - `known`   — the MBID already keyed a row. The call is a no-op read (plus any ruling).
+ *   - `minted`     — no row carried this identity or this spelling; a new `labels` row was created.
+ *   - `adopted`    — a row already existed under the MusicBrainz name's slug (or a confirmed alias
+ *                    of it) carrying NO MBID, so the MBID was adopted onto it fill-empty-only.
+ *                    Nothing was duplicated; the publish-minted row simply gained its identity.
+ *   - `known`      — the MBID already keyed a row. The call is a no-op read (plus any ruling).
+ *   - `taken_over` — the spelling belonged to a row folded on a DIFFERENT MBID and the operator
+ *                    named that row in `takeOverSlug`, so the row's identity was re-pointed onto
+ *                    the minted entity. Only ever reached by that explicit instruction.
  */
 export const MintLabelOutcomeSchema = z
-  .enum(["minted", "adopted", "known"])
+  .enum(["minted", "adopted", "known", "taken_over"])
   .meta({ id: "MintLabelOutcome" });
+
+/**
+ * What a TAKE-OVER moved, beside the row itself. The operator asked for an identity re-point, so
+ * the answer has to say which identity was replaced and what could not travel with the name.
+ *
+ * `clearedFacts` names the columns wiped or re-armed because they describe the OLD MusicBrainz
+ * entity rather than the NAME (its Discogs id, its logo, its parent imprint and the two sweep state
+ * machines that walked them). `droppedRules` counts the label-scoped artist rules deleted — they
+ * roster the old identity, so they are dropped rather than carried, exactly as `merge_label` drops
+ * the losing row's set. `retiredFrontierNodes` counts the crawl-frontier nodes stamped retired, and
+ * `rearmedSeedNode` reports whether the label's seed resolver was re-armed so the next tick walks
+ * the NEW entity instead of resuming the old one.
+ */
+export const LabelTakeOverResultSchema = z
+  .object({
+    /** Identity-derived columns cleared or re-armed because they belong to the replaced entity. */
+    clearedFacts: z.array(z.string()),
+    /** Label-scoped artist rules deleted — they roster the replaced identity, never the name. */
+    droppedRules: z.number(),
+    /** The MBID the row carried before the take-over (null when it carried none). */
+    previousMbLabelId: z.string().nullable(),
+    /** `true` when the label's `fluncle:label:<slug>` seed resolver was re-armed. */
+    rearmedSeedNode: z.boolean(),
+    /** Crawl-frontier nodes stamped retired so the old entity is never re-walked. */
+    retiredFrontierNodes: z.number(),
+    /** The slug of the row whose identity moved. */
+    slug: z.string(),
+  })
+  .meta({ id: "LabelTakeOverResult" });
 
 /**
  * `mint_label` → `POST /admin/labels` (operationId `mintLabel`).
@@ -300,6 +332,21 @@ export const MintLabelOutcomeSchema = z
  * `ruled_at` and the re-arm watermark stamp identically. Omitting it leaves a NEW row at the table's
  * `undecided` default (never silently crawled, never silently dropped) and leaves an EXISTING row's
  * ruling exactly where the operator left it — a re-run can never un-rule a label it did not mint.
+ *
+ * ── `takeOverSlug`: THE EXPLICIT WAY THROUGH THE CONFLICT ──────────────────────────────────
+ * A slug that already belongs to a DIFFERENT MusicBrainz label is a 409 by default. One upstream
+ * shape earns a way through: a MusicBrainz split moves the drum & bass catalogue onto a NEW entity
+ * that keeps the ORIGINAL's name, and Fluncle's row for that name still points at the original,
+ * which now holds only the foreign catalogue. `takeOverSlug` names THAT row and re-points its
+ * `mb_label_id` onto the minted entity (`outcome: "taken_over"`).
+ *
+ * It is honoured ONLY when the named slug IS the conflicting row — a slug that is not gets a 400
+ * (`take_over_slug_mismatch`) naming the row that actually conflicts, so no unrelated identity is
+ * re-pointed by a typo. The row must hold ZERO tracks and must not be `enabled`, else a 409
+ * (`take_over_not_empty`): a row with tracks is a MERGE, not a take-over. Aliases and the bio
+ * describe the NAME and ride along; the old identity's artist rules are dropped and reported in
+ * `takenOver`, which also carries the replaced MBID. `takenOver` is present ONLY on that outcome.
+ * A second call with the same MBID is still `known`, `takeOverSlug` or not.
  */
 export const mintLabel = oc
   .route({
@@ -315,6 +362,7 @@ export const mintLabel = oc
         error: "mbLabelId must be a MusicBrainz label MBID",
       }),
       seedState: LabelSeedStateSchema.optional(),
+      takeOverSlug: z.string().min(1).optional(),
     }),
   )
   .output(
@@ -322,6 +370,7 @@ export const mintLabel = oc
       label: LabelAdminItemSchema,
       ok: z.literal(true),
       outcome: MintLabelOutcomeSchema,
+      takenOver: LabelTakeOverResultSchema.optional(),
     }),
   );
 
