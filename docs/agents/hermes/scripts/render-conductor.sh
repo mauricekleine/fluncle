@@ -623,18 +623,37 @@ cd "$HOME/fluncle" || { echo "[freshen] no ~/fluncle — needs reprovision"; exi
 # Bounded, and it ASSERTS: the deps-ok / deps-failed marker is what the caller reads, because
 # `boat ssh` flattens the remote exit code. The agent NEVER installs (render-detached.sh
 # refuses to launch into an incomplete workspace instead).
+# A killed install (OOM, timeout) leaves EMPTY package directories behind, and the next
+# `bun install --frozen-lockfile` trusts a directory that exists as a package that is installed,
+# exits 0 and steps over the hole. So a directory is never proof: the check demands the package
+# manifest, the install prunes every empty package directory first so bun re-links them, and
+# `deps-ok` is asserted on the tree AFTER the install, never on bun's exit code alone.
+empty_packages() {
+  [ -d node_modules ] || return 0
+  find node_modules -mindepth 1 -maxdepth 1 -type d -empty ! -name '.*' 2>/dev/null
+  find node_modules -mindepth 2 -maxdepth 2 -type d -empty -path 'node_modules/@*/*' 2>/dev/null
+}
 install_deps() {
-  if timeout 900 bun install --frozen-lockfile </dev/null >/tmp/freshen-install.log 2>&1; then
+  # Two passes: pruning a scope's last package leaves the scope directory itself empty.
+  empty_packages | xargs -r rmdir 2>/dev/null
+  empty_packages | xargs -r rmdir 2>/dev/null
+  if timeout 900 bun install --frozen-lockfile </dev/null >/tmp/freshen-install.log 2>&1 && ! deps_incomplete; then
     echo "[freshen] deps-ok"
     return 0
   fi
   echo "[freshen] deps-failed"
   tail -c 1000 /tmp/freshen-install.log 2>/dev/null
+  deps_incomplete && echo "the tree is still incomplete after the install: $(empty_packages | head -5 | tr '\n' ' ')"
   return 1
 }
 # `browserslist` is a transitive dependency of the render's webpack bundling step, so its
-# absence is the cheapest honest proof that the workspace tree is incomplete.
-deps_incomplete() { [ -d node_modules ] && [ -d node_modules/browserslist ] && return 1; return 0; }
+# missing manifest is the cheapest honest proof that the workspace tree is incomplete; an empty
+# package directory anywhere is the other face of the same hole.
+deps_incomplete() {
+  [ -f node_modules/browserslist/package.json ] || return 0
+  [ -n "$(empty_packages | head -1)" ] && return 0
+  return 1
+}
 
 git fetch --depth 1 origin main -q 2>/dev/null || { echo "[freshen] fetch failed — keep current"; exit 0; }
 have="$(git rev-parse HEAD 2>/dev/null)"; want="$(git rev-parse FETCH_HEAD 2>/dev/null)"

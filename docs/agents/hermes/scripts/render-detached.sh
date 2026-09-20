@@ -64,8 +64,9 @@ refuse() {
 
 # --- precondition: the workspace's modules ---
 # `browserslist` is a transitive dependency of the render's webpack bundling step, so its
-# absence is the cheapest honest proof that the tree is incomplete.
-if [ ! -d "$WORKSPACE/node_modules" ] || [ ! -d "$WORKSPACE/node_modules/browserslist" ]; then
+# missing manifest is the cheapest honest proof that the tree is incomplete. The MANIFEST, not
+# the directory: a killed install leaves empty package directories that look installed.
+if [ ! -f "$WORKSPACE/node_modules/browserslist/package.json" ]; then
   refuse deps-missing "the workspace has no complete node_modules — the conductor's wake install did not land"
 fi
 

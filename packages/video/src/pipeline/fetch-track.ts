@@ -3,7 +3,8 @@
 
 import { type CosmosTrack } from "../remotion/types";
 
-const TRACK_ENDPOINT = "https://www.fluncle.com/api/tracks";
+// The versioned oRPC path: the bare `/api/tracks` alias no longer answers (`apps/web/src/routes/api/-alias.ts`).
+const TRACK_ENDPOINT = "https://www.fluncle.com/api/v1/tracks";
 
 type ApiTrack = {
   trackId: string;

@@ -101,8 +101,11 @@ function runLauncher(options: Launch, root: string): LaunchResult {
   const workspace = join(home, "fluncle");
   mkdirSync(join(workspace, "packages/skills/fluncle-video/automation"), { recursive: true });
   mkdirSync(stub, { recursive: true });
+  // `depsMissing: true` leaves the package directory in place but EMPTY — the shape a killed
+  // install leaves behind — so the launcher is judged on the manifest, not the directory.
+  mkdirSync(join(workspace, "node_modules/browserslist"), { recursive: true });
   if (options.depsMissing !== true) {
-    mkdirSync(join(workspace, "node_modules/browserslist"), { recursive: true });
+    writeFileSync(join(workspace, "node_modules/browserslist/package.json"), "{}\n");
   }
   writeFileSync(
     join(workspace, "packages/skills/fluncle-video/automation/render-queue.prompt.md"),
@@ -234,7 +237,7 @@ describe("the trust setting", () => {
 });
 
 describe("the workspace's modules", () => {
-  test("an incomplete tree is refused, and the agent is never handed the install", async () => {
+  test("an empty package directory is refused as incomplete, and the agent is never handed the install", async () => {
     await withLaunch({ depsMissing: true }, (result) => {
       expect(result.stdout).toContain("render-detached: refused deps-missing");
       expect(result.stdout).not.toContain("render-detached: launched");
