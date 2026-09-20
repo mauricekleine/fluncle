@@ -24,9 +24,12 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # NOTE: render-conductor.sh execs provision-rave-03.sh from its own dir, so Unit A MUST bake
 # provision-rave-03.sh alongside it under /opt/hermes-scripts/ (see this dir's README).
 ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-render -- bash -c '. /opt/hermes-scripts/cron-output.sh && emit_cron_output render -- bash /opt/hermes-scripts/render-conductor.sh'
-# The tick is quick (<120s: state read + box poll/trigger); the render runs detached on rave-03.
-# Preserve the prior 180s payload budget after the admission runner's bounded 120s wait.
-TimeoutStartSec=310
+# A poll tick is quick (state read + box probe); a LAUNCH tick is not: it wakes the box, freshens
+# the checkout and runs the conductor's bounded dependency install (`timeout 900 bun install`)
+# before it starts the detached render. Budget = the admission runner's 120s wait + wake/resume +
+# the 900s install ceiling, so a slow install lands as the conductor's own `render_deps_install_failed`
+# verdict instead of a systemd kill mid-install that leaves the box awake with no marker.
+TimeoutStartSec=1500
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
