@@ -1,4 +1,6 @@
 import { encodeDueWorkOrder } from "./due-work-order";
+import { fnv1a64 } from "@fluncle/contracts/util/hash";
+import { dueWorkNowIso } from "./due-work-time";
 
 /** Physical due-work kinds for the remaining track selectors. */
 export type DueWorkVendorKind =
@@ -171,14 +173,6 @@ export type DueWorkVendorEvaluationOptions = {
   sources: readonly DueWorkVendorSource[];
 };
 
-function nowIso(now: Date | string): string {
-  const date = typeof now === "string" ? new Date(now) : now;
-  if (!Number.isFinite(date.getTime())) {
-    throw new RangeError("Due-work evaluation requires a valid now timestamp");
-  }
-  return date.toISOString();
-}
-
 function timestampAfter(timestamp: string, milliseconds: number): string | undefined {
   const time = Date.parse(timestamp);
   return Number.isFinite(time) ? new Date(time + milliseconds).toISOString() : undefined;
@@ -249,7 +243,6 @@ export function dueWorkVendorSourceVersion(
   kind: DueWorkVendorKind,
   rankCorpus?: string,
 ): string {
-  let hash = 0xcbf29ce484222325n;
   const columns =
     kind === "catalogue-rank"
       ? CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS
@@ -259,10 +252,7 @@ export function dueWorkVendorSourceVersion(
     ...columns.map((column) => `${column}:${JSON.stringify(source[column])}`),
     ...(kind === "catalogue-rank" ? [`rankCorpus:${rankCorpus ?? ""}`] : []),
   ].join("\u001f");
-  for (const byte of new TextEncoder().encode(input)) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
-  }
+  const hash = fnv1a64(input);
   const prefix = kind === "catalogue-rank" ? "dw-rank1" : "dw1";
   return `${prefix}-${hash.toString(16).padStart(16, "0")}`;
 }
@@ -467,7 +457,7 @@ export function describeDueWorkVendorDecision(
 export function evaluateDueWorkVendorQueue(
   options: DueWorkVendorEvaluationOptions & { kind: DueWorkVendorKind },
 ): DueWorkVendorRow[] {
-  const now = nowIso(options.now);
+  const now = dueWorkNowIso(options.now);
   return options.sources
     .flatMap((source) => {
       const nextDueAt = dueAt(options.kind, source, now, options.rankCorpus);

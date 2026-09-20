@@ -137,7 +137,7 @@ export function createShuffleBag(size: number, rng: Rng): ShuffleBag {
  * `ObservedDeck` (`identity.ts`), so `serve.ts` hands it straight to `resolveDeck`. `title` +
  * `artist` are the identity (both required); `bpm`/`key` are the resolver's coarse guards.
  */
-export type VjIdentity = {
+type VjIdentity = {
   title: string;
   artist: string;
   bpm?: number;

@@ -26,6 +26,7 @@
 // complement for the unlit half — is the same structural guard the rest of `tracks.ts` uses:
 // a catalogue row has no `findings` columns to map, so it cannot leak into a finding surface.
 
+import { type FreshTrack } from "@fluncle/contracts";
 import { bestAlbumCoverUrl, bestArtistAvatarUrl } from "../media";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
@@ -337,18 +338,7 @@ export const FRESH_TRACKS_MAX = 100;
  * `certified`, so a consumer physically cannot render an uncertified row as a named finding). Every
  * date is a RELEASE date (VOICE.md's Found Rule) — a surface labels it "Released", never "Found".
  */
-export type FreshTrack = {
-  artists: string[];
-  bpm?: number;
-  certified: boolean;
-  coverImageUrl?: string;
-  durationMs?: number;
-  key?: string;
-  logId?: string;
-  releaseDate: string;
-  spotifyUrl?: string;
-  title: string;
-};
+export type { FreshTrack };
 
 /** The flat fresh payload: newest RELEASES first, plus the album entities they sit on. */
 export type FreshTracks = {

@@ -33,7 +33,6 @@
     "better-auth": "1.6.26",
     "expo": "~56.0.17",
     "expo-audio": "~56.0.13",
-    "expo-blur": "~56.0.4",
     "expo-constants": "~56.0.22",
     "expo-dev-client": "~56.0.24",
     "expo-font": "~56.0.7",

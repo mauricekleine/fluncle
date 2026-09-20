@@ -16,6 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type Client } from "@libsql/client";
+import { type ServiceHealthStatus } from "@fluncle/contracts";
 import {
   HEALTH_SNAPSHOT_PRODUCER_MAX,
   HEALTH_SNAPSHOT_PRODUCER_PATTERN,
@@ -31,7 +32,7 @@ import {
 } from "./operation-receipts";
 
 /** The three-state health enum, shared with the `@fluncle/contracts` snapshot schema. */
-export type ServiceHealthStatus = "ok" | "degraded" | "down";
+export type { ServiceHealthStatus };
 
 /** A current-state row, including a synthetic never-reported expected writer (the page grid). */
 export type ServiceStatusRow = {

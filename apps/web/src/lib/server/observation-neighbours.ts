@@ -21,7 +21,7 @@ import { type ObservationNeighbor } from "./observation-echo";
 import { getSimilarFindings } from "./tracks";
 
 /** The default neighbourhood window — the same six the note layer and `/log`'s "more like this" use. */
-export const OBSERVATION_NEIGHBOR_LIMIT = 6;
+const OBSERVATION_NEIGHBOR_LIMIT = 6;
 
 /**
  * The stored observation scripts of a finding's sonic neighbours, keyed to their Log IDs, in

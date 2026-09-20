@@ -11,7 +11,7 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { TrackSearchResultSchema } from "./_shared";
+import { TrackSearchResultSchema } from "./_shared.js";
 
 /**
  * `search_tracks` → `GET /search` (operationId `searchTracks`).

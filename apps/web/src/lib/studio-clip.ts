@@ -13,42 +13,12 @@
 //      fractions of the set duration (what the energy lane draws) ⇄ millisecond
 //      `inMs`/`outMs` (what `create_clip` stores).
 //
-// `StudioEnvelope` (+ its peak/suggestion shapes) is MIRRORED here, not imported
-// from `@fluncle/video`: that package is a Node/ffmpeg/Remotion pipeline and is
-// not (and should not become) a dependency of the Worker-targeted `apps/web`. The
-// mirror is the wire contract of `<log-id>/studio-envelope.json`; if the producer
-// shape ever changes, keep this in step (the field set is small and stable).
+// The producer and editor share this artifact through the contracts package. These
+// type-only imports keep the Worker free of the Node/ffmpeg/Remotion video package.
 
-/** A loudness-rise candidate ("drop") — a guess the operator vets, not a certainty. */
-export type StudioPeak = {
-  atMs: number;
-  score: number;
-  kind: "drop";
-};
+import { type StudioEnvelope, type StudioPeak, type StudioSuggestion } from "@fluncle/contracts";
 
-/** A vettable clip window: the drop lands at `anchorMs`, just inside `startMs`. */
-export type StudioSuggestion = {
-  startMs: number;
-  durationMs: number;
-  anchorMs: number;
-  score: number;
-};
-
-/**
- * The set-analysis artifact the editor reads from R2. Mirror of the producer type
- * in `@fluncle/video` (`analyze-set.ts`). `bpm` is null on a multi-tempo set; the
- * curves are decimated to `hopMs` (~100ms). Absent on R2 until the box stages it.
- */
-export type StudioEnvelope = {
-  durationMs: number;
-  hopMs: number;
-  bpm: number | null;
-  energy: number[];
-  bass: number[];
-  flux: number[];
-  peaks: StudioPeak[];
-  suggestions: StudioSuggestion[];
-};
+export type { StudioEnvelope, StudioPeak, StudioSuggestion };
 
 /** A timeline region as fractions of the set duration (what the energy lane draws). */
 export type TimelineRegion = {
