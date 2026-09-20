@@ -5950,7 +5950,7 @@ async function runBackfillArtistEdges(
   options: BackfillSyncOptions,
   backfillArtistEdgesCommand: typeof import("./commands/admin-tracks").backfillArtistEdgesCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit) ?? 200;
+  const limit = parseListLimit(options.limit);
   const fullyMatched: string[] = [];
   const partiallyMatched: string[] = [];
   const zeroMatched: string[] = [];
@@ -6023,7 +6023,7 @@ async function runBackfillArtistCredits(
   options: BackfillSyncOptions,
   backfillArtistCreditsCommand: typeof import("./commands/admin-tracks").backfillArtistCreditsCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit) ?? 40;
+  const limit = parseListLimit(options.limit);
   let cursor: string | undefined;
   let dryRun = options.dryRun;
   let scanned = 0;
@@ -6095,7 +6095,7 @@ async function runArtistResolveQueue(
   listArtistsCommand: typeof import("./commands/admin-artists").listArtistsCommand,
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
-  const result = await listArtistsCommand(limit ?? 50);
+  const result = await listArtistsCommand(limit);
 
   if (options.json) {
     printJson({ artists: result.artists, ok: true });
@@ -8405,7 +8405,7 @@ async function runAdminTrackWork(
   options: TrackWorkOptions,
   trackWorkCommand: typeof import("./commands/admin-tracks").trackWorkCommand,
 ): Promise<void> {
-  const kind = options.kind?.trim().toLowerCase() ?? "";
+  const kind = options.kind.trim().toLowerCase();
   const scope = options.scope?.trim().toLowerCase() ?? "all";
 
   if (!TRACK_WORK_KINDS.has(kind)) {
@@ -8610,7 +8610,7 @@ async function runOpen(
     throw new Error(`Unknown open target: ${target}`);
   }
 
-  const limit = Number.parseInt(options.limit ?? "20", 10);
+  const limit = Number.parseInt(options.limit, 10);
 
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error("Limit must be an integer between 1 and 100");
