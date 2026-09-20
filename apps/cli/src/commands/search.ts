@@ -9,12 +9,7 @@
 // coordinate column (the Unlit Rule — presence or absence of the coordinate IS
 // the distinction; the uncertified tier is never named or labelled).
 //
-// The `search_archive` response types are not surfaced through the zod-free
-// `@fluncle/contracts` package index (only `search_tracks`'s Spotify shape is),
-// and the CLI must not pull the zod-backed `/orpc` subpath into its bundle, so
-// this thin client carries the slice of the response it reads — mirrored from
-// packages/contracts/src/orpc/search.ts (the `SearchHit` / `SearchEntity` shapes).
-
+import { type SearchEntity, type SearchHit } from "@fluncle/contracts";
 import { publicApiGet } from "../api";
 import { webBaseUrl } from "../links";
 import { printJson } from "../output";
@@ -23,27 +18,6 @@ import { printJson } from "../output";
 // same `—` `fresh` uses (the Unlit Rule), keeping the column aligned. Distinct
 // from the one sanctioned `Artist — Title` separator below.
 const COORD_FALLBACK = "—";
-
-// One archive row as `search_archive` returns it. `certified` ⇔ a `logId` is
-// present; an uncertified track links out via `spotifyUrl` instead.
-type SearchHit = {
-  artists: string[];
-  certified: boolean;
-  logId?: string;
-  spotifyUrl?: string;
-  title: string;
-  trackId: string;
-};
-
-// A graph node the query named — a jump target with a page, not a result row.
-type SearchEntity = {
-  kind: "album" | "artist" | "galaxy" | "label" | "mixtape";
-  name: string;
-  slug: string;
-  // The page this entity IS, when it is not the `/<kind>/<slug>` default (a galaxy's plural
-  // segment, a mixtape's log page). Server-supplied so the CLI never special-cases the route.
-  url?: string;
-};
 
 // The slice of the `search_archive` envelope this command reads.
 type SearchArchiveResponse = {

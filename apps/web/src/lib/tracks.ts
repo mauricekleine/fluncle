@@ -1,13 +1,15 @@
-import { type RadioNowPlaying } from "@fluncle/contracts";
-import { type TrackListItem, type TrackListPage } from "./server/tracks";
-import { type FeedItem } from "./mixtapes";
+import {
+  type RadioNowPlaying,
+  type RadioNowPlayingResponse,
+  type RandomTrackResponse,
+  type TrackListItem,
+  type TracksResponse,
+} from "@fluncle/contracts";
 
 // Client reads use the public /api/v1/findings feed contract produced by lib/server/tracks.ts.
 export type Track = TrackListItem;
 
-export type { RadioNowPlaying };
-
-export type TracksResponse = Omit<TrackListPage, "tracks"> & { tracks: FeedItem[] };
+export type { RadioNowPlaying, TracksResponse };
 
 export async function fetchTracks({
   cursor,
@@ -31,8 +33,6 @@ export async function fetchTracks({
   return (await response.json()) as TracksResponse;
 }
 
-type RandomTrackResponse = { ok: true; track: TrackListItem };
-
 /**
  * One certified finding, picked at random by the server (`get_random_track`). The
  * 404 page's "throw you somewhere real" action: fetch a fresh coordinate on every
@@ -51,11 +51,6 @@ export async function fetchRandomFindingLogId(): Promise<string | undefined> {
 
   return data.track.logId || undefined;
 }
-
-type RadioNowPlayingResponse = {
-  nowPlaying: RadioNowPlaying;
-  ok: true;
-};
 
 /**
  * The server-authoritative now-playing slot on the shared broadcast loop (the

@@ -441,7 +441,7 @@ const LYRIC_DOMAINS = [
   "lyricstranslate.com",
 ];
 
-type FirecrawlResult = { description?: string; title?: string; url?: string };
+export type FirecrawlResult = { description?: string; title?: string; url?: string };
 
 export type TrackContextFuel = {
   snippets: string[];

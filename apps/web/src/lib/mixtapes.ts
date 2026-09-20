@@ -1,14 +1,14 @@
 import {
+  type FeedItem,
   type MixtapeDTO,
   type MixtapeExternalUrls,
   type MixtapeMember,
   type MixtapeStatus,
-  type TrackListItem,
 } from "@fluncle/contracts";
 import { buildMixtapeCoverUrl, type MixtapeCoverSize } from "@fluncle/contracts/util/mixtape-cover";
 import { siteUrl } from "./fluncle-links";
 
-export type { MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
+export type { FeedItem, MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
 export { type MixtapeCoverSize } from "@fluncle/contracts/util/mixtape-cover";
 
 /**
@@ -31,8 +31,6 @@ export function mixtapeDisplayTitle(title: string): string {
 export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
   return buildMixtapeCoverUrl(siteUrl, logId, size);
 }
-
-export type FeedItem = MixtapeDTO | TrackListItem;
 
 export type MixtapeRowLike = {
   added_at?: string | null;

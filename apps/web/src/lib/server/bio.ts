@@ -40,6 +40,7 @@ import {
   isLyricDomain,
   maskEntityName,
   scanObservationScript,
+  type FirecrawlResult,
   type VoiceGateViolation,
 } from "./observation";
 import { renderRegisteredPrompt } from "./prompts";
@@ -331,8 +332,6 @@ export async function fetchEntityFacts(input: {
 
   return { facts: snippets.join("\n").slice(0, 2000), sources };
 }
-
-type FirecrawlResult = { description?: string; title?: string; url?: string };
 
 // ── The prompt-assembly helper (the reusable seam the future cron authors through) ────
 
