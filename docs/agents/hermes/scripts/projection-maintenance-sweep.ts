@@ -32,6 +32,17 @@ const DUE_WORK_MARKERS_PER_STEP = 5;
 const PUBLIC_SUBJECTS_PER_STEP = REPAIR_LIMIT;
 
 /**
+ * Steps a public family takes whatever its marker count says.
+ *
+ * The two public families do not converge on markers alone: an unmatched epoch, and for public
+ * aggregates an invalid anchor document, are repair work the bounded status read reports as zero
+ * markers. Sizing them from the count alone would buy one step for work that is several pages long,
+ * so their floor is the fixed budget they had before the step count became adaptive; escalation
+ * still lifts them to the ceiling.
+ */
+const PUBLIC_MIN_STEPS = 4;
+
+/**
  * Debt older than this is not a page behind — it is a set that never empties. A source-repair page
  * drains in primary-key order, so a marker only ages when every tick leaves markers behind it; the
  * family then spends its full step ceiling until the set empties again.
@@ -297,14 +308,15 @@ function hasRepairDebt(family: FamilyStatus): boolean {
  * A bounded, fresh count buys the steps that count needs and one more for what producers append
  * while the tick runs. Two states instead spend the ceiling: a TRUNCATED count, which is a floor
  * rather than a measurement and says nothing about how much debt is really there, and debt older
- * than {@link DEBT_AGE_ESCALATION_MS}, which says the set is not emptying between ticks. A family
- * with no measured markers but an unmatched epoch still takes its headroom steps, because the epoch
- * is the other half of its convergence.
+ * than {@link DEBT_AGE_ESCALATION_MS}, which says the set is not emptying between ticks. `minSteps`
+ * is the floor for work the marker count cannot measure at all — an unmatched epoch, an invalid
+ * anchor document — which is why the public families carry one and the due-work families do not.
  */
 export function adaptiveSteps(
   family: FamilyStatus,
   subjectsPerStep: number,
   ceiling: number,
+  minSteps: number,
 ): number {
   const debt = family.repairs.total;
   const ageMs = family.oldestOutstandingMarkerAge?.ageMs ?? null;
@@ -312,7 +324,7 @@ export function adaptiveSteps(
     return ceiling;
   }
   const measured = Math.ceil(debt.count / Math.max(subjectsPerStep, 1));
-  return Math.min(Math.max(measured + STEPS_HEADROOM, 1), ceiling);
+  return Math.min(Math.max(measured + STEPS_HEADROOM, minSteps, 1), ceiling);
 }
 
 /**
@@ -500,6 +512,7 @@ export function runProjectionMaintenanceTick(
   const plans = [
     {
       enabled: cutovers.trackDueWork,
+      minSteps: 1,
       repairNeeded: hasRepairDebt(projections.trackDueWork),
       status: projections.trackDueWork,
       subjectsPerStep: DUE_WORK_MARKERS_PER_STEP,
@@ -507,6 +520,7 @@ export function runProjectionMaintenanceTick(
     },
     {
       enabled: cutovers.crawlDueWork,
+      minSteps: 1,
       repairNeeded: hasRepairDebt(projections.crawlDueWork),
       status: projections.crawlDueWork,
       subjectsPerStep: DUE_WORK_MARKERS_PER_STEP,
@@ -514,6 +528,7 @@ export function runProjectionMaintenanceTick(
     },
     {
       enabled: cutovers.publicProjections,
+      minSteps: PUBLIC_MIN_STEPS,
       repairNeeded: needsRepair(aggregates) || !aggregates.anchorsReady,
       status: aggregates,
       subjectsPerStep: PUBLIC_SUBJECTS_PER_STEP,
@@ -521,6 +536,7 @@ export function runProjectionMaintenanceTick(
     },
     {
       enabled: cutovers.publicProjections,
+      minSteps: PUBLIC_MIN_STEPS,
       repairNeeded: needsRepair(artists),
       status: artists,
       subjectsPerStep: PUBLIC_SUBJECTS_PER_STEP,
@@ -528,6 +544,7 @@ export function runProjectionMaintenanceTick(
     },
   ] as const satisfies readonly {
     enabled: boolean;
+    minSteps: number;
     repairNeeded: boolean;
     status: FamilyStatus;
     subjectsPerStep: number;
@@ -543,7 +560,12 @@ export function runProjectionMaintenanceTick(
       results.set(plan.target, maintainFamily(run, plan.target, plan.enabled, false, 1, age));
       continue;
     }
-    const requested = adaptiveSteps(plan.status, plan.subjectsPerStep, PROJECTION_MAX_STEPS);
+    const requested = adaptiveSteps(
+      plan.status,
+      plan.subjectsPerStep,
+      PROJECTION_MAX_STEPS,
+      plan.minSteps,
+    );
     const steps = wallBoundedSteps(requested, RUN_WALL_BUDGET_MS - (now() - startedAt));
     if (steps === 0) {
       summary.wallDeferredFamilies.push(plan.target);

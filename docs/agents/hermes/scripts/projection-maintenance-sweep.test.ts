@@ -338,17 +338,24 @@ describe("projection maintenance bounded family repair", () => {
         );
       }
       const target = args[args.indexOf("--target") + 1] as FamilyName;
-      return advance(target, false, target === "public_aggregates" ? 9 : 4, 2);
+      return advance(
+        target,
+        false,
+        target === "public_aggregates" ? 9 : 4,
+        target.endsWith("due_work") ? 2 : 4,
+      );
     });
 
-    // One measured marker per family buys one step for it and one for what lands during the tick.
+    // One measured marker per family buys one step for it and one for what lands during the tick;
+    // the public families keep their floor, because their epoch and anchor work is not measured in
+    // markers at all.
     expect(calls.slice(1)).toEqual(
       (
         [
           ["track_due_work", "2"],
           ["crawl_due_work", "2"],
-          ["public_aggregates", "2"],
-          ["artist_qualification", "2"],
+          ["public_aggregates", "4"],
+          ["artist_qualification", "4"],
         ] as const
       ).map(([target, maxSteps]) => [
         "admin",
@@ -380,8 +387,8 @@ describe("projection maintenance bounded family repair", () => {
     });
     expect(summary.trackDueWork).toMatchObject({ complete: false, steps: 2 });
     expect(summary.crawlDueWork).toMatchObject({ complete: false, steps: 2 });
-    expect(summary.publicAggregates).toMatchObject({ complete: false, steps: 2 });
-    expect(summary.artistQualification).toMatchObject({ complete: false, steps: 2 });
+    expect(summary.publicAggregates).toMatchObject({ complete: false, steps: 4 });
+    expect(summary.artistQualification).toMatchObject({ complete: false, steps: 4 });
     expect(summary).not.toHaveProperty("queue_depth");
     expect(summary).not.toHaveProperty("queueDepth");
   });
@@ -565,6 +572,26 @@ describe("projection maintenance bounded family repair", () => {
 
     // Forty markers are eight pages of five, plus the headroom step.
     expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("9");
+  });
+
+  test("a public family with an unmatched epoch and no markers still gets its floor", () => {
+    const calls: string[][] = [];
+    // Zero repair markers, so the count measures none of the work: the epoch mismatch IS the work.
+    const epochOnly = family({ convergence: { epochMatched: false } });
+    const summary = runProjectionMaintenanceTick((args) => {
+      calls.push(args);
+      if (args[2] === "get") {
+        return status({ publicProjections: true }, { aggregate: epochOnly, artists: epochOnly });
+      }
+      const target = args[args.indexOf("--target") + 1] as FamilyName;
+      return advance(target, false, 1, 4);
+    });
+
+    for (const call of calls.slice(1)) {
+      expect(call[call.indexOf("--max-steps") + 1]).toBe("4");
+    }
+    expect(summary.publicAggregates.attempted).toBe(true);
+    expect(summary.artistQualification.attempted).toBe(true);
   });
 
   test("the family with the oldest debt is advanced first", () => {
