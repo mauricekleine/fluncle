@@ -187,7 +187,10 @@ type SeedTrack = {
  * columns the tests read. To seed an UNCERTIFIED catalogue track (a `tracks` row with no
  * `findings` row — the shape every finding read must exclude), use `seedCatalogueTrack`.
  */
-export async function seedTrack(client: Client, track: SeedTrack): Promise<void> {
+export async function seedTrack(
+  client: Pick<Client, "batch" | "execute">,
+  track: SeedTrack,
+): Promise<void> {
   const addedAt = track.addedAt ?? new Date().toISOString();
 
   await seedCatalogueTrack(client, track);
@@ -220,7 +223,7 @@ export async function seedTrack(client: Client, track: SeedTrack): Promise<void>
  * the fixture a test uses to prove a read really does join through the certification.
  */
 export async function seedCatalogueTrack(
-  client: Client,
+  client: Pick<Client, "batch" | "execute">,
   track: Omit<SeedTrack, "addedToSpotify" | "logId" | "postedToTelegram">,
 ): Promise<void> {
   const title = track.title ?? "Test Track";
@@ -268,7 +271,7 @@ export async function seedCatalogueTrack(
  * production cannot diverge — including the clear's mirror-driven delete ordering.
  */
 export async function seedEmbedding(
-  client: Client,
+  client: Pick<Client, "batch" | "execute">,
   trackId: string,
   vector: null | number[],
 ): Promise<void> {
