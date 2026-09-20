@@ -369,6 +369,8 @@ describe("projection maintenance bounded family repair", () => {
         "500",
         "--max-steps",
         maxSteps,
+        "--wall-ms",
+        "30000",
         "--no-terminal-status",
       ]),
     );
@@ -727,6 +729,185 @@ describe("projection maintenance bounded family repair", () => {
     expect(summary.oldestDebtAgeMs).toBe(30_000);
     expect(summary.errors).toBe(0);
     expect(summary.ok).toBe(true);
+  });
+
+  // A KILLED CHILD IS ITS OWN OUTCOME. It reported nothing at all — not a step, not a processed
+  // page — while holding the tick's write lease for the whole deadline, so it must not read as the
+  // measured zero that `no_progress` means, and it must not take the rest of the tick down with it.
+  test("a CLI that runs past its deadline is a timeout, and the other families still report", () => {
+    const debt = (ageMs: number) =>
+      family({
+        oldestOutstandingMarkerAge: { ageMs, reason: null, truncated: false },
+        repairs: {
+          direct: { count: 1, truncated: false },
+          fanout: { count: 0, truncated: false },
+          total: { count: 1, truncated: false },
+        },
+      });
+    const directory = mkdtempSync(join(tmpdir(), "projection-maintenance-timeout-"));
+    const executable = join(directory, "fluncle");
+    const previous = process.env.FLUNCLE_BIN;
+    // A stub that answers status instantly and then sleeps past the child deadline on any advance.
+    writeFileSync(
+      executable,
+      `#!/bin/sh
+case "$3" in
+  get) printf '%s\\n' "$FLUNCLE_STUB_STATUS" ;;
+  *) sleep 5 ;;
+esac
+`,
+    );
+    chmodSync(executable, 0o755);
+    process.env.FLUNCLE_BIN = executable;
+    process.env.FLUNCLE_STUB_STATUS = JSON.stringify(
+      status({ crawlDueWork: true, trackDueWork: true }, { crawl: debt(10_000), track: debt(0) }),
+    );
+    try {
+      const summary = runProjectionMaintenanceTick((args) =>
+        // Only the crawl family reaches the real stub; the track family is answered in-process, so
+        // one test proves both halves: a timeout stays contained and its neighbour still reports.
+        args[args.indexOf("--target") + 1] === "track_due_work"
+          ? advance("track_due_work", true, 7, 2)
+          : // A one-second deadline against a stub that sleeps five reaches the real kill path in
+            // bounded time; the production deadline is the module constant.
+            fluncleJson(args, 1_000),
+      );
+
+      expect(summary.crawlDueWork).toMatchObject({
+        attempted: true,
+        complete: false,
+        outcome: "timeout",
+        processed: null,
+        steps: null,
+        wallStopped: null,
+      });
+      expect(summary.crawlDueWork.error).toMatch(/deadline/);
+      expect(summary.crawlDueWork.leaseHoldMs).not.toBeNull();
+      expect(summary.trackDueWork).toMatchObject({
+        complete: true,
+        outcome: "useful_completion",
+        processed: 7,
+      });
+      // The worst outcome is the loud one, and the run is a failure for the ledger.
+      expect(summary.outcome).toBe("timeout");
+      expect(summary.errors).toBe(1);
+      expect(summary.ok).toBe(false);
+      expect(summary.converged).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FLUNCLE_BIN;
+      } else {
+        process.env.FLUNCLE_BIN = previous;
+      }
+      delete process.env.FLUNCLE_STUB_STATUS;
+      rmSync(directory, { force: true, recursive: true });
+    }
+  }, 30_000);
+
+  test("every family is handed a wall budget, and the tail of the tick is not spent on a stub call", () => {
+    const debt = (ageMs: number) =>
+      family({
+        oldestOutstandingMarkerAge: { ageMs, reason: null, truncated: false },
+        repairs: {
+          direct: { count: 0, truncated: true },
+          fanout: { count: 100, truncated: true },
+          total: { count: 100, truncated: true },
+        },
+      });
+    const calls: string[][] = [];
+    let clock = 0;
+    const summary = runProjectionMaintenanceTick(
+      (args) => {
+        calls.push(args);
+        if (args[2] === "get") {
+          return status(
+            { crawlDueWork: true, trackDueWork: true },
+            { crawl: debt(10_000), track: debt(600_000) },
+          );
+        }
+        // The first family spends all but four seconds of the run budget.
+        clock += 116_000;
+        return advance("track_due_work", false, 1, 100);
+      },
+      { now: () => clock },
+    );
+
+    // The escalated family still asks for the hard step ceiling, but its call is bounded by time.
+    expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("100");
+    expect(calls[1]?.[calls[1].indexOf("--wall-ms") + 1]).toBe("30000");
+    // Four seconds buys roughly one round trip, so the second family waits for the next tick
+    // rather than spending the tail on a call that cannot finish a page.
+    expect(calls).toHaveLength(2);
+    expect(summary.wallDeferredFamilies).toEqual(["crawl_due_work"]);
+  });
+
+  test("a family the wall budget stopped reports its steps, pages, and lease hold", () => {
+    const debt = family({
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    let clock = 0;
+    const summary = runProjectionMaintenanceTick(
+      (args) => {
+        if (args[2] === "get") {
+          return status({ trackDueWork: true }, { track: debt });
+        }
+        clock += 30_000;
+        return { ...advance("track_due_work", false, 41, 2), wallStopped: true };
+      },
+      { now: () => clock },
+    );
+
+    expect(summary.trackDueWork).toMatchObject({
+      complete: false,
+      leaseHoldMs: 30_000,
+      outcome: "partial_progress",
+      processed: 41,
+      steps: 2,
+      wallStopped: true,
+    });
+    // A spent budget is a healthy incomplete tick, not an execution error.
+    expect(summary.errors).toBe(0);
+    expect(summary.ok).toBe(true);
+    expect(summary.budgetExhaustedFamilies).toEqual(["track_due_work"]);
+  });
+
+  // The catalogue-rank corpus marker is a resumable REBUILD checkpoint wearing a source-marker row.
+  // It can be hours old while every ordinary marker drains, so the server reports it apart from
+  // `oldestOutstandingMarkerAge` and the sweep carries it into the ledger under its own name.
+  test("the catalogue-rank rebuild marker's age is reported, never folded into debt age", () => {
+    const track = family({
+      catalogueRankMarkerAgeMs: 14_217_575,
+      oldestOutstandingMarkerAge: { ageMs: null, reason: null, truncated: false },
+      repairs: {
+        direct: { count: 0, truncated: false },
+        fanout: { count: 1, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const calls: string[][] = [];
+    const summary = runProjectionMaintenanceTick((args) => {
+      calls.push(args);
+      return args[2] === "get"
+        ? status({ trackDueWork: true }, { track })
+        : advance("track_due_work", false, 1, 2);
+    });
+
+    expect(summary.catalogueRankMarkerAgeMs).toBe(14_217_575);
+    // A four-hour rebuild checkpoint is not four-hour-old debt, so it neither escalates the step
+    // ask to the ceiling nor reads as debt the tick failed to drain.
+    expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("2");
+    expect(summary.oldestDebtAgeMs).toBeNull();
+  });
+
+  test("a server that does not report the rank marker is not a malformed status", () => {
+    const summary = runProjectionMaintenanceTick(() => status({ trackDueWork: true }));
+
+    expect(summary.catalogueRankMarkerAgeMs).toBeNull();
+    expect(summary.errors).toBe(0);
   });
 
   test("malformed status fails before mutation and malformed advances fail their family", () => {

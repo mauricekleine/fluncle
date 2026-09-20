@@ -5,6 +5,18 @@ import { adminApiGet, adminApiPost, adminApiPut } from "../api";
 export { PROJECTION_STEP_LIMIT_MAX };
 export const PROJECTION_MAX_STEPS = 100;
 
+/**
+ * Bounds on `--wall-ms`, the wall budget an advance invocation may spend issuing steps.
+ *
+ * A step is one HTTP round trip, so a step count is a poor proxy for how long an invocation runs:
+ * the same ceiling costs a second against a warm database and minutes against a loaded one. A
+ * caller that must return inside a deadline of its own — the box maintenance sweep runs each family
+ * under a child-process deadline — states that deadline here instead of guessing a step count from
+ * an assumed per-step cost. The step ceiling stays the hard cap on requests issued.
+ */
+export const PROJECTION_WALL_MS_MIN = 1_000;
+export const PROJECTION_WALL_MS_MAX = 600_000;
+
 export type ProjectionTarget =
   | "artist_qualification"
   | "crawl_due_work"
@@ -58,7 +70,7 @@ export type ProjectionStatus = {
     artistQualification: FamilyStatus;
     crawlDueWork: FamilyStatus;
     publicAggregates: FamilyStatus & { anchorsReady: boolean };
-    trackDueWork: FamilyStatus;
+    trackDueWork: FamilyStatus & { catalogueRankMarkerAgeMs?: null | number };
   };
   readyToOpen: {
     crawlDueWork: boolean;
@@ -79,6 +91,12 @@ export type ProjectionStepResponse = {
 };
 type ProjectionAdvanceSummary = Omit<ProjectionStepResponse, "status"> & {
   steps: number;
+  /**
+   * Whether the wall budget, rather than completion or the step ceiling, ended the step sequence.
+   * It is the difference between "this family is drained" and "this family has more to drain", so
+   * an automated caller can report an honest incomplete result instead of an error.
+   */
+  wallStopped: boolean;
 };
 export type ProjectionAdvanceResponse = ProjectionAdvanceSummary & {
   status: ProjectionStatus;
@@ -90,7 +108,9 @@ type ProjectionAdvanceInput = {
   includeTerminalStatus?: boolean;
   limit: number;
   maxSteps?: number;
+  now?: () => number;
   target: ProjectionTarget;
+  wallMs?: number;
 };
 
 export async function getProjectionStatusCommand(): Promise<ProjectionStatusResponse> {
@@ -109,12 +129,23 @@ export function advanceProjectionCommand(
 export async function advanceProjectionCommand(
   input: ProjectionAdvanceInput,
 ): Promise<ProjectionAdvanceResponse | ProjectionAdvanceWithoutStatusResponse> {
-  const { includeTerminalStatus = true, maxSteps = 1, target, ...body } = input;
+  const {
+    includeTerminalStatus = true,
+    maxSteps = 1,
+    now = () => Date.now(),
+    target,
+    wallMs,
+    ...body
+  } = input;
   if (!includeTerminalStatus && input.action !== "repair") {
     throw new Error("terminal status may be omitted only for repair automation");
   }
   const stepBody =
     maxSteps > 1 || !includeTerminalStatus ? { ...body, includeStatus: false } : body;
+  // The first step always runs, whatever the budget: an invocation that issued no request at all
+  // would report a step sequence it never attempted, and its caller would read zero progress as a
+  // drained family. The budget bounds what FOLLOWS a step, never a step already in flight.
+  const startedAt = now();
   let response = await adminApiPost<ProjectionStepResponse>(
     `/api/v1/admin/projections/${target}/advance`,
     stepBody,
@@ -122,8 +153,13 @@ export async function advanceProjectionCommand(
   let steps = 1;
   let processed = response.processed;
   let scheduled = response.scheduled;
+  let wallStopped = false;
 
   while (!response.complete && steps < maxSteps) {
+    if (wallMs !== undefined && now() - startedAt >= wallMs) {
+      wallStopped = true;
+      break;
+    }
     response = await adminApiPost<ProjectionStepResponse>(
       `/api/v1/admin/projections/${target}/advance`,
       stepBody,
@@ -135,10 +171,10 @@ export async function advanceProjectionCommand(
 
   if (!includeTerminalStatus) {
     const { status: _status, ...withoutStatus } = response;
-    return { ...withoutStatus, processed, scheduled, steps };
+    return { ...withoutStatus, processed, scheduled, steps, wallStopped };
   }
   const status = response.status ?? (await getProjectionStatusCommand()).status;
-  return { ...response, processed, scheduled, status, steps };
+  return { ...response, processed, scheduled, status, steps, wallStopped };
 }
 
 export async function setProjectionCutoverCommand(input: {
@@ -173,6 +209,20 @@ export function parseProjectionMaxSteps(value: string): number {
     throw new Error(`--max-steps must be a whole number from 1 through ${PROJECTION_MAX_STEPS}`);
   }
   return maxSteps;
+}
+
+export function parseProjectionWallMs(value: string): number {
+  const wallMs = Number(value);
+  if (
+    !Number.isSafeInteger(wallMs) ||
+    wallMs < PROJECTION_WALL_MS_MIN ||
+    wallMs > PROJECTION_WALL_MS_MAX
+  ) {
+    throw new Error(
+      `--wall-ms must be a whole number of milliseconds from ${PROJECTION_WALL_MS_MIN} through ${PROJECTION_WALL_MS_MAX}`,
+    );
+  }
+  return wallMs;
 }
 
 export function parseProjectionTarget(value: string): ProjectionTarget {

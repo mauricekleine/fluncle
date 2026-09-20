@@ -55,20 +55,35 @@ const DEBT_AGE_ESCALATION_MS = 60 * 60_000;
  * budget shapes an ordinary tick, the unit timeout bounds a pathological one. A family reached with
  * no budget left keeps its debt for the next tick, which sorts it first.
  */
-const RUN_WALL_BUDGET_MS = 240_000;
+const RUN_WALL_BUDGET_MS = 120_000;
 
 /**
- * Wall time one advance step is assumed to cost when sizing a family's call. It is an estimate for
- * budgeting only — the CLI's own per-process deadline is the hard bound — so it is set above the
- * round trip a step actually pays, and a family whose steps run faster simply finishes early.
+ * The wall budget one family's advance call is HANDED, as `--wall-ms`. The CLI stops issuing steps
+ * once it is spent and returns what it did, so this is a bound the child honours rather than a
+ * step count this script derives from an assumed per-step cost.
+ *
+ * Sizing it is the whole point: the tick holds ONE whole-lifetime write lease, so the lease share
+ * is what maintenance costs the fleet's other writers. Four families at this budget is well under
+ * the five-minute cadence, and a typical tick — one busy family plus short public calls — holds the
+ * lane for well under a minute.
  */
-const STEP_ESTIMATE_MS = 1_000;
+const FAMILY_CALL_BUDGET_MS = 30_000;
 
 /**
- * Wall time one family's advance call may be sized for, inside the CLI child deadline this script
- * enforces in {@link fluncleJson}. It leaves that process room to exit and report.
+ * The smallest wall budget worth handing a family. Below it the call would buy roughly one round
+ * trip, so the family is deferred to the next tick, where the oldest-debt-first order puts it first,
+ * instead of spending the tail of this one on a call that cannot finish a page.
  */
-const FAMILY_CALL_BUDGET_MS = 100_000;
+const MIN_FAMILY_CALL_BUDGET_MS = 5_000;
+
+/**
+ * The child-process deadline for one CLI invocation. It must clear
+ * {@link FAMILY_CALL_BUDGET_MS} plus the step already in flight when that budget runs out plus
+ * process startup, with margin: the budget is what the child honours, and this deadline is the
+ * backstop for a child that cannot honour anything. A child killed here reports NOTHING, so the
+ * margin between the two is what keeps an ordinary busy tick out of that blind state.
+ */
+const CLI_CALL_TIMEOUT_MS = 60_000;
 
 export type FamilyName =
   | "artist_qualification"
@@ -103,7 +118,7 @@ type ProjectionStatusResponse = {
       artistQualification: FamilyStatus;
       crawlDueWork: FamilyStatus;
       publicAggregates: FamilyStatus & { anchorsReady: boolean };
-      trackDueWork: FamilyStatus;
+      trackDueWork: FamilyStatus & { catalogueRankMarkerAgeMs?: null | number };
     };
   };
 };
@@ -115,6 +130,8 @@ type AdvanceResponse = {
   scheduled: number;
   steps: number;
   target: FamilyName;
+  /** Absent against a CLI that predates `--wall-ms`; the call then ended on steps or completion. */
+  wallStopped?: boolean;
 };
 
 export type FamilySummary = {
@@ -136,17 +153,30 @@ export type FamilySummary = {
   processed: number | null;
   scheduled: number | null;
   steps: number | null;
+  /** Whether the family's own wall budget, rather than completion or the step ceiling, ended it. */
+  wallStopped: boolean | null;
 };
 
 export type ProjectionMaintenanceOutcome =
   | "no_debt"
   | "no_progress"
   | "partial_progress"
+  | "timeout"
   | "useful_completion";
 
 export type ProjectionMaintenanceSummary = {
   artistQualification: FamilySummary;
   budgetExhaustedFamilies: FamilyName[];
+  /**
+   * Age of the synthetic catalogue-rank corpus marker, straight from the opening status.
+   *
+   * That marker is a resumable rank REBUILD checkpoint, not fan-out debt: it clears only when a
+   * whole generation completes against an unchanged corpus, and any corpus mutation restarts it, so
+   * it can be hours old while every ordinary marker drains normally. The server keeps it out of
+   * `oldestOutstandingMarkerAge` for exactly that reason; reporting it here is what stops it ageing
+   * silently, and what makes a rank rebuild that has genuinely stalled visible in the ledger.
+   */
+  catalogueRankMarkerAgeMs: number | null;
   checked: number | null;
   converged: boolean | null;
   crawlDueWork: FamilySummary;
@@ -197,6 +227,11 @@ function isOldestOutstandingMarkerAge(value: unknown): value is OldestOutstandin
   );
 }
 
+/** An age a server may not carry at all: absent, explicitly unknown, or a measured duration. */
+function isOptionalAge(value: unknown): value is null | number | undefined {
+  return value === undefined || value === null || isNonnegativeInteger(value);
+}
+
 function isFamilyStatus(value: unknown): value is FamilyStatus {
   if (!isObject(value) || !isObject(value["convergence"]) || !isObject(value["repairs"])) {
     return false;
@@ -228,7 +263,8 @@ function parseStatus(value: unknown): ProjectionStatusResponse {
     !isFamilyStatus(projections["crawlDueWork"]) ||
     !isFamilyStatus(projections["publicAggregates"]) ||
     typeof projections["publicAggregates"]["anchorsReady"] !== "boolean" ||
-    !isFamilyStatus(projections["trackDueWork"])
+    !isFamilyStatus(projections["trackDueWork"]) ||
+    !isOptionalAge(projections["trackDueWork"]["catalogueRankMarkerAgeMs"])
   ) {
     throw new Error("projection status response is malformed");
   }
@@ -246,7 +282,8 @@ function parseAdvance(value: unknown, target: FamilyName, maxSteps: number): Adv
     !isNonnegativeInteger(value["scheduled"]) ||
     !isNonnegativeInteger(value["steps"]) ||
     value["steps"] < 1 ||
-    value["steps"] > maxSteps
+    value["steps"] > maxSteps ||
+    (value["wallStopped"] !== undefined && typeof value["wallStopped"] !== "boolean")
   ) {
     throw new Error(`${target} repair response is malformed`);
   }
@@ -255,14 +292,39 @@ function parseAdvance(value: unknown, target: FamilyName, maxSteps: number): Adv
 
 export type RunCommand = (args: string[]) => unknown;
 
-/** Execute one CLI command and require both exit zero and one valid JSON document. */
-export function fluncleJson(args: string[]): unknown {
+/**
+ * A CLI child that ran past its deadline and was killed. It is its own error because it is its own
+ * failure mode: the child reports NOTHING, so the tick cannot say what it processed, how far it
+ * got, or whether the family is draining — it only knows the lease was held for the full deadline.
+ * An ordinary thrown error at least carries the server's reason.
+ */
+export class CliTimeoutError extends Error {
+  constructor(command: string, timeoutMs: number) {
+    super(`fluncle ${command} exceeded its ${timeoutMs}ms deadline and was killed`);
+    this.name = "CliTimeoutError";
+  }
+}
+
+/**
+ * Execute one CLI command and require both exit zero and one valid JSON document. `timeoutMs` is
+ * the child deadline; only a test that must reach it in bounded time passes anything but the
+ * default.
+ */
+export function fluncleJson(args: string[], timeoutMs: number = CLI_CALL_TIMEOUT_MS): unknown {
   const fluncleBin = process.env.FLUNCLE_BIN ?? "fluncle";
   const result = spawnSync(fluncleBin, [...args, "--json"], {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
-    timeout: 120_000,
+    timeout: timeoutMs,
   });
+  // A killed child surfaces as an `ETIMEDOUT` spawn error on some runtimes and as the kill signal
+  // alone on others; either way it is a deadline, never a missing binary.
+  const timedOut =
+    (result.error !== undefined && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") ||
+    (result.signal !== null && result.signal !== undefined);
+  if (timedOut) {
+    throw new CliTimeoutError(args.join(" "), timeoutMs);
+  }
   if (result.error) {
     throw new Error(`failed to spawn ${fluncleBin}: ${result.error.message}`);
   }
@@ -298,6 +360,7 @@ function emptyFamily(): FamilySummary {
     processed: 0,
     scheduled: 0,
     steps: 0,
+    wallStopped: null,
   };
 }
 
@@ -345,16 +408,19 @@ export function adaptiveSteps(
 }
 
 /**
- * The steps a family may take with `remainingMs` of the tick's wall budget left. Zero means the
- * tick ran out of budget before reaching this family; it keeps its debt, and the oldest-debt-first
- * order puts it in front on the next tick rather than letting it starve behind a busy neighbour.
+ * The wall budget a family's advance call is handed with `remainingMs` of the tick's budget left.
+ *
+ * Zero means the tick has too little left to be worth a call; the family keeps its debt, and the
+ * oldest-debt-first order puts it in front on the next tick rather than letting it starve behind a
+ * busy neighbour. This replaces deriving a step count from an ASSUMED per-step cost: a step is one
+ * round trip whose cost the script cannot know, so the bound that matters is stated in time and
+ * handed to the child that can actually measure it.
  */
-export function wallBoundedSteps(requested: number, remainingMs: number): number {
-  if (remainingMs <= 0) {
+export function familyWallBudgetMs(remainingMs: number): number {
+  if (remainingMs < MIN_FAMILY_CALL_BUDGET_MS) {
     return 0;
   }
-  const affordable = Math.floor(Math.min(remainingMs, FAMILY_CALL_BUDGET_MS) / STEP_ESTIMATE_MS);
-  return Math.max(0, Math.min(requested, affordable));
+  return Math.min(remainingMs, FAMILY_CALL_BUDGET_MS);
 }
 
 /**
@@ -378,6 +444,7 @@ function advanceFamily(
   run: RunCommand,
   target: FamilyName,
   maxSteps: number,
+  wallMs: number,
   oldestOutstandingMarkerAge: OldestOutstandingMarkerAge,
   now: () => number,
 ): FamilySummary {
@@ -398,6 +465,8 @@ function advanceFamily(
         String(REPAIR_LIMIT),
         "--max-steps",
         String(maxSteps),
+        "--wall-ms",
+        String(wallMs),
         "--no-terminal-status",
       ]),
       target,
@@ -417,6 +486,7 @@ function advanceFamily(
       processed: response.processed,
       scheduled: response.scheduled,
       steps: response.steps,
+      wallStopped: response.wallStopped ?? false,
     };
   } catch (error) {
     return {
@@ -425,10 +495,14 @@ function advanceFamily(
       error: error instanceof Error ? error.message : String(error),
       leaseHoldMs: now() - startedAt,
       oldestOutstandingMarkerAge,
-      outcome: "no_progress",
+      // A killed child is its own outcome. It reported nothing at all, so calling it `no_progress`
+      // would claim the tick measured zero progress when it measured nothing — and that is the one
+      // state where the family held the write lease for a full deadline with nothing to show.
+      outcome: error instanceof CliTimeoutError ? "timeout" : "no_progress",
       processed: null,
       scheduled: null,
       steps: null,
+      wallStopped: null,
     };
   }
 }
@@ -439,6 +513,7 @@ function maintainFamily(
   enabled: boolean,
   repairNeeded: boolean,
   maxSteps: number,
+  wallMs: number,
   oldestOutstandingMarkerAge: OldestOutstandingMarkerAge,
   now: () => number,
 ): FamilySummary {
@@ -453,16 +528,19 @@ function maintainFamily(
       outcome: "no_debt",
     };
   }
-  return advanceFamily(run, target, maxSteps, oldestOutstandingMarkerAge, now);
+  return advanceFamily(run, target, maxSteps, wallMs, oldestOutstandingMarkerAge, now);
 }
 
 function worstOutcome(families: readonly FamilySummary[]): ProjectionMaintenanceOutcome | null {
   // No progress is worst because the tick left debt untouched; partial progress remains healthy
   // but incomplete, useful completion drained known debt, and no debt needed no work.
+  // A timeout is worse than no progress: no progress is a measured zero, a timeout is a family
+  // that held the write lease for a full deadline and reported nothing at all.
   const severity: Record<ProjectionMaintenanceOutcome, number> = {
     no_debt: 0,
     no_progress: 3,
     partial_progress: 2,
+    timeout: 4,
     useful_completion: 1,
   };
   return families.reduce<ProjectionMaintenanceOutcome | null>((worst, family) => {
@@ -489,6 +567,7 @@ export function runProjectionMaintenanceTick(
   const summary: ProjectionMaintenanceSummary = {
     artistQualification: emptyFamily(),
     budgetExhaustedFamilies: [],
+    catalogueRankMarkerAgeMs: null,
     checked: null,
     converged: null,
     crawlDueWork: emptyFamily(),
@@ -532,6 +611,7 @@ export function runProjectionMaintenanceTick(
   summary.gateState = "active";
 
   const projections = status.status.projections;
+  summary.catalogueRankMarkerAgeMs = projections.trackDueWork.catalogueRankMarkerAgeMs ?? null;
   const aggregates = projections.publicAggregates;
   const artists = projections.artistQualification;
   const plans = [
@@ -582,22 +662,28 @@ export function runProjectionMaintenanceTick(
   )) {
     const age = markerAge(plan.status);
     if (!plan.enabled || !plan.repairNeeded) {
-      results.set(plan.target, maintainFamily(run, plan.target, plan.enabled, false, 1, age, now));
+      results.set(
+        plan.target,
+        maintainFamily(run, plan.target, plan.enabled, false, 1, FAMILY_CALL_BUDGET_MS, age, now),
+      );
       continue;
     }
-    const requested = adaptiveSteps(
+    const wallMs = familyWallBudgetMs(RUN_WALL_BUDGET_MS - (now() - startedAt));
+    if (wallMs === 0) {
+      summary.wallDeferredFamilies.push(plan.target);
+      results.set(plan.target, wallDeferredFamily(age));
+      continue;
+    }
+    // The step ceiling stays a HARD cap on requests issued; the wall budget is what actually ends
+    // an ordinary busy call, so an escalated family asking for the ceiling can no longer run the
+    // child past its deadline.
+    const steps = adaptiveSteps(
       plan.status,
       plan.subjectsPerStep,
       PROJECTION_MAX_STEPS,
       plan.minSteps,
     );
-    const steps = wallBoundedSteps(requested, RUN_WALL_BUDGET_MS - (now() - startedAt));
-    if (steps === 0) {
-      summary.wallDeferredFamilies.push(plan.target);
-      results.set(plan.target, wallDeferredFamily(age));
-      continue;
-    }
-    results.set(plan.target, maintainFamily(run, plan.target, true, true, steps, age, now));
+    results.set(plan.target, maintainFamily(run, plan.target, true, true, steps, wallMs, age, now));
   }
 
   const targetedFamilies: readonly (readonly [FamilyName, FamilySummary])[] = plans.map((plan) => [

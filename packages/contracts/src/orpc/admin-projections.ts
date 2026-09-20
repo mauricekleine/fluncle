@@ -79,7 +79,15 @@ export const ProjectionStatusSchema = z.object({
     artistQualification: ProjectionFamilyStatusSchema,
     crawlDueWork: ProjectionFamilyStatusSchema,
     publicAggregates: ProjectionFamilyStatusSchema.extend({ anchorsReady: z.boolean() }),
-    trackDueWork: ProjectionFamilyStatusSchema,
+    trackDueWork: ProjectionFamilyStatusSchema.extend({
+      // The synthetic catalogue-rank corpus marker's age. It is a resumable rebuild checkpoint
+      // wearing a source-marker row, not fan-out debt: it clears only when a whole rank generation
+      // completes against an unchanged corpus, and any corpus mutation restarts it. Its age is
+      // therefore reported here and excluded from `oldestOutstandingMarkerAge`, which exists to say
+      // whether ordinary debt is draining. Null when the marker holds no repair row; optional for
+      // rolling compatibility with an older server.
+      catalogueRankMarkerAgeMs: CountSchema.nullable().optional(),
+    }),
   }),
   readyToOpen: z.object({
     crawlDueWork: z.boolean(),
