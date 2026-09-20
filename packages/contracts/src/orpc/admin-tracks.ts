@@ -321,6 +321,13 @@ const CaptureReceiptCoordinatesSchema = z.strictObject({
 
 const CapturePreparedTrackSchema = z.strictObject({
   analyzedFrom: z.enum(["full", "preview"]).optional(),
+  /**
+   * The row carried a Spotify anchor when it was frozen. Additive and read straight off the
+   * snapshot the prepare already holds, so it costs nothing: it exists so the sweep can publish
+   * how much of a tick's capture spend went to ANCHORED rows, which is the only way to see the
+   * anchored-first drain order actually taking effect rather than assume it.
+   */
+  anchored: z.boolean().optional(),
   artists: z.array(z.string().max(512)).max(64),
   bpm: z.number().optional(),
   certified: z.boolean(),
@@ -447,6 +454,268 @@ export const commitTrackCapture = oc
         replayed: z.boolean(),
       }),
     ]),
+  );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE BATCHED PIPELINE PHASES — one admitted database lease per batch, not per row.
+//
+// Every database-touching phase a box sweep runs takes a lease on the single `write` lane
+// (docs/database-performance.md). A per-row phase pays that toll once per row, so a batch's lease
+// toll grew with the batch while the work it protected did not. These ops move the batch inside one
+// phase WITHOUT collapsing the rows: each item keeps its own snapshot token, its own receipt
+// coordinates and its own receipt, so `track.capture` and `track.embed` stay non-replayable and a
+// poisoned row can still be reconciled on its own.
+//
+// Each request is wall-budgeted server side. The unprocessed tail comes back as a retryable
+// per-item verdict rather than the request running past the admission watchdog window.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How many rows one `prepare_track_captures` request freezes. It matches the capture sweep's own
+ * batch cap: the prepare is the whole batch, and every row it does NOT claim pays the per-row
+ * admission toll again.
+ */
+export const MAX_CAPTURE_PREPARE_BATCH = 12;
+
+/**
+ * How many rows one `commit_track_captures` request settles, and it is deliberately NARROWER than
+ * the prepare. A commit's per-item server time is a receipt-backed transaction against the live
+ * snapshot, while a prepare's is one indexed read; the bound is what keeps K × p99(per-item) inside
+ * the admission watchdog window, so a twelve-row tick commits in two phases rather than one.
+ */
+export const MAX_CAPTURE_COMMIT_BATCH = 6;
+
+/** How many vectors one `update_track_embeddings` request writes — the embed sweep's batch cap. */
+export const MAX_EMBEDDING_WRITE_BATCH = 6;
+
+/** The MuQ vector's width. A batch of {@link MAX_EMBEDDING_WRITE_BATCH} is ~120 KB of JSON. */
+export const EMBEDDING_DIMENSIONS = 1024;
+
+/**
+ * What a batched pipeline Worker accepts, surfaced on {@link listTrackWork}. A number is the batch
+ * width that op takes; an absent key is a Worker that does not have the op at all.
+ */
+const TrackWorkCapabilitiesSchema = z.strictObject({
+  commitTrackCaptures: z.number().int().min(1).max(MAX_CAPTURE_COMMIT_BATCH).optional(),
+  prepareTrackCaptures: z.number().int().min(1).max(MAX_CAPTURE_PREPARE_BATCH).optional(),
+  updateTrackEmbeddings: z.number().int().min(1).max(MAX_EMBEDDING_WRITE_BATCH).optional(),
+});
+
+/**
+ * HOW LONG THIS ITEM TOOK THE SERVER, in milliseconds. Additive on every batched response, and its
+ * purpose is to make K derivable instead of assumed: the wall budget is checked BETWEEN items, so a
+ * batch's exposure to one slow item grows with K, and only a measured per-item distribution can say
+ * whether the chosen K is right. The sweeps publish per-tick max and median, so a day of ordinary
+ * ticks yields the p99 the bound should be re-derived from.
+ */
+const ItemElapsedMsSchema = z.number().int().min(0).optional();
+
+const CapturePreparedItemSchema = z.union([
+  z.strictObject({
+    elapsedMs: ItemElapsedMsSchema,
+    prepared: z.literal(false),
+    reason: z.enum(["deferred", "ineligible", "not-found", "stale"]),
+    trackId: z.string().min(1).max(256),
+  }),
+  z.strictObject({
+    elapsedMs: ItemElapsedMsSchema,
+    prepared: z.literal(true),
+    snapshotToken: z.string().min(1).max(65_536),
+    track: CapturePreparedTrackSchema,
+    trackId: z.string().min(1).max(256),
+  }),
+]);
+
+/**
+ * `prepare_track_captures` → `POST /admin/tracks/captures/prepare`.
+ *
+ * Admin tier (agent-allowed). Freeze a whole batch of currently eligible capture/provenance rows in
+ * ONE admitted phase, before any provider work starts. Each item gets the same answer the
+ * single-row {@link prepareTrackCapture} gives it, plus one extra refusal reason:
+ *
+ * `deferred` — the request's wall budget was spent before this row was reached. Nothing was frozen
+ * and nothing was charged; the caller reissues exactly those rows, or lets the next tick take them.
+ *
+ * THE BUDGET IS APPLIED CUMULATIVELY, IN REQUEST ORDER. The catalogue capture budget
+ * (`apps/web/src/lib/server/capture-budget.ts`) is a rolling-24h count cap plus a byte backstop, and
+ * the per-row prepare could only ever ask "is it open right now". A batch is different: it authorizes
+ * N downloads before any of them lands, so the count cap is applied as a RESERVATION — the batch may
+ * freeze at most `remainingTracks` uncertified rows, and every further uncertified row is refused
+ * `ineligible` exactly as a closed budget refuses it. Certified findings are never gated, never
+ * counted, and never displaced by an uncertified row ahead of them, which is the same guarantee the
+ * per-row path gave. The byte cap stays a backstop and its overshoot bound is stated in
+ * docs/track-lifecycle.md.
+ */
+export const prepareTrackCaptures = oc
+  .route({
+    method: "POST",
+    operationId: "prepareTrackCaptures",
+    path: "/admin/tracks/captures/prepare",
+    summary: "Prepare a batch of capture reconciliation snapshots in one admitted phase",
+    tags: ["Admin"],
+  })
+  .input(
+    z.strictObject({
+      items: z
+        .array(
+          z.strictObject({
+            kind: CaptureReconciliationKindSchema,
+            priorSnapshotToken: z.string().min(1).max(65_536).optional(),
+            trackId: z.string().min(1).max(256),
+          }),
+        )
+        .min(1)
+        .max(MAX_CAPTURE_PREPARE_BATCH),
+      /**
+       * UNCERTIFIED ROWS THIS TICK HAS ALREADY AUTHORIZED, across its earlier prepare calls.
+       *
+       * The rolling-24h count ledger is charged at COMMIT (`tracks.source_audio_attempted_at`), so a
+       * second prepare call inside one tick would otherwise read the very same pre-tick remaining
+       * count the first call already reserved against — and a tick whose batch is wider than this
+       * op's width, or whose wall budget deferred a tail, makes exactly that second call. The caller
+       * carries its running total here and the server SUBTRACTS it.
+       *
+       * It can only ever shrink the budget: the server clamps `remainingTracks - reservedThisTick`
+       * at zero and never adds, so a caller that over-reports authorizes less and a caller that
+       * under-reports is bounded by the ledger it is spending against. A missing value is zero,
+       * which is exactly an older sweep's single-call behaviour.
+       */
+      reservedThisTick: z.number().int().min(0).max(10_000).optional(),
+    }),
+  )
+  .output(
+    z.strictObject({
+      /** How many trailing items the wall budget left unprepared. They read `deferred`. */
+      deferred: z.number().int().min(0),
+      ok: z.literal(true),
+      /**
+       * How many UNCERTIFIED rows this call authorized — what it spent of the rolling count cap.
+       * The caller adds it to its running `reservedThisTick` rather than re-deriving the server's
+       * certification rule, so the two can never disagree about what a call cost.
+       */
+      reserved: z.number().int().min(0),
+      /** One answer per request item, in request order. */
+      results: z.array(CapturePreparedItemSchema).max(MAX_CAPTURE_PREPARE_BATCH),
+    }),
+  );
+
+const CaptureCommitReceiptSchema = z
+  .object({
+    elapsedMs: ItemElapsedMsSchema,
+    /** This item's own failure message, bounded. Present only for `failed`. */
+    error: z.string().max(500).optional(),
+    outcome: z.enum([
+      "committed",
+      "conflict",
+      "failed",
+      "in-progress",
+      "lookup-failed",
+      "rejected",
+      "safely-retryable",
+    ]),
+    replayed: z.boolean(),
+    result: z
+      .union([CaptureCommittedReceiptResultSchema, CaptureRejectedReceiptResultSchema])
+      .optional(),
+    trackId: z.string().min(1).max(256),
+  })
+  .meta({ id: "CaptureCommitReceipt" });
+
+/**
+ * `commit_track_captures` → `POST /admin/tracks/captures/commit`.
+ *
+ * Admin tier (agent-allowed). Settle a batch of snapshot-bound capture results through the durable
+ * operation-receipt rail in ONE admitted phase. Each item carries exactly what the single-row
+ * {@link commitTrackCapture} carries — its own commit token and its own receipt coordinates — and
+ * gets its own receipt back, so a stale row rejects alone while its neighbours commit and
+ * `track.capture` stays non-replayable. Never a batch-wide operation id: the per-item coordinates
+ * are what make a retry safe, and what lets `resolve_operation_receipt` still answer about one row.
+ *
+ * The unprocessed tail of a wall-budgeted request reads `safely-retryable`, which is the verdict the
+ * caller already knows how to reconcile.
+ */
+export const commitTrackCaptures = oc
+  .route({
+    method: "POST",
+    operationId: "commitTrackCaptures",
+    path: "/admin/tracks/captures/commit",
+    summary: "Commit a batch of prepared capture results in one admitted phase",
+    tags: ["Admin"],
+  })
+  .input(
+    z.strictObject({
+      items: z
+        .array(
+          CaptureReceiptCoordinatesSchema.extend({
+            commitToken: z.string().min(1).max(65_536),
+            trackId: z.string().min(1).max(256),
+          }),
+        )
+        .min(1)
+        .max(MAX_CAPTURE_COMMIT_BATCH),
+    }),
+  )
+  .output(
+    z.strictObject({
+      /** How many trailing items the wall budget left uncommitted. They read `safely-retryable`. */
+      deferred: z.number().int().min(0),
+      ok: z.literal(true),
+      /** One receipt per request item, in request order. */
+      receipts: z.array(CaptureCommitReceiptSchema).max(MAX_CAPTURE_COMMIT_BATCH),
+    }),
+  );
+
+/**
+ * `update_track_embeddings` → `POST /admin/tracks/embeddings`.
+ *
+ * Admin tier (agent-allowed). Write a tick's worth of MuQ vectors in ONE admitted phase. Each item
+ * takes the same path a single `update_track` embedding write takes — the certification rail
+ * included — and gets its own verdict, so a rejected row never costs its neighbours their write.
+ *
+ * `track.embed` is deliberately non-replayable: an accepted vector mints a fresh catalogue-rank
+ * material revision and appends a Sonar artifact change, so a write is issued exactly once and an
+ * item whose outcome is unknown is reported rather than retried. `deferred` is the one exception the
+ * caller may reissue, because a deferred item never reached a write at all.
+ */
+export const updateTrackEmbeddings = oc
+  .route({
+    method: "POST",
+    operationId: "updateTrackEmbeddings",
+    path: "/admin/tracks/embeddings",
+    summary: "Write a batch of audio embeddings in one admitted phase",
+    tags: ["Admin"],
+  })
+  .input(
+    z.strictObject({
+      items: z
+        .array(
+          z.strictObject({
+            embedding: z.array(z.number()).length(EMBEDDING_DIMENSIONS),
+            trackId: z.string().min(1).max(256),
+          }),
+        )
+        .min(1)
+        .max(MAX_EMBEDDING_WRITE_BATCH),
+    }),
+  )
+  .output(
+    z.strictObject({
+      /** How many trailing items the wall budget left unwritten. They read `deferred`. */
+      deferred: z.number().int().min(0),
+      ok: z.literal(true),
+      /** One verdict per request item, in request order. */
+      results: z
+        .array(
+          z.strictObject({
+            elapsedMs: ItemElapsedMsSchema,
+            error: z.string().max(500).optional(),
+            fields: z.array(z.string()).optional(),
+            outcome: z.enum(["deferred", "failed", "updated"]),
+            trackId: z.string().min(1).max(256),
+          }),
+        )
+        .max(MAX_EMBEDDING_WRITE_BATCH),
+    }),
   );
 
 /**
@@ -996,6 +1265,16 @@ export const listTrackWork = oc
   )
   .output(
     z.object({
+      /**
+       * WHAT THIS WORKER CAN DO, answered inside the response every pipeline sweep already reads.
+       *
+       * The box CLI is a pinned release and lags the Worker in both directions. A NEW sweep must
+       * never discover a missing batched op by catching a 404 halfway through a batch, so it
+       * feature-detects here, on the worklist read it runs first: an absent field is an OLD Worker
+       * and the per-item path is taken. An OLD sweep ignores the field entirely, which is why the
+       * per-item ops it calls are not going anywhere.
+       */
+      capabilities: TrackWorkCapabilitiesSchema.optional(),
       ok: z.literal(true),
       /** The whole backlog for this kind+scope. Present only when `count=true` was asked for. */
       queued: z.number().optional(),
@@ -1085,6 +1364,7 @@ export const getMixableOrder = oc
 export const adminTracksContract = {
   authorize_track_capture: authorizeTrackCapture,
   commit_track_capture: commitTrackCapture,
+  commit_track_captures: commitTrackCaptures,
   context_track: contextTrack,
   finalize_track_video: finalizeTrackVideo,
   get_mixable_order: getMixableOrder,
@@ -1094,9 +1374,11 @@ export const adminTracksContract = {
   note_track: noteTrack,
   observe_track: observeTrack,
   prepare_track_capture: prepareTrackCapture,
+  prepare_track_captures: prepareTrackCaptures,
   presign_track_video_uploads: presignTrackVideoUploads,
   publish_track: publishTrack,
   purge_video: purgeVideo,
   requeue_video: requeueVideo,
   update_track: updateTrack,
+  update_track_embeddings: updateTrackEmbeddings,
 };

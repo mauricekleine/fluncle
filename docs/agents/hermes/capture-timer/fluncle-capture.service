@@ -33,6 +33,10 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # SUB-cap of FLUNCLE_CAPTURE_PROVENANCE_LIMIT (2), so a wider setting would let provenance
 # segment downloads compete with the paid capture run for the same daily bytes. Findings
 # provenance is untouched — it still takes whatever of the 2 the catalogue does not.
+# FLUNCLE_CAPTURE_BATCH_CAP is VALIDATED in the orchestrator (an integer 1..24; anything else is
+# refused loudly and the default stands), so a mistyped value here can never widen the metered
+# spend. A cap wider than the Worker's advertised prepare width costs extra batched prepare CALLS,
+# never extra budget: every call carries the tick's running reservation and the server subtracts it.
 # The orchestrator is intentionally NOT wrapped in a whole-lifetime admission lease. It opens
 # bounded phase leases itself for each queue/prepare/reconcile/commit request; yt-dlp, oEmbed,
 # fingerprinting, and R2 remain outside every database lease.

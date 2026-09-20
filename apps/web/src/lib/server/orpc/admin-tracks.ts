@@ -26,7 +26,12 @@
 import { env } from "cloudflare:workers";
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { ORPCError } from "@orpc/server";
-import { type contract } from "@fluncle/contracts/orpc";
+import {
+  type contract,
+  MAX_CAPTURE_COMMIT_BATCH,
+  MAX_CAPTURE_PREPARE_BATCH,
+  MAX_EMBEDDING_WRITE_BATCH,
+} from "@fluncle/contracts/orpc";
 import { FOUND_BASE, trackMedia, videoVersion } from "../../media";
 import { recordNoteAttempt } from "../backfill";
 import { coerceEmbedding, EMBEDDING_DIMS } from "../embedding";
@@ -55,7 +60,9 @@ import { countTrackWork, listTrackWork } from "../track-work";
 import {
   authorizeCaptureReconciliation,
   commitCaptureReconciliation,
+  commitCaptureReconciliations,
   prepareCaptureReconciliation,
+  prepareCaptureReconciliations,
   type CaptureExternalResult,
   type CaptureReconciliationKind,
 } from "../track-capture-reconciliation";
@@ -169,6 +176,27 @@ function resolveDurationTargetSec(value: unknown): number {
   return 30;
 }
 
+/**
+ * WHAT THIS WORKER OFFERS THE PIPELINE SWEEPS, answered on the worklist read they already run first.
+ *
+ * The box CLI is a pinned release and lags the Worker in both directions, so a NEW sweep must never
+ * discover a missing batched op by catching a 404 halfway through a batch. It reads these numbers
+ * off the queue; an absent field is an OLD Worker and the per-item path is taken instead. An OLD
+ * sweep ignores the field entirely, which is why the per-item ops remain.
+ */
+const TRACK_WORK_CAPABILITIES = {
+  commitTrackCaptures: MAX_CAPTURE_COMMIT_BATCH,
+  prepareTrackCaptures: MAX_CAPTURE_PREPARE_BATCH,
+  updateTrackEmbeddings: MAX_EMBEDDING_WRITE_BATCH,
+} as const;
+
+/**
+ * The batched embedding write's wall budget, the counterpart of
+ * `CAPTURE_BATCH_WALL_BUDGET_MS`: an admitted phase's watchdog window is ~75s, so the request stops
+ * itself and reports the tail rather than running long and losing its fence mid-write.
+ */
+const EMBEDDING_BATCH_WALL_BUDGET_MS = 45_000;
+
 /** JSON.parse that returns `null` instead of throwing — for the embedding string form. */
 function safeJsonParse(value: string): unknown {
   try {
@@ -249,6 +277,118 @@ export function adminTracksHandlers(os: Implementer) {
       } catch (error) {
         throw toFault(error);
       }
+    });
+
+  // POST /admin/tracks/captures/prepare — a whole batch frozen in ONE admitted phase, with the
+  // catalogue capture budget consumed cumulatively across the batch in request order.
+  const prepareTrackCapturesHandler = os.prepare_track_captures
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { deferred, reserved, results } = await prepareCaptureReconciliations(
+          input.items.map((item) => ({
+            kind: item.kind as CaptureReconciliationKind,
+            ...(item.priorSnapshotToken === undefined
+              ? {}
+              : { priorSnapshotToken: item.priorSnapshotToken }),
+            trackId: item.trackId,
+          })),
+          // Only ever subtracts from the remaining count — never adds. See the op's contract.
+          { reservedThisTick: input.reservedThisTick ?? 0 },
+        );
+
+        return { deferred, ok: true as const, reserved, results };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  // POST /admin/tracks/captures/commit — a batch settled in ONE admitted phase, one receipt per
+  // item. A stale or poisoned row rejects alone; the wall-budgeted tail reads `safely-retryable`.
+  const commitTrackCapturesHandler = os.commit_track_captures
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { deferred, receipts } = await commitCaptureReconciliations(input.items);
+
+        return {
+          deferred,
+          ok: true as const,
+          receipts: receipts.map((receipt) => ({
+            ...(receipt.elapsedMs === undefined ? {} : { elapsedMs: receipt.elapsedMs }),
+            ...(receipt.error === undefined ? {} : { error: receipt.error }),
+            outcome: receipt.outcome,
+            replayed: receipt.replayed,
+            ...(isCaptureCommittedResult(receipt.result) || isCaptureRejectedResult(receipt.result)
+              ? { result: receipt.result }
+              : {}),
+            trackId: receipt.trackId,
+          })),
+        };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  // POST /admin/tracks/embeddings — a tick's MuQ vectors written in ONE admitted phase. Each item
+  // takes the same `updateTrack` path (certification rail included) and keeps its own verdict:
+  // `track.embed` is non-replayable, so a failure is reported rather than retried here.
+  const updateTrackEmbeddingsHandler = os.update_track_embeddings
+    .use(adminAuth)
+    .handler(async ({ context, input }) => {
+      const startedAt = performance.now();
+      const results: {
+        elapsedMs?: number;
+        error?: string;
+        fields?: string[];
+        outcome: "deferred" | "failed" | "updated";
+        trackId: string;
+      }[] = [];
+      let deferred = 0;
+
+      for (const [index, item] of input.items.entries()) {
+        if (index > 0 && performance.now() - startedAt >= EMBEDDING_BATCH_WALL_BUDGET_MS) {
+          deferred += 1;
+          results.push({ elapsedMs: 0, outcome: "deferred", trackId: item.trackId });
+          continue;
+        }
+
+        const itemStartedAt = performance.now();
+        const vector = coerceEmbedding(item.embedding);
+
+        if (!vector) {
+          results.push({
+            elapsedMs: Math.max(0, Math.round(performance.now() - itemStartedAt)),
+            error: `embedding must be a JSON array of ${EMBEDDING_DIMS} finite numbers`,
+            outcome: "failed",
+            trackId: item.trackId,
+          });
+          continue;
+        }
+
+        try {
+          const result = await updateTrack(
+            item.trackId,
+            { embedding: JSON.stringify(vector) },
+            { writer: context.role },
+          );
+          results.push({
+            elapsedMs: Math.max(0, Math.round(performance.now() - itemStartedAt)),
+            fields: result.fields,
+            outcome: "updated",
+            trackId: item.trackId,
+          });
+        } catch (error) {
+          results.push({
+            elapsedMs: Math.max(0, Math.round(performance.now() - itemStartedAt)),
+            error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+            outcome: "failed",
+            trackId: item.trackId,
+          });
+        }
+      }
+
+      return { deferred, ok: true as const, results };
     });
 
   const commitTrackCaptureHandler = os.commit_track_capture
@@ -657,7 +797,7 @@ export function adminTracksHandlers(os: Implementer) {
           ? await countTrackWork({ kind: input.kind, scope: input.scope })
           : undefined;
 
-      return { ok: true, queued, tracks } as const;
+      return { capabilities: TRACK_WORK_CAPABILITIES, ok: true, queued, tracks } as const;
     } catch (error) {
       throw toFault(error);
     }
@@ -1477,6 +1617,7 @@ export function adminTracksHandlers(os: Implementer) {
   return {
     authorize_track_capture: authorizeTrackCaptureHandler,
     commit_track_capture: commitTrackCaptureHandler,
+    commit_track_captures: commitTrackCapturesHandler,
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
     get_mixable_order: getMixableOrderHandler,
@@ -1486,10 +1627,12 @@ export function adminTracksHandlers(os: Implementer) {
     note_track: noteTrackHandler,
     observe_track: observeTrackHandler,
     prepare_track_capture: prepareTrackCaptureHandler,
+    prepare_track_captures: prepareTrackCapturesHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
     publish_track: publishTrackHandler,
     purge_video: purgeVideoHandler,
     requeue_video: requeueVideoHandler,
     update_track: updateTrackHandler,
+    update_track_embeddings: updateTrackEmbeddingsHandler,
   };
 }

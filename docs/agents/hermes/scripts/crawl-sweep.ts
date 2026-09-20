@@ -99,6 +99,7 @@ type PhaseEnvelope = JsonObject & {
 };
 type PrepareEnvelope = PhaseEnvelope & {
   boxFetch?: boolean;
+  capabilities?: CommitBatchCapabilities;
   frontierPending?: number;
   items?: { fetchPlan?: CrawlFetchPlan; nodeId: string; preparedToken: string }[];
   kind?: "drained" | "prepared" | "unavailable";
@@ -107,7 +108,26 @@ type FetchEnvelope = PhaseEnvelope & {
   commitToken?: string;
   operationId?: string;
   operationKey?: string;
+  /** The vendor pushed back on this node. Absent on a Worker older than the batched commit. */
+  rateLimited?: boolean;
   requestDigest?: string;
+};
+type CommitBatchCapabilities = {
+  commitBatchLimit?: number;
+  commitBatchMaxTotalBytes?: number;
+};
+type CommitBatchReceipt = {
+  elapsedMs?: number;
+  error?: string;
+  operationKey?: string;
+  outcome?: string;
+  replayed?: boolean;
+  result?: JsonObject;
+  state?: string;
+};
+type CommitBatchEnvelope = PhaseEnvelope & {
+  deferred?: number;
+  receipts?: CommitBatchReceipt[];
 };
 type ReceiptEnvelope = PhaseEnvelope & {
   receipt?: { outcome?: string; result?: JsonObject; state?: string };
@@ -125,6 +145,24 @@ type SweepSummary = {
   failed: number;
   gateState: "active" | "disabled" | "paused" | null;
   labelsDiscovered: string[];
+  /**
+   * How many ADMITTED DATABASE PHASES this tick took — the shared write lane's acquisitions, each
+   * one a lease with a coordinator round trip and a process spawn of its own. A claim of six nodes
+   * costs two (its prepare and its batched commit) plus whatever a poisoned node's own fallback
+   * commit adds; the pre-batching shape was seven. It is a counter, never a model: every admitted
+   * phase increments it wherever it is taken.
+   */
+  leases: number;
+  /**
+   * The per-tick shape of a batched commit's PER-ITEM server time. The wall budget is checked
+   * BETWEEN items, so a batch's exposure to one slow item grows with its width — and that width was
+   * chosen from the natural unit of work (one claim) rather than from a measured p99. Publishing the
+   * max and the median is what turns that into evidence: a day of ordinary ticks yields the
+   * distribution the bound should be re-derived from. Absent when no batched commit ran.
+   */
+  itemMsMax?: number;
+  itemMsP50?: number;
+  itemSamples?: number;
   ok: boolean;
   partial: boolean;
   pending: number;
@@ -230,14 +268,56 @@ function runCriticalPhase(file: string): JsonObject {
   }
 }
 
-function admittedPhase<T>(directory: string, name: string, body: JsonObject): T | undefined {
+/** The batched commit is its own op, so its admitted child runs its own command. */
+function runCriticalCommitBatch(file: string): JsonObject {
+  try {
+    return fluncleJson<JsonObject>(["admin", "catalogue", "commit-nodes", "--file", file]);
+  } catch (error) {
+    if (isDueWorkRepairPending(error)) {
+      return repairPendingEnvelope();
+    }
+    throw error;
+  }
+}
+
+/** Server-measured per-item milliseconds from this tick's batched commits. */
+const itemTiming: number[] = [];
+
+/** Fold the tick's per-item readings into the max/median pair the ledger publishes. */
+export function summariseItemTiming(
+  samples: readonly number[],
+): { itemMsMax: number; itemMsP50: number; itemSamples: number } | undefined {
+  const sorted = [...samples]
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .sort((left, right) => left - right);
+
+  if (sorted.length === 0) {
+    return undefined;
+  }
+
+  return {
+    itemMsMax: sorted[sorted.length - 1] ?? 0,
+    itemMsP50: sorted[Math.floor((sorted.length - 1) / 2)] ?? 0,
+    itemSamples: sorted.length,
+  };
+}
+
+/**
+ * HOW MANY LEASES THIS TICK TOOK — the number that makes the batching measurable rather than
+ * asserted. Every admitted phase, whatever its shape, passes through here, so the ledger's `leases`
+ * is a count of the shared write lane's acquisitions and not a model of them.
+ */
+let admittedPhaseCount = 0;
+
+function admittedPhase<T>(
+  directory: string,
+  name: string,
+  body: JsonObject,
+  flag: "--critical-commit-batch" | "--critical-phase" = "--critical-phase",
+): T | undefined {
+  admittedPhaseCount += 1;
   const result = runDatabaseAdmissionPhase({
-    command: [
-      process.execPath,
-      import.meta.path,
-      "--critical-phase",
-      phaseFile(directory, name, body),
-    ],
+    command: [process.execPath, import.meta.path, flag, phaseFile(directory, name, body)],
     owner: ADMISSION_OWNER,
     yieldRetries: 0,
   });
@@ -336,6 +416,7 @@ function createSummary(): SweepSummary {
     failed: 0,
     gateState: null,
     labelsDiscovered: [],
+    leases: 0,
     ok: true,
     partial: false,
     pending: 0,
@@ -562,6 +643,35 @@ async function supplyProviderBodies(
   }
 }
 
+/**
+ * ONE node's provider leg, whichever way its commit will be settled.
+ *
+ * The box-fetch half is unchanged: when both switches agree the MusicBrainz reads happen here, on
+ * this machine's address under the shared budget, and the bodies ride into the Worker's unadmitted
+ * fetch phase. What the batched commit adds is `boxThrottled` — the box knows the vendor pushed back
+ * BEFORE the Worker tells it, because it made the call. A tick that batches its commits has to
+ * decide whether to keep fetching the rest of its claim before any commit verdict exists, so it
+ * reads the throttle from its own hand as well as from the response's `rateLimited`. Either alone is
+ * enough: the response covers a Worker-fetched read, and the box's own outcome covers the case where
+ * the Worker is older than that field.
+ */
+async function fetchPreparedNode(
+  directory: string,
+  index: number,
+  item: { fetchPlan?: CrawlFetchPlan; preparedToken: string },
+  boxFetch: boolean,
+  summary: SweepSummary,
+): Promise<{ boxThrottled: boolean; fetched: FetchEnvelope }> {
+  const supplied = await supplyProviderBodies(item.fetchPlan, boxFetch, summary);
+  const boxThrottled = supplied.some((entry) => entry.outcome === "throttled");
+  const fetched = directPhase<FetchEnvelope>(directory, `fetch-${index}`, {
+    phase: "fetch",
+    preparedToken: item.preparedToken,
+    ...(supplied.length > 0 ? { supplied } : {}),
+  });
+  return { boxThrottled, fetched };
+}
+
 async function processPreparedItem(
   directory: string,
   index: number,
@@ -569,19 +679,152 @@ async function processPreparedItem(
   boxFetch: boolean,
   summary: SweepSummary,
 ): Promise<NodeOutcome> {
-  const supplied = await supplyProviderBodies(item.fetchPlan, boxFetch, summary);
-  const fetched = directPhase<FetchEnvelope>(directory, `fetch-${index}`, {
-    phase: "fetch",
-    preparedToken: item.preparedToken,
-    ...(supplied.length > 0 ? { supplied } : {}),
-  });
+  const { fetched } = await fetchPreparedNode(directory, index, item, boxFetch, summary);
   const committed = commitFetched(directory, index, fetched, summary);
   return committed === undefined ? "stop" : applyReceipt(summary, committed);
 }
 
 /**
- * Work one claim's nodes serially. Returns how many nodes were reached and whether the tick should
- * carry on — a throttle pauses it, a stale claim or an admission yield ends it.
+ * THE BATCHED COMMIT'S KILL SWITCH and its feature detection, in one place.
+ *
+ * `FLUNCLE_CRAWL_COMMIT_BATCH=0` in the unit's environment puts every node back on its own commit
+ * phase without a rebake of anything but the unit file — the lever an operator reaches for when a
+ * batched commit is the suspect. Otherwise the answer is the WORKER's: a prepare that carries no
+ * `capabilities.commitBatchLimit` is a Worker that does not have `commit_crawl_nodes`, and the
+ * per-node path is taken. That is the only way this sweep may learn it, because a 404 discovered
+ * halfway through a claim would strand the nodes it had already fetched.
+ */
+function commitBatchLimit(capabilities: CommitBatchCapabilities | undefined): number | undefined {
+  if ((process.env.FLUNCLE_CRAWL_COMMIT_BATCH ?? "1") === "0") {
+    return undefined;
+  }
+  const limit = capabilities?.commitBatchLimit;
+  return typeof limit === "number" && Number.isInteger(limit) && limit >= 1 ? limit : undefined;
+}
+
+/** The batch's signed-envelope budget, taken from the Worker so the two split at the same number. */
+function commitBatchMaxTotalBytes(capabilities: CommitBatchCapabilities | undefined): number {
+  const bytes = capabilities?.commitBatchMaxTotalBytes;
+  return typeof bytes === "number" && Number.isInteger(bytes) && bytes >= 1
+    ? bytes
+    : 8 * 1024 * 1024;
+}
+
+type FetchedNode = { fetched: FetchEnvelope; index: number };
+
+/**
+ * Apply ONE item's receipt out of a batched commit.
+ *
+ * A terminal receipt is applied exactly as a single-node commit's is. Anything else — this item's
+ * own `failed`, the wall-budgeted tail's `safely-retryable`, a receipt-rail verdict that needs
+ * reconciling — falls back to the per-node commit path for THAT NODE ALONE. That path is
+ * idempotent by construction (the same operation key can only read its stored result back), it is
+ * the code that already knows how to reconcile, and it costs one extra lease for exactly the nodes
+ * that earned it. Its neighbours in the batch are already settled and pay nothing.
+ */
+function applyBatchReceipt(
+  directory: string,
+  node: FetchedNode,
+  receipt: CommitBatchReceipt | undefined,
+  summary: SweepSummary,
+): NodeOutcome {
+  if (receipt?.outcome === "committed" || receipt?.outcome === "rejected") {
+    return applyReceipt(summary, { receipt });
+  }
+  if (receipt?.error) {
+    log(`node ${node.index} commit failed inside its batch: ${receipt.error}`);
+  }
+  const committed = commitFetched(directory, node.index, node.fetched, summary);
+  return committed === undefined ? "stop" : applyReceipt(summary, committed);
+}
+
+/**
+ * Settle a run of fetched nodes in ONE admitted phase, then apply their receipts item by item.
+ *
+ * Returns `undefined` when the phase itself yielded — no node was settled, and the tick stops as
+ * paused backpressure exactly as a yielded single commit already does.
+ */
+function commitFetchedBatch(
+  directory: string,
+  nodes: readonly FetchedNode[],
+  summary: SweepSummary,
+): NodeOutcome[] | undefined {
+  const items = nodes.map(({ fetched }) => {
+    const { commitToken, operationId, operationKey, requestDigest } = fetched;
+    if (!commitToken || !operationId || !operationKey || !requestDigest) {
+      throw new Error("crawl provider phase returned incomplete operation coordinates");
+    }
+    return { commitToken, operationId, operationKey, requestDigest };
+  });
+  const first = nodes[0];
+  if (first === undefined) {
+    return [];
+  }
+
+  let batch: CommitBatchEnvelope | undefined;
+  try {
+    batch = admittedPhase<CommitBatchEnvelope>(
+      directory,
+      `commit-batch-${first.index}`,
+      { items },
+      "--critical-commit-batch",
+    );
+    if (batch === undefined) {
+      // The phase yielded before it ran, so nothing was settled.
+      recordPhaseYield(summary);
+      return undefined;
+    }
+  } catch (error) {
+    if (isDueWorkRepairPending(error)) {
+      throw error;
+    }
+    // The batch request itself failed, so NO item carries a receipt from it. Each node falls back
+    // to the per-node commit path, which reconciles its own operation key — the effect of a request
+    // that may or may not have landed is exactly what that path exists to settle.
+    log(
+      `crawl commit batch failed: ${error instanceof Error ? error.message : String(error)} — settling ${nodes.length} node(s) individually`,
+    );
+    batch = undefined;
+  }
+  if (batch !== undefined && !batch.receipts) {
+    throw new Error("crawl commit batch returned no receipts");
+  }
+
+  const outcomes: NodeOutcome[] = [];
+  for (const [index, node] of nodes.entries()) {
+    const receipt = batch?.receipts?.[index];
+    if (
+      typeof receipt?.elapsedMs === "number" &&
+      Number.isFinite(receipt.elapsedMs) &&
+      receipt.elapsedMs >= 0
+    ) {
+      itemTiming.push(receipt.elapsedMs);
+    }
+    if (receipt !== undefined && receipt.operationKey !== node.fetched.operationKey) {
+      throw new Error("crawl commit batch returned a receipt for the wrong node");
+    }
+    const outcome = applyBatchReceipt(directory, node, receipt, summary);
+    outcomes.push(outcome);
+    if (outcome === "stop") {
+      return outcomes;
+    }
+  }
+  return outcomes;
+}
+
+/**
+ * Work one claim's nodes. Returns how many nodes were reached and whether the tick should carry on
+ * — a throttle pauses it, a stale claim or an admission yield ends it.
+ *
+ * ONE CLAIM, TWO LEASES. The nodes' MusicBrainz fetches are unadmitted and stay that way; what
+ * changed is that their commits ride ONE admitted phase for the whole claim instead of one each.
+ * A claim of six therefore costs two leases (its prepare and its commit) rather than seven, and the
+ * ~15-30s of pure lease toll a node used to pay is paid once for the batch.
+ *
+ * A THROTTLE STILL ABANDONS THE REST OF THE CLAIM. The fetch response says so directly
+ * (`rateLimited`), so the sweep learns it before it spends the next node's provider leg — the same
+ * moment it used to learn it from that node's commit. What it has already fetched is committed
+ * rather than discarded: those nodes' provider work is done and their claim is live.
  */
 async function drainPreparedBatch(
   directory: string,
@@ -590,25 +833,99 @@ async function drainPreparedBatch(
   boxFetch: boolean,
   summary: SweepSummary,
   spentMs: () => number,
+  capabilities?: CommitBatchCapabilities,
 ): Promise<{ done: boolean; processed: number; throttled: boolean }> {
+  const batchLimit = commitBatchLimit(capabilities);
   let reached = processed;
+
+  if (batchLimit === undefined) {
+    // The per-node path, unchanged: an old Worker, or an operator who flipped the kill switch.
+    for (const item of items) {
+      if (spentMs() >= WALL_BUDGET_MS) {
+        recordWallBudgetStop(summary);
+        return { done: true, processed: reached, throttled: false };
+      }
+      const outcome = await processPreparedItem(directory, reached, item, boxFetch, summary);
+      reached += 1;
+      if (outcome === "throttled") {
+        // The rest of THIS claim is abandoned deliberately: its nodes would meet the same wall, and
+        // an unworked claim simply expires back to `ready`. Their turn comes round again.
+        return { done: false, processed: reached, throttled: true };
+      }
+      if (outcome === "stop") {
+        return { done: true, processed: reached, throttled: false };
+      }
+    }
+    return { done: false, processed: reached, throttled: false };
+  }
+
+  const maxTotalBytes = commitBatchMaxTotalBytes(capabilities);
+  let pending: FetchedNode[] = [];
+  let pendingBytes = 0;
+  let done = false;
+  let throttled = false;
+
+  const settlePending = (): void => {
+    if (pending.length === 0) {
+      return;
+    }
+    const settling = pending;
+    pending = [];
+    pendingBytes = 0;
+    const outcomes = commitFetchedBatch(directory, settling, summary);
+    if (outcomes === undefined || outcomes.includes("stop")) {
+      done = true;
+      return;
+    }
+    if (outcomes.includes("throttled")) {
+      throttled = true;
+    }
+  };
+
   for (const item of items) {
     if (spentMs() >= WALL_BUDGET_MS) {
       recordWallBudgetStop(summary);
-      return { done: true, processed: reached, throttled: false };
+      done = true;
+      break;
     }
-    const outcome = await processPreparedItem(directory, reached, item, boxFetch, summary);
+    const { boxThrottled, fetched } = await fetchPreparedNode(
+      directory,
+      reached,
+      item,
+      boxFetch,
+      summary,
+    );
+    const bytes = Buffer.byteLength(fetched.commitToken ?? "", "utf8");
+    // The pathological path: MusicBrainz envelopes are kilobytes, so a claim ordinarily fits one
+    // batch. A run of fat ones splits into consecutive batches at the SERVER's own byte bound
+    // rather than being sent as a body the Worker would refuse.
+    if (
+      pending.length > 0 &&
+      (pending.length >= batchLimit || pendingBytes + bytes > maxTotalBytes)
+    ) {
+      settlePending();
+      if (done) {
+        break;
+      }
+    }
+    pending.push({ fetched, index: reached });
+    pendingBytes += bytes;
     reached += 1;
-    if (outcome === "throttled") {
-      // The rest of THIS claim is abandoned deliberately: its nodes would meet the same wall, and
-      // an unworked claim simply expires back to `ready`. Their turn comes round again.
-      return { done: false, processed: reached, throttled: true };
-    }
-    if (outcome === "stop") {
-      return { done: true, processed: reached, throttled: false };
+    // The vendor pushed back: from the box's own read, or from the Worker's response. Either way the
+    // rest of THIS claim is abandoned before another provider leg is spent, exactly as the per-node
+    // path abandons it — an unworked claim simply expires back to `ready`.
+    if (boxThrottled || fetched.rateLimited === true) {
+      throttled = true;
+      break;
     }
   }
-  return { done: false, processed: reached, throttled: false };
+
+  // Whatever is still pending is COMMITTED rather than dropped, whichever budget or wall stopped
+  // the loop: those nodes' provider work is already spent and their claim is live.
+  settlePending();
+
+  // `done` ends the tick; `throttled` only pauses it, so a tick that hit both stops.
+  return { done, processed: reached, throttled: throttled && !done };
 }
 
 /** Claim, work, and — when the vendor pushes back — wait, until a budget or the frontier says stop. */
@@ -651,6 +968,7 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
       boxFetch,
       summary,
       spentMs,
+      prepared.capabilities,
     );
     processed = batch.processed;
     if (batch.done) {
@@ -682,6 +1000,8 @@ export async function main(): Promise<void> {
     validateConfig();
   } catch (error) {
     recordFailure(summary, error);
+    summary.leases = admittedPhaseCount;
+    Object.assign(summary, summariseItemTiming(itemTiming));
     console.log(JSON.stringify(summary));
     process.exitCode = 1;
     return;
@@ -699,6 +1019,8 @@ export async function main(): Promise<void> {
         recordFailure(summary, error);
       }
     }
+    summary.leases = admittedPhaseCount;
+    Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
     console.log(JSON.stringify(summary));
     if (!summary.ok) {
       process.exitCode = 1;
@@ -714,6 +1036,8 @@ export async function main(): Promise<void> {
     });
     if (!initialized) {
       recordPhaseYield(summary);
+      summary.leases = admittedPhaseCount;
+      Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
       console.log(JSON.stringify(summary));
       return;
     }
@@ -724,6 +1048,8 @@ export async function main(): Promise<void> {
       summary.admissionOutcome = "cutover-disabled";
       summary.gateState = "disabled";
       summary.reason = "crawl_due_cutover_disabled";
+      summary.leases = admittedPhaseCount;
+      Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
       console.log(JSON.stringify(summary));
       return;
     }
@@ -743,6 +1069,8 @@ export async function main(): Promise<void> {
     rmSync(directory, { force: true, recursive: true });
   }
 
+  summary.leases = admittedPhaseCount;
+  Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
   console.log(JSON.stringify(summary));
   if (!summary.ok) {
     process.exitCode = 1;
@@ -751,9 +1079,13 @@ export async function main(): Promise<void> {
 
 if (import.meta.main) {
   const criticalIndex = process.argv.indexOf("--critical-phase");
+  const batchIndex = process.argv.indexOf("--critical-commit-batch");
   const file = criticalIndex >= 0 ? process.argv[criticalIndex + 1] : undefined;
+  const batchFile = batchIndex >= 0 ? process.argv[batchIndex + 1] : undefined;
   if (file) {
     console.log(JSON.stringify(runCriticalPhase(file)));
+  } else if (batchFile) {
+    console.log(JSON.stringify(runCriticalCommitBatch(batchFile)));
   } else {
     await main();
   }

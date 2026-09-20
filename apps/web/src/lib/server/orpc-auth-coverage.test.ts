@@ -307,7 +307,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   clear_wrong_audio: "operator",
   collect_private_galaxy_log: "private-session",
   // Capture commit settles only the receipt-bound result authorized for the prepared snapshot.
+  commit_crawl_nodes: "admin",
   commit_track_capture: "admin",
+  commit_track_captures: "admin",
   // Prefix deletion is irreversible even though the runtime proves every live consumer is beyond
   // the barrier, so only an operator may trigger a bounded compaction transaction.
   compact_artifact_changes: "operator",
@@ -605,6 +607,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   observe_track: "admin",
   // Capture prepare freezes current eligibility before the box starts external work.
   prepare_track_capture: "admin",
+  prepare_track_captures: "admin",
   // The box's clip-cut upload presign (Fluncle Studio Unit C) — agent tier (adminAuth
   // only, no operatorGuard), the presign_track_video_uploads precedent: the on-box cron
   // signs its OWN clip output (`<clipId>/footage.mp4`) with the agent token. Distinct
@@ -877,6 +880,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   update_recording: "operator",
   update_subscription: "operator",
   update_track: "admin",
+  update_track_embeddings: "admin",
   update_track_social: "operator",
   // The mint-cover retry drain (E2) — admin tier (agent-allowed), the refresh_frontier_playlists
   // precedent: the box's cron (and the operator) render + upload every owing Frontier cover IN

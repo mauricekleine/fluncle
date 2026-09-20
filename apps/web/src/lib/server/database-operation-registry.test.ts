@@ -1041,6 +1041,7 @@ describe("database operation registry", () => {
     expect(embed?.triggers.map((trigger) => trigger.operationId)).toEqual([
       "track.embed.queue",
       "track.update.embedding",
+      "track.embed.write-batch",
     ]);
   });
 

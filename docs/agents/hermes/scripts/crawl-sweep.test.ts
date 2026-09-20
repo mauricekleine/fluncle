@@ -19,6 +19,14 @@ const PROCESS_TIMEOUT_MS = 8_000;
 const CHOREOGRAPHY_TEST_TIMEOUT_MS = 45_000;
 const temporaryDirectories: string[] = [];
 
+/** A batched commit in which BOTH nodes settled — the ordinary batched shape. */
+const COMMIT_BATCH_ALL_COMMITTED =
+  '{"ok":true,"deferred":0,"receipts":[{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}},{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}]}';
+
+/** A batched commit with a POISONED middle item: its neighbour still carries its own receipt. */
+const COMMIT_BATCH_POISONED =
+  '{"ok":true,"deferred":0,"receipts":[{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}},{"operationKey":"crawl-key","outcome":"failed","replayed":false,"error":"stale claim"}]}';
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
@@ -114,8 +122,12 @@ function fixture(): Fixture {
     "    prepare:repair-pending|fetch:repair-pending-fetch)",
     '      printf \'%s\\n\' \'{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\'',
     "      exit 1 ;;",
+    "    prepare:commit-batch|prepare:commit-batch-poison)",
+    '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","capabilities":{"commitBatchLimit":6,"commitBatchMaxTotalBytes":8388608},"items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
     "    prepare:throttled-after-failure|prepare:yield-after-work)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
+    "    prepare:box-fetch-batch)",
+    '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","boxFetch":true,"capabilities":{"commitBatchLimit":6,"commitBatchMaxTotalBytes":8388608},"items":[{"nodeId":"node-1","preparedToken":"prepared-token-1","fetchPlan":{"kind":"none"}},{"nodeId":"node-2","preparedToken":"prepared-token-2","fetchPlan":{"kind":"none"}}],"frontierPending":2}\' ;;',
     "    prepare:box-fetch|prepare:box-fetch-off)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token","fetchPlan":{"kind":"none"}}],"frontierPending":1,"boxFetch":true}\' ;;',
     '    prepare:*) printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token"}],"frontierPending":1}\' ;;',
@@ -127,7 +139,7 @@ function fixture(): Fixture {
     "        while [ ! -e " + data.fetchRelease + " ]; do sleep 0.01; done",
     "      fi",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"fetch","commitToken":"commit-token","operationId":"crawl-op","operationKey":"crawl-key","requestDigest":"digest"}\' ;;',
-    "    commit:normal|commit:batch|commit:provider-pause|commit:box-fetch|commit:box-fetch-off)",
+    "    commit:normal|commit:batch|commit:provider-pause|commit:box-fetch|commit:box-fetch-off|commit:commit-batch|commit:commit-batch-poison|commit:box-fetch-batch)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}}\' ;;',
     "    commit:throttle-then-work)",
     "      count=$(grep -c '^commit:' " + data.calls + ")",
@@ -165,6 +177,13 @@ function fixture(): Fixture {
     '      printf \'%s\\n\' "{\\"ok\\":true,\\"phase\\":\\"commit\\",\\"receipt\\":{\\"outcome\\":\\"committed\\",\\"state\\":\\"committed\\",\\"result\\":$result}}" ;;',
     '    *) printf \'%s\\n\' \'{"ok":true,"phase":"unknown"}\' ;;',
     "  esac",
+    'elif [[ "$*" == *"admin catalogue commit-nodes"* ]]; then',
+    "  printf 'commit-nodes\\n' >> " + data.calls + "",
+    '  if [ "$mode" = "commit-batch-poison" ]; then',
+    "    printf '%s\\n' '" + COMMIT_BATCH_POISONED + "'",
+    "  else",
+    "    printf '%s\\n' '" + COMMIT_BATCH_ALL_COMMITTED + "'",
+    "  fi",
     'elif [[ "$*" == *"admin receipts reconcile"* ]]; then',
     '  printf \'%s\\n\' \'{"receipt":{"outcome":"committed","state":"committed"}}\'',
     "else",
@@ -314,6 +333,113 @@ describe("crawl-sweep phase protocol", () => {
       expect(calls).toContain("prepare-limit:2");
       expect(calls.match(/^fetch:/gm)).toHaveLength(2);
       expect(calls.match(/^commit:/gm)).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // ── THE BATCHED COMMIT ──────────────────────────────────────────────────────────────────────
+  // One claim, TWO admitted phases: its prepare and its commit. Before batching a six-node claim
+  // took seven, and the ~15-30s of pure lease toll a node paid was paid per node.
+
+  test(
+    "settles a whole claim in ONE admitted commit phase when the Worker advertises the batch",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "commit-batch"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      const summary = JSON.parse(result.stdout);
+      expect(summary).toMatchObject({ checked: 2, expanded: 2, ok: true, tracksWritten: 6 });
+      const calls = readFileSync(data.calls, "utf8");
+      // Both nodes fetched, ONE batched commit, and not a single per-node commit phase.
+      expect(calls.match(/^fetch:/gm)).toHaveLength(2);
+      expect(calls.match(/^commit-nodes$/gm)).toHaveLength(1);
+      expect(calls.match(/^commit:/gm)).toBeNull();
+      // THE LEASES PER CLAIM. The ledger publishes the count so the effect is measurable rather
+      // than asserted: one initialize, one prepare, one batched commit.
+      expect(summary.leases).toBe(3);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "lets a poisoned item inside a batch fall back alone while its neighbour keeps its receipt",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "commit-batch-poison"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      const summary = JSON.parse(result.stdout);
+      // The neighbour committed inside the batch; only the poisoned node paid for its own commit.
+      const calls = readFileSync(data.calls, "utf8");
+      expect(calls.match(/^commit-nodes$/gm)).toHaveLength(1);
+      expect(calls.match(/^commit:/gm)).toHaveLength(1);
+      expect(summary).toMatchObject({ checked: 2, expanded: 2, ok: true });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "commits node by node against a Worker that advertises no batch (new sweep, old Worker)",
+    async () => {
+      // The pinned box CLI leads the Worker as often as it lags it. A prepare with no
+      // `capabilities` is an older Worker without `commit_crawl_nodes`, and the sweep must take the
+      // per-node path rather than discover the missing op as a 404 mid-claim.
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "batch"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      const calls = readFileSync(data.calls, "utf8");
+      expect(calls.match(/^commit:/gm)).toHaveLength(2);
+      expect(calls).not.toContain("commit-nodes");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "puts every node back on its own commit phase when the kill switch is set",
+    async () => {
+      // `FLUNCLE_CRAWL_COMMIT_BATCH=0` is the operator's lever when the batched commit is the
+      // suspect: the Worker still advertises it, and the sweep still refuses it.
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: {
+            ...sweepEnvironment(data, "commit-batch"),
+            FLUNCLE_CRAWL_COMMIT_BATCH: "0",
+            FLUNCLE_CRAWL_NODES: "2",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      const calls = readFileSync(data.calls, "utf8");
+      expect(calls.match(/^commit:/gm)).toHaveLength(2);
+      expect(calls).not.toContain("commit-nodes");
     },
     TEST_TIMEOUT_MS,
   );
@@ -902,6 +1028,95 @@ describe("crawl-sweep phase protocol", () => {
       });
       // A terminal node's provider leg reads nothing at all, so no MusicBrainz request exists to
       // move anywhere and the fetch phase carries no bodies.
+      expect(readFileSync(data.fetchBody, "utf8")).not.toContain('"supplied"');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // ── THE TWO FEATURES COMPOSED ───────────────────────────────────────────────────────────────
+  // Box-fetch moves the MusicBrainz reads off Worker egress; batching moves the commits off one
+  // lease per node. They meet on the same claim and are deliberately independent: the prepare
+  // answers both questions in one response, the reads stay outside every lease either way, and
+  // each switch can be closed without the other noticing. All four combinations are covered —
+  // both on here, box-fetch on / batch off and box-fetch off / batch on below and above.
+
+  test(
+    "runs a whole claim with box-fetch ON and the batched commit ON",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "box-fetch-batch"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      const summary = JSON.parse(result.stdout);
+      expect(summary).toMatchObject({
+        boxFetch: true,
+        checked: 2,
+        expanded: 2,
+        ok: true,
+        tracksWritten: 6,
+      });
+      const calls = readFileSync(data.calls, "utf8");
+      // Both nodes fetched unadmitted, ONE batched commit, no per-node commit phase.
+      expect(calls.match(/^fetch:/gm)).toHaveLength(2);
+      expect(calls.match(/^commit-nodes$/gm)).toHaveLength(1);
+      expect(calls.match(/^commit:/gm)).toBeNull();
+      // Two leases for the claim plus the tick's one initialize — the batching holds with the
+      // provider reads on the box.
+      expect(summary.leases).toBe(3);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "commits node by node with box-fetch ON and the batched commit OFF",
+    async () => {
+      // The mixed mode a rollback produces: the Worker still reads box-fetched bodies, but its
+      // prepare advertises no batch width, so every node pays its own commit lease.
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "box-fetch"), FLUNCLE_CRAWL_NODES: "1" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ boxFetch: true, ok: true });
+      const calls = readFileSync(data.calls, "utf8");
+      expect(calls.match(/^commit:/gm)).toHaveLength(1);
+      expect(calls).not.toContain("commit-nodes");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "batches the commits with box-fetch OFF, leaving the reads on Worker egress",
+    async () => {
+      // The other mixed mode: the batch is live and the provider reads are the Worker's, which is
+      // exactly what the `crawl_box_fetch_enabled` rollback leaves behind.
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "commit-batch"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ boxFetch: false, ok: true });
+      const calls = readFileSync(data.calls, "utf8");
+      expect(calls.match(/^commit-nodes$/gm)).toHaveLength(1);
       expect(readFileSync(data.fetchBody, "utf8")).not.toContain('"supplied"');
     },
     TEST_TIMEOUT_MS,
