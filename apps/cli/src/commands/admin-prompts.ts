@@ -65,7 +65,7 @@ export type ResolvedPrompt = {
 };
 
 /** The one write's result: the version it minted. */
-export type AppendedVersion = { ok: true; version: number };
+type AppendedVersion = { ok: true; version: number };
 
 // ── The two reads ───────────────────────────────────────────────────────────
 

@@ -8,7 +8,7 @@ import { publicApiGet, publicApiPost } from "../api";
 import { promptLine, selectWithKeyboard, truncateTerminalLine } from "../interactive";
 import { CliError } from "../output";
 
-export type SearchCandidate = TrackSearchResult;
+type SearchCandidate = TrackSearchResult;
 
 const PROMPT_NON_INTERACTIVE_MESSAGE =
   "fluncle submit requires an interactive terminal for prompts.";

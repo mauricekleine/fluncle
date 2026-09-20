@@ -116,7 +116,7 @@ import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
 /** Enabled seed labels probed per pass — oldest-probe-stamp first. Bounded so one tick stays a
  *  trickle on the shared Spotify budget, leaving headroom for the live publish/reach calls. */
-export const PROBE_LABELS_PER_PASS = 5;
+const PROBE_LABELS_PER_PASS = 5;
 
 /** How stale a label's last probe may get before it is re-tapped. The cron runs daily, so 20h means
  *  every enabled label's freshness is refreshed each day without re-probing one twice a day when the

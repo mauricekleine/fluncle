@@ -21,7 +21,7 @@ export const VECTOR_FALLBACK_DEADLINE_MS = 12_000;
  * job is to catch a route that stopped resolving, and the SLOW warning below is what catches a
  * route that merely got slower.
  */
-export const VECTOR_ENDPOINT_PROBE_MARGIN_MS = 5_000;
+const VECTOR_ENDPOINT_PROBE_MARGIN_MS = 5_000;
 
 /** What an out-of-process caller waits for a vector-capable endpoint before declaring it dead. */
 export const VECTOR_ENDPOINT_PROBE_TIMEOUT_MS =

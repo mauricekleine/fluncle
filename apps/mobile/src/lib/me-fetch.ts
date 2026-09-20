@@ -67,7 +67,7 @@ export function buildMeHeaders(options: {
 }
 
 /** The narrow request shape the `/me` tier uses: a method, optional JSON string body, and extra headers. */
-export type MeRequestInit = {
+type MeRequestInit = {
   body?: string;
   headers?: Record<string, string>;
   method?: string;

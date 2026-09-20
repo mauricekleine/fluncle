@@ -108,7 +108,7 @@ function isRemoteSavedFinding(value: unknown): value is RemoteSavedFinding {
 
 /** Pull the account's saved findings, or null if the list is unreachable (no session, offline,
  * a non-OK status, or an unreadable body) — a null pull leaves the device store untouched. */
-export async function pullRemoteSaved(fetch: SyncFetch): Promise<RemoteSavedFinding[] | null> {
+async function pullRemoteSaved(fetch: SyncFetch): Promise<RemoteSavedFinding[] | null> {
   let response: Awaited<ReturnType<SyncFetch>>;
   try {
     response = await fetch(SAVED_FINDINGS_PATH, { method: "GET" });

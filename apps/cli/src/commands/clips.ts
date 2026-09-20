@@ -60,7 +60,7 @@ export const CLIP_AUDIO_BITRATE = "192k";
 
 // Cloudflare MT rejects a source over 100 MB; the cut must clear it (the bitrate cap is
 // the primary guard, this is the backstop the cut command asserts on the rendered file).
-export const MAX_CLIP_BYTES = 100 * 1024 * 1024;
+const MAX_CLIP_BYTES = 100 * 1024 * 1024;
 
 /** The clip's pseudo-finding master key on R2 — what every MT helper resolves against. */
 export function clipFootageKey(clipId: string): string {

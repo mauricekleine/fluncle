@@ -70,7 +70,7 @@ type SourceInspection = {
   schema: Map<DeviceSourceTable, DeviceDbSqliteColumn[]>;
 };
 
-export function parseDeviceDerivationArgs(argv: readonly string[]): DerivationArgs {
+function parseDeviceDerivationArgs(argv: readonly string[]): DerivationArgs {
   const values = new Map<string, string>();
 
   for (let index = 0; index < argv.length; index += 1) {

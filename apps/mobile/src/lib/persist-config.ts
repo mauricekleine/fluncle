@@ -61,7 +61,7 @@ export type DehydratableQuery = {
  * Queries whose cached answer is a live sample of the server's clock, worthless the instant
  * it is stored. Restoring a stale one would hand the radio a slot that finished hours ago.
  */
-export const EPHEMERAL_QUERY_OPERATIONS: readonly string[] = ["get_radio_now_playing"];
+const EPHEMERAL_QUERY_OPERATIONS: readonly string[] = ["get_radio_now_playing"];
 
 /**
  * The operation name inside a query key. oRPC keys are `[[path…], { type, input }]`, so the

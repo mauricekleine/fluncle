@@ -111,7 +111,7 @@ export function buildDumpSql(
 // ── Manifest (the integrity fingerprint captured at dump time) ───────────────
 
 /** A content spot-check for the anchor table: engine-computed count + min/max of one column. */
-export type DumpSpot = {
+type DumpSpot = {
   column: string;
   count: number;
   max: string | null;

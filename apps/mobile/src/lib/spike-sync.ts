@@ -20,7 +20,7 @@ export const SPIKE_TOKEN_ENV = "EXPO_PUBLIC_SPIKE_TOKEN";
 
 export const SPIKE_PASS = "SPIKE PASS";
 
-export type SpikeLineKind = "error" | "hint" | "info" | "skipped" | "step" | "verdict";
+type SpikeLineKind = "error" | "hint" | "info" | "skipped" | "step" | "verdict";
 
 export type SpikeLine = {
   /** Milliseconds since the run started. */

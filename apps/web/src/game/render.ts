@@ -336,7 +336,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     const speedFactor = view.phase === "boot" ? 0.4 + view.bootT * 3 : sim.ship.speed / 70;
 
-    drawDistantStars(sim.ship.heading, horizon, view.nowS);
+    drawDistantStars(sim.ship.heading, view.nowS);
     drawStreaks(dt, speedFactor, view.steer, horizon);
     drawWorld(sim, view);
 
@@ -409,7 +409,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     };
   }
 
-  function drawDistantStars(heading: number, horizon: number, nowS: number): void {
+  function drawDistantStars(heading: number, nowS: number): void {
     for (const star of distant) {
       const bearing = wrapAngle(star.angle - heading);
 
@@ -841,11 +841,7 @@ export function createRenderer(container: HTMLElement): Renderer {
       return;
     }
 
-    drawDistantStars(
-      sim.ship.heading + (reducedMotion ? 0 : view.nowS * 0.018),
-      Math.round(height * HORIZON_FRACTION),
-      view.nowS,
-    );
+    drawDistantStars(sim.ship.heading + (reducedMotion ? 0 : view.nowS * 0.018), view.nowS);
 
     const cx = Math.round(width / 2);
     const cy = Math.round(height * 0.5);
@@ -1180,7 +1176,7 @@ export function createRenderer(container: HTMLElement): Renderer {
   // "fix" them to cap-top.
   function drawGate(view: RenderView): void {
     // A quiet starfield behind the plate, drifting just enough to feel alive.
-    drawDistantStars(reducedMotion ? 0 : view.nowS * 0.02, Math.round(height * 0.4), view.nowS);
+    drawDistantStars(reducedMotion ? 0 : view.nowS * 0.02, view.nowS);
 
     const cx = width / 2;
     const orbY = Math.round(height * 0.26);

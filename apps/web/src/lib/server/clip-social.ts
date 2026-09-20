@@ -19,7 +19,7 @@ import { getSetting, setSetting } from "./settings";
 export const CLIP_DRIP_PLATFORM = "instagram" as const;
 
 // The kill-switch key in the `settings` KV.
-export const CLIP_DRIP_PAUSED_KEY = "clip_drip_paused";
+const CLIP_DRIP_PAUSED_KEY = "clip_drip_paused";
 
 // The jittered daily cadence: a clip's slot is the queue tail + a random gap in
 // [23h, 25h]. The jitter keeps post times drifting so the feed never reads as a bot
