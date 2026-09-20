@@ -40,6 +40,7 @@ import {
   isLyricDomain,
   maskEntityName,
   scanObservationScript,
+  type FirecrawlResult,
   type VoiceGateViolation,
 } from "./observation";
 import { renderRegisteredPrompt } from "./prompts";
@@ -193,7 +194,7 @@ export function gateOrAcceptBio(input: {
 }
 
 /** The `voice_gate` 422 message, shared so a bypassed acceptance logs the same words it would have thrown. */
-export function voiceGateMessage(violations: readonly VoiceGateViolation[]): string {
+function voiceGateMessage(violations: readonly VoiceGateViolation[]): string {
   return `The bio fails the voice gate: ${violations.map((violation) => violation.reason).join("; ")}`;
 }
 
@@ -331,8 +332,6 @@ export async function fetchEntityFacts(input: {
 
   return { facts: snippets.join("\n").slice(0, 2000), sources };
 }
-
-type FirecrawlResult = { description?: string; title?: string; url?: string };
 
 // ── The prompt-assembly helper (the reusable seam the future cron authors through) ────
 

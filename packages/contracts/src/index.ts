@@ -32,9 +32,11 @@ import {
   type AddArtistRuleInputSchema,
   type ArtistRuleInputSchema,
   type ArtistRuleSchema,
+  type ArtistRuleSourceSchema,
   type ArtistRuleVerdictSchema,
   type LabelArtistRuleVerdictSchema,
 } from "./orpc/admin-artist-rules.js";
+import { type PushCategorySchema } from "./orpc/devices.js";
 import { type LabelDetailSchema, type LabelListItemSchema } from "./orpc/labels.js";
 import {
   type AttentionQueueSchema,
@@ -63,6 +65,7 @@ import {
   type LabelAliasKindSchema,
   type LabelAliasSourceSchema,
   type LabelSeedStateSchema,
+  type LabelTakeOverResultSchema,
   type MergeLabelResultSchema,
   type MintLabelOutcomeSchema,
 } from "./orpc/admin-labels.js";
@@ -76,7 +79,7 @@ import { type GalaxyListItemSchema } from "./orpc/galaxies.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import { type MixArtistSchema } from "./orpc/mix.js";
 import {
-  type ClipDTOSchema,
+  type ClipDTO,
   type EditionDTOSchema,
   type FreshAlbumSchema,
   type FreshTrackSchema,
@@ -84,11 +87,11 @@ import {
   type MixtapeSocialPostItemSchema,
   type PublicUserSchema,
   type RadioNowPlayingSchema,
-  type RecordingDTOSchema,
+  type RecordingDTO,
   type MixCandidateSchema,
   type MixReasonSchema,
   type MixTrackSchema,
-  type RecordingTracklistItemSchema,
+  type RecordingTracklistItem,
   type SocialPostItemSchema,
   type SubmissionSchema,
   type SubscriptionDTOSchema,
@@ -100,6 +103,10 @@ import {
   // CLI) + vite/esbuild resolve it back to the `.ts` source. Type-only import, so
   // no zod runtime reaches the zod-free `.` bundle.
 } from "./orpc/_shared.js";
+
+export type { SearchEntity, SearchFilters, SearchHit, SearchKind } from "./orpc/search.js";
+export type { VectorServingReason, VectorServingStatus } from "./orpc/admin-vectors.js";
+export type { ClipDTO, RecordingDTO, RecordingTracklistItem };
 
 // ── Common ───────────────────────────────────────────────────────────────────
 
@@ -224,6 +231,9 @@ export type ArtistRuleVerdict = z.infer<typeof ArtistRuleVerdictSchema>;
 /** The narrower verdict set a per-label rule may carry: acquisition scope, never visibility. */
 export type LabelArtistRuleVerdict = z.infer<typeof LabelArtistRuleVerdictSchema>;
 
+/** Which actor authored an artist-acquisition rule. */
+export type ArtistRuleSource = z.infer<typeof ArtistRuleSourceSchema>;
+
 /** List or whole-set replacement response for label-scoped and global artist rules. */
 export type ArtistRulesResponse = Ok<{ rules: ArtistRule[] }>;
 
@@ -239,10 +249,19 @@ export type MergeLabelResult = z.infer<typeof MergeLabelResultSchema>;
 
 /**
  * What `mint_label` (`POST /api/v1/admin/labels`) did with the MusicBrainz identity it was handed:
- * `minted` a new row, `adopted` the MBID onto a row that already carried the spelling, or found the
- * MBID already `known`. Inferred from `MintLabelOutcomeSchema` (./orpc/admin-labels.ts).
+ * `minted` a new row, `adopted` the MBID onto a row that already carried the spelling, found the
+ * MBID already `known`, or `taken_over` — re-pointed the conflicting row's identity onto the minted
+ * entity, which happens only on the operator's explicit `takeOverSlug`. Inferred from
+ * `MintLabelOutcomeSchema` (./orpc/admin-labels.ts).
  */
 export type MintLabelOutcome = z.infer<typeof MintLabelOutcomeSchema>;
+
+/**
+ * What a `mint_label` TAKE-OVER moved: the replaced MBID, the identity-derived facts cleared off the
+ * row, the label-scoped artist rules dropped, and the crawl-frontier nodes retired or re-armed.
+ * Inferred from `LabelTakeOverResultSchema` (./orpc/admin-labels.ts).
+ */
+export type LabelTakeOverResult = z.infer<typeof LabelTakeOverResultSchema>;
 
 // ── Users (the account roster — the operator's read-only rollout window) ───────
 
@@ -398,6 +417,9 @@ export type GalaxyProgress = z.infer<typeof GalaxyProgressSchema>;
  */
 export type ServiceHealthStatus = z.infer<typeof ServiceHealthStatusSchema>;
 
+/** A notification category a registered device can mute. */
+export type PushCategory = z.infer<typeof PushCategorySchema>;
+
 // ── Track ────────────────────────────────────────────────────────────────────
 
 /**
@@ -535,9 +557,6 @@ export type MixtapesResponse = Ok<{ mixtapes: MixtapeDTO[] }>;
 // so the wire shape cannot drift. The CLI (`fluncle admin clips list|cut`) + the box
 // clip-cut cron read these.
 
-/** A clip row as the clip ops emit it. */
-export type ClipDTO = z.infer<typeof ClipDTOSchema>;
-
 /** `GET /api/v1/admin/clips` response: every clip (optionally filtered by mixtape/status). */
 export type ClipsResponse = Ok<{ clips: ClipDTO[] }>;
 
@@ -573,6 +592,8 @@ export type ClipSocialPost = {
   updatedAt: string;
 };
 
+export type ClipSocialStatus = ClipSocialPost["status"];
+
 /** `GET /api/v1/admin/clips/social` response: every clip's drip-feed row. */
 export type ClipSocialPostsResponse = Ok<{ posts: ClipSocialPost[] }>;
 
@@ -588,12 +609,6 @@ export type ClipDripStateResponse = Ok<{ paused: boolean }>;
 // Inferred from the Zod schemas (./orpc/_shared) so the wire shape cannot drift. The
 // CLI (`fluncle admin recordings …`) + the box clip-cut cron read these.
 
-/** A recording tracklist cue (`{ id, artists, title, startMs? }`). */
-export type RecordingTracklistItem = z.infer<typeof RecordingTracklistItemSchema>;
-
-/** A recording row as the recording ops emit it (with the promoted logId/mixtapeId if any). */
-export type RecordingDTO = z.infer<typeof RecordingDTOSchema>;
-
 /** `GET /api/v1/admin/recordings` response: every recording, newest first. */
 export type RecordingsResponse = Ok<{ recordings: RecordingDTO[] }>;
 
@@ -601,6 +616,33 @@ export type RecordingsResponse = Ok<{ recordings: RecordingDTO[] }>;
 export type RecordingResponse = Ok<{ recording: RecordingDTO }>;
 
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
+
+/** A loudness-rise candidate in the Studio analysis artifact. */
+export type StudioPeak = {
+  atMs: number;
+  kind: "drop";
+  score: number;
+};
+
+/** A vettable clip window around a Studio analysis peak. */
+export type StudioSuggestion = {
+  anchorMs: number;
+  durationMs: number;
+  score: number;
+  startMs: number;
+};
+
+/** The set-analysis artifact shared by the video producer and Studio editor. */
+export type StudioEnvelope = {
+  bass: number[];
+  bpm: number | null;
+  durationMs: number;
+  energy: number[];
+  flux: number[];
+  hopMs: number;
+  peaks: StudioPeak[];
+  suggestions: StudioSuggestion[];
+};
 
 // ── Attention (the /admin queue digest) ──────────────────────────────────────
 

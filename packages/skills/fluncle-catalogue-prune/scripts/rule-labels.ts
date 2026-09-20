@@ -10,7 +10,7 @@
 // identify UNDECIDED (it stays in the /admin/labels review queue). Disabling is reversible; the
 // rollback file restores the prior seed_state.
 import { writeFileSync } from "node:fs";
-import { getDb } from "./lib";
+import { getDb, rowString } from "./lib";
 
 const args = process.argv.slice(2);
 const CONFIRM = args.includes("--confirm");
@@ -32,11 +32,11 @@ if (!enableNames.size && !disableNames.size) {
 }
 
 const db = await getDb();
-const labels = (await db.execute(`select id, name, seed_state from labels`)).rows as unknown as {
-  id: string;
-  name: string;
-  seed_state: string;
-}[];
+const labels = (await db.execute(`select id, name, seed_state from labels`)).rows.map((row) => ({
+  id: rowString(row, "id"),
+  name: rowString(row, "name"),
+  seed_state: rowString(row, "seed_state"),
+}));
 const enable = labels.filter((l) => enableNames.has(l.name));
 const disable = labels.filter((l) => disableNames.has(l.name));
 

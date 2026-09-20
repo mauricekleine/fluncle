@@ -36,9 +36,7 @@ export const dueWorkMaintenancePendingMiddleware = implement(contract)
  * The router-level middleware that carries no authority. Every op inherits it, so it says nothing
  * about an op's auth tier and nothing about whether an op is a public unauthenticated read.
  */
-export const NON_AUTH_ROUTER_MIDDLEWARES: readonly unknown[] = [
-  dueWorkMaintenancePendingMiddleware,
-];
+const NON_AUTH_ROUTER_MIDDLEWARES: readonly unknown[] = [dueWorkMaintenancePendingMiddleware];
 
 /** An op's middleware chain with the authority-free router middleware removed. */
 export function authMiddlewaresOf(middlewares: readonly unknown[]): unknown[] {

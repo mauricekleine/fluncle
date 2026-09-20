@@ -1,5 +1,7 @@
 import { LONG_FORM_MS } from "../catalogue-eligibility";
+import { fnv1a64 } from "@fluncle/contracts/util/hash";
 import { encodeDueWorkOrder, type DueWorkOrderComponent } from "./due-work-order";
+import { dueWorkNowIso } from "./due-work-time";
 
 export { LONG_FORM_MS };
 
@@ -231,14 +233,6 @@ export type DueWorkEvaluationOptions = {
   sources: readonly DueWorkTrackSource[];
 };
 
-function nowIso(now: Date | string): string {
-  const date = typeof now === "string" ? new Date(now) : now;
-  if (!Number.isFinite(date.getTime())) {
-    throw new RangeError("Due-work evaluation requires a valid now timestamp");
-  }
-  return date.toISOString();
-}
-
 function addMilliseconds(iso: string, milliseconds: number): string {
   const time = Date.parse(iso);
   if (!Number.isFinite(time)) {
@@ -321,14 +315,10 @@ function reverdictOrder(source: DueWorkTrackSource): string {
 
 /** A stable FNV-1a token over the explicit source-column contract. */
 export function dueWorkTrackSourceVersion(source: DueWorkTrackSource): string {
-  let hash = 0xcbf29ce484222325n;
   const input = [...DUE_WORK_TRACK_SOURCE_COLUMNS, ...DUE_WORK_TRACK_PAYLOAD_ONLY_SOURCE_COLUMNS]
     .map((column) => `${column}:${JSON.stringify(source[column])}`)
     .join("\u001f");
-  for (const byte of new TextEncoder().encode(input)) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
-  }
+  const hash = fnv1a64(input);
   return `dw1-${hash.toString(16).padStart(16, "0")}`;
 }
 
@@ -501,7 +491,7 @@ function compareRows(left: DueWorkTrackRow, right: DueWorkTrackRow): number {
 export function evaluateDueWorkQueue(
   options: DueWorkEvaluationOptions & { kind: DueWorkKind; scope?: DueWorkScope },
 ): DueWorkTrackRow[] {
-  const now = nowIso(options.now);
+  const now = dueWorkNowIso(options.now);
   const rows: DueWorkTrackRow[] = [];
   const scopes: readonly DueWorkScope[] = options.scope
     ? [options.scope]

@@ -22,7 +22,7 @@ import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 
 /** The field's accessible name — literal, and the one string that names what a caller may type. */
-export const IDENTITY_FIELD_LABEL =
+const IDENTITY_FIELD_LABEL =
   "A Spotify or Deezer link, an ISRC, a MusicBrainz recording id, or a Log ID";
 
 export function IdentityLookupForm({ submitLabel = "Look up" }: { submitLabel?: string }) {

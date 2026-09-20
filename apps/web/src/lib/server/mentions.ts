@@ -35,7 +35,7 @@ export const MAX_MENTION_HANDLES = 3;
  *     allows 4,000). Fluncle pushes TikTok via Postiz AND the operator pastes the same
  *     text in-app, so the conservative 2,200 floor keeps one caption safe on both paths.
  */
-export const PLATFORM_CAPTION_CAP: Record<MentionPlatform, number> = {
+const PLATFORM_CAPTION_CAP: Record<MentionPlatform, number> = {
   tiktok: 2200,
   youtube: 5000,
 };

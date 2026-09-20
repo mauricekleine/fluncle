@@ -1,4 +1,4 @@
-import { type TrackWorkItem } from "@fluncle/contracts";
+import { type TrackWorkItem, type TrackWorkScope } from "@fluncle/contracts";
 import { adminApiGet, adminApiPost } from "../api";
 import { mapTrack, type RecentTrack, type TracksResponse } from "./recent";
 import { trackUpdateCommand } from "./track";
@@ -196,8 +196,6 @@ export async function captureQueueCommand(limit: number): Promise<RecentTrack[]>
 // of the `capture` worklist entirely. The three sweeps read it; this is the CLI mirror
 // (the CLI holds no queue logic of its own).
 export type TrackWorkKind = "analyze" | "capture" | "embed";
-export type TrackWorkScope = "all" | "catalogue" | "findings";
-
 export type TrackWorkPage = {
   /**
    * The page was withheld because due-work repair is still converging, so `tracks` is empty and

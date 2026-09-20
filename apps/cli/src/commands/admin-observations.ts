@@ -10,15 +10,15 @@
 // Ruling on a held observation (render it / bin it) is OPERATOR-tier and lives on the web
 // admin (the observation dialog's held panel), per the persona law.
 
-import { type ObservationGate, type ObservationRejection } from "@fluncle/contracts";
+import {
+  type ObservationGate,
+  type ObservationRejection,
+  type ObservationRejectionsResponse,
+} from "@fluncle/contracts";
 import { adminApiGet, adminApiPatch } from "../api";
 
 export type { ObservationGate, ObservationRejection };
 
-type ObservationRejectionsResponse = {
-  gate: ObservationGate;
-  rejections: ObservationRejection[];
-};
 type ObservationGateResponse = { gate: ObservationGate };
 
 /**

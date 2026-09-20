@@ -16,6 +16,7 @@
 // never fail or delay a finding/mixtape going out.
 
 import { waitUntil } from "cloudflare:workers";
+import { type PushCategory } from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
 import { getDb, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
@@ -36,7 +37,7 @@ const FINDINGS_CHANNEL = "findings";
 const MIXTAPES_CHANNEL = "mixtapes";
 
 /** The two notification categories — the per-category mute key a device can set. */
-export type PushCategory = "findings" | "mixtapes";
+export type { PushCategory };
 
 // One Expo push message (the subset we send). `data.url` is the in-app deep-link
 // target the client routes to on tap.

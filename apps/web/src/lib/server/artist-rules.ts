@@ -1,4 +1,12 @@
 import { randomUUID } from "node:crypto";
+import {
+  type AddArtistRuleInput,
+  type ArtistRule,
+  type ArtistRuleInput,
+  type ArtistRuleSource,
+  type ArtistRuleVerdict,
+  type LabelArtistRuleVerdict,
+} from "@fluncle/contracts";
 import { parseSpotifyArtistId } from "./artist-resolution";
 import {
   markCrawlProjectionRepairStatement,
@@ -9,42 +17,17 @@ import { type DueWorkStatement, markDueWorkSourceMaintenanceStatements } from ".
 import { LabelNotFoundError } from "./labels";
 import { mbFetch } from "./musicbrainz";
 
-export const ARTIST_RULE_LIMIT = 100;
+const ARTIST_RULE_LIMIT = 100;
 
 /**
  * Two axes in one column. `allow`/`block` are ACQUISITION scope (what a future crawl takes);
  * `unlisted` is the one VISIBILITY verdict (the artist entity has no public page) and is inert at
  * crawl time. `unlisted` is valid only on a GLOBAL rule — see `LabelScopedUnlistedRuleError`.
  */
-export type ArtistRuleVerdict = "allow" | "block" | "unlisted";
-/** The verdicts a per-label rule may carry: acquisition scope only. */
-export type LabelArtistRuleVerdict = "allow" | "block";
-export type ArtistRuleSource = "operator" | "triage";
+export type { ArtistRule, ArtistRuleSource, ArtistRuleVerdict, LabelArtistRuleVerdict };
 
-export type ArtistRule = {
-  artistMbid: string;
-  artistName: string;
-  artistSpotifyId: null | string;
-  checkedAt: null | string;
-  createdAt: string;
-  id: string;
-  resolvedMbid: null | string;
-  resolvedName: null | string;
-  updatedAt: string;
-  verdict: ArtistRuleVerdict;
-};
-
-export type LabelArtistRuleInput = {
-  artistMbid: string;
-  artistName: string;
-  verdict: LabelArtistRuleVerdict;
-};
-
-export type GlobalArtistRuleInput = {
-  artistMbid: string;
-  artistName?: string;
-  verdict: ArtistRuleVerdict;
-};
+export type LabelArtistRuleInput = ArtistRuleInput;
+export type GlobalArtistRuleInput = AddArtistRuleInput;
 
 export type UpdateArtistRuleInput = {
   checkedAt?: string;

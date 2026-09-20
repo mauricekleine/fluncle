@@ -357,6 +357,11 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
 
 const encoder = new TextEncoder();
 
+/** Copy a view's exact byte window into an ArrayBuffer-backed WebCrypto input. */
+function webCryptoBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(bytes);
+}
+
 function toHex(buffer: ArrayBuffer): string {
   let hex = "";
   for (const byte of new Uint8Array(buffer)) {
@@ -366,14 +371,14 @@ function toHex(buffer: ArrayBuffer): string {
 }
 
 async function sha256Hex(data: Uint8Array | string): Promise<string> {
-  const bytes = typeof data === "string" ? encoder.encode(data) : data;
-  return toHex(await crypto.subtle.digest("SHA-256", bytes as unknown as ArrayBuffer));
+  const bytes = webCryptoBytes(typeof data === "string" ? encoder.encode(data) : data);
+  return toHex(await crypto.subtle.digest("SHA-256", bytes));
 }
 
 async function hmac(key: ArrayBuffer | Uint8Array, data: string): Promise<ArrayBuffer> {
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
-    key as unknown as ArrayBuffer,
+    key instanceof ArrayBuffer ? key : webCryptoBytes(key),
     { hash: "SHA-256", name: "HMAC" },
     false,
     ["sign"],

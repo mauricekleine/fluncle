@@ -205,7 +205,7 @@ export async function verifySealedArtifact(options: {
   }
 
   const sha256 = Buffer.from(
-    await crypto.subtle.digest("SHA-256", plaintext as unknown as ArrayBuffer),
+    await crypto.subtle.digest("SHA-256", new Uint8Array(plaintext)),
   ).toString("hex");
 
   if (sha256 !== manifest.sha256) {

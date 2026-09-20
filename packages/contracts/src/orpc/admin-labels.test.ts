@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 
-import { MB_LABEL_MBID_PATTERN, mintLabel } from "./admin-labels";
+import { MB_LABEL_MBID_PATTERN, MintLabelOutcomeSchema, mintLabel } from "./admin-labels";
 import { adminLabelsContract } from "./admin-labels";
 
 /** The op's input validator, reached the same way the coverage tests reach a route. */
@@ -65,6 +65,40 @@ function accepts(value: unknown): boolean {
 {
   assert.equal(MB_LABEL_MBID_PATTERN.test("4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2"), true);
   assert.equal(MB_LABEL_MBID_PATTERN.test("not-an-mbid"), false);
+}
+
+// 3b. `takeOverSlug` is OPTIONAL and must carry a slug when present — the identity re-point is
+//     never inferred, it is always the operator saying which row to move, out loud.
+{
+  const mbid = "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2";
+
+  assert.equal(accepts({ mbLabelId: mbid }), true, "the take-over is opt-in");
+  assert.equal(
+    accepts({ mbLabelId: mbid, takeOverSlug: "med-school" }),
+    true,
+    "a slug names the row whose identity moves",
+  );
+  assert.equal(
+    accepts({ mbLabelId: mbid, seedState: "enabled", takeOverSlug: "med-school" }),
+    true,
+    "a take-over may rule the new identity in the same call",
+  );
+  assert.equal(accepts({ mbLabelId: mbid, takeOverSlug: "" }), false, "an empty slug names nobody");
+  assert.equal(accepts({ mbLabelId: mbid, takeOverSlug: 7 }), false, "the slug is a string");
+}
+
+// 3c. `taken_over` is a first-class outcome beside the original three, so a client can tell an
+//     identity RE-POINT from a fresh mint or an adoption.
+{
+  const isOutcome = (value: unknown): boolean =>
+    (MintLabelOutcomeSchema["~standard"].validate(value) as { issues?: readonly unknown[] })
+      .issues === undefined;
+
+  for (const outcome of ["minted", "adopted", "known", "taken_over"]) {
+    assert.equal(isOutcome(outcome), true, `${outcome} is an outcome`);
+  }
+
+  assert.equal(isOutcome("takenover"), false, "the outcome set is closed");
 }
 
 // 4. The op is registered under its canonical `verb_noun` key, at the collection-level route the

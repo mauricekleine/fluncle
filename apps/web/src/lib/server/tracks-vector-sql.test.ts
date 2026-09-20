@@ -563,7 +563,7 @@ function logIdFor(index: number): string {
  * Enough same-key, far-away rows to open the sonic coverage gate (11 embedded tracks in play).
  * Their cosine to the target is 0, so they calibrate to 0 and settle at the foot of the rail.
  */
-function gateFillers(from: number, key: string): MixSeed[] {
+function gateFillers(key: string): MixSeed[] {
   return Array.from({ length: 10 }, (_, index) => ({
     bpm: 172,
     embedding: axis(200 + index),
@@ -583,7 +583,7 @@ describe("the /mix rail ranks by adjacency to the chain's LAST track", () => {
       { bpm: 172, embedding: atCosine(0.635, 1), key: "A minor", trackId: "t_same_far" },
       // calibrate(0.77) = 0.6 → mix 0.66, rail 0.396
       { bpm: 172, embedding: atCosine(0.77, 2), key: "B minor", trackId: "t_energy_near" },
-      ...gateFillers(3, "A minor"),
+      ...gateFillers("A minor"),
     ];
 
     await seed(rows);
@@ -630,7 +630,7 @@ describe("the /mix rail ranks by adjacency to the chain's LAST track", () => {
         key: "A minor",
         trackId: "t_near_tail",
       },
-      ...gateFillers(4, "A minor"),
+      ...gateFillers("A minor"),
     ];
 
     await seed(rows);
@@ -654,7 +654,7 @@ describe("the /mix rail ranks by adjacency to the chain's LAST track", () => {
       { bpm: 172, embedding: null, key: "A minor", trackId: "t_target" },
       { bpm: 172, embedding: atCosine(0.9, 1), key: "A minor", trackId: "t_near" },
       { bpm: 172, embedding: atCosine(0.55, 2), key: "A minor", trackId: "t_far" },
-      ...gateFillers(3, "A minor"),
+      ...gateFillers("A minor"),
     ];
 
     await seed(rows);

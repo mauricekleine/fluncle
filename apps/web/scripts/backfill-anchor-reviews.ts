@@ -72,7 +72,7 @@ export type AnchorReviewSeed = {
 };
 
 /** Why a seed did not land — reported per row so a scan's misses are never silent. */
-export type AnchorReviewSeedSkip =
+type AnchorReviewSeedSkip =
   | "already_anchored"
   | "already_reviewed"
   | "certified"

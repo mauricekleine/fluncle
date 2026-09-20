@@ -81,6 +81,7 @@
 // their usual order. A certified finding's capture is a handful a week, it is not the spend,
 // and the archive is never starved by the speculative half.
 
+import { type TrackWorkItem, type TrackWorkKind, type TrackWorkScope } from "@fluncle/contracts";
 import { anchorSearchQuery } from "./anchor";
 import { deezerSearchQuery } from "./deezer";
 import { type CatalogueCaptureState, isCatalogueCaptureOpen } from "./capture-budget";
@@ -99,21 +100,7 @@ import {
   readArtistYoutubeChannelIdsByTrack,
 } from "./tracks";
 
-/**
- * Which stage of the audio pipeline a worklist is for. The three are strictly sequential
- * for any one track — capture puts the bytes in private R2, analyze reads them for
- * BPM/key/features, embed reads them for the MuQ vector — but they are INDEPENDENT
- * queues: capture never gates the other two (docs/track-lifecycle.md), and analyze never
- * gates embed.
- */
-export type TrackWorkKind =
-  | "analyze"
-  | "anchor"
-  | "capture"
-  | "embed"
-  | "isrc-recovery"
-  | "youtube-provenance"
-  | "youtube-reverdict";
+export type { TrackWorkItem, TrackWorkKind, TrackWorkScope };
 
 /** The free Deezer pass shares the MusicBrainz ISRC refresh's three-week re-ask cadence. */
 export const ISRC_RECOVERY_REASK_AFTER_DAYS = 21;
@@ -208,95 +195,6 @@ const UNANCHORABLE_ARTIST_CREDITS = [
 const UNANCHORABLE_ARTISTS_JSON = UNANCHORABLE_ARTIST_CREDITS.map((name) =>
   JSON.stringify([name]).toLowerCase(),
 );
-
-/**
- * Which half of the archive a worklist covers.
- *
- *   - `findings`  — certified tracks only (a `findings` row exists).
- *   - `catalogue` — uncertified tracks only (no `findings` row). The Ear's raw material.
- *   - `all`       — both, certified first. The default: the pipeline does not care whether
- *                   a recording is certified, only whether it has audio to measure.
- */
-export type TrackWorkScope = "all" | "catalogue" | "findings";
-
-/**
- * One row of work. It carries the track's identity and the facts a sweep needs to act — the
- * captured-audio key, whether the track is certified, and (for the `capture` worklist only)
- * the trust + re-derive signals the download step reads.
- *
- * `certified` is on the DTO on purpose: it is what tells a sweep it must NOT write a
- * certification field (a `--status`, a note, a video, an `enrichment_status`) on this row.
- * `logId` is null exactly when `certified` is false, because the coordinate lives on the
- * certification.
- *
- * The four `capture`-only fields (`bpm`, `analyzedFrom`, `sourceAudioFailures`,
- * `artistYoutubeChannelIds`) are what the finding-only capture queue (`captureQueue=true`,
- * tracks.ts) surfaced before this worklist replaced it — carried here so the migrated sweep's
- * per-finding behaviour (trust classification, failure-count accumulation, the capture→enrich
- * re-derive) is byte-identical to the migrated worklist. They are ABSENT for
- * `analyze`/`embed`, which read those columns off the row directly and never needed them here.
- */
-export type TrackWorkItem = {
-  /**
-   * Which audio class BPM/key were last analyzed from — CAPTURE-only, so the sweep can
-   * decide whether a newly captured track must re-derive from the full song. Absent for
-   * `analyze`/`embed` (they read it off the row directly) and for a never-analyzed track.
-   */
-  analyzedFrom?: "full" | "preview";
-  /**
-   * The ready-made Spotify search query for the ANCHOR worklist (`anchorSearchQuery`: the row's
-   * artists then its title) — so the box's Apify sweep stays dumb and never has to know how to
-   * build the query. Attached ONLY for the `anchor` worklist; absent for every other kind.
-   */
-  anchorQuery?: string;
-  /**
-   * The artist's own YouTube channel id(s) — CAPTURE-only, the sweep's strongest download
-   * trust signal (a candidate on the artist's OWN channel is the artist's upload). Attached
-   * only for the `capture` worklist, and only when non-empty (never surfaced as `[]`).
-   */
-  artistYoutubeChannelIds?: string[];
-  artists: string[];
-  /**
-   * The stored BPM — CAPTURE-only, read alongside `analyzedFrom` for the re-derive predicate.
-   * Absent for other kinds and when genuinely missing (null/≤0).
-   */
-  bpm?: number;
-  /** The Ear's pre-audio ladder tier, or null on a finding / an unranked catalogue row. */
-  capturePriority: number | null;
-  /** True when a `findings` row exists — the certification rail's flag, in the DTO. */
-  certified: boolean;
-  /**
-   * The ready-made DEEZER search query (`deezerSearchQuery`: free text over the row's credited
-   * artists + its canonicalized title — Deezer's combined field syntax answers empty for every
-   * input, so it is never sent). Attached for every
-   * ISRC-RECOVERY row and for an ANCHOR row that carries NO ISRC, because those are exactly the rows
-   * the pre-anchor recovery rung acts on; its presence is the server telling the box "search Deezer
-   * for this one, from your own IP". Absent for other kinds, for an anchor row that already has an
-   * ISRC, and when the row has no usable artist/title to ask with.
-   */
-  deezerQuery?: string;
-  durationMs: number;
-  isrc: null | string;
-  label: null | string;
-  /** Null for every catalogue track: the coordinate lives on `findings`. */
-  logId: null | string;
-  /**
-   * The consecutive full-song capture failures — CAPTURE-only, read so the sweep's failure
-   * bump ACCUMULATES (the queue's failure-cap backoff depends on it). Absent for other kinds
-   * and when zero, matching the finding-only capture DTO's convention.
-   */
-  sourceAudioFailures?: number;
-  /** The private-R2 key of the captured full song. Presence = there is audio to work on. */
-  sourceAudioKey: null | string;
-  /**
-   * The bad-audio memory (docs/the-ear.md § Wrong audio) — the JSON array of rejected capture
-   * sources ({ videoId?, sha256, reason, at }). CAPTURE-only like the trust signals: the sweep's
-   * pre-download videoId filter + post-download sha backstop read it. Absent when empty.
-   */
-  sourceAudioRejected?: string;
-  title: string;
-  trackId: string;
-};
 
 type WorkRow = {
   analyzed_from: null | string;

@@ -225,7 +225,7 @@ RUN arch="$(uname -m)" \
        x86_64|amd64)  cpu="x64" ;; \
        *) echo "unsupported arch for the fluncle binary: $arch" >&2; exit 1 ;; \
      esac \
-  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.246.0/fluncle-linux-${cpu}" \
+  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.249.0/fluncle-linux-${cpu}" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 
@@ -260,14 +260,22 @@ RUN arch="$(uname -m)" \
 # World-readable + exec so the non-root hermes cron user runs them.
 COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/
 COPY apps/web/src/lib/catalogue-eligibility.ts \
-     apps/web/scripts/lib/device-db-derivation.ts \
      apps/web/scripts/lib/device-db-schema.ts \
      /opt/hermes-scripts/
+# The device deriver is baked under its REPOSITORY-RELATIVE tree, because its imports reach
+# sideways into apps/web (`../../src/lib/...`) and only that tree shape resolves them. Every file
+# in its import closure is listed here, and device-bake-closure.test.ts walks that closure against
+# this list so a new import fails the PR instead of the box's hourly device-mirror run. The flat
+# /opt/hermes-scripts copy is a shim onto this tree rather than a second copy of the deriver, so a
+# relative import can never resolve against /opt/hermes-scripts/../../ (that is `/`).
 COPY apps/web/scripts/derive-device-db.ts /opt/hermes-device/apps/web/scripts/derive-device-db.ts
 COPY apps/web/scripts/lib/device-db-derivation.ts \
      apps/web/scripts/lib/device-db-schema.ts \
      /opt/hermes-device/apps/web/scripts/lib/
 COPY apps/web/src/lib/catalogue-eligibility.ts /opt/hermes-device/apps/web/src/lib/catalogue-eligibility.ts
+COPY apps/web/src/lib/server/artist-visibility.ts /opt/hermes-device/apps/web/src/lib/server/artist-visibility.ts
+RUN printf '%s\n' 'export * from "/opt/hermes-device/apps/web/scripts/lib/device-db-derivation";' \
+      >/opt/hermes-scripts/device-db-derivation.ts
 ENV DEVICE_DERIVE_SCRIPT=/opt/hermes-device/apps/web/scripts/derive-device-db.ts
 RUN rm -f /opt/hermes-scripts/*.test.ts \
           /opt/hermes-scripts/bunfig.toml \

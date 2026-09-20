@@ -230,7 +230,7 @@ export async function sendBroadcast(
  * whether that surfaces to the user (Better Auth's `sendResetPassword` swallows it so
  * a delivery hiccup never leaks whether an account exists).
  */
-export async function sendTransactionalEmail(params: {
+async function sendTransactionalEmail(params: {
   html: string;
   subject: string;
   text: string;

@@ -159,6 +159,57 @@ describe("fluncle CLI parsing and JSON output", () => {
     );
   });
 
+  test("admin labels mint names the identity a take-over replaced and what it dropped", () => {
+    // The replaced MBID and the dropped roster are the part the operator cannot read off the row
+    // afterwards, so the line has to say them.
+    expect(
+      labelMintLine(
+        {
+          mbLabelId: "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+          name: "Med School",
+          seedState: "enabled",
+          slug: "med-school",
+        },
+        "taken_over",
+        "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+        {
+          clearedFacts: ["discogsLabelId", "imageKey"],
+          droppedRules: 1,
+          previousMbLabelId: "9f1d3c7e-2b1a-4d5f-8c6e-0a1b2c3d4e5f",
+          rearmedSeedNode: true,
+          retiredFrontierNodes: 1,
+        },
+      ),
+    ).toBe(
+      "TAKEN OVER — Med School (med-school), MusicBrainz 4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2, seed state ENABLED.\n" +
+        "  replaced MusicBrainz 9f1d3c7e-2b1a-4d5f-8c6e-0a1b2c3d4e5f · 1 artist rule dropped · cleared discogsLabelId, imageKey · retired the old crawl node · re-armed the seed.",
+    );
+
+    // A row the frontier never held reports nothing about crawl state rather than pretending.
+    expect(
+      labelMintLine(
+        {
+          mbLabelId: "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+          name: "Med School",
+          seedState: "undecided",
+          slug: "med-school",
+        },
+        "taken_over",
+        "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+        {
+          clearedFacts: [],
+          droppedRules: 0,
+          previousMbLabelId: "9f1d3c7e-2b1a-4d5f-8c6e-0a1b2c3d4e5f",
+          rearmedSeedNode: false,
+          retiredFrontierNodes: 0,
+        },
+      ),
+    ).toBe(
+      "TAKEN OVER — Med School (med-school), MusicBrainz 4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2, seed state UNDECIDED.\n" +
+        "  replaced MusicBrainz 9f1d3c7e-2b1a-4d5f-8c6e-0a1b2c3d4e5f · 0 artist rules dropped.",
+    );
+  });
+
   testCli("admin labels mint rejects an invalid supplied ruling before fetching", async () => {
     const result = await runCli([
       "admin",
@@ -173,6 +224,25 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Pass --seed-state enabled|disabled|undecided");
+  });
+
+  testCli("admin labels mint takes --take-over as a value option, not a positional", async () => {
+    // A value-taking flag missing from `stringOptions` leaks its VALUE into the positionals; here
+    // that would put a slug where the MBID belongs. Reaching the blank-slug refusal proves the
+    // MBID argument still parsed as the MBID, with the flag's value attached to the flag.
+    const result = await runCli([
+      "admin",
+      "labels",
+      "mint",
+      "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+      "--take-over",
+      "   ",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Pass --take-over <slug>");
   });
 
   testCli("admin labels mint rejects a slug where an MBID belongs, before fetching", async () => {

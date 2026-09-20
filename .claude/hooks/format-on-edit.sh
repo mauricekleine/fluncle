@@ -13,6 +13,12 @@ HOOK_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_hook-json.sh
 . "${HOOK_DIR}/_hook-json.sh"
 
+# UNATTENDED (FLUNCLE_UNATTENDED=1, exported by the agentic box sweeps): skip. `.oxlintrc.json`
+# is type-aware, so even a one-file `oxlint --fix` loads the TypeScript program through tsgolint
+# (2.5–3 GB), which the Hermes container's memory cap kills — every edit an unattended pass makes
+# would fire one of those. The box's scoped checks live in audit/verify.sh; nothing here is lost.
+[ "${FLUNCLE_UNATTENDED:-}" = "1" ] && exit 0
+
 fields="$(hook_read_fields)" || exit 0
 file="$(printf '%s' "$fields" | sed -n '2p')"
 [ -z "$file" ] && exit 0

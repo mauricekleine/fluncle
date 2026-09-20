@@ -46,7 +46,7 @@ fn env_usize(key: &str, default: usize) -> usize {
 }
 
 fn p50(mut durs: Vec<f64>) -> f64 {
-    durs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    durs.sort_by(f64::total_cmp);
     durs[durs.len() / 2]
 }
 

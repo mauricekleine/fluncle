@@ -210,20 +210,45 @@ const LABEL_MINT_WORDS: Record<string, string> = {
   adopted: "ADOPTED",
   known: "ALREADY KNOWN",
   minted: "MINTED",
+  taken_over: "TAKEN OVER",
 };
 
 /**
  * The one human line for a label mint: what happened, which label, which MusicBrainz identity, and
- * the ruling it now carries. JSON output bypasses this entirely.
+ * the ruling it now carries. A TAKE-OVER names the identity it replaced and what could not travel
+ * with the name, because that is the part the operator cannot see on the row afterwards. JSON
+ * output bypasses this entirely.
  */
 export function labelMintLine(
   label: { mbLabelId?: null | string; name: string; seedState: string; slug: string },
   outcome: string,
   requestedMbid: string,
+  takenOver?: {
+    clearedFacts: string[];
+    droppedRules: number;
+    previousMbLabelId: null | string;
+    rearmedSeedNode: boolean;
+    retiredFrontierNodes: number;
+  },
 ): string {
   const word = LABEL_MINT_WORDS[outcome] ?? outcome.toUpperCase();
+  const line = `${word} — ${label.name} (${label.slug}), MusicBrainz ${label.mbLabelId ?? requestedMbid}, seed state ${label.seedState.toUpperCase()}.`;
 
-  return `${word} — ${label.name} (${label.slug}), MusicBrainz ${label.mbLabelId ?? requestedMbid}, seed state ${label.seedState.toUpperCase()}.`;
+  if (!takenOver) {
+    return line;
+  }
+
+  const dropped = [
+    `replaced MusicBrainz ${takenOver.previousMbLabelId ?? "none"}`,
+    `${takenOver.droppedRules} artist ${takenOver.droppedRules === 1 ? "rule" : "rules"} dropped`,
+    ...(takenOver.clearedFacts.length === 0
+      ? []
+      : [`cleared ${takenOver.clearedFacts.join(", ")}`]),
+    ...(takenOver.retiredFrontierNodes === 0 ? [] : ["retired the old crawl node"]),
+    ...(takenOver.rearmedSeedNode ? ["re-armed the seed"] : []),
+  ].join(" · ");
+
+  return `${line}\n  ${dropped}.`;
 }
 
 // The catalogue-index browse commands (`artists`, `albums`, `labels`): a JSON
@@ -3981,34 +4006,49 @@ JSON field reference:
   // crawl discovery, for a label no walk will reach (the half an upstream MusicBrainz split moved onto a
   // new entity). Idempotent; without `--seed-state` a new row lands `undecided` and an existing
   // row's ruling is left exactly as it was.
+  //
+  // `--take-over <slug>` is the explicit way through the identity conflict a MusicBrainz split
+  // leaves behind: the drum & bass half moves to a NEW entity carrying the SAME name, and the
+  // archive's row for that name still points at the original. It re-points THAT row's identity —
+  // the server honours it only for the exact conflicting row, only when it holds no tracks, and
+  // only when it is not an enabled seed (a row with tracks is `admin labels merge`).
   labels
     .command("mint")
     .description("Mint a label from its MusicBrainz MBID (operator; idempotent)")
     .argument("<mbid>", "The MusicBrainz label MBID")
     .option("--seed-state <state>", "Rule it on arrival: enabled, disabled, or undecided")
+    .option("--take-over <slug>", "Re-point this trackless row's identity onto the minted entity")
     .option("--json", "Print JSON", false)
-    .action(async (mbid: string, options: { json: boolean; seedState?: string }) => {
-      const seedState = options.seedState;
+    .action(
+      async (mbid: string, options: { json: boolean; seedState?: string; takeOver?: string }) => {
+        const seedState = options.seedState;
 
-      if (
-        seedState !== undefined &&
-        seedState !== "enabled" &&
-        seedState !== "disabled" &&
-        seedState !== "undecided"
-      ) {
-        throw new Error("Pass --seed-state enabled|disabled|undecided");
-      }
+        if (
+          seedState !== undefined &&
+          seedState !== "enabled" &&
+          seedState !== "disabled" &&
+          seedState !== "undecided"
+        ) {
+          throw new Error("Pass --seed-state enabled|disabled|undecided");
+        }
 
-      const { mintLabelCommand } = await import("./commands/admin-labels");
-      const { label, outcome } = await mintLabelCommand(mbid, seedState);
+        const takeOver = options.takeOver?.trim();
 
-      if (options.json) {
-        printJson({ label, ok: true, outcome });
-        return;
-      }
+        if (options.takeOver !== undefined && !takeOver) {
+          throw new Error("Pass --take-over <slug>");
+        }
 
-      console.log(labelMintLine(label, outcome, mbid));
-    });
+        const { mintLabelCommand } = await import("./commands/admin-labels");
+        const { label, outcome, takenOver } = await mintLabelCommand(mbid, seedState, takeOver);
+
+        if (options.json) {
+          printJson({ label, ok: true, outcome, ...(takenOver ? { takenOver } : {}) });
+          return;
+        }
+
+        console.log(labelMintLine(label, outcome, mbid, takenOver));
+      },
+    );
 
   // `merge_label` → `admin labels merge <losingSlug> <canonicalSlug>` (operator). Fold a slug-split
   // twin (the Med School / Medschool class) into its canonical row: re-point every FK, reconcile
@@ -8943,6 +8983,7 @@ const stringOptions = new Set([
   "--stream",
   "--stream-version",
   "--subject",
+  "--take-over",
   "--target",
   "--title",
   "--through-seq",
