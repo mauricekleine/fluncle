@@ -27,8 +27,9 @@ import {
   fanOutDueWorkSourceRepairs,
   repairDueWorkBeforeRead,
   SOURCE_REPAIR_LIMIT,
+  TRACK_SOURCE_REPAIR_FANOUT,
 } from "./due-work-source-repair";
-import { DueWorkMaintenancePendingError } from "./due-work";
+import { DueWorkMaintenancePendingError, MAX_DUE_WORK_CHUNK_SIZE } from "./due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import { createIntegrationDb, seedAlbum, seedCatalogueTrack, seedTrack } from "./integration-db";
 import { advanceProjectionFor } from "./projection-operations";
@@ -294,7 +295,7 @@ describe("transactionally coupled due-work source repair", () => {
   });
 
   it("caps a requested 500-source page and continues from the durable marker set", async () => {
-    const subjects = Array.from({ length: 6 }, (_, index) => ({
+    const subjects = Array.from({ length: SOURCE_REPAIR_LIMIT + 1 }, (_, index) => ({
       subjectId: `wide-fanout-${String(index).padStart(3, "0")}`,
       subjectType: "track" as const,
     }));
@@ -379,14 +380,24 @@ describe("transactionally coupled due-work source repair", () => {
       },
     };
     const first = await fanOutDueWorkSourceRepairs(measuredClient, { limit: 500 });
-    expect(first).toMatchObject({ deferred: 0, expanded: 5, hasMore: true, scanned: 5 });
+    expect(first).toMatchObject({
+      deferred: 0,
+      expanded: SOURCE_REPAIR_LIMIT,
+      hasMore: true,
+      scanned: SOURCE_REPAIR_LIMIT,
+    });
     // A missing rank-state cache pays one bounded read plus one fill before later pages become
-    // cache-only. The source page itself remains capped at five markers.
+    // cache-only. The source page itself stays capped at the derived marker bound whatever limit
+    // the operator supplies.
     expect(executeCalls).toBeLessThanOrEqual(10);
     expect(batchCalls).toBe(1);
     expect(maximumBatchStatements).toBeLessThanOrEqual(4);
-    expect(maximumStatementArgs).toBeLessThanOrEqual(2_040);
-    expect(maximumBatchArgs).toBeLessThanOrEqual(3_100);
+    // THE PAGE BOUND. One marker multiplies into every registered physical queue, so the batch is
+    // bounded in ROWS, not markers: the widest page stays inside the shared projection chunk bound.
+    const pageRows = SOURCE_REPAIR_LIMIT * TRACK_SOURCE_REPAIR_FANOUT;
+    expect(pageRows).toBeLessThanOrEqual(MAX_DUE_WORK_CHUNK_SIZE);
+    expect(maximumStatementArgs).toBeLessThanOrEqual(pageRows * 12);
+    expect(maximumBatchArgs).toBeLessThanOrEqual(pageRows * 12 + SOURCE_REPAIR_LIMIT * 3);
     expect(
       Number(
         (
@@ -433,7 +444,7 @@ describe("transactionally coupled due-work source repair", () => {
           })
         ).rows[0]?.n ?? 0,
       ),
-    ).toBe(6);
+    ).toBe(subjects.length);
     expect(
       (
         await db.execute({
@@ -848,7 +859,7 @@ describe("transactionally coupled due-work source repair", () => {
               and subject_id <> '${DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID}'`)
         ).rows[0]?.n ?? 0,
       ),
-    ).toBe(205);
+    ).toBe(210 - SOURCE_REPAIR_LIMIT);
     expect(
       (
         await db.execute(`select state from due_work
@@ -861,9 +872,13 @@ describe("transactionally coupled due-work source repair", () => {
           where work_kind = 'catalogue-rank' and subject_type = 'track'`)
       ).rows[0],
     ).toMatchObject({ scanned_count: 500 });
-    // limit=500 performs exactly 5 ordinary + 500 rank + 1 physical units here, and one
-    // repair-index read locates the physical definition however late it is registered.
+    // limit=500 performs exactly one ordinary source page + 500 rank + 1 physical units here, and
+    // one repair-index read locates the physical definition however late it is registered. The
+    // round trips are a property of the page, not of its width, so raising the marker bound widens
+    // only the write batch — and that batch stays inside the shared projection chunk bound.
     expect(batchCalls + executeCalls).toBe(28);
+    // These fixture tracks reach 16 of the registered physical queues, at 12 bound values each.
+    const projectedRowsPerMarker = 16;
     expect({
       batchCalls,
       executeCalls,
@@ -875,7 +890,7 @@ describe("transactionally coupled due-work source repair", () => {
       executeCalls: 24,
       maximumBatchStatements: 501,
       maximumReadRows: 500,
-      maximumStatementArgs: 960,
+      maximumStatementArgs: SOURCE_REPAIR_LIMIT * projectedRowsPerMarker * 12,
     });
 
     let actions = 1;
@@ -1677,12 +1692,14 @@ describe("transactionally coupled due-work source repair", () => {
   });
 
   it.each([
-    { remaining: 15, writeMs: 700 },
-    { remaining: 25, writeMs: 10_000 },
+    { pages: 3, writeMs: 700 },
+    { pages: 1, writeMs: 10_000 },
   ])(
     "starts no page once the drain time is spent yet converges the first page and chunk ($writeMs ms writes)",
-    async ({ remaining, writeMs }) => {
-      await markTrackBurst(db, "slow-burst", 30);
+    async ({ pages, writeMs }) => {
+      const burst = SOURCE_REPAIR_LIMIT * 6;
+      const remaining = burst - SOURCE_REPAIR_LIMIT * pages;
+      await markTrackBurst(db, "slow-burst", burst);
       await seedCatalogueTrack(db, { trackId: "slow-physical" });
       await markDueWorkRepair(db, {
         sourceVersion: "slow-physical-v1",
@@ -1717,19 +1734,24 @@ describe("transactionally coupled due-work source repair", () => {
 
   it("shares one drain budget across every guarded read in a Worker request", async () => {
     const pages = DUE_WORK_READ_DRAIN_BUDGET.sourcePages;
+    // A frozen clock isolates the page count from the wall bound, which is the other half of the
+    // same shared budget and is exercised by the slow-write cases above.
+    const unspent = { now: () => 0 };
     await markTrackBurst(db, "shared-first", SOURCE_REPAIR_LIMIT * (pages - 4));
 
     await runWithDatabaseRequestScope(async () => {
-      await expect(repairDueWorkBeforeRead(db, "artist-edges")).resolves.toBeUndefined();
+      await expect(repairDueWorkBeforeRead(db, "artist-edges", unspent)).resolves.toBeUndefined();
       await markTrackBurst(db, "shared-second", SOURCE_REPAIR_LIMIT * 8);
       // The first read started all but four of the request's pages.
-      await expect(repairDueWorkBeforeRead(db, "embed-catalogue")).rejects.toBeInstanceOf(
+      await expect(repairDueWorkBeforeRead(db, "embed-catalogue", unspent)).rejects.toBeInstanceOf(
         DueWorkMaintenancePendingError,
       );
     });
     expect(await countPendingTrackSourceMarkers(db)).toBe(SOURCE_REPAIR_LIMIT * 4);
 
-    await runWithDatabaseRequestScope(() => repairDueWorkBeforeRead(db, "embed-catalogue"));
+    await runWithDatabaseRequestScope(() =>
+      repairDueWorkBeforeRead(db, "embed-catalogue", unspent),
+    );
     expect(await countPendingTrackSourceMarkers(db)).toBe(0);
   });
 

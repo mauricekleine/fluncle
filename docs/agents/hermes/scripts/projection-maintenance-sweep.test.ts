@@ -226,7 +226,7 @@ describe("projection maintenance bounded family repair", () => {
     const summary = runProjectionMaintenanceTick((args) =>
       args[2] === "get"
         ? status({ trackDueWork: true }, { track: debt })
-        : advance("track_due_work", false, 0, 20),
+        : advance("track_due_work", false, 0, 2),
     );
 
     expect(summary.trackDueWork).toMatchObject({
@@ -234,7 +234,7 @@ describe("projection maintenance bounded family repair", () => {
       complete: false,
       outcome: "no_progress",
       processed: 0,
-      steps: 20,
+      steps: 2,
     });
     expect(summary).toMatchObject({
       budgetExhaustedFamilies: ["track_due_work"],
@@ -265,10 +265,10 @@ describe("projection maintenance bounded family repair", () => {
         return advance(target, true, 1);
       }
       if (target === "crawl_due_work") {
-        return advance(target, false, 1, 20);
+        return advance(target, false, 1, 2);
       }
       if (target === "public_aggregates") {
-        return advance(target, false, 0, 4);
+        return advance(target, false, 0, 2);
       }
       return advance(target, true, 2);
     });
@@ -302,7 +302,7 @@ describe("projection maintenance bounded family repair", () => {
         );
       }
       const target = args[args.indexOf("--target") + 1] as FamilyName;
-      return advance(target, false, 0, target.endsWith("due_work") ? 20 : 4);
+      return advance(target, false, 0, 2);
     });
 
     expect(summary).toMatchObject({
@@ -338,16 +338,17 @@ describe("projection maintenance bounded family repair", () => {
         );
       }
       const target = args[args.indexOf("--target") + 1] as FamilyName;
-      return advance(target, false, target === "public_aggregates" ? 9 : 4, 4);
+      return advance(target, false, target === "public_aggregates" ? 9 : 4, 2);
     });
 
+    // One measured marker per family buys one step for it and one for what lands during the tick.
     expect(calls.slice(1)).toEqual(
       (
         [
-          ["track_due_work", "20"],
-          ["crawl_due_work", "20"],
-          ["public_aggregates", "4"],
-          ["artist_qualification", "4"],
+          ["track_due_work", "2"],
+          ["crawl_due_work", "2"],
+          ["public_aggregates", "2"],
+          ["artist_qualification", "2"],
         ] as const
       ).map(([target, maxSteps]) => [
         "admin",
@@ -377,10 +378,10 @@ describe("projection maintenance bounded family repair", () => {
       ok: true,
       produced: 21,
     });
-    expect(summary.trackDueWork).toMatchObject({ complete: false, steps: 4 });
-    expect(summary.crawlDueWork).toMatchObject({ complete: false, steps: 4 });
-    expect(summary.publicAggregates).toMatchObject({ complete: false, steps: 4 });
-    expect(summary.artistQualification).toMatchObject({ complete: false, steps: 4 });
+    expect(summary.trackDueWork).toMatchObject({ complete: false, steps: 2 });
+    expect(summary.crawlDueWork).toMatchObject({ complete: false, steps: 2 });
+    expect(summary.publicAggregates).toMatchObject({ complete: false, steps: 2 });
+    expect(summary.artistQualification).toMatchObject({ complete: false, steps: 2 });
     expect(summary).not.toHaveProperty("queue_depth");
     expect(summary).not.toHaveProperty("queueDepth");
   });
@@ -484,7 +485,8 @@ describe("projection maintenance bounded family repair", () => {
         tick += 1;
         return status({ trackDueWork: true }, { track: debt });
       }
-      return advance("track_due_work", tick > 1, tick > 1 ? 1 : 100, tick > 1 ? 1 : 20);
+      // Six measured markers buy two steps: one page of five plus the headroom step.
+      return advance("track_due_work", tick > 1, tick > 1 ? 1 : 100, tick > 1 ? 1 : 2);
     };
 
     const incomplete = runProjectionMaintenanceTick(run);
@@ -492,7 +494,7 @@ describe("projection maintenance bounded family repair", () => {
       attempted: true,
       complete: false,
       processed: 100,
-      steps: 20,
+      steps: 2,
     });
     expect(calls).toHaveLength(2);
 
@@ -504,6 +506,144 @@ describe("projection maintenance bounded family repair", () => {
       steps: 1,
     });
     expect(calls).toHaveLength(4);
+  });
+
+  test("a truncated debt count spends the step ceiling instead of the count it could see", () => {
+    const calls: string[][] = [];
+    const truncated = family({
+      repairs: {
+        direct: { count: 0, truncated: true },
+        fanout: { count: 100, truncated: true },
+        total: { count: 100, truncated: true },
+      },
+    });
+    runProjectionMaintenanceTick((args) => {
+      calls.push(args);
+      return args[2] === "get"
+        ? status({ trackDueWork: true }, { track: truncated })
+        : advance("track_due_work", false, 1_400, 100);
+    });
+
+    expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("100");
+  });
+
+  test("debt older than the escalation bar spends the ceiling even when the count is small", () => {
+    const calls: string[][] = [];
+    const old = family({
+      oldestOutstandingMarkerAge: { ageMs: 10 * 60 * 60_000, reason: null, truncated: false },
+      repairs: {
+        direct: { count: 0, truncated: false },
+        fanout: { count: 3, truncated: false },
+        total: { count: 3, truncated: false },
+      },
+    });
+    runProjectionMaintenanceTick((args) => {
+      calls.push(args);
+      return args[2] === "get"
+        ? status({ trackDueWork: true }, { track: old })
+        : advance("track_due_work", false, 900, 100);
+    });
+
+    expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("100");
+  });
+
+  test("bounded fresh debt asks for the steps it needs and no more", () => {
+    const calls: string[][] = [];
+    const bounded = family({
+      repairs: {
+        direct: { count: 0, truncated: false },
+        fanout: { count: 40, truncated: false },
+        total: { count: 40, truncated: false },
+      },
+    });
+    runProjectionMaintenanceTick((args) => {
+      calls.push(args);
+      return args[2] === "get"
+        ? status({ trackDueWork: true }, { track: bounded })
+        : advance("track_due_work", true, 40, 9);
+    });
+
+    // Forty markers are eight pages of five, plus the headroom step.
+    expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("9");
+  });
+
+  test("the family with the oldest debt is advanced first", () => {
+    const withAge = (ageMs: number) =>
+      family({
+        oldestOutstandingMarkerAge: { ageMs, reason: null, truncated: false },
+        repairs: {
+          direct: { count: 1, truncated: false },
+          fanout: { count: 0, truncated: false },
+          total: { count: 1, truncated: false },
+        },
+      });
+    const targets: FamilyName[] = [];
+    runProjectionMaintenanceTick((args) => {
+      if (args[2] === "get") {
+        return status(
+          { crawlDueWork: true, publicProjections: true, trackDueWork: true },
+          {
+            aggregate: withAge(40_000),
+            artists: withAge(900_000),
+            crawl: withAge(10_000),
+            track: withAge(120_000),
+          },
+        );
+      }
+      const target = args[args.indexOf("--target") + 1] as FamilyName;
+      targets.push(target);
+      return advance(target, true, 1);
+    });
+
+    expect(targets).toEqual([
+      "artist_qualification",
+      "track_due_work",
+      "public_aggregates",
+      "crawl_due_work",
+    ]);
+  });
+
+  test("a family reached with no wall budget left keeps its debt and is not called converged", () => {
+    const debt = family({
+      oldestOutstandingMarkerAge: { ageMs: 30_000, reason: null, truncated: false },
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const older = family({
+      oldestOutstandingMarkerAge: { ageMs: 600_000, reason: null, truncated: false },
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    const targets: FamilyName[] = [];
+    // The clock jumps past the run's wall budget the moment the first family's advance returns.
+    let clock = 0;
+    const summary = runProjectionMaintenanceTick(
+      (args) => {
+        if (args[2] === "get") {
+          return status({ crawlDueWork: true, trackDueWork: true }, { crawl: debt, track: older });
+        }
+        const target = args[args.indexOf("--target") + 1] as FamilyName;
+        targets.push(target);
+        clock += 600_000;
+        return advance(target, true, 1);
+      },
+      { now: () => clock },
+    );
+
+    expect(targets).toEqual(["track_due_work"]);
+    expect(summary.wallDeferredFamilies).toEqual(["crawl_due_work"]);
+    expect(summary.crawlDueWork).toMatchObject({ attempted: false, complete: false });
+    expect(summary.converged).toBe(false);
+    // The deferred family's debt age still reaches the health bar that watches it.
+    expect(summary.oldestDebtAgeMs).toBe(30_000);
+    expect(summary.errors).toBe(0);
+    expect(summary.ok).toBe(true);
   });
 
   test("malformed status fails before mutation and malformed advances fail their family", () => {

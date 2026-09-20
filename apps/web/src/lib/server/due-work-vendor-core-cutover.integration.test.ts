@@ -298,8 +298,11 @@ describe("Goal C core vendor selector cutovers", () => {
   });
 
   it("reports pending track source markers until a ranked page's fanout drains", async () => {
-    const trackIds = ["rank_drain_0", "rank_drain_1", "rank_drain_2", "rank_drain_3"];
-    trackIds.push("rank_drain_4", "rank_drain_5");
+    // One marker more than a source page holds, so the first step provably leaves debt behind.
+    const trackIds = Array.from(
+      { length: SOURCE_REPAIR_LIMIT + 1 },
+      (_, index) => `rank_drain_${String(index).padStart(3, "0")}`,
+    );
     for (const trackId of trackIds) {
       await seedCatalogueTrack(db, { trackId });
     }
@@ -307,7 +310,7 @@ describe("Goal C core vendor selector cutovers", () => {
     for (const trackId of trackIds) {
       await schedule("catalogue-rank", trackId);
     }
-    expect((await rankCatalogue(6)).prioritized).toBe(6);
+    expect((await rankCatalogue(trackIds.length)).prioritized).toBe(trackIds.length);
 
     const step = () =>
       advanceProjectionFor(db, {
@@ -316,7 +319,7 @@ describe("Goal C core vendor selector cutovers", () => {
         limit: 500,
         target: "track_due_work",
       });
-    // One step fans out five of the page's six markers; the next clears the last one.
+    // One step fans out a full source page of the markers; the next clears the last one.
     expect(await step()).toMatchObject({ complete: false, trackSourceMarkersPending: true });
     expect(await step()).toMatchObject({ complete: true, trackSourceMarkersPending: false });
   });

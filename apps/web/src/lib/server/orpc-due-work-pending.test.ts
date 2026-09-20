@@ -15,7 +15,13 @@ import { call, implement, ORPCError } from "@orpc/server";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { type OrpcContext } from "./orpc-auth";
 import { apiFault, toFault, type ApiFaultData } from "./orpc/_shared";
-import { apiUrl, readJson, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
+import {
+  apiUrl,
+  OPERATOR_TOKEN,
+  readJson,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 const captureException = vi.fn();
 
@@ -36,7 +42,22 @@ vi.mock("./tracks", async (importOriginal) => {
   };
 });
 
+vi.mock("./track-work", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./track-work")>();
+
+  return {
+    ...actual,
+    countTrackWork: (...args: Parameters<typeof actual.countTrackWork>) =>
+      pendingFromTrackWorkPage ? Promise.resolve(4_812) : actual.countTrackWork(...args),
+    listTrackWork: (...args: Parameters<typeof actual.listTrackWork>) =>
+      pendingFromTrackWorkPage
+        ? Promise.reject(new DueWorkMaintenancePendingError("embed-catalogue"))
+        : actual.listTrackWork(...args),
+  };
+});
+
 let pendingFromListTracks = false;
+let pendingFromTrackWorkPage = false;
 
 beforeAll(() => {
   setAdminTokenEnv();
@@ -45,7 +66,50 @@ warmOrpcRouter();
 
 afterEach(() => {
   pendingFromListTracks = false;
+  pendingFromTrackWorkPage = false;
   captureException.mockClear();
+});
+
+// A COUNT IS A GAUGE, NOT A WORK HANDOUT. The deferral protects a metered ORDER, so it withholds
+// the page — but refusing the SIZE of the backlog blinds the operator and the gauge-publishing
+// sweeps exactly when debt is the thing they need to see.
+describe("the worklist count answers under debt while the page stays withheld", () => {
+  it("answers the backlog, an empty page, and debtPending instead of the typed 503", async () => {
+    const { handleOrpc } = await import("./orpc");
+    pendingFromTrackWorkPage = true;
+
+    const response = await handleOrpc(
+      new Request(apiUrl("/admin/tracks/work?kind=embed&count=true&limit=5"), {
+        headers: { Authorization: `Bearer ${OPERATOR_TOKEN}` },
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toMatchObject({
+      debtPending: true,
+      ok: true,
+      queued: 4_812,
+      tracks: [],
+    });
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a page-only read, where the page IS the answer", async () => {
+    const { handleOrpc } = await import("./orpc");
+    pendingFromTrackWorkPage = true;
+
+    const response = await handleOrpc(
+      new Request(apiUrl("/admin/tracks/work?kind=embed&limit=5"), {
+        headers: { Authorization: `Bearer ${OPERATOR_TOKEN}` },
+      }),
+    );
+
+    expect(response?.status).toBe(503);
+    expect(await readJson(response)).toMatchObject({
+      code: "due_work_maintenance_pending",
+      ok: false,
+    });
+  });
 });
 
 describe("due-work maintenance pending is a typed 503, never a fault", () => {

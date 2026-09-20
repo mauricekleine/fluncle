@@ -961,7 +961,12 @@ function projectFindingSourceRepair(
       );
 }
 
-const FINDING_DUE_WORK_KINDS = [
+/**
+ * The finding-derived queues one track source marker projects into, beside the track and vendor
+ * inventories. The three lists together are the marker's fan-out width, which is what bounds a
+ * source-repair page's row count.
+ */
+export const FINDING_DUE_WORK_KINDS = [
   "finding.enrich",
   "finding.context",
   "finding.context.retry-empty",

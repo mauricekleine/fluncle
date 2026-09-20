@@ -72,6 +72,18 @@ export async function readPromotedDueWorkPage(
   workKind: string,
   options: {
     continuation?: DueWorkContinuation;
+    /**
+     * What an EMPTY page means while this request's bounded drain left source debt behind.
+     *
+     * `defer` (the default) answers `due_work_maintenance_pending`: the debt may own every row the
+     * read would have returned, or rows not projected yet, so "nothing to do" cannot be said
+     * honestly. `serve` answers the empty page instead. Serving an empty page hands out no row and
+     * therefore spends nothing — the cost of a wrong empty is a MISSED TICK, not a wrong spend —
+     * so a queue may opt in when its consumer simply retries on its own cadence and nothing
+     * downstream reads "empty" as "backlog drained". A queue whose order spends a metered budget
+     * keeps the default: there an empty answer is what tells the operator the money stopped.
+     */
+    emptyPageUnderDebt?: "defer" | "serve";
     limit: number;
     now?: () => Date;
     subjectIds?: readonly string[];
@@ -139,8 +151,14 @@ export async function readPromotedDueWorkPage(
   );
 
   // Nothing servable while the subject family still owes repair is not an empty queue: the debt may
-  // own every row this read would have returned, or rows it has not projected yet.
-  if (subjectIds.length === 0 && !repair.sourceConverged) {
+  // own every row this read would have returned, or rows it has not projected yet. A queue that
+  // opted into `serve` accepts that and answers the empty page, because the worst it can cost is
+  // one delayed tick.
+  if (
+    subjectIds.length === 0 &&
+    !repair.sourceConverged &&
+    options.emptyPageUnderDebt !== "serve"
+  ) {
     throw new DueWorkMaintenancePendingError(workKind);
   }
 

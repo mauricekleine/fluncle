@@ -8221,7 +8221,7 @@ async function runAdminTrackWork(
     return;
   }
 
-  const { queued, tracks } = await trackWorkCommand({
+  const { debtPending, queued, tracks } = await trackWorkCommand({
     count: options.count,
     kind: kind as "analyze" | "capture" | "embed",
     limit: parseListLimit(options.limit),
@@ -8229,7 +8229,15 @@ async function runAdminTrackWork(
   });
 
   if (options.json) {
-    printJson({ ok: true, queued, tracks });
+    printJson({ debtPending, ok: true, queued, tracks });
+    return;
+  }
+
+  // The page was withheld, not drained. Say so, and still report the backlog the count measured.
+  if (debtPending === true) {
+    console.log(
+      `${queued ?? 0} queued to ${kind} (${scope}) — page held back, due-work repair is still converging.`,
+    );
     return;
   }
 
