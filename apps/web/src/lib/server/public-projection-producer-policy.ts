@@ -136,6 +136,7 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "label-image-resolved",
     "label-mint",
     "label-reconcile-mint",
+    "label-take-over",
     "publish-spotify-error",
     "publish-spotify-success",
     "publish-telegram-error",
