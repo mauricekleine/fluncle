@@ -5,6 +5,7 @@ import {
   type LabelAdminItem,
   type LabelSeedState,
   type MergeLabelResult,
+  type MintLabelOutcome,
 } from "@fluncle/contracts";
 import { adminApiGet, adminApiPatch, adminApiPost, adminApiPut } from "../api";
 import {
@@ -158,6 +159,37 @@ export async function updateLabelCommand(
   );
 
   return response.label;
+}
+
+// ── The mint: bring a label in by its MusicBrainz identity ────────────────────
+// Thin HTTP client over the operator-tier `mint_label` op (POST /admin/labels). The operator's own
+// door beside the publish path and a crawl discovery, for a label no walk will reach — the shape an
+// upstream MusicBrainz conflation split leaves behind. Idempotent; an omitted `seedState` leaves a
+// new row `undecided` and an existing row's ruling untouched. See docs/label-entity.md.
+
+// The op is keyed by the MusicBrainz MBID itself — there is no Fluncle id to resolve yet, so unlike
+// `update`/`artists` this one makes no seed-set round trip first.
+export async function mintLabelCommand(
+  mbLabelId: string,
+  seedState?: LabelSeedState,
+): Promise<{ label: LabelAdminItem; outcome: MintLabelOutcome }> {
+  const mbid = mbLabelId.trim().toLowerCase();
+
+  // The server validates the same shape; catching it here spends no request on a typo.
+  if (!MBID_PATTERN.test(mbid)) {
+    throw new Error(`'${mbLabelId}' is not a MusicBrainz label MBID`);
+  }
+
+  const response = await adminApiPost<{
+    label: LabelAdminItem;
+    ok: boolean;
+    outcome: MintLabelOutcome;
+  }>("/api/v1/admin/labels", {
+    mbLabelId: mbid,
+    ...(seedState === undefined ? {} : { seedState }),
+  });
+
+  return { label: response.label, outcome: response.outcome };
 }
 
 // ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────

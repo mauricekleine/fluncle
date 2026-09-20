@@ -205,6 +205,27 @@ export function labelUpdateLines(
   return lines;
 }
 
+/** The status word for each mint outcome, in the operator register's terse ALL-CAPS. */
+const LABEL_MINT_WORDS: Record<string, string> = {
+  adopted: "ADOPTED",
+  known: "ALREADY KNOWN",
+  minted: "MINTED",
+};
+
+/**
+ * The one human line for a label mint: what happened, which label, which MusicBrainz identity, and
+ * the ruling it now carries. JSON output bypasses this entirely.
+ */
+export function labelMintLine(
+  label: { mbLabelId?: null | string; name: string; seedState: string; slug: string },
+  outcome: string,
+  requestedMbid: string,
+): string {
+  const word = LABEL_MINT_WORDS[outcome] ?? outcome.toUpperCase();
+
+  return `${word} — ${label.name} (${label.slug}), MusicBrainz ${label.mbLabelId ?? requestedMbid}, seed state ${label.seedState.toUpperCase()}.`;
+}
+
 // The catalogue-index browse commands (`artists`, `albums`, `labels`): a JSON
 // toggle plus the 1-based `--page` cursor over the A-to-Z list.
 type BrowseOptions = {
@@ -3954,6 +3975,40 @@ JSON field reference:
         }
       },
     );
+
+  // `mint_label` → `admin labels mint <mbid> [--seed-state <state>]` (operator). Bring a label into
+  // the archive BY ITS MUSICBRAINZ IDENTITY — the operator's own door beside the publish path and a
+  // crawl discovery, for a label no walk will reach (the half an upstream MusicBrainz split moved onto a
+  // new entity). Idempotent; without `--seed-state` a new row lands `undecided` and an existing
+  // row's ruling is left exactly as it was.
+  labels
+    .command("mint")
+    .description("Mint a label from its MusicBrainz MBID (operator; idempotent)")
+    .argument("<mbid>", "The MusicBrainz label MBID")
+    .option("--seed-state <state>", "Rule it on arrival: enabled, disabled, or undecided")
+    .option("--json", "Print JSON", false)
+    .action(async (mbid: string, options: { json: boolean; seedState?: string }) => {
+      const seedState = options.seedState;
+
+      if (
+        seedState !== undefined &&
+        seedState !== "enabled" &&
+        seedState !== "disabled" &&
+        seedState !== "undecided"
+      ) {
+        throw new Error("Pass --seed-state enabled|disabled|undecided");
+      }
+
+      const { mintLabelCommand } = await import("./commands/admin-labels");
+      const { label, outcome } = await mintLabelCommand(mbid, seedState);
+
+      if (options.json) {
+        printJson({ label, ok: true, outcome });
+        return;
+      }
+
+      console.log(labelMintLine(label, outcome, mbid));
+    });
 
   // `merge_label` → `admin labels merge <losingSlug> <canonicalSlug>` (operator). Fold a slug-split
   // twin (the Med School / Medschool class) into its canonical row: re-point every FK, reconcile

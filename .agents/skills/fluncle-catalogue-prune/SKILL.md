@@ -179,6 +179,8 @@ for s in <impostor-slug> <real-dnb-slug>; do
 
 Then watch the next crawl tick: the seed should resolve to `mb_label_id` and mint a MusicBrainz node whose `external_id` matches. If a namesake node goes `pending` again, the resolver fix is not actually live — stop and go back to step 0. Hub counts lag as after any purge; the nightly `reconcile_hub_counts` sweep heals them within a day.
 
+**When the fix is an UPSTREAM MusicBrainz split, bring the DnB half in by hand.** Splitting a conflated MusicBrainz label entity usually lands the drum & bass half on a NEW MBID — one no release in Fluncle's graph points at yet, so no walk may ever reach it. Do not wait for one: `fluncle admin labels mint <new-mbid> --seed-state enabled` puts the row in the table by its MusicBrainz identity and rules it in the same call, and the next crawl tick seeds from it with no name search at all (docs/label-entity.md § How a label gets a row). It is idempotent, so re-running it costs nothing.
+
 ## Conflated entities (one artists row, two real acts)
 
 **The case the namesake purge deliberately leaves behind.** `purge-artists.ts` deletes an artist WHOLE, so it spares any artist holding genuine enabled-label tracks — correctly, because deleting them would take a real drum & bass page with them. What survives that rule is the **conflated row**: ONE `artists` row carrying a real DnB act AND an unrelated same-named act whose tracks arrived on the impostor walk. The impostor's tracks still render on the real act's public page.

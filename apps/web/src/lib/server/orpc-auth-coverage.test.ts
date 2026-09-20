@@ -599,6 +599,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // destructive-capable data move (it can delete public R2 objects), so an agent
   // token 403s. Dry-run by default; the CLI must opt into a real run.
   migrate_preview_archive: "operator",
+  // Minting a label from its MusicBrainz identity — operator tier, the `update_label` class:
+  // bringing a label into the archive decides what the crawler may seed from and what earns a
+  // public page, and its optional ruling stamps `ruled_at`. An agent token 403s at `operatorGuard`.
+  mint_label: "operator",
   mint_mixcloud_token: "operator",
   // The Frontier mint/refresh (E2) — private-session (privateUserMutation), the
   // save_private_rec_seed precedent. CSRF + a 4/h rate limit; the verified-email gate

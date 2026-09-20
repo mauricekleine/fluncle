@@ -438,6 +438,13 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   },
   {
     disposition: "non-eligibility",
+    file: "label-mint.ts",
+    rationale:
+      "Carries MusicBrainz founding facts fill-empty-only, outside label bio and artwork eligibility predicates.",
+    sites: ["label-mint.ts:update:labels:81d073c0"],
+  },
+  {
+    disposition: "non-eligibility",
     file: "label-releases.ts",
     rationale: "Writes the label crawl cadence, which no due-work projection evaluates.",
     sites: ["label-releases.ts:update:labels:32c5071e", "label-releases.ts:update:labels:0e8fa4e4"],
@@ -760,6 +767,12 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
       "label-lineage.ts:update:labels:8b333375",
       "label-lineage.ts:update:labels:b2861415",
     ],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "label-mint.ts",
+    rationale: "Changes label display facts on a mint, not seed state or crawl scope.",
+    sites: ["label-mint.ts:update:labels:81d073c0"],
   },
   {
     disposition: "derived-projection-write",
