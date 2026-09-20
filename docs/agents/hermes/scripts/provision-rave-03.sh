@@ -64,6 +64,18 @@ if [ -z "$id" ]; then
 fi
 err "provisioning render box $id from $REPO ..."
 
+# A box that exists but never finished setup must not be left RUNNING and untracked: the
+# conductor only files ids it received on stdout, and a failed provision returns none. So
+# every failure past this point parks the box and puts it on the reclaim clock itself, the
+# same lifetime-based condemn the conductor uses (`extend --ttl`, never a delete verb).
+abandon() {
+  err "$1"
+  boat_cli stop "$id" >/dev/null 2>&1 || true
+  boat_cli extend "$id" --ttl "${CONDEMN_TTL:-60}" >/dev/null 2>&1 || true
+  err "abandoned render box $id — parked, reclaimed in ${CONDEMN_TTL:-60}s"
+  exit 1
+}
+
 # 2. Clone clean main + install + the fluncle-video skill + the bun-wrapper. The
 #    wrapper dir is created BEFORE the scp in step 3 (the scp target must exist).
 #    EVERY step gets </dev/null: this runs via `bash -s` (the script is on stdin), and
@@ -74,7 +86,21 @@ if ! boat_cli ssh "$id" 'bash -s' >&2 <<PROV
 set -e
 cd ~ && rm -rf fluncle
 git clone --depth 1 $REPO fluncle </dev/null
-cd fluncle && bun install </dev/null >/dev/null 2>&1
+cd fluncle
+# The box image's bun may predate the lockfile format the repo pins (packageManager in
+# package.json); hold it at the pin before the install, as the conductor's freshen does.
+# The installer is \`bash -s\` reading its script from the curl pipe — the one step here that
+# must NOT get </dev/null, or it reads nothing and exits.
+want=\$(sed -n 's/.*"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' package.json | head -1)
+if [ -n "\$want" ] && [ "\$want" != "\$(bun --version)" ]; then
+  if ! curl -fsSL https://bun.sh/install | BUN_INSTALL="\$HOME/.bun" bash -s "bun-v\$want" >"\$HOME/.provision-bun.log" 2>&1 \
+    || ! install -m 0755 "\$HOME/.bun/bin/bun" /usr/local/bin/bun; then
+    echo "bun toolchain: the repo pins \$want, the box has \$(bun --version), and the pinned install failed:" >&2
+    tail -c 600 "\$HOME/.provision-bun.log" >&2
+    exit 1
+  fi
+fi
+bun install --frozen-lockfile </dev/null >/dev/null 2>&1
 npx -y skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
 # Native, self-updating claude into ~/.local/bin (shadows the un-updatable global base
 # claude; render-detached.sh's PATH puts ~/.local/bin first). set -e aborts provisioning
@@ -85,26 +111,22 @@ printf '#!/bin/sh\nexec bun "\$HOME/.local/lib/fluncle.mjs" "\$@"\n' > ~/.local/
 chmod +x ~/.local/bin/fluncle
 PROV
 then
-  err "box setup failed"
-  exit 1
+  abandon "box setup failed"
 fi
 
 # Belt-and-suspenders: confirm setup actually produced the wrapper dir before the scp
 # (the stdin-eating bug failed silently with `boat ssh` still returning 0).
 if ! boat_cli ssh "$id" 'test -d "$HOME/.local/lib"' </dev/null >/dev/null 2>&1; then
-  err "box setup incomplete — no ~/.local/lib after setup"
-  exit 1
+  abandon "box setup incomplete — no ~/.local/lib after setup"
 fi
 
 # 3. Copy the bundled fluncle CLI (run under bun via the wrapper) + the detached
 #    render entry onto the box (~/.local/lib exists from step 2).
 if ! boat_cli scp "$FLUNCLE_BIN" "$id:/home/user/.local/lib/fluncle.mjs" >&2; then
-  err "fluncle CLI copy failed"
-  exit 1
+  abandon "fluncle CLI copy failed"
 fi
 if ! boat_cli scp "$SCRIPT_DIR/render-detached.sh" "$id:/home/user/render-detached.sh" >&2; then
-  err "render-detached.sh copy failed"
-  exit 1
+  abandon "render-detached.sh copy failed"
 fi
 boat_cli ssh "$id" 'chmod +x ~/render-detached.sh' >&2 || true
 
