@@ -2149,6 +2149,30 @@ export async function listLabelsPage(
 export class LabelNotFoundError extends Error {}
 
 /**
+ * ONE label in the `/admin/labels` shape, by id — the single-row twin of {@link listLabelsPage}.
+ * It exists so a caller that already holds a label id (the MusicBrainz mint, label-mint.ts) reads
+ * the operator shape back through the SAME projection + count the station uses, instead of
+ * assembling a second spelling of `LabelAdminItem` from a raw row. Its count is bounded to this one
+ * label's indexed `label_id` edge, never a whole-corpus aggregate. `undefined` = no such label.
+ */
+export async function getLabelAdminItem(id: string): Promise<LabelAdminItem | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [id],
+    sql: `select ${LABEL_COLUMNS} from labels where id = ? limit 1`,
+  });
+  const row = typedRows<LabelRow>(result.rows)[0];
+
+  if (!row) {
+    return undefined;
+  }
+
+  const counts = await labelFindingCountsByIds([row.id]);
+
+  return toLabelItem(row, counts.get(row.id) ?? 0);
+}
+
+/**
  * The operator's scope write — the ONLY write that moves `seed_state`. A supplied ruling stamps
  * `ruled_at`, which tells the one-time D7 bootstrap (scripts/backfill-labels.ts) to keep its hands
  * off this row forever after. A bare re-walk preserves the ruling and stamps only the scope

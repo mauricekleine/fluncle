@@ -468,6 +468,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // `fluncle-reconcile-hub-counts` cron POSTs a bare trigger with its agent token and the Worker
   // corrects the drifted counters in SQL.
   "POST /admin/hub-counts/reconcile": "reconcile_hub_counts",
+  // The operator's MINT of a label from its MusicBrainz identity — contract-only oRPC (no
+  // TanStack route file). OPERATOR tier (the `update_label` precedent): bringing a label into the
+  // archive decides what may be crawled and what earns a public page, so the agent token 403s.
+  // Idempotent connect-or-create on the MBID fold; it certifies nothing and rules nothing itself.
+  "POST /admin/labels": "mint_label",
   // The label-alias confirm (RFC musickit-second-authority, U2a) — contract-only oRPC. Operator
   // tier: fold a candidate spelling into the label; the agent token 403s.
   "POST /admin/labels/aliases/{id}/confirm": "confirm_label_alias",
