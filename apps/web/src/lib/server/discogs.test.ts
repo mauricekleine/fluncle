@@ -515,7 +515,7 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("accepts the legacy (artist, title) positional form", async () => {
+  it("searches Discogs directly when the input has no ISRC", async () => {
     mockFetch([
       { body: { results: [{ id: 7, master_id: 0 }] }, match: DISCOGS_SEARCH },
       {
@@ -531,8 +531,8 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       },
     ]);
 
-    // No ISRC in the legacy form → MB bridge is skipped, straight to the search.
-    expect(await discogsResolveRelease("Teddy Killerz", "Gate")).toEqual({
+    // Without an ISRC, skip the MusicBrainz bridge and search Discogs.
+    expect(await discogsResolveRelease({ artists: ["Teddy Killerz"], title: "Gate" })).toEqual({
       releaseId: 7,
       styles: ["Drum n Bass"],
     });
@@ -552,7 +552,7 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     // Budget spent → reported throttled (not a clean miss), so the backfill's
     // circuit breaker stops the run instead of storming; the search is not re-fired
     // across the other query variants.
-    expect(await discogsResolveRelease("IYRE", "Glowing Embers")).toEqual({
+    expect(await discogsResolveRelease({ artists: ["IYRE"], title: "Glowing Embers" })).toEqual({
       rateLimited: true,
       rateLimitedBy: "discogs",
     });

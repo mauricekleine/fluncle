@@ -866,19 +866,11 @@ async function resolveViaDiscogsSearch(
  * Stores nothing below CONFIDENCE_THRESHOLD (null = the correct "unresolved" state).
  * Never throws — any failure resolves to {} so the publish path is untouched.
  *
- * Accepts either the rich input object or the legacy `(artist, title)` positional
- * form (the early call site / tests). When the master is the only clear grouping we
- * return `masterId`; when the exact release is clear we return `releaseId`.
+ * Returns `masterId` when only the grouping is clear, or `releaseId` for an exact release.
  */
 export async function discogsResolveRelease(
-  inputOrArtist: DiscogsResolveInput | string | undefined,
-  legacyTitle?: string,
+  input: DiscogsResolveInput,
 ): Promise<DiscogsEnrichment> {
-  const input: DiscogsResolveInput =
-    typeof inputOrArtist === "object"
-      ? inputOrArtist
-      : { artists: inputOrArtist ? [inputOrArtist] : [], title: legacyTitle ?? "" };
-
   const cleanArtist = input.artists[0]?.trim();
   const cleanTitle = input.title.trim();
 
