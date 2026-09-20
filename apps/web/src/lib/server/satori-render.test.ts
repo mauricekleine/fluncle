@@ -252,7 +252,7 @@ describe("fetchImageDataUri's inline ceiling", () => {
 
   function withFetch<T>(response: () => Response, run: () => Promise<T>): Promise<T> {
     const original = globalThis.fetch;
-    globalThis.fetch = (() => Promise.resolve(response())) as typeof globalThis.fetch;
+    globalThis.fetch = (() => Promise.resolve(response())) as unknown as typeof fetch;
 
     return run().finally(() => {
       globalThis.fetch = original;
