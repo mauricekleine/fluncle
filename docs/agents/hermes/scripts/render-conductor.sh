@@ -636,33 +636,48 @@ empty_packages() {
 # install with "Unknown lockfile version" no matter how complete the tree is. So the wake step
 # holds the box's bun at that pin before it installs — the PINNED release, never `bun upgrade`
 # (which tracks latest and puts the toolchain on a moving target).
+# The installer is `bash -s`, which reads its SCRIPT from stdin: that stdin is the curl pipe and
+# must never be redirected to /dev/null, or bash reads nothing, exits, and curl reports a write
+# failure with an empty log.
 bun_pin() { sed -n 's/.*"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' package.json | head -1; }
 bun_stale() { local want; want="$(bun_pin)"; [ -n "$want" ] && [ "$want" != "$(bun --version 2>/dev/null)" ]; }
 sync_bun() {
   bun_stale || return 0
   local want have
   want="$(bun_pin)"; have="$(bun --version 2>/dev/null || echo none)"
-  if curl -fsSL https://bun.sh/install | BUN_INSTALL="$HOME/.bun" bash -s "bun-v$want" </dev/null >/tmp/freshen-bun.log 2>&1 \
+  if curl -fsSL https://bun.sh/install | BUN_INSTALL="$HOME/.bun" bash -s "bun-v$want" >"$HOME/.freshen-bun.log" 2>&1 \
     && [ -x "$HOME/.bun/bin/bun" ] && install -m 0755 "$HOME/.bun/bin/bun" /usr/local/bin/bun; then
     echo "[freshen] bun $have -> $(bun --version)"
     return 0
   fi
   echo "[freshen] deps-failed"
   echo "bun toolchain: the repo pins $want, the box has $have, and the pinned install failed"
-  tail -c 600 /tmp/freshen-bun.log 2>/dev/null
+  tail -c 600 "$HOME/.freshen-bun.log" 2>/dev/null
   return 1
+}
+# The killed install's other residue: HOLLOW entries in bun's global cache (a package
+# directory with no manifest, its extraction never finished). bun links every later install
+# from that cache, so a hollow entry becomes an empty package directory in node_modules on
+# every run until the entry itself is gone. Purge them beside the empty directories.
+hollow_cache_entries() {
+  local cache="$HOME/.bun/install/cache"
+  [ -d "$cache" ] || return 0
+  find "$cache" -mindepth 1 -maxdepth 1 -type d ! -name '.*' ! -name '@*' ! -exec test -e '{}/package.json' ';' -print 2>/dev/null
+  find "$cache" -mindepth 2 -maxdepth 2 -type d -path "$cache/@*/*" ! -exec test -e '{}/package.json' ';' -print 2>/dev/null
 }
 install_deps() {
   sync_bun || return 1
+  local hollow; hollow="$(hollow_cache_entries | wc -l | tr -d ' ')"
+  [ "$hollow" = "0" ] || { echo "[freshen] purging $hollow hollow bun cache entries"; hollow_cache_entries | xargs -r rm -rf; }
   # Two passes: pruning a scope's last package leaves the scope directory itself empty.
   empty_packages | xargs -r rmdir 2>/dev/null
   empty_packages | xargs -r rmdir 2>/dev/null
-  if timeout 900 bun install --frozen-lockfile </dev/null >/tmp/freshen-install.log 2>&1 && ! deps_incomplete; then
+  if timeout 900 bun install --frozen-lockfile </dev/null >"$HOME/.freshen-install.log" 2>&1 && ! deps_incomplete; then
     echo "[freshen] deps-ok"
     return 0
   fi
   echo "[freshen] deps-failed"
-  tail -c 1000 /tmp/freshen-install.log 2>/dev/null
+  tail -c 1000 "$HOME/.freshen-install.log" 2>/dev/null
   deps_incomplete && echo "the tree is still incomplete after the install: $(empty_packages | head -5 | tr '\n' ' ')"
   return 1
 }

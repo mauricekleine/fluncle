@@ -4,11 +4,7 @@ import {
   PUBLIC_PROJECTION_TARGETS,
 } from "./public-projection-source-maintenance";
 
-export type PublicProjectionImpact =
-  | "artist_qualification"
-  | "both"
-  | "neither"
-  | "public_aggregates";
+type PublicProjectionImpact = "artist_qualification" | "both" | "neither" | "public_aggregates";
 
 export type PublicProjectionProducerPolicy =
   | {

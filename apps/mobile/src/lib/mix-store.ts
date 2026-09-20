@@ -27,7 +27,7 @@ export type MixState = {
 };
 
 /** The storage envelope. Versioned so a future shape change can migrate or discard. */
-export type MixEnvelope = {
+type MixEnvelope = {
   chain: MixTrack[];
   sourceSetId?: string;
   sourceSetName?: string;

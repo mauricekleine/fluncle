@@ -9,7 +9,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type ClipDTO } from "@fluncle/contracts/orpc";
-import { buildClipCaption } from "./clip-caption";
+import { buildCaptionForClip } from "./clip-caption-builder";
 import { nextDripSlot, upsertClipPost } from "./clip-social";
 import { getDb, typedRow, typedRows } from "./db";
 import { logEvent } from "./log";
@@ -169,7 +169,7 @@ export async function createClip(recordingId: string, input: ClipInput): Promise
   // created, so a scheduling hiccup must not fail the create; the operator can re-schedule
   // it from /admin/clips, and the drip cron never picks a clip that has no scheduled row.
   try {
-    const built = await buildClipCaption(id);
+    const built = await buildCaptionForClip(await getClip(id));
     await upsertClipPost({
       caption: built.builtCaption,
       clipId: id,

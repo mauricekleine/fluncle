@@ -340,29 +340,30 @@ export function boxStateKeyFromEnv(env: NodeJS.ProcessEnv = process.env): Uint8A
   return bytes;
 }
 
+/** Copy a view's exact byte window into an ArrayBuffer-backed WebCrypto input. */
+function webCryptoBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(bytes);
+}
+
 /**
  * Seal `plaintext` as `<magic><iv><ciphertext||tag>`. The magic doubles as the AAD, so a
  * truncated or re-headed artifact fails authentication rather than decrypting to garbage.
  */
 export async function sealBoxState(plaintext: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
-  const magic = new TextEncoder().encode(BOX_STATE_MAGIC);
+  const magic = webCryptoBytes(new TextEncoder().encode(BOX_STATE_MAGIC));
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    key as unknown as ArrayBuffer,
-    "AES-GCM",
-    false,
-    ["encrypt"],
-  );
+  const cryptoKey = await crypto.subtle.importKey("raw", webCryptoBytes(key), "AES-GCM", false, [
+    "encrypt",
+  ]);
   const sealed = new Uint8Array(
     await crypto.subtle.encrypt(
       {
-        additionalData: magic as unknown as ArrayBuffer,
-        iv: iv as unknown as ArrayBuffer,
+        additionalData: magic,
+        iv,
         name: "AES-GCM",
       },
       cryptoKey,
-      plaintext as unknown as ArrayBuffer,
+      webCryptoBytes(plaintext),
     ),
   );
 
@@ -376,7 +377,7 @@ export async function sealBoxState(plaintext: Uint8Array, key: Uint8Array): Prom
 
 /** The inverse of `sealBoxState` — the restore side, and what the tests round-trip through. */
 export async function openBoxState(sealed: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
-  const magic = new TextEncoder().encode(BOX_STATE_MAGIC);
+  const magic = webCryptoBytes(new TextEncoder().encode(BOX_STATE_MAGIC));
   const header = sealed.subarray(0, magic.byteLength);
 
   if (magic.some((byte, index) => header[index] !== byte)) {
@@ -385,23 +386,19 @@ export async function openBoxState(sealed: Uint8Array, key: Uint8Array): Promise
 
   const iv = sealed.subarray(magic.byteLength, magic.byteLength + IV_BYTES);
   const body = sealed.subarray(magic.byteLength + IV_BYTES);
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    key as unknown as ArrayBuffer,
-    "AES-GCM",
-    false,
-    ["decrypt"],
-  );
+  const cryptoKey = await crypto.subtle.importKey("raw", webCryptoBytes(key), "AES-GCM", false, [
+    "decrypt",
+  ]);
 
   return new Uint8Array(
     await crypto.subtle.decrypt(
       {
-        additionalData: magic as unknown as ArrayBuffer,
-        iv: iv as unknown as ArrayBuffer,
+        additionalData: magic,
+        iv: webCryptoBytes(iv),
         name: "AES-GCM",
       },
       cryptoKey,
-      body as unknown as ArrayBuffer,
+      webCryptoBytes(body),
     ),
   );
 }
@@ -468,9 +465,7 @@ export async function buildBoxStateArchive(options: {
       );
     }
 
-    const sha256 = new Uint8Array(
-      await crypto.subtle.digest("SHA-256", plaintext as unknown as ArrayBuffer),
-    );
+    const sha256 = new Uint8Array(await crypto.subtle.digest("SHA-256", webCryptoBytes(plaintext)));
     const sealed = await sealBoxState(plaintext, options.key);
 
     writeFileSync(options.outPath, sealed, { mode: 0o600 });

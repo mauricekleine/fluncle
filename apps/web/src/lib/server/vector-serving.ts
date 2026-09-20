@@ -1,3 +1,4 @@
+import { type VectorServingReason, type VectorServingStatus } from "@fluncle/contracts";
 import { type ArtifactConsumerStatus } from "@fluncle/contracts/orpc";
 
 import { getArtifactConsumerStatusLive } from "./artifact-changes";
@@ -17,45 +18,7 @@ const FRESHNESS_GRACE_MULTIPLIER = 3;
 const DELTA_STALE_SECS = SONAR_DELTA_CADENCE_SECS * FRESHNESS_GRACE_MULTIPLIER;
 const REPLICA_STALE_SECS = SONAR_RECONCILE_CADENCE_SECS * FRESHNESS_GRACE_MULTIPLIER;
 
-export type VectorServingReason =
-  | "artifact_contract_mismatch"
-  | "checkpoint_mismatch"
-  | "consumer_contract_mismatch"
-  | "consumer_not_active"
-  | "consumer_rebuild_incomplete"
-  | "consumer_unavailable"
-  | "delta_stale"
-  | "empty_index"
-  | "pending_ack"
-  | "producer_backlog"
-  | "replica_stale"
-  | "sonar_not_ok"
-  | "sonar_unavailable"
-  | "build_identity_missing"
-  | "validation_failed";
-
-export type VectorServingStatus = {
-  commissioning: { ready: boolean; reasons: VectorServingReason[] };
-  enabled: boolean;
-  evidence: {
-    artifactVersion: string | null;
-    checkpoint: number | null;
-    checkpointedAt: string | null;
-    commit: string | null;
-    consumerAppliedThroughSeq: number | null;
-    consumerHeadSeq: number | null;
-    consumerId: string | null;
-    consumerState: ArtifactConsumerStatus["state"] | null;
-    deltaAgeSeconds: number | null;
-    deltaBacklog: number | null;
-    pendingAck: boolean | null;
-    replicaLagSeconds: number | null;
-    tracks: number | null;
-    validation: SonarHealth["validation"] | null;
-  };
-  runtime: { ready: boolean; reasons: VectorServingReason[] };
-  target: "tracks";
-};
+export type { VectorServingReason, VectorServingStatus };
 
 type AssessmentInput = {
   consumer: ArtifactConsumerStatus | null;

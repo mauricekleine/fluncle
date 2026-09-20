@@ -380,7 +380,7 @@ export type HubAnchorLeafMeta = {
 };
 
 /** The persisted marker that makes a shard fingerprint leaf metadata rather than a corpus fingerprint. */
-export const HUB_ANCHOR_LEAF_META_VERSION = 1;
+const HUB_ANCHOR_LEAF_META_VERSION = 1;
 
 function isHubOrderKey(value: unknown): value is HubOrderKey {
   if (typeof value !== "object" || value === null) {

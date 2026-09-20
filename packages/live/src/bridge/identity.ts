@@ -145,7 +145,7 @@ const VERSION_MARKERS = [
 ];
 
 /** The set of version markers present in a normalized string (its "which recording" signature). */
-export function versionSignature(normalized: string): Set<string> {
+function versionSignature(normalized: string): Set<string> {
   const tokens = new Set(normalized.split(" ").filter(Boolean));
   const sig = new Set<string>();
   for (const marker of VERSION_MARKERS) {

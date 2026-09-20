@@ -82,7 +82,7 @@ export const SPOTIFY_ANCHOR_BREAKER_REASON_KEY = "spotify_anchor_breaker_reason"
  * on three throttles a month apart. Unset (as in production today) reads as "no live window", so the
  * adopted `failures` value restarts cleanly at 1 on the next 429 rather than inheriting a stale count.
  */
-export const SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY = "spotify_anchor_breaker_last_failure_at";
+const SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY = "spotify_anchor_breaker_last_failure_at";
 
 // ── Policy constants — THE ONE PLACE THE BREAKER IS TUNED ───────────────────────────────────────
 //
