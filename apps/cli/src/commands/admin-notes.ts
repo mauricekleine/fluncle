@@ -10,12 +10,11 @@
 // retune. The dials live in the `settings` KV, the house's one flag store, so a retune is a
 // flip that the very next sweep tick reads — never a deploy.
 
-import { type NoteGate, type NoteRejection } from "@fluncle/contracts";
+import { type NoteGate, type NoteRejection, type NoteRejectionsResponse } from "@fluncle/contracts";
 import { adminApiGet, adminApiPatch } from "../api";
 
 export type { NoteGate, NoteRejection };
 
-type NoteRejectionsResponse = { gate: NoteGate; rejections: NoteRejection[] };
 type NoteGateResponse = { gate: NoteGate };
 
 /**

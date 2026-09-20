@@ -11,37 +11,19 @@
 // rest age into a backlog behind [Show all].
 
 import { TIKTOK_DRAFT_STALE_MS, trackLabel } from "@fluncle/contracts/util";
-import { type AttentionRow, type AttentionSourceCount } from "@fluncle/contracts";
+import {
+  type AttentionRow,
+  type AttentionSource,
+  type AttentionSourceCount,
+} from "@fluncle/contracts";
 
 // ─── The rows ────────────────────────────────────────────────────────────────
 
 /**
- * The queue sources (the roadmap's data-honesty-verified EXISTS set).
- *
- * EXHAUSTIVE, and alphabetically sorted (fifteen). It is mirrored by `AttentionSourceSchema` in
- * packages/contracts/src/orpc/admin-attention.ts and switched/mapped over in five more
- * places — `SOURCE_ORDER` + `primaryFor` + `briefPhrase` below, `SOURCE_ICONS` +
- * `SOURCE_LABELS` in routes/admin/index.tsx, `SOURCE_LABELS` in the CLI's
- * admin-attention.ts, and `SOURCE_META` in the Raycast menu bar. Adding a source means
- * ALL of them, or the build breaks.
+ * The contract's source enum is exhaustive. `SOURCE_ORDER`, `primaryFor`, and `briefPhrase` below,
+ * the admin route, CLI, and Raycast maps must cover every member.
  */
-export type AttentionSource =
-  | "anchor-review"
-  | "artist-review"
-  | "attach-cues"
-  | "bio-review"
-  | "capture-suspect"
-  | "distribute"
-  | "drip-empty"
-  | "label-review"
-  | "newsletter"
-  | "note-rejected"
-  | "observation-rejected"
-  | "post-tiktok"
-  | "post-youtube"
-  | "submission"
-  | "tiktok-draft";
-
+export type { AttentionSource };
 /**
  * The near-match on an anchor-review row: what the anchor gate refused, and whether it is
  * anchorable. `descriptor` is the version words that differ from ours ("" when the CANDIDATE is the

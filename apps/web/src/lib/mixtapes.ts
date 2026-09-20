@@ -1,13 +1,13 @@
 import {
+  type FeedItem,
   type MixtapeDTO,
   type MixtapeExternalUrls,
   type MixtapeMember,
   type MixtapeStatus,
-  type TrackListItem,
 } from "@fluncle/contracts";
 import { siteUrl } from "./fluncle-links";
 
-export type { MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
+export type { FeedItem, MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
 
 /**
  * The renditions the on-the-fly cover endpoint serves (api/mixtape-cover.$logId.ts).
@@ -46,8 +46,6 @@ const COVER_VERSION = 2;
 export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
   return `${siteUrl}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}&v=${COVER_VERSION}`;
 }
-
-export type FeedItem = MixtapeDTO | TrackListItem;
 
 export type MixtapeRowLike = {
   added_at?: string | null;

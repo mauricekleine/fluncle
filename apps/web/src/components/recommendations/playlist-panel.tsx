@@ -15,6 +15,7 @@
 import { MagnifyingGlassIcon, PlaylistIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { type SearchHit } from "@fluncle/contracts";
 import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 import { SpotifyIcon } from "@/components/platform-icons";
@@ -32,21 +33,6 @@ import {
   SEED_CAP,
 } from "./shared";
 import { type FrontierMint } from "./use-frontier-mint";
-
-// The slice of the search resolver's reply the panel consumes — a track candidate. The
-// endpoint returns more (entities, filters, the sonic anchor); a pick is a TRACK, so the
-// panel reads `results` only and ignores the rest.
-type SearchHit = {
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  certified: boolean;
-  key?: string;
-  logId?: string;
-  releaseDate?: string;
-  title: string;
-  trackId: string;
-};
 
 type SearchResponse = { results?: SearchHit[] };
 

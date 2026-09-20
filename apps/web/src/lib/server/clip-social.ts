@@ -12,8 +12,11 @@
 // `setSetting` (./settings.ts) are the reusable KV primitives underneath — the same pair
 // the render → publish auto-advance's switch rides.
 
+import { type ClipSocialPost, type ClipSocialStatus } from "@fluncle/contracts";
 import { getDb, typedRow, typedRows } from "./db";
 import { getSetting, setSetting } from "./settings";
+
+export type { ClipSocialPost, ClipSocialStatus };
 
 // Instagram is the only drip platform today (the enum leaves room to grow).
 export const CLIP_DRIP_PLATFORM = "instagram" as const;
@@ -27,21 +30,6 @@ export const CLIP_DRIP_PAUSED_KEY = "clip_drip_paused";
 const HOUR_MS = 60 * 60 * 1000;
 export const DRIP_MIN_GAP_MS = 23 * HOUR_MS;
 export const DRIP_MAX_GAP_MS = 25 * HOUR_MS;
-
-export type ClipSocialStatus = "failed" | "posted" | "scheduled";
-
-/** A `mixtape_clip_social_posts` row as the store reads it back. */
-export type ClipSocialPost = {
-  caption?: string;
-  clipId: string;
-  createdAt: string;
-  platform: string;
-  postedUrl?: string;
-  postizId?: string;
-  scheduledFor: string;
-  status: ClipSocialStatus;
-  updatedAt: string;
-};
 
 type ClipSocialPostRow = {
   caption: string | null;

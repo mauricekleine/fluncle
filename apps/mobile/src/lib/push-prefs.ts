@@ -6,14 +6,15 @@
 // these). The wire owns the INVERSE: `register_device` takes the categories a device
 // has MUTED, so a toggle that is ON is a category that is ABSENT from the array.
 
+import { type PushCategory } from "@fluncle/contracts";
+
+export type { PushCategory };
+
 /** The two categories a device can toggle. Mirrors the server's two send paths
  * (notifyNewFinding → "findings", notifyNewMixtape → "mixtapes") and the contract's
  * `PushCategorySchema` enum — kept as a const so the muted-array element type is
  * exactly the `register_device` input's `mutedCategories` element type. */
-export const PUSH_CATEGORIES = ["findings", "mixtapes"] as const;
-
-/** One push category — `"findings" | "mixtapes"`, matching the contract enum. */
-export type PushCategory = (typeof PUSH_CATEGORIES)[number];
+export const PUSH_CATEGORIES = ["findings", "mixtapes"] as const satisfies readonly PushCategory[];
 
 /** Which categories the device WANTS (the toggles). ON ⇔ delivered; default both on. */
 export type PushPrefs = { findings: boolean; mixtapes: boolean };
