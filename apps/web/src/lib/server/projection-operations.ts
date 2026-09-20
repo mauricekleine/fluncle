@@ -6,7 +6,11 @@ import {
   runCrawlDueRebuildChunk,
 } from "./crawl-due-work";
 import { CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
-import { repairDueWorkChunk, runDueWorkRebuildChunk } from "./due-work";
+import {
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  repairDueWorkChunk,
+  runDueWorkRebuildChunk,
+} from "./due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   fanOutDueWorkSourceRepairs,
@@ -103,7 +107,7 @@ export type ProjectionStatus = {
     artistQualification: FamilyStatus;
     crawlDueWork: FamilyStatus;
     publicAggregates: FamilyStatus & { anchorsReady: boolean };
-    trackDueWork: FamilyStatus;
+    trackDueWork: FamilyStatus & { catalogueRankMarkerAgeMs: number | null };
   };
   readyToOpen: {
     crawlDueWork: boolean;
@@ -361,12 +365,42 @@ async function assertProjectionAuditReady(
   }
 }
 
+/**
+ * The synthetic catalogue-rank corpus marker's age, or null when it holds no repair row.
+ *
+ * That marker is a resumable REBUILD checkpoint wearing a source-marker row, not fan-out debt: it
+ * clears only when a whole rank generation completes against a corpus proven unchanged, and any
+ * corpus mutation restarts the generation from page zero. Its age therefore measures how long the
+ * rank rebuild has been running, never whether ordinary markers are draining, so it is reported
+ * under its own name and kept out of {@link oldestOutstandingMarkerAge}. Reporting it separately
+ * rather than dropping it is what keeps a rank rebuild that genuinely stalls visible.
+ */
+function catalogueRankMarkerAge(rows: readonly unknown[], now: number): number | null {
+  for (const row of rows as { created_at: unknown; subject_id: unknown }[]) {
+    if (row.subject_id !== DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID) {
+      continue;
+    }
+    const timestamp = typeof row.created_at === "string" ? Date.parse(row.created_at) : Number.NaN;
+    return Number.isNaN(timestamp) ? null : Math.max(0, now - timestamp);
+  }
+  return null;
+}
+
+function isCatalogueRankMarkerRow(row: unknown): boolean {
+  return (
+    typeof row === "object" &&
+    row !== null &&
+    (row as { subject_id?: unknown }).subject_id === DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID
+  );
+}
+
 function trackFamilyStatus(
   results: readonly ResultSet[],
   audit: ProjectionAuditEvidence | undefined,
   sourceFence: number,
   oldestMarkerAge: OldestOutstandingMarkerAge,
-): FamilyStatus {
+  rankMarkerAgeMs: number | null,
+): FamilyStatus & { catalogueRankMarkerAgeMs: number | null } {
   const rows = results[12]?.rows as unknown as
     | { projected_count: number; scanned_count: number; state: string }[]
     | undefined;
@@ -408,6 +442,7 @@ function trackFamilyStatus(
       ready: boundedCount(results[1]?.rows ?? []),
       scheduled: boundedCount(results[2]?.rows ?? []),
     },
+    catalogueRankMarkerAgeMs: rankMarkerAgeMs,
     convergence: {
       digestMatched,
       epochMatched: null,
@@ -508,7 +543,9 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
-      sql: `select work_kind, repair_entered_at as created_at
+      // `subject_id` is read only to tell the synthetic catalogue-rank corpus marker apart from
+      // ordinary debt; it is compared against that one constant and never leaves this read.
+      sql: `select work_kind, subject_id, repair_entered_at as created_at
         from due_work indexed by due_work_repair_idx
         where state = 'repair' order by subject_type, subject_id limit ?`,
     },
@@ -579,7 +616,12 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
     results,
     trackAudit,
     integerSetting(settingRows, TRACK_DUE_AUDIT_FENCE_KEY),
-    oldestOutstandingMarkerAge(trackRepairRows, trackRepairs.truncated, now),
+    oldestOutstandingMarkerAge(
+      trackRepairRows.filter((row) => !isCatalogueRankMarkerRow(row)),
+      trackRepairs.truncated,
+      now,
+    ),
+    catalogueRankMarkerAge(trackRepairRows, now),
   );
   const crawlDirectRepairRows = results[8]?.rows ?? [];
   const crawlFanoutRepairRows = results[9]?.rows ?? [];

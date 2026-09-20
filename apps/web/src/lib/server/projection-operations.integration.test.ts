@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
+import { DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID } from "./due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   advanceProjectionAudit,
@@ -471,6 +472,65 @@ describe("projection production operations", () => {
       reason: null,
       truncated: false,
     });
+  });
+
+  // THE CATALOGUE-RANK CORPUS MARKER IS NOT DEBT AGE. It is a resumable rebuild checkpoint wearing
+  // a source-marker row: it clears only when a whole rank generation completes against a corpus
+  // proven unchanged, and any corpus mutation restarts that generation from page zero. Folding its
+  // age into `oldestOutstandingMarkerAge` reports a healthy long rebuild as debt that is not
+  // draining, which is what an age-driven escalation reads. It is reported under its own name so it
+  // can never age silently either.
+  it("reports the catalogue-rank rebuild marker apart from outstanding track debt age", async () => {
+    const rankCreatedAt = "2025-01-01T00:00:00.000Z";
+    const ordinaryCreatedAt = "2025-01-01T06:00:00.000Z";
+    await db.batch([
+      {
+        args: [
+          DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+          "2020-01-01T00:00:00.000Z",
+          rankCreatedAt,
+        ],
+        sql: `insert into due_work
+          (work_kind, subject_type, subject_id, state, updated_at, repair_entered_at)
+          values ('source-repair', 'track', ?, 'repair', ?, ?)`,
+      },
+      {
+        args: ["ordinary-track", "2020-01-01T00:00:00.000Z", ordinaryCreatedAt],
+        sql: `insert into due_work
+          (work_kind, subject_type, subject_id, state, updated_at, repair_entered_at)
+          values ('source-repair', 'track', ?, 'repair', ?, ?)`,
+      },
+    ]);
+
+    const readStartedAt = Date.now();
+    const status = await getProjectionStatusFor(db);
+    const readEndedAt = Date.now();
+    const track = status.projections.trackDueWork;
+    const withinRead = (ageMs: number | null, timestamp: string) => {
+      const markerTime = Date.parse(timestamp);
+      expect(ageMs).toBeGreaterThanOrEqual(readStartedAt - markerTime);
+      expect(ageMs).toBeLessThanOrEqual(readEndedAt - markerTime);
+    };
+
+    // The older of the two rows is the rank marker, and the debt age must not be it.
+    withinRead(track.oldestOutstandingMarkerAge.ageMs, ordinaryCreatedAt);
+    withinRead(track.catalogueRankMarkerAgeMs, rankCreatedAt);
+    // It remains repair work the bounded repair action advances, so it stays in the counts.
+    expect(track.repairs.fanout.count).toBe(2);
+  });
+
+  it("reports no rank marker age while that marker holds no repair row", async () => {
+    await db.execute({
+      args: ["ordinary-track-only", "2020-01-01T00:00:00.000Z", "2025-01-01T00:00:00.000Z"],
+      sql: `insert into due_work
+        (work_kind, subject_type, subject_id, state, updated_at, repair_entered_at)
+        values ('source-repair', 'track', ?, 'repair', ?, ?)`,
+    });
+
+    const status = await getProjectionStatusFor(db);
+
+    expect(status.projections.trackDueWork.catalogueRankMarkerAgeMs).toBeNull();
+    expect(status.projections.trackDueWork.oldestOutstandingMarkerAge.ageMs).not.toBeNull();
   });
 
   it("keeps fully observed crawl age complete when direct and fanout counts exceed the combined count cap", async () => {

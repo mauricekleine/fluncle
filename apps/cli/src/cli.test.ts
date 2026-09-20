@@ -944,6 +944,7 @@ describe("fluncle CLI parsing and JSON output", () => {
           status: { phase: "complete" },
           steps: 1,
           target: "public_aggregates",
+          wallStopped: false,
         });
       },
     );
@@ -1075,6 +1076,7 @@ describe("fluncle CLI parsing and JSON output", () => {
           status: { phase: "final" },
           steps: 3,
           target: "track_due_work",
+          wallStopped: false,
         });
       },
     );
@@ -1140,6 +1142,10 @@ describe("fluncle CLI parsing and JSON output", () => {
               "500",
               "--max-steps",
               maxSteps,
+              // Exactly what the box maintenance sweep sends: the wall budget is a value flag, so
+              // it must also be declared in the parser's string-option set to bind its argument.
+              "--wall-ms",
+              "30000",
               "--no-terminal-status",
               "--json",
             ],
@@ -1155,6 +1161,7 @@ describe("fluncle CLI parsing and JSON output", () => {
             scheduled: 0,
             steps: 1,
             target,
+            wallStopped: false,
           });
         }
       },
