@@ -638,13 +638,16 @@ empty_packages() {
 # install with "Unknown lockfile version" no matter how complete the tree is. So the wake step
 # holds the box's bun at that pin before it installs — the PINNED release, never `bun upgrade`
 # (which tracks latest and puts the toolchain on a moving target).
+# The installer is `bash -s`, which reads its SCRIPT from stdin: that stdin is the curl pipe and
+# must never be redirected to /dev/null, or bash reads nothing, exits, and curl reports a write
+# failure with an empty log.
 bun_pin() { sed -n 's/.*"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' package.json | head -1; }
 bun_stale() { local want; want="$(bun_pin)"; [ -n "$want" ] && [ "$want" != "$(bun --version 2>/dev/null)" ]; }
 sync_bun() {
   bun_stale || return 0
   local want have
   want="$(bun_pin)"; have="$(bun --version 2>/dev/null || echo none)"
-  if curl -fsSL https://bun.sh/install | BUN_INSTALL="$HOME/.bun" bash -s "bun-v$want" </dev/null >"$HOME/.freshen-bun.log" 2>&1 \
+  if curl -fsSL https://bun.sh/install | BUN_INSTALL="$HOME/.bun" bash -s "bun-v$want" >"$HOME/.freshen-bun.log" 2>&1 \
     && [ -x "$HOME/.bun/bin/bun" ] && install -m 0755 "$HOME/.bun/bin/bun" /usr/local/bin/bun; then
     echo "[freshen] bun $have -> $(bun --version)"
     return 0
