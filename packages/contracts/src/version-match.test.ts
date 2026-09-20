@@ -3,8 +3,7 @@
 // Its fuzzy Deezer/iTunes fallbacks are now gated by these helpers: a REMIX finding
 // must never archive the ORIGINAL's preview (and vice-versa).
 //
-// The helpers live in this package, so the gate lives here too — it used to sit in
-// apps/cli, one consumer away from the code it pins.
+// The gate lives beside the helpers it pins so every consumer shares the same rule.
 
 import { describe, expect, test } from "bun:test";
 

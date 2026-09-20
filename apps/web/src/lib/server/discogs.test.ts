@@ -560,7 +560,7 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
   });
 });
 
-// THE RELEASE FACTS — the catalogue number + styles the resolver used to score and discard, and the
+// THE RELEASE FACTS — catalogue number + styles retained from the resolver payload, and the
 // backfill leg that reads them for a release Fluncle already resolved. The claims on trial: the
 // facts come off the payload the resolver already holds, Discogs' literal "none" is DROPPED rather
 // than stored, a multi-label release takes the first real number, and the three outcomes the ledger

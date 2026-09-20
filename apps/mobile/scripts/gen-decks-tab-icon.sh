@@ -3,8 +3,8 @@
 # platters (circle + spindle dot, Phosphor's vinyl-record doubled) flanking the mixer (a
 # rounded rect with its fader knob). Wired WITHOUT renderingMode="original", so the iOS
 # tab bar template-tints it exactly like its four SF-symbol siblings (stardust idle, gold
-# selected) — the 2026-07-13 ruling after the always-gold disc experiment: every trigger
-# obeys the bar's tint; the centre SLOT is the prominence. The glyph is drawn in Stardust
+# selected). Every trigger obeys the bar's tint; the centre SLOT is the prominence. The glyph is
+# drawn in Stardust
 # rather than black: iOS templates purely by the alpha channel (the colour is ignored),
 # while Android renders src images in their ORIGINAL colours — black would vanish on the
 # dark bar, Stardust reads as the idle tint.

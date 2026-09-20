@@ -3,7 +3,7 @@
 // THE DEFECT THIS EXISTS FOR. The capture sweep's yt-dlp search can return a same-label (or
 // same-artist) upload whose AUDIO is a different song — and a length coincidence slips the
 // duration guard (finding 005.9.9L: expected 198.6s, stored 246.9s off an Elevate Records
-// channel video, caught in the 2026-07-12 capture audit). The wrong bytes are INAUDIBLE on every
+// channel video). The wrong bytes are INAUDIBLE on every
 // human surface — the site, the video, and the radio all play the ISRC-resolved OFFICIAL preview,
 // never the captured file — so a wrong capture poisons only analysis, BPM/key, and the MuQ
 // ranking space, silently. The operator's ruling: verify every captured file against that same
@@ -51,7 +51,7 @@ import { join } from "node:path";
  * never FALSE-REJECTING a true match on a cross-source encoding difference — a false rejection
  * would quarantine a correct capture and cost the operator a re-verify, so caution runs toward
  * accepting. Env-overridable (`FLUNCLE_VERIFY_MAX_BER`) so the operator can tighten or relax it
- * without a re-bake. Sources dated 2026-07-13 (Chromaprint/AcoustID matching practice).
+ * without a re-bake. The thresholds follow Chromaprint/AcoustID matching practice.
  */
 export const DEFAULT_MAX_BER = 0.2;
 

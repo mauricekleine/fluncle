@@ -2,7 +2,7 @@
 // `list_artists` / `get_artist` oRPC ops, rendered in the catalogue reference
 // register (plain, no cosmos: `/artists` is a reference shelf, VOICE.md §5).
 //
-// `list_artists` is now the unified index — every artist Fluncle holds, A to Z,
+// `list_artists` is the unified index — every artist Fluncle holds, A to Z,
 // one page at a time — so the bare list pages with `--page` and each row carries
 // a plain track count (the Unlit Rule keeps the certified/tier marker off the
 // row; `--json` carries `certified` and the finding count). A bare `slug` reads

@@ -500,11 +500,10 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
       isLabel ? [needle, nameArg(needle), needle, limit] : [nameArg(needle), limit],
     // THE GATE, single-sourced with the hubs (`hubInclusionWhere`): it admits exactly the entities
     // `/labels` + `/albums` list — a certified finding OR a page over the thin-content floor — never
-    // a bare crawler stub. Two STORED counters on the entity row answer it (keystone 2), so the
-    // grouped `id in (select … from tracks left join findings … group by …)` subquery this used to
-    // carry is gone entirely: the gate is now two integer comparisons on the row the name predicate
-    // already matched. The cover subquery is the one part that still reaches into `tracks`, and it
-    // runs only for those matched rows.
+    // a bare crawler stub. Two STORED counters on the entity row answer it (keystone 2), avoiding a
+    // grouped `id in (select … from tracks left join findings … group by …)` subquery. The gate is
+    // two integer comparisons on the row the name predicate already matched. Only the cover
+    // subquery still reaches into `tracks`, and it runs only for those matched rows.
     sql: `select ${table}.name as name, ${table}.slug as slug, ${logoSelect} ${labelRankSelect}
             (select t.album_image_url
                from tracks t join findings f on f.track_id = t.track_id
@@ -1372,7 +1371,7 @@ const CENTROID_TIEBREAK = `order by length(artists.name) asc, artists.name asc l
  * column so `artists_name_nocase_idx` cannot be seeked, and an `or` arm that is a correlated
  * `exists` is not indexable, so SQLite cannot build a multi-index OR and falls back to the table.
  * Once per input, up to {@link MAX_SIMILAR_ARTISTS_INPUT} of them, on every `sounds like <artists>`
- * search. This doc block used to call that "indexed single-row reads"; it was neither.
+ * search. These are correlated table reads, never indexed single-row reads.
  *
  * The `name_rank asc … limit 1` tiebreak was only ever "ask rank 0, then rank 1", so the two ranks
  * are asked separately, in rank order. Rank 0 is two indexable equalities — `name = ? collate

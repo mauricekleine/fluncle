@@ -496,9 +496,9 @@ export const tracks = sqliteTable(
     // NOT write here — it reads its finding off `nearest_finding_track_id`.
     duplicateOfTrackId: text("duplicate_of_track_id"),
     durationMs: integer("duration_ms").notNull(),
-    // LEGACY, UNREAD, AWAITING ITS DROP. The MuQ vector used to live here; it now lives in
-    // the {@link trackEmbeddings} satellite, and NOTHING reads or writes this column any
-    // more — not the ranking, not the queues, not the fixtures. It survives one release as
+    // UNREAD COMPATIBILITY COLUMN, AWAITING ITS DROP. The MuQ vector lives in the
+    // {@link trackEmbeddings} satellite, and NOTHING reads or writes this column — not the
+    // ranking, queues, or fixtures. It remains temporarily as
     // the rollback copy of the data the split migration moved, because dropping a 169 MB
     // column is a one-way door that must not ride in the same change as the code that
     // stopped reading it. The next migration drops it; until then treat it as absent.

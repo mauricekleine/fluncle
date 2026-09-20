@@ -8,7 +8,7 @@ import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integratio
 
 // THE VECTOR SATELLITE (schema.ts § `trackEmbeddings`, docs/track-lifecycle.md).
 //
-// The MuQ vector used to be a `tracks` column; it now lives 1:1 in `track_embeddings`, and
+// The MuQ vector lives 1:1 in `track_embeddings`, and
 // `tracks.has_embedding` mirrors that row's EXISTENCE. Three things have to hold for that split to
 // be invisible to everything above it, and each gets a case here:
 //

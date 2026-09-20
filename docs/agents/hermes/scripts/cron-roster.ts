@@ -4,17 +4,9 @@
 // THE PROBLEM THIS EXISTS FOR. `AUTOMATION_CRONS` in fluncle-healthcheck.ts is the set of crons
 // the /status prober expects to find markers for, and every entry — the token, the service id,
 // the cadence — restates by hand something the repo already states elsewhere: the timer unit.
-// Restating drifts. Measured 2026-07-29 against the 45 committed `.timer` units:
-//
-//   • `fluncle-frontier-refresh` moved from a Friday-07:00 burst to a 15-minute paced drain
-//     (its timer says `OnCalendar=*:0/15`; its README explains why), and the prober kept the
-//     old weekly cadence. The stale budget is 3x the cadence, so a DEAD frontier-refresh would
-//     have read `fresh` on /status for 21 days instead of 45 minutes. `@fluncle/registry`'s
-//     probeConfig had already been corrected to 15 min — the prober alone was left behind,
-//     which is exactly what a third uncoupled copy of a fact buys you.
-//   • `fluncle-timer-watchdog` and `fluncle-secrets-sync` had no entry at all — and, unlike
-//     `pin-watch` (which self-posts the `self-deploy` row) and `fluncle-healthcheck` (which
-//     self-emits its own), they report to NOTHING. Two of the box's timers were invisible.
+// Restating drifts. Every marker-producing `.timer` unit must appear in the roster with the token,
+// service id, and cadence derived from that unit. Timers that self-report through another channel
+// stay in the explicit non-writer roster below.
 //
 // AGENTS.md names this exact class for the Cloudflare watch-paths mirror: "the two lists live
 // in different places with NOTHING testing that they agree". This module is the something.
@@ -109,8 +101,7 @@ export const NON_WRITER_TIMERS: Record<string, string> = {
     "the prober itself — it self-emits cron.healthcheck; a self-read would be circular",
   // Runs on the HOST as a root oneshot outside the container, so it never sources
   // cron-output.sh and there is no marker for a prober to read. NOT invisible, though: it POSTs
-  // its own row to the run ledger (`record_run`), where a missing row reads as a missed run —
-  // which is what closed the gap this entry used to record.
+  // its own row to the run ledger (`record_run`), where a missing row reads as a missed run.
   "fluncle-secrets-sync.timer":
     "a host-side oneshot outside the container — writes no marker; POSTs its own run-ledger row",
   // Same shape as secrets-sync: a root host oneshot with no marker, reporting itself to the run

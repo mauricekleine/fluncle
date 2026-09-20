@@ -19,9 +19,9 @@ import { SEARCH_EXAMPLES, type SearchExampleIcon } from "@/lib/search-results";
 // for, so the list carries a contract: each query is REAL, and each is answered WITHOUT a model.
 //
 // ── WHY "WITHOUT A MODEL" IS THE LOAD-BEARING HALF ──────────────────────────────────────────
-// The fourth tier is nondeterministic by construction. The list used to carry a natural-language
-// filter query to teach it, and the same sentence parsed once to `{bpmMin, key}` (rows) and once
-// to `{bpmMin, key, text: "tracks"}` — where the stray leftover word narrowed the answer to
+// The fourth tier is nondeterministic by construction. A natural-language filter example can
+// produce `{bpmMin, key}` in one run and `{bpmMin, key, text: "tracks"}` in another, where the
+// stray leftover word narrows the answer to
 // nothing. A worked example that is a coin flip is not a worked example. So the contract is not
 // "usually returns something"; it is "resolved by a tier that cannot vary", and that is a thing a
 // test can actually hold.

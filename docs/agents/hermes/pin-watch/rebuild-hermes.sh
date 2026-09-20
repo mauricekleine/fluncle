@@ -261,12 +261,9 @@ alert() {
 # here: the endpoint path, the five body fields, and the Bearer auth. If any of them changes in
 # the workspace, change it in all four copies.
 #
-# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN, and this cost a shipped bug: the four copies once
-# agreed with EACH OTHER on `/api/v1/admin/runs/events` while the contract declared
-# `/admin/telemetry/runs`, so every POST 404'd, the `|| true` swallowed it, the ledger stayed
-# empty, and both test suites were green. Byte-equality is a closed loop. So run-events.test.ts
-# now RESOLVES this path against the workspace's own surfaces (the contract op paths + the
-# `apps/web/src/routes/api/**` file routes) — the assertion that crosses the boundary.
+# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN. Byte-equality among four copies is a closed loop, so
+# run-events.test.ts RESOLVES this path against the workspace's own surfaces: the contract op paths
+# and the `apps/web/src/routes/api/**` file routes.
 #
 # THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
 # `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for
@@ -386,10 +383,9 @@ pinwatch_on_exit() {
 
 # ── the baked path set (derived from the Dockerfile's own COPY lines) ─────────────────────────
 # WHAT the image bakes is decided in exactly one place — the COPY lines in $DOCKERFILE — so the
-# fingerprint DERIVES its watch set from them rather than restating it. A hand-kept list drifts:
-# it used to name two skill sub-paths while the Dockerfile has long baked `COPY packages/skills`
-# WHOLESALE, so a new or edited skill rode into the image without ever moving the fingerprint and
-# the box ran it stale until some unrelated change happened to force a rebuild. Deriving makes
+# fingerprint DERIVES its watch set from them rather than restating it. A hand-kept list drifts and
+# can miss a new or edited skill under a wholesale `COPY packages/skills`, leaving the image stale.
+# Deriving makes
 # a new COPY self-covering — there is nothing here to remember to update.
 #
 # The parser is deliberately narrow, because the Dockerfile is ours: single-stage, plain-form
@@ -491,9 +487,8 @@ cleanup_gateway_smoke() {
 
 # The rebake LOCK — the half of the quiesce that covers what stopping timers cannot: a
 # MANUAL `systemctl start fluncle-<job>.service` walking into the build/swap window. The
-# container swap TERMs every in-flight `docker exec` (measured twice: exit 143 mid-tick,
-# 2026-07-26 12:27 and 2026-07-27 04:34 — both manually-triggered sweeps; a pre-check
-# races the swap, so the sweep itself must see the window). Written into the /opt/data
+# container swap TERMs every in-flight `docker exec`; a pre-check races the swap, so the sweep
+# itself must see the window. Written into the /opt/data
 # mount so the BAKED sweeps can read it (cron-output.sh skips the tick when it is
 # present, with a >45-min staleness escape so a hard-killed rebuild can never wedge the
 # roster). Removed in restore_sweep_timers, which the EXIT trap already guarantees.
@@ -506,8 +501,7 @@ REBAKE_LOCK=""
 # NextElapse=infinity, never firing again. Persistent=true is what makes that permanent
 # (its stamp file reads as the last trigger, so systemd declines to re-fire the elapsed
 # OnBootSec) — see ../timer-watchdog/README.md for the reproduction. A reboot landing
-# inside this quiesce window did exactly that on 2026-07-28 and killed seven sweeps for
-# 13h with every health signal still green.
+# inside this quiesce window can strand a timer while every other health signal stays green.
 # Activating the service once restores the reference point. --no-block so a long sweep
 # never holds the EXIT trap open; a busy service is skipped (its infinity is just the
 # in-flight tick). Returns 0 only when it actually re-armed something.
@@ -863,8 +857,7 @@ preserve_live_ceiling
 # The post-swap prune (step 7) only runs on a SUCCESSFUL rebuild, so it never helps
 # the build currently in flight: a full rebuild has to write a SECOND large image
 # (plus fresh layer cache) alongside the running one, and on a tight disk that peak
-# is exactly what strands the next rebuild with "no space left on device" (seen
-# 2026-07-09, mid base-bump, at 99%). So free space up front — drop every
+# is exactly what strands the next rebuild with "no space left on device". Free space up front — drop every
 # fluncle-hermes image EXCEPT the running one ($OLD_IMAGE, kept for rollback) and
 # trim the build cache to a small working set. Doubly safe: the OLD container is
 # still up on $OLD_IMAGE here, so docker refuses to remove it even if the grep
@@ -1025,7 +1018,7 @@ if run_container "$NEW_IMAGE" && container_healthy; then
   # prune the BUILD CACHE too — the unbounded consumer the image prune above never touches.
   # A full rebuild (esp. a base-image bump, which busts the cache) writes ~15GB of layer
   # cache; left uncapped it silently fills the disk and strands the NEXT rebuild with
-  # "no space left on device" (seen 2026-07-09: the box hit 99% mid-base-bump). Keep a small
+  # "no space left on device". Keep a small
   # working set so incremental rebuilds stay fast.
   docker builder prune -f --keep-storage=3GB >/dev/null 2>&1 || true
   # LAST, and only here: the deploy landed, the rollback decision is behind us, and the docker

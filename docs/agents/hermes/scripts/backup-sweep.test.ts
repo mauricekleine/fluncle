@@ -1,10 +1,9 @@
 // Unit tests for the database-backup sweep's STREAMING dump (backup-sweep.ts).
 //
-// The incident this suite is the fence around: the sweep used to build the whole dump as one
-// JavaScript string, `Buffer.from` it, then `gzipSync` it — three simultaneous full copies,
-// and a JS string is UTF-16, so the 323 MB dump of 2026-07-23 wanted ≈650 MB for the string
-// alone. Inside a 4 GiB container with no swap it was OOM-killed on three consecutive nights
-// (2026-07-24/25/26, status=137) and the last good backup was 2026-07-23.
+// The sweep must never build the whole dump as a JavaScript string, `Buffer.from` it, then
+// `gzipSync` it. That creates three simultaneous full copies, and a UTF-16 JS string alone needs
+// about twice the dump size. The box has no swap and the container has a strict memory limit, so
+// the sweep streams the dump instead.
 //
 // So there are three things worth proving, and they are the three suites below:
 //   1. The streamed bytes are EXACTLY what the old builder produced — the format is the

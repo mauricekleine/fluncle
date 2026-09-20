@@ -1,18 +1,14 @@
 // Unit tests for the /status prober (fluncle-healthcheck.ts): the layer that decides whether a
 // cron reads green, and the layer that decides whether the operator ever hears about it twice.
 //
-// The cron-verdict cases are each a real marker file in a temp dir, because the bug that suite
-// exists for was about a FILE's shape, not a code path:
+// The cron-verdict cases use real marker files because the marker's shape determines the verdict:
 //
 //   `cron-output.sh` WRAPS the sweep rather than exec'ing it, so a SIGKILLed run still leaves
-//   a marker — a 28-byte file whose only line is the `# Cron Job: …` header. The prober took
-//   the last non-empty line, failed to `JSON.parse` it, and shrugged ("freshness governs").
-//   `fluncle-backup` was OOM-killed three nights running (2026-07-24/25/26) and `cron.backup`
-//   read GREEN the whole time.
+//   a marker whose only line is the `# Cron Job: …` header. The last non-empty line may therefore
+//   be a non-JSON header; freshness alone cannot make that marker green.
 //
 // The escalation cases guard the second half of that lesson: the prober can be RIGHT and still
-// say nothing. Alerting was edge-triggered, so `cron.render` failing hourly for ~20 hours pinged
-// once and then held its peace for the other nineteen. These tests pin the streak ladder that
+// say nothing. These tests pin the streak ladder that
 // turns duration into a signal — and, just as importantly, pin that it stays a LADDER (6, 12,
 // 24 …) rather than becoming a per-tick siren.
 //
@@ -574,8 +570,7 @@ describe("judgeCron — no runs at all", () => {
   });
 
   test("past the cron's own stale budget, a never-fired timer is lagging", () => {
-    // The second blindness: a timer that never installed used to read "no runs yet / ok"
-    // forever. Once the box has been up longer than the cron's whole stale budget, it hasn't
+    // Once the box has been up longer than the cron's whole stale budget, it hasn't
     // "not started yet" — it has never fired.
     expect(judgeCron(CRON, undefined, STALE_BUDGET_MS + 60_000)).toBe("lagging");
     expect(cronCheck(CRON, "lagging").status).toBe("degraded");
@@ -775,8 +770,7 @@ describe("normalizeState — the state file round-trip", () => {
   });
 
   test("the LEGACY flat map still parses — it just restarts the counters", () => {
-    // The state file sitting on the box right now is this shape. A prober that threw on it
-    // would take the dead-man's beacon down with it, so it degrades instead.
+    // Existing flat-map state must degrade safely instead of taking the dead-man's beacon down.
     expect(normalizeState({ "cron.render": "down", web: "ok" })).toEqual({
       "cron.render": { downStreak: 0, escalatedStreak: 0, status: "down" },
       web: { downStreak: 0, escalatedStreak: 0, status: "ok" },

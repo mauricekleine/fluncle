@@ -1,19 +1,9 @@
 // THE INSTALLER-COMPLETENESS GUARD — every unit dir, timer, and host script this repo holds
 // must be covered by `docs/agents/hermes/install-host-timers.sh`.
 //
-// WHY THIS TEST EXISTS. The installer used to name its work in a hardcoded list:
-//
-//     unit_dirs=("${REPO_DIR}"/*-timer "${REPO_DIR}"/pin-watch "${REPO_DIR}"/sweep-failure)
-//
-// `secrets/` does not match any of those three, so `fluncle-secrets-sync.{service,timer}` was
-// never installed — a rebuilt box enabled all 40-odd sweep timers and fired them on schedule
-// with NO credentials. And nothing laid down the host scripts a unit's `ExecStart=` points at,
-// so `pin-watch.timer` was enabled against a missing `/opt/fluncle-pin-watch/rebuild-hermes.sh`
-// and the box permanently lost self-deploy.
-//
-// Both failures were SILENT: the script exited 0, printed a success line, and
-// `systemctl list-timers` read green over a box where nothing worked. That is the class of bug
-// a rebuild discovers months later, so it cannot be left to review — it has to fail the build.
+// Every unit directory, including `secrets/`, and every host script referenced by `ExecStart=`
+// must be installed. A partial install can still exit 0 and leave timers enabled, so this test
+// makes an incomplete rebuild fail before deployment.
 //
 // HOW IT CHECKS. The installer grew a `--dry-run` mode that prints its derived plan and exits
 // without touching the host. This test runs that REAL selection code and diffs the plan against

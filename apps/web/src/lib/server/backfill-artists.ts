@@ -1,7 +1,7 @@
 // Artist-entity backfill: for existing tracks that predate the artists/track_artists
 // tables, re-fetch `/tracks/{trackId}` from Spotify (the cheapest call — one GET
 // per finding, no extra enrichment) and upsert `artists` + `track_artists`. The
-// Spotify artist IDs are on that response and were previously discarded at ingest.
+// The response's Spotify artist IDs must reach both entity tables.
 //
 // Mirrors the Discogs / Last.fm backfill model:
 //   - One bounded pass per request (MAX_BATCH findings), cursor-resumable.

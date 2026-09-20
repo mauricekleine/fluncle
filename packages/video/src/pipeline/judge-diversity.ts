@@ -392,14 +392,11 @@ function findingsAgo(index: number): string {
  * a soft rhyme; beyond it, clear. A null subject family skips the gate (never fails a
  * ship because a body couldn't be classified). No fs, no network — heavily tested.
  *
- * The feed is now ALL-REPRESENTATIONAL (operator ruling 2026-07-20; see
+ * The feed is ALL-REPRESENTATIONAL (see
  * docs/agents/hermes/scripts/assign-video-axes.ts): representational is a PREREQUISITE,
  * not one register among several. So the gate polices structural-family sameness WITHIN
  * representational — a same-family repeat inside the FAIL window is a hard FAIL regardless
- * of register. The earlier representational→WARN demotion existed only because
- * representational was rare (so presence pairs wouldn't be punished); under the
- * all-representational feed EVERY consecutive pair would qualify, defanging the gate
- * entirely, so it is gone. The SUBJECT-kind axis the structural fingerprint can't see
+ * of register. The SUBJECT-kind axis the structural fingerprint can't see
  * (a ship vs a ruin vs a creature all classify the same `metaball`/`other`) is policed by
  * evaluatePlateSubjectGate, which stays WARN-only as the softer second layer.
  */

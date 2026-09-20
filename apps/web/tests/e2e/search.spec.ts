@@ -15,21 +15,19 @@
 // are that property, checked once per kind, plus the handoff that keeps the palette
 // the fast way in rather than the only way in.
 //
-// ── THE TIER-4 RAIL ──────────────────────────────────────────────────────────
-// The resolver has four tiers (docs/search.md): coordinate → exact entity → bare
-// token (FTS5) → sonic → a small LLM that emits FILTERS. The fourth calls a real
-// model, and `blockExternalRequests` stubs the BROWSER's requests, never the
-// Worker's — so a tier-4 query used to make this suite non-hermetic, and the rail
-// was "never write a query that reaches it".
+// ── THE MODEL RAIL ───────────────────────────────────────────────────────────
+// The resolver handles coordinates, exact entities, bare tokens (FTS5), sonic anchors, and
+// model-emitted filters (docs/search.md). `blockExternalRequests` stubs the BROWSER's requests,
+// never the Worker's, so a query that reaches the model makes this suite non-hermetic.
 //
 // The rail is now held by the ENVIRONMENT instead, which is both stronger and
 // smaller: `.dev.vars.e2e.tpl` carries NO `OPENROUTER_API_KEY`, so `translateQuery`
 // short-circuits on "unprovisioned" and returns null before a socket is opened. A
-// tier-4 query therefore degrades to full text and answers deterministically — the
+// model query therefore degrades to full text and answers deterministically — the
 // documented degradation contract, which is also the local-dev steady state. That
 // is what lets the STRUCTURED query below be tested at all, rather than avoided.
 //
-// The tiers each query here exercises:
+// The resolver paths each query here exercises:
 //   - a COORDINATE (`701.1.0A`) — tier 1, returns the finding or the "no finding
 //     at that coordinate" empty, either way it returns;
 //   - an EXACT ENTITY (`Nova Kestrel`) — tier 2, returns on a hit;
@@ -121,8 +119,8 @@ test("search dialog resolves the deterministic tiers over the seeded archive", a
   // Tier 2, the exact entity: the seeded artist comes back as a JUMP TARGET under
   // its own heading — the thing searched for, offered as somewhere to go. EXACT, because
   // the non-exact form also matches any track ROW crediting the artist once the FTS tier
-  // resolves — a race that has flaked this assertion twice (2026-07-29, 2026-07-31) as a
-  // strict-mode violation when both options render.
+  // resolves. The non-exact locator would therefore match both options and violate Playwright's
+  // strict locator rule.
   await typeQuery(page, SEEDED_ARTIST_NAME);
   await expect(page.getByRole("option", { exact: true, name: SEEDED_ARTIST_NAME })).toBeVisible();
 

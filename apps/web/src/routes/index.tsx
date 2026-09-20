@@ -27,7 +27,7 @@ import { registerWebMcpTools } from "@/lib/webmcp";
 // refinement, and the transport model it explicitly rejects are recorded in PRODUCT.md ("The front
 // door") and DESIGN.md §5 ("The Long Scroll").
 //
-// The archive front page this route used to be is whole and unchanged at `/findings` — the cover,
+// `/findings` owns the archive front page — the cover,
 // the nameplate, the stories ring, the infinite feed. `/?story=` still resolves: it 301s to the
 // standalone `/log/<id>` page the mask always displayed, so every shared link survives.
 //

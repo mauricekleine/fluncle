@@ -371,8 +371,7 @@ function leanLine(assessment: SubmissionAssessment): string {
 }
 
 // ---------------------------------------------------------------------------
-// THE PROMPT VARIABLES — the facts `buildTriagePrompt` used to interpolate in TS, handed
-// to the REGISTRY template instead. The prose all lives in the template now (so the
+// THE PROMPT VARIABLES — facts handed to the REGISTRY template. The prose lives in the template so
 // operator can tune the verdict register), and the sweep supplies only the data. The
 // signals arrive PRE-JOINED as one string (the renderer has no loops). These names MUST
 // match the `variables` array of the `triage_verdict` registry entry exactly, or the

@@ -71,11 +71,11 @@ export type SearchExampleIcon = "coordinate" | "sonic" | "token";
  * of them to be answered by a tier that does not involve a model — a coordinate lookup, an indexed
  * entity read, FTS5, or the anchored vector scan (docs/search.md, tiers 1–3½).
  *
- * The list used to carry a natural-language filter query ("tracks in A minor above 170 bpm") to
- * teach the LLM tier. It came out because the LLM tier is NONDETERMINISTIC BY CONSTRUCTION: the
- * same sentence parsed once to `{bpmMin, key}` and returned rows, and once to `{bpmMin, key, text:
- * "tracks"}` — where the stray leftover word narrowed the result set to nothing. A worked example
- * that is a coin flip is not a worked example, and this list is the one place in the product that
+ * The list excludes natural-language filter examples because the LLM tier is NONDETERMINISTIC BY
+ * CONSTRUCTION. The same sentence can produce `{bpmMin, key}` and return rows, or produce
+ * `{bpmMin, key, text: "tracks"}` and let the stray leftover word narrow the result set to nothing.
+ * A worked example that is a coin flip is not a worked example, and this list is the one place in
+ * the product that
  * promises otherwise. The language tier is still there and still answers; it is simply not
  * something to advertise with a query that might come back empty.
  *

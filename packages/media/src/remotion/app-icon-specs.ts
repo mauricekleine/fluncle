@@ -2,8 +2,8 @@
 // (root.tsx maps them to <Still>s) and the render scripts.
 //
 // Two sets. APP_ICON_SPECS is the CANDIDATE set (render-app-icons.ts → the
-// gitignored out/, for the operator's taste pick — resolved 2026-07-12: variant
-// "traveler", plain Deep Field). MOBILE_ASSET_SPECS is the PRODUCTION set
+// gitignored out/, for the operator's taste pick: variant "traveler", plain Deep Field).
+// MOBILE_ASSET_SPECS is the PRODUCTION set
 // (render-mobile-assets.ts → apps/mobile/assets/, committed): the picked icon
 // master plus its two Expo siblings, the Android adaptive-icon foreground and
 // the splash mark. All render at the 1024×1024 master size (Expo's recommended
@@ -94,8 +94,8 @@ export type MobileAssetSpec = {
   variant: AppIconVariant;
 };
 
-// The production mobile assets — the operator's pick (variant "traveler",
-// 2026-07-12) plus its Expo siblings. render-mobile-assets.ts renders these to
+// The production mobile assets — the operator's "traveler" pick plus its Expo siblings.
+// render-mobile-assets.ts renders these to
 // apps/mobile/assets/, which app.config.js references; they are COMMITTED
 // files (like the OG card), regenerated + re-committed when the design changes.
 export const MOBILE_ASSET_SPECS: readonly MobileAssetSpec[] = [

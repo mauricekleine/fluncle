@@ -12,8 +12,8 @@ import {
 // The ADMIN MUTATION ORIGIN GUARD, both halves: the pure helper (env.ts) and the
 // oRPC middleware that applies it (orpc-auth.ts `adminAuth`).
 //
-// WHAT IT DEFENDS. An admin mutation carried by the browser's grant COOKIE used to
-// have exactly one CSRF brake: `SameSite=Lax`. Lax is SITE-scoped (eTLD+1), so a
+// WHAT IT DEFENDS. `SameSite=Lax` is insufficient as the only CSRF brake on an admin mutation
+// carried by the browser's grant COOKIE. Lax is SITE-scoped (eTLD+1), so a
 // request from any `*.fluncle.com` host is same-site and DOES carry the grant, and
 // Chrome's "Lax-allowing-unsafe" intervention additionally lets a top-level
 // cross-site POST through for two minutes after the cookie is set. Requiring the

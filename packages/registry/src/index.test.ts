@@ -211,8 +211,7 @@ assert.ok(
   "liveSurfaces excludes every pending surface",
 );
 
-// Fluncle Lens went live on the Chrome Web Store (2026-06-29): present in the
-// catalog, no longer pending, and surfaced as a `secondary` web entry.
+// Fluncle Lens is present in the catalog, live, and surfaced as a `secondary` web entry.
 const lens = SURFACES.find((surface) => surface.name === "extension.lens");
 assert.ok(lens, "the Fluncle Lens surface is registered");
 assert.notEqual(lens?.pending, true, "the Fluncle Lens surface is live (not pending)");

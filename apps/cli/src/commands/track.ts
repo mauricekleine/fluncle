@@ -147,9 +147,8 @@ const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptio
 // The RE-RENDERABLE-SOURCE contract: the three artifacts that MUST accompany any
 // footage upload so the R2 bundle stays a complete, re-renderable source and its
 // render.json stays in sync with the DB ledger. Shipping footage WITHOUT these
-// desyncs the bundle — the 2026-07 partial-upload regression (footage/social/poster
-// uploaded, composition/props/render left stale). Keyed by conventional filename so
-// the error names exactly what to add.
+// desyncs the bundle when footage/social/poster upload without composition/props/render. The fields
+// are keyed by conventional filename so the error names exactly what to add.
 const RERENDER_CONTRACT_FIELDS: ReadonlyArray<{ file: string; option: keyof TrackVideoOptions }> = [
   { file: "composition.tsx", option: "composition" },
   { file: "props.json", option: "props" },
@@ -324,10 +323,8 @@ export async function trackVideoCommand(
 
   // Phase 2: PUT each file straight to its presigned URL. The two ~99MB footage
   // masters stream via Bun.file so they are never buffered into memory; everything
-  // small (the JSON/text artifacts, posters, plates) is BUFFERED instead — the
-  // 2026-07-14 render-box crash (Bun 1.3.14 Linux x64 segfaulted repeatedly while
-  // PUTting the small bundle artifacts, killing the ship mid-flight) implicates the
-  // streamed-small-body path, and buffering a few-KB file costs nothing. The
+  // small (the JSON/text artifacts, posters, plates) is BUFFERED instead because the
+  // streamed-small-body path is unstable and buffering a few-KB file costs nothing. The
   // Content-Type MUST match the one baked into the signature, or R2 returns
   // SignatureDoesNotMatch.
   const STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024;
@@ -400,10 +397,8 @@ export async function trackVideoCommand(
 // Reads the bundle's render.json once and returns the string fields the finalize
 // call needs (vehicle/grain/register — the diversity ledgers — plus model/reasoning).
 // A missing or unparseable value leaves that field absent (the caller defaults) and
-// never FAILS the upload — but it no longer passes SILENTLY: vehicle/grain/register
-// are the homogenisation evidence (docs/planning/homogenisation-evidence.md), and
-// three 2026-07 renders shipped as unlabelled holes in that ledger before this warn
-// existed. The warning lands on stderr, so the render conductor's log carries it and
+// never FAILS the upload. vehicle/grain/register are the homogenisation evidence
+// (docs/planning/homogenisation-evidence.md), so missing fields warn on stderr and
 // the ship is auditable after the fact.
 type RenderManifestField = "grain" | "model" | "palette" | "reasoning" | "register" | "vehicle";
 

@@ -300,10 +300,8 @@ export async function main(): Promise<void> {
   console.log(JSON.stringify(buildLiveSummary({ at, poll, posted })));
 }
 
-// ONE bounded retry before exiting 1: the every-minute poll sees a transient upstream
-// blip a handful of times a day; each used to fire a Discord alert the very next tick
-// self-healed — pure noise. A PERSISTENT failure still exits 1 (and alerts) after the
-// in-tick retry misses too.
+// ONE bounded retry absorbs a transient upstream blip. A persistent failure still exits 1 and
+// alerts after the in-tick retry misses too.
 if (import.meta.main) {
   main().catch(async (error) => {
     log(`poll failed, retrying once: ${error instanceof Error ? error.message : String(error)}`);

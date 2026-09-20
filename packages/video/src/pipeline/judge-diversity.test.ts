@@ -155,9 +155,8 @@ describe("evaluateStructureGate", () => {
   });
 
   // ── the all-representational feed: register no longer softens the gate ──────
-  // Operator ruling 2026-07-20 made the automated feed all-representational (see
-  // assign-video-axes.ts), so representational is a PREREQUISITE, not a rare register
-  // whose repeats deserved a pass. The earlier representational→WARN demotion is gone: a
+  // The automated feed is all-representational (see assign-video-axes.ts), so representational
+  // is a PREREQUISITE, not a rare register whose repeats deserve a pass. A
   // same-family repeat inside the FAIL window is a hard FAIL regardless of register — the
   // subject-KIND rotation the fingerprint can't see is the plate-subject gate's job.
   test("a representational-pair same-family repeat inside the FAIL window FAILS (no demotion)", () => {

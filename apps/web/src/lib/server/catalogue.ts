@@ -2413,8 +2413,8 @@ export type CatalogueSummary = {
 // ── The cached summary — the six counts come OFF the hot path ─────────────────────────────────
 //
 // The six counts describe the WHOLE catalogue, so computing them live is O(all catalogue): a
-// six-way conditional aggregate over every `tracks` row with no `findings` row. That scan used to
-// run on EVERY page load, every focus refetch, and every mutation invalidation — and the crawler
+// six-way conditional aggregate over every `tracks` row with no `findings` row. Running that scan
+// on page loads, focus refetches, or mutation invalidations is unbounded because the crawler
 // grows `tracks` by the thousand, so its cost is unbounded (measured ~10 s of pure query time).
 //
 // So the counts move off the request path, the same shape as the ranking itself (docs/the-ear.md

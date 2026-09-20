@@ -7,18 +7,11 @@
 // (newsletter-sweep.sh) the cron runner execs Fridays 15:00 Amsterdam — see that
 // file's header for the `host-timer` wire-up and ../cron/README.md.
 //
-// WHY THIS REPLACED THE AGENT LOOP. The newsletter used to be an AGENT cron (a
-// model-driven conversation that authored + persisted + offered the Send button). On
-// 2026-06-27 a single triggered run flailed for 83 model calls / ~$9.61 of OpenRouter
-// credit (it hand-rolled the shell for the CLI call, fumbled quoting, and — once the
-// new empty-edition guard started rejecting its hollow drafts — retried into a storm
-// with no iteration cap). This sweep moves the newsletter onto the SAME hybrid
-// `--no-agent` pattern as note/observe: everything deterministic except ONE bounded
-// `claude -p` authoring call. One call, not 83; a hard ceiling on cost; and the
-// authoring runs on the Claude SUBSCRIPTION (CLAUDE_CODE_OAUTH_TOKEN), not OpenRouter,
-// so it burns zero per-token credit.
+// This sweep uses the same hybrid `--no-agent` pattern as note/observe: everything deterministic
+// except ONE bounded `claude -p` authoring call. The single-call limit bounds cost. Authoring runs on the Claude
+// subscription (CLAUDE_CODE_OAUTH_TOKEN), not OpenRouter, so it uses no per-token credit.
 //
-// THE JOB, in order (mirrors the old doctrine, minus the agent):
+// THE JOB, in order:
 //   1. MISS-RECOVERY (deterministic): `fluncle admin newsletter list --json`. If an
 //      unsent draft already exists (status `draft`, no number), DO NOT author a new
 //      one — re-offer THAT draft (re-emit the operator summary) and exit. Its finds
@@ -401,9 +394,8 @@ function priorWhysBlock(priorWhys: string[]): string {
 }
 
 // ---------------------------------------------------------------------------
-// THE PROMPT VARIABLES — the facts `buildAuthoringPrompt` used to interpolate in TS,
-// handed to the REGISTRY template instead. The prose (the JSON shape, the voice rails,
-// the single-list rule) all lives in the template now, and the sweep supplies only the
+// THE PROMPT VARIABLES — facts handed to the REGISTRY template. The prose (the JSON shape, the
+// voice rails, the single-list rule) lives in the template, and the sweep supplies only the
 // data. These names MUST match the `variables` array of the `newsletter_edition` registry
 // entry exactly, or the template renders holes.
 // ---------------------------------------------------------------------------

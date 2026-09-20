@@ -103,7 +103,7 @@ assertEqual(withGalaxyAndMixtape.length, 3, "artist, galaxy, and mixtape groups 
 assertEqual(withGalaxyAndMixtape[1]?.heading, "Galaxies", "galaxies follow albums");
 assertEqual(withGalaxyAndMixtape[2]?.heading, "Mixtapes", "mixtapes come last");
 
-// 9. Track partitioning (operator ruling 2026-07-12): certified "Fluncle's Findings"
+// 9. Track partitioning: certified "Fluncle's Findings"
 //    ALWAYS before uncertified "Tracks", order preserved within each, empty groups dropped.
 function hit(trackId: string, certified: boolean): SearchHit {
   return { artists: ["Netsky"], certified, title: trackId, trackId };

@@ -468,8 +468,8 @@ describe("listLabels (the read, and the crawler's seed set)", () => {
     expect((await listLabels("undecided")).map((label) => label.slug)).toEqual(["chelou"]);
   });
 
-  // The logo rides the shared owned-cover ladder now (a `/cdn-cgi/image` rendition of the R2
-  // master with the `?v` vintage on the source), not the raw object it used to be.
+  // The logo rides the shared owned-cover ladder: a `/cdn-cgi/image` rendition of the R2
+  // master with the `?v` vintage on the source, never the raw object.
   it("surfaces the label's own logo when a resolved image_key exists, undefined otherwise", async () => {
     await seedFinding("t1", "Hospital Records");
     await seedFinding("t2", "Anjunabeats");
@@ -1154,7 +1154,7 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
       seedState: "enabled",
       slug: "med-school",
     });
-    // Loser is the slug-split twin: a WRONG MBID (the 2026-07-18 mis-resolve class) but it does
+    // Loser is the slug-split twin: a WRONG MBID, but it does
     // carry a founding date the canonical lacks.
     await insertFullLabel({
       foundingDate: "1996",

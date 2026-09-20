@@ -304,7 +304,7 @@ async function main(): Promise<void> {
     await seedEntities(entityCount);
   }
 
-  // The numbered-page model (the 2026-07-19 late-row-lookup follow-up): step 1 pages the bare ids
+  // The numbered-page model: step 1 pages the bare ids
   // (`limit ? offset ?`, no SELECT-list subqueries — the shape the OFFSET walk pays), step 2
   // hydrates exactly one page's ids with the full column set, and the pager's `count(*)` runs
   // beside them. A DEEP page is the shape the one-step read blew up on (it evaluated the per-row

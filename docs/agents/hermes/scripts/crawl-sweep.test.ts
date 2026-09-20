@@ -338,8 +338,8 @@ describe("crawl-sweep phase protocol", () => {
   );
 
   // ── THE BATCHED COMMIT ──────────────────────────────────────────────────────────────────────
-  // One claim, TWO admitted phases: its prepare and its commit. Before batching a six-node claim
-  // took seven, and the ~15-30s of pure lease toll a node paid was paid per node.
+  // One claim requires TWO admitted phases: its prepare and its batched commit. The batch pays the
+  // ~15-30s lease toll once for all six nodes.
 
   test(
     "settles a whole claim in ONE admitted commit phase when the Worker advertises the batch",
@@ -488,7 +488,7 @@ describe("crawl-sweep phase protocol", () => {
         partial: false,
         throttled: true,
         throttles: 1,
-        // The skip breakdown the receipt always carried and the summary used to drop.
+        // The summary preserves the receipt's skip breakdown.
         tracksSkippedArtistRule: 2,
         tracksSkippedHeld: 2,
         tracksSkippedLabelGate: 2,

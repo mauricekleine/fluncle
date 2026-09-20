@@ -1,9 +1,8 @@
 // The feed card's action-rail labels as pure state → string maps, so the Chrome Rule
 // (voice.md §4: one stable literal label per control; the icon + the gold tint carry
 // the state, never the word) is pinned by a test and not just by the JSX. A label that
-// flips per press — "Sound"→"Muted" — is exactly the bug this guards (ratified
-// 2026-07-11). The screen-reader hint DOES name the action, since a11y wants the verb;
-// the visible chrome stays put.
+// flips per press — "Sound"→"Muted" — violates that rule. The screen-reader hint DOES name the
+// action, since accessibility needs the verb; the visible chrome stays put.
 
 export type RailControl = {
   /** Whether the control reads as "on" — drives the gold tint + accessibilityState. */

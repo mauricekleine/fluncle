@@ -2140,10 +2140,9 @@ describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403
 // Two claims are pinned here, and the second one is pinned with the REAL detector rather than
 // by reasoning about the vocabulary:
 //
-//   1. EVERY challenge is counted. The re-roll fires at most once per track-run, and the log
-//      line used to live inside that guard — so the 610 lines two days of box output produced
-//      were "runs that hit their FIRST challenge", a floor, and no instrument could tell an
-//      operator whether a change to the challenge rate worked.
+//   1. EVERY challenge is counted. The re-roll fires at most once per track-run, but logging only
+//      inside that guard would count runs that hit a first challenge rather than every challenge,
+//      hiding whether the challenge rate changed.
 //   2. The wording each line carries is what `countDistressLines` scores. A re-rolled
 //      challenge is recoverable friction on a healthy tick (~12% of runs) and must score
 //      ZERO — at that rate a scoring line means a `degraded` that can never clear. A challenge
@@ -2589,9 +2588,9 @@ describe("flat search extraction — one seventh of the bytes, on every search t
   });
 
   test("THE CEIL IS ABSORBED — the guard is max(3s, 3%) and a flat duration rounds UP by at most 1s", () => {
-    // The one thing flat extraction loses: a listed duration is the CEIL of the rendered length
-    // (+1s on ~47% of ids measured 2026-08-01). The capture guard's floor is three whole seconds,
-    // so a one-second ceil cannot move a candidate across it in either direction.
+    // A listed duration is the CEIL of the rendered length, so it can add at most one second. The
+    // capture guard's floor is three whole seconds, so that ceil cannot move a candidate across
+    // the guard in either direction.
     const targetMs = 217_000;
 
     // The exact length, and the same length ceiled — both still inside the guard.
@@ -2788,8 +2787,8 @@ describe("RUNG 1 — the Topic art track, served on metadata alone", () => {
   });
 
   test("AMBIGUITY — the primary artist's channel wins a split credit", () => {
-    // A split credit puts the same delivered master on each credited artist's channel. Every tie
-    // the 2026-08-01 spike saw was that, so the preference is the row's PRIMARY artist.
+    // A split credit puts the same delivered master on each credited artist's channel, so the
+    // preference is the row's PRIMARY artist.
     const pick = pickTopicCandidate(
       [
         { channel: "Metrik - Topic", durationSec: 217, id: "secondary", title: "Rio" },

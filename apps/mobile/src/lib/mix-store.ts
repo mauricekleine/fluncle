@@ -75,7 +75,7 @@ export function serialize(state: MixState): string {
   return JSON.stringify({
     chain: state.chain,
     // The account set this chain was opened from (if any) — Save set updates it in
-    // place instead of minting a sibling (operator flag 2026-07-14). The name rides too,
+    // place instead of minting a sibling. The name rides too,
     // so the Save-set dialog prefills with it.
     sourceSetId: state.sourceSetId,
     sourceSetName: state.sourceSetName,

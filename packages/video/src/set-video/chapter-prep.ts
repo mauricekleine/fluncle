@@ -1,7 +1,7 @@
 // Unit O · chapter prep — turn an archived per-track composition into a
 // chapter-ready one for the hour-long set render.
 //
-// THE PROBLEM (proven by the 2026-07-03 de-risk spike on 012.2.4L): an archived
+// THE PROBLEM: an archived
 // composition re-drives correctly at chapter length INSIDE a <Sequence> — Remotion
 // scopes `useVideoConfig().durationInFrames` to the sequence and `useCurrentFrame()`
 // to its start, so everything driven off `useJourney()`/`u_progress`/the audio bus

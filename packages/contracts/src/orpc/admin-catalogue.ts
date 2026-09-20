@@ -57,7 +57,7 @@ import * as z from "zod";
  *                    actions): rows he took out of the telescope. A REVERSIBLE veto, its own quiet
  *                    lens so a dismissal is never a black hole — each row carries a Restore.
  *   - `unmatched`  — the terminal "no acceptable candidate" verdicts, most-recently attempted
- *                    first: the observability window the 2026-07-14 audit lacked. Read-only;
+ *                    first: the terminal-capture observability window. Read-only;
  *                    the rescue is `requeue_unmatched_captures`.
  *   - `failed`     — the download-failure pile (cooling toward retry or past the failure cap),
  *                    most-recently attempted first. `unmatched`'s sibling window.
@@ -119,8 +119,7 @@ export const CatalogueTrackItemSchema = z
     /**
      * The capture state machine's verdict on this row (`pending` / `done` / `failed` /
      * `unmatched` / `wrong-audio` / the sticky cleared states), or null (never attempted).
-     * The observability field the 2026-07-14 unmatched audit had to pull a prod snapshot
-     * for — with it, "what is failing and why" is one filtered read.
+     * With this observability field, "what is failing and why" is one filtered read.
      */
     captureStatus: z.string().nullable(),
     /**
@@ -372,7 +371,7 @@ export const clearWrongAudio = oc
  * `requeue_unmatched_captures` → `POST /admin/catalogue/captures/requeue-unmatched`
  * (operationId `requeueUnmatchedCaptures`).
  *
- * OPERATOR tier — the terminal-`unmatched` rescue (the 2026-07-14 unmatched audit). An
+ * OPERATOR tier — the terminal-`unmatched` rescue. An
  * `unmatched` capture verdict is terminal by design so the metered budget never re-burns a
  * hopeless search — but when the SEARCH itself improves (the music-search ladder, the
  * normalized query variant), the old verdicts describe the old matcher, not the tracks: the
@@ -404,8 +403,7 @@ export const requeueUnmatchedCaptures = oc
  * OPERATOR tier — clear the named rows' `spotify_anchor_attempted_at` re-ask stamp so the next
  * `fluncle-anchor` tick attempts them again NOW instead of after the 14-day backoff. The
  * operator's lever for "the resolver just got better, give these rows their shot" — a matcher
- * fix, a recovered ISRC, a freshly-reviewed candidate (three separate ad-hoc prod UPDATEs did
- * exactly this on 2026-07-26/27; this op is that act made sanctioned, audited, and one line).
+ * fix, a recovered ISRC, or a freshly reviewed candidate.
  *
  * Deliberately narrow: it clears ONLY the stamp — `spotify_anchor_attempts` (the lifetime cap,
  * #893) stays honest, so a requeue never resets a row's bounded spend; already-anchored rows are

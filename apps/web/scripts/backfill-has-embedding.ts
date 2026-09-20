@@ -4,8 +4,8 @@
  * embedding-presence mirror (docs/db-scale-backlog Wave 2 #4) against the vectors themselves.
  *
  * WHAT IT MIRRORS. `has_embedding` is `1` iff a `track_embeddings` row exists (schema.ts §
- * `trackEmbeddings`), so this reconciles against the SATELLITE — not against the legacy
- * `tracks.embedding_blob` column it used to read, which is now unread and awaiting its drop. It
+ * `trackEmbeddings`), so this reconciles against the SATELLITE. The inline
+ * `tracks.embedding_blob` compatibility column is unread and awaiting removal. This pass
  * runs immediately AFTER `backfill-track-embeddings.ts` in `db:backfill` for that reason: the
  * satellite must hold the moved history before the flag is derived from it, or this pass would
  * cheerfully zero every mirror on the deploy that lands the split.

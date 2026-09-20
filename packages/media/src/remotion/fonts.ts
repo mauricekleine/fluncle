@@ -6,12 +6,8 @@
 // may ask for it.
 //
 // THE CANON TRAVELS RULE (DESIGN.md §3). A render environment has no system fonts
-// to inherit and no stylesheet to cascade from, so it must EMBED the faces itself.
-// This package used to embed Oxanium ONLY, and the /galaxy OG card's tagline fell
-// through to a bare `sans-serif` — which resolves to Helvetica on a Mac and DejaVu
-// Sans on a Linux render box. The same committed asset rendered in two different
-// typefaces depending on where it was built: exactly the "three renderings, only one
-// of which we ever looked at" bug the canon exists to kill. Both faces ship now.
+// to inherit and no stylesheet to cascade from. Embed both faces so assets render the same
+// typography on every host.
 //
 // THE ONE BOX RULE (DESIGN.md §3). Both faces are re-cut to the SAME 1.25em metric
 // box via ascent/descent/line-gap overrides, so that (ascent − descent) equals that

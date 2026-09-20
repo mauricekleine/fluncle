@@ -15,9 +15,9 @@ import spaceGrotesk700 from "./fonts/space-grotesk-700.ttf?inline";
 //   unusable here. It takes TTF/OTF/WOFF.
 // - A Worker has no system fonts, no `assets` binding (wrangler.jsonc), and cannot fetch
 //   its own origin (that loops to the SPA fallback — see mixtape-cover.ts). The bytes have
-//   to be in the bundle. These three surfaces used to `loadGoogleFont()` — a render-time
-//   fetch to Google — which broke the self-hosting rule (DESIGN.md §3: "All three faces are
-//   SELF-HOSTED, and that is a rule") and put a third-party network hop on the critical path
+//   to be in the bundle: render-time Google font fetches break the self-hosting rule
+//   (DESIGN.md §3: "All three faces are SELF-HOSTED, and that is a rule") and put a
+//   third-party network hop on the critical path
 //   of every link preview.
 // - Satori has no `@font-face`, so it reads each TTF's own hhea/OS/2 tables and the CSS
 //   ascent-override/descent-override in styles.css cannot reach it. The One Box Rule is

@@ -109,7 +109,7 @@ const ECHO_RETRIES = 1;
 // could never be voiced however it was rewritten. THE NAME EXEMPTION
 // (apps/web/src/lib/server/observation.ts) fixes that at the source; this bounds whatever is next.
 //
-// NO BYPASS. The operator's ruling (2026-07-30): an observation is optional editorial and an absent
+// NO BYPASS. An observation is optional editorial and an absent
 // one is a good state, so an exhausted finding is simply left UNVOICED. Gate-failed copy is never
 // rendered and published to close a queue — and here it would also spend Cartesia credits doing it.
 //
@@ -472,8 +472,7 @@ export function buildAuthoringPrompt(
 }
 
 // ---------------------------------------------------------------------------
-// THE PROMPT VARIABLES — the facts `buildAuthoringPrompt` used to interpolate in TS,
-// handed to the REGISTRY template instead. The prose all lives in the template now (so
+// THE PROMPT VARIABLES — facts handed to the REGISTRY template. The prose lives in the template so
 // the operator can tune every rail), and the sweep supplies only the data.
 //
 // `noContextNote` is the inverse flag the template's `{{#if noContextNote}}` arm reads:
@@ -799,7 +798,7 @@ function logExhausted(id: string): void {
  * is now permanently out of this sweep's reach and the summary has to say so. Returns null when the
  * caller should keep the delivery's own outcome.
  *
- * There is no render-anyway branch here, on purpose (the operator's 2026-07-30 ruling). The last
+ * There is no render-anyway branch here, on purpose. The last
  * refused draft is discarded exactly like the first two: a gate-failed read is never rendered.
  */
 function settleBudget(

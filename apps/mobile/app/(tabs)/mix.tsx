@@ -4,8 +4,8 @@
 // touches this feature). Name a few artists you like, pick something to open with, and the
 // engine ranks what mixes in clean after it; the rail re-ranks after every add.
 //
-// A STEPPED FLOW (operator ruling 2026-07-12 — the web's one-page layout buried the openers
-// below a full artist grid on a phone), driven by the chain plus one step flag:
+// A STEPPED FLOW separates the choices so the artist grid cannot bury the openers on a phone. It
+// is driven by the chain plus one step flag:
 //   1 taste   → the artist grid, with one footer CTA onward ("Pick an opener" — picking
 //               zero artists is the sanctioned skip; step 2 still has search)
 //   2 opener  → what to open with: the seeded artists' own tracks, and an archive search
@@ -103,8 +103,8 @@ export default function MixScreen() {
   // save attempt so a stale line never lingers over a fresh action.
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState("");
-  // The Save-set dialog (the one save-set contract on web AND mobile, operator ruling
-  // 2026-07-14): the pill opens a small overlay with a name field + Save/Cancel, rather than
+  // The Save-set dialog follows the one save-set contract on web AND mobile: the pill opens a
+  // small overlay with a name field + Save/Cancel, rather than
   // saving straight away. The name prefills with the stable reference's name when editing.
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
@@ -122,8 +122,8 @@ export default function MixScreen() {
       const bodyPayload = buildSaveSetBody(name, serializeSet(tokens), serializeTaste(taste));
       const savedName = name.trim();
       // A chain opened from (or already saved to) an account set UPDATES that set in
-      // place — Save set never mints siblings of the set you are editing (operator flag
-      // 2026-07-14). A fresh chain POSTs once, then adopts the returned id + name so every
+      // place — Save set never mints siblings of the set you are editing. A fresh chain POSTs once,
+      // then adopts the returned id + name so every
       // save after the first is also an update. A 404 on the PATCH (the set was deleted
       // on another device) falls back to creating anew and adopting THAT.
       let response: Response;
@@ -258,7 +258,7 @@ export default function MixScreen() {
   );
 }
 
-// The Save-set dialog — the same small overlay the web renders (operator ruling 2026-07-14):
+// The Save-set dialog — the same small overlay the web renders:
 // a name field, a Save button, a Cancel button. A React Native `Modal` over a transparent
 // scrim, a small centered card in the app's dark, quiet register (the account modal's field
 // styles are the sibling). Save is disabled while the live chain is empty or the name is blank
@@ -549,8 +549,7 @@ function ChainList({ chain, onRemove }: { chain: MixTrack[]; onRemove: (token: s
 // row carries its reason chip (the whole explanation — no number ever). Copy reused verbatim.
 // Loading rows for the pending lists (the rail re-ranking, openers, live search): the
 // same quiet skeletons as the cold start. An empty-state line during a fetch is a false
-// claim (operator flag 2026-07-14 — "Quiet sector tonight" rendered while the rail was
-// still ranking), so pending ALWAYS reads as skeletons, never as an answer.
+// claim, so pending ALWAYS reads as skeletons, never as an answer.
 function PendingRows({ count = 3 }: { count?: number }) {
   return (
     <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -646,8 +645,7 @@ function useIsSignedIn(): boolean {
   const [signedIn, setSignedIn] = useState(false);
 
   // Re-probe on every FOCUS, not once on mount: the tab stays mounted for the app's whole
-  // life, so a mount-only probe never learns about a sign-in that happened on the account
-  // modal (operator find 2026-07-14 — signed in, and the "Save set" pill never appeared).
+  // life, so a mount-only probe never learns about a sign-in that happened on the account modal.
   // Returning to the Decks after the modal closes is a focus event, so the pill catches up.
   useFocusEffect(
     useCallback(() => {

@@ -422,7 +422,7 @@ describe("noteOne (the bounded re-author, across ticks)", () => {
     expect(authorings()).toBe(MAX_NOTE_ATTEMPTS);
   });
 
-  // THE OPERATOR'S RULING (2026-07-30), and the one place the siblings differ from the bio sweep:
+  // THE OPERATOR'S RULING, and the one place the siblings differ from the bio sweep:
   // there is NO final-attempt bypass. A note is optional editorial and an absent one is a good
   // state, so gate-failed copy is never published to close a queue.
   test("NOTHING is ever stored for a finding whose drafts the gate refused", async () => {

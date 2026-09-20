@@ -239,8 +239,7 @@ describe("trackVideoCommand bundle guard", () => {
       return new Response("", { status: 200 });
     }) as typeof fetch;
 
-    // Real files on disk: small artifacts are BUFFERED before the PUT (the 2026-07-14
-    // render-box hardening), so the upload now reads the path eagerly.
+    // Real files on disk: small artifacts are BUFFERED before the PUT, so the upload reads the path eagerly.
     const dir = await mkdtemp(join(tmpdir(), "fluncle-plates-"));
 
     try {

@@ -86,12 +86,12 @@ const UpdateTrackBodySchema = z.looseObject({
   // other capture side-channels: the handler admits only the two known match kinds.
   sourceVerification: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
-  // THE RE-VERDICT ASK (operator ruling 2026-07-31) — re-rule the officialness of the id this row
+  // THE RE-VERDICT ASK — re-rule the officialness of the id this row
   // ALREADY holds, under whatever the current rule is. Carries no verdict and no id: the server
   // re-runs its own keyless oEmbed check. It can only PROMOTE a row off 0/NULL; a row already at 1
   // is left alone, so a re-ask can never retract a link. ADDITIVE AND OPTIONAL like the rest.
   youtubeReverdict: z.unknown().optional(),
-  // THE PROVENANCE BACKFILL'S VERDICT (operator ruling 2026-07-31) — what the capture sweep's
+  // THE PROVENANCE BACKFILL'S VERDICT — what the capture sweep's
   // PROVENANCE phase found when it re-ran the ladder over an already-captured row and threw the
   // candidate bytes away. Five values, and each one is a different claim:
   //
@@ -116,7 +116,7 @@ const UpdateTrackBodySchema = z.looseObject({
   // capture verdict would be a lie about the archive. ADDITIVE AND OPTIONAL on the Deezer/#1049
   // precedent: an old baked box build that never sends it keeps working unchanged.
   youtubeVerification: z.unknown().optional(),
-  // THE CAPTURE'S YOUTUBE PROVENANCE (operator ruling 2026-07-31) — the id of the upload whose
+  // THE CAPTURE'S YOUTUBE PROVENANCE — the id of the upload whose
   // audio a fingerprint gate VERIFIED for this recording. ADDITIVE AND OPTIONAL, on the Deezer
   // precedent: the baked box scripts freshen asynchronously after a deploy, so an old sweep that
   // never sends this field must keep working unchanged, and it does. LOOSE like the rest: the
@@ -1180,8 +1180,7 @@ export const TrackWorkScopeSchema = z.enum(["all", "catalogue", "findings"]).met
  * `artistYoutubeChannelIds`) are the trust + re-derive signals the `fluncle-capture` sweep
  * reads: the artist-own-channel trust tier, the failure-count backoff, and the capture→enrich
  * re-derive predicate. They ride ONLY the `capture` worklist (absent for `analyze`/`embed`) and
- * are omitted when empty, so the migrated sweep parses the exact shape the finding-only capture
- * queue used to hand it.
+ * are omitted when empty, so every sweep parses one exact capture-work shape.
  */
 export const TrackWorkItemSchema = z
   .object({

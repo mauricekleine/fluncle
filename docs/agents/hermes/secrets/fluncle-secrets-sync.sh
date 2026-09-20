@@ -5,12 +5,10 @@
 # state dir the hermes container sees). Atomic (temp -> install) + sanity-checked, so
 # an op outage can never leave a partial/empty secrets file. Run at boot + on a timer.
 #
-# ── WHY IT REPORTS A RUN (added 2026-07-29; RUN-01) ───────────────────────────
-# This unit is the one every sweep depends on and it wrote no run record of any kind: a
-# `journalctl` line nobody reads, and nothing on /status. A silent failure here does not
-# break loudly — it leaves the box holding STALE credentials, and every sweep downstream
-# keeps reporting its own cheerful `ok` until a token expires. So every pass now ends with a
-# JSON summary line — `checked` (secret targets attempted), `produced` (files actually
+# ── RUN REPORTING ─────────────────────────────────────────────────────────────
+# A silent failure here leaves the box holding stale credentials while downstream sweeps may
+# remain healthy until a token expires. Every pass ends with a JSON summary line — `checked`
+# (secret targets attempted), `produced` (files actually
 # installed), `errors`, `queue_depth` (targets left unwritten) — and POSTs that line to the
 # run ledger. The line states NO `ok`: the Worker derives the verdict from the exit code and the
 # error count, and a summary that grades itself is rejected at the edge.
@@ -62,12 +60,9 @@ container_env() {
 # here: the endpoint path, the five body fields, and the Bearer auth. If any of them changes in
 # the workspace, change it in all four copies.
 #
-# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN, and this cost a shipped bug: the four copies once
-# agreed with EACH OTHER on `/api/v1/admin/runs/events` while the contract declared
-# `/admin/telemetry/runs`, so every POST 404'd, the `|| true` swallowed it, the ledger stayed
-# empty, and both test suites were green. Byte-equality is a closed loop. So run-events.test.ts
-# now RESOLVES this path against the workspace's own surfaces (the contract op paths + the
-# `apps/web/src/routes/api/**` file routes) — the assertion that crosses the boundary.
+# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN. Byte-equality among four copies is a closed loop, so
+# run-events.test.ts RESOLVES this path against the workspace's own surfaces: the contract op paths
+# and the `apps/web/src/routes/api/**` file routes.
 #
 # THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
 # `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for

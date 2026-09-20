@@ -1,23 +1,14 @@
 // THE EXPECTED-WRITERS GUARD — the prober's `AUTOMATION_CRONS`, `@fluncle/registry`'s cron
 // probeConfigs, and the committed systemd timer units must all say the same thing.
 //
-// WHY THIS TEST EXISTS. Three files state one fact — which sweeps run, and how often:
+// Three files state one fact — which sweeps run, and how often:
 //
 //   1. `docs/agents/hermes/*/*.timer`      — the SCHEDULE, and the only one that is true
 //                                            (systemd reads it; the others merely believe it)
 //   2. `@fluncle/registry`'s probeConfig   — what /status calls the cron and how often it ticks
 //   3. `AUTOMATION_CRONS` (the prober)     — the staleness budget a marker is judged against
 //
-// Nothing tested that they agreed, and they didn't. Measured 2026-07-29:
-//
-//   • `fluncle-frontier-refresh` moved from a Friday-07:00 burst to a 15-minute paced drain.
-//     The timer said 15 min, the registry said 15 min, and the prober said SEVEN DAYS — a 3x
-//     staleness budget of 21 days. A drain that died on the 1st would have read `fresh` until
-//     the 22nd. Nobody was careless; the fact simply lived in three places and one was missed.
-//   • `fluncle-timer-watchdog` and `fluncle-secrets-sync` appeared in NO list. Unlike the other
-//     two non-writers (`pin-watch` self-posts `self-deploy`; `fluncle-healthcheck` self-emits
-//     its own row) those two report to nothing at all — including, in the watchdog's case, a
-//     detector whose whole job is noticing silence.
+// This test keeps the schedule, registry freshness budget, and prober roster synchronized.
 //
 // AGENTS.md flags this class explicitly for the Cloudflare watch-paths mirror: "the two lists
 // live in different places with NOTHING testing that they agree." This is that test, for these

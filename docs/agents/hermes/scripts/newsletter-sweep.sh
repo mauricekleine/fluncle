@@ -14,8 +14,7 @@
 # Discord webhook, so it no longer depends on the gateway's `--deliver discord` (retired with
 # the host-timer migration — see ../newsletter-timer/).
 #
-# THE HYBRID MODEL (same shape as note/observe — this REPLACED the old agent loop that
-# flailed 83 calls / ~$9.61 on a single 2026-06-27 run). Everything is deterministic
+# THE HYBRID MODEL uses the same bounded shape as note/observe. Everything is deterministic
 # (the window math, the /api/v1/findings + /api/v1/mixtapes reads, the draft persist) EXCEPT
 # ONE `claude -p` authoring call — Claude Code, SUBSCRIPTION auth via
 # CLAUDE_CODE_OAUTH_TOKEN, NOT OpenRouter — with READ-ONLY tools so it can load the

@@ -184,12 +184,12 @@ _VERSION_WORDS = {
 # Suffixes that name a version but are NOT distinguishing - they are the original.
 # Mirrors NEUTRAL_DESCRIPTORS in the TS port (apps/web/src/lib/server/track-match.ts) -
 # keep the two in lockstep ("original version" was added there first; a parity run over
-# _split_title caught the drift, 2026-07-27).
+# _split_title catches the drift).
 _NEUTRAL_DESCRIPTORS = {"original mix", "original", "extended mix", "original version"}
 
 # The subset of _VERSION_WORDS strong enough to mark a version even BARE at the end of a
 # title - no parens, no dash ("Paint It Black VIP" vs "Paint It Black (Vip)"; a measured
-# anchor false-miss, 2026-07-26). Deliberately narrow: dub/mix/version/edit/flip/extended
+# anchor false-miss). Deliberately narrow: dub/mix/version/edit/flip/extended
 # are genuine title-final words in jungle/DnB, and folding one off a real title would let
 # two different recordings match. Mirrors BARE_TRAILING_VERSION_WORDS in the TS port
 # (apps/web/src/lib/server/track-match.ts) - keep the two in lockstep.
@@ -199,7 +199,7 @@ _BARE_TRAILING_VERSION_WORDS = {
 
 # Token spellings that name the SAME version word. Two platforms writing one recording two
 # ways ("(Air.K & Cephei rmx)" vs "(Air.K & Cephei Remix)") is a measured anchor false-miss
-# (2026-07-26), so the descriptor's tokens are rewritten to one spelling before it becomes
+# so the descriptor's tokens are rewritten to one spelling before it becomes
 # identity. Deliberately tiny - only spellings observed in the wild go in; a new synonym is a
 # one-line addition here. Mirrors DESCRIPTOR_TOKEN_SYNONYMS in the TS port
 # (apps/web/src/lib/server/track-match.ts) - keep the two in lockstep.

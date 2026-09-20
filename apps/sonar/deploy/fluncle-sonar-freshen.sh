@@ -38,11 +38,9 @@
 # run with --dry-run to download + verify + pre-smoke and STOP (the live service is
 # never touched).
 #
-# ── WHY IT REPORTS A RUN (added 2026-07-29; RUN-01) ──────────────────────────
-# This unit posted a /status row and a Discord line and nothing else — no record of a tick
-# that RAN, only of one that had something to say. So the failure it cannot report is the one
-# that matters: a release feed it never reached, tick after tick, while the box quietly stays
-# behind. Every pass now ends with a JSON summary line and POSTs it to the run ledger.
+# ── RUN REPORTING ─────────────────────────────────────────────────────────────
+# Every pass ends with a JSON summary line and POSTs it to the run ledger so an unreachable
+# release feed is visible even when the box has nothing else to report.
 # `checked` is the denominator (0 until the feed actually resolves a commit, so a blind tick
 # is legible AS blind), `produced` counts a swap actually made, `queueDepth` a published build
 # not yet on the box — the pair the ledger's `produced == 0 AND queueDepth > 0` alarm reads.
@@ -155,12 +153,9 @@ PRIOR_LIVE_SHA=""
 # here: the endpoint path, the five body fields, and the Bearer auth. If any of them changes in
 # the workspace, change it in all four copies.
 #
-# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN, and this cost a shipped bug: the four copies once
-# agreed with EACH OTHER on `/api/v1/admin/runs/events` while the contract declared
-# `/admin/telemetry/runs`, so every POST 404'd, the `|| true` swallowed it, the ledger stayed
-# empty, and both test suites were green. Byte-equality is a closed loop. So run-events.test.ts
-# now RESOLVES this path against the workspace's own surfaces (the contract op paths + the
-# `apps/web/src/routes/api/**` file routes) — the assertion that crosses the boundary.
+# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN. Byte-equality among four copies is a closed loop, so
+# run-events.test.ts RESOLVES this path against the workspace's own surfaces: the contract op paths
+# and the `apps/web/src/routes/api/**` file routes.
 #
 # THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
 # `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for

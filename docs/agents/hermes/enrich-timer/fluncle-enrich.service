@@ -19,7 +19,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # its /status marker (cron-output.sh) so the fluncle-healthcheck prober stays honest. Parallel
 # host timers replace the one serial gateway runner (~300s global budget); a staggered
 # OnBootSec spreads the simultaneous 5-min ticks so the latency-sensitive sweeps never pile.
-# Catch-up pace (2026-07-20): the catalogue-analyze arm runs 12 rows/tick (~3,450/day ceiling)
+# Catch-up pace: the catalogue-analyze arm runs 12 rows/tick (~3,450/day ceiling)
 # while capture drains the crawled backlog at ~2,200/day — a measured 2-row tick used 8-15s of
 # its 5-minute window, so 12 stays comfortably inside it. At saturation, delete the -e flag to
 # fall back to the sweep's conservative baked default of 2.

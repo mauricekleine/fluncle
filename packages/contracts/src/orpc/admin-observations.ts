@@ -1,9 +1,7 @@
 // The `admin-observations` domain contract — the SPOKEN sibling of `admin-notes`, plus the
 // authoring read the on-box observation sweep needs.
 //
-// The observations were the worst-measured generated family Fluncle has and the only written
-// family with NO anti-sameness rail (docs/planning/homogenisation-evidence.md, 2026-07-14).
-// This domain ports the notes' proven mechanism to them:
+// Observations use the notes' anti-sameness mechanism (docs/planning/homogenisation-evidence.md):
 //
 //   - `list_observation_neighbours` — AGENT tier read: the sonic neighbourhood's stored
 //     observation scripts (the SPENT moves the box author must route around, and the corpus

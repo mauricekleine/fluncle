@@ -112,7 +112,7 @@ const ECHO_RETRIES = 1;
 // could never be written up however it was rewritten. THE NAME EXEMPTION
 // (apps/web/src/lib/server/observation.ts) fixes that at the source; this bounds whatever is next.
 //
-// NO BYPASS. The operator's ruling (2026-07-30): an entry is optional editorial and a gap is a good
+// NO BYPASS. An entry is optional editorial and a gap is a good
 // state, so an exhausted day simply STAYS A GAP. Gate-failed copy is never published to close a
 // queue.
 //
@@ -425,9 +425,8 @@ function buildSpentMoves(spent: Spent[]): string {
 }
 
 // ---------------------------------------------------------------------------
-// THE PROMPT VARIABLES — the facts the builder below used to interpolate in TS, handed
-// to the REGISTRY template instead. The prose all lives in the template now (so the
-// operator can tune every rail, including the figure-token contract), and the sweep
+// THE PROMPT VARIABLES — facts supplied to the REGISTRY template. The prose lives in the template
+// so the operator can tune every rail, including the figure-token contract, and the sweep
 // supplies only the data. These names MUST match the `variables` array of the
 // `logbook_entry` registry entry exactly, or the template renders holes.
 // ---------------------------------------------------------------------------
@@ -787,7 +786,7 @@ function logExhausted(sector: number): void {
  * permanently out of this sweep's reach and the summary has to say so. Returns null when the caller
  * should keep the delivery's own outcome.
  *
- * There is no publish-anyway branch here, on purpose (the operator's 2026-07-30 ruling). The last
+ * There is no publish-anyway branch here, on purpose. The last
  * refused draft is discarded exactly like the first two: a gate-failed entry never reaches
  * /logbook.
  */

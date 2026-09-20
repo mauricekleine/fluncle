@@ -46,12 +46,9 @@ export const NATIVE_TAB_BAR_HEIGHT = 49;
 // bed joins when it lands) instead of freezing the card on its poster.
 const START_SYNC_WINDOW_MS = 2500;
 
-// OPERATOR RULING 2026-07-12: the scrim returns (third iteration). The previous fix
-// removed the gradient entirely because iteration two had a visible ONSET LINE — its
-// first stop jumped 0→0.35 alpha at 14% of the height, a perceptible edge on light
-// footage. The direction was right; the failure was the hard start. This iteration is a
-// bottom gradient that reaches FULL opacity at the very bottom screen edge (behind the
-// tab bar too) with an IMPERCEPTIBLE onset: many stops on an eased curve where alpha
+// The scrim supports text legibility without flattening the artwork. It reaches FULL opacity at the
+// bottom screen edge (behind the tab bar too) with an IMPERCEPTIBLE onset: many stops on an eased
+// curve where alpha
 // stays under ~0.05 through the first third of the gradient's height, so there is no
 // human-visible start line even on a pure-white cover. The per-glyph shadows below stay
 // — they COMPOSE with the scrim (the caption/rail sit in the gradient's ≥0.7 zone, and
@@ -64,13 +61,11 @@ const TEXT_SHADOW = {
   textShadowRadius: 10,
 } as const;
 
-// THE SCRIM (operator ruling 2026-07-12). A warm near-black (rgb(9,6,3) — never pure
+// THE SCRIM. A warm near-black (rgb(9,6,3) — never pure
 // #000, DESIGN.md) bottom-to-top gradient. Two properties are load-bearing:
 //
 //  1. IMPERCEPTIBLE ONSET AND RAMP — no visible start line AND no visible mid-ramp
-//     banding. Iteration three eased the onset but climbed 0.04→0.30 across 18% of the
-//     height with big slope-jumps between stops — the eye caught the KINKS (Mach
-//     banding), not the darkness. So the alpha now follows one continuous curve —
+//     banding. The alpha follows one continuous curve —
 //     smootherstep((t−0.12)/0.88)^1.15 — sampled at 15 even stops: near-zero through
 //     the first ~28%, no segment's slope jumping against its neighbour, opaque only
 //     at the very bottom. Regenerate the arrays from that formula; never hand-tune
@@ -115,7 +110,7 @@ function scrimHeight(overlayTop: number, screenHeight: number): number {
   return Math.min(screenHeight, overlayTop / 0.28);
 }
 
-// OPERATOR RULING 2026-07-11 (device pass): the firm TEXT_SHADOW above is right for the
+// The firm TEXT_SHADOW above is right for the
 // thin text strokes (caption + rail labels), but on an Ionicons/MaterialCommunityIcons
 // glyph — a large, solid, font-rendered shape — a radius-10, 0.92-alpha shadow smears
 // into a dark blotchy backdrop behind every icon, very visible on light footage. Icons
@@ -145,15 +140,14 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
   // The floor every bottom overlay sits above: the home-indicator inset plus the
-  // floating tab bar (H3 — the caption/date and the bottom rail control used to hide
-  // under it).
+  // floating tab bar (H3), keeping the caption/date and bottom rail controls visible.
   const bottomFloor = insets.bottom + NATIVE_TAB_BAR_HEIGHT;
   // INVARIANT: the rail and the caption share a bottom line. Both bottom overlays anchor
   // their bottom edge here, so the rail's last label ("Sound") bottom-aligns with the
   // caption's last line (the coordinate + Found row) — one line, not two staggered ones
   // (operator device pass). The -24 is the Decks-proven correction (mix.tsx's footer
   // clearance): the iOS 26 floating pill hugs the bottom tighter than inset + bar-height
-  // implies, so the naive sum left a dead band above the bar (operator flag 2026-07-14).
+  // implies. The -24 correction closes the dead band above the bar.
   const bottomLine = bottomFloor - 24;
   // The scrim rises from the opaque bottom edge past the tallest overlay (the rail top)
   // and fades to nothing above it — sized so the rail/caption band sits in its ≥0.7 zone.
@@ -310,7 +304,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         </Animated.View>
       )}
 
-      {/* The scrim (operator ruling 2026-07-12): a warm near-black gradient anchored to
+      {/* The scrim is a warm near-black gradient anchored to
           the bottom edge, opaque at the very bottom (behind the tab bar) and fading to an
           imperceptible onset above the overlays — no visible start line on a light cover.
           Non-interactive so the rail below still takes every tap. */}
@@ -323,11 +317,10 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         style={{ bottom: 0, height: scrimH, left: 0, position: "absolute", right: 0 }}
       />
 
-      {/* Right action rail (TikTok-style): Spotify / Share / Sound. Observation discovery
-          moved to the Radio tab (operator ruling 2026-07-12), so the card rail no longer
-          carries it. Each control keeps ONE stable label (the Chrome Rule); the icon + the
-          gold tint carry state, never the word. Every glyph renders inside a fixed 36×36
-          centered box (styles.railIcon) so all three advance boxes center on the rail axis
+      {/* Right action rail (TikTok-style): Spotify / Share / Sound. Observation discovery belongs
+          to the Radio tab, outside this card rail. Each control keeps ONE stable label (the Chrome
+          Rule); the icon + the gold tint carry state, never the word. Every glyph renders inside a
+          fixed 36×36 centered box (styles.railIcon) so all three advance boxes center on the rail axis
           identically, regardless of the glyph's internal artwork — no per-glyph nudges.
           Icons carry the tight ICON_SHADOW halo; gold marks the active state (Ignition). */}
       <View style={[styles.rail, { bottom: bottomLine }]}>
@@ -457,7 +450,7 @@ const styles = StyleSheet.create({
   // The firm per-glyph shadow that composes over the scrim (operator ruling): every
   // caption glyph carries this warm-dark halo on top of the gradient so it reads on light
   // footage. The rail labels share it; the rail icons use the tighter ICON_SHADOW (the
-  // firm one smeared into a dark blotch behind the solid glyphs — device pass).
+  // solid glyphs need the tighter halo to avoid a dark blotch).
   captionShadow: TEXT_SHADOW,
   // Rail glyphs: the tight halo, not the firm text shadow (see ICON_SHADOW). Every icon
   // renders inside the fixed 36×36 `railIcon` box, so its advance box centers on the rail

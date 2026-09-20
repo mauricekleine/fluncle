@@ -456,7 +456,7 @@ export async function seedE2eData(client: Client): Promise<void> {
 
 /**
  * EVERY track pressed by the seeded label points AT it — the pointer and the raw string say the
- * same thing, which is what production holds and what the fixture used to fake.
+ * same thing, matching the production invariant.
  *
  * `linkTrackToLabel` runs on every publish, so a label's name on `tracks.label` and its id on
  * `tracks.label_id` arrive together; `scripts/backfill-labels.ts` (in the deploy chain) reconciles

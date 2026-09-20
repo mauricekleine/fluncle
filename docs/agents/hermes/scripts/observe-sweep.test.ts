@@ -296,7 +296,7 @@ describe("observeOne (the bounded re-author, across ticks)", () => {
     expect(authorings()).toBe(MAX_OBSERVE_ATTEMPTS);
   });
 
-  // THE OPERATOR'S RULING (2026-07-30): no final-attempt bypass. An observation is optional
+  // THE OPERATOR'S RULING: no final-attempt bypass. An observation is optional
   // editorial, and rendering gate-failed copy would also spend Cartesia credits to publish it.
   test("NOTHING is ever rendered for a finding whose drafts the gate refused", async () => {
     verdict("voice");

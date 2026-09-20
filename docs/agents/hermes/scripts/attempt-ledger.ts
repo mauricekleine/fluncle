@@ -4,13 +4,10 @@
 // REFUSED it?" Read at the top of a tick, written through as it is spent, and consulted before any
 // model is called. It is what makes "keeps failing" BOUNDED, whatever the cause.
 //
-// WHY IT EXISTS. A gate rejection used to be a plain skip that left the item queued with nothing
-// anywhere counting the tries — so "retry" meant "forever". That is not hypothetical: the three
-// entity-bio crons re-authored three slugs ~90 times each over two days (~270 model calls) because
-// their rejections were UNSATISFIABLE — the gate scanned the entity's own NAME, so an artist called
-// "Future Signal" could not be written about at all. THE NAME EXEMPTION
-// (apps/web/src/lib/server/observation.ts) fixes that root cause everywhere. This is the BACKSTOP
-// that bounds the next unsatisfiable rejection, whatever it turns out to be.
+// Every gate rejection must consume an attempt. A plain skip leaves the item queued without
+// counting the try, turning "retry" into "forever". THE NAME EXEMPTION
+// (apps/web/src/lib/server/observation.ts) handles rejections caused by scanning the entity's own
+// name. This ledger bounds every other unsatisfiable rejection.
 //
 // THE SIBLING SWEEPS HAD THE SAME SHAPE AND A WORSE QUEUE. note-sweep, observe-sweep and
 // logbook-sweep all run BATCH_CAP=1 over an oldest-first worklist, so an item that can never pass
@@ -18,7 +15,7 @@
 // forever. `selectWork` is the half of this module that fixes that, and it matters more than the
 // budget itself.
 //
-// WHAT IT DELIBERATELY DOES NOT DO — the operator's ruling, 2026-07-30. The bio sweep pairs its
+// WHAT IT DELIBERATELY DOES NOT DO — the operator's ruling. The bio sweep pairs its
 // budget with a FINAL-ATTEMPT ACCEPTANCE: the third bio lands even if the voice gate refused it,
 // because an entity page with an empty bio slot is a half-built page. THE SIBLINGS GET NO SUCH
 // BYPASS. A note, an observation and a logbook entry are OPTIONAL editorial: an absent one is a

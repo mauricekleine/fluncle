@@ -18,8 +18,7 @@ import { closeCardProgress, closeCardReveal } from "./close-card-timing";
 //     and dim; signature in the Oxanium brandMark voice, the loudest type
 //     moment of the clip (committed scale contrast, not two similar lines).
 //   - Colour follows the COMPOSITION, not the brand: the ink and the signature's
-//     emphasis accent are scene-matched, never a fixed gold (it used to force
-//     Eclipse Gold here and clashed with non-gold scenes). Gold is the sun,
+//     emphasis accent are scene-matched, never a fixed gold. Gold is the sun,
 //     never the type.
 //   - PLACEMENT: the card's default home is the SAME lower-left anchor as the
 //     TypePlate's identity block — the sign-off lands where the credits were.
@@ -31,12 +30,11 @@ import { closeCardProgress, closeCardReveal } from "./close-card-timing";
 // `progress` 0..1 and renders the reveal from that, so the close stays in lock
 // step with whatever journey is driving the scene.
 //
-// THE ARC TRAP (fixed): the reveal used to fall back to `arc ?? progress`, and
-// callers reach for the journey's GLOBAL `arc` (useJourney().arc) — already
-// non-zero through most of the clip — so the sign-off printed mid-clip. The reveal
-// is driven ONLY by `progress` (the "arrive" phase's phaseProgress, ~0 until the
-// close begins), and the legacy `arc` prop has been removed — never reintroduce it
-// (see close-card-timing.ts). The timing math lives in that pure module with a
+// THE ARC TRAP: reveal timing must not fall back to the journey's GLOBAL `arc`
+// (`useJourney().arc`). It is already non-zero through most of the clip and would print the
+// sign-off mid-clip. The reveal is driven ONLY by `progress` (the "arrive" phase's phaseProgress,
+// ~0 until the close begins); `arc` is deliberately unavailable as a fallback driver (see
+// close-card-timing.ts). The timing math lives in that pure module with a
 // regression test.
 //
 // Determinism: the reveal is a pure function of the `progress` value the caller
@@ -133,8 +131,7 @@ export const CloseCard: React.FC<CloseCardProps> = ({
   const { signatureP, taglineP } = closeCardReveal(p);
 
   const ink = palette?.ink ?? colors.starlightCream;
-  // The signature is the emphasis line; its ink follows the COMPOSITION, not a
-  // fixed gold (it used to force Eclipse Gold and clashed with non-gold scenes).
+  // The signature is the emphasis line; its ink follows the COMPOSITION, never fixed gold.
   // Default to the tagline ink so a missing override never reintroduces gold;
   // pass palette.accent a scene-derived highlight to emphasise it in-palette.
   const accent = palette?.accent ?? ink;

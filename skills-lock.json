@@ -81,7 +81,7 @@
     "fluncle-rekordbox-sync": {
       "source": "packages/skills/fluncle-rekordbox-sync",
       "sourceType": "local",
-      "computedHash": "4fdd2926f1e942435b0137088bad23102b829bf0e6b01d986723341d14b01fdf"
+      "computedHash": "aad347ef5655f8f84d1b767915e3c322578cdade8c16b833b7ee394e376d4447"
     },
     "fluncle-rfc-writer": {
       "source": "packages/skills/fluncle-rfc-writer",
@@ -96,7 +96,7 @@
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "b49a680f531e07584a84555ddd3efc8a6b9551abbcc7ab209f8f36ee8e08f380"
+      "computedHash": "20e46143286ff0ee55455c219790e4ca2d492990734af40661d03edf9740b487"
     },
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
@@ -106,7 +106,7 @@
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "a57d3f683b39ff3e4b5e6dbb39bda9eb1d77f67dffdad30b8b64909a896a55b7"
+      "computedHash": "2a3366738d44f1c7eb5400c6567fcc4d596eb8dc458d46e34598b463521896f4"
     },
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",

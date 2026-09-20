@@ -57,10 +57,9 @@ describe("constantTimeEqual — length-mismatch safety", () => {
 
 // adminRole is the ONE gate every /api/admin/* route reads (requireAdmin and
 // requireOperator both call it). It reads the two Bearer carriers out of the env, and an
-// UNPROVISIONED deployment must still answer unauthorized — not throw. The operator read
-// used to be the THROWING `readEnv`, so a Bearer request against a Worker with no
-// FLUNCLE_API_TOKEN (a preview branch, a half-configured deploy) raised
-// `Missing FLUNCLE_API_TOKEN` out of the auth check and surfaced as an unhandled 500: an
+// UNPROVISIONED deployment must still answer unauthorized — not throw. A Bearer request against a
+// Worker with no FLUNCLE_API_TOKEN (a preview branch, a half-configured deploy) must not raise
+// `Missing FLUNCLE_API_TOKEN` out of the auth check as an unhandled 500: that would be an
 // availability bug that also named the missing secret. Pin the graceful shape: an absent
 // secret means that carrier simply cannot authenticate, and the request falls through.
 describe("adminRole — an unprovisioned deployment answers unauthorized, never throws", () => {
