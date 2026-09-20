@@ -1,3 +1,4 @@
+import { type DueWorkSubjectType } from "./due-work-types";
 import { type Client, type InStatement, type InValue, type ResultSet } from "@libsql/client";
 
 import { DUE_WORK_COLUMNS } from "./due-work-columns";
@@ -10,7 +11,7 @@ import {
   markPublicProjectionSourceChangedStatements,
 } from "./public-projection-source-maintenance";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
-import { type DueWorkCatalogueRankProducer } from "./due-work-registry";
+import { type DueWorkCatalogueRankProducer } from "./due-work-rank-producers";
 
 export const DUE_WORK_LIVE_GENERATION = "live";
 export const DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID = "@catalogue-rank-corpus";
@@ -53,7 +54,7 @@ export function isDueWorkMaintenancePending(error: unknown): boolean {
   return error instanceof DueWorkMaintenancePendingError;
 }
 
-export type DueWorkSubjectType = "album" | "artist" | "label" | "track";
+export type { DueWorkSubjectType } from "./due-work-types";
 export type DueWorkState = "leased" | "ready" | "repair" | "scheduled";
 export type DueWorkProjectionState = Extract<DueWorkState, "ready" | "scheduled">;
 export type DueWorkClient = Pick<Client, "batch" | "execute">;

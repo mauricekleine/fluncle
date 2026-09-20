@@ -15,7 +15,7 @@
 import { contract } from "@fluncle/contracts/orpc";
 import { implement } from "@orpc/server";
 import { isDueWorkMaintenancePending } from "./due-work";
-import { type OrpcContext } from "./orpc-auth";
+import { type OrpcContext } from "./orpc-context";
 import { dueWorkMaintenancePendingFault } from "./orpc/_shared";
 
 export const dueWorkMaintenancePendingMiddleware = implement(contract)

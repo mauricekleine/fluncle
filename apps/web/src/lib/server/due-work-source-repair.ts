@@ -1,3 +1,4 @@
+import { type DueWorkReadRepairOutcome } from "./due-work-types";
 import {
   clearDueWorkSourceRepairStatement,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
@@ -640,7 +641,7 @@ function repairConverged(result: DueWorkRepairResult): boolean {
  * want it, but it can never make a ready read unsafe — a physical marker IS the queue row, held in
  * `state = 'repair'`, which no ready read reaches.
  */
-export type DueWorkReadRepairOutcome = { physicalConverged: boolean; sourceConverged: boolean };
+export type { DueWorkReadRepairOutcome } from "./due-work-types";
 
 /**
  * Converge the requested queue's repair before its ready index is read. Ordinary source markers of

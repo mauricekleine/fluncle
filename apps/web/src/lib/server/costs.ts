@@ -17,7 +17,7 @@
 //     RFC §0).
 
 import { type CostEventInput } from "@fluncle/contracts/orpc";
-import { parseArtistsJson } from "./artists";
+import { parseArtistsJson } from "./artist-names";
 import { priceFromRates } from "./cost-rates";
 import { getDb } from "./db";
 import { logEvent } from "./log";
