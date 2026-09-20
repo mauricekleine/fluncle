@@ -21,7 +21,7 @@ import { type Track } from "@/lib/tracks";
 // The reusable shell. Placement is the caller's job (a behind-the-scenes trigger
 // belongs in a different spot on every surface), so this carries no layout of its
 // own — just the trigger, the right-hand sheet, and the title idiom.
-export function BehindTheScenes({
+function BehindTheScenes({
   children,
   label,
   title,

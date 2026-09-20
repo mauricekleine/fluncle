@@ -377,7 +377,7 @@ export function bestArtistAvatarUrl(avatar: {
 // (same key) evicts every rendition, exactly like the cover masters' `?v`.
 
 /** The R2 key an account's uploaded avatar master is stored at (world-readable, found.fluncle.com). */
-export function avatarKey(userId: string, ext: string): string {
+function avatarKey(userId: string, ext: string): string {
   return `avatars/${userId}.${ext}`;
 }
 

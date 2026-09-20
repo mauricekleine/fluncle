@@ -733,7 +733,7 @@ function searchVariants(input: DiscogsResolveInput): URLSearchParams[] {
 }
 
 /** The bounded, Worker-owned query spellings handed to a box fetcher. */
-export function discogsSearchQueries(input: DiscogsResolveInput): string[] {
+function discogsSearchQueries(input: DiscogsResolveInput): string[] {
   return searchVariants(input).map((variant) => variant.toString());
 }
 

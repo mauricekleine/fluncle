@@ -32,7 +32,6 @@
     "@remotion/bundler": "catalog:",
     "@remotion/captions": "catalog:",
     "@remotion/cli": "catalog:",
-    "@remotion/fonts": "catalog:",
     "@remotion/renderer": "catalog:",
     "node-vibrant": "~4.0.4",
     "react": "catalog:",

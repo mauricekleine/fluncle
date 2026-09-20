@@ -365,7 +365,7 @@ async function readAlbums(window: SitemapWindow): Promise<SitemapEntity[]> {
 
 /** The logbook travelogue entries — one <loc> per authored sector-day, with its last
     (re)generation as lastmod. */
-export function logbookSitemapWindowStatement(limit: number, afterSector?: string) {
+function logbookSitemapWindowStatement(limit: number, afterSector?: string) {
   const seek = afterSector === undefined ? "sector <= ?" : "sector < ?";
 
   return {

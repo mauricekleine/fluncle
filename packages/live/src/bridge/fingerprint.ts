@@ -148,7 +148,7 @@ export async function fingerprintFile(logId: string, path: string): Promise<Fing
 }
 
 /** Fingerprint raw container bytes (a fetched preview held in memory). */
-export async function fingerprintBytes(logId: string, bytes: Uint8Array): Promise<Fingerprint> {
+async function fingerprintBytes(logId: string, bytes: Uint8Array): Promise<Fingerprint> {
   return { frames: melFrames(await decodeMono(bytes)), logId };
 }
 

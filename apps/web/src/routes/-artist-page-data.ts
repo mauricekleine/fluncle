@@ -39,7 +39,7 @@ export type { ArtistSocialLink };
 // keys) plus the "same sector" neighbours. Assembled in the loader so the whole
 // page arrives in one SSR payload (no client round-trip), matching the route's
 // existing loader-only shape.
-export type ArtistDossier = ArtistSignature & {
+type ArtistDossier = ArtistSignature & {
   findingCount: number;
   neighbours: ArtistNeighbour[];
 };

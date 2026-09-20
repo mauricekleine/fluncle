@@ -33,7 +33,7 @@ const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 
 /** Anchors we can lift a usable handle from, in preference order. */
-export const HANDLE_ANCHORS = ["instagram", "soundcloud", "twitter", "youtube"] as const;
+const HANDLE_ANCHORS = ["instagram", "soundcloud", "twitter", "youtube"] as const;
 
 /** Extract a bare handle from a profile URL, or null when the URL carries no usable handle. */
 export function handleFromUrl(platform: string, url: string): string | null {
