@@ -647,6 +647,8 @@ export function buildEmbedSummary(options: {
   counts: EmbedCounts;
   errors: number;
   failureStreak?: EmbedFailureStreak | null;
+  /** Server-measured per-item milliseconds from this tick's batched write. */
+  itemTiming?: readonly number[];
   /**
    * How many ADMITTED DATABASE PHASES this tick took — the shared write lane's acquisitions. A tick
    * that batches its writes costs two (its worklist read and its one write) where it used to cost
@@ -684,6 +686,7 @@ export function buildEmbedSummary(options: {
     errors: options.errors,
     failed,
     fetchFailed: options.counts.fetchFailed,
+    ...summariseItemTiming(options.itemTiming ?? []),
     ...(options.leases === undefined ? {} : { leases: options.leases }),
     noSource: options.counts.noSource,
     ok: options.ok,
@@ -743,6 +746,8 @@ export type EmbedWriteWindow = { costWriteFailures: number; written: boolean };
  */
 export type EmbedWriteBatchWindow = {
   costWriteFailures: number;
+  /** Server-measured per-item milliseconds, for the ledger's batch-width evidence. */
+  elapsedMs?: number[];
   results: { outcome: "deferred" | "failed" | "updated"; trackId: string }[];
 };
 
@@ -820,6 +825,7 @@ async function writeEmbedResultsWindow(
   items: readonly EmbedWriteItem[],
 ): Promise<EmbedWriteBatchWindow> {
   let results: EmbedWriteBatchWindow["results"];
+  let elapsedMs: number[] = [];
 
   try {
     const response = await adminApiPost<unknown>("/api/v1/admin/tracks/embeddings", {
@@ -827,6 +833,7 @@ async function writeEmbedResultsWindow(
     });
 
     results = parseEmbedWriteBatchResults(response, items);
+    elapsedMs = parseEmbedWriteBatchTiming(response);
   } catch (error) {
     // The whole request's outcome is unknown. Every item is reported as failed and none is
     // re-issued; the durable fence is the next tick's worklist read, which still holds any track
@@ -837,7 +844,48 @@ async function writeEmbedResultsWindow(
 
   const costWriteFailures = (await emitCost(items.map((item) => item.cost))).failed;
 
-  return { costWriteFailures, results };
+  return { costWriteFailures, elapsedMs, results };
+}
+
+/** The server's per-item milliseconds, when it reports them. An older Worker reports none. */
+export function parseEmbedWriteBatchTiming(response: unknown): number[] {
+  const rows =
+    typeof response === "object" &&
+    response !== null &&
+    Array.isArray((response as { results?: unknown }).results)
+      ? ((response as { results: unknown[] }).results as { elapsedMs?: unknown }[])
+      : [];
+
+  return rows.flatMap((row) =>
+    typeof row?.elapsedMs === "number" && Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0
+      ? [row.elapsedMs]
+      : [],
+  );
+}
+
+/**
+ * The per-tick shape of a batched phase's per-item server time. The wall budget is checked BETWEEN
+ * items, so a batch's exposure to one slow item grows with the batch width — and that width was
+ * chosen from the natural unit of work rather than from a measured p99. Publishing the max and the
+ * median per tick is what turns that into evidence: a day of ordinary ticks yields the distribution
+ * the bound should be re-derived from.
+ */
+export function summariseItemTiming(
+  samples: readonly number[],
+): { itemMsMax: number; itemMsP50: number; itemSamples: number } | undefined {
+  const sorted = [...samples]
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .sort((left, right) => left - right);
+
+  if (sorted.length === 0) {
+    return undefined;
+  }
+
+  return {
+    itemMsMax: sorted[sorted.length - 1] ?? 0,
+    itemMsP50: sorted[Math.floor((sorted.length - 1) / 2)] ?? 0,
+    itemSamples: sorted.length,
+  };
 }
 
 /** Map a batched write response back onto its request items, in request order. */
@@ -977,6 +1025,12 @@ export function parseWriteBatchWindowEnvelope(stdout: string): EmbedWriteBatchWi
 
   return {
     costWriteFailures: failures,
+    elapsedMs: Array.isArray(envelope.elapsedMs)
+      ? envelope.elapsedMs.filter(
+          (value): value is number =>
+            typeof value === "number" && Number.isFinite(value) && value >= 0,
+        )
+      : [],
     results: results.map((row) => {
       const record = row as { outcome?: unknown; trackId?: unknown };
 
@@ -1119,9 +1173,83 @@ export function batchedWrites(deps: EmbedSweepDependencies, itemCount: number): 
   );
 }
 
+/**
+ * WRITE THE TICK'S VECTORS, batched when the Worker offers it and per result otherwise.
+ *
+ * Either way a vector is written exactly once: `track.embed` is non-replayable, so an unproven
+ * write is counted and never re-issued. `deferred` is the one verdict the caller may reissue,
+ * because a deferred item never reached a write at all. It is lifted out of the sweep's entrypoint
+ * so that function stays one readable pass over the tick rather than two nested write paths.
+ */
+async function applyEmbedWrites(
+  deps: EmbedSweepDependencies,
+  writeItems: readonly EmbedWriteItem[],
+  counts: EmbedCounts,
+  itemTiming: number[],
+): Promise<{ costWriteFailures: number; leases: number; writesPending: number }> {
+  let costWriteFailures = 0;
+  let leases = 0;
+  let writesPending = 0;
+
+  if (batchedWrites(deps, writeItems.length)) {
+    leases += 1;
+
+    const window = await deps.windows.writeResults?.(writeItems);
+
+    if (window === undefined) {
+      // The yielded batch is unproven: nothing is re-issued, and the whole tick's results are
+      // reported as unapplied. The durable fence is the next tick's worklist read.
+      log(`write window yielded — ${writeItems.length} result(s) left unapplied`);
+
+      return { costWriteFailures, leases, writesPending: writeItems.length };
+    }
+
+    costWriteFailures += window.costWriteFailures;
+    itemTiming.push(...(window.elapsedMs ?? []));
+
+    for (const result of window.results) {
+      if (result.outcome === "updated") {
+        counts.done += 1;
+      } else if (result.outcome === "deferred") {
+        // The Worker's own wall budget stopped before this item, so it never reached a write.
+        writesPending += 1;
+      } else {
+        counts.skipped += 1;
+      }
+    }
+
+    return { costWriteFailures, leases, writesPending };
+  }
+
+  for (const [index, item] of writeItems.entries()) {
+    leases += 1;
+
+    const window = await deps.windows.writeResult(item);
+
+    if (window === undefined) {
+      // The yielded write is unproven: it is never re-issued, and no later write starts.
+      writesPending = writeItems.length - index;
+      log(`${item.trackId}: write window yielded — ${writesPending} result(s) left unapplied`);
+      break;
+    }
+
+    costWriteFailures += window.costWriteFailures;
+
+    if (window.written) {
+      counts.done += 1;
+    } else {
+      counts.skipped += 1;
+    }
+  }
+
+  return { costWriteFailures, leases, writesPending };
+}
+
 export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<EmbedSweepOutcome> {
   // Every admitted database window this tick opens, counted where it is opened.
   let leases = 1;
+  // Server-measured per-item milliseconds from this tick's batched write, for the K evidence.
+  const itemTiming: number[] = [];
   const queueWindow = await deps.windows.readQueue();
 
   if (queueWindow === undefined) {
@@ -1285,52 +1413,11 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
     let costWriteFailures = 0;
     let writesPending = 0;
 
-    if (batchedWrites(capable, writeItems.length)) {
-      leases += 1;
+    const written = await applyEmbedWrites(capable, writeItems, counts, itemTiming);
 
-      const window = await capable.windows.writeResults?.(writeItems);
-
-      if (window === undefined) {
-        // The yielded batch is unproven: nothing is re-issued, and the whole tick's results are
-        // reported as unapplied. The durable fence is the next tick's worklist read.
-        writesPending = writeItems.length;
-        log(`write window yielded — ${writesPending} result(s) left unapplied`);
-      } else {
-        costWriteFailures += window.costWriteFailures;
-
-        for (const result of window.results) {
-          if (result.outcome === "updated") {
-            counts.done += 1;
-          } else if (result.outcome === "deferred") {
-            // The Worker's own wall budget stopped before this item, so it never reached a write.
-            writesPending += 1;
-          } else {
-            counts.skipped += 1;
-          }
-        }
-      }
-    } else {
-      for (const [index, item] of writeItems.entries()) {
-        leases += 1;
-
-        const window = await capable.windows.writeResult(item);
-
-        if (window === undefined) {
-          // The yielded write is unproven: it is never re-issued, and no later write starts.
-          writesPending = writeItems.length - index;
-          log(`${item.trackId}: write window yielded — ${writesPending} result(s) left unapplied`);
-          break;
-        }
-
-        costWriteFailures += window.costWriteFailures;
-
-        if (window.written) {
-          counts.done += 1;
-        } else {
-          counts.skipped += 1;
-        }
-      }
-    }
+    costWriteFailures += written.costWriteFailures;
+    leases += written.leases;
+    writesPending += written.writesPending;
 
     const failureMessages: string[] = [];
 
@@ -1367,6 +1454,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
           counts,
           errors: 1,
           failureStreak,
+          itemTiming,
           leases,
           ok: false,
           queued,
@@ -1381,6 +1469,7 @@ export async function runEmbedSweep(deps: EmbedSweepDependencies): Promise<Embed
       counts,
       errors: 0,
       failureStreak,
+      itemTiming,
       leases,
       ok: true,
       queued,

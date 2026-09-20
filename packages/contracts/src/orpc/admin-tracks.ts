@@ -321,6 +321,13 @@ const CaptureReceiptCoordinatesSchema = z.strictObject({
 
 const CapturePreparedTrackSchema = z.strictObject({
   analyzedFrom: z.enum(["full", "preview"]).optional(),
+  /**
+   * The row carried a Spotify anchor when it was frozen. Additive and read straight off the
+   * snapshot the prepare already holds, so it costs nothing: it exists so the sweep can publish
+   * how much of a tick's capture spend went to ANCHORED rows, which is the only way to see the
+   * anchored-first drain order actually taking effect rather than assume it.
+   */
+  anchored: z.boolean().optional(),
   artists: z.array(z.string().max(512)).max(64),
   bpm: z.number().optional(),
   certified: z.boolean(),
@@ -494,13 +501,24 @@ const TrackWorkCapabilitiesSchema = z.strictObject({
   updateTrackEmbeddings: z.number().int().min(1).max(MAX_EMBEDDING_WRITE_BATCH).optional(),
 });
 
+/**
+ * HOW LONG THIS ITEM TOOK THE SERVER, in milliseconds. Additive on every batched response, and its
+ * purpose is to make K derivable instead of assumed: the wall budget is checked BETWEEN items, so a
+ * batch's exposure to one slow item grows with K, and only a measured per-item distribution can say
+ * whether the chosen K is right. The sweeps publish per-tick max and median, so a day of ordinary
+ * ticks yields the p99 the bound should be re-derived from.
+ */
+const ItemElapsedMsSchema = z.number().int().min(0).optional();
+
 const CapturePreparedItemSchema = z.union([
   z.strictObject({
+    elapsedMs: ItemElapsedMsSchema,
     prepared: z.literal(false),
     reason: z.enum(["deferred", "ineligible", "not-found", "stale"]),
     trackId: z.string().min(1).max(256),
   }),
   z.strictObject({
+    elapsedMs: ItemElapsedMsSchema,
     prepared: z.literal(true),
     snapshotToken: z.string().min(1).max(65_536),
     track: CapturePreparedTrackSchema,
@@ -548,6 +566,21 @@ export const prepareTrackCaptures = oc
         )
         .min(1)
         .max(MAX_CAPTURE_PREPARE_BATCH),
+      /**
+       * UNCERTIFIED ROWS THIS TICK HAS ALREADY AUTHORIZED, across its earlier prepare calls.
+       *
+       * The rolling-24h count ledger is charged at COMMIT (`tracks.source_audio_attempted_at`), so a
+       * second prepare call inside one tick would otherwise read the very same pre-tick remaining
+       * count the first call already reserved against — and a tick whose batch is wider than this
+       * op's width, or whose wall budget deferred a tail, makes exactly that second call. The caller
+       * carries its running total here and the server SUBTRACTS it.
+       *
+       * It can only ever shrink the budget: the server clamps `remainingTracks - reservedThisTick`
+       * at zero and never adds, so a caller that over-reports authorizes less and a caller that
+       * under-reports is bounded by the ledger it is spending against. A missing value is zero,
+       * which is exactly an older sweep's single-call behaviour.
+       */
+      reservedThisTick: z.number().int().min(0).max(10_000).optional(),
     }),
   )
   .output(
@@ -555,6 +588,12 @@ export const prepareTrackCaptures = oc
       /** How many trailing items the wall budget left unprepared. They read `deferred`. */
       deferred: z.number().int().min(0),
       ok: z.literal(true),
+      /**
+       * How many UNCERTIFIED rows this call authorized — what it spent of the rolling count cap.
+       * The caller adds it to its running `reservedThisTick` rather than re-deriving the server's
+       * certification rule, so the two can never disagree about what a call cost.
+       */
+      reserved: z.number().int().min(0),
       /** One answer per request item, in request order. */
       results: z.array(CapturePreparedItemSchema).max(MAX_CAPTURE_PREPARE_BATCH),
     }),
@@ -562,6 +601,7 @@ export const prepareTrackCaptures = oc
 
 const CaptureCommitReceiptSchema = z
   .object({
+    elapsedMs: ItemElapsedMsSchema,
     /** This item's own failure message, bounded. Present only for `failed`. */
     error: z.string().max(500).optional(),
     outcome: z.enum([
@@ -667,6 +707,7 @@ export const updateTrackEmbeddings = oc
       results: z
         .array(
           z.strictObject({
+            elapsedMs: ItemElapsedMsSchema,
             error: z.string().max(500).optional(),
             fields: z.array(z.string()).optional(),
             outcome: z.enum(["deferred", "failed", "updated"]),

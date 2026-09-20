@@ -117,6 +117,7 @@ type CommitBatchCapabilities = {
   commitBatchMaxTotalBytes?: number;
 };
 type CommitBatchReceipt = {
+  elapsedMs?: number;
   error?: string;
   operationKey?: string;
   outcome?: string;
@@ -152,6 +153,16 @@ type SweepSummary = {
    * phase increments it wherever it is taken.
    */
   leases: number;
+  /**
+   * The per-tick shape of a batched commit's PER-ITEM server time. The wall budget is checked
+   * BETWEEN items, so a batch's exposure to one slow item grows with its width — and that width was
+   * chosen from the natural unit of work (one claim) rather than from a measured p99. Publishing the
+   * max and the median is what turns that into evidence: a day of ordinary ticks yields the
+   * distribution the bound should be re-derived from. Absent when no batched commit ran.
+   */
+  itemMsMax?: number;
+  itemMsP50?: number;
+  itemSamples?: number;
   ok: boolean;
   partial: boolean;
   pending: number;
@@ -267,6 +278,28 @@ function runCriticalCommitBatch(file: string): JsonObject {
     }
     throw error;
   }
+}
+
+/** Server-measured per-item milliseconds from this tick's batched commits. */
+const itemTiming: number[] = [];
+
+/** Fold the tick's per-item readings into the max/median pair the ledger publishes. */
+export function summariseItemTiming(
+  samples: readonly number[],
+): { itemMsMax: number; itemMsP50: number; itemSamples: number } | undefined {
+  const sorted = [...samples]
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .sort((left, right) => left - right);
+
+  if (sorted.length === 0) {
+    return undefined;
+  }
+
+  return {
+    itemMsMax: sorted[sorted.length - 1] ?? 0,
+    itemMsP50: sorted[Math.floor((sorted.length - 1) / 2)] ?? 0,
+    itemSamples: sorted.length,
+  };
 }
 
 /**
@@ -760,6 +793,13 @@ function commitFetchedBatch(
   const outcomes: NodeOutcome[] = [];
   for (const [index, node] of nodes.entries()) {
     const receipt = batch?.receipts?.[index];
+    if (
+      typeof receipt?.elapsedMs === "number" &&
+      Number.isFinite(receipt.elapsedMs) &&
+      receipt.elapsedMs >= 0
+    ) {
+      itemTiming.push(receipt.elapsedMs);
+    }
     if (receipt !== undefined && receipt.operationKey !== node.fetched.operationKey) {
       throw new Error("crawl commit batch returned a receipt for the wrong node");
     }
@@ -961,6 +1001,7 @@ export async function main(): Promise<void> {
   } catch (error) {
     recordFailure(summary, error);
     summary.leases = admittedPhaseCount;
+    Object.assign(summary, summariseItemTiming(itemTiming));
     console.log(JSON.stringify(summary));
     process.exitCode = 1;
     return;
@@ -979,6 +1020,7 @@ export async function main(): Promise<void> {
       }
     }
     summary.leases = admittedPhaseCount;
+    Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
     console.log(JSON.stringify(summary));
     if (!summary.ok) {
       process.exitCode = 1;
@@ -995,6 +1037,7 @@ export async function main(): Promise<void> {
     if (!initialized) {
       recordPhaseYield(summary);
       summary.leases = admittedPhaseCount;
+      Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
       console.log(JSON.stringify(summary));
       return;
     }
@@ -1006,6 +1049,7 @@ export async function main(): Promise<void> {
       summary.gateState = "disabled";
       summary.reason = "crawl_due_cutover_disabled";
       summary.leases = admittedPhaseCount;
+      Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
       console.log(JSON.stringify(summary));
       return;
     }
@@ -1026,6 +1070,7 @@ export async function main(): Promise<void> {
   }
 
   summary.leases = admittedPhaseCount;
+  Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
   console.log(JSON.stringify(summary));
   if (!summary.ok) {
     process.exitCode = 1;

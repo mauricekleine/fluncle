@@ -285,7 +285,7 @@ export function adminTracksHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async ({ input }) => {
       try {
-        const { deferred, results } = await prepareCaptureReconciliations(
+        const { deferred, reserved, results } = await prepareCaptureReconciliations(
           input.items.map((item) => ({
             kind: item.kind as CaptureReconciliationKind,
             ...(item.priorSnapshotToken === undefined
@@ -293,9 +293,11 @@ export function adminTracksHandlers(os: Implementer) {
               : { priorSnapshotToken: item.priorSnapshotToken }),
             trackId: item.trackId,
           })),
+          // Only ever subtracts from the remaining count — never adds. See the op's contract.
+          { reservedThisTick: input.reservedThisTick ?? 0 },
         );
 
-        return { deferred, ok: true as const, results };
+        return { deferred, ok: true as const, reserved, results };
       } catch (error) {
         throw toFault(error);
       }
@@ -313,6 +315,7 @@ export function adminTracksHandlers(os: Implementer) {
           deferred,
           ok: true as const,
           receipts: receipts.map((receipt) => ({
+            ...(receipt.elapsedMs === undefined ? {} : { elapsedMs: receipt.elapsedMs }),
             ...(receipt.error === undefined ? {} : { error: receipt.error }),
             outcome: receipt.outcome,
             replayed: receipt.replayed,
@@ -335,6 +338,7 @@ export function adminTracksHandlers(os: Implementer) {
     .handler(async ({ context, input }) => {
       const startedAt = performance.now();
       const results: {
+        elapsedMs?: number;
         error?: string;
         fields?: string[];
         outcome: "deferred" | "failed" | "updated";
@@ -345,14 +349,16 @@ export function adminTracksHandlers(os: Implementer) {
       for (const [index, item] of input.items.entries()) {
         if (index > 0 && performance.now() - startedAt >= EMBEDDING_BATCH_WALL_BUDGET_MS) {
           deferred += 1;
-          results.push({ outcome: "deferred", trackId: item.trackId });
+          results.push({ elapsedMs: 0, outcome: "deferred", trackId: item.trackId });
           continue;
         }
 
+        const itemStartedAt = performance.now();
         const vector = coerceEmbedding(item.embedding);
 
         if (!vector) {
           results.push({
+            elapsedMs: Math.max(0, Math.round(performance.now() - itemStartedAt)),
             error: `embedding must be a JSON array of ${EMBEDDING_DIMS} finite numbers`,
             outcome: "failed",
             trackId: item.trackId,
@@ -366,9 +372,15 @@ export function adminTracksHandlers(os: Implementer) {
             { embedding: JSON.stringify(vector) },
             { writer: context.role },
           );
-          results.push({ fields: result.fields, outcome: "updated", trackId: item.trackId });
+          results.push({
+            elapsedMs: Math.max(0, Math.round(performance.now() - itemStartedAt)),
+            fields: result.fields,
+            outcome: "updated",
+            trackId: item.trackId,
+          });
         } catch (error) {
           results.push({
+            elapsedMs: Math.max(0, Math.round(performance.now() - itemStartedAt)),
             error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
             outcome: "failed",
             trackId: item.trackId,

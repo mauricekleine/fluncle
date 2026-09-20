@@ -3154,6 +3154,7 @@ export const CRAWL_COMMIT_BATCH_WALL_BUDGET_MS = 45_000;
 export type CrawlCommitBatchItem = CrawlPhaseFetchResult;
 
 export type CrawlCommitBatchReceipt = {
+  elapsedMs?: number;
   error?: string;
   operationKey: string;
   outcome:
@@ -3230,17 +3231,24 @@ export async function commitCrawlNodes(
     if (index > 0 && now() - startedAt >= budgetMs) {
       deferred += 1;
       receipts.push({
+        elapsedMs: 0,
         operationKey: item.operationKey,
         outcome: "safely-retryable",
         replayed: false,
       });
       continue;
     }
+    const itemStartedAt = now();
     try {
       const receipt = await (options.commit ?? commitCrawlPhase)(item);
-      receipts.push({ operationKey: item.operationKey, ...receipt });
+      receipts.push({
+        elapsedMs: Math.max(0, Math.round(now() - itemStartedAt)),
+        operationKey: item.operationKey,
+        ...receipt,
+      });
     } catch (error) {
       receipts.push({
+        elapsedMs: Math.max(0, Math.round(now() - itemStartedAt)),
         error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
         operationKey: item.operationKey,
         outcome: "failed",

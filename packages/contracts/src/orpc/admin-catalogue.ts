@@ -842,6 +842,12 @@ const CrawlCommitItemSchema = z.strictObject({
  */
 const CrawlCommitReceiptSchema = z
   .object({
+    /**
+     * How long this item took the server, in milliseconds. Additive, and its purpose is to make the
+     * batch width derivable instead of assumed: the wall budget is checked BETWEEN items, so a
+     * batch's exposure to one slow item grows with K. The sweep publishes per-tick max and median.
+     */
+    elapsedMs: z.number().int().min(0).optional(),
     /** This item's own failure message, bounded. Present only for `failed`. */
     error: z.string().max(500).optional(),
     operationKey: z.string().max(128),

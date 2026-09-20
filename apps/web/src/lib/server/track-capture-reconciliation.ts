@@ -88,6 +88,8 @@ export type CaptureSnapshot = {
 
 export type CapturePreparedTrack = {
   analyzedFrom?: "full" | "preview";
+  /** The row carried a Spotify anchor when it was frozen (the anchored-first drain order's proof). */
+  anchored?: boolean;
   artists: string[];
   bpm?: number;
   certified: boolean;
@@ -457,8 +459,19 @@ export type CapturePrepareBatchItem = {
 };
 
 export type CapturePreparedBatchResult =
-  | { prepared: false; reason: "deferred" | "ineligible" | "not-found" | "stale"; trackId: string }
-  | { prepared: true; snapshotToken: string; track: CapturePreparedTrack; trackId: string };
+  | {
+      elapsedMs?: number;
+      prepared: false;
+      reason: "deferred" | "ineligible" | "not-found" | "stale";
+      trackId: string;
+    }
+  | {
+      elapsedMs?: number;
+      prepared: true;
+      snapshotToken: string;
+      track: CapturePreparedTrack;
+      trackId: string;
+    };
 
 /**
  * Freeze a batch of capture rows inside ONE admitted phase.
@@ -479,6 +492,19 @@ export type CapturePreparedBatchResult =
  * A row carrying a PRIOR SNAPSHOT TOKEN is a continuation of work already authorized, so it does not
  * consume the reservation either — exactly as the per-row path skips the budget when `prior` is set.
  *
+ * THE RESERVATION SPANS A TICK, NOT ONE CALL. The ledger is charged at COMMIT, so a second prepare
+ * call inside one tick reads the same pre-tick remaining count the first already reserved against. A
+ * caller wider than this op's width, or one whose wall budget deferred a tail, makes exactly that
+ * second call — so it carries its running total in `reservedThisTick` and the server subtracts it.
+ * The subtraction is clamped at zero and can only ever SHRINK the budget: an over-reporting caller
+ * authorizes less, and an under-reporting one is still bounded by the ledger it spends against.
+ *
+ * It is an IN-MEMORY, PER-TICK reservation and not a durable cross-process one. Two overlapping
+ * ticks (an operator CLI run beside the timer) can each authorize against the same remaining count,
+ * because neither has committed yet. That is pre-existing — the per-row prepare had the same
+ * property between its own rows — and what keeps it theoretical in practice is that the sweep is a
+ * systemd oneshot, which does not overlap itself.
+ *
  * THE BYTE CAP STAYS A BACKSTOP. A file's size is knowable only after it is downloaded, so no
  * prepare — batched or not — can enforce it ahead of the spend. Batching widens its overshoot from
  * "the rows in flight when the tick read the gate" to "the uncertified rows this batch froze": at
@@ -491,12 +517,15 @@ export async function prepareCaptureReconciliations(
     now?: () => number;
     /** The per-row prepare. Injectable so the batch's budget accounting is provable in isolation. */
     prepare?: typeof prepareCaptureReconciliation;
+    /** Uncertified rows this TICK has already authorized in earlier calls. Only ever subtracts. */
+    reservedThisTick?: number;
     wallBudgetMs?: number;
   } = {},
-): Promise<{ deferred: number; results: CapturePreparedBatchResult[] }> {
+): Promise<{ deferred: number; reserved: number; results: CapturePreparedBatchResult[] }> {
   const now = options.now ?? (() => performance.now());
   const budgetMs = options.wallBudgetMs ?? CAPTURE_BATCH_WALL_BUDGET_MS;
   const startedAt = now();
+  const alreadyReserved = Math.max(0, Math.trunc(options.reservedThisTick ?? 0));
 
   // Read the ledger ONCE for the whole batch. A per-row read would be the very thing that lets a
   // batch overshoot: each row would see the same untouched spend and each would say yes.
@@ -508,6 +537,9 @@ export async function prepareCaptureReconciliations(
   const state = gated
     ? await (options.captureState ?? readBatchCaptureBudgetState)()
     : { open: true, remainingTracks: 0 };
+  // What is left for THIS call, after everything the tick has already authorized. Clamped at zero,
+  // so the carried total can shrink the budget and never grow it.
+  const remainingTracks = Math.max(0, state.remainingTracks - alreadyReserved);
   let reserved = 0;
 
   const results: CapturePreparedBatchResult[] = [];
@@ -516,31 +548,34 @@ export async function prepareCaptureReconciliations(
   for (const [index, item] of items.entries()) {
     if (index > 0 && now() - startedAt >= budgetMs) {
       deferred += 1;
-      results.push({ prepared: false, reason: "deferred", trackId: item.trackId });
+      results.push({ elapsedMs: 0, prepared: false, reason: "deferred", trackId: item.trackId });
       continue;
     }
 
     const budgeted =
       (item.kind === "capture" || item.kind === "youtube-provenance") &&
       item.priorSnapshotToken === undefined;
+    const itemStartedAt = now();
     const prepared = await (options.prepare ?? prepareCaptureReconciliation)(
       item.trackId,
       item.kind,
       item.priorSnapshotToken,
       // The batch owns the budget decision so it can consume it cumulatively; the per-row gate is
       // handed the verdict instead of re-reading a ledger it would find untouched.
-      budgeted
-        ? { catalogueCaptureOpen: state.open && reserved < state.remainingTracks }
-        : undefined,
+      budgeted ? { catalogueCaptureOpen: state.open && reserved < remainingTracks } : undefined,
     );
     // Only an UNCERTIFIED row spends the catalogue budget, so only one consumes the reservation.
     if (budgeted && prepared.prepared && !prepared.track.certified) {
       reserved += 1;
     }
-    results.push({ ...prepared, trackId: item.trackId });
+    results.push({
+      ...prepared,
+      elapsedMs: Math.max(0, Math.round(now() - itemStartedAt)),
+      trackId: item.trackId,
+    });
   }
 
-  return { deferred, results };
+  return { deferred, reserved, results };
 }
 
 async function readBatchCaptureBudgetState(): Promise<{ open: boolean; remainingTracks: number }> {
@@ -557,6 +592,7 @@ export type CaptureCommitBatchItem = {
 };
 
 export type CaptureCommitBatchReceipt = {
+  elapsedMs?: number;
   error?: string;
   outcome:
     | "committed"
@@ -598,12 +634,19 @@ export async function commitCaptureReconciliations(
   for (const [index, item] of items.entries()) {
     if (index > 0 && now() - startedAt >= budgetMs) {
       deferred += 1;
-      receipts.push({ outcome: "safely-retryable", replayed: false, trackId: item.trackId });
+      receipts.push({
+        elapsedMs: 0,
+        outcome: "safely-retryable",
+        replayed: false,
+        trackId: item.trackId,
+      });
       continue;
     }
+    const itemStartedAt = now();
     try {
       const outcome = await (options.commit ?? commitCaptureReconciliation)(item);
       receipts.push({
+        elapsedMs: Math.max(0, Math.round(now() - itemStartedAt)),
         outcome: outcome.outcome,
         replayed: outcome.replayed,
         ...("result" in outcome && outcome.result !== undefined ? { result: outcome.result } : {}),
@@ -611,6 +654,7 @@ export async function commitCaptureReconciliations(
       });
     } catch (error) {
       receipts.push({
+        elapsedMs: Math.max(0, Math.round(now() - itemStartedAt)),
         error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
         outcome: "failed",
         replayed: false,
@@ -770,6 +814,9 @@ export function sameCaptureReconciliationState(
 function preparedTrack(snapshot: CaptureSnapshot): CapturePreparedTrack {
   return {
     ...(snapshot.source.analyzedFrom ? { analyzedFrom: snapshot.source.analyzedFrom } : {}),
+    // Read straight off the snapshot this prepare already holds, so it costs no extra query. It is
+    // what lets the sweep publish how much of a tick's capture spend went to anchored rows.
+    anchored: snapshot.source.spotifyUri !== null,
     artists: parseArtistsJson(snapshot.source.artistsJson),
     ...(snapshot.extra.bpm === null ? {} : { bpm: snapshot.extra.bpm }),
     certified: snapshot.source.certified,

@@ -251,6 +251,84 @@ describe("the batched capture prepare's budget accounting", () => {
     expect(results.map((row) => row.prepared)).toEqual([true, true, true, false]);
   });
 
+  it("subtracts what the tick already authorized, so a second call cannot re-spend the cap", async () => {
+    // THE COUNT-CAP HOLE THIS CLOSES. The ledger is charged at COMMIT, so a tick's second prepare
+    // call reads the same pre-tick remaining count its first already reserved against. Carrying the
+    // running total is what makes two calls behave as one budget.
+    const { asked, prepare } = recordingPrepare(() => false);
+
+    const first = await prepareCaptureReconciliations(["a", "b"].map(catalogueRow), {
+      captureState: async () => ({ open: true, remainingTracks: 3 }),
+      prepare,
+    });
+    expect(first.reserved).toBe(2);
+
+    const second = await prepareCaptureReconciliations(["c", "d", "e"].map(catalogueRow), {
+      captureState: async () => ({ open: true, remainingTracks: 3 }),
+      prepare,
+      reservedThisTick: first.reserved,
+    });
+
+    // Three left, two already spent: exactly one more authorization across the whole tick.
+    expect(second.reserved).toBe(1);
+    expect(asked.map((ask) => ask.open)).toEqual([true, true, true, false, false]);
+  });
+
+  it("can only ever shrink the budget, never grow it", async () => {
+    const { prepare } = recordingPrepare(() => false);
+
+    const overReported = await prepareCaptureReconciliations(["a", "b"].map(catalogueRow), {
+      captureState: async () => ({ open: true, remainingTracks: 2 }),
+      prepare,
+      // More than the ledger has left. The clamp is at zero, so this authorizes nothing rather
+      // than wrapping into a larger budget.
+      reservedThisTick: 99,
+    });
+    expect(overReported.reserved).toBe(0);
+
+    const negative = await prepareCaptureReconciliations(["a", "b"].map(catalogueRow), {
+      captureState: async () => ({ open: true, remainingTracks: 2 }),
+      prepare,
+      // A nonsense value cannot ADD budget: it is floored at zero before it subtracts.
+      reservedThisTick: -50,
+    });
+    expect(negative.reserved).toBe(2);
+  });
+
+  it("never lets a carried reservation gate a certified finding", async () => {
+    const { prepare } = recordingPrepare(() => true);
+
+    const page = await prepareCaptureReconciliations(["a", "b"].map(catalogueRow), {
+      captureState: async () => ({ open: true, remainingTracks: 0 }),
+      prepare,
+      reservedThisTick: 50,
+    });
+
+    // capture-budget.ts § "the findings are never gated": both prepare, and neither is counted.
+    expect(page.results.map((row) => row.prepared)).toEqual([true, true]);
+    expect(page.reserved).toBe(0);
+  });
+
+  it("reports each item's own server milliseconds, so the batch width becomes derivable", async () => {
+    let clock = 0;
+    const prepare = (async (trackId: string) => {
+      clock += 7;
+      return {
+        prepared: true as const,
+        snapshotToken: `snapshot-${trackId}`,
+        track: { artists: [], certified: false, title: trackId, trackId },
+      };
+    }) as never;
+
+    const { results } = await prepareCaptureReconciliations(["a", "b"].map(catalogueRow), {
+      captureState: async () => ({ open: true, remainingTracks: 10 }),
+      now: () => clock,
+      prepare,
+    });
+
+    expect(results.map((row) => row.elapsedMs)).toEqual([7, 7]);
+  });
+
   it("reads the ledger once for the whole batch, never once per row", async () => {
     const captureState = vi.fn(async () => ({ open: true, remainingTracks: 10 }));
     const { prepare } = recordingPrepare(() => false);
@@ -286,8 +364,8 @@ describe("the batched capture prepare's budget accounting", () => {
 
     expect(deferred).toBe(2);
     expect(results.slice(1)).toEqual([
-      { prepared: false, reason: "deferred", trackId: "b" },
-      { prepared: false, reason: "deferred", trackId: "c" },
+      { elapsedMs: 0, prepared: false, reason: "deferred", trackId: "b" },
+      { elapsedMs: 0, prepared: false, reason: "deferred", trackId: "c" },
     ]);
   });
 });

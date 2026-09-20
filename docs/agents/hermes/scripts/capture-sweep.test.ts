@@ -92,10 +92,15 @@ import {
 import { countDistressLines, countSummaryStrain } from "./fluncle-healthcheck";
 import {
   type CollectedCaptureCommit,
+  DEFAULT_CAPTURE_BATCH_CAP,
   isDeferredOutcome,
+  MAX_CAPTURE_BATCH_CAP,
   parseCaptureCapabilities,
+  prepareTickSnapshots,
+  resolveCaptureBatchCap,
   resolveDeferredOutcome,
   settleCollectedCommits,
+  summariseItemTiming,
 } from "./capture-sweep";
 
 describe("capture sweep canonical counters", () => {
@@ -3422,5 +3427,267 @@ describe("the capture batch's version tolerance", () => {
     } finally {
       delete process.env.FLUNCLE_CAPTURE_BATCH_PHASES;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TICK'S BATCH CAP — a typo guard on the one knob that widens metered spend.
+// ---------------------------------------------------------------------------
+
+describe("the capture batch cap", () => {
+  test("takes the default when unset or empty", () => {
+    expect(resolveCaptureBatchCap(undefined)).toBe(DEFAULT_CAPTURE_BATCH_CAP);
+    expect(resolveCaptureBatchCap("  ")).toBe(DEFAULT_CAPTURE_BATCH_CAP);
+  });
+
+  test("takes an integer inside the ceiling", () => {
+    expect(resolveCaptureBatchCap("12")).toBe(12);
+    expect(resolveCaptureBatchCap(String(MAX_CAPTURE_BATCH_CAP))).toBe(MAX_CAPTURE_BATCH_CAP);
+  });
+
+  test("refuses anything that would widen the metered spend by accident", () => {
+    // A value the contract could never accept per request, a zero-width batch, a float, an
+    // exponent, and a word all fall back to the default rather than through.
+    for (const raw of [String(MAX_CAPTURE_BATCH_CAP + 1), "0", "-3", "2.5", "1e3", "lots"]) {
+      expect(resolveCaptureBatchCap(raw)).toBe(DEFAULT_CAPTURE_BATCH_CAP);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PER-ITEM TIMING the ledger publishes, so the batch width stops being a guess.
+// ---------------------------------------------------------------------------
+
+describe("the per-tick item timing", () => {
+  test("publishes the max and the median of what the server measured", () => {
+    expect(summariseItemTiming([10, 90, 20, 30, 40])).toEqual({
+      itemMsMax: 90,
+      itemMsP50: 30,
+      itemSamples: 5,
+    });
+  });
+
+  test("says nothing at all when no batched phase reported a reading", () => {
+    // An older Worker answers no `elapsedMs`, and a tick with no batched phase has no items. Either
+    // way the ledger gets an honest gap rather than a fabricated zero.
+    expect(summariseItemTiming([])).toBeUndefined();
+    expect(summariseItemTiming([Number.NaN, -1])).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TICK'S SHARED RESERVATION — the count cap stays exact across several calls.
+//
+// The rolling-24h count ledger is charged at COMMIT, so every prepare inside a tick reads the same
+// pre-tick remaining count. One call can reserve against it; a SECOND call cannot, unless it is
+// told what the first already spent. A tick makes that second call whenever its batch is wider than
+// the op's advertised width, or whenever a call's wall budget deferred a tail. These cases are the
+// arithmetic of that, driven through the real chunking loop with a fake admitted phase.
+// ---------------------------------------------------------------------------
+
+describe("the tick's shared capture reservation", () => {
+  const reservationDirectory = mkdtempSync(join(tmpdir(), "fluncle-capture-reserve-"));
+
+  afterAll(() => {
+    rmSync(reservationDirectory, { force: true, recursive: true });
+  });
+
+  /**
+   * A server that honours the contract: it authorizes at most `remaining - reservedThisTick`
+   * uncertified rows per call, defers anything past `answerLimit`, and records every call it saw.
+   */
+  function fakeServer(options: {
+    answerLimit?: number;
+    certified?: (trackId: string) => boolean;
+    remaining: number;
+  }) {
+    const calls: { items: string[]; reservedThisTick: number }[] = [];
+    const certified = options.certified ?? (() => false);
+    const phase = ((_action: string, statePath: string) => {
+      const body = JSON.parse(readFileSync(statePath, "utf8")) as {
+        items: { trackId: string }[];
+        reservedThisTick?: number;
+      };
+      const reservedThisTick = body.reservedThisTick ?? 0;
+      calls.push({
+        items: body.items.map((item) => item.trackId),
+        reservedThisTick,
+      });
+
+      let budget = Math.max(0, options.remaining - reservedThisTick);
+      let reserved = 0;
+      const results = body.items.map((item, index) => {
+        if (options.answerLimit !== undefined && index >= options.answerLimit) {
+          return { elapsedMs: 0, prepared: false, reason: "deferred", trackId: item.trackId };
+        }
+        const isCertified = certified(item.trackId);
+        // A certified finding is never gated and never consumes the catalogue's budget.
+        if (!isCertified) {
+          if (budget <= 0) {
+            return { elapsedMs: 1, prepared: false, reason: "ineligible", trackId: item.trackId };
+          }
+          budget -= 1;
+          reserved += 1;
+        }
+        return {
+          elapsedMs: 1,
+          prepared: true,
+          snapshotToken: `snapshot-${item.trackId}`,
+          track: {
+            anchored: true,
+            artists: [],
+            certified: isCertified,
+            title: item.trackId,
+            trackId: item.trackId,
+          },
+          trackId: item.trackId,
+        };
+      });
+
+      writeFileSync(
+        `${statePath}.result`,
+        JSON.stringify({ deferred: 0, ok: true, reserved, results }),
+      );
+
+      return "completed";
+    }) as never;
+
+    return { calls, phase };
+  }
+
+  test("authorizes exactly the remaining count when the tick is wider than the op", () => {
+    // Batch cap 20 against an advertised width of 12 and five downloads left: the tail takes a
+    // SECOND batched call, and the two calls share one budget rather than each seeing five.
+    const ids = Array.from({ length: 20 }, (_, index) => `track-${index}`);
+    const { calls, phase } = fakeServer({ remaining: 5 });
+
+    const page = prepareTickSnapshots(ids, "capture", 12, phase);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.reservedThisTick).toBe(0);
+    // The second call is told what the first spent, and spends the rest.
+    expect(calls[1]?.reservedThisTick).toBe(5);
+    expect(page?.reserved).toBe(5);
+    const authorized = [...(page?.prepared.values() ?? [])].filter((entry) => entry.prepared);
+    expect(authorized).toHaveLength(5);
+    // Every row got an answer; fifteen of them the refusal a closed budget gives.
+    expect(page?.prepared.size).toBe(20);
+  });
+
+  test("a wall-budget deferred tail is re-asked in a batched call, never dropped to per-row", () => {
+    const ids = Array.from({ length: 6 }, (_, index) => `track-${index}`);
+    // Each call answers only its first two rows; the rest come back `deferred`.
+    const { calls, phase } = fakeServer({ answerLimit: 2, remaining: 3 });
+
+    const page = prepareTickSnapshots(ids, "capture", 6, phase);
+
+    // Every call carries the running reservation, so the deferred tail cannot re-spend the cap.
+    expect(calls.length).toBeGreaterThan(1);
+    expect(calls.map((call) => call.reservedThisTick)).toEqual(
+      calls.map((call) => call.reservedThisTick).sort((left, right) => left - right),
+    );
+    expect(page?.reserved).toBe(3);
+    expect([...(page?.prepared.values() ?? [])].filter((entry) => entry.prepared)).toHaveLength(3);
+  });
+
+  test("a certified finding is authorized past a spent budget and consumes none of it", () => {
+    const ids = ["cat-0", "cert-0", "cat-1", "cert-1"];
+    const { phase } = fakeServer({
+      certified: (trackId) => trackId.startsWith("cert-"),
+      remaining: 1,
+    });
+
+    const page = prepareTickSnapshots(ids, "capture", 12, phase);
+
+    // One catalogue row rides the budget, the other is refused; both findings prepare regardless.
+    expect(page?.reserved).toBe(1);
+    expect(page?.prepared.get("cert-0")?.prepared).toBe(true);
+    expect(page?.prepared.get("cert-1")?.prepared).toBe(true);
+    expect(page?.prepared.get("cat-0")?.prepared).toBe(true);
+    expect(page?.prepared.get("cat-1")?.prepared).toBe(false);
+  });
+
+  test("stops rather than spending another lease when a call answers nothing", () => {
+    const ids = ["track-0", "track-1"];
+    // A server that defers everything makes no progress; the loop must not spin on it.
+    const { calls, phase } = fakeServer({ answerLimit: 0, remaining: 5 });
+
+    const page = prepareTickSnapshots(ids, "capture", 2, phase);
+
+    expect(calls).toHaveLength(1);
+    expect(page?.prepared.size).toBe(0);
+    expect(page?.reserved).toBe(0);
+  });
+
+  test("a yielded call freezes nothing and pauses the tick", () => {
+    const page = prepareTickSnapshots(["track-0"], "capture", 2, (() => "yielded") as never);
+
+    expect(page).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE ANCHORED-FIRST ORDER'S RECEIPT — published, not assumed.
+// ---------------------------------------------------------------------------
+
+describe("the anchored split the tick publishes", () => {
+  test("rides the summary beside the counts it explains", () => {
+    const summary = buildCaptureSummary({
+      anchoring: { attemptsAnchored: 9, attemptsUnanchored: 3, doneAnchored: 7, doneUnanchored: 1 },
+      batch: 12,
+      botChallenges: 0,
+      botChallengesUncleared: 0,
+      counts: {
+        done: 8,
+        failed: 0,
+        pending: 0,
+        reconciled: 0,
+        rejected: 0,
+        skipped: 0,
+        unmatched: 4,
+      },
+      elapsedMs: 1_000,
+      itemTiming: [4, 12, 8],
+      provenance: { failed: 0, found: 0, none: 0 },
+      reverdict: { asked: 0, failed: 0 },
+      writes: { confirmed: 8, failed: 0, pending: 0 },
+    });
+
+    // What the order handed out, and what the metered spend actually bought.
+    expect(summary).toMatchObject({
+      attemptsAnchored: 9,
+      attemptsUnanchored: 3,
+      doneAnchored: 7,
+      doneUnanchored: 1,
+    });
+    // The batch width's evidence rides the same line.
+    expect(summary).toMatchObject({ itemMsMax: 12, itemMsP50: 8, itemSamples: 3 });
+    // The counts the tripwires read are untouched by either addition.
+    expect(summary).toMatchObject({ checked: 12, done: 8, failed: 0 });
+  });
+
+  test("says nothing about anchoring when the Worker answered no flag", () => {
+    const summary = buildCaptureSummary({
+      batch: 1,
+      botChallenges: 0,
+      botChallengesUncleared: 0,
+      counts: {
+        done: 1,
+        failed: 0,
+        pending: 0,
+        reconciled: 0,
+        rejected: 0,
+        skipped: 0,
+        unmatched: 0,
+      },
+      elapsedMs: 10,
+      provenance: { failed: 0, found: 0, none: 0 },
+      reverdict: { asked: 0, failed: 0 },
+      writes: { confirmed: 1, failed: 0, pending: 0 },
+    });
+
+    // An honest gap, never a fabricated zero.
+    expect(summary.doneAnchored).toBeUndefined();
+    expect(summary.itemMsMax).toBeUndefined();
   });
 });
