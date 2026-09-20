@@ -43,7 +43,12 @@ import {
   resolveAnchorFree,
   resolveAnchorReview,
 } from "../anchor";
-import { isAnchorApifyEnabled, setAnchorApifyEnabled } from "../anchor-apify";
+import {
+  getAnchorApifyBudget,
+  isAnchorApifyEnabled,
+  setAnchorApifyDailyRows,
+  setAnchorApifyEnabled,
+} from "../anchor-apify";
 import {
   isAnchorSpotifySearchEnabled,
   setAnchorSpotifySearchEnabled,
@@ -578,6 +583,36 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
     });
 
+  // GET /admin/catalogue/anchor/apify-budget — the paid anchor rung's daily row brake. Admin tier
+  // (agent-allowed READ, the `get_capture_budget` precedent): the box's sweep reads it in its
+  // preflight so it stops PULLING rows it cannot spend on, instead of pulling them and being refused
+  // one at a time. The same state the resolver's own charge reads — a display that can disagree with
+  // the budget is worse than none.
+  const getAnchorApifyBudgetHandler = os.get_anchor_apify_budget
+    .use(adminAuth)
+    .handler(async () => {
+      try {
+        return { ...(await getAnchorApifyBudget()), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // PUT /admin/catalogue/anchor/apify-budget — OPERATOR tier, the `set_capture_budget` rule: a
+  // machine does not raise its own spend cap. The kill-flag beside it is a switch; this is the number
+  // between its two states. It returns the brake as stored (one call writes and reads back) and
+  // leaves the day's tally alone, so raising the cap mid-day releases the rows it was holding.
+  const setAnchorApifyBudgetHandler = os.set_anchor_apify_budget
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { ...(await setAnchorApifyDailyRows(input.dailyRows)), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // GET /admin/catalogue/capture-budget — the spend readout. Admin tier (agent-allowed READ,
   // the `get_crawl_status` precedent): reading what a budget has left publishes nothing and
   // spends nothing, and the box's sweeps are entitled to know why the queue went quiet.
@@ -629,13 +664,21 @@ export function adminCatalogueHandlers(os: Implementer) {
       try {
         // `rungs` rides along because a paused breaker and a DISARMED rung look identical from
         // outside — both are silence — and the two operator flags had no read surface at all.
-        const [breaker, apifyEnabled, spotifySearchEnabled] = await Promise.all([
+        // The BRAKE rides with the flags for the same reason the flags ride with the breaker: "why is
+        // the anchor sweep quiet" has a fourth answer, and the day's rows being gone looks from
+        // outside exactly like the other three.
+        const [breaker, apifyBudget, apifyEnabled, spotifySearchEnabled] = await Promise.all([
           getSpotifyAnchorBreakerState(),
+          getAnchorApifyBudget(),
           isAnchorApifyEnabled(),
           isAnchorSpotifySearchEnabled(),
         ]);
 
-        return { ...breaker, ok: true as const, rungs: { apifyEnabled, spotifySearchEnabled } };
+        return {
+          ...breaker,
+          ok: true as const,
+          rungs: { apifyBudget, apifyEnabled, spotifySearchEnabled },
+        };
       } catch (error) {
         throw apiFault(error);
       }
@@ -680,6 +723,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     crawl_catalogue: crawlCatalogueHandler,
     flag_wrong_audio: flagWrongAudioHandler,
     force_capture: forceCaptureHandler,
+    get_anchor_apify_budget: getAnchorApifyBudgetHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
     get_spotify_anchor_breaker: getSpotifyAnchorBreakerHandler,
@@ -695,6 +739,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     resolve_anchor: resolveAnchorHandler,
     resolve_anchor_review: resolveAnchorReviewHandler,
     set_anchor_apify: setAnchorApifyHandler,
+    set_anchor_apify_budget: setAnchorApifyBudgetHandler,
     set_anchor_search: setAnchorSearchHandler,
     set_capture_budget: setCaptureBudgetHandler,
     set_track_dismissed: setTrackDismissedHandler,

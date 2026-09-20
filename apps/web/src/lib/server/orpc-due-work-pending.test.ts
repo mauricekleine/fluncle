@@ -15,7 +15,13 @@ import { call, implement, ORPCError } from "@orpc/server";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { type OrpcContext } from "./orpc-auth";
 import { apiFault, toFault, type ApiFaultData } from "./orpc/_shared";
-import { apiUrl, readJson, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
+import {
+  apiUrl,
+  OPERATOR_TOKEN,
+  readJson,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 const captureException = vi.fn();
 
@@ -36,7 +42,24 @@ vi.mock("./tracks", async (importOriginal) => {
   };
 });
 
+vi.mock("./track-work", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./track-work")>();
+
+  return {
+    ...actual,
+    countTrackWork: (...args: Parameters<typeof actual.countTrackWork>) =>
+      trackWorkPage === "real" ? actual.countTrackWork(...args) : Promise.resolve(4_812),
+    listTrackWork: (...args: Parameters<typeof actual.listTrackWork>) =>
+      trackWorkPage === "pending"
+        ? Promise.reject(new DueWorkMaintenancePendingError("embed-catalogue"))
+        : trackWorkPage === "served"
+          ? Promise.resolve([])
+          : actual.listTrackWork(...args),
+  };
+});
+
 let pendingFromListTracks = false;
+let trackWorkPage: "pending" | "real" | "served" = "real";
 
 beforeAll(() => {
   setAdminTokenEnv();
@@ -45,7 +68,100 @@ warmOrpcRouter();
 
 afterEach(() => {
   pendingFromListTracks = false;
+  trackWorkPage = "real";
   captureException.mockClear();
+});
+
+// A COUNT IS A GAUGE, NOT A WORK HANDOUT. The deferral protects a metered ORDER, so it withholds
+// the page — but refusing the SIZE of the backlog blinds the operator and the gauge-publishing
+// sweeps exactly when debt is the thing they need to see.
+describe("the worklist count answers under debt while the page stays withheld", () => {
+  const read = (query: string) =>
+    import("./orpc").then(({ handleOrpc }) =>
+      handleOrpc(
+        new Request(apiUrl(`/admin/tracks/work?kind=embed&limit=5&${query}`), {
+          headers: { Authorization: `Bearer ${OPERATOR_TOKEN}` },
+        }),
+      ),
+    );
+
+  it("answers the backlog, an empty page, and debtPending to a caller that opted in", async () => {
+    trackWorkPage = "pending";
+
+    const response = await read("count=true&debtAware=true");
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toMatchObject({
+      debtPending: true,
+      ok: true,
+      queued: 4_812,
+      tracks: [],
+    });
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  // THE OLD-SWEEP WINDOW. The box CLI is a pinned release; a sweep baked before this flag existed
+  // does not send it, and several of them size PAID capture and GPU rental off this read. Handed a
+  // 200 with an empty page it would report "no work" against a real backlog until its next rebake.
+  // It must keep getting the refusal it already pauses on, which is what makes the Worker safe to
+  // deploy ahead of the box.
+  it("keeps the typed 503 for a counting caller that did NOT opt in", async () => {
+    trackWorkPage = "pending";
+
+    const response = await read("count=true");
+
+    expect(response?.status).toBe(503);
+    expect(await readJson(response)).toMatchObject({
+      code: "due_work_maintenance_pending",
+      ok: false,
+    });
+  });
+
+  it("treats any value other than the exact string as not opted in", async () => {
+    trackWorkPage = "pending";
+
+    for (const flag of ["1", "yes", "TRUE", ""]) {
+      const response = await read(`count=true&debtAware=${flag}`);
+
+      expect(response?.status).toBe(503);
+    }
+  });
+
+  it("still refuses a page-only read, where the page IS the answer", async () => {
+    trackWorkPage = "pending";
+
+    // Even opted in: without `count` there is no gauge to answer, only a page that was withheld.
+    for (const query of ["", "debtAware=true"]) {
+      const response = await read(query);
+
+      expect(response?.status).toBe(503);
+      expect(await readJson(response)).toMatchObject({
+        code: "due_work_maintenance_pending",
+        ok: false,
+      });
+    }
+  });
+
+  // An opted-in read answers the flag either way, so its presence is also the caller's proof that
+  // this Worker understood the flag. An OLD Worker omits the field entirely, which is how a NEW
+  // caller tells "the page is genuinely complete" from "my flag was ignored".
+  it("answers debtPending false, not absent, when an opted-in read was served", async () => {
+    trackWorkPage = "served";
+
+    expect(await readJson(await read("count=true&debtAware=true"))).toMatchObject({
+      debtPending: false,
+      ok: true,
+    });
+  });
+
+  it("omits debtPending entirely for a caller that did not opt in", async () => {
+    trackWorkPage = "served";
+
+    const body = await readJson(await read("count=true"));
+
+    expect(body).toMatchObject({ ok: true });
+    expect((body as { debtPending?: unknown }).debtPending).toBeUndefined();
+  });
 });
 
 describe("due-work maintenance pending is a typed 503, never a fault", () => {

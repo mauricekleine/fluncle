@@ -56,6 +56,7 @@ import {
   type TrackUpdate,
   updateTrack,
 } from "../track-update";
+import { isDueWorkMaintenancePending } from "../due-work";
 import { countTrackWork, listTrackWork } from "../track-work";
 import {
   authorizeCaptureReconciliation,
@@ -782,22 +783,52 @@ export function adminTracksHandlers(os: Implementer) {
   // metered capture budget should be spent (docs/gpu-batch-embed.md, docs/the-ear.md).
   const listTrackWorkHandler = os.list_track_work.use(adminAuth).handler(async ({ input }) => {
     try {
-      const tracks = await listTrackWork({
-        kind: input.kind,
-        limit: input.limit,
-        scope: input.scope,
-      });
+      const counting = input.count === "true";
+      // THE GAUGE READING IS OPT-IN, and the caller is the one who opts in.
+      //
+      // A COUNT IS A GAUGE, NOT A WORK HANDOUT: a page the due-work drain withheld is never
+      // served, so `tracks` stays empty and no row reaches a metered budget, while the backlog
+      // SIZE is a different question answered from the projection's own counters. Refusing that
+      // number blinds the operator exactly when debt is what they need to see.
+      //
+      // But the box CLI is a pinned release that lags this Worker. An OLD sweep has no
+      // `debtPending` in its vocabulary, and several of them size PAID capture and GPU rental off
+      // this read — handed a 200 with an empty page it would report "no work" against a real
+      // backlog until its next rebake. So the new shape is spoken only to a caller that asked for
+      // it by name. Without `debtAware`, this stays the typed 503 every existing consumer already
+      // pauses on.
+      const debtAware = counting && input.debtAware === "true";
+      let tracks: Awaited<ReturnType<typeof listTrackWork>> = [];
+      let debtPending = false;
+      try {
+        tracks = await listTrackWork({
+          kind: input.kind,
+          limit: input.limit,
+          scope: input.scope,
+        });
+      } catch (error) {
+        // A page-only read keeps refusing whatever the flag says: there the page is the answer.
+        if (!debtAware || !isDueWorkMaintenancePending(error)) {
+          throw error;
+        }
+        debtPending = true;
+      }
 
       // `count=true` → the size of the WHOLE backlog, not the page. Opt-in: a page read is
       // capped at 200 rows, so `tracks.length` cannot answer "how much is left", and that is
       // the number the GPU batch reports at the end (rent another hour, or not). Opt-in keeps
       // page-only readers cheap; a sweep must ask for it before publishing a backlog gauge.
-      const queued =
-        input.count === "true"
-          ? await countTrackWork({ kind: input.kind, scope: input.scope })
-          : undefined;
+      const queued = counting
+        ? await countTrackWork({ kind: input.kind, scope: input.scope })
+        : undefined;
 
-      return { capabilities: TRACK_WORK_CAPABILITIES, ok: true, queued, tracks } as const;
+      return {
+        capabilities: TRACK_WORK_CAPABILITIES,
+        debtPending: debtAware ? debtPending : undefined,
+        ok: true,
+        queued,
+        tracks,
+      } as const;
     } catch (error) {
       throw toFault(error);
     }

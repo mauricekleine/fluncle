@@ -805,6 +805,29 @@ export const tracks = sqliteTable(
     // NULLABLE, no `.default()` (the ~125-index rebuild trap). Public via the identity envelope; no
     // lastmod bump.
     spotifyAnchoredAt: text("spotify_anchored_at"),
+    // THE FREE EXACT-ISRC ASK RECEIPT (docs/catalogue-crawler.md § the anchor) — ISO of the moment
+    // the FREE exact-ISRC Spotify rung (`findSpotifyTrackByIsrc`, anchor.ts `resolveViaSpotifySearch`)
+    // genuinely ASKED Spotify about this row and got a CLEAN MISS. Only a real ask writes it: a row
+    // whose ask was deferred by the box's per-tick budget or night window, refused by the breaker or
+    // the shared meter, throttled (429), or rejected by an unauthorized grant leaves it NULL, because
+    // none of those put the question to Spotify at all.
+    //
+    // IT IS THE PAID RUNG'S ADMISSION TICKET. The waterfall's free exact-ISRC rung answers ~78% of the
+    // asks it is given, and the metered Apify fallback answers the SAME question for money — so an
+    // ISRC-bearing row may only reach Apify once this receipt exists (anchor.ts `resolveAnchorFree`'s
+    // eligibility rule, enforced again in `anchorTrack`). NULL therefore means "not yet asked, keep its
+    // turn", never "asked and missed".
+    //
+    // IT LIVES FOR ONE RE-ASK WINDOW. Every write of `spotify_anchor_attempted_at` beside it clears
+    // this column in the same statement (the hit + miss writes in `anchorTrack`, and
+    // `stampAnchorAttempt`), so a row returning after `ANCHOR_REASK_AFTER_DAYS` must be asked for free
+    // again before it can be bought — a receipt from a previous window is not evidence about this one.
+    //
+    // NULLABLE with NO `.default()`, on the `spotify_anchor_attempts` rule above. NOT INDEXED: it is
+    // read per row inside the resolver (which has already fetched the row) and appears in no worklist
+    // predicate or ordering, so no btree walk depends on it and `tracks_funnel_scan_idx`'s coverage is
+    // untouched. Internal reliability state — no public surface, no lastmod bump.
+    spotifyIsrcAskedAt: text("spotify_isrc_asked_at"),
     // NULLABLE (they were NOT NULL until the tracks/findings split): a catalogue track
     // resolved from MusicBrainz/Discogs may have no Spotify presence at all. `track_id`
     // stays the opaque PK — today it happens to be the Spotify id; a catalogue-only track

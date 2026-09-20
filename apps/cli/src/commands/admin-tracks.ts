@@ -199,6 +199,11 @@ export type TrackWorkKind = "analyze" | "capture" | "embed";
 export type TrackWorkScope = "all" | "catalogue" | "findings";
 
 export type TrackWorkPage = {
+  /**
+   * The page was withheld because due-work repair is still converging, so `tracks` is empty and
+   * says nothing about the backlog. Only ever set on a `--count` read.
+   */
+  debtPending?: boolean;
   /** The WHOLE backlog for this kind+scope — only when `--count` was asked for. */
   queued?: number;
   /** The page, capped at 200 by the server. Never "how much is left". */
@@ -221,15 +226,23 @@ export async function trackWorkCommand(options: {
   // 200 rows, so counting rows in the page answers "how many did I get", never "how much is
   // left" — and at catalogue scale those differ by orders of magnitude. Emitted only when set,
   // so page-only readers stay byte-identical and never pay for the count.
+  // `debtAware` rides with `--count`: an operator asking how big the backlog is wants the number,
+  // not a refusal, when due-work repair is mid-convergence. The page is still withheld — the
+  // answer carries `debtPending` and an empty page — so no row is handed out either way.
   if (options.count) {
     params.set("count", "true");
+    params.set("debtAware", "true");
   }
 
   const response = await adminApiGet<TrackWorkPage>(
     `/api/v1/admin/tracks/work?${params.toString()}`,
   );
 
-  return { queued: response.queued, tracks: response.tracks ?? [] };
+  return {
+    debtPending: response.debtPending,
+    queued: response.queued,
+    tracks: response.tracks ?? [],
+  };
 }
 
 // One stale finding in the analysis-provenance requeue (RFC bpm-key-accuracy): its

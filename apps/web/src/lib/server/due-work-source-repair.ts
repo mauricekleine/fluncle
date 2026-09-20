@@ -22,12 +22,37 @@ import { getRequestScopedValue } from "./database-request-scope";
 import {
   DUE_WORK_BACKFILLS,
   dueWorkRepairDefinitions,
+  FINDING_DUE_WORK_KINDS,
   projectTrackDueWorkSourceRepairs,
   refreshDueWorkCatalogueRankCorpus,
 } from "./due-work-registry";
+import { DUE_WORK_TRACK_WORK_KIND_INVENTORY } from "./due-work-track-definitions";
+import { DUE_WORK_VENDOR_WORK_KIND_INVENTORY } from "./due-work-vendor-definitions";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
-export const SOURCE_REPAIR_LIMIT = 5;
+/**
+ * Physical queue rows one track source marker expands into. A track marker is the widest subject:
+ * it projects into every track queue, every vendor queue, and every finding queue, and each of
+ * those outcomes is exactly one row in the page's write batch — an upsert when the queue wants the
+ * subject, a delete when it does not.
+ */
+export const TRACK_SOURCE_REPAIR_FANOUT =
+  DUE_WORK_TRACK_WORK_KIND_INVENTORY.length +
+  DUE_WORK_VENDOR_WORK_KIND_INVENTORY.length +
+  FINDING_DUE_WORK_KINDS.length;
+
+/**
+ * Ordinary source markers one page converges. The bound is the page's ROW count, not its marker
+ * count and not its statement count: one marker multiplies into {@link TRACK_SOURCE_REPAIR_FANOUT}
+ * rows, so the widest page stays inside the shared {@link MAX_DUE_WORK_CHUNK_SIZE} projection bound
+ * every other bounded write batch in this module already runs at. Registering another physical
+ * queue narrows the page automatically instead of silently widening the batch past that bound.
+ *
+ * The page always flushes as the same two to four statements — a set-based guarded upsert, a
+ * set-based guarded delete, the marker clear, and the audit-fence advance — and widening it adds
+ * rows and bound parameters to those, never more statements.
+ */
+export const SOURCE_REPAIR_LIMIT = Math.floor(MAX_DUE_WORK_CHUNK_SIZE / TRACK_SOURCE_REPAIR_FANOUT);
 export const PHYSICAL_REPAIR_LIMIT = 50;
 // A rank rebuild page is one indexed `track_id` range read, then one write batch of per-row guarded
 // upserts (14 bound values each, no compound SELECT) plus one guarded checkpoint advance; bounded
@@ -468,9 +493,9 @@ export async function fanOutDueWorkSourceRepairs(
   ) {
     throw new Error(`due-work limit must be an integer from 1 through ${MAX_DUE_WORK_CHUNK_SIZE}`);
   }
-  // One track marker can project into every registered physical queue. Keep that multiplicative
-  // write shape hosted-safe even when the operator supplies the shared 500-row projection limit;
-  // callers already continue from the durable marker set while `hasMore` remains true.
+  // One track marker can project into every registered physical queue. The page bound is therefore
+  // stated in rows, not markers, and {@link SOURCE_REPAIR_LIMIT} carries that division; callers
+  // already continue from the durable marker set while `hasMore` remains true.
   const limit = Math.min(options.limit ?? SOURCE_REPAIR_LIMIT, SOURCE_REPAIR_LIMIT);
   const page = await listDueWorkSourceRepairs(client, {
     excludeSubjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,

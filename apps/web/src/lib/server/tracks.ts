@@ -3091,6 +3091,27 @@ function buildTrackListFilters({
   return { filterArgs, filterClauses };
 }
 
+/**
+ * The render queues answer an honest EMPTY page while track source repair is still converging,
+ * instead of deferring the read.
+ *
+ * The rail the deferral exists to hold is untouched: an empty page hands out no row, so nothing
+ * downstream spends on an ordering repair has not caught up with, and every row this read DOES
+ * serve is still withheld per subject by its own outstanding marker. What the deferral costs here
+ * is the whole queue: the render conductor is a single-flight loop over roughly one finding a day,
+ * so its ready page is empty almost every tick, and a permanently non-zero track family therefore
+ * turned every one of those ticks into a deferral rather than into a render. The worst a wrong
+ * empty can cost is one delayed pick, which the next tick takes.
+ *
+ * The metered queues keep the deferral. There an empty answer is read as "the backlog is drained"
+ * by the sweeps that size a capture or GPU budget off it, and relaxing that is an operator ruling,
+ * not a code change.
+ */
+const EMPTY_RENDER_PAGE_IS_SERVABLE = new Set<FindingDueWorkKind>([
+  "finding.render",
+  "finding.render.requires-observation",
+]);
+
 async function listProjectedTracks(
   db: Awaited<ReturnType<typeof getDb>>,
   kind: FindingDueWorkKind,
@@ -3117,6 +3138,7 @@ async function listProjectedTracks(
     : undefined;
   const page = await readPromotedDueWorkPage(db, kind, {
     continuation,
+    emptyPageUnderDebt: EMPTY_RENDER_PAGE_IS_SERVABLE.has(kind) ? "serve" : "defer",
     limit: options.limit,
   });
 

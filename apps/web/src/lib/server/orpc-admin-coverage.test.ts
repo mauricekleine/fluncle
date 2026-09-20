@@ -114,6 +114,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The Spotify anchor-search THROTTLE breaker's READ — contract-only oRPC (no TanStack route
   // file). Admin tier (agent-allowed, the `get_capture_budget` precedent): the box's anchor sweep
   // is entitled to know why its free Spotify rungs went quiet. Its RESET sibling is operator tier.
+  "GET /admin/catalogue/anchor/apify-budget": "get_anchor_apify_budget",
   "GET /admin/catalogue/anchor/breaker": "get_spotify_anchor_breaker",
   // THE CAPTURE BUDGET (docs/the-ear.md § The capture budget) — the spend readout behind the
   // brake on metered per-GB audio capture. Contract-only oRPC (no TanStack route file). Admin
@@ -611,6 +612,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // budget → a clean self-managing state), the `set_capture_budget`/`set_anchor_search` class. Static
   // `/apify` nests under the `/anchor` POST above.
   "PUT /admin/catalogue/anchor/apify": "set_anchor_apify",
+  "PUT /admin/catalogue/anchor/apify-budget": "set_anchor_apify_budget",
   // The DARK flag for slice 2's Spotify anchor-search rungs — contract-only oRPC (no TanStack route
   // file). OPERATOR tier: it arms the shared official Spotify app (mints/publish) against the
   // catalogue, the `set_capture_budget` money/rate-judgement class. Static `/search` nests under the

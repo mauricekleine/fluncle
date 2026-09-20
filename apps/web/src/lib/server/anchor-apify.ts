@@ -52,8 +52,43 @@
 // keeps the EARLIEST time and the window covers the whole outage. The requeue is a ONE-SHOT operator write
 // (the flip-ON), never a per-tick/hot path, so its full-table scan is acceptable.
 
+// ── THE DAILY ROW BRAKE (below the flag) ──────────────────────────────────────────────────────────
+// The kill-flag above is a switch: Apify runs, or it does not. Between those two states there was no
+// number — the sweep sent every free-rung miss to the actor, hour after hour, and the only meter was
+// Apify's own console, which nobody reads at 04:00. A per-day ROW CAP is that number. The operator's
+// cap is a `settings` row (`anchor_apify_daily_rows`); the day's TALLY is not, and that split is the
+// whole point of this section.
+//
+// THE TALLY IS A FIXED-WINDOW COUNTER, NOT A KV BLOB, BECAUSE A MONEY CAP MUST BE ATOMIC. Reading a
+// `settings` row, adding one in app code and writing it back is a read-then-write race: two callers
+// at cap−1 both read cap−1, both write cap, and the cap is breached. "The sweep is single-flight" is
+// not the guarantee it sounds like either — an operator's attended `--limit` burn overlaps the hourly
+// timer, and both reach `resolve_anchor`. A LOST UPDATE ON A SPEND METER MEANS OVER-SPEND, so the
+// increment and the enforcement have to be the same statement.
+//
+// That statement already exists: `rate_limit_counters` + `bumpRateLimitCounter` (./rate-limit.ts) is
+// the repo's ONE atomic conditional upsert — `on conflict … do update set count = count + ? where
+// count + ? <= ?` with `returning count`, so at the cap the UPDATE is a no-op, RETURNING yields no
+// row, and two concurrent charges can never both pass at cap−1. It is a fixed-window counter keyed
+// `(action, bucket, window_start)`, and a `windowMs` of 24h aligns `window_start` to UTC midnight —
+// which IS the day boundary this cap is expressed in, so the roll needs no sweep and no marker. It
+// also already has retention pruning wired into the health snapshot. Reusing it is the rule about
+// searching before building, and it is why this brake needs no table and no migration of its own.
+//
+// IT COUNTS AUTHORISATIONS, NOT RECEIPTS. The server charges when it tells the box a row is
+// Apify-ELIGIBLE (anchor.ts `resolveAnchorFree`) — before the actor runs — because that is the only
+// moment the server is in the loop ahead of the money. A sweep that dies between the authorisation and
+// the actor over-counts by one row, which is the conservative direction: the brake reads the spend it
+// AUTHORISED, never less than what was actually billed.
+//
+// THE BOX IS NOT THE ENFORCER. It holds an agent-scoped token and is a pinned, lagging build, so the
+// cap is read and charged server-side on every `resolve_anchor`; the sweep's own preflight read of the
+// cap is a courtesy that lets it stop pulling rows it cannot spend on, never the gate.
+
 import { getDb } from "./db";
 import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
+import { logEvent } from "./log";
+import { bumpRateLimitCounter, readRateLimitCount } from "./rate-limit";
 import { deleteSetting, getSetting, setSetting } from "./settings";
 
 /** The kill-flag on the shared `settings` KV. DEFAULT ON — only the literal "false" disables it. */
@@ -78,6 +113,149 @@ export const ANCHOR_APIFY_DISABLED_AT_KEY = "anchor_apify_disabled_at";
  */
 export async function isAnchorApifyEnabled(): Promise<boolean> {
   return (await getSetting(ANCHOR_APIFY_ENABLED_KEY)) !== "false";
+}
+
+/** The operator's cap on catalogue rows sent to the metered Apify actor per UTC day. */
+export const ANCHOR_APIFY_DAILY_ROWS_KEY = "anchor_apify_daily_rows";
+
+/** The fixed-window counter's action key — the day's tally lives in `rate_limit_counters`. */
+export const ANCHOR_APIFY_SPEND_ACTION = "anchor_apify_rows";
+
+/**
+ * Its bucket. The cap is GLOBAL (one archive, one Apify account, one bill), so there is exactly one
+ * bucket and it is named rather than derived — nothing about this spend is per-caller.
+ */
+export const ANCHOR_APIFY_SPEND_BUCKET = "catalogue";
+
+/** The window: 24h, which aligns `window_start` to UTC midnight and makes the roll implicit. */
+export const ANCHOR_APIFY_SPEND_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The default cap: 300 rows a day.
+ *
+ * A row costs one keyword search at `FLUNCLE_ANCHOR_KEYWORD_LIMIT` results (3 by default) and the
+ * actor bills per result, so 300 rows is a bounded few dollars a day rather than an open tab. It is
+ * DELIBERATELY BELOW what the waterfall can produce: the brake should bite and be raised on purpose,
+ * not sit slack and be discovered after a bill.
+ */
+export const ANCHOR_APIFY_DEFAULT_DAILY_ROWS = 300;
+
+/** The Apify row brake's whole readout — the cap, the UTC day's spend, and what is left. */
+export type AnchorApifyBudget = {
+  /** The UTC day the tally belongs to (`YYYY-MM-DD`). */
+  day: string;
+  /** The operator's cap on rows per UTC day. */
+  dailyRows: number;
+  /** Rows left before the brake bites. Never negative. */
+  remainingRows: number;
+  /** Rows the server has AUTHORISED for the actor today. */
+  rowsSent: number;
+  /** True ⇒ the cap is reached and no further row may be sent to the actor today. */
+  spent: boolean;
+};
+
+/** The UTC calendar day a tally belongs to — the window the cap is expressed in. */
+function utcDay(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * The cap as stored. DEFAULT-CONSERVATIVE: an unset key, an empty database, a fresh preview, or any
+ * value that is not a non-negative integer all read as {@link ANCHOR_APIFY_DEFAULT_DAILY_ROWS}. A lost
+ * row must never read as "unlimited" — the failure mode of a spend rail has to be the cheap one. `0`
+ * IS a legal cap and means "send nothing", which is a different statement from the kill-flag being off
+ * (the cap can be raised back without touching the switch — the `set_capture_budget` rule).
+ */
+async function readAnchorApifyDailyRows(): Promise<number> {
+  const raw = await getSetting(ANCHOR_APIFY_DAILY_ROWS_KEY);
+  const parsed = Number(raw);
+
+  return raw !== undefined && Number.isInteger(parsed) && parsed >= 0
+    ? parsed
+    : ANCHOR_APIFY_DEFAULT_DAILY_ROWS;
+}
+
+/** The cap and the live tally, folded into the readout shape. */
+function budgetOf(dailyRows: number, rowsSent: number, now: Date): AnchorApifyBudget {
+  return {
+    dailyRows,
+    day: utcDay(now),
+    remainingRows: Math.max(0, dailyRows - rowsSent),
+    rowsSent,
+    spent: rowsSent >= dailyRows,
+  };
+}
+
+/** Read the brake without touching it — the readout `/admin`, the CLI and the sweep's preflight share. */
+export async function getAnchorApifyBudget(now: Date = new Date()): Promise<AnchorApifyBudget> {
+  const [dailyRows, rowsSent] = await Promise.all([
+    readAnchorApifyDailyRows(),
+    readRateLimitCount({
+      action: ANCHOR_APIFY_SPEND_ACTION,
+      bucket: ANCHOR_APIFY_SPEND_BUCKET,
+      now: now.getTime(),
+      windowMs: ANCHOR_APIFY_SPEND_WINDOW_MS,
+    }),
+  ]);
+
+  return budgetOf(dailyRows, rowsSent, now);
+}
+
+/**
+ * Set the operator's daily row cap and read the brake back, so one call both writes and reads — the
+ * `set_capture_budget` shape. The tally is untouched: raising the cap mid-day releases the rows the
+ * brake is holding back rather than pretending the day started over.
+ */
+export async function setAnchorApifyDailyRows(
+  dailyRows: number,
+  now: Date = new Date(),
+): Promise<AnchorApifyBudget> {
+  await setSetting(ANCHOR_APIFY_DAILY_ROWS_KEY, String(Math.max(0, Math.trunc(dailyRows))));
+
+  return getAnchorApifyBudget(now);
+}
+
+/**
+ * CHARGE ONE ROW to today's tally and report the brake as it now stands — called at the single moment
+ * the server authorises a row for the metered actor.
+ *
+ * ONE ATOMIC STATEMENT does both halves: `bumpRateLimitCounter` increments the day's counter ONLY
+ * while the spend still fits under the cap, and returns nothing when it does not. So `charged` is the
+ * statement's own verdict rather than a decision taken around it, and two concurrent charges at
+ * cap−1 cannot both pass — which is the property a money cap has to have, because the hourly timer
+ * and an operator's attended `--limit` burn genuinely do overlap.
+ *
+ * `charged: false` means the caller must NOT send the row. Total by contract: a database fault is
+ * logged and read as "no room", the cheap failure.
+ */
+export async function chargeAnchorApifyRow(
+  now: Date = new Date(),
+): Promise<{ budget: AnchorApifyBudget; charged: boolean }> {
+  try {
+    const dailyRows = await readAnchorApifyDailyRows();
+    const rowsSent = await bumpRateLimitCounter({
+      action: ANCHOR_APIFY_SPEND_ACTION,
+      bucket: ANCHOR_APIFY_SPEND_BUCKET,
+      limit: dailyRows,
+      now: now.getTime(),
+      windowMs: ANCHOR_APIFY_SPEND_WINDOW_MS,
+    });
+
+    if (rowsSent === undefined) {
+      // Refused by the statement itself. Read the tally back so the readout is honest about where
+      // the day actually stands rather than asserting it equals the cap.
+      return { budget: await getAnchorApifyBudget(now), charged: false };
+    }
+
+    return { budget: budgetOf(dailyRows, rowsSent, now), charged: true };
+  } catch (error) {
+    logEvent("warn", "anchor.apify-spend-charge-failed", { error });
+
+    return {
+      budget: { dailyRows: 0, day: utcDay(now), remainingRows: 0, rowsSent: 0, spent: true },
+      charged: false,
+    };
+  }
 }
 
 /**

@@ -65,6 +65,7 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "album-mint",
     "anchor-apify-requeue",
     "anchor-hit",
+    "anchor-isrc-asked",
     "anchor-miss",
     "anchor-requeue",
     "anchor-review-accept",

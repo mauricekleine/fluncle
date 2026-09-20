@@ -88,6 +88,7 @@ import {
   dueWorkRepairPendingSummary,
   failureBodyUnlessRepairPending,
   isDueWorkRepairPending,
+  throwIfPageRepairPending,
 } from "./due-work-repair-pending";
 
 // ---------------------------------------------------------------------------
@@ -412,6 +413,11 @@ export function parseEmbedQueue(body: unknown): {
   }
 
   const page = body as { capabilities?: unknown; queued?: unknown; tracks?: unknown };
+  // This read asks for the gauge reading (`debtAware=true`), so a page the due-work drain withheld
+  // arrives as an empty page plus `debtPending` instead of the typed 503. The sweep consumes the
+  // PAGE, and an empty page under debt is not a drained queue, so it pauses on it exactly as it
+  // pauses on the refusal — the batched write path below must not run against a withheld page.
+  throwIfPageRepairPending("embed queue read", page);
   const tracks = Array.isArray(page.tracks) ? (page.tracks as QueueFinding[]) : [];
   const queued =
     typeof page.queued === "number" && Number.isSafeInteger(page.queued) && page.queued >= 0
@@ -464,7 +470,7 @@ async function fetchEmbedQueue(): Promise<{
   queued?: number;
   tracks: QueueFinding[];
 }> {
-  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=embed&scope=all&limit=${QUEUE_LIMIT}&count=true`;
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=embed&scope=all&limit=${QUEUE_LIMIT}&count=true&debtAware=true`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),

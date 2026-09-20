@@ -20,6 +20,7 @@ import {
   triggerMutationPolicyId,
   TRIGGER_MUTATION_POLICY_IDS,
 } from "./database-operation-registry";
+import { PROJECTION_MAX_STEPS } from "../../../../cli/src/commands/admin-projections";
 import { SOURCE_REPAIR_LIMIT } from "./due-work-source-repair";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../../..");
@@ -996,8 +997,8 @@ describe("database operation registry", () => {
 
     expect(repairTargets).toEqual([
       "fluncle admin projections advance --target track_due_work --action repair --limit 500 --max-steps 1 --no-terminal-status --json",
-      "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps 20 --no-terminal-status --json",
-      "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps 4 --no-terminal-status --json",
+      "fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps <adaptive> --no-terminal-status --json",
+      "fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps <adaptive> --no-terminal-status --json",
     ]);
   });
 
@@ -1020,11 +1021,29 @@ describe("database operation registry", () => {
     ]);
   });
 
-  it("keeps rank's guard drain constant equal to the server source-repair page", () => {
+  it("keeps rank's baked guard drain constant a floor under the server source-repair page", () => {
     const script = readFileSync(join(REPO_ROOT, SCRIPTS, "rank-sweep.ts"), "utf8");
     const guard = /^export const SOURCE_REPAIRS_PER_RANK_GUARD = (\d+);$/m.exec(script);
 
-    expect(Number(guard?.[1])).toBe(SOURCE_REPAIR_LIMIT);
+    // The baked box script lags the Worker. It divides `rankPhaseCap`, so a value under the
+    // server's page grants extra phases the wall budget bounds, while a value over it would cap the
+    // tick below the phases its own drain needs.
+    expect(Number(guard?.[1])).toBeGreaterThan(0);
+    expect(Number(guard?.[1])).toBeLessThanOrEqual(SOURCE_REPAIR_LIMIT);
+  });
+
+  it("keeps the maintenance sweep's step ceiling inside the CLI's own bound", () => {
+    // The sweep mirrors the CLI's `--max-steps` bound as a literal, because a baked box script
+    // cannot import the workspace. Asking for more than the CLI accepts would make every family's
+    // advance fail validation instead of draining anything, so the mirror is pinned here.
+    const script = readFileSync(
+      join(REPO_ROOT, SCRIPTS, "projection-maintenance-sweep.ts"),
+      "utf8",
+    );
+    const ceiling = /^const PROJECTION_MAX_STEPS = (\d+);$/m.exec(script);
+
+    expect(Number(ceiling?.[1])).toBeGreaterThan(0);
+    expect(Number(ceiling?.[1])).toBeLessThanOrEqual(PROJECTION_MAX_STEPS);
   });
 
   it("pins embed's non-retried phased admission around its worklist read and vector write", () => {

@@ -96,6 +96,21 @@ export async function failureBodyUnlessRepairPending(
   return body;
 }
 
+/**
+ * The OK-response twin: a `count=true` worklist read answers the backlog size even while repair is
+ * converging, because a count is a gauge and hands out no row. It reports that with an empty page
+ * and `debtPending: true` instead of the typed 503. A sweep consuming the PAGE must pause on it
+ * exactly as it paused on the refusal — an empty page under debt is not a drained queue, and a
+ * sweep that reported "no work" against a real backlog would be a gauge that lies.
+ */
+export function throwIfPageRepairPending(operation: string, payload: unknown): void {
+  const page = jsonObject(typeof payload === "string" ? payload : JSON.stringify(payload));
+
+  if (page?.debtPending === true) {
+    throw new DueWorkRepairPendingError(operation);
+  }
+}
+
 /** Throw {@link DueWorkRepairPendingError} when a failed CLI command printed the typed answer. */
 export function throwIfCliRepairPending(operation: string, exitCode: number, stdout: string): void {
   if (isDueWorkMaintenancePendingCliFailure(exitCode, stdout)) {

@@ -1808,6 +1808,24 @@ type CaptureAdmissionAction =
   | "queue"
   | "reconcile";
 
+/**
+ * Every admitted phase the parent can spawn. The child's argv guard reads THIS list, so adding an
+ * action to {@link CaptureAdmissionAction} without listing it here fails the type check instead of
+ * failing every tick at runtime with `invalid capture admission phase invocation`.
+ */
+export const CAPTURE_ADMISSION_ACTIONS = [
+  "commit",
+  "commit-batch",
+  "prepare",
+  "prepare-batch",
+  "queue",
+  "reconcile",
+] as const satisfies readonly CaptureAdmissionAction[];
+
+export function isCaptureAdmissionAction(value: string): value is CaptureAdmissionAction {
+  return (CAPTURE_ADMISSION_ACTIONS as readonly string[]).includes(value);
+}
+
 function phaseCommand(action: CaptureAdmissionAction, statePath: string): string[] {
   return [BUN_BIN, import.meta.filename, "--admission-phase", action, "--phase-state", statePath];
 }
@@ -4830,13 +4848,7 @@ async function main(): Promise<void> {
   const admissionPhase = argumentValue(argv, "--admission-phase");
   const phaseStatePath = argumentValue(argv, "--phase-state");
   if (admissionPhase) {
-    if (
-      !phaseStatePath ||
-      (admissionPhase !== "prepare" &&
-        admissionPhase !== "commit" &&
-        admissionPhase !== "queue" &&
-        admissionPhase !== "reconcile")
-    ) {
+    if (!phaseStatePath || !isCaptureAdmissionAction(admissionPhase)) {
       throw new Error("invalid capture admission phase invocation");
     }
     await runCaptureAdmissionChild(admissionPhase, phaseStatePath);

@@ -13,11 +13,14 @@ import { DUE_WORK_REPAIR_PENDING_REASON } from "./due-work-repair-pending";
 
 const BATCH = Number(process.env.FLUNCLE_RANK_BATCH ?? "250");
 const MAX_CALLS = Number(process.env.FLUNCLE_RANK_MAX_CALLS ?? "8");
-// Every guarded rank read converges at least this many track source markers, one server
-// source-repair page, before it can answer `due_work_maintenance_pending`; the Worker's read-drain
-// budget may converge more pages in the same call. It equals `SOURCE_REPAIR_LIMIT` in
-// apps/web/src/lib/server/due-work-source-repair.ts; database-operation-registry.test.ts pins the
-// parity.
+// Every guarded rank read converges at least this many track source markers before it can answer
+// `due_work_maintenance_pending`; the Worker's read-drain budget may converge more pages in the
+// same call. It is a FLOOR under the server's `SOURCE_REPAIR_LIMIT`
+// (apps/web/src/lib/server/due-work-source-repair.ts), never an equality: this script is baked into
+// the box image and lags the Worker, and it only divides `rankPhaseCap`, so understating the
+// server's page grants extra phases the wall budget still bounds, while overstating it would cap
+// the tick below the phases its own drain needs. database-operation-registry.test.ts pins that
+// direction.
 export const SOURCE_REPAIRS_PER_RANK_GUARD = 5;
 const PHASE_START_BUDGET_MS = 600_000;
 const CLI_CHILD_TIMEOUT_MS = 120_000;

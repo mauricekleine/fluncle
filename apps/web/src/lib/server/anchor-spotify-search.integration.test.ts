@@ -160,7 +160,10 @@ describe("resolveAnchorFree — the dark flag is the load-bearing gate", () => {
 
     expect(result).toEqual({
       anchored: false,
+      apifyBudgetRemaining: 299,
+      apifyEligible: true,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
@@ -224,7 +227,10 @@ describe("resolveAnchorFree — the Spotify ISRC rung (flag on, outside the wind
 
     expect(result).toEqual({
       anchored: true,
+      apifyBudgetRemaining: 300,
+      apifyEligible: false,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
@@ -279,7 +285,10 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
 
     expect(result).toEqual({
       anchored: true,
+      apifyBudgetRemaining: 300,
+      apifyEligible: false,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
@@ -340,7 +349,10 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
 
     expect(result).toEqual({
       anchored: false,
+      apifyBudgetRemaining: 299,
+      apifyEligible: true,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
@@ -402,7 +414,10 @@ describe("resolveAnchorFree — ListenBrainz still wins first, even with the fla
 
     expect(result).toEqual({
       anchored: true,
+      apifyBudgetRemaining: 300,
+      apifyEligible: false,
       apifyEnabled: true,
+      apifyIneligibleReason: null,
       freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
@@ -718,5 +733,285 @@ describe("resolveAnchorFree — the caller's deferral and the yield law", () => 
     expect(result.spotifyThrottled).toBe(true);
     // A no-ISRC row never reaches the exact rung, so the budget's unit is untouched.
     expect(result.spotifyIsrcAsked).toBe(false);
+  });
+});
+
+// ── THE PAID RUNG'S ADMISSION RULE ───────────────────────────────────────────────────────────────
+//
+// The free exact-ISRC rung and the metered Apify search answer the SAME question about an
+// ISRC-bearing row, and the free one answers roughly four asks in five — so a row the free rung has
+// not actually ASKED about must not be bought. The receipt for that ask is `spotify_isrc_asked_at`,
+// and every test here is a statement about who writes it and who may spend on it.
+
+/** The ask receipt + the re-ask stamp, the two ledgers the rule keeps apart. */
+async function askState(trackId: string): Promise<{ asked: unknown; attempted: unknown }> {
+  const row = await db.execute({
+    args: [trackId],
+    sql: "select spotify_isrc_asked_at, spotify_anchor_attempted_at from tracks where track_id = ?",
+  });
+
+  return {
+    asked: row.rows[0]?.spotify_isrc_asked_at,
+    attempted: row.rows[0]?.spotify_anchor_attempted_at,
+  };
+}
+
+describe("resolveAnchorFree — the paid rung is admitted only after a real free ask", () => {
+  it("an ISRC row whose ask was DEFERRED is refused the paid rung and keeps its turn", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_deferred" });
+
+    // The box's own tick guard (its ask budget / night window / the yield law) says "not this row".
+    const result = await resolveAnchorFree("mb_deferred", NON_FRIDAY, { spotifySearch: false });
+
+    expect(result.apifyEligible).toBe(false);
+    expect(result.apifyIneligibleReason).toBe("awaiting_free_ask");
+    // NOT ASKED IS NOT MISSED: no receipt, no backoff stamp, and no slot taken out of the day's cap.
+    expect(await askState("mb_deferred")).toEqual({ asked: null, attempted: null });
+    expect(result.apifyBudgetRemaining).toBe(300);
+    expect(findSpotifyTrackByIsrc).not.toHaveBeenCalled();
+  });
+
+  it("an ISRC row Spotify genuinely has nothing for writes the receipt and IS admitted", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_asked" });
+    findSpotifyTrackByIsrc.mockResolvedValue({ match: null });
+    searchTrackCandidates.mockResolvedValue([]);
+
+    const result = await resolveAnchorFree("mb_asked", NON_FRIDAY);
+
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalledTimes(1);
+    expect(result.apifyEligible).toBe(true);
+    expect(result.apifyIneligibleReason).toBeNull();
+    // The receipt is written, and it is the ONLY ledger that moved — the row is not backed off.
+    const state = await askState("mb_asked");
+    expect(state.asked).not.toBeNull();
+    expect(state.attempted).toBeNull();
+    // …and the row took one slot out of the day's cap, charged at the moment it was authorised.
+    expect(result.apifyBudgetRemaining).toBe(299);
+  });
+
+  it("a THROTTLED ask writes no receipt and admits nothing — the yield law and the money rail agree", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_429" });
+    findSpotifyTrackByIsrc.mockResolvedValue({ match: null, rateLimited: true });
+
+    const result = await resolveAnchorFree("mb_429", NON_FRIDAY);
+
+    expect(result.spotifyThrottled).toBe(true);
+    // The question was never actually put, so nothing is settled and nothing is bought.
+    expect(result.apifyEligible).toBe(false);
+    expect(result.apifyIneligibleReason).toBe("awaiting_free_ask");
+    expect((await askState("mb_429")).asked).toBeNull();
+  });
+
+  it("a receipt from an EARLIER tick admits the row without asking Spotify twice", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_prior" });
+    await db.execute({
+      args: ["mb_prior"],
+      sql: "update tracks set spotify_isrc_asked_at = '2026-09-19T03:00:00.000Z' where track_id = ?",
+    });
+
+    // Deferred this tick — but the question was already answered, so the row is still admitted. This
+    // is what lets a row asked at 03:00 be bought at 09:00 when the day's cap frees up.
+    const result = await resolveAnchorFree("mb_prior", NON_FRIDAY, { spotifySearch: false });
+
+    expect(findSpotifyTrackByIsrc).not.toHaveBeenCalled();
+    expect(result.apifyEligible).toBe(true);
+    expect(result.apifyBudgetRemaining).toBe(299);
+  });
+
+  it("with the free search rungs DISARMED every row is admitted at once (the exemption)", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    // No flag row ⇒ default OFF. No receipt can ever be written, so requiring one would close the
+    // only rung the row has left — the rule must not bite here, and the sweep drains as before.
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_exempt" });
+
+    const result = await resolveAnchorFree("mb_exempt", NON_FRIDAY);
+
+    expect(result.apifyEligible).toBe(true);
+    expect(result.apifyIneligibleReason).toBeNull();
+    expect((await askState("mb_exempt")).asked).toBeNull();
+  });
+
+  it("an ISRC-LESS row is admitted once the FUZZY rung actually ran", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: null, trackId: "mb_fuzzy_ran" });
+    searchTrackCandidates.mockResolvedValue([]);
+
+    const ran = await resolveAnchorFree("mb_fuzzy_ran", NON_FRIDAY);
+
+    expect(searchTrackCandidates).toHaveBeenCalledTimes(1);
+    expect(ran.apifyEligible).toBe(true);
+    // The exact rung is never reached for a row with no ISRC, so no receipt is written for it: the
+    // fuzzy rung's own run is the verdict, and it is a per-call one.
+    expect((await askState("mb_fuzzy_ran")).asked).toBeNull();
+  });
+
+  it("an ISRC-LESS row whose fuzzy rung was deferred is refused", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: null, trackId: "mb_fuzzy_deferred" });
+
+    const result = await resolveAnchorFree("mb_fuzzy_deferred", NON_FRIDAY, {
+      spotifySearch: false,
+    });
+
+    expect(searchTrackCandidates).not.toHaveBeenCalled();
+    expect(result.apifyEligible).toBe(false);
+    expect(result.apifyIneligibleReason).toBe("awaiting_free_ask");
+  });
+
+  it("a SPENT daily cap refuses an otherwise-admitted row, and the row keeps its turn", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyDailyRows } = await import("./anchor-apify");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await setAnchorApifyDailyRows(0);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_broke" });
+    findSpotifyTrackByIsrc.mockResolvedValue({ match: null });
+    searchTrackCandidates.mockResolvedValue([]);
+
+    const result = await resolveAnchorFree("mb_broke", NON_FRIDAY);
+
+    expect(result.apifyEligible).toBe(false);
+    expect(result.apifyIneligibleReason).toBe("apify_budget_spent");
+    expect(result.apifyBudgetRemaining).toBe(0);
+    // The ask still HAPPENED and its receipt still stands, so tomorrow's tick buys the row without
+    // paying Spotify's shared app for the same question again.
+    expect((await askState("mb_broke")).asked).not.toBeNull();
+    expect((await askState("mb_broke")).attempted).toBeNull();
+  });
+
+  it("an ANCHORED row is never admitted and never charges the cap", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_won" });
+    findSpotifyTrackByIsrc.mockResolvedValue({ match: { trackId: "spISRC" } });
+    fetchTrackMetadata.mockResolvedValue(metadata());
+
+    const result = await resolveAnchorFree("mb_won", NON_FRIDAY);
+
+    expect(result.anchored).toBe(true);
+    expect(result.apifyEligible).toBe(false);
+    expect(result.apifyBudgetRemaining).toBe(300);
+    // The anchor write clears the receipt with the question it was evidence about.
+    expect((await askState("mb_won")).asked).toBeNull();
+  });
+});
+
+describe("anchorTrack — the admission rule is re-checked at the write boundary", () => {
+  /** The Apify candidate that WOULD anchor `ROWISRC0001` if the row were admitted. */
+  const candidate = {
+    artists: [{ id: "sp-etherwood", name: "Etherwood" }],
+    durationMs: 261_800,
+    isrc: "ROWISRC0001",
+    spotifyTrackId: "spPaid",
+    title: "Weightless",
+  };
+
+  it("refuses a never-asked ISRC row with `awaiting_free_ask`, touching nothing", async () => {
+    const { AnchorTrackError, anchorTrack } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_stale_box" });
+
+    // Only a sweep that ignored the `apifyEligible` verdict it was handed can reach this — a stale
+    // baked box — and the refusal is loud so that box gets rebaked.
+    await expect(anchorTrack("mb_stale_box", [candidate])).rejects.toThrow(AnchorTrackError);
+    await expect(anchorTrack("mb_stale_box", [candidate])).rejects.toMatchObject({
+      reason: "awaiting_free_ask",
+    });
+    // It REFUSES, it does not park: a row never asked is not a row that missed.
+    expect(await askState("mb_stale_box")).toEqual({ asked: null, attempted: null });
+    expect((await anchorState("mb_stale_box")).uri).toBeNull();
+  });
+
+  it("lets the same row through once the receipt exists, and clears it on the hit", async () => {
+    const { anchorTrack } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_admitted" });
+    await db.execute({
+      args: ["mb_admitted"],
+      sql: "update tracks set spotify_isrc_asked_at = '2026-07-22T03:00:00.000Z' where track_id = ?",
+    });
+
+    expect(await anchorTrack("mb_admitted", [candidate])).toEqual({
+      anchored: true,
+      verifiedBy: "isrc",
+    });
+    expect((await askState("mb_admitted")).asked).toBeNull();
+  });
+
+  it("never holds back a row the free rung could not have asked about", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    // Two shapes the rule must let straight through: the search rungs DISARMED (no receipt can
+    // exist), and a row with no ISRC (the exact rung has nothing to ask with).
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_flag_off" });
+    expect((await anchorTrack("mb_flag_off", [candidate])).anchored).toBe(true);
+
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: null, trackId: "mb_no_isrc" });
+    expect((await anchorTrack("mb_no_isrc", [candidate])).anchored).toBe(true);
+  });
+
+  it("a free rung is never made to wait for itself", async () => {
+    const { anchorTrack } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_free_source" });
+
+    // Only the `apify` source is held to the rule — every other source IS one of the free rungs.
+    expect(
+      (await anchorTrack("mb_free_source", [candidate], { source: "spotify-isrc" })).anchored,
+    ).toBe(true);
+  });
+
+  it("a MISS on an admitted row clears the receipt with the stamp it authorised", async () => {
+    const { anchorTrack } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_admitted_miss" });
+    await db.execute({
+      args: ["mb_admitted_miss"],
+      sql: "update tracks set spotify_isrc_asked_at = '2026-07-22T03:00:00.000Z' where track_id = ?",
+    });
+
+    expect((await anchorTrack("mb_admitted_miss", [])).anchored).toBe(false);
+
+    // The re-ask window just closed, so the receipt dies with it: a row coming back in a fortnight
+    // must be asked for free again before it can be bought again.
+    const state = await askState("mb_admitted_miss");
+    expect(state.asked).toBeNull();
+    expect(state.attempted).not.toBeNull();
   });
 });
