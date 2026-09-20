@@ -22,7 +22,7 @@ export function artistTitle(track: Pick<RecentItem, "artists" | "title">): strin
  * artist is always Fluncle and the coordinate already leads the line, so the
  * platform title's "Fluncle … | <coord>" would otherwise say both twice.
  */
-export function rowLabel(track: Pick<RecentItem, "artists" | "logId" | "title" | "type">): string {
+function rowLabel(track: Pick<RecentItem, "artists" | "logId" | "title" | "type">): string {
   return track.type === "mixtape"
     ? stripCoordinateSuffix(track.title, track.logId)
     : artistTitle(track);

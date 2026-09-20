@@ -26,7 +26,7 @@
 // going to fail), and an expired copy grants nothing.
 
 /** What the Worker mints: where the replica lives, the credential, and when it dies. */
-export type ReplicaToken = {
+type ReplicaToken = {
   expiresAt: string;
   token: string;
   url: string;

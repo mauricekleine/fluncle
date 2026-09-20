@@ -13,7 +13,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { contract } from "@fluncle/contracts/orpc";
 import { call, implement, ORPCError } from "@orpc/server";
 import { DueWorkMaintenancePendingError } from "./due-work";
-import { type OrpcContext } from "./orpc-auth";
+import { type OrpcContext } from "./orpc-context";
 import { apiFault, toFault, type ApiFaultData } from "./orpc/_shared";
 import {
   apiUrl,

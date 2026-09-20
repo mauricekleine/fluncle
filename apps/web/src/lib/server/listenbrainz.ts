@@ -62,7 +62,7 @@ type ListenBrainzResponseItem = {
  * are the labs echo, kept for logging/diagnostics — the anchor gate re-derives identity from the
  * Spotify candidate's own metadata, never from these strings.
  */
-export type ListenBrainzMatch = {
+type ListenBrainzMatch = {
   artistName: null | string;
   recordingMbid: string;
   spotifyTrackIds: string[];

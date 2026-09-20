@@ -1,4 +1,4 @@
-import { type DueWorkSubjectType } from "./due-work";
+import { type DueWorkSubjectType } from "./due-work-types";
 
 export type DueWorkProducerInventoryEntry = {
   file: `${string}.ts`;
@@ -212,6 +212,7 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
     producers: ["label-image-failure", "label-image-none", "label-image-resolved"],
     subjects: ["label"],
   },
+  { file: "label-mint.ts", producers: ["label-take-over"], subjects: ["label"] },
   {
     file: "label-releases.ts",
     producers: ["label-release-track-mint"],

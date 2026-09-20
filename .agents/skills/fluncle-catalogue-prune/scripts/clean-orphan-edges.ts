@@ -15,7 +15,7 @@
 // Run from the REPO ROOT with prod creds (see lib.ts / SKILL.md § Setup).
 import { writeFileSync } from "node:fs";
 
-import { type Client } from "@libsql/client/web";
+import { type Client, type Row, type Value } from "@libsql/client/web";
 
 import {
   ORPHAN_EDGE_BY_ARTIST_SQL,
@@ -28,7 +28,7 @@ import {
 export type OrphanByArtist = { artist_id: string; name: string; slug: string; edges: number };
 
 /** A libSQL cell is a union (text/blob/number/null); take it as text only when it IS text. */
-const text = (v: unknown): string => (typeof v === "string" ? v : "");
+const text = (v: Value): string => (typeof v === "string" ? v : "");
 
 /** How many `track_artists` rows point at a track that no longer exists. */
 export async function countOrphanEdges(db: Client): Promise<number> {
@@ -50,7 +50,7 @@ export async function orphanEdgesByArtist(db: Client): Promise<OrphanByArtist[]>
 }
 
 /** The full orphaned rows, for the rollback snapshot. */
-export async function orphanEdgeRows(db: Client): Promise<unknown[]> {
+export async function orphanEdgeRows(db: Client): Promise<Row[]> {
   return (await db.execute(ORPHAN_EDGE_ROWS_SQL)).rows;
 }
 

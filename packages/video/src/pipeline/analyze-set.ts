@@ -22,6 +22,7 @@
 
 import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
+import { type StudioEnvelope, type StudioPeak, type StudioSuggestion } from "@fluncle/contracts";
 
 import {
   type Bands,
@@ -34,6 +35,8 @@ import {
   onsetEnvelope,
 } from "./audio-curves";
 import { bestPhaseGrid, estimateBpm, pickOnsets } from "./analyze-audio";
+
+export type { StudioEnvelope, StudioPeak, StudioSuggestion };
 
 // ffmpeg/ffprobe on PATH by default (mirrors download-preview.ts's FLUNCLE_FFMPEG).
 const FFMPEG = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
@@ -58,37 +61,6 @@ const LOCAL_NORM_HALF_MS = 30_000; // ±30s local max-normalization window
 const LOCAL_TEMPO_HALF_MS = 8_000; // ±8s local tempo/phase window for the snap
 const DROP_SCORE_WEIGHT = 1.0; // λ on dropScore in the final ranking
 const MULTI_TEMPO_TOLERANCE_BPM = 4; // local-BPM spread above this ⇒ global bpm = null
-
-/** A loudness-rise candidate. `kind: "drop"` is a guess, not a certainty (see file header). */
-export type StudioPeak = {
-  atMs: number;
-  score: number;
-  kind: "drop";
-};
-
-/** A vettable clip window: the drop lands at `anchorMs`, just inside `startMs`. */
-export type StudioSuggestion = {
-  startMs: number;
-  durationMs: number;
-  anchorMs: number;
-  score: number;
-};
-
-/**
- * The set-analysis artifact (Unit E consumes it). The 20ms analysis stays internal;
- * only the decimated `hopMs` curve crosses the wire. `bpm` is null on a multi-tempo
- * set (a single global grid would drift — the per-peak local snap is used instead).
- */
-export type StudioEnvelope = {
-  durationMs: number;
-  hopMs: number;
-  bpm: number | null;
-  energy: number[];
-  bass: number[];
-  flux: number[];
-  peaks: StudioPeak[];
-  suggestions: StudioSuggestion[];
-};
 
 export type AnalyzeSetOptions = {
   sampleRate?: number;

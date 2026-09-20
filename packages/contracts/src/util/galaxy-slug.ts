@@ -1,3 +1,7 @@
+import { fnv1a32 as fnv1a } from "./hash";
+
+export { fnv1a };
+
 // The plan handle: an auto Galaxy-vocab slug for a Plan → Recording → Mixtape
 // take. Minted once from a seed and stored on the plan (never date-predicted, so
 // the drift bug that killed `predictedMixtapeLogId` can't come back) — the
@@ -10,23 +14,6 @@
 // (VOICE.md → packages/skills/copywriting-fluncle/references/voice.md §3
 // Vocabulary + §4 The Sauce, the sci-fi sublime), guarded by a load-bearing test
 // (`galaxy-slug.test.ts`) that asserts no pool word is in `BANNED`.
-
-/**
- * Stable 32-bit FNV-1a hash → non-negative integer. Replicated from
- * `apps/web/src/lib/log-id-shared.ts` (contracts can't depend on `apps/web` —
- * the dependency runs the other way), kept byte-identical so a Log ID and a plan
- * handle hash the same. Pure and dependency-free.
- */
-export function fnv1a(value: string): number {
-  let hash = 0x811c9dc5;
-
-  for (let index = 0; index < value.length; index++) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-
-  return hash >>> 0;
-}
 
 // The three curated vocab pools. Every word is a single lowercase `[a-z]+` token
 // (no digits, no internal hyphen) so a three-word slug always matches

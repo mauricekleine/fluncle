@@ -28,7 +28,7 @@ import { OpenAPIGenerator } from "@orpc/openapi";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement, ORPCError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import { type OrpcContext } from "./orpc-auth";
+import { type OrpcContext } from "./orpc-context";
 import { applyPublicCors, buildPublicCorsMatcher, corsPreflightResponse } from "./orpc-cors";
 import { dueWorkMaintenancePendingMiddleware } from "./orpc-backpressure";
 import { isApiFaultData } from "./orpc/_shared";

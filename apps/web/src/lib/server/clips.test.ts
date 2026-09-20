@@ -21,10 +21,10 @@ vi.mock("./recordings", () => ({
   getRecording: (...a: unknown[]) => getRecording(...a),
 }));
 
-const buildClipCaption = vi.fn();
+const buildCaptionForClip = vi.fn();
 
-vi.mock("./clip-caption", () => ({
-  buildClipCaption: (...a: unknown[]) => buildClipCaption(...a),
+vi.mock("./clip-caption-builder", () => ({
+  buildCaptionForClip: (...a: unknown[]) => buildCaptionForClip(...a),
 }));
 
 const nextDripSlot = vi.fn();
@@ -63,7 +63,7 @@ beforeEach(() => {
     }
     return { rows: [] };
   });
-  buildClipCaption.mockResolvedValue({ builtCaption: "the caption", coordinates: [] });
+  buildCaptionForClip.mockResolvedValue({ builtCaption: "the caption", coordinates: [] });
   nextDripSlot.mockResolvedValue("2026-07-06T12:00:00.000Z");
 });
 
@@ -72,7 +72,7 @@ describe("createClip auto-queue-on-create", () => {
     await createClip("rec-1", { inMs: 0, outMs: 30_000, xOffset: 240 });
 
     expect(nextDripSlot).toHaveBeenCalledTimes(1);
-    expect(buildClipCaption).toHaveBeenCalledTimes(1);
+    expect(buildCaptionForClip).toHaveBeenCalledTimes(1);
     expect(upsertClipPost).toHaveBeenCalledTimes(1);
 
     const arg = upsertClipPost.mock.calls[0]?.[0] as {

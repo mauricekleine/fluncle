@@ -16,6 +16,8 @@ import { buildEntityBioPrompt, fetchEntityFacts, gateOrAcceptBio } from "../bio"
 import { purgeEntityCache } from "../edge-cache";
 import {
   LabelMintIdentityConflictError,
+  LabelTakeOverNotEmptyError,
+  LabelTakeOverSlugMismatchError,
   mintLabelFromMusicbrainz,
   MusicbrainzLabelNotFoundError,
   MusicbrainzThrottledError,
@@ -177,17 +179,23 @@ export function adminLabelsHandlers(os: Implementer) {
   // beside the publish path and a crawl discovery. Connect-or-create through the SAME `ensureLabel`
   // MBID fold the crawler uses, facts carried fill-empty-only, idempotent on a second call. An
   // optional `seedState` rules through the SAME `update_label` write, so the stamps match. Purges the
-  // label's cached page because filled founding facts are visible on it.
+  // label's cached page because filled founding facts are visible on it. `takeOverSlug` is the
+  // operator's explicit way through the identity conflict: it re-points that exact row's MBID onto
+  // the minted entity, and only ever for a trackless, non-enabled row.
   const mintLabelHandler = os.mint_label
     .use(adminAuth)
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { label, outcome } = await mintLabelFromMusicbrainz(input.mbLabelId, input.seedState);
+        const { label, outcome, takenOver } = await mintLabelFromMusicbrainz(
+          input.mbLabelId,
+          input.seedState,
+          input.takeOverSlug,
+        );
 
         purgeEntityCache("label", label.slug);
 
-        return { label, ok: true as const, outcome };
+        return { label, ok: true as const, outcome, ...(takenOver ? { takenOver } : {}) };
       } catch (error) {
         if (error instanceof MusicbrainzLabelNotFoundError) {
           throw new ORPCError("NOT_FOUND", {
@@ -208,6 +216,27 @@ export function adminLabelsHandlers(os: Implementer) {
         if (error instanceof LabelMintIdentityConflictError) {
           throw new ORPCError("CONFLICT", {
             data: { apiCode: "label_identity_conflict", apiMessage: error.message },
+            message: error.message,
+            status: 409,
+          });
+        }
+
+        // The operator named a row that is not the one the mint collided with — a BAD REQUEST,
+        // because the instruction itself is wrong, and the message names the row that conflicts.
+        if (error instanceof LabelTakeOverSlugMismatchError) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: { apiCode: "take_over_slug_mismatch", apiMessage: error.message },
+            message: error.message,
+            status: 400,
+          });
+        }
+
+        // The named row cannot give up its identity (it holds tracks, or it is a live crawl seed).
+        // A CONFLICT, the `merge_seed_conflict` class: the state of the archive refuses, not the
+        // request shape.
+        if (error instanceof LabelTakeOverNotEmptyError) {
+          throw new ORPCError("CONFLICT", {
+            data: { apiCode: "take_over_not_empty", apiMessage: error.message },
             message: error.message,
             status: 409,
           });

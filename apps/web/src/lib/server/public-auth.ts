@@ -5,6 +5,7 @@ import { betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer, deviceAuthorization } from "better-auth/plugins";
 import { username } from "better-auth/plugins/username";
+import { type PublicUser } from "@fluncle/contracts";
 import * as schema from "../../db/schema";
 import { getDb, getDrizzleDb, typedRow } from "./db";
 import { notifyDiscordSignup } from "./discord-alert";
@@ -23,37 +24,7 @@ export const cliDeviceClientId = "fluncle-cli";
 
 type PublicAuth = Auth<BetterAuthOptions>;
 
-export type PublicUser = {
-  createdAt: string;
-  // The account's enlistment ordinal — its place on the crew manifest (the
-  // account-redesign brief, ruling #1). Stamped once at sign-up by the
-  // `user.create.after` hook and fixed for life. OPTIONAL: a legacy account created
-  // before the crew number existed carries none until the one-time backfill runs, so
-  // every reader must treat its absence as "unstamped", never zero.
-  crewNumber?: number;
-  displayUsername?: string;
-  // The account's own email. This is the AUTHENTICATED identity — a `PublicUser` is
-  // only ever resolved from the requester's OWN session (the `/me` private tier), so
-  // this is always the requester's own address, never another user's. It powers the
-  // Settings "Email" section + the "resend verification" action, and rides the data
-  // export. The DESIGN invariant "email never appears on PUBLIC surfaces" is upheld:
-  // no public route serializes a `PublicUser`.
-  email: string;
-  // Whether this account's email is verified. Always present (the `user` row's
-  // `email_verified` is NOT NULL, default false). Verification GATES future
-  // features, never the session — an unverified user still signs in (see
-  // `emailVerification` below, which deliberately omits `requireEmailVerification`).
-  emailVerified: boolean;
-  id: string;
-  // The avatar URL when the account has one (Google fills it at sign-up; an
-  // upload path is a future slice). Absent = render the glyph fallback.
-  image?: string;
-  // The freeform display name (the "Name" in Settings — what Google fills at
-  // sign-up and what the header shows). Distinct from `username` (the handle) and
-  // `displayUsername` (the handle's as-typed casing).
-  name: string;
-  username?: string;
-};
+export type { PublicUser };
 
 type PublicUserRow = {
   created_at: number;

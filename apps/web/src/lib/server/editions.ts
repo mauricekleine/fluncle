@@ -349,7 +349,7 @@ export async function getEditionByNumber(number: number): Promise<EditionDTO | u
 }
 
 /** A single edition by its uuid (admin path — drafts inclusive when asked). */
-export async function getEditionById(
+async function getEditionById(
   id: string,
   options: { includeDrafts?: boolean } = {},
 ): Promise<EditionDTO> {

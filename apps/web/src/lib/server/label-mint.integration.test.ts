@@ -25,10 +25,12 @@ vi.mock("./musicbrainz", async (importOriginal) => {
   return { ...actual, mbFetch };
 });
 
-import { createIntegrationDb } from "./integration-db";
+import { createIntegrationDb, syncHubCounts } from "./integration-db";
 import { listLabels } from "./labels";
 import {
   LabelMintIdentityConflictError,
+  LabelTakeOverNotEmptyError,
+  LabelTakeOverSlugMismatchError,
   mintLabelFromMusicbrainz,
   MusicbrainzLabelNotFoundError,
   MusicbrainzThrottledError,
@@ -266,5 +268,250 @@ describe("mintLabelFromMusicbrainz", () => {
       LabelMintIdentityConflictError,
     );
     expect((await labelRow("med-school"))?.mb_label_id).toBe(HOSPITAL_MBID);
+  });
+
+  it("names the take-over as the way through the plain conflict", async () => {
+    await seedConflictingRow();
+    mbFetch.mockResolvedValueOnce(mbLabel());
+
+    // The refusal has to carry its own remedy: an operator reading it must not have to know the
+    // flag exists, and the slug it names is the row the mint actually collided with.
+    await expect(mintLabelFromMusicbrainz(MED_SCHOOL_MBID)).rejects.toThrow(
+      /--take-over med-school/,
+    );
+  });
+});
+
+// ── The take-over: re-point a trackless row's identity onto the minted entity ─────────────────
+// The upstream shape it exists for: a MusicBrainz split moves the drum & bass catalogue onto a NEW
+// entity carrying the SAME name, while the archive's row for that name still points at the
+// original — which now holds only the foreign catalogue. Every assertion below is about SQL
+// (the UNIQUE MBID index, the overwrite, the rule delete, the frontier stamps), which is why this
+// lives in the integration suite beside the mint it extends.
+
+/** The conflicting row: "Med School" folded on the OTHER MusicBrainz label, ruled `undecided`. */
+async function seedConflictingRow(): Promise<void> {
+  await db.execute({
+    args: [HOSPITAL_MBID],
+    sql: `insert into labels (id, name, slug, mb_label_id, disambiguation, founded_location,
+                              founding_date, discogs_label_id, image_key, image_state,
+                              parent_label_id, lineage_state, created_at, updated_at)
+          values ('lbl_other', 'Med School', 'med-school', ?, 'US folk label', 'Chicago', '1974',
+                  4242, 'labels/med-school.jpg', 'resolved', null, 'resolved',
+                  '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+  });
+}
+
+/** One label-scoped artist rule — the old identity's roster, which must not survive the move. */
+async function seedArtistRule(labelId: string): Promise<void> {
+  await db.execute({
+    args: [labelId],
+    sql: `insert into artist_rules (id, artist_mbid, artist_name, label_id, source, verdict,
+                                    created_at, updated_at)
+          values ('rule_1', '11111111-2222-3333-4444-555555555555', 'A Folk Act', ?, 'operator',
+                  'allow', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+  });
+}
+
+/** The two frontier nodes an enabled seed leaves behind: the resolver, and the MBID's browse. */
+async function seedFrontierNodes(slug: string, mbLabelId: string): Promise<void> {
+  await db.batch(
+    [
+      {
+        args: [`fluncle:label:${slug}`, slug, slug],
+        sql: `insert into crawl_frontier (id, kind, source, external_id, hop, label_slug, state,
+                                          cursor, done_at, created_at, updated_at)
+              values (?, 'label', 'fluncle', ?, 0, ?, 'done', 3, '2026-01-02T00:00:00.000Z',
+                      '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
+      },
+      {
+        args: [`musicbrainz:label:${mbLabelId}`, mbLabelId, slug],
+        sql: `insert into crawl_frontier (id, kind, source, external_id, hop, label_slug, state,
+                                          cursor, done_at, created_at, updated_at)
+              values (?, 'label', 'musicbrainz', ?, 0, ?, 'done', 7, '2026-01-02T00:00:00.000Z',
+                      '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
+      },
+    ],
+    "write",
+  );
+}
+
+async function frontierNode(id: string) {
+  const result = await db.execute({
+    args: [id],
+    sql: `select id, state, cursor, note from crawl_frontier where id = ? limit 1`,
+  });
+
+  return result.rows[0] as
+    | undefined
+    | { cursor: number; id: string; note: null | string; state: string };
+}
+
+async function artistRuleCount(): Promise<number> {
+  const result = await db.execute("select count(*) as n from artist_rules");
+
+  return Number((result.rows[0] as { n: number } | undefined)?.n ?? 0);
+}
+
+describe("mintLabelFromMusicbrainz --take-over", () => {
+  it("re-points the named row's identity, overwrites its facts, and drops the old roster", async () => {
+    await seedConflictingRow();
+    await seedArtistRule("lbl_other");
+    await seedFrontierNodes("med-school", HOSPITAL_MBID);
+    mbFetch.mockResolvedValueOnce(mbLabel());
+
+    const result = await mintLabelFromMusicbrainz(MED_SCHOOL_MBID, "enabled", "med-school");
+
+    expect(result.outcome).toBe("taken_over");
+    expect(result.label.id).toBe("lbl_other");
+    // One row, not two: the take-over MOVES an identity rather than minting a second spelling.
+    expect(await labelCount()).toBe(1);
+
+    const row = await labelRow("med-school");
+
+    expect(row?.mb_label_id).toBe(MED_SCHOOL_MBID);
+    // OVERWRITE, not the mint's fill-empty-only coalesce — the row is changing identity, so the
+    // replaced entity's answers must not survive as if they described this label.
+    expect(row?.disambiguation).toBe("UK drum & bass label");
+    expect(row?.founded_location).toBe("London");
+    expect(row?.founding_date).toBe("2008");
+
+    // The rules rostered the OLD identity's acts, so they are dropped and reported.
+    expect(await artistRuleCount()).toBe(0);
+    expect(result.takenOver).toEqual({
+      clearedFacts: ["discogsLabelId", "imageKey"],
+      droppedRules: 1,
+      previousMbLabelId: HOSPITAL_MBID,
+      rearmedSeedNode: true,
+      retiredFrontierNodes: 1,
+      slug: "med-school",
+    });
+
+    // The supplied ruling lands through the same seed-state write, after the identity moved.
+    expect(result.label.seedState).toBe("enabled");
+    expect(row?.seed_state).toBe("enabled");
+    expect(row?.ruled_at).toEqual(expect.any(String));
+  });
+
+  it("clears the facts the replaced entity supplied and re-arms their sweeps", async () => {
+    await seedConflictingRow();
+    mbFetch.mockResolvedValueOnce(mbLabel());
+
+    await mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "med-school");
+
+    const result = await db.execute(
+      `select discogs_label_id, image_key, image_state, parent_label_id, lineage_state
+       from labels where slug = 'med-school'`,
+    );
+    const row = result.rows[0] as undefined | Record<string, unknown>;
+
+    // The logo, the Discogs id and the parent imprint were all walked FROM the replaced entity, so
+    // they go with it and both sweeps re-enter their worklists to re-walk the new identity.
+    expect(row?.discogs_label_id).toBeNull();
+    expect(row?.image_key).toBeNull();
+    expect(row?.image_state).toBe("pending");
+    expect(row?.parent_label_id).toBeNull();
+    expect(row?.lineage_state).toBe("pending");
+  });
+
+  it("retires the replaced entity's crawl node and re-arms the seed resolver", async () => {
+    await seedConflictingRow();
+    await seedFrontierNodes("med-school", HOSPITAL_MBID);
+    mbFetch.mockResolvedValueOnce(mbLabel());
+
+    await mintLabelFromMusicbrainz(MED_SCHOOL_MBID, "enabled", "med-school");
+
+    // The old browse node is KEPT and stamped — the walk history stays readable, and the crawl's
+    // re-arm join already refuses a node whose external_id is not the label's current MBID.
+    const retired = await frontierNode(`musicbrainz:label:${HOSPITAL_MBID}`);
+
+    expect(retired?.state).toBe("done");
+    expect(retired?.note).toContain(MED_SCHOOL_MBID);
+
+    // The resolver mints the MBID's browse node exactly once and then sits `done`; without this
+    // re-arm the NEW entity would never be enqueued at all.
+    const resolver = await frontierNode("fluncle:label:med-school");
+
+    expect(resolver?.state).toBe("pending");
+    expect(Number(resolver?.cursor)).toBe(0);
+  });
+
+  it("works for a row the frontier has never held, and says so in the result", async () => {
+    await seedConflictingRow();
+    mbFetch.mockResolvedValueOnce(mbLabel());
+
+    const result = await mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "med-school");
+
+    // An undecided row was never seeded, so there is nothing to retire or re-arm — the take-over
+    // still succeeds, and reports zero rather than pretending it moved crawl state.
+    expect(result.takenOver?.rearmedSeedNode).toBe(false);
+    expect(result.takenOver?.retiredFrontierNodes).toBe(0);
+    expect((await labelRow("med-school"))?.mb_label_id).toBe(MED_SCHOOL_MBID);
+  });
+
+  it("refuses a row that holds a stored track — that is a merge", async () => {
+    await seedConflictingRow();
+    await db.execute(
+      `insert into tracks (track_id, title, artists_json, duration_ms, label_id, is_catalogue)
+       values ('mb_track', 'Some Tune', '["An Act"]', 0, 'lbl_other', 1)`,
+    );
+    // The maintained hub counters are the pair every label surface gates on, and the production
+    // invariant is that they match the `tracks.label_id` edge; sync them the way the backfill does.
+    await syncHubCounts(db);
+    mbFetch.mockResolvedValue(mbLabel());
+
+    await expect(
+      mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "med-school"),
+    ).rejects.toBeInstanceOf(LabelTakeOverNotEmptyError);
+    await expect(
+      mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "med-school"),
+    ).rejects.toThrow(/merge/);
+    expect((await labelRow("med-school"))?.mb_label_id).toBe(HOSPITAL_MBID);
+  });
+
+  it("refuses a row that is a live crawl seed", async () => {
+    await seedConflictingRow();
+    await db.execute("update labels set seed_state = 'enabled' where id = 'lbl_other'");
+    mbFetch.mockResolvedValueOnce(mbLabel());
+
+    await expect(
+      mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "med-school"),
+    ).rejects.toBeInstanceOf(LabelTakeOverNotEmptyError);
+    expect((await labelRow("med-school"))?.mb_label_id).toBe(HOSPITAL_MBID);
+  });
+
+  it("refuses a slug that is not the conflicting row, and names the one that is", async () => {
+    await seedConflictingRow();
+    await db.execute(
+      `insert into labels (id, name, slug, created_at, updated_at)
+       values ('lbl_bystander', 'Bystander', 'bystander', '2026-01-01T00:00:00.000Z',
+               '2026-01-01T00:00:00.000Z')`,
+    );
+    mbFetch.mockResolvedValue(mbLabel());
+
+    await expect(
+      mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "bystander"),
+    ).rejects.toBeInstanceOf(LabelTakeOverSlugMismatchError);
+    await expect(mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "bystander")).rejects.toThrow(
+      /med-school/,
+    );
+
+    // Neither row moved: a typo must never re-point a bystander's identity.
+    expect((await labelRow("med-school"))?.mb_label_id).toBe(HOSPITAL_MBID);
+    expect((await labelRow("bystander"))?.mb_label_id).toBeNull();
+  });
+
+  it("is still idempotent: a second call is `known`, take-over flag or not", async () => {
+    await seedConflictingRow();
+    mbFetch.mockResolvedValueOnce(mbLabel());
+    await mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "med-school");
+
+    const second = await mintLabelFromMusicbrainz(MED_SCHOOL_MBID, undefined, "med-school");
+
+    expect(second.outcome).toBe("known");
+    expect(second.takenOver).toBeUndefined();
+    // The MBID short-circuit runs before the flag is ever read, so the re-run spends no request.
+    expect(mbFetch).toHaveBeenCalledTimes(1);
+    expect(await labelCount()).toBe(1);
   });
 });

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type InValue } from "@libsql/client/web";
+import { type MeResponse } from "@fluncle/contracts";
 import {
   type GalaxyCollectionItem,
   type GalaxyCompletion,
@@ -114,14 +115,7 @@ type SqlStatement = {
   sql: string;
 };
 
-export type MeResponse = {
-  // Whether "Continue with Google" is live server-side (both GOOGLE_CLIENT_* creds
-  // present). The account UI gates the Google button on this so it never renders a
-  // dead button. Session-independent — present on the `user: null` body too.
-  googleEnabled: boolean;
-  ok: true;
-  user: null | PublicUser;
-};
+export type { MeResponse };
 
 // The success shapes of the `/me` read/write helpers. These are RETURN-TYPE
 // annotations only (no behavior change): TypeScript widens a bare `ok: true`
@@ -613,7 +607,7 @@ export async function listGalaxyCollection(user: PublicUser): Promise<{
   return { collection, galaxies, ok: true };
 }
 
-export async function incrementGalaxyCounters(
+async function incrementGalaxyCounters(
   userId: string,
   counters: { deaths?: number; wins?: number },
 ) {

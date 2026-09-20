@@ -783,7 +783,7 @@ type NoteBody = {
 };
 
 /** How hard a note echoes its sonic neighbourhood (the anti-sameness rail's reading). */
-export type TrackNoteEcho = {
+type TrackNoteEcho = {
   /** The neighbour it echoes hardest, or null when there was nothing to echo. */
   logId: string | null;
   /** Content-word overlap with that neighbour (0..1). */

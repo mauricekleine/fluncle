@@ -10,7 +10,7 @@
 //   FLUNCLE_TURSO_OP_ITEM='op://<vault>/<item>' \
 //     bun run packages/skills/fluncle-catalogue-prune/scripts/scan.ts
 import { $ } from "bun";
-import { createClient, type Client } from "@libsql/client/web";
+import { createClient, type Client, type Row } from "@libsql/client/web";
 
 /** The pruning helper performs its remote maintenance work serially. */
 const CATALOGUE_PRUNE_DB_CONCURRENCY = 1;
@@ -72,31 +72,67 @@ export type Catalogue = {
   trackDisabled: (t: { label: string | null }) => boolean;
 };
 
+export function rowString(row: Row, column: string): string {
+  const value = row[column];
+  if (typeof value !== "string") {
+    throw new TypeError(`Expected ${column} to be a string`);
+  }
+
+  return value;
+}
+
+function rowNullableString(row: Row, column: string): string | null {
+  const value = row[column];
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(`Expected ${column} to be a string or null`);
+  }
+
+  return value;
+}
+
 /** Load the whole catalogue into memory once. Everything the scripts need derives from this. */
 export async function loadCatalogue(): Promise<Catalogue> {
   const db = await getDb();
-  const rows = async (sql: string) => (await db.execute(sql)).rows as any[];
-  const labels = (await rows(
-    `select id, slug, name, seed_state from labels`,
-  )) as Catalogue["labels"];
+  const rows = async (sql: string): Promise<Row[]> => (await db.execute(sql)).rows;
+  const labels = (await rows(`select id, slug, name, seed_state from labels`)).map((row) => ({
+    id: rowString(row, "id"),
+    name: rowString(row, "name"),
+    seed_state: rowString(row, "seed_state"),
+    slug: rowString(row, "slug"),
+  }));
   const enabledSlugs = new Set(labels.filter((l) => l.seed_state === "enabled").map((l) => l.slug));
   const disabledSlugs = new Set(
     labels.filter((l) => l.seed_state === "disabled").map((l) => l.slug),
   );
-  const tracks = (await rows(
-    `select track_id, label, title, album_id from tracks`,
-  )) as Catalogue["tracks"];
+  const tracks = (await rows(`select track_id, label, title, album_id from tracks`)).map((row) => ({
+    album_id: rowNullableString(row, "album_id"),
+    label: rowNullableString(row, "label"),
+    title: rowNullableString(row, "title"),
+    track_id: rowString(row, "track_id"),
+  }));
   const trackById = new Map(tracks.map((t) => [t.track_id, t]));
-  const edges = (await rows(`select artist_id, track_id from track_artists`)) as Catalogue["edges"];
+  const edges = (await rows(`select artist_id, track_id from track_artists`)).map((row) => ({
+    artist_id: rowString(row, "artist_id"),
+    track_id: rowString(row, "track_id"),
+  }));
   const findingTrackIds = new Set(
-    (await rows(`select track_id from findings`)).map((f) => f.track_id),
+    (await rows(`select track_id from findings`)).map((row) => rowString(row, "track_id")),
   );
-  const artists = (await rows(
-    `select id, name, slug, spotify_url from artists`,
-  )) as Catalogue["artists"];
+  const artists = (await rows(`select id, name, slug, spotify_url from artists`)).map((row) => ({
+    id: rowString(row, "id"),
+    name: rowString(row, "name"),
+    slug: rowString(row, "slug"),
+    spotify_url: rowNullableString(row, "spotify_url"),
+  }));
   const artistById = new Map(artists.map((a) => [a.id, a]));
   const albumName = new Map(
-    (await rows(`select id, name from albums`)).map((a) => [a.id, a.name as string]),
+    (await rows(`select id, name from albums`)).map((row) => [
+      rowString(row, "id"),
+      rowString(row, "name"),
+    ]),
   );
   return {
     albumName,
@@ -444,8 +480,8 @@ export async function selectAllIn(
   table: string,
   col: string,
   ids: string[],
-): Promise<unknown[]> {
-  const out: unknown[] = [];
+): Promise<Row[]> {
+  const out: Row[] = [];
   for (const c of chunk(ids)) {
     const result = await db.execute({
       args: c,
@@ -477,14 +513,14 @@ export async function deleteIn(
 }
 
 export type ArtistCascadeRollback = {
-  albums: unknown[];
-  artist_aliases: unknown[];
-  artist_socials: unknown[];
-  artists: unknown[];
+  albums: Row[];
+  artist_aliases: Row[];
+  artist_socials: Row[];
+  artists: Row[];
   at: string;
-  cost_events: unknown[];
-  track_artists: unknown[];
-  tracks: unknown[];
+  cost_events: Row[];
+  track_artists: Row[];
+  tracks: Row[];
 };
 
 /**
@@ -504,8 +540,7 @@ export async function captureArtistCascadeRollback(
     ...(await selectAllIn(db, "track_artists", "artist_id", artistIds)),
     ...(await selectAllIn(db, "track_artists", "track_id", trackIds)),
   ].filter((row) => {
-    const r = row as { artist_id?: unknown; track_id?: unknown };
-    const key = JSON.stringify([r.artist_id, r.track_id]);
+    const key = JSON.stringify([row.artist_id, row.track_id]);
     if (seenEdges.has(key)) {
       return false;
     }

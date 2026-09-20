@@ -4,11 +4,7 @@ import {
   PUBLIC_PROJECTION_TARGETS,
 } from "./public-projection-source-maintenance";
 
-export type PublicProjectionImpact =
-  | "artist_qualification"
-  | "both"
-  | "neither"
-  | "public_aggregates";
+type PublicProjectionImpact = "artist_qualification" | "both" | "neither" | "public_aggregates";
 
 export type PublicProjectionProducerPolicy =
   | {
@@ -136,6 +132,7 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "label-image-resolved",
     "label-mint",
     "label-reconcile-mint",
+    "label-take-over",
     "publish-spotify-error",
     "publish-spotify-success",
     "publish-telegram-error",

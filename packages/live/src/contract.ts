@@ -89,7 +89,7 @@ export type PlanEntry = {
 };
 
 /** A classified custom (non-header) uniform in a replay scene. */
-export type PlanCustomUniform = {
+type PlanCustomUniform = {
   name: string;
   type: string;
   class: "riseRamp" | "settleDim" | "audioAlias" | "color" | "velocityPos" | "velocity";
