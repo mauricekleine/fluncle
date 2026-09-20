@@ -1295,8 +1295,12 @@ export const listTrackWork = oc
        */
       capabilities: TrackWorkCapabilitiesSchema.optional(),
       /**
-       * The page was withheld because due-work repair is still converging, so `tracks` is empty and
-       * says nothing about the backlog. Only ever present on a `count=true&debtAware=true` read.
+       * True when the page was withheld because due-work repair is still converging, so `tracks` is
+       * empty and says nothing about the backlog.
+       *
+       * Present on every `count=true&debtAware=true` read and on no other, so its PRESENCE is also
+       * the caller's proof that this Worker understood the flag: an older Worker omits it, which is
+       * how a new caller tells a genuinely complete page from a flag that was ignored.
        */
       debtPending: z.boolean().optional(),
       ok: z.literal(true),

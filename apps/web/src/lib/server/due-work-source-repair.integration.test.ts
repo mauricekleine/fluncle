@@ -393,7 +393,10 @@ describe("transactionally coupled due-work source repair", () => {
     expect(batchCalls).toBe(1);
     expect(maximumBatchStatements).toBeLessThanOrEqual(4);
     // THE PAGE BOUND. One marker multiplies into every registered physical queue, so the batch is
-    // bounded in ROWS, not markers: the widest page stays inside the shared projection chunk bound.
+    // bounded in ROWS — not in markers, and not in the statements asserted just above: the page is
+    // always the same handful of set-based statements, and widening it adds rows and bound
+    // parameters to those rather than more statements. The widest page stays inside the shared
+    // projection chunk bound.
     const pageRows = SOURCE_REPAIR_LIMIT * TRACK_SOURCE_REPAIR_FANOUT;
     expect(pageRows).toBeLessThanOrEqual(MAX_DUE_WORK_CHUNK_SIZE);
     expect(maximumStatementArgs).toBeLessThanOrEqual(pageRows * 12);

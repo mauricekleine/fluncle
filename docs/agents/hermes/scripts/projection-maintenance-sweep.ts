@@ -121,6 +121,16 @@ export type FamilySummary = {
   attempted: boolean;
   complete: boolean | null;
   error: string | null;
+  /**
+   * Wall time this family's advance call spent, which is the slice of the tick's lease it held.
+   *
+   * The unit wraps the whole payload in ONE whole-lifetime lease, so the runner's own `hold_ms`
+   * already reports what maintenance costs the write lane end to end — but not how that splits, and
+   * the adaptive step budget moved the worst case per family from 100 markers to 1,400. This is the
+   * per-family half of that, so the ledger can answer what share of the write lane maintenance
+   * takes and which family takes it. Null when the family was not advanced.
+   */
+  leaseHoldMs: number | null;
   oldestOutstandingMarkerAge: OldestOutstandingMarkerAge | null;
   outcome: ProjectionMaintenanceOutcome | null;
   processed: number | null;
@@ -148,6 +158,12 @@ export type ProjectionMaintenanceSummary = {
   produced: number | null;
   publicAggregates: FamilySummary;
   reason: string | null;
+  /**
+   * Wall time this tick spent inside advance calls, summed across families: the measured write-lane
+   * cost of one maintenance tick, beside the `hold_ms` the admission runner reports for the whole
+   * payload. The difference between the two is the status read plus process overhead.
+   */
+  totalLeaseHoldMs: number;
   trackDueWork: FamilySummary;
   /** Families this tick reached with no wall budget left. Their debt sorts first on the next tick. */
   wallDeferredFamilies: FamilyName[];
@@ -276,6 +292,7 @@ function emptyFamily(): FamilySummary {
     attempted: false,
     complete: null,
     error: null,
+    leaseHoldMs: null,
     oldestOutstandingMarkerAge: null,
     outcome: null,
     processed: 0,
@@ -362,7 +379,11 @@ function advanceFamily(
   target: FamilyName,
   maxSteps: number,
   oldestOutstandingMarkerAge: OldestOutstandingMarkerAge,
+  now: () => number,
 ): FamilySummary {
+  // Measured around the call rather than derived from the step count: a step's cost is a round
+  // trip, and the whole point of reporting it is that the assumed cost is an assumption.
+  const startedAt = now();
   try {
     const response = parseAdvance(
       run([
@@ -386,6 +407,7 @@ function advanceFamily(
       attempted: true,
       complete: response.complete,
       error: null,
+      leaseHoldMs: now() - startedAt,
       oldestOutstandingMarkerAge,
       outcome: response.complete
         ? "useful_completion"
@@ -401,6 +423,7 @@ function advanceFamily(
       attempted: true,
       complete: false,
       error: error instanceof Error ? error.message : String(error),
+      leaseHoldMs: now() - startedAt,
       oldestOutstandingMarkerAge,
       outcome: "no_progress",
       processed: null,
@@ -417,6 +440,7 @@ function maintainFamily(
   repairNeeded: boolean,
   maxSteps: number,
   oldestOutstandingMarkerAge: OldestOutstandingMarkerAge,
+  now: () => number,
 ): FamilySummary {
   if (!enabled) {
     return { ...emptyFamily(), oldestOutstandingMarkerAge };
@@ -429,7 +453,7 @@ function maintainFamily(
       outcome: "no_debt",
     };
   }
-  return advanceFamily(run, target, maxSteps, oldestOutstandingMarkerAge);
+  return advanceFamily(run, target, maxSteps, oldestOutstandingMarkerAge, now);
 }
 
 function worstOutcome(families: readonly FamilySummary[]): ProjectionMaintenanceOutcome | null {
@@ -476,6 +500,7 @@ export function runProjectionMaintenanceTick(
     produced: null,
     publicAggregates: emptyFamily(),
     reason: null,
+    totalLeaseHoldMs: 0,
     trackDueWork: emptyFamily(),
     wallDeferredFamilies: [],
   };
@@ -557,7 +582,7 @@ export function runProjectionMaintenanceTick(
   )) {
     const age = markerAge(plan.status);
     if (!plan.enabled || !plan.repairNeeded) {
-      results.set(plan.target, maintainFamily(run, plan.target, plan.enabled, false, 1, age));
+      results.set(plan.target, maintainFamily(run, plan.target, plan.enabled, false, 1, age, now));
       continue;
     }
     const requested = adaptiveSteps(
@@ -572,7 +597,7 @@ export function runProjectionMaintenanceTick(
       results.set(plan.target, wallDeferredFamily(age));
       continue;
     }
-    results.set(plan.target, maintainFamily(run, plan.target, true, true, steps, age));
+    results.set(plan.target, maintainFamily(run, plan.target, true, true, steps, age, now));
   }
 
   const targetedFamilies: readonly (readonly [FamilyName, FamilySummary])[] = plans.map((plan) => [
@@ -606,6 +631,10 @@ export function runProjectionMaintenanceTick(
   }, null);
   // `ok` and `errors` report execution, not convergence. A clean bounded tick may exhaust
   // every family budget; `converged`, `outcome`, and `budgetExhaustedFamilies` carry that fact.
+  summary.totalLeaseHoldMs = families.reduce(
+    (total, family) => total + (family.leaseHoldMs ?? 0),
+    0,
+  );
   summary.errors = families.filter((family) => family.error !== null).length;
   summary.ok = summary.errors === 0;
   summary.produced = families.some((family) => family.processed === null)

@@ -594,6 +594,62 @@ describe("projection maintenance bounded family repair", () => {
     expect(summary.artistQualification.attempted).toBe(true);
   });
 
+  // THE WRITE-LANE SHARE, measured rather than assumed. The adaptive budget moved the worst case
+  // per family from 100 markers to 1,400, all inside one whole-lifetime lease, so the ledger needs
+  // to be able to answer what share of the write lane maintenance actually takes.
+  test("reports the wall time each family's advance held, and the tick's total", () => {
+    const debt = family({
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    let clock = 0;
+    const summary = runProjectionMaintenanceTick(
+      (args) => {
+        if (args[2] === "get") {
+          return status({ crawlDueWork: true, trackDueWork: true }, { crawl: debt, track: debt });
+        }
+        const target = args[args.indexOf("--target") + 1] as FamilyName;
+        clock += target === "track_due_work" ? 4_000 : 1_500;
+        return advance(target, true, 1, 2);
+      },
+      { now: () => clock },
+    );
+
+    expect(summary.trackDueWork.leaseHoldMs).toBe(4_000);
+    expect(summary.crawlDueWork.leaseHoldMs).toBe(1_500);
+    // A family that needed no advance held nothing, and contributes nothing to the total.
+    expect(summary.publicAggregates.leaseHoldMs).toBeNull();
+    expect(summary.totalLeaseHoldMs).toBe(5_500);
+  });
+
+  test("a family whose advance failed still reports what it held", () => {
+    const debt = family({
+      repairs: {
+        direct: { count: 1, truncated: false },
+        fanout: { count: 0, truncated: false },
+        total: { count: 1, truncated: false },
+      },
+    });
+    let clock = 0;
+    const summary = runProjectionMaintenanceTick(
+      (args) => {
+        if (args[2] === "get") {
+          return status({ trackDueWork: true }, { track: debt });
+        }
+        clock += 2_500;
+        throw new Error("advance blew up");
+      },
+      { now: () => clock },
+    );
+
+    expect(summary.trackDueWork.leaseHoldMs).toBe(2_500);
+    expect(summary.totalLeaseHoldMs).toBe(2_500);
+    expect(summary.ok).toBe(false);
+  });
+
   test("the family with the oldest debt is advanced first", () => {
     const withAge = (ageMs: number) =>
       family({

@@ -42,11 +42,15 @@ export const TRACK_SOURCE_REPAIR_FANOUT =
   FINDING_DUE_WORK_KINDS.length;
 
 /**
- * Ordinary source markers one page converges. The bound is the page's row count, not its marker
- * count: one marker multiplies into {@link TRACK_SOURCE_REPAIR_FANOUT} rows, so the widest page
- * stays inside the shared {@link MAX_DUE_WORK_CHUNK_SIZE} projection bound every other bounded
- * write batch in this module already runs at. Registering another physical queue narrows the page
- * automatically instead of silently widening the batch past that bound.
+ * Ordinary source markers one page converges. The bound is the page's ROW count, not its marker
+ * count and not its statement count: one marker multiplies into {@link TRACK_SOURCE_REPAIR_FANOUT}
+ * rows, so the widest page stays inside the shared {@link MAX_DUE_WORK_CHUNK_SIZE} projection bound
+ * every other bounded write batch in this module already runs at. Registering another physical
+ * queue narrows the page automatically instead of silently widening the batch past that bound.
+ *
+ * The page always flushes as the same two to four statements — a set-based guarded upsert, a
+ * set-based guarded delete, the marker clear, and the audit-fence advance — and widening it adds
+ * rows and bound parameters to those, never more statements.
  */
 export const SOURCE_REPAIR_LIMIT = Math.floor(MAX_DUE_WORK_CHUNK_SIZE / TRACK_SOURCE_REPAIR_FANOUT);
 export const PHYSICAL_REPAIR_LIMIT = 50;
