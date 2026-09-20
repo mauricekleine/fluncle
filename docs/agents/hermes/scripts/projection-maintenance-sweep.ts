@@ -122,6 +122,8 @@ type OldestOutstandingMarkerAge = {
 type FamilyStatus = {
   convergence: { epochMatched: boolean | null };
   oldestOutstandingMarkerAge?: OldestOutstandingMarkerAge;
+  /** Optional like the marker age: an older Worker that omits it reads as nothing to re-project. */
+  rebuild?: { complete: boolean };
   repairs: { direct: BoundedCount; fanout: BoundedCount; total: BoundedCount };
 };
 type ProjectionStatusResponse = {
@@ -145,6 +147,14 @@ type AdvanceResponse = {
   complete: boolean;
   ok: true;
   processed: number;
+  /**
+   * The two due-work families only. `--action rebuild` is operator-tier and no cron runs it, so a
+   * family whose stored definition version is older than the running code's is re-projected on this
+   * repair path instead, with the page budget ordinary repair left behind. These report that walk
+   * so a stalled re-projection is visible in the ledger rather than hiding inside `processed`.
+   */
+  rebuildRowsWalked?: number;
+  rebuildStaleFamilies?: number;
   scheduled: number;
   steps: number;
   target: FamilyName;
@@ -169,6 +179,10 @@ export type FamilySummary = {
   oldestOutstandingMarkerAge: OldestOutstandingMarkerAge | null;
   outcome: ProjectionMaintenanceOutcome | null;
   processed: number | null;
+  /** Source rows this family's stale-definition rebuild walk covered; null when not advanced. */
+  rebuildRowsWalked: number | null;
+  /** Families still on an older definition version after this tick; null when not advanced. */
+  rebuildStaleFamilies: number | null;
   scheduled: number | null;
   steps: number | null;
   /**
@@ -407,6 +421,8 @@ function emptyFamily(): FamilySummary {
     oldestOutstandingMarkerAge: null,
     outcome: null,
     processed: 0,
+    rebuildRowsWalked: null,
+    rebuildStaleFamilies: null,
     scheduled: 0,
     steps: 0,
     wallBound: null,
@@ -430,6 +446,16 @@ function needsRepair(family: FamilyStatus): boolean {
 
 function hasRepairDebt(family: FamilyStatus): boolean {
   return family.repairs.total.count > 0;
+}
+
+/**
+ * A due-work family is advanced for repair debt OR for an incomplete rebuild. The second arm is
+ * what makes the definition version self-driving: a deploy that changes a queue's order leaves
+ * every affected checkpoint reading incomplete, and this gate is what brings the repair call that
+ * carries the re-projection walk.
+ */
+function dueWorkNeedsAdvance(family: FamilyStatus): boolean {
+  return hasRepairDebt(family) || family.rebuild?.complete === false;
 }
 
 /**
@@ -535,6 +561,8 @@ function advanceFamily(
           ? "partial_progress"
           : "no_progress",
       processed: response.processed,
+      rebuildRowsWalked: response.rebuildRowsWalked ?? null,
+      rebuildStaleFamilies: response.rebuildStaleFamilies ?? null,
       scheduled: response.scheduled,
       steps: response.steps,
       wallBound,
@@ -554,6 +582,8 @@ function advanceFamily(
       // state where the family held the write lease for a full deadline with nothing to show.
       outcome: error instanceof CliTimeoutError ? "timeout" : "no_progress",
       processed: null,
+      rebuildRowsWalked: null,
+      rebuildStaleFamilies: null,
       scheduled: null,
       steps: null,
       wallBound,
@@ -681,7 +711,7 @@ export function runProjectionMaintenanceTick(
     {
       enabled: cutovers.trackDueWork,
       minSteps: 1,
-      repairNeeded: hasRepairDebt(projections.trackDueWork),
+      repairNeeded: dueWorkNeedsAdvance(projections.trackDueWork),
       status: projections.trackDueWork,
       subjectsPerStep: DUE_WORK_MARKERS_PER_STEP,
       target: "track_due_work",
@@ -689,7 +719,7 @@ export function runProjectionMaintenanceTick(
     {
       enabled: cutovers.crawlDueWork,
       minSteps: 1,
-      repairNeeded: hasRepairDebt(projections.crawlDueWork),
+      repairNeeded: dueWorkNeedsAdvance(projections.crawlDueWork),
       status: projections.crawlDueWork,
       subjectsPerStep: DUE_WORK_MARKERS_PER_STEP,
       target: "crawl_due_work",

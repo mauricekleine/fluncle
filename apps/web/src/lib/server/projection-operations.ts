@@ -1,7 +1,9 @@
 import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 
 import {
+  crawlDueDefinitionVersion,
   fanOutCrawlProjectionRepairs,
+  readCrawlDueRebuild,
   repairCrawlDueNodes,
   runCrawlDueRebuildChunk,
 } from "./crawl-due-work";
@@ -293,6 +295,18 @@ async function publicProjectionEpochMatched(
   return result.rows.length > 0;
 }
 
+/** The running definition version for one registered `due_work` family, by its rebuild identity. */
+function trackDefinitionVersionFor(workKind: unknown, subjectType: unknown): string | undefined {
+  return DUE_WORK_BACKFILLS.find(
+    (definition) => definition.workKind === workKind && definition.subjectType === subjectType,
+  )?.definitionVersion;
+}
+
+function trackCheckpointDefinitionCurrent(row: Record<string, unknown>): boolean {
+  const current = trackDefinitionVersionFor(row.work_kind, row.subject_type);
+  return current !== undefined && row.definition_version === current;
+}
+
 async function assertProjectionAuditReady(
   client: ProjectionClient,
   target: ProjectionTarget,
@@ -311,7 +325,10 @@ async function assertProjectionAuditReady(
   ];
   if (target === "track_due_work") {
     statements.push(
-      { args: [], sql: `select state from due_work_rebuilds` },
+      {
+        args: [],
+        sql: `select state, work_kind, subject_type, definition_version from due_work_rebuilds`,
+      },
       {
         args: [],
         sql: `select 1 from due_work indexed by due_work_repair_idx
@@ -322,7 +339,8 @@ async function assertProjectionAuditReady(
     statements.push(
       {
         args: [],
-        sql: `select state from crawl_due_work_rebuilds where scope = 'frontier' limit 1`,
+        sql: `select state, definition_version from crawl_due_work_rebuilds
+          where scope = 'frontier' limit 1`,
       },
       {
         args: [],
@@ -354,11 +372,18 @@ async function assertProjectionAuditReady(
   const results = await client.batch(statements);
   const cutoverOpen = results[0]?.rows[0]?.value === "true";
   const rebuildRows = results[1]?.rows ?? [];
+  // A checkpoint whose stored definition version is not the running code's projected its rows under
+  // an older definition, so it is not complete however its `state` column reads.
   const rebuildComplete =
     target === "track_due_work"
       ? rebuildRows.length === DUE_WORK_BACKFILLS.length &&
-        rebuildRows.every((row) => row.state === "complete")
-      : rebuildRows[0]?.state === "complete";
+        rebuildRows.every(
+          (row) => row.state === "complete" && trackCheckpointDefinitionCurrent(row),
+        )
+      : target === "crawl_due_work"
+        ? rebuildRows[0]?.state === "complete" &&
+          rebuildRows[0]?.definition_version === crawlDueDefinitionVersion()
+        : rebuildRows[0]?.state === "complete";
   const repairDebt = results.slice(2).some((result) => result.rows.length > 0);
   if (cutoverOpen || !rebuildComplete || repairDebt) {
     throw new Error("projection audit requires a dark, rebuilt target with no repair debt");
@@ -402,9 +427,20 @@ function trackFamilyStatus(
   rankMarkerAgeMs: number | null,
 ): FamilyStatus & { catalogueRankMarkerAgeMs: number | null } {
   const rows = results[12]?.rows as unknown as
-    | { projected_count: number; scanned_count: number; state: string }[]
+    | {
+        definition_version: null | string;
+        projected_count: number;
+        scanned_count: number;
+        state: string;
+        subject_type: string;
+        work_kind: string;
+      }[]
     | undefined;
-  const completed = rows?.filter((row) => row.state === "complete").length ?? 0;
+  // A checkpoint that says `complete` under an older definition version has not projected today's
+  // `sort_key`s, so it counts as outstanding rebuild work here too.
+  const completed =
+    rows?.filter((row) => row.state === "complete" && trackCheckpointDefinitionCurrent(row))
+      .length ?? 0;
   const running = rows?.filter((row) => row.state === "running").length ?? 0;
   const repairRows = results[4]?.rows ?? [];
   const repairTruncated = repairRows.length > PROJECTION_STATUS_COUNT_LIMIT;
@@ -476,7 +512,8 @@ function crawlFamilyStatus(
     sourceDigest !== null &&
     sourceDigest === projectedDigest &&
     audit.sourceFence === sourceFence;
-  const complete = row?.["state"] === "complete";
+  const complete =
+    row?.["state"] === "complete" && row["definition_version"] === crawlDueDefinitionVersion();
   return {
     backlog: {
       leased: boundedCount(results[7]?.rows ?? []),
@@ -587,10 +624,15 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
         where projection = 'artist_qualification'
         order by projection, source_epoch, subject_type, subject_id limit ?`,
     },
-    { args: [], sql: `select state, scanned_count, projected_count from due_work_rebuilds` },
     {
       args: [],
-      sql: `select state, scanned_count, projected_count, source_digest, projected_digest
+      sql: `select state, scanned_count, projected_count, work_kind, subject_type,
+        definition_version from due_work_rebuilds`,
+    },
+    {
+      args: [],
+      sql: `select state, scanned_count, projected_count, source_digest, projected_digest,
+        definition_version
         from crawl_due_work_rebuilds where scope = 'frontier'`,
     },
     {
@@ -709,7 +751,8 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
     }
     const checkpoint = await client.execute({
       args: [definition.workKind, definition.subjectType],
-      sql: `select state from due_work_rebuilds where work_kind = ? and subject_type = ?`,
+      sql: `select state, definition_version from due_work_rebuilds
+        where work_kind = ? and subject_type = ?`,
     });
     const result = await runDueWorkRebuildChunk(client, definition, {
       boundedCleanup: true,
@@ -735,9 +778,14 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
   for (const definition of DUE_WORK_BACKFILLS) {
     const checkpoint = await client.execute({
       args: [definition.workKind, definition.subjectType],
-      sql: `select state from due_work_rebuilds where work_kind = ? and subject_type = ?`,
+      sql: `select state, definition_version from due_work_rebuilds
+        where work_kind = ? and subject_type = ?`,
     });
-    if (checkpoint.rows[0]?.state === "complete") {
+    // A complete checkpoint is skipped only while it is complete UNDER TODAY'S DEFINITION. When an
+    // order or eligibility change moved the version, this step falls through and `startDueWorkRebuild`
+    // opens a fresh generation for it — no audit, no cutover flip, no operator ceremony.
+    const row = checkpoint.rows[0];
+    if (row?.state === "complete" && row.definition_version === definition.definitionVersion) {
       continue;
     }
     const result = await runDueWorkRebuildChunk(client, definition, {
@@ -747,6 +795,100 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
     return { complete: false, processed: result.scanned, scheduled: 0 };
   }
   return { complete: true, processed: 0, scheduled: 0 };
+}
+
+type StaleRebuildOutcome = { complete: boolean; rowsWalked: number; staleFamilies: number };
+
+/**
+ * The self-driving half of the definition version.
+ *
+ * `--action rebuild` is operator-only and no cron runs it, so a mechanism that waited for a human
+ * to walk 41 families would be the ceremony the definition version exists to remove. This runs on
+ * the agent-eligible REPAIR path instead, and only ever for a family whose stored definition
+ * version is not the running code's — which `startDueWorkRebuild`'s own conditional upsert enforces
+ * in SQL, not merely here: a complete family on today's definition cannot be restarted by this path
+ * at all, because the `where ? = 1 or definition_version is not ?` clause is false for it.
+ *
+ * Oldest-stale-first, one bounded page per call, and only with the budget ordinary repair left
+ * behind, so the walk paces itself across ticks and can never starve the repair it follows.
+ */
+async function staleTrackRebuildDefinitions(client: ProjectionClient) {
+  const checkpoints = await client.execute(
+    `select work_kind, subject_type, definition_version, state, updated_at from due_work_rebuilds`,
+  );
+  const rows = checkpoints.rows as unknown as {
+    definition_version: null | string;
+    state: string;
+    subject_type: string;
+    updated_at: string;
+    work_kind: string;
+  }[];
+  const byIdentity = new Map(rows.map((row) => [`${row.work_kind} ${row.subject_type}`, row]));
+  return DUE_WORK_BACKFILLS.map((definition) => ({
+    definition,
+    row: byIdentity.get(`${definition.workKind} ${definition.subjectType}`),
+  }))
+    .filter(({ definition, row }) => {
+      if (row === undefined || row.definition_version !== definition.definitionVersion) {
+        // Never built, or built under an older definition: this walk's whole reason to exist.
+        return true;
+      }
+      // A generation this walk opened writes today's version immediately, so it has to be able to
+      // FINISH a running checkpoint or it would strand every family at page one. The exception is a
+      // family that resolves its own generation (catalogue-rank, off the ranking corpus): its own
+      // driver inside repair owns that walk, and two drivers on one checkpoint double-count it.
+      return row.state !== "complete" && definition.resolveGeneration === undefined;
+    })
+    .sort((left, right) => {
+      const leftAt = left.row?.updated_at ?? "";
+      const rightAt = right.row?.updated_at ?? "";
+      return (
+        leftAt.localeCompare(rightAt) ||
+        left.definition.workKind.localeCompare(right.definition.workKind)
+      );
+    });
+}
+
+async function advanceStaleTrackRebuild(
+  client: ProjectionClient,
+  limit: number,
+): Promise<StaleRebuildOutcome> {
+  const stale = await staleTrackRebuildDefinitions(client);
+  const next = stale[0];
+  if (next === undefined) {
+    return { complete: true, rowsWalked: 0, staleFamilies: 0 };
+  }
+  if (limit < 1) {
+    return { complete: false, rowsWalked: 0, staleFamilies: stale.length };
+  }
+  const result = await runDueWorkRebuildChunk(client, next.definition, {
+    boundedCleanup: true,
+    limit,
+  });
+  return {
+    complete: result.complete && stale.length === 1,
+    rowsWalked: result.scanned,
+    staleFamilies: stale.length,
+  };
+}
+
+async function advanceStaleCrawlRebuild(
+  client: ProjectionClient,
+  limit: number,
+): Promise<StaleRebuildOutcome> {
+  const checkpoint = await readCrawlDueRebuild(client);
+  const stale =
+    checkpoint === undefined ||
+    checkpoint.state !== "complete" ||
+    checkpoint.definitionVersion !== crawlDueDefinitionVersion();
+  if (!stale) {
+    return { complete: true, rowsWalked: 0, staleFamilies: 0 };
+  }
+  if (limit < 1) {
+    return { complete: false, rowsWalked: 0, staleFamilies: 1 };
+  }
+  const result = await runCrawlDueRebuildChunk(client, { boundedCleanup: true, limit });
+  return { complete: result.complete, rowsWalked: result.scanned, staleFamilies: 1 };
 }
 
 async function advanceTrackRepair(client: ProjectionClient, limit: number) {
@@ -1882,6 +2024,10 @@ type ProjectionAdvanceInput = {
 type ProjectionAdvanceOutcome = {
   complete: boolean;
   processed: number;
+  /** Due-work repair only: source rows the stale-definition rebuild walk covered this step. */
+  rebuildRowsWalked?: number;
+  /** Due-work repair only: families still carrying an older definition version after this step. */
+  rebuildStaleFamilies?: number;
   scheduled: number;
   // Track repair only: whether an ordinary track source marker still awaits fanout.
   trackSourceMarkersPending?: boolean;
@@ -1939,10 +2085,24 @@ export async function advanceProjectionFor(
     return advanceAuditProjection(client, input, includeStatus);
   }
   if (input.target === "track_due_work") {
-    outcome =
-      input.action === "rebuild"
-        ? await advanceTrackRebuild(client, input.limit, previousAudit?.complete === true)
-        : await advanceTrackRepair(client, input.limit);
+    if (input.action === "rebuild") {
+      outcome = await advanceTrackRebuild(client, input.limit, previousAudit?.complete === true);
+    } else {
+      const repair = await advanceTrackRepair(client, input.limit);
+      // Repair has first claim on the page; the stale-definition walk spends what it left.
+      const rebuild = await advanceStaleTrackRebuild(
+        client,
+        Math.max(0, input.limit - repair.processed),
+      );
+      outcome = {
+        complete: repair.complete && rebuild.complete,
+        processed: repair.processed + rebuild.rowsWalked,
+        rebuildRowsWalked: rebuild.rowsWalked,
+        rebuildStaleFamilies: rebuild.staleFamilies,
+        scheduled: repair.scheduled,
+        trackSourceMarkersPending: repair.trackSourceMarkersPending,
+      };
+    }
   } else if (input.target === "crawl_due_work") {
     if (input.action === "rebuild") {
       const result = await runCrawlDueRebuildChunk(client, {
@@ -1965,9 +2125,17 @@ export async function advanceProjectionFor(
         };
       } else {
         const repair = await repairCrawlDueNodes(client, { limit: input.limit });
+        // Same contract as the track family: repair first, then the stale-definition walk on
+        // whatever page budget repair did not spend.
+        const rebuild = await advanceStaleCrawlRebuild(
+          client,
+          Math.max(0, input.limit - repair.scanned),
+        );
         outcome = {
-          complete: !repair.hasMore,
-          processed: repair.scanned + fanout.markersCleared,
+          complete: !repair.hasMore && rebuild.complete,
+          processed: repair.scanned + fanout.markersCleared + rebuild.rowsWalked,
+          rebuildRowsWalked: rebuild.rowsWalked,
+          rebuildStaleFamilies: rebuild.staleFamilies,
           scheduled: 0,
         };
       }
@@ -2064,7 +2232,8 @@ function openCutoverStatement(target: ProjectionCutover) {
     const rebuildProof = DUE_WORK_BACKFILLS.map(
       () =>
         `exists (select 1 from due_work_rebuilds
-          where work_kind = ? and subject_type = ? and state = 'complete')`,
+          where work_kind = ? and subject_type = ? and state = 'complete'
+            and definition_version = ?)`,
     ).join(" and ");
     return {
       args: [
@@ -2073,6 +2242,7 @@ function openCutoverStatement(target: ProjectionCutover) {
         ...DUE_WORK_BACKFILLS.flatMap((definition) => [
           definition.workKind,
           definition.subjectType,
+          definition.definitionVersion,
         ]),
       ],
       sql: `insert into settings (key, value)
@@ -2088,13 +2258,13 @@ function openCutoverStatement(target: ProjectionCutover) {
   }
   if (target === "crawl_due_work") {
     return {
-      args: [key, PROJECTION_AUDIT_SETTING_KEYS.crawl_due_work],
+      args: [key, PROJECTION_AUDIT_SETTING_KEYS.crawl_due_work, crawlDueDefinitionVersion()],
       sql: `insert into settings (key, value)
         select ?, 'true' where
           exists (select 1 from settings audit where audit.key = ?
             and ${matchingAuditSql("audit", "crawl_due_work")})
           and exists (select 1 from crawl_due_work_rebuilds
-            where scope = 'frontier' and state = 'complete')
+            where scope = 'frontier' and state = 'complete' and definition_version = ?)
           and not exists (select 1 from crawl_due_work indexed by crawl_due_work_repair_idx
             where state = 'repair')
           and not exists (select 1 from crawl_projection_repairs

@@ -31,6 +31,8 @@ Order capture work by certification first, then `capture_priority DESC`, then �
 
 The anchored term is the metered queue's alone. Audio bought for a row with no Spotify identity cannot become recommendable — `REC_ELIGIBLE_WHERE` requires the anchor — so it waits on a separate billed anchor search before it earns anything, while an anchored sibling at the same tier becomes recommendable the moment it is embedded. It reorders **within** a tier only: the ladder still decides which rows drain first, and nothing moves across a tier or past the veto. The free queues (`analyze`, `embed`) keep the shared ladder unchanged — capture already hands them an anchored-first population, so the yield is raised once, where the money is spent.
 
+With the track due-work cutover open, the queue is read from the `due_work` projection's stored `sort_key`, so this term took effect only once the `capture-catalogue` queue was re-keyed under the definition that carries it. Changing an order this way is not a source mutation, and the mechanism that makes such a change land — the stored definition version and the `fluncle admin projections rekey` lever — is specified in [docs/database-performance.md](./database-performance.md) § projections.
+
 ### The veto is a predicate, not a sort
 
 A disabled label has capture priority −1 and is excluded by `capture_priority >= 0`. Its row remains visible for inspection but never reaches the metered capture worker.

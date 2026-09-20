@@ -74,6 +74,14 @@ type AdminProjectionCutoverOptions = JsonOptions & {
   target: string;
 };
 
+type AdminProjectionRekeyOptions = JsonOptions & {
+  apply: boolean;
+  cursor?: string;
+  limit: string;
+  maxPages: string;
+  workKind: string;
+};
+
 type AdminVectorSetOptions = JsonOptions & {
   enabled: string;
 };
@@ -1042,6 +1050,31 @@ JSON field reference:
       console.log(
         `${result.target} ${result.action}: steps ${result.steps}, processed ${result.processed}, scheduled ${result.scheduled}, ${result.complete ? "complete" : result.wallStopped ? "wall budget spent, more work remains" : "more work remains"}.`,
       );
+    });
+
+  adminProjections
+    .command("rekey")
+    .description("Mark one due-work queue for re-keying under today's order definition")
+    .requiredOption("--work-kind <kind>", "Physical queue, e.g. capture-catalogue")
+    .option("--cursor <subjectId>", "Resume after this subject id")
+    .option("--limit <limit>", "Rows per page (1-500)", "500")
+    .option("--max-pages <pages>", "Maximum pages to mark in one run (1-200)", "1")
+    .option("--apply", "Write the repair markers; omit for a dry run", false)
+    .option("--json", "Print the page result as JSON", false)
+    .action(async (options: AdminProjectionRekeyOptions) => {
+      const projections = await import("./commands/admin-projections");
+      const result = await projections.rekeyDueWorkQueueCommand({
+        apply: options.apply,
+        cursor: options.cursor ?? null,
+        limit: projections.parseDueWorkRekeyLimit(options.limit),
+        maxPages: projections.parseDueWorkRekeyMaxPages(options.maxPages),
+        workKind: options.workKind,
+      });
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(projections.dueWorkRekeyLine(result));
     });
 
   adminProjections
@@ -8809,6 +8842,7 @@ const stringOptions = new Set([
   "--lens",
   "--limit",
   "--max-hop",
+  "--max-pages",
   "--max-steps",
   "--max-overlap",
   "--metrics",
@@ -8872,6 +8906,7 @@ const stringOptions = new Set([
   "--wall-ms",
   "--window-since",
   "--window-until",
+  "--work-kind",
 ]);
 
 const rootHelpSections = `

@@ -70,6 +70,51 @@ const advance = (target: FamilyName, complete = true, processed = 1, steps = 1) 
   target,
 });
 
+describe("the stale-definition re-projection the repair path carries", () => {
+  test("advances a due-work family with zero repair debt when its rebuild is incomplete", () => {
+    const calls: string[][] = [];
+    const summary = runProjectionMaintenanceTick((args) => {
+      calls.push(args);
+      if (args[2] === "get") {
+        return status({ trackDueWork: true }, { track: family({ rebuild: { complete: false } }) });
+      }
+      return {
+        ...advance("track_due_work", false, 500),
+        rebuildRowsWalked: 500,
+        rebuildStaleFamilies: 7,
+      };
+    });
+
+    // Without the rebuild arm of the gate this tick would have reported `no_debt` and issued
+    // nothing, which is exactly how a definition change used to sit un-projected forever.
+    expect(calls.some((args) => args.includes("advance"))).toBe(true);
+    expect(summary.trackDueWork).toMatchObject({
+      attempted: true,
+      complete: false,
+      outcome: "partial_progress",
+      rebuildRowsWalked: 500,
+      rebuildStaleFamilies: 7,
+    });
+    expect(summary.converged).toBe(false);
+  });
+
+  test("issues nothing for a due-work family that is complete with no debt", () => {
+    const calls: string[][] = [];
+    const summary = runProjectionMaintenanceTick((args) => {
+      calls.push(args);
+      return status({ trackDueWork: true }, { track: family({ rebuild: { complete: true } }) });
+    });
+
+    expect(calls).toEqual([["admin", "projections", "get"]]);
+    expect(summary.trackDueWork).toMatchObject({
+      attempted: false,
+      outcome: "no_debt",
+      rebuildRowsWalked: null,
+      rebuildStaleFamilies: null,
+    });
+  });
+});
+
 describe("projection maintenance status gate", () => {
   test("dark means one status read and zero advances", () => {
     const calls: string[][] = [];

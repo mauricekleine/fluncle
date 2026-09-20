@@ -1,9 +1,10 @@
-import { PROJECTION_STEP_LIMIT_MAX } from "@fluncle/contracts/orpc";
+import { DUE_WORK_REKEY_LIMIT_MAX, PROJECTION_STEP_LIMIT_MAX } from "@fluncle/contracts/orpc";
 
 import { adminApiGet, adminApiPost, adminApiPut } from "../api";
 
-export { PROJECTION_STEP_LIMIT_MAX };
+export { DUE_WORK_REKEY_LIMIT_MAX, PROJECTION_STEP_LIMIT_MAX };
 export const PROJECTION_MAX_STEPS = 100;
+export const DUE_WORK_REKEY_MAX_PAGES = 200;
 
 /**
  * Bounds on `--wall-ms`, the wall budget an advance invocation may spend issuing steps.
@@ -85,6 +86,9 @@ export type ProjectionStepResponse = {
   complete: boolean;
   ok: true;
   processed: number;
+  /** Due-work repair only: the stale-definition rebuild walk this step drove. */
+  rebuildRowsWalked?: number;
+  rebuildStaleFamilies?: number;
   scheduled: number;
   status?: ProjectionStatus;
   target: ProjectionTarget;
@@ -154,6 +158,7 @@ export async function advanceProjectionCommand(
   let processed = response.processed;
   let scheduled = response.scheduled;
   let wallStopped = false;
+  let rebuildRowsWalked = response.rebuildRowsWalked ?? 0;
 
   while (!response.complete && steps < maxSteps) {
     if (wallMs !== undefined && now() - startedAt >= wallMs) {
@@ -167,14 +172,20 @@ export async function advanceProjectionCommand(
     steps += 1;
     processed += response.processed;
     scheduled += response.scheduled;
+    rebuildRowsWalked += response.rebuildRowsWalked ?? 0;
   }
 
+  // The walk total is the sum across steps; the stale-family count is the terminal reading.
+  const rebuild =
+    response.rebuildStaleFamilies === undefined
+      ? {}
+      : { rebuildRowsWalked, rebuildStaleFamilies: response.rebuildStaleFamilies };
   if (!includeTerminalStatus) {
     const { status: _status, ...withoutStatus } = response;
-    return { ...withoutStatus, processed, scheduled, steps, wallStopped };
+    return { ...withoutStatus, ...rebuild, processed, scheduled, steps, wallStopped };
   }
   const status = response.status ?? (await getProjectionStatusCommand()).status;
-  return { ...response, processed, scheduled, status, steps, wallStopped };
+  return { ...response, ...rebuild, processed, scheduled, status, steps, wallStopped };
 }
 
 export async function setProjectionCutoverCommand(input: {
@@ -186,6 +197,83 @@ export async function setProjectionCutoverCommand(input: {
     `/api/v1/admin/projections/${target}/cutover`,
     { enabled },
   );
+}
+
+export type DueWorkRekeyPageResponse = {
+  applied: boolean;
+  cursor: null | string;
+  definitionVersion: string;
+  hasMore: boolean;
+  marked: number;
+  matched: number;
+  ok: true;
+  remaining: { count: number; truncated: boolean };
+  subjectType: string;
+  workKind: string;
+};
+
+export type DueWorkRekeyResponse = DueWorkRekeyPageResponse & { pages: number };
+
+/**
+ * Walk one queue's re-key pages. Each page is a durable server-side act keyed by the cursor it
+ * returns, so an interrupted run resumes by passing the last reported cursor back in.
+ */
+export async function rekeyDueWorkQueueCommand(input: {
+  apply: boolean;
+  cursor: null | string;
+  limit: number;
+  maxPages: number;
+  workKind: string;
+}): Promise<DueWorkRekeyResponse> {
+  const { apply, limit, maxPages, workKind } = input;
+  let cursor = input.cursor;
+  let response = await adminApiPost<DueWorkRekeyPageResponse>(
+    `/api/v1/admin/projections/due-work/${encodeURIComponent(workKind)}/rekey`,
+    { apply, cursor, limit },
+  );
+  let pages = 1;
+  let marked = response.marked;
+  let matched = response.matched;
+  cursor = response.cursor;
+
+  // A dry run reports the first page and stops: walking further would only restate the same
+  // bounded remaining count without changing anything.
+  while (apply && response.hasMore && response.cursor !== null && pages < maxPages) {
+    response = await adminApiPost<DueWorkRekeyPageResponse>(
+      `/api/v1/admin/projections/due-work/${encodeURIComponent(workKind)}/rekey`,
+      { apply, cursor, limit },
+    );
+    pages += 1;
+    marked += response.marked;
+    matched += response.matched;
+    cursor = response.cursor;
+  }
+
+  return { ...response, cursor, marked, matched, pages };
+}
+
+export function parseDueWorkRekeyLimit(value: string): number {
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > DUE_WORK_REKEY_LIMIT_MAX) {
+    throw new Error(`--limit must be a whole number from 1 through ${DUE_WORK_REKEY_LIMIT_MAX}`);
+  }
+  return limit;
+}
+
+export function parseDueWorkRekeyMaxPages(value: string): number {
+  const pages = Number(value);
+  if (!Number.isSafeInteger(pages) || pages < 1 || pages > DUE_WORK_REKEY_MAX_PAGES) {
+    throw new Error(
+      `--max-pages must be a whole number from 1 through ${DUE_WORK_REKEY_MAX_PAGES}`,
+    );
+  }
+  return pages;
+}
+
+export function dueWorkRekeyLine(result: DueWorkRekeyResponse): string {
+  const remaining = `${result.remaining.count}${result.remaining.truncated ? "+" : ""}`;
+  const verb = result.applied ? `marked ${result.marked}` : `would mark ${result.matched}`;
+  return `${result.workKind} re-key — ${verb} over ${result.pages} page(s); ${remaining} still on the old key; cursor ${result.cursor ?? "start"}; definition ${result.definitionVersion}.`;
 }
 
 export function parseProjectionEnabled(value: string): boolean {

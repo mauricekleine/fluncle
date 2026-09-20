@@ -182,12 +182,14 @@ export {
 export {
   advanceProjection,
   adminProjectionsContract,
+  DUE_WORK_REKEY_LIMIT_MAX,
   getProjectionStatus,
   PROJECTION_STEP_LIMIT_MAX,
   ProjectionCutoverSchema,
   ProjectionStatusSchema,
   ProjectionStepActionSchema,
   ProjectionTargetSchema,
+  rekeyDueWorkQueue,
   setProjectionCutover,
 } from "./admin-projections";
 export {

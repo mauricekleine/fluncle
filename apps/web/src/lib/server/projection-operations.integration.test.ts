@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
+import { crawlDueDefinitionVersion } from "./crawl-due-work";
 import { DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID } from "./due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
@@ -60,7 +61,7 @@ describe("projection production operations", () => {
       create table due_work_rebuilds (
         work_kind text not null, subject_type text not null, state text not null,
         scanned_count integer not null, projected_count integer not null,
-        generation text not null default 'complete', cursor text,
+        generation text not null default 'complete', cursor text, definition_version text,
         started_at text not null default '', updated_at text not null default '', completed_at text,
         primary key (work_kind, subject_type)
       );
@@ -96,7 +97,7 @@ describe("projection production operations", () => {
       create table crawl_due_work_rebuilds (
         scope text primary key, state text not null, scanned_count integer not null,
         projected_count integer not null, source_digest text, projected_digest text,
-        generation text not null default 'complete', cursor text,
+        generation text not null default 'complete', cursor text, definition_version text,
         started_at text not null default '', updated_at text not null default '', completed_at text
       );
       create table projection_repairs (
@@ -171,19 +172,22 @@ describe("projection production operations", () => {
         primary key (hub, clause_hash)
       );
     `);
+    // A complete checkpoint is complete only UNDER TODAY'S DEFINITION, so the fixture stores the
+    // running definition version alongside the state it claims.
     for (const definition of DUE_WORK_BACKFILLS) {
       await db.execute({
-        args: [definition.workKind, definition.subjectType],
+        args: [definition.workKind, definition.subjectType, definition.definitionVersion],
         sql: `insert into due_work_rebuilds
-          (work_kind, subject_type, state, scanned_count, projected_count)
-          values (?, ?, 'complete', 0, 0)`,
+          (work_kind, subject_type, state, scanned_count, projected_count, definition_version)
+          values (?, ?, 'complete', 0, 0, ?)`,
       });
     }
     await db.execute({
-      args: [EMPTY_DIGEST, EMPTY_DIGEST],
+      args: [EMPTY_DIGEST, EMPTY_DIGEST, crawlDueDefinitionVersion()],
       sql: `insert into crawl_due_work_rebuilds
-        (scope, state, scanned_count, projected_count, source_digest, projected_digest)
-        values ('frontier', 'complete', 0, 0, ?, ?)`,
+        (scope, state, scanned_count, projected_count, source_digest, projected_digest,
+         definition_version)
+        values ('frontier', 'complete', 0, 0, ?, ?, ?)`,
     });
     await db.execute({
       args: [EMPTY_DIGEST, EMPTY_DIGEST],

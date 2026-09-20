@@ -109,9 +109,11 @@ export type ArtistImageSource = {
   spotify_artist_id: string | null;
 };
 
-const BIO_INDEX_FLOOR = 3;
-const ENRICH_STALE_PROCESSING_MS = 30 * 60 * 1000;
-const IMAGE_RETRY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+// Exported so the definition-fingerprint coverage test can enumerate every constant these
+// evaluators read and prove the probe matrix crosses each one.
+export const BIO_INDEX_FLOOR = 3;
+export const ENRICH_STALE_PROCESSING_MS = 30 * 60 * 1000;
+export const IMAGE_RETRY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 function timestampMilliseconds(value: string, field: string): number {
   const milliseconds = Date.parse(value);

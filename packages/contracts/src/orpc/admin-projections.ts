@@ -130,6 +130,10 @@ export const advanceProjection = oc
       complete: z.boolean(),
       ok: z.literal(true),
       processed: CountSchema,
+      // Due-work repair only: the stale-definition rebuild walk this step drove with the page
+      // budget repair left behind, and how many families still carry an older definition version.
+      rebuildRowsWalked: CountSchema.optional(),
+      rebuildStaleFamilies: CountSchema.optional(),
       scheduled: CountSchema,
       status: ProjectionStatusSchema.optional(),
       target: ProjectionTargetSchema,
@@ -158,8 +162,53 @@ export const setProjectionCutover = oc
     }),
   );
 
+export const DUE_WORK_REKEY_LIMIT_MAX = 500;
+
+/**
+ * Mark one due-work queue's projected rows for repair, so the maintenance sweep re-keys them under
+ * today's definition. Bounded and resumable; a dry run is the default. The automatic path is the
+ * definition version stored with each rebuild checkpoint — this is the operator's lever for
+ * forcing one queue now.
+ */
+export const rekeyDueWorkQueue = oc
+  .route({
+    method: "POST",
+    operationId: "rekeyDueWorkQueue",
+    path: "/admin/projections/due-work/{workKind}/rekey",
+    summary: "Mark one due-work queue for re-keying under today's order definition",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      apply: z.boolean().default(false),
+      cursor: z.string().max(200).nullable().default(null),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(DUE_WORK_REKEY_LIMIT_MAX)
+        .default(DUE_WORK_REKEY_LIMIT_MAX),
+      workKind: z.string().min(1).max(64),
+    }),
+  )
+  .output(
+    z.object({
+      applied: z.boolean(),
+      cursor: z.string().nullable(),
+      definitionVersion: z.string(),
+      hasMore: z.boolean(),
+      marked: CountSchema,
+      matched: CountSchema,
+      ok: z.literal(true),
+      remaining: BoundedCountSchema,
+      subjectType: z.string(),
+      workKind: z.string(),
+    }),
+  );
+
 export const adminProjectionsContract = {
   advance_projection: advanceProjection,
   get_projection_status: getProjectionStatus,
+  rekey_due_work_queue: rekeyDueWorkQueue,
   set_projection_cutover: setProjectionCutover,
 };
