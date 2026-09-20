@@ -52,6 +52,34 @@ export const PROBE_LADDER_BASE: readonly unknown[] = [
 ];
 
 /**
+ * The ladder a TIMESTAMP column gets, and the reason the matrix types its columns at all.
+ *
+ * `Date.parse` of anything that is not an ISO-8601 string falls back to an implementation-defined
+ * parse that reads the result in the HOST'S LOCAL TIME: a bare `899999` in an `*_at` column becomes
+ * a year, and the `next_due_at` it produces then differs by the machine's UTC offset. That would
+ * make the fingerprint a function of the host clock's timezone rather than of the code — the
+ * version would flap between a developer's machine and the UTC Worker and re-project forever.
+ *
+ * So a timestamp column is probed only with values whose parse is specified: `null`, the two
+ * strings that are unambiguously not dates (both yield NaN, which every evaluator documents as the
+ * self-healing arm), and the three fixed ISO instants. Every other column keeps the full ladder,
+ * which is where the numeric thresholds need to be crossed anyway.
+ */
+export const PROBE_LADDER_TIMESTAMP: readonly unknown[] = [
+  null,
+  "",
+  "probe",
+  PROBE_BEFORE,
+  PROBE_NOW,
+  PROBE_AFTER,
+];
+
+/** A column the evaluators feed to `Date.parse`, by the naming both source shapes already use. */
+export function isTimestampProbeColumn(column: string): boolean {
+  return /(?:_at|At)$/.test(column);
+}
+
+/**
  * The ladder, DERIVED from the thresholds the caller's evaluators compare against: each one
  * contributes its own value plus both neighbours, so a retune of any size — including by one —
  * moves a probe answer and therefore the version. Deriving it is the point: a hand-listed ladder
@@ -88,7 +116,7 @@ export function probeMatrix<Base extends Record<string, unknown>>(
   const probes: Base[] = [...bases];
   for (const base of bases) {
     for (const column of columns) {
-      for (const value of ladder) {
+      for (const value of isTimestampProbeColumn(column) ? PROBE_LADDER_TIMESTAMP : ladder) {
         probes.push({ ...base, [column]: value });
       }
     }

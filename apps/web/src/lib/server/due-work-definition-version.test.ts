@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import { crawlDueDefinitionVersion, CRAWL_DUE_WORK_FRONTIER } from "./crawl-due-work";
 import {
   definitionFingerprint,
+  isTimestampProbeColumn,
+  probeAnswer,
   probeLadderCrossing,
   probeMatrix,
   PROBE_BEFORE,
+  PROBE_LADDER_TIMESTAMP,
   PROBE_NOW,
 } from "./due-work-definition-fingerprint";
 import {
@@ -44,48 +47,48 @@ import {
 // rebuild checkpoint stores the version, a mismatch is not `complete`, and the maintenance sweep
 // opens a fresh generation for it (docs/database-performance.md).
 const DEFINITION_VERSIONS: Record<string, string> = {
-  "album.bio": "dv1-4819c920a086e930",
-  "album.cover-master": "dv1-459e79a54b3a843e",
-  "analyze-catalogue": "dv1-1f297b5cef0697a4",
-  "analyze-findings": "dv1-22242cd998de4319",
-  anchor: "dv1-4c86384c7bf91680",
-  "apple-catalogue": "dv1-ed94c054757c759f",
-  "apple-finding": "dv1-f0c353ca093dcca5",
-  "artist-credits": "dv1-d0f5defb9c7a254c",
-  "artist-edges": "dv1-c449335013e4e2c5",
-  "artist.bio": "dv1-8eb4d729ca634243",
-  "artist.cover-master": "dv1-793bef3a6e067a1f",
+  "album.bio": "dv1-b16f0116bc6fed16",
+  "album.cover-master": "dv1-e7552d3fadd73a54",
+  "analyze-catalogue": "dv1-85f6f20e421ca833",
+  "analyze-findings": "dv1-e70734e1e30c39ad",
+  anchor: "dv1-c49c8368a78a9886",
+  "apple-catalogue": "dv1-a59ea93258a3ab92",
+  "apple-finding": "dv1-55aa719eb3835318",
+  "artist-credits": "dv1-843ac6fc10cb90e0",
+  "artist-edges": "dv1-24b1a70a9f5cf687",
+  "artist.bio": "dv1-e08ec8daaed9288a",
+  "artist.cover-master": "dv1-c88a7458fc7b4f49",
   "artist.image": "dv1-9c360030245a3584",
-  "beatport-catalogue": "dv1-c74a55868e9a4b5b",
-  "beatport-finding": "dv1-6cb525c623f95994",
-  "capture-catalogue": "dv1-2163efcff42c1846",
-  "capture-findings": "dv1-f6a5231ec5915261",
-  "capture-verification": "dv1-6dfa7d33bd65c6fc",
-  "catalogue-rank": "dv1-b4d716fc92aecd70",
-  [CRAWL_DUE_WORK_FRONTIER]: "dv1-fb948dc996aa0790",
-  "deezer-catalogue": "dv1-e4a1bc14ec6497ff",
-  "deezer-finding": "dv1-5b1928fa8ae6b8b4",
-  "discogs-track": "dv1-a326bfe891da6a6a",
-  "embed-catalogue": "dv1-0423ac8ca65d0801",
-  "embed-findings": "dv1-fc8ef789bce82fe6",
-  "finding.context": "dv1-a088324065f20535",
-  "finding.context.retry-empty": "dv1-1abf6af6d360c616",
-  "finding.enrich": "dv1-f75bdde4dcf49b61",
-  "finding.note": "dv1-3bb54f8054cd8485",
-  "finding.observe": "dv1-090a2f17ce7e1650",
-  "finding.render": "dv1-ab77f540425e2e6a",
-  "finding.render.requires-observation": "dv1-aff14ee99090bbb5",
-  "isrc-recovery": "dv1-7537e54f29cb579a",
-  "label.bio": "dv1-41ae5783c64f46a9",
-  "label.image": "dv1-d151b3b48f992d54",
-  "lastfm-track": "dv1-1ee3b3f38ed9d959",
-  "mbid-isrc-lookup": "dv1-f27e5513545bc97d",
-  "mbid-isrc-refresh": "dv1-21cd21b971f56659",
-  "mbid-prefix-strip": "dv1-20958d0c7aad29ea",
-  "youtube-provenance-catalogue": "dv1-86b325cd42fc4589",
-  "youtube-provenance-findings": "dv1-36ecb6b2ef0fd4dd",
-  "youtube-reverdict-catalogue": "dv1-836c7811ef779b40",
-  "youtube-reverdict-findings": "dv1-35be954cf97c7f8c",
+  "beatport-catalogue": "dv1-b6e005f13c3e3f6c",
+  "beatport-finding": "dv1-846defdfc1c40f50",
+  "capture-catalogue": "dv1-c9e25f6a512cc710",
+  "capture-findings": "dv1-47c7a6c8379476a5",
+  "capture-verification": "dv1-93400c1ce764898a",
+  "catalogue-rank": "dv1-3c2f45dbed7774ca",
+  [CRAWL_DUE_WORK_FRONTIER]: "dv1-a88caa6773687598",
+  "deezer-catalogue": "dv1-f55ba84edd5da5a6",
+  "deezer-finding": "dv1-d48f15a364352f41",
+  "discogs-track": "dv1-be3ae1f4ba16cced",
+  "embed-catalogue": "dv1-6dd3ba304aaa282e",
+  "embed-findings": "dv1-77254001ba00eea1",
+  "finding.context": "dv1-2db40ca0eb662fea",
+  "finding.context.retry-empty": "dv1-46ce17dc3d1c6e08",
+  "finding.enrich": "dv1-78801a1152640791",
+  "finding.note": "dv1-c1493454abb9aec1",
+  "finding.observe": "dv1-bbddf9e198fc198c",
+  "finding.render": "dv1-37c8ef786c5a38cd",
+  "finding.render.requires-observation": "dv1-179ad4f609e7a93e",
+  "isrc-recovery": "dv1-ff890f3b8fcea34d",
+  "label.bio": "dv1-92c056f3dcc72422",
+  "label.image": "dv1-099ae2da11e18da7",
+  "lastfm-track": "dv1-e2153b963e8b428e",
+  "mbid-isrc-lookup": "dv1-dea1ee4dc7288415",
+  "mbid-isrc-refresh": "dv1-bf0e2bb9ecac2357",
+  "mbid-prefix-strip": "dv1-7d14c23be7dd5b40",
+  "youtube-provenance-catalogue": "dv1-f94542b5935f59d3",
+  "youtube-provenance-findings": "dv1-28ab3d18dab7084e",
+  "youtube-reverdict-catalogue": "dv1-5283cd28dd833b59",
+  "youtube-reverdict-findings": "dv1-16dcde0f0bd4de94",
 };
 
 function versionFor(workKind: string): string {
@@ -296,6 +299,60 @@ describe("due-work definition versions", () => {
     expect(definitionFingerprint("probe", transcript(original))).not.toBe(
       definitionFingerprint("probe", transcript(reordered)),
     );
+  });
+
+  it("is independent of the host timezone", () => {
+    // `Date.parse` of a non-ISO value reads in LOCAL time, so an ill-typed probe in an `*_at`
+    // column made the fingerprint a function of the machine's UTC offset: a developer on +02:00
+    // pins a fixture the UTC Worker disagrees with, and the queue re-projects every time it is
+    // read from the other side. A half-hour zone is deliberate — it catches an offset a
+    // whole-hour zone could coincidentally round away.
+    const transcriptUnder = (timeZone: string) => {
+      const previous = process.env.TZ;
+      process.env.TZ = timeZone;
+      try {
+        return [
+          ...trackProbeMatrix().map((source, index) =>
+            [
+              index,
+              probeAnswer(() => describeDueWorkTrackDecision("capture", source, PROBE_NOW)),
+              probeAnswer(() => describeDueWorkTrackDecision("anchor", source, PROBE_NOW)),
+              probeAnswer(() =>
+                describeDueWorkTrackDecision("youtube-provenance", source, PROBE_NOW),
+              ),
+            ].join("|"),
+          ),
+          ...vendorProbeMatrix().map((source, index) =>
+            [
+              index,
+              probeAnswer(() => vendorDecision(source, "lastfm-track")),
+              probeAnswer(() => vendorDecision(source, "mbid-isrc-refresh")),
+            ].join("|"),
+          ),
+        ];
+      } finally {
+        process.env.TZ = previous;
+      }
+    };
+
+    expect(definitionFingerprint("tz", transcriptUnder("UTC"))).toBe(
+      definitionFingerprint("tz", transcriptUnder("Asia/Kolkata")),
+    );
+    expect(definitionFingerprint("tz", transcriptUnder("UTC"))).toBe(
+      definitionFingerprint("tz", transcriptUnder("America/Los_Angeles")),
+    );
+  });
+
+  it("probes a timestamp column only with values whose parse is specified", () => {
+    // The guard the case above rests on: nothing ill-typed may reach `Date.parse`.
+    for (const source of [...trackProbeMatrix(), ...vendorProbeMatrix()]) {
+      for (const [column, value] of Object.entries(source)) {
+        if (!isTimestampProbeColumn(column)) {
+          continue;
+        }
+        expect(PROBE_LADDER_TIMESTAMP.includes(value), `${column}=${String(value)}`).toBe(true);
+      }
+    }
   });
 
   it("derives a ladder that straddles every threshold it is given", () => {
