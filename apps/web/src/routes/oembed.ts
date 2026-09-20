@@ -113,7 +113,15 @@ async function resolveOembed(
 
     const findings = await getFindingsByArtist(artist.id, artist.name);
     const cover = findings[0];
+    // The SAME ladder the page's own head runs (routes/artist.$slug.tsx): the artist's OWN
+    // portrait leads — its owned avatar master, else the raw Spotify image, both already at the
+    // `large` rung out of `bestArtistAvatarUrl` — then the freshest finding's cover, then the
+    // house cover as the floor. The card and the page must not disagree about an entity's
+    // picture: an oEmbed-aware consumer prefers this payload over the page's og:image, so a
+    // shorter ladder here unfurls a worse card than the page already declares. The label branch
+    // below carries its own logo for the same reason.
     const thumbnailUrl =
+      artist.imageUrl ??
       (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
       `${siteUrl}/fluncle-cover.png`;
 
