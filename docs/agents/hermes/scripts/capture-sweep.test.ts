@@ -85,6 +85,8 @@ import {
   type CaptureProgress,
   type CaptureProgressPorts,
   type ReceiptCoordinates,
+  CAPTURE_ADMISSION_ACTIONS,
+  isCaptureAdmissionAction,
 } from "./capture-sweep";
 // The REAL /status strain detector, imported rather than re-implemented: since #994 this
 // sweep's stderr is teed into the marker and scored by these two functions, so the only
@@ -3689,5 +3691,53 @@ describe("the anchored split the tick publishes", () => {
     // An honest gap, never a fabricated zero.
     expect(summary.doneAnchored).toBeUndefined();
     expect(summary.itemMsMax).toBeUndefined();
+  });
+});
+
+describe("the admitted phase child's argv guard", () => {
+  // The parent spawns `--admission-phase <action>` for every member of the action union; a guard
+  // that lags the union rejects the spawn and fails the WHOLE tick, so the guard reads the list.
+  test("accepts every action the parent can spawn, and nothing else", () => {
+    for (const action of CAPTURE_ADMISSION_ACTIONS) {
+      expect(isCaptureAdmissionAction(action)).toBe(true);
+    }
+    expect(CAPTURE_ADMISSION_ACTIONS).toEqual(
+      expect.arrayContaining([
+        "prepare-batch",
+        "commit-batch",
+        "prepare",
+        "commit",
+        "queue",
+        "reconcile",
+      ]),
+    );
+    expect(isCaptureAdmissionAction("")).toBe(false);
+    expect(isCaptureAdmissionAction("batch")).toBe(false);
+    expect(isCaptureAdmissionAction("PREPARE")).toBe(false);
+  });
+
+  test("the real child entrypoint accepts a batch action instead of throwing", () => {
+    // Drive the actual script the way `phaseCommand` spawns it. The state file is empty, so the
+    // child fails INSIDE the phase (a state-shape error), never at the argv guard.
+    const dir = mkdtempSync(join(tmpdir(), "capture-argv-guard-"));
+    try {
+      const statePath = join(dir, "prepare-batch.json");
+      writeFileSync(statePath, "{}");
+      const run = Bun.spawnSync(
+        [
+          process.execPath,
+          join(import.meta.dir, "capture-sweep.ts"),
+          "--admission-phase",
+          "prepare-batch",
+          "--phase-state",
+          statePath,
+        ],
+        { env: { ...process.env, FLUNCLE_API_TOKEN: "test" }, stderr: "pipe", stdout: "pipe" },
+      );
+      const text = `${run.stdout.toString()}\n${run.stderr.toString()}`;
+      expect(text).not.toContain("invalid capture admission phase invocation");
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 });
