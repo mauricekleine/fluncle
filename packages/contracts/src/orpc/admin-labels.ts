@@ -251,6 +251,80 @@ export const mergeLabel = oc
   .input(z.object({ canonicalSlug: z.string(), slug: z.string() }))
   .output(z.object({ ok: z.literal(true), result: MergeLabelResultSchema }));
 
+// ── Minting a label from its MusicBrainz identity (the operator's own door) ────────────────
+// A `labels` row is otherwise born two ways, both of them a side effect of something else: the
+// publish path mints one off a certified finding's label string, and the catalogue crawler mints
+// one when a walk reaches a release naming a label with an MBID. Neither door opens for a label
+// NOBODY HAS WALKED TO YET — and that is exactly the shape an upstream MusicBrainz conflation split
+// leaves behind, where the drum & bass half lands on a brand-new entity a one-release imprint may
+// never put in a crawl's path. `mint_label` is the operator's own door: he names the MusicBrainz
+// IDENTITY and the row exists.
+
+/** The MusicBrainz MBID shape (8-4-4-4-12 hex) — the only identity `mint_label` accepts. */
+export const MB_LABEL_MBID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * What the mint actually did — a discriminated outcome, never a bare boolean, because the three
+ * cases are three different facts about the archive:
+ *
+ *   - `minted`  — no row carried this identity or this spelling; a new `labels` row was created.
+ *   - `adopted` — a row already existed under the MusicBrainz name's slug (or a confirmed alias of
+ *                 it) carrying NO MBID, so the MBID was adopted onto it fill-empty-only. Nothing
+ *                 was duplicated; the publish-minted row simply gained its identity.
+ *   - `known`   — the MBID already keyed a row. The call is a no-op read (plus any ruling).
+ */
+export const MintLabelOutcomeSchema = z
+  .enum(["minted", "adopted", "known"])
+  .meta({ id: "MintLabelOutcome" });
+
+/**
+ * `mint_label` → `POST /admin/labels` (operationId `mintLabel`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`, the `update_label` / `merge_label` precedent):
+ * bringing a label into the archive decides what Fluncle may crawl and what earns a public page,
+ * which is an editorial act, so an agent token 403s.
+ *
+ * The Worker looks the MBID up through the ONE shared rate-limited MusicBrainz client and folds the
+ * result through the SAME `ensureLabel(name, mbLabelId)` connect-or-create the crawler uses — so the
+ * MBID fold and the fill-empty adoption behave here exactly as they do on a crawl. MusicBrainz's
+ * disambiguation, area and life-span ride onto the row fill-empty-only; nothing already stored is
+ * overwritten.
+ *
+ * IDEMPOTENT: an MBID that already keys a row returns that row with `outcome: "known"` — never an
+ * error. A MusicBrainz lookup that finds nothing is a 404 (`musicbrainz_label_not_found`); an active
+ * MusicBrainz throttle is a 503 (`musicbrainz_rate_limited`), because the answer is unknown rather
+ * than absent.
+ *
+ * `seedState` is OPTIONAL and, when given, rules the label through the same `update_label` write, so
+ * `ruled_at` and the re-arm watermark stamp identically. Omitting it leaves a NEW row at the table's
+ * `undecided` default (never silently crawled, never silently dropped) and leaves an EXISTING row's
+ * ruling exactly where the operator left it — a re-run can never un-rule a label it did not mint.
+ */
+export const mintLabel = oc
+  .route({
+    method: "POST",
+    operationId: "mintLabel",
+    path: "/admin/labels",
+    summary: "Mint a label from its MusicBrainz identity (operator; connect-or-create, idempotent)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      mbLabelId: z.string().regex(MB_LABEL_MBID_PATTERN, {
+        error: "mbLabelId must be a MusicBrainz label MBID",
+      }),
+      seedState: LabelSeedStateSchema.optional(),
+    }),
+  )
+  .output(
+    z.object({
+      label: LabelAdminItemSchema,
+      ok: z.literal(true),
+      outcome: MintLabelOutcomeSchema,
+    }),
+  );
+
 // ── Label aliases: two spellings, one label (RFC musickit-second-authority, U2a) ──────────
 // A second metadata authority (Apple's album `recordLabel`, corroborated by MusicBrainz over a
 // shared ISRC) proposes that "Med School Recordings" is the same label as "Medschool". These
@@ -485,6 +559,7 @@ export const adminLabelsContract = {
   list_labels_admin: listLabelsAdmin,
   list_labels_missing_bio: listLabelsMissingBio,
   merge_label: mergeLabel,
+  mint_label: mintLabel,
   reject_label_alias: rejectLabelAlias,
   replace_label_artist_rules: replaceLabelArtistRules,
   update_label: updateLabel,

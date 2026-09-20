@@ -15,6 +15,7 @@ const label = {
 
 let patches: Array<{ body: unknown; path: string }> = [];
 let gets: string[] = [];
+let posts: Array<{ body: unknown; path: string }> = [];
 let puts: Array<{ body: unknown; path: string }> = [];
 
 const artistRule = {
@@ -43,6 +44,11 @@ await mock.module("../api", () => ({
 
     return { label, ok: true };
   },
+  adminApiPost: async (path: string, body: unknown) => {
+    posts.push({ body, path });
+
+    return { label, ok: true, outcome: "minted" };
+  },
   adminApiPut: async (path: string, body: unknown) => {
     puts.push({ body, path });
     return { ok: true, rules: [artistRule] };
@@ -51,6 +57,7 @@ await mock.module("../api", () => ({
 
 const {
   listLabelArtistRulesCommand,
+  mintLabelCommand,
   parseLabelArtistRulesJson,
   replaceLabelArtistRulesCommand,
   updateLabelCommand,
@@ -59,6 +66,7 @@ const {
 beforeEach(() => {
   gets = [];
   patches = [];
+  posts = [];
   puts = [];
 });
 
@@ -82,6 +90,40 @@ describe("updateLabelCommand", () => {
         path: "/api/v1/admin/labels/lbl_test",
       },
     ]);
+  });
+});
+
+describe("mintLabelCommand", () => {
+  test("posts the MBID alone, adds a ruling only when one is given, and makes no seed-set round trip", async () => {
+    await mintLabelCommand("4CBB2BA1-4E0A-4A6E-8F3D-5E17A4C0A1F2");
+    const ruled = await mintLabelCommand("4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2", "enabled");
+
+    expect(posts).toEqual([
+      {
+        body: { mbLabelId: "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2" },
+        path: "/api/v1/admin/labels",
+      },
+      {
+        body: { mbLabelId: "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2", seedState: "enabled" },
+        path: "/api/v1/admin/labels",
+      },
+    ]);
+    // The op is keyed by the MusicBrainz identity, so there is no Fluncle id to resolve first.
+    expect(gets).toEqual([]);
+    expect(ruled.outcome).toBe("minted");
+  });
+
+  test("refuses a value that is not a MusicBrainz MBID before spending a request", async () => {
+    let message = "";
+
+    try {
+      await mintLabelCommand("med-school");
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("MusicBrainz label MBID");
+    expect(posts).toEqual([]);
   });
 });
 

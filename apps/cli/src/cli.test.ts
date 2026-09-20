@@ -3,6 +3,7 @@ import { fluncleAsciiLogo } from "./brand";
 import {
   ARTIST_RULE_BOUNDARY,
   artistRuleLines,
+  labelMintLine,
   labelUpdateLines,
   parseTelemetryTimestamp,
   unmatchedRowLine,
@@ -129,6 +130,57 @@ describe("fluncle CLI parsing and JSON output", () => {
       "Test Label (test-label) → scoped re-walk armed.",
       "  The next crawl rechecks its MusicBrainz releases.",
     ]);
+  });
+
+  test("admin labels mint leads with the outcome and names the identity it folded on", () => {
+    expect(
+      labelMintLine(
+        {
+          mbLabelId: "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+          name: "Med School",
+          seedState: "enabled",
+          slug: "med-school",
+        },
+        "minted",
+        "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+      ),
+    ).toBe(
+      "MINTED — Med School (med-school), MusicBrainz 4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2, seed state ENABLED.",
+    );
+
+    expect(
+      labelMintLine(
+        { mbLabelId: null, name: "Med School", seedState: "undecided", slug: "med-school" },
+        "known",
+        "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+      ),
+    ).toBe(
+      "ALREADY KNOWN — Med School (med-school), MusicBrainz 4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2, seed state UNDECIDED.",
+    );
+  });
+
+  testCli("admin labels mint rejects an invalid supplied ruling before fetching", async () => {
+    const result = await runCli([
+      "admin",
+      "labels",
+      "mint",
+      "4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2",
+      "--seed-state",
+      "maybe",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Pass --seed-state enabled|disabled|undecided");
+  });
+
+  testCli("admin labels mint rejects a slug where an MBID belongs, before fetching", async () => {
+    const result = await runCli(["admin", "labels", "mint", "med-school", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("MusicBrainz label MBID");
   });
 
   testCli("artist rule commands validate mutation inputs before fetching", async () => {

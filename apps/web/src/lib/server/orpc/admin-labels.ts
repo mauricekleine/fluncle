@@ -15,6 +15,12 @@
 import { buildEntityBioPrompt, fetchEntityFacts, gateOrAcceptBio } from "../bio";
 import { purgeEntityCache } from "../edge-cache";
 import {
+  LabelMintIdentityConflictError,
+  mintLabelFromMusicbrainz,
+  MusicbrainzLabelNotFoundError,
+  MusicbrainzThrottledError,
+} from "../label-mint";
+import {
   LabelScopedUnlistedRuleError,
   listLabelArtistRules,
   replaceLabelArtistRules,
@@ -158,6 +164,50 @@ export function adminLabelsHandlers(os: Implementer) {
         if (error instanceof LabelMergeConflictError) {
           throw new ORPCError("CONFLICT", {
             data: { apiCode: "merge_seed_conflict", apiMessage: error.message },
+            message: error.message,
+            status: 409,
+          });
+        }
+
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/labels — OPERATOR tier: mint a label from its MusicBrainz identity, the one door
+  // beside the publish path and a crawl discovery. Connect-or-create through the SAME `ensureLabel`
+  // MBID fold the crawler uses, facts carried fill-empty-only, idempotent on a second call. An
+  // optional `seedState` rules through the SAME `update_label` write, so the stamps match. Purges the
+  // label's cached page because filled founding facts are visible on it.
+  const mintLabelHandler = os.mint_label
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { label, outcome } = await mintLabelFromMusicbrainz(input.mbLabelId, input.seedState);
+
+        purgeEntityCache("label", label.slug);
+
+        return { label, ok: true as const, outcome };
+      } catch (error) {
+        if (error instanceof MusicbrainzLabelNotFoundError) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "musicbrainz_label_not_found", apiMessage: error.message },
+            message: error.message,
+            status: 404,
+          });
+        }
+
+        if (error instanceof MusicbrainzThrottledError) {
+          throw new ORPCError("SERVICE_UNAVAILABLE", {
+            data: { apiCode: "musicbrainz_rate_limited", apiMessage: error.message },
+            message: error.message,
+            status: 503,
+          });
+        }
+
+        if (error instanceof LabelMintIdentityConflictError) {
+          throw new ORPCError("CONFLICT", {
+            data: { apiCode: "label_identity_conflict", apiMessage: error.message },
             message: error.message,
             status: 409,
           });
@@ -348,6 +398,7 @@ export function adminLabelsHandlers(os: Implementer) {
     list_labels_admin: listLabelsAdminHandler,
     list_labels_missing_bio: listLabelsMissingBioHandler,
     merge_label: mergeLabelHandler,
+    mint_label: mintLabelHandler,
     reject_label_alias: rejectLabelAliasHandler,
     replace_label_artist_rules: replaceLabelArtistRulesHandler,
     update_label: updateLabelHandler,

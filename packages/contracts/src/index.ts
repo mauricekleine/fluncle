@@ -64,6 +64,7 @@ import {
   type LabelAliasSourceSchema,
   type LabelSeedStateSchema,
   type MergeLabelResultSchema,
+  type MintLabelOutcomeSchema,
 } from "./orpc/admin-labels.js";
 import { type UserAdminItemSchema, type UserStatusSchema } from "./orpc/admin-users.js";
 import { type NoteGateSchema, type NoteRejectionSchema } from "./orpc/admin-notes.js";
@@ -235,6 +236,13 @@ export type ArtistRuleAddResponse = Ok<{ rule: ArtistRule }>;
  * fields filled from the loser, the alias written, and the resolved crawl-seed state.
  */
 export type MergeLabelResult = z.infer<typeof MergeLabelResultSchema>;
+
+/**
+ * What `mint_label` (`POST /api/v1/admin/labels`) did with the MusicBrainz identity it was handed:
+ * `minted` a new row, `adopted` the MBID onto a row that already carried the spelling, or found the
+ * MBID already `known`. Inferred from `MintLabelOutcomeSchema` (./orpc/admin-labels.ts).
+ */
+export type MintLabelOutcome = z.infer<typeof MintLabelOutcomeSchema>;
 
 // ── Users (the account roster — the operator's read-only rollout window) ───────
 
