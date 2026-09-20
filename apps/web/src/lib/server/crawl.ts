@@ -114,7 +114,7 @@ import {
 import { relinkTracksToEntity } from "./hub-counts";
 import { hasIsrc } from "./isrc";
 import { setLabelMbLabelId } from "./label-images";
-import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
+import { adoptLabelMbLabelId, ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
 import { MUSICBRAINZ_API_HOST, mbFetch, musicbrainzUrl } from "./musicbrainz";
 import {
@@ -717,17 +717,25 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
  * A genuinely NEW label is returned `undefined`; the caller then mints the row from MB's
  * spelling and writes that same spelling onto the track, so the two agree by construction.
  *
+ * It returns the ROW, not just the name, so the caller can adopt the release's label MBID onto a
+ * row that carries none without a second resolve — one write, and only when there is something to
+ * write. The crawl commits inside a bounded transaction-op budget, so a read it already pays for
+ * is the right place to learn that.
+ *
  * Bounded: `labels` holds one row per DISTINCT label (tens), never one per track.
  */
-async function canonicalLabelName(
+async function canonicalLabelRow(
   name: string,
   client?: Pick<Client, "execute">,
-): Promise<string | undefined> {
+): Promise<undefined | { id: string; mbLabelId: null | string; name: string }> {
   const db = client ?? (await getDb());
-  const result = await db.execute("select name from labels");
+  const result = await db.execute("select id, name, mb_label_id from labels");
   const want = fold(name);
+  const row = typedRows<{ id: string; mb_label_id: null | string; name: string }>(result.rows).find(
+    (candidate) => fold(candidate.name) === want,
+  );
 
-  return typedRows<{ name: string }>(result.rows).find((row) => fold(row.name) === want)?.name;
+  return row ? { id: row.id, mbLabelId: row.mb_label_id, name: row.name } : undefined;
 }
 
 // ── Seeding ──────────────────────────────────────────────────────────────────
@@ -1342,7 +1350,7 @@ async function writeCatalogueTracks(
  * It resolves the label on the MBID FIRST (`where mb_label_id = ?`), then falls back to
  * `slugify(label)`. The MBID fold is why two spellings that slugify apart ("Med School" ⇄
  * "Medschool") point at the SAME label row; the slug fallback is why the crawler writes the
- * ARCHIVE's spelling of a label it already knows (`canonicalLabelName`) rather than
+ * ARCHIVE's spelling of a label it already knows (`canonicalLabelRow`) rather than
  * MusicBrainz's, so even a label with no MBID lands on a real `labels.slug` rather than
  * pointing at nothing. Purely resolve-and-stamp — it never mints (the discovered label was
  * already minted by `ensureLabel` above, and a known label already exists).
@@ -2393,17 +2401,37 @@ async function applyRelease(
   let labelName = mbLabelName;
 
   if (mbLabelName && labelSlug(mbLabelName)) {
-    const known = await canonicalLabelName(mbLabelName, client);
+    const known = await canonicalLabelRow(mbLabelName, client);
 
     if (known) {
-      labelName = known;
-    } else {
+      labelName = known.name;
+
+      // THE ADOPTION. A release is MusicBrainz telling the crawler which label this is, and the
+      // publish path mints a label off a bare vendor string, so a label the archive already knows
+      // is exactly the row most likely to be carrying no MBID. Adopt rather than drop it:
+      // fill-empty-only, never rewriting a row already folded on a different MBID. This is how a
+      // publish-minted label acquires its MusicBrainz identity — off a release that STATES it,
+      // never off a name search that would guess between namesakes. One write, only for a row
+      // with something to gain, and it never fires for that row again.
+      if (mbLabelId && !known.mbLabelId) {
+        await adoptLabelMbLabelId(known.id, mbLabelId, client);
+      }
+    } else if (mbLabelId) {
       // A label nobody has ruled on: it enters `undecided` (the `labels` DDL default) and
       // surfaces in the operator's attention queue. It is NOT crawled — the next crawl
       // seeds from it only if he enables it. The crawler proposes; the operator rules.
       // Minted (or folded) on the MBID so two spellings that slugify apart collapse to one row.
       await ensureLabel(mbLabelName, mbLabelId, client);
       labelsDiscovered.push(mbLabelName);
+    } else {
+      // A release whose `label-info` names a label but carries no `label.id` identifies NOTHING,
+      // and the crawler walks by identity — it would be proposing a row whose MusicBrainz entity
+      // nobody can name, which is the namesake class (packages/skills/fluncle-catalogue-prune,
+      // references/traps.md). So the DISCOVERY path declines: no row, no queue entry, and the
+      // release's tracks keep the raw string alone. This is the one place the two mint paths
+      // differ, and deliberately: publish mints on a string because a certified finding must have
+      // its label page; the crawler mints only on an MBID because it walks by identity.
+      logEvent("info", "crawl.label-discovery-unidentified", { name: mbLabelName });
     }
   }
 
