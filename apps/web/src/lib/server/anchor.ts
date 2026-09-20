@@ -75,7 +75,7 @@
 // free positive-only ListenBrainz rung can park a row without spending one of its finite tries. See
 // `stampAnchorAttempt` for the rule in full.
 
-import { isAnchorApifyEnabled } from "./anchor-apify";
+import { chargeAnchorApifyRow, getAnchorApifyBudget, isAnchorApifyEnabled } from "./anchor-apify";
 import {
   anchorSpotifyBreakerAllows,
   anchorSpotifySearchAllowed,
@@ -444,9 +444,43 @@ type AnchorRow = {
   certified: number;
   duration_ms: number;
   isrc: null | string;
+  spotify_isrc_asked_at: null | string;
   spotify_uri: null | string;
   title: string;
 };
+
+// ── THE PAID RUNG'S ADMISSION RULE ────────────────────────────────────────────────────────────────
+//
+// THE LEAK THIS CLOSES. The free exact-ISRC rung (`findSpotifyTrackByIsrc`) and the metered Apify
+// search answer the SAME question about an ISRC-bearing row — "which Spotify track is this ISRC?" —
+// and the free one answers it about four times out of five. But the free rung is metered by the box's
+// per-tick ask budget and its night window, so every ISRC-bearing row the tick could not ask about
+// fell straight through to the paid rung in the same tick and was BOUGHT. Almost all of that spend
+// bought answers the free rung would have given away.
+//
+// THE RULE. An ISRC-bearing row reaches the paid rung only with a receipt that the free rung genuinely
+// asked Spotify about IT and got a clean miss — `tracks.spotify_isrc_asked_at` (schema.ts), written by
+// nothing but a real ask. A deferral, a 429, a dead grant, a tripped breaker, a spent meter and a
+// failed metadata read all leave it NULL, because none of them put the question.
+//
+// THE ONE EXEMPTION, and it is what keeps anchoring alive: when the free exact-ISRC rung is NOT ARMED
+// at all (`anchor_spotify_search_enabled` off — its default), no receipt can ever be written, so
+// requiring one would permanently close the only rung left. A disarmed free rung gives nothing away,
+// so there is nothing to wait for and the row is eligible immediately — the pre-rule behaviour,
+// unchanged. The rule bites exactly when the free rung is armed, which is exactly when it is cheaper.
+//
+// AN ISRC-LESS ROW is held to the same rule where it is cheap: the only free rung that can conclude
+// about it is the FUZZY Spotify search, so it is eligible once that search actually ran and was not
+// throttled — or immediately when the search rungs are disarmed, for the same reason as above. The
+// Deezer ISRC-recovery rung runs before either, so a row that just won an ISRC is judged as the
+// ISRC-bearing row it now is.
+//
+// WHERE IT IS ENFORCED. `resolveAnchorFree` decides and reports it as `apifyEligible`, so the sweep is
+// TOLD rather than trusted; `anchorTrack` re-checks it on the paid path, so a lagging box cannot talk
+// the Worker into writing an anchor it refused to authorise.
+
+/** Why a row may not be sent to the metered Apify rung right now, or null when it may. */
+export type AnchorApifyIneligibleReason = "apify_budget_spent" | "awaiting_free_ask";
 
 /**
  * The catalogue row the anchor targets is missing, certified, or already anchored — plus the two
@@ -455,6 +489,7 @@ type AnchorRow = {
  */
 export type AnchorTrackReason =
   | "already_anchored"
+  | "awaiting_free_ask"
   | "certified"
   | "no_review"
   | "no_spotify_candidate"
@@ -501,6 +536,7 @@ export async function anchorTrack(
   const found = await db.execute({
     args: [trackId],
     sql: `select t.isrc, t.title, t.artists_json, t.duration_ms, t.spotify_uri,
+                 t.spotify_isrc_asked_at,
                  (f.track_id is not null) as certified
           from tracks t
           left join findings f on f.track_id = t.track_id
@@ -525,6 +561,29 @@ export async function anchorTrack(
     throw new AnchorTrackError(
       "already_anchored",
       `Track ${trackId} already carries a Spotify anchor`,
+    );
+  }
+
+  // THE PAID RUNG'S ADMISSION RULE, re-checked at the write boundary (see the section above). Only
+  // the `apify` source is held to it — every other source IS one of the free rungs, and a rung cannot
+  // be made to wait for itself. The flag read is ordered LAST so a free-rung call and an ISRC-less row
+  // pay nothing for a check that cannot apply to them.
+  //
+  // IT REFUSES, IT DOES NOT PARK. A row that was never asked is not a row that missed, so it keeps its
+  // turn and stamps nothing; the 409 is loud on purpose. The only caller that can reach it is a sweep
+  // that ignored the `apifyEligible` verdict it was given — a stale baked box — and a refusal that is
+  // visible in the tick summary is what gets that box rebaked. The operator keeps the Apify kill-flag
+  // OFF across such a rollout (the box already honours it and skips the actor entirely), which is what
+  // stops the money rather than this rail: by the time a candidate list arrives here it is bought.
+  if (
+    source === "apify" &&
+    row.isrc?.trim() &&
+    !row.spotify_isrc_asked_at &&
+    (await isAnchorSpotifySearchEnabled())
+  ) {
+    throw new AnchorTrackError(
+      "awaiting_free_ask",
+      `Track ${trackId} has not been asked of the free exact-ISRC rung yet — the paid rung is not eligible for it`,
     );
   }
 
@@ -600,9 +659,13 @@ export async function anchorTrack(
         [
           {
             args: [now, trackId],
+            // The free exact-ISRC ask receipt is cleared with the stamp it authorised (schema.ts §
+            // `spotify_isrc_asked_at`): it is evidence about THIS re-ask window, and the window just
+            // closed. A row coming back in a fortnight must be asked for free again before it is bought.
             sql: `update tracks
                   set spotify_anchor_attempted_at = ?,
-                      spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
+                      spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
+                      spotify_isrc_asked_at = null
                   where track_id = ?`,
           },
         ],
@@ -661,7 +724,11 @@ export async function anchorTrack(
               spotify_anchor_source = ?,
               spotify_anchor_verified_by = ?,
               spotify_anchored_at = ?,
-              anchor_review_json = null
+              anchor_review_json = null,
+              -- The free exact-ISRC ask receipt dies with the question it was evidence about
+              -- (schema.ts, spotify_isrc_asked_at): this row is anchored, so there is nothing
+              -- left to ask and nothing left to authorise.
+              spotify_isrc_asked_at = null
           where track_id = ?`,
       },
       updateTrackDuplicateIsrcStatement(trackId, expectedIsrc),
@@ -745,6 +812,22 @@ export type ListenBrainzAnchorOutcome =
  */
 export type AnchorResolveResult = {
   anchored: boolean;
+  /**
+   * Rows the metered Apify rung may still be sent TODAY under the operator's daily cap
+   * (anchor-apify.ts), as it stands AFTER this call's own authorisation. The sweep reports it and
+   * stops pulling work once it reaches 0 — the brake itself is server-side, this is the readout.
+   */
+  apifyBudgetRemaining: number;
+  /**
+   * THE PAID RUNG'S ADMISSION VERDICT for this row — the server telling the sweep whether it may
+   * spend Apify money on it (see "THE PAID RUNG'S ADMISSION RULE" above). FALSE on an anchor (there
+   * is nothing left to buy), on a row whose free exact-ISRC ask has not happened yet, and on a row
+   * the daily cap has no room for. The box is TOLD, never trusted: `anchorTrack` re-checks the rule
+   * at the write boundary.
+   */
+  apifyEligible: boolean;
+  /** Why `apifyEligible` is false, or null (an anchor, or an eligible row). */
+  apifyIneligibleReason: AnchorApifyIneligibleReason | null;
   apifyEnabled: boolean;
   /** Free-rung candidates that arrived without a numeric duration, counted without filtering them. */
   freeDurationMsOmitted: number;
@@ -765,12 +848,24 @@ export type AnchorResolveResult = {
  */
 type FreeResolveOutcome = Omit<
   AnchorResolveResult,
+  | "apifyBudgetRemaining"
+  | "apifyEligible"
   | "apifyEnabled"
+  | "apifyIneligibleReason"
   | "isrcRecoveredByDeezer"
   | "listenbrainzOutcome"
   | "spotifySearchEnabled"
   | "stamped"
->;
+> & {
+  /**
+   * INTERNAL, never on the wire: the exact-ISRC rung ASKED Spotify about this row and Spotify had
+   * nothing — the receipt condition (schema.ts § `spotify_isrc_asked_at`). Strictly narrower than
+   * `spotifyIsrcAsked`, which is also true for the asks that ended in a 429, a dead grant, or a
+   * metadata read that failed: none of those is a clean miss, and treating them as one would buy an
+   * Apify search for a question Spotify never actually answered.
+   */
+  spotifyIsrcCleanMiss: boolean;
+};
 
 /** A Spotify-rung outcome with every field a miss carries — the shared "nothing happened" shape. */
 const NO_SPOTIFY_OUTCOME: FreeResolveOutcome = {
@@ -778,6 +873,7 @@ const NO_SPOTIFY_OUTCOME: FreeResolveOutcome = {
   freeDurationMsOmitted: 0,
   source: null,
   spotifyIsrcAsked: false,
+  spotifyIsrcCleanMiss: false,
   spotifySearchDone: false,
   spotifyThrottled: false,
   verifiedBy: null,
@@ -998,6 +1094,12 @@ async function resolveViaSpotifySearch(
   now: Date,
 ): Promise<FreeResolveOutcome> {
   let freeDurationMsOmitted = 0;
+  // The receipt condition (schema.ts § `spotify_isrc_asked_at`): the exact rung ASKED and Spotify's
+  // answer settled the question. Two shapes qualify — Spotify holds no track under this ISRC, and
+  // Spotify holds one that this row's own gate refuses. Both are answers the PAID rung would only
+  // buy again, because it scrapes the same catalogue and is judged by the same gate. Every other exit
+  // below (a 429, a dead grant, a failed by-id read) leaves it false: the question went unanswered.
+  let spotifyIsrcCleanMiss = false;
 
   // RUNG 2 — the exact ISRC search, only for a row that carries one.
   if (isrc?.trim()) {
@@ -1014,6 +1116,11 @@ async function resolveViaSpotifySearch(
         spotifySearchDone: true,
         spotifyThrottled: Boolean(lookup.rateLimited),
       };
+    }
+
+    if (!lookup.match) {
+      // Spotify answered, and it does not hold this ISRC. The cleanest possible miss.
+      spotifyIsrcCleanMiss = true;
     }
 
     if (lookup.match) {
@@ -1043,11 +1150,16 @@ async function resolveViaSpotifySearch(
             freeDurationMsOmitted,
             source: "spotify-isrc",
             spotifyIsrcAsked: true,
+            spotifyIsrcCleanMiss: false,
             spotifySearchDone: true,
             spotifyThrottled: false,
             verifiedBy: result.verifiedBy,
           };
         }
+
+        // Spotify holds the ISRC and this row's own gate refused what it holds. The paid rung reads
+        // the same catalogue through the same gate, so it can only refuse it again — asked, answered.
+        spotifyIsrcCleanMiss = true;
       }
     }
   }
@@ -1067,6 +1179,7 @@ async function resolveViaSpotifySearch(
       ...NO_SPOTIFY_OUTCOME,
       freeDurationMsOmitted,
       spotifyIsrcAsked: isrcAsked,
+      spotifyIsrcCleanMiss,
       spotifySearchDone: true,
       spotifyThrottled: isSpotifyThrottle(error),
     };
@@ -1088,6 +1201,7 @@ async function resolveViaSpotifySearch(
     freeDurationMsOmitted,
     source: result.anchored ? "spotify-search" : null,
     spotifyIsrcAsked: isrcAsked,
+    spotifyIsrcCleanMiss,
     spotifySearchDone: true,
     spotifyThrottled: false,
     verifiedBy: result.verifiedBy,
@@ -1358,8 +1472,11 @@ async function stampAnchorAttempt(
     [
       {
         args: [now.toISOString(), trackId],
+        // The free exact-ISRC ask receipt is cleared with the stamp, always — parking a row ends the
+        // re-ask window the receipt was evidence about (schema.ts § `spotify_isrc_asked_at`).
         sql: `update tracks
-              set spotify_anchor_attempted_at = ?
+              set spotify_anchor_attempted_at = ?,
+                  spotify_isrc_asked_at = null
                   ${options.chargeAttempt ? ", spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1" : ""}
               where track_id = ?`,
       },
@@ -1498,6 +1615,114 @@ export async function requeueIsrcRecoveryStamps(input: {
 }
 
 /**
+ * Write the FREE exact-ISRC ask receipt (schema.ts § `spotify_isrc_asked_at`) — the one write that
+ * makes an ISRC-bearing row eligible for the paid rung. Called on exactly one condition: the rung
+ * ASKED Spotify about this row and Spotify's answer settled the question (`spotifyIsrcCleanMiss`).
+ *
+ * A plain assignment, not a coalesce: the receipt is about the CURRENT re-ask window, and the
+ * freshest ask is the one the admission rule should read.
+ */
+async function stampSpotifyIsrcAsked(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackId: string,
+  now: Date,
+): Promise<void> {
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [now.toISOString(), trackId],
+        sql: `update tracks set spotify_isrc_asked_at = ? where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "anchor-isrc-asked" },
+  );
+}
+
+/** What {@link admitToApifyRung} reads about a row before it authorises money on it. */
+type ApifyAdmissionInput = {
+  anchored: boolean;
+  apifyEnabled: boolean;
+  /** The row carries an ISRC — read AFTER rung 0's Deezer recovery, so a just-recovered row counts. */
+  hasIsrc: boolean;
+  /** The receipt was ALREADY on the row when this call read it (a clean ask from an earlier tick). */
+  priorAsk: boolean;
+  /** This call's exact-ISRC rung asked and Spotify settled it (`resolveViaSpotifySearch`). */
+  spotifyIsrcCleanMiss: boolean;
+  spotifySearchEnabled: boolean;
+  /** The FUZZY rung ran this call and was not throttled — an ISRC-less row's only free verdict. */
+  spotifySearchSettled: boolean;
+};
+
+/** The three admission fields every `resolveAnchorFree` return path carries. */
+type ApifyAdmission = Pick<
+  AnchorResolveResult,
+  "apifyBudgetRemaining" | "apifyEligible" | "apifyIneligibleReason"
+>;
+
+/**
+ * THE ADMISSION DECISION — may this row be sent to the metered Apify rung, and has the day's budget
+ * room for it? The one place the rule in "THE PAID RUNG'S ADMISSION RULE" above is evaluated, so the
+ * verdict the sweep obeys and the guard `anchorTrack` enforces can never read two different rules.
+ *
+ * It also WRITES THE RECEIPT, because the ask and the record of the ask are one fact: a clean miss
+ * that could not be spent today (the budget had no room) must still authorise the spend tomorrow.
+ *
+ * THE CHARGE IS THE LAST THING IT DOES, and only for a row actually about to be sent: an anchored
+ * row, an unadmitted row, and a row under a disabled kill-flag (the sweep skips the actor entirely,
+ * so no money moves) all leave the tally alone.
+ */
+async function admitToApifyRung(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackId: string,
+  now: Date,
+  input: ApifyAdmissionInput,
+): Promise<ApifyAdmission> {
+  if (input.spotifyIsrcCleanMiss) {
+    await stampSpotifyIsrcAsked(db, trackId, now);
+  }
+
+  const withBudget = async (
+    apifyEligible: boolean,
+    apifyIneligibleReason: AnchorApifyIneligibleReason | null,
+  ): Promise<ApifyAdmission> => ({
+    apifyBudgetRemaining: (await getAnchorApifyBudget(now)).remainingRows,
+    apifyEligible,
+    apifyIneligibleReason,
+  });
+
+  if (input.anchored) {
+    // Nothing left to buy — not a refusal, so no reason.
+    return withBudget(false, null);
+  }
+
+  // THE EXEMPTION: a DISARMED free exact-ISRC rung can never write a receipt, so waiting for one
+  // would close the only rung the row has left. See the rule's section header.
+  const asked = input.hasIsrc
+    ? input.priorAsk || input.spotifyIsrcCleanMiss
+    : input.spotifySearchSettled;
+
+  if (input.spotifySearchEnabled && !asked) {
+    return withBudget(false, "awaiting_free_ask");
+  }
+
+  if (!input.apifyEnabled) {
+    // The kill-flag already stops the actor loop on the box, so this row is admitted by the rule this
+    // function governs and the tally is untouched — there is no spend to meter.
+    return withBudget(true, null);
+  }
+
+  const { budget, charged } = await chargeAnchorApifyRow(now);
+
+  return {
+    apifyBudgetRemaining: budget.remainingRows,
+    apifyEligible: charged,
+    apifyIneligibleReason: charged ? null : "apify_budget_spent",
+  };
+}
+
+/**
  * THE FREE (non-Apify) RESOLVER RUNGS of the waterfall — try to anchor a catalogue row without any
  * Apify money (docs/catalogue-crawler.md § the anchor). The box's sweep calls this FIRST per row and
  * spends the metered Apify search only when it MISSES.
@@ -1572,27 +1797,42 @@ export async function resolveAnchorFree(
 
   const found = await db.execute({
     args: [trackId],
-    sql: `select mb_recording_id, isrc, artists_json, title, duration_ms from tracks where track_id = ? limit 1`,
+    sql: `select mb_recording_id, isrc, artists_json, title, duration_ms, spotify_isrc_asked_at
+          from tracks where track_id = ? limit 1`,
   });
   const row = typedRows<{
     artists_json: null | string;
     duration_ms: null | number;
     isrc: null | string;
     mb_recording_id: null | string;
+    spotify_isrc_asked_at: null | string;
     title: null | string;
   }>(found.rows)[0];
 
   // An unknown track has nothing to resolve — a clean miss, zero vendor calls (slice-1 behaviour).
+  // It is NOT admitted to the paid rung: there is no row to anchor, so a search on it could only ever
+  // be money spent on a 404. The budget is reported, never charged.
   if (!row) {
+    const { spotifyIsrcCleanMiss: _ignored, ...noSpotify } = NO_SPOTIFY_OUTCOME;
+
     return {
-      ...NO_SPOTIFY_OUTCOME,
+      ...noSpotify,
+      apifyBudgetRemaining: (await getAnchorApifyBudget(now)).remainingRows,
+      apifyEligible: false,
       apifyEnabled,
+      apifyIneligibleReason: null,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "not-attempted",
       spotifySearchEnabled,
       stamped: false,
     };
   }
+
+  // The receipt AS THE ROW ALREADY CARRIED IT — a clean exact-ISRC ask from an earlier tick, which
+  // admits the row to the paid rung without asking Spotify the same question twice (schema.ts §
+  // `spotify_isrc_asked_at`). Captured before any rung runs, so the admission rule reads the state the
+  // call started from rather than one its own writes changed.
+  const priorAsk = Boolean(row.spotify_isrc_asked_at);
 
   const rowArtists = parseArtistsJson(row.artists_json ?? "[]");
 
@@ -1627,9 +1867,21 @@ export async function resolveAnchorFree(
 
   if (listenbrainz.outcome === "anchored") {
     // A HIT already wrote the anchor + stamped the attempt — never re-stamp, regardless of the flag.
+    // The free waterfall's cheapest win, and the paid rung never hears about this row.
+    const { spotifyIsrcCleanMiss: _ignored, ...noSpotify } = NO_SPOTIFY_OUTCOME;
+
     return {
-      ...NO_SPOTIFY_OUTCOME,
+      ...noSpotify,
       anchored: true,
+      ...(await admitToApifyRung(db, trackId, now, {
+        anchored: true,
+        apifyEnabled,
+        hasIsrc: Boolean(isrc?.trim()),
+        priorAsk,
+        spotifyIsrcCleanMiss: false,
+        spotifySearchEnabled,
+        spotifySearchSettled: false,
+      })),
       apifyEnabled,
       freeDurationMsOmitted: listenbrainzDurationMsOmitted,
       isrcRecoveredByDeezer,
@@ -1670,8 +1922,22 @@ export async function resolveAnchorFree(
       await stampAnchorAttempt(db, trackId, now, { chargeAttempt: false });
     }
 
+    const { spotifyIsrcCleanMiss: _ignored, ...noSpotify } = NO_SPOTIFY_OUTCOME;
+
     return {
-      ...NO_SPOTIFY_OUTCOME,
+      ...noSpotify,
+      // NOT ASKED IS NOT MISSED. The Spotify rungs did not run, so an ISRC-bearing row has no receipt
+      // and is refused the paid rung — it keeps its turn for the tick that can ask for free. The one
+      // exception is a DISARMED search flag, where no receipt can ever exist (see the rule's header).
+      ...(await admitToApifyRung(db, trackId, now, {
+        anchored: false,
+        apifyEnabled,
+        hasIsrc: Boolean(isrc?.trim()),
+        priorAsk,
+        spotifyIsrcCleanMiss: false,
+        spotifySearchEnabled,
+        spotifySearchSettled: false,
+      })),
       apifyEnabled,
       freeDurationMsOmitted: listenbrainzDurationMsOmitted,
       isrcRecoveredByDeezer,
@@ -1709,8 +1975,22 @@ export async function resolveAnchorFree(
     await stampAnchorAttempt(db, trackId, now, { chargeAttempt: true });
   }
 
+  const { spotifyIsrcCleanMiss, ...searchWire } = searchOutcome;
+
   return {
-    ...searchOutcome,
+    ...searchWire,
+    // The admission decision, on everything this call actually learned: whether the exact rung asked
+    // and Spotify settled it, and whether the fuzzy rung ran for an ISRC-less row. A throttled pass
+    // settled nothing, so it admits nothing — the yield law and the money rail agree.
+    ...(await admitToApifyRung(db, trackId, now, {
+      anchored: searchOutcome.anchored,
+      apifyEnabled,
+      hasIsrc: Boolean(isrc?.trim()),
+      priorAsk,
+      spotifyIsrcCleanMiss,
+      spotifySearchEnabled,
+      spotifySearchSettled: searchOutcome.spotifySearchDone && !throttled,
+    })),
     apifyEnabled,
     freeDurationMsOmitted: listenbrainzDurationMsOmitted + searchOutcome.freeDurationMsOmitted,
     isrcRecoveredByDeezer,
@@ -2109,7 +2389,11 @@ export async function resolveAnchorReview(
               spotify_anchor_source = null,
               spotify_anchor_verified_by = 'operator',
               spotify_anchored_at = ?,
-              anchor_review_json = null
+              anchor_review_json = null,
+              -- The free exact-ISRC ask receipt dies with the question it was evidence about
+              -- (schema.ts, spotify_isrc_asked_at): this row is anchored, so there is nothing
+              -- left to ask and nothing left to authorise.
+              spotify_isrc_asked_at = null
           where track_id = ?`,
       },
       updateTrackDuplicateIsrcStatement(trackId, expectedIsrc),

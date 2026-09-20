@@ -11,6 +11,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AnchorDeps,
+  anchorFiringDeferral,
+  type AnchorPreflight,
   type ApifyResultItem,
   chunk,
   groupCandidatesByTarget,
@@ -439,24 +441,31 @@ describe("runAnchorTick", () => {
     });
   });
 
-  test("a free rung that THROWS still lets the row spend Apify (never starves anchoring)", async () => {
+  test("a free rung that THROWS never spends Apify — the server alone admits a row", async () => {
+    let actorRuns = 0;
     const summary = await runAnchorTick(
       50,
       deps({
-        // The free rung errors on every row; each must still fall through to the Apify fallback.
+        // The free rung errors on every row. The server is the only thing that may admit a row to
+        // the paid fallback, so a row it never answered about must not be bought on a guess.
         resolveFree: () => Promise.reject(new Error("resolve_anchor 500")),
+        runActor: () => {
+          actorRuns += 1;
+
+          return Promise.resolve([]);
+        },
       }),
     );
 
     expect(summary.ok).toBe(true);
-    expect(summary.anchoredByListenbrainz).toBe(0);
-    // The Apify fallback still ran on all three: mb_hold → isrc, mb_fau → search, mb_none → miss.
-    expect(summary.anchoredByIsrc).toBe(1);
-    expect(summary.anchoredBySearch).toBe(1);
-    expect(summary.missed).toBe(1);
-    // …and the throw is REPORTED. With Apify enabled these rows anchor via the fallback, so the tick
-    // reads healthy — which is exactly how a dead free rung stayed invisible for a week. The count is
-    // unconditional so the very first tick after a breakage says so.
+    expect(actorRuns).toBe(0);
+    expect(summary.apifyRowsSent).toBe(0);
+    expect(summary.anchoredByIsrc).toBe(0);
+    expect(summary.anchoredBySearch).toBe(0);
+    // Nothing was asked, so nothing was settled: the rows are skipped and the next tick asks again.
+    expect(summary.missed).toBe(0);
+    expect(summary.skipped).toBe(3);
+    // …and the throw is REPORTED, unconditionally, so the very first tick after a breakage says so.
     expect(summary.freeRungErrors).toBe(3);
     expect(summary.error).toBeNull();
     expect(summary.errors).toBe(0);
@@ -1586,5 +1595,419 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
       produced: 0,
       queueDepth: null,
     });
+  });
+});
+
+/** The verdict fields the admission-gate tests override. */
+type AnchorVerdictShape = Awaited<ReturnType<AnchorDeps["resolveFree"]>>;
+
+// ── THE PAID RUNG'S ADMISSION RULE, box side ─────────────────────────────────────────────────────
+//
+// The server decides whether a row may cost money and says so on the verdict; the sweep obeys. These
+// pin both sides of that gate, plus the firing-level preflight that keeps an out-of-window tick from
+// re-reading a queue head it cannot conclude anything about.
+
+describe("anchorFiringDeferral", () => {
+  const OPEN: AnchorPreflight = {
+    apifyBudgetRemaining: 300,
+    apifyBudgetSpent: false,
+    apifyEnabled: true,
+    spotifySearchEnabled: true,
+  };
+  const IN_WINDOW = new Date("2026-09-20T03:00:00Z");
+  const OUT_OF_WINDOW = new Date("2026-09-20T12:00:00Z");
+  const NIGHT = parseIsrcAskWindow("0-8");
+
+  test("inside the night window the firing pulls work", () => {
+    expect(anchorFiringDeferral(OPEN, NIGHT, IN_WINDOW)).toBeNull();
+  });
+
+  test("outside it, with both rungs armed, the firing pulls NOTHING", () => {
+    // Every row it could reach would want a free ask this tick cannot make, so pulling them only
+    // re-reads the queue head — the churn the admission rule would otherwise reintroduce.
+    expect(anchorFiringDeferral(OPEN, NIGHT, OUT_OF_WINDOW)).toBe("awaiting_free_ask");
+  });
+
+  test("a spent daily cap stops the firing whatever the clock says", () => {
+    expect(anchorFiringDeferral({ ...OPEN, apifyBudgetSpent: true }, NIGHT, IN_WINDOW)).toBe(
+      "apify_budget_spent",
+    );
+  });
+
+  test("with the free search rungs DISARMED the firing always pulls — the load-bearing case", () => {
+    // No receipt can ever be written then, so the admission rule exempts every row and the sweep
+    // must drain exactly as it did before the rule existed.
+    expect(
+      anchorFiringDeferral({ ...OPEN, spotifySearchEnabled: false }, NIGHT, OUT_OF_WINDOW),
+    ).toBeNull();
+  });
+
+  test("with the kill-flag OFF there is no money to protect, so the firing pulls", () => {
+    expect(
+      anchorFiringDeferral(
+        { ...OPEN, apifyBudgetSpent: true, apifyEnabled: false },
+        NIGHT,
+        OUT_OF_WINDOW,
+      ),
+    ).toBeNull();
+  });
+
+  test('an empty window ("always") never defers on the clock', () => {
+    expect(anchorFiringDeferral(OPEN, parseIsrcAskWindow(""), OUT_OF_WINDOW)).toBeNull();
+  });
+
+  test("the escape hatch turns every deferral into a free-rungs-only firing", () => {
+    // `FLUNCLE_ANCHOR_DAY_FREE_RUNGS=1`: pull the batch, run the free rungs, spend nothing. Both
+    // deferral causes convert, so the knob reverses the whole tradeoff rather than half of it.
+    expect(anchorFiringDeferral(OPEN, NIGHT, OUT_OF_WINDOW, true)).toBe("free_rungs_only");
+    expect(anchorFiringDeferral({ ...OPEN, apifyBudgetSpent: true }, NIGHT, IN_WINDOW, true)).toBe(
+      "free_rungs_only",
+    );
+  });
+
+  test("the escape hatch changes nothing about a firing that was already going to run", () => {
+    expect(anchorFiringDeferral(OPEN, NIGHT, IN_WINDOW, true)).toBeNull();
+    expect(
+      anchorFiringDeferral({ ...OPEN, spotifySearchEnabled: false }, NIGHT, OUT_OF_WINDOW, true),
+    ).toBeNull();
+  });
+});
+
+describe("runAnchorTick — the admission gate", () => {
+  function gateDeps(
+    eligible: (trackId: string) => Partial<AnchorVerdictShape>,
+    onActor?: () => void,
+  ): AnchorDeps {
+    return {
+      fetchQueue: () =>
+        Promise.resolve([
+          { anchorQuery: "Azuro Hold Tight", trackId: "mb_hold" },
+          { anchorQuery: "Technimatic For All of Us", trackId: "mb_fau" },
+        ]),
+      log: () => {},
+      now: () => 0,
+      report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+      resolveFree: (trackId) =>
+        Promise.resolve({ anchored: false, verifiedBy: null, ...eligible(trackId) }),
+      runActor: () => {
+        onActor?.();
+
+        return Promise.resolve(APIFY_SAMPLE);
+      },
+      searchDeezer: () => Promise.resolve([]),
+      sleep: () => Promise.resolve(),
+    };
+  }
+
+  test("an un-admitted row is DEFERRED, never sent to the actor and never counted as missed", async () => {
+    let actorRuns = 0;
+    const summary = await runAnchorTick(
+      50,
+      gateDeps(
+        () => ({ apifyEligible: false, apifyIneligibleReason: "awaiting_free_ask" }),
+        () => {
+          actorRuns += 1;
+        },
+      ),
+    );
+
+    expect(actorRuns).toBe(0);
+    expect(summary.apifyRowsSent).toBe(0);
+    expect(summary.apifySkippedAwaitingSpotify).toBe(2);
+    expect(summary.deferred).toBe(2);
+    // `missed` means RETIRED. Nothing was asked about these rows, so nothing was settled.
+    expect(summary.missed).toBe(0);
+    expect(summary.ok).toBe(true);
+  });
+
+  test("a budget refusal has its own counter, so the two causes never blur", async () => {
+    const summary = await runAnchorTick(
+      50,
+      gateDeps(() => ({
+        apifyBudgetRemaining: 0,
+        apifyEligible: false,
+        apifyIneligibleReason: "apify_budget_spent",
+      })),
+    );
+
+    expect(summary.apifyBudgetSkipped).toBe(2);
+    expect(summary.apifySkippedAwaitingSpotify).toBe(0);
+    expect(summary.apifyBudgetRemaining).toBe(0);
+  });
+
+  test("an ADMITTED row still spends the actor, and the ledger counts rows AND result items", async () => {
+    const summary = await runAnchorTick(
+      50,
+      gateDeps(() => ({ apifyBudgetRemaining: 42, apifyEligible: true })),
+    );
+
+    expect(summary.apifyRowsSent).toBe(2);
+    // The actor bills per RESULT ITEM, so the ledger carries items, not runs.
+    expect(summary.apifyResults).toBe(APIFY_SAMPLE.length);
+    expect(summary.apifyBudgetRemaining).toBe(42);
+    expect(summary.deferred).toBe(0);
+  });
+
+  test("a server that reports NO verdict admits the row (new sweep, old Worker)", async () => {
+    const summary = await runAnchorTick(
+      50,
+      gateDeps(() => ({})),
+    );
+
+    // Version tolerance runs both ways: a Worker with no admission rule has no verdict to give, and
+    // the sweep must not invent one on its behalf.
+    expect(summary.apifyRowsSent).toBe(2);
+    expect(summary.apifySkippedAwaitingSpotify).toBe(0);
+  });
+
+  test("one admitted and one refused row split cleanly", async () => {
+    const posted: string[] = [];
+    const deps = gateDeps((trackId) => ({
+      apifyEligible: trackId === "mb_hold",
+      apifyIneligibleReason: trackId === "mb_hold" ? null : "awaiting_free_ask",
+    }));
+    const summary = await runAnchorTick(50, {
+      ...deps,
+      report: (trackId) => {
+        posted.push(trackId);
+
+        return Promise.resolve({ anchored: false, verifiedBy: null });
+      },
+    });
+
+    expect(posted).toEqual(["mb_hold"]);
+    expect(summary.apifySkippedAwaitingSpotify).toBe(1);
+    expect(summary.deferred).toBe(1);
+  });
+});
+
+describe("runAnchorSweep — the firing preflight", () => {
+  function preflightDeps(
+    preflight: AnchorPreflight | (() => Promise<AnchorPreflight>),
+    onFetch: () => void,
+  ): AnchorDeps {
+    return {
+      fetchQueue: () => {
+        onFetch();
+
+        return Promise.resolve([{ anchorQuery: "q", trackId: "mb_a" }]);
+      },
+      log: () => {},
+      // 12:00 UTC — outside the default "0-8" night window.
+      now: () => Date.parse("2026-09-20T12:00:00Z"),
+      readPreflight: typeof preflight === "function" ? preflight : () => Promise.resolve(preflight),
+      report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+      resolveFree: () =>
+        Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+      runActor: () => Promise.resolve([]),
+      searchDeezer: () => Promise.resolve([]),
+      sleep: () => Promise.resolve(),
+    };
+  }
+
+  test("a deferred firing reads NO worklist page at all", async () => {
+    let fetches = 0;
+    const summary = await runAnchorSweep(
+      15,
+      preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          spotifySearchEnabled: true,
+        },
+        () => {
+          fetches += 1;
+        },
+      ),
+    );
+
+    expect(fetches).toBe(0);
+    expect(summary.reason).toBe("awaiting_free_ask");
+    expect(summary.checked).toBe(0);
+    // It measured nothing, so it claims nothing about the backlog.
+    expect(summary.queueDepth).toBeNull();
+    expect(summary.apifyBudgetRemaining).toBe(300);
+    expect(summary.ok).toBe(true);
+  });
+
+  test("a spent cap defers the firing with its own reason", async () => {
+    const summary = await runAnchorSweep(
+      15,
+      preflightDeps(
+        {
+          apifyBudgetRemaining: 0,
+          apifyBudgetSpent: true,
+          apifyEnabled: true,
+          spotifySearchEnabled: false,
+        },
+        () => {},
+      ),
+    );
+
+    expect(summary.reason).toBe("apify_budget_spent");
+  });
+
+  test("a preflight that THROWS is fail-open — the firing runs as it always did", async () => {
+    let fetches = 0;
+    const summary = await runAnchorSweep(
+      1,
+      preflightDeps(
+        () => Promise.reject(new Error("breaker read 503")),
+        () => {
+          fetches += 1;
+        },
+      ),
+    );
+
+    // The admission rule is enforced server-side on every row regardless, so a blip here must cost a
+    // wasted tick at worst, never a stalled drain.
+    expect(fetches).toBe(1);
+    expect(summary.reason).toBeNull();
+    expect(summary.checked).toBe(1);
+  });
+
+  test("an ARMED firing never pulls more rows than the tick can ask about", async () => {
+    const asked: number[] = [];
+    const summary = await runAnchorSweep(1_000, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: (limit) => {
+        asked.push(limit);
+
+        return Promise.resolve([]);
+      },
+      now: () => Date.parse("2026-09-20T03:00:00Z"),
+    });
+
+    // A row only leaves this queue after the exact-ISRC rung has asked about it, and the tick may
+    // ask `ISRC_ASK_LIMIT` times — pulling more hands the surplus a pass that can conclude nothing.
+    expect(asked).toEqual([newSpotifyAskState().limit]);
+    expect(summary.ok).toBe(true);
+  });
+
+  test("a DISARMED firing pulls the operator's whole batch", async () => {
+    const asked: number[] = [];
+    await runAnchorSweep(1_000, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          spotifySearchEnabled: false,
+        },
+        () => {},
+      ),
+      fetchQueue: (limit) => {
+        asked.push(limit);
+
+        return Promise.resolve([]);
+      },
+    });
+
+    // Disarmed, every row is admitted on sight, so the cap must not bind (200 is the page limit).
+    expect(asked).toEqual([200]);
+  });
+
+  test("a deferred firing NAMES the rungs it skipped, including the free ones", async () => {
+    const summary = await runAnchorSweep(
+      15,
+      preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+    );
+
+    // `checked: 0` alone reads like an empty queue. The ledger has to say the two FREE rungs did
+    // not run either, or a later reader infers a drained backlog from a firing that pulled nothing.
+    expect(summary.rungsSkipped).toEqual([
+      "listenbrainz",
+      "deezer-isrc-recovery",
+      "spotify-search",
+      "apify",
+    ]);
+  });
+
+  test("free-rungs-only: the batch is pulled and resolved, the actor never runs, rows keep their turn", async () => {
+    let actorRuns = 0;
+    let posted = 0;
+    const summary = await runAnchorTick(
+      50,
+      {
+        fetchQueue: () =>
+          Promise.resolve([
+            { anchorQuery: "Azuro Hold Tight", trackId: "mb_hold" },
+            { anchorQuery: "Technimatic For All of Us", trackId: "mb_fau" },
+          ]),
+        log: () => {},
+        now: () => 0,
+        report: () => {
+          posted += 1;
+
+          return Promise.resolve({ anchored: false, verifiedBy: null });
+        },
+        resolveFree: (trackId) =>
+          Promise.resolve(
+            trackId === "mb_hold"
+              ? { anchored: true, source: "listenbrainz", verifiedBy: "isrc" }
+              : { anchored: false, apifyEligible: true, verifiedBy: null },
+          ),
+        runActor: () => {
+          actorRuns += 1;
+
+          return Promise.resolve([]);
+        },
+        searchDeezer: () => Promise.resolve([]),
+        sleep: () => Promise.resolve(),
+      },
+      15,
+      newSpotifyAskState(),
+      true,
+    );
+
+    // The FREE rung still wins what it can — that is the entire point of the escape hatch.
+    expect(summary.anchoredByListenbrainz).toBe(1);
+    expect(summary.produced).toBe(1);
+    // …and the paid leg is untouched: no actor run, no POST, and the miss is DEFERRED not MISSED.
+    expect(actorRuns).toBe(0);
+    expect(posted).toBe(0);
+    expect(summary.apifyRowsSent).toBe(0);
+    expect(summary.deferred).toBe(1);
+    expect(summary.missed).toBe(0);
+    expect(summary.rungsSkipped).toEqual(["apify"]);
+  });
+
+  test("an armed, in-window firing pulls normally", async () => {
+    let fetches = 0;
+    const deps = preflightDeps(
+      {
+        apifyBudgetRemaining: 300,
+        apifyBudgetSpent: false,
+        apifyEnabled: true,
+        spotifySearchEnabled: true,
+      },
+      () => {
+        fetches += 1;
+      },
+    );
+    const summary = await runAnchorSweep(1, {
+      ...deps,
+      now: () => Date.parse("2026-09-20T03:00:00Z"),
+    });
+
+    expect(fetches).toBe(1);
+    expect(summary.reason).toBeNull();
   });
 });

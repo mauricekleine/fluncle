@@ -51,7 +51,12 @@
 //       resolves a ListenBrainz candidate (recording MBID → Spotify ids, no auth) + one by-id Spotify
 //       metadata read, verifies it against the SAME gate, and on a hit writes the anchor for free. A
 //       hit here means this row NEVER reaches the paid Apify rung.
-//   (c) APIFY FALLBACK, over the free-rung MISSES only: RUN the Apify actor once per chunk of
+//   (b1) THE ADMISSION GATE. A free-rung miss is not automatically a paid ask. The Worker decides
+//       whether each row may cost money (`apifyEligible`) and the box obeys: an ISRC-bearing row is
+//       admitted only once the FREE exact-ISRC rung actually asked Spotify about it and missed, and
+//       any row is refused once the day's row cap is spent. A refused row settled nothing, so it is
+//       `deferred` and keeps its turn — never `missed`.
+//   (c) APIFY FALLBACK, over the ADMITTED free-rung misses only: RUN the Apify actor once per chunk of
 //       queries (`run-sync-get-dataset-items`), GROUP its flat result array by `target` (the query),
 //       map each to a candidate, and POST each row's candidates to `anchor_track`.
 //       BUT the operator kill-flag `anchor_apify_enabled` (default ON) gates this whole step: when it
@@ -75,7 +80,11 @@
 // new timer: the free rung rides the same agent token, base URL, and host timer as the Apify rung.
 //
 // COST. ~$0.005 per Apify result item → ~$0.015/row at searchKeywordLimit 3 — but ONLY on the rows
-// the free rung misses. A 2026-07-30 sample of 20 REAL anchor-worklist MBIDs found 11 mapping rows and
+// the free rung ASKED ABOUT and missed, under a server-side daily row cap (`anchor_apify_daily_rows`,
+// default 300). The firing reads that cap and the two rung flags ONCE up front (`readPreflight`) and
+// pulls NOTHING when nothing it pulled could conclude: outside the night window with the paid rung
+// armed, or once the day's cap is spent. Every query it does send is the free-text `anchorQuery` —
+// there is no ISRC query shape here, so `searchKeywordLimit` stays at 3 (the gate needs candidates). A 2026-07-30 sample of 20 REAL anchor-worklist MBIDs found 11 mapping rows and
 // 4 non-empty Spotify id lists: ~20% carried a free candidate. The realised anchor rate is measured,
 // never assumed, by the per-outcome `lb*` counters below. Pause = stop the timer. Attended burn =
 // `--limit N`. Full cost math: ../anchor-timer/README.md.
@@ -147,6 +156,21 @@ const ISRC_ASK_LIMIT = Number(process.env.FLUNCLE_ANCHOR_ISRC_ASK_LIMIT ?? "25")
  * being wrong is a paused optional sweep rather than a starved user-facing path.
  */
 const ISRC_WINDOW_UTC = process.env.FLUNCLE_ANCHOR_ISRC_WINDOW_UTC ?? "0-8";
+
+/**
+ * THE DAY FREE-RUNGS ESCAPE HATCH. `1` makes a firing that would otherwise pull NOTHING (see
+ * {@link AnchorPreflight}) instead pull its batch and run ONLY the free rungs, with the Apify leg
+ * skipped and every row keeping its turn.
+ *
+ * It is DEFAULT OFF because the free rungs currently win nothing on this queue by day: with both
+ * rungs armed, ListenBrainz mapped 0 of 3,092 rows across 18 ticks, and the Deezer ISRC-recovery
+ * rung has its OWN hourly `fluncle-isrc-recovery` sweep that does not depend on this firing at all.
+ * So the day gate costs ~nothing today and saves the whole daytime re-read of a queue head that
+ * cannot conclude. The knob exists because "~nothing" is a measurement, not a law: if
+ * `anchoredByListenbrainz` or `isrcRecoveredByDeezer` ever start moving on this sweep, this reverses
+ * the tradeoff with an env change and a restart — no deploy, no rebake.
+ */
+const DAY_FREE_RUNGS = process.env.FLUNCLE_ANCHOR_DAY_FREE_RUNGS === "1";
 
 /** This host timer runs hourly. Emitted so the run ledger judges freshness against the real cadence. */
 const ANCHOR_EXPECTED_INTERVAL_MS = 60 * 60 * 1000;
@@ -222,6 +246,23 @@ export type AnchorCandidatePayload = {
 export type AnchorVerdict = {
   anchored: boolean;
   /**
+   * Rows the paid rung may still be sent TODAY under the server's daily cap, as it stands after this
+   * call's own authorisation. Reported, never enforced here — the Worker charges and refuses.
+   */
+  apifyBudgetRemaining?: number;
+  /**
+   * THE PAID RUNG'S ADMISSION VERDICT for this row, from the server. FALSE ⇒ do NOT send it to the
+   * actor: the free exact-ISRC rung has not asked Spotify about it yet (so the paid rung would be
+   * buying an answer the free one gives away), or the day's row cap has no room. Such a row keeps its
+   * turn — it is `deferred`, never `missed`.
+   *
+   * Optional, and ABSENT DEFAULTS TO TRUE: a pre-rule server has no admission rule to report, and the
+   * sweep must not invent one on its behalf.
+   */
+  apifyEligible?: boolean;
+  /** Why `apifyEligible` is false, or null. Drives which deferral counter the tick bumps. */
+  apifyIneligibleReason?: "apify_budget_spent" | "awaiting_free_ask" | null;
+  /**
    * The `anchor_apify_enabled` operator kill-flag (default ON) as `resolve_anchor` read it — a GLOBAL
    * flag, so every verdict in a tick agrees. FALSE ⇒ Apify is out of budget: the sweep skips the whole
    * Apify actor loop, and the server already stamped-and-backed-off each full-miss row (slice 3).
@@ -289,6 +330,27 @@ export type DeezerSearchResult = {
   droppedIncomplete: number;
 };
 
+/**
+ * THE TICK PREFLIGHT — which rungs are armed and what the paid one has left, read ONCE per firing
+ * from `get_spotify_anchor_breaker` before a single worklist row is pulled.
+ *
+ * It exists because of what the admission rule changed about an out-of-window tick. The paid rung is
+ * now admitted only after the FREE exact-ISRC rung asked about a row, and that rung is metered by
+ * this sweep's own night window and per-tick ask budget — so outside the window a tick can conclude
+ * nothing about the ISRC-bearing rows that lead the worklist. It would pull the same head hour after
+ * hour, re-ask ListenBrainz the same question it already answered, and retire nothing: the churn PR
+ * #1385 removed for the both-rungs-off case, walking back in wearing a new state.
+ *
+ * So the tick asks first, and pulls nothing when nothing it pulled could conclude. The rows keep
+ * their turn and the night window — which is wider (8h) than the deferral is long — reaches them.
+ */
+export type AnchorPreflight = {
+  apifyBudgetRemaining: number;
+  apifyBudgetSpent: boolean;
+  apifyEnabled: boolean;
+  spotifySearchEnabled: boolean;
+};
+
 /** One counted worklist read: the page itself plus the real whole-queue depth before the page runs. */
 export type AnchorQueuePage = {
   queueDepth: number;
@@ -299,6 +361,31 @@ export type AnchorQueuePage = {
 export type AnchorSummary = {
   /** Failed Apify actor CHUNKS — the paid rung's failure denominator, never last-write-wins. */
   apifyActorErrors: number;
+  /** Rows the server's daily cap had no room for. They keep their turn; tomorrow's tick buys them. */
+  apifyBudgetSkipped: number;
+  /**
+   * WHICH RUNGS THIS FIRING DID NOT RUN, named rather than inferred. A firing that pulls nothing
+   * reports `checked: 0` and settles nothing, which on its own reads like an empty queue; a reader a
+   * year from now must be able to see that the ListenBrainz and Deezer rungs were skipped too, not
+   * just the paid one. Empty on an ordinary firing.
+   */
+  rungsSkipped: string[];
+  /**
+   * Rows the paid rung may still be sent today, as the last verdict (or the preflight) reported it.
+   * Null when nothing in this firing asked. The ledger's answer to "how much of the day is left".
+   */
+  apifyBudgetRemaining: null | number;
+  /** Result ITEMS the actor returned — the unit Apify bills, so the unit the ledger must carry. */
+  apifyResults: number;
+  /** Rows actually POSTed to `anchor_track`, i.e. rows the actor was actually run for. */
+  apifyRowsSent: number;
+  /**
+   * Rows held back from the paid rung because the FREE exact-ISRC rung has not asked Spotify about
+   * them yet — the admission rule doing its job. They are `deferred`, never `missed`: nothing was
+   * asked, so nothing was settled. A large value beside a small `spotifyIsrcAsks` is the tell that
+   * the ask budget or the night window, not the catalogue, is the bottleneck.
+   */
+  apifySkippedAwaitingSpotify: number;
   /**
    * Rows whose query the Apify dataset came back WITHOUT — the actor returned, but no item carried
    * this row's `target`. Those rows are POSTed an empty candidate list, so the Worker stamps a clean
@@ -409,7 +496,12 @@ export type AnchorSummary = {
    * the positive-only ListenBrainz oracle and it won nothing. A run that is ok, honest, and useless
    * must not be indistinguishable from a healthy empty queue.
    */
-  reason: "no_capable_rung" | null | typeof DUE_WORK_REPAIR_PENDING_REASON;
+  reason:
+    | "apify_budget_spent"
+    | "awaiting_free_ask"
+    | "no_capable_rung"
+    | null
+    | typeof DUE_WORK_REPAIR_PENDING_REASON;
   /** Rows this tick could not settle (a bad worklist row, or an anchor POST that threw). */
   skipped: number;
   /** EXACT-ISRC asks the server reported spending this tick — what {@link ISRC_ASK_LIMIT} meters. */
@@ -456,6 +548,14 @@ export type AnchorDeps = {
    * same answer with nothing to report.
    */
   searchDeezer: (query: string) => Promise<DeezerCandidatePayload[] | DeezerSearchResult | null>;
+  /**
+   * The ONE preflight read of `get_spotify_anchor_breaker` per firing (see {@link AnchorPreflight}).
+   * OPTIONAL: omitted ⇒ no preflight and the pre-rule pull behaviour, which is what keeps every
+   * existing caller and test honest. A read that THROWS is fail-OPEN for the same reason — the
+   * admission rule is enforced by the server on every row regardless, so a preflight blip must cost
+   * a wasted tick at worst, never a stalled drain.
+   */
+  readPreflight?: () => Promise<AnchorPreflight>;
   /** Pause for `ms`. Injected so the Spotify-search pacer can be driven by a fake clock in tests. */
   sleep: (ms: number) => Promise<void>;
 };
@@ -731,6 +831,50 @@ export function spotifyAskDeferral(
   return state.asksSpent >= state.limit ? "budget" : null;
 }
 
+/**
+ * WHAT THIS FIRING CAN CONCLUDE, off the preflight and the clock — pure, so the decision is proven
+ * against fixed clocks rather than by waiting for 09:00.
+ *
+ * `null` means "pull work". A string is the firing's `reason` and means the opposite: pull NOTHING,
+ * because every row this firing could reach would be re-read and put straight back.
+ *
+ *   · `apify_budget_spent` — the server's daily row cap has no room. Every free-rung miss today is
+ *     already refused per row, so pulling more rows only re-reads the queue head.
+ *   · `awaiting_free_ask` — the paid rung is armed AND the free exact-ISRC rung is armed, but the
+ *     clock is outside this box's night window, so no row can get the free ask the paid rung now
+ *     requires. The rows keep their turn and the window reaches them: the window is 8h wide and a
+ *     firing is hourly, so every waiting row is offered inside it every day.
+ *
+ * WITH THE FREE SEARCH RUNGS DISARMED it returns `null` unconditionally, and that is the load-bearing
+ * case: no receipt can ever be written then, so the admission rule exempts every row and the sweep
+ * must keep draining exactly as it did before the rule existed.
+ *
+ * `dayFreeRungs` ({@link DAY_FREE_RUNGS}) turns every would-be deferral into `"free_rungs_only"`
+ * instead: pull the batch, run the free rungs, skip the paid leg, and let every row keep its turn.
+ * That is the reversal lever for the day this sweep's free rungs start winning something.
+ */
+export function anchorFiringDeferral(
+  preflight: AnchorPreflight,
+  askWindow: IsrcAskWindow,
+  now: Date,
+  dayFreeRungs: boolean = false,
+): "apify_budget_spent" | "awaiting_free_ask" | "free_rungs_only" | null {
+  if (!preflight.apifyEnabled) {
+    // The free-rungs-only drain: no money to protect, and its own `no_capable_rung` verdict already
+    // describes the useless case honestly.
+    return null;
+  }
+
+  const deferral = preflight.apifyBudgetSpent
+    ? "apify_budget_spent"
+    : preflight.spotifySearchEnabled && !withinIsrcAskWindow(askWindow, now)
+      ? "awaiting_free_ask"
+      : null;
+
+  // The escape hatch turns "pull nothing" into "pull, but spend nothing".
+  return deferral !== null && dayFreeRungs ? "free_rungs_only" : deferral;
+}
+
 // ── One tick, with injected effects ──────────────────────────────────────────
 
 async function fetchAnchorWorkRows(
@@ -771,31 +915,44 @@ function actionableAnchorRows(queue: AnchorWorkItem[]): {
 }
 
 /**
- * Settle the free-rung misses when the paid Apify rung is DISABLED — the only path on which nothing
- * further will be asked about these rows this tick.
+ * Settle the free-rung misses on every path where the ACTOR WILL NOT RUN — the paid rung disabled by
+ * the operator's kill-flag, or a free-rungs-only firing. Either way nothing further will be asked
+ * about these rows this tick.
  *
  * A row is `missed` — retired, backed off, one fewer in the backlog — ONLY when the server says it
  * PARKED it (`stamped`). A verdict that stamped nothing leaves the row exactly where it was, so it is
  * `deferred` and the queue depth is not decremented: counting it as a miss is how a tick that re-read
- * the same 250-row head reported clearing 250 of them. A free-rung call that THREW got no verdict at
- * all and stays `skipped` (it retries next tick).
+ * the same 250-row head reported clearing 250 of them. A free-rung call that THREW never reaches here
+ * at all — it is `skipped` at the point it threw, because a row the server never answered about is a
+ * row it never admitted to the paid rung.
  *
  * An older server omits `stamped`; that row falls back to the pre-existing reading (a full miss under
  * a disabled Apify rung was stamped), so a lagging Worker degrades to today's numbers, never worse.
  */
-function settleDisabledApify(
-  apifyEnabled: boolean,
-  apifyRows: readonly { stamped?: boolean; threw: boolean }[],
-  summary: AnchorSummary,
-): boolean {
+function settleUnspentRows(input: {
+  apifyEnabled: boolean;
+  apifyRows: readonly { stamped?: boolean }[];
+  freeRungsOnly: boolean;
+  summary: AnchorSummary;
+}): boolean {
+  const { apifyEnabled, apifyRows, freeRungsOnly, summary } = input;
+
+  // FREE-RUNGS-ONLY ({@link DAY_FREE_RUNGS}). The batch got its free shot and the paid leg is
+  // skipped, so every remaining row is DEFERRED, never `missed`: no actor ran, the server stamped
+  // nothing, and the queue depth is untouched because not one of these rows was settled.
+  if (freeRungsOnly) {
+    summary.deferred += apifyRows.length;
+    summary.rungsSkipped = ["apify"];
+
+    return true;
+  }
+
   if (apifyEnabled) {
     return false;
   }
 
   for (const row of apifyRows) {
-    if (row.threw) {
-      summary.skipped += 1;
-    } else if (row.stamped === false) {
+    if (row.stamped === false) {
       summary.deferred += 1;
     } else {
       summary.missed += 1;
@@ -816,7 +973,12 @@ async function runApifyFallback(
     let byTarget: Map<string, AnchorCandidatePayload[]>;
 
     try {
-      byTarget = groupCandidatesByTarget(await deps.runActor(batch.map((row) => row.anchorQuery)));
+      const items = await deps.runActor(batch.map((row) => row.anchorQuery));
+      // The actor bills per RESULT ITEM, so the ledger counts items, not runs: `apifyResults` divided
+      // by `apifyRowsSent` is the realised results-per-row the cost math is built on
+      // (`FLUNCLE_ANCHOR_KEYWORD_LIMIT` is what it is asked for, never what it comes back as).
+      summary.apifyResults += items.length;
+      byTarget = groupCandidatesByTarget(items);
     } catch (error) {
       deps.log(`actor run failed: ${error instanceof Error ? error.message : String(error)}`);
       summary.ok = false;
@@ -836,6 +998,7 @@ async function runApifyFallback(
       ).length;
 
       try {
+        summary.apifyRowsSent += 1;
         const verdict = await deps.report(row.trackId, candidates);
         if (verdict.anchored && verdict.verifiedBy === "isrc") {
           summary.anchoredByIsrc += 1;
@@ -920,6 +1083,12 @@ export async function runAnchorTick(
   deps: AnchorDeps,
   actorChunkSize: number = APIFY_QUERY_CHUNK,
   askState: SpotifyAskState = newSpotifyAskState(),
+  /**
+   * FREE-RUNGS-ONLY ({@link DAY_FREE_RUNGS}): run the free rungs over the batch and skip the paid
+   * leg entirely. Every row that reaches the fallback keeps its turn — nothing is stamped, so
+   * nothing is retired, and the next eligible firing reads them again.
+   */
+  freeRungsOnly: boolean = false,
 ): Promise<AnchorSummary> {
   const summary: AnchorSummary = {
     anchoredByIsrc: 0,
@@ -928,7 +1097,12 @@ export async function runAnchorTick(
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
     apifyActorErrors: 0,
+    apifyBudgetRemaining: null,
+    apifyBudgetSkipped: 0,
     apifyDurationMsOmitted: 0,
+    apifyResults: 0,
+    apifyRowsSent: 0,
+    apifySkippedAwaitingSpotify: 0,
     apifyTargetOmitted: 0,
     checked: 0,
     deezerHitsDroppedIncomplete: 0,
@@ -954,6 +1128,7 @@ export async function runAnchorTick(
     produced: 0,
     queueDepth: null,
     reason: null,
+    rungsSkipped: [],
     skipped: 0,
     spotifyDeferredBudget: 0,
     spotifyDeferredWindow: 0,
@@ -990,8 +1165,7 @@ export async function runAnchorTick(
   // the night window (asked once per row off the injected clock), the exact-ISRC ask budget, and the
   // yield law. None of them can ARM the rungs — the server's dark flag is the only thing that does —
   // so a tick where the flag is off spends the guards' bookkeeping and nothing else.
-  const apifyRows: { anchorQuery: string; stamped?: boolean; threw: boolean; trackId: string }[] =
-    [];
+  const apifyRows: { anchorQuery: string; stamped?: boolean; trackId: string }[] = [];
   let lastSearchStartMs: null | number = null;
   // The GLOBAL Apify kill-flag, learned from any verdict (all agree). Default true ⇒ a pre-slice-3
   // server that omits it keeps the current Apify-runs behaviour. When false, the Apify loop is skipped.
@@ -1054,7 +1228,6 @@ export async function runAnchorTick(
     // What the server said about this row's fate, so the settle below can tell a RETIRED row from one
     // that merely kept its turn. Undefined until a verdict says.
     let rowStamped: boolean | undefined;
-    let rowThrew = false;
 
     try {
       const verdict = await deps.resolveFree(
@@ -1075,19 +1248,43 @@ export async function runAnchorTick(
       apifyEnabled = verdict.apifyEnabled ?? apifyEnabled;
       spotifySearchEnabled = verdict.spotifySearchEnabled ?? spotifySearchEnabled;
 
+      if (typeof verdict.apifyBudgetRemaining === "number") {
+        summary.apifyBudgetRemaining = verdict.apifyBudgetRemaining;
+      }
+
       if (tallyFreeVerdict(verdict, summary, askState, deps)) {
+        continue;
+      }
+
+      // THE ADMISSION GATE. The server decides whether this row may cost money and says so; the box
+      // obeys. An un-admitted row settled NOTHING — it was not asked — so it is `deferred`, keeps its
+      // turn, and the queue depth is not decremented. Absent (a pre-rule server) reads as admitted,
+      // so a lagging Worker degrades to the previous behaviour rather than to a silent stall.
+      if (verdict.apifyEligible === false) {
+        if (verdict.apifyIneligibleReason === "apify_budget_spent") {
+          summary.apifyBudgetSkipped += 1;
+        } else {
+          summary.apifySkippedAwaitingSpotify += 1;
+        }
+
+        summary.deferred += 1;
         continue;
       }
     } catch (error) {
       deps.log(
         `free rung ${row.trackId}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      rowThrew = true;
       summary.freeRungErrors += 1;
       recordFailure(summary);
+      // A THROWN free rung is not an authorisation. Under the admission rule the server is the only
+      // thing that may admit a row to the paid fallback, so a row it never answered about must not be
+      // bought on a guess — it is `skipped` and the next tick asks again. The trade is deliberate:
+      // spend correctness over throughput, with `freeRungErrors` as the alarm that says which.
+      summary.skipped += 1;
+      continue;
     }
 
-    apifyRows.push({ ...row, stamped: rowStamped, threw: rowThrew });
+    apifyRows.push({ ...row, stamped: rowStamped });
   }
 
   // THE CAPABILITY VERDICT. Neither the paid Apify fallback nor the dark Spotify search rungs are
@@ -1108,7 +1305,7 @@ export async function runAnchorTick(
   // So we skip the whole actor loop — ZERO wasted 403s — and count per the server's own `stamped`:
   // parked rows are `missed` (terminal, backed off), rows that kept their turn are `deferred`, and a
   // free rung that THREW got no verdict at all and stays `skipped`.
-  if (settleDisabledApify(apifyEnabled, apifyRows, summary)) {
+  if (settleUnspentRows({ apifyEnabled, apifyRows, freeRungsOnly, summary })) {
     return summary;
   }
 
@@ -1373,6 +1570,42 @@ export async function searchDeezerOnBox(
   }
 }
 
+/**
+ * The real preflight: ONE `get_spotify_anchor_breaker` read (admin tier, agent-allowed) that answers
+ * which rungs are armed and what the paid one has left today. Never throws in a way the caller must
+ * handle — `runAnchorSweep` catches and proceeds, the fail-open rule.
+ */
+async function readAnchorPreflight(): Promise<AnchorPreflight> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/catalogue/anchor/breaker`, {
+    headers: { Authorization: `Bearer ${API_TOKEN}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`anchor preflight read failed (${res.status})`);
+  }
+
+  const body = (await res.json()) as {
+    rungs?: {
+      apifyBudget?: { remainingRows?: number; spent?: boolean };
+      apifyEnabled?: boolean;
+      spotifySearchEnabled?: boolean;
+    };
+  };
+
+  const budget = body.rungs?.apifyBudget;
+
+  return {
+    apifyBudgetRemaining: typeof budget?.remainingRows === "number" ? budget.remainingRows : 0,
+    // A server that predates the brake carries no `apifyBudget`, and an ABSENT cap must never read as
+    // spent: the old behaviour is "no cap", and failing closed here would stop anchoring on a version
+    // skew rather than on a budget.
+    apifyBudgetSpent: budget?.spent === true,
+    apifyEnabled: body.rungs?.apifyEnabled !== false,
+    spotifySearchEnabled: body.rungs?.spotifySearchEnabled === true,
+  };
+}
+
 async function reportAnchor(
   trackId: string,
   candidates: AnchorCandidatePayload[],
@@ -1447,8 +1680,13 @@ async function resolveAnchorFree(
 
   return {
     anchored: Boolean(body.anchored),
+    apifyBudgetRemaining: body.apifyBudgetRemaining,
+    // ABSENT DEFAULTS TO ADMITTED: a server with no admission rule has no verdict to give, and the
+    // sweep must not invent one for it (version tolerance runs both ways — new sweep, old Worker).
+    apifyEligible: body.apifyEligible === undefined ? true : Boolean(body.apifyEligible),
     // Default true when a pre-slice-3 server omits it — the current Apify-runs behaviour.
     apifyEnabled: body.apifyEnabled === undefined ? true : Boolean(body.apifyEnabled),
+    apifyIneligibleReason: body.apifyIneligibleReason ?? null,
     isrcRecoveredByDeezer: Boolean(body.isrcRecoveredByDeezer),
     listenbrainzOutcome: body.listenbrainzOutcome,
     source: body.source ?? null,
@@ -1476,7 +1714,12 @@ export async function runAnchorSweep(
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
     apifyActorErrors: 0,
+    apifyBudgetRemaining: null as null | number,
+    apifyBudgetSkipped: 0,
     apifyDurationMsOmitted: 0,
+    apifyResults: 0,
+    apifyRowsSent: 0,
+    apifySkippedAwaitingSpotify: 0,
     apifyTargetOmitted: 0,
     checked: 0,
     deezerHitsDroppedIncomplete: 0,
@@ -1504,6 +1747,7 @@ export async function runAnchorSweep(
     pulled: 0,
     queueDepth: null as null | number,
     reason: null as AnchorSummary["reason"],
+    rungsSkipped: [] as string[],
     skipped: 0,
     spotifyDeferredBudget: 0,
     spotifyDeferredWindow: 0,
@@ -1511,18 +1755,76 @@ export async function runAnchorSweep(
     spotifyIsrcAsks: 0,
   };
 
+  // THE PREFLIGHT, once per firing and before a single row is pulled. Fail-OPEN: the admission rule
+  // is enforced server-side on every row regardless, so a blip here costs one wasted tick at most,
+  // never a stalled drain. An omitted dep is the pre-rule behaviour, unchanged.
+  const askState = newSpotifyAskState();
+  // Whether the free exact-ISRC rung is armed at all — set by the preflight, and the condition under
+  // which a pulled row needs an ask before it can conclude.
+  let askArmed = false;
+  // Whether this firing runs its batch through the free rungs alone (the escape hatch).
+  let freeRungsOnly = false;
+
+  if (deps.readPreflight) {
+    const preflight = await deps.readPreflight().catch((error: unknown) => {
+      deps.log(`preflight read failed: ${error instanceof Error ? error.message : String(error)}`);
+
+      return undefined;
+    });
+
+    if (preflight) {
+      merged.apifyBudgetRemaining = preflight.apifyBudgetRemaining;
+      askArmed = preflight.apifyEnabled && preflight.spotifySearchEnabled;
+      const deferral = anchorFiringDeferral(
+        preflight,
+        askState.askWindow,
+        new Date(deps.now()),
+        DAY_FREE_RUNGS,
+      );
+
+      if (deferral === "free_rungs_only") {
+        // The escape hatch: pull the batch, run the free rungs, spend nothing. No ask can be made
+        // outside the window, so the ask ceiling is not the right cap on this pull — the operator's
+        // batch is.
+        freeRungsOnly = true;
+        askArmed = false;
+      } else if (deferral !== null) {
+        // Nothing this firing pulled could conclude, so it pulls nothing: the rows keep their turn
+        // and the queue is not churned. `checked` stays 0 and `queueDepth` stays null — the firing
+        // measured nothing and must not claim to have.
+        //
+        // IT NAMES WHAT IT SKIPPED. A firing that settles nothing reads like an empty queue unless
+        // the summary says which rungs never ran — including the two FREE ones, which is the part a
+        // later reader would otherwise have to infer. `FLUNCLE_ANCHOR_DAY_FREE_RUNGS=1` is the knob
+        // that trades this back (see {@link DAY_FREE_RUNGS}).
+        merged.reason = deferral;
+        merged.rungsSkipped = ["listenbrainz", "deezer-isrc-recovery", "spotify-search", "apify"];
+
+        return merged;
+      }
+    }
+  }
+
   let remaining = Math.max(0, Math.trunc(total));
+
+  // AND THE PULL IS CAPPED BY WHAT THE TICK CAN ASK. With the exact-ISRC rung armed, a row only
+  // leaves this queue after that rung has asked about it, and the tick may ask `ISRC_ASK_LIMIT`
+  // times. Pulling more than that hands the surplus rows a free-rung pass that can conclude nothing
+  // and then re-reads them next tick — the same churn the preflight above exists to stop, one layer
+  // in. The cap binds only while the rung is ARMED; disarmed, every row is admitted on sight and the
+  // operator's full batch is the right pull.
+  if (askArmed) {
+    remaining = Math.min(remaining, askState.limit);
+  }
   // Whether any page found no rung capable of concluding. Folded into the firing's `reason` only if
   // the firing as a whole settled nothing — one page's win makes the sweep useful.
   let noCapableRung = false;
-  // ONE ask state for the whole firing. The budget and the yield law are per-TICK, and a sweep's
-  // pages are internal bookkeeping — a per-page state would hand a `--limit 200` burn eight fresh
-  // budgets and defeat the ceiling entirely.
-  const askState = newSpotifyAskState();
-
+  // ONE ask state for the whole firing (minted above, before the preflight reads its window). The
+  // budget and the yield law are per-TICK, and a sweep's pages are internal bookkeeping — a per-page
+  // state would hand a `--limit 200` burn eight fresh budgets and defeat the ceiling entirely.
   while (remaining > 0) {
     const ask = Math.min(pageLimit, remaining);
-    const page = await runAnchorTick(ask, deps, APIFY_QUERY_CHUNK, askState);
+    const page = await runAnchorTick(ask, deps, APIFY_QUERY_CHUNK, askState, freeRungsOnly);
     const pulled = page.checked;
 
     merged.pages += 1;
@@ -1532,6 +1834,16 @@ export async function runAnchorSweep(
     // A deferred page read nothing, so the last measured backlog gauge stands.
     merged.queueDepth = page.gateState === "paused" ? merged.queueDepth : page.queueDepth;
     merged.apifyActorErrors += page.apifyActorErrors;
+    merged.apifyResults += page.apifyResults;
+    merged.apifyRowsSent += page.apifyRowsSent;
+    merged.apifySkippedAwaitingSpotify += page.apifySkippedAwaitingSpotify;
+    merged.apifyBudgetSkipped += page.apifyBudgetSkipped;
+
+    if (page.rungsSkipped.length > 0) {
+      merged.rungsSkipped = page.rungsSkipped;
+    }
+    // The LAST page to hear a number wins — the budget is a live counter, not a sum.
+    merged.apifyBudgetRemaining = page.apifyBudgetRemaining ?? merged.apifyBudgetRemaining;
     merged.anchoredByIsrc += page.anchoredByIsrc;
     merged.anchoredByListenbrainz += page.anchoredByListenbrainz;
     merged.anchoredBySearch += page.anchoredBySearch;
@@ -1653,6 +1965,7 @@ async function main(): Promise<void> {
     fetchQueue: fetchAnchorQueue,
     log,
     now: () => Date.now(),
+    readPreflight: readAnchorPreflight,
     report: reportAnchor,
     resolveFree: resolveAnchorFree,
     runActor: runApifyActor,

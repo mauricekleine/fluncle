@@ -98,12 +98,15 @@ export async function bumpRateLimitCounter({
   action,
   bucket,
   limit,
+  now = Date.now(),
   units = 1,
   windowMs,
 }: {
   action: string;
   bucket: string;
   limit: number;
+  /** The clock the window is aligned against. Injected so a fixed-window test needs no real time. */
+  now?: number;
   units?: number;
   windowMs: number;
 }): Promise<number | undefined> {
@@ -115,7 +118,7 @@ export async function bumpRateLimitCounter({
 
   const db = await getDb();
   // Align the window so every request in the same windowMs slice shares a row.
-  const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs).toISOString();
+  const windowStart = new Date(Math.floor(now / windowMs) * windowMs).toISOString();
 
   // One atomic conditional upsert. The INSERT path opens a new window at the spend.
   // The conflict path bumps the existing counter ONLY while the spend still fits under
@@ -134,6 +137,37 @@ export async function bumpRateLimitCounter({
   });
 
   return typedRow<CounterRow>(result.rows)?.count;
+}
+
+/**
+ * Read a window's counter WITHOUT touching it — the readout half of {@link bumpRateLimitCounter},
+ * for a counter that is not only a limiter but a SPEND the operator watches (the Apify anchor row
+ * brake, ./anchor-apify.ts). It composes the window key the exact same way the bump does, so a
+ * display can never describe a different window than the one being charged.
+ *
+ * 0 when the window has no row yet — an unopened window has spent nothing.
+ */
+export async function readRateLimitCount({
+  action,
+  bucket,
+  now = Date.now(),
+  windowMs,
+}: {
+  action: string;
+  bucket: string;
+  now?: number;
+  windowMs: number;
+}): Promise<number> {
+  const db = await getDb();
+  const windowStart = new Date(Math.floor(now / windowMs) * windowMs).toISOString();
+  const result = await db.execute({
+    args: [action, bucket, windowStart],
+    sql: `select count from rate_limit_counters
+          where action = ? and bucket = ? and window_start = ?
+          limit 1`,
+  });
+
+  return typedRow<CounterRow>(result.rows)?.count ?? 0;
 }
 
 /**

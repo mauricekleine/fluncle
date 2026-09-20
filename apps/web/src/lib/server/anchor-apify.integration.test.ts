@@ -257,3 +257,148 @@ describe("anchor_apify_disabled_at — the off-window marker + flip-ON requeue",
     expect(await attempts("isrc-sibling")).toBe(2);
   });
 });
+
+// ── THE DAILY ROW BRAKE ──────────────────────────────────────────────────────────────────────────
+//
+// The kill-flag above is a switch; this is the NUMBER between its two states, so "Apify runs" stops
+// meaning "Apify runs without a limit". Every guarantee here is a statement about the real `settings`
+// KV, because that is what the operator flips and what the resolver charges.
+
+describe("the Apify daily row brake", () => {
+  const DAY = new Date("2026-09-20T11:00:00Z");
+
+  it("defaults CONSERVATIVE, not unlimited, when nothing is stored", async () => {
+    const { ANCHOR_APIFY_DEFAULT_DAILY_ROWS, getAnchorApifyBudget } =
+      await import("./anchor-apify");
+
+    // The failure mode of a spend rail has to be the cheap one: an unset key, an empty database and
+    // a fresh preview must all read as the default cap, never as "no cap".
+    expect(await getAnchorApifyBudget(DAY)).toEqual({
+      dailyRows: ANCHOR_APIFY_DEFAULT_DAILY_ROWS,
+      day: "2026-09-20",
+      remainingRows: ANCHOR_APIFY_DEFAULT_DAILY_ROWS,
+      rowsSent: 0,
+      spent: false,
+    });
+  });
+
+  it("reads a stored cap back, and 0 is a legal cap (send nothing)", async () => {
+    const { chargeAnchorApifyRow, getAnchorApifyBudget, setAnchorApifyDailyRows } =
+      await import("./anchor-apify");
+
+    expect(await setAnchorApifyDailyRows(50, DAY)).toMatchObject({
+      dailyRows: 50,
+      remainingRows: 50,
+      spent: false,
+    });
+
+    // `0` is a different statement from the kill-flag being off: the cap can be raised back without
+    // touching the switch (the `set_capture_budget` rule).
+    expect(await setAnchorApifyDailyRows(0, DAY)).toMatchObject({
+      dailyRows: 0,
+      remainingRows: 0,
+      spent: true,
+    });
+    expect((await getAnchorApifyBudget(DAY)).spent).toBe(true);
+    // …and a cap of 0 REFUSES the very first charge, rather than opening a window above the cap.
+    expect(await chargeAnchorApifyRow(DAY)).toMatchObject({
+      budget: { remainingRows: 0, rowsSent: 0, spent: true },
+      charged: false,
+    });
+  });
+
+  it("a garbage cap reads as the default rather than as unlimited", async () => {
+    const { ANCHOR_APIFY_DAILY_ROWS_KEY, ANCHOR_APIFY_DEFAULT_DAILY_ROWS, getAnchorApifyBudget } =
+      await import("./anchor-apify");
+    const { setSetting } = await import("./settings");
+
+    await setSetting(ANCHOR_APIFY_DAILY_ROWS_KEY, "lots");
+
+    expect((await getAnchorApifyBudget(DAY)).dailyRows).toBe(ANCHOR_APIFY_DEFAULT_DAILY_ROWS);
+  });
+
+  it("charges one row at a time and REFUSES at the cap — the tally never runs past it", async () => {
+    const { chargeAnchorApifyRow, getAnchorApifyBudget, setAnchorApifyDailyRows } =
+      await import("./anchor-apify");
+
+    await setAnchorApifyDailyRows(2, DAY);
+
+    expect(await chargeAnchorApifyRow(DAY)).toMatchObject({
+      budget: { remainingRows: 1, rowsSent: 1, spent: false },
+      charged: true,
+    });
+    expect(await chargeAnchorApifyRow(DAY)).toMatchObject({
+      budget: { remainingRows: 0, rowsSent: 2, spent: true },
+      charged: true,
+    });
+    // The third asks for a slot the cap does not have: NOT charged, and the tally stands at the cap.
+    expect(await chargeAnchorApifyRow(DAY)).toMatchObject({
+      budget: { remainingRows: 0, rowsSent: 2, spent: true },
+      charged: false,
+    });
+    expect((await getAnchorApifyBudget(DAY)).rowsSent).toBe(2);
+  });
+
+  it("the tally rolls at UTC midnight without anything sweeping it", async () => {
+    const { chargeAnchorApifyRow, getAnchorApifyBudget } = await import("./anchor-apify");
+
+    await chargeAnchorApifyRow(DAY);
+    expect((await getAnchorApifyBudget(DAY)).rowsSent).toBe(1);
+
+    // A tally belonging to an EARLIER day reads as zero — the roll is implicit, so no job has to run
+    // at midnight and a box that was asleep through it wakes to a correct budget.
+    const nextDay = new Date("2026-09-21T00:30:00Z");
+    expect(await getAnchorApifyBudget(nextDay)).toMatchObject({
+      day: "2026-09-21",
+      rowsSent: 0,
+      spent: false,
+    });
+  });
+
+  it("CONCURRENT charges can never breach the cap — the money rail is one atomic statement", async () => {
+    const { chargeAnchorApifyRow, getAnchorApifyBudget, setAnchorApifyDailyRows } =
+      await import("./anchor-apify");
+
+    // The single-flight assumption is not a guarantee: an operator's attended `--limit` burn
+    // overlaps the hourly timer and both reach `resolve_anchor`. A read-then-write tally would lose
+    // updates here, and a lost update on a SPEND meter means over-spend. The counter is incremented
+    // and enforced by ONE statement, so exactly `cap` of these may pass.
+    const cap = 4;
+    await setAnchorApifyDailyRows(cap, DAY);
+
+    const results = await Promise.all(Array.from({ length: 25 }, () => chargeAnchorApifyRow(DAY)));
+
+    expect(results.filter((result) => result.charged)).toHaveLength(cap);
+    expect((await getAnchorApifyBudget(DAY)).rowsSent).toBe(cap);
+    // Every charged call saw a distinct tally value — no two shared a slot.
+    const charged = results.filter((result) => result.charged).map((r) => r.budget.rowsSent);
+    expect(new Set(charged).size).toBe(cap);
+  });
+
+  it("the readout and the charge address the SAME window, so they can never disagree", async () => {
+    const { chargeAnchorApifyRow, getAnchorApifyBudget } = await import("./anchor-apify");
+
+    await chargeAnchorApifyRow(DAY);
+
+    // Same instant, same key composition: the display is the counter, not a second opinion of it.
+    expect((await getAnchorApifyBudget(DAY)).rowsSent).toBe(1);
+    // …and an instant in the SAME UTC day still sees it (the window is the day, not the hour).
+    const laterSameDay = new Date("2026-09-20T23:59:00Z");
+    expect((await getAnchorApifyBudget(laterSameDay)).rowsSent).toBe(1);
+  });
+
+  it("raising the cap mid-day releases the held rows instead of restarting the day", async () => {
+    const { chargeAnchorApifyRow, setAnchorApifyDailyRows } = await import("./anchor-apify");
+
+    await setAnchorApifyDailyRows(1, DAY);
+    await chargeAnchorApifyRow(DAY);
+
+    expect(await setAnchorApifyDailyRows(3, DAY)).toMatchObject({
+      dailyRows: 3,
+      // The day's spend is KEPT: the operator raised a ceiling, he did not buy back a morning.
+      remainingRows: 2,
+      rowsSent: 1,
+      spent: false,
+    });
+  });
+});

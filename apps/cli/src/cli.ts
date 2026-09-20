@@ -3005,11 +3005,48 @@ JSON field reference:
         }`,
       );
 
+      const budget = state.rungs.apifyBudget;
+
+      console.log(
+        `APIFY BUDGET — ${budget.rowsSent}/${budget.dailyRows} rows today · ${budget.remainingRows} left${
+          budget.spent ? " · SPENT" : ""
+        }`,
+      );
+
       if (!state.rungs.spotifySearchEnabled && !state.rungs.apifyEnabled) {
         console.log(
           "No rung can conclude — ListenBrainz still runs and can win, but its miss settles nothing.",
         );
       }
+    });
+
+  // `get_anchor_apify_budget` / `set_anchor_apify_budget` → `admin catalogue anchor-apify-budget`.
+  // THE DAILY ROW BRAKE on the one anchor rung that costs money. The kill-flag beside it is a
+  // switch; this is the number between its two states, so "Apify runs" stops meaning "Apify runs
+  // without a limit". The bare command is the agent-allowed readout; `set` is the operator's.
+  const anchorApifyBudget = catalogue
+    .command("anchor-apify-budget")
+    .description("The paid Apify anchor rung's daily row cap, today's spend, and what is left")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { anchorApifyBudgetCommand } = await import("./commands/admin-catalogue");
+      printAnchorApifyBudget(await anchorApifyBudgetCommand(), options);
+    });
+
+  anchorApifyBudget
+    .command("set")
+    .description("Set the paid Apify anchor rung's daily row cap (operator)")
+    .requiredOption("--rows <n>", "Max catalogue rows sent to the Apify actor per UTC day")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions & { rows: string }) => {
+      const dailyRows = Number(options.rows);
+
+      if (!Number.isInteger(dailyRows) || dailyRows < 0) {
+        throw new Error("--rows must be a non-negative whole number of rows");
+      }
+
+      const { setAnchorApifyBudgetCommand } = await import("./commands/admin-catalogue");
+      printAnchorApifyBudget(await setAnchorApifyBudgetCommand(dailyRows), options);
     });
 
   // `requeue_isrc_recovery` → `admin catalogue requeue-isrc-recovery --since <iso>` (operator).
@@ -6705,6 +6742,31 @@ async function runPublishAdvance(
   }
 }
 
+// ── The Apify anchor brake (the metered per-row spend) ───────────────────────────────
+
+/**
+ * The paid anchor rung's brake, in one block — the cap, what the day has spent, and what is left.
+ * The same four facts the capture budget prints, for the same reason: a metered thing you cannot see
+ * is a thing you cannot control.
+ */
+function printAnchorApifyBudget(
+  state: import("./commands/admin-catalogue").AnchorApifyBudgetState,
+  options: { json: boolean },
+): void {
+  if (options.json) {
+    printJson({ ...state, ok: true });
+    return;
+  }
+
+  console.log(
+    state.spent
+      ? `APIFY ROWS SPENT for ${state.day} — the paid anchor rung sends nothing more today.`
+      : `APIFY ROWS OPEN for ${state.day} — the paid anchor rung may still be sent rows.`,
+  );
+  console.log(`  Today:   ${state.rowsSent} of ${state.dailyRows} row(s)`);
+  console.log(`  Left:    ${state.remainingRows} row(s)`);
+}
+
 // ── The capture budget (the metered per-GB spend) ────────────────────────────────────
 
 const GB = 1024 * 1024 * 1024;
@@ -8765,6 +8827,7 @@ const stringOptions = new Set([
   "--reasoning",
   "--recorded-at",
   "--recording",
+  "--rows",
   "--rules-file",
   "--render",
   "--scene",

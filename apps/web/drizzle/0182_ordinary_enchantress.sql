@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `spotify_isrc_asked_at` text;

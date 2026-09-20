@@ -9,7 +9,11 @@ const SERVER_DIR = import.meta.dirname;
 // A registered key with no reader or writer is an orphan; an unregistered key in
 // code is inventory drift. Both fail the build.
 const SETTINGS_INVENTORY = {
-  "anchor-apify.ts": ["anchor_apify_disabled_at", "anchor_apify_enabled"],
+  "anchor-apify.ts": [
+    "anchor_apify_daily_rows",
+    "anchor_apify_disabled_at",
+    "anchor_apify_enabled",
+  ],
   "anchor-spotify-search.ts": ["anchor_spotify_search_enabled"],
   "apple-breaker.ts": [
     "apple_auth_breaker_failures",
@@ -160,7 +164,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(43);
+    expect(registered.size).toBe(44);
     expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(20);
   });
 });
