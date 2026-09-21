@@ -113,7 +113,11 @@ async function resolveOembed(
 
     const findings = await getFindingsByArtist(artist.id, artist.name);
     const cover = findings[0];
+    // The artist's OWN portrait leads, the same ladder the page head runs (artist.$slug.tsx),
+    // then the freshest finding's cover, then the house cover. An oEmbed-aware consumer prefers
+    // this payload over the page's og:image, so the card and the page must not disagree.
     const thumbnailUrl =
+      artist.imageUrl ??
       (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
       `${siteUrl}/fluncle-cover.png`;
 
