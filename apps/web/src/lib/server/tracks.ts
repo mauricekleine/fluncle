@@ -1257,6 +1257,55 @@ export async function hasTrackFeatures(trackId: string): Promise<boolean> {
   return result.rows.length > 0;
 }
 
+/**
+ * The capture-source facts the admin board's Capture-source dialog shows for ONE finding
+ * (docs/the-ear.md § Wrong audio): where the capture stands, what the gate said about it, the
+ * operator's pin if one stands, and the YouTube id the row holds. Read lazily for the open row
+ * only — capture state is internal side-channel and never rides the public track contract or the
+ * board's hot page read. Null for an unknown track.
+ */
+export type CaptureSourceState = {
+  captureSourcePin: null | string;
+  captureStatus: string;
+  captureVerification: null | string;
+  hasCapturedAudio: boolean;
+  sourceAudioFailures: number;
+  youtubeVideoId: null | string;
+};
+
+export async function getCaptureSourceState(trackId: string): Promise<CaptureSourceState | null> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select capture_source_pin, capture_status, capture_verification,
+                 (source_audio_key is not null) as has_captured_audio,
+                 source_audio_failures, youtube_video_id
+          from tracks
+          where track_id = ? limit 1`,
+  });
+  const row = typedRow<{
+    capture_source_pin: null | string;
+    capture_status: string;
+    capture_verification: null | string;
+    has_captured_audio: bigint | number;
+    source_audio_failures: bigint | null | number;
+    youtube_video_id: null | string;
+  }>(result.rows);
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    captureSourcePin: row.capture_source_pin,
+    captureStatus: row.capture_status,
+    captureVerification: row.capture_verification,
+    hasCapturedAudio: Number(row.has_captured_audio) === 1,
+    sourceAudioFailures: Number(row.source_audio_failures ?? 0),
+    youtubeVideoId: row.youtube_video_id,
+  };
+}
+
 export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMember[]> {
   const db = await getDb();
   const result = await db.execute({

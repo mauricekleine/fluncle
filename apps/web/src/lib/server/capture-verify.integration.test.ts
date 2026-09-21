@@ -154,6 +154,44 @@ describe("verifyCapture — the verdict routing", () => {
     expect(row.source_audio_rejected).toBeNull();
   });
 
+  it("steps aside from an OPERATOR-VERIFIED capture — never flags, never quarantines what the operator chose", async () => {
+    // The capture-source pin (docs/the-ear.md § Wrong audio): the sweep stamps a pinned capture
+    // `operator-verified`, which keeps it off the unverified worklist by construction; this is the
+    // server backstop for a box re-posting a verdict it measured before the pin landed. Proven on
+    // BOTH halves, with the harshest verdict: the finding is not flagged, the catalogue row is not
+    // rewound, and neither stamp moves.
+    await seedTrack(db, { logId: "012.3.4A", trackId: "find_pinned" });
+    await capture("find_pinned", SHA);
+    await embed("find_pinned");
+    await seedCatalogueTrack(db, { trackId: "cat_pinned" });
+    await capture("cat_pinned", SHA);
+    await embed("cat_pinned");
+    await db.execute({
+      sql: `update tracks set capture_verification = 'operator-verified',
+                              capture_verified_at = '2026-07-02T00:00:00.000Z',
+                              capture_source_pin = 'dQw4w9WgXcQ'
+            where track_id in ('find_pinned', 'cat_pinned')`,
+    });
+
+    expect(await verifyCapture("find_pinned", "mismatch")).toBe("operator-verified");
+    expect(await verifyCapture("cat_pinned", "mismatch")).toBe("operator-verified");
+
+    for (const trackId of ["find_pinned", "cat_pinned"]) {
+      const row = await readRow(trackId);
+
+      expect(row.capture_verification).toBe("operator-verified");
+      expect(row.capture_verified_at).toBe("2026-07-02T00:00:00.000Z");
+      expect(row.capture_status).toBe("done");
+      expect(row.embedding_blob).not.toBeNull();
+      expect(row.source_audio_rejected).toBeNull();
+    }
+    // …and the worklist never offered either row in the first place.
+    const queued = (await listUnverifiedCaptures()).map((item) => item.trackId);
+
+    expect(queued).not.toContain("find_pinned");
+    expect(queued).not.toContain("cat_pinned");
+  });
+
   it("is a `not-captured` no-op on a row with no audio, and on an already-quarantined row", async () => {
     await seedCatalogueTrack(db, { trackId: "cat_bare" });
 

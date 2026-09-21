@@ -143,6 +143,10 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "recording-mbid-resolved",
     "social-finding-touch",
     "track-capture-reconciliation",
+    // The capture-source pin writes only capture side-channel + YouTube provenance columns —
+    // no key, no seed state, no certification — so it moves no public aggregate.
+    "track-capture-source-pin",
+    "track-capture-source-pin-clear",
     "track-note-fill",
   ]),
   ...staticPolicies("public_aggregates", ["crawl-track-mint", "label-release-track-mint"]),

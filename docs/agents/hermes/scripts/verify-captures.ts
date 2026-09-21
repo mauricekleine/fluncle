@@ -326,6 +326,13 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
           `${trackId} (${item.logId ?? "?"}): MISMATCH on a FINDING — attention item raised; the operator rules with flag-wrong-audio`,
         );
         summary.flaggedFindings += 1;
+      } else if (action === "operator-verified") {
+        // The row's capture came from the operator's PINNED source (docs/the-ear.md § Wrong audio)
+        // and the server stepped aside — nothing stamped, nothing quarantined, nothing flagged. The
+        // box never gets to second-guess what the operator chose; its verdict was for the record.
+        deps.log(
+          `${trackId}: capture is operator-verified (pinned source) — the server stepped aside; verdict ${verdict} not applied`,
+        );
       } else {
         // `not-captured` (a race — the row changed under us). Counted as verified work either way.
         deps.log(`${trackId}: nothing to verify anymore (${action})`);

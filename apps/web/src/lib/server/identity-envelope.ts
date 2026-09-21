@@ -557,6 +557,12 @@ function deezerState(row: IdentityRow): IdentityState {
  * the receipt would then print nothing at all and the reader would be told less, not more.
  */
 function youtubeMethod(storedBy: null | string): IdentityMethod {
+  // `operator` is the capture-source pin (docs/the-ear.md § Wrong audio): a human ruled which
+  // upload carries the recording, and the receipt must say so rather than borrow the fingerprint's
+  // sentence for a match the gate may well have refused.
+  if (storedBy === "operator") {
+    return "operator";
+  }
   return storedBy === "search" ? "search" : "fingerprint";
 }
 

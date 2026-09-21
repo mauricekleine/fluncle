@@ -41,7 +41,11 @@ export type CaptureExternalResult =
       attemptedAt: string;
       bytes: number;
       capturedAt: string;
-      captureVerification: "preview-match" | "unverified";
+      /**
+       * `operator-verified` is a capture taken from the operator's pinned source (docs/the-ear.md §
+       * Wrong audio): the fingerprint still ran, but the pin outranks its verdict.
+       */
+      captureVerification: "operator-verified" | "preview-match" | "unverified";
       kind: "capture";
       outcome: "done";
       sourceAudioKey: string;
@@ -69,6 +73,8 @@ export type CaptureExternalResult =
 
 type CaptureSnapshotExtra = {
   bpm: number | null;
+  /** The operator's pinned YouTube source, frozen with the row so a mid-flight pin or clear stales the commit. */
+  captureSourcePin: string | null;
   captureVerification: string | null;
   captureVerifiedAt: string | null;
   enrichmentStatus: string | null;
@@ -92,6 +98,8 @@ export type CapturePreparedTrack = {
   anchored?: boolean;
   artists: string[];
   bpm?: number;
+  /** The operator's pinned YouTube source — the sweep downloads this id instead of walking the ladder. */
+  captureSourcePin?: string;
   certified: boolean;
   durationMs?: number;
   label?: string;
@@ -129,6 +137,7 @@ type CaptureSourceRow = {
   artists_json: string;
   bpm: bigint | null | number;
   capture_priority: bigint | null | number;
+  capture_source_pin: string | null;
   capture_status: string | null;
   capture_verification: string | null;
   capture_verified_at: string | null;
@@ -168,8 +177,8 @@ type CaptureSourceRow = {
 };
 
 const CAPTURE_SOURCE_SELECT = `select
-  t.analyzed_at, t.analyzed_from, t.artists_json, t.bpm, t.capture_priority, t.capture_status,
-  t.capture_verification, t.capture_verified_at, t.demand_score, t.dismissed_at,
+  t.analyzed_at, t.analyzed_from, t.artists_json, t.bpm, t.capture_priority, t.capture_source_pin,
+  t.capture_status, t.capture_verification, t.capture_verified_at, t.demand_score, t.dismissed_at,
   t.duration_ms, t.duplicate_of_track_id, t.has_embedding, t.has_isrc, t.isrc,
   t.isrc_recovery_attempted_at, t.label, t.nearest_finding_score,
   t.source_audio_attempted_at, t.source_audio_bytes, t.source_audio_captured_at,
@@ -234,6 +243,7 @@ function snapshotFromRow(row: CaptureSourceRow): CaptureSnapshot {
   return {
     extra: {
       bpm: numberOrNull(row.bpm),
+      captureSourcePin: row.capture_source_pin,
       captureVerification: row.capture_verification,
       captureVerifiedAt: row.capture_verified_at,
       enrichmentStatus: row.enrichment_status,
@@ -788,6 +798,9 @@ function relevantSnapshot(snapshot: CaptureSnapshot, kind: CaptureReconciliation
     return { identity, youtube };
   }
   const capture = {
+    // `?? null`, so a snapshot token frozen before the column existed compares equal to a fresh
+    // read of an unpinned row rather than staling every in-flight capture once.
+    captureSourcePin: snapshot.extra.captureSourcePin ?? null,
     captureStatus: source.captureStatus,
     captureVerification: snapshot.extra.captureVerification,
     captureVerifiedAt: snapshot.extra.captureVerifiedAt,
@@ -819,6 +832,9 @@ function preparedTrack(snapshot: CaptureSnapshot): CapturePreparedTrack {
     anchored: snapshot.source.spotifyUri !== null,
     artists: parseArtistsJson(snapshot.source.artistsJson),
     ...(snapshot.extra.bpm === null ? {} : { bpm: snapshot.extra.bpm }),
+    ...(snapshot.extra.captureSourcePin
+      ? { captureSourcePin: snapshot.extra.captureSourcePin }
+      : {}),
     certified: snapshot.source.certified,
     ...(snapshot.source.durationMs === null ? {} : { durationMs: snapshot.source.durationMs }),
     ...(snapshot.extra.labelName || snapshot.extra.label

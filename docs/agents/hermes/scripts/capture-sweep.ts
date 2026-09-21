@@ -381,6 +381,14 @@ export type CaptureFinding = {
   // case the label/allowlist signals carry the trust classification.
   artistYoutubeChannelIds?: string[];
   bpm?: number | null;
+  // THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) — the one YouTube video id
+  // this row must be captured FROM. Present ⇒ the search ladder is skipped entirely and
+  // `findPinnedUpload` downloads this id through the same sticky session: the duration guard still
+  // applies (a wrong paste must never land a live set), the fingerprint still RUNS, but its verdict
+  // is recorded as `operator-verified` — a mismatch is logged and captured on the operator's
+  // authority, never remembered as a rejection. A pinned row can land `done` or `failed`, never
+  // `unmatched`. Absent = no pin (the ladder walks as ever).
+  captureSourcePin?: string;
   // True when a `findings` row exists — the certification rail's flag. FALSE for a catalogue
   // track (visible only once the operator opens the budget). The re-derive write-back gates on
   // it: `enrichment_status` is a certification column and the server 409s an uncertified write.
@@ -425,7 +433,7 @@ export type CaptureExternalResult =
       bodyBase64: string;
       bytes: number;
       capturedAt: string;
-      captureVerification: "preview-match" | "unverified";
+      captureVerification: "operator-verified" | "preview-match" | "unverified";
       contentType: string;
       kind: "capture";
       outcome: "done";
@@ -494,7 +502,7 @@ type CaptureProviderCompletion =
       outcome: "accepted";
       rejectedSources?: string;
       source: CaptureSearchSource;
-      verdict: "match" | "no-reference";
+      verdict: "match" | "no-reference" | "operator";
       videoId: string;
     };
 
@@ -1345,23 +1353,33 @@ export function verifyCaptureFile(
   previewFp: number[] | null,
   captureFilePath: string,
 ): CaptureVerdict {
-  if (previewFp === null) {
-    return "no-reference";
+  return verifyCaptureFileDetailed(previewFp, captureFp(captureFilePath)).verdict;
+}
+
+function captureFp(captureFilePath: string): null | number[] {
+  return fpcalcFingerprint(captureFilePath);
+}
+
+/**
+ * The same gate with its EVIDENCE attached: the bit-error rate at the best alignment, when a
+ * comparison actually ran. The pinned-source walk logs it beside a mismatch it is about to capture
+ * anyway, so the operator can read how far his pick sat from the store reference.
+ */
+export function verifyCaptureFileDetailed(
+  previewFp: readonly number[] | null,
+  captureFingerprint: readonly number[] | null,
+): { ber?: number; verdict: CaptureVerdict } {
+  if (previewFp === null || captureFingerprint === null) {
+    return { verdict: "no-reference" };
   }
 
-  const captureFp = fpcalcFingerprint(captureFilePath);
-
-  if (captureFp === null) {
-    return "no-reference";
-  }
-
-  const result = slidingWindowMatch(previewFp, captureFp);
+  const result = slidingWindowMatch(previewFp, captureFingerprint);
 
   if (result === null) {
-    return "no-reference";
+    return { verdict: "no-reference" };
   }
 
-  return result.match ? "match" : "mismatch";
+  return { ber: result.ber, verdict: result.match ? "match" : "mismatch" };
 }
 
 // ── MIRROR of apps/web/src/lib/server/aws-sigv4.ts — keep in step ────────────
@@ -1960,6 +1978,7 @@ function validPreparedTrack(value: unknown, expectedTrackId: string): value is C
     "anchored",
     "artists",
     "bpm",
+    "captureSourcePin",
     "certified",
     "durationMs",
     "label",
@@ -1990,6 +2009,7 @@ function validPreparedTrack(value: unknown, expectedTrackId: string): value is C
       (Number.isInteger(value.durationMs) && Number(value.durationMs) >= 1)) &&
     (value.sourceAudioFailures === undefined ||
       (Number.isInteger(value.sourceAudioFailures) && Number(value.sourceAudioFailures) >= 0)) &&
+    validOptionalPreparedString(value, "captureSourcePin", 64) &&
     validOptionalPreparedString(value, "label", 1_024) &&
     validOptionalPreparedString(value, "logId", 64) &&
     validOptionalPreparedString(value, "sourceAudioKey", 1_024) &&
@@ -2637,7 +2657,7 @@ function resultFromProviderCompletion(
   }
   const bytes = readFileSync(join(progress.attempt.workDirectory, completion.fileName));
   const keyRoot = progress.attempt.finding.logId ?? `catalogue/${progress.trackId}`;
-  const verification = completion.verdict === "match" ? "preview-match" : "unverified";
+  const verification = captureVerificationFor(completion.verdict);
   return {
     attemptedAt: completion.completedAt,
     bodyBase64: bytes.toString("base64"),
@@ -3337,10 +3357,28 @@ export type VerifiedUpload = {
   ext: string;
   path: string;
   source: CaptureSearchSource;
-  /** `match` = fingerprint-verified. `no-reference` = the honest abstain (nothing was compared). */
-  verdict: "match" | "no-reference";
+  /**
+   * `match` = fingerprint-verified. `no-reference` = the honest abstain (nothing was compared).
+   * `operator` = the operator's pinned source: the gate ran, the pin outranks its verdict.
+   */
+  verdict: "match" | "no-reference" | "operator";
   videoId: string;
 };
+
+/**
+ * ONE mapping from the walk's verdict to the `capture_verification` the row is stamped with, shared
+ * by the inline success path and the journal-replay path so the two can never disagree. `match` →
+ * `preview-match`; `operator` → `operator-verified` (the pinned source — the historic verification
+ * backfill leaves it alone); anything else is the honest `unverified` abstain.
+ */
+export function captureVerificationFor(
+  verdict: VerifiedUpload["verdict"],
+): "operator-verified" | "preview-match" | "unverified" {
+  if (verdict === "match") {
+    return "preview-match";
+  }
+  return verdict === "operator" ? "operator-verified" : "unverified";
+}
 
 function captureProviderCompletion(
   accepted: VerifiedUpload | null,
@@ -3596,6 +3634,141 @@ async function findVerifiedUpload(options: {
   throw lastError;
 }
 
+// ── THE PINNED SOURCE (docs/the-ear.md § Wrong audio) ──────────────────────────────────────────
+//
+// The fingerprint gate above is precision-over-recall BY DESIGN: a genuine match scores a bit-error
+// rate around 0.02–0.07 against the store preview, and the gate refuses anything past its threshold.
+// For some recordings the only uploads that exist are a different master or edit of the same release
+// — same length, wrong bits, BER 0.33–0.46 against BOTH store previews — so every walk lands a
+// terminal `unmatched` and the finding never gets full audio, never an embedding, and is absent from
+// similarity search. The operator's ear is the only thing that outranks the gate, and
+// `capture_source_pin` is how he says "capture THIS upload". This walk honours it.
+//
+// WHAT THE PIN CHANGES: the ladder is not searched (one download, no billed search), the bad-audio
+// memory is not consulted and NEVER grown (this function does not even receive it — a source-pinned
+// test proves the slice never touches `memory`), and the fingerprint's verdict is recorded as
+// `operator-verified` whatever it says — a mismatch is LOGGED with its BER, then captured on the
+// operator's authority.
+//
+// WHAT THE PIN DOES NOT CHANGE: the duration guard. A pasted id that points at a live set, a
+// continuous mix, or a wrong edit off by more than the tolerance is REFUSED — a `failed` outcome (the
+// retry path, so a later tick can see a corrected pin) and never `unmatched` (the terminal verdict
+// the pin exists to escape). Download failures — a bot wall, a 403, a timeout — take the normal
+// `failed` + cooldown path through the same sticky-session re-roll as the ladder, and retry on later
+// ticks. The commit path is unchanged, so analyze and embed pick a pinned capture up automatically.
+
+/** The seams `findPinnedUpload` reaches the world through — injectable so the walk is provable. */
+export type PinnedUploadPorts = {
+  download: (
+    proxyUrl: string,
+    candidate: YtCandidate,
+    dir: string,
+    playerClientFallback: boolean,
+  ) => { ext: string; path: string };
+  fingerprint: (path: string) => null | number[];
+  probeDurationSec: (path: string) => number;
+  referenceFingerprint: (idOrLogId: string) => Promise<null | number[]>;
+};
+
+/** The refusal a pinned upload earns when it fails the duration guard. Lands `failed`, retryable. */
+export type PinnedDurationRefusal = Error & { isPinnedDurationRefusal: true };
+
+export function isPinnedDurationRefusal(error: unknown): error is PinnedDurationRefusal {
+  return (error as { isPinnedDurationRefusal?: boolean })?.isPinnedDurationRefusal === true;
+}
+
+/**
+ * Download the operator's pinned upload for one row and hand it back ACCEPTED, or throw. It never
+ * returns `null`: a pinned row has no ladder to exhaust, so there is no "disproved every candidate"
+ * verdict for the caller to name — every failure here is the caller's retryable `failed` path.
+ */
+export async function findPinnedUpload(options: {
+  dir: string;
+  finding: CaptureFinding;
+  ports?: Partial<PinnedUploadPorts>;
+  session: ProxySession;
+  videoId: string;
+}): Promise<VerifiedUpload> {
+  const { dir, finding, session, videoId } = options;
+  const ports: PinnedUploadPorts = {
+    download: options.ports?.download ?? runYtDownload,
+    fingerprint: options.ports?.fingerprint ?? fpcalcFingerprint,
+    probeDurationSec: options.ports?.probeDurationSec ?? probeDurationSec,
+    referenceFingerprint:
+      options.ports?.referenceFingerprint ??
+      ((idOrLogId) =>
+        fetchPreviewFingerprint({ apiBaseUrl: API_BASE_URL, apiToken: API_TOKEN, idOrLogId })),
+  };
+  const who = finding.logId ?? `catalogue (${finding.trackId})`;
+  // The pinned id as the downloader wants it. `durationSec` is unknown until the bytes are probed;
+  // the guard below reads the REAL file length, never a search value.
+  const candidate: YtCandidate = { durationSec: 0, id: videoId, source: "youtube", title: "" };
+
+  log(`honouring the operator's capture-source pin for ${who}: youtube ${videoId}`);
+
+  // ONE download, answered exactly as the ladder answers a challenge: decide the recovery BEFORE the
+  // re-roll spends the session's one fresh exit, then re-try the same id once. Anything past that
+  // throws into the caller's `failed` path and a later tick retries it.
+  let file: { ext: string; path: string };
+  try {
+    file = ports.download(session.url, candidate, dir, false);
+  } catch (error) {
+    const flags = error as DownloadErrorFlags;
+    const recovery = chooseDownloadRecovery(flags, session.rerollable(), "youtube");
+
+    if (flags.isBotChallenge) {
+      session.reroll("download");
+    }
+
+    if (recovery === "reroll") {
+      file = ports.download(session.url, candidate, dir, false);
+    } else if (recovery === "player-client-fallback") {
+      file = ports.download(session.url, candidate, dir, true);
+    } else {
+      throw error;
+    }
+  }
+
+  // THE DURATION GUARD STILL APPLIES. The pin says which upload; it does not waive the one check
+  // that keeps a wrong paste from landing an hour-long set as a five-minute finding's full song.
+  const realDurationSec = ports.probeDurationSec(file.path);
+  if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
+    rmSync(file.path, { force: true });
+    const refusal = new Error(
+      `pinned upload ${videoId} fails the duration guard (${Math.round(realDurationSec)}s against the row's ${Math.round((finding.durationMs ?? 0) / 1000)}s) — not captured`,
+    ) as PinnedDurationRefusal;
+    refusal.isPinnedDurationRefusal = true;
+    log(`pinned upload fails the duration guard (${refusal.message})`);
+    throw refusal;
+  }
+
+  const fileBytes = new Uint8Array(readFileSync(file.path));
+  const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
+
+  // THE GATE STILL RUNS — for the record, never for the verdict. The operator chose this upload
+  // with the gate's refusal in front of him; what he is owed is the number, not a second refusal.
+  const previewFp = await ports.referenceFingerprint(finding.trackId);
+  const verified = verifyCaptureFileDetailed(previewFp, ports.fingerprint(file.path));
+
+  if (verified.verdict === "mismatch") {
+    log(
+      `pinned upload ${videoId} mismatches the store reference (ber=${(verified.ber ?? 0).toFixed(3)}) — capturing on operator authority`,
+    );
+  } else {
+    log(`pinned upload ${videoId} fingerprint verdict: ${verified.verdict} — capturing`);
+  }
+
+  return {
+    bytes: fileBytes,
+    digest: fileDigest,
+    ext: file.ext,
+    path: file.path,
+    source: "youtube",
+    verdict: "operator",
+    videoId,
+  };
+}
+
 // ── Per-finding capture ────────────────────────────────────────────────────
 
 /**
@@ -3717,6 +3890,14 @@ async function captureFinding(
       kind: "capture",
       provider: async (directory) => {
         workDirectory = directory;
+        // THE OPERATOR'S PIN OUTRANKS THE LADDER (docs/the-ear.md § Wrong audio). A pinned row
+        // downloads that one id — no search, no memory (the walk is not handed it), the gate for the
+        // record only — and can never land `unmatched`: `findPinnedUpload` returns an accepted
+        // upload or throws into the `failed` path below.
+        const pin = finding.captureSourcePin?.trim();
+        if (pin) {
+          return findPinnedUpload({ dir: directory, finding, session, videoId: pin });
+        }
         return findVerifiedUpload({
           dir: directory,
           finding,
@@ -3761,9 +3942,10 @@ async function captureFinding(
       return captureOutcomeFor(disposition, "unmatched");
     }
 
-    // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain). Store the
-    // bytes + stamp the verdict provenance in the same write.
-    const verification = accepted.verdict === "match" ? "preview-match" : "unverified";
+    // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain); OPERATOR (the
+    // pinned source) → `operator-verified`. Store the bytes + stamp the verdict provenance in the
+    // same write.
+    const verification = captureVerificationFor(accepted.verdict);
     const key = buildSourceAudioKey(keyRoot, accepted.digest, accepted.ext);
 
     // The key + done + the captured stamp + THE METER + THE VERIFICATION PROVENANCE.

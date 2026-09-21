@@ -673,6 +673,9 @@ export const verifyCapture = oc
       action: z.enum([
         "flagged-finding",
         "not-captured",
+        // The row's capture was taken on the operator's pinned source (`operator-verified`), and
+        // the backfill steps aside: it never flags what the operator chose. A no-op, reported.
+        "operator-verified",
         "preview-match",
         "quarantined-catalogue",
         "unverified",

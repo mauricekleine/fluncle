@@ -57,6 +57,7 @@ import {
   markDueWorkSourceRepairsFromSelectStatement,
 } from "./due-work";
 import { ApiError } from "./spotify";
+import { extractYoutubeVideoId } from "./youtube";
 import { checkYoutubeOfficial } from "./youtube-official";
 import { upsertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
@@ -1452,4 +1453,219 @@ export async function fillEmptyNote(
   }
 
   return filled;
+}
+
+// ── THE OPERATOR'S CAPTURE-SOURCE PIN (docs/track-lifecycle.md § Capture; docs/the-ear.md § Wrong
+// audio) ──────────────────────────────────────────────────────────────────────────────────────────
+//
+// The capture sweep's fingerprint gate is precision-over-recall by design: a genuine match against
+// the store preview scores a bit-error rate around 0.02–0.07, and the gate refuses anything past
+// its threshold. For some recordings the only uploads that exist are a different master or edit of
+// the same release — same length, wrong bits — so the sweep lands a terminal `unmatched` and the
+// finding never gets full audio, never an embedding, and is absent from similarity search. The
+// operator's ear is the only thing that outranks the gate. The pin is how he says "capture THIS
+// upload"; it is a SOURCE HINT on `tracks`, never a certification, and it moves no `findings` column.
+
+/** A YouTube video id: 11 URL-safe base64 characters. */
+const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+
+/** The hosts a pasted capture-source URL may come from; anything else is not a YouTube upload. */
+const YOUTUBE_HOSTS = new Set([
+  "m.youtube.com",
+  "music.youtube.com",
+  "www.youtube.com",
+  "youtu.be",
+  "youtube.com",
+]);
+
+/**
+ * Reduce what the operator pasted to a YouTube video id: a bare 11-character id passes through, a
+ * `youtube.com` / `music.youtube.com` / `youtu.be` URL (watch, shorts, embed, share) yields its id,
+ * and everything else is `null`. Strict on the host on purpose — a SoundCloud link or a stray
+ * 11-character word must not become a pin the sweep then tries to download from YouTube.
+ */
+export function parseCaptureSourceVideoId(input: string): null | string {
+  const value = input.trim();
+
+  if (YOUTUBE_VIDEO_ID_PATTERN.test(value)) {
+    return value;
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(value.includes("://") ? value : `https://${value}`);
+  } catch {
+    return null;
+  }
+
+  if (!YOUTUBE_HOSTS.has(url.hostname.toLowerCase())) {
+    return null;
+  }
+
+  return extractYoutubeVideoId(url.toString());
+}
+
+export type CaptureSourcePinResult = {
+  captureSourcePin: null | string;
+  captureStatus: string;
+  logId: null | string;
+  trackId: string;
+};
+
+type CaptureSourcePinRow = {
+  artists_json: string | null;
+  capture_source_pin: string | null;
+  capture_status: string;
+  label: string | null;
+  label_name: string | null;
+  log_id: string | null;
+};
+
+async function readCaptureSourcePinRow(trackId: string): Promise<CaptureSourcePinRow> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select tracks.artists_json, tracks.capture_source_pin, tracks.capture_status,
+                 tracks.label, labels.name as label_name, findings.log_id
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          left join labels on labels.id = tracks.label_id
+          where tracks.track_id = ? limit 1`,
+  });
+  const row = typedRow<CaptureSourcePinRow>(result.rows);
+
+  if (!row) {
+    throw new ApiError("not_found", `No track with id ${trackId}`, 404);
+  }
+
+  return row;
+}
+
+/**
+ * PIN a capture source (`pin_capture_source`, operator tier). One statement, so the row is never
+ * half-pinned:
+ *
+ *   · `capture_source_pin = <id>` — the instruction the sweep reads off the row it already holds;
+ *   · `capture_status = 'pending'` — re-queue it: a terminal `unmatched` (the case the pin exists
+ *     for) leaves the worklist for good, and `pending` is what puts it back;
+ *   · `source_audio_failures = 0` — the retry ledger starts clean, so a pinned row is not held out
+ *     by a backoff its ladder walks earned;
+ *   · `source_audio_rejected = null` — the bad-audio memory describes the LADDER's rejections, and
+ *     the ladder is being bypassed; a pinned download is never filtered against it;
+ *   · the YouTube provenance trio + method, written OUTRIGHT (not fill-empty-only): the operator's
+ *     ruling replaces whatever a sweep proved before, and `youtube_verified_by = 'operator'` names
+ *     the method honestly so /identity says a human ruled rather than "matched by audio
+ *     fingerprint". The officialness verdict is still the SERVER's oEmbed check — a pin says which
+ *     upload carries the recording, never whether it may be shown;
+ *   · `source_verification = 'operator'` — the same stamp on the non-YouTube evidence column, so
+ *     the provenance backfill (which requires it null) does not re-open a question the operator
+ *     just closed.
+ *
+ * The `duplicate-cleared` sentinel is respected exactly as `updateTrack` respects it: a force-
+ * captured row keeps its sentinel and is capture-eligible under it already. Not one `findings`
+ * column moves — a pin is a source hint, never a certification — which is also why it is legal on a
+ * catalogue row. Returns the row as it now stands.
+ */
+export async function pinCaptureSource(
+  trackId: string,
+  videoId: string,
+  options: { fetchImpl?: typeof fetch } = {},
+): Promise<CaptureSourcePinResult> {
+  if (!YOUTUBE_VIDEO_ID_PATTERN.test(videoId)) {
+    throw new ApiError(
+      "invalid_youtube_video_id",
+      `"${videoId}" is not a YouTube video id (11 URL-safe characters, or a youtube.com / youtu.be / music.youtube.com URL)`,
+      400,
+    );
+  }
+
+  const existing = await readCaptureSourcePinRow(trackId);
+  const labels = [existing.label_name, existing.label]
+    .filter((name): name is string => typeof name === "string" && name.trim().length > 0)
+    .map((name) => name.trim());
+  const official = await checkYoutubeOfficial(
+    videoId,
+    { artists: parseArtistsJson(existing.artists_json ?? "[]"), labels },
+    options.fetchImpl,
+  );
+  const now = new Date().toISOString();
+  const db = await getDb();
+
+  await db.batch(
+    [
+      {
+        args: [videoId, videoId, official, now, trackId],
+        sql: `update tracks
+                set capture_source_pin = ?,
+                    capture_status = case when capture_status = 'duplicate-cleared' then capture_status else 'pending' end,
+                    source_audio_failures = 0,
+                    source_audio_rejected = null,
+                    youtube_video_id = ?,
+                    youtube_video_official = ?,
+                    youtube_verified_at = ?,
+                    youtube_verified_by = 'operator',
+                    source_verification = 'operator'
+              where track_id = ?`,
+      },
+      ...markDueWorkSourceMaintenanceStatements([{ subjectId: trackId, subjectType: "track" }], {
+        producer: "track-capture-source-pin",
+      }),
+    ],
+    "write",
+  );
+
+  const after = await readCaptureSourcePinRow(trackId);
+
+  return {
+    captureSourcePin: after.capture_source_pin,
+    captureStatus: after.capture_status,
+    logId: after.log_id,
+    trackId,
+  };
+}
+
+/**
+ * CLEAR a capture-source pin (`clear_capture_source`, operator tier). Withdraws the standing
+ * instruction and the two `operator` stamps the pin set, and touches nothing else: the capture
+ * status and any audio captured under the pin stay as they are (rewinding a capture is
+ * `flag_wrong_audio`'s job). The YouTube stamp is withdrawn as a trio-plus-method and ONLY when the
+ * method is `operator`: that id had no proof beside it but the operator's word, and leaving it under
+ * a nulled method would let the envelope's legacy fallback print "matched by audio fingerprint" over
+ * a match that never ran. An id a fingerprint sweep earned is never touched. Idempotent — clearing an
+ * unpinned row rewrites nothing.
+ */
+export async function clearCaptureSource(trackId: string): Promise<CaptureSourcePinResult> {
+  const existing = await readCaptureSourcePinRow(trackId);
+  const db = await getDb();
+
+  await db.batch(
+    [
+      {
+        args: [trackId],
+        // `youtube_verified_by` is read by every CASE and cleared LAST — SQLite evaluates each SET
+        // expression against the pre-update row, so the order is not load-bearing, but the shape
+        // reads as the all-or-nothing withdrawal it is.
+        sql: `update tracks
+                set capture_source_pin = null,
+                    youtube_video_id = case when youtube_verified_by = 'operator' then null else youtube_video_id end,
+                    youtube_video_official = case when youtube_verified_by = 'operator' then null else youtube_video_official end,
+                    youtube_verified_at = case when youtube_verified_by = 'operator' then null else youtube_verified_at end,
+                    source_verification = case when source_verification = 'operator' then null else source_verification end,
+                    youtube_verified_by = case when youtube_verified_by = 'operator' then null else youtube_verified_by end
+              where track_id = ?`,
+      },
+      ...markDueWorkSourceMaintenanceStatements([{ subjectId: trackId, subjectType: "track" }], {
+        producer: "track-capture-source-pin-clear",
+      }),
+    ],
+    "write",
+  );
+
+  return {
+    captureSourcePin: null,
+    captureStatus: existing.capture_status,
+    logId: existing.log_id,
+    trackId,
+  };
 }

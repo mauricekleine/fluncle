@@ -77,6 +77,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the paths directly). `list` is admin tier; create/update/
   // delete are operator tier (the operator's private spend data — a valid agent token 403s).
   "DELETE /admin/subscriptions/{id}": "delete_subscription",
+  // The capture-source pin's counterpart (docs/the-ear.md § Wrong audio) — contract-only oRPC.
+  // Operator tier: it withdraws the operator's own ruling; the agent token 403s.
+  "DELETE /admin/tracks/{trackId}/capture-source": "clear_capture_source",
   // The three entity bio WORKLISTS — contract-only oRPC (no TanStack route file). Admin tier
   // (agent-allowed reads): the box's bio sweeps drain them with the agent token.
   "GET /admin/albums/bio-queue": "list_albums_missing_bio",
@@ -661,6 +664,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The render → publish auto-advance KILL SWITCH — contract-only oRPC (no TanStack route
   // file). Operator tier: pause/resume every future auto-publish, no deploy.
   "PUT /admin/social/publish/advance/state": "set_publish_advance",
+  // THE CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) — contract-only oRPC. Operator
+  // tier: the fingerprint gate is precision-over-recall and the operator's ear is the only
+  // thing that outranks it, so the pin is his alone; the agent token 403s.
+  "PUT /admin/tracks/{trackId}/capture-source": "pin_capture_source",
   // The tracks-only Sonar switch: first enable is readiness-gated; disable is unconditional.
   "PUT /admin/vectors/tracks/serving": "set_vector_serving",
 };

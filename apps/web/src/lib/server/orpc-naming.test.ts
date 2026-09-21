@@ -112,6 +112,13 @@ const APPROVED_VERBS = new Set<string>([
   // `observe`/`context`, same verb-as-action shape ("note this finding").
   "note",
   "observe",
+  // `pin` (fix the one external source a sweep must use for a row, overriding the search the
+  // sweep would otherwise run) — added deliberately with `pin_capture_source` (docs/the-ear.md §
+  // Wrong audio). Genuinely new: not `force` (overrule a machine VETO so the machine may act —
+  // the row still walks the ladder), not `set` (write a value the row displays), not `update`
+  // (a generic patch), not `anchor` (bind a row to its store identity) — it NAMES THE SOURCE the
+  // acquisition must come from, on the operator's authority, and `clear` is its counterpart.
+  "pin",
   // `purge` (evict a finding's stale Cloudflare video renditions from the edge) —
   // ratified into the action set with the `purge_video` re-render cache command.
   // The sibling of `requeue` on the video lifecycle:

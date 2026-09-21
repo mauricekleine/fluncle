@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `capture_source_pin` text;

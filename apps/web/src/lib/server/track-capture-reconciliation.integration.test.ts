@@ -85,6 +85,99 @@ describe("capture reconciliation against the real schema", () => {
     expect(Number(receipts.rows[0]?.count)).toBe(1);
   });
 
+  it("freezes the operator's capture-source pin into the snapshot and commits an operator-verified capture", async () => {
+    const {
+      authorizeCaptureReconciliation,
+      commitCaptureReconciliation,
+      prepareCaptureReconciliation,
+    } = await import("./track-capture-reconciliation");
+    await db.execute({
+      args: [TRACK_ID],
+      sql: `update tracks set capture_source_pin = 'dQw4w9WgXcQ', capture_status = 'pending'
+            where track_id = ?`,
+    });
+
+    const prepared = await prepareCaptureReconciliation(TRACK_ID, "capture");
+    expect(prepared.prepared).toBe(true);
+    if (!prepared.prepared) {
+      return;
+    }
+    // The sweep reads the pin off the frozen row — the same row it captures from.
+    expect(prepared.track.captureSourcePin).toBe("dQw4w9WgXcQ");
+
+    const digest = "b".repeat(64);
+    const receipt = await authorizeCaptureReconciliation({
+      result: {
+        attemptedAt: "2026-09-08T10:00:00.000Z",
+        bytes: 4_096,
+        captureVerification: "operator-verified",
+        capturedAt: "2026-09-08T10:00:00.000Z",
+        kind: "capture",
+        outcome: "done",
+        sourceAudioKey: `${LOG_ID}/${digest}.webm`,
+        verifiedAt: "2026-09-08T10:00:00.000Z",
+      },
+      snapshotToken: prepared.snapshotToken,
+      trackId: TRACK_ID,
+    });
+    const outcome = await commitCaptureReconciliation({ ...receipt, trackId: TRACK_ID });
+
+    expect(outcome).toMatchObject({ outcome: "committed", replayed: false });
+    const state = await db.execute({
+      args: [TRACK_ID],
+      sql: `select capture_status, capture_verification, capture_source_pin, source_audio_key
+            from tracks where track_id = ?`,
+    });
+    // The capture lands like any other — analyze and embed pick it up from `source_audio_key` —
+    // stamped with the operator's authority; the pin stands until he clears it.
+    expect(state.rows[0]).toMatchObject({
+      capture_source_pin: "dQw4w9WgXcQ",
+      capture_status: "done",
+      capture_verification: "operator-verified",
+      source_audio_key: `${LOG_ID}/${digest}.webm`,
+    });
+    // No officialness check ran: an operator-verified result carries no YouTube id (the pin op
+    // already stamped the row's provenance), so the server had nothing to rule on.
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+  });
+
+  it("refuses a ladder capture prepared BEFORE the operator pinned the row", async () => {
+    const {
+      authorizeCaptureReconciliation,
+      commitCaptureReconciliation,
+      prepareCaptureReconciliation,
+    } = await import("./track-capture-reconciliation");
+    const prepared = await prepareCaptureReconciliation(TRACK_ID, "capture");
+    expect(prepared.prepared).toBe(true);
+    if (!prepared.prepared) {
+      return;
+    }
+    const receipt = await authorizeCaptureReconciliation({
+      result: {
+        attemptedAt: "2026-09-08T10:00:00.000Z",
+        kind: "capture",
+        outcome: "unmatched",
+      },
+      snapshotToken: prepared.snapshotToken,
+      trackId: TRACK_ID,
+    });
+    // The operator pins the row while the ladder walk is in flight.
+    await db.execute({
+      args: [TRACK_ID],
+      sql: `update tracks set capture_source_pin = 'dQw4w9WgXcQ' where track_id = ?`,
+    });
+
+    const outcome = await commitCaptureReconciliation({ ...receipt, trackId: TRACK_ID });
+
+    // The stale `unmatched` must not land on a row he just pinned — the pin exists to escape it.
+    expect(outcome).toMatchObject({ outcome: "rejected", replayed: false });
+    const state = await db.execute({
+      args: [TRACK_ID],
+      sql: `select capture_status from tracks where track_id = ?`,
+    });
+    expect(state.rows[0]?.capture_status).toBe("pending");
+  });
+
   it("atomically refuses an older result after wrong-audio and rejection memory advance", async () => {
     const {
       authorizeCaptureReconciliation,

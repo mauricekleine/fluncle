@@ -278,7 +278,10 @@ const CaptureExternalResultSchema = z.union([
     z.strictObject({
       attemptedAt: z.string().datetime({ offset: true }),
       bytes: z.number().int().min(1),
-      captureVerification: z.enum(["preview-match", "unverified"]),
+      // `operator-verified` is the pinned-source capture: the fingerprint still RAN, but the
+      // operator's pin outranks its verdict (docs/the-ear.md § Wrong audio), so the row carries
+      // his authority rather than the gate's. The historic verification backfill leaves it alone.
+      captureVerification: z.enum(["operator-verified", "preview-match", "unverified"]),
       capturedAt: z.string().datetime({ offset: true }),
       kind: z.literal("capture"),
       outcome: z.literal("done"),
@@ -330,6 +333,12 @@ const CapturePreparedTrackSchema = z.strictObject({
   anchored: z.boolean().optional(),
   artists: z.array(z.string().max(512)).max(64),
   bpm: z.number().optional(),
+  /**
+   * THE OPERATOR'S CAPTURE-SOURCE PIN — the one YouTube video id the sweep downloads INSTEAD of
+   * walking its ladder (docs/the-ear.md § Wrong audio). Frozen into the snapshot with the row, so
+   * a pin set or cleared mid-flight makes the in-flight commit stale rather than half-honoured.
+   */
+  captureSourcePin: z.string().max(64).optional(),
   certified: z.boolean(),
   durationMs: z.number().int().min(1).optional(),
   label: z.string().max(1024).optional(),
@@ -1001,6 +1010,91 @@ export const purgeVideo = oc
   );
 
 /**
+ * What the capture-source pin ops hand back: the row's identity, the pin as it now stands (null
+ * once cleared), and the capture status the write left behind, so the CLI and the admin dialog can
+ * say what happened without a second read.
+ */
+const CaptureSourcePinResultSchema = z
+  .object({
+    /** The pinned YouTube video id, or null when no pin stands. */
+    captureSourcePin: z.string().nullable(),
+    /** The row's `capture_status` after the write (`pending` after a pin; untouched by a clear). */
+    captureStatus: z.string(),
+    /** The finding's coordinate; null on a catalogue row. */
+    logId: z.string().nullable(),
+    ok: z.literal(true),
+    trackId: z.string(),
+  })
+  .meta({ id: "CaptureSourcePinResult" });
+
+/**
+ * `pin_capture_source` → `PUT /admin/tracks/{trackId}/capture-source` (operationId
+ * `pinCaptureSource`).
+ *
+ * OPERATOR tier. "Capture THIS upload." The capture sweep's fingerprint gate (docs/the-ear.md §
+ * Wrong audio) is precision-over-recall by design: it refuses any upload whose bit-error rate
+ * against the track's store preview clears the threshold, and for some recordings the only uploads
+ * that exist are a different master or edit of the same release — same length, wrong bits — so the
+ * sweep lands a terminal `unmatched` and the finding never gets full audio, never an embedding, and
+ * is absent from similarity search. The operator's ear is the only thing that outranks the gate,
+ * and this is how he says so.
+ *
+ * `youtubeVideoId` accepts a bare 11-character id or a `youtube.com` / `youtu.be` /
+ * `music.youtube.com` URL; the SERVER reduces it to the id and rejects anything else with
+ * `invalid_youtube_video_id`/400. The write (lib/server/track-update.ts § pinCaptureSource) sets
+ * `capture_source_pin`, re-queues the row (`capture_status = 'pending'`), clears the bad-audio
+ * memory (`source_audio_rejected = null` — the memory describes the ladder's rejections, and the
+ * ladder is being bypassed), and stamps the id as the row's YouTube provenance with `operator` as
+ * the method (`youtube_video_id`, `youtube_verified_by`, `source_verification`). It moves NO
+ * `findings` column: a pin is a source hint, never a certification. The sweep then downloads that
+ * one id instead of walking the ladder, STILL applies the duration guard (a wrong paste must never
+ * land a live set), still runs the fingerprint, and records the capture `operator-verified` —
+ * which the historic verification backfill leaves alone. Codes: `not_found`/404.
+ */
+export const pinCaptureSource = oc
+  .route({
+    method: "PUT",
+    operationId: "pinCaptureSource",
+    path: "/admin/tracks/{trackId}/capture-source",
+    summary: "Pin the YouTube upload the capture sweep must download for a track",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      trackId: z.string(),
+      /** A bare 11-char YouTube video id, or a youtube.com / youtu.be / music.youtube.com URL. */
+      youtubeVideoId: z.string().min(1).max(2_048),
+    }),
+  )
+  .output(CaptureSourcePinResultSchema);
+
+/**
+ * `clear_capture_source` → `DELETE /admin/tracks/{trackId}/capture-source` (operationId
+ * `clearCaptureSource`).
+ *
+ * OPERATOR tier — `pin_capture_source`'s counterpart. Nulls the pin and withdraws the two
+ * `operator` provenance stamps it set, and NOTHING else: the capture status and any audio already
+ * captured under the pin stay exactly as they are — a clear withdraws the standing instruction to
+ * the sweep, it does not rewind a capture (that is `flag_wrong_audio`, which also retires the pin).
+ * The YouTube stamp is withdrawn as a TRIO-plus-method (`youtube_video_id`, `youtube_video_official`,
+ * `youtube_verified_at`, `youtube_verified_by`), and only when `youtube_verified_by = 'operator'`:
+ * the id had no proof beside it but the operator's word, and leaving it standing under a nulled
+ * method would let /identity print "matched by audio fingerprint" over a match that never ran. An id
+ * a fingerprint sweep earned is never touched. `source_verification` is nulled on the same
+ * condition. Idempotent: clearing an unpinned row is a clean no-op. Codes: `not_found`/404.
+ */
+export const clearCaptureSource = oc
+  .route({
+    method: "DELETE",
+    operationId: "clearCaptureSource",
+    path: "/admin/tracks/{trackId}/capture-source",
+    summary: "Clear a track's pinned capture source (the ladder runs again)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string() }))
+  .output(CaptureSourcePinResultSchema);
+
+/**
  * The publish-track result (`PublishTrackResult` in ../index.ts). The
  * `POST /admin/tracks` body — `publishTrack`'s output envelope.
  */
@@ -1194,6 +1288,13 @@ export const TrackWorkItemSchema = z
     artists: z.array(z.string()),
     bpm: z.number().optional(),
     capturePriority: z.number().nullable(),
+    /**
+     * THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) — the one YouTube video id
+     * the `fluncle-capture` sweep downloads INSTEAD of walking its search ladder. CAPTURE-only like
+     * the trust signals, and omitted when no pin stands, so the shape every other sweep parses is
+     * unchanged.
+     */
+    captureSourcePin: z.string().optional(),
     certified: z.boolean(),
     /**
      * The ready-made DEEZER search query — Deezer's `artist:"…" track:"…"` FIELD syntax, a different
@@ -1390,6 +1491,7 @@ export const getMixableOrder = oc
 /** The `admin-tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTracksContract = {
   authorize_track_capture: authorizeTrackCapture,
+  clear_capture_source: clearCaptureSource,
   commit_track_capture: commitTrackCapture,
   commit_track_captures: commitTrackCaptures,
   context_track: contextTrack,
@@ -1400,6 +1502,7 @@ export const adminTracksContract = {
   list_tracks_admin: listTracksAdmin,
   note_track: noteTrack,
   observe_track: observeTrack,
+  pin_capture_source: pinCaptureSource,
   prepare_track_capture: prepareTrackCapture,
   prepare_track_captures: prepareTrackCaptures,
   presign_track_video_uploads: presignTrackVideoUploads,

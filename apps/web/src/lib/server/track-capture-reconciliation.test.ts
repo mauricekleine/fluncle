@@ -11,6 +11,7 @@ function snapshot(): CaptureSnapshot {
   return {
     extra: {
       bpm: 174,
+      captureSourcePin: null,
       captureVerification: null,
       captureVerifiedAt: null,
       enrichmentStatus: "done",
@@ -87,6 +88,28 @@ describe("capture reconciliation expected state", () => {
 
     expect(sameCaptureReconciliationState(prepared, current, "capture")).toBe(true);
     expect(isCaptureReconciliationEligible(current, "capture", new Date())).toBe(false);
+  });
+
+  test("a capture-source pin set or cleared mid-flight stales the in-flight commit", () => {
+    // The pin decides WHICH upload the sweep downloads, so a commit prepared under one pin state
+    // must not land under another: a ladder capture must not overwrite a row the operator just
+    // pinned, and a pinned capture must not land on a row whose pin he just withdrew.
+    const prepared = snapshot();
+    const pinned = structuredClone(prepared);
+    pinned.extra.captureSourcePin = "dQw4w9WgXcQ";
+
+    expect(sameCaptureReconciliationState(prepared, pinned, "capture")).toBe(false);
+    expect(sameCaptureReconciliationState(pinned, prepared, "capture")).toBe(false);
+  });
+
+  test("a snapshot frozen before the pin column existed still matches an unpinned row", () => {
+    // The pin compares as `?? null`, so a token minted by a Worker that never read the column
+    // does not stale every in-flight capture the moment the column lands.
+    const prepared = snapshot();
+    const { captureSourcePin: _absent, ...legacyExtra } = prepared.extra;
+    const legacy = { ...prepared, extra: legacyExtra } as unknown as CaptureSnapshot;
+
+    expect(sameCaptureReconciliationState(legacy, prepared, "capture")).toBe(true);
   });
 
   test("rejects provenance that another writer already settled", () => {

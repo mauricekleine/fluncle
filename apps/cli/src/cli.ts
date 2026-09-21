@@ -356,6 +356,12 @@ type TrackDraftOptions = {
   platform?: string;
 };
 
+type TrackPinSourceOptions = {
+  clear: boolean;
+  json: boolean;
+  upload?: string;
+};
+
 type TrackSocialOptions = {
   capture?: boolean;
   json: boolean;
@@ -1791,6 +1797,34 @@ JSON field reference:
     .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
       const { trackPurgeVideoCommand } = await import("./commands/track");
       await runTrackPurgeVideo(idOrLogId, options, trackPurgeVideoCommand);
+    });
+
+  adminTrack
+    .command("pin-source")
+    .description(
+      "Pin the YouTube upload the capture sweep must download for a track (operator); --clear withdraws it",
+    )
+    .argument("[idOrLogId]")
+    .option(
+      "--clear",
+      "Withdraw the pin (capture status and captured audio stay as they are)",
+      false,
+    )
+    .option("--json", "Print JSON", false)
+    // `--upload`, not `--youtube`: the option parser's value-taking set is GLOBAL, and `--youtube`
+    // is already a boolean flag on `admin mixtapes distribute` / `resync`.
+    .option(
+      "--upload <url|id>",
+      "The YouTube upload: a bare 11-char video id or a youtube.com / youtu.be URL",
+    )
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: TrackPinSourceOptions) => {
+      const { trackClearSourcePinCommand, trackPinSourceCommand } =
+        await import("./commands/track");
+      await runTrackPinSource(idOrLogId, options, {
+        clear: trackClearSourcePinCommand,
+        pin: trackPinSourceCommand,
+      });
     });
 
   adminTrack
@@ -6619,6 +6653,49 @@ async function runTrackRequeueVideo(
   );
 }
 
+async function runTrackPinSource(
+  idOrLogId: string | undefined,
+  options: TrackPinSourceOptions,
+  commands: {
+    clear: typeof import("./commands/track").trackClearSourcePinCommand;
+    pin: typeof import("./commands/track").trackPinSourceCommand;
+  },
+): Promise<void> {
+  const usage =
+    "Usage: fluncle admin tracks pin-source <track_id|log_id> --upload <url|id> [--json] | --clear";
+
+  if (!idOrLogId) {
+    throw new Error(`Missing id. ${usage}`);
+  }
+
+  const youtube = options.upload?.trim();
+
+  if (options.clear && youtube) {
+    throw new Error(`Pass either --upload or --clear, not both. ${usage}`);
+  }
+
+  if (!options.clear && !youtube) {
+    throw new Error(`Missing --upload <url|id> (or --clear to withdraw the pin). ${usage}`);
+  }
+
+  const result = options.clear
+    ? await commands.clear(idOrLogId)
+    : await commands.pin(idOrLogId, youtube ?? "");
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const who = result.logId ?? result.trackId;
+
+  console.log(
+    result.captureSourcePin
+      ? `Pinned ${who} to youtube ${result.captureSourcePin} — capture ${result.captureStatus.toUpperCase()}; the next capture tick downloads that upload, ladder skipped.`
+      : `Cleared the capture-source pin on ${who} — capture ${result.captureStatus.toUpperCase()} untouched; the ladder runs again.`,
+  );
+}
+
 async function runTrackPurgeVideo(
   idOrLogId: string | undefined,
   options: JsonOptions,
@@ -9001,6 +9078,7 @@ const stringOptions = new Set([
   "--wall-ms",
   "--window-since",
   "--window-until",
+  "--upload",
   "--work-kind",
 ]);
 

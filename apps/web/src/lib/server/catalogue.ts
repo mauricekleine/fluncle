@@ -3512,6 +3512,11 @@ export async function forceCapture(trackId: string): Promise<boolean> {
  * key-derived check, kept alongside it), and `capture_verification` is NULLED so the fresh capture
  * is re-verified from scratch — a flagged finding was verified `mismatch` by the backfill, and that
  * verdict is stale the instant it re-enters the capture queue.
+ *
+ * THE OPERATOR'S CAPTURE-SOURCE PIN IS RETIRED IN THE SAME WRITE (`capture_source_pin = null`). A
+ * pinned row's capture came from the pin, so flagging that capture wrong and leaving the pin
+ * standing would have the re-queued sweep download the very same upload again, on the operator's
+ * own authority, forever. Flag first, then pin the right upload — that order is the whole flow.
  */
 export async function flagWrongAudio(trackId: string): Promise<boolean> {
   const db = await getDb();
@@ -3558,6 +3563,7 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
               ${CLEAR_EMBEDDING_SQL},
               analyzed_from = null,
               capture_verification = null,
+              capture_source_pin = null,
               source_audio_rejected = ?
           where track_id = ?
             and source_audio_key is not null
@@ -3657,13 +3663,21 @@ export type CaptureVerifyVerdict = "match" | "mismatch" | "no-preview";
 export type CaptureVerifyAction =
   | "flagged-finding"
   | "not-captured"
+  | "operator-verified"
   | "preview-match"
   | "quarantined-catalogue"
   | "unverified";
 
+/**
+ * The verification the capture sweep stamps on a capture taken from the OPERATOR'S PINNED SOURCE
+ * (docs/the-ear.md § Wrong audio). The fingerprint still ran; the pin outranks its verdict.
+ */
+export const OPERATOR_VERIFIED = "operator-verified";
+
 type VerifyRow = {
   artists_json: string;
   capture_status: null | string;
+  capture_verification: null | string;
   certified: number;
   isrc: null | string;
   label: null | string;
@@ -3790,8 +3804,10 @@ export async function countUnverifiedCaptures(): Promise<number> {
  *     the bad-audio memory, and stamp `capture_status = 'wrong-audio'`. No operator in the loop —
  *     a catalogue row is not something Fluncle has spoken about.
  *
- * A row with no captured audio (or already quarantined) is a `not-captured` no-op. Returns the
- * action taken so the sweep reports honestly.
+ * A row with no captured audio (or already quarantined) is a `not-captured` no-op. A row whose
+ * capture is `operator-verified` — taken from the operator's pinned source — is an
+ * `operator-verified` no-op: the backfill never flags what the operator chose, whatever verdict a
+ * stale box re-posts for it. Returns the action taken so the sweep reports honestly.
  */
 export async function verifyCapture(
   trackId: string,
@@ -3803,7 +3819,8 @@ export async function verifyCapture(
   const rowResult = await db.execute({
     args: [trackId],
     sql: `select ct.artists_json as artists_json, ct.label as label, ct.isrc as isrc,
-                 ct.capture_status as capture_status, ct.source_audio_key as source_audio_key,
+                 ct.capture_status as capture_status, ct.capture_verification as capture_verification,
+                 ct.source_audio_key as source_audio_key,
                  ct.source_audio_rejected as source_audio_rejected, ct.title as title,
                  (f.track_id is not null) as certified
           from tracks ct
@@ -3816,6 +3833,13 @@ export async function verifyCapture(
   // capture the gate will verify). Either way, a no-op the sweep reports as `not-captured`.
   if (!row || !row.source_audio_key || row.capture_status === WRONG_AUDIO_STATUS) {
     return "not-captured";
+  }
+
+  // THE OPERATOR'S PIN OUTRANKS THE GATE. The worklist already excludes this row (its verification
+  // is non-null), so this is the server-side backstop for a box that re-posts a verdict it measured
+  // before the pin landed: nothing is stamped, nothing is quarantined, nothing is flagged.
+  if (row.capture_verification === OPERATOR_VERIFIED) {
+    return "operator-verified";
   }
 
   const certified = Number(row.certified) === 1;

@@ -426,6 +426,7 @@ export {
   startLastfmAuth,
 } from "./admin-tokens";
 export {
+  clearCaptureSource,
   commitTrackCaptures,
   contextTrack,
   EMBEDDING_DIMENSIONS,
@@ -439,6 +440,7 @@ export {
   MAX_EMBEDDING_WRITE_BATCH,
   noteTrack,
   observeTrack,
+  pinCaptureSource,
   prepareTrackCaptures,
   presignTrackVideoUploads,
   publishTrack,

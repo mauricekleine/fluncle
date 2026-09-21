@@ -27,6 +27,8 @@ import { isYoutubeVerification, YOUTUBE_VERIFICATION_VALUES } from "./track-upda
 
 const updateTrack = vi.fn();
 const fillEmptyNote = vi.fn();
+const pinCaptureSource = vi.fn();
+const clearCaptureSource = vi.fn();
 const getTrackByIdOrLogId = vi.fn();
 const getSimilarFindings = vi.fn();
 const getTrackContextNote = vi.fn();
@@ -69,7 +71,9 @@ vi.mock("./track-update", async (importOriginal) => {
 
   return {
     ...actual,
+    clearCaptureSource: (...args: unknown[]) => clearCaptureSource(...args),
     fillEmptyNote: (...args: unknown[]) => fillEmptyNote(...args),
+    pinCaptureSource: (...args: unknown[]) => pinCaptureSource(...args),
     updateTrack: (...args: unknown[]) => updateTrack(...args),
   };
 });
@@ -195,6 +199,8 @@ beforeEach(() => {
   recordObservationRejection.mockReset().mockResolvedValue(undefined);
   updateTrack.mockReset();
   fillEmptyNote.mockReset();
+  pinCaptureSource.mockReset();
+  clearCaptureSource.mockReset();
   getTrackByIdOrLogId.mockReset();
   // The default sonic neighbourhood is EMPTY: the echo gate then has nothing to measure
   // against, so every pre-existing note_track test keeps its exact old behaviour. The
@@ -1983,6 +1989,131 @@ describe("oRPC requeue_video (POST .../video/requeue)", () => {
     expect(response?.status).toBe(404);
     expect(((await readJson(response)) as { code: string }).code).toBe("not_found");
     expect(updateTrack).not.toHaveBeenCalled();
+  });
+});
+
+// ── pin_capture_source / clear_capture_source — operator tier (docs/the-ear.md § Wrong audio) ──
+function captureSourceRequest(method: "DELETE" | "PUT", token: string | undefined, body?: unknown) {
+  const headers: Record<string, string> = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  return new Request(`https://www.fluncle.com/api/v1/admin/tracks/${TRACK_ID}/capture-source`, {
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    headers,
+    method,
+  });
+}
+
+const PINNED = {
+  captureSourcePin: "dQw4w9WgXcQ",
+  captureStatus: "pending",
+  logId: "004.7.2I",
+  trackId: TRACK_ID,
+};
+
+describe("oRPC pin_capture_source (PUT .../capture-source)", () => {
+  it("401s with no admin token, 403s the AGENT — the pin is the operator's alone", async () => {
+    const { handleOrpc } = await import("./orpc");
+
+    const anonymous = await handleOrpc(
+      captureSourceRequest("PUT", undefined, { youtubeVideoId: "dQw4w9WgXcQ" }),
+    );
+    expect(anonymous?.status).toBe(401);
+
+    const agent = await handleOrpc(
+      captureSourceRequest("PUT", AGENT_TOKEN, { youtubeVideoId: "dQw4w9WgXcQ" }),
+    );
+    expect(agent?.status).toBe(403);
+    expect(((await readJson(agent)) as { code: string }).code).toBe("forbidden");
+    expect(pinCaptureSource).not.toHaveBeenCalled();
+  });
+
+  it("reduces a pasted YouTube URL to its id SERVER-SIDE before the write", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    pinCaptureSource.mockResolvedValueOnce(PINNED);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      captureSourceRequest("PUT", OPERATOR_TOKEN, {
+        youtubeVideoId: "https://music.youtube.com/watch?v=dQw4w9WgXcQ&si=xyz",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ...PINNED, ok: true });
+    expect(pinCaptureSource).toHaveBeenCalledWith(TRACK_ID, "dQw4w9WgXcQ");
+  });
+
+  it("400s `invalid_youtube_video_id` for a paste that is not a YouTube upload — nothing written", async () => {
+    const { handleOrpc } = await import("./orpc");
+
+    for (const youtubeVideoId of [
+      "https://soundcloud.com/artist/track",
+      "not an id",
+      "https://www.youtube.com/@channel",
+    ]) {
+      const response = await handleOrpc(
+        captureSourceRequest("PUT", OPERATOR_TOKEN, { youtubeVideoId }),
+      );
+
+      expect(response?.status).toBe(400);
+      expect(((await readJson(response)) as { code: string }).code).toBe(
+        "invalid_youtube_video_id",
+      );
+    }
+    expect(pinCaptureSource).not.toHaveBeenCalled();
+    expect(getTrackByIdOrLogId).not.toHaveBeenCalled();
+  });
+
+  it("404s `not_found` for an unknown track", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      captureSourceRequest("PUT", OPERATOR_TOKEN, { youtubeVideoId: "dQw4w9WgXcQ" }),
+    );
+
+    expect(response?.status).toBe(404);
+    expect(((await readJson(response)) as { code: string }).code).toBe("not_found");
+    expect(pinCaptureSource).not.toHaveBeenCalled();
+  });
+});
+
+describe("oRPC clear_capture_source (DELETE .../capture-source)", () => {
+  it("403s the AGENT — withdrawing the operator's ruling is his alone", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(captureSourceRequest("DELETE", AGENT_TOKEN));
+
+    expect(response?.status).toBe(403);
+    expect(clearCaptureSource).not.toHaveBeenCalled();
+  });
+
+  it("clears the pin for the operator and reports the row as it stands", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    clearCaptureSource.mockResolvedValueOnce({
+      ...PINNED,
+      captureSourcePin: null,
+      captureStatus: "done",
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(captureSourceRequest("DELETE", OPERATOR_TOKEN));
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      ...PINNED,
+      captureSourcePin: null,
+      captureStatus: "done",
+      ok: true,
+    });
+    expect(clearCaptureSource).toHaveBeenCalledWith(TRACK_ID);
   });
 });
 

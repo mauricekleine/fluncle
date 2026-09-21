@@ -24,6 +24,7 @@ import {
   boardSteps,
 } from "@/components/admin/pipeline/board-model";
 import { PipelineBoard } from "@/components/admin/pipeline/pipeline-board";
+import { CaptureSourceDialog, useCaptureSource } from "@/components/admin/capture-source-dialog";
 import { EnrichDialog } from "@/components/admin/enrich-dialog";
 import { NoteDialog } from "@/components/admin/note-dialog";
 import { ContextDialog, ObservationDialog } from "@/components/admin/observation-dialogs";
@@ -58,7 +59,9 @@ import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spoti
 import { listPendingSubmissions, type Submission } from "@/lib/server/submissions";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
 import {
+  type CaptureSourceState,
   decodeTrackCursor,
+  getCaptureSourceState,
   getTrackByIdOrLogId,
   hasTrackFeatures,
   listEmbeddingPresenceForTracks,
@@ -114,6 +117,8 @@ const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
 const OBSERVATION_SCRIPT_KEY = ["admin", "observation-script"] as const;
 // The lazily-read spectral-features presence for the Enrich dialog, keyed by trackId.
 const ENRICH_FEATURES_KEY = ["admin", "enrich-features"] as const;
+// The lazily-read capture-source state for the Embeddings cell's dialog, keyed by trackId.
+const CAPTURE_SOURCE_KEY = ["admin", "capture-source"] as const;
 
 // The worklists — a `blockedOn` filter (the next action) plus "all" and a "done"
 // terminal bucket. The active one lives in `?stage` so it's deep-linkable and
@@ -367,6 +372,20 @@ const fetchEnrichFeatures = createServerFn({ method: "GET" })
     }
 
     return { hasFeatures: await hasTrackFeatures(data.trackId) };
+  });
+
+// Lazy capture-source read — only when the operator opens a finding's Embeddings cell, to show
+// where the full-song capture stands and the pin on file (docs/the-ear.md § Wrong audio). Capture
+// state is internal side-channel, so it rides this gated admin path and never the board's hot page
+// read or the public track contract.
+const fetchCaptureSource = createServerFn({ method: "GET" })
+  .validator((data: { trackId: string }) => data)
+  .handler(async ({ data }): Promise<CaptureSourceState | null> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return getCaptureSourceState(data.trackId);
   });
 
 // The Spotify connection light. Read-only (no token refresh) and focus-refetched,
@@ -641,6 +660,8 @@ function AdminBoardPage() {
   const [copiedId, setCopiedId] = useState<string | undefined>();
   const [enrichBusy, setEnrichBusy] = useState(false);
   const [enrichError, setEnrichError] = useState<string | undefined>();
+  // The Embeddings cell's dialog — the capture stage's source control (the operator's pin).
+  const [captureSourceId, setCaptureSourceId] = useState<string | undefined>();
   // Seeded from the attention queue's held-note deep-link (`?note=<trackId>`), so landing
   // straight from the queue row opens the note dialog on that finding with its held note in it.
   const [noteId, setNoteId] = useState<string | undefined>(() => focusNoteTrackId);
@@ -753,6 +774,7 @@ function AdminBoardPage() {
     [rows],
   );
   const enrichRow = rowFor(enrichId);
+  const captureSourceRow = rowFor(captureSourceId);
   const boardNoteRow = rowFor(noteId);
   // The deep-linked finding may sit beyond the board's loaded pages (the held-note queue row
   // points at an arbitrary, often older, finding). Fetch that one row when it's missing, so
@@ -991,6 +1013,17 @@ function AdminBoardPage() {
     staleTime: Number.POSITIVE_INFINITY,
   });
 
+  // The capture-source dialog's query + pin/clear mutation, keyed per finding and lazily read the
+  // first time an Embeddings cell is opened (docs/the-ear.md § Wrong audio). The hook owns the
+  // refetch-after-write so the dialog shows the row as the server left it.
+  const captureSource = useCaptureSource({
+    fetchState: (trackId) => fetchCaptureSource({ data: { trackId } }),
+    onClose: () => setCaptureSourceId(undefined),
+    queryKey: CAPTURE_SOURCE_KEY,
+    row: captureSourceRow,
+    trackId: captureSourceId,
+  });
+
   // The next finding in the current worklist — powers "Save & next" in the Tag and
   // Note dialogs so a batch is one sitting. Undefined at the end of the list, which
   // closes the dialog.
@@ -1126,6 +1159,7 @@ function AdminBoardPage() {
   // stable, so this never re-creates.
   const actions = useMemo<BoardActions>(
     () => ({
+      onCaptureSource: (row) => setCaptureSourceId(row.trackId),
       onContext: (row) => setContextId(row.trackId),
       onEnrich: (row) => setEnrichId(row.trackId),
       onMixtape: (row) => setMixtapeId(row.trackId),
@@ -1232,6 +1266,17 @@ function AdminBoardPage() {
         onTrigger={runEnrichment}
         row={enrichRow ?? null}
         triggering={enrichBusy}
+      />
+
+      <CaptureSourceDialog
+        busy={captureSource.busy}
+        error={captureSource.error}
+        loading={captureSource.loading}
+        onClear={captureSource.clear}
+        onOpenChange={captureSource.onOpenChange}
+        onPin={captureSource.pin}
+        row={captureSource.row}
+        state={captureSource.state}
       />
 
       <NoteDialog

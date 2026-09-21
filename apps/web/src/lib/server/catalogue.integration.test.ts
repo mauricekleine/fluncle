@@ -1624,10 +1624,21 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     await withSourceKey("finding-dwyl", "005.9.9L/badbeef.webm");
     await db.execute({
       args: ["finding-dwyl"],
-      sql: `update tracks set analyzed_from = 'full', capture_status = 'done' where track_id = ?`,
+      // A standing capture-source pin, as if this capture had come from the operator's own pick.
+      sql: `update tracks set analyzed_from = 'full', capture_status = 'done',
+                              capture_source_pin = 'dQw4w9WgXcQ'
+            where track_id = ?`,
     });
 
     expect(await flagWrongAudio("finding-dwyl")).toBe(true);
+
+    // The pin RETIRES with the flag (docs/the-ear.md § Wrong audio): left standing, the re-queued
+    // sweep would re-buy the very upload just ruled wrong, on the operator's own authority, forever.
+    const pin = await db.execute({
+      args: ["finding-dwyl"],
+      sql: `select capture_source_pin from tracks where track_id = ?`,
+    });
+    expect(pin.rows[0]?.capture_source_pin ?? null).toBeNull();
 
     const state = await stateOf("finding-dwyl");
     expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
