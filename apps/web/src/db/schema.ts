@@ -379,6 +379,19 @@ export const tracks = sqliteTable(
     // `catalogue_ranked_at` — ISO of that ranking. Freshness, for the operator and the
     //   sweep's own summary; never a predicate.
     capturePriority: integer("capture_priority"),
+    // THE OPERATOR'S CAPTURE-SOURCE PIN (docs/track-lifecycle.md § Capture; docs/the-ear.md §
+    // Wrong audio) — a YouTube video id the capture sweep must download INSTEAD of walking its
+    // search ladder. The fingerprint gate is precision-over-recall by design, and for some
+    // recordings the only uploads that exist are a different master or edit of the same release:
+    // same length, but a bit-error rate the gate rightly refuses. The operator's ear is the only
+    // thing that outranks the gate, and this column is how he says "capture THIS one". A SOURCE
+    // HINT, never a certification: it lives on `tracks`, moves no `findings` column, and the
+    // duration guard still applies to what it points at (a wrong paste must never land a live
+    // set). The sweep stamps the resulting capture `operator-verified`, which the historic
+    // verification backfill leaves alone. Null = no pin (the ladder runs). Written by
+    // `pin_capture_source` / cleared by `clear_capture_source` (operator tier) and by
+    // `flag_wrong_audio` (a flagged capture retires the pin that produced it).
+    captureSourcePin: text("capture_source_pin"),
     // The full-song capture side-channel state (RFC full-audio). Models
     // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
     // `publishTrack`'s insert never names this column, so the DDL default is what

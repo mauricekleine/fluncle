@@ -201,6 +201,7 @@ type WorkRow = {
   artists_json: string;
   bpm: null | number;
   capture_priority: null | number;
+  capture_source_pin: null | string;
   certified: number;
   duration_ms: number;
   isrc: null | string;
@@ -215,6 +216,7 @@ type WorkRow = {
 
 const WORK_SELECT = `t.track_id, t.title, t.artists_json, t.isrc, t.label, t.duration_ms,
   t.source_audio_key, t.source_audio_rejected, t.capture_priority, t.bpm, t.analyzed_from, t.source_audio_failures,
+  t.capture_source_pin,
   f.log_id as log_id,
   (f.track_id is not null) as certified`;
 
@@ -953,6 +955,12 @@ export async function listTrackWork(options: {
             bpm:
               row.bpm !== null && Number.isFinite(Number(row.bpm)) && Number(row.bpm) > 0
                 ? Number(row.bpm)
+                : undefined,
+            // THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) — the one id the
+            // sweep downloads instead of walking its ladder. Capture-only, omitted when unpinned.
+            captureSourcePin:
+              typeof row.capture_source_pin === "string" && row.capture_source_pin.trim()
+                ? row.capture_source_pin.trim()
                 : undefined,
             sourceAudioFailures:
               row.source_audio_failures !== null && Number(row.source_audio_failures) > 0

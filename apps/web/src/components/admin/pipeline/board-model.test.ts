@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type BoardRow } from "@/components/admin/use-publish";
-import { automatedSocialsBreakdown, boardSteps } from "./board-model";
+import { automatedSocialsBreakdown, type BoardActions, boardSteps, runStep } from "./board-model";
 
 // The Discogs cell is a workflow tracker whose FILL state is driven by `state`
 // (`open` renders an un-filled icon; `done` a filled one — see step-node.tsx). A
@@ -79,9 +79,10 @@ describe("boardSteps — Discogs cell", () => {
 // The Embeddings cell is a read-only presence tracker (like Last.fm/Discogs): its
 // FILL is driven by `state` — `done` (filled gold check) once the finding carries a
 // MuQ audio embedding (a `track_embeddings` row, surfaced as `hasEmbedding`),
-// `open` (hollow) while it's still in the embed cron's queue. No operator action — the
-// on-box `fluncle-embed` cron advances it. This is the sonic fingerprint that
-// provide the sonic fingerprint; the Tag cell is not part of this board (docs/track-lifecycle.md).
+// `open` (hollow) while it's still in the embed cron's queue. The on-box `fluncle-embed`
+// cron advances the STATE; the click opens the capture-source dialog, the one operator
+// control on the capture stage (the pin under the fingerprint gate — docs/the-ear.md §
+// Wrong audio). The Tag cell is not part of this board (docs/track-lifecycle.md).
 function embeddingStep(row: BoardRow) {
   const step = boardSteps(row).find((s) => s.key === "embedding");
 
@@ -98,8 +99,8 @@ describe("boardSteps — Embeddings cell", () => {
 
     expect(step.state).toBe("done");
     expect(step.statusLabel).toBe("Embedded");
-    // A presence mark, not a click target — the embed cron advances it.
-    expect(step.actionable).toBe(false);
+    // The cron advances the state; the click is the capture-source dialog, so it stays live.
+    expect(step.actionable).toBe(true);
   });
 
   it("reads open (hollow) while the finding is still in the embed queue", () => {
@@ -107,7 +108,26 @@ describe("boardSteps — Embeddings cell", () => {
 
     expect(step.state).toBe("open");
     expect(step.statusLabel).toBe("Pending");
-    expect(step.actionable).toBe(false);
+    expect(step.actionable).toBe(true);
+  });
+
+  it("dispatches its click to the capture-source dialog and nowhere else", () => {
+    const row = makeRow({ hasEmbedding: false });
+    const opened: string[] = [];
+    const actions: BoardActions = {
+      onCaptureSource: (target) => opened.push(`source:${target.trackId}`),
+      onContext: () => opened.push("context"),
+      onEnrich: () => opened.push("enrich"),
+      onMixtape: () => opened.push("mixtape"),
+      onNote: () => opened.push("note"),
+      onObservation: () => opened.push("observation"),
+      onPreview: () => opened.push("preview"),
+      onPush: () => opened.push("push"),
+    };
+
+    runStep(embeddingStep(row), row, actions);
+
+    expect(opened).toEqual([`source:${row.trackId}`]);
   });
 
   it("sits in the Agents group, right after Enrich and before Context", () => {

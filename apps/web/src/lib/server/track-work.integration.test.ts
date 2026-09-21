@@ -983,6 +983,42 @@ describe("listTrackWork — the wire", () => {
     }
   });
 
+  it("carries the operator's CAPTURE-SOURCE PIN — on the capture worklist only, and a pinned row re-queued `pending` is served", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The pin (docs/the-ear.md § Wrong audio) is the one instruction the sweep reads off the row
+    // instead of searching. It rides the capture DTO like the trust signals do, is omitted when
+    // unpinned, and never reaches the analyze/embed wire. A row the pin op re-queued from
+    // terminal `unmatched` to `pending` is served by the capture queue — that is the whole
+    // point of the re-queue.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await db.execute({
+      args: ["aaaaaaaaaaaaaaaaaaaaaa"],
+      sql: `update tracks set capture_status = 'unmatched' where track_id = ?`,
+    });
+    expect(await listTrackWork({ kind: "capture" })).toEqual([]);
+
+    await db.execute({
+      args: ["aaaaaaaaaaaaaaaaaaaaaa"],
+      sql: `update tracks set capture_status = 'pending', capture_source_pin = 'dQw4w9WgXcQ'
+            where track_id = ?`,
+    });
+
+    const [capture] = await listTrackWork({ kind: "capture" });
+
+    expect(capture?.trackId).toBe("aaaaaaaaaaaaaaaaaaaaaa");
+    expect(capture?.captureSourcePin).toBe("dQw4w9WgXcQ");
+
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa", { analyzedFrom: "preview" });
+
+    for (const kind of ["analyze", "embed"] as const) {
+      const [item] = await listTrackWork({ kind });
+
+      expect(item?.trackId).toBe("aaaaaaaaaaaaaaaaaaaaaa");
+      expect(item?.captureSourcePin).toBeUndefined();
+    }
+  });
+
   it("omits the capture signals when they are empty (a missing bpm / zero failures / no channel)", async () => {
     const { listTrackWork } = await import("./track-work");
 
@@ -998,6 +1034,7 @@ describe("listTrackWork — the wire", () => {
     expect(capture?.analyzedFrom).toBeUndefined();
     expect(capture?.sourceAudioFailures).toBeUndefined();
     expect(capture?.artistYoutubeChannelIds).toBeUndefined();
+    expect(capture?.captureSourcePin).toBeUndefined();
   });
 
   it("drops an embedded track from the embed queue (idempotent by construction)", async () => {

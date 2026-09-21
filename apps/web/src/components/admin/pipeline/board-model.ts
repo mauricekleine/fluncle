@@ -73,6 +73,8 @@ export type StepState = "open" | "running" | "partial" | "done" | "stale" | "pla
 /** The callbacks the board hands every variant — one per openable step dialog. */
 export type BoardActions = {
   onEnrich: (row: BoardRow) => void;
+  /** The Embeddings cell's dialog: the capture stage's source control (the operator's pin). */
+  onCaptureSource: (row: BoardRow) => void;
   onContext: (row: BoardRow) => void;
   onObservation: (row: BoardRow) => void;
   onNote: (row: BoardRow) => void;
@@ -344,16 +346,18 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
     },
     discogs: discogsBoardStep(row),
     embedding: {
-      // A read-only presence tracker, like Last.fm/Discogs — no operator action. The
-      // on-box `fluncle-embed` cron drains the `has_embedding = 0` queue over the
-      // captured full song and stamps a MuQ vector; `done` (filled) once the finding
-      // carries one, grey while it's still in the queue. This is the sonic fingerprint
-      // a finding's galaxy is clustered from; see docs/track-lifecycle.md.
-      actionable: false,
+      // A presence tracker the on-box `fluncle-embed` cron advances (it drains the
+      // `has_embedding = 0` queue over the CAPTURED full song and stamps a MuQ vector; `done`
+      // once the finding carries one, grey while it's still in the queue — the sonic
+      // fingerprint a finding's galaxy is clustered from; docs/track-lifecycle.md). The cell
+      // opens the CAPTURE-SOURCE dialog: an embedding needs a capture, and a finding the
+      // fingerprint gate keeps refusing never gets one — the operator's pin (docs/the-ear.md §
+      // Wrong audio) is the one control that reaches under the gate, and it lives here.
+      actionable: true,
       gated: false,
       hint: row.hasEmbedding
-        ? "MuQ audio embedding captured"
-        : "No embedding yet — the embed cron drains the queue",
+        ? "MuQ audio embedding captured — open the capture source"
+        : "No embedding yet — open the capture source (pin an upload if the gate keeps refusing)",
       state: row.hasEmbedding ? "done" : "open",
       statusLabel: row.hasEmbedding ? "Embedded" : "Pending",
     },
@@ -404,9 +408,10 @@ export function runStep(step: BoardStep, row: BoardRow, actions: BoardActions): 
       }
       return;
     case "embedding":
+      return actions.onCaptureSource(row);
     case "socials":
-      // Read-only presence trackers — the agent (the embed / Last.fm crons) advances
-      // them; the cell is a status mark, not a click target.
+      // A read-only presence tracker — the Last.fm cron advances it; the cell is a status
+      // mark, not a click target.
       return;
   }
 }

@@ -663,6 +663,22 @@ describe("the identifiers and the other platforms", () => {
     ).toMatchObject({ verification: { method: "fingerprint" } });
   });
 
+  it("says `operator` for an id the operator PINNED as the capture source", async () => {
+    // The capture-source pin (docs/the-ear.md § Wrong audio): a human ruled which upload carries the
+    // recording, on a match the fingerprint gate may well have refused. The receipt must say a human
+    // ruled — borrowing the fingerprint's sentence would print a match that never ran.
+    await insertTrack("yt-pinned", {
+      youtubeVerifiedAt: "2026-08-01T00:00:00.000Z",
+      youtubeVerifiedBy: "operator",
+      youtubeVideoId: "pinnedSrcId",
+      youtubeVideoOfficial: 1,
+    });
+
+    expect((await only({ idOrLogId: "yt-pinned", kind: "idOrLogId" })).links.youtube).toMatchObject(
+      { verification: { method: "operator" } },
+    );
+  });
+
   it("degrades an UNRECOGNISED stored method to the legacy answer rather than to silence", async () => {
     // A value the envelope does not know must not reach the receipt renderer as a method that does
     // not exist — the line would then print no method fragment at all and the reader would be told

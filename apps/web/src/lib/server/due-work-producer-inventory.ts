@@ -265,7 +265,12 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
   },
   {
     file: "track-update.ts",
-    producers: ["track-note-fill", "track-update"],
+    producers: [
+      "track-capture-source-pin",
+      "track-capture-source-pin-clear",
+      "track-note-fill",
+      "track-update",
+    ],
     subjects: ["track"],
   },
 ] as const satisfies readonly DueWorkProducerInventoryEntry[];

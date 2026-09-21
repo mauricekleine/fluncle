@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { updateTrack } from "./track-update";
+import {
+  clearCaptureSource,
+  parseCaptureSourceVideoId,
+  pinCaptureSource,
+  updateTrack,
+} from "./track-update";
 
 // updateTrack runs two statements: a SELECT (existing isrc/log_id/added_at) then
 // the UPDATE. The mock returns an existing row for the SELECT and captures the
@@ -50,6 +55,8 @@ vi.mock("./youtube-official", () => ({ checkYoutubeOfficial }));
 const EXISTING = {
   added_at: "2026-06-01T00:00:00.000Z",
   artists_json: '["Calibre"]',
+  capture_source_pin: null,
+  capture_status: "unmatched",
   certified: 1,
   isrc: "GB1234567890",
   label: null,
@@ -968,5 +975,152 @@ describe("updateTrack — the RE-VERDICT", () => {
     expect(lastUpdateSql).not.toContain("updated_at = ?");
     expect(lastUpdateSql).not.toContain("capture_status");
     expect(lastUpdateSql).not.toContain("source_audio_key");
+  });
+});
+
+// ── THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) ──────────────────────────
+
+describe("parseCaptureSourceVideoId — the URL → id reduction, server-side", () => {
+  it("passes a bare 11-character id through", () => {
+    expect(parseCaptureSourceVideoId("dQw4w9WgXcQ")).toBe("dQw4w9WgXcQ");
+    expect(parseCaptureSourceVideoId("  dQw4w9WgXcQ\n")).toBe("dQw4w9WgXcQ");
+    expect(parseCaptureSourceVideoId("a-b_C1234ab")).toBe("a-b_C1234ab");
+  });
+
+  it("reduces every YouTube URL shape the operator will paste", () => {
+    for (const url of [
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123&index=2&t=42s",
+      "https://youtube.com/watch?v=dQw4w9WgXcQ",
+      "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+      "https://music.youtube.com/watch?v=dQw4w9WgXcQ&si=abc",
+      "https://youtu.be/dQw4w9WgXcQ",
+      "https://youtu.be/dQw4w9WgXcQ?t=10",
+      "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+      "https://www.youtube.com/embed/dQw4w9WgXcQ",
+      "youtu.be/dQw4w9WgXcQ",
+      "music.youtube.com/watch?v=dQw4w9WgXcQ",
+    ]) {
+      expect(parseCaptureSourceVideoId(url), url).toBe("dQw4w9WgXcQ");
+    }
+  });
+
+  it("rejects anything that is not a YouTube upload — no host, wrong host, no id, junk", () => {
+    for (const input of [
+      "",
+      "   ",
+      "dQw4w9WgXc", // 10 chars
+      "dQw4w9WgXcQ1", // 12 chars
+      "dQw4w9WgX$Q", // bad character
+      "https://soundcloud.com/artist/track",
+      "https://example.com/watch?v=dQw4w9WgXcQ",
+      "https://www.youtube.com/channel/UCxyz",
+      "https://www.youtube.com/@artist",
+      "https://www.youtube.com/watch?list=PL123",
+      "not a url at all",
+      "https://evil.youtube.com.example/watch?v=dQw4w9WgXcQ",
+    ]) {
+      expect(parseCaptureSourceVideoId(input), input).toBeNull();
+    }
+  });
+});
+
+describe("pinCaptureSource — the write the pin lands", () => {
+  it("pins, re-queues, clears the memory and stamps the operator provenance in ONE statement", async () => {
+    await pinCaptureSource("track-123", "dQw4w9WgXcQ");
+
+    const update = lastUpdateSql;
+    expect(update).toContain("capture_source_pin = ?");
+    // Re-queued through the same `duplicate-cleared` sentinel guard `updateTrack` respects.
+    expect(update).toContain(
+      "capture_status = case when capture_status = 'duplicate-cleared' then capture_status else 'pending' end",
+    );
+    expect(update).toContain("source_audio_failures = 0");
+    expect(update).toContain("source_audio_rejected = null");
+    // The YouTube trio + method are written OUTRIGHT — the operator's ruling replaces a sweep's.
+    expect(update).toContain("youtube_video_id = ?");
+    expect(update).not.toContain("coalesce(youtube_video_id");
+    expect(update).toContain("youtube_video_official = ?");
+    expect(update).toContain("youtube_verified_at = ?");
+    expect(update).toContain("youtube_verified_by = 'operator'");
+    expect(update).toContain("source_verification = 'operator'");
+    expect(lastUpdateArgs.slice(0, 2)).toEqual(["dQw4w9WgXcQ", "dQw4w9WgXcQ"]);
+    // Officialness is still the SERVER's oEmbed verdict — asked with the recording's own names.
+    expect(checkYoutubeOfficial).toHaveBeenCalledWith(
+      "dQw4w9WgXcQ",
+      { artists: ["Calibre"], labels: [] },
+      undefined,
+    );
+    expect(lastUpdateArgs).toContain(1);
+  });
+
+  it("moves NOT ONE findings column — a pin is a source hint, never a certification", async () => {
+    await pinCaptureSource("track-123", "dQw4w9WgXcQ");
+
+    expect(lastUpdateSql).not.toContain("update findings");
+    expect(lastUpdateSql).not.toContain("updated_at");
+    expect(lastUpdateSql).not.toContain("enrichment_status");
+    // …and touches no captured audio: the pin instructs the NEXT capture, it does not rewind one.
+    expect(lastUpdateSql).not.toContain("source_audio_key");
+    expect(lastUpdateSql).not.toContain("source_audio_captured_at");
+  });
+
+  it("refuses a malformed id with the typed 400 before touching the row", async () => {
+    await expect(
+      pinCaptureSource("track-123", "https://youtu.be/dQw4w9WgXcQ"),
+    ).rejects.toMatchObject({ code: "invalid_youtube_video_id", status: 400 });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("404s an unknown track", async () => {
+    execute.mockImplementation(() => Promise.resolve({ rows: [] }));
+
+    await expect(pinCaptureSource("missing", "dQw4w9WgXcQ")).rejects.toMatchObject({
+      code: "not_found",
+      status: 404,
+    });
+  });
+});
+
+describe("clearCaptureSource — the withdrawal", () => {
+  it("nulls the pin and withdraws ONLY the operator's own stamps, as a trio-plus-method", async () => {
+    withExistingRow({ capture_source_pin: "dQw4w9WgXcQ", capture_status: "done" });
+
+    const result = await clearCaptureSource("track-123");
+
+    expect(lastUpdateSql).toContain("capture_source_pin = null");
+    // Every YouTube clause is conditioned on the method being `operator`: an id a fingerprint sweep
+    // earned is never touched, and an operator-stamped one goes as a whole, never half.
+    for (const column of [
+      "youtube_video_id",
+      "youtube_video_official",
+      "youtube_verified_at",
+      "youtube_verified_by",
+    ]) {
+      expect(lastUpdateSql).toContain(
+        `${column} = case when youtube_verified_by = 'operator' then null else ${column} end`,
+      );
+    }
+    expect(lastUpdateSql).toContain(
+      "source_verification = case when source_verification = 'operator' then null else source_verification end",
+    );
+    expect(result).toEqual({
+      captureSourcePin: null,
+      captureStatus: "done",
+      logId: "004.7.2I",
+      trackId: "track-123",
+    });
+  });
+
+  it("does NOT touch the capture status or the captured audio", async () => {
+    withExistingRow({ capture_source_pin: "dQw4w9WgXcQ", capture_status: "done" });
+
+    await clearCaptureSource("track-123");
+
+    expect(lastUpdateSql).not.toContain("capture_status =");
+    expect(lastUpdateSql).not.toContain("source_audio_key");
+    expect(lastUpdateSql).not.toContain("source_audio_rejected");
+    expect(lastUpdateSql).not.toContain("update findings");
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
   });
 });

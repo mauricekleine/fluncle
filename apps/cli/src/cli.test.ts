@@ -693,6 +693,42 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin tracks requeue-video");
   });
 
+  testCli("admin tracks pin-source requires an id before any pin", async () => {
+    // No id fails local validation before the API call, so this runs without a server or an
+    // operator token (and never pins a live row).
+    const result = await runCli([
+      "admin",
+      "tracks",
+      "pin-source",
+      "--upload",
+      "dQw4w9WgXcQ",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: fluncle admin tracks pin-source");
+  });
+
+  testCli("admin tracks pin-source requires --upload or --clear, never both", async () => {
+    const missing = await runCli(["admin", "tracks", "pin-source", "004.7.2I", "--json"]);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stdout).toContain("Missing --upload");
+
+    const both = await runCli([
+      "admin",
+      "tracks",
+      "pin-source",
+      "004.7.2I",
+      "--upload",
+      "dQw4w9WgXcQ",
+      "--clear",
+      "--json",
+    ]);
+    expect(both.exitCode).toBe(1);
+    expect(both.stdout).toContain("either --upload or --clear");
+  });
+
   testCli("admin tracks context --queue validates --limit before fetching", async () => {
     const result = await runCli([
       "admin",
@@ -1951,6 +1987,33 @@ describe("the stringOptions invariant", () => {
 
     const missing = [...declared].filter((flag) => !allowed.has(flag)).sort();
     expect(missing).toEqual([]);
+  });
+
+  // The mirror image: `stringOptions` is one GLOBAL set, so a value-taking `--flag <x>` on one
+  // command and a boolean `--flag` on another cannot coexist — the parser would swallow the
+  // token after the boolean (`admin mixtapes resync <id> --youtube --json` would read `--json` as
+  // the value). A new value option must take a name no boolean flag already uses.
+  test("no boolean flag shares its name with a stringOptions entry", async () => {
+    const source = await Bun.file(cliPath).text();
+    const setSource = source.match(/const stringOptions = new Set\(\[(.*?)\]\)/s);
+    const allowed = new Set(
+      [...(setSource?.[1] ?? "").matchAll(/"(--[a-z-]+)"/g)].map((m) => m[1]),
+    );
+
+    const booleans = new Set<string>();
+    for (const [, fileSource] of await readSourceFiles()) {
+      for (const match of fileSource.matchAll(
+        /\.(?:option|requiredOption)\(\s*\n?\s*"(--[a-z][a-z-]*)"\s*,/g,
+      )) {
+        const flag = match[1];
+        if (flag !== undefined) {
+          booleans.add(flag);
+        }
+      }
+    }
+
+    expect(booleans.size).toBeGreaterThan(10);
+    expect([...booleans].filter((flag) => allowed.has(flag)).sort()).toEqual([]);
   });
 
   // The scan above now reads the whole tree, but `stringOptions` itself lives in cli.ts,

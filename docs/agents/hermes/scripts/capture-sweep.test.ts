@@ -80,13 +80,21 @@ import {
   splitProvenanceBudget,
   topicChannelArtist,
   verifyCaptureFile,
+  verifyCaptureFileDetailed,
   withoutProtectedTracks,
   writeJsonAtomic,
+  type CaptureFinding,
   type CaptureProgress,
   type CaptureProgressPorts,
+  type PinnedUploadPorts,
+  type ProxySession,
   type ReceiptCoordinates,
+  type YtCandidate,
   CAPTURE_ADMISSION_ACTIONS,
+  captureVerificationFor,
+  findPinnedUpload,
   isCaptureAdmissionAction,
+  isPinnedDurationRefusal,
 } from "./capture-sweep";
 // The REAL /status strain detector, imported rather than re-implemented: since #994 this
 // sweep's stderr is teed into the marker and scored by these two functions, so the only
@@ -3625,6 +3633,72 @@ describe("the tick's shared capture reservation", () => {
 
     expect(page).toBeUndefined();
   });
+
+  /** A Worker newer than this bake: it puts a field on the prepared track the allow-list lacks. */
+  function newerWorker(options: { extraFor: string; extra: Record<string, unknown> }) {
+    const calls: string[][] = [];
+    const phase = ((_action: string, statePath: string) => {
+      const body = JSON.parse(readFileSync(statePath, "utf8")) as { items: { trackId: string }[] };
+      calls.push(body.items.map((item) => item.trackId));
+      const results = body.items.map((item) => ({
+        elapsedMs: 1,
+        prepared: true,
+        snapshotToken: `snapshot-${item.trackId}`,
+        track: {
+          artists: [],
+          certified: true,
+          logId: "004.7.2I",
+          title: item.trackId,
+          trackId: item.trackId,
+          ...(item.trackId === options.extraFor ? options.extra : {}),
+        },
+        trackId: item.trackId,
+      }));
+      writeFileSync(`${statePath}.result`, JSON.stringify({ deferred: 0, ok: true, results }));
+      return "completed";
+    }) as never;
+    return { calls, phase };
+  }
+
+  test("a field this bake does not know leaves THAT row unreached — the rest of the tick proceeds", () => {
+    // A stale bake must degrade per row, never per tick: a throw here is a fatal summary before
+    // the worker pool starts, and one row a newer Worker described in words this box cannot read
+    // must not take the other rows with it.
+    const ids = ["track-0", "track-newer", "track-2"];
+    const { calls, phase } = newerWorker({
+      extra: { fieldFromTheFuture: "x" },
+      extraFor: "track-newer",
+    });
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (message: unknown) => {
+      lines.push(String(message));
+    };
+    let page: ReturnType<typeof prepareTickSnapshots>;
+    try {
+      page = prepareTickSnapshots(ids, "capture", 12, phase);
+    } finally {
+      console.error = original;
+    }
+
+    expect([...(page?.prepared.keys() ?? [])].sort()).toEqual(["track-0", "track-2"]);
+    expect(page?.unreached).toEqual(["track-newer"]);
+    // Answered for the tick: not frozen, and not asked again in a second call either.
+    expect(calls).toHaveLength(1);
+    const line = lines.find((entry) => entry.includes("this bake does not know"));
+    expect(line).toContain("track-newer");
+    expect(line).toContain("fieldFromTheFuture");
+  });
+
+  test("a KNOWN key with a bad shape still fails closed", () => {
+    // The exact-key allow-list keeps its teeth for the shapes it knows: a `logId` that is not a
+    // string is a broken answer, not a newer vocabulary, and the tick refuses it as before.
+    const { phase } = newerWorker({ extra: { logId: 42 }, extraFor: "track-bad" });
+
+    expect(() => prepareTickSnapshots(["track-bad"], "capture", 12, phase)).toThrow(
+      "invalid answer for track-bad",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3738,5 +3812,318 @@ describe("the admitted phase child's argv guard", () => {
     } finally {
       rmSync(dir, { force: true, recursive: true });
     }
+  });
+});
+
+// ── THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) ──────────────────────────
+//
+// The fingerprint gate is precision-over-recall by design; the pin is the one thing that outranks
+// it. These tests drive `findPinnedUpload` through its injected ports (no yt-dlp, no fpcalc, no
+// network) and pin the caller's wiring by reading the sweep's own source, the way the ladder's rails
+// are pinned above.
+describe("the operator's capture-source pin", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+  const pinnedWalk = source.slice(
+    source.indexOf("// ── THE PINNED SOURCE"),
+    source.indexOf("// ── Per-finding capture"),
+  );
+  const captureFn = source.slice(
+    source.indexOf("async function captureFinding("),
+    source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+  );
+
+  const finding: CaptureFinding = {
+    captureSourcePin: "dQw4w9WgXcQ",
+    certified: true,
+    durationMs: 300_000,
+    logId: "012.3.4A",
+    title: "Song",
+    trackId: "track-pinned",
+  };
+
+  /** A sticky session with one re-roll, exactly as `openProxySession` shapes it. */
+  function fakeSession(): ProxySession & { rerolls: number } {
+    const session = {
+      reroll: () => {
+        if (session.rerolls > 0) {
+          return false;
+        }
+        session.rerolls += 1;
+        session.url = "http://proxy/rerolled";
+        return true;
+      },
+      rerollable: () => session.rerolls === 0,
+      rerolls: 0,
+      url: "http://proxy/first",
+    };
+    return session;
+  }
+
+  /** Ports that download a real scratch file so the sha + cleanup paths run for real. */
+  function fakePorts(
+    dir: string,
+    overrides: Partial<PinnedUploadPorts> = {},
+  ): PinnedUploadPorts & { downloads: YtCandidate[] } {
+    const downloads: YtCandidate[] = [];
+    return {
+      download:
+        overrides.download ??
+        ((_proxy, candidate) => {
+          downloads.push(candidate);
+          const path = join(dir, "audio.webm");
+          writeFileSync(path, `bytes of ${candidate.id}`);
+          return { ext: "webm", path };
+        }),
+      downloads,
+      fingerprint: overrides.fingerprint ?? (() => null),
+      probeDurationSec: overrides.probeDurationSec ?? (() => 300),
+      referenceFingerprint: overrides.referenceFingerprint ?? (async () => null),
+    };
+  }
+
+  const scratch: string[] = [];
+  function workdir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "capture-pin-"));
+    scratch.push(dir);
+    return dir;
+  }
+  afterAll(() => {
+    for (const dir of scratch) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  /** Capture the sweep's stderr lines for one call. */
+  async function withLog<T>(run: () => Promise<T>): Promise<{ lines: string[]; value: T }> {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (message: unknown) => {
+      lines.push(String(message));
+    };
+    try {
+      return { lines, value: await run() };
+    } finally {
+      console.error = original;
+    }
+  }
+
+  test("a pinned row downloads THE ONE PINNED ID and skips the ladder entirely", async () => {
+    const dir = workdir();
+    const ports = fakePorts(dir);
+    const { lines, value } = await withLog(() =>
+      findPinnedUpload({ dir, finding, ports, session: fakeSession(), videoId: "dQw4w9WgXcQ" }),
+    );
+
+    // One download, of exactly the pin, from YouTube — no search preceded it.
+    expect(ports.downloads.map((candidate) => candidate.id)).toEqual(["dQw4w9WgXcQ"]);
+    expect(ports.downloads[0]?.source).toBe("youtube");
+    expect(value.videoId).toBe("dQw4w9WgXcQ");
+    expect(value.verdict).toBe("operator");
+    expect(value.source).toBe("youtube");
+    expect(value.digest).toBe(createHash("sha256").update("bytes of dQw4w9WgXcQ").digest("hex"));
+    // Exactly one line says the pin was honoured, naming the row and the id.
+    const honoured = lines.filter((line) => line.includes("capture-source pin"));
+    expect(honoured).toHaveLength(1);
+    expect(honoured[0]).toContain("012.3.4A");
+    expect(honoured[0]).toContain("dQw4w9WgXcQ");
+  });
+
+  test("the pinned walk has NO search ladder in it — by source, not by luck", () => {
+    expect(pinnedWalk.length).toBeGreaterThan(1_000);
+    expect(pinnedWalk).toContain("export async function findPinnedUpload(");
+    for (const ladderCall of [
+      "runYtSearch",
+      "buildCaptureSearchLadder",
+      "findFirstRankedCaptureRung",
+      "rankCandidates(",
+      "pickCandidate(",
+    ]) {
+      expect(pinnedWalk).not.toContain(ladderCall);
+    }
+  });
+
+  test("the pinned walk NEVER touches the rejection memory — it is not even handed it", () => {
+    // The memory describes the LADDER's rejections. A pinned mismatch is captured on the operator's
+    // authority and must not be remembered as wrong audio, or the very next re-capture would refuse
+    // the upload he chose. The function has no `memory` parameter at all, and the slice names none of
+    // the memory's helpers.
+    for (const memoryTouch of [
+      "memory.",
+      "memory:",
+      "appendRejectedSource",
+      "filterRejectedCandidates",
+      "rejectedVideoIds",
+      "rejectedShas",
+      "knownBadShas",
+      "legacyRejectKey",
+    ]) {
+      expect(pinnedWalk).not.toContain(memoryTouch);
+    }
+    // …and the caller hands the memory ONLY to the ladder walk.
+    expect(captureFn).toContain(
+      "return findPinnedUpload({ dir: directory, finding, session, videoId: pin });",
+    );
+  });
+
+  test("the duration guard STILL applies — a wrong paste is refused, its file deleted, no fingerprint spent", async () => {
+    const dir = workdir();
+    let fingerprinted = 0;
+    const ports = fakePorts(dir, {
+      fingerprint: () => {
+        fingerprinted += 1;
+        return [1, 2, 3];
+      },
+      // An hour-long set against a five-minute finding.
+      probeDurationSec: () => 3_600,
+    });
+
+    const { lines, value: error } = await withLog(() =>
+      findPinnedUpload({
+        dir,
+        finding,
+        ports,
+        session: fakeSession(),
+        videoId: "dQw4w9WgXcQ",
+      }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      ),
+    );
+
+    expect(isPinnedDurationRefusal(error)).toBe(true);
+    expect((error as Error).message).toContain("fails the duration guard");
+    expect((error as Error).message).toContain("3600s");
+    expect(lines.some((line) => line.includes("pinned upload fails the duration guard ("))).toBe(
+      true,
+    );
+    // The bytes are gone and the gate was never even consulted for a file that fails the guard.
+    expect(existsSync(join(dir, "audio.webm"))).toBe(false);
+    expect(fingerprinted).toBe(0);
+  });
+
+  test("the duration refusal is a THROW, so the caller lands `failed` (retryable), never `unmatched`", () => {
+    // `findPinnedUpload` returns `Promise<VerifiedUpload>` — never null — so the caller's `!accepted`
+    // (unmatched) branch is unreachable for a pinned row; every refusal is the catch's `failed`.
+    expect(pinnedWalk).toContain("}): Promise<VerifiedUpload> {");
+    expect(pinnedWalk).not.toContain("return null");
+    expect(pinnedWalk).not.toContain('"unmatched"');
+    expect(pinnedWalk).toContain("throw refusal;");
+  });
+
+  test("a fingerprint MISMATCH is logged with its BER and captured anyway, as `operator-verified`", async () => {
+    const dir = workdir();
+    // Two fingerprints long enough to compare (≥ MIN_OVERLAP_FRAMES) and bitwise opposite, so the
+    // sliding window reports a BER of 1.0 — the clearest mismatch there is.
+    const reference = Array.from({ length: 40 }, () => 0);
+    const opposite = Array.from({ length: 40 }, () => -1);
+    const ports = fakePorts(dir, {
+      fingerprint: () => opposite,
+      referenceFingerprint: async () => reference,
+    });
+
+    const { lines, value } = await withLog(() =>
+      findPinnedUpload({ dir, finding, ports, session: fakeSession(), videoId: "dQw4w9WgXcQ" }),
+    );
+
+    expect(verifyCaptureFileDetailed(reference, opposite)).toEqual({ ber: 1, verdict: "mismatch" });
+    const mismatchLine = lines.find((line) => line.includes("mismatches the store reference"));
+    expect(mismatchLine).toContain("ber=1.000");
+    expect(mismatchLine).toContain("capturing on operator authority");
+    // Captured regardless, with the operator's verdict — which maps to the stamp the backfill skips.
+    expect(value.verdict).toBe("operator");
+    expect(captureVerificationFor(value.verdict)).toBe("operator-verified");
+    expect(existsSync(value.path)).toBe(true);
+  });
+
+  test("a MATCH on a pinned row is still recorded as `operator-verified`, never `preview-match`", async () => {
+    // The pin is the authority whatever the gate says: one provenance per row, honestly named.
+    const dir = workdir();
+    const same = Array.from({ length: 40 }, (_, index) => index);
+    const ports = fakePorts(dir, {
+      fingerprint: () => same,
+      referenceFingerprint: async () => same,
+    });
+    const { value } = await withLog(() =>
+      findPinnedUpload({ dir, finding, ports, session: fakeSession(), videoId: "dQw4w9WgXcQ" }),
+    );
+
+    expect(value.verdict).toBe("operator");
+    expect(captureVerificationFor(value.verdict)).toBe("operator-verified");
+    expect(captureVerificationFor("match")).toBe("preview-match");
+    expect(captureVerificationFor("no-reference")).toBe("unverified");
+  });
+
+  test("a download failure rethrows into the caller's `failed` path — the pin is retried next tick", async () => {
+    const dir = workdir();
+    const ports = fakePorts(dir, {
+      download: () => {
+        const error = new Error("yt-dlp download failed: HTTP Error 403: Forbidden");
+        Object.assign(error, classifyDownloadFailure("HTTP Error 403: Forbidden"));
+        throw error;
+      },
+    });
+    const session = fakeSession();
+
+    const { value: error } = await withLog(() =>
+      findPinnedUpload({ dir, finding, ports, session, videoId: "dQw4w9WgXcQ" }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      ),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("yt-dlp download failed");
+    // A plain 403 is not a duration refusal — it is the ladder's ordinary retryable failure.
+    expect(isPinnedDurationRefusal(error)).toBe(false);
+  });
+
+  test("a bot wall re-rolls the sticky exit ONCE and retries the same pinned id", async () => {
+    const dir = workdir();
+    const proxies: string[] = [];
+    let attempts = 0;
+    const ports = fakePorts(dir, {
+      download: (proxy, candidate) => {
+        proxies.push(proxy);
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("yt-dlp download failed: Sign in to confirm you're not a bot");
+          Object.assign(
+            error,
+            classifyDownloadFailure("ERROR: Sign in to confirm you're not a bot"),
+          );
+          throw error;
+        }
+        const path = join(dir, "audio.webm");
+        writeFileSync(path, `bytes of ${candidate.id}`);
+        return { ext: "webm", path };
+      },
+    });
+    const session = fakeSession();
+
+    const { value } = await withLog(() =>
+      findPinnedUpload({ dir, finding, ports, session, videoId: "dQw4w9WgXcQ" }),
+    );
+
+    expect(value.videoId).toBe("dQw4w9WgXcQ");
+    expect(session.rerolls).toBe(1);
+    expect(proxies).toEqual(["http://proxy/first", "http://proxy/rerolled"]);
+  });
+
+  test("the caller routes a pinned row to the pinned walk and the ladder otherwise", () => {
+    // The pin is read off the row the sweep already holds (the prepared snapshot carries it), and a
+    // blank pin is no pin.
+    expect(captureFn).toContain("const pin = finding.captureSourcePin?.trim();");
+    expect(captureFn).toMatch(/if \(pin\) \{\s*return findPinnedUpload\(/);
+    expect(captureFn).toContain("return findVerifiedUpload({");
+    // …and the prepared-snapshot validator admits the pin, so a pinned row survives the freeze.
+    expect(source).toContain('"captureSourcePin",');
+    expect(source).toContain('validOptionalPreparedString(value, "captureSourcePin", 64)');
+  });
+
+  test("the journal replay stamps the same verification the inline path does", () => {
+    // Both exits map the verdict through ONE function, so a crash between download and commit
+    // cannot turn an operator-verified capture into a preview-match on replay.
+    expect(source).toContain("const verification = captureVerificationFor(completion.verdict);");
+    expect(source).toContain("const verification = captureVerificationFor(accepted.verdict);");
   });
 });

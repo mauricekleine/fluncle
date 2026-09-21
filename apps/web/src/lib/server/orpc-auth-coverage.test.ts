@@ -301,6 +301,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // `update_label` / `set_capture_budget` rule.
   certify_track: "operator",
   checkpoint_artifact_rebuild: "admin",
+  // Withdraws the operator's capture-source pin (docs/the-ear.md § Wrong audio) — operator
+  // tier, the pin's counterpart; an agent never rules on the operator's ruling.
+  clear_capture_source: "operator",
   // The wrong-audio quarantine override (docs/the-ear.md § Wrong audio) — operator tier: an
   // agent does not get to reverse the machine's own wrong-audio verdict on its own output, the
   // same reasoning that keeps `update_label` and `set_capture_budget` operator-tier.
@@ -613,6 +616,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
   note_track: "admin",
   observe_track: "admin",
+  // THE CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) — operator tier (adminAuth +
+  // operatorGuard): the fingerprint gate is precision-over-recall by design and the operator's
+  // ear is the only thing that outranks it. A machine never overrules the gate on its own
+  // output, the `clear_wrong_audio` / `force_capture` reasoning; the agent token 403s.
+  pin_capture_source: "operator",
   // Capture prepare freezes current eligibility before the box starts external work.
   prepare_track_capture: "admin",
   prepare_track_captures: "admin",

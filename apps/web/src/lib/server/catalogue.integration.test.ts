@@ -1624,10 +1624,37 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     await withSourceKey("finding-dwyl", "005.9.9L/badbeef.webm");
     await db.execute({
       args: ["finding-dwyl"],
-      sql: `update tracks set analyzed_from = 'full', capture_status = 'done' where track_id = ?`,
+      // A standing capture-source pin with its operator stamps, exactly as `pinCaptureSource` leaves
+      // them: this capture came from the operator's own pick.
+      sql: `update tracks set analyzed_from = 'full', capture_status = 'done',
+                              capture_source_pin = 'dQw4w9WgXcQ',
+                              youtube_video_id = 'dQw4w9WgXcQ', youtube_video_official = 1,
+                              youtube_verified_at = '2026-07-02T00:00:00.000Z',
+                              youtube_verified_by = 'operator', source_verification = 'operator'
+            where track_id = ?`,
     });
 
     expect(await flagWrongAudio("finding-dwyl")).toBe(true);
+
+    // The pin RETIRES with the flag (docs/the-ear.md § Wrong audio): left standing, the re-queued
+    // sweep would re-buy the very upload just ruled wrong, on the operator's own authority, forever.
+    // Its `operator` stamps go with it, the way `clearCaptureSource` withdraws them: /identity must
+    // stop saying a human ruled for audio the human just rejected, and the provenance backfill
+    // (gated on `source_verification is null`) must be free to re-examine the row.
+    const pinned = await db.execute({
+      args: ["finding-dwyl"],
+      sql: `select capture_source_pin, youtube_video_id, youtube_video_official, youtube_verified_at,
+                   youtube_verified_by, source_verification
+            from tracks where track_id = ?`,
+    });
+    expect(pinned.rows[0]).toMatchObject({
+      capture_source_pin: null,
+      source_verification: null,
+      youtube_verified_at: null,
+      youtube_verified_by: null,
+      youtube_video_id: null,
+      youtube_video_official: null,
+    });
 
     const state = await stateOf("finding-dwyl");
     expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
@@ -1645,6 +1672,36 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
 
     // Idempotent: a second flag reports honestly that nothing changed.
     expect(await flagWrongAudio("finding-dwyl")).toBe(false);
+
+    // …while an id a FINGERPRINT sweep earned is not the operator's to lose: a flag on such a row
+    // leaves the YouTube trio and the SoundCloud evidence exactly where they were.
+    await seedFinding("finding-fp", {
+      artists: ["Freaks & Geeks"],
+      title: "Fingerprinted",
+      vector: axis(1),
+    });
+    await withSourceKey("finding-fp", "005.9.9M/cafebabe.webm");
+    await db.execute({
+      args: ["finding-fp"],
+      sql: `update tracks set capture_status = 'done',
+                              youtube_video_id = 'fpEarnedId0', youtube_video_official = 1,
+                              youtube_verified_at = '2026-07-02T00:00:00.000Z',
+                              youtube_verified_by = 'fingerprint',
+                              source_verification = 'soundcloud-preview-match'
+            where track_id = ?`,
+    });
+    expect(await flagWrongAudio("finding-fp")).toBe(true);
+    const earned = await db.execute({
+      args: ["finding-fp"],
+      sql: `select youtube_video_id, youtube_video_official, youtube_verified_by, source_verification
+            from tracks where track_id = ?`,
+    });
+    expect(earned.rows[0]).toMatchObject({
+      source_verification: "soundcloud-preview-match",
+      youtube_verified_by: "fingerprint",
+      youtube_video_id: "fpEarnedId0",
+      youtube_video_official: 1,
+    });
 
     // The guard mirror of clearWrongAudio's: a CATALOGUE row is never flaggable — that side of
     // the collision belongs to the sweep's own quarantine.

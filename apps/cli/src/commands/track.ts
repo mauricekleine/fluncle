@@ -7,7 +7,14 @@ import {
   type TrackSocialUpdateResponse,
   type TrackUpdateResponse,
 } from "@fluncle/contracts";
-import { adminApiGet, adminApiPatch, adminApiPost, publicApiGet } from "../api";
+import {
+  adminApiDelete,
+  adminApiGet,
+  adminApiPatch,
+  adminApiPost,
+  adminApiPut,
+  publicApiGet,
+} from "../api";
 import { CliError } from "../output";
 
 export type TrackGetResult = TrackGetResponse;
@@ -625,6 +632,40 @@ export type TrackPurgeVideoResponse = {
 export async function trackPurgeVideoCommand(idOrLogId: string): Promise<TrackPurgeVideoResponse> {
   return adminApiPost<TrackPurgeVideoResponse>(
     `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/video/purge`,
+  );
+}
+
+// `fluncle admin tracks pin-source <id|logId> --upload <url|id>` — THE OPERATOR'S CAPTURE-SOURCE
+// PIN (docs/the-ear.md § Wrong audio): "capture THIS upload". The fingerprint gate is precision-
+// over-recall by design and the operator's ear is the only thing that outranks it. The value is
+// sent AS PASTED — a bare 11-char id or a youtube.com / youtu.be / music.youtube.com URL — and the
+// SERVER reduces it to the id (a typed `invalid_youtube_video_id` 400 for anything else), so the
+// CLI stays a thin client and the one parser lives behind the API. `--clear` is the counterpart:
+// it withdraws the pin and touches neither the capture status nor any audio already captured.
+// Operator-authenticated (`pin_capture_source` / `clear_capture_source`).
+export type TrackCaptureSourcePinResponse = {
+  captureSourcePin: null | string;
+  captureStatus: string;
+  logId: null | string;
+  ok: true;
+  trackId: string;
+};
+
+export async function trackPinSourceCommand(
+  idOrLogId: string,
+  youtube: string,
+): Promise<TrackCaptureSourcePinResponse> {
+  return adminApiPut<TrackCaptureSourcePinResponse>(
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/capture-source`,
+    { youtubeVideoId: youtube },
+  );
+}
+
+export async function trackClearSourcePinCommand(
+  idOrLogId: string,
+): Promise<TrackCaptureSourcePinResponse> {
+  return adminApiDelete<TrackCaptureSourcePinResponse>(
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/capture-source`,
   );
 }
 

@@ -51,8 +51,11 @@ import { adminAuth, operatorGuard } from "../orpc-auth";
 import { ApiError } from "../spotify";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
 import {
+  clearCaptureSource,
   fillEmptyNote,
   isYoutubeVerification,
+  parseCaptureSourceVideoId,
+  pinCaptureSource,
   type TrackUpdate,
   updateTrack,
 } from "../track-update";
@@ -642,7 +645,9 @@ export function adminTracksHandlers(os: Implementer) {
         // THE CAPTURE VERIFICATION provenance (docs/the-ear.md § Wrong audio) — the ingest gate's
         // verdict + its stamp + the bad-audio memory. Agent-writable analysis fields (internal, no
         // public surface). The verdict is narrowed to the 3-value enum; the memory is a JSON string
-        // ("" clears it, handled in updateTrack).
+        // ("" clears it, handled in updateTrack). `operator-verified` is DELIBERATELY not admitted
+        // here: it is the operator's authority, stamped only by the receipt-bound capture commit of a
+        // row whose pin he set — a generic agent PATCH must never be able to claim it.
         if (
           body.captureVerification === "preview-match" ||
           body.captureVerification === "unverified" ||
@@ -1591,6 +1596,58 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
+  // PUT /admin/tracks/{trackId}/capture-source — operator tier. THE CAPTURE-SOURCE PIN
+  // (docs/the-ear.md § Wrong audio): "capture THIS upload". The fingerprint gate is
+  // precision-over-recall and the operator's ear is the only thing that outranks it, so the
+  // pin is his and never the box agent's — an agent token 403s. The body's `youtubeVideoId`
+  // is reduced to a bare id HERE (a bare id or a youtube.com / youtu.be / music.youtube.com
+  // URL; anything else is the typed `invalid_youtube_video_id`/400), and the write itself is
+  // lib/server/track-update.ts § pinCaptureSource: pin + re-queue + memory cleared + the
+  // `operator` provenance stamps, with not one `findings` column moved.
+  const pinCaptureSourceHandler = os.pin_capture_source
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      const videoId = parseCaptureSourceVideoId(input.youtubeVideoId);
+
+      if (videoId === null) {
+        const message = `"${input.youtubeVideoId.trim().slice(0, 120)}" is not a YouTube video id or watch URL (expected 11 URL-safe characters, or a youtube.com / youtu.be / music.youtube.com link)`;
+
+        throw new ORPCError("BAD_REQUEST", {
+          data: { apiCode: "invalid_youtube_video_id", apiMessage: message },
+          message,
+          status: 400,
+        });
+      }
+
+      try {
+        const track = await requireTrack(input.trackId);
+        const result = await pinCaptureSource(track.trackId, videoId);
+
+        return { ...result, ok: true as const };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  // DELETE /admin/tracks/{trackId}/capture-source — operator tier, the pin's counterpart.
+  // Withdraws the standing instruction and the `operator` stamps it set; the capture status
+  // and any audio already captured stay untouched (rewinding a capture is `flag_wrong_audio`).
+  // Idempotent on an unpinned row.
+  const clearCaptureSourceHandler = os.clear_capture_source
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const track = await requireTrack(input.trackId);
+        const result = await clearCaptureSource(track.trackId);
+
+        return { ...result, ok: true as const };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   // GET /admin/tracks/mixable-order — admin tier (`adminAuth` only, agent-allowed like
   // get_track_admin). A PURE read: it imports only the read path + the pure mixability
   // core, never a write/publish surface (`promote_recording` remains the only mint).
@@ -1647,6 +1704,7 @@ export function adminTracksHandlers(os: Implementer) {
 
   return {
     authorize_track_capture: authorizeTrackCaptureHandler,
+    clear_capture_source: clearCaptureSourceHandler,
     commit_track_capture: commitTrackCaptureHandler,
     commit_track_captures: commitTrackCapturesHandler,
     context_track: contextTrackHandler,
@@ -1657,6 +1715,7 @@ export function adminTracksHandlers(os: Implementer) {
     list_tracks_admin: listTracksAdminHandler,
     note_track: noteTrackHandler,
     observe_track: observeTrackHandler,
+    pin_capture_source: pinCaptureSourceHandler,
     prepare_track_capture: prepareTrackCaptureHandler,
     prepare_track_captures: prepareTrackCapturesHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
