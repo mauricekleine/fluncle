@@ -3517,6 +3517,12 @@ export async function forceCapture(trackId: string): Promise<boolean> {
  * pinned row's capture came from the pin, so flagging that capture wrong and leaving the pin
  * standing would have the re-queued sweep download the very same upload again, on the operator's
  * own authority, forever. Flag first, then pin the right upload — that order is the whole flow.
+ * The pin's `operator` PROVENANCE STAMPS go with it, exactly as `clearCaptureSource` withdraws
+ * them (lib/server/track-update.ts): the YouTube trio-plus-method only when `youtube_verified_by
+ * = 'operator'`, and `source_verification` only when it is `'operator'`. The operator has just
+ * ruled the audio those stamps vouched for WRONG, so /identity must stop saying a human ruled for
+ * it, and the provenance backfill (gated on `source_verification is null`) must be free to
+ * re-examine the row. An id a fingerprint sweep earned is never touched.
  */
 export async function flagWrongAudio(trackId: string): Promise<boolean> {
   const db = await getDb();
@@ -3564,6 +3570,11 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
               analyzed_from = null,
               capture_verification = null,
               capture_source_pin = null,
+              youtube_video_id = case when youtube_verified_by = 'operator' then null else youtube_video_id end,
+              youtube_video_official = case when youtube_verified_by = 'operator' then null else youtube_video_official end,
+              youtube_verified_at = case when youtube_verified_by = 'operator' then null else youtube_verified_at end,
+              source_verification = case when source_verification = 'operator' then null else source_verification end,
+              youtube_verified_by = case when youtube_verified_by = 'operator' then null else youtube_verified_by end,
               source_audio_rejected = ?
           where track_id = ?
             and source_audio_key is not null

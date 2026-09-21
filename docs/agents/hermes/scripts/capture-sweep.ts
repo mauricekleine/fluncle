@@ -1969,26 +1969,41 @@ function validOptionalPreparedString(
   return value === undefined || (typeof value === "string" && value.length <= max);
 }
 
+/** The exact key allow-list of a prepared track: the snapshot the sweep captures FROM. */
+const PREPARED_TRACK_KEYS = new Set([
+  "analyzedFrom",
+  "anchored",
+  "artists",
+  "bpm",
+  "captureSourcePin",
+  "certified",
+  "durationMs",
+  "label",
+  "logId",
+  "sourceAudioFailures",
+  "sourceAudioKey",
+  "sourceAudioRejected",
+  "title",
+  "trackId",
+]);
+
+/**
+ * The keys a NEWER Worker put on a prepared track that this bake does not know. A non-empty answer
+ * is the one shape of invalid answer that must degrade PER ROW rather than fail the tick: a field
+ * the Worker added after this box was baked is a fact this sweep cannot honour (it would capture
+ * without the instruction the field carries), so the row is left unreached for the next bake — but
+ * the eleven other rows in the batch are not that row's problem. A KNOWN key with a bad shape still
+ * fails closed through `validPreparedTrack`.
+ */
+function unknownPreparedTrackKeys(track: unknown): string[] {
+  return isRecord(track) ? Object.keys(track).filter((key) => !PREPARED_TRACK_KEYS.has(key)) : [];
+}
+
 function validPreparedTrack(value: unknown, expectedTrackId: string): value is CaptureFinding {
   if (!isRecord(value)) {
     return false;
   }
-  const allowedKeys = new Set([
-    "analyzedFrom",
-    "anchored",
-    "artists",
-    "bpm",
-    "captureSourcePin",
-    "certified",
-    "durationMs",
-    "label",
-    "logId",
-    "sourceAudioFailures",
-    "sourceAudioKey",
-    "sourceAudioRejected",
-    "title",
-    "trackId",
-  ]);
+  const allowedKeys = PREPARED_TRACK_KEYS;
   return (
     Object.keys(value).every((key) => allowedKeys.has(key)) &&
     value.trackId === expectedTrackId &&
@@ -2101,6 +2116,12 @@ export type CapturePrepareBatchPage = {
   prepared: Map<string, PreparedSnapshot>;
   /** UNCERTIFIED rows this call authorized. The caller carries the running total to the next call. */
   reserved: number;
+  /**
+   * Rows the Worker answered with a prepared track carrying a key this bake does not recognise
+   * (`unknownPreparedTrackKeys`). Not frozen here, not asked again this tick, not a tick failure:
+   * they wait for the bake that knows the key, while every other row proceeds.
+   */
+  unreached: string[];
 };
 
 function prepareBatchSnapshots(
@@ -2130,6 +2151,7 @@ function prepareBatchSnapshots(
   }
   const prepared = new Map<string, PreparedSnapshot>();
   const elapsedMs: number[] = [];
+  const unreached: string[] = [];
   for (const row of response.results) {
     if (!isRecord(row) || typeof row.trackId !== "string") {
       throw new Error("capture batch prepare returned an invalid response");
@@ -2145,6 +2167,19 @@ function prepareBatchSnapshots(
     if (rest.prepared === false && rest.reason === "deferred") {
       continue;
     }
+    // A NEWER Worker's field on the prepared track — the one invalid shape that is this row's
+    // problem and nobody else's. Logged and left unreached rather than thrown: a throw here is a
+    // fatal tick, and one row a stale bake cannot honour must not take the other eleven with it.
+    if (rest.prepared === true) {
+      const unknown = unknownPreparedTrackKeys(rest.track);
+      if (unknown.length > 0) {
+        log(
+          `prepared row ${trackId} carries field(s) this bake does not know (${unknown.join(", ")}) — leaving it unreached until the box is rebaked`,
+        );
+        unreached.push(trackId);
+        continue;
+      }
+    }
     if (!validPreparedSnapshotValue(rest, trackId)) {
       throw new Error(`capture batch prepare returned an invalid answer for ${trackId}`);
     }
@@ -2159,7 +2194,7 @@ function prepareBatchSnapshots(
       ? response.reserved
       : [...prepared.values()].filter((entry) => entry.prepared && entry.track.certified === false)
           .length;
-  return { elapsedMs, prepared, reserved };
+  return { elapsedMs, prepared, reserved, unreached };
 }
 
 /**
@@ -2184,6 +2219,7 @@ export function prepareTickSnapshots(
 ): CapturePrepareBatchPage | undefined {
   const prepared = new Map<string, PreparedSnapshot>();
   const elapsedMs: number[] = [];
+  const unreached: string[] = [];
   let reserved = 0;
   let outstanding = [...trackIds];
   // Every call answers at least its first item, so the worklist strictly shrinks; the guard is the
@@ -2200,7 +2236,11 @@ export function prepareTickSnapshots(
     for (const [trackId, snapshot] of page.prepared) {
       prepared.set(trackId, snapshot);
     }
-    const next = outstanding.filter((trackId) => !prepared.has(trackId));
+    // An unreached row is answered for this tick — it leaves the worklist without being frozen, so
+    // the next call does not re-freeze (and re-reserve against) a row this bake cannot capture.
+    unreached.push(...page.unreached);
+    const settled = new Set([...prepared.keys(), ...unreached]);
+    const next = outstanding.filter((trackId) => !settled.has(trackId));
     if (next.length === outstanding.length) {
       // No progress at all. Stop rather than spend another lease on the same answer; the rows stay
       // for the next tick, unfrozen and uncharged.
@@ -2209,7 +2249,7 @@ export function prepareTickSnapshots(
     outstanding = next;
   }
 
-  return { elapsedMs, prepared, reserved };
+  return { elapsedMs, prepared, reserved, unreached };
 }
 
 function admittedWorkList(options: {

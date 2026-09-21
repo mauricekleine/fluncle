@@ -3633,6 +3633,72 @@ describe("the tick's shared capture reservation", () => {
 
     expect(page).toBeUndefined();
   });
+
+  /** A Worker newer than this bake: it puts a field on the prepared track the allow-list lacks. */
+  function newerWorker(options: { extraFor: string; extra: Record<string, unknown> }) {
+    const calls: string[][] = [];
+    const phase = ((_action: string, statePath: string) => {
+      const body = JSON.parse(readFileSync(statePath, "utf8")) as { items: { trackId: string }[] };
+      calls.push(body.items.map((item) => item.trackId));
+      const results = body.items.map((item) => ({
+        elapsedMs: 1,
+        prepared: true,
+        snapshotToken: `snapshot-${item.trackId}`,
+        track: {
+          artists: [],
+          certified: true,
+          logId: "004.7.2I",
+          title: item.trackId,
+          trackId: item.trackId,
+          ...(item.trackId === options.extraFor ? options.extra : {}),
+        },
+        trackId: item.trackId,
+      }));
+      writeFileSync(`${statePath}.result`, JSON.stringify({ deferred: 0, ok: true, results }));
+      return "completed";
+    }) as never;
+    return { calls, phase };
+  }
+
+  test("a field this bake does not know leaves THAT row unreached — the rest of the tick proceeds", () => {
+    // A stale bake must degrade per row, never per tick: a throw here is a fatal summary before
+    // the worker pool starts, and one row a newer Worker described in words this box cannot read
+    // must not take the other rows with it.
+    const ids = ["track-0", "track-newer", "track-2"];
+    const { calls, phase } = newerWorker({
+      extra: { fieldFromTheFuture: "x" },
+      extraFor: "track-newer",
+    });
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (message: unknown) => {
+      lines.push(String(message));
+    };
+    let page: ReturnType<typeof prepareTickSnapshots>;
+    try {
+      page = prepareTickSnapshots(ids, "capture", 12, phase);
+    } finally {
+      console.error = original;
+    }
+
+    expect([...(page?.prepared.keys() ?? [])].sort()).toEqual(["track-0", "track-2"]);
+    expect(page?.unreached).toEqual(["track-newer"]);
+    // Answered for the tick: not frozen, and not asked again in a second call either.
+    expect(calls).toHaveLength(1);
+    const line = lines.find((entry) => entry.includes("this bake does not know"));
+    expect(line).toContain("track-newer");
+    expect(line).toContain("fieldFromTheFuture");
+  });
+
+  test("a KNOWN key with a bad shape still fails closed", () => {
+    // The exact-key allow-list keeps its teeth for the shapes it knows: a `logId` that is not a
+    // string is a broken answer, not a newer vocabulary, and the tick refuses it as before.
+    const { phase } = newerWorker({ extra: { logId: 42 }, extraFor: "track-bad" });
+
+    expect(() => prepareTickSnapshots(["track-bad"], "capture", 12, phase)).toThrow(
+      "invalid answer for track-bad",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
