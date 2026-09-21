@@ -13,6 +13,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -93,6 +94,7 @@ import {
   type RejectedMemory,
   type YtCandidate,
   CAPTURE_ADMISSION_ACTIONS,
+  captureProviderCompletion,
   captureVerificationFor,
   findConsensus,
   findPinnedUpload,
@@ -4440,18 +4442,17 @@ describe("the consensus check — independent uploads agreeing where the preview
     expect(value?.verdict).toBe("consensus");
     expect(value?.videoId).toBe("ukf00000001");
     expect(captureVerificationFor("consensus")).toBe("consensus-verified");
-    // The accepted file is the held one, moved off the `audio.*` slot, still on disk with the
-    // bytes that were downloaded for it — and the walk reads them back for the caller.
-    expect(value?.path).toBe(join(dir, "held-ukf00000001.webm"));
+    // The accepted file sits back on the `audio.<ext>` slot — the ONE file name the journal's
+    // completion gate admits — with the bytes that were downloaded for it, and the walk reads them
+    // back for the caller; the work directory looks exactly like a preview-match capture's.
+    expect(value?.path).toBe(join(dir, "audio.webm"));
     expect(existsSync(value?.path ?? "")).toBe(true);
     expect(Buffer.from(value?.bytes ?? []).toString("utf8")).toBe("bytes of ukf00000001");
     expect(value?.digest).toBe(createHash("sha256").update("bytes of ukf00000001").digest("hex"));
+    expect(readdirSync(dir)).toEqual(["audio.webm"]);
     // The agreeing upload is NOT remembered as wrong audio; the disagreeing one IS.
     expect(memory.dirty).toBe(true);
     expect(memory.sources.map((entry) => entry.videoId)).toEqual(["wrong0000001"]);
-    // Their files are gone; only the winner's remains.
-    expect(existsSync(join(dir, "held-topic0000001.webm"))).toBe(false);
-    expect(existsSync(join(dir, "held-wrong0000001.webm"))).toBe(false);
     // Exactly the walk's three downloads — consensus adds none.
     expect(downloads).toEqual(["ukf00000001", "topic0000001", "wrong0000001"]);
     // The one line that names the verdict, with the BER evidence.
@@ -4488,6 +4489,178 @@ describe("the consensus check — independent uploads agreeing where the preview
 
     expect(value).toBeNull();
     expect(memory.sources.map((entry) => entry.videoId)).toEqual(["ukf00000001", "nochan00001"]);
+
+    // An EMPTY or blank channel string is no channel either — independent of what the search
+    // parser hands over, it can neither lead nor count toward independence.
+    const blank = [
+      {
+        candidate: { channel: "", channelId: "", durationSec: 259, id: "a", title: "" },
+        fingerprint: UKF,
+      },
+      { candidate: { channelId: "  ", durationSec: 260, id: "b", title: "" }, fingerprint: TOPIC },
+    ];
+    expect(findConsensus(blank)).toBeNull();
+    expect(
+      findConsensus([
+        ...blank,
+        {
+          candidate: { channelId: "UC-real", durationSec: 261, id: "c", title: "" },
+          fingerprint: SLEEPLESS,
+        },
+      ]),
+    ).toBeNull();
+  });
+
+  test("END TO END: a consensus acceptance passes the journal's completion gate and advances the journal", async () => {
+    // The journal (`runJournaledCaptureProvider`) admits exactly one completed file name,
+    // `audio.<ext>`, and its replay path reads that name out of the work directory. A consensus
+    // capture therefore has to leave the work directory looking exactly like a preview-match
+    // capture — otherwise every consensus acceptance would throw at the gate and land `failed`.
+    // This drives the real journal around the real walk, with the same completion the capture
+    // tick builds, and checks the journal's recorded completion names the slot file.
+    const uploads: Upload[] = [
+      { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
+      { channelId: "UC-two", durationSec: 260, fingerprint: TOPIC, id: "topic0000001" },
+      { channelId: "UC-three", durationSec: 261, fingerprint: WRONG_SONG, id: "wrong0000001" },
+    ];
+    const { ports } = fakePorts(uploads);
+    const memory = freshMemory();
+    const journalDir = workdir();
+    const journalPath = join(journalDir, `${"c".repeat(64)}.json`);
+
+    const run = await withLog(() =>
+      runJournaledCaptureProvider({
+        completion: (accepted) => captureProviderCompletion(accepted, memory),
+        finding,
+        kind: "capture",
+        progressPath: () => journalPath,
+        provider: (directory) =>
+          findVerifiedUpload({ dir: directory, finding, memory, ports, session: fakeSession() }),
+        snapshotToken: "snapshot-token",
+      }),
+    );
+
+    expect(run.value.disposition).toBe("completed");
+    if (run.value.disposition !== "completed") {
+      return;
+    }
+    expect(run.value.value?.verdict).toBe("consensus");
+    expect(readdirSync(run.value.workDirectory)).toEqual(["audio.webm"]);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8")) as {
+      attempt: { completion?: Record<string, unknown>; state: string };
+    };
+    expect(journal.attempt.state).toBe("provider-completed");
+    expect(journal.attempt.completion).toMatchObject({
+      digest: createHash("sha256").update("bytes of ukf00000001").digest("hex"),
+      ext: "webm",
+      fileName: "audio.webm",
+      outcome: "accepted",
+      verdict: "consensus",
+      videoId: "ukf00000001",
+    });
+    // The rejection memory rides the completion, so a replay after a crash persists it too.
+    expect(JSON.parse(String(journal.attempt.completion?.rejectedSources))).toMatchObject([
+      { videoId: "wrong0000001" },
+    ]);
+  });
+
+  test("a provider throw settles as `failed` through the same journal path — the intent journal never wedges a row", async () => {
+    // A thrown provider error is caught in-process by the capture tick, which writes its `failed`
+    // result to the SAME journal path (`persistAndCommit` → `progressPath(trackId, "capture")`),
+    // replacing the provider-intent journal and committing it. So the next tick finds no journal
+    // and runs the provider again. Proven here with the real journal + the real persist path over
+    // fake reconciliation ports; the `provider-ambiguous` hold is reserved for a PROCESS DEATH
+    // mid-provider, which is the one case nothing in-process can rule on.
+    const journalDir = workdir();
+    const journalPath = join(journalDir, `${"d".repeat(64)}.json`);
+    let providerCalls = 0;
+    const thrown = await runJournaledCaptureProvider({
+      completion: () => ({
+        completedAt: "2026-09-08T10:00:00.000Z",
+        digest: "e".repeat(64),
+        ext: "webm",
+        // The shape the gate refuses — a completed file off the slot.
+        fileName: "held-x.webm",
+        outcome: "accepted",
+        source: "youtube",
+        verdict: "consensus",
+        videoId: "x",
+      }),
+      finding,
+      kind: "capture",
+      progressPath: () => journalPath,
+      provider: async (directory) => {
+        providerCalls += 1;
+        writeFileSync(join(directory, "held-x.webm"), "bytes");
+        return null;
+      },
+      snapshotToken: "snapshot-token",
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect((thrown as Error).message).toContain("unsafe completed file");
+    expect(JSON.parse(readFileSync(journalPath, "utf8"))).toMatchObject({
+      attempt: { state: "provider-intent" },
+    });
+
+    // The capture tick's catch: the `failed` result lands on the same path and commits.
+    const progressPorts: CaptureProgressPorts = {
+      admittedPhase: () => {
+        throw new Error("unexpected admitted phase");
+      },
+      authorizeProgress: async (progress) => ({
+        ...progress,
+        receipt: {
+          commitToken: "commit-token",
+          operationId: "track.capture",
+          operationKey: "track.capture:receipt",
+          requestDigest: "a".repeat(64),
+        },
+      }),
+      prepareCurrentSnapshot: () => ({
+        prepared: true,
+        snapshotToken: "snapshot-token",
+        track: {
+          artists: [],
+          certified: true,
+          logId: "012.3.4B",
+          title: "x",
+          trackId: finding.trackId,
+        },
+      }),
+      progressPath: () => journalPath,
+      r2Exists: async () => true,
+      r2Put: async () => {
+        throw new Error("unexpected R2 PUT");
+      },
+    };
+    await persistAndCommit(
+      finding.trackId,
+      "snapshot-token",
+      { attemptedAt: "2026-09-08T10:00:00.000Z", kind: "capture", outcome: "failed" },
+      progressPorts,
+    );
+    // The fake ports cannot commit (no admitted phase), so the persist reads `pending` — and what
+    // the journal now holds is the `failed` RESULT with its receipt, never the provider ATTEMPT.
+    // A result journal is what `recoverCaptureProgress` finishes at the head of the next tick (the
+    // server settles it, the file goes); an attempt journal is the one shape that is held as
+    // ambiguous forever. So a caught provider error can never leave a row wedged.
+    expect(providerCalls).toBe(1);
+    const settled = JSON.parse(readFileSync(journalPath, "utf8")) as Record<string, unknown>;
+    expect(settled).not.toHaveProperty("attempt");
+    expect(settled).toMatchObject({
+      receipt: { operationId: "track.capture" },
+      result: { kind: "capture", outcome: "failed" },
+    });
+    // …and the capture tick's own catch is exactly this call: same track, same kind, same path.
+    const captureFn = source.slice(
+      source.indexOf("async function captureFinding("),
+      source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+    );
+    const failurePath = captureFn.slice(captureFn.indexOf("} catch (error) {"));
+    expect(failurePath).toContain('outcome: "failed"');
+    expect(failurePath).toContain("await persistAndCommit(trackId, snapshotToken, {");
   });
 
   test("an agreeing upload that FAILED the duration guard has no say — one held witness is no consensus", async () => {

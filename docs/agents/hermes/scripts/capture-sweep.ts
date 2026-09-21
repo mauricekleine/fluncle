@@ -3447,7 +3447,7 @@ export function captureVerificationFor(
   return verdict === "operator" ? "operator-verified" : "unverified";
 }
 
-function captureProviderCompletion(
+export function captureProviderCompletion(
   accepted: VerifiedUpload | null,
   memory: RejectedMemory,
 ): CaptureProviderCompletion {
@@ -3504,7 +3504,8 @@ type HeldCandidate = {
  * channel yt-dlp did not report cannot be shown independent of anyone and is never counted.
  */
 function consensusChannelKey(candidate: YtCandidate): string | undefined {
-  return candidate.channelId ?? candidate.channel;
+  const key = (candidate.channelId ?? candidate.channel)?.trim();
+  return key ? key : undefined;
 }
 
 /** One agreeing set the consensus check found: the accepted candidate + who agrees with it. */
@@ -3864,11 +3865,23 @@ export async function findVerifiedUpload(options: {
       // The winner and its agreeing set are NOT remembered as wrong audio — they are the
       // recording, on each other's word. Everything else held is.
       settle(new Set([accepted, ...agreeing]), accepted.path);
+      // THE WINNER GOES BACK ONTO THE `audio.<ext>` SLOT. The journal's completion gate admits
+      // exactly that file name and nothing else (`runJournaledCaptureProvider`), and the replay
+      // path reads the completion's `fileName` out of the work directory — so a consensus capture
+      // must leave the work directory looking exactly like a preview-match capture does: one
+      // `audio.<ext>`, the accepted bytes. Every other download was deleted above; a stray slot
+      // file of another extension is cleared first so the rename can never land beside one.
+      for (const stray of readdirSync(dir).filter((entry) => entry.startsWith("audio."))) {
+        rmSync(join(dir, stray), { force: true });
+      }
+      const acceptedPath = join(dir, `audio.${accepted.ext}`);
+      renameSync(accepted.path, acceptedPath);
+      const acceptedBytes = new Uint8Array(readFileSync(acceptedPath));
       return {
-        bytes: new Uint8Array(readFileSync(accepted.path)),
-        digest: accepted.digest,
+        bytes: acceptedBytes,
+        digest: createHash("sha256").update(acceptedBytes).digest("hex"),
         ext: accepted.ext,
-        path: accepted.path,
+        path: acceptedPath,
         source: accepted.candidate.source ?? "youtube",
         verdict: "consensus",
         videoId: accepted.candidate.id,
