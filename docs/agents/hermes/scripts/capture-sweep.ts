@@ -3458,6 +3458,19 @@ async function findVerifiedUpload(options: {
   // proxy bytes again. Applied before the attempt budget, so DOWNLOAD_ATTEMPTS is spent only on
   // candidates that could actually be new audio.
   const attempts = filterRejectedCandidates(ranked, rejectedIds, DOWNLOAD_ATTEMPTS);
+  // Say what the memory took off the table. A row whose correct upload was once rejected by the
+  // fingerprint gate keeps skipping that upload silently on every later walk, and from the journal
+  // alone it reads as "no candidates" — the row lands `unmatched` with nothing to explain it.
+  const preFiltered =
+    ranked.length - ranked.filter((entry) => !rejectedIds.has(entry.candidate.id)).length;
+  if (preFiltered > 0) {
+    log(
+      `${preFiltered} of ${ranked.length} ranked candidate(s) already remembered as wrong audio — skipping: ${ranked
+        .filter((entry) => rejectedIds.has(entry.candidate.id))
+        .map((entry) => entry.candidate.id)
+        .join(", ")}`,
+    );
+  }
 
   // ── THE REFERENCE ────────────────────────────────────────────────────────────────────────
   // The ISRC-resolved official 30s preview, fingerprinted ONCE per track (not per candidate).
@@ -3720,6 +3733,11 @@ async function captureFinding(
     const accepted = providerRun.value;
 
     if (!accepted) {
+      // The one line that names the row: every candidate verdict above is logged by video id
+      // only, so without this a finding that lands terminal reads as if it was never walked.
+      log(
+        `capture unmatched for ${logId ?? `catalogue (${trackId})`} — no candidate survived; ${memory.sources.length} rejected upload(s) remembered`,
+      );
       // `unmatched` is terminal — the queue never re-burns it; a fresh finding still jumps it
       // newest-first. `sourceAudioAttemptedAt` is stamped here too: it was a billed proxy request,
       // and the capture budget's ledger counts attempts rather than successes — a day of unmatched
