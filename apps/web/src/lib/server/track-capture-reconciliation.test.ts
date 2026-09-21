@@ -12,6 +12,7 @@ function snapshot(): CaptureSnapshot {
     extra: {
       bpm: 174,
       captureSourcePin: null,
+      captureSourcePinAllowDuration: false,
       captureVerification: null,
       captureVerifiedAt: null,
       enrichmentStatus: "done",
@@ -107,6 +108,29 @@ describe("capture reconciliation expected state", () => {
     // does not stale every in-flight capture the moment the column lands.
     const prepared = snapshot();
     const { captureSourcePin: _absent, ...legacyExtra } = prepared.extra;
+    const legacy = { ...prepared, extra: legacyExtra } as unknown as CaptureSnapshot;
+
+    expect(sameCaptureReconciliationState(legacy, prepared, "capture")).toBe(true);
+  });
+
+  test("the pin's duration override flipped mid-flight stales the in-flight commit", () => {
+    // The override decides whether the sweep WAIVES the duration guard for the pinned id, so a
+    // capture prepared under one reading of it must not land under the other: a guarded download
+    // must not commit as a waived one, and a waived one must not commit after the operator took
+    // the waiver back.
+    const guarded = snapshot();
+    guarded.extra.captureSourcePin = "dQw4w9WgXcQ";
+    const waived = structuredClone(guarded);
+    waived.extra.captureSourcePinAllowDuration = true;
+
+    expect(sameCaptureReconciliationState(guarded, waived, "capture")).toBe(false);
+    expect(sameCaptureReconciliationState(waived, guarded, "capture")).toBe(false);
+  });
+
+  test("a snapshot frozen before the override column existed still matches an un-waived row", () => {
+    // `?? false`: absent reads as the column's default, so the column landing stales nothing.
+    const prepared = snapshot();
+    const { captureSourcePinAllowDuration: _absent, ...legacyExtra } = prepared.extra;
     const legacy = { ...prepared, extra: legacyExtra } as unknown as CaptureSnapshot;
 
     expect(sameCaptureReconciliationState(legacy, prepared, "capture")).toBe(true);

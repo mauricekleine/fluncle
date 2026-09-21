@@ -1266,6 +1266,8 @@ export async function hasTrackFeatures(trackId: string): Promise<boolean> {
  */
 export type CaptureSourceState = {
   captureSourcePin: null | string;
+  /** Whether the standing pin waives the duration guard (a deliberately chosen different edit). */
+  captureSourcePinAllowDuration: boolean;
   captureStatus: string;
   captureVerification: null | string;
   hasCapturedAudio: boolean;
@@ -1277,14 +1279,15 @@ export async function getCaptureSourceState(trackId: string): Promise<CaptureSou
   const db = await getDb();
   const result = await db.execute({
     args: [trackId],
-    sql: `select capture_source_pin, capture_status, capture_verification,
-                 (source_audio_key is not null) as has_captured_audio,
+    sql: `select capture_source_pin, capture_source_pin_allow_duration, capture_status,
+                 capture_verification, (source_audio_key is not null) as has_captured_audio,
                  source_audio_failures, youtube_video_id
           from tracks
           where track_id = ? limit 1`,
   });
   const row = typedRow<{
     capture_source_pin: null | string;
+    capture_source_pin_allow_duration: bigint | null | number;
     capture_status: string;
     capture_verification: null | string;
     has_captured_audio: bigint | number;
@@ -1298,6 +1301,7 @@ export async function getCaptureSourceState(trackId: string): Promise<CaptureSou
 
   return {
     captureSourcePin: row.capture_source_pin,
+    captureSourcePinAllowDuration: Number(row.capture_source_pin_allow_duration ?? 0) === 1,
     captureStatus: row.capture_status,
     captureVerification: row.capture_verification,
     hasCapturedAudio: Number(row.has_captured_audio) === 1,

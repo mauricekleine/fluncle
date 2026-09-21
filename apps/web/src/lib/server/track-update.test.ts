@@ -56,6 +56,7 @@ const EXISTING = {
   added_at: "2026-06-01T00:00:00.000Z",
   artists_json: '["Calibre"]',
   capture_source_pin: null,
+  capture_source_pin_allow_duration: 0,
   capture_status: "unmatched",
   certified: 1,
   isrc: "GB1234567890",
@@ -1044,7 +1045,10 @@ describe("pinCaptureSource — the write the pin lands", () => {
     expect(update).toContain("youtube_verified_at = ?");
     expect(update).toContain("youtube_verified_by = 'operator'");
     expect(update).toContain("source_verification = 'operator'");
-    expect(lastUpdateArgs.slice(0, 2)).toEqual(["dQw4w9WgXcQ", "dQw4w9WgXcQ"]);
+    // The duration override is written on EVERY pin — a plain pin writes it FALSE, so a re-pin
+    // without the flag withdraws a standing waiver rather than inheriting it.
+    expect(update).toContain("capture_source_pin_allow_duration = ?");
+    expect(lastUpdateArgs.slice(0, 3)).toEqual(["dQw4w9WgXcQ", 0, "dQw4w9WgXcQ"]);
     // Officialness is still the SERVER's oEmbed verdict — asked with the recording's own names.
     expect(checkYoutubeOfficial).toHaveBeenCalledWith(
       "dQw4w9WgXcQ",
@@ -1063,6 +1067,22 @@ describe("pinCaptureSource — the write the pin lands", () => {
     // …and touches no captured audio: the pin instructs the NEXT capture, it does not rewind one.
     expect(lastUpdateSql).not.toContain("source_audio_key");
     expect(lastUpdateSql).not.toContain("source_audio_captured_at");
+  });
+
+  it("writes the duration override TRUE when the operator waives the guard, and reports it", async () => {
+    // The waiver is the operator saying, with the two lengths in front of him, that this different
+    // edit IS the recording — so the sweep skips the guard for this id. It rides the pin's own
+    // statement, and NOTHING here touches `duration_ms`: the finding keeps its store length.
+    withExistingRow({ capture_source_pin: "dQw4w9WgXcQ", capture_source_pin_allow_duration: 1 });
+
+    const result = await pinCaptureSource("track-123", "dQw4w9WgXcQ", {
+      allowDurationMismatch: true,
+    });
+
+    expect(lastUpdateSql).toContain("capture_source_pin_allow_duration = ?");
+    expect(lastUpdateArgs.slice(0, 3)).toEqual(["dQw4w9WgXcQ", 1, "dQw4w9WgXcQ"]);
+    expect(lastUpdateSql).not.toContain("duration_ms");
+    expect(result.captureSourcePinAllowDuration).toBe(true);
   });
 
   it("refuses a malformed id with the typed 400 before touching the row", async () => {
@@ -1104,8 +1124,11 @@ describe("clearCaptureSource — the withdrawal", () => {
     expect(lastUpdateSql).toContain(
       "source_verification = case when source_verification = 'operator' then null else source_verification end",
     );
+    // The duration waiver goes with the pin it rode on.
+    expect(lastUpdateSql).toContain("capture_source_pin_allow_duration = 0");
     expect(result).toEqual({
       captureSourcePin: null,
+      captureSourcePinAllowDuration: false,
       captureStatus: "done",
       logId: "004.7.2I",
       trackId: "track-123",

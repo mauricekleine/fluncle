@@ -2013,6 +2013,7 @@ function captureSourceRequest(method: "DELETE" | "PUT", token: string | undefine
 
 const PINNED = {
   captureSourcePin: "dQw4w9WgXcQ",
+  captureSourcePinAllowDuration: false,
   captureStatus: "pending",
   logId: "004.7.2I",
   trackId: TRACK_ID,
@@ -2048,7 +2049,34 @@ describe("oRPC pin_capture_source (PUT .../capture-source)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ...PINNED, ok: true });
-    expect(pinCaptureSource).toHaveBeenCalledWith(TRACK_ID, "dQw4w9WgXcQ");
+    // A plain pin: the duration guard applies (the flag is passed as false, never left undefined).
+    expect(pinCaptureSource).toHaveBeenCalledWith(TRACK_ID, "dQw4w9WgXcQ", {
+      allowDurationMismatch: false,
+    });
+  });
+
+  it("passes `allowDurationMismatch` through to the write and reports the waiver back", async () => {
+    // The duration guard's one waiver — a deliberately chosen different edit of the same recording.
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    pinCaptureSource.mockResolvedValueOnce({ ...PINNED, captureSourcePinAllowDuration: true });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      captureSourceRequest("PUT", OPERATOR_TOKEN, {
+        allowDurationMismatch: true,
+        youtubeVideoId: "dQw4w9WgXcQ",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      ...PINNED,
+      captureSourcePinAllowDuration: true,
+      ok: true,
+    });
+    expect(pinCaptureSource).toHaveBeenCalledWith(TRACK_ID, "dQw4w9WgXcQ", {
+      allowDurationMismatch: true,
+    });
   });
 
   it("400s `invalid_youtube_video_id` for a paste that is not a YouTube upload — nothing written", async () => {

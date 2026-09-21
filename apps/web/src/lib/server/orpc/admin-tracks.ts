@@ -1622,7 +1622,12 @@ export function adminTracksHandlers(os: Implementer) {
 
       try {
         const track = await requireTrack(input.trackId);
-        const result = await pinCaptureSource(track.trackId, videoId);
+        // `allowDurationMismatch` is the guard's one waiver (a deliberately chosen different edit
+        // of the same recording); absent reads as false, and a re-pin without it withdraws a
+        // standing waiver.
+        const result = await pinCaptureSource(track.trackId, videoId, {
+          allowDurationMismatch: input.allowDurationMismatch === true,
+        });
 
         return { ...result, ok: true as const };
       } catch (error) {

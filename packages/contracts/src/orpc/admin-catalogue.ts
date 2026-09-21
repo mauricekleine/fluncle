@@ -124,7 +124,8 @@ export const CatalogueTrackItemSchema = z
     captureStatus: z.string().nullable(),
     /**
      * The capture-verification verdict (docs/the-ear.md § Wrong audio): `preview-match` /
-     * `unverified` / `mismatch`, or null (pre-gate legacy / no capture). A quiet honesty marker.
+     * `unverified` / `mismatch` / `operator-verified` (the pinned source) / `consensus-verified`
+     * (independent uploads agreeing), or null (pre-gate legacy / no capture). A quiet honesty marker.
      */
     captureVerification: z.string().nullable(),
     /** ISO of when the operator dismissed this row ("not for me"); null on a live row. */

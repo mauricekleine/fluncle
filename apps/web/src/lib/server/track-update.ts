@@ -1508,6 +1508,8 @@ export function parseCaptureSourceVideoId(input: string): null | string {
 
 export type CaptureSourcePinResult = {
   captureSourcePin: null | string;
+  /** Whether the standing pin waives the duration guard; always false once cleared. */
+  captureSourcePinAllowDuration: boolean;
   captureStatus: string;
   logId: null | string;
   trackId: string;
@@ -1516,6 +1518,7 @@ export type CaptureSourcePinResult = {
 type CaptureSourcePinRow = {
   artists_json: string | null;
   capture_source_pin: string | null;
+  capture_source_pin_allow_duration: bigint | null | number;
   capture_status: string;
   label: string | null;
   label_name: string | null;
@@ -1526,7 +1529,8 @@ async function readCaptureSourcePinRow(trackId: string): Promise<CaptureSourcePi
   const db = await getDb();
   const result = await db.execute({
     args: [trackId],
-    sql: `select tracks.artists_json, tracks.capture_source_pin, tracks.capture_status,
+    sql: `select tracks.artists_json, tracks.capture_source_pin,
+                 tracks.capture_source_pin_allow_duration, tracks.capture_status,
                  tracks.label, labels.name as label_name, findings.log_id
           from tracks
           left join findings on findings.track_id = tracks.track_id
@@ -1560,7 +1564,12 @@ async function readCaptureSourcePinRow(trackId: string): Promise<CaptureSourcePi
  *     upload carries the recording, never whether it may be shown;
  *   · `source_verification = 'operator'` — the same stamp on the non-YouTube evidence column, so
  *     the provenance backfill (which requires it null) does not re-open a question the operator
- *     just closed.
+ *     just closed;
+ *   · `capture_source_pin_allow_duration = <allowDurationMismatch>` — the guard's one waiver,
+ *     written on EVERY pin (a re-pin without the flag withdraws a standing waiver): the operator has
+ *     deliberately chosen a different EDIT of the same recording, and the sweep skips the duration
+ *     guard for this id. The row's own `duration_ms` is never rewritten — the finding keeps its
+ *     store length.
  *
  * The `duplicate-cleared` sentinel is respected exactly as `updateTrack` respects it: a force-
  * captured row keeps its sentinel and is capture-eligible under it already. Not one `findings`
@@ -1570,7 +1579,7 @@ async function readCaptureSourcePinRow(trackId: string): Promise<CaptureSourcePi
 export async function pinCaptureSource(
   trackId: string,
   videoId: string,
-  options: { fetchImpl?: typeof fetch } = {},
+  options: { allowDurationMismatch?: boolean; fetchImpl?: typeof fetch } = {},
 ): Promise<CaptureSourcePinResult> {
   if (!YOUTUBE_VIDEO_ID_PATTERN.test(videoId)) {
     throw new ApiError(
@@ -1595,9 +1604,17 @@ export async function pinCaptureSource(
   await db.batch(
     [
       {
-        args: [videoId, videoId, official, now, trackId],
+        args: [
+          videoId,
+          options.allowDurationMismatch === true ? 1 : 0,
+          videoId,
+          official,
+          now,
+          trackId,
+        ],
         sql: `update tracks
                 set capture_source_pin = ?,
+                    capture_source_pin_allow_duration = ?,
                     capture_status = case when capture_status = 'duplicate-cleared' then capture_status else 'pending' end,
                     source_audio_failures = 0,
                     source_audio_rejected = null,
@@ -1619,6 +1636,7 @@ export async function pinCaptureSource(
 
   return {
     captureSourcePin: after.capture_source_pin,
+    captureSourcePinAllowDuration: Number(after.capture_source_pin_allow_duration ?? 0) === 1,
     captureStatus: after.capture_status,
     logId: after.log_id,
     trackId,
@@ -1648,6 +1666,7 @@ export async function clearCaptureSource(trackId: string): Promise<CaptureSource
         // reads as the all-or-nothing withdrawal it is.
         sql: `update tracks
                 set capture_source_pin = null,
+                    capture_source_pin_allow_duration = 0,
                     youtube_video_id = case when youtube_verified_by = 'operator' then null else youtube_video_id end,
                     youtube_video_official = case when youtube_verified_by = 'operator' then null else youtube_video_official end,
                     youtube_verified_at = case when youtube_verified_by = 'operator' then null else youtube_verified_at end,
@@ -1664,6 +1683,7 @@ export async function clearCaptureSource(trackId: string): Promise<CaptureSource
 
   return {
     captureSourcePin: null,
+    captureSourcePinAllowDuration: false,
     captureStatus: existing.capture_status,
     logId: existing.log_id,
     trackId,

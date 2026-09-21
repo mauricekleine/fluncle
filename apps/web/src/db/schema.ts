@@ -392,6 +392,18 @@ export const tracks = sqliteTable(
     // `pin_capture_source` / cleared by `clear_capture_source` (operator tier) and by
     // `flag_wrong_audio` (a flagged capture retires the pin that produced it).
     captureSourcePin: text("capture_source_pin"),
+    // THE PIN'S DURATION OVERRIDE (`pin_capture_source … allowDurationMismatch`). True ⇒ the sweep
+    // waives the duration guard for the pinned id: the operator has deliberately chosen a
+    // different EDIT of the same recording (a radio cut, an extended mix) because it is the one
+    // that exists, and he has the two lengths in front of him. The row's own `duration_ms` is never
+    // rewritten from the captured file — the finding keeps its store length. Meaningful only
+    // beside a pin; reset to false by `clear_capture_source` and by `flag_wrong_audio` alongside
+    // the pin they retire.
+    captureSourcePinAllowDuration: integer("capture_source_pin_allow_duration", {
+      mode: "boolean",
+    })
+      .notNull()
+      .default(false),
     // The full-song capture side-channel state (RFC full-audio). Models
     // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
     // `publishTrack`'s insert never names this column, so the DDL default is what
@@ -423,6 +435,11 @@ export const tracks = sqliteTable(
     //     the wrong-audio quarantine (capture_status = 'wrong-audio') as the lens's honest WHY — a
     //     preview mismatch, not a cross-title archive collision — and the fresh capture's ingest
     //     gate overwrites it when the re-download lands.
+    //   - operator-verified: the capture came from the operator's pinned source (`capture_source_pin`);
+    //     the gate ran for the record and the pin outranks its verdict. The backfill steps aside.
+    //   - consensus-verified: the preview refused every duration-verified upload, but two or more
+    //     from different channels carry the same recording as each other. Machine evidence — the
+    //     backfill re-checks it like `preview-match`.
     //   - null: pre-gate legacy (captured before verification shipped), or a fresh row not yet checked.
     // Machine-measured provenance like `analyzed_from`: internal, never a public surface, never a
     // lastmod bump. A fresh (re-)capture clears it so the new bytes are re-verified.

@@ -729,6 +729,40 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(both.stdout).toContain("either --upload or --clear");
   });
 
+  testCli(
+    "admin tracks pin-source --allow-duration-mismatch is a boolean flag that rides a pin only",
+    async () => {
+      // A BOOLEAN flag: the token after it is the next option, never its value — so `--json` here is
+      // still parsed as --json (the id check runs first, and prints the usage line as JSON-mode text).
+      const noId = await runCli([
+        "admin",
+        "tracks",
+        "pin-source",
+        "--allow-duration-mismatch",
+        "--upload",
+        "dQw4w9WgXcQ",
+        "--json",
+      ]);
+      expect(noId.exitCode).toBe(1);
+      expect(noId.stdout).toContain("Missing id");
+      expect(noId.stdout).toContain("[--allow-duration-mismatch]");
+
+      // The waiver has no meaning beside --clear (there is no pin for it to ride), so it is refused
+      // locally before any API call.
+      const withClear = await runCli([
+        "admin",
+        "tracks",
+        "pin-source",
+        "004.7.2I",
+        "--clear",
+        "--allow-duration-mismatch",
+        "--json",
+      ]);
+      expect(withClear.exitCode).toBe(1);
+      expect(withClear.stdout).toContain("--allow-duration-mismatch rides a pin, not --clear");
+    },
+  );
+
   testCli("admin tracks context --queue validates --limit before fetching", async () => {
     const result = await runCli([
       "admin",

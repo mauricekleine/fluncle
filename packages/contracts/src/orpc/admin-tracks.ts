@@ -281,7 +281,16 @@ const CaptureExternalResultSchema = z.union([
       // `operator-verified` is the pinned-source capture: the fingerprint still RAN, but the
       // operator's pin outranks its verdict (docs/the-ear.md § Wrong audio), so the row carries
       // his authority rather than the gate's. The historic verification backfill leaves it alone.
-      captureVerification: z.enum(["operator-verified", "preview-match", "unverified"]),
+      // `consensus-verified` is the ladder's CONSENSUS capture: the preview refused every
+      // duration-verified upload, but two or more from different channels carry the same recording
+      // as each other. Machine evidence, subordinate to a preview match, and the server treats it
+      // like any other verified capture (re-checkable, never stepped aside from).
+      captureVerification: z.enum([
+        "consensus-verified",
+        "operator-verified",
+        "preview-match",
+        "unverified",
+      ]),
       capturedAt: z.string().datetime({ offset: true }),
       kind: z.literal("capture"),
       outcome: z.literal("done"),
@@ -339,6 +348,12 @@ const CapturePreparedTrackSchema = z.strictObject({
    * a pin set or cleared mid-flight makes the in-flight commit stale rather than half-honoured.
    */
   captureSourcePin: z.string().max(64).optional(),
+  /**
+   * The pin's DURATION OVERRIDE: the operator has deliberately pinned a different EDIT of the same
+   * recording, so the sweep waives the duration guard for that one id. Frozen with the pin for the
+   * same reason; only ever sent as `true`, and only beside a pin.
+   */
+  captureSourcePinAllowDuration: z.boolean().optional(),
   certified: z.boolean(),
   durationMs: z.number().int().min(1).optional(),
   label: z.string().max(1024).optional(),
@@ -1018,6 +1033,8 @@ const CaptureSourcePinResultSchema = z
   .object({
     /** The pinned YouTube video id, or null when no pin stands. */
     captureSourcePin: z.string().nullable(),
+    /** Whether the standing pin waives the duration guard (`allowDurationMismatch`); false once cleared. */
+    captureSourcePinAllowDuration: z.boolean(),
     /** The row's `capture_status` after the write (`pending` after a pin; untouched by a clear). */
     captureStatus: z.string(),
     /** The finding's coordinate; null on a catalogue row. */
@@ -1049,7 +1066,14 @@ const CaptureSourcePinResultSchema = z
  * `findings` column: a pin is a source hint, never a certification. The sweep then downloads that
  * one id instead of walking the ladder, STILL applies the duration guard (a wrong paste must never
  * land a live set), still runs the fingerprint, and records the capture `operator-verified` —
- * which the historic verification backfill leaves alone. Codes: `not_found`/404.
+ * which the historic verification backfill leaves alone.
+ *
+ * `allowDurationMismatch` (default false) is the guard's one waiver, for the case where the operator
+ * has deliberately chosen a different EDIT of the same recording (a radio cut, an extended mix)
+ * because it is the one that exists: the sweep then skips the duration guard for the pinned id and
+ * logs the two lengths, and the row's own `duration_ms` is never rewritten — the finding keeps its
+ * store length. Stored on `tracks.capture_source_pin_allow_duration`; a clear resets it. Codes:
+ * `not_found`/404.
  */
 export const pinCaptureSource = oc
   .route({
@@ -1061,6 +1085,8 @@ export const pinCaptureSource = oc
   })
   .input(
     z.object({
+      /** Waive the duration guard for this pin — a deliberately chosen different edit. */
+      allowDurationMismatch: z.boolean().optional(),
       trackId: z.string(),
       /** A bare 11-char YouTube video id, or a youtube.com / youtu.be / music.youtube.com URL. */
       youtubeVideoId: z.string().min(1).max(2_048),
@@ -1295,6 +1321,8 @@ export const TrackWorkItemSchema = z
      * unchanged.
      */
     captureSourcePin: z.string().optional(),
+    /** The pin's duration override — present (true) only beside a pin the operator waived the guard for. */
+    captureSourcePinAllowDuration: z.boolean().optional(),
     certified: z.boolean(),
     /**
      * The ready-made DEEZER search query — Deezer's `artist:"…" track:"…"` FIELD syntax, a different
