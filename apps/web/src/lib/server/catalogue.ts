@@ -2328,7 +2328,8 @@ export type CatalogueTrackItem = {
   /**
    * The capture-verification verdict (docs/the-ear.md § Wrong audio): `preview-match` (the
    * captured audio matched the ISRC preview), `unverified` (the gate abstained — no reference),
-   * `mismatch` (a finding awaiting the operator's ruling), or null (pre-gate legacy / no capture).
+   * `mismatch` (a finding awaiting the operator's ruling), `operator-verified` (the pinned source),
+   * `consensus-verified` (independent uploads agreeing), or null (pre-gate legacy / no capture).
    * A quiet honesty marker; the board may whisper `unverified`, never redesign around it.
    */
   captureVerification: string | null;
@@ -3570,6 +3571,7 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
               analyzed_from = null,
               capture_verification = null,
               capture_source_pin = null,
+              capture_source_pin_allow_duration = 0,
               youtube_video_id = case when youtube_verified_by = 'operator' then null else youtube_video_id end,
               youtube_video_official = case when youtube_verified_by = 'operator' then null else youtube_video_official end,
               youtube_verified_at = case when youtube_verified_by = 'operator' then null else youtube_verified_at end,
@@ -3818,7 +3820,11 @@ export async function countUnverifiedCaptures(): Promise<number> {
  * A row with no captured audio (or already quarantined) is a `not-captured` no-op. A row whose
  * capture is `operator-verified` — taken from the operator's pinned source — is an
  * `operator-verified` no-op: the backfill never flags what the operator chose, whatever verdict a
- * stale box re-posts for it. Returns the action taken so the sweep reports honestly.
+ * stale box re-posts for it. A `consensus-verified` row (the ladder accepted an upload on the
+ * agreement of independent uploads, not the preview) gets NO such pass: it is machine evidence,
+ * and a verdict posted for it routes exactly like a verdict for a `preview-match` row — a fresh
+ * match re-stamps it, a mismatch flags the finding or quarantines the catalogue row. Returns the
+ * action taken so the sweep reports honestly.
  */
 export async function verifyCapture(
   trackId: string,

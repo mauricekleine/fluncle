@@ -1628,6 +1628,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
       // them: this capture came from the operator's own pick.
       sql: `update tracks set analyzed_from = 'full', capture_status = 'done',
                               capture_source_pin = 'dQw4w9WgXcQ',
+                              capture_source_pin_allow_duration = 1,
                               youtube_video_id = 'dQw4w9WgXcQ', youtube_video_official = 1,
                               youtube_verified_at = '2026-07-02T00:00:00.000Z',
                               youtube_verified_by = 'operator', source_verification = 'operator'
@@ -1643,12 +1644,14 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     // (gated on `source_verification is null`) must be free to re-examine the row.
     const pinned = await db.execute({
       args: ["finding-dwyl"],
-      sql: `select capture_source_pin, youtube_video_id, youtube_video_official, youtube_verified_at,
+      sql: `select capture_source_pin, capture_source_pin_allow_duration, youtube_video_id,
+                   youtube_video_official, youtube_verified_at,
                    youtube_verified_by, source_verification
             from tracks where track_id = ?`,
     });
     expect(pinned.rows[0]).toMatchObject({
       capture_source_pin: null,
+      capture_source_pin_allow_duration: 0,
       source_verification: null,
       youtube_verified_at: null,
       youtube_verified_by: null,

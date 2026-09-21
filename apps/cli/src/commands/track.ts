@@ -645,6 +645,8 @@ export async function trackPurgeVideoCommand(idOrLogId: string): Promise<TrackPu
 // Operator-authenticated (`pin_capture_source` / `clear_capture_source`).
 export type TrackCaptureSourcePinResponse = {
   captureSourcePin: null | string;
+  /** Whether the standing pin waives the duration guard (`--allow-duration-mismatch`). */
+  captureSourcePinAllowDuration: boolean;
   captureStatus: string;
   logId: null | string;
   ok: true;
@@ -654,10 +656,16 @@ export type TrackCaptureSourcePinResponse = {
 export async function trackPinSourceCommand(
   idOrLogId: string,
   youtube: string,
+  options: { allowDurationMismatch?: boolean } = {},
 ): Promise<TrackCaptureSourcePinResponse> {
   return adminApiPut<TrackCaptureSourcePinResponse>(
     `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/capture-source`,
-    { youtubeVideoId: youtube },
+    {
+      // Sent only when set, so a plain pin's body is unchanged and the server's default (false)
+      // is the one source of truth for the flag's absence.
+      ...(options.allowDurationMismatch === true ? { allowDurationMismatch: true } : {}),
+      youtubeVideoId: youtube,
+    },
   );
 }
 

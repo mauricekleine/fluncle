@@ -86,16 +86,21 @@ import {
   type CaptureFinding,
   type CaptureProgress,
   type CaptureProgressPorts,
+  type LadderPorts,
   type PinnedUploadPorts,
   type ProxySession,
   type ReceiptCoordinates,
+  type RejectedMemory,
   type YtCandidate,
   CAPTURE_ADMISSION_ACTIONS,
   captureVerificationFor,
+  findConsensus,
   findPinnedUpload,
+  findVerifiedUpload,
   isCaptureAdmissionAction,
   isPinnedDurationRefusal,
 } from "./capture-sweep";
+import { mutualWindowMatch } from "./fingerprint-match";
 // The REAL /status strain detector, imported rather than re-implemented: since #994 this
 // sweep's stderr is teed into the marker and scored by these two functions, so the only
 // honest way to pin the wording contract is to run the real lines through them.
@@ -2475,7 +2480,11 @@ describe("the PROVENANCE phase never touches a capture column", () => {
     // A parallel walk would drift, and the thing it would drift on is the identity gate that keeps
     // wrong audio out of the archive. Exactly one implementation exists, and both callers use it.
     expect(source.match(/async function findVerifiedUpload\(/g)).toHaveLength(1);
-    expect(source.match(/verifyCaptureFile\(previewFp/g)).toHaveLength(1);
+    // ONE gate call in the ladder walk (the pinned walk has its own, against a `file` it holds by a
+    // different name), fed by the same detailed matcher.
+    expect(
+      source.match(/const verified = verifyCaptureFileDetailed\(previewFp, captureFingerprint\)/g),
+    ).toHaveLength(1);
     expect(source.match(/const attempts = filterRejectedCandidates\(/g)).toHaveLength(1);
   });
 
@@ -2619,7 +2628,14 @@ describe("flat search extraction — one seventh of the bytes, on every search t
     expect(
       source.match(/args\.push\(buildCaptureDownloadUrl\(source, candidate\.id\)\);/g),
     ).toHaveLength(2);
-    expect(source).toContain("const realDurationSec = probeDurationSec(file.path)");
+    // The ladder walk and the pinned walk both ffprobe the REAL file through their injectable port,
+    // whose default is the ffprobe helper.
+    expect(
+      source.match(/const realDurationSec = ports\.probeDurationSec\(file\.path\)/g),
+    ).toHaveLength(2);
+    expect(source).toContain(
+      "probeDurationSec: options.ports?.probeDurationSec ?? probeDurationSec",
+    );
   });
 });
 
@@ -3959,10 +3975,17 @@ describe("the operator's capture-source pin", () => {
     ]) {
       expect(pinnedWalk).not.toContain(memoryTouch);
     }
-    // …and the caller hands the memory ONLY to the ladder walk.
-    expect(captureFn).toContain(
-      "return findPinnedUpload({ dir: directory, finding, session, videoId: pin });",
+    // …and the caller hands the memory ONLY to the ladder walk: the pinned call names exactly the
+    // override flag, the directory, the row, the session and the id.
+    const pinnedCall = captureFn.slice(
+      captureFn.indexOf("return findPinnedUpload({"),
+      captureFn.indexOf("return findVerifiedUpload({"),
     );
+    expect(pinnedCall).toContain(
+      "allowDurationMismatch: finding.captureSourcePinAllowDuration === true,",
+    );
+    expect(pinnedCall).toContain("videoId: pin,");
+    expect(pinnedCall).not.toContain("memory");
   });
 
   test("the duration guard STILL applies — a wrong paste is refused, its file deleted, no fingerprint spent", async () => {
@@ -3999,6 +4022,90 @@ describe("the operator's capture-source pin", () => {
     // The bytes are gone and the gate was never even consulted for a file that fails the guard.
     expect(existsSync(join(dir, "audio.webm"))).toBe(false);
     expect(fingerprinted).toBe(0);
+  });
+
+  test("the DURATION OVERRIDE waives the guard for the pinned id only — a 233 s edit lands on a 365 s finding, logged, on operator authority", async () => {
+    // `allowDurationMismatch` is the operator saying, with the two lengths in front of him, that
+    // this different EDIT is the recording he wants captured. Without it the same upload is the
+    // duration refusal below (`failed`, retryable); with it the file is kept, fingerprinted for the
+    // record, and captured `operator`. The row's own `duration_ms` is never touched here — the
+    // returned upload carries bytes and a verdict, no length.
+    const longFinding: CaptureFinding = { ...finding, durationMs: 365_000 };
+    const refusedDir = workdir();
+    const refused = await withLog(() =>
+      findPinnedUpload({
+        dir: refusedDir,
+        finding: longFinding,
+        ports: fakePorts(refusedDir, { probeDurationSec: () => 233 }),
+        session: fakeSession(),
+        videoId: "dQw4w9WgXcQ",
+      }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      ),
+    );
+    expect(isPinnedDurationRefusal(refused.value)).toBe(true);
+    expect(existsSync(join(refusedDir, "audio.webm"))).toBe(false);
+
+    const dir = workdir();
+    let fingerprinted = 0;
+    const ports = fakePorts(dir, {
+      fingerprint: () => {
+        fingerprinted += 1;
+        return null;
+      },
+      probeDurationSec: () => 233,
+    });
+    const { lines, value } = await withLog(() =>
+      findPinnedUpload({
+        allowDurationMismatch: true,
+        dir,
+        finding: longFinding,
+        ports,
+        session: fakeSession(),
+        videoId: "dQw4w9WgXcQ",
+      }),
+    );
+
+    expect(value.verdict).toBe("operator");
+    expect(value.videoId).toBe("dQw4w9WgXcQ");
+    expect(existsSync(value.path)).toBe(true);
+    expect(fingerprinted).toBe(1);
+    expect(
+      lines.some((line) =>
+        line.includes("pinned upload duration 233s vs 365s — accepted on operator authority"),
+      ),
+    ).toBe(true);
+    expect(lines.some((line) => line.includes("fails the duration guard"))).toBe(false);
+    // The caller hands the override in from the prepared row's flag, and only ever as a boolean.
+    expect(captureFn).toContain(
+      "allowDurationMismatch: finding.captureSourcePinAllowDuration === true,",
+    );
+    // …and the sweep's snapshot validator admits the flag as a boolean, nothing looser.
+    expect(source).toContain('"captureSourcePinAllowDuration",');
+    expect(source).toContain(
+      'validOptionalPreparedBoolean(value, "captureSourcePinAllowDuration")',
+    );
+  });
+
+  test("a pin WITHOUT the override still refuses a wrong length — a paste is never waived by default", async () => {
+    const dir = workdir();
+    const { value: error } = await withLog(() =>
+      findPinnedUpload({
+        allowDurationMismatch: false,
+        dir,
+        finding: { ...finding, durationMs: 365_000 },
+        ports: fakePorts(dir, { probeDurationSec: () => 233 }),
+        session: fakeSession(),
+        videoId: "dQw4w9WgXcQ",
+      }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      ),
+    );
+
+    expect(isPinnedDurationRefusal(error)).toBe(true);
+    expect((error as Error).message).toContain("233s against the row's 365s");
   });
 
   test("the duration refusal is a THROW, so the caller lands `failed` (retryable), never `unmatched`", () => {
@@ -4125,5 +4232,436 @@ describe("the operator's capture-source pin", () => {
     // cannot turn an operator-verified capture into a preview-match on replay.
     expect(source).toContain("const verification = captureVerificationFor(completion.verdict);");
     expect(source).toContain("const verification = captureVerificationFor(accepted.verdict);");
+  });
+});
+
+// ── THE CONSENSUS CHECK (docs/the-ear.md § Wrong audio) ────────────────────────────────────────
+//
+// The preview gate's one blind spot: a store preview cut from a low-information section scores a BER
+// around 0.33 against EVERY genuine upload, while the genuine uploads agree with each other at
+// 0.02–0.04 and a wrong song agrees with nothing. These tests drive the ladder walk through its
+// injected ports (no yt-dlp, no fpcalc, no network) with fingerprints shaped to those measured
+// figures, and prove the walk's memory, its file handling, and its download budget around them.
+describe("the consensus check — independent uploads agreeing where the preview could not", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+  const FRAMES = 600;
+
+  /** A deterministic pseudo-random 32-bit fingerprint — one "recording" per seed. */
+  function recording(seed: number, frames = FRAMES): number[] {
+    let state = seed >>> 0 || 1;
+    return Array.from({ length: frames }, () => {
+      // xorshift32
+      state ^= state << 13;
+      state >>>= 0;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      state >>>= 0;
+      return state | 0;
+    });
+  }
+
+  /**
+   * Another upload of the SAME recording: flip `bitsPerFrame` bits in every `everyNth` frame — a
+   * BER of bitsPerFrame / (32 × everyNth). 1/1 ≈ 0.031 (UKF vs Topic), 1/2 ≈ 0.016 (UKF vs
+   * Sleepless), and 1/1 plus a second bit every third frame ≈ 0.042 (Sleepless vs Topic, UKF vs
+   * Flatch) — the measured spread of genuine mutual agreement.
+   */
+  function reupload(base: readonly number[], bitsPerFrame: number, everyNth = 1): number[] {
+    return base.map((frame, index) => {
+      if (index % everyNth !== 0) {
+        return frame;
+      }
+      let mask = 0;
+      for (let bit = 0; bit < bitsPerFrame; bit += 1) {
+        mask |= 1 << ((index + bit * 7) % 32);
+      }
+      return (frame ^ mask) | 0;
+    });
+  }
+
+  /** Flip one more bit in every third frame (offset `phase`) — a second, slightly farther upload. */
+  function thirdFrameBit(base: readonly number[], phase: number, shift: number): number[] {
+    return base.map((frame, index) =>
+      index % 3 === phase ? (frame ^ (1 << ((index + shift) % 32))) | 0 : frame,
+    );
+  }
+
+  /**
+   * The LOW-INFORMATION store preview: the recording's own middle 240 frames with 11 of 32 bits
+   * disagreeing in every frame — BER 0.344, the measured "preview vs the distributor's own upload"
+   * figure that the gate (0.20) rightly refuses and that no threshold tweak should admit.
+   */
+  function lowInformationPreview(base: readonly number[]): number[] {
+    const start = Math.floor((base.length - 240) / 2);
+    return base.slice(start, start + 240).map((frame) => (frame ^ 0x7ff) | 0);
+  }
+
+  const RECORDING = recording(7);
+  const WRONG_SONG = recording(99);
+  const PREVIEW = lowInformationPreview(RECORDING);
+  const UKF = reupload(RECORDING, 1, 2);
+  const TOPIC = reupload(RECORDING, 1);
+  const SLEEPLESS = thirdFrameBit(reupload(RECORDING, 1), 0, 11);
+  const FLATCH = thirdFrameBit(reupload(RECORDING, 1), 1, 5);
+
+  test("the fixtures sit where the box measured them", () => {
+    // Genuine uploads agree with each other well inside the gate's 0.20; the preview sits at 0.34
+    // against every one of them; the wrong song sits at ≈0.5 against everything.
+    const ber = (a: readonly number[], b: readonly number[]) => mutualWindowMatch(a, b)?.ber ?? 1;
+    expect(ber(UKF, TOPIC)).toBeGreaterThan(0.01);
+    expect(ber(UKF, TOPIC)).toBeLessThan(0.05);
+    expect(ber(UKF, SLEEPLESS)).toBeLessThan(0.06);
+    expect(ber(TOPIC, SLEEPLESS)).toBeLessThan(0.06);
+    expect(ber(UKF, FLATCH)).toBeLessThan(0.06);
+    expect(ber(UKF, WRONG_SONG)).toBeGreaterThan(0.4);
+    for (const upload of [UKF, TOPIC, SLEEPLESS, FLATCH]) {
+      const gate = verifyCaptureFileDetailed(PREVIEW, upload);
+      expect(gate.verdict).toBe("mismatch");
+      expect(gate.ber ?? 0).toBeGreaterThan(0.3);
+      expect(gate.ber ?? 0).toBeLessThan(0.4);
+    }
+  });
+
+  const finding: CaptureFinding = {
+    artists: ["Krakota"],
+    certified: true,
+    durationMs: 259_000,
+    logId: "012.3.4B",
+    title: "Be The Reason",
+    trackId: "track-consensus",
+  };
+
+  type Upload = {
+    channelId?: string;
+    durationSec: number;
+    fingerprint: readonly number[];
+    id: string;
+  };
+
+  function fakeSession(): ProxySession {
+    return {
+      reroll: () => false,
+      rerollable: () => false,
+      url: "http://proxy/first",
+    };
+  }
+
+  const scratch: string[] = [];
+  function workdir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "capture-consensus-"));
+    scratch.push(dir);
+    return dir;
+  }
+  afterAll(() => {
+    for (const dir of scratch) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  async function withLog<T>(run: () => Promise<T>): Promise<{ lines: string[]; value: T }> {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (message: unknown) => {
+      lines.push(String(message));
+    };
+    try {
+      return { lines, value: await run() };
+    } finally {
+      console.error = original;
+    }
+  }
+
+  /**
+   * Ports over a fixed candidate list, in SEARCH order. Every candidate carries the finding's own
+   * title and no trust, and its listed duration is `durationSec`, so the ranker orders them by
+   * closeness to the row's length — the fixtures below pick durations so rank == list order. The
+   * download writes `bytes of <id>` into the downloader's `audio.webm` slot exactly as yt-dlp does
+   * (so a held file MUST be moved off it or the next download clobbers it), the fingerprint port
+   * reads the id back out of the bytes, and ffprobe answers the listed duration.
+   */
+  function fakePorts(uploads: readonly Upload[], overrides: Partial<LadderPorts> = {}) {
+    const downloads: string[] = [];
+    const byId = new Map(uploads.map((upload) => [upload.id, upload]));
+    const idFromPath = (path: string) => readFileSync(path, "utf8").replace(/^bytes of /, "");
+    const ports: LadderPorts = {
+      download:
+        overrides.download ??
+        ((_proxy, candidate, dir) => {
+          downloads.push(candidate.id);
+          const path = join(dir, "audio.webm");
+          writeFileSync(path, `bytes of ${candidate.id}`);
+          return { ext: "webm", path };
+        }),
+      fingerprint:
+        overrides.fingerprint ??
+        ((path) => {
+          const upload = byId.get(idFromPath(path));
+          return upload ? [...upload.fingerprint] : null;
+        }),
+      probeDurationSec:
+        overrides.probeDurationSec ?? ((path) => byId.get(idFromPath(path))?.durationSec ?? 0),
+      referenceFingerprint: overrides.referenceFingerprint ?? (async () => [...PREVIEW]),
+      search:
+        overrides.search ??
+        (() =>
+          uploads.map((upload) => ({
+            ...(upload.channelId ? { channel: upload.channelId, channelId: upload.channelId } : {}),
+            durationSec: upload.durationSec,
+            id: upload.id,
+            source: "youtube" as const,
+            title: finding.title ?? "",
+          }))),
+    };
+    return { downloads, ports };
+  }
+
+  function freshMemory(): RejectedMemory {
+    return { dirty: false, sources: [] };
+  }
+
+  async function walk(uploads: readonly Upload[], overrides: Partial<LadderPorts> = {}) {
+    const dir = workdir();
+    const { downloads, ports } = fakePorts(uploads, overrides);
+    const memory = freshMemory();
+    const { lines, value } = await withLog(() =>
+      findVerifiedUpload({ dir, finding, memory, ports, session: fakeSession() }),
+    );
+    return { dir, downloads, lines, memory, value };
+  }
+
+  test("three preview mismatches, two agreeing from different channels → the highest-ranked of the pair, `consensus`; the third remembered", async () => {
+    const uploads: Upload[] = [
+      { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
+      { channelId: "UC-two", durationSec: 260, fingerprint: TOPIC, id: "topic0000001" },
+      { channelId: "UC-three", durationSec: 261, fingerprint: WRONG_SONG, id: "wrong0000001" },
+    ];
+    const { dir, downloads, lines, memory, value } = await walk(uploads);
+
+    expect(value?.verdict).toBe("consensus");
+    expect(value?.videoId).toBe("ukf00000001");
+    expect(captureVerificationFor("consensus")).toBe("consensus-verified");
+    // The accepted file is the held one, moved off the `audio.*` slot, still on disk with the
+    // bytes that were downloaded for it — and the walk reads them back for the caller.
+    expect(value?.path).toBe(join(dir, "held-ukf00000001.webm"));
+    expect(existsSync(value?.path ?? "")).toBe(true);
+    expect(Buffer.from(value?.bytes ?? []).toString("utf8")).toBe("bytes of ukf00000001");
+    expect(value?.digest).toBe(createHash("sha256").update("bytes of ukf00000001").digest("hex"));
+    // The agreeing upload is NOT remembered as wrong audio; the disagreeing one IS.
+    expect(memory.dirty).toBe(true);
+    expect(memory.sources.map((entry) => entry.videoId)).toEqual(["wrong0000001"]);
+    // Their files are gone; only the winner's remains.
+    expect(existsSync(join(dir, "held-topic0000001.webm"))).toBe(false);
+    expect(existsSync(join(dir, "held-wrong0000001.webm"))).toBe(false);
+    // Exactly the walk's three downloads — consensus adds none.
+    expect(downloads).toEqual(["ukf00000001", "topic0000001", "wrong0000001"]);
+    // The one line that names the verdict, with the BER evidence.
+    const line = lines.find((entry) => entry.includes("accepting ukf00000001 on consensus"));
+    expect(line).toContain("preview gate rejected 3 duration-verified candidate(s)");
+    expect(line).toContain("2 of them agree with each other (ber=0.0");
+  });
+
+  test("two agreeing uploads from the SAME channel are one witness → unmatched, all remembered", async () => {
+    const uploads: Upload[] = [
+      { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
+      { channelId: "UC-one", durationSec: 260, fingerprint: TOPIC, id: "ukf00000002" },
+      { channelId: "UC-three", durationSec: 261, fingerprint: WRONG_SONG, id: "wrong0000001" },
+    ];
+    const { dir, memory, value } = await walk(uploads);
+
+    expect(value).toBeNull();
+    // The plain preview-gate memory: every preview mismatch remembered, in walk order.
+    expect(memory.sources.map((entry) => entry.videoId)).toEqual([
+      "ukf00000001",
+      "ukf00000002",
+      "wrong0000001",
+    ]);
+    expect(memory.sources.every((entry) => entry.reason === "fingerprint-mismatch")).toBe(true);
+    expect(existsSync(join(dir, "held-ukf00000001.webm"))).toBe(false);
+  });
+
+  test("a candidate with no channel identity cannot be shown independent and is never counted", async () => {
+    const uploads: Upload[] = [
+      { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
+      { durationSec: 260, fingerprint: TOPIC, id: "nochan00001" },
+    ];
+    const { memory, value } = await walk(uploads);
+
+    expect(value).toBeNull();
+    expect(memory.sources.map((entry) => entry.videoId)).toEqual(["ukf00000001", "nochan00001"]);
+  });
+
+  test("an agreeing upload that FAILED the duration guard has no say — one held witness is no consensus", async () => {
+    const uploads: Upload[] = [
+      { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
+      // Listed at the row's length so the ranker admits it, but the REAL file is a 6-minute edit.
+      { channelId: "UC-two", durationSec: 260, fingerprint: TOPIC, id: "topic0000001" },
+    ];
+    const { memory, value } = await walk(uploads, {
+      probeDurationSec: (path) => (readFileSync(path, "utf8").includes("topic0000001") ? 360 : 259),
+    });
+
+    expect(value).toBeNull();
+    // The wrong-length upload is skipped, not remembered (a plain miss); the held one is remembered.
+    expect(memory.sources.map((entry) => entry.videoId)).toEqual(["ukf00000001"]);
+  });
+
+  test("a preview MATCH later in the walk wins over any consensus — the held pair is remembered as before", async () => {
+    // The third candidate carries the section the PREVIEW recognises, so the gate passes it; the
+    // two earlier uploads — which agree with each other — were still refused by the preview and
+    // are remembered as wrong audio, the plain preview-gate memory.
+    const full = [...WRONG_SONG];
+    full.splice(Math.floor((full.length - 240) / 2), 240, ...PREVIEW);
+    const uploads: Upload[] = [
+      { channelId: "UC-a", durationSec: 259, fingerprint: UKF, id: "a0000000001" },
+      { channelId: "UC-b", durationSec: 260, fingerprint: TOPIC, id: "b0000000001" },
+      { channelId: "UC-c", durationSec: 261, fingerprint: full, id: "c0000000001" },
+    ];
+    const { dir, memory, value } = await walk(uploads);
+
+    expect(value?.verdict).toBe("match");
+    expect(value?.videoId).toBe("c0000000001");
+    expect(value?.path).toBe(join(dir, "audio.webm"));
+    expect(memory.sources.map((entry) => entry.videoId)).toEqual(["a0000000001", "b0000000001"]);
+    expect(existsSync(join(dir, "held-a0000000001.webm"))).toBe(false);
+    expect(existsSync(join(dir, "held-b0000000001.webm"))).toBe(false);
+  });
+
+  test("no extra downloads: the held set is bounded by the walk's own attempt budget", async () => {
+    // Five ranked candidates; the walk downloads its DOWNLOAD_ATTEMPTS (3 by default) and no more —
+    // the two that would have agreed at ranks 4 and 5 are never fetched, and the walk lands where
+    // it always did. Consensus reads the files already on disk; it never widens the budget.
+    const uploads: Upload[] = [
+      { channelId: "UC-x", durationSec: 259, fingerprint: WRONG_SONG, id: "x0000000001" },
+      { channelId: "UC-y", durationSec: 260, fingerprint: recording(5), id: "y0000000001" },
+      { channelId: "UC-z", durationSec: 261, fingerprint: recording(6), id: "z0000000001" },
+      { channelId: "UC-one", durationSec: 262, fingerprint: UKF, id: "ukf00000001" },
+      { channelId: "UC-two", durationSec: 263, fingerprint: TOPIC, id: "topic0000001" },
+    ];
+    const { downloads, value } = await walk(uploads);
+
+    expect(value).toBeNull();
+    expect(downloads).toEqual(["x0000000001", "y0000000001", "z0000000001"]);
+  });
+
+  test("a thrown error mid-walk still remembers what was held and deletes its file", async () => {
+    const uploads: Upload[] = [
+      { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
+      { channelId: "UC-two", durationSec: 260, fingerprint: TOPIC, id: "topic0000001" },
+    ];
+    const dir = workdir();
+    const { ports } = fakePorts(uploads, {
+      download: (_proxy, candidate, directory) => {
+        if (candidate.id === "topic0000001") {
+          throw new Error("yt-dlp download failed: proxy tunnel reset");
+        }
+        const path = join(directory, "audio.webm");
+        writeFileSync(path, `bytes of ${candidate.id}`);
+        return { ext: "webm", path };
+      },
+    });
+    const memory = freshMemory();
+
+    const { value: error } = await withLog(() =>
+      findVerifiedUpload({ dir, finding, memory, ports, session: fakeSession() }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      ),
+    );
+
+    expect((error as Error).message).toContain("proxy tunnel reset");
+    expect(memory.sources.map((entry) => entry.videoId)).toEqual(["ukf00000001"]);
+    expect(existsSync(join(dir, "held-ukf00000001.webm"))).toBe(false);
+  });
+
+  test("the abstain path is untouched: no reference → the first duration-verified upload, `no-reference`, nothing held", async () => {
+    const uploads: Upload[] = [
+      { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
+      { channelId: "UC-two", durationSec: 260, fingerprint: TOPIC, id: "topic0000001" },
+    ];
+    const { downloads, memory, value } = await walk(uploads, {
+      referenceFingerprint: async () => null,
+    });
+
+    expect(value?.verdict).toBe("no-reference");
+    expect(value?.videoId).toBe("ukf00000001");
+    expect(downloads).toEqual(["ukf00000001"]);
+    expect(memory.dirty).toBe(false);
+  });
+
+  test("findConsensus — every downloaded witness counts, the highest-ranked leads, no channel means no vote", () => {
+    // The measured case: four duration-verified uploads from four channels, all refused by the
+    // preview, all agreeing with each other — the fourth included, which is why the check runs
+    // over EVERY held candidate and not a top-N of them.
+    const held = [
+      {
+        candidate: { channelId: "UC-ukf", durationSec: 259, id: "ukf", title: "" },
+        fingerprint: UKF,
+      },
+      {
+        candidate: { channelId: "UC-sleepless", durationSec: 259, id: "sleepless", title: "" },
+        fingerprint: SLEEPLESS,
+      },
+      {
+        candidate: { channelId: "UC-topic", durationSec: 259, id: "topic", title: "" },
+        fingerprint: TOPIC,
+      },
+      {
+        candidate: { channelId: "UC-flatch", durationSec: 262, id: "flatch", title: "" },
+        fingerprint: FLATCH,
+      },
+    ];
+    const verdict = findConsensus(held);
+
+    expect(verdict?.accepted.candidate.id).toBe("ukf");
+    expect(verdict?.agreeing.map((entry) => entry.candidate.id).sort()).toEqual([
+      "flatch",
+      "sleepless",
+      "topic",
+    ]);
+    expect(verdict?.bers.every((ber) => ber > 0 && ber < 0.1)).toBe(true);
+
+    // A leading candidate with no channel is skipped; the next independent pair still forms.
+    const unnamedFirst = [
+      { candidate: { durationSec: 259, id: "anon", title: "" }, fingerprint: UKF },
+      ...held.slice(1),
+    ];
+    expect(findConsensus(unnamedFirst)?.accepted.candidate.id).toBe("sleepless");
+
+    // Two channels, two different recordings: nobody agrees, no consensus.
+    expect(
+      findConsensus([
+        ...held.slice(0, 1),
+        {
+          candidate: { channelId: "UC-other", durationSec: 259, id: "other", title: "" },
+          fingerprint: WRONG_SONG,
+        },
+      ]),
+    ).toBeNull();
+    // Fewer than two held: never.
+    expect(findConsensus(held.slice(0, 1))).toBeNull();
+    expect(findConsensus([])).toBeNull();
+  });
+
+  test("the journal replay and the inline path stamp `consensus-verified` through the ONE mapping", () => {
+    expect(captureVerificationFor("consensus")).toBe("consensus-verified");
+    expect(source).toContain('verdict: "consensus" | "match" | "no-reference" | "operator"');
+    // The commit types admit the verdict on both the box and the Worker side of the wire.
+    expect(source).toContain('"consensus-verified"');
+    const contract = readFileSync(
+      new URL("../../../../packages/contracts/src/orpc/admin-tracks.ts", import.meta.url),
+      "utf8",
+    );
+    expect(contract).toContain('"consensus-verified"');
+  });
+
+  test("a consensus capture ships NO YouTube id — the id rides only a preview match", () => {
+    const captureFn = source.slice(
+      source.indexOf("async function captureFinding("),
+      source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+    );
+    expect(captureFn).toContain(
+      'if (accepted.verdict === "match" && accepted.source !== "soundcloud") {',
+    );
+    expect(captureFn.match(/update\.youtubeVideoId = accepted\.videoId;/g)).toHaveLength(1);
   });
 });

@@ -158,6 +158,8 @@ import {
   fetchPreviewFingerprint,
   fold,
   fpcalcFingerprint,
+  maxBer,
+  mutualWindowMatch,
   normalizeArtists,
   parseRejectedSources,
   type RejectedSource,
@@ -389,6 +391,12 @@ export type CaptureFinding = {
   // authority, never remembered as a rejection. A pinned row can land `done` or `failed`, never
   // `unmatched`. Absent = no pin (the ladder walks as ever).
   captureSourcePin?: string;
+  // THE PIN'S DURATION OVERRIDE (`pin_capture_source … allowDurationMismatch`). True ⇒
+  // `findPinnedUpload` skips the duration guard for the pinned id, on the operator's authority: he
+  // has deliberately chosen a different EDIT of the same recording (a radio cut, an extended mix)
+  // because it is the one that exists. The row's own `duration_ms` is never overwritten — the
+  // finding keeps its store length. Absent/false = the guard applies as ever.
+  captureSourcePinAllowDuration?: boolean;
   // True when a `findings` row exists — the certification rail's flag. FALSE for a catalogue
   // track (visible only once the operator opens the budget). The re-derive write-back gates on
   // it: `enrichment_status` is a certification column and the server 409s an uncertified write.
@@ -433,7 +441,11 @@ export type CaptureExternalResult =
       bodyBase64: string;
       bytes: number;
       capturedAt: string;
-      captureVerification: "operator-verified" | "preview-match" | "unverified";
+      captureVerification:
+        | "consensus-verified"
+        | "operator-verified"
+        | "preview-match"
+        | "unverified";
       contentType: string;
       kind: "capture";
       outcome: "done";
@@ -502,7 +514,7 @@ type CaptureProviderCompletion =
       outcome: "accepted";
       rejectedSources?: string;
       source: CaptureSearchSource;
-      verdict: "match" | "no-reference" | "operator";
+      verdict: "consensus" | "match" | "no-reference" | "operator";
       videoId: string;
     };
 
@@ -1969,6 +1981,11 @@ function validOptionalPreparedString(
   return value === undefined || (typeof value === "string" && value.length <= max);
 }
 
+function validOptionalPreparedBoolean(track: Record<string, unknown>, key: string): boolean {
+  const value = track[key];
+  return value === undefined || typeof value === "boolean";
+}
+
 /** The exact key allow-list of a prepared track: the snapshot the sweep captures FROM. */
 const PREPARED_TRACK_KEYS = new Set([
   "analyzedFrom",
@@ -1976,6 +1993,7 @@ const PREPARED_TRACK_KEYS = new Set([
   "artists",
   "bpm",
   "captureSourcePin",
+  "captureSourcePinAllowDuration",
   "certified",
   "durationMs",
   "label",
@@ -2018,13 +2036,14 @@ function validPreparedTrack(value: unknown, expectedTrackId: string): value is C
     (value.analyzedFrom === undefined ||
       value.analyzedFrom === "full" ||
       value.analyzedFrom === "preview") &&
-    (value.anchored === undefined || typeof value.anchored === "boolean") &&
+    validOptionalPreparedBoolean(value, "anchored") &&
     (value.bpm === undefined || (typeof value.bpm === "number" && Number.isFinite(value.bpm))) &&
     (value.durationMs === undefined ||
       (Number.isInteger(value.durationMs) && Number(value.durationMs) >= 1)) &&
     (value.sourceAudioFailures === undefined ||
       (Number.isInteger(value.sourceAudioFailures) && Number(value.sourceAudioFailures) >= 0)) &&
     validOptionalPreparedString(value, "captureSourcePin", 64) &&
+    validOptionalPreparedBoolean(value, "captureSourcePinAllowDuration") &&
     validOptionalPreparedString(value, "label", 1_024) &&
     validOptionalPreparedString(value, "logId", 64) &&
     validOptionalPreparedString(value, "sourceAudioKey", 1_024) &&
@@ -3400,8 +3419,11 @@ export type VerifiedUpload = {
   /**
    * `match` = fingerprint-verified. `no-reference` = the honest abstain (nothing was compared).
    * `operator` = the operator's pinned source: the gate ran, the pin outranks its verdict.
+   * `consensus` = the preview gate refused every duration-verified upload, but two or more of them
+   * from different channels carry the same recording as each other (the CONSENSUS check below):
+   * machine evidence, subordinate to a preview match, re-checkable.
    */
-  verdict: "match" | "no-reference" | "operator";
+  verdict: "consensus" | "match" | "no-reference" | "operator";
   videoId: string;
 };
 
@@ -3409,13 +3431,18 @@ export type VerifiedUpload = {
  * ONE mapping from the walk's verdict to the `capture_verification` the row is stamped with, shared
  * by the inline success path and the journal-replay path so the two can never disagree. `match` →
  * `preview-match`; `operator` → `operator-verified` (the pinned source — the historic verification
- * backfill leaves it alone); anything else is the honest `unverified` abstain.
+ * backfill leaves it alone); `consensus` → `consensus-verified` (independent uploads agreeing with
+ * each other — the server treats it like any other verified capture and MAY re-check it); anything
+ * else is the honest `unverified` abstain.
  */
 export function captureVerificationFor(
   verdict: VerifiedUpload["verdict"],
-): "operator-verified" | "preview-match" | "unverified" {
+): "consensus-verified" | "operator-verified" | "preview-match" | "unverified" {
   if (verdict === "match") {
     return "preview-match";
+  }
+  if (verdict === "consensus") {
+    return "consensus-verified";
   }
   return verdict === "operator" ? "operator-verified" : "unverified";
 }
@@ -3442,6 +3469,141 @@ function captureProviderCompletion(
   };
 }
 
+/** The seams the ladder walk reaches the world through — injectable so the walk is provable. */
+export type LadderPorts = {
+  download: (
+    proxyUrl: string,
+    candidate: YtCandidate,
+    dir: string,
+    playerClientFallback: boolean,
+  ) => { ext: string; path: string };
+  fingerprint: (path: string) => null | number[];
+  probeDurationSec: (path: string) => number;
+  referenceFingerprint: (idOrLogId: string) => Promise<null | number[]>;
+  search: (proxyUrl: string, query: string, source: CaptureSearchSource) => YtCandidate[];
+};
+
+/**
+ * A duration-verified candidate the PREVIEW gate refused, kept on disk (renamed off the downloader's
+ * `audio.*` slot so the next download cannot overwrite it) with its fingerprint, for the consensus
+ * check at the end of the walk. Bounded by construction: the walk downloads at most
+ * `DOWNLOAD_ATTEMPTS` files, and a held one is one of those — nothing extra is ever downloaded.
+ * Held in WALK order, which is rank order — the tiebreak inside an agreeing set.
+ */
+type HeldCandidate = {
+  candidate: YtCandidate;
+  digest: string;
+  ext: string;
+  fingerprint: readonly number[];
+  path: string;
+};
+
+/**
+ * The independence key of a candidate for the consensus check: the upload's CHANNEL. Two uploads
+ * from one channel are one uploader's word said twice, never two witnesses. A candidate whose
+ * channel yt-dlp did not report cannot be shown independent of anyone and is never counted.
+ */
+function consensusChannelKey(candidate: YtCandidate): string | undefined {
+  return candidate.channelId ?? candidate.channel;
+}
+
+/** One agreeing set the consensus check found: the accepted candidate + who agrees with it. */
+export type ConsensusVerdict<T extends { candidate: YtCandidate; fingerprint: readonly number[] }> =
+  {
+    accepted: T;
+    /** Every held candidate that carries the same recording as `accepted` — any channel. */
+    agreeing: T[];
+    /** The BER of each agreeing candidate against `accepted`, in `agreeing` order. */
+    bers: number[];
+  };
+
+/**
+ * THE CONSENSUS CHECK (docs/the-ear.md § Wrong audio). The preview gate is precision-over-recall
+ * and it has one blind spot: a store preview cut from a LOW-INFORMATION section of the recording (a
+ * beatless intro) scores a BER around 0.33 against every genuine upload — including the
+ * distributor's own `- Topic` art-track — while genuine uploads agree with EACH OTHER at 0.02–0.04
+ * and wrong-song candidates do not agree with anything. So when the gate refused every
+ * duration-verified upload the walk downloaded, ask the uploads about each other: walking the held
+ * set in RANK order, the first candidate that agrees (`mutualWindowMatch`, the gate's own `maxBer()`)
+ * with at least one candidate from a DIFFERENT channel is accepted, and every held candidate that
+ * agrees with it — any channel — is its agreeing set. `null` when no two independent uploads agree;
+ * the caller's behaviour is then exactly the terminal `unmatched` walk it always was. Pure, so the
+ * test suite can drive it with fingerprints alone.
+ */
+export function findConsensus<T extends { candidate: YtCandidate; fingerprint: readonly number[] }>(
+  held: readonly T[],
+  threshold: number = maxBer(),
+): ConsensusVerdict<T> | null {
+  for (const candidate of held) {
+    const ownKey = consensusChannelKey(candidate.candidate);
+
+    if (ownKey === undefined) {
+      continue;
+    }
+
+    const agreeing: T[] = [];
+    const bers: number[] = [];
+    let independent = false;
+
+    for (const other of held) {
+      if (other === candidate) {
+        continue;
+      }
+      const result = mutualWindowMatch(candidate.fingerprint, other.fingerprint, threshold);
+      if (result === null || !result.match) {
+        continue;
+      }
+      agreeing.push(other);
+      bers.push(result.ber);
+      const otherKey = consensusChannelKey(other.candidate);
+      if (otherKey !== undefined && otherKey !== ownKey) {
+        independent = true;
+      }
+    }
+
+    if (independent) {
+      return { accepted: candidate, agreeing, bers };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * ONE download of a candidate, answered exactly as the ladder answers a challenge: decide the
+ * recovery BEFORE the re-roll spends the session's one fresh exit (the re-roll is what spends
+ * `canReroll`), meter a bot challenge whichever branch wins (a challenge the run cannot clear is
+ * still a challenge, and its visibility must not ride on there being a re-roll left), then re-try
+ * the SAME id once — on a fresh exit, or through the player-client fallback. Anything past that
+ * throws to the caller: the ladder walk treats a recoverable one as "next candidate", the pinned
+ * walk as its retryable `failed`.
+ */
+function downloadWithRecovery(
+  download: LadderPorts["download"],
+  session: ProxySession,
+  candidate: YtCandidate,
+  dir: string,
+): { ext: string; path: string } {
+  try {
+    return download(session.url, candidate, dir, false);
+  } catch (error) {
+    const flags = error as DownloadErrorFlags;
+    const recovery = chooseDownloadRecovery(flags, session.rerollable(), candidate.source);
+
+    if (flags.isBotChallenge) {
+      session.reroll("download");
+    }
+
+    if (recovery === "reroll") {
+      return download(session.url, candidate, dir, false);
+    }
+    if (recovery === "player-client-fallback") {
+      return download(session.url, candidate, dir, true);
+    }
+    throw error;
+  }
+}
+
 /**
  * Run the ladder for one track and return the first upload that clears the fingerprint gate, or
  * `null` when the walk DISPROVED every candidate it could reach.
@@ -3450,8 +3612,17 @@ function captureProviderCompletion(
  * top hit with nothing usable behind it), exactly as the inline walk did — a recoverable skip
  * disproves nothing, so it must not be allowed to read as a terminal verdict (the 047.0.8M case).
  * `memory` is mutated in place, so a caller that persists it keeps every paid-for rejection.
+ *
+ * A candidate the PREVIEW gate refuses is not remembered on the spot: it is HELD (file + fingerprint,
+ * no extra download) until the walk ends, because the gate's refusal is not the last word when the
+ * refused uploads agree with each other (`findConsensus`). When the walk ends without a preview
+ * match, a consensus among two or more independent held candidates accepts the highest-ranked of
+ * them as `consensus`; the held candidates that DISAGREE with it are remembered as wrong audio, the
+ * agreeing ones are not. With no consensus, every held candidate is remembered — the walk's memory
+ * is then the plain preview-gate memory, every held candidate remembered. A match or a throw settles
+ * the held set the same way (all remembered), so no paid-for rejection is ever dropped.
  */
-async function findVerifiedUpload(options: {
+export async function findVerifiedUpload(options: {
   dir: string;
   finding: CaptureFinding;
   /**
@@ -3462,10 +3633,21 @@ async function findVerifiedUpload(options: {
    */
   legacyRejectKey?: string;
   memory: RejectedMemory;
+  ports?: Partial<LadderPorts>;
   session: ProxySession;
 }): Promise<VerifiedUpload | null> {
   const { dir, finding, memory, session } = options;
   const { trackId } = finding;
+  const ports: LadderPorts = {
+    download: options.ports?.download ?? runYtDownload,
+    fingerprint: options.ports?.fingerprint ?? fpcalcFingerprint,
+    probeDurationSec: options.ports?.probeDurationSec ?? probeDurationSec,
+    referenceFingerprint:
+      options.ports?.referenceFingerprint ??
+      ((idOrLogId) =>
+        fetchPreviewFingerprint({ apiBaseUrl: API_BASE_URL, apiToken: API_TOKEN, idOrLogId })),
+    search: options.ports?.search ?? runYtSearch,
+  };
 
   // THE SEARCH LADDER (bounded — QUERY_VARIANTS billed searches max, never a loop).
   // Ranked ACCEPTANCE is the gate between steps, not raw-candidate count: the 2026-07-14
@@ -3496,12 +3678,12 @@ async function findVerifiedUpload(options: {
       );
     }
     try {
-      return runYtSearch(session.url, rung.query, rung.source);
+      return ports.search(session.url, rung.query, rung.source);
     } catch (error) {
       if (!(error as { isBotChallenge?: boolean }).isBotChallenge || !session.reroll("search")) {
         throw error;
       }
-      return runYtSearch(session.url, rung.query, rung.source);
+      return ports.search(session.url, rung.query, rung.source);
     }
   });
   const ranked = found?.ranked ?? [];
@@ -3555,118 +3737,158 @@ async function findVerifiedUpload(options: {
   // null ⇒ the track has NO preview source, or fpcalc is absent — the gate then ABSTAINS on
   // whatever downloads (stamped `unverified`), never blocking a track that has no reference.
   // The preview is a verification REFERENCE only: never a vector, never a stored analysis input.
-  const previewFp = await fetchPreviewFingerprint({
-    apiBaseUrl: API_BASE_URL,
-    apiToken: API_TOKEN,
-    idOrLogId: trackId,
-  });
+  const previewFp = await ports.referenceFingerprint(trackId);
 
-  // Walk the (pre-filtered) candidates: download → known-bad sha backstop → real-duration
-  // re-check → THE FINGERPRINT GATE. A verified MATCH (or an abstain, when there is no
-  // reference) is RETURNED to the caller; a fingerprint MISMATCH rejects the candidate,
-  // remembers it, and falls through to the next upload. A DRM/bot-walled hit is skipped
-  // (recoverable) but keeps the run off a terminal verdict (see below); a non-recoverable
-  // error aborts.
-  let lastError: unknown;
-  for (const candidate of attempts) {
-    try {
-      let file: { ext: string; path: string };
-      try {
-        file = runYtDownload(session.url, candidate.candidate, dir, false);
-      } catch (error) {
-        const flags = error as DownloadErrorFlags;
-        // Decided BEFORE the re-roll fires, since the re-roll is what spends `canReroll`.
-        const recovery = chooseDownloadRecovery(
-          flags,
-          session.rerollable(),
-          candidate.candidate.source,
-        );
-
-        // Metered whichever branch wins — a challenge the run cannot clear is still a
-        // challenge, and its visibility must not ride on there being a re-roll left.
-        if (flags.isBotChallenge) {
-          session.reroll("download");
-        }
-
-        if (recovery === "reroll") {
-          // A fresh exit usually clears the challenge for the SAME candidate; if it
-          // throws again the outer catch handles it as before (recoverable → next
-          // candidate, since the run's one re-roll is now spent).
-          file = runYtDownload(session.url, candidate.candidate, dir, false);
-        } else if (recovery === "player-client-fallback") {
-          file = runYtDownload(session.url, candidate.candidate, dir, true);
-        } else {
-          throw error;
-        }
-      }
-
-      const fileBytes = new Uint8Array(readFileSync(file.path));
-      const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
-
-      // KNOWN-BAD BYTES (the deep backstop): the same wrong audio re-uploaded under a new id.
-      if (knownBadShas.has(fileDigest)) {
-        log(`candidate ${candidate.candidate.id} is the known wrong audio — trying next`);
-        rmSync(file.path, { force: true });
-        continue;
-      }
-
-      // Belt-and-suspenders: confirm the REAL downloaded duration passes the SYMMETRIC guard
-      // (the search value can lie / point at a different manifest). A wrong-LENGTH file is a
-      // plain miss, not a same-recording claim, so it is skipped but NOT remembered.
-      const realDurationSec = probeDurationSec(file.path);
-      if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
-        rmSync(file.path, { force: true });
-        continue;
-      }
-
-      // ── THE FINGERPRINT GATE ──────────────────────────────────────────────────────────────
-      const verdict = verifyCaptureFile(previewFp, file.path);
-
-      if (verdict === "mismatch") {
-        // WRONG AUDIO: the captured bytes do not match the ISRC-resolved preview (the 005.9.9L
-        // failure). Remember the source — videoId (PRE-download filter) + sha (backstop) — so it
-        // never costs bytes again, and fall through to the next upload.
-        log(`candidate ${candidate.candidate.id} failed fingerprint verification — trying next`);
+  // ── THE HELD SET ─────────────────────────────────────────────────────────────────────────
+  // Preview-refused, duration-verified candidates wait here for the consensus check. `settle`
+  // runs on EVERY exit: it remembers the held candidates NOT in `keep` (all of them, on a preview
+  // match / a terminal null / a throw — every preview refusal remembered) and deletes their files;
+  // a kept candidate is the consensus winner or one that agrees with it, and is neither remembered
+  // nor, for the winner, deleted.
+  const held: HeldCandidate[] = [];
+  const settle = (keep: ReadonlySet<HeldCandidate>, retainPath?: string): void => {
+    for (const entry of held) {
+      if (!keep.has(entry)) {
         memory.sources = appendRejectedSource(memory.sources, {
           at: new Date().toISOString(),
           reason: "fingerprint-mismatch",
-          sha256: fileDigest,
-          videoId: candidate.candidate.id,
+          sha256: entry.digest,
+          videoId: entry.candidate.id,
         });
         memory.dirty = true;
-        knownBadShas.add(fileDigest);
-        rmSync(file.path, { force: true });
-        continue;
       }
-
-      // ACCEPTED. The file is still on disk and the caller decides its fate: the capture sweep
-      // stores the bytes in R2, the provenance backfill deletes them and keeps only the id.
-      return {
-        bytes: fileBytes,
-        digest: fileDigest,
-        ext: file.ext,
-        path: file.path,
-        source: candidate.candidate.source ?? "youtube",
-        verdict,
-        videoId: candidate.candidate.id,
-      };
-    } catch (error) {
-      lastError = error;
-      if ((error as { isRecoverable?: boolean }).isRecoverable) {
-        log(`candidate ${candidate.candidate.id} unusable (DRM/bot-wall) — trying next`);
-        continue;
+      if (entry.path !== retainPath) {
+        rmSync(entry.path, { force: true });
       }
-      throw error;
     }
+    held.length = 0;
+  };
+
+  // Walk the (pre-filtered) candidates: download → known-bad sha backstop → real-duration
+  // re-check → THE FINGERPRINT GATE. A verified MATCH (or an abstain, when there is no
+  // reference) is RETURNED to the caller; a fingerprint MISMATCH holds the candidate for the
+  // consensus check and falls through to the next upload. A DRM/bot-walled hit is skipped
+  // (recoverable) but keeps the run off a terminal verdict (see below); a non-recoverable
+  // error aborts.
+  let lastError: unknown;
+  try {
+    for (const candidate of attempts) {
+      try {
+        // A fresh exit usually clears a challenge for the SAME candidate; if the retry throws
+        // again the catch below handles it as before (recoverable → next candidate, since the
+        // run's one re-roll is now spent).
+        const file = downloadWithRecovery(ports.download, session, candidate.candidate, dir);
+
+        const fileBytes = new Uint8Array(readFileSync(file.path));
+        const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
+
+        // KNOWN-BAD BYTES (the deep backstop): the same wrong audio re-uploaded under a new id.
+        if (knownBadShas.has(fileDigest)) {
+          log(`candidate ${candidate.candidate.id} is the known wrong audio — trying next`);
+          rmSync(file.path, { force: true });
+          continue;
+        }
+
+        // Belt-and-suspenders: confirm the REAL downloaded duration passes the SYMMETRIC guard
+        // (the search value can lie / point at a different manifest). A wrong-LENGTH file is a
+        // plain miss, not a same-recording claim, so it is skipped but NOT remembered — and never
+        // held: a wrong-length upload has no say in the consensus.
+        const realDurationSec = ports.probeDurationSec(file.path);
+        if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
+          rmSync(file.path, { force: true });
+          continue;
+        }
+
+        // ── THE FINGERPRINT GATE ──────────────────────────────────────────────────────────────
+        const captureFingerprint = ports.fingerprint(file.path);
+        const verified = verifyCaptureFileDetailed(previewFp, captureFingerprint);
+
+        if (verified.verdict === "mismatch" && captureFingerprint !== null) {
+          // WRONG AUDIO by the preview's account (the 005.9.9L failure) — or the preview's blind
+          // spot. HELD, not yet remembered: the file moves off the downloader's `audio.*` slot so
+          // the next download cannot clobber it, and the consensus check at the end of the walk
+          // decides whether this is a rejection to remember or a genuine upload the preview could
+          // not see. The same bytes later in the walk are still refused as known-bad.
+          log(
+            `candidate ${candidate.candidate.id} failed fingerprint verification (ber=${(verified.ber ?? 0).toFixed(3)}) — holding for consensus, trying next`,
+          );
+          knownBadShas.add(fileDigest);
+          const heldPath = join(dir, `held-${candidate.candidate.id}.${file.ext}`);
+          renameSync(file.path, heldPath);
+          held.push({
+            candidate: candidate.candidate,
+            digest: fileDigest,
+            ext: file.ext,
+            fingerprint: captureFingerprint,
+            path: heldPath,
+          });
+          continue;
+        }
+
+        // ACCEPTED. The file is still on disk and the caller decides its fate: the capture sweep
+        // stores the bytes in R2, the provenance backfill deletes them and keeps only the id. A
+        // preview match outranks any consensus the held set could have reached: every held
+        // candidate is remembered, exactly as before.
+        settle(new Set());
+        return {
+          bytes: fileBytes,
+          digest: fileDigest,
+          ext: file.ext,
+          path: file.path,
+          source: candidate.candidate.source ?? "youtube",
+          verdict: verified.verdict === "match" ? "match" : "no-reference",
+          videoId: candidate.candidate.id,
+        };
+      } catch (error) {
+        lastError = error;
+        if ((error as { isRecoverable?: boolean }).isRecoverable) {
+          log(`candidate ${candidate.candidate.id} unusable (DRM/bot-wall) — trying next`);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    // ── THE CONSENSUS CHECK ────────────────────────────────────────────────────────────────────
+    // No preview match. Before naming the verdict, ask the refused uploads about each other: two
+    // or more from DIFFERENT channels carrying the same recording is evidence the preview's
+    // refusal could not outweigh (its section was low-information; theirs agree end to end).
+    // Machine evidence, subordinate to a preview match (which returned above) and to the
+    // operator's pin (which never reaches this walk), and re-checkable by the server.
+    const consensus = findConsensus(held);
+    if (consensus) {
+      const { accepted, agreeing, bers } = consensus;
+      log(
+        `preview gate rejected ${held.length} duration-verified candidate(s); ${agreeing.length + 1} of them agree with each other (ber=${bers.map((ber) => ber.toFixed(3)).join(",")}) — accepting ${accepted.candidate.id} on consensus`,
+      );
+      // The winner and its agreeing set are NOT remembered as wrong audio — they are the
+      // recording, on each other's word. Everything else held is.
+      settle(new Set([accepted, ...agreeing]), accepted.path);
+      return {
+        bytes: new Uint8Array(readFileSync(accepted.path)),
+        digest: accepted.digest,
+        ext: accepted.ext,
+        path: accepted.path,
+        source: accepted.candidate.source ?? "youtube",
+        verdict: "consensus",
+        videoId: accepted.candidate.id,
+      };
+    }
+  } finally {
+    // Every exit that did not settle explicitly — the terminal null or a thrown error (the match
+    // and consensus returns above already emptied the set, so this is a no-op for them) —
+    // remembers the whole held set: a paid-for preview rejection is never dropped, and a run
+    // that errored still persists it through the caller's `failed` patch.
+    settle(new Set());
   }
 
   // Nothing accepted. `null` — a terminal verdict for the caller to name — is returned ONLY when
   // the walk actually DISPROVED every upload: each fresh candidate was WRONG AUDIO (known-bad or
-  // a fingerprint mismatch) or wrong-length, or the pre-filter left nothing to try. A recoverable
-  // skip (DRM/bot-wall) disproves nothing — the skipped upload can be the RIGHT audio (the
-  // 047.0.8M case: the correct art-track bot-walled, two wrong songs fingerprint-rejected, and
-  // the rejections masked the transient error into a terminal verdict) — so any `lastError`
-  // rethrows into the caller's retryable path.
+  // a fingerprint mismatch no other upload backed) or wrong-length, or the pre-filter left nothing
+  // to try. A recoverable skip (DRM/bot-wall) disproves nothing — the skipped upload can be the
+  // RIGHT audio (the 047.0.8M case: the correct art-track bot-walled, two wrong songs
+  // fingerprint-rejected, and the rejections masked the transient error into a terminal verdict)
+  // — so any `lastError` rethrows into the caller's retryable path.
   if (!lastError) {
     return null;
   }
@@ -3723,6 +3945,12 @@ export function isPinnedDurationRefusal(error: unknown): error is PinnedDuration
  * verdict for the caller to name — every failure here is the caller's retryable `failed` path.
  */
 export async function findPinnedUpload(options: {
+  /**
+   * The pin's DURATION OVERRIDE (`pin_capture_source … allowDurationMismatch`): the operator has
+   * deliberately pinned a different EDIT of the same recording, so the guard is waived for this
+   * one id on his authority. The row's `duration_ms` is never rewritten from the file.
+   */
+  allowDurationMismatch?: boolean;
   dir: string;
   finding: CaptureFinding;
   ports?: Partial<PinnedUploadPorts>;
@@ -3746,33 +3974,25 @@ export async function findPinnedUpload(options: {
 
   log(`honouring the operator's capture-source pin for ${who}: youtube ${videoId}`);
 
-  // ONE download, answered exactly as the ladder answers a challenge: decide the recovery BEFORE the
-  // re-roll spends the session's one fresh exit, then re-try the same id once. Anything past that
-  // throws into the caller's `failed` path and a later tick retries it.
-  let file: { ext: string; path: string };
-  try {
-    file = ports.download(session.url, candidate, dir, false);
-  } catch (error) {
-    const flags = error as DownloadErrorFlags;
-    const recovery = chooseDownloadRecovery(flags, session.rerollable(), "youtube");
+  // ONE download, answered exactly as the ladder answers a challenge (the shared
+  // `downloadWithRecovery`): decide the recovery BEFORE the re-roll spends the session's one fresh
+  // exit, then re-try the same id once. Anything past that throws into the caller's `failed` path
+  // and a later tick retries it.
+  const file = downloadWithRecovery(ports.download, session, candidate, dir);
 
-    if (flags.isBotChallenge) {
-      session.reroll("download");
-    }
-
-    if (recovery === "reroll") {
-      file = ports.download(session.url, candidate, dir, false);
-    } else if (recovery === "player-client-fallback") {
-      file = ports.download(session.url, candidate, dir, true);
-    } else {
-      throw error;
-    }
-  }
-
-  // THE DURATION GUARD STILL APPLIES. The pin says which upload; it does not waive the one check
-  // that keeps a wrong paste from landing an hour-long set as a five-minute finding's full song.
+  // THE DURATION GUARD STILL APPLIES — unless the operator waived it FOR THIS PIN. A bare pin says
+  // which upload; it does not waive the one check that keeps a wrong paste from landing an
+  // hour-long set as a five-minute finding's full song. The override is the operator saying, with
+  // the lengths in front of him, that this different edit IS the recording he wants captured: the
+  // real length is logged beside the row's, and the row's own `duration_ms` stays what the store
+  // said (nothing in the commit path writes it).
   const realDurationSec = ports.probeDurationSec(file.path);
-  if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
+  const durationOk = durationWithinTolerance(realDurationSec, finding.durationMs);
+  if (!durationOk && options.allowDurationMismatch === true) {
+    log(
+      `pinned upload duration ${Math.round(realDurationSec)}s vs ${Math.round((finding.durationMs ?? 0) / 1000)}s — accepted on operator authority`,
+    );
+  } else if (!durationOk) {
     rmSync(file.path, { force: true });
     const refusal = new Error(
       `pinned upload ${videoId} fails the duration guard (${Math.round(realDurationSec)}s against the row's ${Math.round((finding.durationMs ?? 0) / 1000)}s) — not captured`,
@@ -3936,7 +4156,13 @@ async function captureFinding(
         // upload or throws into the `failed` path below.
         const pin = finding.captureSourcePin?.trim();
         if (pin) {
-          return findPinnedUpload({ dir: directory, finding, session, videoId: pin });
+          return findPinnedUpload({
+            allowDurationMismatch: finding.captureSourcePinAllowDuration === true,
+            dir: directory,
+            finding,
+            session,
+            videoId: pin,
+          });
         }
         return findVerifiedUpload({
           dir: directory,
@@ -3983,8 +4209,9 @@ async function captureFinding(
     }
 
     // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain); OPERATOR (the
-    // pinned source) → `operator-verified`. Store the bytes + stamp the verdict provenance in the
-    // same write.
+    // pinned source) → `operator-verified`; CONSENSUS (independent uploads agreeing with each
+    // other) → `consensus-verified`. Store the bytes + stamp the verdict provenance in the same
+    // write.
     const verification = captureVerificationFor(accepted.verdict);
     const key = buildSourceAudioKey(keyRoot, accepted.digest, accepted.ext);
 
@@ -4020,7 +4247,9 @@ async function captureFinding(
     // this id under `method: "fingerprint"`, so shipping one from the abstain path would put
     // the words "matched by audio fingerprint" on a page under a match that never happened.
     // The server re-checks this same condition (lib/server/track-update.ts) rather than
-    // trusting the box, but the honest source is here.
+    // trusting the box, but the honest source is here. A CONSENSUS capture ships no id either:
+    // the uploads proved they carry ONE recording, not that it is the recording the ISRC names,
+    // and `authorize_track_capture` 422s an id beside anything but `preview-match`.
     if (accepted.verdict === "match" && accepted.source !== "soundcloud") {
       update.youtubeVideoId = accepted.videoId;
     }

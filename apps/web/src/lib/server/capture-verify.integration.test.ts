@@ -154,6 +154,32 @@ describe("verifyCapture — the verdict routing", () => {
     expect(row.source_audio_rejected).toBeNull();
   });
 
+  it("RE-CHECKS a CONSENSUS-VERIFIED capture like any other — machine evidence gets no pass", async () => {
+    // The ladder's consensus (docs/the-ear.md § Wrong audio) is machine evidence, subordinate to a
+    // preview match and to the operator's pin: a verdict posted for it routes exactly as it would
+    // for a `preview-match` row. A mismatch on a FINDING is stamped and raised for the operator; a
+    // fresh match re-stamps the row. It sits off the unverified worklist only because its
+    // verification is non-null, like every stamped row.
+    await seedTrack(db, { logId: "012.3.4B", trackId: "find_consensus" });
+    await capture("find_consensus", SHA);
+    await embed("find_consensus");
+    await db.execute({
+      sql: `update tracks set capture_verification = 'consensus-verified',
+                              capture_verified_at = '2026-07-02T00:00:00.000Z'
+            where track_id = 'find_consensus'`,
+    });
+
+    expect(await verifyCapture("find_consensus", "mismatch")).toBe("flagged-finding");
+    expect((await readRow("find_consensus")).capture_verification).toBe("mismatch");
+
+    await db.execute({
+      sql: `update tracks set capture_verification = 'consensus-verified'
+            where track_id = 'find_consensus'`,
+    });
+    expect(await verifyCapture("find_consensus", "match")).toBe("preview-match");
+    expect((await readRow("find_consensus")).capture_verification).toBe("preview-match");
+  });
+
   it("steps aside from an OPERATOR-VERIFIED capture — never flags, never quarantines what the operator chose", async () => {
     // The capture-source pin (docs/the-ear.md § Wrong audio): the sweep stamps a pinned capture
     // `operator-verified`, which keeps it off the unverified worklist by construction; this is the
