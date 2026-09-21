@@ -79,11 +79,15 @@ APP_BIN="${SONARFRESHEN_APP_BIN:-$APP_DIR/sonar}"
 PREV_BIN="$APP_BIN.prev"
 SERVICE_ENV="${SONARFRESHEN_SERVICE_ENV:-/etc/sonar.env}"
 
-# How long to wait for an index load. sonar reads the WHOLE embedding corpus out of
-# Turso and builds both in-memory indexes before it serves /health — ~30s at today's
-# corpus and it grows with the archive, so this is deliberately generous. Applied to
-# both the isolated pre-smoke and the post-swap wait.
-BOOT_TIMEOUT_SECS="${SONARFRESHEN_BOOT_TIMEOUT_SECS:-180}"
+# How long to wait for an index load. sonar validates its durable state and builds both
+# in-memory indexes before it serves /health: about three minutes at a 45k-track corpus, and
+# roughly fifteen when the state fails its remote checkpoint confirmation and the engine
+# rebuilds from the replica first (`checkpoint_divergence`) — which is exactly the boot a
+# ROLLBACK produces, since it restores an older SQLite generation. A timeout shorter than that
+# boot turns a healthy swap into a rollback and the healthy rollback into "rollback failed", and
+# every later run re-runs the recovery against an engine that is fine. Applied to the isolated
+# pre-smoke, the post-swap wait, and the rollback wait alike.
+BOOT_TIMEOUT_SECS="${SONARFRESHEN_BOOT_TIMEOUT_SECS:-1200}"
 
 # The isolated pre-smoke walks five consecutive loopback ports from this base. One box runs one
 # of these at a time, so the default is a fixed, distinctive range. It is overridable because the

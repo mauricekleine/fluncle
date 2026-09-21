@@ -20,7 +20,10 @@
 #                                                not lower it either; one package IS the peak)
 #   apps/web typecheck alone     2.80 GB peak   ← that one package is the whole figure
 #   apps/cli typecheck           0.36 GB peak
-#   PATH-SCOPED type-aware lint  1.50 GB peak   ← fits, and is what this script runs
+#   PATH-SCOPED type-aware lint  1.50 GB peak at first measurement, 3.0 GB once the program grew:
+#                                                the path list scopes the DIAGNOSTICS, not the
+#                                                program tsgolint loads — so this script lints
+#                                                WITHOUT the type-aware rules (derived config)
 #
 # So the whole-repo passes are not run here. They are not skipped work: every one of them runs on
 # the PR this audit opens (the `quality-checks` action) and again in `deploy:gate` before anything
@@ -152,8 +155,8 @@ else
   log "${#CHANGED[@]} changed path(s)"
 
   # ── 2. Formatting, then the lint rules, both scoped to the changed paths ─────────────────────
-  # Path-scoped keeps the type-aware pass inside the box's headroom (1.50 GB measured against the
-  # 3.34 GB whole-repo run) while still checking every line this night wrote.
+  # Path-scoped, and without the type-aware rules (see the header): every line this night wrote
+  # is still checked by the rules that do not need the whole program.
   # `bunx` is a SEPARATE binary the bun installer symlinks beside `bun`, and a container that
   # copied only `bun` onto its PATH has one and not the other — where this read `bunx` outright,
   # both steps died `exit-126` (permission denied) and the night's record said FAILED about two
@@ -166,7 +169,15 @@ else
   fi
 
   step format 256 -- "${BUNX[@]}" oxfmt --check "${CHANGED[@]}"
-  step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUNX[@]}" oxlint "${CHANGED[@]}"
+  # The repo's `.oxlintrc.json` turns type-aware rules on, and a type-aware pass loads the WHOLE
+  # TypeScript program through tsgolint no matter how few paths it is given — the path list scopes
+  # the diagnostics, not the memory. That is the 3 GB peak the container's cap kills. So the box
+  # lints with the same rules minus the type-aware ones, from a derived config; the type-aware
+  # rules run on the PR in CI, where they belong.
+  BOX_OXLINTRC="$(mktemp)"
+  bun -e 'const c=JSON.parse(require("fs").readFileSync(".oxlintrc.json","utf8"));c.typeAware=false;process.stdout.write(JSON.stringify(c))' >"${BOX_OXLINTRC}"
+  step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUNX[@]}" oxlint -c "${BOX_OXLINTRC}" "${CHANGED[@]}"
+  rm -f "${BOX_OXLINTRC}"
 
   # ── 3. The changed packages' own typecheck + tests ───────────────────────────────────────────
   PACKAGES=()

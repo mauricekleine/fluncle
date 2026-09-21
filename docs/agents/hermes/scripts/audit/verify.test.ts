@@ -157,7 +157,10 @@ describe("the audit verification ladder", () => {
     expect(record).toMatchObject({ failed: 0, ran: 2 });
     const calls = fixture.calls();
     expect(calls).toContain("bunx oxfmt --check touched.ts");
-    expect(calls).toContain("bunx oxlint touched.ts");
+    // The lint runs from a DERIVED config with the type-aware rules off (the whole-program load
+    // is what the box cannot afford), so the call carries `-c <file>` before the paths.
+    expect(calls.some((call) => /^bunx oxlint -c \S+ touched\.ts$/.test(call))).toBe(true);
+    expect(calls.some((call) => /^bunx oxlint touched\.ts$/.test(call))).toBe(false);
     // The whole-repo forms are what the box cannot afford; none of them may appear.
     expect(calls.some((call) => /^bunx oxlint$/.test(call))).toBe(false);
     expect(calls.some((call) => call.includes("run check"))).toBe(false);
