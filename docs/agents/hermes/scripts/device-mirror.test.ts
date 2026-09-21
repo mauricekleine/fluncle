@@ -18,6 +18,7 @@ import {
   type DeviceTargetClient,
   inspectDeviceGeneration,
   type LibsqlStatement,
+  publishCadence,
   publishDeviceGeneration,
   type QueryResult,
   syncSourceReplica,
@@ -315,6 +316,35 @@ function publicRows(database: Database): Record<string, unknown[]> {
     }),
   );
 }
+
+describe("the publish cadence gate", () => {
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+  test("a live replica younger than the interval is not republished", () => {
+    const now = Date.parse("2026-01-01T12:00:00Z");
+    const cadence = publishCadence("2026-01-01T09:00:00Z", now, DAY, false);
+    expect(cadence.due).toBe(false);
+    expect(cadence.ageMs).toBe(3 * HOUR);
+  });
+  test("a replica at or past the interval is due", () => {
+    const now = Date.parse("2026-01-02T09:00:00Z");
+    expect(publishCadence("2026-01-01T09:00:00Z", now, DAY, false).due).toBe(true);
+  });
+  test("a forced rebuild publishes regardless of age", () => {
+    const now = Date.parse("2026-01-01T09:00:01Z");
+    expect(publishCadence("2026-01-01T09:00:00Z", now, DAY, true).due).toBe(true);
+  });
+  test("a target that was never published (no parseable derived_at) is due", () => {
+    expect(publishCadence("", Date.now(), DAY, false).due).toBe(true);
+    expect(publishCadence("not a date", Date.now(), DAY, false).due).toBe(true);
+  });
+  test("a clock that reads before the last publish counts as age zero, not due", () => {
+    const now = Date.parse("2026-01-01T08:00:00Z");
+    const cadence = publishCadence("2026-01-01T09:00:00Z", now, DAY, false);
+    expect(cadence.ageMs).toBe(0);
+    expect(cadence.due).toBe(false);
+  });
+});
 
 describe("embedded source replica", () => {
   test("reports zero post-sync lag only when the embedded sync result is measurable", () => {
