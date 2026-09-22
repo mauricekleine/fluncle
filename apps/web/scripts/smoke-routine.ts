@@ -4,12 +4,13 @@
  *
  * Boots a fully isolated dev stack on DEDICATED ports — a `turso dev` libSQL
  * server over this checkout's seeded `.dev/local.db`, plus a Vite dev server —
- * runs the three admin browser smokes (shell, queue with SEED=1, touch) against
- * it, tears the stack down, and prints ONE machine-parseable summary line:
+ * runs the four admin browser smokes (shell, queue with SEED=1, touch, labels
+ * with SEED=1) against it, tears the stack down, and prints ONE
+ * machine-parseable summary line:
  *
- *   SMOKE ROUTINE: shell=PASS|FAIL queue=PASS|FAIL touch=PASS|FAIL
+ *   SMOKE ROUTINE: shell=PASS|FAIL queue=PASS|FAIL touch=PASS|FAIL labels=PASS|FAIL
  *
- * Exit 0 iff all three passed. The scheduled "nightly-admin-smokes" desktop
+ * Exit 0 iff all four passed. The scheduled "nightly-admin-smokes" desktop
  * routine parses that final line (see the doc).
  *
  * THE DB-URL CONTRACT (verified empirically, not assumed): the dev worker runs
@@ -46,14 +47,14 @@ const DEV_VARS_BACKUP = ".dev/dev-vars.routine-backup";
 const READINESS_TIMEOUT_MS = 90_000;
 const READINESS_POLL_MS = 500;
 
-export type SmokeName = "shell" | "queue" | "touch";
+export type SmokeName = "shell" | "queue" | "touch" | "labels";
 export type SmokeResults = Record<SmokeName, boolean>;
 
 /** The final, machine-parseable line the routine agent reads. Byte-stable. */
 export function formatSummary(results: SmokeResults): string {
   const mark = (ok: boolean): string => (ok ? "PASS" : "FAIL");
 
-  return `SMOKE ROUTINE: shell=${mark(results.shell)} queue=${mark(results.queue)} touch=${mark(results.touch)}`;
+  return `SMOKE ROUTINE: shell=${mark(results.shell)} queue=${mark(results.queue)} touch=${mark(results.touch)} labels=${mark(results.labels)}`;
 }
 
 /** Rewrite the `.dev.vars` text so `TURSO_DATABASE_URL` names `url`, leaving every
@@ -290,7 +291,7 @@ async function main(): Promise<void> {
   writeFileSync(DEV_VARS_BACKUP, original);
   writeFileSync(DEV_VARS, withTursoUrl(original, LIBSQL_URL));
 
-  const results: SmokeResults = { queue: false, shell: false, touch: false };
+  const results: SmokeResults = { labels: false, queue: false, shell: false, touch: false };
 
   try {
     // ── Boot: libSQL, migrate, then Vite — all reading the rewritten `.dev.vars` ─
@@ -331,10 +332,11 @@ async function main(): Promise<void> {
     await waitForHttp(`${BASE_URL}/api/v1/health`, [turso, vite]);
     console.log(`smoke:routine — stack ready at ${BASE_URL}`);
 
-    // ── Run the three smokes; continue past a failure so all three report ──────
+    // ── Run the four smokes; continue past a failure so all four report ───────
     results.shell = await runSmoke("shell", "tests/browser/shell-smoke.ts", {});
     results.queue = await runSmoke("queue", "tests/browser/queue-smoke.ts", { SEED: "1" });
     results.touch = await runSmoke("touch", "tests/browser/admin-touch-smoke.ts", {});
+    results.labels = await runSmoke("labels", "tests/browser/labels-smoke.ts", { SEED: "1" });
   } catch (error) {
     console.error(
       `\nsmoke:routine — boot failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -361,7 +363,7 @@ async function main(): Promise<void> {
 
   console.log(`\n${summary}`);
 
-  process.exit(results.shell && results.queue && results.touch ? 0 : 1);
+  process.exit(results.shell && results.queue && results.touch && results.labels ? 0 : 1);
 }
 
 /** SIGKILL anything still bound to one of OUR dedicated ports after teardown. */

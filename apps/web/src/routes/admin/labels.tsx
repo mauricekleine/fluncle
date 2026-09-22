@@ -54,6 +54,7 @@ import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import {
   type LabelsAdminPage,
+  type LabelsAdminSection,
   listLabelAliasCandidates,
   listLabelsPage,
 } from "@/lib/server/labels";
@@ -84,6 +85,14 @@ import {
 // which deep-links here. So the page's primary goal is CLEARING that section — the two
 // ruling buttons on an undecided row are the loudest thing on the page, and re-ruling a
 // settled label is the rare act, tucked behind the row's ⋮ (the disclosure law).
+//
+// ── WAITING IS NOT THE SAME AS UNDECIDED ────────────────────────────────────────
+// An undecided label that carries PER-LABEL artist rules has been RULED: writing allows and
+// leaving the seed state alone is the `dnb_partial` verdict, and the next crawl then takes the
+// named artists off that label and nobody else. So `undecided` is two sections here, split in SQL
+// ({@link LabelsAdminSection}) — the queue, and the settled partials — and only the first is work.
+// The header count leads with the first alone, because a number that calls a settled verdict a gap
+// is a queue the operator learns to stop believing.
 //
 // The ruling is publish-class in authority terms (it steers what Fluncle crawls next), so
 // it rides the OPERATOR-tier `update_label` op — an agent token 403s.
@@ -119,30 +128,40 @@ const RULES_KEY = [...LABELS_KEY, "rules"] as const;
 /** One label's rule set — the dialog's own read, invalidated by its own save. */
 const labelRulesKey = (labelId: string) => [...RULES_KEY, labelId] as const;
 
-/** The infinite-query key for one seed-state section, so a ruling can invalidate the whole board. */
-const sectionKey = (seedState: LabelSeedState) => [...LABELS_KEY, "section", seedState] as const;
+/** The infinite-query key for one section, so a ruling can invalidate the whole board. */
+const sectionKey = (section: LabelsAdminSection) => [...LABELS_KEY, "section", section] as const;
 
-// The seed-state sections, in the order the work arrives: the queue, then the two settled sets.
+// The sections, in the order the work arrives: the queue, then the three settled sets.
+//
+// `Waiting on a ruling` states BOTH ways a label reaches the queue — a finding carried it, or the
+// crawl walked into it — because most rows here now come from the crawl and show `0 findings`, and
+// a sentence that describes only the other path is one the operator can see is false.
 //
 // The intro is SPLIT so the exception count can join the sentence that states the SCOPE, never the
 // one that exists to promise storage is untouched. `scope` is the joinable head (no full stop),
 // `tail` whatever must follow the count.
 const SECTIONS: {
+  section: LabelsAdminSection;
   scope: string;
-  seedState: LabelSeedState;
   tail?: string;
   title: string;
 }[] = [
   {
-    scope: "A finding landed on these and nobody has ruled on them yet",
-    seedState: "undecided",
+    scope: "A finding carried these, or the crawl walked into them, and nobody has ruled yet",
+    section: "undecided",
     tail: "Say whether the next crawl can dig from them.",
     title: "Waiting on a ruling",
   },
-  { scope: "The next crawl digs from these", seedState: "enabled", title: "Seeding from" },
+  {
+    scope: "The next crawl takes the artists named on each of these, and nobody else",
+    section: "partial",
+    tail: "That is a ruling, not a gap — the names live behind the ⋮.",
+    title: "Seeding named artists",
+  },
+  { scope: "The next crawl digs from these", section: "enabled", title: "Seeding from" },
   {
     scope: "The next crawl skips these",
-    seedState: "disabled",
+    section: "disabled",
     tail: "Their findings are untouched.",
     title: "Not seeding",
   },
@@ -163,8 +182,11 @@ type LabelsBoard = {
   aliases: LabelAliasCandidate[];
   disabled: LabelsSectionPage;
   enabled: LabelsSectionPage;
+  /** The undecided labels that DO carry per-label rules — a settled verdict, never the queue. */
+  partial: LabelsSectionPage;
   /** How many labels in each seed state carry an artist rule — the settled sections' intros. */
   ruled: Record<string, number>;
+  /** The undecided labels carrying no per-label rule — the only section that is work. */
   undecided: LabelsSectionPage;
 };
 
@@ -178,22 +200,24 @@ async function withRuleContext(page: LabelsAdminPage): Promise<LabelsSectionPage
   return { ...page, queued, rules };
 }
 
-// The loader's ONE round-trip: page 1 of each of the three sections plus the (already bounded)
+// The loader's ONE round-trip: page 1 of each of the four sections plus the (already bounded)
 // alias candidates, in parallel. Each section then hydrates its own infinite query from its slice.
 const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<LabelsBoard> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
   }
 
-  const [undecided, enabled, disabled, aliases, ruled] = await Promise.all([
+  const [undecided, partial, enabled, disabled, aliases, ruled] = await Promise.all([
     listLabelsPage("undecided", 1),
+    listLabelsPage("partial", 1),
     listLabelsPage("enabled", 1),
     listLabelsPage("disabled", 1),
     listLabelAliasCandidates(),
     ruledLabelCounts(),
   ]);
-  const [undecidedPage, enabledPage, disabledPage] = await Promise.all([
+  const [undecidedPage, partialPage, enabledPage, disabledPage] = await Promise.all([
     withRuleContext(undecided),
+    withRuleContext(partial),
     withRuleContext(enabled),
     withRuleContext(disabled),
   ]);
@@ -202,6 +226,7 @@ const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<L
     aliases,
     disabled: disabledPage,
     enabled: enabledPage,
+    partial: partialPage,
     ruled,
     undecided: undecidedPage,
   };
@@ -211,13 +236,13 @@ const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<L
 // the refetch a ruling invalidation fires. Re-checks the admin grant (the page guard only protects
 // the render, never the server function behind it).
 const fetchSection = createServerFn({ method: "GET" })
-  .validator((data: { page: number; seedState: LabelSeedState }) => data)
+  .validator((data: { page: number; section: LabelsAdminSection }) => data)
   .handler(async ({ data }): Promise<LabelsSectionPage> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
-    return withRuleContext(await listLabelsPage(data.seedState, data.page));
+    return withRuleContext(await listLabelsPage(data.section, data.page));
   });
 
 // The rules dialog's artist typeahead — a page-local admin read of the LOCAL artists table (the
@@ -263,11 +288,12 @@ function AdminLabelsPage() {
   // opened by a row's ⋮. Mounting per target keeps its draft state fresh per label.
   const [rulesTarget, setRulesTarget] = useState<LabelAdminItem | undefined>();
 
-  // The backlog size the operator steers by — the undecided TOTAL (the whole waiting set), not
-  // the count of rows loaded so far. Read off the seed page's `count(*) over ()`.
+  // The backlog size the operator steers by — the WAITING total (the undecided labels carrying no
+  // per-label rule), not the count of rows loaded so far and not every undecided row. Read off the
+  // waiting section's own `count(*) over ()`, so the number and the section it names are one fact.
   const waiting = board.undecided.total;
   const hasAnyLabels =
-    board.undecided.total + board.enabled.total + board.disabled.total > 0 ||
+    board.undecided.total + board.partial.total + board.enabled.total + board.disabled.total > 0 ||
     board.aliases.length > 0;
 
   const subtitle = !hasAnyLabels
@@ -290,15 +316,15 @@ function AdminLabelsPage() {
           <EmptyLabels />
         ) : (
           <>
-            {SECTIONS.map((section) => (
+            {SECTIONS.map((entry) => (
               <LabelSection
                 focusSlug={focusSlug}
-                initialPage={board[section.seedState]}
-                intro={sectionIntro(section, board.ruled)}
-                key={section.seedState}
+                initialPage={board[entry.section]}
+                intro={sectionIntro(entry, board.ruled)}
+                key={entry.section}
                 onManageRules={setRulesTarget}
-                seedState={section.seedState}
-                title={section.title}
+                section={entry.section}
+                title={entry.title}
               />
             ))}
 
@@ -326,36 +352,41 @@ function AdminLabelsPage() {
  * The count joins the SCOPE clause on the operator register's em-dash — an exception qualifies
  * what the crawl takes, so hanging it off the storage promise ("Their findings are untouched")
  * would attach it to the one sentence it has nothing to do with.
+ *
+ * Only the two SEED-STATE sections take it. The waiting section has no exceptions by definition,
+ * and `partial` is ALL exceptions — its section total already is the number, so repeating it as a
+ * qualifier would say the same thing twice.
  */
 function sectionIntro(
-  section: { scope: string; seedState: LabelSeedState; tail?: string },
+  section: { scope: string; section: LabelsAdminSection; tail?: string },
   ruled: Record<string, number>,
 ): string {
-  const count = ruled[section.seedState] ?? 0;
+  const count =
+    section.section === "enabled" || section.section === "disabled"
+      ? (ruled[section.section] ?? 0)
+      : 0;
   const scoped =
-    section.seedState === "undecided" || count === 0
-      ? `${section.scope}.`
-      : `${section.scope} — ${count} with an artist exception.`;
+    count === 0 ? `${section.scope}.` : `${section.scope} — ${count} with an artist exception.`;
 
   return section.tail ? `${scoped} ${section.tail}` : scoped;
 }
 
-// One seed-state section, hydrating its own infinite query from the loader's page 1 and paging the
-// rest in on demand. Empty sections render nothing (no heading over zero rows). The title leads with
-// the section TOTAL so the backlog reads true even before the operator scrolls the rows in.
+// One section, hydrating its own infinite query from the loader's page 1 and paging the rest in on
+// demand. Empty sections render nothing (no heading over zero rows). The title leads with the
+// section TOTAL so the backlog reads true even before the operator scrolls the rows in.
 function LabelSection({
   focusSlug,
   initialPage,
   intro,
   onManageRules,
-  seedState,
+  section,
   title,
 }: {
   focusSlug: string | undefined;
   initialPage: LabelsSectionPage;
   intro: string;
   onManageRules: (label: LabelAdminItem) => void;
-  seedState: LabelSeedState;
+  section: LabelsAdminSection;
   title: string;
 }) {
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
@@ -363,8 +394,8 @@ function LabelSection({
       lastPage.page < lastPage.pageCount ? lastPage.page + 1 : undefined,
     initialData: { pageParams: [1], pages: [initialPage] },
     initialPageParam: 1,
-    queryFn: ({ pageParam }) => fetchSection({ data: { page: pageParam, seedState } }),
-    queryKey: sectionKey(seedState),
+    queryFn: ({ pageParam }) => fetchSection({ data: { page: pageParam, section } }),
+    queryKey: sectionKey(section),
     refetchOnWindowFocus: true,
     // A short-lived seed matches the pace a crawl mints labels; without it every focus
     // re-fetched every loaded page of every section on tab-back.
@@ -399,6 +430,7 @@ function LabelSection({
             onManageRules={() => onManageRules(label)}
             queued={queued[label.slug] ?? 0}
             ruleCounts={rules[label.id]}
+            section={section}
           />
         ))}
       </ObjectList>
@@ -462,7 +494,8 @@ function EmptyLabels() {
       />
       <p className="text-sm font-medium">No labels yet</p>
       <p className="mt-1.5 text-sm text-muted-foreground">
-        Every label a finding carries lands here on its own, waiting on your ruling.
+        Every label a finding carries, and every one the crawl walks into, lands here on its own —
+        waiting on your ruling.
       </p>
     </div>
   );
@@ -495,12 +528,14 @@ function LabelRow({
   onManageRules,
   queued,
   ruleCounts,
+  section,
 }: {
   focused: boolean;
   label: LabelAdminItem;
   onManageRules: () => void;
   queued: number;
   ruleCounts: LabelRuleCounts | undefined;
+  section: LabelsAdminSection;
 }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | undefined>();
@@ -531,7 +566,7 @@ function LabelRow({
       ref={rowRef}
       trailing={
         <>
-          <RuleChip ruleCounts={ruleCounts} seedState={label.seedState} />
+          <RuleChip ruleCounts={ruleCounts} section={section} seedState={label.seedState} />
           <span className="text-xs text-muted-foreground tabular-nums">
             {findingsCount(label.findingCount)}
           </span>
@@ -541,9 +576,15 @@ function LabelRow({
               className="size-4 text-muted-foreground motion-safe:animate-spin"
               weight="bold"
             />
-          ) : label.seedState === "undecided" ? (
+          ) : section === "undecided" ? (
             // The one thing the operator came here to do: rule. Both ways are one tap, and
             // neither is dressed as destructive, because neither destroys anything.
+            //
+            // The THIRD verdict — take the named artists and nobody else — is the rare one and
+            // lands the row in the settled section, so it sits behind the ⋮ at the weight the
+            // disclosure law gives it, reusing the same whole-set rules dialog the settled rows
+            // open. The row carries NO re-ruling options there: they would only repeat the two
+            // buttons beside them.
             <>
               <Button onClick={() => rule.mutate("enabled")} size="sm">
                 Seed from it
@@ -551,7 +592,22 @@ function LabelRow({
               <Button onClick={() => rule.mutate("disabled")} size="sm" variant="outline">
                 Not our lane
               </Button>
+              <RuleMenu
+                name={label.name}
+                onManageRules={onManageRules}
+                seedState={label.seedState}
+              />
             </>
+          ) : label.seedState === "undecided" ? (
+            // Settled by its rules. Its state IS the chip above ("Only N artists"), so it takes no
+            // seed-state chip — "Seeding" would overclaim (the crawl never seeds from it) and
+            // "Skipped" would deny the artists it does take.
+            <RuleMenu
+              name={label.name}
+              onManageRules={onManageRules}
+              onRule={(seedState) => rule.mutate(seedState)}
+              seedState={label.seedState}
+            />
           ) : (
             // Settled. The state reads as quiet data; changing your mind is the rare act, so
             // it lives off the resting surface behind the ⋮ (the disclosure law).
@@ -654,30 +710,45 @@ function labelIdentity(label: LabelAdminItem, queued: number): ReactNode | undef
 // table means opposite things on the two sides of a ruling: on a seeded label a rule SUBTRACTS
 // ("Except 2 artists"), on a skipped one it ADDS ("Only 3 artists"). Only the live half counts;
 // a block on a skipped label changes nothing, so it is not advertised as if it did.
+//
+// An UNDECIDED label reads exactly as a skipped one: the crawl takes nothing off it by default, so
+// the ALLOW half is the live one (an allow admits that artist's billed records on a non-enabled
+// label, crawl.ts). That is what makes the chip the settled-partial row's state — a waiting row
+// carries no rules, so it renders nothing and the promise is never made for a crawl that is not
+// happening.
 function RuleChip({
   ruleCounts,
+  section,
   seedState,
 }: {
   ruleCounts: LabelRuleCounts | undefined;
+  section: LabelsAdminSection;
   seedState: LabelSeedState;
 }) {
-  // An unruled label has no default for a rule to except, so neither half is live yet — the row
-  // states nothing rather than promising a crawl that is not happening.
-  if (seedState === "undecided") {
-    return null;
-  }
-
   const live = seedState === "enabled" ? (ruleCounts?.block ?? 0) : (ruleCounts?.allow ?? 0);
 
-  if (live === 0) {
-    return null;
+  if (live > 0) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        {seedState === "enabled" ? "Except" : "Only"} {live} {live === 1 ? "artist" : "artists"}
+      </span>
+    );
   }
 
-  return (
-    <span className="text-xs text-muted-foreground">
-      {seedState === "enabled" ? "Except" : "Only"} {live} {live === 1 ? "artist" : "artists"}
-    </span>
-  );
+  // The settled-partial section is DEFINED by carrying rules, so a row whose rules are all inert
+  // here — blocks left on a label that was seeded and then put back in the queue — still states
+  // what it holds rather than reading as a row with no reason to be in the section.
+  const inert = ruleCounts?.block ?? 0;
+
+  if (section === "partial" && inert > 0) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        {inert} inert {inert === 1 ? "rule" : "rules"}
+      </span>
+    );
+  }
+
+  return null;
 }
 
 // The label's OWN logo (the Discogs→R2 backfill), at the object row's md plate footprint. Falls
@@ -720,6 +791,10 @@ function SeedStateChip({ seedState }: { seedState: "disabled" | "enabled" }) {
 // Change your mind about a settled label: the two states it is not currently in, and the artist
 // exception to the state it is in. Both are rare, so both stay behind the ⋮ rather than sitting at
 // the same weight as the ruling buttons above.
+//
+// `onRule` is ABSENT on a row that already carries the ruling buttons (the waiting queue). The menu
+// is then the artist exception alone — the third verdict, which is the one thing those buttons
+// cannot say — and never a second, quieter copy of the two controls beside it.
 function RuleMenu({
   name,
   onManageRules,
@@ -728,7 +803,7 @@ function RuleMenu({
 }: {
   name: string;
   onManageRules: () => void;
-  onRule: (seedState: LabelSeedState) => void;
+  onRule?: (seedState: LabelSeedState) => void;
   seedState: LabelSeedState;
 }) {
   const options: Array<{ label: string; value: LabelSeedState }> = [
@@ -740,7 +815,7 @@ function RuleMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={`Ruling and artist rules for ${name}`}
+        aria-label={onRule ? `Ruling and artist rules for ${name}` : `Artist rules for ${name}`}
         className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         <DotsThreeVerticalIcon aria-hidden="true" className="size-4" weight="bold" />
@@ -749,13 +824,15 @@ function RuleMenu({
         <DropdownMenuItem onClick={onManageRules}>
           {seedState === "enabled" ? "Block an artist on it…" : "Allow an artist from it…"}
         </DropdownMenuItem>
-        {options
-          .filter((option) => option.value !== seedState)
-          .map((option) => (
-            <DropdownMenuItem key={option.value} onClick={() => onRule(option.value)}>
-              {option.label}
-            </DropdownMenuItem>
-          ))}
+        {onRule
+          ? options
+              .filter((option) => option.value !== seedState)
+              .map((option) => (
+                <DropdownMenuItem key={option.value} onClick={() => onRule(option.value)}>
+                  {option.label}
+                </DropdownMenuItem>
+              ))
+          : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
