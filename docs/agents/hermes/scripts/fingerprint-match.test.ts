@@ -11,12 +11,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendRejectedSource,
+  CONSENSUS_WINDOW_FRAMES,
   DEFAULT_MAX_BER,
   durationAgrees,
   fold,
   type ItunesReference,
   matchKey,
   MIN_OVERLAP_FRAMES,
+  mutualWindowMatch,
   parseFpcalcJson,
   parseRejectedSources,
   pickSearchReference,
@@ -158,6 +160,64 @@ describe("slidingWindowMatch", () => {
 
     expect(a?.ber).toBe(b?.ber);
     expect(a?.match).toBe(b?.match);
+  });
+});
+
+describe("mutualWindowMatch (two full songs against EACH OTHER — the consensus comparison)", () => {
+  test("two uploads of one recording agree at the genuine level, through a 30 s window from the middle", () => {
+    const recording = randomFingerprint(2400, 21);
+    // A different-codec re-upload: one flipped bit per frame, BER ≈ 0.031 — the measured
+    // agreement between independent genuine uploads (0.02–0.04).
+    const reupload = addNoise(recording, 1, 4);
+
+    const result = mutualWindowMatch(recording, reupload, DEFAULT_MAX_BER);
+
+    expect(result?.overlap).toBe(CONSENSUS_WINDOW_FRAMES);
+    expect(result?.ber).toBeGreaterThan(0.02);
+    expect(result?.ber).toBeLessThan(0.05);
+    expect(result?.match).toBe(true);
+  });
+
+  test("a different EDIT of the same recording (a longer intro) still aligns — the window slides over the whole longer one", () => {
+    const recording = randomFingerprint(2000, 22);
+    // The same song with 300 frames of extra intro on the front: the middle of the shorter one
+    // sits at a different offset inside the longer one.
+    const extended = [...randomFingerprint(300, 23), ...recording];
+
+    const result = mutualWindowMatch(recording, extended, DEFAULT_MAX_BER);
+
+    expect(result?.ber).toBe(0);
+    expect(result?.match).toBe(true);
+  });
+
+  test("two different recordings do NOT agree — the ~0.5 random regime", () => {
+    const result = mutualWindowMatch(
+      randomFingerprint(2400, 24),
+      randomFingerprint(2500, 25),
+      DEFAULT_MAX_BER,
+    );
+
+    expect(result?.ber).toBeGreaterThan(0.4);
+    expect(result?.match).toBe(false);
+  });
+
+  test("a fingerprint shorter than the window is compared whole; below the minimum overlap it abstains", () => {
+    const short = randomFingerprint(100, 26);
+    const long = [...randomFingerprint(50, 27), ...short, ...randomFingerprint(50, 28)];
+
+    expect(mutualWindowMatch(short, long, DEFAULT_MAX_BER)?.overlap).toBe(100);
+    expect(mutualWindowMatch(short, long, DEFAULT_MAX_BER)?.ber).toBe(0);
+    expect(
+      mutualWindowMatch(randomFingerprint(MIN_OVERLAP_FRAMES - 1, 29), long, DEFAULT_MAX_BER),
+    ).toBeNull();
+  });
+
+  test("the window is ~30 s of Chromaprint frames, the preview gate's own scale", () => {
+    // ~0.1238 s per frame → 240 frames ≈ 29.7 s, so a mutual BER and a preview BER read on one
+    // scale and the one `maxBer()` threshold applies to both.
+    expect(CONSENSUS_WINDOW_FRAMES).toBe(240);
+    expect(CONSENSUS_WINDOW_FRAMES * 0.1238).toBeGreaterThan(29);
+    expect(CONSENSUS_WINDOW_FRAMES * 0.1238).toBeLessThan(31);
   });
 });
 

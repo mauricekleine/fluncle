@@ -357,6 +357,7 @@ type TrackDraftOptions = {
 };
 
 type TrackPinSourceOptions = {
+  allowDurationMismatch: boolean;
   clear: boolean;
   json: boolean;
   upload?: string;
@@ -1805,6 +1806,12 @@ JSON field reference:
       "Pin the YouTube upload the capture sweep must download for a track (operator); --clear withdraws it",
     )
     .argument("[idOrLogId]")
+    // A BOOLEAN flag (no value), so it must never join `stringOptions` — the tripwire test pins it.
+    .option(
+      "--allow-duration-mismatch",
+      "Waive the duration guard for this pin: a deliberately chosen different edit of the same recording (the finding keeps its store length)",
+      false,
+    )
     .option(
       "--clear",
       "Withdraw the pin (capture status and captured audio stay as they are)",
@@ -6662,7 +6669,7 @@ async function runTrackPinSource(
   },
 ): Promise<void> {
   const usage =
-    "Usage: fluncle admin tracks pin-source <track_id|log_id> --upload <url|id> [--json] | --clear";
+    "Usage: fluncle admin tracks pin-source <track_id|log_id> --upload <url|id> [--allow-duration-mismatch] [--json] | --clear";
 
   if (!idOrLogId) {
     throw new Error(`Missing id. ${usage}`);
@@ -6678,9 +6685,15 @@ async function runTrackPinSource(
     throw new Error(`Missing --upload <url|id> (or --clear to withdraw the pin). ${usage}`);
   }
 
+  if (options.clear && options.allowDurationMismatch) {
+    throw new Error(`--allow-duration-mismatch rides a pin, not --clear. ${usage}`);
+  }
+
   const result = options.clear
     ? await commands.clear(idOrLogId)
-    : await commands.pin(idOrLogId, youtube ?? "");
+    : await commands.pin(idOrLogId, youtube ?? "", {
+        allowDurationMismatch: options.allowDurationMismatch,
+      });
 
   if (options.json) {
     printJson(result);
@@ -6688,10 +6701,13 @@ async function runTrackPinSource(
   }
 
   const who = result.logId ?? result.trackId;
+  const guard = result.captureSourcePinAllowDuration
+    ? "any length accepted"
+    : "duration guard applies";
 
   console.log(
     result.captureSourcePin
-      ? `Pinned ${who} to youtube ${result.captureSourcePin} — capture ${result.captureStatus.toUpperCase()}; the next capture tick downloads that upload, ladder skipped.`
+      ? `Pinned ${who} to youtube ${result.captureSourcePin} — capture ${result.captureStatus.toUpperCase()}; the next capture tick downloads that upload, ladder skipped, ${guard}.`
       : `Cleared the capture-source pin on ${who} — capture ${result.captureStatus.toUpperCase()} untouched; the ladder runs again.`,
   );
 }

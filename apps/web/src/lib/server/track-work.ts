@@ -202,6 +202,7 @@ type WorkRow = {
   bpm: null | number;
   capture_priority: null | number;
   capture_source_pin: null | string;
+  capture_source_pin_allow_duration: bigint | null | number;
   certified: number;
   duration_ms: number;
   isrc: null | string;
@@ -216,7 +217,7 @@ type WorkRow = {
 
 const WORK_SELECT = `t.track_id, t.title, t.artists_json, t.isrc, t.label, t.duration_ms,
   t.source_audio_key, t.source_audio_rejected, t.capture_priority, t.bpm, t.analyzed_from, t.source_audio_failures,
-  t.capture_source_pin,
+  t.capture_source_pin, t.capture_source_pin_allow_duration,
   f.log_id as log_id,
   (f.track_id is not null) as certified`;
 
@@ -961,6 +962,14 @@ export async function listTrackWork(options: {
             captureSourcePin:
               typeof row.capture_source_pin === "string" && row.capture_source_pin.trim()
                 ? row.capture_source_pin.trim()
+                : undefined,
+            // The pin's duration override — present (true) only beside a pin the operator waived
+            // the guard for, so an un-waived or unpinned row's shape is unchanged.
+            captureSourcePinAllowDuration:
+              typeof row.capture_source_pin === "string" &&
+              row.capture_source_pin.trim() &&
+              Number(row.capture_source_pin_allow_duration ?? 0) === 1
+                ? true
                 : undefined,
             sourceAudioFailures:
               row.source_audio_failures !== null && Number(row.source_audio_failures) > 0

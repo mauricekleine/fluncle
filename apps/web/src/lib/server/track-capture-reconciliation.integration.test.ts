@@ -309,6 +309,117 @@ describe("capture reconciliation against the real schema", () => {
     expect(checkYoutubeOfficial).not.toHaveBeenCalled();
   });
 
+  it("commits a CONSENSUS-VERIFIED capture like any other verified capture — and refuses an id beside it", async () => {
+    // The ladder's consensus (docs/the-ear.md § Wrong audio): the preview refused every upload, but
+    // two independent uploads agreed with each other. Machine evidence — it lands, it is stamped
+    // honestly, and it earns NO YouTube id: the uploads proved they carry one recording, not that
+    // it is the recording the ISRC names, so an id beside it is the same 422 the abstain path gets.
+    const {
+      authorizeCaptureReconciliation,
+      commitCaptureReconciliation,
+      prepareCaptureReconciliation,
+    } = await import("./track-capture-reconciliation");
+    const prepared = await prepareCaptureReconciliation(TRACK_ID, "capture");
+    expect(prepared.prepared).toBe(true);
+    if (!prepared.prepared) {
+      return;
+    }
+    const at = "2026-09-08T10:00:00.000Z";
+    const digest = "c".repeat(64);
+
+    await expect(
+      authorizeCaptureReconciliation({
+        result: {
+          attemptedAt: at,
+          bytes: 4_096,
+          captureVerification: "consensus-verified",
+          capturedAt: at,
+          kind: "capture",
+          outcome: "done",
+          sourceAudioKey: `${LOG_ID}/${digest}.webm`,
+          verifiedAt: at,
+          youtubeVideoId: "consensusId1",
+        },
+        snapshotToken: prepared.snapshotToken,
+        trackId: TRACK_ID,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_capture_result", status: 422 });
+
+    const receipt = await authorizeCaptureReconciliation({
+      result: {
+        attemptedAt: at,
+        bytes: 4_096,
+        captureVerification: "consensus-verified",
+        capturedAt: at,
+        kind: "capture",
+        outcome: "done",
+        sourceAudioKey: `${LOG_ID}/${digest}.webm`,
+        verifiedAt: at,
+      },
+      snapshotToken: prepared.snapshotToken,
+      trackId: TRACK_ID,
+    });
+    const outcome = await commitCaptureReconciliation({ ...receipt, trackId: TRACK_ID });
+
+    expect(outcome).toMatchObject({ outcome: "committed", replayed: false });
+    const state = await db.execute({
+      args: [TRACK_ID],
+      sql: `select capture_status, capture_verification, source_audio_key, youtube_video_id
+            from tracks where track_id = ?`,
+    });
+    expect(state.rows[0]).toMatchObject({
+      capture_status: "done",
+      capture_verification: "consensus-verified",
+      source_audio_key: `${LOG_ID}/${digest}.webm`,
+      youtube_video_id: null,
+    });
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+  });
+
+  it("freezes the pin's duration override into the prepared track, only beside a pin and only when set", async () => {
+    const { prepareCaptureReconciliation } = await import("./track-capture-reconciliation");
+    // Waived without a pin: the flag is meaningless alone and the prepared track does not carry it.
+    await db.execute({
+      args: [TRACK_ID],
+      sql: `update tracks set capture_source_pin = null, capture_source_pin_allow_duration = 1,
+                              capture_status = 'pending'
+            where track_id = ?`,
+    });
+    const orphan = await prepareCaptureReconciliation(TRACK_ID, "capture");
+    expect(orphan.prepared).toBe(true);
+    if (!orphan.prepared) {
+      return;
+    }
+    expect(orphan.track.captureSourcePin).toBeUndefined();
+    expect(orphan.track.captureSourcePinAllowDuration).toBeUndefined();
+
+    // Pinned and waived: the sweep reads both off the frozen row.
+    await db.execute({
+      args: [TRACK_ID],
+      sql: `update tracks set capture_source_pin = 'dQw4w9WgXcQ' where track_id = ?`,
+    });
+    const waived = await prepareCaptureReconciliation(TRACK_ID, "capture");
+    expect(waived.prepared).toBe(true);
+    if (!waived.prepared) {
+      return;
+    }
+    expect(waived.track.captureSourcePin).toBe("dQw4w9WgXcQ");
+    expect(waived.track.captureSourcePinAllowDuration).toBe(true);
+
+    // Pinned, guard applies: the key is absent, so the box's exact-key allow-list sees the same
+    // shape it always has for a plain pin.
+    await db.execute({
+      args: [TRACK_ID],
+      sql: `update tracks set capture_source_pin_allow_duration = 0 where track_id = ?`,
+    });
+    const guarded = await prepareCaptureReconciliation(TRACK_ID, "capture");
+    expect(guarded.prepared).toBe(true);
+    if (!guarded.prepared) {
+      return;
+    }
+    expect(guarded.track.captureSourcePinAllowDuration).toBeUndefined();
+  });
+
   it("banks accepted audio without clobbering a newer in-progress enrichment", async () => {
     const {
       authorizeCaptureReconciliation,

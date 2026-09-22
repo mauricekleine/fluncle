@@ -146,6 +146,44 @@ export function slidingWindowMatch(
 }
 
 /**
+ * The window two FULL-SONG fingerprints are compared through when they are checked against EACH
+ * OTHER rather than against the store preview (the consensus check in capture-sweep.ts). ~240
+ * Chromaprint frames ≈ 30 s of audio — the same excerpt length the preview gate works with, so a
+ * mutual comparison reports on the same scale as the gate and the one `maxBer()` threshold applies
+ * to both. Taken from the MIDDLE of the shorter fingerprint: the middle of a song is its densest,
+ * most distinctive section, where a beatless intro or a faded outro (the low-information regions
+ * that make the preview gate false-negative in the first place) cannot sit.
+ */
+export const CONSENSUS_WINDOW_FRAMES = 240;
+
+/**
+ * Do two full-song fingerprints carry the SAME RECORDING? A 30 s window from the middle of the
+ * shorter one is slid over the whole of the longer one (`slidingWindowMatch`), so a different edit
+ * — a radio cut, a longer intro, a different master of the same release — still aligns at its best
+ * offset. `null` when the shorter fingerprint is below `MIN_OVERLAP_FRAMES` (inconclusive, never a
+ * match). Measured on the sweep's own matcher: independent genuine uploads of one recording agree at
+ * a BER around 0.02–0.04, the store preview against the same uploads can sit at 0.33 when the
+ * preview section is low-information, and unrelated recordings sit at 0.42–0.45 — so the gate's own
+ * `maxBer()` (0.20) separates agreement from disagreement with the same margin it has always had.
+ */
+export function mutualWindowMatch(
+  a: readonly number[],
+  b: readonly number[],
+  threshold: number = maxBer(),
+): MatchResult | null {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+
+  if (short.length < MIN_OVERLAP_FRAMES) {
+    return null;
+  }
+
+  const window = Math.min(CONSENSUS_WINDOW_FRAMES, short.length);
+  const start = Math.floor((short.length - window) / 2);
+
+  return slidingWindowMatch(short.slice(start, start + window), long, threshold);
+}
+
+/**
  * Parse `fpcalc -raw -json` stdout into the raw fingerprint array. fpcalc prints
  * `{"duration": <s>, "fingerprint": [<int>, …]}` for `-raw`. Returns null on any shape it does not
  * recognise, so a fpcalc quirk degrades to "no fingerprint" (abstain) rather than a thrown tick.

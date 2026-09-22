@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
+import { Checkbox } from "@fluncle/ui/components/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -23,7 +24,10 @@ import { type CaptureSourceState } from "@/lib/server/tracks";
 // shows where the capture stands and lets him PIN the one YouTube upload the sweep must download
 // (`pin_capture_source`, operator tier) or CLEAR a standing pin (`clear_capture_source`).
 // The paste is sent as-is — a bare id or any youtube.com / youtu.be / music.youtube.com URL —
-// and the server reduces it to the id; the CLI shares that one parser by not having one.
+// and the server reduces it to the id; the CLI shares that one parser by not having one. The
+// "Accept a different length" checkbox is the duration guard's one waiver (`allowDurationMismatch`):
+// the operator has deliberately chosen a different edit of the same recording, and the finding
+// keeps its store length.
 //
 // Operator register: terse, em-dash joins, ALL-CAPS status words. Not public copy.
 
@@ -51,7 +55,11 @@ export function useCaptureSource(options: {
     queryKey: key,
     refetchOnWindowFocus: true,
   });
-  const mutation = useMutation<void, Error, { kind: "clear" } | { kind: "pin"; youtube: string }>({
+  const mutation = useMutation<
+    void,
+    Error,
+    { kind: "clear" } | { allowDurationMismatch: boolean; kind: "pin"; youtube: string }
+  >({
     mutationFn: async (input) => {
       if (!row) {
         return;
@@ -61,7 +69,10 @@ export function useCaptureSource(options: {
         `/api/v1/admin/tracks/${encodeURIComponent(row.trackId)}/capture-source`,
         input.kind === "pin"
           ? {
-              body: JSON.stringify({ youtubeVideoId: input.youtube }),
+              body: JSON.stringify({
+                allowDurationMismatch: input.allowDurationMismatch,
+                youtubeVideoId: input.youtube,
+              }),
               credentials: "same-origin",
               headers: { "Content-Type": "application/json" },
               method: "PUT",
@@ -93,7 +104,8 @@ export function useCaptureSource(options: {
         mutation.reset();
       }
     },
-    pin: (youtube: string) => mutation.mutateAsync({ kind: "pin", youtube }).then(() => undefined),
+    pin: (youtube: string, allowDurationMismatch: boolean) =>
+      mutation.mutateAsync({ allowDurationMismatch, kind: "pin", youtube }).then(() => undefined),
     row: row ?? null,
     state: query.data,
   };
@@ -108,7 +120,7 @@ type CaptureSourceDialogProps = {
   error?: string;
   onClear: () => Promise<void> | void;
   onOpenChange: (open: boolean) => void;
-  onPin: (youtube: string) => Promise<void> | void;
+  onPin: (youtube: string, allowDurationMismatch: boolean) => Promise<void> | void;
   row: BoardRow | null;
 };
 
@@ -139,6 +151,8 @@ function verificationWord(verification: null | string): string | undefined {
       return "fingerprint MATCH";
     case "operator-verified":
       return "OPERATOR-VERIFIED";
+    case "consensus-verified":
+      return "CONSENSUS-VERIFIED — independent uploads agree";
     case "mismatch":
       return "fingerprint MISMATCH";
     case "unverified":
@@ -160,13 +174,18 @@ export function CaptureSourceDialog({
 }: CaptureSourceDialogProps) {
   const inputId = useId();
   const hintId = useId();
+  const allowId = useId();
   const [youtube, setYoutube] = useState("");
+  // The duration waiver rides the NEXT pin only and starts unticked on every open: it is a
+  // deliberate, per-pin ruling, never a sticky preference.
+  const [allowDurationMismatch, setAllowDurationMismatch] = useState(false);
 
   // A fresh open starts on an empty field — the pin on file is shown as data, not pre-filled, so
   // a stray submit can never re-pin the same id and re-queue the row by accident.
   useEffect(() => {
     if (row === null) {
       setYoutube("");
+      setAllowDurationMismatch(false);
     }
   }, [row]);
 
@@ -180,13 +199,15 @@ export function CaptureSourceDialog({
         return;
       }
 
-      await onPin(value);
+      await onPin(value, allowDurationMismatch);
       setYoutube("");
+      setAllowDurationMismatch(false);
     },
-    [onPin, youtube],
+    [allowDurationMismatch, onPin, youtube],
   );
 
   const pinned = state?.captureSourcePin ?? null;
+  const pinnedAnyLength = pinned !== null && state?.captureSourcePinAllowDuration === true;
   const verification = state ? verificationWord(state.captureVerification) : undefined;
 
   return (
@@ -200,7 +221,8 @@ export function CaptureSourceDialog({
           <DialogDescription>
             Where the full-song capture stands, and the one control under the fingerprint gate. Pin
             a YouTube upload and the next capture tick downloads it instead of searching — the
-            duration guard still applies, the gate still runs, the pin wins.
+            duration guard still applies unless you accept a different length, the gate still runs,
+            the pin wins.
           </DialogDescription>
         </DialogHeader>
 
@@ -248,7 +270,9 @@ export function CaptureSourceDialog({
                   >
                     youtube {pinned}
                   </a>
-                  <span className="text-muted-foreground">PINNED</span>
+                  <span className="text-muted-foreground">
+                    {pinnedAnyLength ? "PINNED — any length" : "PINNED"}
+                  </span>
                 </>
               ) : state.youtubeVideoId ? (
                 <>
@@ -293,10 +317,22 @@ export function CaptureSourceDialog({
                 Pin
               </Button>
             </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                checked={allowDurationMismatch}
+                disabled={busy || state === null}
+                id={allowId}
+                onCheckedChange={(checked) => setAllowDurationMismatch(checked === true)}
+              />
+              <Label className="text-xs font-normal" htmlFor={allowId}>
+                Accept a different length — a chosen edit of the same recording; the finding keeps
+                its store length
+              </Label>
+            </div>
             <p className="text-xs text-muted-foreground" id={hintId}>
               Re-queues the capture and clears the rejection memory — the sweep downloads this
-              upload, refuses it only if the length is off, and records the capture
-              OPERATOR-VERIFIED. Flag wrong audio first if a bad capture is already on file.
+              upload, refuses it only if the length is off (unless accepted above), and records the
+              capture OPERATOR-VERIFIED. Flag wrong audio first if a bad capture is already on file.
             </p>
           </div>
 

@@ -44,8 +44,15 @@ export type CaptureExternalResult =
       /**
        * `operator-verified` is a capture taken from the operator's pinned source (docs/the-ear.md §
        * Wrong audio): the fingerprint still ran, but the pin outranks its verdict.
+       * `consensus-verified` is the ladder's consensus capture: the preview refused every
+       * duration-verified upload, but two or more from different channels agree with each other.
+       * Machine evidence, treated like any other verified capture (re-checkable).
        */
-      captureVerification: "operator-verified" | "preview-match" | "unverified";
+      captureVerification:
+        | "consensus-verified"
+        | "operator-verified"
+        | "preview-match"
+        | "unverified";
       kind: "capture";
       outcome: "done";
       sourceAudioKey: string;
@@ -75,6 +82,8 @@ type CaptureSnapshotExtra = {
   bpm: number | null;
   /** The operator's pinned YouTube source, frozen with the row so a mid-flight pin or clear stales the commit. */
   captureSourcePin: string | null;
+  /** The pin's duration override, frozen with the pin for the same reason (a flip mid-flight stales the commit). */
+  captureSourcePinAllowDuration: boolean;
   captureVerification: string | null;
   captureVerifiedAt: string | null;
   enrichmentStatus: string | null;
@@ -100,6 +109,8 @@ export type CapturePreparedTrack = {
   bpm?: number;
   /** The operator's pinned YouTube source — the sweep downloads this id instead of walking the ladder. */
   captureSourcePin?: string;
+  /** The pin's duration override — sent as `true` only beside a pin the operator waived the guard for. */
+  captureSourcePinAllowDuration?: boolean;
   certified: boolean;
   durationMs?: number;
   label?: string;
@@ -138,6 +149,7 @@ type CaptureSourceRow = {
   bpm: bigint | null | number;
   capture_priority: bigint | null | number;
   capture_source_pin: string | null;
+  capture_source_pin_allow_duration: bigint | null | number;
   capture_status: string | null;
   capture_verification: string | null;
   capture_verified_at: string | null;
@@ -178,6 +190,7 @@ type CaptureSourceRow = {
 
 const CAPTURE_SOURCE_SELECT = `select
   t.analyzed_at, t.analyzed_from, t.artists_json, t.bpm, t.capture_priority, t.capture_source_pin,
+  t.capture_source_pin_allow_duration,
   t.capture_status, t.capture_verification, t.capture_verified_at, t.demand_score, t.dismissed_at,
   t.duration_ms, t.duplicate_of_track_id, t.has_embedding, t.has_isrc, t.isrc,
   t.isrc_recovery_attempted_at, t.label, t.nearest_finding_score,
@@ -244,6 +257,7 @@ function snapshotFromRow(row: CaptureSourceRow): CaptureSnapshot {
     extra: {
       bpm: numberOrNull(row.bpm),
       captureSourcePin: row.capture_source_pin,
+      captureSourcePinAllowDuration: Number(row.capture_source_pin_allow_duration ?? 0) === 1,
       captureVerification: row.capture_verification,
       captureVerifiedAt: row.capture_verified_at,
       enrichmentStatus: row.enrichment_status,
@@ -801,6 +815,8 @@ function relevantSnapshot(snapshot: CaptureSnapshot, kind: CaptureReconciliation
     // `?? null`, so a snapshot token frozen before the column existed compares equal to a fresh
     // read of an unpinned row rather than staling every in-flight capture once.
     captureSourcePin: snapshot.extra.captureSourcePin ?? null,
+    // `?? false` for the same legacy-token reason: absent reads as the column's default.
+    captureSourcePinAllowDuration: snapshot.extra.captureSourcePinAllowDuration ?? false,
     captureStatus: source.captureStatus,
     captureVerification: snapshot.extra.captureVerification,
     captureVerifiedAt: snapshot.extra.captureVerifiedAt,
@@ -834,6 +850,11 @@ function preparedTrack(snapshot: CaptureSnapshot): CapturePreparedTrack {
     ...(snapshot.extra.bpm === null ? {} : { bpm: snapshot.extra.bpm }),
     ...(snapshot.extra.captureSourcePin
       ? { captureSourcePin: snapshot.extra.captureSourcePin }
+      : {}),
+    // Only beside a pin, and only when set: the sweep's exact-key allow-list means an absent key
+    // is the default, so an unpinned or un-waived row's snapshot is byte-identical to before.
+    ...(snapshot.extra.captureSourcePin && snapshot.extra.captureSourcePinAllowDuration
+      ? { captureSourcePinAllowDuration: true }
       : {}),
     certified: snapshot.source.certified,
     ...(snapshot.source.durationMs === null ? {} : { durationMs: snapshot.source.durationMs }),

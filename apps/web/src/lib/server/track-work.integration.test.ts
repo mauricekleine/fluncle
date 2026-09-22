@@ -1008,6 +1008,16 @@ describe("listTrackWork — the wire", () => {
 
     expect(capture?.trackId).toBe("aaaaaaaaaaaaaaaaaaaaaa");
     expect(capture?.captureSourcePin).toBe("dQw4w9WgXcQ");
+    // A plain pin: the duration waiver is absent, not false — the shape is unchanged.
+    expect(capture?.captureSourcePinAllowDuration).toBeUndefined();
+
+    // The waiver rides the DTO only beside its pin, and only as `true`.
+    await db.execute({
+      args: ["aaaaaaaaaaaaaaaaaaaaaa"],
+      sql: `update tracks set capture_source_pin_allow_duration = 1 where track_id = ?`,
+    });
+    const [waived] = await listTrackWork({ kind: "capture" });
+    expect(waived?.captureSourcePinAllowDuration).toBe(true);
 
     await withAudio("aaaaaaaaaaaaaaaaaaaaaa", { analyzedFrom: "preview" });
 
@@ -1016,6 +1026,7 @@ describe("listTrackWork — the wire", () => {
 
       expect(item?.trackId).toBe("aaaaaaaaaaaaaaaaaaaaaa");
       expect(item?.captureSourcePin).toBeUndefined();
+      expect(item?.captureSourcePinAllowDuration).toBeUndefined();
     }
   });
 
@@ -1035,6 +1046,7 @@ describe("listTrackWork — the wire", () => {
     expect(capture?.sourceAudioFailures).toBeUndefined();
     expect(capture?.artistYoutubeChannelIds).toBeUndefined();
     expect(capture?.captureSourcePin).toBeUndefined();
+    expect(capture?.captureSourcePinAllowDuration).toBeUndefined();
   });
 
   it("drops an embedded track from the embed queue (idempotent by construction)", async () => {

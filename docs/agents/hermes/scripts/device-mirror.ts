@@ -139,6 +139,29 @@ type WireStatementResult = {
 };
 
 const EXPECTED_INTERVAL_MS = 3_600_000;
+/**
+ * Whether a tick may publish: forced, never published (no parseable `derived_at`), or the live
+ * replica is at least the interval old. Pure, so the gate is testable without a target.
+ */
+export function publishCadence(
+  previousDerivedAt: string,
+  nowMs: number,
+  intervalMs: number,
+  forced: boolean,
+): { ageMs: number; due: boolean } {
+  const previousTime = Date.parse(previousDerivedAt);
+  if (!Number.isFinite(previousTime)) {
+    return { ageMs: Number.POSITIVE_INFINITY, due: true };
+  }
+  const ageMs = Math.max(0, nowMs - previousTime);
+  return { ageMs, due: forced || ageMs >= intervalMs };
+}
+
+// Every six hours: the device replica is what the live mobile app's offline-first store pulls, so
+// a day-old replica is a stale product, while every publish still costs a full rewrite of the
+// replica against a metered monthly write quota. Six hours is the pragmatic middle until the
+// publish is diff-based (write only the drifted rows), at which point hourly freshness is cheap.
+export const DEFAULT_PUBLISH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_LOCK_STALE_MS = 2 * EXPECTED_INTERVAL_MS;
@@ -1637,7 +1660,7 @@ type MirrorSummary = {
   error: string | null;
   errors: number;
   expected_interval_ms: number;
-  gateState: "active" | "locked";
+  gateState: "active" | "locked" | "paused";
   generation: string | null;
   localPeakDiskBytes: number | null;
   maxBufferedRows: number | null;
@@ -1650,7 +1673,7 @@ type MirrorSummary = {
   replicaFramesSynced: number | null;
   replicaLagFrames: number | null;
   rowCounts: null | Record<DeviceSourceTable, number>;
-  validation: "failed" | "locked" | "verified";
+  validation: "failed" | "locked" | "paused" | "verified";
 };
 
 function emptySummary(): MirrorSummary {
@@ -1711,6 +1734,42 @@ export async function main(): Promise<MirrorSummary> {
       throw new Error("Source and target database URLs must be different");
     }
 
+    // THE PUBLISH CADENCE GATE. A publication rewrites every device row (≈90k rows across the six
+    // tables, staged then cut over) no matter how few source rows drifted, and the tick runs
+    // hourly — so an hourly publish costs ~2M written rows a day against a metered monthly write
+    // quota, while the live mobile app's offline-first store only needs it fresh to the hour or so. The
+    // tick keeps its hourly cadence (the ledger's expected interval, the /status row) but PUBLISHES
+    // only once the live replica is older than the interval below; a paused tick reports itself
+    // and costs no replica sync, no derivation and no writes. `DEVICE_MIRROR_FULL_REBUILD=true`
+    // still forces a publish.
+    const target = new LibsqlHttpClient(targetUrl, targetToken);
+    const publishIntervalMs = positiveIntegerEnv(
+      "DEVICE_MIRROR_PUBLISH_INTERVAL_MS",
+      DEFAULT_PUBLISH_INTERVAL_MS,
+    );
+    const previous = await readTargetMeta(target);
+    const forced = process.env.DEVICE_MIRROR_FULL_REBUILD === "true";
+    const previousTime = Date.parse(previous.derivedAt);
+    const cadence = publishCadence(previous.derivedAt, Date.now(), publishIntervalMs, forced);
+    if (!cadence.due) {
+      const ageMs = cadence.ageMs;
+      log(
+        `live device replica is ${Math.round(ageMs / 60_000)}m old — next publish after ${Math.round(publishIntervalMs / 3_600_000)}h; nothing written`,
+      );
+      const paused = {
+        ...summary,
+        checked: null,
+        derivedAt: previous.derivedAt,
+        driftAgeMs: ageMs,
+        gateState: "paused" as const,
+        ok: true,
+        produced: 0,
+        validation: "paused" as const,
+      };
+      console.log(JSON.stringify(paused));
+      return paused;
+    }
+
     const home = process.env.HOME ?? "/opt/data/home";
     const stateDirectory = process.env.DEVICE_MIRROR_STATE_DIR ?? join(home, "device-mirror");
     const replicaPath = join(stateDirectory, "source-replica.db");
@@ -1745,9 +1804,6 @@ export async function main(): Promise<MirrorSummary> {
     summary.rowCounts = generation.rowCounts;
     summary.rebuildDurationMs = (summary.rebuildDurationMs ?? 0) + derivation.elapsedMs;
 
-    const target = new LibsqlHttpClient(targetUrl, targetToken);
-    const previous = await readTargetMeta(target);
-    const previousTime = Date.parse(previous.derivedAt);
     const nextTime = Date.parse(generation.derivedAt);
     summary.driftAgeMs =
       Number.isFinite(previousTime) && Number.isFinite(nextTime)

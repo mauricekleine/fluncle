@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `capture_source_pin_allow_duration` integer DEFAULT false NOT NULL;
