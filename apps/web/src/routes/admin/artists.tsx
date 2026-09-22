@@ -70,16 +70,24 @@ import {
 } from "@/lib/artist-socials";
 import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+// The board's two client-side folds and the shapes it renders come from the CLIENT-SAFE module.
+// A live client reference into `lib/server/artists.ts` pins that module in the browser bundle and
+// with it the whole `getDb` chain, whose externalized `node:async_hooks` stub throws on module
+// evaluation and takes the route down (docs/client-bundle.md, Rule 1 — build-enforced by the
+// `fluncle-client-chunk-purity` gate). The reads below are only ever called inside a
+// `createServerFn().handler()`, whose body the client build removes wholesale.
 import {
   artistNeedsLook,
   type ArtistOverviewItem,
-  type ArtistsPage,
   type ArtistSocial,
   type FreshLinkEntry,
+  partitionFreshLinks,
+} from "@/lib/artist-review";
+import {
+  type ArtistsPage,
   type FreshLinksData,
   listArtistsPage,
   listFreshLinks,
-  partitionFreshLinks,
 } from "@/lib/server/artists";
 import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";

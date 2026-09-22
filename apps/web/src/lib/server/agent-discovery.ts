@@ -195,7 +195,7 @@ function agentCard() {
       // and the registry weights it `web: primary` alongside the findings feed and the
       // track enumerator. Its Spotify-candidate sibling below is a SUBMIT step, not an
       // archive read; the two descriptions say which is which so a caller cannot confuse
-      // them. The wording mirrors the `search_archive` MCP spec (tools/specs.ts), the
+      // them. The wording mirrors the `search_archive` MCP spec (lib/tool-specs.ts), the
       // stated source of truth for what a skill maps onto — the sonic tier included.
       {
         description:

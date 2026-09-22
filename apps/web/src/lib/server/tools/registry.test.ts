@@ -10,7 +10,7 @@ import {
   toInputJsonSchema,
   toWebMcpTool,
   type Transport,
-} from "./specs";
+} from "../../tool-specs";
 import { compactFinding, publicFindingRecord, SHARED_TOOLS, toMcpTool } from "./registry";
 
 // The registry projects one tool set onto three transports. These tests are the drift guard: the

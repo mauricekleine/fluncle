@@ -7,7 +7,7 @@
 //
 // It is deliberately free of React, of `lib/server/**`, and of any I/O: the `/search` route's
 // `validateSearch` / `loaderDeps` / `head` are EAGERLY bundled into the client entry chunk
-// (docs/client-bundle.md, Rule 1, build-enforced by the `fluncle-eager-chunk-purity` gate), so
+// (docs/client-bundle.md, Rule 1, build-enforced by the `fluncle-client-chunk-purity` gate), so
 // anything they reach has to be free of the `getDb` → `@libsql/client` chain. Type-only imports
 // from `@fluncle/contracts` erase at compile time, so the canonical wire shapes stay safe here.
 //

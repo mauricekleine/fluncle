@@ -14,7 +14,7 @@ import {
 import { isStaleTikTokDraft, tikTokDraftAgeHours } from "@fluncle/contracts/util";
 import { type ComponentType } from "react";
 import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
-import { type BlockedOn, type Stage } from "@/lib/server/track-stage";
+import { type BlockedOn, type Stage } from "@/lib/track-stage";
 import { type BoardRow } from "@/components/admin/use-publish";
 
 /** A step glyph — a phosphor icon or a wrapped simple-icons brand mark, same call. */

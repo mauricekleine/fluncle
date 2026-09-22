@@ -9,6 +9,10 @@
 // here with zero server imports, and the server `execute` + adapters live in ./registry.ts,
 // which imports these specs and attaches an `execute` to each. WebMCP imports only from this
 // file; the MCP server and ChatDnB import the full ToolDefs from ./registry.ts.
+//
+// It sits under `lib/` rather than `lib/server/tools/` because that is what client-safe means
+// here: the `fluncle-client-chunk-purity` gate reads the PATH, so a module the browser bundle is
+// allowed to hold lives outside `lib/server/**` (docs/client-bundle.md, Rule 1).
 
 import { z } from "zod";
 
