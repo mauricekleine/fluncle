@@ -18,6 +18,7 @@ import {
   type DeviceTargetClient,
   inspectDeviceGeneration,
   type LibsqlStatement,
+  DEFAULT_PUBLISH_INTERVAL_MS,
   publishCadence,
   publishDeviceGeneration,
   type QueryResult,
@@ -329,6 +330,9 @@ describe("the publish cadence gate", () => {
   test("a replica at or past the interval is due", () => {
     const now = Date.parse("2026-01-02T09:00:00Z");
     expect(publishCadence("2026-01-01T09:00:00Z", now, DAY, false).due).toBe(true);
+  });
+  test("the default interval keeps a live app's replica within six hours", () => {
+    expect(DEFAULT_PUBLISH_INTERVAL_MS).toBe(6 * HOUR);
   });
   test("a forced rebuild publishes regardless of age", () => {
     const now = Date.parse("2026-01-01T09:00:01Z");

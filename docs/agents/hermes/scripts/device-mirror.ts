@@ -157,9 +157,11 @@ export function publishCadence(
   return { ageMs, due: forced || ageMs >= intervalMs };
 }
 
-// One publish a day: the device replica's consumer is the offline-first mobile app, which pulls it
-// at most daily, and every publish costs a full rewrite of the replica.
-const DEFAULT_PUBLISH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// Every six hours: the device replica is what the live mobile app's offline-first store pulls, so
+// a day-old replica is a stale product, while every publish still costs a full rewrite of the
+// replica against a metered monthly write quota. Six hours is the pragmatic middle until the
+// publish is diff-based (write only the drifted rows), at which point hourly freshness is cheap.
+export const DEFAULT_PUBLISH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_LOCK_STALE_MS = 2 * EXPECTED_INTERVAL_MS;
@@ -1735,7 +1737,7 @@ export async function main(): Promise<MirrorSummary> {
     // THE PUBLISH CADENCE GATE. A publication rewrites every device row (≈90k rows across the six
     // tables, staged then cut over) no matter how few source rows drifted, and the tick runs
     // hourly — so an hourly publish costs ~2M written rows a day against a metered monthly write
-    // quota, for a replica whose consumer is offline-first and reads it at most once a day. The
+    // quota, while the live mobile app's offline-first store only needs it fresh to the hour or so. The
     // tick keeps its hourly cadence (the ledger's expected interval, the /status row) but PUBLISHES
     // only once the live replica is older than the interval below; a paused tick reports itself
     // and costs no replica sync, no derivation and no writes. `DEVICE_MIRROR_FULL_REBUILD=true`

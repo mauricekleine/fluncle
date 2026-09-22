@@ -247,6 +247,16 @@ The consumer half shipped in ONE PR because the rewrite alone is plan-neutral (a
 - fix, in preference order: (a) serve reads on the OLD keys while a family rebuilds — a slightly stale order is strictly better than no order, and the rebuild already writes the new keys row by row; (b) rebuild per family in priority order (capture-catalogue first, the read that gates paid spend) instead of round-robin; (c) give the sweep a rebuild-specific budget (rows per tick) separate from repair debt, sized from the measured ~45k rows/min ceiling.
 - what has to be proven on hosted: that a read on old keys during the walk cannot serve a row twice or skip one (the rebuild's checkpoint + the read's seek must agree on the key space), and the wall-time cost of the family scans at 150k+ rows under the write lane.
 
+**25. Device replica publish: a full rewrite of every device row on every publish**
+`tier=design · fluncle-device · T1`
+**STATUS: DESIGN — measured, cadence-gated meanwhile.**
+
+- loc: docs/agents/hermes/scripts/device-mirror.ts (`publishDeviceGeneration` → `stageAndVerify` + `cutoverDeviceGeneration`; the cadence gate `publishCadence`).
+- shape: every publish stages and cuts over the whole device generation (~97k rows across six tables) however few source rows drifted (measured drift between hourly publishes: 10–200 rows). At an hourly cadence that is ~2M written rows a day on the metered `fluncle-device` database — 43.8M of one month's 110M quota. The cadence gate (six hours) caps it at ~0.4M/day at the cost of replica freshness, and the replica is what the live mobile app's offline-first store pulls.
+- impact: HIGH on quota and MEDIUM on product — freshness and write cost are traded against each other for as long as the publish is a rewrite.
+- fix: a diff-based publish — derive the generation, compute the row-level delta against the live target (by primary key + row digest), and write only inserts/updates/deletes; with today's drift that is ~5k writes/day at HOURLY freshness. Keep the atomic cutover for schema changes and for a delta above a threshold (a rewrite is cheaper than a huge delta).
+- what has to be proven on hosted: the delta computation must not pull whole tables into the isolate (rank the diff in SQL on the target, or stream by key range), and the consumer's checkpoint semantics must survive a row-level update without a generation flip.
+
 ## Owned elsewhere — do NOT touch
 
 - already-fixed — catalogue.ts:1183 rankCatalogue max-similarity vector cross-scan (finding_vec/candidate_vec CTEs) + the RANK_BATCH_SIZE=250 batch write. CONFIRMED mitigated: both CTE arms carry `as materialized`, the join is a `cross join` pinning findings (small) as the driver with the `embedding_blob is not null` guards moved inside the CTEs, and the batch write is bounded/single-row/PK-keyed/idempotent under the single-writer box sweep. Do NOT re-flag as new.
