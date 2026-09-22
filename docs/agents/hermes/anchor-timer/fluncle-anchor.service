@@ -16,11 +16,19 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). Secrets (the agent token + APIFY_API_TOKEN) come from the shared op-injected
 # ${HOME}/.fluncle-secrets.env the wrapper sources.
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=250 -e FLUNCLE_ANCHOR_ISRC_ASK_LIMIT=100 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-anchor -- bash /opt/hermes-scripts/anchor-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=250 -e FLUNCLE_ANCHOR_ISRC_ASK_LIMIT=100 -e FLUNCLE_ANCHOR_ISRC_WINDOW_UTC= hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-anchor -- bash /opt/hermes-scripts/anchor-sweep.sh
 # `FLUNCLE_ANCHOR_ISRC_ASK_LIMIT=100` is the tick's ceiling on Spotify EXACT-ISRC asks (the sweep's own
 # default is 25). The rung resolves most ISRC-bearing rows at zero cost, so it is what keeps those rows
-# off the metered Apify fallback; it stays inside the night window (`FLUNCLE_ANCHOR_ISRC_WINDOW_UTC`)
-# and behind the shared-app throttle breaker, which is what protects publishing and playlist calls.
+# off the metered Apify fallback. It runs at ALL HOURS (`FLUNCLE_ANCHOR_ISRC_WINDOW_UTC=` — empty is
+# always) and behind the shared-app throttle breaker, which is what protects publishing and playlist
+# calls.
+#
+# WHY THE NIGHT WINDOW IS OPEN. The window existed to keep the sweep off the ONE official Spotify app
+# during publishing hours. The breaker is the guard that actually enforces that: a 429 anywhere ends
+# the tick's asks and trips a cooldown, so the window was a second, blunter copy of a rail that
+# already exists — and it cost two thirds of the day's free conversion while the free Deezer
+# pre-filter refills the ISRC shelf faster than eight hours of asks can drain it. If user-facing
+# Spotify traffic ever competes with this sweep, restore a window here rather than widen the breaker.
 # One tick drains 250 rows (`FLUNCLE_ANCHOR_BATCH`) — the sweep PAGES the worklist in ≤200-row reads
 # (the server clamp), so the batch may exceed one read's cap (anchor-sweep.ts `runAnchorSweep`).
 # Safe to run large because the FREE rungs resolve most rows at zero Apify cost, and 250 is the hard

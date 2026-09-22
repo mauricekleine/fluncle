@@ -636,7 +636,7 @@ export const AUTOMATION_CRONS: CronDef[] = [
     service: "cron.projection-maintenance",
   },
   { cadenceMs: 60 * 60_000, match: "anchor", service: "cron.anchor" }, // catalogue Spotify anchors via Apify — one bounded batch per hour
-  { cadenceMs: 60 * 60_000, match: "isrc-recovery", service: "cron.isrc-recovery" }, // free Deezer ISRC recovery — one paced batch per hour
+  { cadenceMs: 10 * 60_000, match: "isrc-recovery", service: "cron.isrc-recovery" }, // free Deezer ISRC recovery — one paced batch per hour
   { cadenceMs: 60 * 60_000, match: "device-mirror", service: "cron.device-mirror" }, // shared anchored-cut device replica — full diff, in-place writes
   { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick
   { cadenceMs: 60 * 60_000, match: "recording-mbids", service: "cron.recording-mbids" }, // MusicBrainz recording MBIDs — crawler PK strip + ISRC resolve, one bounded batch per tick
