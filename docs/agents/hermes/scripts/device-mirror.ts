@@ -12,7 +12,7 @@
 import { createClient, type Client, type Config, type Replicated } from "@libsql/client";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, rmdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, rmdir, rm, stat, utimes } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -164,7 +164,19 @@ export function publishCadence(
 export const DEFAULT_PUBLISH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
-const DEFAULT_LOCK_STALE_MS = 2 * EXPECTED_INTERVAL_MS;
+/**
+ * How long a lock directory may go untouched before a later tick treats it as abandoned.
+ *
+ * A RUNNING publish keeps its own lock fresh (see `acquireLock`'s heartbeat), so this bounds how
+ * long a lock left by a DEAD tick can block its successors rather than how long a publish may take.
+ * The admission runner's containment kills the payload's whole process group when it fences a tick,
+ * which is exactly the death that leaves a lock behind — and a window measured in hours then costs
+ * a publish cycle. Fifteen minutes is comfortably above the heartbeat interval and well under the
+ * tick cadence.
+ */
+const DEFAULT_LOCK_STALE_MS = 15 * 60 * 1000;
+/** How often a running publish touches its lock so the window above can stay short. */
+const LOCK_HEARTBEAT_MS = 60 * 1000;
 const STAGE_CONTROL_TABLE = "_device_mirror_stage_control";
 const STAGE_CHECKPOINT_TABLE = "_device_mirror_stage_checkpoint";
 const REQUIRED_SOURCE_TABLES = [...DEVICE_SOURCE_TABLES, "track_embeddings"] as const;
@@ -1638,7 +1650,24 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
     await mkdir(lockDir);
   }
 
-  return async () => {
+  // Keep the lock fresh while this tick works, so a short stale window never mistakes a long
+  // publish for an abandoned one. `unref` so the timer cannot hold the process open by itself.
+  const heartbeat = setInterval(() => {
+    const now = new Date();
+    utimes(lockDir, now, now).catch(() => {
+      // A lock we can no longer touch is a lock another tick may reclaim; the release below and the
+      // stale window are what recover from it, so a failed touch is not worth interrupting for.
+    });
+  }, LOCK_HEARTBEAT_MS);
+  heartbeat.unref?.();
+
+  let released = false;
+  const release = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    clearInterval(heartbeat);
     try {
       await rmdir(lockDir);
     } catch (error) {
@@ -1647,6 +1676,20 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
       );
     }
   };
+
+  // THE FENCED KILL. The admission runner terminates the payload's process group when it withdraws
+  // a lease, and the tick's own `finally` never runs — so without this the lock outlives the tick
+  // and its successors read `locked` until the stale window passes. A handler per signal, removed
+  // on release so a later tick's handlers are not stacked on this one's.
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+    process.once(signal, () => {
+      void release().finally(() => {
+        process.exit(143);
+      });
+    });
+  }
+
+  return release;
 }
 
 type MirrorSummary = {

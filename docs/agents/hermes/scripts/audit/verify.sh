@@ -24,6 +24,8 @@
 #                                                the path list scopes the DIAGNOSTICS, not the
 #                                                program tsgolint loads — so this script lints
 #                                                WITHOUT the type-aware rules (derived config)
+#   one file, type-aware ON        1.44 GB peak  ← the whole-program load, on a single path
+#   one file, type-aware OFF       0.14 GB peak  ← what the derived config buys
 #
 # So the whole-repo passes are not run here. They are not skipped work: every one of them runs on
 # the PR this audit opens (the `quality-checks` action) and again in `deploy:gate` before anything
@@ -174,9 +176,27 @@ else
   # the diagnostics, not the memory. That is the 3 GB peak the container's cap kills. So the box
   # lints with the same rules minus the type-aware ones, from a derived config; the type-aware
   # rules run on the PR in CI, where they belong.
-  BOX_OXLINTRC="$(mktemp)"
-  bun -e 'const c=JSON.parse(require("fs").readFileSync(".oxlintrc.json","utf8"));c.typeAware=false;process.stdout.write(JSON.stringify(c))' >"${BOX_OXLINTRC}"
-  step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUNX[@]}" oxlint -c "${BOX_OXLINTRC}" "${CHANGED[@]}"
+  # THE DERIVED CONFIG IS A TEXT EDIT, AT THE REPO ROOT, AND IT ASSERTS.
+  #   · TEXT, not `JSON.parse`: `.oxlintrc.json` carries `//` comments (oxlint reads JSONC), so a
+  #     JSON parse throws, the redirect leaves an EMPTY file, and oxlint rejects it — a lint leg
+  #     that never ran while the ladder reported a failure about the branch.
+  #   · REPO ROOT, not `mktemp`: a config resolves its relative `ignorePatterns` and `overrides`
+  #     against its OWN directory, so a config in /tmp silently lints with neither.
+  #   · `options.typeAware`, not a top-level key: the flag lives under `options`, and oxlint
+  #     ignores an unknown top-level one without complaint.
+  # The substitution is verified before the config is used: if the key ever moves or is renamed,
+  # this fails loudly rather than handing the box a config that quietly loads the whole program.
+  BOX_OXLINTRC=".oxlintrc.box.jsonc"
+  sed -E 's/("typeAware"[[:space:]]*:[[:space:]]*)true/\1false/' .oxlintrc.json >"${BOX_OXLINTRC}"
+  if grep -q '"typeAware"[[:space:]]*:[[:space:]]*false' "${BOX_OXLINTRC}"; then
+    step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUNX[@]}" oxlint -c "${BOX_OXLINTRC}" "${CHANGED[@]}"
+  else
+    # The lint leg is SKIPPED rather than run against the repo's own config: a type-aware pass
+    # loads the whole TypeScript program and the container's cap kills it. The record carries the
+    # reason, so the night reports a check that did not run instead of a check that failed, and
+    # the remaining legs still run.
+    record "lint" failed "type-aware-override-missing"
+  fi
   rm -f "${BOX_OXLINTRC}"
 
   # ── 3. The changed packages' own typecheck + tests ───────────────────────────────────────────

@@ -125,3 +125,7 @@ docs/1password-audit.local.md
 # Data
 /data/
 .firecrawl
+
+# The audit ladder's derived type-aware-off oxlint config, written beside the real one so its
+# relative paths resolve, and removed when the lint step ends.
+.oxlintrc.box.jsonc

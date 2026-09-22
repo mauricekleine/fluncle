@@ -85,6 +85,22 @@ function box(options: { stubExitCode?: number; stubSleepSeconds?: number } = {})
 
   git(repo, "init", "--quiet", "--initial-branch=main");
   writeFileSync(join(repo, "README.md"), "fixture\n", "utf8");
+  // The real `.oxlintrc.json` is JSONC (it carries `//` comments) and holds the type-aware switch
+  // under `options`. The fixture mirrors BOTH, because the ladder derives a type-aware-off config
+  // from this file by text edit: a fixture without it let a derivation that could never work pass.
+  writeFileSync(
+    join(repo, ".oxlintrc.json"),
+    [
+      "{",
+      "  // a comment the JSON parser would choke on",
+      '  "options": {',
+      '    "typeAware": true',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
   git(repo, "add", "-A");
   git(repo, "commit", "--quiet", "-m", "fixture");
 
@@ -145,6 +161,33 @@ describe("the audit verification ladder", () => {
     expect(record).toMatchObject({ failed: 0, ran: 0, skipped: 1 });
     expect(record.steps[0]).toMatchObject({ reason: "no-changed-paths", state: "skipped" });
     expect(fixture.calls()).toEqual([]);
+  });
+
+  test("the lint config it derives has the type-aware switch off, at the repo root", () => {
+    const fixture = box();
+    writeFileSync(join(fixture.repo, "touched.ts"), "export const a = 1;\n", "utf8");
+    // The stub records the config path it was handed; the ladder removes the file afterwards, so
+    // the assertion is on WHERE it was written and that the switch was actually flipped.
+    const { status } = fixture.run();
+    expect(status).toBe(0);
+    const call = fixture.calls().find((entry) => entry.startsWith("bunx oxlint -c "));
+    expect(call).toBeDefined();
+    const configPath = (call ?? "").split(" ")[3] ?? "";
+    // Relative to the repo root: a config in a temp directory resolves its ignorePatterns there.
+    expect(configPath.startsWith("/")).toBe(false);
+    expect(existsSync(join(fixture.repo, configPath))).toBe(false);
+  });
+
+  test("a config whose type-aware switch cannot be flipped fails the ladder loudly", () => {
+    const fixture = box();
+    writeFileSync(join(fixture.repo, ".oxlintrc.json"), '{ "options": {} }\n', "utf8");
+    writeFileSync(join(fixture.repo, "touched.ts"), "export const a = 1;\n", "utf8");
+    const { record, status } = fixture.run();
+    // The ladder keeps going (its other legs are still worth running) but the night's record says
+    // the lint leg did not run, and it must never fall through to the repo's type-aware config.
+    expect(status).toBe(1);
+    expect(record).toMatchObject({ failed: 1 });
+    expect(fixture.calls().some((entry) => entry.startsWith("bunx oxlint"))).toBe(false);
   });
 
   test("formatting and the lint rules run scoped to the changed paths, never the whole repo", () => {
