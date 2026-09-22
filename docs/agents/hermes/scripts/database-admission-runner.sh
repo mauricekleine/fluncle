@@ -376,10 +376,17 @@ while :; do
     exit_wait_expired "${last_wait_yield_reason:-queue}"
   fi
   if ! admission_post acquire "" "$(acquisition_request_timeout)"; then
-    if [ "$enforced" -eq 0 ] && [ "$ADMISSION_FAIL_CLOSED" != "true" ] && [ "$ADMISSION_ERROR_REASON" = "coordinator-unavailable" ]; then
-      emit_admission_event shadow-unavailable 0
-      exec "$@"
-    fi
+    # Shadow mode (not yet enforced, local gate unarmed) fails open at once on any coordinator
+    # unavailability, an edge 5xx included: the retry budget below exists to protect an admitted
+    # tick, and a unit that admission does not yet govern must not stall on a deploy blip.
+    case "$ADMISSION_ERROR_REASON" in
+      coordinator-unavailable | gateway-transport)
+        if [ "$enforced" -eq 0 ] && [ "$ADMISSION_FAIL_CLOSED" != "true" ]; then
+          emit_admission_event shadow-unavailable 0
+          exec "$@"
+        fi
+        ;;
+    esac
     # A transient failure is retried inside the acquisition budget instead of forfeiting the tick.
     # The Worker keys a contender on (owner, runId) and its acquire upserts that row and then reads
     # it back whatever its state, so an acquire that landed server-side but timed out client-side
@@ -584,6 +591,11 @@ while payload_is_running; do
       # definitive rejection (401, any 4xx) fences at once; a lost/stolen lease answers 2xx with
       # `outcome: "lost"` and is handled below. `database-busy` here is a heartbeat the busy
       # coordinator could not write yet while the lease it renews is still held, so it retries.
+      # Two known bounds: the heartbeat POST is capped by the request ceiling, not by the time
+      # left on the local deadline, so this loop's bookkeeping may trail the watchdog's kill by
+      # one request timeout (the watchdog, not this loop, is the actual containment); and the
+      # local deadline reads wall-clock while the server lease runs on the database clock, which
+      # the watchdog window's margin under the 90-second lease absorbs.
       if transient_admission_failure && ! watchdog_deadline_passed; then
         yield_reason="$ADMISSION_ERROR_REASON"
         emit_admission_event heartbeat-retry "$(( (SECONDS - payload_started_seconds) * 1000 ))"

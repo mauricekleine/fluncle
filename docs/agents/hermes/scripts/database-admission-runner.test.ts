@@ -401,6 +401,24 @@ describe("database admission unit runner", () => {
     },
   );
 
+  it.each([
+    ["an edge 5xx", `printf '%s\\n%s\\n' '{}' '503'`],
+    ["a request past the ceiling", "sleep 1.1\nexit 28"],
+  ])(
+    "fails open at once in shadow mode when the coordinator answers %s",
+    async (_label, response) => {
+      fakeCurl(response);
+      const result = await run(["bash", "-c", "printf shadow"]);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("shadow");
+      expect(result.stderr).toContain('"outcome":"shadow-unavailable"');
+      expect(result.stderr).not.toContain('"outcome":"acquire-retry"');
+      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(1);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
   it(
     "fails closed after the whole window when the locally armed coordinator never answers",
     PROCESS_TEST_OPTIONS,
@@ -489,6 +507,7 @@ ${ACQUIRED_RESPONSE}
 `);
       const payloadMarker = join(directory, "payload-started");
       const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        failClosed: true,
         maxWaitSecs: 10,
       });
 
