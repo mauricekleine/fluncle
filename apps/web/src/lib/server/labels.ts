@@ -160,7 +160,7 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
 const LABEL_COLUMNS = `id, name, slug, seed_state, ruled_at, scope_changed_at, created_at, updated_at,
    image_key, image_updated_at, mb_label_id, disambiguation, founding_date, founded_location`;
 
-/** The `/admin/labels` section page size — each of the three seed-state sections pages this many. */
+/** The `/admin/labels` section page size — each of the station's sections pages this many. */
 export const LABELS_ADMIN_PAGE_SIZE = 50;
 
 /**
@@ -2021,7 +2021,7 @@ export type LabelSeedItem = Omit<LabelAdminItem, "findingCount"> & {
   mbLabelId: null | string;
 };
 
-/** One paged section of the `/admin/labels` station — one seed state, bounded, name-sorted. */
+/** One paged section of the `/admin/labels` station — see {@link LabelsAdminSection}. */
 export type LabelsAdminPage = {
   items: LabelAdminItem[];
   page: number;
@@ -2108,27 +2108,66 @@ async function labelFindingCountsByIds(labelIds: string[]): Promise<Map<string, 
 }
 
 /**
- * One numbered page of the `/admin/labels` station's section for a single seed state — the read the
- * station hydrates each of its three sections from. Bounded: `where seed_state = ?` rides the
- * `(seed_state, name)` index, `order by name` reads it in order, and `count(*) over ()` returns the
- * section total for the pager without a second query. Only the page's ≤{@link LABELS_ADMIN_PAGE_SIZE}
- * labels get their finding count, via {@link labelFindingCountsByIds} over the indexed `label_id`
- * edge — so the whole-corpus aggregate is absent from every load/focus.
+ * One `/admin/labels` section. Three of them ARE a seed state; `partial` is the other half of
+ * `undecided`.
+ *
+ * ── WHY `undecided` IS TWO SECTIONS ──────────────────────────────────────────────────────
+ * An undecided label that carries PER-LABEL artist rules has been ruled — writing allows and
+ * leaving the seed state alone IS the `dnb_partial` verdict (the fluncle-label-triage skill's
+ * exception model, docs/label-entity.md): the next crawl takes the named artists off that label
+ * and nothing else. An undecided label has NO other way to acquire per-label rules, so the check
+ * is EXACT rather than a heuristic, and it is the same one the triage pull partitions on
+ * (`packages/skills/fluncle-label-triage/scripts/partition-undecided.py`) — the station and the
+ * pull must agree about what is still waiting on the operator.
+ *
+ * A GLOBAL rule (`artist_rules.label_id is null`) is the other axis and never counts here: it says
+ * nothing about this label.
+ */
+export type LabelsAdminSection = LabelSeedState | "partial";
+
+/**
+ * Does this label carry a rule of its OWN? A correlated `exists` on `artist_rules_label_id_idx`,
+ * driven from the small side — the same shape the crawl status read uses to attribute due work to
+ * undecided labels (crawl.ts). `label_id = labels.id` excludes a global rule by construction.
+ */
+const LABEL_CARRIES_ARTIST_RULE = `exists (select 1 from artist_rules
+                                            where artist_rules.label_id = labels.id)`;
+
+/**
+ * One numbered page of the `/admin/labels` station's section — the read the station hydrates each
+ * of its four sections from. Bounded: `where seed_state = ?` rides the `(seed_state, name)` index,
+ * `order by name` reads it in order, and `count(*) over ()` returns the section total for the pager
+ * without a second query. Only the page's ≤{@link LABELS_ADMIN_PAGE_SIZE} labels get their finding
+ * count, via {@link labelFindingCountsByIds} over the indexed `label_id` edge — so the whole-corpus
+ * aggregate is absent from every load/focus.
+ *
+ * The `undecided` / `partial` split is one extra `where` term ({@link LABEL_CARRIES_ARTIST_RULE}),
+ * so it is decided in SQL: the two sections are disjoint and their totals sum to the seed state's,
+ * and neither section ever drags the other's rows into the isolate to filter them out. The term is
+ * a per-row check on top of the same index walk, never a new access path, and `count(*) over ()`
+ * is evaluated after the `where`, so a section's total is its OWN count.
  */
 export async function listLabelsPage(
-  seedState: LabelSeedState,
+  section: LabelsAdminSection,
   page: number,
 ): Promise<LabelsAdminPage> {
   const db = await getDb();
   const limit = LABELS_ADMIN_PAGE_SIZE;
   const safePage = Math.max(1, Math.floor(page));
   const offset = (safePage - 1) * limit;
+  const seedState: LabelSeedState = section === "partial" ? "undecided" : section;
+  const rules =
+    section === "partial"
+      ? ` and ${LABEL_CARRIES_ARTIST_RULE}`
+      : section === "undecided"
+        ? ` and not ${LABEL_CARRIES_ARTIST_RULE}`
+        : "";
 
   const result = await db.execute({
     args: [seedState, limit, offset],
     sql: `select ${LABEL_COLUMNS}, count(*) over () as total_count
           from labels
-          where seed_state = ?
+          where seed_state = ?${rules}
           order by name collate nocase
           limit ? offset ?`,
   });

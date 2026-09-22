@@ -23,6 +23,7 @@ import {
   settlePublicProjectionTestState,
 } from "../../../scripts/lib/public-projection-test-state";
 import { createIntegrationDb } from "./integration-db";
+import { labelRuleCounts } from "../../routes/admin/-artist-rule-reads";
 import { bestAlbumCoverUrl } from "../media";
 import { DUE_WORK_SOURCE_REPAIR_KIND } from "./due-work";
 import { fanOutDueWorkSourceRepairs } from "./due-work-source-repair";
@@ -487,6 +488,154 @@ describe("listLabels (the read, and the crawler's seed set)", () => {
       `https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/labels/hospital-records.jpg?v=${Date.parse("2026-07-29T00:00:00.000Z")}`,
     );
     expect(bySlug.get("anjunabeats")?.logoImageUrl).toBeUndefined();
+  });
+});
+
+// ── The `/admin/labels` station's four sections ────────────────────────────────────────────────
+//
+// `undecided` is TWO sections, split on one exact fact: does the label carry a rule of its OWN?
+// Writing per-label allows and leaving the seed state alone IS the `dnb_partial` verdict, so such a
+// label has been ruled and is not waiting on anybody — and an undecided label has no other way to
+// acquire per-label rules. The triage pull partitions on the same check
+// (`packages/skills/fluncle-label-triage/scripts/partition-undecided.py`); these tests are what
+// keeps the station and the pull agreeing about what is still open.
+describe("listLabelsPage sections (the waiting queue vs the settled partials)", () => {
+  /** Write one artist rule. `labelId` null is the GLOBAL rule — the other axis entirely. */
+  async function seedArtistRule(
+    labelId: null | string,
+    artistMbid: string,
+    verdict: "allow" | "block" = "allow",
+  ): Promise<void> {
+    const now = "2026-07-01T00:00:00.000Z";
+
+    await db.execute({
+      args: [`rule_${artistMbid}_${labelId ?? "global"}`, labelId, artistMbid, verdict, now, now],
+      sql: `insert into artist_rules
+              (id, label_id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+            values (?, ?, ?, 'Some Act', ?, 'triage', ?, ?)`,
+    });
+  }
+
+  async function labelIdBySlug(slug: string): Promise<string> {
+    const label = (await listLabels()).find((row) => row.slug === slug);
+
+    if (!label) {
+      throw new Error(`no label for slug ${slug}`);
+    }
+
+    return label.id;
+  }
+
+  it("keeps a rule-carrying undecided label out of the waiting set and states its rule count", async () => {
+    await ensureLabel("Alpha Records");
+    await ensureLabel("Beta Records");
+    const beta = await labelIdBySlug("beta-records");
+    await seedArtistRule(beta, "mbid-beta-1");
+    await seedArtistRule(beta, "mbid-beta-2");
+
+    const waiting = await listLabelsPage("undecided", 1);
+    const settled = await listLabelsPage("partial", 1);
+
+    expect(waiting.items.map((label) => label.slug)).toEqual(["alpha-records"]);
+    expect(settled.items.map((label) => label.slug)).toEqual(["beta-records"]);
+    // The rule count the settled row prints comes from the same rows the split read: two allows.
+    expect(await labelRuleCounts([beta])).toEqual({ [beta]: { allow: 2, block: 0 } });
+  });
+
+  // A global rule is the VISIBILITY/anywhere axis and says nothing about this label, so it can
+  // never move a label out of the operator's queue.
+  it("leaves a label with only a GLOBAL rule on some artist in the waiting set", async () => {
+    await ensureLabel("Alpha Records");
+    await seedArtistRule(null, "mbid-global");
+
+    expect((await listLabelsPage("undecided", 1)).items.map((label) => label.slug)).toEqual([
+      "alpha-records",
+    ]);
+    expect((await listLabelsPage("partial", 1)).items).toEqual([]);
+  });
+
+  // The split is the UNDECIDED pile's business. A ruled label's section is its ruling, rules or no
+  // rules — an enabled label with blocks is still "Seeding from".
+  it("does not move a rule-carrying enabled or disabled label out of its own section", async () => {
+    await ensureLabel("Alpha Records");
+    await ensureLabel("Beta Records");
+    const alpha = await labelIdBySlug("alpha-records");
+    const beta = await labelIdBySlug("beta-records");
+    await updateLabelSeedState(alpha, "enabled");
+    await updateLabelSeedState(beta, "disabled");
+    await seedArtistRule(alpha, "mbid-alpha", "block");
+    await seedArtistRule(beta, "mbid-beta");
+
+    expect((await listLabelsPage("enabled", 1)).items.map((label) => label.slug)).toEqual([
+      "alpha-records",
+    ]);
+    expect((await listLabelsPage("disabled", 1)).items.map((label) => label.slug)).toEqual([
+      "beta-records",
+    ]);
+    expect((await listLabelsPage("undecided", 1)).items).toEqual([]);
+    expect((await listLabelsPage("partial", 1)).items).toEqual([]);
+  });
+
+  // The split must stay a per-row check on the SAME index walk the station always had — the
+  // `(seed_state, name)` index for the range and the order, one indexed probe per candidate for
+  // the rule. If the term ever costs the read its access path, the station scans `labels` in a
+  // temp b-tree on every section load and focus refetch, and no assertion above would notice.
+  it("still rides the (seed_state, name) index, with the rule probe on artist_rules_label_id_idx", async () => {
+    await ensureLabel("Alpha Records");
+
+    const execute = vi.spyOn(db, "execute");
+    await listLabelsPage("partial", 1);
+    const statement = execute.mock.calls
+      .map((call) => call[0] as unknown)
+      .find(
+        (call): call is { args: unknown[]; sql: string } =>
+          typeof call === "object" &&
+          call !== null &&
+          "sql" in call &&
+          typeof call.sql === "string" &&
+          call.sql.includes("count(*) over ()"),
+      );
+    execute.mockRestore();
+
+    expect(statement).toBeDefined();
+
+    if (!statement) {
+      return;
+    }
+
+    const plan = await db.execute({
+      args: statement.args as never,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    const details = plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
+
+    expect(details).toContainEqual(
+      expect.stringMatching(
+        /SEARCH labels USING INDEX labels_seed_state_name_idx \(seed_state=\?\)/,
+      ),
+    );
+    expect(details).toContainEqual(
+      expect.stringMatching(
+        /SEARCH artist_rules USING (COVERING )?INDEX artist_rules_label_id_idx \(label_id=\?\)/,
+      ),
+    );
+    expect(details.filter((detail) => detail.startsWith("SCAN labels"))).toEqual([]);
+  });
+
+  // The header count ("N waiting on a ruling") reads this total, so it is the number under test:
+  // the two sections are disjoint, and they sum to the seed state they split.
+  it("counts only the unruled labels as waiting, and the two totals sum to the undecided pile", async () => {
+    await ensureLabel("Alpha Records");
+    await ensureLabel("Beta Records");
+    await ensureLabel("Gamma Records");
+    await seedArtistRule(await labelIdBySlug("gamma-records"), "mbid-gamma");
+
+    const waiting = await listLabelsPage("undecided", 1);
+    const settled = await listLabelsPage("partial", 1);
+
+    expect(waiting.total).toBe(2);
+    expect(settled.total).toBe(1);
+    expect((await listLabels("undecided")).length).toBe(waiting.total + settled.total);
   });
 });
 
