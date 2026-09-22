@@ -13,10 +13,15 @@ import {
 } from "../../../../apps/web/src/lib/server/integration-db";
 import {
   calculateReplicaLagFrames,
+  DEVICE_DELTA_MAX_ROWS,
+  DEVICE_DELTA_MAX_SHARE,
   type DeviceGeneration,
+  deviceDeltaCeiling,
+  deviceRowDigest,
   type DeviceSqlValue,
   type DeviceTargetClient,
   inspectDeviceGeneration,
+  isGenerationWatermark,
   type LibsqlStatement,
   DEFAULT_PUBLISH_INTERVAL_MS,
   publishCadence,
@@ -164,6 +169,55 @@ function insertTrack(database: Database, trackId: string, title: string): void {
        VALUES (${columns.map(() => "?").join(", ")})`,
     )
     .run(...columns.map((column) => binding(row[column] ?? null)));
+}
+
+type TrackFixture = { id: string; title: string };
+
+/** A generation carrying exactly these tracks, so a test can state the drift it wants row by row. */
+function trackGenerationFixture(tracks: readonly TrackFixture[], name: string): DeviceGeneration {
+  const directory = temporaryDirectory();
+  const path = join(directory, `${name}.db`);
+  const database = new Database(path, { create: true, strict: true });
+  createDeviceTables(database);
+
+  for (const track of tracks) {
+    insertTrack(database, track.id, track.title);
+  }
+
+  database
+    .query("INSERT INTO device_sync_meta VALUES (?, ?, ?, ?)")
+    .run(DEVICE_DB_SCHEMA_VERSION, "anchored", "2026-08-25T12:00:00.000Z", "source");
+  database.run("VACUUM");
+  database.close();
+  return inspectDeviceGeneration(path);
+}
+
+function sequentialTracks(count: number): TrackFixture[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `track-${String(index).padStart(4, "0")}`,
+    title: `Track ${index}`,
+  }));
+}
+
+/** The statements of the one write batch that carries the `device_sync_meta` cutover. */
+function recordCutoverBatch(client: LocalTargetClient): { statements: LibsqlStatement[] } {
+  const record: { statements: LibsqlStatement[] } = { statements: [] };
+  client.beforeBatch = (statements, mode) => {
+    if (
+      mode === "write" &&
+      statements.some((statement) => statement.sql.includes("UPDATE device_sync_meta"))
+    ) {
+      record.statements = [...statements];
+    }
+  };
+  return record;
+}
+
+function liveTitle(client: LocalTargetClient, trackId: string): string | undefined {
+  const row = client.database.query("SELECT title FROM tracks WHERE track_id = ?").get(trackId) as {
+    title: string;
+  } | null;
+  return row?.title ?? undefined;
 }
 
 function generationFixture(rowCount: number, name = `generation-${rowCount}`): DeviceGeneration {
@@ -331,8 +385,8 @@ describe("the publish cadence gate", () => {
     const now = Date.parse("2026-01-02T09:00:00Z");
     expect(publishCadence("2026-01-01T09:00:00Z", now, DAY, false).due).toBe(true);
   });
-  test("the default interval keeps a live app's replica within six hours", () => {
-    expect(DEFAULT_PUBLISH_INTERVAL_MS).toBe(6 * HOUR);
+  test("the default interval keeps a live app's replica within the hour", () => {
+    expect(DEFAULT_PUBLISH_INTERVAL_MS).toBe(HOUR);
   });
   test("a forced rebuild publishes regardless of age", () => {
     const now = Date.parse("2026-01-01T09:00:01Z");
@@ -768,5 +822,279 @@ describe("staged target publication", () => {
     expect(sizes[1] ?? Infinity).toBeLessThanOrEqual((sizes[0] ?? 0) * 2);
     expect(sizes[2] ?? Infinity).toBeLessThanOrEqual((sizes[0] ?? 0) * 4);
     incremental.client.close();
+  }, 30_000);
+});
+
+describe("the diff-based publish", () => {
+  const BASE = 100;
+
+  /** A target already carrying `generation`, published the only way a bootstrap can be: a rewrite. */
+  async function publishedTarget(generation: DeviceGeneration): Promise<LocalTargetClient> {
+    const { client } = targetFixture(false);
+    const first = await publishDeviceGeneration(client, generation, 5);
+    expect(first.publishPath).toBe("rewrite");
+    expect(first.rewriteReason).toBe("no_prior_generation");
+    return client;
+  }
+
+  test("the delta ceiling is a share of the generation with an absolute cap", () => {
+    expect(DEVICE_DELTA_MAX_SHARE).toBe(0.05);
+    expect(deviceDeltaCeiling(100)).toBe(5);
+    expect(deviceDeltaCeiling(97_000)).toBe(4_850);
+    expect(deviceDeltaCeiling(10_000_000)).toBe(DEVICE_DELTA_MAX_ROWS);
+    expect(deviceDeltaCeiling(0)).toBe(1);
+  });
+
+  test("only a content fingerprint counts as a prior generation to diff against", () => {
+    expect(isGenerationWatermark(`sha256:${"a".repeat(64)}`)).toBe(true);
+    expect(isGenerationWatermark("old-fingerprint")).toBe(false);
+    expect(isGenerationWatermark("")).toBe(false);
+    expect(isGenerationWatermark(`sha256:${"a".repeat(63)}`)).toBe(false);
+  });
+
+  test("the row digest is derived from the shipped column list, so a value change moves it", () => {
+    const row = Object.fromEntries(
+      DEVICE_DB_COLUMNS.tracks.map((column) => [column, null]),
+    ) as Record<string, DeviceSqlValue>;
+    row.track_id = "track-0000";
+    row.title = "Track 0";
+
+    const before = deviceRowDigest("tracks", row);
+    expect(deviceRowDigest("tracks", { ...row, title: "Track 0" })).toBe(before);
+    expect(deviceRowDigest("tracks", { ...row, title: "Track 0 (VIP)" })).not.toBe(before);
+    // Every allowlisted column is in the digest, not just the ones a fixture happens to set.
+    for (const column of DEVICE_DB_COLUMNS.tracks) {
+      expect(deviceRowDigest("tracks", { ...row, [column]: "moved" })).not.toBe(before);
+    }
+  });
+
+  test("a first publish with no prior generation takes the rewrite path", async () => {
+    const generation = trackGenerationFixture(sequentialTracks(BASE), "bootstrap");
+    const { client } = targetFixture(false);
+
+    const result = await publishDeviceGeneration(client, generation, 5);
+    expect(result.publishPath).toBe("rewrite");
+    expect(result.rewriteReason).toBe("no_prior_generation");
+    expect(result.deltaRows).toBeNull();
+    expect(result.stagedRows).toBe(BASE);
+    expect(liveTracks(client)).toHaveLength(BASE);
+    expect(stageFootprint(client)).toBe(0);
+    client.close();
+  });
+
+  test("a second publish writes only the drifted rows, one statement each", async () => {
+    const tracks = sequentialTracks(BASE);
+    const client = await publishedTarget(trackGenerationFixture(tracks, "delta-base"));
+
+    const drifted = tracks.map((track, index) =>
+      index < 3 ? { ...track, title: `${track.title} (VIP)` } : track,
+    );
+    const next = trackGenerationFixture(drifted, "delta-next");
+    const cutover = recordCutoverBatch(client);
+
+    const result = await publishDeviceGeneration(client, next, 5);
+    expect(result.publishPath).toBe("delta");
+    expect(result.rewriteReason).toBeNull();
+    expect(result.deltaRows).toBe(3);
+    expect(result.stagedRows).toBe(0);
+    // Three drifted rows: three upserts plus the one `device_sync_meta` cutover, nothing else.
+    expect(cutover.statements).toHaveLength(4);
+    expect(result.writtenRows).toBe(3);
+    expect(liveTitle(client, "track-0000")).toBe("Track 0 (VIP)");
+    expect(liveTitle(client, "track-0003")).toBe("Track 3");
+    expect(liveTracks(client)).toHaveLength(BASE);
+    expect(stageFootprint(client)).toBe(0);
+    expect(client.database.query("SELECT source_watermark FROM device_sync_meta").get()).toEqual({
+      source_watermark: next.fingerprint,
+    });
+    client.close();
+  });
+
+  test("a deleted source row is deleted on the target and an added one is inserted", async () => {
+    const tracks = sequentialTracks(BASE);
+    const client = await publishedTarget(trackGenerationFixture(tracks, "removal-base"));
+
+    const next = trackGenerationFixture(
+      [...tracks.slice(1), { id: "track-9999", title: "Newcomer" }],
+      "removal-next",
+    );
+    const cutover = recordCutoverBatch(client);
+
+    const result = await publishDeviceGeneration(client, next, 5);
+    expect(result.publishPath).toBe("delta");
+    expect(result.deltaRows).toBe(2);
+    // One delete, one insert, one cutover.
+    expect(cutover.statements).toHaveLength(3);
+    expect(liveTracks(client)).not.toContain("track-0000");
+    expect(liveTracks(client)).toContain("track-9999");
+    expect(liveTracks(client)).toHaveLength(BASE);
+    client.close();
+  });
+
+  test("an identical generation republished after a watermark reset writes only the metadata", async () => {
+    const tracks = sequentialTracks(BASE);
+    const generation = trackGenerationFixture(tracks, "idempotent");
+    const client = await publishedTarget(generation);
+    // A watermark the target cannot recognise as this generation still must not rewrite 100 rows.
+    const same = trackGenerationFixture(tracks, "idempotent-again");
+    expect(same.fingerprint).toBe(generation.fingerprint);
+    client.database.run("UPDATE device_sync_meta SET source_watermark = ?", [
+      `sha256:${"0".repeat(64)}`,
+    ]);
+    const cutover = recordCutoverBatch(client);
+
+    const result = await publishDeviceGeneration(client, same, 5);
+    expect(result.publishPath).toBe("delta");
+    expect(result.deltaRows).toBe(0);
+    expect(result.writtenRows).toBe(0);
+    expect(cutover.statements).toHaveLength(1);
+    client.close();
+  });
+
+  test("a stale stage schema is an artifact-version change and forces a rewrite", async () => {
+    const tracks = sequentialTracks(BASE);
+    const client = await publishedTarget(trackGenerationFixture(tracks, "version-base"));
+    // What a `DEVICE_DB_COLUMNS` change looks like on a target: the baked stage shape no longer
+    // matches the shipped column list, so the live rows cannot be assumed to be of the new shape.
+    client.database.run(`DROP TABLE "_device_mirror_stage_tracks"`);
+    client.database.run(`CREATE TABLE "_device_mirror_stage_tracks" (stale TEXT)`);
+
+    const next = trackGenerationFixture(
+      tracks.map((track, index) => (index === 0 ? { ...track, title: "Moved" } : track)),
+      "version-next",
+    );
+    const result = await publishDeviceGeneration(client, next, 5);
+    expect(result.publishPath).toBe("rewrite");
+    expect(result.rewriteReason).toBe("schema_change");
+    expect(result.stagedRows).toBe(BASE);
+    expect(liveTitle(client, "track-0000")).toBe("Moved");
+    client.close();
+  });
+
+  test("a delta above the ceiling forces a rewrite instead of one huge transaction", async () => {
+    const tracks = sequentialTracks(BASE);
+    const client = await publishedTarget(trackGenerationFixture(tracks, "threshold-base"));
+
+    const ceiling = deviceDeltaCeiling(BASE);
+    const next = trackGenerationFixture(
+      tracks.map((track, index) =>
+        index <= ceiling ? { ...track, title: `${track.title} (VIP)` } : track,
+      ),
+      "threshold-next",
+    );
+    const result = await publishDeviceGeneration(client, next, 5);
+    expect(result.publishPath).toBe("rewrite");
+    expect(result.rewriteReason).toBe("delta_over_threshold");
+    expect(result.deltaRows).toBeNull();
+    expect(result.stagedRows).toBe(BASE);
+    expect(liveTitle(client, "track-0000")).toBe("Track 0 (VIP)");
+    expect(liveTitle(client, `track-${String(ceiling + 1).padStart(4, "0")}`)).toBe(
+      `Track ${ceiling + 1}`,
+    );
+    client.close();
+  });
+
+  test("a delta interrupted before its transaction leaves the last generation live and converges", async () => {
+    const tracks = sequentialTracks(BASE);
+    const base = trackGenerationFixture(tracks, "interrupt-base");
+    const client = await publishedTarget(base);
+    const lastGood = publicRows(client.database);
+
+    const next = trackGenerationFixture(
+      tracks.map((track, index) => (index === 0 ? { ...track, title: "Half applied" } : track)),
+      "interrupt-next",
+    );
+
+    expect(
+      await rejectionMessage(
+        publishDeviceGeneration(client, next, 5, {
+          beforeCutover: () => {
+            throw new Error("delta interrupted");
+          },
+        }),
+      ),
+    ).toContain("delta interrupted");
+    expect(publicRows(client.database)).toEqual(lastGood);
+    expect(client.database.query("SELECT source_watermark FROM device_sync_meta").get()).toEqual({
+      source_watermark: base.fingerprint,
+    });
+
+    const converged = await publishDeviceGeneration(client, next, 5);
+    expect(converged.publishPath).toBe("delta");
+    expect(converged.deltaRows).toBe(1);
+    expect(liveTitle(client, "track-0000")).toBe("Half applied");
+    client.close();
+  });
+
+  test("a delta whose response is lost after commit replays as a complete generation", async () => {
+    const tracks = sequentialTracks(BASE);
+    const client = await publishedTarget(trackGenerationFixture(tracks, "lost-base"));
+    const next = trackGenerationFixture(
+      tracks.map((track, index) => (index === 0 ? { ...track, title: "Committed" } : track)),
+      "lost-next",
+    );
+
+    expect(
+      await rejectionMessage(
+        publishDeviceGeneration(client, next, 5, {
+          afterCutover: () => {
+            throw new Error("delta response lost");
+          },
+        }),
+      ),
+    ).toContain("delta response lost");
+    expect(liveTitle(client, "track-0000")).toBe("Committed");
+
+    const replay = await publishDeviceGeneration(client, next, 5);
+    expect(replay.publishPath).toBe("replay");
+    expect(replay.writtenRows).toBe(0);
+    expect(liveTitle(client, "track-0000")).toBe("Committed");
+    client.close();
+  });
+
+  test("the delta walk reads the target one bounded page at a time", async () => {
+    const tracks = sequentialTracks(BASE);
+    const client = await publishedTarget(trackGenerationFixture(tracks, "paged-base"));
+    const next = trackGenerationFixture(
+      tracks.map((track, index) => (index === 42 ? { ...track, title: "Paged" } : track)),
+      "paged-next",
+    );
+
+    const result = await publishDeviceGeneration(client, next, 5);
+    expect(result.publishPath).toBe("delta");
+    expect(result.maxBufferedRows).toBeLessThanOrEqual(5);
+    expect(liveTitle(client, "track-0042")).toBe("Paged");
+    client.close();
+  });
+
+  test("a real derived generation republishes its own drift as a delta", async () => {
+    const source = await scaledSourceFixture(4);
+    const artifactPath = join(temporaryDirectory(), "derived-delta-base.db");
+    await deriveDeviceDatabase({ cut: "anchored", out: artifactPath, source });
+    const generation = inspectDeviceGeneration(artifactPath);
+    const client = await publishedTarget(generation);
+
+    const sourceDatabase = new Database(source, { strict: true });
+    sourceDatabase.run("UPDATE tracks SET title = 'Certified 0 (VIP)' WHERE track_id = ?", [
+      "certified-00",
+    ]);
+    sourceDatabase.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    sourceDatabase.close();
+
+    const nextPath = join(temporaryDirectory(), "derived-delta-next.db");
+    await deriveDeviceDatabase({ cut: "anchored", out: nextPath, source });
+    const next = inspectDeviceGeneration(nextPath);
+    expect(next.fingerprint).not.toBe(generation.fingerprint);
+
+    const result = await publishDeviceGeneration(client, next, 5);
+    expect(result.publishPath).toBe("delta");
+    expect(result.deltaRows).toBe(1);
+    expect(result.writtenRows).toBe(1);
+
+    const artifact = new Database(nextPath, { readonly: true, strict: true });
+    const expectedRows = publicRows(artifact);
+    artifact.close();
+    expect(publicRows(client.database)).toEqual(expectedRows);
+    client.close();
   }, 30_000);
 });
