@@ -1834,7 +1834,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: every("12min", "1h"),
+    cadence: every("12min", "10min"),
     directory: "isrc-recovery-timer",
     heavy: false,
     mutationTarget: "primary",

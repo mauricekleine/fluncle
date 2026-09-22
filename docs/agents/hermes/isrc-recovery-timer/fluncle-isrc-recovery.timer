@@ -4,10 +4,19 @@ Description=fluncle-isrc-recovery timer — recover catalogue ISRCs through a fr
 [Timer]
 # Per-firing jitter prevents the sweep roster from aligning into one write convoy.
 RandomizedDelaySec=90
-# Start on a free minute, then run one paced, bounded batch per hour. The worklist and its
+# Start on a free minute, then run one paced, bounded batch every ten minutes. The worklist and its
 # re-ask backoff are durable, so a missed tick loses no work and an empty tick is a cheap no-op.
+#
+# WHY TEN MINUTES RATHER THAN AN HOUR. This is the archive's one FREE pre-filter: a row Deezer gives
+# an ISRC to becomes a row the free Spotify exact-ISRC rung answers about three times in four, so
+# every recovered ISRC is an anchor the metered Apify rung never has to be paid for. The queue is
+# hundreds of thousands of rows deep while a tick reads 100, so the hourly cadence walked it at a
+# rate measured in years. The rate limit is Deezer's, not the cadence's, and the sweep already paces
+# its searches per row (`ISRC_RECOVERY_PACE_MS`); at this cadence the measured miss rate and
+# transport failures are unchanged from the hourly one, which is the evidence that Deezer is not the
+# thing being pushed. Raise the cadence only with that same evidence in hand.
 OnBootSec=12min
-OnUnitActiveSec=1h
+OnUnitActiveSec=10min
 Persistent=true
 
 [Install]
