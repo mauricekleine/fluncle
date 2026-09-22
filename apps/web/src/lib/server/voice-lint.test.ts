@@ -124,7 +124,7 @@ const SCAN_ROOTS = [
   "apps/web/src/game",
   // The MCP tool descriptions: a PUBLIC agent surface — an assistant reads these
   // strings out to a stranger, so they are copy even though they live in lib/.
-  "apps/web/src/lib/server/tools/specs.ts",
+  "apps/web/src/lib/tool-specs.ts",
   // Renders the markdown home that agents and crawlers read.
   "apps/web/src/lib/server/agent-discovery.ts",
   // The canonical entity strings, reused verbatim by every meta/OG/JSON-LD surface.
@@ -484,7 +484,7 @@ describe("voice lint", () => {
     expect(scanned.has("apps/cli/src/cli.ts")).toBe(true);
     expect(scanned.has("apps/cli/scripts/build-npm.ts")).toBe(true);
     expect(scanned.has("apps/web/src/game/game.ts")).toBe(true);
-    expect(scanned.has("apps/web/src/lib/server/tools/specs.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/tool-specs.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/agent-discovery.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/identity.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/log-prose.ts")).toBe(true);

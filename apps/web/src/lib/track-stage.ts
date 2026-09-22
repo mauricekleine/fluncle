@@ -13,10 +13,16 @@
 // ("needs a video", "ready for YouTube", "ready for TikTok") filter on. (The old
 // operator vibe-TAGGING stage is gone with the vibe map — galaxy placement is the
 // cluster engine's job now and gates nothing in this pipeline.)
+//
+// It sits under `lib/` rather than `lib/server/` because the admin board calls `trackStage` from
+// its COMPONENT — client code — and the `fluncle-client-chunk-purity` gate reads the path: a
+// module the browser bundle is allowed to hold lives outside `lib/server/**`
+// (docs/client-bundle.md, Rule 1). Its only runtime import is a contracts helper; the two shapes
+// it takes are type-only, so nothing server-side follows it into the bundle.
 
 import { isStaleTikTokDraft } from "@fluncle/contracts/util";
-import { type SocialPostItem } from "./social";
-import { type TrackListItem } from "./tracks";
+import { type SocialPostItem } from "./server/social";
+import { type TrackListItem } from "./server/tracks";
 
 /**
  * The five pipeline stages, in lifecycle order. A finding sits at the furthest

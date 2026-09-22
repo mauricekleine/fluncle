@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type SocialPostItem } from "./social";
+import { type SocialPostItem } from "./server/social";
 import { type StageInput, STAGE_ORDER, trackStage } from "./track-stage";
 
 // A fully-added finding: on Spotify + Telegram, nothing else. The lifecycle

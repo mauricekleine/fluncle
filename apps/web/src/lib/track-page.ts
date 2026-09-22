@@ -45,7 +45,7 @@
 // Nothing from `lib/server/**` or `db/**`. A route's `loader`/`head` is bundled EAGERLY, so a
 // single constant reached from one welds the `getDb` → `@libsql/client` → `drizzle-orm` chain onto
 // every page's first paint (docs/client-bundle.md rule 1, build-enforced by the
-// `fluncle-eager-chunk-purity` gate). The predicates that need SQL live in `lib/server/track-page.ts`
+// `fluncle-client-chunk-purity` gate). The predicates that need SQL live in `lib/server/track-page.ts`
 // and are stated ONCE there; what is here is arithmetic and strings.
 
 import { siteUrl } from "./fluncle-links";

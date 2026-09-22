@@ -7,7 +7,7 @@
 // before first paint. A resolver referenced outside a `createServerFn().handler()` body keeps its
 // `lib/server/**` imports alive in the client build, and those carry `getDb` → `@libsql/client` +
 // `drizzle-orm` + all of `db/schema.ts` (docs/client-bundle.md rule 1, build-enforced by the
-// `fluncle-eager-chunk-purity` gate in vite.config.ts).
+// `fluncle-client-chunk-purity` gate in vite.config.ts).
 //
 // So the resolver lives here, the route reaches it by a DYNAMIC import inside the handler, and the
 // route keeps only `import type`, which erases. The function stays exported and side-effect-free,

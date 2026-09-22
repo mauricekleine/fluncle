@@ -3,14 +3,14 @@
 // best-effort; browsers without navigator.modelContext skip it silently.
 //
 // The TOOL set is not mirrored by hand: name, description, and input schema come from the
-// shared spec registry (./server/tools/specs), the same one the server MCP (lib/server/mcp.ts)
+// shared spec registry (lib/tool-specs.ts), the same one the server MCP (lib/server/mcp.ts)
 // and ChatDnB read, so the three surfaces cannot drift into three spellings of a verb. Only the
 // `fetch('/api/…')` bodies below are browser-specific. The server MCP also speaks resources (the
 // archive as a readable corpus) and prompts (Fluncle-voiced starting points), but
 // navigator.modelContext has no resource/prompt primitive — so the browser read path is the
 // get_track tool below, and resources/prompts stay server-MCP only.
 
-import { SHARED_TOOL_SPECS, toWebMcpTool } from "./server/tools/specs";
+import { SHARED_TOOL_SPECS, toWebMcpTool } from "./tool-specs";
 
 type WebMcpToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -59,7 +59,7 @@ export function registerWebMcpTools(): void {
 }
 
 // The browser HTTP execute per shared read tool. Name/description/schema come from the shared
-// registry specs (./server/tools/specs); only these hand-written `fetch('/api/…')` bodies are
+// registry specs (lib/tool-specs.ts); only these hand-written `fetch('/api/…')` bodies are
 // WebMCP's own (the browser has no in-process server functions).
 const httpExecutes: Record<string, WebMcpTool["execute"]> = {
   get_random_track: async () => jsonResult(await fetchJson("/api/v1/tracks/random")),

@@ -9,7 +9,7 @@
 // every overlapping tool's name, description, and input schema — so the same verb could drift
 // into three subtly different answers (the `list_fresh` empty-in-chat bug that kicked off this
 // work). The tool SPECS (name + title + description + Zod input schema, client-safe) live in
-// ./specs.ts; this module attaches the server-side `execute` to each and PROJECTS it onto each
+// lib/tool-specs.ts; this module attaches the server-side `execute` to each and PROJECTS it onto each
 // transport through a thin adapter. Change a tool here (or its spec) and all three surfaces move
 // together.
 //
@@ -107,10 +107,10 @@ import {
   toInputJsonSchema,
   type Transport,
   toWebMcpTool,
-} from "./specs";
+} from "../../tool-specs";
 
 // The client-safe spec types, the spec list, and the WebMCP adapter are re-exported so a server
-// consumer can reach the whole registry from one import. (WebMCP itself imports ./specs directly,
+// consumer can reach the whole registry from one import. (WebMCP itself imports lib/tool-specs.ts directly,
 // so it never pulls this server module — and its Turso imports — into the browser bundle.)
 export type {
   Projection,
@@ -120,7 +120,7 @@ export type {
   ToolTier,
   Transport,
   WebMcpToolDescriptor,
-} from "./specs";
+} from "../../tool-specs";
 export { SHARED_TOOL_SPECS, toInputJsonSchema, toWebMcpTool };
 // The tool error carrier — re-exported so callers share the one `ApiError` in the server (the MCP
 // dispatcher's `instanceof` check depends on it).
@@ -136,7 +136,7 @@ export { ApiError };
  */
 export type ToolCtx = { request?: Request; signal?: AbortSignal; transport: Transport };
 
-/** A tool spec (from ./specs) plus its canonical server `execute`. */
+/** A tool spec (from lib/tool-specs.ts) plus its canonical server `execute`. */
 export type ToolDef = ToolSpec & {
   execute: (args: Record<string, unknown>, ctx: ToolCtx) => Promise<unknown>;
 };
@@ -153,7 +153,7 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** The recent-window default (the cap `MAX_RECENT_LIMIT` lives in ./specs alongside the schema). */
+/** The recent-window default (the cap `MAX_RECENT_LIMIT` lives in lib/tool-specs.ts alongside the schema). */
 const DEFAULT_RECENT_LIMIT = 10;
 
 /** Clamp a recent-window limit into `[1, 48]`, defaulting to 10 — the shape `list_tracks` uses. */
