@@ -3,9 +3,13 @@
 //
 // One explicit embedded-replica sync is the only production corpus read. The anchored selection,
 // artifact build, row counts, reachability checks, and fingerprint are all local after that sync.
-// The remote device database receives the verified generation in bounded restartable pages; one
-// final target transaction applies the server-local delta and metadata cutover, so devices see the
-// old complete generation or the new complete generation and never a batch-wise hybrid.
+// The remote device database then receives ONLY the rows that drifted: the generation and the live
+// target are walked together by primary key and compared by row digest, and one target transaction
+// applies the resulting inserts/updates/deletes with the `device_sync_meta` cutover. The staged
+// whole-generation rewrite remains the fallback for a schema change, a bootstrap, an oversized
+// delta, or a delta whose own projected fingerprint disagrees with the generation. Either way one
+// transaction carries the cutover, so devices see the old complete generation or the new complete
+// generation and never a batch-wise hybrid.
 //
 // stdout: one bounded JSON ledger summary line. Diagnostics go to stderr.
 
@@ -60,10 +64,25 @@ export type StageMetrics = {
   stagedRows: number;
 };
 
+export type DevicePublishPath = "delta" | "replay" | "rewrite";
+
+/**
+ * Why a tick could not take the row-level delta path. Reported in the run summary so the ledger
+ * shows delta-versus-rewrite without reading the target.
+ */
+export type DeviceRewriteReason =
+  | "delta_over_threshold"
+  | "delta_validation_mismatch"
+  | "no_prior_generation"
+  | "schema_change";
+
 export type PublicationResult = StageMetrics & {
   backlogRows: number;
+  deltaRows: number | null;
+  publishPath: DevicePublishPath;
   published: boolean;
   replayed: boolean;
+  rewriteReason: DeviceRewriteReason | null;
   stageRebuilt: boolean;
   stageRetained: boolean;
   writtenRows: number;
@@ -157,11 +176,35 @@ export function publishCadence(
   return { ageMs, due: forced || ageMs >= intervalMs };
 }
 
-// Every six hours: the device replica is what the live mobile app's offline-first store pulls, so
-// a day-old replica is a stale product, while every publish still costs a full rewrite of the
-// replica against a metered monthly write quota. Six hours is the pragmatic middle until the
-// publish is diff-based (write only the drifted rows), at which point hourly freshness is cheap.
-export const DEFAULT_PUBLISH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// Hourly: the device replica is what the live mobile app's offline-first store pulls, so freshness
+// is a product property, and the diff-based publish writes only the drifted rows — an hour of drift
+// costs a few hundred writes against the metered monthly quota rather than a whole generation.
+export const DEFAULT_PUBLISH_INTERVAL_MS = 60 * 60 * 1000;
+/**
+ * The share of the generation's rows above which a delta stops being the cheaper shape.
+ *
+ * The delta lands in ONE target transaction with one statement per drifted row, and unlike the
+ * staged rewrite it carries no restart checkpoint — so the ceiling bounds that transaction rather
+ * than the write quota (the delta is always fewer writes). Above it the restartable, page-verified
+ * rewrite is the safer publish. The scan abandons itself the moment the ceiling is crossed, so an
+ * over-threshold tick pays a partial read and not a wasted full one.
+ */
+export const DEVICE_DELTA_MAX_SHARE = 0.05;
+/** The absolute ceiling on statements in the single delta transaction, whatever the share allows. */
+export const DEVICE_DELTA_MAX_ROWS = 5000;
+
+/** How many drifted rows may still publish as a delta for a generation of `totalRows` rows. */
+export function deviceDeltaCeiling(totalRows: number): number {
+  return Math.max(
+    1,
+    Math.min(DEVICE_DELTA_MAX_ROWS, Math.floor(totalRows * DEVICE_DELTA_MAX_SHARE)),
+  );
+}
+
+/** A published watermark is the previous generation's content fingerprint; anything else is a bootstrap. */
+export function isGenerationWatermark(watermark: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/.test(watermark);
+}
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
 /**
@@ -238,6 +281,21 @@ function addRowToFingerprint(
   for (const column of DEVICE_DB_COLUMNS[table]) {
     hash.update(`${column}=${canonicalValue(row[column] ?? null)}\n`);
   }
+}
+
+/**
+ * A row's comparison digest, derived from the SAME column list the artifact ships and the same
+ * canonical encoding the generation fingerprint uses.
+ *
+ * A column added to `DEVICE_DB_COLUMNS` therefore enters the digest automatically; a target whose
+ * stored columns do not match that list is rejected outright by `validateLiveTargetSchema` and
+ * `rowFromCells`. Neither half can silently omit a column and call two different rows equal.
+ */
+export function deviceRowDigest(table: DeviceSourceTable, row: DeviceRow): string {
+  const hash = createHash("sha256");
+  addTableHeader(hash, table);
+  addRowToFingerprint(hash, table, row);
+  return hash.digest("hex");
 }
 
 function rowFromCells(table: DeviceSourceTable, cells: readonly DeviceSqlValue[]): DeviceRow {
@@ -1403,6 +1461,314 @@ async function measureBacklog(
   return results.reduce((total, result) => total + Number(result.rows[0]?.[0] ?? 0), 0);
 }
 
+/** Children before parents, so a removal never strands an edge mid-transaction. */
+const DEVICE_DELETE_ORDER = [
+  "track_artists",
+  "findings",
+  "tracks",
+  "artists",
+  "labels",
+  "albums",
+] as const satisfies readonly DeviceSourceTable[];
+/** Parents before children, so an edge is written only once its destination row exists. */
+const DEVICE_UPSERT_ORDER = [
+  "albums",
+  "artists",
+  "labels",
+  "tracks",
+  "findings",
+  "track_artists",
+] as const satisfies readonly DeviceSourceTable[];
+
+export type DeviceTableDelta = {
+  /** Primary-key objects of live rows the generation no longer carries. */
+  deletes: DeviceRow[];
+  /** Complete rows to insert or overwrite. */
+  upserts: DeviceRow[];
+};
+
+export type DeviceDelta = {
+  deletes: number;
+  /** The fingerprint the target WILL carry once this delta is applied. */
+  fingerprint: string;
+  inserts: number;
+  maxBufferedRows: number;
+  rows: number;
+  tables: Record<DeviceSourceTable, DeviceTableDelta>;
+  updates: number;
+};
+
+export type DeviceDeltaScan =
+  | { delta: DeviceDelta; kind: "delta" }
+  | { kind: "over-threshold"; maxBufferedRows: number };
+
+/**
+ * Both sides are ordered by SQLite's BINARY collation, so the merge compares UTF-8 bytes rather
+ * than UTF-16 code units — the two disagree above the basic multilingual plane and a disagreement
+ * would make the walk emit a spurious insert/delete pair.
+ */
+function compareKeyTuples(left: readonly string[], right: readonly string[]): number {
+  for (let index = 0; index < left.length; index += 1) {
+    const comparison = Buffer.compare(
+      Buffer.from(left[index] ?? "", "utf8"),
+      Buffer.from(right[index] ?? "", "utf8"),
+    );
+
+    if (comparison !== 0) {
+      return comparison;
+    }
+  }
+
+  return 0;
+}
+
+function keyTuple(table: DeviceSourceTable, row: DeviceRow): string[] {
+  // `rowKeyObject` already rejects a non-text primary key, so every value here is a string.
+  const key = rowKeyObject(table, row);
+
+  return DEVICE_DB_PRIMARY_KEYS[table].map((column) => {
+    const value = key[column];
+
+    return typeof value === "string" ? value : "";
+  });
+}
+
+async function readLivePage(
+  target: DeviceTargetClient,
+  table: DeviceSourceTable,
+  lastKey: DeviceRow | null,
+  limit: number,
+): Promise<DeviceRow[]> {
+  const columns = DEVICE_DB_COLUMNS[table]
+    .map((column) => `live.${quoteDeviceDbIdentifier(column)}`)
+    .join(", ");
+  const order = DEVICE_DB_PRIMARY_KEYS[table]
+    .map((column) => `live.${quoteDeviceDbIdentifier(column)}`)
+    .join(", ");
+  const keyset = keysetClause(table, "live", lastKey);
+  const [result] = await target.batch(
+    [
+      {
+        args: [...keyset.args, limit],
+        sql: `SELECT ${columns} FROM ${quoteDeviceDbIdentifier(table)} AS live
+          WHERE 1 = 1${keyset.sql} ORDER BY ${order} LIMIT ?`,
+      },
+    ],
+    "read",
+  );
+
+  return (result?.rows ?? []).map((cells) => rowFromCells(table, cells));
+}
+
+/**
+ * Walk the freshly derived generation and the live target together, by primary key, and emit the
+ * row-level delta between them.
+ *
+ * Neither side is pulled into the process whole: the local generation streams off disk in key
+ * order and the target is read one bounded keyset page at a time, so the peak buffer is one page.
+ * Equality is decided by `deviceRowDigest`, and every local row also feeds the projected
+ * fingerprint — the generation's own fingerprint recomputed from the rows the walk actually saw —
+ * so a merge that skipped or double-counted a row fails its own check instead of shipping.
+ *
+ * The scan abandons itself as soon as the delta crosses `ceiling`; the caller then rewrites.
+ */
+export async function computeDeviceDelta(
+  target: DeviceTargetClient,
+  generation: DeviceGeneration,
+  pageSize: number,
+  ceiling: number,
+): Promise<DeviceDeltaScan> {
+  const database = new Database(generation.path, { readonly: true, strict: true });
+  const hash = startContentFingerprint();
+  const tables = {} as Record<DeviceSourceTable, DeviceTableDelta>;
+  let maxBufferedRows = 0;
+  let deletes = 0;
+  let inserts = 0;
+  let updates = 0;
+
+  try {
+    for (const table of DEVICE_SOURCE_TABLES) {
+      addTableHeader(hash, table);
+      const tableDelta: DeviceTableDelta = { deletes: [], upserts: [] };
+      tables[table] = tableDelta;
+
+      const columns = DEVICE_DB_COLUMNS[table].map(quoteDeviceDbIdentifier).join(", ");
+      const order = DEVICE_DB_PRIMARY_KEYS[table].map(quoteDeviceDbIdentifier).join(", ");
+      const localRows = database
+        .query(`SELECT ${columns} FROM ${quoteDeviceDbIdentifier(table)} ORDER BY ${order}`)
+        .iterate() as Iterable<DeviceRow>;
+      const localCursor = localRows[Symbol.iterator]();
+
+      let livePage: DeviceRow[] = [];
+      let liveIndex = 0;
+      let liveLastKey: DeviceRow | null = null;
+      let liveExhausted = false;
+
+      const nextLive = async (): Promise<DeviceRow | null> => {
+        if (liveIndex >= livePage.length) {
+          if (liveExhausted) {
+            return null;
+          }
+
+          livePage = await readLivePage(target, table, liveLastKey, pageSize);
+          liveIndex = 0;
+          maxBufferedRows = Math.max(maxBufferedRows, livePage.length);
+
+          if (livePage.length < pageSize) {
+            liveExhausted = true;
+          }
+          if (livePage.length === 0) {
+            return null;
+          }
+
+          const finalRow = livePage[livePage.length - 1];
+
+          if (!finalRow) {
+            throw new Error(`Missing final ${table} row in live delta page`);
+          }
+
+          liveLastKey = rowKeyObject(table, finalRow);
+        }
+
+        const row = livePage[liveIndex] ?? null;
+        liveIndex += 1;
+        return row;
+      };
+
+      let localRow = localCursor.next();
+      let liveRow = await nextLive();
+
+      while (!localRow.done || liveRow !== null) {
+        const localKey = localRow.done ? null : keyTuple(table, localRow.value);
+        const liveKey = liveRow === null ? null : keyTuple(table, liveRow);
+        const comparison =
+          localKey === null ? 1 : liveKey === null ? -1 : compareKeyTuples(localKey, liveKey);
+
+        if (comparison < 0 && !localRow.done) {
+          addRowToFingerprint(hash, table, localRow.value);
+          tableDelta.upserts.push(localRow.value);
+          inserts += 1;
+          localRow = localCursor.next();
+        } else if (comparison > 0 && liveRow !== null) {
+          tableDelta.deletes.push(rowKeyObject(table, liveRow));
+          deletes += 1;
+          liveRow = await nextLive();
+        } else if (!localRow.done && liveRow !== null) {
+          addRowToFingerprint(hash, table, localRow.value);
+
+          if (deviceRowDigest(table, localRow.value) !== deviceRowDigest(table, liveRow)) {
+            tableDelta.upserts.push(localRow.value);
+            updates += 1;
+          }
+
+          localRow = localCursor.next();
+          liveRow = await nextLive();
+        }
+
+        if (inserts + updates + deletes > ceiling) {
+          return { kind: "over-threshold", maxBufferedRows };
+        }
+      }
+    }
+  } finally {
+    database.close();
+  }
+
+  return {
+    delta: {
+      deletes,
+      fingerprint: `sha256:${hash.digest("hex")}`,
+      inserts,
+      maxBufferedRows,
+      rows: inserts + updates + deletes,
+      tables,
+      updates,
+    },
+    kind: "delta",
+  };
+}
+
+function deleteRowStatement(table: DeviceSourceTable, key: DeviceRow): LibsqlStatement {
+  const keys = DEVICE_DB_PRIMARY_KEYS[table];
+
+  return {
+    args: keys.map((column) => key[column] ?? null),
+    sql: `DELETE FROM ${quoteDeviceDbIdentifier(table)}
+      WHERE ${keys.map((column) => `${quoteDeviceDbIdentifier(column)} = ?`).join(" AND ")}`,
+  };
+}
+
+function upsertRowStatement(table: DeviceSourceTable, row: DeviceRow): LibsqlStatement {
+  const columns = DEVICE_DB_COLUMNS[table];
+  const keys = DEVICE_DB_PRIMARY_KEYS[table];
+  const mutable = columns.filter((column) => !keys.includes(column));
+
+  return {
+    args: columns.map((column) => row[column] ?? null),
+    sql: `INSERT INTO ${quoteDeviceDbIdentifier(table)}
+      (${columns.map(quoteDeviceDbIdentifier).join(", ")})
+      VALUES (${columns.map(() => "?").join(", ")})
+      ON CONFLICT (${keys.map(quoteDeviceDbIdentifier).join(", ")}) DO UPDATE SET
+      ${mutable
+        .map(
+          (column) =>
+            `${quoteDeviceDbIdentifier(column)} = excluded.${quoteDeviceDbIdentifier(column)}`,
+        )
+        .join(", ")}`,
+  };
+}
+
+/**
+ * The delta's statements: dependent-first deletes, parent-first upserts, then the same
+ * `device_sync_meta` cutover the staged rewrite performs.
+ *
+ * One transaction, exactly as the rewrite's cutover is one transaction, so a reader sees the old
+ * complete generation or the new complete generation and the watermark identifies which.
+ */
+export function deviceDeltaStatements(
+  generation: DeviceGeneration,
+  delta: DeviceDelta,
+): readonly LibsqlStatement[] {
+  const statements: LibsqlStatement[] = [];
+
+  for (const table of DEVICE_DELETE_ORDER) {
+    for (const key of delta.tables[table].deletes) {
+      statements.push(deleteRowStatement(table, key));
+    }
+  }
+  for (const table of DEVICE_UPSERT_ORDER) {
+    for (const row of delta.tables[table].upserts) {
+      statements.push(upsertRowStatement(table, row));
+    }
+  }
+
+  statements.push({
+    args: [generation.derivedAt, generation.fingerprint, DEVICE_DB_SCHEMA_VERSION, "anchored"],
+    sql: `UPDATE device_sync_meta SET derived_at = ?, source_watermark = ?
+      WHERE schema_version = ? AND cut_name = ?`,
+  });
+
+  return statements;
+}
+
+export async function applyDeviceDelta(
+  target: DeviceTargetClient,
+  generation: DeviceGeneration,
+  delta: DeviceDelta,
+): Promise<number> {
+  const statements = deviceDeltaStatements(generation, delta);
+  const results = await target.batch(statements, "write");
+  const metadataResult = results[results.length - 1];
+
+  if (metadataResult?.affectedRows !== 1) {
+    throw new Error("Device delta metadata did not update exactly once");
+  }
+
+  return results
+    .slice(0, results.length - 1)
+    .reduce((total, result) => total + result.affectedRows, 0);
+}
+
 function deleteLiveStatement(table: DeviceSourceTable, generation: string): LibsqlStatement {
   return {
     args: [generation],
@@ -1449,27 +1815,11 @@ export async function cutoverDeviceGeneration(
   failureAfterStatement?: number,
 ): Promise<number> {
   const statements: LibsqlStatement[] = [];
-  const deleteOrder = [
-    "track_artists",
-    "findings",
-    "tracks",
-    "artists",
-    "labels",
-    "albums",
-  ] as const;
-  const upsertOrder = [
-    "albums",
-    "artists",
-    "labels",
-    "tracks",
-    "findings",
-    "track_artists",
-  ] as const;
 
-  for (const table of deleteOrder) {
+  for (const table of DEVICE_DELETE_ORDER) {
     statements.push(deleteLiveStatement(table, generation.fingerprint));
   }
-  for (const table of upsertOrder) {
+  for (const table of DEVICE_UPSERT_ORDER) {
     statements.push(upsertLiveStatement(table, generation.fingerprint));
   }
 
@@ -1583,14 +1933,85 @@ export async function publishDeviceGeneration(
 
     return {
       backlogRows: 0,
+      deltaRows: null,
       maxBufferedRows: 0,
+      publishPath: "replay",
       published: true,
       replayed: true,
       restarted: false,
+      rewriteReason: null,
       stageRebuilt: stageSchemaRebuilt,
       stageRetained,
       stagedRows: 0,
       writtenRows: 0,
+    };
+  }
+
+  // THE PATH CHOICE. A publish writes only the rows that drifted. The staged whole-generation
+  // rewrite stays the fallback for the cases a row-level delta cannot express or cannot afford:
+  // the device column list changed since the last publish (so every live row is of the old shape),
+  // the target carries no prior generation to diff against, the delta is too large for one
+  // transaction, or the walk's own projected fingerprint disagrees with the generation it derived.
+  let rewriteReason: DeviceRewriteReason | null = stageSchemaRebuilt
+    ? "schema_change"
+    : isGenerationWatermark(current.sourceWatermark)
+      ? null
+      : "no_prior_generation";
+  let delta: DeviceDelta | null = null;
+  let scanBufferedRows = 0;
+
+  if (rewriteReason === null) {
+    const totalRows = DEVICE_SOURCE_TABLES.reduce(
+      (total, table) => total + generation.rowCounts[table],
+      0,
+    );
+    const scan = await computeDeviceDelta(
+      target,
+      generation,
+      pageSize,
+      deviceDeltaCeiling(totalRows),
+    );
+    scanBufferedRows = scan.kind === "delta" ? scan.delta.maxBufferedRows : scan.maxBufferedRows;
+
+    if (scan.kind === "over-threshold") {
+      rewriteReason = "delta_over_threshold";
+    } else if (scan.delta.fingerprint !== generation.fingerprint) {
+      rewriteReason = "delta_validation_mismatch";
+      log("delta walk fingerprint disagreed with the derived generation; rewriting");
+    } else {
+      delta = scan.delta;
+    }
+  }
+
+  if (delta) {
+    await hooks.beforeCutover?.();
+    const writtenRows = await applyDeviceDelta(target, generation, delta);
+    await hooks.afterCutover?.();
+    await validatePublishedTarget(target, generation);
+    let deltaStageRetained = false;
+
+    try {
+      await clearStage(target);
+    } catch (error) {
+      deltaStageRetained = true;
+      log(
+        `could not clear the stage after a delta publish: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    return {
+      backlogRows: delta.rows,
+      deltaRows: delta.rows,
+      maxBufferedRows: scanBufferedRows,
+      publishPath: "delta",
+      published: true,
+      replayed: false,
+      restarted: false,
+      rewriteReason: null,
+      stageRebuilt: stageSchemaRebuilt,
+      stageRetained: deltaStageRetained,
+      stagedRows: 0,
+      writtenRows,
     };
   }
 
@@ -1617,10 +2038,13 @@ export async function publishDeviceGeneration(
 
   return {
     backlogRows,
-    maxBufferedRows: stage.maxBufferedRows,
+    deltaRows: null,
+    maxBufferedRows: Math.max(scanBufferedRows, stage.maxBufferedRows),
+    publishPath: "rewrite",
     published: true,
     replayed: false,
     restarted: stage.restarted,
+    rewriteReason,
     stageRebuilt: stageSchemaRebuilt || stage.rebuilt,
     stageRetained,
     stagedRows: stage.stagedRows,
@@ -1697,6 +2121,7 @@ type MirrorSummary = {
   artifactVersion: number;
   checked: number | null;
   checkpoint: null | { generation: string; restarted: boolean; stagedRows: number };
+  deltaRows: number | null;
   derivedAt: string | null;
   driftBacklogRows: number | null;
   driftAgeMs: number | null;
@@ -1709,8 +2134,10 @@ type MirrorSummary = {
   maxBufferedRows: number | null;
   ok: boolean;
   produced: number | null;
+  publishPath: DevicePublishPath | null;
   queueDepth: number | null;
   rebuildCause: string | null;
+  rewriteReason: DeviceRewriteReason | null;
   rebuildDurationMs: number | null;
   replicaFrame: number | null;
   replicaFramesSynced: number | null;
@@ -1725,6 +2152,7 @@ function emptySummary(): MirrorSummary {
     artifactVersion: DEVICE_DB_SCHEMA_VERSION,
     checked: 0,
     checkpoint: null,
+    deltaRows: null,
     derivedAt: null,
     driftAgeMs: null,
     driftBacklogRows: null,
@@ -1737,12 +2165,14 @@ function emptySummary(): MirrorSummary {
     maxBufferedRows: null,
     ok: false,
     produced: 0,
+    publishPath: null,
     queueDepth: null,
     rebuildCause: null,
     rebuildDurationMs: null,
     replicaFrame: null,
     replicaFramesSynced: null,
     replicaLagFrames: null,
+    rewriteReason: null,
     rowCounts: null,
     validation: "failed",
   };
@@ -1777,14 +2207,11 @@ export async function main(): Promise<MirrorSummary> {
       throw new Error("Source and target database URLs must be different");
     }
 
-    // THE PUBLISH CADENCE GATE. A publication rewrites every device row (≈90k rows across the six
-    // tables, staged then cut over) no matter how few source rows drifted, and the tick runs
-    // hourly — so an hourly publish costs ~2M written rows a day against a metered monthly write
-    // quota, while the live mobile app's offline-first store only needs it fresh to the hour or so. The
-    // tick keeps its hourly cadence (the ledger's expected interval, the /status row) but PUBLISHES
-    // only once the live replica is older than the interval below; a paused tick reports itself
-    // and costs no replica sync, no derivation and no writes. `DEVICE_MIRROR_FULL_REBUILD=true`
-    // still forces a publish.
+    // THE PUBLISH CADENCE GATE. A publication writes only the rows that drifted, so the cadence is
+    // no longer bought with write quota — but the derivation and the target diff still cost real
+    // work, so a tick publishes only once the live replica is older than the interval below and
+    // otherwise reports itself, costing no replica sync, no derivation and no writes.
+    // `DEVICE_MIRROR_FULL_REBUILD=true` still forces a publish.
     const target = new LibsqlHttpClient(targetUrl, targetToken);
     const publishIntervalMs = positiveIntegerEnv(
       "DEVICE_MIRROR_PUBLISH_INTERVAL_MS",
@@ -1865,6 +2292,9 @@ export async function main(): Promise<MirrorSummary> {
     };
     summary.maxBufferedRows = publication.maxBufferedRows;
     summary.produced = publication.writtenRows;
+    summary.publishPath = publication.publishPath;
+    summary.rewriteReason = publication.rewriteReason;
+    summary.deltaRows = publication.deltaRows;
     summary.driftBacklogRows = publication.backlogRows;
     summary.queueDepth = publication.published ? 0 : publication.backlogRows;
     summary.ok = true;
