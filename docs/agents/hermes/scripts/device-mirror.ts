@@ -1747,6 +1747,7 @@ export async function main(): Promise<MirrorSummary> {
     );
     const previous = await readTargetMeta(target);
     const forced = process.env.DEVICE_MIRROR_FULL_REBUILD === "true";
+    const previousTime = Date.parse(previous.derivedAt);
     const cadence = publishCadence(previous.derivedAt, Date.now(), publishIntervalMs, forced);
     if (!cadence.due) {
       const ageMs = cadence.ageMs;
