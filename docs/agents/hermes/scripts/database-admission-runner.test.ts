@@ -401,27 +401,53 @@ describe("database admission unit runner", () => {
     },
   );
 
+  it.each([
+    ["an edge 5xx", `printf '%s\\n%s\\n' '{}' '503'`],
+    ["a request past the ceiling", "sleep 1.1\nexit 28"],
+  ])(
+    "fails open at once in shadow mode when the coordinator answers %s",
+    async (_label, response) => {
+      fakeCurl(response);
+      const result = await run(["bash", "-c", "printf shadow"]);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("shadow");
+      expect(result.stderr).toContain('"outcome":"shadow-unavailable"');
+      expect(result.stderr).not.toContain('"outcome":"acquire-retry"');
+      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(1);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
   it(
-    "fails closed before payload start when the locally armed coordinator is unavailable",
+    "fails closed after the whole window when the locally armed coordinator never answers",
     PROCESS_TEST_OPTIONS,
     async () => {
+      // Every acquire outlives the one-second request ceiling and curl gives up (28). A silent
+      // coordinator is retried for the whole acquisition budget and only then read as an outage.
       fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"acquire"'; then
-  exit 1
+  sleep 1.1
+  exit 28
 fi
 printf '{}'
 `);
       const payloadMarker = join(directory, "payload-started");
       const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         failClosed: true,
+        maxWaitSecs: 3,
       });
 
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(false);
+      expect(result.stderr).toContain('"outcome":"acquire-retry"');
+      expect(result.stderr).toContain('"outcome":"acquisition-unavailable"');
       expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
-      expect(markerSummary()).toEqual({
+      const calls = readFileSync(curlLog, "utf8");
+      expect(calls.match(/"action":"acquire"/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      const summary = markerSummary();
+      expect(summary).toMatchObject({
         admissionOutcome: "acquisition-unavailable",
-        admissionWaitMs: 0,
         admissionYieldReason: "coordinator-unavailable",
         checked: null,
         errors: 0,
@@ -431,9 +457,86 @@ printf '{}'
         produced: null,
         queueDepth: null,
       });
+      expect(summary.admissionWaitMs).toBeGreaterThanOrEqual(3_000);
       // The same wrapper POSTs the marker's summary to the ledger; the fake coordinator lets
       // that separate endpoint succeed, so this firing is evidence rather than journald-only.
-      expect(readFileSync(curlLog, "utf8")).toContain('"summary_raw"');
+      expect(calls).toContain('"summary_raw"');
+    },
+  );
+
+  it(
+    "retries an acquire that outlives the request ceiling and runs the payload on the late grant",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(`
+acquire_count="$(grep -c '"action":"acquire"' "${curlLog}")"
+if printf '%s' "$*" | grep -q '"action":"acquire"' && [ "$acquire_count" -le 2 ]; then
+  sleep 1.1
+  exit 28
+fi
+${ACQUIRED_RESPONSE}
+`);
+      const payloadMarker = join(directory, "payload-started");
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        failClosed: true,
+        maxWaitSecs: 15,
+      });
+
+      expect(result.status).toBe(0);
+      expect(existsSync(payloadMarker)).toBe(true);
+      expect(result.stderr.match(/"outcome":"acquire-retry"/g)).toHaveLength(2);
+      expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
+      expect(result.stderr).toContain('"outcome":"released"');
+      expect(result.stderr).not.toContain('"outcome":"acquisition-unavailable"');
+      const calls = readFileSync(curlLog, "utf8");
+      expect(calls.match(/"action":"acquire"/g)?.length ?? 0).toBe(3);
+      expect(calls).toContain('"action":"release"');
+    },
+  );
+
+  it(
+    "retries a gateway transport failure inside the acquisition window",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"acquire"' && [ "$(grep -c '"action":"acquire"' "${curlLog}")" -eq 1 ]; then
+  printf '%s\\n%s\\n' '{}' '503'
+  exit 0
+fi
+${ACQUIRED_RESPONSE}
+`);
+      const payloadMarker = join(directory, "payload-started");
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        failClosed: true,
+        maxWaitSecs: 10,
+      });
+
+      expect(result.status).toBe(0);
+      expect(existsSync(payloadMarker)).toBe(true);
+      expect(result.stderr).toContain('"outcome":"acquire-retry"');
+      expect(result.stderr).toContain('"yield_reason":"gateway-transport"');
+      expect(result.stderr).toContain('"outcome":"released"');
+      expect(result.stderr).not.toContain('"outcome":"acquisition-gateway-transport"');
+      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(2);
+    },
+  );
+
+  it(
+    "yields at once on a validation rejection instead of retrying it",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(`printf '%s\\n%s\\n' '{"code":"invalid_request"}' '400'`);
+      const payloadMarker = join(directory, "payload-started");
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        failClosed: true,
+      });
+
+      expect(result.status).toBe(0);
+      expect(existsSync(payloadMarker)).toBe(false);
+      expect(result.stderr).not.toContain('"outcome":"acquire-retry"');
+      expect(result.stderr).toContain('"outcome":"acquisition-unavailable"');
+      expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
+      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(1);
     },
   );
 
@@ -671,10 +774,10 @@ fi
   );
 
   it(
-    "reports a genuine pre-deadline retry failure by its typed cause",
+    "retries a pre-deadline gateway failure and keeps the last admitted reason at the deadline",
     PROCESS_TEST_OPTIONS,
     async () => {
-      fakeAdmissionClock(1_000, 1_000, 1_100, 1_200, 1_200, 1_300);
+      fakeAdmissionClock(1_000, 1_000, 1_100, 1_200, 1_200, 1_300, 1_300, 2_000, 2_000);
       fakeExecutable("sleep", ":");
       fakeCurl(`
 if [ "$(wc -l < "${curlLog}")" -eq 1 ]; then
@@ -688,11 +791,14 @@ fi
 
       expect(result.status).toBe(0);
       expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(2);
-      expect(result.stderr).toContain('"outcome":"acquisition-gateway-transport"');
+      expect(result.stderr).toContain('"outcome":"acquire-retry"');
       expect(result.stderr).toContain('"yield_reason":"gateway-transport"');
+      expect(result.stderr).toContain('"outcome":"wait-expired"');
+      expect(result.stderr).not.toContain('"outcome":"acquisition-gateway-transport"');
       expect(markerSummary()).toMatchObject({
-        admissionOutcome: "acquisition-gateway-transport",
-        admissionYieldReason: "gateway-transport",
+        admissionOutcome: "wait-expired",
+        admissionWaitMs: 1_000,
+        admissionYieldReason: "public-latency",
       });
     },
   );
@@ -849,12 +955,6 @@ fi
       `printf '%s\\n%s\\n' '{"code":"database_busy"}' '503'`,
       "acquisition-database-busy",
       "database-busy",
-    ],
-    [
-      "gateway transport",
-      `printf '%s\\n%s\\n' '{}' '502'`,
-      "acquisition-gateway-transport",
-      "gateway-transport",
     ],
     [
       "authentication",
@@ -1092,20 +1192,92 @@ ${ACQUIRED_RESPONSE}
   );
 
   it(
-    "kills the payload process group and fails fenced when a heartbeat is partitioned",
+    "kills the payload process group and fails fenced when a heartbeat is definitively rejected",
     PROCESS_TEST_OPTIONS,
     async () => {
       fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
-  exit 1
+  printf '%s\\n%s\\n' '{}' '401'
+  exit 0
 fi
 ${ACQUIRED_RESPONSE}
 `);
       const result = await run(["bash", "-c", "while :; do sleep 1; done"]);
       expect(result.status).toBe(75);
       expect(result.signal).toBeNull();
+      expect(result.stderr).not.toContain('"outcome":"heartbeat-retry"');
       expect(result.stderr).toContain('"outcome":"fenced"');
       expect(result.stderr).toContain('"yield_reason":"partition"');
+    },
+  );
+
+  it(
+    "keeps the payload running across one transient heartbeat failure",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      // The first heartbeat outlives the request ceiling; the second fails at the edge; every
+      // later one renews. The lease never lapses, so the payload finishes and releases normally.
+      fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
+  heartbeat_count="$(grep -c '"action":"heartbeat"' "${curlLog}")"
+  if [ "$heartbeat_count" -eq 1 ]; then
+    exit 28
+  fi
+  if [ "$heartbeat_count" -eq 2 ]; then
+    printf '%s\\n%s\\n' '{}' '503'
+    exit 0
+  fi
+fi
+${ACQUIRED_RESPONSE}
+`);
+      const result = await run(["bash", "-c", "sleep 6; printf complete"]);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("complete");
+      expect(result.stderr.match(/"outcome":"heartbeat-retry"/g)).toHaveLength(2);
+      expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
+      expect(result.stderr).toContain('"yield_reason":"gateway-transport"');
+      expect(result.stderr).toMatch(/"outcome":"released"[^\n]*"yield_reason":""/);
+      expect(result.stderr).not.toContain('"outcome":"fenced"');
+      const calls = readFileSync(curlLog, "utf8");
+      expect(calls.match(/"action":"heartbeat"/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+      expect(calls.match(/"action":"release"/g)?.length ?? 0).toBe(1);
+    },
+  );
+
+  it(
+    "stops the payload when heartbeats keep failing past the local lease deadline",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      // Heartbeats never reach the coordinator. The first failure is retried because the lease
+      // deadline written at acquisition still stands; the clock then jumps past that deadline and
+      // the next failure is a lost lease, so the payload group is terminated and the run fences.
+      const advanceClock = join(directory, "advance-heartbeat-clock");
+      fakeExecutable(
+        "date",
+        `if [ "$1" = "+%s%3N" ]; then
+  if [ -e "${advanceClock}" ]; then printf '100000000'; else printf '1000'; fi
+  exit 0
+fi
+exec /usr/bin/date "$@"`,
+      );
+      fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
+  if [ "$(grep -c '"action":"heartbeat"' "${curlLog}")" -ge 2 ]; then
+    printf advance > "${advanceClock}"
+  fi
+  exit 28
+fi
+${ACQUIRED_RESPONSE}
+`);
+      const result = await run(["bash", "-c", "while :; do sleep 1; done"]);
+
+      expect(result.status).toBe(75);
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toContain('"outcome":"heartbeat-retry"');
+      expect(result.stderr).toContain('"outcome":"fenced"');
+      expect(result.stderr).toContain('"yield_reason":"heartbeat-deadline"');
+      expect(readFileSync(curlLog, "utf8")).toContain('"action":"release"');
     },
   );
 

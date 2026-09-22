@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # One client for every registry-classified recurring writer/heavy reader. The Worker owns queue
 # truth and fencing; this process owns bounded waiting and the payload process group.
+#
+# Environment knobs (every value is validated before the first request):
+#   DATABASE_ADMISSION_MAX_WAIT_SECS     absolute acquisition budget, 0..120 (default 120)
+#   DATABASE_ADMISSION_POLL_SECS         queue poll + transient-retry interval, 1..30 (default 2)
+#   DATABASE_ADMISSION_HTTP_TIMEOUT_SECS per-request curl ceiling, 1..30 (default 10). A slow
+#                                        coordinator is not an unavailable one: a request that
+#                                        exceeds it is retried inside the acquisition budget, so
+#                                        widen this per unit only when its ledger shows retries
+#                                        that a longer single request would have absorbed.
+#   DATABASE_ADMISSION_KILL_GRACE_SECS   TERM→KILL grace for the payload group, 0..10 (default 10)
+#   DATABASE_ADMISSION_FAIL_CLOSED       exact `true` arms the local gate before the database flag
 set -uo pipefail
 
 ADMISSION_PATH='/api/v1/admin/database-admission'
@@ -54,7 +65,7 @@ case "$ADMISSION_POLL_SECS" in
     ;;
 esac
 bounded_uint DATABASE_ADMISSION_POLL_SECS "$ADMISSION_POLL_SECS" 1 30
-bounded_uint DATABASE_ADMISSION_HTTP_TIMEOUT_SECS "$ADMISSION_HTTP_TIMEOUT_SECS" 1 10
+bounded_uint DATABASE_ADMISSION_HTTP_TIMEOUT_SECS "$ADMISSION_HTTP_TIMEOUT_SECS" 1 30
 bounded_uint DATABASE_ADMISSION_KILL_GRACE_SECS "$ADMISSION_KILL_GRACE_SECS" 0 10
 [ "$ADMISSION_FAIL_CLOSED" = "true" ] || ADMISSION_FAIL_CLOSED=false
 
@@ -95,7 +106,10 @@ last_wait_yield_reason=""
 recovered=false
 payload_pid=""
 terminal_action_started=0
-admission_curl_timed_out=false
+admission_transport_failed=false
+ADMISSION_RESPONSE=""
+ADMISSION_RESPONSE_CODE=""
+ADMISSION_ERROR_REASON="coordinator-unavailable"
 watchdog_directory=""
 watchdog_state=""
 watchdog_window_ms=$(( (90 - ADMISSION_KILL_GRACE_SECS - 5) * 1000 ))
@@ -157,8 +171,9 @@ json_boolean() {
 admission_post() {
   local action="$1" token="${2:-}" request_timeout="${3:-$ADMISSION_HTTP_TIMEOUT_SECS}" body curl_status response response_code response_with_code
   ADMISSION_RESPONSE=""
+  ADMISSION_RESPONSE_CODE=""
   ADMISSION_ERROR_REASON="coordinator-unavailable"
-  admission_curl_timed_out=false
+  admission_transport_failed=false
   [ -n "$api_base" ] || return 1
   [ -n "$api_token" ] || return 1
   command -v curl >/dev/null 2>&1 || return 1
@@ -173,7 +188,7 @@ admission_post() {
     --data-binary "$body" "${api_base}${ADMISSION_PATH}" 2>/dev/null)"
   curl_status=$?
   if [ "$curl_status" -ne 0 ]; then
-    [ "$curl_status" -eq 28 ] && admission_curl_timed_out=true
+    admission_transport_failed=true
     return 1
   fi
   response_code="${response_with_code##*$'\n'}"
@@ -186,6 +201,7 @@ admission_post() {
       ;;
   esac
   ADMISSION_RESPONSE="$response"
+  ADMISSION_RESPONSE_CODE="$response_code"
   case "$response_code" in
     2??) return 0 ;;
   esac
@@ -198,6 +214,22 @@ admission_post() {
       *) ADMISSION_ERROR_REASON="coordinator-unavailable" ;;
     esac
   fi
+  return 1
+}
+
+# A failed POST is transient when the coordinator may simply have been slow or briefly
+# unreachable: curl gave up (a timeout or any transport error) or an edge/origin answered 5xx.
+# The coordinator's own single-row UPDATE waits behind the database's single writer, so a request
+# that outlives the curl ceiling is the ordinary shape of write contention, not an outage. A
+# definitive answer is never transient: a 401, a 4xx validation rejection, or a missing
+# precondition (no base URL, no token, no curl) will not change by asking again.
+transient_admission_failure() {
+  if [ "$admission_transport_failed" = "true" ]; then
+    return 0
+  fi
+  case "$ADMISSION_RESPONSE_CODE" in
+    5??) return 0 ;;
+  esac
   return 1
 }
 
@@ -298,6 +330,19 @@ refresh_watchdog_deadline() {
   mv -f -- "$temporary" "$watchdog_state"
 }
 
+# The local lease bound, as the payload-group watchdog sees it: the deadline the last confirmed
+# heartbeat wrote, or the `expired` marker the watchdog wrote when it passed. An unreadable or
+# malformed state file counts as passed, so a lost file can never extend a lease.
+watchdog_deadline_passed() {
+  local deadline
+  [ -r "$watchdog_state" ] || return 0
+  deadline="$(sed -n '1p' "$watchdog_state" 2>/dev/null)"
+  case "$deadline" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  [ "$(current_time_ms)" -ge "$deadline" ]
+}
+
 payload_group_is_alive() {
   [ -n "$payload_pid" ] || return 1
   kill -0 -- "-${payload_pid}" 2>/dev/null
@@ -331,12 +376,44 @@ while :; do
     exit_wait_expired "${last_wait_yield_reason:-queue}"
   fi
   if ! admission_post acquire "" "$(acquisition_request_timeout)"; then
-    if [ "$admission_curl_timed_out" = "true" ] && [ "$enforced" -eq 1 ] && [ -n "$last_wait_yield_reason" ] && [ "$(current_time_ms)" -ge "$acquisition_deadline_ms" ]; then
-      exit_wait_expired "$last_wait_yield_reason"
-    fi
-    if [ "$enforced" -eq 0 ] && [ "$ADMISSION_FAIL_CLOSED" != "true" ] && [ "$ADMISSION_ERROR_REASON" = "coordinator-unavailable" ]; then
-      emit_admission_event shadow-unavailable 0
-      exec "$@"
+    # Shadow mode (not yet enforced, local gate unarmed) fails open at once on any coordinator
+    # unavailability, an edge 5xx included: the retry budget below exists to protect an admitted
+    # tick, and a unit that admission does not yet govern must not stall on a deploy blip.
+    case "$ADMISSION_ERROR_REASON" in
+      coordinator-unavailable | gateway-transport)
+        if [ "$enforced" -eq 0 ] && [ "$ADMISSION_FAIL_CLOSED" != "true" ]; then
+          emit_admission_event shadow-unavailable 0
+          exec "$@"
+        fi
+        ;;
+    esac
+    # A transient failure is retried inside the acquisition budget instead of forfeiting the tick.
+    # The Worker keys a contender on (owner, runId) and its acquire upserts that row and then reads
+    # it back whatever its state, so an acquire that landed server-side but timed out client-side
+    # is found again by the retry, already queued or already holding its fencing token: the retry
+    # never mints a second contender. `database-busy` is the coordinator refusing new work on
+    # purpose and stays an immediate yield with its own outcome, as do every 401 and 4xx.
+    if [ "$ADMISSION_ERROR_REASON" != "database-busy" ] && transient_admission_failure; then
+      now_ms="$(current_time_ms)"
+      if [ "$now_ms" -ge "$acquisition_deadline_ms" ]; then
+        # The budget is spent. A coordinator that answered at least once merely kept us queued;
+        # one that never answered inside the whole window is a real outage and reads as one.
+        if [ "$enforced" -eq 1 ] && [ -n "$last_wait_yield_reason" ]; then
+          exit_wait_expired "$last_wait_yield_reason"
+        fi
+        wait_ms=$((now_ms - started_at_ms))
+        yield_reason="$ADMISSION_ERROR_REASON"
+        terminal_admission
+        failure_outcome="$(admission_failure_outcome "$yield_reason")"
+        exit_admission_yield "$failure_outcome" "$yield_reason"
+      fi
+      yield_reason="$ADMISSION_ERROR_REASON"
+      emit_admission_event acquire-retry 0
+      remaining_ms=$((acquisition_deadline_ms - now_ms))
+      poll_ms=$((ADMISSION_POLL_SECS * 1000))
+      [ "$poll_ms" -lt "$remaining_ms" ] || poll_ms="$remaining_ms"
+      sleep "$(duration_ms_as_seconds "$poll_ms")"
+      continue
     fi
     yield_reason="$ADMISSION_ERROR_REASON"
     terminal_admission
@@ -507,8 +584,31 @@ fence_lost=0
 while payload_is_running; do
   if [ "$SECONDS" -ge "$next_heartbeat" ]; then
     if ! admission_post heartbeat "$fencing_token"; then
+      # One slow or dropped heartbeat is not a lost lease. The server-side lease outlives several
+      # heartbeat intervals and the payload-group watchdog already terminates the group when the
+      # local deadline (refreshed only by a heartbeat the coordinator confirmed) passes, so a
+      # transient failure retries on the poll interval until that deadline stops the payload. A
+      # definitive rejection (401, any 4xx) fences at once; a lost/stolen lease answers 2xx with
+      # `outcome: "lost"` and is handled below. `database-busy` here is a heartbeat the busy
+      # coordinator could not write yet while the lease it renews is still held, so it retries.
+      # Two known bounds: the heartbeat POST is capped by the request ceiling, not by the time
+      # left on the local deadline, so this loop's bookkeeping may trail the watchdog's kill by
+      # one request timeout (the watchdog, not this loop, is the actual containment); and the
+      # local deadline reads wall-clock while the server lease runs on the database clock, which
+      # the watchdog window's margin under the 90-second lease absorbs.
+      if transient_admission_failure && ! watchdog_deadline_passed; then
+        yield_reason="$ADMISSION_ERROR_REASON"
+        emit_admission_event heartbeat-retry "$(( (SECONDS - payload_started_seconds) * 1000 ))"
+        next_heartbeat=$((SECONDS + ADMISSION_POLL_SECS))
+        sleep 1
+        continue
+      fi
       fence_lost=1
-      yield_reason="partition"
+      if watchdog_deadline_passed; then
+        yield_reason="heartbeat-deadline"
+      else
+        yield_reason="partition"
+      fi
       break
     fi
     response="$ADMISSION_RESPONSE"
@@ -527,6 +627,8 @@ while payload_is_running; do
       yield_reason="heartbeat-deadline"
       break
     fi
+    # A confirmed heartbeat clears the reason a retried one carried, so `released` reports none.
+    yield_reason=""
     next_heartbeat=$((SECONDS + heartbeat_seconds))
   fi
   sleep 1
