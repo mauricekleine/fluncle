@@ -114,10 +114,12 @@ export const ISRC_RECOVERY_WALL_BUDGET_MS = 840_000;
  * The sample floor exists so a short or nearly-drained tick cannot trip it by luck; the share is
  * just under 1 so a single recovery in a hundred does not excuse a blind run.
  *
- * THE DENOMINATOR IS EVERY ROW DEEZER ANSWERED; the numerator is only the rows whose answer reached
- * a verdict. A tick that yields or runs out of wall budget therefore dilutes its own ratio and
- * cannot fire, which is the safe direction: an unsettled row is evidence about the lane, not about
- * the ask.
+ * THE DENOMINATOR IS EVERY ROW THE TICK JUDGED — Deezer answered it AND the resolver returned a
+ * verdict — never every row it searched. The two diverge whenever a settle window yields or the
+ * wall budget stops the tick, and dividing by the searched count there would suppress the alarm
+ * precisely when the lane is busiest: a tick that searched a hundred rows, settled thirty, and
+ * found every one of those thirty empty is blind, and must say so. The sample floor, not a
+ * deflated ratio, is what protects a partial tick from tripping on a thin sample.
  */
 export const DEEZER_BLIND_MIN_SEARCHED = 25;
 export const DEEZER_BLIND_EMPTY_SHARE = 0.98;
@@ -373,14 +375,21 @@ async function searchClaimedRows(
 // The tick.
 // ---------------------------------------------------------------------------
 
-/** Apply one settle window's verdicts, preserving the per-outcome accounting exactly. */
+/**
+ * Apply one settle window's verdicts, preserving the per-outcome accounting exactly.
+ *
+ * Returns the rows this window actually JUDGED: a verdict that reached the resolver for a row
+ * Deezer had answered. That count, not the number searched, is the blind tripwire's denominator —
+ * see {@link DEEZER_BLIND_EMPTY_SHARE}.
+ */
 function applySettleWindow(
   window: IsrcRecoverySettleWindow,
   items: readonly IsrcRecoverySettleItem[],
   summary: IsrcRecoverySummary,
   deps: IsrcRecoveryDeps,
-): void {
+): number {
   const byTrackId = new Map(items.map((item) => [item.trackId, item]));
+  let judged = 0;
 
   for (const verdict of window.verdicts) {
     if (verdict.outcome === "failed") {
@@ -392,6 +401,9 @@ function applySettleWindow(
 
     const item = byTrackId.get(verdict.trackId);
 
+    if (item !== undefined) {
+      judged += 1;
+    }
     if (verdict.isrcRecoveredByDeezer) {
       summary.recovered += 1;
       summary.produced += 1;
@@ -408,6 +420,8 @@ function applySettleWindow(
     // committed before the response was lost — so queue depth waits for the next queue read.
     settleQueueRow(summary);
   }
+
+  return judged;
 }
 
 /** Run one bounded tick: one claim window, the unadmitted searches, then bounded settle windows. */
@@ -453,6 +467,10 @@ export async function runIsrcRecoverySweep(
   const searched = await searchClaimedRows(claimed.rows, summary, deps);
   let pending = [...searched.items];
   let yielded = false;
+  // Rows this tick actually JUDGED — Deezer answered AND the resolver returned a verdict. The
+  // blind tripwire divides by this, never by the number searched: a tick that loses the lane
+  // part-way must still be able to report that everything it DID observe came back empty.
+  let judged = 0;
 
   while (pending.length > 0) {
     if (spentMs() >= ISRC_RECOVERY_WALL_BUDGET_MS) {
@@ -470,7 +488,7 @@ export async function runIsrcRecoverySweep(
       break;
     }
 
-    applySettleWindow(window, chunk, summary, deps);
+    judged += applySettleWindow(window, chunk, summary, deps);
 
     if (window.deferred.length > 0) {
       deps.log(
@@ -499,21 +517,25 @@ export async function runIsrcRecoverySweep(
 
   summary.unsettled = pending.length;
 
-  if (yielded) {
-    return admissionYieldSummary(summary);
-  }
-
   // THE TRIPWIRE, read off the tick's own counts (see DEEZER_BLIND_EMPTY_SHARE). A blind pass is
   // still a pass that wrote durable clean misses, so the verdict is reported rather than the work
   // undone — the operator clears the stamps with `requeue_isrc_recovery` once the ask is fixed.
-  if (
-    searched.answered >= DEEZER_BLIND_MIN_SEARCHED &&
-    summary.deezerEmpty / searched.answered >= DEEZER_BLIND_EMPTY_SHARE
-  ) {
+  //
+  // IT IS EVALUATED BEFORE THE YIELD RETURN, and outranks it. A pause is the ordinary shape of a
+  // busy lane; a blind ask is an incident that has already written durable misses. A tick that
+  // judged enough rows to be evidence must report that even if it then lost the lane, or losing
+  // the lane would be a way for the alarm to go unheard.
+  const blind =
+    judged >= DEEZER_BLIND_MIN_SEARCHED && summary.deezerEmpty / judged >= DEEZER_BLIND_EMPTY_SHARE;
+
+  if (yielded && !blind) {
+    return admissionYieldSummary(summary);
+  }
+  if (blind) {
     summary.ok = false;
     summary.reason = "deezer_blind";
     deps.log(
-      `Deezer answered empty for ${summary.deezerEmpty}/${searched.answered} searched rows — the ask, not the catalogue`,
+      `Deezer answered empty for ${summary.deezerEmpty}/${judged} judged rows — the ask, not the catalogue`,
     );
   }
 

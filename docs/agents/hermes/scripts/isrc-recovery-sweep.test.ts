@@ -467,6 +467,56 @@ describe("isrc-recovery due-work repair pause", () => {
     expect(summary).toMatchObject({ ok: true, reason: null, recovered: 3 });
   });
 
+  // THE PARTIAL-TICK CASES. Phased admission made a tick able to search far more rows than it
+  // settles, which opens two ways for a real blind sweep to go unreported: judging the empty share
+  // against everything SEARCHED, and letting the lane's own pause return before the verdict is
+  // read. Both are pinned here, because a detector that stops reaching its own signal is worse
+  // than no detector — it reports green.
+  test("a tick that settles only part of its batch still reports what it judged", async () => {
+    const searched = DEEZER_BLIND_MIN_SEARCHED * 2;
+    const harness = blindHarness(searched, 0);
+    const inner = harness.windows;
+    let windows = 0;
+    // Three windows judge 30 rows — past the sample floor — and the fourth loses the lane.
+    harness.effects.windows = {
+      readQueue: (limit) => inner.readQueue(limit),
+      settle: (items) => {
+        windows += 1;
+        return windows > 3 ? Promise.resolve(undefined) : inner.settle(items);
+      },
+    };
+
+    const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
+
+    // Divided by the rows it SEARCHED this is 30/50 and silent; divided by the rows it JUDGED it
+    // is 30/30 and the alarm is correct.
+    expect(summary).toMatchObject({
+      deezerEmpty: SETTLE_WINDOW_ROWS * 3,
+      ok: false,
+      reason: "deezer_blind",
+    });
+    expect(exitCode).toBe(1);
+  });
+
+  test("a partial tick below the sample floor stays quiet — the floor, not a deflated ratio", async () => {
+    const harness = blindHarness(DEEZER_BLIND_MIN_SEARCHED * 2, 0);
+    const inner = harness.windows;
+    let windows = 0;
+    harness.effects.windows = {
+      readQueue: (limit) => inner.readQueue(limit),
+      settle: (items) => {
+        windows += 1;
+        return windows > 1 ? Promise.resolve(undefined) : inner.settle(items);
+      },
+    };
+
+    const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
+
+    // Ten judged rows are not evidence about the ask, so the lane's pause is the whole story.
+    expect(summary).toMatchObject({ gateState: "paused", ok: true, reason: "database_admission" });
+    expect(exitCode).toBe(0);
+  });
+
   test("does not trip on a short tick — the sample floor is what makes the rate evidence", async () => {
     const harness = blindHarness(DEEZER_BLIND_MIN_SEARCHED - 1, 0);
 
