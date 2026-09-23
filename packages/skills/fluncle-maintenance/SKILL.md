@@ -18,7 +18,7 @@ This file is the doctrine and the decision map. The drift surface (file:line + c
 - The **`fluncle` CLI** baked into the image (the standalone bun-compiled binary, pinned by release-asset URL — the Bun-runtime commands need it; the `npm -g` thin client runs under node and can't).
 - The **Claude Code CLI** baked into the image (`npm -g`).
 - **boat.dev CLI** — the render box's transport, pinned to a checksum-verified release binary (the vendor's floating installer tracks whatever it currently ships and ends in an interactive onboard). **MANUAL-watch tier**: never auto-bumped — a bump can move a verb, a flag, or a blocking/non-blocking boundary under the render conductor. Re-verify with `render-conductor.sh --preflight` after any bump or base rebuild.
-- The **GitHub Actions** mutable tags in `.github/workflows/` (`actions/checkout@v6`, `oven-sh/setup-bun@v2`, …) — a `.deepsec` scan flags these as a supply-chain risk and recommends SHA-pinning.
+- The **GitHub Actions** SHA-pins in `.github/workflows/`. Renovate refreshes the digests; pin any stray bare `@vN` tag the same way.
 
 **Out of scope (separate flows — reference, do not duplicate):**
 

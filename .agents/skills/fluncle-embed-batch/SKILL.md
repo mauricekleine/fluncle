@@ -203,10 +203,6 @@ fluncle admin catalogue rank --limit 250 --json    # repeat while the ranker rep
 
 An embedded-but-unranked track is in the archive but not yet placed in The Ear's ordering, so it won't surface in recommendations or "sounds like" until this runs. This is the step that turns "embedded" into "recommendation-eligible".
 
-## Pitfalls
-
-The owning sections above define the safeguards: _Path A_ owns the CPU-only M5 path; _The four env vars_ owns the private R2 credentials; _The API_ and _Create the pod_ own pod health, `dockerStartCmd`, PID 1 environment import, and dependency pins; _Monitor from the Mac_ owns slow-start and teardown guards; _`--minutes` and the clock_ owns clock-bounded sizing; _Reading the result_ owns resumability and queue state; and the architecture document owns the certification rail.
-
 ## Where the concrete detail lives
 
 - Architecture + the clock-bound design: [`docs/gpu-batch-embed.md`](../../../docs/gpu-batch-embed.md).

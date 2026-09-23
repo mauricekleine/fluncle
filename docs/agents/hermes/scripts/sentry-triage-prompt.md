@@ -59,8 +59,9 @@ the code around it). Then decide:
   it from the stack. Filing means appending a row to the ledger (below), **not** opening a PR.
 
 The dividing line is confidence + risk, not raw size. When in doubt, **file** — an un-fixed issue
-waits safely; a wrong auto-fix merged to `main` is a production regression. You are one agent with
-no second reviewer behind you (unlike the audit), so hold the fix bar high.
+waits safely; a wrong auto-fix merged to `main` is a production regression. When the RUNTIME line enables
+auto-merge, nothing reviews your fix before it deploys; otherwise the operator merges. Hold the
+fix bar high either way.
 
 ## Never touch (file instead, if relevant)
 
@@ -80,8 +81,9 @@ PR.
 
 ## Verify what you touch
 
-For every edit, run the relevant checks from `AGENTS.md` → Quality Checks (typecheck / lint / test
-/ build, scoped to what you changed) and record the exact commands + pass/fail in the report. If a
+For every edit, run the scoped checks that fit this box (the changed module's `*.test.ts`, a
+non-`apps/web` package typecheck); `apps/web` typecheck, build, and type-aware lint, and a
+whole-repo `bun run check`, exceed the box's memory and run in CI on the PR. Record the exact commands + pass/fail in the report. If a
 check fails and you cannot cleanly fix it, **revert that edit and file the issue instead** — never
 leave a branch red.
 

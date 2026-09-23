@@ -1,6 +1,6 @@
 # Safety doctrine — Opus is the gate
 
-This routine runs **hands-off**, on Opus 5, with **no human in the loop on a tick**. There is no approval prompt before a bump **ships** — merged to `main`, and for a baked pin the box self-deploys it. So the model's judgment is the only safety mechanism on the repo side — and the doctrine is built around one asymmetry:
+This routine runs with **no human approving a merge**. There is no approval prompt before a bump **ships** — merged to `main`, and for a baked pin the box self-deploys it. So the model's judgment is the only safety mechanism on the repo side — and the doctrine is built around one asymmetry:
 
 > **A missed bump is a non-event. A bad shipped bump that takes the gateway down — with nobody watching — is a real incident.**
 
@@ -23,7 +23,7 @@ Edit the pin → open the PR → wait for CI green → merge. For a baked pin, t
 1. **A patch or minor bump of the `fluncle` CLI** (first-party; a stale CLI just lacks a recent command; a patch/minor never removes one). Baked → pin-watch pre-smoke validates it before the live container is touched.
 2. **A patch or minor bump of the Claude Code CLI** (the agent binary, not the model or the auth; a patch rarely changes the `claude -p` contract). Baked → pin-watch pre-smoke validated.
 3. **A patch or minor bump of bun**, edited in **all three** places at once (Dockerfile installer + `package.json` `packageManager` + every workflow `bun-version:`) — the CI runs on the new bun (the repo-side validation), and the box gets it via pin-watch on the same rebuild as any baked pin.
-4. **SHA-pinning a GitHub Action at its CURRENT major** (replace `@v6` with the commit SHA `v6` resolves to today, keeping `# v6` as a trailing comment). Changes **no behaviour** — pins the same commit — and the PR's CI run proves the workflow still parses and runs. Fully repo-side; ships on merge. This is the `.deepsec` hardening and the safest thing in the skill.
+4. **SHA-pinning a GitHub Action at its CURRENT major** (replace `@v6` with the commit SHA `v6` resolves to today, keeping `# v6` as a trailing comment). Changes **no behaviour** — pins the same commit — and the PR's CI run proves the workflow still parses and runs. Fully repo-side; ships on merge. It is the safest thing in the skill.
 
 ## PULL THE BRAKE — report, never ship
 
@@ -49,6 +49,6 @@ The autonomy to ship is conditional on every gate staying green. The moment one 
 ## Scope discipline (so a tick stays bounded)
 
 - **One bounded pass per tick.** Sweep the inventory once, ship the safe, stop. Do not loop to "catch up."
-- **Stay inside the inventory.** This skill owns the six runtime pins — not the workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow), not the app dependency tree, not the model or voice. Out-of-scope drift is a mention in the report, not an action.
+- **Stay inside the inventory.** This skill owns the inventory's runtime pins — not the workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow), not the app dependency tree, not the model or voice. Out-of-scope drift is a mention in the report, not an action.
 - **Never touch the box.** The deploy, pre-smoke, swap, rollback, and single-flight for a baked-pin merge are all the on-box `fluncle-pin-watch` timer's job (`docs/agents/hermes/pin-watch/`). The routine's job ends at `gh pr merge`.
 - **Merge ONLY a green PR**, and only for SHIP items. Never merge a red PR; never commit to `main` directly (the PR is the audit trail + the CI gate).

@@ -58,7 +58,7 @@ Apply this completeness standard to every plan this skill produces.
 
 ## Scale to the task
 
-Match the machinery to the size. A focused two-surface change: 2–3 research threads, a 3-role panel. A sprawling cross-cutting overhaul: 4–5 threads, a 4-role panel, maybe a second research round if the first surfaces unknowns. The fan-out is genuinely heavy (a full run can spawn ~8–10 agents), so it earns its keep on substantial work and is overkill for a one-file fix. When unsure, lean thorough for research/architecture asks.
+Match the machinery to the size. A focused two-surface change: 2–3 research threads, a 3-role panel. A sprawling cross-cutting overhaul: 4–5 threads, a 4-role panel, maybe a second research round if the first surfaces unknowns. The fan-out is genuinely heavy (a full run can spawn ~8–10 agents), so it earns its keep on substantial work and is overkill for a one-file fix.
 
 ## Output
 

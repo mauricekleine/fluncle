@@ -34,19 +34,19 @@ Default prod `https://www.fluncle.com`. For a pre-merge PR, smoke its Cloudflare
 ## The sweep
 
 1. **oRPC route resolution (the big one).** For every contract op, `curl -X <method> <target><path>` and assert **served, never 404**: public-tier → `200`; admin/private-tier unauthenticated → `401`. A `404` means the route is dead = regression. A `405`/`400` means served (wrong method/body) = fine.
-2. **Public web + feeds + discovery.** Each registry web-route / feed / discovery surface → `200`: `/`, `/log`, `/log/<logId>`, `/mixtapes`, `/status`, `/galaxy`, `/pipeline`, `/about`, `/docs/api`; `/rss.xml`, `/atom.xml`, `/podcast.xml`, `/sitemap.xml`, `/llms.txt`, `/robots.txt`, `/cli/latest.sh`, `/api/v1/openapi.json`, `/api/v1/postman.json`.
+2. **Public web + feeds + discovery.** Each `liveSurfaces()` entry of kind web route / feed / discovery → `200` (derive the list each run; `/log/<logId>` needs a real coordinate).
 3. **Subdomains.** `galaxy.`, `radio.`, `status.` → `200`. `found.` is the R2 object store — its **root 404s by design**; probe a real object (`found.fluncle.com/<logId>/set.mp4` → `200`).
 4. **CLI.** Dry-run the thin client's read paths against the target: `bun run --cwd apps/cli fluncle recent --limit 1 --json`, `fluncle tracks get <logId> --json`, `fluncle status`. Confirms the CLI→API contract end to end.
 5. **MCP / SSH / DNS.** MCP at `/mcp` (GET `405` / POST `400` = served). SSH terminal `rave.fluncle.com:22` TCP-open (`bash -c 'cat </dev/null >/dev/tcp/rave.fluncle.com/22'`). DNS `dig +short @rave.fluncle.com <name> TXT`.
 6. **/api/v1/status aggregate.** The box's own view: `services` all `ok`, `secondsSinceFreshestReport` small (the host-timer healthcheck is fresh).
-7. **Interactive surfaces — only when the change touched them.** The video players and admin UI need a real browser past hydration, not a `200`. Drive the chrome-devtools MCP (logged-out: the public `/log/<mixtape>` player) or claude-in-chrome (the authed admin): verify playback / seek / overlay / the actual interaction. See the `verify-interactive-states-visually` memory.
+7. **Interactive surfaces — only when the change touched them.** The video players and admin UI need a real browser past hydration, not a `200`. Drive the chrome-devtools MCP (logged-out: the public `/log/<mixtape>` player) or claude-in-chrome (the authed admin): verify playback / seek / overlay / the actual interaction.
 
 ## Judgment (what a frozen script gets wrong)
 
 - **Method matters.** POST-only ops (`backfill`, `mixtape youtube`, `mixcloud/token`) return `404` to a GET — probe each op with its real method or you raise false alarms.
 - **`401` on admin is healthy** (served + auth-gated); `404` is dead. Never read `401` as a failure.
 - **og vs cover.** `/api/og/<id>` is findings-only; mixtapes use `/api/mixtape-cover/<id>`. A mixtape logId correctly `404`s on `/api/og`.
-- **CLI commands are plural + canonical.** Probe the canonical plural command `tracks get`; `track` is outside the supported surface, so an `unknown command` response is expected.
+- **CLI commands are plural + canonical.** Probe the canonical plural command (`tracks get`).
 - **`record_health` POSTs abort transiently during a Worker redeploy** — a `/status` blip right after a merge is the deploy settling, not an outage; re-check after ~1 minute.
 - **Auth-gated UI can't be probed headless** — the admin API returning `401` is the proxy signal; flag the UI itself as eyeball-only.
 - A contract-owned path is served by oRPC because `server.ts` mounts oRPC ahead of TanStack — the basis for the "never 404" assertion (the oRPC-default principle lives in `AGENTS.md` Architecture).

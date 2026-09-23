@@ -53,6 +53,15 @@ type Fixture = {
   ws: string;
 };
 
+/** Every argv the stubbed `git` / `gh` / `claude` received, one invocation per line. */
+function calls(box: Fixture, command: "claude" | "gh" | "git"): string {
+  try {
+    return readFileSync(join(box.root, `${command}.log`), "utf8");
+  } catch {
+    return "";
+  }
+}
+
 type RunDeadlineOptions = {
   deadlineAfterStderr?: string;
   deadlineMs?: number;
@@ -165,12 +174,15 @@ function fixture(): Fixture {
   executable(join(bin, "bun"), "#!/usr/bin/env bash\nexit 0\n");
   // The stub stands in for the one bounded judgment call. STUB_CLAUDE_SLEEP drives the wall
   // budget; STUB_OOM_KILLS rewrites the cgroup event counter the way the kernel would when a
-  // child of this pass is killed by the memory cap.
+  // child of this pass is killed by the memory cap; STUB_REPORT is the `.audit/report.md` the
+  // agent hands the driver as the PR body.
   executable(
     join(bin, "claude"),
     `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${join(root, "claude.log")}"
 [ -z "\${STUB_OOM_KILLS:-}" ] || printf 'oom_kill %s\\n' "\${STUB_OOM_KILLS}" >"\${AGENT_PASS_CGROUP_EVENTS}"
 [ -z "\${STUB_VERIFY:-}" ] || { mkdir -p .audit; printf '%s\\n' "\${STUB_VERIFY}" >.audit/verify.json; }
+[ -z "\${STUB_REPORT:-}" ] || { mkdir -p .audit; printf '%s\\n' "\${STUB_REPORT}" >.audit/report.md; }
 sleep "\${STUB_CLAUDE_SLEEP:-0}"
 exit "\${STUB_CLAUDE_STATUS:-0}"
 `,
@@ -179,11 +191,14 @@ exit "\${STUB_CLAUDE_STATUS:-0}"
   executable(
     join(bin, "git"),
     `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${join(root, "git.log")}"
 case "$*" in
   *"status --porcelain"*)
     [ "\${STUB_CHANGED:-0}" = "0" ] || printf ' M fixture.txt\\n'
     ;;
   *"rev-list --count"*) printf '%s\\n' "\${STUB_AHEAD:-0}" ;;
+  commit*) exit "\${STUB_COMMIT_STATUS:-0}" ;;
+  push*) exit "\${STUB_PUSH_STATUS:-0}" ;;
 esac
 exit 0
 `,
@@ -191,7 +206,12 @@ exit 0
   executable(
     join(bin, "gh"),
     `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${join(root, "gh.log")}"
 case "$*" in
+  *"pr create"*)
+    [ "\${STUB_PR_CREATE_STATUS:-0}" = "0" ] || exit "\${STUB_PR_CREATE_STATUS}"
+    printf 'https://example.invalid/pull/42\\n'
+    ;;
   *"pr list"*"--head"*) printf '%s\\n' "\${STUB_AUDIT_PR_URL:-}" ;;
   *"pr list"*) printf '%s\\n' "\${STUB_REVIEW_PR_NUM:-}" ;;
   *"pr checkout"*) exit "\${STUB_CHECKOUT_STATUS:-0}" ;;
@@ -440,10 +460,18 @@ describe("fluncle-audit canonical counters", () => {
   test("an opened PR is the one successfully acted-on audit unit", async () => {
     const box = fixture();
     const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
-      STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+      STUB_CHANGED: "1",
+      STUB_REPORT: "1 fix, 0 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
     });
 
-    expect(result.summary).toMatchObject({ checked: 1, errors: 0, produced: 1 });
+    expect(result.summary).toMatchObject({
+      action: "opened",
+      checked: 1,
+      errors: 0,
+      pr: "https://example.invalid/pull/42",
+      produced: 1,
+    });
   });
 
   test("a failed dry-run agent cannot claim a changed path as produced", async () => {
@@ -483,14 +511,26 @@ describe("fluncle-audit canonical counters", () => {
     });
   });
 
-  test("an opened PR is still ok:false when the agent that opened it errored", async () => {
+  test("a failed pass that left edits is ok:false and ships nothing", async () => {
     const box = fixture();
     const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
-      STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+      STUB_CHANGED: "1",
       STUB_CLAUDE_STATUS: "1",
+      STUB_REPORT: "1 fix, 0 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
     });
 
-    expect(result.summary).toMatchObject({ action: "opened", errors: 1, ok: false });
+    expect(result.summary).toMatchObject({
+      action: "unshipped",
+      changed: 1,
+      errors: 1,
+      ok: false,
+      produced: 0,
+      reason: "nonzero-exit",
+    });
+    // Work from a pass that did not choose its own ending is never committed, pushed, or PR'd.
+    expect(calls(box, "git")).not.toMatch(/^(add|commit|push)\b/m);
+    expect(calls(box, "gh")).not.toContain("pr create");
   });
 
   test("the healthy dry-run path still reports ok:true", async () => {
@@ -559,6 +599,7 @@ describe("fluncle-audit failure is loud", () => {
     const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
       STUB_AHEAD: "2",
       STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+      STUB_REPORT: "1 fix, 0 filed",
       STUB_VERIFY: '{"ran":2,"skipped":1,"failed":1,"steps":[]}',
     });
 
@@ -575,6 +616,7 @@ describe("fluncle-audit failure is loud", () => {
     const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
       STUB_AHEAD: "2",
       STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+      STUB_REPORT: "1 fix, 0 filed",
     });
 
     expect(result.summary).toMatchObject({ errors: 1, ok: false, reason: "unverified" });
@@ -585,6 +627,7 @@ describe("fluncle-audit failure is loud", () => {
     const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
       STUB_AHEAD: "2",
       STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+      STUB_REPORT: "1 fix, 0 filed",
       STUB_VERIFY: CLEAN_VERIFY,
     });
 
@@ -605,6 +648,160 @@ describe("fluncle-audit failure is loud", () => {
     });
 
     expect(result.summary).toMatchObject({ errors: 1, ok: false, reason: "budget-exceeded" });
+  });
+});
+
+// Once the agent's edits and `.audit/report.md` exist, shipping them is fully determined, so the
+// DRIVER commits, pushes, and opens the PR. The agent never runs git writes or gh.
+describe("fluncle-audit ships the agent's working tree", () => {
+  test("a dirty tree with a report is committed, pushed, and opened as the night's PR", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_CHANGED: "1",
+      STUB_REPORT: "# 2 fixes, 1 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.summary).toMatchObject({ action: "opened", ok: true, produced: 1 });
+    const git = calls(box, "git");
+    expect(git).toMatch(/^add -A$/m);
+    // Hooks are skipped on purpose: the pre-commit preflight join does not fit the box.
+    expect(git).toMatch(/^commit --quiet --no-verify -m audit\(test\): 2 fixes, 1 filed$/m);
+    expect(git).toMatch(/^push --quiet -u origin HEAD$/m);
+    // The reviewer selects on the `audit/` head; the report is the PR body.
+    expect(calls(box, "gh")).toMatch(
+      /^pr create --base main --head audit\/\d{8}-test --title nightly audit — test --body-file \.audit\/report\.md$/m,
+    );
+  });
+
+  test("commits the agent already made are pushed and reuse an existing PR", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AHEAD: "1",
+      STUB_AUDIT_PR_URL: "https://example.invalid/pull/7",
+      STUB_REPORT: "1 fix, 0 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.summary).toMatchObject({
+      action: "opened",
+      pr: "https://example.invalid/pull/7",
+    });
+    expect(calls(box, "git")).not.toMatch(/^commit\b/m);
+    expect(calls(box, "git")).toMatch(/^push --quiet -u origin HEAD$/m);
+    expect(calls(box, "gh")).not.toContain("pr create");
+  });
+
+  test("a clean tree opens no PR", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_REPORT: "clean",
+    });
+
+    expect(result.summary).toMatchObject({ action: "clean", ok: true, produced: 0 });
+    expect(calls(box, "git")).not.toMatch(/^(add|commit|push)\b/m);
+    expect(calls(box, "gh")).toBe("");
+  });
+
+  test("a dry run runs no git write and no gh at all", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test", "--dry-run"], {
+      STUB_CHANGED: "1",
+      STUB_REPORT: "1 fix, 0 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.summary).toMatchObject({ action: "dry-run", ok: true });
+    expect(calls(box, "git")).not.toMatch(/^(add|commit|push)\b/m);
+    expect(calls(box, "gh")).toBe("");
+  });
+
+  test("work without a report cannot become a PR and fails the run", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_CHANGED: "1",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.summary).toMatchObject({
+      action: "ship-failed",
+      error: "work exists but the agent wrote no .audit/report.md",
+      ok: false,
+      produced: 0,
+    });
+    expect(calls(box, "git")).not.toMatch(/^(commit|push)\b/m);
+  });
+
+  test("a rejected push fails the run and opens no PR", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_CHANGED: "1",
+      STUB_PUSH_STATUS: "1",
+      STUB_REPORT: "1 fix, 0 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.summary).toMatchObject({
+      action: "ship-failed",
+      error: "push failed",
+      ok: false,
+    });
+    expect(calls(box, "gh")).not.toContain("pr create");
+  });
+
+  test("a failed gh pr create fails the run", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_CHANGED: "1",
+      STUB_PR_CREATE_STATUS: "1",
+      STUB_REPORT: "1 fix, 0 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.summary).toMatchObject({ action: "ship-failed", error: "gh pr create failed" });
+  });
+});
+
+// The effort is pinned like the model, so a shifting CLI default never changes how deeply the
+// auditor or the reviewer reads.
+describe("fluncle-audit pins its reasoning effort", () => {
+  test("both passes default to --effort high", async () => {
+    const audit = fixture();
+    await run(audit, "audit-sweep.sh", ["--domain", "test"]);
+    expect(calls(audit, "claude")).toContain("--model opus --effort high");
+
+    const review = fixture();
+    await run(review, "audit-review-sweep.sh", ["--pr", "7"]);
+    expect(calls(review, "claude")).toContain("--model opus --effort high");
+  });
+
+  test("the per-sweep env overrides the level", async () => {
+    const audit = fixture();
+    await run(audit, "audit-sweep.sh", ["--domain", "test"], { AUDIT_CLAUDE_EFFORT: "max" });
+    expect(calls(audit, "claude")).toContain("--effort max");
+
+    const review = fixture();
+    await run(review, "audit-review-sweep.sh", ["--pr", "7"], {
+      AUDIT_REVIEW_CLAUDE_EFFORT: "medium",
+    });
+    expect(calls(review, "claude")).toContain("--effort medium");
+  });
+
+  test("a level the CLI would not accept falls back to high", async () => {
+    const audit = fixture();
+    const result = await run(audit, "audit-sweep.sh", ["--domain", "test"], {
+      AUDIT_CLAUDE_EFFORT: "turbo",
+    });
+    expect(calls(audit, "claude")).toContain("--effort high");
+    expect(result.summary).toMatchObject({ ok: true });
+
+    const review = fixture();
+    await run(review, "audit-review-sweep.sh", ["--pr", "7"], { AUDIT_REVIEW_CLAUDE_EFFORT: "" });
+    expect(calls(review, "claude")).toContain("--effort high");
   });
 });
 

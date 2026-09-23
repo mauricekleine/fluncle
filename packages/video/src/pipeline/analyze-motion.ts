@@ -32,6 +32,7 @@ import { type CosmosAudio, type EnergySample } from "../remotion/types";
 
 import { extractGrayFrames, extractRgbFrames, type RgbFrames, structuralDelta } from "./frames";
 import { type BeatPullResult, scoreBeatPull } from "./detect-beat-pull";
+import { sha256File } from "./ship-gates";
 import {
   type IntentBand,
   LIGHT_AXES,
@@ -2081,6 +2082,9 @@ export type GateRollup = {
 
 export type MotionReport = {
   trackId: string;
+  /** Whether `--allow-flash` was passed: ship honours a flash override only when the
+   *  record carries it (ship-gates.ts). */
+  allowFlash: boolean;
   logId: string | null;
   video: string;
   fps: number;
@@ -2353,6 +2357,7 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   });
 
   return {
+    allowFlash: options.allowFlash === true,
     arc,
     beatPull,
     beatReactivity,
@@ -2394,14 +2399,20 @@ if (import.meta.main) {
     process.exit(2);
   }
 
-  const report = analyzeMotion(target, { allowFlash, intentPath });
+  const analyzed = analyzeMotion(target, { allowFlash, intentPath });
+  // The digest of the exact render measured: ship refuses a record whose digest does not
+  // match the render it packages, so a pass on an earlier render cannot clear a new one.
+  const report = { ...analyzed, videoSha256: sha256File(analyzed.video) };
 
-  // Persist the combined report next to the other artifacts.
+  // Persist the combined report next to the other artifacts. It is ship's gate record,
+  // so a failed write is loud: ship refuses without it.
   const reportPath = path.join(OUT_DIR, `${report.trackId}.metrics.json`);
   try {
     writeFileSync(reportPath, JSON.stringify(report, null, 2));
-  } catch {
-    // non-fatal — the report is still printed
+  } catch (error) {
+    console.error(
+      `! could not write ${reportPath} (${error instanceof Error ? error.message : String(error)}); ship refuses without this record`,
+    );
   }
 
   if (asJson) {

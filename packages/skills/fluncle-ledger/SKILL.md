@@ -20,7 +20,7 @@ In JSON, top-level `.ok` acknowledges the request. It says nothing about run hea
 
 ## The two rules you read under
 
-**1. The ledger is the current truth. A prior report is not.** An audit from yesterday said the ListenBrainz anchor rung yielded zero; the live ledger showed it anchoring 10–33 per tick. If a claim about a sweep arrives from a doc, a backlog file, or an earlier session, re-measure it here before repeating it. A stale premise is the characteristic failure of a reader working from a previous harvest.
+**1. The ledger is the current truth. A prior report is not.** If a claim about a sweep arrives from a doc, a backlog file, or an earlier session, re-measure it here before repeating it. A stale premise is the characteristic failure of a reader working from a previous harvest.
 
 **2. Absence is the loudest signal and it is invisible in stored rows.** A unit that stopped reporting has no evidence row to find. Every silence question uses `--missing`, which diffs the selected window against the authoritative writer roster and returns the absent writers with cadence. Skipping that view is how a dead sweep reads as a clean ledger.
 
@@ -45,7 +45,7 @@ fluncle admin telemetry read --since 24h --limit 1
 
 ### 2. The liars — a claim that contradicts the verdict
 
-`ok` is derived server-side (`exit_code === 0 && (errors ?? 0) === 0`) and a sweep's own `ok` never sets it; the claim is filed beside it as `selfAssertedOk`. `errors` means the run itself failed; `failed` means individual work items failed and the run continued. The founding case: the nightly Sentry sweep printed `{"errors":2,"ok":true}` for eleven nights while fetching nothing, because a rejected query parameter left `ok` a hardcoded literal.
+`ok` is derived server-side (`exit_code === 0 && (errors ?? 0) === 0`) and a sweep's own `ok` never sets it; the claim is filed beside it as `selfAssertedOk`. `errors` means the run itself failed; `failed` means individual work items failed and the run continued.
 
 Any rollup with `LIAR` above zero, then pull the evidence:
 
@@ -100,7 +100,7 @@ fluncle admin telemetry read --since 24h --missing-field checked --limit 100 --j
 
 `--blind` returns rows where `checked`, `produced`, and `queueDepth` are all null. `--missing-field` returns rows missing one canonical counter; accepted names are `checked`, `produced`, `queue_depth`, `errors`, and `expected_interval_ms`. Use it once per counter you are measuring.
 
-`missingFields` lists the mandatory counters a summary did not carry, and that list IS the upgrade queue. Historical context, not a live claim: at the ledger's start the productivity axis was empty across its first 1,655 rows — `checked`, `produced`, `errors` and `expected_interval_ms` were zero non-null — and sweeps are being upgraded to emit them one at a time. Measure the current state here rather than repeating that. Report it as ONE line naming how many units still owe which counters. It is never N findings, and a unit appearing here is not broken.
+`missingFields` lists the mandatory counters a summary did not carry, and that list IS the upgrade queue. Report it as ONE line naming how many units still owe which counters. It is never N findings, and a unit appearing here is not broken.
 
 ### 6. `produced == 0 AND queue_depth > 0` — the designed alarm
 
@@ -123,7 +123,7 @@ fluncle admin telemetry read --unit fluncle-<name> --since 24h --limit 100 --jso
   | jq -r '[.rows[].queueDepth] | unique'
 ```
 
-A single value across many runs is a constant, not a backlog. This has happened repeatedly: `queueDepth: 24` was measured to be a page cap (`QUEUE_LIMIT`), and three more gauges that could not move were fixed or deleted in one pass — one was rewired to the authoritative backlog count, two were removed outright rather than given invented sources. A reading that cannot be trusted is worse than no reading, because a human calibrates on it. If the value never changes, the finding is "this gauge is a constant", not whatever the gauge appears to say.
+A single value across many runs is a constant, not a backlog. A value pinned at a page cap (a `QUEUE_LIMIT`-style constant) is the common case. A reading that cannot be trusted is worse than no reading, because a human calibrates on it. If the value never changes, the finding is "this gauge is a constant", not whatever the gauge appears to say.
 
 ## Calibration — what is NOT a finding
 
