@@ -43,7 +43,7 @@ flies the flag for the American side of the map   →   came in from a far secto
 (or omit the origin entirely and stay on the feel)
 ```
 
-This is the Garnish/Sauce rule applied to the heard surface: the cosmos is scientific (sectors, coordinates, light-years), never the earthly map. The voice gate in `observation.ts` now hard-fails a spoken script that names a place — but the gate is a backstop; the script should never reach for the map in the first place.
+This is the Garnish/Sauce rule applied to the heard surface: the cosmos is scientific (sectors, coordinates, light-years), never the earthly map. The voice gate in `observation.ts` hard-fails a spoken script that names a place — but the gate is a backstop; the script should never reach for the map in the first place.
 
 ## No catalog recitation
 

@@ -143,6 +143,6 @@ describe("buildAuthoringPrompt anti-sameness rails", () => {
 
     expect(prompt).not.toContain("ALREADY SENT");
     // …and it is still a complete, authorable prompt.
-    expect(prompt).toContain("Output ONLY the JSON object.");
+    expect(prompt).toContain("THIS WEEK'S MIXTAPES");
   });
 });

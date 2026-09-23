@@ -1,6 +1,6 @@
 # Tonight's domain: Security & secret hygiene
 
-This repo is **open source and world-readable forever, git history included** — a single committed secret VALUE or a slice of the secret-management topology is existential, un-leakable once pushed. The auth tiers are the platform's spine: every mutating and admin op must sit behind the right guard, and the publish boundary (only the Worker holds the keys) must stay intact. So this domain leans hard toward **filing, not fixing** — the highest-value findings here (a leaked secret, a mis-tiered op, a widened footprint) are exactly the human-eyes class, and the hard rails forbid you from editing an auth guard or a secret file yourself. Hunt relentlessly; touch almost nothing.
+This repo is **open source and world-readable forever, git history included** — a single committed secret VALUE or a slice of the secret-management topology is existential, un-leakable once pushed. The auth tiers are the platform's spine: every mutating and admin op must sit behind the right guard, and the publish boundary (only the Worker holds the keys) must stay intact. So this domain leans hard toward **filing, not fixing** — the highest-value findings here (a leaked secret, a mis-tiered op, a widened footprint) are exactly the human-eyes class, and the hard rails forbid you from editing an auth guard or a secret file yourself. Audit the whole domain; almost every finding here is filed, not fixed.
 
 ## The hunt
 

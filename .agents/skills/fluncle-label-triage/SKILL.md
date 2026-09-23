@@ -62,7 +62,7 @@ The DB read is required: it carries the stored-track counts and the whole-corpus
 
 The partition itself is `scripts/partition-undecided.py`, so both exclusions are unit-tested with no database (`scripts/tests/test_partition_undecided.py`).
 
-`/admin/labels` now shows the SAME split the pull does: an undecided label carrying per-label rules sits in its own _Seeding named artists_ section and is not counted in the header's "waiting on a ruling", so the station's open queue and this round's worklist are the same set ([docs/label-entity.md](../../../docs/label-entity.md)).
+`/admin/labels` shows the SAME split the pull does: an undecided label carrying per-label rules sits in its own _Seeding named artists_ section and is not counted in the header's "waiting on a ruling", so the station's open queue and this round's worklist are the same set ([docs/label-entity.md](../../../docs/label-entity.md)).
 
 **There is deliberately no hold list.** Everything else undecided is triaged every round, a prior round's `unclear` included. A hold is a snapshot of a judgment, and a hand-maintained one drifts silently until it skips labels that were settled and misses labels that were not. Re-triage is cheap and self-correcting: a still-unclear label costs one slice of a research batch and comes back unclear, while a label held pending an upstream MusicBrainz split — or pending a global rule that moves its share test — RESOLVES ITSELF the first round after the fix lands, instead of waiting for someone to remember it. Do not reintroduce a slug file; if a deferral ever needs to be first-class, it belongs in the DB next to `seed_state`, which today cannot tell "never seen" from "looked at and deferred".
 

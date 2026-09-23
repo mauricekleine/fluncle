@@ -10,7 +10,7 @@
     "copywriting-fluncle": {
       "source": "packages/skills/copywriting-fluncle",
       "sourceType": "local",
-      "computedHash": "e8a71bd4036d2e9fb031534e9e1a6657dc3b21ffa6110fdc654292bd98bc02d1"
+      "computedHash": "1e2447431f8365c7c9a47288f91efc32893b503cc54d6d0153c00f340af9e0ce"
     },
     "email-best-practices": {
       "source": "resend/resend-skills",
@@ -21,7 +21,7 @@
     "fluncle-audit-operator": {
       "source": "packages/skills/fluncle-audit-operator",
       "sourceType": "local",
-      "computedHash": "e9f3bf0f3a0a136196400aeb7979e69532bad05ffe0f3333dfc29caccff22d9c"
+      "computedHash": "b8bdb94e2e5a30c2231b36e101ecfaa13ef7d16fe2c773ee7f71bd0b2b11e4d6"
     },
     "fluncle-box-restore": {
       "source": "packages/skills/fluncle-box-restore",
@@ -36,42 +36,42 @@
     "fluncle-embed-batch": {
       "source": "packages/skills/fluncle-embed-batch",
       "sourceType": "local",
-      "computedHash": "8afd983eb88f060c286d96f9ccf787760c2f89a9bf49938730ab539273874190"
+      "computedHash": "1d1448d9c7ed593d96bd23ac76a1136745ed5c2656841c1178f3e17443ea1dc9"
     },
     "fluncle-goal-writer": {
       "source": "packages/skills/fluncle-goal-writer",
       "sourceType": "local",
-      "computedHash": "aa5edaaaad31a35858d3260f2522a1eac370d7923e1b079a0ba52f4ecacbf85f"
+      "computedHash": "8feab8a1a5430da2554b344980aae15248bbfdda2754a233ba84f1f4a3ded41c"
     },
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "cca4d4d896a53636a8017711df27e2a90378dd0c9e6ba337454e3f2d92771eb3"
+      "computedHash": "51335898046c45bae0eb5b6a6beb4fe6225d1e76c2c0ce7b6d6ecc3f47b2fa05"
     },
     "fluncle-label-triage": {
       "source": "packages/skills/fluncle-label-triage",
       "sourceType": "local",
-      "computedHash": "7d0737b8ea21e8773eafc5a002ee1dd0b2bb60f7c163af2c185ef665671d45d3"
+      "computedHash": "cc9d3270835c42d4ee49dc88ef1eab42f7f8d35e671f71b3aac7ef8256045f9d"
     },
     "fluncle-ledger": {
       "source": "packages/skills/fluncle-ledger",
       "sourceType": "local",
-      "computedHash": "ec0b20e8c4ffeee89f5481c9637090db2db22e64d4f43e26890ad19326381ade"
+      "computedHash": "decc20694973a6d708dea6e4b28e2f03af6a2be01c61df110eed374ec031dff1"
     },
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "86060ff9f8b52e6097770c81757b3864e1fb1af7c9bb57e494e99e4dfc5bfaff"
+      "computedHash": "b892659e4a5ecba78420c04c4f2504e4be816e91c89cab0dc11aee39bde267c8"
     },
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "9fe038d072fd7492224e456791d641601e94fa87b38d7220e4a2a86520d68605"
+      "computedHash": "813365e3e340c3b2bdac38278eb9b998e4b58d632c370cd2df4501cf516d1b33"
     },
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "271d829fee0f6e594c5376159a087a4e904f7a10b1e472e08c1b7f91f3278734"
+      "computedHash": "31b3c260f4e67e5b3220202ddbbaba34e895396ab835ab158d2d3bd88e29108b"
     },
     "fluncle-publish": {
       "source": "packages/skills/fluncle-publish",
@@ -86,32 +86,32 @@
     "fluncle-rfc-writer": {
       "source": "packages/skills/fluncle-rfc-writer",
       "sourceType": "local",
-      "computedHash": "ed3d06e1751592de822017cac39a8c08fa83319c51a4e58bf31cc1739c32ca4e"
+      "computedHash": "118e8681e4ae9c46bc71ed5aec032f1010e02211a908c056f8815ab6026bdabe"
     },
     "fluncle-smoke": {
       "source": "packages/skills/fluncle-smoke",
       "sourceType": "local",
-      "computedHash": "1b0213f00baff44dd62f5e9cf29ea4c19b8d8653c21c6c113828b2829cc761d8"
+      "computedHash": "40eec23cfa5ea1786b06151e6c3e80b6765836dc571614315ff202d8e9905352"
     },
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "20e46143286ff0ee55455c219790e4ca2d492990734af40661d03edf9740b487"
+      "computedHash": "e1a94db277250af61a86ae626e6bd36f436383315b73ab1c6edcca425d068409"
     },
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "ac567bfae77972f7277ad6d7996dc860023f0f3237d9957745b6821ffa2a4a1e"
+      "computedHash": "6bb98f3fd96152cdb7a4de22cbec476e28623f4e6eab9883b4ad1928dbce7548"
     },
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "2a3366738d44f1c7eb5400c6567fcc4d596eb8dc458d46e34598b463521896f4"
+      "computedHash": "8828f5c1aaf281d85377b81f550d1ca694c53157976e3ddf0d2c3ce61cac3af9"
     },
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "426917b616d05095a25b8a308daebec8d50b2cf94baa2d72ef6145af88467dbc"
+      "computedHash": "803b6dc8d09f5b7e3b1471ff94d655278fba1e7a8271f64a04530fb0d2332a90"
     },
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",

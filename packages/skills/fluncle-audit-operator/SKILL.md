@@ -12,8 +12,9 @@ OpenRouter tokens):
 
 - **`fluncle-audit`** (01:00 Amsterdam) — audits one domain (`epoch-day mod 8`: design · voice ·
   architecture · security · surfaces-seo · docs · tests · db-query-shape), fixes what's confidently
-  correct, files the high-impact/high-risk findings to `docs/audit-backlog.md`, and opens an
-  `audit/<date>-<domain>` PR.
+  correct, files the high-impact/high-risk findings to `docs/audit-backlog.md`, and writes
+  `.audit/report.md`. The driver, not the agent, then commits that working tree, pushes, and opens
+  an `audit/<date>-<domain>` PR with the report as its body.
 - **`fluncle-audit-review`** (05:00) — reviews that PR adversarially, fixes small residual nits,
   and **merges** when required CI is green and nothing high-impact remains; otherwise comments and
   leaves it open for you.
@@ -35,6 +36,7 @@ this skill is the operator's map of the recurring tasks.
 | Change what the agents verify locally     | `scripts/audit/verify.sh` (the ladder) — it runs from the CHECKOUT, so it is live the moment it merges                              | push to `main`; no rebake needed                                                                                                       |
 | Change a pass's wall budget               | `scripts/agent-pass.sh` (`AGENT_PASS_BUDGET_SECS`) — MUST stay under the unit's `TimeoutStartSec`                                   | baked; rebuild — and refresh the unit if you moved the ceiling too                                                                     |
 | Change the driver mechanics               | `scripts/audit-sweep.sh` / `scripts/audit-review-sweep.sh`                                                                          | baked; rebuild                                                                                                                         |
+| Change a pass's reasoning effort          | `AUDIT_CLAUDE_EFFORT` / `AUDIT_REVIEW_CLAUDE_EFFORT` as plain lines in the host `fluncle-secrets.env.tpl` (default `high`)          | re-run `fluncle-secrets-sync`; no rebake                                                                                               |
 | Bump the pinned `gh`                      | `docs/agents/hermes/Dockerfile` (the `gh` layer — manual-watch tier)                                                                | pin-watch rebuild (its pre-smoke does `gh --version`)                                                                                  |
 | Rotate / add a secret                     | the host `fluncle-secrets.env.tpl` + `FLUNCLE_GSC_OP_REF` (bootstrap)                                                               | re-run `fluncle-secrets-sync`                                                                                                          |
 
@@ -47,8 +49,8 @@ docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/aud
 ```
 
 `--dry-run` audits + edits + writes `.audit/report.md` in the workspace (`~/audit-workspace/fluncle`)
-without pushing — inspect the diff there. Drop `--dry-run` to open a real PR. Review a specific PR:
-`audit-review-sweep.sh --pr <N>`.
+and the driver runs no git write or `gh` — inspect the diff there. Drop `--dry-run` and the driver
+commits, pushes, and opens a real PR. Review a specific PR: `audit-review-sweep.sh --pr <N>`.
 
 **Triage the ledger.** `docs/audit-backlog.md` is forward-facing — open findings only, newest run
 on top, deduped, never a changelog. Promote the ones worth scheduling into `docs/planning/ROADMAP.md`;
@@ -95,10 +97,13 @@ sudo systemctl enable  --now fluncle-audit.timer fluncle-audit-review.timer   # 
   client only; the container-side sweep runs on and self-reports. The real budget is
   `AGENT_PASS_BUDGET_SECS` in `scripts/agent-pass.sh`, and it must stay strictly under the unit's
   ceiling — change one, check the other.
-- **`ok:false` now has a reason.** Read `reason` + `container_oom_kills` + `verify` on the summary
+- **`ok:false` carries a reason.** Read `reason` + `container_oom_kills` + `verify` on the summary
   line: `budget-exceeded` means the pass outran its budget, `oom-killed` means the container's cap
   killed something during it, `verify-failed` means the ladder reported a red check, `unverified`
-  means the night committed work and ran no checks at all.
+  means the night produced work and ran no checks at all. `action:"unshipped"` means the pass
+  failed after editing: the driver never ships a failed pass's work, and it stays in the workspace
+  until the next night's reset. `action:"ship-failed"` names the driver step that broke (no
+  report, commit, push, or `gh pr create`).
 - **`/status` is the honesty signal.** `cron.audit` + `cron.audit-review` show freshness (24h
   cadence); a dead PAT or a failed ship shows as stale/degraded there. Watch it after any change.
 - **Public repo.** The prompts + scripts carry no secret values or topology — the concrete `op://`

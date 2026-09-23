@@ -18,7 +18,7 @@ Read `README.md`, `PRODUCT.md`, and `.agents/skills/fluncle-operator/SKILL.md` f
 - `.agents/skills/fluncle-operator/references/vps-deploy.md` for VPS deployment and standalone binary tasks
 - `apps/cli/src/` for CLI command behavior
 - `apps/raycast/src/` for Raycast command behavior
-- `apps/web/src/routes/api/` and `apps/web/src/lib/server/` for public/admin API behavior, Spotify, Telegram, and Turso flows
+- `packages/contracts/src/orpc/**` and `apps/web/src/lib/server/` (the oRPC router) for public/admin API behavior, Spotify, Telegram, and Turso flows; `apps/web/src/routes/api/` only for the documented carve-outs
 - relevant files, tests, PR notes, or proof artifacts named by the user
 
 Use current Codex goal guidance as the model: a goal is for long-running work with a durable objective, validation loop, and explicit completion/blocker boundary. It is not a backlog dump, broad roadmap, or exploratory brainstorm.

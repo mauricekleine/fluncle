@@ -61,9 +61,9 @@ Nothing is lost by not running the whole-repo passes here: every one of them run
 
 ## Failure is loud (how a bad night reaches the ledger)
 
-Three failure shapes used to reach the run ledger as healthy nights. Each now writes `ok:false` with a `reason`:
+Three failure shapes write `ok:false` with a `reason` rather than reaching the run ledger as healthy nights:
 
-- **The unit timeout is a backstop, not a budget.** `TimeoutStartSec` kills the host-side `docker exec` CLIENT; the container-side sweep keeps running, finishes minutes later, and writes its ordinary marker and ledger row. A unit reading `Result=timeout` on the host therefore sat beside an `ok:true` ledger row. The real budget now lives in the script ([`../scripts/agent-pass.sh`](../scripts/agent-pass.sh), `AGENT_PASS_BUDGET_SECS`), which always exits on its own terms. **The ordering invariant:** the script's budget plus its kill grace plus the driver's clone/install/ship time must stay strictly under the unit's `TimeoutStartSec`, or the host kill races the script again. Both `.service` files restate it.
+- **The unit timeout is a backstop, not a budget.** `TimeoutStartSec` kills the host-side `docker exec` CLIENT; the container-side sweep keeps running, finishes minutes later, and writes its ordinary marker and ledger row. A unit reading `Result=timeout` on the host therefore sat beside an `ok:true` ledger row. The real budget lives in the script ([`../scripts/agent-pass.sh`](../scripts/agent-pass.sh), `AGENT_PASS_BUDGET_SECS`), which always exits on its own terms. **The ordering invariant:** the script's budget plus its kill grace plus the driver's clone/install/ship time must stay strictly under the unit's `TimeoutStartSec`, or the host kill races the script again. Both `.service` files restate it.
 - **An OOM-killed child does not fail its parent.** The agent survives, reports "that check did not run", and exits 0. The helper samples the cgroup's own `memory.events` `oom_kill` counter either side of the pass and reports the delta as `container_oom_kills`; any delta fails the run. The counter is container-wide, so a neighbour sweep's kill also fails the audit night — deliberately: on one shared cap that is the same capacity problem, and the operator needs to see the night it happened.
 - **Work nobody checked.** A night with commits and no `.audit/verify.json` is `reason:"unverified"`; a ladder record carrying `failed > 0` is `reason:"verify-failed"`.
 
@@ -87,8 +87,8 @@ The sweeps read these from the shared secrets file `~/.fluncle-secrets.env` (+ a
 GSC), materialized by `../secrets/fluncle-secrets-sync.sh` from the `Fluncle Automations` vault:
 
 - `FLUNCLE_AUDIT_GITHUB_PAT` — fine-grained PAT (Contents + Pull requests write, Actions read) on
-  `mauricekleine/fluncle`. Drives `git push` + `gh pr create`/`merge`/`comment` (both agents use
-  `GH_TOKEN`; no token is written to disk — the git credential helper is `gh auth git-credential`).
+  `mauricekleine/fluncle`. The audit driver uses it for `git push` + `gh pr create`; the reviewer agent for
+  `gh pr merge`/`comment` (both use `GH_TOKEN`; no token is written to disk — the git credential helper is `gh auth git-credential`).
 - `CLAUDE_CODE_OAUTH_TOKEN` — Claude Code subscription auth (already synced).
 - `FLUNCLE_BING_WEBMASTER_API_KEY` — Bing Webmaster (surfaces-seo day).
 - `GOOGLE_APPLICATION_CREDENTIALS=~/.fluncle-gsc.json` — the GSC service-account key on disk (its

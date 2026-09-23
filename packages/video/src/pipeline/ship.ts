@@ -13,6 +13,7 @@
 //     poster.jpg          (a late/drop frame ~80% in)
 //     cover.jpg           (the profile-grid cover: loud centered identity over art)
 //     note.txt            (the fixed-template caption)
+//     metrics.json  — the judge:metrics record that cleared this render
 //     composition.tsx — exact temporary Remotion composition source used
 //     props.json    — analyzed props: beat grid, energy/bass curves, palette
 //     render.json   — composition id + rerender pointers + the diversity-ledger
@@ -25,6 +26,11 @@
 // (one composition, two renders). Any extra variant renders present at
 // out/<trackId>{.notext,.landscape,.notext.landscape}.mp4 (see EXTRA_VARIANT_SOURCES)
 // are packaged too. Upload the bundle with `fluncle admin track video`.
+//
+// Ship refuses before it writes anything into the bundle unless the hard gates clear
+// (ship-gates.ts): a passing judge:metrics record for THIS render (its digest must
+// match out/<trackId>.mp4), then the palette gate, which ship runs itself on the poster
+// it cuts. The verified metrics record ships in the bundle as metrics.json.
 //
 // Side effects run only when this file is the process entrypoint (import.meta.main) —
 // importing ship.ts (e.g. from a test) is side-effect-free. The pure bundle-
@@ -54,9 +60,11 @@ import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate 
 import { deletePreviewAudio } from "./download-preview";
 import { fluncleBin, fluncleSpawnEnv } from "./fluncle-bin";
 import { generateIntentStub } from "./intent";
+import { judgePalette } from "./judge-palette";
 import { type PaletteSummary, summarizePalette } from "./palette-summary";
 import { renderCover } from "./render-cover";
 import { buildScene, locateFragmentLiteral, resolveGlslBody, type ScenePalette } from "./scene";
+import { type GateVerdict, metricsGateVerdict, paletteGateVerdict, sha256File } from "./ship-gates";
 import {
   classifyShaderStructure,
   labelWithStructure,
@@ -198,6 +206,7 @@ export type BundlePaths = {
   footageNotext: string;
   footageSocial: string;
   intentOutPath: string;
+  metricsOutPath: string;
   notePath: string;
   poster: string;
   propsOutPath: string;
@@ -217,6 +226,7 @@ export function resolveBundlePaths(outDir: string, logId: string): BundlePaths {
     footageNotext: path.join(bundle, FOOTAGE_NOTEXT_FILENAME),
     footageSocial: path.join(bundle, FOOTAGE_SOCIAL_FILENAME),
     intentOutPath: path.join(bundle, "intent.json"),
+    metricsOutPath: path.join(bundle, "metrics.json"),
     notePath: path.join(bundle, "note.txt"),
     poster: path.join(bundle, "poster.jpg"),
     propsOutPath: path.join(bundle, "props.json"),
@@ -456,10 +466,9 @@ function readShipRenderManifest(
   }
 }
 
-function renderPoster(
-  paths: ReturnType<typeof resolveBundlePaths>,
-  log: (message: string) => void,
-): boolean {
+/** Cut the poster (~80% in) from the square master into `posterPath`. Returns an error
+ *  description on failure, null on success. */
+function renderPoster(footagePath: string, posterPath: string): string | null {
   const durProbe = spawnSync("ffprobe", [
     "-v",
     "error",
@@ -467,7 +476,7 @@ function renderPoster(
     "format=duration",
     "-of",
     "csv=p=0",
-    paths.footage,
+    footagePath,
   ]);
   const duration = Number.parseFloat(durProbe.stdout.toString().trim()) || 20;
   const posterResult = spawnSync(
@@ -477,24 +486,79 @@ function renderPoster(
       "-ss",
       String(duration * 0.8),
       "-i",
-      paths.footage,
+      footagePath,
       "-frames:v",
       "1",
       "-q:v",
       "3",
-      paths.poster,
+      posterPath,
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
-  if (posterResult.status === 0 && existsSync(paths.poster)) {
-    return false;
+  if (posterResult.status === 0 && existsSync(posterPath)) {
+    return null;
   }
   const stderr = posterResult.stderr?.toString().trim();
-  const reason = posterResult.error
+  return posterResult.error
     ? posterResult.error.message
     : `ffmpeg exited ${posterResult.status ?? "unknown"}${stderr ? `\n${stderr.slice(-1000)}` : ""}`;
-  log(`WARNING: poster.jpg render FAILED — the bundle ships without a poster. ${reason}`);
-  return true;
+}
+
+/** The metrics gate: read out/<trackId>.metrics.json, refuse unless it measured this
+ *  render and passed, and return the verified record (it ships as metrics.json). */
+function enforceMetricsGate(
+  trackId: string,
+  renderPath: string,
+  log: (message: string) => void,
+): unknown {
+  const metricsPath = path.join(OUT_DIR, `${trackId}.metrics.json`);
+  let record: unknown = null;
+  if (existsSync(metricsPath)) {
+    try {
+      record = JSON.parse(readFileSync(metricsPath, "utf8")) as unknown;
+    } catch {
+      record = null;
+    }
+  }
+  enforceGate(metricsGateVerdict({ record, renderSha256: sha256File(renderPath), trackId }), log);
+  log("judge:metrics record: this render, hard gates passed");
+  return record;
+}
+
+/** The palette gate: cut the poster from the square master to `posterPath`, then refuse
+ *  unless its palette clears the recent published posters. A failed cut refuses too,
+ *  because the gate has no subject without it. */
+async function cutPosterAndEnforcePalette(
+  squarePath: string,
+  posterPath: string,
+  logId: string,
+  log: (message: string) => void,
+): Promise<void> {
+  const posterError = renderPoster(squarePath, posterPath);
+  if (posterError !== null) {
+    throw new Error(
+      `REFUSED: poster.jpg could not be cut, so the palette gate cannot run. ${posterError}`,
+    );
+  }
+  let gate: Awaited<ReturnType<typeof judgePalette>>;
+  try {
+    gate = await judgePalette(posterPath, { excludeLogId: logId });
+  } catch (error) {
+    throw new Error(
+      `REFUSED: the palette gate could not run (${error instanceof Error ? error.message : String(error)}). Re-run ship once the published feed and posters are reachable.`,
+    );
+  }
+  enforceGate(paletteGateVerdict(gate), log);
+}
+
+/** Throw the refusal when a gate verdict fails; log its notes when it passes. */
+function enforceGate(verdict: GateVerdict, log: (message: string) => void): void {
+  if (!verdict.ok) {
+    throw new Error(`REFUSED: ${verdict.reason}`);
+  }
+  for (const note of verdict.notes) {
+    log(note);
+  }
 }
 
 async function packageOptionalAssets(
@@ -586,20 +650,16 @@ async function main(argv: string[]): Promise<void> {
     );
   }
 
-  // 3. Assemble the bundle under out/<log-id>/.
+  // 3. The metrics gate, before anything is written: a passing judge:metrics record
+  // whose digest matches the render on disk now (ship-gates.ts).
+  const metricsRecord = enforceMetricsGate(track.trackId, reviewSrc, log);
+
   const paths = resolveBundlePaths(OUT_DIR, track.logId);
-  mkdirSync(paths.bundle, { recursive: true });
 
   // The render manifest (composition id + the props the portrait master rendered
   // from) is read up front: the square crop source re-renders that same
   // composition + props with aspect=square, hideOverlay=true.
   const renderManifest = readShipRenderManifest(track.trackId, log);
-
-  // footage.social.mp4 — the portrait, text, audio social cut: exactly today's
-  // review render (out/<trackId>.mp4). It is the playable cut for Stories, YouTube,
-  // and (audio-stripped via MT) TikTok.
-  log("footage.social.mp4 (portrait, text, audio — the social cut)");
-  copyFileSync(reviewSrc, paths.footageSocial);
 
   // footage.mp4 — the SQUARE crop source: 1920×1920, audio, CLEAN (no overlay). MT
   // centre-crops it to portrait/landscape on the fly, so this is the one stored
@@ -612,7 +672,8 @@ async function main(argv: string[]): Promise<void> {
   // RE-render (a new composition), shipping two DIVERGED masters. ship now stamps
   // the inputs' fingerprint when it renders the square and re-renders whenever the
   // sidecar mismatches — the artifact twin of render.ts's bundle-hash gate (#307).
-  const prepareSquareMaster = async (): Promise<void> => {
+  // Returns the cached square's path; the bundle copy waits until the gates clear.
+  const prepareSquareMaster = async (): Promise<string> => {
     const squareSrc = path.join(OUT_DIR, `${track.trackId}.square.mp4`);
     const squareHashPath = `${squareSrc}.hash`;
     const propsInPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
@@ -681,19 +742,32 @@ async function main(argv: string[]): Promise<void> {
         }),
       );
     }
-    copyFileSync(squareSrc, paths.footage);
+    return squareSrc;
   };
 
-  await prepareSquareMaster();
+  const squareSrc = await prepareSquareMaster();
 
-  let posterMissing = false;
+  // 4. The palette gate on the exact poster this bundle ships. The poster is cut to a
+  // staging path first, so a refusal leaves out/<log-id>/ untouched. The palette gate
+  // needs the poster, so a failed cut refuses the ship.
   log("poster.jpg (~80% in)");
-  // Capture stderr so a failing render is a DIAGNOSIS, not silence. poster.jpg is
-  // not in the re-render contract (it's a derived thumbnail the diversity/calibrate
-  // gates read from the public host), so — like cover.jpg, intent.json, and scene.json
-  // below — a failure WARNS and is surfaced in the ship summary rather than failing
-  // the ship. A silent ffmpeg failure must not ship a posterless bundle that reads as "ready".
-  posterMissing = renderPoster(paths, log);
+  const stagedPoster = path.join(OUT_DIR, `${track.trackId}.poster.jpg`);
+  await cutPosterAndEnforcePalette(squareSrc, stagedPoster, logId, log);
+
+  // 5. The gates cleared: assemble the bundle under out/<log-id>/.
+  mkdirSync(paths.bundle, { recursive: true });
+
+  // footage.social.mp4 — the portrait, text, audio social cut: exactly the review
+  // render (out/<trackId>.mp4) the metrics gate measured. It is the playable cut for
+  // Stories, YouTube, and (audio-stripped via MT) TikTok.
+  log("footage.social.mp4 (portrait, text, audio — the social cut)");
+  copyFileSync(reviewSrc, paths.footageSocial);
+  copyFileSync(squareSrc, paths.footage);
+  copyFileSync(stagedPoster, paths.poster);
+  // metrics.json — the exact record the metrics gate verified (with any recorded
+  // --allow-flash override), shipped as the bundle's gate provenance.
+  log("metrics.json (the judge:metrics record that cleared this render)");
+  writeFileSync(paths.metricsOutPath, JSON.stringify(metricsRecord, null, 2));
 
   log("note.txt");
   // Prefer the stored release_date (from `tracks get`); fall back to Deezer for any
@@ -822,27 +896,14 @@ async function main(argv: string[]): Promise<void> {
           }
         }
 
-        // Fold the ship-time gate verdicts from the metrics report (if analyze-motion
-        // ran). Absent → `cleared` reads `unknown`, never a failure.
-        const metricsPath = path.join(OUT_DIR, `${track.trackId}.metrics.json`);
-        let metricsReport: unknown = null;
-        if (existsSync(metricsPath)) {
-          try {
-            metricsReport = JSON.parse(readFileSync(metricsPath, "utf8"));
-          } catch (error) {
-            log(
-              `scene cleared unresolved: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }
-
+        // Fold the ship-time gate verdicts from the metrics record the gate verified.
         const { scene, warnings } = buildScene({
           at: new Date().toISOString(),
           glsl: GLSL as unknown as Record<string, string>,
           grainFamily: flags.grain ?? renderManifest.grain ?? null,
           id: logId,
           kind: "finding",
-          metricsReport,
+          metricsReport: metricsRecord,
           palette,
           source,
         });
@@ -897,11 +958,6 @@ async function main(argv: string[]): Promise<void> {
     }
   }
 
-  if (posterMissing) {
-    console.error(
-      `[ship] NOTE: poster.jpg is MISSING from out/${track.logId}/ — its render failed (see the WARNING above). The bundle is otherwise complete; re-run ship or render the poster before the diversity/calibrate gates need it.`,
-    );
-  }
   console.error(`\n[ship] bundle ready → out/${track.logId}/`);
   console.error(
     `[ship] upload with: fluncle admin track video ${track.logId} --dir packages/video/out/${track.logId}\n`,

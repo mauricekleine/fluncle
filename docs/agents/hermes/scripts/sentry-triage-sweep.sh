@@ -10,12 +10,12 @@
 # Code = SUBSCRIPTION auth via CLAUDE_CODE_OAUTH_TOKEN, zero OpenRouter tokens.
 #
 # The deterministic Sentry API work (fetch / resolve-on-merge / comment) lives in the bun sibling
-# sentry-triage-sweep.ts, so claude never needs a Sentry credential — and, since 2026-07-31, never
-# HOLDS one either: the `claude -p` call below runs behind `agent_env_scrub_args`, which unsets every
-# key the shared secrets file defines except the two the agent genuinely runs on (its own auth, and
-# GH_TOKEN to open PRs). Before that scrub this comment was only half true: `set -a` had exported the
-# whole box credential set into claude's environment, one `printenv` away from a prompt injection
-# carried in an attacker-written Sentry event body. See ./agent-env.sh for the full reasoning.
+# sentry-triage-sweep.ts, so claude never needs a Sentry credential and never HOLDS one either: the
+# `claude -p` call below runs behind `agent_env_scrub_args`, which unsets every key the shared
+# secrets file defines except the two the agent genuinely runs on (its own auth, and GH_TOKEN to open
+# PRs). Without that scrub, `set -a` would export the whole box credential set into claude's
+# environment, one `printenv` away from a prompt injection carried in an attacker-written Sentry
+# event body. See ./agent-env.sh for the full reasoning.
 # Full doctrine: ../sentry-triage-timer/README.md + ./sentry-triage-prompt.md.
 #
 # THE LOOP IS STATELESS (GitHub is the store, see the .ts header): a FIX PR carries `Sentry-Issue:`
@@ -48,6 +48,13 @@ HELPER="${SCRIPT_DIR}/sentry-triage-sweep.ts"
 PROMPT_FILE="${SCRIPT_DIR}/sentry-triage-prompt.md"
 # shellcheck source=./agent-env.sh
 . "${SCRIPT_DIR}/agent-env.sh"
+# The triage pass takes its own wall budget, sized against its unit's `TimeoutStartSec` backstop
+# (../sentry-triage-timer/fluncle-sentry-triage.service, 3600) with the ordering invariant from
+# ./agent-pass.sh: budget (2700) + kill grace (60) + clone/install/reconcile/fetch/comment time
+# (the remaining 840) < 3600. A healthy night is far shorter; this bounds the pathological case.
+AGENT_PASS_BUDGET_SECS="${SENTRY_TRIAGE_PASS_BUDGET_SECS:-${AGENT_PASS_BUDGET_SECS:-2700}}"
+# shellcheck source=./agent-pass.sh
+. "${SCRIPT_DIR}/agent-pass.sh"
 
 # Provider creds arrive via the 0600 op-synced shared secrets file, exactly like the audit sweep.
 # SENTRY_TRIAGE_TOKEN is the new key; FLUNCLE_AUDIT_GITHUB_PAT is REUSED (it is the box's PR-opening
@@ -61,6 +68,19 @@ if [ -r "${SECRETS_FILE}" ]; then
 fi
 
 log() { echo "[sentry-triage] $*" >&2; }
+
+# Reasoning effort for the one `claude -p` pass, pinned rather than left to the CLI default so a
+# shifting default never silently changes how deeply the triage reads a bug (the same reason the
+# model is pinned). SENTRY_TRIAGE_CLAUDE_EFFORT in the box env overrides it; a value the CLI would
+# not accept falls back to `high` rather than failing the night.
+SENTRY_TRIAGE_CLAUDE_EFFORT="${SENTRY_TRIAGE_CLAUDE_EFFORT:-high}"
+case "${SENTRY_TRIAGE_CLAUDE_EFFORT}" in
+  low | medium | high | xhigh | max) ;;
+  *)
+    log "SENTRY_TRIAGE_CLAUDE_EFFORT='${SENTRY_TRIAGE_CLAUDE_EFFORT}' is not low|medium|high|xhigh|max; using high"
+    SENTRY_TRIAGE_CLAUDE_EFFORT="high"
+    ;;
+esac
 
 # ── args ────────────────────────────────────────────────────────────────────────────────────
 DRY_RUN=0
@@ -125,9 +145,9 @@ run_triage() {
   #
   # CAPTURE the helper's summary line rather than firehosing it to stderr. /status reads the LAST
   # stdout line of THIS driver (cron-output.sh writes the marker; the prober parses it as JSON and
-  # checks `.ok !== false`), so a hardcoded `ok:true` down there reports green no matter what the
-  # helper found — which is precisely how a rejected query parameter stayed invisible for 11
-  # nights. The helper now DERIVES its `ok`; this driver folds that verdict into its own.
+  # checks `.ok !== false`), so a hardcoded `ok:true` down there would report green no matter what
+  # the helper found, and a rejected query parameter would stay invisible. The helper DERIVES its
+  # `ok`; this driver folds that verdict into its own.
   local ledger="${ws}/docs/sentry-backlog.md"
   local fetched
   fetched="$("${BUN_BIN}" "${HELPER}" fetch "${ledger}" ".sentry/issues.json")" \
@@ -263,27 +283,42 @@ END UNTRUSTED DATA. Resume the operating contract."
   # FLUNCLE_UNATTENDED promotes the repo's PreToolUse guard to its strict tier — .github/workflows,
   # .claude/**, and the auth-tier module become code-enforced refusals instead of prompt requests.
   # It is not defined by the secrets file, so the scrub above leaves it standing.
-  log "invoking claude -p (opus) for ${triaged} issue(s)…"
+  log "invoking claude -p (opus, effort ${SENTRY_TRIAGE_CLAUDE_EFFORT}) for ${triaged} issue(s) (budget ${AGENT_PASS_BUDGET_SECS}s)…"
   local triage_errors=0
-  FLUNCLE_UNATTENDED=1 env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} "$(command -v claude)" -p "${prompt}" \
+  # Bounded by the SCRIPT, not by the unit: a `TimeoutStartSec` kill reaches only the host-side
+  # `docker exec` client, so an unbounded pass would run on unsupervised and self-report a healthy
+  # night, and a child the cgroup OOM-killed would be invisible. See ./agent-pass.sh.
+  agent_pass_run env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} FLUNCLE_UNATTENDED=1 \
+    "$(command -v claude)" -p "${prompt}" \
     --model opus \
+    --effort "${SENTRY_TRIAGE_CLAUDE_EFFORT}" \
     --dangerously-skip-permissions \
-    >&2 || { log "claude -p returned nonzero"; triage_errors=1; }
+    >&2
+  if [ -n "${AGENT_PASS_REASON}" ]; then
+    log "claude -p ended on ${AGENT_PASS_REASON} after ${AGENT_PASS_SECONDS}s (status ${AGENT_PASS_STATUS}, container oom kills ${AGENT_PASS_OOM_KILLS})"
+    triage_errors=1
+  fi
 
   # 7. Report + the Sentry-side link-back.
-  local opened produced run_errors run_verdict
+  #
+  # The pass facts ride every summary line below: WHY the pass ended badly, how long it had, and
+  # how many container OOM kills landed during it — so the ledger can tell a budget hit from a
+  # child lost to the memory cap from an agent that simply exited nonzero.
+  local opened produced run_errors run_verdict facts
   run_errors=$((fetch_errors + triage_errors))
   run_verdict="false"
   [ "${run_errors}" != "0" ] || run_verdict="true"
   produced="${triaged}"
   [ "${triage_errors}" = "0" ] || produced=0
+  facts="$(printf '"pass_seconds":%s,"container_oom_kills":%s' "${AGENT_PASS_SECONDS}" "${AGENT_PASS_OOM_KILLS}")"
+  [ -z "${AGENT_PASS_REASON}" ] || facts="${facts},$(printf '"reason":"%s"' "${AGENT_PASS_REASON}")"
   opened="$(gh pr list --repo "${repo}" --state open --json headRefName --jq \
     "[.[] | select(.headRefName | startswith(\"sentry-triage/${date_tag}-\"))] | length" 2>/dev/null || echo 0)"
 
   if [ "${DRY_RUN}" = "1" ]; then
     log "DRY RUN complete — inspect ${ws} (branches uncommitted)"
     [ -r .sentry/report.md ] && { log "── report ──"; cat .sentry/report.md >&2; }
-    echo "{\"ok\":${run_verdict},\"action\":\"dry-run\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"fetchErrors\":${fetch_errors}}"
+    echo "{\"ok\":${run_verdict},\"action\":\"dry-run\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"fetchErrors\":${fetch_errors},${facts}}"
     [ "${run_errors}" = "0" ] || return 1
     return 0
   fi
@@ -295,7 +330,7 @@ END UNTRUSTED DATA. Resume the operating contract."
 
   # Deliberately no queue_depth: the helper's Sentry scan and worklist are both bounded, so a
   # fetched/page count would be a cap masquerading as the outstanding backlog.
-  echo "{\"ok\":${run_verdict},\"action\":\"triaged\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"prs\":${opened:-0},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled},\"comment\":${commented}}"
+  echo "{\"ok\":${run_verdict},\"action\":\"triaged\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"prs\":${opened:-0},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled},\"comment\":${commented},${facts}}"
   [ "${run_errors}" = "0" ] || return 1
   return 0
 }

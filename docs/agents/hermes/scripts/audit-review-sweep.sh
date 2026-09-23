@@ -42,6 +42,19 @@ fi
 
 log() { echo "[audit-review] $*" >&2; }
 
+# Reasoning effort for the one `claude -p` pass, pinned rather than left to the CLI default so a
+# shifting default never silently changes how deeply the reviewer reads the diff (the same reason
+# the model is pinned). AUDIT_REVIEW_CLAUDE_EFFORT in the box env overrides it; a value the CLI
+# would not accept falls back to `high` rather than failing the night.
+AUDIT_REVIEW_CLAUDE_EFFORT="${AUDIT_REVIEW_CLAUDE_EFFORT:-high}"
+case "${AUDIT_REVIEW_CLAUDE_EFFORT}" in
+  low | medium | high | xhigh | max) ;;
+  *)
+    log "AUDIT_REVIEW_CLAUDE_EFFORT='${AUDIT_REVIEW_CLAUDE_EFFORT}' is not low|medium|high|xhigh|max; using high"
+    AUDIT_REVIEW_CLAUDE_EFFORT="high"
+    ;;
+esac
+
 PR_NUM=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -123,7 +136,7 @@ ${runtime_note}"
   # write, and the reviewer holds the same PAT as the author it is reviewing.
   # Declares GH_TOKEN — the reviewer reads the PR, comments, and holds it open or lets it merge.
   agent_env_scrub_args --secrets "${SECRETS_FILE}" --allow GH_TOKEN
-  log "invoking claude -p (opus) reviewer for PR #${PR_NUM} (budget ${AGENT_PASS_BUDGET_SECS}s)…"
+  log "invoking claude -p (opus, effort ${AUDIT_REVIEW_CLAUDE_EFFORT}) reviewer for PR #${PR_NUM} (budget ${AGENT_PASS_BUDGET_SECS}s)…"
   local run_errors=0 pass_reason=""
   # Bounded by the SCRIPT, for the same reason the auditor's pass is: a unit `TimeoutStartSec`
   # kill reaches only the host-side `docker exec` client, so the pass would otherwise outlive its
@@ -131,6 +144,7 @@ ${runtime_note}"
   agent_pass_run env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} FLUNCLE_UNATTENDED=1 \
     "$(command -v claude)" -p "${prompt}" \
     --model opus \
+    --effort "${AUDIT_REVIEW_CLAUDE_EFFORT}" \
     --dangerously-skip-permissions \
     >&2
   if [ -n "${AGENT_PASS_REASON}" ]; then

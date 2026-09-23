@@ -21,7 +21,7 @@ Current commands:
 - `recent-tracks`: list command titled "Recent Bangers"; runs `fluncle recent --json`.
 - `attention-queue`: menu-bar command titled "Attention Queue"; runs `fluncle admin queue --json` (the `/admin` attention queue + the day's dispatch).
 
-Do not re-add a separate note command unless there is a materially different workflow. `Add Track` already includes an optional note field and clipboard-prefills the URL.
+`Add Track` carries an optional note field and clipboard-prefills the URL, so notes need no separate command.
 
 ## Local CLI Path
 

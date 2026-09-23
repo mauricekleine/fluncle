@@ -65,7 +65,7 @@ run ledger. Re-run it after every fix, so the last record is the branch's real s
 **Run it instead of, not alongside, the whole-repo passes.** `bun run check`, `bun run typecheck`,
 `bunx oxlint` with no paths, and `apps/web build` do not fit in this box's memory cap — they get
 killed by the kernel mid-run, which looks to you like a flaky check and is actually the night
-falling over. Every one of them runs on the PR you open (the `quality-checks` action) and again in
+falling over. Every one of them runs on the PR the driver opens (the `quality-checks` action) and again in
 `deploy:gate` before anything deploys, and the reviewer merges only on green required checks. The
 numbers behind that ruling are in the header of `verify.sh`.
 
@@ -75,19 +75,17 @@ skipped, ci-only" — and move on. Never route around a skip by running the whol
 If a step FAILS and you cannot cleanly fix it, **revert that edit and file the finding instead** —
 never leave the branch red. Record the ladder's verdict in the report's Checks section.
 
-## Ship it — you drive git yourself
+## Ship it — the driver ships your working tree
 
-When the audit is done, land your work as a PR (the driver set your git identity + `GH_TOKEN`; the
-branch is already checked out):
+When the audit is done:
 
 1. Write the report to `.audit/report.md` (see format below). `.audit/` is gitignored — it never
-   gets committed; it's just how you hand the PR body to the driver.
-2. If you made **no** edits and filed nothing, stop here — do **not** open a PR. A clean night is a
-   good outcome; the driver will record it. Never manufacture churn.
-3. Otherwise: `git add -A` (this includes your fixes **and** the `docs/audit-backlog.md` rows),
-   commit with a clear `audit(<domain>): …` message, `git push -u origin HEAD`, then open the PR
-   with `gh pr create --base main --title "nightly audit — <domain label>" --body-file .audit/report.md`.
-   Do not merge — the 5am reviewer does that.
+   gets committed; it is the PR body, and its first line becomes the commit subject.
+2. Make no commit, push, or PR yourself, and never merge. Leave your fixes **and** the
+   `docs/audit-backlog.md` rows in the working tree. When you finish, the driver commits everything,
+   pushes the branch, and opens the PR for the 5am reviewer.
+3. If you made **no** edits and filed nothing, leave the tree clean. A clean tree is a clean night:
+   no PR opens, and that is a good outcome. Never manufacture churn.
 
 ## The report — `.audit/report.md` (becomes the PR body)
 

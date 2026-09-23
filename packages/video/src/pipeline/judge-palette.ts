@@ -13,7 +13,8 @@
 // tested without fs or network; the CLI wraps it with poster decoding.
 //
 // CLI: bun src/pipeline/judge-palette.ts <posterPathOrLogId> [--neighbours N]
-//      [--threshold T] [--json]  (exits non-zero on FAIL — it is a hard ship gate.)
+//      [--threshold T] [--json]  (exits non-zero on FAIL). ship.ts runs the same gate on
+//      the poster it cuts and refuses on a FAIL (ship-gates.ts); this CLI is the manual read.
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -145,10 +146,12 @@ async function fetchPosterTo(logId: string, scratchDir: string): Promise<void> {
   writeFileSync(path.join(scratchDir, `${logId.replace(/[^\w.-]/g, "_")}.jpg`), bytes);
 }
 
-/** Judge the subject poster's palette against the recent published neighbours. */
+/** Judge the subject poster's palette against the recent published neighbours.
+ *  `excludeLogId` keeps a finding's own published poster out of its neighbours when the
+ *  subject is a local poster path (ship re-shipping a finding that already has a video). */
 export async function judgePalette(
   subject: string,
-  opts: { neighbours?: number; threshold?: number } = {},
+  opts: { excludeLogId?: string; neighbours?: number; threshold?: number } = {},
 ): Promise<PaletteGate> {
   const wanted = opts.neighbours ?? DEFAULT_NEIGHBOURS;
   const threshold = opts.threshold ?? PALETTE_MIN;
@@ -160,8 +163,9 @@ export async function judgePalette(
     }
     const subjectHist = decodePoster(subject, scratchDir);
 
+    const excluded = opts.excludeLogId ?? subjectLogId;
     const ids = (await fetchRecentVideoLogIds(wanted + 1))
-      .filter((id) => id !== subjectLogId)
+      .filter((id) => id !== excluded)
       .slice(0, wanted);
 
     const neighbourHists: { logId: string; hist: Float32Array }[] = [];
@@ -211,6 +215,6 @@ if (import.meta.main) {
     }
     console.log(`${gate.pass ? "✓" : "✗"} ${gate.verdict}`);
   }
-  // A hard gate: a FAIL exits non-zero so the render prompt's gate list blocks the ship.
+  // A FAIL exits non-zero; ship runs this gate itself and refuses on the same FAIL.
   process.exit(gate.status === "fail" ? 1 : 0);
 }

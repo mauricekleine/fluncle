@@ -4,9 +4,9 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
-**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (boat.dev) is pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+**Automation covers most of this.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (boat.dev) is pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
 
-**A pin absent from this inventory is a pin nobody watches.** yt-dlp was baked and pinned but listed nowhere here, so no sweep ever asked about it. It fell behind a YouTube player change and `fluncle-capture` failed every single download for thirteen days while reporting a healthy tick each time — the failure is item-level (`ytDlpFailures`), so the run verdict stayed true and nothing escalated. Adding a baked binary to the Dockerfile without adding a row here is how that happens again.
+**A pin absent from this inventory is a pin nobody watches.** Every baked binary needs a row here. Item-level failures (e.g. `ytDlpFailures`) do not flip a run's verdict, so an unlisted pin that falls behind fails silently while each tick reports healthy.
 
 ---
 
@@ -120,7 +120,7 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 
 ## 6. GitHub Actions pins — AXIS COMPLETE, Renovate owns it
 
-**This axis is done.** Every action in every workflow is SHA-pinned with a trailing version comment, so the `.deepsec` finding that opened it (mutable major-version tags in CI, worst case `oven-sh/setup-bun` in the OIDC-publishing `cli-release.yml` job) is closed. There is no manual sweep left to run here — do not hand-resolve tags to digests.
+Every action in every workflow is SHA-pinned with a trailing version comment, and Renovate maintains the digests. Do not hand-resolve tags to digests.
 
 `renovate.json` (repo root) configures the Renovate GitHub App scoped to the `github-actions` manager with the `helpers:pinGitHubActionDigests` preset: it SHA-pins any newly-added action and refreshes each digest (same-major) as the action ships updates, while a new major waits for dependency-dashboard approval. The config is **inert until the Renovate app is installed** on the repo.
 

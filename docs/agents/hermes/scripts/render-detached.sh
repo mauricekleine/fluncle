@@ -43,6 +43,11 @@
 # the model here so a shifting CLI default never silently re-tiers the render. `opus`
 # stays a FLOATING alias — it resolves to the current Opus tier (today Opus 5), and
 # pinning it to a version id would defeat the point.
+#
+# The reasoning effort is pinned for the same reason: `--effort high` unless
+# RENDER_CLAUDE_EFFORT (read after /dev/shm/fluncle.env is sourced) names another level
+# the CLI accepts. A value outside low|medium|high|xhigh|max falls back to `high` and says
+# so on the first line of the run log, rather than failing the render window.
 WORKSPACE="${FLUNCLE_WORKSPACE:-$HOME/fluncle}"
 CLAUDE_JSON="${CLAUDE_CONFIG_FILE:-$HOME/.claude.json}"
 DONE_MARKER="$HOME/conductor-run.done"
@@ -112,13 +117,22 @@ setsid bash -c '
   export BASH_MAX_TIMEOUT_MS=3600000
   export BASH_DEFAULT_TIMEOUT_MS=900000
   # Harness-level guarantee behind the prompt rail: no background tasks at all
-  # (headless kills backgrounded Bash ~5s after the final result — the 07-19
-  # dead-render class). Documented: code.claude.com/docs/en/env-vars.md
+  # (headless kills backgrounded Bash ~5s after the final result, so a backgrounded
+  # render dies unshipped). Documented: code.claude.com/docs/en/env-vars.md
   export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
+  __effort="${RENDER_CLAUDE_EFFORT:-high}"
+  case "$__effort" in
+    low | medium | high | xhigh | max) ;;
+    *)
+      printf "render-detached: RENDER_CLAUDE_EFFORT=%s is not low|medium|high|xhigh|max; using high\n" "$__effort" \
+        >> "'"$RUN_LOG"'"
+      __effort=high
+      ;;
+  esac
   __start=$(date +%s)
-  claude -p "$(cat '"$PROMPT"')" --model opus --dangerously-skip-permissions \
-    --max-turns 150 \
-    > "'"$RUN_LOG"'" 2>&1 &
+  claude -p "$(cat '"$PROMPT"')" --model opus --effort "$__effort" \
+    --dangerously-skip-permissions --max-turns 150 \
+    >> "'"$RUN_LOG"'" 2>&1 &
   __claude=$!
   # THE SECOND FACE OF THE TRUST RAIL. Marking the workspace trusted is the fix; this is
   # the detector that keeps the fix honest. If the CLI still reports it is ignoring the

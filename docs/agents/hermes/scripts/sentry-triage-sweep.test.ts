@@ -551,6 +551,7 @@ describe("the env scrub (the real driver + a real secrets file) — what claude 
     copyFileSync(SWEEP_SH, join(scriptDir, "sentry-triage-sweep.sh"));
     copyFileSync(CRON_OUTPUT_SH, join(scriptDir, "cron-output.sh"));
     copyFileSync(join(import.meta.dir, "agent-env.sh"), join(scriptDir, "agent-env.sh"));
+    copyFileSync(join(import.meta.dir, "agent-pass.sh"), join(scriptDir, "agent-pass.sh"));
     writeFileSync(join(scriptDir, "sentry-triage-prompt.md"), "# fixture prompt\n", "utf8");
 
     // A secrets file shaped like the box's: the two the agent legitimately runs on, plus the
@@ -740,6 +741,7 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
     copyFileSync(SWEEP_SH, join(scriptDir, "sentry-triage-sweep.sh"));
     copyFileSync(CRON_OUTPUT_SH, join(scriptDir, "cron-output.sh"));
     copyFileSync(join(import.meta.dir, "agent-env.sh"), join(scriptDir, "agent-env.sh"));
+    copyFileSync(join(import.meta.dir, "agent-pass.sh"), join(scriptDir, "agent-pass.sh"));
     writeFileSync(join(scriptDir, "sentry-triage-prompt.md"), "# fixture prompt\n", "utf8");
 
     // The fixture helper: `reconcile` is a clean no-op; `fetch` writes an EMPTY worklist and then
@@ -814,9 +816,24 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
     git(["push", "--quiet", "-u", "origin", "main"], ws);
 
     const binDir = writeGhStub(root);
+    // The stub stands in for the one bounded judgment call: it records its argv, FIXTURE_OOM_KILLS
+    // rewrites the cgroup event counter the way the kernel would when a child of the pass is
+    // OOM-killed, and FIXTURE_CLAUDE_SLEEP drives the wall budget.
     const claude = join(binDir, "claude");
-    writeFileSync(claude, '#!/usr/bin/env bash\nexit "${FIXTURE_CLAUDE_STATUS:-0}"\n', "utf8");
+    writeFileSync(
+      claude,
+      [
+        "#!/usr/bin/env bash",
+        `printf '%s\\n' "$*" >"${join(root, "claude-args.txt")}"`,
+        '[ -z "${FIXTURE_OOM_KILLS:-}" ] || printf \'oom_kill %s\\n\' "${FIXTURE_OOM_KILLS}" >"${AGENT_PASS_CGROUP_EVENTS}"',
+        'sleep "${FIXTURE_CLAUDE_SLEEP:-0}"',
+        'exit "${FIXTURE_CLAUDE_STATUS:-0}"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
     chmodSync(claude, 0o755);
+    writeFileSync(join(root, "memory.events"), "low 0\nhigh 0\nmax 0\noom_kill 0\n", "utf8");
 
     return { cronDir, root, script: join(scriptDir, "sentry-triage-sweep.sh"), ws };
   }
@@ -830,6 +847,7 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
     const run = spawnSync("bash", [box.script], {
       encoding: "utf8",
       env: {
+        AGENT_PASS_CGROUP_EVENTS: join(box.root, "memory.events"),
         BUN_BIN: process.execPath,
         FIXTURE_FETCH_MODE: mode,
         FLUNCLE_AUDIT_GITHUB_PAT: "fixture-pat",
@@ -932,5 +950,68 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
       triaged: 1,
     });
     expect(marker).toContain('"ok":false');
+  });
+  test("a pass that outruns its wall budget is ok:false with the reason", () => {
+    const box = setUpBox();
+    const { status, summary } = runDriver(box, "work", {
+      AGENT_PASS_KILL_GRACE_SECS: "1",
+      FIXTURE_CLAUDE_SLEEP: "30",
+      SENTRY_TRIAGE_PASS_BUDGET_SECS: "1",
+    });
+
+    // The script bounds its own pass, so the night ends on its own terms with an honest line
+    // instead of outliving a unit timeout that only reaches the host-side `docker exec` client.
+    expect(status).toBe(1);
+    expect(summary).toMatchObject({
+      action: "triaged",
+      errors: 1,
+      ok: false,
+      produced: 0,
+      reason: "budget-exceeded",
+    });
+  });
+
+  test("an OOM-killed child fails the run even when the agent itself exits clean", () => {
+    const box = setUpBox();
+    const { status, summary } = runDriver(box, "work", { FIXTURE_OOM_KILLS: "2" });
+
+    expect(status).toBe(1);
+    expect(summary).toMatchObject({
+      container_oom_kills: 2,
+      errors: 1,
+      ok: false,
+      produced: 0,
+      reason: "oom-killed",
+    });
+  });
+
+  test("a clean pass reports its facts: zero OOM kills and no reason", () => {
+    const box = setUpBox();
+    const { status, summary } = runDriver(box, "work");
+
+    expect(status).toBe(0);
+    expect(summary).toMatchObject({ container_oom_kills: 0, errors: 0, ok: true, produced: 1 });
+    expect(typeof summary.pass_seconds).toBe("number");
+    expect("reason" in summary).toBe(false);
+  });
+
+  test("the pass pins its model and effort, whatever the CLI default becomes", () => {
+    const box = setUpBox();
+    runDriver(box, "work");
+    const args = readFileSync(join(box.root, "claude-args.txt"), "utf8");
+
+    expect(args).toContain("--model opus");
+    expect(args).toContain("--effort high");
+  });
+
+  test("SENTRY_TRIAGE_CLAUDE_EFFORT overrides the effort, and a junk value falls back to high", () => {
+    const override = setUpBox();
+    runDriver(override, "work", { SENTRY_TRIAGE_CLAUDE_EFFORT: "max" });
+    expect(readFileSync(join(override.root, "claude-args.txt"), "utf8")).toContain("--effort max");
+
+    const junk = setUpBox();
+    const { summary } = runDriver(junk, "work", { SENTRY_TRIAGE_CLAUDE_EFFORT: "extreme" });
+    expect(readFileSync(join(junk.root, "claude-args.txt"), "utf8")).toContain("--effort high");
+    expect(summary.ok).toBe(true);
   });
 });

@@ -32,6 +32,6 @@ The workflow encodes only the _provably_ safe rule — a same-major bump of a fi
 - **Out of scope, on purpose.** The workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) and the agent's model/voice/permissions are separate flows — neither mechanism here touches them.
 - **Pause it** by disabling the workflow (Actions tab) and/or the Renovate app. In-flight artifacts are an open PR (reviewable like any other). Pausing never leaves a half-rebuilt box — neither mechanism touches the live box; only the merge → pin-watch path does.
 
-## Retired: the local Mac Routine
+## The manual deep pass
 
-This sweep previously ran as a **Claude Code desktop-app Routine on the operator's Mac** (driven by `maintenance.prompt.md`). It worked but was laptop-dependent — a closed lid skipped a week — and in practice the **bump-PR half was never actually running**, so the pins drifted while only the box's deploy half (pin-watch) stayed live. It is **retired** in favour of the always-on CI workflow above. `maintenance.prompt.md` is kept as the doctrine-complete manual / deep sweep — run it by hand when you want the full judgment pass, not as the scheduled mechanism.
+`maintenance.prompt.md` is the doctrine-complete manual sweep: run it by hand when you want the full judgment pass. It is not scheduled; the CI workflow above is the scheduled mechanism.

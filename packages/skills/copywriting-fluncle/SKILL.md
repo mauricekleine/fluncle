@@ -15,7 +15,7 @@ Use this skill to write copy that sounds like Fluncle: the uncle with the good r
 2. `references/voice.md`: the Voice canon — narrator, vocabulary, named rules, surface registers, mechanics, and the rewrite table. Read it before writing anything.
 3. `references/voice-baseline.md` for the inherited baseline (proof over hype, understated confidence, short lines, no em dashes, signature patterns).
 4. `references/social-formats.md` when the copy is a social post or longer-form writing (X, LinkedIn, README, blog-shaped) rather than product UI.
-   - `references/recovered-audio-delivery.md` when the copy is a spoken observation script (the recovered-audio register, `voice.md` §5): the voice, voice settings, and the load-bearing `<break/>` pacing rule for how it renders.
+   - `references/recovered-audio-delivery.md` when the copy is a spoken observation script (the recovered-audio register, `voice.md` §5): the voice, voice settings, and the punctuation-only pacing rule (no `<break/>` tags) for how it renders.
 5. Surface context, inlined below (no external files needed): Fluncle is a drum & bass banger archive — the uncle discovers, certifies, and logs findings; the product is music-first, quiet, and fast. The visual mood is the Nostalgic Cosmos: awe and melancholy under a burning eclipse, warm and crewed, never cold or corporate. Match copy to that mood and to the surface's design (for example, empty states inside the playlist shell stay quiet and in-fiction). When working inside the Fluncle repo, `PRODUCT.md` and `DESIGN.md` carry the full strategy and visual system if deeper context is needed.
 
 Where sources disagree on language, `references/voice.md` wins. The two known divergences from the baseline: Fluncle uses sentence case everywhere (never the lowercase X habit), and Fluncle speaks as a persona ("I" = the uncle), not as a founder.
@@ -46,7 +46,7 @@ These are reminders, not the spec; the spec is `references/voice.md`.
   - The Sauce: the cosmos is a unit measuring how hard a tune hit or how far it threw you, never a free-floating subject. Strip Test: delete the space-words; a true, active, bodily sentence must remain. Keep it scientific (physics, the future, consciousness, simulation), never spiritual/hippie (ayahuasca, meditation, nirvana). The body keeps the transcendence honest.
 - Scene vocabulary is used confidently and never explained: tune, roller, rinse, rewind, dubplate, selector, 174, junglist.
 - The Name It Rule: call the thing by its noun — banger, track, tune, mixtape, playlist. "Ones", "things", "stuff", and bare "more" are banned unless the noun stands earlier in the SAME copy and the reference is unmistakable; even then, prefer the noun again. Repeating a true noun is voice, not a fault.
-- Log ID is a finding's permanent coordinate (`fluncle://241.7.3A`, bare `241.7.3A` in tight columns). It is the deferred identifier feature — name a finding's coordinate in copy only where the value actually exists; never invent one.
+- Log ID is a finding's permanent coordinate (`fluncle://241.7.3A`, bare `241.7.3A` in tight columns). Name a finding's coordinate in copy only where the value exists; never invent one.
 
 ## Final checks
 
@@ -58,7 +58,7 @@ Before returning copy, verify against `references/voice.md`:
 - Every pro-form points at a noun written earlier in the same copy (the Name It Rule): scan for "ones", "things", "stuff", bare "more" — if the antecedent is not in the string the reader sees, write the noun.
 - No exclamation marks. No em dashes in prose (the `Artist — Title` separator is the only sanctioned use). Mechanical sweep: grep the draft for `—` (U+2014); every hit must be an `Artist — Title` separator, rewrite the rest into commas, colons, or separate sentences. Use the grep as the mechanical backstop for this rule.
 - Sentence case for UI copy, headings, buttons, and labels; ALL CAPS only quotes the cover art or a sanctioned brand-mark plate (e.g. "RAVE TERMINAL" under the SSH figlet logo).
-- Emoji only on Telegram, only from the sanctioned set (🛸, 🎧).
+- Emoji only on the crew feeds (Telegram, Bluesky), only from the sanctioned set (🛸, 🎧).
 - Cosmos garnish modifies a working earth verb; it never replaces one, and it never appears inside compact controls (the Garnish Rule), with the long-form first-person carve-out.
 - Active voice: Fluncle is the subject doing the verb. No agentless passives ("the findings hold it together", "mixed down into one long one", "everything lands somewhere") — the ghost's tell.
 - The Strip Test: delete the cosmos words; a true, active, bodily sentence must remain. If nothing solid is left, the sauce was covering for an empty line.
@@ -68,7 +68,7 @@ Before returning copy, verify against `references/voice.md`:
 - Warmth holds: dry and deadpan, never cynical or cold, nobody left on the floor (the Mosh Pit Rule).
 - CLI and SSH output stays clean and parseable when it is data; jokes live in help text, welcomes, and empty states, not in machine-readable lines.
 - Any lossy texture is narrative, never broken UI (the Light-Years Rule).
-- Every claim is real: no invented tracks, dates, Log IDs, stats, or scene history. The Log ID coordinate is a deferred feature — never fabricate one to fill a layout.
+- Every claim is real: no invented tracks, dates, Log IDs, stats, or scene history. Never fabricate a Log ID to fill a layout.
 - Identity strings are fixed and reused verbatim, never paraphrased. Both open with the tagline ("Drum & bass bangers from another dimension."), so the entity reads identically everywhere:
   - **Canonical entity description** (JSON-LD/schema, llms.txt, glossary, link-preview descriptions): "Drum & bass bangers from another dimension. Fluncle discovers and certifies every track, logs each as a finding, and keeps the full archive across the Galaxy, from the web to the rave terminal. fluncle.com is home base." The `<meta name="description">` / OG / Twitter SERP snippet uses a trimmed ≤155-char variant (search engines flag + truncate the full one): "Drum & bass bangers from another dimension. Fluncle discovers, certifies, and logs every find, with the full archive across the Galaxy at fluncle.com."
   - **Platform bio** (Spotify, Telegram, TikTok, MusicBrainz, Wikidata, …): the tagline, then a blank line, then `www.fluncle.com` on its own line.

@@ -62,7 +62,4 @@ or accept. Either fix the small thing and merge, or merge as-is. If your own fix
 and you can't cleanly resolve it, revert that fix (leave the auditor's green work intact) and merge
 that, or — if the whole thing is now questionable — leave it open with a comment.
 
-If the auditor opened no PR (a clean night), you won't be run — there's nothing to review.
-
-Everything you do here is real: your commits push to the branch, your merge deploys, your comment
-is the human's morning signal. Act accordingly.
+Your comment is the operator's morning signal.
