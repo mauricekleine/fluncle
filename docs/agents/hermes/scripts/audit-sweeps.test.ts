@@ -197,7 +197,12 @@ case "$*" in
     [ "\${STUB_CHANGED:-0}" = "0" ] || printf ' M fixture.txt\\n'
     ;;
   *"rev-list --count"*) printf '%s\\n' "\${STUB_AHEAD:-0}" ;;
-  commit*) exit "\${STUB_COMMIT_STATUS:-0}" ;;
+  commit*--no-verify*) exit "\${STUB_COMMIT_STATUS:-0}" ;;
+  commit*)
+    printf 'env FLUNCLE_UNATTENDED=%s\\n' "\${FLUNCLE_UNATTENDED:-}" >>"${join(root, "git.log")}"
+    [ "\${STUB_HOOK_STATUS:-0}" = "0" ] || exit "\${STUB_HOOK_STATUS}"
+    exit "\${STUB_COMMIT_STATUS:-0}"
+    ;;
   push*) exit "\${STUB_PUSH_STATUS:-0}" ;;
 esac
 exit 0
@@ -666,8 +671,10 @@ describe("fluncle-audit ships the agent's working tree", () => {
     expect(result.summary).toMatchObject({ action: "opened", ok: true, produced: 1 });
     const git = calls(box, "git");
     expect(git).toMatch(/^add -A$/m);
-    // Hooks are skipped on purpose: the pre-commit preflight join does not fit the box.
-    expect(git).toMatch(/^commit --quiet --no-verify -m audit\(test\): 2 fixes, 1 filed$/m);
+    // The hook runs unattended: its scoped steps stay, the preflight join skips itself.
+    expect(git).toMatch(/^commit --quiet -m audit\(test\): 2 fixes, 1 filed$/m);
+    expect(git).toMatch(/^env FLUNCLE_UNATTENDED=1$/m);
+    expect(git).not.toContain("--no-verify");
     expect(git).toMatch(/^push --quiet -u origin HEAD$/m);
     // The reviewer selects on the `audit/` head; the report is the PR body.
     expect(calls(box, "gh")).toMatch(
@@ -732,6 +739,22 @@ describe("fluncle-audit ships the agent's working tree", () => {
       produced: 0,
     });
     expect(calls(box, "git")).not.toMatch(/^(commit|push)\b/m);
+  });
+
+  test("a commit the hook refuses still ships, unverified, for the PR's checks to flag", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_CHANGED: "1",
+      STUB_HOOK_STATUS: "1",
+      STUB_REPORT: "1 fix, 0 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.summary).toMatchObject({ action: "opened", ok: true });
+    const git = calls(box, "git");
+    expect(git).toMatch(/^commit --quiet -m audit\(test\): 1 fix, 0 filed$/m);
+    expect(git).toMatch(/^commit --quiet --no-verify -m audit\(test\): 1 fix, 0 filed$/m);
   });
 
   test("a rejected push fails the run and opens no PR", async () => {
