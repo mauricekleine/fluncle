@@ -25,8 +25,11 @@ function source(file: string): string {
   return readFileSync(join(SERVER, file), "utf8");
 }
 
-describe("track_duplicate_keys writer coverage", () => {
-  it("materializes every production tracks insert in the same write batch", () => {
+// This inventory discovers new write sites; textual co-occurrence cannot prove
+// transaction ordering. The publish, crawl, label-release and duplicate-key
+// integration suites exercise persisted keys and rollback behavior.
+describe("track_duplicate_keys writer inventory", () => {
+  it("keeps discovered track inserters on the duplicate-key maintenance API", () => {
     const inserts: string[] = [];
 
     for (const file of serverSources()) {
@@ -57,7 +60,7 @@ describe("track_duplicate_keys writer coverage", () => {
     ).toEqual([]);
   });
 
-  it("pairs every ISRC repair with an atomic duplicate-key update", () => {
+  it("keeps discovered ISRC writers on the duplicate-key maintenance API", () => {
     const isrcWriterFiles = serverSources()
       .filter((file) => file !== "isrc.ts")
       .filter((file) => {
@@ -81,7 +84,7 @@ describe("track_duplicate_keys writer coverage", () => {
     ).toEqual([]);
   });
 
-  it("requires any future title or artist mutation to carry an atomic full re-key", () => {
+  it("flags title or artist writers that do not reference the full re-key API", () => {
     const unpaired: string[] = [];
 
     for (const file of serverSources()) {

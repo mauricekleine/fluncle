@@ -329,6 +329,9 @@ describe("crawl admission phases", () => {
       result: { expanded: 1, failed: 0, tracksFound: 60, tracksWritten: 60 },
     });
     expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(60);
+    expect((await db.execute("select count(*) as n from track_duplicate_keys")).rows[0]?.n).toBe(
+      60,
+    );
     expect(
       (
         await db.execute(
@@ -544,6 +547,7 @@ describe("crawl admission phases", () => {
 
     expect(await commitCrawlPhase(fetched)).toMatchObject({ outcome: "safely-retryable" });
     expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(0);
+    expect((await db.execute("select count(*) as n from track_duplicate_keys")).rows[0]?.n).toBe(0);
     expect(
       (
         await db.execute(

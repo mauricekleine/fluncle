@@ -1,5 +1,5 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb, seedCatalogueTrack } from "./integration-db";
 
 let db: Client;
@@ -14,7 +14,25 @@ beforeEach(async () => {
   db = await createIntegrationDb();
 });
 
+afterEach(() => db.close());
+
 describe("track_duplicate_keys maintenance and lookup plan", () => {
+  it("rolls back the source ISRC when the derived key update fails", async () => {
+    const { updateTrack } = await import("./track-update");
+    await seedCatalogueTrack(db, { trackId: "rollback-key" });
+    await db.execute(`create trigger reject_duplicate_key before update on track_duplicate_keys
+      begin select raise(abort, 'duplicate key rejected'); end`);
+
+    await expect(updateTrack("rollback-key", { isrc: "GBABC1234567" })).rejects.toThrow(
+      /duplicate key rejected/,
+    );
+
+    const result = await db.execute(`select tracks.isrc, keys.normalized_isrc
+      from tracks join track_duplicate_keys keys on keys.track_id = tracks.track_id
+      where tracks.track_id = 'rollback-key'`);
+    expect(result.rows).toEqual([{ isrc: null, normalized_isrc: null }]);
+  });
+
   it("moves the normalized ISRC atomically through the real generic writer", async () => {
     const { updateTrack } = await import("./track-update");
     await seedCatalogueTrack(db, {

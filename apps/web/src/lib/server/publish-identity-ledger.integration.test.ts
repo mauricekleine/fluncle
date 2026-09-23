@@ -14,7 +14,7 @@
 // AFTER the rows are written — so the assertions read exactly what the insert laid down.
 
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
 
@@ -62,6 +62,7 @@ vi.mock("./discogs", async (importOriginal) => {
 
 import { createIntegrationDb } from "./integration-db";
 import { publishTrack } from "./publish";
+import { ApiError } from "./spotify";
 
 let db: Client;
 
@@ -92,13 +93,16 @@ beforeEach(async () => {
   vendors.lookupIsrcFromDeezer.mockResolvedValue(undefined);
   vendors.enrichFromDeezer.mockResolvedValue({});
   vendors.discogsResolveRelease.mockResolvedValue({ masterId: 55, releaseId: 6_414_598 });
-  // The publish stops here, after the rows are written — everything asserted below is already in.
-  vendors.addTrackToPlaylist.mockRejectedValue(new Error("stop here"));
+  // Stop after the rows are written without waiting through transient retry
+  // backoff. Retry policy is exercised separately in retry.test.ts.
+  vendors.addTrackToPlaylist.mockRejectedValue(new ApiError("fixture_stop", "stop here", 400));
 });
+
+afterEach(() => db.close());
 
 /** Drive the publish to its (deliberate) Spotify failure and read back the row it laid down. */
 async function publishAndRead(): Promise<Record<string, unknown>> {
-  await expect(publishTrack(SPOTIFY_URL, { note: "a note" })).rejects.toThrow();
+  await expect(publishTrack(SPOTIFY_URL, { note: "a note" })).rejects.toThrow(/stop here/);
 
   const result = await db.execute({
     args: [TRACK_ID],
@@ -124,6 +128,15 @@ async function publishAndRead(): Promise<Record<string, unknown>> {
 describe("publishTrack — the identity-ledger stamps", () => {
   it("stamps both looks when both land", async () => {
     const row = await publishAndRead();
+    expect(vendors.addTrackToPlaylist).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await db.execute({
+          args: [TRACK_ID],
+          sql: "select normalized_isrc from track_duplicate_keys where track_id = ?",
+        })
+      ).rows,
+    ).toEqual([{ normalized_isrc: "GBCJY1300173" }]);
 
     expect(row.isrc).toBe("GBCJY1300173");
     expect(row.isrc_attempted_at).not.toBeNull();
@@ -133,6 +146,24 @@ describe("publishTrack — the identity-ledger stamps", () => {
     expect(row.backfill_discogs_done_at).not.toBeNull();
     expect(Number(row.backfill_discogs_attempts)).toBe(1);
     expect(Number(row.backfill_discogs_failures)).toBe(0);
+  });
+
+  it("rolls back the track and finding when duplicate-key maintenance fails", async () => {
+    await db.execute(`create trigger reject_publish_key before insert on track_duplicate_keys
+      begin select raise(abort, 'duplicate key rejected'); end`);
+
+    await expect(publishTrack(SPOTIFY_URL, { note: "a note" })).rejects.toThrow(
+      /duplicate key rejected/,
+    );
+
+    for (const table of ["tracks", "findings", "track_duplicate_keys"]) {
+      const result = await db.execute({
+        args: [TRACK_ID],
+        sql: `select track_id from ${table} where track_id = ?`,
+      });
+      expect(result.rows).toEqual([]);
+    }
+    expect(vendors.addTrackToPlaylist).not.toHaveBeenCalled();
   });
 
   it("is born ANCHORED, with `publish` provenance and the hit time stamped", async () => {
