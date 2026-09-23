@@ -319,33 +319,23 @@ audit_domain_label() {
 # Stage everything (the fixes AND the docs/audit-backlog.md rows; `.audit/` is gitignored) and
 # commit it as `audit(<domain>): <the report's verdict line>`.
 #
-# `--no-verify` is deliberate. The repo's pre-commit hook ends in the quality preflight join, which
-# runs the whole affected closure — the passes verify.sh documents as not fitting this box's memory
-# cap — and could take longer than the driver's headroom under the unit timeout. The box's
-# verification is verify.sh (recorded in .audit/verify.json); the PR's required checks and
-# `deploy:gate` are the gate. The two hook steps that CHANGE the commit run here explicitly:
-# lint-staged's staged-file `oxfmt --write` / `oxlint --fix`, then the skill-copy sync, so the
-# commit carries the same formatting and regenerated copies a hooked commit would.
+# The commit runs the repo's pre-commit hook under FLUNCLE_UNATTENDED=1: the hook keeps its scoped,
+# commit-changing steps (lint-staged's staged-file `oxfmt --write` / `oxlint --fix`, then the
+# skill-copy sync) and skips the preflight join, whose repository-wide lane does not fit this
+# box's memory cap. When the hook refuses the commit (an unfixable lint error the agent left), the
+# night's work still ships: the driver commits with `--no-verify` and the PR's lint and format
+# checks flag it, which keeps the fix in front of the reviewer instead of in a discarded workspace.
 audit_commit() {
-  local verdict
+  local message
+  message="audit(${DOMAIN}): $(sed -n '/[^[:space:]]/{s/^[#[:space:]]*//;p;q;}' .audit/report.md | cut -c1-72)"
+  [ "${message}" != "audit(${DOMAIN}): " ] || message="audit(${DOMAIN}): nightly audit"
   git add -A || return 1
-  if [ -x "node_modules/.bin/oxlint" ]; then
-    log "formatting the staged files (lint-staged)…"
-    if ! timeout 300 "${BUN_BIN}" x lint-staged >&2; then
-      log "lint-staged failed; committing as-is — the PR's lint and format checks will flag it"
-      git add -A || return 1
-    fi
+  if FLUNCLE_UNATTENDED=1 git commit --quiet -m "${message}" >&2; then
+    return 0
   fi
-  if git diff --cached --name-only | grep -q '^packages/skills/'; then
-    log "skill source staged — syncing the committed skill copies (bun run skills:install)…"
-    if timeout 120 "${BUN_BIN}" run skills:install >&2; then
-      git add .agents/skills .claude/skills skills-lock.json || return 1
-    else
-      log "skills:install failed; the PR's skills drift check will flag the stale copies"
-    fi
-  fi
-  verdict="$(sed -n '/[^[:space:]]/{s/^[#[:space:]]*//;p;q;}' .audit/report.md | cut -c1-72)"
-  git commit --quiet --no-verify -m "audit(${DOMAIN}): ${verdict:-nightly audit}" >&2
+  log "the pre-commit hook refused the commit; committing with --no-verify so the PR's checks flag it"
+  git add -A || return 1
+  git commit --quiet --no-verify -m "${message}" >&2
 }
 
 # Deliberately no queue_depth: one rotating domain is inspected per tick, and this driver does
