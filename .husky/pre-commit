@@ -36,7 +36,16 @@ fi
 # Edit hooks start affected leaves in the background. A commit is the explicit join point: the
 # fingerprinted result must match the complete worktree, so an edit made while checks were running
 # cannot accidentally reuse a stale pass.
-if [ -x "node_modules/.bin/oxlint" ]; then
+#
+# UNATTENDED (FLUNCLE_UNATTENDED=1, exported by the agentic box sweeps): skip the join, the same
+# marker and the same reason as the two PostToolUse hooks. The join runs the repository-wide
+# type-aware lane, whose tsgolint peak the Hermes container's memory cap kills — and a SIGKILL here
+# fails the sweep's own commit, which is how a sweep ends up committing with `--no-verify` and
+# losing the scoped checks above as well. Those scoped checks still run, and the PR's Quality
+# Checks plus `deploy:gate` remain the correctness net for the full matrix.
+if [ "${FLUNCLE_UNATTENDED:-}" = "1" ]; then
+  echo "husky: FLUNCLE_UNATTENDED=1 — skipping the preflight join; CI runs the full matrix."
+elif [ -x "node_modules/.bin/oxlint" ]; then
   # Husky/lint-staged may prepend the relative `node_modules/.bin`. The shell-integrity
   # guard deliberately rejects relative PATH entries, so make that known entry absolute
   # before the join (and avoid `bun run`, which would add it again).
