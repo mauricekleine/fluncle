@@ -640,7 +640,9 @@ describe("the env scrub (the real driver + a real secrets file) — what claude 
   });
 
   test("no secret from the shared file reaches the child", () => {
-    const { env } = runWithSecrets();
+    const { env, invoked } = runWithSecrets();
+    // Every assertion below is a NEGATIVE one, so an empty env (the stub never ran) would pass it.
+    expect(invoked).toBe(true);
     for (const key of [
       "SENTRY_TRIAGE_TOKEN",
       "FLUNCLE_AUDIT_GITHUB_PAT",
