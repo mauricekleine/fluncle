@@ -16,7 +16,7 @@
 // The vendors are mocked (there is no network): MusicBrainz answers "no match", Discogs hands back
 // one logo, and R2 is a fake bucket that records its `put`s.
 
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -49,7 +49,7 @@ vi.mock("./env", () => ({ readOptionalEnv }));
 
 import { createIntegrationDb } from "./integration-db";
 import { resolveLabelImages } from "./label-images";
-import { listLabelsPage } from "./labels";
+import { getEnabledSeedLabel, listLabels, listLabelsPage } from "./labels";
 
 let db: Client;
 
@@ -244,5 +244,53 @@ describe("listLabelsPage carries the ruling-time identity", () => {
     expect(item?.foundingDate).toBeNull();
     expect(item?.foundedLocation).toBeNull();
     expect(item?.logoImageUrl).toBeUndefined();
+  });
+});
+
+// The crawler resolves a claimed seed node to its label once at prepare and once at commit. That
+// question names ONE label by its UNIQUE slug, so it is answered by one index seek, never by
+// reading the whole enabled seed set (thousands of rows) and searching it in the isolate.
+describe("getEnabledSeedLabel resolves one seed label by slug", () => {
+  it("answers exactly what the enabled seed set would, for enabled, ruled-out and unknown slugs", async () => {
+    await seedLabel({
+      mbLabelId: "0d4e2b8f-1111-2222-3333-444455556666",
+      name: "Hospital Records",
+      slug: "hospital-records",
+    });
+    await seedLabel({ name: "Medschool", slug: "medschool" });
+    await seedLabel({ name: "Off Genre Imprint", slug: "off-genre-imprint" });
+    await db.execute(
+      "update labels set seed_state = 'enabled' where slug in ('hospital-records', 'medschool')",
+    );
+    await db.execute("update labels set seed_state = 'disabled' where slug = 'off-genre-imprint'");
+
+    const enabled = await listLabels("enabled");
+
+    for (const slug of ["hospital-records", "medschool", "off-genre-imprint", "not-a-label"]) {
+      expect(await getEnabledSeedLabel(slug)).toEqual(enabled.find((label) => label.slug === slug));
+    }
+
+    expect((await getEnabledSeedLabel("hospital-records"))?.mbLabelId).toBe(
+      "0d4e2b8f-1111-2222-3333-444455556666",
+    );
+  });
+
+  it("seeks the slug index rather than scanning labels", async () => {
+    const spy = vi.spyOn(db, "execute");
+
+    await getEnabledSeedLabel("medschool");
+
+    const input = spy.mock.calls[0]?.[0] as InStatement | undefined;
+    spy.mockRestore();
+
+    if (input === undefined || typeof input === "string") {
+      throw new Error("getEnabledSeedLabel issued no bound statement");
+    }
+
+    const plan = await db.execute({ args: input.args, sql: `explain query plan ${input.sql}` });
+    const details = plan.rows.map((row) => String((row as Record<string, unknown>)["detail"]));
+
+    expect(details.some((detail) => detail.includes("SEARCH labels USING INDEX"))).toBe(true);
+    expect(details.some((detail) => detail.startsWith("SCAN labels"))).toBe(false);
   });
 });
