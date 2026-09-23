@@ -10,6 +10,7 @@ import {
 } from "./catalogue";
 import {
   createIntegrationDb,
+  seedArtist,
   seedCatalogueTrack,
   seedEmbedding,
   seedTrack,
@@ -116,8 +117,17 @@ describe("verifyCapture — the verdict routing", () => {
     await seedCatalogueTrack(db, { label: "Critical Music", trackId: "cat_wrong" });
     await capture("cat_wrong", SHA);
     await embed("cat_wrong");
+    await seedArtist(db, { id: "verify-artist", slug: "verify-artist" });
+    await db.execute(`insert into track_artists (track_id, artist_id, position)
+      values ('cat_wrong', 'verify-artist', 0)`);
+    await db.execute("update tracks set key = '8A' where track_id = 'cat_wrong'");
+    await db.execute("update artists set rankable_track_count = 1 where id = 'verify-artist'");
 
     expect(await verifyCapture("cat_wrong", "mismatch")).toBe("quarantined-catalogue");
+    expect(
+      (await db.execute("select rankable_track_count from artists where id = 'verify-artist'"))
+        .rows[0]?.rankable_track_count,
+    ).toBe(0);
 
     const row = await readRow("cat_wrong");
 

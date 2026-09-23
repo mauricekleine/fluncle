@@ -29,12 +29,6 @@ describe("mixable artist projection writer coverage", () => {
     }
   });
 
-  it("pairs every guarded catalogue embedding clear with an exact artist repair", () => {
-    const source = readFileSync(join(SERVER, "catalogue.ts"), "utf8");
-    expect(source.match(/clearEmbeddingSatellite\(/g)?.length).toBe(3);
-    expect(source.match(/repairRankableArtistsForTrackStatement\(/g)?.length).toBe(3);
-  });
-
   it("covers the generic key/embedding writer and invalidates after mirror repair", () => {
     const update = readFileSync(join(SERVER, "track-update.ts"), "utf8");
     const backfill = readFileSync(join(WEB, "scripts/backfill-has-embedding.ts"), "utf8");

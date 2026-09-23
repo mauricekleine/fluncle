@@ -679,6 +679,12 @@ describe("probeLabelReleases", () => {
     expect(result.albumsMatched).toBe(1); // only the copyright-matching album
     expect(result.newRows).toBe(1);
     expect(result.newTrackIds).toEqual(["sp_t_real"]);
+    expect(
+      (
+        await db.execute(`select normalized_isrc from track_duplicate_keys
+          where track_id = 'sp_t_real'`)
+      ).rows,
+    ).toEqual([{ normalized_isrc: "GB0000000001" }]);
     // The junk album's track is NEVER minted.
     const junk = await db.execute({
       args: ["sp_t_junk"],

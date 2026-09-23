@@ -1445,6 +1445,10 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     await edge("cat-fyl", "art-flowidus");
     await withSourceKey("cat-fyl", "catalogue/cat-fyl/badbeef.webm");
 
+    await db.execute(`update tracks set key = '8A'
+      where track_id in ('finding-shelter', 'cat-fyl')`);
+    await db.execute("update artists set rankable_track_count = 2 where id = 'art-flowidus'");
+
     const summary = await rankCatalogue();
     expect(summary.quarantined).toBe(1);
     // A quarantined row is no longer a scored find — it never reaches the top of the ear lens.
@@ -1463,6 +1467,10 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
     expect(state.embedding_blob).toBeNull();
     expect(state.source_audio_key).toBe("catalogue/cat-fyl/badbeef.webm");
+    expect(
+      (await db.execute("select rankable_track_count from artists where id = 'art-flowidus'"))
+        .rows[0]?.rankable_track_count,
+    ).toBe(1);
   });
 
   it("reads the archive's TITLE+ARTIST identity ONCE per tick, both directions off one statement", async () => {
@@ -1635,7 +1643,16 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
             where track_id = ?`,
     });
 
+    await seedArtistRow("flag-artist", "Freaks & Geeks", "flag-artist");
+    await edge("finding-dwyl", "flag-artist");
+    await db.execute("update tracks set key = '8A' where track_id = 'finding-dwyl'");
+    await db.execute("update artists set rankable_track_count = 1 where id = 'flag-artist'");
+
     expect(await flagWrongAudio("finding-dwyl")).toBe(true);
+    expect(
+      (await db.execute("select rankable_track_count from artists where id = 'flag-artist'"))
+        .rows[0]?.rankable_track_count,
+    ).toBe(0);
 
     // The pin RETIRES with the flag (docs/the-ear.md § Wrong audio): left standing, the re-queued
     // sweep would re-buy the very upload just ruled wrong, on the operator's own authority, forever.
