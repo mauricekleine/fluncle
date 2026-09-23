@@ -1178,6 +1178,7 @@ creds="$(mktemp)"
   # arrives here from the 1P-injected sweep secrets; absent -> the agent's documented
   # procedural fallback (never a failure).
   printf 'export GEMINI_API_KEY=%s\n' "${GEMINI_API_KEY:-}"
+  printf 'export RENDER_CLAUDE_EFFORT=%s\n' "${RENDER_CLAUDE_EFFORT:-high}"
 } >"$creds"
 
 # DETERMINISTIC DIVERSITY AXES (docs/planning/homogenisation-evidence.md; ROADMAP

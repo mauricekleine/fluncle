@@ -45,6 +45,8 @@ type Launch = {
   claudeHangs?: boolean;
   /** Pre-existing ~/.claude.json content, to prove nothing else is disturbed. */
   existingConfig?: string;
+  /** Extra environment for the launcher, e.g. an effort override. */
+  env?: Record<string, string>;
 };
 
 type LaunchResult = {
@@ -136,6 +138,7 @@ function runLauncher(options: Launch, root: string): LaunchResult {
       HOME: home,
       PATH: `${stub}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       TRUST_GUARD_SECONDS: "30",
+      ...options.env,
     },
     timeout: FIXTURE_TIMEOUT_MS,
   });
@@ -228,9 +231,39 @@ describe("the trust setting", () => {
 
         expect(marker).toContain("EXIT=0");
         expect(marker).toContain("DURATION=");
-        // The render stays pinned to Opus and bounded, whatever the CLI's default becomes.
+        // The render stays pinned to Opus, at a fixed effort, and bounded, whatever the CLI's
+        // defaults become.
         expect(result.claudeArgs()).toContain("--model opus");
+        expect(result.claudeArgs()).toContain("--effort high");
         expect(result.claudeArgs()).toContain("--max-turns 150");
+      });
+    },
+  );
+});
+
+describe("the reasoning effort", () => {
+  test(
+    "RENDER_CLAUDE_EFFORT overrides the pinned level",
+    { timeout: FIXTURE_TIMEOUT_MS },
+    async () => {
+      await withLaunch({ env: { RENDER_CLAUDE_EFFORT: "xhigh" } }, async (result) => {
+        expect(await waitForFile(result.marker, 15_000)).toBe(true);
+        expect(result.claudeArgs()).toContain("--effort xhigh");
+      });
+    },
+  );
+
+  test(
+    "a level the CLI would not accept falls back to high and says so in the run log",
+    { timeout: FIXTURE_TIMEOUT_MS },
+    async () => {
+      await withLaunch({ env: { RENDER_CLAUDE_EFFORT: "ludicrous" } }, async (result) => {
+        expect(await waitForFile(result.marker, 15_000)).toBe(true);
+        expect(result.claudeArgs()).toContain("--effort high");
+        expect(readFileSync(result.marker, "utf8")).toContain("EXIT=0");
+        expect(readFileSync(result.runLog, "utf8")).toContain(
+          "RENDER_CLAUDE_EFFORT=ludicrous is not low|medium|high|xhigh|max; using high",
+        );
       });
     },
   );

@@ -12,7 +12,7 @@ You are the contract-coverage reviewer for Fluncle's contract-first HTTP API. Th
 
 - **Contracts** live in `packages/contracts/src/orpc/*.ts` (one file per domain: `tracks.ts`, `admin-tracks.ts`, `me.ts`, `me-saved.ts`, `submissions.ts`, `stories.ts`, `radio.ts`, etc.). `_shared.ts` holds shared schemas; `index.ts` aggregates them.
 - **Handlers / server wiring** live in `apps/web` — route handlers under `apps/web/src/routes/api/**` and server modules under `apps/web/src/lib/server/**`.
-- **Auth tiers** (see `apps/web/src/lib/server/admin-auth.ts`): an **admin** tier and a **private-user** ("me"/spine) tier. Admin routes live under the `/admin` path and are excluded from generated OpenAPI. Field-level auth is **reject-not-drop**: an unauthorized field must cause a rejection, never be silently stripped from the response.
+- **Auth tiers** (see `apps/web/src/lib/server/orpc-auth.ts`): `adminAuth` (operator or agent token), `operatorGuard`/`operatorProcedure` (operator only; an agent token gets 403), and the **private-user** ("me"/spine) tier (`privateUserAuth`/`privateUserMutation`). `orpc-auth-coverage.test.ts` is the exhaustiveness net. Admin routes live under the `/admin` path and are excluded from generated OpenAPI. Field-level auth is **reject-not-drop**: an unauthorized field must cause a rejection, never be silently stripped from the response.
 - `apps/web` is the sole owner of API behavior. The CLI, Raycast, SSH, and mobile are thin clients; they must not reimplement API logic.
 
 ## How to work

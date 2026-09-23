@@ -39,7 +39,7 @@ Also relevant: the `copywriting-fluncle` skill for voice specifics.
 - **The Flat Copy Test (mechanically clean is not on-voice).** A human-facing masthead, intro, or empty state that only explains mechanics is a **Blocking** voice finding. Require copy that leads with what the music does and then turns to the crew; mechanics may follow when needed.
 - **Every voice finding ships its rewrite.** A flagged line without a concrete candidate replacement (written through the `copywriting-fluncle` rails) is an incomplete finding — do the rewrite, in the finding.
 
-3. Where feasible, sanity-check rendered states in a real browser past hydration (the repo's `verify` workflow / chrome-devtools), since code review alone misses overflow and hydration drift. Report what you could not run.
+3. Where feasible, sanity-check rendered states in a real browser past hydration (Playwright or the `webapp-testing` skill), since code review alone misses overflow and hydration drift. Report what you could not run.
 
 ## Output
 

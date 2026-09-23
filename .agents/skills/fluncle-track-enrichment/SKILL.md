@@ -65,7 +65,7 @@ That's the whole loop: get → analyze → archive → update.
 
 ## Rules
 
-- **Never invent data.** If no audio resolves at all (no captured full song and no preview), report it and stop — don't guess BPM/key. Set `--status failed` if you want the operator to see it.
+- **Never invent data.** If no audio resolves at all (no captured full song and no preview), report it and stop — don't guess BPM/key. Set `--status failed` so the operator sees it.
 - **Key honesty.** Only write a key the analysis was confident about (the script already gates this; respect the `null`).
 - One track per run.
 

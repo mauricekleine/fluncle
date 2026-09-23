@@ -69,10 +69,15 @@ agent_pass_run() {
 
   AGENT_PASS_REASON=""
   AGENT_PASS_OOM_KILLS=0
+  # Restore the caller's errexit state exactly. Forcing `set -e` on here would arm it in a
+  # driver that runs without it, and a later `return 1` from the driver's own payload would
+  # then abandon cron-output.sh's capture subshell before it records the exit code.
+  local errexit_was_set=0
+  case "$-" in *e*) errexit_was_set=1 ;; esac
   set +e
   timeout -k "${AGENT_PASS_KILL_GRACE_SECS}" "${AGENT_PASS_BUDGET_SECS}" "$@"
   AGENT_PASS_STATUS=$?
-  set -e
+  [ "${errexit_was_set}" = "0" ] || set -e
 
   ended="$(date -u +%s)"
   AGENT_PASS_SECONDS=$((ended - started))

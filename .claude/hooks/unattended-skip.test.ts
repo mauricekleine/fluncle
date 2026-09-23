@@ -17,6 +17,10 @@ import { join } from "node:path";
 
 const FORMAT_HOOK = join(import.meta.dir, "format-on-edit.sh");
 const PREFLIGHT_HOOK = join(import.meta.dir, "preflight-on-edit.sh");
+// The pre-commit hook probes `node_modules/.bin/oxlint` by a path relative to the repository root,
+// so it must be run from there rather than from whatever directory the suite runner happens to use.
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+const PRE_COMMIT_HOOK = join(REPO_ROOT, ".husky", "pre-commit");
 
 const temporaryDirectories: string[] = [];
 
@@ -46,8 +50,9 @@ function calls(log: string): string {
   return existsSync(log) ? readFileSync(log, "utf8") : "";
 }
 
-function run(hook: string, env: Record<string, string>, input?: string): number {
+function run(hook: string, env: Record<string, string>, input?: string, cwd?: string): number {
   const result = spawnSync("bash", [hook], {
+    cwd,
     encoding: "utf8",
     env: { HOME: process.env.HOME ?? "", ...env },
     input,
@@ -97,5 +102,30 @@ describe("preflight-on-edit.sh", () => {
     const settings = readFileSync(join(import.meta.dir, "..", "settings.json"), "utf8");
     expect(settings).toContain("/.claude/hooks/preflight-on-edit.sh");
     expect(settings).not.toContain('"command": "bun run quality:preflight');
+  });
+});
+
+// The git pre-commit hook is the third place heavy tooling runs on the box, and the one that
+// actually killed an unattended sweep: its preflight JOIN runs the repository-wide type-aware lane.
+// A SIGKILL there fails the sweep's commit, which pushes the sweep to `--no-verify` and so loses
+// the cheap scoped checks too. Only the join is skipped; lint-staged is scoped and affordable.
+describe(".husky/pre-commit", () => {
+  test("attended, the preflight join is invoked", () => {
+    const { dir, log } = stubCommands(["node", "bunx", "git", "bun"]);
+    run(PRE_COMMIT_HOOK, { PATH: `${dir}:${process.env.PATH ?? ""}` }, undefined, REPO_ROOT);
+    expect(calls(log)).toContain("preflight.mjs join");
+  });
+
+  test("unattended, the join is skipped and the scoped checks are not", () => {
+    const { dir, log } = stubCommands(["node", "bunx", "git", "bun"]);
+    run(
+      PRE_COMMIT_HOOK,
+      { FLUNCLE_UNATTENDED: "1", PATH: `${dir}:${process.env.PATH ?? ""}` },
+      undefined,
+      REPO_ROOT,
+    );
+    const invoked = calls(log);
+    expect(invoked).not.toContain("preflight.mjs join");
+    expect(invoked).toContain("lint-staged");
   });
 });

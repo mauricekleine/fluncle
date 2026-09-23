@@ -205,8 +205,10 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
     0,
   ),
   "catalogue.demand": wholeLifetime("One bounded demand-projection write is the payload."),
-  "catalogue.isrc-recovery": wholeLifetime(
-    "The bounded resolver interleaves external identity recovery with per-track durable stamps.",
+  "catalogue.isrc-recovery": phased(
+    `${SCRIPTS}/isrc-recovery-sweep.ts`,
+    "One claim window reads the worklist, every paced Deezer search runs between phase processes with no lease, and the resolver verdicts settle in windows bounded by rows and by elapsed time.",
+    0,
   ),
   "catalogue.label-releases": wholeLifetime(
     "Spotify budget checks and release writes form an interleaved resumable loop.",

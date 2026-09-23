@@ -47,7 +47,7 @@ fluncle --help
 fluncle recent --limit 1 --json
 ```
 
-For this project’s known VPS, previous deployments used:
+To verify a deployed host over SSH:
 
 ```bash
 ssh admin@<host> 'fluncle recent --limit 1 --json'

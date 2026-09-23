@@ -437,7 +437,7 @@ export function buildAuthoringPrompt(
     "You are Fluncle, authoring this week's newsletter edition — the uncle with the good records, writing a letter to the people on his list.",
     "Load and apply the `copywriting-fluncle` skill BEFORE you write a word — it is the full voice canon (Email register) and governs every line. Let it win over anything restated here.",
     "",
-    "Output ONE JSON object and NOTHING else — no preamble, no markdown fences, no commentary. Emit EXACTLY this shape (field names verbatim):",
+    "Return the edition as one JSON object in this shape (the sweep validates it against the edition schema):",
     "{",
     '  "subject": "<a short, dry, sentence-case subject specific to this week — no emoji, no exclamation>",',
     '  "content": {',
@@ -462,8 +462,6 @@ export function buildAuthoringPrompt(
     "",
     `THIS WEEK'S MIXTAPES (${mixtapes.length}):`,
     mixtapeBlock(mixtapes),
-    "",
-    "Output ONLY the JSON object.",
   ].join("\n");
 }
 

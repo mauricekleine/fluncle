@@ -6,13 +6,11 @@ A cron that films the Fluncle render queue, one finding per tick, hands-off. The
 
 Each tick, the prompt runs as a Claude Code agent: it reads `fluncle admin tracks queue --limit 1 --json`, and if a finding is waiting (no video yet) it renders and ships **exactly one** video for it via the `fluncle-video` skill, then stops. An empty queue is a silent no-op. Because the ship step sets the finding's `video_url`, the filmed finding leaves the queue — so at-least-once delivery is safe: a re-run sees an empty (or advanced) queue and won't re-render the same finding. The full per-tick contract (the at-least-once invariant, the diversity check, the `judge:metrics` gate — beat-pull + WCAG flash safety, both hard — the hard rails) lives in the prompt; this file is just orientation.
 
-## Where it runs (since 2026-06-24): the Hermes `fluncle-render` conductor
+## Where it runs: the Hermes `fluncle-render` conductor
 
 The prompt is triggered by the **`fluncle-render.timer` host systemd timer on rave-02** (which `docker exec`s the baked conductor, `/opt/hermes-scripts/render-conductor.sh`, inside the `hermes` container every 60m — units at `docs/agents/hermes/render-timer/`) — not a Mac routine, and not the retired Hermes gateway cron runner. The Hermes box carries no Remotion toolchain, so it **conducts**: every hour it wakes a separate scale-to-zero **boat.dev render box** (also GPU-less — the render is software GL either way), runs this prompt there via a remote `claude -p` (detached, ~85 min on software GL), and parks the box when the render finishes. The render box carries `bun` + `ffmpeg` + the bun-wrapped `fluncle` CLI + the `fluncle-video` skill, provisioned from clean `main`; it resolves audio region-independently from the R2 preview archive and renders with software GL (`FLUNCLE_GL=swangle`). It ships with its own `agent`-scoped token (`track video` is agent-tier), and **never** posts to social — both by the prompt's hard rail and by the operator-tier publish gate.
 
 **The canonical operator setup — mechanism, the state machine, single-flight, secrets, the wiring steps, and the boat.dev CLI gotchas — lives in [docs/agents/hermes/cron/README.md § the render conductor](../../../../docs/agents/hermes/cron/README.md); the host-timer install/pause runbook is [docs/agents/hermes/render-timer/README.md](../../../../docs/agents/hermes/render-timer/README.md).** This file does not duplicate them; the scripts are at `docs/agents/hermes/scripts/render-conductor.sh` + `provision-rave-03.sh` + `render-detached.sh`.
-
-> **Predecessor (retired 2026-06-24):** a Claude Code **desktop-app Routine** ("Fluncle video queue") on the operator's Mac that ran this same prompt hourly. It was Mac-bound — a closed laptop meant zero renders, the queue backed up — and is fully superseded by the conductor above. The prompt is unchanged; only the trigger moved off the Mac.
 
 ## The per-tick behaviors (what a healthy tick does)
 

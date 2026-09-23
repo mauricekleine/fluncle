@@ -14,9 +14,16 @@ Type=oneshot
 # user. The .sh + .ts + prompt are BAKED at /opt/hermes-scripts (Unit A — auto-updates from main via
 # pin-watch); this host unit only TRIGGERS the sweep, which self-writes its /status marker (cron-output.sh).
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/sentry-triage-sweep.sh
-# A full agentic `claude -p` triage — freshen an isolated checkout, bun install, locate each bug →
-# fix → run scoped checks → commit → push → open a PR — needs a long budget, like the audit sweep
-# (not the 300s Worker-trigger sweeps). One hour is a generous ceiling; a healthy night is far shorter.
+# A BACKSTOP, NOT THE BUDGET — same reasoning as the auditor's unit: this timeout kills the
+# host-side `docker exec` client only, so the container-side sweep would keep running and write an
+# ordinary marker. The real budget lives in the script (`agent-pass.sh`, bounded by
+# SENTRY_TRIAGE_PASS_BUDGET_SECS), which always exits on its own terms and writes an honest summary.
+# This value must stay ABOVE that budget plus the driver's clone/install/reconcile/fetch/comment
+# time, or the host kill races the script again:
+#
+#     SENTRY_TRIAGE_PASS_BUDGET_SECS (2700) + kill grace (60) + setup/ship headroom  <  3600
+#
+# which leaves the driver 840s for everything outside the pass.
 TimeoutStartSec=3600
 # Modest hardening for a root docker-driving oneshot (matches the sweep units).
 NoNewPrivileges=true
