@@ -21,6 +21,12 @@ import { SearchProvider, SearchTrigger } from "@/components/search/search-comman
 //   canvas, the draggable machinery map). Each is a fixed inset-0 viewport that owns its
 //   own chrome (its own bottom status bar), so a mounted colophon only overlaps it.
 // - /device, /cli: bare auth / install flows.
+//
+// They carry no skip link, deliberately. A skip link bypasses a block that repeats across pages
+// (WCAG 2.4.1): here, the top bar and the colophon. A chromeless surface renders neither, so its
+// first Tab stop is already its own content and a skip link would have nothing to skip. The
+// public ones are pinned by `tests/e2e/chrome-a11y.spec.ts`: no shared chrome, and the first Tab
+// stop lands inside the page.
 const CHROMELESS_PREFIXES = ["/admin", "/radio", "/galaxy", "/pipeline", "/device", "/cli"];
 
 function isChromeless(pathname: string): boolean {
