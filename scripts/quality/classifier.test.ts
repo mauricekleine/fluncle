@@ -69,6 +69,19 @@ describe("dependency-closure classifier", () => {
     expect(installer.lanes.skills).toBe(true);
   });
 
+  test("discovery capture selects scripts without public-web E2E", () => {
+    const plan = classifyPaths([
+      "scripts/ux-capture.ts",
+      "scripts/ux-capture/report.ts",
+      "scripts/ux-capture/report.test.ts",
+    ]);
+
+    expect(plan.full).toBe(false);
+    expect(plan.unknownFiles).toEqual([]);
+    expect(plan.lanes.scripts).toBe(true);
+    expect(plan.lanes.e2e).toBe(false);
+  });
+
   test("workflow, lockfile, root config, harness, and unknown paths fail closed", () => {
     for (const path of [
       ".github/workflows/quality-checks.yml",
