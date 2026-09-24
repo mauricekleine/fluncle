@@ -59,7 +59,9 @@ test("Jade hears three tracks from the front door inside a minute, without leavi
     ).toHaveAttribute("data-status", /^(loading|playing)$/);
   }
 
-  expect(new Set(requested).size).toBeGreaterThanOrEqual(3);
+  // A control reads "loading" the moment it is pressed, a beat before its clip is requested, so
+  // the count is polled rather than read once.
+  await expect.poll(() => new Set(requested).size).toBeGreaterThanOrEqual(3);
   expect(Date.now() - started).toBeLessThan(60_000);
   await expect(page).toHaveURL(/\/$/);
 
