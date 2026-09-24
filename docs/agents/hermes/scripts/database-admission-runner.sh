@@ -242,17 +242,29 @@ admission_failure_outcome() {
   esac
 }
 
+# The run's last word to the coordinator: release the lease it holds, or cancel the contender it
+# queued. It is retried on a transient failure, because the coordinator is slowest exactly when the
+# lane is contended, and a release or cancel lost to a curl timeout leaves a lease the Worker may
+# already have granted with nobody to use or free it: every other writer then waits out its full
+# lease. Both actions are idempotent on (owner, runId), so a retry after a late success is harmless.
+# Bounded to TERMINAL_ADMISSION_ATTEMPTS so a dead coordinator cannot hold the exit past the unit's
+# stop timeout; a definitive answer (2xx, 401, any 4xx) ends it at once.
+TERMINAL_ADMISSION_ATTEMPTS=3
+
 terminal_admission() {
-  local token
+  local token action attempt
   [ "$terminal_action_started" -eq 0 ] || return 0
   terminal_action_started=1
   token="$fencing_token"
   fencing_token=""
-  if [ -n "$token" ]; then
-    admission_post release "$token" || true
-  else
-    admission_post cancel || true
-  fi
+  action=cancel
+  [ -z "$token" ] || action=release
+  for ((attempt = 1; attempt <= TERMINAL_ADMISSION_ATTEMPTS; attempt += 1)); do
+    admission_post "$action" "$token" && return 0
+    transient_admission_failure || return 0
+    [ "$attempt" -lt "$TERMINAL_ADMISSION_ATTEMPTS" ] && sleep "$ADMISSION_POLL_SECS"
+  done
+  return 0
 }
 
 emit_admission_event() {
