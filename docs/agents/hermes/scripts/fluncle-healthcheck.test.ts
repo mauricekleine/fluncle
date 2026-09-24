@@ -59,6 +59,8 @@ import {
   strainTotals,
   strainWindowMs,
   sweepStrainCheck,
+  probeWebWith,
+  WEB_RESAMPLE_OVER_MS,
 } from "./fluncle-healthcheck";
 
 const CRON: CronDef = { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" };
@@ -97,6 +99,86 @@ function marker(stdout: string): string {
 
 /** What it writes when the payload is SIGKILLed before printing anything — the incident. */
 const KILLED_MARKER = "# Cron Job: fluncle-backup\n\n";
+
+describe("probeWebWith — the latency that gates the write lane", () => {
+  /** A transport answering each call with the next status, and a clock stepping by each latency. */
+  function scripted(samples: { latencyMs: number; status: number }[]) {
+    let clock = 0;
+    let call = 0;
+    const calls: string[] = [];
+    const pending: number[] = [];
+    const transport = async (url: string): Promise<Response> => {
+      calls.push(url);
+      const sample = samples[call] ?? { latencyMs: 1, status: 200 };
+      call += 1;
+      pending.push(sample.latencyMs);
+      return new Response(null, { status: sample.status });
+    };
+    // `now()` is read once before and once after each call; the after-read adds that call's latency.
+    let reads = 0;
+    const now = (): number => {
+      reads += 1;
+      if (reads % 2 === 0) {
+        clock += pending.shift() ?? 0;
+      }
+      return clock;
+    };
+    return { calls, now, transport };
+  }
+
+  test("records the warmed isolate's reading when one sample lands on a cold start", async () => {
+    const { calls, now, transport } = scripted([
+      { latencyMs: 1_219, status: 200 },
+      { latencyMs: 90, status: 200 },
+    ]);
+    const check = await probeWebWith("https://worker.invalid", transport, now);
+
+    expect(calls).toHaveLength(2);
+    expect(check).toMatchObject({ latencyMs: 90, status: "ok" });
+  });
+
+  test("still records genuine slowness, which reads slow on both samples", async () => {
+    const { calls, now, transport } = scripted([
+      { latencyMs: 1_300, status: 200 },
+      { latencyMs: 1_250, status: 200 },
+    ]);
+    const check = await probeWebWith("https://worker.invalid", transport, now);
+
+    expect(calls).toHaveLength(2);
+    expect(check.latencyMs).toBeGreaterThan(WEB_RESAMPLE_OVER_MS);
+    expect(check).toMatchObject({ latencyMs: 1_250, status: "ok" });
+  });
+
+  test("takes one sample when the first is inside the limit", async () => {
+    const { calls, now, transport } = scripted([{ latencyMs: 120, status: 200 }]);
+    const check = await probeWebWith("https://worker.invalid", transport, now);
+
+    expect(calls).toHaveLength(1);
+    expect(check).toMatchObject({ latencyMs: 120, status: "ok" });
+  });
+
+  test("resamples at exactly the limit the admission coordinator gates on", () => {
+    // Read from source: the coordinator module pulls in the Worker's database client.
+    const source = readFileSync(
+      join(import.meta.dir, "../../../../apps/web/src/lib/server/database-admission.ts"),
+      "utf8",
+    );
+    const limit = /DATABASE_ADMISSION_PUBLIC_LATENCY_LIMIT_MS = (\d+)/.exec(source)?.[1];
+
+    expect(Number(limit)).toBe(WEB_RESAMPLE_OVER_MS);
+  });
+
+  test("never resamples a failing answer into a pass", async () => {
+    const { calls, now, transport } = scripted([
+      { latencyMs: 900, status: 503 },
+      { latencyMs: 40, status: 200 },
+    ]);
+    const check = await probeWebWith("https://worker.invalid", transport, now);
+
+    expect(calls).toHaveLength(1);
+    expect(check).toMatchObject({ latencyMs: 900, status: "down" });
+  });
+});
 
 describe("findJsonSummary", () => {
   test("finds the summary on the last line", () => {
