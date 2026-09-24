@@ -9,14 +9,21 @@
 // The search palette, OPEN, is a dialog named by its own title, and that title leaves the outline
 // again when the palette closes.
 // The chromeless public surfaces carry no skip link on purpose (public-chrome.tsx): they render no
-// shared chrome to bypass. That precondition is asserted here, so the exemption cannot quietly stop
-// being true.
+// shared chrome to bypass. That precondition is asserted here, with where each surface's first Tab
+// stop lands, so the exemption cannot quietly stop being true.
 
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 import { blockExternalRequests } from "./browser";
 
 const PAGES = ["/", "/search", "/tracks", "/artists", "/albums", "/labels", "/fresh"] as const;
-const CHROMELESS = ["/radio", "/galaxy", "/pipeline", "/device"] as const;
+// Each chromeless public surface, and where its first Tab stop lands. `/galaxy` is the game: its
+// keyboard interface is the game's own keys on the canvas, and it has no tabbable control at all.
+const CHROMELESS = [
+  { firstTab: "page", path: "/radio" },
+  { firstTab: "none", path: "/galaxy" },
+  { firstTab: "page", path: "/pipeline" },
+  { firstTab: "page", path: "/device" },
+] as const;
 
 function watchForErrors(page: Page): string[] {
   const problems: string[] = [];
@@ -70,16 +77,28 @@ for (const path of PAGES) {
     await page.keyboard.press("Enter");
     await expect(page.locator("#content")).toBeFocused();
 
-    // The next Tab continues from the page, never back up into the top bar.
+    // The next Tab continues from the page: a control inside the page region, never the skip link
+    // again, the top bar, or the colophon.
     await page.keyboard.press("Tab");
-    expect(
-      await page.evaluate(
-        () =>
-          document.activeElement?.closest(".nav-topbar") === null &&
-          document.activeElement !== document.body,
-      ),
-      `the Tab after the skip on ${path} stays in the page`,
-    ).toBe(true);
+
+    const next = await page.evaluate(() => {
+      const active = document.activeElement;
+
+      return {
+        inColophon: active?.closest(".nav-footer") !== null,
+        inPage:
+          active?.closest("#content") !== null && active !== document.getElementById("content"),
+        inTopBar: active?.closest(".nav-topbar") !== null,
+        isSkip: active?.classList.contains("skip-link") === true,
+      };
+    });
+
+    expect(next, `the Tab after the skip on ${path} lands on a control in the page`).toEqual({
+      inColophon: false,
+      inPage: true,
+      inTopBar: false,
+      isSkip: false,
+    });
 
     expect(problems, `expected a clean console on ${path}, saw:\n${problems.join("\n")}`).toEqual(
       [],
@@ -109,8 +128,8 @@ test("the open palette is a dialog named by its title, and the title leaves with
   await expect(titleHeading).toHaveCount(0);
 });
 
-for (const path of CHROMELESS) {
-  test(`${path} is chromeless: no shared chrome, so nothing for a skip link to bypass`, async ({
+for (const { firstTab, path } of CHROMELESS) {
+  test(`${path} is chromeless: nothing to bypass, and the first Tab stop is its own`, async ({
     page,
   }) => {
     await blockExternalRequests(page);
@@ -126,5 +145,35 @@ for (const path of CHROMELESS) {
     await expect(page.locator(".nav-topbar")).toHaveCount(0);
     await expect(page.locator(".nav-footer")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Skip to the page" })).toHaveCount(0);
+
+    // The keyboard half: the first Tab stop is the surface's own content (inside its <main>), or,
+    // for a surface with no tabbable control, focus stays on the document. A surface that renders
+    // its controls after hydration (the machinery map) is given the moment to draw them first.
+    if (firstTab === "page") {
+      await expect(
+        page
+          .locator(
+            "main :is(a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1']))",
+          )
+          .first(),
+      ).toBeVisible();
+    }
+
+    await page.keyboard.press("Tab");
+
+    const first = await page.evaluate(() => {
+      const active = document.activeElement;
+
+      return {
+        inMain: active !== null && active !== document.body && active.closest("main") !== null,
+        onDocument: active === null || active === document.body,
+      };
+    });
+
+    expect(first, `${path}'s first Tab stop`).toEqual(
+      firstTab === "page"
+        ? { inMain: true, onDocument: false }
+        : { inMain: false, onDocument: true },
+    );
   });
 }
