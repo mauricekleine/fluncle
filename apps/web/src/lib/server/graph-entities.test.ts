@@ -275,7 +275,6 @@ describe("the reconcile (scripts/backfill-album-graph.ts + backfill-labels.ts)",
       title: "Deep cut",
       trackId: "t2",
     });
-
     await reconcile();
 
     const album = await getAlbumBySlug("wormhole");
@@ -505,6 +504,12 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
       title: "Deep cut",
       trackId: "t2",
     });
+    await db.execute({
+      args: ["t2"],
+      sql: `update tracks set album_image_url = 'https://i.scdn.co/image/cover',
+             duration_ms = 201000, bpm = 172, key = 'C minor', isrc = 'GBTEST2600003',
+             release_date = '2026-04-02' where track_id = ?`,
+    });
     await reconcile();
   });
 
@@ -545,6 +550,14 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
     // it links OUT. This is what keeps it structurally unable to pose as a finding.
     expect(albumCatalogue.tracks[0]).not.toHaveProperty("logId");
     expect(albumCatalogue.tracks[0]?.spotifyUrl).toContain("open.spotify.com");
+    expect(albumCatalogue.tracks[0]).toMatchObject({
+      albumImageUrl: expect.any(String),
+      bpm: 172,
+      durationMs: 201000,
+      key: "C minor",
+      previewable: true,
+      releaseDate: "2026-04-02",
+    });
     expect(labelTracks[0]).not.toHaveProperty("logId");
   });
 

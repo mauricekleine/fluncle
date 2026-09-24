@@ -28,6 +28,7 @@
 
 import { type FreshTrack } from "@fluncle/contracts";
 import { bestAlbumCoverUrl, bestArtistAvatarUrl } from "../media";
+import { hasPreviewSource } from "../track-preview";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
@@ -153,7 +154,13 @@ export type FreshReleases = {
 };
 
 type FreshCatalogueRow = LeadArtistRow & {
+  album_image_url: string | null;
   artists_json: string;
+  bpm: number | null;
+  duration_ms: number;
+  isrc: string | null;
+  key: string | null;
+  preview_url: string | null;
   release_date: string;
   spotify_url: string | null;
   title: string;
@@ -222,13 +229,14 @@ export async function listFreshReleases(
     }),
     // The unlit half: the catalogue rows (a `tracks` row with no `findings` row — the maintained
     // `is_catalogue = 1`, materializing the anti-join off `tracks_is_catalogue_idx`) released in the
-    // window. No album COVER and no coordinate — nothing that would let it read as a
-    // finding (DESIGN.md's Unlit Rule). The lead artist's avatar rides along, but the UI dims it into
+    // window. No coordinate crosses this boundary. The lead artist's avatar rides along, but the UI dims it into
     // the unlit register (the `hub-grid` precedent), so it identifies WHO without lighting up.
     db.execute({
       args: [windowStart, today, FRESH_CATALOGUE_LIMIT],
       sql: `select tracks.track_id, tracks.title, tracks.artists_json,
-                   tracks.spotify_url, tracks.release_date, ${LEAD_ARTIST_SELECT}
+                   tracks.spotify_url, tracks.release_date, tracks.album_image_url,
+                   tracks.duration_ms, tracks.bpm, tracks.key, tracks.preview_url, tracks.isrc,
+                   ${LEAD_ARTIST_SELECT}
             from tracks
             ${LEAD_ARTIST_JOIN}
             where tracks.is_catalogue = 1
@@ -282,8 +290,18 @@ export async function listFreshReleases(
   );
   const catalogue: FreshCatalogueItem[] = typedRows<FreshCatalogueRow>(catalogueResult.rows).map(
     (row) => ({
+      albumImageUrl: bestAlbumCoverUrl({
+        imageKey: null,
+        imageState: null,
+        imageUpdatedAt: null,
+        spotifyUrl: row.album_image_url,
+      }),
       artistAvatarUrl: leadArtistAvatarUrl(row),
       artists: parseArtistsJson(row.artists_json),
+      bpm: row.bpm ?? undefined,
+      durationMs: row.duration_ms || undefined,
+      key: row.key ?? undefined,
+      previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
       releaseDate: row.release_date,
       spotifyUrl: row.spotify_url ?? undefined,
       title: row.title,

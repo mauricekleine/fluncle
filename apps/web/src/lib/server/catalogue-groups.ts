@@ -111,6 +111,8 @@ import {
   GRAPH_GROUP_TRACK_LIMIT,
 } from "../catalogue";
 import { parseArtistsJson } from "./artists";
+import { bestAlbumCoverUrl } from "../media";
+import { hasPreviewSource } from "../track-preview";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import { dedupeByRecordingIdentity, type RecordingIdentity } from "./track-match";
@@ -143,10 +145,18 @@ export {
 
 type GroupTrackRow = {
   album: string | null;
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
+  album_image_url: string | null;
   album_slug: string | null;
   artists_json: string;
+  bpm: number | null;
+  duration_ms: number;
   group_key: string;
   isrc: string | null;
+  key: string | null;
+  preview_url: string | null;
   release_date: string | null;
   spotify_url: string | null;
   title: string;
@@ -237,7 +247,18 @@ function toTrack(
   row: Pick<GroupTrackRow, "artists_json" | "spotify_url" | "title" | "track_id">,
 ): CatalogueTrackItem {
   return {
+    albumImageUrl: bestAlbumCoverUrl({
+      imageKey: row.album_image_key,
+      imageState: row.album_image_state,
+      imageUpdatedAt: row.album_image_updated_at,
+      spotifyUrl: row.album_image_url,
+    }),
     artists: parseArtistsJson(row.artists_json),
+    bpm: row.bpm ?? undefined,
+    durationMs: row.duration_ms || undefined,
+    key: row.key ?? undefined,
+    previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
+    releaseDate: row.release_date ?? undefined,
     spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
@@ -371,6 +392,11 @@ export async function listArtistCatalogue(
             select tracks.track_id as track_id, tracks.title as title,
                    tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
                    tracks.isrc as isrc, tracks.album as album, al.slug as album_slug,
+                   tracks.album_image_url as album_image_url,
+                   al.image_key as album_image_key, al.image_state as album_image_state,
+                   al.image_updated_at as album_image_updated_at,
+                   tracks.duration_ms as duration_ms, tracks.bpm as bpm,
+                   tracks.key as key, tracks.preview_url as preview_url,
                    tracks.release_date as release_date,
                    lower(coalesce(tracks.album, '')) as group_key
             from tracks
@@ -405,6 +431,8 @@ export async function listArtistCatalogue(
             select paged.*, max(paged.group_rn) over () as total_groups from paged
           )
           select track_id, title, artists_json, spotify_url, isrc, album, album_slug,
+                 album_image_url, album_image_key, album_image_state, album_image_updated_at,
+                 duration_ms, bpm, key, preview_url,
                  release_date, group_key, group_name, group_slug, group_release_date,
                  track_count, record_count, total_tracks, total_groups
           from counted
@@ -540,6 +568,11 @@ export async function listLabelCatalogue(
             select tracks.track_id as track_id, tracks.title as title,
                    tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
                    tracks.isrc as isrc, tracks.album as album, al.slug as album_slug,
+                   tracks.album_image_url as album_image_url,
+                   al.image_key as album_image_key, al.image_state as album_image_state,
+                   al.image_updated_at as album_image_updated_at,
+                   tracks.duration_ms as duration_ms, tracks.bpm as bpm,
+                   tracks.key as key, tracks.preview_url as preview_url,
                    tracks.release_date as release_date,
                    lower(credit.value) as group_key, credit.value as credit_name,
                    asl.slug as artist_slug
@@ -579,6 +612,8 @@ export async function listLabelCatalogue(
             select paged.*, max(paged.group_rn) over () as total_groups from paged
           )
           select track_id, title, artists_json, spotify_url, isrc, album, album_slug,
+                 album_image_url, album_image_key, album_image_state, album_image_updated_at,
+                 duration_ms, bpm, key, preview_url,
                  release_date, group_key, group_name, group_slug, group_release_date,
                  track_count, record_count, total_groups,
                  (select count(*)

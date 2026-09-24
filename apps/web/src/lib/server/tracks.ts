@@ -11,6 +11,7 @@ import {
 } from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
 import { bestAlbumCoverUrl, versionedObservationAudioUrl } from "../media";
+import { hasPreviewSource } from "../track-preview";
 import { nextBoundaryEpochMs, type RadioScheduleEntry } from "../radio-schedule";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { composeAppleArtworkUrl } from "./apple-music";
@@ -1022,7 +1023,13 @@ export async function listLogIndexEntries(limit = 500): Promise<LogIndexEntry[]>
  * left here is the ALBUM page, which needs no grouping because an album IS one group.
  */
 export type CatalogueTrackItem = {
+  albumImageUrl?: string;
   artists: string[];
+  bpm?: number;
+  durationMs?: number;
+  key?: string;
+  previewable: boolean;
+  releaseDate?: string;
   /** Null when the track has no Spotify presence at all (a catalogue-only resolve). */
   spotifyUrl: string | undefined;
   title: string;
@@ -1049,8 +1056,13 @@ export type CatalogueSlice = {
 };
 
 type CatalogueTrackRow = {
+  album_image_url: string | null;
   artists_json: string;
+  bpm: number | null;
+  duration_ms: number;
   isrc: string | null;
+  key: string | null;
+  preview_url: string | null;
   release_date: string | null;
   spotify_url: string | null;
   title: string;
@@ -1066,9 +1078,7 @@ type CatalogueTrackRow = {
  * `release_date is null` leads the sort because SQLite orders NULL as the SMALLEST value, so a
  * bare `release_date desc` would float every undated row to the top of the page.
  *
- * No `album_image_url` here, and that is not an oversight: an unlit row renders NO COVER (it is
- * half of what holds it apart from a finding — DESIGN.md's Unlit Rule), so selecting one shipped
- * a URL through the markup, the hydration payload and the wire on every row, to be thrown away.
+ * The cover and readout travel with the bounded slice so its rows need no follow-up reads.
  */
 export async function listCatalogueTracksByAlbum(albumId: string): Promise<CatalogueSlice> {
   const db = await getDb();
@@ -1080,7 +1090,8 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
     // gate keys off the same set the page renders. The crawler leaves most twins unstamped, so the
     // slice is folded again below (`dedupeByRecordingIdentity`) before it crosses the wire.
     sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url,
-                 tracks.isrc, tracks.release_date, count(*) over () as total
+                 tracks.album_image_url, tracks.duration_ms, tracks.bpm, tracks.key,
+                 tracks.preview_url, tracks.isrc, tracks.release_date, count(*) over () as total
           from tracks
           left join findings on findings.track_id = tracks.track_id
           where tracks.album_id = ? and findings.track_id is null
@@ -1107,7 +1118,18 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
     // tracks than the page shows (`count(distinct)` in SQL would double-scan the growing table).
     total: Math.max(rawTotal - (rows.length - deduped.length), deduped.length),
     tracks: deduped.map((row) => ({
+      albumImageUrl: bestAlbumCoverUrl({
+        imageKey: null,
+        imageState: null,
+        imageUpdatedAt: null,
+        spotifyUrl: row.album_image_url,
+      }),
       artists: parseArtistsJson(row.artists_json),
+      bpm: row.bpm ?? undefined,
+      durationMs: row.duration_ms || undefined,
+      key: row.key ?? undefined,
+      previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
+      releaseDate: row.release_date ?? undefined,
       spotifyUrl: row.spotify_url ?? undefined,
       title: row.title,
       trackId: row.track_id,

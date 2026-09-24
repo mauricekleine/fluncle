@@ -5,7 +5,7 @@
 // can filter and page through. It is a CATALOGUE page (VOICE.md's Three Areas) — a reference shelf,
 // not a lore page — and it renders the two-register grammar the rest of the archive lives by: a
 // certified finding is LIT (its cover, its Log ID coordinate, a link to `/log/<logId>`), an
-// uncertified catalogue row is UNLIT (no cover — the eclipse fallback — no coordinate, out to
+// uncertified catalogue row is UNLIT (a dimmed cover, no coordinate, out to
 // Spotify — DESIGN.md's Unlit Rule). The register is a bit the mapper reads, structural in the shape
 // below; the row component (`components/tracks-hub-row.tsx`) renders each register without deciding
 // which one it is.
@@ -101,7 +101,9 @@ import {
   type ResolvedFilterEntities,
 } from "./search";
 import { logPageUrl } from "../fluncle-links";
+import { bestAlbumCoverUrl } from "../media";
 import { hasTrackPageIdentity, trackPageUrl } from "../track-page";
+import { hasPreviewSource } from "../track-preview";
 import { fold } from "./track-match";
 import { releasedByTodaySql, releaseTodayUtc, validReleaseDateSql } from "./release-day";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
@@ -150,8 +152,7 @@ export type TracksHubArtistLink = { name: string; slug?: string };
 /**
  * One row of the hub: a lit finding or an unlit catalogue row, plus the release date the row's date
  * column prints and the resolved artist links both registers render. A finding carries its full
- * public DTO (cover, coordinate, label + slug); a catalogue row carries only the columns the unlit
- * register renders (no cover crosses the wire — the Unlit Rule is structural in this shape), plus
+ * public DTO (cover, coordinate, label + slug); a catalogue row carries its own cover and readout, plus
  * the label + slug so its imprint still links to `/label/<slug>` when the entity exists.
  */
 export type TracksHubEntry =
@@ -451,7 +452,7 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
   }
 
   // A catalogue row: the findings.* columns are null and NEVER read. Only the `tracks` columns map,
-  // and no cover and no coordinate cross the wire (the Unlit Rule is structural in this shape). The
+  // and no coordinate crosses the wire. The
   // label + slug ride along so the row's imprint still links to `/label/<slug>` when it has a page.
   return {
     artistLinks,
@@ -460,8 +461,18 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
     labelSlug: row.label_slug ?? undefined,
     releaseDate,
     track: {
+      albumImageUrl: bestAlbumCoverUrl({
+        imageKey: row.album_image_key,
+        imageState: row.album_image_state,
+        imageUpdatedAt: row.album_image_updated_at,
+        spotifyUrl: row.album_image_url,
+      }),
       artistAvatarUrl,
       artists: displayArtists,
+      bpm: row.bpm ?? undefined,
+      durationMs: row.duration_ms || undefined,
+      key: row.key ?? undefined,
+      previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
       releaseDate,
       spotifyUrl: row.spotify_url ?? undefined,
       title: row.title,

@@ -75,6 +75,7 @@ import {
   tokenize,
 } from "../search-query";
 import { bestArtistAvatarUrl, labelLogoUrl } from "../media";
+import { hasPreviewSource } from "../track-preview";
 import { ALBUM_INDEX_MIN_TRACKS } from "./albums";
 import { MAX_SIMILAR_ARTISTS_INPUT, meanEmbedding } from "./artist-dossier";
 import { listedArtistWhere } from "./artist-visibility";
@@ -128,10 +129,13 @@ type SearchRow = {
   album_image_url: string | null;
   artists_json: string;
   bpm: number | null;
+  duration_ms: number | null;
   galaxy_name: string | null;
   key: string | null;
   label: string | null;
   log_id: string | null;
+  isrc: string | null;
+  preview_url: string | null;
   release_date: string | null;
   spotify_url: string | null;
   title: string;
@@ -143,7 +147,7 @@ type SearchRow = {
 // leak); it is NULL for an uncertified track by construction — a galaxy is a property of the
 // certified archive.
 const SEARCH_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album, tracks.album_image_url,
-  tracks.bpm, tracks.key, tracks.label, tracks.release_date, tracks.spotify_url, findings.log_id,
+  tracks.bpm, tracks.duration_ms, tracks.isrc, tracks.preview_url, tracks.key, tracks.label, tracks.release_date, tracks.spotify_url, findings.log_id,
   (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name`;
 
 /**
@@ -185,10 +189,12 @@ function toHit(row: SearchRow): SearchHit {
     artists: parseArtists(row.artists_json),
     bpm: row.bpm ?? undefined,
     certified: row.log_id !== null,
+    durationMs: row.duration_ms || undefined,
     galaxy: row.galaxy_name ?? undefined,
     key: row.key ?? undefined,
     label: row.label ?? undefined,
     logId: row.log_id ?? undefined,
+    previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
     releaseDate: row.release_date ?? undefined,
     spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,

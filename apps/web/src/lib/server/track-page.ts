@@ -57,6 +57,7 @@ import { isSonarTrackEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { hydrateRankedSonarMatches } from "./sonar-hydration";
 import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
 import { bestAlbumCoverUrl } from "../media";
+import { hasPreviewSource } from "../track-preview";
 import { type ListenKind } from "../track-page";
 import { discogsReleaseUrl } from "./discogs";
 import { parseArtistsJson } from "./artists";
@@ -104,6 +105,8 @@ export type SonicNeighbour = {
   albumImageUrl: string | undefined;
   artists: string[];
   logId: string | undefined;
+  previewable: boolean;
+  spotifyUrl?: string;
   title: string;
   trackId: string;
 };
@@ -382,7 +385,7 @@ export async function readTrackDestination(trackId: string): Promise<TrackPageRo
       mbRecordingId: row.mb_recording_id?.trim() ? row.mb_recording_id.trim() : undefined,
       // A stored clip, or an ISRC the relay's own rungs can resolve one from. Both are the same
       // bounded short-source media every other Fluncle surface previews; neither is a full song.
-      previewable: Boolean(row.preview_url ?? row.isrc),
+      previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
       releaseDate: row.release_date ?? undefined,
       title: row.title,
       trackId: row.track_id,
@@ -399,12 +402,16 @@ type NeighbourRow = {
   album_image_updated_at: string | null;
   album_image_url: string | null;
   artists_json: string;
+  isrc: string | null;
   log_id: string | null;
+  preview_url: string | null;
+  spotify_url: string | null;
   title: string;
   track_id: string;
 };
 
 const NEIGHBOUR_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
+  tracks.preview_url, tracks.isrc, tracks.spotify_url,
   (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
   (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
   (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
@@ -427,6 +434,8 @@ function toNeighbour(row: NeighbourRow): SonicNeighbour {
     }),
     artists: parseArtistsJson(row.artists_json),
     logId: row.log_id ?? undefined,
+    previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
+    spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
   };

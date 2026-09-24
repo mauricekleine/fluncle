@@ -287,6 +287,12 @@ describe("listArtistCatalogue (the artist page's records)", () => {
   });
 
   it("groups the tracks into records, nameless bucket last, and counts in SQL", async () => {
+    await db.execute({
+      args: ["t_a1"],
+      sql: `update tracks set album_image_url = 'https://i.scdn.co/image/cover',
+             duration_ms = 205000, bpm = 173, key = 'D minor',
+             preview_url = 'https://example.com/preview.mp3' where track_id = ?`,
+    });
     const artist = await getArtistBySlug("nu-tone");
 
     if (!artist) {
@@ -307,6 +313,14 @@ describe("listArtistCatalogue (the artist page's records)", () => {
     const words = page.groups.find((group) => group.name === "Words Gone Forever");
 
     expect(words?.tracks.map((track) => track.trackId).sort()).toEqual(["t_a1", "t_a2"]);
+    expect(words?.tracks.find((track) => track.trackId === "t_a1")).toMatchObject({
+      albumImageUrl: expect.any(String),
+      bpm: 173,
+      durationMs: 205000,
+      key: "D minor",
+      previewable: true,
+      releaseDate: "2018-01-01",
+    });
   });
 
   it("orders records by newest release under 'recent', and every row is coordinate-less", async () => {
@@ -418,6 +432,12 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
     // Goldie earns a certified finding (elsewhere) — that, not the mere row, is what lights the link.
     await seedCertifiedFinding("t_goldie_finding", "art_goldie", "Goldie");
     await backfillArtistLinks(db);
+    await db.execute({
+      args: ["t_c1"],
+      sql: `update tracks set album_image_url = 'https://i.scdn.co/image/cover',
+             duration_ms = 220000, bpm = 171, key = 'A minor', isrc = 'GBTEST2600002'
+             where track_id = ?`,
+    });
 
     const page = await listLabelCatalogue("lbl_1", "name", 1);
 
@@ -434,6 +454,14 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
     // The findings-free entity is grouped, its track kept, AND linked (it has a public page now).
     expect(calibre?.slug).toBe("calibre");
     expect(calibre?.records[0]?.tracks).toHaveLength(1);
+    expect(calibre?.records[0]?.tracks[0]).toMatchObject({
+      albumImageUrl: expect.any(String),
+      bpm: 171,
+      durationMs: 220000,
+      key: "A minor",
+      previewable: true,
+      releaseDate: "2001-01-01",
+    });
     // The certified entity carries the link too.
     expect(goldie?.slug).toBe("goldie");
     // The whole flattened page is coordinate-less (the rail again).
