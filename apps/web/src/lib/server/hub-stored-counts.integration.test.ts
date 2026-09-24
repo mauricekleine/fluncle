@@ -288,9 +288,17 @@ describe("the bio worklists read the stored counters", () => {
 });
 
 describe("the indexable count reads page membership", () => {
-  it("counts the edged artist and label plus the album's stored gate", async () => {
+  it("counts the edged label, the album's stored gate, and an artist only when both halves agree", async () => {
     expect(await countIndexableLabels()).toBe(1);
     expect(await countIndexableAlbums()).toBe(1);
+    // An artist's whole-archive gate is its maintained counter AND its rendered rows (the counter
+    // keeps a whole-archive read bounded; the rows keep it honest). The edged artist's counter
+    // still reads zero and the counted artist has no rows, so neither clears it yet.
+    expect(await countIndexableArtists()).toBe(0);
+
+    await db.execute(
+      `update artists set renderable_track_count = ${FLOOR} where slug = 'uncounted-artist'`,
+    );
     expect(await countIndexableArtists()).toBe(1);
   });
 
@@ -332,7 +340,7 @@ describe("the sitemap row readers gate on page membership", () => {
     ]);
   });
 
-  it("keeps visible artist and label rows when their stored counters drift", async () => {
+  it("keeps a visible label when its counter drifts; an artist follows its counter, page and sitemap alike", async () => {
     for (const table of ["albums", "artists", "labels"] as const) {
       await db.execute(`update ${table} set renderable_track_count = ${FLOOR - 1}`);
     }
@@ -341,9 +349,9 @@ describe("the sitemap row readers gate on page membership", () => {
       "uncounted-imprint",
     ]);
     expect(await listAlbumSitemapRows(FLOOR)).toEqual([]);
-    expect((await listArtistSitemapRows(FLOOR)).map((row) => row.slug)).toEqual([
-      "uncounted-artist",
-    ]);
+    // The artist page's robots gate reads the very same predicate (`isArtistIndexable`), so a
+    // drifted counter hides the artist from both at once, never from one alone.
+    expect(await listArtistSitemapRows(FLOOR)).toEqual([]);
   });
 
   it("carries no lastmod for a findings-free entity (catalogue rows have no found date)", async () => {

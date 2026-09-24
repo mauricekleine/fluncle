@@ -136,7 +136,7 @@ export async function resolveLabelPageData(
           throw error;
         },
       ),
-      countRenderedLabelTracks(label.id, today),
+      countRenderedLabelTracks(label.id, today, LABEL_INDEX_MIN_TRACKS),
     ],
   );
 

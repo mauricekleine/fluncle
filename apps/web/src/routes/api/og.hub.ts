@@ -3,8 +3,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse } from "workers-og";
 import { BODY, BRAND, OG_CACHE_CONTROL, cardFonts, satoriText } from "@/lib/server/satori-render";
 import { countIndexableAlbums } from "@/lib/server/albums";
-import { countIndexableArtists } from "@/lib/server/artists";
-import { countIndexableLabels } from "@/lib/server/labels";
+import { countArtistPagesForDisplay } from "@/lib/server/artists";
+import { countLabelPagesForDisplay } from "@/lib/server/labels";
 import { countAllTracks } from "@/lib/server/tracks-hub";
 
 // The hub-level Open Graph card (1200×630) for the four entity hubs — /artists, /albums,
@@ -62,7 +62,7 @@ const HUB_CARDS: Record<string, HubCard> = {
     name: "Albums",
   },
   artists: {
-    count: countIndexableArtists,
+    count: countArtistPagesForDisplay,
     line: (total) =>
       total > 1
         ? `${countFormatter.format(total)} drum & bass artists, A to Z.`
@@ -70,7 +70,7 @@ const HUB_CARDS: Record<string, HubCard> = {
     name: "Artists",
   },
   labels: {
-    count: countIndexableLabels,
+    count: countLabelPagesForDisplay,
     line: (total) =>
       total > 1
         ? `${countFormatter.format(total)} drum & bass labels, A to Z.`

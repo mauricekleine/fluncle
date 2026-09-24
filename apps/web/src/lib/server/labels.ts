@@ -723,7 +723,7 @@ export function labelSitemapWindowStatement(minTracks: number, limit: number, af
                         where t2.label_id = labels.id and f2.log_id is not null)
                     limit 1) as cover_url
           from labels
-          where ${seek} and ${renderedLabelCountSql("labels.id", "date('now')")} >= ?
+          where ${seek} and ${renderedLabelCountSql("labels.id", "date('now')", minTracks)} >= ?
           order by labels.slug asc
           limit ?`,
   };
@@ -1677,12 +1677,21 @@ export const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
 };
 
 /** The same indexed rendered-membership gate as the label page and sitemap row reader. */
+/**
+ * How many label pages a SHELF shows (the front door, the OG hub card, the funnel): the maintained
+ * `renderable_track_count` against the floor, one indexed read. A display number, not a decision;
+ * the page's robots and the sitemap use the exact gate (`countIndexableLabels`).
+ */
+export function countLabelPagesForDisplay(): Promise<number> {
+  return countIndexableHubEntities(LABELS_HUB_QUERY);
+}
+
 export async function countIndexableLabels(): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
     args: [LABEL_INDEX_MIN_TRACKS],
     sql: `select count(*) as n from labels
-          where ${renderedLabelCountSql("labels.id", "date('now')")} >= ?`,
+          where ${renderedLabelCountSql("labels.id", "date('now')", LABEL_INDEX_MIN_TRACKS)} >= ?`,
   });
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }

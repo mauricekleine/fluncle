@@ -30,10 +30,10 @@ const getFindingsByArtist = vi.hoisted(() => vi.fn());
 const getArtistNeighbours = vi.hoisted(() => vi.fn());
 const listArtistCatalogue = vi.hoisted(() => vi.fn());
 const listArtistUpcoming = vi.hoisted(() => vi.fn());
-const countRenderedArtistTracks = vi.hoisted(() => vi.fn());
+const isArtistIndexable = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/entity-indexability", () => ({
-  countRenderedArtistTracks,
+  isArtistIndexable,
   publicEntityIndexable: (count: number, floor: number) => count >= floor,
 }));
 
@@ -164,9 +164,9 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getArtistNeighbours.mockReset();
     listArtistCatalogue.mockReset();
     listArtistUpcoming.mockReset();
-    countRenderedArtistTracks.mockReset();
-    countRenderedArtistTracks.mockImplementation(
-      async () => (await getPublicArtistBySlug("drift"))?.renderableTrackCount ?? 0,
+    isArtistIndexable.mockReset();
+    isArtistIndexable.mockImplementation(
+      async () => ((await getPublicArtistBySlug("drift"))?.renderableTrackCount ?? 0) >= 3,
     );
     getPublicArtistSocials.mockResolvedValue([]);
     getPublicArtistAliasNames.mockResolvedValue([]);
@@ -235,7 +235,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     ]);
     countArtistFindings.mockResolvedValue(0);
 
-    countRenderedArtistTracks.mockResolvedValue(3);
+    isArtistIndexable.mockResolvedValue(true);
     const indexed = await resolveArtistPageData("drift", "name", 1);
     expect(indexed).toMatchObject({ indexable: true, status: "found" });
   });

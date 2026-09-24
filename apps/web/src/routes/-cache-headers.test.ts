@@ -20,6 +20,8 @@ vi.mock("../lib/server/db", () => ({
 }));
 vi.mock("../lib/server/artists", () => ({
   ARTIST_INDEX_MIN_FINDINGS: 3,
+  countArtistPagesForDisplay: vi.fn(async () => 0),
+  countArtistSitemapCandidates: vi.fn(async () => 0),
   countIndexableArtists: vi.fn(async () => 0),
   listArtistSitemapRows: vi.fn(async () => []),
   maxArtistSitemapLastmod: vi.fn(async () => undefined),

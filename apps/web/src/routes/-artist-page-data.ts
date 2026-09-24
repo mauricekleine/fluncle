@@ -30,7 +30,7 @@ import {
 } from "@/lib/catalogue";
 import { listArtistCatalogue, listArtistUpcoming } from "@/lib/server/catalogue-groups";
 import { releaseTodayUtc } from "@/lib/server/release-day";
-import { countRenderedArtistTracks, publicEntityIndexable } from "@/lib/server/entity-indexability";
+import { isArtistIndexable } from "@/lib/server/entity-indexability";
 import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
 
 // The socials row's shape travels with the page data, so the route renders it without
@@ -116,7 +116,7 @@ export async function resolveArtistPageData(
     },
   );
 
-  const [catalogue, findings, socials, neighbours, alternateNames, upcoming, renderedCount] =
+  const [catalogue, findings, socials, neighbours, alternateNames, upcoming, artistIndexable] =
     await Promise.all([
       cataloguePromise,
       getFindingsByArtist(artist.id, artist.name, today),
@@ -133,7 +133,7 @@ export async function resolveArtistPageData(
           throw error;
         },
       ),
-      countRenderedArtistTracks(artist.id, artist.name, today),
+      isArtistIndexable(artist.id, today, ARTIST_INDEX_MIN_FINDINGS),
     ]);
 
   if (catalogue === null || upcoming === null) {
@@ -159,8 +159,8 @@ export async function resolveArtistPageData(
     findings,
     id: artist.id,
     imageUrl: artist.imageUrl,
-    // The rendered-membership count includes Upcoming and is the sitemap's gate as well.
-    indexable: publicEntityIndexable(renderedCount, ARTIST_INDEX_MIN_FINDINGS),
+    // The same gate as the sitemap rows (rendered membership, Upcoming included).
+    indexable: artistIndexable,
     lastfmUrl: artist.lastfmUrl,
     mbid: artist.mbid,
     name: artist.name,

@@ -494,7 +494,37 @@ describe("a child sitemap fetches only its own bag", () => {
           args: statement.args,
           sql: `explain query plan ${statement.sql}`,
         });
-        const details = typedRows<{ detail: string }>(plan.rows)
+        const rows = typedRows<{ detail: string; id: number; parent: number }>(plan.rows);
+        // The artist gate's credit-name fallback is one materialized table per statement, fed only
+        // by two index-ordered windows of at most ARTIST_JSON_FALLBACK_LIMIT rows each; grouping
+        // that bounded set is allowed. Everything OUTSIDE it (the window itself) must still be a
+        // pure index search with no temporary sort.
+        const fallbackRoot = rows.find((row) => row.detail === "MATERIALIZE artist_fallback");
+        const inFallback = new Set<number>(fallbackRoot ? [fallbackRoot.id] : []);
+
+        for (const row of rows) {
+          if (inFallback.has(row.parent)) {
+            inFallback.add(row.id);
+          }
+        }
+
+        if (kind === "artists") {
+          const fallback = rows
+            .filter((row) => inFallback.has(row.id))
+            .map((row) => row.detail)
+            .join("\n");
+
+          expect(fallback, `artists fallback\n${fallback}`).toMatch(
+            /SEARCH f USING COVERING INDEX findings_added_at_track_id_idx/,
+          );
+          expect(fallback, `artists fallback\n${fallback}`).toMatch(
+            /SEARCH t USING COVERING INDEX tracks_release_date_track_id_idx/,
+          );
+          expect(fallback, `artists fallback\n${fallback}`).not.toMatch(/^SCAN (?:f|t)\b/m);
+        }
+
+        const details = rows
+          .filter((row) => !inFallback.has(row.id))
           .map((row) => row.detail)
           .join("\n");
 
