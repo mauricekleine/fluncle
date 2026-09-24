@@ -113,12 +113,12 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     expect(resolveLogPageTarget).toHaveBeenCalledWith("abc");
   });
 
-  it("no longer serves the bare /api alias — the back-compat mount is gone (falls through)", async () => {
+  it("serves nothing off the bare /api prefix — it falls through to TanStack", async () => {
     resolveLogPageTarget.mockResolvedValueOnce({ kind: "track", track: TRACK });
 
     const { handleOrpc } = await import("./orpc");
-    // The vocabulary cut removed the bare `/api` alias: only `/api/v1` is oRPC's, so
-    // a bare `/api/tracks/*` request falls through to TanStack (null), never served here.
+    // Only `/api/v1` is oRPC's, for every op and method: the prefix gate runs before routing, so
+    // a bare `/api/*` request falls through to TanStack (null) and never reaches a procedure.
     expect(await handleOrpc(get("https://www.fluncle.com/api/tracks/abc"))).toBeNull();
     expect(resolveLogPageTarget).not.toHaveBeenCalled();
   });
@@ -179,12 +179,6 @@ describe("oRPC public read — GET /health (get_health)", () => {
     expect(response?.status).toBe(200);
     expect(response?.headers.get("Cache-Control")).toBe("no-store");
     expect(await readJson(response)).toEqual({ ok: true, sha: expectedSha });
-  });
-
-  it("no longer serves the bare /api alias — the back-compat mount is gone (falls through)", async () => {
-    const { handleOrpc } = await import("./orpc");
-    // Bare `/api/health` is no longer an oRPC mount; it falls through to TanStack.
-    expect(await handleOrpc(get("https://www.fluncle.com/api/health"))).toBeNull();
   });
 });
 

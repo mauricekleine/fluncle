@@ -186,8 +186,8 @@ export type AppleMusicBackfillResult = BackfillPass<{
 // out: it is NOT a Worker-paced vendor sweep (no `backfillNote…` driver lives in
 // this module) — it only shares the per-source `backfill_note_*` column shape so the
 // auto-note authoring step (`note_track`, agent tier) can reuse `recordAttempt` for
-// its "ran" stamp and the board can reuse `listBackfillRanForTracks(_, "note")` for
-// the Note cell's done-when-ran semantics, exactly like Discogs/Last.fm.
+// its "ran" stamp and the board's ran flags (observation-board.ts) give the Note
+// cell the same done-when-ran semantics as Discogs/Last.fm.
 export type BackfillSource = "apple_music" | "beatport" | "discogs" | "lastfm" | "note";
 
 // The per-source reliability state read off a finding's row.
@@ -249,63 +249,6 @@ async function readReliability(trackId: string, source: BackfillSource): Promise
     failures: typeof row?.failures === "number" ? row.failures : 0,
     isDone: Boolean(row?.done_at),
   };
-}
-
-/**
- * Which of the given findings are already loved on Last.fm — i.e. carry a
- * `backfill_lastfm_done_at`. Returned as a Set of trackIds; the admin board turns
- * it into the Last.fm (LFM) cell status, the SAME `done_at` the backfill stamps on
- * a successful `track.love`, so the heart and the love write share one source of
- * truth. One batch query for the whole page, no N+1. Findings that predate the
- * column (or were never loved) read as absent — an empty heart.
- */
-export async function listLastfmLovedForTracks(trackIds: string[]): Promise<Set<string>> {
-  if (trackIds.length === 0) {
-    return new Set();
-  }
-
-  const db = await getDb();
-  const placeholders = trackIds.map(() => "?").join(", ");
-  const result = await db.execute({
-    args: trackIds,
-    sql: `select track_id from findings
-          where track_id in (${placeholders})
-            and backfill_lastfm_done_at is not null`,
-  });
-
-  return new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
-}
-
-/**
- * Which of the given findings the backfill has RUN for a given source — i.e. carry
- * a `backfill_<source>_attempted_at`. The attempt timestamp is stamped on EVERY
- * real attempt (a confident match, a clean no-match, and a failure alike — see
- * `recordAttempt`), so it answers the board's actual question: "has the workflow
- * run for this finding?", not "did it find data?". `done_at` (loved / resolved)
- * only stamps on a successful match, so a ran-but-empty finding has `attempted_at`
- * set and `done_at` null — exactly the "Checked — no release" / "Checked — not
- * loved" state the board now shows instead of grey. One batch query per source for
- * the whole page, no N+1. Findings that predate the columns read as absent.
- */
-export async function listBackfillRanForTracks(
-  trackIds: string[],
-  source: BackfillSource,
-): Promise<Set<string>> {
-  if (trackIds.length === 0) {
-    return new Set();
-  }
-
-  const db = await getDb();
-  const p = columnPrefix(source);
-  const placeholders = trackIds.map(() => "?").join(", ");
-  const result = await db.execute({
-    args: trackIds,
-    sql: `select track_id from findings
-          where track_id in (${placeholders})
-            and ${p}_attempted_at is not null`,
-  });
-
-  return new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
 }
 
 // The cooldown window for a finding given its consecutive-failure count: the base

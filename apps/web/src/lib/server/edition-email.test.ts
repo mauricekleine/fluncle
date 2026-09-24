@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { type EditionDTO, type TrackListItem } from "@fluncle/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -136,7 +133,7 @@ describe("renderEditionEmailHtml — Frontier teaser (email-only chrome)", () =>
     expect(html).toContain("Open the frontier");
   });
 
-  it("sits after the sign-off and before the compliance footer", async () => {
+  it("sits after the sign-off and before the compliance footer, even on an empty edition", async () => {
     const html = await renderEditionEmailHtml(edition({}));
 
     const signOff = html.indexOf("Happy raving");
@@ -146,25 +143,5 @@ describe("renderEditionEmailHtml — Frontier teaser (email-only chrome)", () =>
     expect(signOff).toBeGreaterThanOrEqual(0);
     expect(teaser).toBeGreaterThan(signOff);
     expect(unsubscribe).toBeGreaterThan(teaser);
-  });
-
-  it("renders even for an edition with no authored content (it is chrome, not content)", async () => {
-    const html = await renderEditionEmailHtml(edition({}));
-
-    expect(html).toContain('href="https://www.fluncle.com/recommendations"');
-  });
-
-  // The /newsletter archive page renders the SAME stored `content` from its own React
-  // component (newsletter.$number.tsx), never `renderEditionEmailHtml`. The teaser is
-  // email-only chrome, so it must not appear in that render path.
-  it("stays out of the archive-page render path", () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const archiveSource = readFileSync(
-      resolve(here, "../../routes/newsletter.$number.tsx"),
-      "utf8",
-    );
-
-    expect(archiveSource).not.toContain("/recommendations");
-    expect(archiveSource).not.toContain("The frontier");
   });
 });

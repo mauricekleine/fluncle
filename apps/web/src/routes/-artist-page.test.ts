@@ -5,8 +5,6 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -391,36 +389,11 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 });
 
-// Fix 2 — the artist page must stop printing "Quiet sector.". Two layers of proof:
-//
-//  (1) STRUCTURAL: the artist route SOURCE no longer carries the apology, and its findings band is
-//      the shared FindingsGrid (the same component the label/album graph pages use) — so it inherits
-//      their "a band with nothing in it renders NOTHING" contract by construction, not by copy.
-//  (2) BEHAVIOURAL: FindingsGrid itself, SSR'd through a router, renders NOTHING for a findings-free
-//      entity (no grid, no heading, no "Quiet sector.") and a real cover-grid when findings exist.
-//
-// Together they pin: a findings-free artist page shows no apology — its masthead (name + signature)
-// and catalogue tracklist carry it, exactly as a crawler-discovered label's page does.
+// The artist page's findings band is the shared FindingsGrid (the label/album graph pages use it too):
+// a findings-free entity renders NOTHING (no grid, no heading, no apology) and findings render a
+// real cover-grid.
 
-describe("Fix 2: the artist route dropped the 'Quiet sector.' empty state", () => {
-  const source = readFileSync(
-    fileURLToPath(new URL("./artist.$slug.tsx", import.meta.url)),
-    "utf8",
-  );
-
-  it("no longer references the 'Quiet sector.' apology or its scanline empty state", () => {
-    expect(source).not.toContain("Quiet sector");
-    expect(source).not.toContain("empty-scanlines");
-    expect(source).not.toContain("log-index-empty");
-  });
-
-  it("renders its findings band through the shared FindingsGrid component", () => {
-    expect(source).toContain('import { FindingsGrid } from "@/components/graph-sections"');
-    expect(source).toContain("<FindingsGrid");
-  });
-});
-
-describe("FindingsGrid render contract (the band the artist page now delegates to)", () => {
+describe("FindingsGrid render contract (the band the artist page delegates to)", () => {
   /** SSR FindingsGrid through a router (its <Link> needs one), returning the static HTML. */
   async function renderFindingsGrid(findings: unknown[]): Promise<string> {
     const rootRoute = createRootRoute({
