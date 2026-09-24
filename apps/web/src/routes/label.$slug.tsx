@@ -315,13 +315,17 @@ function LabelPage() {
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page
             is only ever about what it actually carries (components/graph-sections.tsx). */}
+        <FindingsGrid findings={findings} />
+
+        {/* Upcoming: releases with a date still ahead, held off the newest-first surfaces until
+            their day. It follows the findings lead, never above it. */}
         {upcoming.total > 0 ? (
           <section aria-labelledby="label-upcoming-heading" className="catalogue-section">
             <h2 className="artist-similar-label" id="label-upcoming-heading">
               Upcoming
             </h2>
-            <FindingsGrid findings={upcoming.findings} label="Upcoming" />
-            <UnlitTracks label="Upcoming" tracks={upcoming.tracks} />
+            <FindingsGrid findings={upcoming.findings} label="Upcoming findings" />
+            <UnlitTracks label="Upcoming tracks" tracks={upcoming.tracks} />
             <CataloguePager
               buildHref={(nextPage) =>
                 entityPageHref(
@@ -332,13 +336,12 @@ function LabelPage() {
                   nextPage,
                 )
               }
-              label="Upcoming"
+              label="Upcoming, more pages"
               page={upcoming.page}
               pageCount={upcoming.pageCount}
             />
           </section>
         ) : undefined}
-        <FindingsGrid findings={findings} />
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
 

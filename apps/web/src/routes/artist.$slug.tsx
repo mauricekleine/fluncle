@@ -350,13 +350,17 @@ function ArtistPage() {
             empty-state apology. Its catalogue tracklist below and its masthead bio carry the page,
             exactly as a crawler-discovered label's does (graph-sections.tsx header: a page with no
             findings is a page about something else). Socials and kin follow. */}
+        <FindingsGrid findings={findings} />
+
+        {/* Upcoming: releases with a date still ahead, held off the newest-first surfaces until
+            their day. It follows the findings lead, never above it. */}
         {upcoming.total > 0 ? (
           <section aria-labelledby="artist-upcoming-heading" className="catalogue-section">
             <h2 className="artist-similar-label" id="artist-upcoming-heading">
               Upcoming
             </h2>
-            <FindingsGrid findings={upcoming.findings} label="Upcoming" />
-            <UnlitTracks label="Upcoming" tracks={upcoming.tracks} />
+            <FindingsGrid findings={upcoming.findings} label="Upcoming findings" />
+            <UnlitTracks label="Upcoming tracks" tracks={upcoming.tracks} />
             <CataloguePager
               buildHref={(nextPage) =>
                 entityPageHref(
@@ -367,13 +371,12 @@ function ArtistPage() {
                   nextPage,
                 )
               }
-              label="Upcoming"
+              label="Upcoming, more pages"
               page={upcoming.page}
               pageCount={upcoming.pageCount}
             />
           </section>
         ) : undefined}
-        <FindingsGrid findings={findings} />
 
         {socials.length > 0 ? (
           <nav aria-label={`Follow ${name}`} className="artist-follow">
