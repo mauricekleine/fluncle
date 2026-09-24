@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   edgeCachePolicyFor,
   entityPurgeUrl,
@@ -245,6 +245,17 @@ describe("isCacheableHubRequest", () => {
 });
 
 describe("edgeCachePolicyFor", () => {
+  // The release-sensitive pages bound their lifetime by the next UTC midnight, so the exact
+  // policies below hold only away from it: the clock sits at midday, whatever time the suite runs.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("ends release-sensitive fresh and stale windows at the next UTC midnight", () => {
     const before = new Date("2026-10-31T23:59:30.000Z");
     const after = new Date("2026-11-01T00:00:01.000Z");

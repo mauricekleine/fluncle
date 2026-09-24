@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The crawler-facing read surfaces (the feeds, the sitemap, the IndexNow key, and
 // the OG image card) must answer with a `Cache-Control` so a repeat poll is served
@@ -66,6 +66,17 @@ const ctx: Ctx = {
 };
 
 const FEED_CACHE = "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400";
+
+// The release-sensitive pages bound their cache lifetime by the next UTC midnight, so these exact
+// directives hold only away from it: the clock sits at midday, whatever time the suite runs.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("Cache-Control on the crawler-facing surfaces", () => {
   beforeEach(() => {
