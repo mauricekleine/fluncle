@@ -104,8 +104,13 @@ export type TrackGraphLink = { name: string; slug: string | undefined };
 export type SonicNeighbour = {
   albumImageUrl: string | undefined;
   artists: string[];
+  /** The readout (The Readout Rule), each present only when the row carries it. */
+  bpm?: number;
+  durationMs?: number;
+  key?: string;
   logId: string | undefined;
   previewable: boolean;
+  releaseDate?: string;
   spotifyUrl?: string;
   title: string;
   trackId: string;
@@ -402,16 +407,21 @@ type NeighbourRow = {
   album_image_updated_at: string | null;
   album_image_url: string | null;
   artists_json: string;
+  bpm: number | null;
+  duration_ms: number;
   isrc: string | null;
+  key: string | null;
   log_id: string | null;
   preview_url: string | null;
+  release_date: string | null;
   spotify_url: string | null;
   title: string;
   track_id: string;
 };
 
 const NEIGHBOUR_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
-  tracks.preview_url, tracks.isrc, tracks.spotify_url,
+  tracks.preview_url, tracks.isrc, tracks.spotify_url, tracks.bpm, tracks.key, tracks.duration_ms,
+  tracks.release_date,
   (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
   (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
   (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
@@ -433,8 +443,13 @@ function toNeighbour(row: NeighbourRow): SonicNeighbour {
       spotifyUrl: row.album_image_url,
     }),
     artists: parseArtistsJson(row.artists_json),
+    bpm: row.bpm ?? undefined,
+    // 0 is the crawler's honest "unknown", never a length (see `TrackDestination.durationMs`).
+    durationMs: row.duration_ms || undefined,
+    key: row.key ?? undefined,
     logId: row.log_id ?? undefined,
     previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
+    releaseDate: row.release_date ?? undefined,
     spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,
     trackId: row.track_id,

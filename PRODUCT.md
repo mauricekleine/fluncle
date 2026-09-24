@@ -49,7 +49,7 @@ Avoid SaaS dashboards, bright streaming-app clones, generic landing-page hero se
 ## Design Principles
 
 - Keep publishing authority behind the authenticated admin API.
-- Put the music first, framed as a finding: artist, title, the Found date, note, Log ID, and the Spotify open action. The music leads the eye; the log frames it.
+- Put the music first, framed as a finding: artist, title, the Found date, note, Log ID, and a way out to Spotify one tap away. The music leads the eye; the log frames it.
 - Treat the cover art as the founding document of the visual system; every visual decision descends from it.
 - Use the Three Areas Rule: lore pages carry the fiction as content, catalogue pages are factual reference surfaces, and workstations let the interface carry the meaning.
 - Make the public app quiet, centered, and fast.

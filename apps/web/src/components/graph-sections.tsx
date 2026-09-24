@@ -201,7 +201,11 @@ function FindingGridTile({
           {cover}
         </PlayCover>
       ) : (
-        cover
+        // No preview: the cover opens the log page, beside the caption (siblings, never nested),
+        // hidden from the keyboard and assistive tech so the one link is announced once.
+        <Link aria-hidden="true" params={{ logId }} tabIndex={-1} to="/log/$logId">
+          {cover}
+        </Link>
       )}
       <Link params={{ logId }} to="/log/$logId">
         <span className={lineClassName}>{artistTitleLine(finding)}</span>

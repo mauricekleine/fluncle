@@ -66,8 +66,15 @@ function FindingTileCover({ finding }: { finding: TrackListItem }): ReactNode {
   );
   const track = findingToDiscoveryTrack(finding);
 
-  if (!track.previewable) {
-    return cover;
+  // No preview: the cover opens the log page, beside the caption (siblings, never nested).
+  if (!track.previewable || !finding.logId) {
+    return finding.logId ? (
+      <Link aria-hidden="true" params={{ logId: finding.logId }} tabIndex={-1} to="/log/$logId">
+        {cover}
+      </Link>
+    ) : (
+      cover
+    );
   }
 
   return (

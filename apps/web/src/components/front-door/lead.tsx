@@ -35,7 +35,7 @@ import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
 import { GraphLink } from "@/components/graph-link";
-import { PlayButton } from "@/components/player/playable-list";
+import { PlayButton, PlayCover } from "@/components/player/playable-list";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
 import { formatDateLong } from "@/lib/format";
@@ -53,12 +53,24 @@ export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
 
   return (
     <article className="fd-lead">
-      <TrackArtwork
-        alt=""
-        className="fd-lead-cover"
-        priority
-        src={albumCoverAtSize(lead.albumImageUrl, LEAD_COVER_SIZE)}
-      />
+      {/* The cover plays too: the biggest thing on the band is the sound, as on every row. */}
+      {playable.previewable ? (
+        <PlayCover className="fd-lead-cover-play" lit track={discoveryQueueTrack(playable)}>
+          <TrackArtwork
+            alt=""
+            className="fd-lead-cover"
+            priority
+            src={albumCoverAtSize(lead.albumImageUrl, LEAD_COVER_SIZE)}
+          />
+        </PlayCover>
+      ) : (
+        <TrackArtwork
+          alt=""
+          className="fd-lead-cover"
+          priority
+          src={albumCoverAtSize(lead.albumImageUrl, LEAD_COVER_SIZE)}
+        />
+      )}
       <div className="fd-lead-body">
         {lead.logId ? <p className="fd-lead-coordinate">{lead.logId}</p> : undefined}
         <p className="fd-lead-line">{line}</p>

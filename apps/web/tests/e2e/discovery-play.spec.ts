@@ -35,17 +35,28 @@ test("Jade hears three tracks from the front door inside a minute, without leavi
   const player = page.getByRole("region", { name: "Player" });
 
   // One: the lead plays where it sits.
-  await page.getByRole("button", { name: /^Play the preview: / }).click();
+  await page
+    .getByRole("button", { name: /^Play the preview of / })
+    .first()
+    .click();
   await expect(player).toContainText(SEEDED_LEAD.title);
 
-  // Two and three: tiles in the findings band, each its own cover.
-  const tiles = page.locator("#fd-findings [data-discovery-play]");
+  // Two and three: tiles in the findings band, each its own cover. The band can hold the lead
+  // too (it is the newest noted finding), so each press picks a tile that is not already sounding.
+  const idleTiles = page.locator('#fd-findings [data-discovery-play][data-status="idle"]');
 
-  await expect(tiles.first()).toBeVisible();
+  await expect(idleTiles.first()).toBeVisible();
 
-  for (const index of [1, 2]) {
-    await tiles.nth(index).click();
-    await expect(tiles.nth(index)).toHaveAttribute("aria-pressed", "true");
+  for (let press = 0; press < 2; press += 1) {
+    const tile = idleTiles.first();
+    const label = await tile.getAttribute("aria-label");
+
+    await tile.click();
+    await expect(
+      page.locator(
+        `#fd-findings [data-discovery-play][aria-label="${label?.replace("Play", "Pause")}"]`,
+      ),
+    ).toHaveAttribute("data-status", /^(loading|playing)$/);
   }
 
   expect(new Set(requested).size).toBeGreaterThanOrEqual(3);

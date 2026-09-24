@@ -21,6 +21,7 @@ import {
 } from "@/lib/preview-player";
 import { trackCredit } from "@/lib/player-tracks";
 import { cn } from "@/lib/utils";
+import { buttonVariants } from "@fluncle/ui/components/button";
 
 type PlayableListValue = {
   continuation?: QueueContinuation;
@@ -172,9 +173,8 @@ export function PlayButton({
 
   return (
     <button
-      aria-label={`${label}: ${credit}`}
-      aria-pressed={active}
-      className={className}
+      aria-label={`${label} of ${credit}`}
+      className={cn(buttonVariants({ size: "lg" }), "min-h-11", className)}
       data-discovery-play=""
       data-missing={missing ? "" : undefined}
       data-status={status}

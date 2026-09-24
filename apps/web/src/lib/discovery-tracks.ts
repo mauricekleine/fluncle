@@ -207,13 +207,17 @@ export function catalogueTrackToDiscoveryTrack(track: CatalogueTrackItem): Disco
 export function sonicNeighbourToDiscoveryTrack(neighbour: SonicNeighbour): DiscoveryTrack {
   return {
     artists: plainCredits(neighbour.artists),
+    bpm: neighbour.bpm,
     coverUrl: neighbour.albumImageUrl,
+    durationMs: neighbour.durationMs,
     href: neighbour.logId ? `/log/${neighbour.logId}` : unlitHref(neighbour),
+    key: neighbour.key,
     lit: neighbour.logId !== undefined,
     logId: neighbour.logId,
     previewable: neighbour.previewable,
     spotifyUrl: neighbour.spotifyUrl,
     title: neighbour.title,
     trackId: neighbour.trackId,
+    year: releaseYear(neighbour.releaseDate),
   };
 }

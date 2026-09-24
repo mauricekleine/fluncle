@@ -1,7 +1,7 @@
 import {
   CaretRightIcon,
   DotsThreeIcon,
-  PlayIcon,
+  FilmStripIcon,
   ShareNetworkIcon,
   WaveformIcon,
 } from "@phosphor-icons/react";
@@ -293,17 +293,22 @@ function TrackLinksMenu({
               />
             }
           >
-            <PlayIcon aria-hidden="true" className="size-4" />
+            <FilmStripIcon aria-hidden="true" className="size-4" />
             Watch the story
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuItem
           render={
-            <a aria-label="Spotify" href={track.spotifyUrl} rel="noreferrer" target="_blank" />
+            <a
+              aria-label="Listen on Spotify"
+              href={track.spotifyUrl}
+              rel="noreferrer"
+              target="_blank"
+            />
           }
         >
           <BrandIcon className="size-4" icon={siSpotify} />
-          Spotify
+          Listen on Spotify
         </DropdownMenuItem>
         {track.tiktokUrl ? (
           <DropdownMenuItem

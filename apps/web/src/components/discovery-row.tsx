@@ -78,6 +78,8 @@ export function DiscoveryRow({
   track: DiscoveryTrack;
 }): ReactNode {
   const queued = discoveryQueueTrack(track);
+  const credit = track.artists.map((artist) => artist.name).join(", ");
+  const linkName = credit.length > 0 ? `${track.title} by ${credit}` : undefined;
   const hasMeta = track.artists.length > 0 || track.label || track.year;
 
   return (
@@ -94,13 +96,15 @@ export function DiscoveryRow({
 
       <div className="discovery-row-body">
         {track.href ? (
-          <Link className="discovery-row-link" to={track.href as never}>
+          // Named with its credit, so two rows that share a title never read as one link.
+          <Link aria-label={linkName} className="discovery-row-link" to={track.href as never}>
             <span className="discovery-row-title">{track.title}</span>
           </Link>
         ) : track.spotifyUrl ? (
           // A row the destination would refuse (no title or credit) still has one honest way
           // out: the whole row opens Spotify.
           <a
+            aria-label={linkName}
             className="discovery-row-link"
             href={track.spotifyUrl}
             rel="noopener noreferrer"
@@ -112,20 +116,23 @@ export function DiscoveryRow({
           <span className="discovery-row-title">{track.title}</span>
         )}
         {hasMeta ? (
+          // The credits truncate; the year never does (The Readout Rule).
           <p className="discovery-row-meta">
-            <Credits credits={track.artists} />
-            {track.label ? (
-              <>
-                {track.artists.length > 0 ? " · " : null}
-                {track.label.slug ? (
-                  <GraphLink kind="label" slug={track.label.slug}>
-                    {track.label.name}
-                  </GraphLink>
-                ) : (
-                  track.label.name
-                )}
-              </>
-            ) : null}
+            <span className="discovery-row-credits">
+              <Credits credits={track.artists} />
+              {track.label ? (
+                <>
+                  {track.artists.length > 0 ? " · " : null}
+                  {track.label.slug ? (
+                    <GraphLink kind="label" slug={track.label.slug}>
+                      {track.label.name}
+                    </GraphLink>
+                  ) : (
+                    track.label.name
+                  )}
+                </>
+              ) : null}
+            </span>
             {track.year ? (
               <span className="discovery-row-year">
                 {track.artists.length > 0 || track.label ? " · " : null}
