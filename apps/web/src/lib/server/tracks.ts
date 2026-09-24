@@ -16,6 +16,7 @@ import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { composeAppleArtworkUrl } from "./apple-music";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
+import { artistCandidateIdsSql } from "./entity-indexability";
 import { releasedByTodaySql } from "./release-day";
 import { countDueWorkNow } from "./due-work";
 import { discogsReleaseUrl } from "./discogs";
@@ -862,23 +863,24 @@ export async function getFindingsByArtist(
 ): Promise<GraphFindingItem[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [artistId, artistName.toLowerCase(), ...(today === undefined ? [] : [today])],
-    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
-          where findings.log_id is not null and ${artistMembershipSql("tracks")}
+    args: [
+      artistId,
+      artistName,
+      today ?? "0000",
+      artistName,
+      ...(today === undefined ? [] : [today]),
+    ],
+    sql: `select ${GRAPH_TRACK_SELECT} from (
+            ${artistCandidateIdsSql("?", "?", "?")}
+          ) artist_tracks
+          join findings on findings.track_id = artist_tracks.track_id
+          join tracks on tracks.track_id = artist_tracks.track_id
+          where findings.log_id is not null
+            and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
             ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           order by findings.added_at desc, tracks.track_id desc`,
   });
   return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
-}
-
-/** The edge and exact display-credit fallback define artist membership in both release lanes. */
-export function artistMembershipSql(trackAlias: string, nameSql = "?"): string {
-  return `(exists (select 1 from track_artists ta
-                  where ta.track_id = ${trackAlias}.track_id and ta.artist_id = ?)
-           or exists (select 1 from json_each(
-                  case when json_valid(${trackAlias}.artists_json)
-                    then ${trackAlias}.artists_json else '[]' end) credit
-                  where lower(credit.value) = ${nameSql}))`;
 }
 
 /** Hydrate only the certified rows of one already bounded upcoming entity page. */
@@ -934,6 +936,7 @@ async function findingsByEntity(
     args: [entityId, ...(today === undefined ? [] : [today])],
     sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
           where ${column} = ? and findings.log_id is not null
+            and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
             ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           order by findings.added_at desc, tracks.track_id desc`,
   });

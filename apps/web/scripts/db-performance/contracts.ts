@@ -5,6 +5,7 @@ import {
   validReleaseDateSql,
 } from "../../src/lib/server/release-day";
 import { DUE_WORK_COLUMNS, DUE_WORK_COLUMN_NAMES } from "../../src/lib/server/due-work-columns";
+import { artistCandidateIdsSql } from "../../src/lib/server/entity-indexability";
 import {
   trackSitemapIndexCountStatement,
   trackSitemapWindowStatement,
@@ -26,6 +27,101 @@ import {
 } from "./registry";
 
 export const performanceRegistry = new PerformanceRegistry();
+
+const artistCandidates = artistCandidateIdsSql("?", "?", "?")
+  .replaceAll("track_artists_artist_id_idx", "perf_track_artists_artist_id_idx")
+  .replaceAll("findings_added_at_track_id_idx", "perf_findings_added_at_track_id_idx")
+  .replaceAll("tracks_release_date_track_id_idx", "perf_tracks_release_date_track_id_idx")
+  .replace(/\btrack_artists\b/g, "perf_track_artists")
+  .replace(/\bfindings\b/g, "perf_findings")
+  .replace(/\btracks\b/g, "perf_tracks")
+  .replace(/\bt\.track_id\b/g, "t.id")
+  .replace(
+    "select t.id from perf_tracks t indexed by",
+    "select t.id as track_id from perf_tracks t indexed by",
+  );
+
+const artistReadPlan = {
+  growingTables: ["perf_findings", "perf_tracks", "perf_track_artists"],
+  requiredDetails: [
+    /perf_track_artists_artist_id_idx/i,
+    /perf_findings_added_at_track_id_idx/i,
+    /perf_tracks_release_date_track_id_idx/i,
+  ],
+};
+
+for (const [id, today, lane] of [
+  ["artist.findings", "9999-12-31", "findings"],
+  ["artist.upcoming", "0000", "upcoming"],
+] as const) {
+  const statement =
+    lane === "findings"
+      ? {
+          args: [
+            "synthetic-artist-000000055",
+            "Synthetic Artist 000000055",
+            today,
+            "Synthetic Artist 000000055",
+            today,
+          ],
+          sql: `select f.track_id from (${artistCandidates}) members
+          join perf_findings f on f.track_id = members.track_id
+          join perf_tracks t on t.id = members.track_id
+          where t.dismissed_at is null and t.duplicate_of_track_id is null
+            and ${releasedByTodaySql("t.release_date")}
+          order by f.added_at desc, f.track_id desc`,
+        }
+      : {
+          args: [
+            "synthetic-artist-000000055",
+            "Synthetic Artist 000000055",
+            today,
+            "Synthetic Artist 000000055",
+            today,
+          ],
+          sql: `select t.id as track_id from (${artistCandidates}) members
+          join perf_tracks t on t.id = members.track_id
+          where t.dismissed_at is null and t.duplicate_of_track_id is null
+            and ${upcomingAfterTodaySql("t.release_date")}
+          order by t.release_date asc, t.id asc limit 100`,
+        };
+  const contract = sqlContract({
+    description: `Artist ${lane} starts at an edge seek and bounds both display-credit windows`,
+    id,
+    iterations: 12,
+    plan: { policy: artistReadPlan, statement },
+    statement,
+    validate(execution) {
+      const cardinality = execution.resultRowCount;
+      const valid =
+        lane === "findings" ? cardinality === 1 : cardinality >= 1 && cardinality <= 100;
+      return valid
+        ? []
+        : [`artist ${lane} returned ${cardinality} rows outside its fixture cardinality`];
+    },
+    warmupIterations: 2,
+    workClass: "route-db",
+  });
+  performanceRegistry.register({
+    ...contract,
+    async execute(context) {
+      const fullFixture = (context.fixtureCounts?.tracks ?? 0) >= 100_000;
+      const artistId = fullFixture ? "synthetic-artist-000001272" : "synthetic-artist-000000055";
+      const artistName = fullFixture ? "Synthetic Artist 000001272" : "Synthetic Artist 000000055";
+      const startedAt = context.now();
+      const result = await context.client.execute({
+        args: [artistId, artistName, today, artistName, today],
+        sql: statement.sql,
+      });
+      return {
+        affectedRowCount: result.rowsAffected ?? 0,
+        durationMs: Math.max(0, context.now() - startedAt),
+        rawResult: result,
+        resultRowCount: result.rows.length,
+      };
+    },
+  });
+}
 
 function explainDetails(result: PerformanceResult): string[] {
   return result.rows.map((row, index) => {

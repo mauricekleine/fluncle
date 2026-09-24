@@ -67,6 +67,7 @@ import {
 } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
+import { renderedArtistCountSql, renderedLabelCountSql } from "./entity-indexability";
 import {
   countPublicIndexableGalaxies,
   GALAXY_INDEX_MIN_FINDINGS,
@@ -123,7 +124,8 @@ export function sitemapBoundaryStatement(
         args: [start, ARTIST_INDEX_MIN_FINDINGS, limit],
         sql: `select max(slug) as boundary, count(*) as n from (
                 select slug from artists
-                where slug ${operator} ? and renderable_track_count >= ?
+                where slug ${operator} ?
+                  and ${renderedArtistCountSql("artists.id", "artists.name", "date('now')")} >= ?
                   and ${listedArtistWhere("artists")}
                 order by slug asc limit ?
               )`,
@@ -133,7 +135,8 @@ export function sitemapBoundaryStatement(
         args: [start, LABEL_INDEX_MIN_TRACKS, limit],
         sql: `select max(slug) as boundary, count(*) as n from (
                 select slug from labels
-                where slug ${operator} ? and renderable_track_count >= ?
+                where slug ${operator} ?
+                  and ${renderedLabelCountSql("labels.id", "date('now')")} >= ?
                 order by slug asc limit ?
               )`,
       };
@@ -515,11 +518,9 @@ async function readSitemapPageInputs(): Promise<SitemapPageInputs> {
  * gates. Every read in it is a `count(*)` or a `max()` — nothing here pulls a row set into the
  * isolate to size it (AGENTS.md), and they all go out in parallel.
  *
- * The three ENTITY counts read the STORED `renderable_track_count` through the same
- * `countIndexableHubEntities` gate `/admin/funnel` uses — an index range scan on
- * `<entity>_renderable_count_idx` — so the index, the funnel card and the children cannot drift
- * apart on what "indexable" means. The three entity DATES are driven from `findings` OUTWARD (see
- * `maxLabelSitemapLastmod`), bounded by the certified corpus rather than by the growing tables.
+ * Artist and label counts use the same per-entity indexed rendered-membership gate as their
+ * page and child rows. Album count uses its stored renderable counter. The three entity dates
+ * are driven from `findings` outward (see `maxLabelSitemapLastmod`).
  */
 async function readSitemapAggregates(): Promise<SitemapAggregates> {
   const [pageInputs, artistCount, labelCount, albumCount, archiveTrackCount] = await Promise.all([

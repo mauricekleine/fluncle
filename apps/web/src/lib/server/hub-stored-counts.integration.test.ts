@@ -15,10 +15,8 @@
 // the gate's source of truth, so a drifted counter shows. Keeping it true is the write side's job
 // (lib/server/hub-counts.ts) with the deploy backfill + the reconciliation sweep behind it.
 //
-// The SITEMAP ROW readers are the one deliberate half-conversion and are pinned separately below:
-// their GATE is the stored column, but they keep the `tracks ⋈ findings` join for the two per-row
-// columns a `<url>` needs (`lastmod`, the cover), so they still require a linked track to emit a row
-// — exactly as they did before.
+// Sitemap indexability reads the linked, visible content. Hub counters remain an independent
+// navigation projection and do not admit a hollow page to the sitemap.
 
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -289,8 +287,8 @@ describe("the bio worklists read the stored counters", () => {
   });
 });
 
-describe("the indexable count reads the stored renderable column alone", () => {
-  it("counts the counted entity of each kind, not the edged one", async () => {
+describe("the indexable count reads page membership", () => {
+  it("counts the edged artist and label plus the album's stored gate", async () => {
     expect(await countIndexableLabels()).toBe(1);
     expect(await countIndexableAlbums()).toBe(1);
     expect(await countIndexableArtists()).toBe(1);
@@ -311,7 +309,7 @@ describe("the indexable count reads the stored renderable column alone", () => {
   });
 });
 
-describe("the sitemap row readers gate on the column and keep the join for lastmod", () => {
+describe("the sitemap row readers gate on page membership", () => {
   beforeEach(async () => {
     // Give the EDGED entities their honest counters, so they clear the floor on both halves and the
     // join has rows to fold. The counted-but-edgeless entities keep their zero edges.
@@ -334,14 +332,18 @@ describe("the sitemap row readers gate on the column and keep the join for lastm
     ]);
   });
 
-  it("drops the entity again the moment its stored column falls under the floor", async () => {
+  it("keeps visible artist and label rows when their stored counters drift", async () => {
     for (const table of ["albums", "artists", "labels"] as const) {
       await db.execute(`update ${table} set renderable_track_count = ${FLOOR - 1}`);
     }
 
-    expect(await listLabelSitemapRows(FLOOR)).toEqual([]);
+    expect((await listLabelSitemapRows(FLOOR)).map((row) => row.slug)).toEqual([
+      "uncounted-imprint",
+    ]);
     expect(await listAlbumSitemapRows(FLOOR)).toEqual([]);
-    expect(await listArtistSitemapRows(FLOOR)).toEqual([]);
+    expect((await listArtistSitemapRows(FLOOR)).map((row) => row.slug)).toEqual([
+      "uncounted-artist",
+    ]);
   });
 
   it("carries no lastmod for a findings-free entity (catalogue rows have no found date)", async () => {

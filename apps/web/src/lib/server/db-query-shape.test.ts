@@ -443,6 +443,13 @@ type AllowlistEntry = {
 const ALLOWLIST: readonly AllowlistEntry[] = [
   // ── the catalogue anti-join, `<findings alias>.track_id is null` ────────────────
   {
+    count: 2,
+    file: "lib/server/entity-indexability.ts",
+    pattern: "anti-join:findings-is-null",
+    reason:
+      "The artist and label indexability counts seek one entity through the artist-edge or label-cover index; the findings PK join classifies only those entity rows.",
+  },
+  {
     count: 1,
     file: "lib/server/capture-budget.ts",
     pattern: "anti-join:findings-is-null",

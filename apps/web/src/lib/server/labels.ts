@@ -38,7 +38,7 @@ import {
   markCrawlProjectionRepairsFromSelectStatement,
 } from "./crawl-due-work";
 import { getDb, typedRows } from "./db";
-import { publicEntityIndexable } from "./entity-indexability";
+import { renderedLabelCountSql } from "./entity-indexability";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   type DueWorkStatement,
@@ -702,11 +702,8 @@ export type EntitySitemapRow = {
  * filter a growing table in the Worker). `minTracks` is the caller's constant, so the gate
  * has exactly one definition and the page and the sitemap cannot drift apart.
  *
- * The floor reads the STORED `renderable_track_count` (keystone 2), so the gate is an indexed
- * pre-filter on `labels` and no longer a `having` over a grouped scan of the whole corpus. The
- * `tracks ⋈ findings` join SURVIVES for the two per-row columns a `<url>` needs and the entity
- * row does not carry — `lastmod` (the freshest certified finding's date, `max` over that join)
- * and the cover — but it now walks only the labels the floor already admitted.
+ * The floor reads the same per-label indexed membership count as the page. The count excludes
+ * dismissed and duplicate rows and admits the released and Upcoming sections.
  */
 export function labelSitemapWindowStatement(minTracks: number, limit: number, afterSlug?: string) {
   const seek = afterSlug === undefined ? "labels.slug >= ?" : "labels.slug > ?";
@@ -726,7 +723,7 @@ export function labelSitemapWindowStatement(minTracks: number, limit: number, af
                         where t2.label_id = labels.id and f2.log_id is not null)
                     limit 1) as cover_url
           from labels
-          where ${seek} and ${publicEntityIndexable("labels", minTracks)}
+          where ${seek} and ${renderedLabelCountSql("labels.id", "date('now')")} >= ?
           order by labels.slug asc
           limit ?`,
   };
@@ -738,23 +735,7 @@ export async function listLabelSitemapRows(
 ): Promise<EntitySitemapRow[]> {
   const db = await getDb();
   const result = await db.execute(
-    window
-      ? labelSitemapWindowStatement(minTracks, window.limit, window.afterSlug)
-      : {
-          args: [minTracks],
-          sql: `select labels.slug as slug,
-                 max(findings.added_at) as lastmod,
-                 (select t2.album_image_url
-                    from findings f2 join tracks t2 on t2.track_id = f2.track_id
-                    where t2.label_id = labels.id and f2.log_id is not null
-                    order by f2.added_at desc limit 1) as cover_url
-          from labels
-          join tracks on tracks.label_id = labels.id
-          left join findings on findings.track_id = tracks.track_id
-          where ${publicEntityIndexable("labels", minTracks)}
-          group by labels.id
-          order by labels.slug asc`,
-        },
+    labelSitemapWindowStatement(minTracks, window?.limit ?? 2_147_483_647, window?.afterSlug),
   );
 
   return typedRows<{
@@ -1695,10 +1676,15 @@ export const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
   slugExpr: "labels.slug",
 };
 
-/** The count of INDEXABLE `/label/<slug>` pages — the floor-clearing set `listLabelSitemapRows`
-    enumerates, for `/admin/funnel`'s public-surfaces card. Reuses `LABELS_HUB_QUERY` (scan + floor). */
-export function countIndexableLabels(): Promise<number> {
-  return countIndexableHubEntities(LABELS_HUB_QUERY);
+/** The same indexed rendered-membership gate as the label page and sitemap row reader. */
+export async function countIndexableLabels(): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [LABEL_INDEX_MIN_TRACKS],
+    sql: `select count(*) as n from labels
+          where ${renderedLabelCountSql("labels.id", "date('now')")} >= ?`,
+  });
+  return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
 /**

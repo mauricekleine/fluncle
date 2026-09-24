@@ -9,7 +9,7 @@ import { listedArtistWhere } from "./artist-visibility";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
-import { publicEntityIndexable } from "./entity-indexability";
+import { renderedArtistCountSql } from "./entity-indexability";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   batchDueWorkMutationGroups,
@@ -31,7 +31,6 @@ import {
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
   type CatalogueListPage,
-  countIndexableHubEntities,
   type EntitySitemapRow,
   hubCountsBySlug,
   hubCountsBySlugs,
@@ -428,11 +427,8 @@ export async function getArtistSlugMap(trackId: string): Promise<Record<string, 
 }
 
 /**
- * The CANONICAL coordinate-bearing finding count for one artist — the pure
- * `track_artists` inner join (NO `artists_json` fallback). It is the artist page's
- * FINDING count (the masthead line, the dossier); the page's `indexable` gate adds
- * the catalogue total to it (findings PLUS renderable catalogue tracks), keyed off the
- * canonical join both sides so an indexable page is never orphaned from the sitemap.
+ * The edge-linked coordinate-bearing finding count for one artist. The public
+ * indexability gate separately includes the bounded display-credit fallback.
  */
 export async function countArtistFindings(artistId: string): Promise<number> {
   const db = await getDb();
@@ -458,12 +454,8 @@ export async function countArtistFindings(artistId: string): Promise<number> {
  * artist with enough catalogue tracks belongs here — orphaning its page from the sitemap would
  * break the same invariant album-entity.md states.
  *
- * The floor is applied in SQL, never in the isolate, and it reads the STORED `renderable_track_count`
- * (keystone 2) — an indexed pre-filter on `artists` rather than a `having` over a grouped scan
- * of `track_artists ⋈ tracks`, the ~2×-`tracks` edge table and the most expensive of the three
- * sitemap walks. The join SURVIVES for the two per-row columns a `<url>` needs and the artist row does
- * not carry: `lastmod` (the freshest certified finding's date, undefined for an artist that carries
- * none — catalogue rows have no `added_at`, and `max` ignores nulls) and the cover.
+ * The floor is applied in SQL through the same per-artist indexed membership count the page
+ * uses. The edge seek owns the primary set; two fixed index windows cover legacy display credits.
  */
 export function artistSitemapWindowStatement(minTracks: number, limit: number, afterSlug?: string) {
   const seek = afterSlug === undefined ? "a.slug >= ?" : "a.slug > ?";
@@ -489,7 +481,7 @@ export function artistSitemapWindowStatement(minTracks: number, limit: number, a
                         where ta2.artist_id = a.id and f2.log_id is not null)
                     limit 1) as cover_url
           from artists a
-          where ${seek} and ${publicEntityIndexable("a", minTracks)}
+          where ${seek} and ${renderedArtistCountSql("a.id", "a.name", "date('now')")} >= ?
             and ${listedArtistWhere("a")}
           order by a.slug asc
           limit ?`,
@@ -502,25 +494,7 @@ export async function listArtistSitemapRows(
 ): Promise<EntitySitemapRow[]> {
   const db = await getDb();
   const result = await db.execute(
-    window
-      ? artistSitemapWindowStatement(minTracks, window.limit, window.afterSlug)
-      : {
-          args: [minTracks],
-          sql: `select a.slug as slug,
-                 max(findings.added_at) as lastmod,
-                 (select t2.album_image_url
-                    from (findings join tracks on tracks.track_id = findings.track_id) t2
-                    join track_artists ta2 on ta2.track_id = t2.track_id
-                    where ta2.artist_id = a.id and t2.log_id is not null
-                    order by t2.added_at desc limit 1) as cover_url
-          from artists a
-          join track_artists ta on ta.artist_id = a.id
-          join tracks on tracks.track_id = ta.track_id
-          left join findings on findings.track_id = tracks.track_id
-          where ${publicEntityIndexable("a", minTracks)} and ${listedArtistWhere("a")}
-          group by a.id
-          order by a.slug asc`,
-        },
+    artistSitemapWindowStatement(minTracks, window?.limit ?? 2_147_483_647, window?.afterSlug),
   );
 
   return typedRows<{
@@ -599,10 +573,16 @@ export const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
   visibilityWhere: listedArtistWhere("a"),
 };
 
-/** The count of INDEXABLE `/artist/<slug>` pages — the floor-clearing set `listArtistSitemapRows`
-    enumerates, for `/admin/funnel`'s public-surfaces card. Reuses `ARTISTS_HUB_QUERY` (scan + floor). */
-export function countIndexableArtists(): Promise<number> {
-  return countIndexableHubEntities(ARTISTS_HUB_QUERY);
+/** The same rendered-membership gate as the artist page and sitemap row reader. */
+export async function countIndexableArtists(): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [ARTIST_INDEX_MIN_FINDINGS],
+    sql: `select count(*) as n from artists a
+          where ${listedArtistWhere("a")}
+            and ${renderedArtistCountSql("a.id", "a.name", "date('now')")} >= ?`,
+  });
+  return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
 /**

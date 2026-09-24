@@ -137,6 +137,8 @@ export const PUBLIC_CACHE_CONTROL = PAGE_CACHE_POLICY.cacheControl;
 
 // Our own freshness stamp (epoch ms at store time); read back to compute age.
 const STAMP_HEADER = "x-edge-cached-at";
+const FRESH_UNTIL_HEADER = "x-edge-fresh-until";
+const EXPIRES_AT_HEADER = "x-edge-expires-at";
 
 /** True for the public log surfaces we edge-cache: `/log` and `/log/<id>`. */
 export function isCacheableLogPath(pathname: string): boolean {
@@ -464,10 +466,11 @@ export async function withEdgeCache(
     releaseSensitivePath(url.pathname) &&
     Number.isFinite(storedAt) &&
     new Date(storedAt).toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10);
-  if (hit && !crossesReleaseDay && cacheAgeSeconds(hit) < cachePolicy.storedMaxAge) {
-    const ageSeconds = cacheAgeSeconds(hit);
+  const expiresAt = Number(hit?.headers.get(EXPIRES_AT_HEADER));
+  if (hit && !crossesReleaseDay && Number.isFinite(expiresAt) && Date.now() < expiresAt) {
+    const freshUntil = Number(hit.headers.get(FRESH_UNTIL_HEADER));
 
-    if (ageSeconds < cachePolicy.freshSeconds) {
+    if (Number.isFinite(freshUntil) && Date.now() < freshUntil) {
       return tagHit(hit, "fresh", cachePolicy);
     }
 
@@ -521,20 +524,13 @@ function isStorable(response: Response, cachePolicy: EdgeCachePolicy): boolean {
 // Re-wrap with the public Cache-Control, our freshness stamp, and a stored hard TTL.
 function toStoredResponse(response: Response, cachePolicy: EdgeCachePolicy): Response {
   const stored = new Response(response.body, response);
+  const storedAt = Date.now();
   stored.headers.set("Cache-Control", `public, s-maxage=${cachePolicy.storedMaxAge}`);
-  stored.headers.set(STAMP_HEADER, String(Date.now()));
+  stored.headers.set(STAMP_HEADER, String(storedAt));
+  stored.headers.set(FRESH_UNTIL_HEADER, String(storedAt + cachePolicy.freshSeconds * 1_000));
+  stored.headers.set(EXPIRES_AT_HEADER, String(storedAt + cachePolicy.storedMaxAge * 1_000));
 
   return stored;
-}
-
-function cacheAgeSeconds(response: Response): number {
-  const stamp = Number(response.headers.get(STAMP_HEADER));
-
-  if (!Number.isFinite(stamp)) {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  return (Date.now() - stamp) / 1000;
 }
 
 // On the way out to the client, present the real SWR directive (not the long stored
@@ -547,6 +543,8 @@ function tagHit(
   const out = new Response(response.body, response);
   out.headers.set("Cache-Control", cachePolicy.cacheControl);
   out.headers.delete(STAMP_HEADER);
+  out.headers.delete(FRESH_UNTIL_HEADER);
+  out.headers.delete(EXPIRES_AT_HEADER);
   out.headers.set("x-edge-cache", status);
 
   return out;

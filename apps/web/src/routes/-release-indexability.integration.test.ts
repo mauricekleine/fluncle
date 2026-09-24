@@ -50,4 +50,50 @@ describe("future-only entity indexability", () => {
     expect(artistSitemap.map((row) => row.slug)).toContain("future-artist");
     expect(labelSitemap.map((row) => row.slug)).toContain("future-label");
   });
+
+  it("excludes dismissed and duplicate future rows from page and sitemap gates", async () => {
+    await db.execute(
+      "update tracks set dismissed_at = 'x' where track_id in ('future-0', 'future-1')",
+    );
+    await db.execute(
+      "update tracks set duplicate_of_track_id = 'future-0' where track_id = 'future-2'",
+    );
+
+    const artist = await resolveArtistPageData("future-artist", "recent", 1);
+    const label = await resolveLabelPageData("future-label", "recent", 1);
+    expect(artist).toMatchObject({ indexable: false, status: "found" });
+    expect(label).toMatchObject({ indexable: false, status: "found" });
+    expect(
+      (await listArtistSitemapRows(ARTIST_INDEX_MIN_FINDINGS)).map((row) => row.slug),
+    ).not.toContain("future-artist");
+    expect(
+      (await listLabelSitemapRows(LABEL_INDEX_MIN_TRACKS)).map((row) => row.slug),
+    ).not.toContain("future-label");
+  });
+
+  it("indexes an artist whose only visible content is JSON-only findings", async () => {
+    await db.execute(`insert into artists (id, name, slug, created_at, updated_at, renderable_track_count)
+      values ('fallback-artist', 'Fallback Artist', 'fallback-artist', 'x', 'x', 0)`);
+    for (let index = 0; index < 3; index += 1) {
+      const trackId = `fallback-${index}`;
+      await db.execute({
+        args: [trackId],
+        sql: `insert into tracks (track_id, title, artists_json, duration_ms)
+          values (?, 'Fallback tune', '["Fallback Artist"]', 0)`,
+      });
+      await db.execute({
+        args: [trackId, `FALLBACK-${index}`],
+        sql: `insert into findings (track_id, log_id, added_at) values (?, ?, '2026-07-20T00:00:00.000Z')`,
+      });
+    }
+
+    const artist = await resolveArtistPageData("fallback-artist", "recent", 1);
+    expect(artist).toMatchObject({ indexable: true, status: "found" });
+    if (artist.status === "found") {
+      expect(artist.findings).toHaveLength(3);
+    }
+    expect(
+      (await listArtistSitemapRows(ARTIST_INDEX_MIN_FINDINGS)).map((row) => row.slug),
+    ).toContain("fallback-artist");
+  });
 });

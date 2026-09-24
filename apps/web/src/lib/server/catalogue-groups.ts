@@ -114,7 +114,8 @@ import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import { dedupeByRecordingIdentity, type RecordingIdentity } from "./track-match";
-import { artistMembershipSql, type CatalogueTrackItem, getGraphFindingsByIds } from "./tracks";
+import { type CatalogueTrackItem, getGraphFindingsByIds } from "./tracks";
+import { artistCandidateIdsSql } from "./entity-indexability";
 import { releasedByTodaySql, upcomingAfterTodaySql } from "./release-day";
 
 // The sort vocabulary, the page bounds, the group SHAPES and the pure helpers live in the
@@ -251,27 +252,31 @@ export async function listArtistUpcoming(
 ): Promise<UpcomingTrackPage> {
   const db = await getDb();
   const predicate = `${upcomingAfterTodaySql("tracks.release_date")}
-            and ${artistMembershipSql("tracks", "(select lower(name) from artists where id = ?)")}
             and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null`;
+  const candidate = artistCandidateIdsSql("?", "(select name from artists where id = ?)", "?");
   const [result, count] = await Promise.all([
     db.execute({
       args: [
+        artistId,
+        artistId,
         today,
         artistId,
-        artistId,
+        today,
         GRAPH_GROUP_ROW_CEILING,
         (page - 1) * GRAPH_GROUP_ROW_CEILING,
       ],
       sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url, findings.log_id
-          from tracks indexed by tracks_release_date_track_id_idx
+          from (${candidate}) artist_tracks
+          join tracks on tracks.track_id = artist_tracks.track_id
           left join findings on findings.track_id = tracks.track_id
           where ${predicate}
           order by tracks.release_date asc, tracks.track_id asc
           limit ? offset ?`,
     }),
     db.execute({
-      args: [today, artistId, artistId],
-      sql: `select count(*) as total from tracks indexed by tracks_release_date_track_id_idx where ${predicate}`,
+      args: [artistId, artistId, today, artistId, today],
+      sql: `select count(*) as total from (${candidate}) artist_tracks
+          join tracks on tracks.track_id = artist_tracks.track_id where ${predicate}`,
     }),
   ]);
   return upcomingPageFromRows(result.rows, count.rows, page);

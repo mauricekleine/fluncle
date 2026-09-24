@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The graph pages' thin-content gate (`/label/<slug>` + `/album/<slug>`), pinned as a pure
 // unit — the `-artist-page.test.ts` precedent.
 //
-// The contract: `noindex` (and sitemap absence) keys off the same maintained renderable-track
+// The contract: `noindex` (and sitemap absence) keys off the same indexed renderable-track
 // count, including Upcoming rows because they are real content on the page. A page that
 // declares itself indexable is always in the sitemap and one that declares `noindex` never is.
 // An indexable page that the sitemap orphans is the bug these pin.
@@ -32,6 +32,12 @@ const getFindingsByAlbum = vi.hoisted(() => vi.fn());
 const listLabelCatalogue = vi.hoisted(() => vi.fn());
 const listLabelUpcoming = vi.hoisted(() => vi.fn());
 const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn());
+const countRenderedLabelTracks = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/server/entity-indexability", () => ({
+  countRenderedLabelTracks,
+  publicEntityIndexable: (count: number, floor: number) => count >= floor,
+}));
 
 vi.mock("@/lib/server/labels", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/labels")>()),
@@ -165,6 +171,10 @@ const NO_LABEL_CATALOGUE = labelCatalogue(0);
 const NO_ALBUM_CATALOGUE = { total: 0, tracks: [] };
 
 beforeEach(() => {
+  countRenderedLabelTracks.mockReset();
+  countRenderedLabelTracks.mockImplementation(
+    async () => (await getLabelBySlug("hospital-records"))?.renderableTrackCount ?? 0,
+  );
   vi.clearAllMocks();
   getLabelBySlug.mockResolvedValue(LABEL);
   getAlbumBySlug.mockResolvedValue(ALBUM);
@@ -246,8 +256,8 @@ describe("the label page", () => {
     });
   });
 
-  it("gates on the entity's maintained count, never the rendered page", async () => {
-    // The gate reads the stored entity count while the page carries one bounded group page.
+  it("gates on the entity's full count, never the rendered page slice", async () => {
+    // The gate reads all eligible entity rows while the page carries one bounded group page.
     getLabelBySlug.mockResolvedValue({ ...LABEL, renderableTrackCount: 3001 });
     getFindingsByLabel.mockResolvedValue(findings(1));
     listLabelCatalogue.mockResolvedValue(labelCatalogue(3000, 100));

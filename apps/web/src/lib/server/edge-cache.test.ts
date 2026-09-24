@@ -449,6 +449,56 @@ describe("withEdgeCache", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a release-day entry until its stored midnight expiry", async () => {
+    const fake = installFakeCache();
+    const request = new Request("https://www.fluncle.com/artist/drift");
+    const render = vi.fn(async () => html("artist"));
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-20T23:58:00.000Z"));
+      await withEdgeCache(
+        request,
+        render,
+        edgeCachePolicyFor("/artist/drift", "") ?? PAGE_CACHE_POLICY,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(new Date("2026-07-20T23:59:30.000Z"));
+      expect(
+        (
+          await withEdgeCache(
+            request,
+            render,
+            edgeCachePolicyFor("/artist/drift", "") ?? PAGE_CACHE_POLICY,
+          )
+        ).headers.get("x-edge-cache"),
+      ).toBe("fresh");
+      expect(render).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(new Date("2026-07-21T00:00:00.000Z"));
+      expect(
+        (
+          await withEdgeCache(
+            request,
+            render,
+            edgeCachePolicyFor("/artist/drift", "") ?? PAGE_CACHE_POLICY,
+          )
+        ).headers.get("x-edge-cache"),
+      ).toBe("miss");
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(new Date("2026-07-21T00:00:01.000Z"));
+      expect(
+        (
+          await withEdgeCache(
+            request,
+            render,
+            edgeCachePolicyFor("/artist/drift", "") ?? PAGE_CACHE_POLICY,
+          )
+        ).headers.get("x-edge-cache"),
+      ).toBe("fresh");
+    } finally {
+      fake.restore();
+    }
+  });
+
   it("stores under the CANONICAL origin + path, dropping the incoming host", async () => {
     const fake = installFakeCache();
 

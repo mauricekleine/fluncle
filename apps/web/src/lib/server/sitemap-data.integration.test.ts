@@ -317,6 +317,12 @@ beforeEach(async () => {
     args: ["track-3", "artist-adele"],
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
   });
+  for (const trackId of ["track-1", "track-2"]) {
+    await db.execute({
+      args: [trackId, "artist-adele"],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
+    });
+  }
   // A SECOND visible artist, so the artists child is genuinely multi-shard at shard size 1 and the
   // boundary probe actually runs. Without it the gated total is 1 and every page past the first is
   // short-circuited as past-end, which is how an ungated probe hid.
@@ -331,6 +337,12 @@ beforeEach(async () => {
     args: ["track-3", "artist-eleven"],
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
   });
+  for (const trackId of ["track-1", "track-2"]) {
+    await db.execute({
+      args: [trackId, "artist-eleven"],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
+    });
+  }
   await db.execute({
     args: ["11111111-1111-4111-8111-111111111111"],
     sql: `insert into artist_rules
