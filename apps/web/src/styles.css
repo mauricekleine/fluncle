@@ -242,6 +242,18 @@ body::before {
   z-index: -2;
 }
 
+/* A phone uses a smaller cover behind this translucent, grain-overlaid backdrop. */
+@media (max-width: 640px) {
+  body::before {
+    background-image:
+      var(--grain-tile),
+      image-set(
+        url("/fluncle-cover-no-text-mobile.avif") type("image/avif"),
+        url("/fluncle-cover-no-text-mobile.webp") type("image/webp")
+      );
+  }
+}
+
 /* Gold as ignition, not fill: ONE directional Eclipse-Gold bloom, anchored
    where the cover's sun sits in the layout (upper left), under every pane.
    It breathes imperceptibly (the one sanctioned motion beyond the 72s drift,

@@ -36,7 +36,8 @@ Owned masters are served through **Cloudflare Images URL transforms** (`/cdn-cgi
 https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/<slug>.jpg?v=<image_updated_at>
 ```
 
-- **The fixed ladder is 64 / 300 / 640 / 1200** (`OWNED_COVER_WIDTH` in `media.ts`). `ownedCoverUrl` builds the base at 640; `albumCoverAtSize(url, size)` rewrites the `width=` to `small`/`medium`/`large`/`xl` at each surface — and it also still resizes a Spotify URL, so every existing call site upgrades for free.
+- **The fixed ladder is 64 / 300 / 640 / 1200** (`OWNED_COVER_WIDTH` in `media.ts`). `ownedCoverUrl` builds the base at 640; `albumCoverAtSize(url, size)` rewrites the `width=` to `small`/`tile`/`medium`/`large`/`xl` at each surface — and it also still resizes a Spotify URL, so every existing call site upgrades for free.
+- **A pending Cover Art Archive fallback uses CAA's own thumbnail ladder.** `albumCoverAtSize` maps its release-front URL to 250px for small and hub tiles, 500px for medium covers, and 1200px for xl; large preserves the stored URL used by the lead and full-size artwork. The owned master remains preferred; Cloudflare Images transforms accept only our own zone, so CAA's 250px thumbnail is the smallest available fallback.
 - **The DTO prefers the owned master server-side.** `bestAlbumCoverUrl` / `bestArtistAvatarUrl` return the CF Images URL once the sweep resolved one, else the Spotify chain (the label `logoKey ?? image_url` precedent). The finding DTO (`toLeanTrackListItem`) emits it as `albumImageUrl`, so **web, mobile, and the video pipeline all upgrade at once** — no consumer changes.
 - **The `?v` bust.** A replaced master bumps `image_updated_at`; the `?v=<epoch>` rides the source URL, so Cloudflare re-keys every rendition. A transform cache survives a zone purge (the video-variants lesson), so the `?v` is the ONLY reliable rendition eviction.
 

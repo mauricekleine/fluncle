@@ -257,6 +257,9 @@ describe("albumCoverAtSize", () => {
     expect(albumCoverAtSize(stored, "medium")).toBe(
       `https://i.scdn.co/image/ab67616d00001e02${HASH}`,
     );
+    expect(albumCoverAtSize(stored, "tile")).toBe(
+      `https://i.scdn.co/image/ab67616d00001e02${HASH}`,
+    );
   });
 
   it("re-sizes whatever source code is stored, not just the 300² variant", () => {
@@ -267,6 +270,25 @@ describe("albumCoverAtSize", () => {
   it("passes a non-Spotify URL through untouched", () => {
     const deezer = "https://e-cdns-images.dzcdn.net/images/cover/abc/250x250-000000-80-0-0.jpg";
     expect(albumCoverAtSize(deezer, "small")).toBe(deezer);
+  });
+
+  it("chooses Cover Art Archive thumbnails for display tiles and larger covers", () => {
+    const front = "https://coverartarchive.org/release/99b09d02-9cc9-3fed-8431-f162165a9371/front";
+
+    expect(albumCoverAtSize(`${front}-500`, "small")).toBe(`${front}-250`);
+    expect(albumCoverAtSize(`${front}-500`, "tile")).toBe(`${front}-250`);
+    expect(albumCoverAtSize(`${front}-500`, "medium")).toBe(`${front}-500`);
+    expect(albumCoverAtSize(`${front}-500`, "large")).toBe(`${front}-500`);
+    expect(albumCoverAtSize(front, "large")).toBe(front);
+    expect(albumCoverAtSize(`${front}-500`, "xl")).toBe(`${front}-1200`);
+    expect(albumCoverAtSize(`${front}?v=1`, "small")).toBe(`${front}-250?v=1`);
+  });
+
+  it("leaves unrelated Cover Art Archive URLs unchanged", () => {
+    const back =
+      "https://coverartarchive.org/release/99b09d02-9cc9-3fed-8431-f162165a9371/back-500";
+
+    expect(albumCoverAtSize(back, "small")).toBe(back);
   });
 
   it("passes an unparseable Spotify URL through untouched", () => {
@@ -558,6 +580,7 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
     const large = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
 
     expect(albumCoverAtSize(large, "small")).toContain("width=64,");
+    expect(albumCoverAtSize(large, "tile")).toContain("width=300,");
     // The ?v bust survives the resize (it rides the source, past the options).
     expect(albumCoverAtSize(large, "small")).toContain("?v=");
   });

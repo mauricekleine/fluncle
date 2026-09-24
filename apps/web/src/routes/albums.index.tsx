@@ -7,7 +7,7 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
+import { albumCoverAtSize, HUB_COVER_TILE_SIZE } from "@/lib/media";
 import { pageParam, textParam } from "@/lib/search-params";
 import { type AlbumHubEntry, listAlbumsHubPage } from "@/lib/server/albums";
 import { type CatalogueHubNumberedPage } from "@/lib/server/labels";
@@ -233,7 +233,7 @@ function AlbumsPage() {
                     <TrackArtwork
                       alt=""
                       className="artist-grid-cover"
-                      src={albumCoverAtSize(album.coverImageUrl, COVER_TILE_SIZE)}
+                      src={albumCoverAtSize(album.coverImageUrl, HUB_COVER_TILE_SIZE)}
                     />
                     <span className="artist-grid-line">{album.name}</span>
                     <span className="artist-grid-count">{tracksCount(album.trackCount)}</span>
