@@ -242,6 +242,27 @@ body::before {
   z-index: -2;
 }
 
+/* A phone uses a smaller cover behind this translucent, grain-overlaid backdrop. The plain WebP
+   declaration is the whole rule wherever `image-set()` with `type()` is unsupported: a value
+   holding `var()` is only rejected at computed-value time, which would blank the backdrop rather
+   than fall back, so the AVIF upgrade sits behind its own `@supports`. */
+@media (max-width: 640px) {
+  body::before {
+    background-image: var(--grain-tile), url("/fluncle-cover-no-text-mobile.webp");
+  }
+
+  @supports (background-image: image-set(url("/a.avif") type("image/avif"))) {
+    body::before {
+      background-image:
+        var(--grain-tile),
+        image-set(
+          url("/fluncle-cover-no-text-mobile.avif") type("image/avif"),
+          url("/fluncle-cover-no-text-mobile.webp") type("image/webp")
+        );
+    }
+  }
+}
+
 /* Gold as ignition, not fill: ONE directional Eclipse-Gold bloom, anchored
    where the cover's sun sits in the layout (upper left), under every pane.
    It breathes imperceptibly (the one sanctioned motion beyond the 72s drift,

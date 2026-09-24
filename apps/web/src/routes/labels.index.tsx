@@ -8,7 +8,7 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
+import { albumCoverAtSize, HUB_COVER_TILE_SIZE } from "@/lib/media";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
   type CatalogueHubNumberedPage,
@@ -256,8 +256,8 @@ function LabelsPage() {
                       // owned-master ladder the album fallback beside it does, so a label's own
                       // picture is no longer the one full-size original on a catalogue-scale grid.
                       src={
-                        albumCoverAtSize(label.logoImageUrl, COVER_TILE_SIZE) ??
-                        albumCoverAtSize(label.coverImageUrl, COVER_TILE_SIZE)
+                        albumCoverAtSize(label.logoImageUrl, HUB_COVER_TILE_SIZE) ??
+                        albumCoverAtSize(label.coverImageUrl, HUB_COVER_TILE_SIZE)
                       }
                     />
                     <span className="artist-grid-line">{label.name}</span>

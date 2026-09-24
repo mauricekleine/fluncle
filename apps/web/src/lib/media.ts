@@ -146,14 +146,17 @@ const SPOTIFY_IMAGE_SIZE_CODE = {
 // The cover-rendition size ladder shared by the two providers a cover URL can carry: Spotify's
 // stored album art AND our OWNED masters (RFC musickit-second-authority, U3b). `xl` is the
 // owned-master 1200 rung (Spotify has no >640 rendition, so a Spotify `xl` clamps to `large`).
-export type CoverSize = "large" | "medium" | "small" | "xl";
+export type CoverSize = "large" | "medium" | "small" | "tile" | "xl";
 
 // The owned-master serving ladder (px) — the fixed 64/300/640/1200 the RFC specifies. Every rung
-// is a separately-cached Cloudflare Images rendition of the ≤1200 R2 master.
+// is a separately-cached Cloudflare Images rendition of the ≤1200 R2 master. `tile` shares the
+// 300px rung with `medium` here, but selects CAA's 250px rung while medium keeps 500px for larger
+// cards such as /fresh.
 const OWNED_COVER_WIDTH: Record<CoverSize, number> = {
   large: 640,
   medium: 300,
   small: 64,
+  tile: 300,
   xl: 1200,
 };
 
@@ -162,11 +165,14 @@ const OWNED_COVER_WIDTH: Record<CoverSize, number> = {
  * `.artist-grid` / `.artist-avatar-grid` family.
  *
  * Those grids are `repeat(auto-fill, minmax(6.5rem, 1fr))`: a tile measures ~114px on the plate
- * (an artist avatar ~102px), so a 2× retina display wants ~230 device px. `medium` (300) covers
- * that with headroom; the `large` (640) rung is a 5.6× over-fetch of
+ * (an artist avatar ~102px), so a 2× retina display wants ~230 device px. `tile` uses 300px
+ * owned/Spotify and 250px CAA covers. The `large` (640) rung is a 5.6× over-fetch of
  * every cover on the page, and `small` (64) would visibly soften on retina. One named constant so
  * the three hubs cannot drift apart.
  */
+export const HUB_COVER_TILE_SIZE: CoverSize = "tile";
+
+/** The wider front-door finding cards keep the 500px CAA medium thumbnail on retina. */
 export const COVER_TILE_SIZE: CoverSize = "medium";
 
 // The Spotify album-art id is the 16-char size code + a 24-char (hex) cover hash.
@@ -193,6 +199,18 @@ const SPOTIFY_ARTIST_IMAGE_SIZE_CODE = {
 } as const;
 
 const SPOTIFY_ARTIST_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab676161[0-9a-f]{8}([0-9a-f]+)$/;
+
+// Cover Art Archive's public thumbnail ladder starts at 250px. Catalogue rows keep a `front-500`
+// release URL while their owned master is pending; use the provider's smaller thumbnail for tiles.
+// Only the documented release-front URL shape is rewritten. An arbitrary archive URL is not a cover.
+const COVER_ART_ARCHIVE_FRONT_RE =
+  /^(https:\/\/coverartarchive\.org\/release\/[0-9a-f-]{36}\/front)(?:-(?:250|500|1200))?(\?.*)?$/;
+const COVER_ART_ARCHIVE_WIDTH: Record<Exclude<CoverSize, "large">, number> = {
+  medium: 500,
+  small: 250,
+  tile: 250,
+  xl: 1200,
+};
 
 // ── Cloudflare Images (owned cover masters) ──────────────────────────────────
 //
@@ -280,6 +298,7 @@ export function labelLogoUrl(
  *     clamps to `large`);
  *   - a stored Spotify ARTIST-portrait URL → swap its own size-code prefix (its ladder is
  *     640/320/160, so `small` clamps UP to 160 and `xl` clamps down to `large`);
+ *   - a Cover Art Archive release-front URL → choose its documented 250/500/1200 thumbnail;
  *   - anything else (a bare R2 object, a future source) → untouched.
  * `small` for the feed/index rows, `large` for the full-bleed /log poster. The generalisation of
  * the old `albumCoverAtSize` so the U3b owned masters resize at every existing call site.
@@ -296,7 +315,8 @@ export function albumCoverAtSize(url: string | undefined, size: CoverSize): stri
   const album = SPOTIFY_ALBUM_IMAGE_RE.exec(url);
 
   if (album) {
-    const code = SPOTIFY_IMAGE_SIZE_CODE[size === "xl" ? "large" : size];
+    const code =
+      SPOTIFY_IMAGE_SIZE_CODE[size === "xl" ? "large" : size === "tile" ? "medium" : size];
 
     return `${album[1]}${code}${album[2]}`;
   }
@@ -306,9 +326,20 @@ export function albumCoverAtSize(url: string | undefined, size: CoverSize): stri
   const artist = SPOTIFY_ARTIST_IMAGE_RE.exec(url);
 
   if (artist) {
-    const code = SPOTIFY_ARTIST_IMAGE_SIZE_CODE[size === "xl" ? "large" : size];
+    const code =
+      SPOTIFY_ARTIST_IMAGE_SIZE_CODE[size === "xl" ? "large" : size === "tile" ? "medium" : size];
 
     return `${artist[1]}${code}${artist[2]}`;
+  }
+
+  const coverArtArchive = COVER_ART_ARCHIVE_FRONT_RE.exec(url);
+
+  if (coverArtArchive) {
+    if (size === "large") {
+      return url;
+    }
+
+    return `${coverArtArchive[1]}-${COVER_ART_ARCHIVE_WIDTH[size]}${coverArtArchive[2] ?? ""}`;
   }
 
   return url;

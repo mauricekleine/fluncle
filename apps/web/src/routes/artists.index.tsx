@@ -10,7 +10,7 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
+import { albumCoverAtSize, HUB_COVER_TILE_SIZE } from "@/lib/media";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
   type ArtistHubEntry,
@@ -263,7 +263,7 @@ function ArtistTileContent({ artist }: { artist: ArtistHubEntry }) {
       <ArtistAvatar
         className="artist-card-avatar"
         name={artist.name}
-        src={albumCoverAtSize(artist.imageUrl, COVER_TILE_SIZE)}
+        src={albumCoverAtSize(artist.imageUrl, HUB_COVER_TILE_SIZE)}
       />
       <span className="artist-grid-line">{artist.name}</span>
       <span className="artist-grid-count">{tracksCount(artist.trackCount)}</span>
