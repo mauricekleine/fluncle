@@ -81,6 +81,7 @@ async function node(options: {
   kind: "artist" | "label" | "release";
   labelSlug?: null | string;
   parentId?: null | string;
+  releaseLabelSlug?: null | string;
   state?: "done" | "failed" | "pending" | "skipped";
 }): Promise<void> {
   await db.execute({
@@ -91,6 +92,7 @@ async function node(options: {
       options.hop,
       options.parentId ?? null,
       options.labelSlug ?? null,
+      options.releaseLabelSlug ?? null,
       options.state ?? "pending",
       options.failures ?? 0,
       options.attemptedAt ?? null,
@@ -99,9 +101,9 @@ async function node(options: {
       options.createdAt ?? OLD,
     ],
     sql: `insert into crawl_frontier
-      (id, kind, source, external_id, hop, parent_id, label_slug, state, failures,
-       attempted_at, done_at, created_at, updated_at)
-      values (?, ?, 'musicbrainz', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, kind, source, external_id, hop, parent_id, label_slug, release_label_slug, state,
+       failures, attempted_at, done_at, created_at, updated_at)
+      values (?, ?, 'musicbrainz', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -560,6 +562,7 @@ describe("crawl due-work shadow runtime", () => {
       kind: "release",
       labelSlug: "lane",
       parentId: "musicbrainz:artist:parent",
+      releaseLabelSlug: "lane",
     });
     await node({
       externalId: "r2",
@@ -631,6 +634,84 @@ describe("crawl due-work shadow runtime", () => {
         where node_id = 'musicbrainz:artist:parent'`)
       ).rows[0]?.state,
     ).toBe("scheduled");
+  });
+
+  it("ranks a release on its own label, never on the seed label an artist walk inherited", async () => {
+    await label("home", "enabled");
+    await label("elsewhere", "disabled");
+    // An artist found on the enabled label: its discography mostly lives on other labels.
+    const artistParent = "musicbrainz:artist:found-on-home";
+    await node({
+      externalId: "inherited",
+      hop: 2,
+      id: "release:inherited",
+      kind: "release",
+      labelSlug: "home",
+      parentId: artistParent,
+    });
+    await node({
+      externalId: "own-enabled",
+      hop: 2,
+      id: "release:own-enabled",
+      kind: "release",
+      labelSlug: "home",
+      parentId: artistParent,
+      releaseLabelSlug: "home",
+    });
+    await node({
+      externalId: "own-disabled",
+      hop: 2,
+      id: "release:own-disabled",
+      kind: "release",
+      labelSlug: "home",
+      parentId: artistParent,
+      releaseLabelSlug: "elsewhere",
+    });
+    await node({
+      externalId: "label-listed",
+      hop: 0,
+      id: "release:label-listed",
+      kind: "release",
+      labelSlug: "home",
+      parentId: "musicbrainz:label:home-mbid",
+    });
+    await rebuildCrawlDueWork(db, { generation: "crawl-own-label", limit: 10 });
+
+    const ranks = async () =>
+      (
+        await db.execute(`select node_id, label_slug, storable_rank from crawl_due_work
+          where node_kind = 'release' order by node_id`)
+      ).rows;
+    expect(await ranks()).toEqual([
+      { label_slug: null, node_id: "release:inherited", storable_rank: 1 },
+      { label_slug: "home", node_id: "release:label-listed", storable_rank: 0 },
+      { label_slug: "elsewhere", node_id: "release:own-disabled", storable_rank: 1 },
+      { label_slug: "home", node_id: "release:own-enabled", storable_rank: 0 },
+    ]);
+
+    // Ruling the release's own label reaches it through the label fan-out, since the row is filed
+    // under the label the storage gate will judge.
+    await db.batch(
+      [
+        {
+          args: [],
+          sql: `update labels set seed_state = 'enabled', updated_at = '2026-01-02'
+            where slug = 'elsewhere'`,
+        },
+        markCrawlProjectionRepairStatement("label", "elsewhere", {
+          sourceEpoch: 1,
+          sourceVersion: "elsewhere-v1",
+        }),
+      ],
+      "write",
+    );
+    await fanOutCrawlProjectionRepairs(db, { limit: 10 });
+    await repairCrawlDueNodes(db, { limit: 10 });
+    expect(await ranks()).toContainEqual({
+      label_slug: "elsewhere",
+      node_id: "release:own-disabled",
+      storable_rank: 0,
+    });
   });
 
   it("preserves fanout repair-entry time across source re-marking until direct repair", async () => {

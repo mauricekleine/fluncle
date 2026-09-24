@@ -5285,6 +5285,12 @@ export const crawlFrontier = sqliteTable(
     // Why a node was skipped or how it last failed — the crawl's honest audit trail.
     note: text("note"),
     parentId: text("parent_id"),
+    // A `release` node's OWN label, as MusicBrainz credits it on the browse that listed the
+    // release, resolved to the `labels` row the archive knows it by (null when the archive holds no
+    // such label, or on a non-release node). It is what the claim ranks a release's storability on,
+    // because the storage gate judges the release's own label, never its provenance: a release
+    // reached through an artist found on an enabled label is usually on some OTHER label.
+    releaseLabelSlug: text("release_label_slug"),
     source: text("source", { enum: ["fluncle", "musicbrainz"] }).notNull(),
     // pending → done (expanded) | failed (retriable under backoff, terminal past
     // MAX_FAILURES) | skipped (deterministically un-expandable — e.g. no MB label

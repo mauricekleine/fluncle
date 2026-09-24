@@ -106,6 +106,8 @@ type CrawlSourceSqlRow = {
   outstanding_allow: number;
   parent_allowed: number;
   parent_id: null | string;
+  rank_label_slug: null | string;
+  release_label_slug: null | string;
   self_allowed: number;
   source: string;
   state: string;
@@ -145,8 +147,29 @@ const CRAWL_DUE_COLUMNS = `claim_expires_at, claim_position, claim_token, claime
   created_at, demand_rank, generation, hop, label_slug, next_due_at, node_id, node_kind,
   parent_id, source_version, state, storable_rank, updated_at`;
 
+/**
+ * THE RANK LABEL — the one label whose ruling decides a node's storability, and so the label a
+ * due-work row is filed under (the label repair fan-out and the undecided-label attribution both
+ * read it). A release is judged by its OWN label: the one its browse listed, else the label it
+ * descends from, which for a release a label browse listed IS its own. A release an ARTIST browse
+ * reached with no own label on record has no rank label at all: the label it inherited is only the
+ * seed its walk descends from, the storage gate never reads it, and an artist found on an enabled
+ * label mostly releases elsewhere. Every other kind keeps its provenance label; nothing ranks on it.
+ */
+export function crawlRankLabelSlugSql(prefix = ""): string {
+  return `case when ${prefix}kind = 'release'
+    then coalesce(${prefix}release_label_slug,
+      case when substr(${prefix}parent_id, 1, length('musicbrainz:artist:')) = 'musicbrainz:artist:'
+        then null else ${prefix}label_slug end)
+    else ${prefix}label_slug end`;
+}
+
+const CRAWL_SOURCE_FROM = `from crawl_frontier cf
+      left join labels provenance_label on provenance_label.slug = ${crawlRankLabelSlugSql("cf.")}`;
+
 const CRAWL_SOURCE_COLUMNS = `cf.attempted_at, cf.created_at, cf.demand_rank, cf.done_at,
   cf.external_id, cf.failures, cf.hop, cf.id, cf.kind, cf.label_slug, cf.parent_id,
+  cf.release_label_slug, ${crawlRankLabelSlugSql("cf.")} as rank_label_slug,
   cf.source, cf.state, cf.updated_at,
   case when provenance_label.seed_state = 'enabled' then 1 else 0 end as label_enabled,
   exists (
@@ -215,6 +238,7 @@ function crawlSourceVersion(row: CrawlSourceSqlRow): string {
     row.created_at,
     row.updated_at,
     row.label_slug,
+    row.release_label_slug,
     row.parent_id,
     Number(row.label_enabled),
     Number(row.parent_allowed),
@@ -268,7 +292,7 @@ function projectCrawlSource(row: CrawlSourceSqlRow): CrawlDueProjection | null {
     createdAt: row.created_at,
     demandRank: Number(row.demand_rank),
     hop: Number(row.hop),
-    labelSlug: row.label_slug,
+    labelSlug: row.rank_label_slug,
     nextDueAt,
     nodeId: row.id,
     nodeKind: row.kind,
@@ -322,6 +346,8 @@ const CRAWL_PROBE_BASES: readonly Record<string, unknown>[] = [
     outstanding_allow: 0,
     parent_allowed: 1,
     parent_id: "probe-parent",
+    rank_label_slug: "probe-label",
+    release_label_slug: "probe-release-label",
     self_allowed: 1,
     source: "musicbrainz",
     state: "pending",
@@ -342,6 +368,8 @@ const CRAWL_PROBE_BASES: readonly Record<string, unknown>[] = [
     outstanding_allow: 0,
     parent_allowed: 0,
     parent_id: null,
+    rank_label_slug: null,
+    release_label_slug: null,
     self_allowed: 1,
     source: "musicbrainz",
     state: "failed",
@@ -362,6 +390,8 @@ const CRAWL_PROBE_BASES: readonly Record<string, unknown>[] = [
     outstanding_allow: 0,
     parent_allowed: 1,
     parent_id: null,
+    rank_label_slug: "probe-label",
+    release_label_slug: null,
     self_allowed: 1,
     source: "musicbrainz",
     state: "done",
@@ -589,7 +619,7 @@ export function markCrawlNodeRepairStatement(
        label_slug, parent_id, generation, source_version, updated_at, repair_entered_at)
       select id, kind, 'repair', hop, demand_rank, created_at,
              case when kind = 'release' then 1 else null end,
-             null, label_slug, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2, ?2
+             null, ${crawlRankLabelSlugSql()}, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2, ?2
       from crawl_frontier where id = ?3 ${condition} ${markerCondition}
       union all
       select node_id, node_kind, 'repair', hop, demand_rank, created_at, storable_rank,
@@ -635,7 +665,7 @@ export function markCrawlNodeRepairsByUpdatedAtStatement(
        label_slug, parent_id, generation, source_version, updated_at, repair_entered_at)
       select id, kind, 'repair', hop, demand_rank, created_at,
              case when kind = 'release' then 1 else null end,
-             null, label_slug, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2, ?2
+             null, ${crawlRankLabelSlugSql()}, parent_id, '${CRAWL_DUE_LIVE_GENERATION}', ?1, ?2, ?2
       from crawl_frontier
       where id in (${placeholders}) and updated_at = ?${uniqueIds.length + 3}
       on conflict(node_id) do update set
@@ -656,8 +686,7 @@ export function crawlSourceChunkStatement(options: {
   return {
     args: [options.after ?? "", options.limit],
     sql: `select ${CRAWL_SOURCE_COLUMNS}
-      from crawl_frontier cf
-      left join labels provenance_label on provenance_label.slug = cf.label_slug
+      ${CRAWL_SOURCE_FROM}
       where cf.id > ?
       order by cf.id
       limit ?`,
@@ -679,8 +708,7 @@ async function readCrawlSourceNode(
   const result = await client.execute({
     args: [nodeId],
     sql: `select ${CRAWL_SOURCE_COLUMNS}
-      from crawl_frontier cf
-      left join labels provenance_label on provenance_label.slug = cf.label_slug
+      ${CRAWL_SOURCE_FROM}
       where cf.id = ? limit 1`,
   });
   return result.rows[0] as unknown as CrawlSourceSqlRow | undefined;
@@ -766,8 +794,7 @@ export async function repairCrawlDueNodes(
   const sourceResult = await client.execute({
     args: markers.map((marker) => marker.nodeId),
     sql: `select ${CRAWL_SOURCE_COLUMNS}
-      from crawl_frontier cf
-      left join labels provenance_label on provenance_label.slug = cf.label_slug
+      ${CRAWL_SOURCE_FROM}
       where cf.id in (${placeholders})`,
   });
   const sourcesById = new Map(
@@ -1419,7 +1446,7 @@ export async function readLegacyCrawlSelection(
     args: [...sharedArgs, releaseLimit],
     sql: `select cf.id
       from crawl_frontier cf
-      left join labels l on l.slug = cf.label_slug
+      left join labels l on l.slug = ${crawlRankLabelSlugSql("cf.")}
       where cf.kind = 'release' and ${eligible}
       order by case
           when l.seed_state = 'enabled' then 0
