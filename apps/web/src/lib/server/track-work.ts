@@ -1038,8 +1038,8 @@ export async function listTrackWork(options: {
 export async function countTrackWork(options: {
   /**
    * An ALREADY-computed capture budget state, threaded in so the caller that also needs the state
-   * (the funnel snapshot: it reads `getCatalogueCaptureState` once for its meters) does not force a
-   * SECOND identical read here. Omitted, the capture count reads the brake itself, as before.
+   * (the `/admin/funnel` page read: it reads `getCatalogueCaptureState` once for its meters) does
+   * not force a SECOND identical read here. Omitted, the capture count reads the brake itself.
    */
   captureState?: CatalogueCaptureState;
   kind: TrackWorkKind;
