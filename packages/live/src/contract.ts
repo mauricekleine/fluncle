@@ -19,6 +19,57 @@ export const BRIDGE_REMOTE_PATH = "/remote";
  */
 export const VJ_TRANSITION_PORT = 9000;
 
+/**
+ * THE CREW WALL — the room's own logos on the show screen. The bridge serves three LAN
+ * surfaces for it on :4180, beside /remote:
+ *   * `/crew` — the upload page anyone on the room's WiFi opens (QR-reachable from the wall),
+ *   * `/crew/moderate` — the operator's approve/reject queue, phone-sized,
+ *   * `/crew/wall` — the rotating overlay OBS reads as a Browser Source.
+ * LAN-local by design, exactly like /remote: no auth, never on the open internet. The
+ * operator gate is ON by default — an upload lands `pending` and reaches the wall only
+ * once he approves it (`FLUNCLE_CREW_AUTO_APPROVE=1` for a room he trusts).
+ */
+export const BRIDGE_CREW_PATH = "/crew";
+export const BRIDGE_CREW_WALL_PATH = "/crew/wall";
+export const BRIDGE_CREW_MODERATE_PATH = "/crew/moderate";
+
+/** Per-upload byte cap: a logo, not a photo album. */
+export const CREW_MAX_BYTES = 2_000_000;
+/** How many logos the wall holds before it stops taking more (bounded by design). */
+export const CREW_MAX_LOGOS = 60;
+/** Uploads one address may land inside `CREW_RATE_WINDOW_MS`. */
+export const CREW_RATE_LIMIT = 5;
+export const CREW_RATE_WINDOW_MS = 60_000;
+/** How long one logo holds the wall before the crossfade to the next. */
+export const CREW_DWELL_MS = 18_000;
+
+/** The raster formats the wall accepts. SVG is refused — it executes script in a browser source. */
+export type CrewImageExt = "png" | "jpeg" | "webp" | "gif";
+
+/** One uploaded logo. `state` IS the operator gate: pending until he approves it. */
+export type CrewLogo = {
+  id: string;
+  ext: CrewImageExt;
+  state: "pending" | "approved";
+  addedAt: number;
+  /** The uploader's own label, trimmed + capped. Shown in the moderation queue only. */
+  label?: string;
+};
+
+/**
+ * The wall's roll: the approved logos plus the ORDER the wall walks them in. The order is
+ * drawn bridge-side by the SAME `createShuffleBag` the RANDOM-VJ director uses, so the
+ * package holds exactly one shuffle implementation — no browser mirror to drift out of step.
+ */
+export type CrewRoll = {
+  /** Bumps whenever the approved set changes, so the wall knows to re-fetch. */
+  version: number;
+  dwellMs: number;
+  /** A full permutation of the approved ids — every logo shows once before any repeats. */
+  order: string[];
+  logos: Array<{ id: string; url: string; label?: string }>;
+};
+
 /** One planned track, enriched at show start (the /plan shape the glass already consumes). */
 export type PlanEntry = {
   logId: string;

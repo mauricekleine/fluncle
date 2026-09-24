@@ -9,6 +9,7 @@
     "bridge": "bun src/bridge/serve.ts",
     "show": "bun src/show.ts",
     "test": "bun test",
+    "qr:verify": "bun scripts/verify-qr.ts",
     "test:matcher-accuracy": "bun src/bridge/accuracy.ts",
     "typecheck": "tsc --noEmit"
   },
