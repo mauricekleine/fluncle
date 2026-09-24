@@ -1764,6 +1764,93 @@ describe("the allowed-artist re-arm", () => {
   });
 });
 
+describe("an artist browse records each release's own label", () => {
+  it("stamps the credited label on new and still-waiting releases, keeping the seed as provenance", async () => {
+    await seedLabel("Elsewhere Records", "elsewhere-records", "disabled");
+    await db.execute(
+      "update labels set mb_label_id = 'label-elsewhere' where slug = 'elsewhere-records'",
+    );
+    await seedLabel("Home Label", "home-label", "enabled");
+    await seedFrontierNode({
+      createdAt: "2026-07-10T00:00:00.000Z",
+      externalId: "artist-own-label",
+      hop: 0,
+      id: "musicbrainz:artist:artist-own-label",
+      kind: "artist",
+      labelSlug: "medschool",
+    });
+    // A release another walk queued before its label was known: waiting, and not yet claimable.
+    await seedFrontierNode({
+      createdAt: "2026-07-09T00:00:00.000Z",
+      externalId: "release-already-queued",
+      hop: 2,
+      id: "musicbrainz:release:release-already-queued",
+      kind: "release",
+      labelSlug: "medschool",
+      state: "failed",
+    });
+
+    const browseUrls: string[] = [];
+    const credit = (id: string, name: string) => [{ label: { id, name } }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes("/release?artist=artist-own-label")) {
+          browseUrls.push(url);
+          return json({
+            "release-count": 4,
+            releases: [
+              {
+                id: "release-elsewhere",
+                "label-info": credit("label-elsewhere", "Elsewhere Records"),
+              },
+              { id: "release-home-fold", "label-info": credit("unrecorded-mbid", "Home Label") },
+              { id: "release-unknown", "label-info": credit("label-nobody", "Nobody Knows") },
+              {
+                id: "release-already-queued",
+                "label-info": credit("label-elsewhere", "Elsewhere Records"),
+              },
+            ],
+          });
+        }
+
+        return json({});
+      }),
+    );
+
+    const { crawlCatalogue } = await import("./crawl");
+    await crawlCatalogue({ limit: 4, maxHop: 2 });
+
+    expect(browseUrls).toHaveLength(1);
+    expect(new URL(browseUrls[0] ?? "").searchParams.get("inc")).toBe("labels");
+    const releases = await db.execute(
+      `select external_id, label_slug, release_label_slug from crawl_frontier
+       where kind = 'release' order by external_id`,
+    );
+    expect(releases.rows.map((row) => ({ ...row }))).toEqual([
+      {
+        external_id: "release-already-queued",
+        label_slug: "medschool",
+        release_label_slug: "elsewhere-records",
+      },
+      {
+        external_id: "release-elsewhere",
+        label_slug: "medschool",
+        release_label_slug: "elsewhere-records",
+      },
+      {
+        external_id: "release-home-fold",
+        label_slug: "medschool",
+        release_label_slug: "home-label",
+      },
+      { external_id: "release-unknown", label_slug: "medschool", release_label_slug: null },
+    ]);
+  });
+});
+
 describe("the scoped label re-arm — a widened ruling replays refused releases", () => {
   const SCOPED_LABEL_MBID = "label-scope-rearm";
   const SCOPED_LABEL_NAME = "Scope Re-arm Records";

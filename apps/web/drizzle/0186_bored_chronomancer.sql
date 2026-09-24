@@ -1,0 +1,1 @@
+ALTER TABLE `crawl_frontier` ADD `release_label_slug` text;

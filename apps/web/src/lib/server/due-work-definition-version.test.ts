@@ -65,7 +65,7 @@ const DEFINITION_VERSIONS: Record<string, string> = {
   "capture-findings": "dv1-47c7a6c8379476a5",
   "capture-verification": "dv1-93400c1ce764898a",
   "catalogue-rank": "dv1-3c2f45dbed7774ca",
-  [CRAWL_DUE_WORK_FRONTIER]: "dv1-a88caa6773687598",
+  [CRAWL_DUE_WORK_FRONTIER]: "dv1-1756d2c65e2d8ab6",
   "deezer-catalogue": "dv1-f55ba84edd5da5a6",
   "deezer-finding": "dv1-d48f15a364352f41",
   "discogs-track": "dv1-be3ae1f4ba16cced",

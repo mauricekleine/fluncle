@@ -1303,6 +1303,13 @@
       "when": 1789989747229,
       "tag": "0185_unusual_baron_strucker",
       "breakpoints": true
+    },
+    {
+      "idx": 186,
+      "version": "6",
+      "when": 1790224614077,
+      "tag": "0186_bored_chronomancer",
+      "breakpoints": true
     }
   ]
 }

@@ -84,6 +84,7 @@ import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import {
   CRAWL_STALE_ARTIST_REARM_LIMIT,
+  crawlRankLabelSlugSql,
   MAX_CRAWL_DUE_CHUNK_SIZE,
   markCrawlNodeRepairStatement,
   markCrawlNodeRepairsByUpdatedAtStatement,
@@ -458,9 +459,15 @@ type MbReleaseDetail = {
   "release-group"?: { id?: string };
   title?: string;
 };
+type MbBrowseRelease = {
+  id?: string;
+  // Present on an ARTIST browse, which asks for `inc=labels` (see `browsePath`).
+  "label-info"?: { label?: { id?: string; name?: string } | null }[];
+  status?: string;
+};
 type MbReleaseBrowse = {
   "release-count"?: number;
-  releases?: { id?: string; status?: string }[];
+  releases?: MbBrowseRelease[];
 };
 type MbLabelSearch = { labels?: { id?: string; name?: string; score?: number }[] };
 
@@ -607,7 +614,7 @@ async function settle(
 /**
  * The pass's pick: the next `limit` nodes to expand — breadth-first and deterministic
  * (`hop, demand_rank, created_at, id`) WITHIN each class of a kind-aware split. The RELEASE half
- * drains storable provenance (an enabled label or allow-artist parent) before non-storable provenance;
+ * drains storable releases (the release's own label enabled, or an allow-artist parent) first;
  * the DISCOVERY half is unchanged. `demand_rank` (docs/catalogue-crawler.md § Demand) sits AFTER
  * `hop`, so a demanded entity's subtree is expanded before its undemanded siblings AT THE SAME
  * HOP within its class — never ahead of a nearer hop in that class. It takes `pending`
@@ -658,7 +665,8 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
                   else 0
                 end as is_storable
           from crawl_frontier
-          left join labels as provenance_label on provenance_label.slug = crawl_frontier.label_slug
+          left join labels as provenance_label
+            on provenance_label.slug = ${crawlRankLabelSlugSql("crawl_frontier.")}
           where kind = 'release' and ${eligible}
           order by is_storable desc, crawl_frontier.hop asc, demand_rank asc,
                    crawl_frontier.created_at asc, crawl_frontier.id asc
@@ -1520,13 +1528,20 @@ function seedSearchPath(name: string): string {
   return `/label?query=${encodeURIComponent(name)}&limit=5`;
 }
 
+/**
+ * An ARTIST browse asks for each release's label credits (`inc=labels`, the same request, a few
+ * more bytes per release), because the release node it mints is ranked on its OWN label: an artist
+ * found on an enabled label mostly releases elsewhere, and only the label credit says where. A LABEL
+ * browse needs no credits, since every release it lists is on the label being browsed.
+ */
 function browsePath(
   key: string,
   externalId: string,
   limit: number,
   offset: number | string,
 ): string {
-  return `/release?${key}=${externalId}&limit=${limit}&offset=${offset}`;
+  const inc = key === "artist" ? "&inc=labels" : "";
+  return `/release?${key}=${externalId}&limit=${limit}&offset=${offset}${inc}`;
 }
 
 async function planCrawlNode(
@@ -1936,15 +1951,76 @@ async function applySeedLabel(
   return { ...EMPTY, enqueued };
 }
 
-/** The `{ id }` releases off a browse response — the ill-formed and scoped exclusions dropped. */
-function browseReleases(browse: MbReleaseBrowse | null, scoped = false): { id: string }[] {
+type BrowsedRelease = { id: string; label: null | { id: null | string; name: null | string } };
+
+/** The releases off a browse response, each with its first named label credit — the ill-formed and
+ * scoped exclusions dropped. The credit is picked exactly as `applyRelease` picks it. */
+function browseReleases(browse: MbReleaseBrowse | null, scoped = false): BrowsedRelease[] {
   return (browse?.releases ?? [])
     .filter(
-      (release): release is { id: string; status?: string } =>
+      (release): release is MbBrowseRelease & { id: string } =>
         typeof release.id === "string" &&
         (!scoped || (release.status !== "Bootleg" && release.status !== "Pseudo-Release")),
     )
-    .map(({ id }) => ({ id }));
+    .map((release) => {
+      const label = (release["label-info"] ?? []).find((info) => info.label?.name)?.label;
+      return {
+        id: release.id,
+        label: label ? { id: label.id ?? null, name: label.name ?? null } : null,
+      };
+    });
+}
+
+/** A name fold two different labels share: the gate refuses to guess between them, and so does
+ * the rank. */
+const AMBIGUOUS_FOLD = Symbol("ambiguous label fold");
+
+/**
+ * Each browsed release's OWN label, as the `labels` slug the archive knows it by: the listing
+ * label itself for a label browse, and for an artist browse the release's credited label resolved
+ * exactly the way the storage gate resolves it (exact MBID first, then an unambiguous name fold).
+ * Null when the archive holds no such label, which ranks the release as not storable, the same
+ * answer the gate would give it today.
+ */
+async function releaseLabelSlugs(
+  node: FrontierRow,
+  releases: readonly BrowsedRelease[],
+  client?: CrawlDbClient,
+): Promise<Map<string, null | string>> {
+  if (node.kind === "label") {
+    return new Map(releases.map((release) => [release.id, node.label_slug]));
+  }
+  if (!releases.some((release) => release.label !== null)) {
+    return new Map(releases.map((release) => [release.id, null]));
+  }
+  const db = client ?? (await getDb());
+  const result = await db.execute("select slug, name, mb_label_id from labels");
+  const byMbid = new Map<string, string>();
+  const byFold = new Map<string, string | typeof AMBIGUOUS_FOLD>();
+  for (const row of typedRows<{ mb_label_id: null | string; name: string; slug: string }>(
+    result.rows,
+  )) {
+    if (row.mb_label_id) {
+      byMbid.set(row.mb_label_id, row.slug);
+    }
+    const key = fold(row.name);
+    if (key) {
+      const previous = byFold.get(key);
+      byFold.set(key, previous === undefined || previous === row.slug ? row.slug : AMBIGUOUS_FOLD);
+    }
+  }
+  const slugFor = (label: BrowsedRelease["label"]): null | string => {
+    if (!label) {
+      return null;
+    }
+    const exact = label.id ? byMbid.get(label.id) : undefined;
+    if (exact) {
+      return exact;
+    }
+    const folded = label.name ? byFold.get(fold(label.name)) : undefined;
+    return typeof folded === "string" ? folded : null;
+  };
+  return new Map(releases.map((release) => [release.id, slugFor(release.label)]));
 }
 
 /**
@@ -1952,52 +2028,59 @@ function browseReleases(browse: MbReleaseBrowse | null, scoped = false): { id: s
  * (an `on conflict do nothing` no-op returns 0). That new-count is load-bearing twice over: it is
  * the walk's outward edge (`enqueued`), and it is the tail-first re-arm's EARLY-STOP signal — a
  * page that mints nothing new means every release below it is already walked.
+ *
+ * Every node carries its release's OWN label (`release_label_slug`), which is what the claim ranks
+ * it on. A release this page re-reaches that is still waiting and has no own label on record has
+ * one stamped, and is re-queued for projection, so a release another walk reached first is ranked
+ * on the truth as soon as any listing names its label. The stamp never counts toward the new-count,
+ * and it leaves a leased node alone, since changing a claimed node would void that claim's commit.
  */
 async function enqueueReleaseNodes(
   node: FrontierRow,
-  releases: { id: string }[],
+  releases: BrowsedRelease[],
   childHop: number,
   replayWatermark?: string,
   client?: CrawlDbClient,
 ): Promise<number> {
-  if (!replayWatermark) {
-    return enqueueMany(
-      releases.map((release) => ({
-        externalId: release.id,
-        hop: childHop,
-        kind: "release",
-        labelSlug: node.label_slug,
-        parentId: node.id,
-        source: "musicbrainz",
-      })),
-      client,
-    );
+  if (releases.length === 0) {
+    return 0;
   }
   const db = client ?? (await getDb());
+  const ownLabels = await releaseLabelSlugs(node, releases, client);
   const groups: InStatement[][] = [];
+  // Which groups are the inserts: only those carry the new-count, never a stamp.
+  const insertGroups = new Set<number>();
   for (const release of releases) {
     const now = new Date().toISOString();
     const nodeId = frontierId("musicbrainz", "release", release.id);
-    groups.push([
-      {
-        args: {
-          createdAt: now,
-          externalId: release.id,
-          hop: childHop,
-          id: nodeId,
-          kind: "release",
-          labelSlug: node.label_slug,
-          parentId: node.id,
-          source: "musicbrainz",
-          updatedAt: now,
-          watermark: replayWatermark,
-        },
-        sql: `insert into crawl_frontier
-                  (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
-                values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug, :createdAt, :updatedAt)
+    const releaseLabelSlug = ownLabels.get(release.id) ?? null;
+    const args = {
+      createdAt: now,
+      externalId: release.id,
+      hop: childHop,
+      id: nodeId,
+      kind: "release",
+      labelSlug: node.label_slug,
+      parentId: node.id,
+      releaseLabelSlug,
+      source: "musicbrainz",
+      updatedAt: now,
+    };
+    insertGroups.add(groups.length);
+    if (replayWatermark) {
+      groups.push([
+        {
+          args: { ...args, watermark: replayWatermark },
+          sql: `insert into crawl_frontier
+                  (id, kind, source, external_id, hop, parent_id, label_slug, release_label_slug,
+                   created_at, updated_at)
+                values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug,
+                        :releaseLabelSlug, :createdAt, :updatedAt)
                 on conflict (id) do update set
                   state = 'pending', cursor = 0, hop = 0,
                   parent_id = excluded.parent_id, label_slug = excluded.label_slug,
+                  release_label_slug = coalesce(excluded.release_label_slug,
+                                                crawl_frontier.release_label_slug),
                   updated_at = excluded.updated_at
                 where (crawl_frontier.state = 'done'
                        and crawl_frontier.done_at < :watermark)
@@ -2005,15 +2088,57 @@ async function enqueueReleaseNodes(
                        and (crawl_frontier.parent_id is not :parentId
                             or crawl_frontier.hop <> 0
                             or crawl_frontier.label_slug is not :labelSlug))`,
-      },
-      markCrawlNodeRepairStatement(nodeId, `crawl-replay-enqueue:${crypto.randomUUID()}`, {
-        now,
-        onlyIfPreviousStatementChanged: true,
-      }),
-    ]);
+        },
+        markCrawlNodeRepairStatement(nodeId, `crawl-replay-enqueue:${crypto.randomUUID()}`, {
+          now,
+          onlyIfPreviousStatementChanged: true,
+        }),
+      ]);
+    } else {
+      groups.push([
+        {
+          args,
+          sql: `insert into crawl_frontier
+                  (id, kind, source, external_id, hop, parent_id, label_slug, release_label_slug,
+                   created_at, updated_at)
+                values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug,
+                        :releaseLabelSlug, :createdAt, :updatedAt)
+                on conflict (id) do nothing`,
+        },
+        markCrawlNodeRepairStatement(nodeId, `crawl-enqueue:${crypto.randomUUID()}`, {
+          now,
+          onlyIfPreviousStatementChanged: true,
+        }),
+      ]);
+    }
+    // Stamped after its own insert, so a release this page just minted is already labelled and its
+    // stamp is a no-op.
+    if (releaseLabelSlug !== null) {
+      groups.push([
+        {
+          args: [releaseLabelSlug, now, nodeId],
+          sql: `update crawl_frontier set release_label_slug = ?, updated_at = ?
+                where id = ? and kind = 'release' and release_label_slug is null
+                  and state in ('pending', 'failed')
+                  and not exists (
+                    select 1 from crawl_due_work
+                    where crawl_due_work.node_id = crawl_frontier.id
+                      and crawl_due_work.state = 'leased'
+                  )`,
+        },
+        markCrawlNodeRepairStatement(nodeId, `crawl-release-label:${crypto.randomUUID()}`, {
+          now,
+          onlyIfPreviousStatementChanged: true,
+        }),
+      ]);
+    }
   }
   const results = await batchDueWorkMutationGroups(db, groups, MAX_CRAWL_DUE_CHUNK_SIZE);
-  return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
+  return results.reduce(
+    (count, group, index) =>
+      insertGroups.has(index) ? count + (group[0]?.rowsAffected ?? 0) : count,
+    0,
+  );
 }
 
 /**

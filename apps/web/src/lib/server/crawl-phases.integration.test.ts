@@ -876,9 +876,9 @@ describe("crawl provider bodies fetched by the box", () => {
       kind: "tail",
       pageSize: 100,
       pageUrlTemplate:
-        "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset={offset}&fmt=json",
+        "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset={offset}&inc=labels&fmt=json",
       probeUrl:
-        "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=1&offset=0&fmt=json",
+        "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=1&offset=0&inc=labels&fmt=json",
     });
 
     refuseWorkerFetch();
@@ -887,12 +887,12 @@ describe("crawl provider bodies fetched by the box", () => {
         {
           body: { "release-count": 250, releases: [] },
           outcome: "body",
-          url: "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=1&offset=0&fmt=json",
+          url: "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=1&offset=0&inc=labels&fmt=json",
         },
         {
           body: providerBrowse(2),
           outcome: "body",
-          url: "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset=150&fmt=json",
+          url: "https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset=150&inc=labels&fmt=json",
         },
       ]),
     );
@@ -912,7 +912,7 @@ describe("crawl provider bodies fetched by the box", () => {
           {
             body: providerBrowse(1),
             outcome: "body",
-            url: `https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset=${offset}&fmt=json`,
+            url: `https://musicbrainz.org/ws/2/release?artist=browse-artist&limit=100&offset=${offset}&inc=labels&fmt=json`,
           },
         ]),
       ).rejects.toThrow(/not for a url this claim issued/);
