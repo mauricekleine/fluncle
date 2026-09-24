@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fluncle-live.sh — the `fluncle-live` `--no-agent` Hermes cron's job ENTRY.
+# fluncle-live.sh — the `fluncle-live` host-timer sweep's job ENTRY.
 #
 # The poller behind Fluncle's cross-surface live-set callout ("Fluncle is on the
 # decks right now"). Version-controlled source; the repo is canonical and the box is
@@ -13,10 +13,9 @@
 # (the crew Telegram callout), and every surface reads it. Auto-clear is read-side
 # (a stale flag is treated offline), so a dead poller can't strand a "LIVE" banner.
 #
-# Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
-# extension — bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts`
-# would be fed to Python. This thin wrapper is the bash entry; the poll + JSON work
-# lives in the bun orchestrator beside it. Its stdout is the cron's run output.
+# Why a .sh that execs a .ts: the host timer runs the sweep as `bash <sweep>.sh`,
+# so this thin wrapper is the bash entry; the poll + JSON work lives in the bun
+# orchestrator beside it. Its stdout is the cron's run output.
 #
 # PUBLIC-SAFE BY CONSTRUCTION (this repo is open source): this script carries NO
 # hostnames, tokens, or secrets. The Twitch credentials are read from the SHARED,
@@ -34,30 +33,29 @@
 #   TWITCH_USER_LOGIN — the channel login to poll. Defaults to flunclelive.
 #
 # FLUNCLE_API_TOKEN (the agent-scoped token that authorizes the POST) arrives via the
-# CRON ENV — an unrecognized custom var passes Hermes' provider-cred blocklist, same
-# as the other sweeps. TWITCH_CLIENT_SECRET resembles a provider cred, so Hermes
-# hard-blocks it from the cron env — that is why it rides the op-injected file.
+# CONTAINER ENV, same as the other sweeps. The Twitch credentials are sweep credentials,
+# so they ride the op-injected file.
 #
 # Scheduled every 1m by a repo-checked-in HOST systemd timer (../live-timer/, installed by
-# ../install-host-timers.sh), NOT a gateway `hermes cron create`. Per-run output is a
+# ../install-host-timers.sh), which `docker exec`s it in the container. Per-run output is a
 # freshness marker the sweep self-writes via cron-output.sh under
 # ~/.hermes/cron/output/fluncle-live/ (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
-# The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that
+# A caller may exec this with a minimal PATH that
 # omits /usr/local/bin (the bun symlink) and /root/.bun/bin, so a bare `bun` is
 # "not found" → exit 127. Prepend the known install dirs so this wrapper's `bun` and
-# the orchestrator's `curl` spawns resolve regardless of the runner's PATH.
+# the orchestrator's `curl` spawns resolve regardless of the caller's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
-# Belt-and-suspenders: the cron runner's exec context loses the PATH export above,
+# Belt-and-suspenders: an exec context can lose the PATH export above,
 # so pin the ABSOLUTE interpreter path. The orchestrator reads BUN_BIN.
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
-# The Twitch credentials ride the SHARED op-injected secrets file (Hermes blocks
-# TWITCH_CLIENT_SECRET from the cron env). Rendered from the box's 1Password secrets
+# The Twitch credentials ride the SHARED op-injected secrets file (where the sweep
+# credentials live). Rendered from the box's 1Password secrets
 # vault by the host fluncle-secrets-sync timer (docs/agents/hermes/secrets/); the same
-# file every other sweep sources. FLUNCLE_API_TOKEN is NOT here — it rides the cron env.
+# file every other sweep sources. FLUNCLE_API_TOKEN is NOT here — it rides the container env.
 LIVE_ENV_FILE="${LIVE_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${LIVE_ENV_FILE}" ]; then
   set -a
@@ -69,7 +67,7 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# Host timers write no per-run output file, so self-report the
 # /status freshness marker (see cron-output.sh) — WRAP the payload (never `exec`) so the
 # marker is written even on a nonzero run. (fluncle-live is not yet in the prober's
 # AUTOMATION_CRONS, so this marker is written for future prober support — harmless today.)

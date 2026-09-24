@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-render — rave-02 host trigger for the video render conductor (migrated off the Hermes gateway cron runner)
+Description=fluncle-render — rave-02 host trigger for the video render conductor
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/render-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service

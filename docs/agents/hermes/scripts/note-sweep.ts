@@ -4,7 +4,7 @@
 //
 // LIVE. Version-controlled source; the repo is canonical and the box is a
 // deploy target (fluncle-hermes-operator skill). Invoked by the bash wrapper
-// (note-sweep.sh) the cron runner execs every ~30m — see that file's header for the
+// (note-sweep.sh) its host timer execs every ~30m — see that file's header for the
 // `host-timer` wire-up and ../cron/README.md for the full cron model.
 //
 // THE HYBRID MODEL (the written-note sibling of observe-sweep). Unlike the
@@ -108,9 +108,8 @@ import { resolveSweepPrompt } from "./prompt-fetch";
 // tick is picked up on the next (~30m later).
 // ---------------------------------------------------------------------------
 
-// One finding per tick: the Hermes cron runner kills a `--no-agent` job at 120s, and
-// a single `claude -p` authoring (skill-read + Sonnet) already sits well inside that
-// budget but two could brush it. The queue drains across ticks (find volume is low).
+// One finding per tick: a single `claude -p` authoring (skill-read + Sonnet) sits well
+// inside 120s, and one per tick keeps every tick short. The queue drains across ticks (find volume is low).
 // Raise only once a HEALTHY run measures comfortably under 120s per finding.
 const BATCH_CAP = 1;
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)

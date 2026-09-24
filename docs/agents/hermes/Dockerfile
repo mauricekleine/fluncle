@@ -257,7 +257,7 @@ RUN arch="$(uname -m)" \
 # by their canonical modules from apps/web; this keeps the box script self-contained without
 # duplicating the device whitelist or anchored-cut SQL. The complete local deriver is copied under
 # its repository-relative tree because its imports deliberately share those same canonical files.
-# World-readable + exec so the non-root hermes cron user runs them.
+# World-readable + exec so the non-root hermes user runs them.
 COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/
 COPY apps/web/src/lib/catalogue-eligibility.ts \
      apps/web/scripts/lib/device-db-schema.ts \
@@ -318,8 +318,8 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.281
 # (note/observe/newsletter authoring), and the nightly audit + reviewer agents lean on
 # the operator skills (fluncle-hermes-operator, fluncle-surfaces, fluncle-audit-operator,
 # fluncle-maintenance, taste, …). CLAUDE DISCOVERS SKILLS UNDER ITS CONFIG DIR
-# (<CLAUDE_CONFIG_DIR>/skills/<name>/, default ~/.claude/skills/). The `--no-agent`
-# cron runner execs as a NON-root user whose HOME is not knowable at build time, so
+# (<CLAUDE_CONFIG_DIR>/skills/<name>/, default ~/.claude/skills/). Each sweep runs as a
+# NON-root user whose HOME is set per `docker exec`, not at build time, so
 # rather than guess that user's ~/.claude we pin the config dir to a world-readable
 # baked path via CLAUDE_CONFIG_DIR=/opt/claude and drop the whole set at
 # /opt/claude/skills/<name>. This makes skill discovery independent of the cron user's

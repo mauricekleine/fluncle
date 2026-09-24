@@ -33,7 +33,7 @@
 //         operator override always wins. A gate 4xx → log which day failed, skip it
 //         (it stays in the gap list), continue. The temp file is cleaned up either way.
 //
-// IMAGES: the box `claude -p` sweeps are TEXT-ONLY (the `--no-agent` runner grants
+// IMAGES: the box `claude -p` sweeps are TEXT-ONLY (the sweep grants `claude -p`
 // Read/Glob/Grep, no multimodal image input), so each finding's poster is passed to the
 // model as a URL in the prompt, NOT as an image the model sees. The model places the
 // `[[logId]]` token; the PAGE renders the real poster. Revisit if the box gains image input.

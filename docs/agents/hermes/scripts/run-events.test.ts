@@ -1065,7 +1065,7 @@ async function runSecretsSync(
   writeFileSync(join(tpl, "hermes.env.tpl"), "FLUNCLE_API_TOKEN={{op}}\n", "utf8");
   writeFileSync(join(tpl, "fluncle-secrets.env.tpl"), "CLAUDE_CODE_OAUTH_TOKEN={{op}}\n", "utf8");
 
-  // An `op` that materializes exactly what the real one does: the gateway env, the sweep env
+  // An `op` that materializes exactly what the real one does: the container env, the sweep env
   // (which deliberately does NOT carry FLUNCLE_API_TOKEN), and the GSC service-account json.
   writeStub(
     bin,

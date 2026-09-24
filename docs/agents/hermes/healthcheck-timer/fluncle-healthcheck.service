@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-healthcheck — rave-02 host trigger for the Hermes /status prober (decoupled from the busy gateway it monitors)
+Description=fluncle-healthcheck — rave-02 host trigger for the Hermes /status prober
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/healthcheck-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
@@ -14,8 +14,8 @@ Type=oneshot
 # probe WORK unprivileged inside the container — matching every other fluncle-* sweep timer,
 # so no host cron execs as container-root. The probe WORK is BAKED into the image (the .sh/.ts
 # pair at /opt/hermes-scripts/, Unit A — auto-updates from main via pin-watch, no
-# /opt/data/scripts copy); this host unit only TRIGGERS it, so the prober no longer rides — and
-# is no longer starved by — the Hermes cron gateway it is meant to monitor. (The prober
+# /opt/data/scripts copy); this host unit only TRIGGERS it, on its own timer, so no long sweep
+# the prober monitors can delay or starve its tick. (The prober
 # self-emits its own /status row, so — unlike the work sweeps — its .sh writes no cron-output
 # marker: a self-read would be circular.)
 # Probes and the dead-man beacon are database-independent control-plane work; the optional

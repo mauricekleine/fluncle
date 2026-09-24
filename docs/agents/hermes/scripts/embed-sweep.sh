@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # embed-sweep.sh — the audio-embedding sweep's job ENTRY (`fluncle-embed`).
 #
-# SCHEDULED BY A HOST SYSTEMD TIMER, not a Hermes gateway cron: a windowed full-song MuQ
-# forward is minutes-scale and must not occupy the shared serial gateway runner (its ~300s
-# global timeout would starve the latency-sensitive 5-min sweeps — the same reason capture is
-# a host timer). The rave-02 host timer `docker exec`s this script inside the container on a
-# schedule — see ../embed-timer/README.md for the unit files + install. The container runner
-# dispatches by extension (bash for `.sh`), and a manual `bash /opt/hermes-scripts/embed-sweep.sh`
+# SCHEDULED BY A HOST SYSTEMD TIMER: a windowed full-song MuQ forward is minutes-scale, so it
+# runs on its own timer and never delays the latency-sensitive 5-min sweeps (the same reason
+# capture is a host timer). The rave-02 host timer `docker exec`s this script inside the
+# container on a schedule — see ../embed-timer/README.md for the unit files + install. The unit
+# runs `bash <sweep>.sh`, and a manual `bash /opt/hermes-scripts/embed-sweep.sh`
 # runs it the same way, so this thin bash wrapper is the entry; all the JSON work lives in the
 # bun orchestrator beside it (embed-sweep.ts, which in turn calls embed-track.py for the MuQ
 # inference). Its stdout is the run output the /status prober reads.
@@ -36,7 +35,7 @@
 #     --embedding-file`, an existing command) — the box's baked config under HOME, unchanged.
 set -euo pipefail
 
-# The docker-exec / runner context hands this a minimal PATH that omits /usr/local/bin (the
+# The docker-exec context may hand this a minimal PATH that omits /usr/local/bin (the
 # bun + fluncle symlinks) and /root/.bun/bin, so a bare `bun`/`fluncle`/`python3` is
 # "not found" → exit 127. Prepend the known install dirs so this wrapper's `bun` AND the
 # orchestrator's `fluncle`/`bun`/`python3` spawns resolve regardless of the caller's PATH.
@@ -52,9 +51,8 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 export PYTHON_BIN="${PYTHON_BIN:-/opt/muq-venv/bin/python}"
 
 # Source the shared 0600 secrets file (the same single source every other sweep reads) so the
-# R2 creds are present. Provider creds are dropped from the cron env by Hermes' blocklist, so
-# the R2/account creds can only arrive via this file — they are unrecognized custom vars, so
-# they pass.
+# R2 creds are present. The container env carries only the agent token and the alert webhook,
+# so the R2/account creds arrive via this file.
 EMBED_ENV_FILE="${EMBED_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${EMBED_ENV_FILE}" ]; then
   set -a
@@ -66,7 +64,7 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# Host timers write no per-run output file, so self-report the
 # /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
 # WRAP the payload (never `exec`) so the marker is written even on a nonzero run. Before
 # this, embed (a host timer since day one) never wrote a marker → cron.embed was cosmetic.

@@ -95,7 +95,7 @@ RELEASE_HEAVY_TIMERS=(
 HERMES_CPUS="${PINWATCH_CPUS:-3}"
 HERMES_MEMORY_GIB="${PINWATCH_MEMORY_GIB:-6}"
 
-# The inherited s6 bootstrap needs CHOWN/DAC_OVERRIDE/FOWNER for /opt/data, SETUID/SETGID to enter hermes, and KILL to supervise that uid.
+# The container keeps CHOWN/DAC_OVERRIDE/FOWNER for /opt/data, SETUID/SETGID to enter hermes, and KILL to signal that uid.
 CONTAINER_SECURITY_ARGS=(
   --security-opt no-new-privileges
   --cap-drop ALL

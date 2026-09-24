@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # cluster-sweep.sh — the sonic-galaxy cluster engine's job ENTRY (`fluncle-cluster`).
 #
-# SCHEDULED BY A HOST SYSTEMD TIMER, not a Hermes gateway cron: the cluster engine is a
-# stateful nightly batch job that reads the whole embedded corpus + the map and writes the
-# map back — it wants the box and its admin token, never the shared serial gateway runner
-# (the same reason embed + capture are host timers). The rave-02 host timer `docker exec`s
+# SCHEDULED BY A HOST SYSTEMD TIMER: the cluster engine is a stateful nightly batch job
+# that reads the whole embedded corpus + the map and writes the map back — it wants the box,
+# its admin token, and its own timer (the same reason embed + capture are host timers). The rave-02 host timer `docker exec`s
 # this script inside the container once a night — see ../cluster-timer/README.md for the unit
 # files + install. A manual `bash /opt/hermes-scripts/cluster-sweep.sh [--cold-start|--remint]`
 # runs it the same way (the operator acts). Its stdout is the run output the /status prober reads.
@@ -25,7 +24,7 @@
 #     ever reads/writes the map + assignments (admin tier) and consumes `split_requested_at`.
 set -euo pipefail
 
-# The docker-exec / runner context hands this a minimal PATH that omits /usr/local/bin (the
+# The docker-exec context may hand this a minimal PATH that omits /usr/local/bin (the
 # bun + fluncle symlinks) and /root/.bun/bin, so a bare `bun`/`fluncle`/`python3` is
 # "not found" -> exit 127. Prepend the known install dirs so this wrapper's `bun` AND the
 # orchestrator's `fluncle`/`bun`/`python3` spawns resolve regardless of the caller's PATH.
@@ -62,7 +61,7 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# Host timers write no per-run output file, so self-report the
 # /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
 # WRAP the payload (never `exec`) so the marker is written even on a nonzero run. Forward
 # every arg (e.g. --cold-start / --remint on a manual operator run) to the orchestrator.

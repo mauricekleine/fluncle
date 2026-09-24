@@ -17,7 +17,7 @@
 //
 // LIVE. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper (backup-sweep.sh)
-// the cron runner execs on a schedule — see that file's header for the wire-up and
+// the host timer execs on a schedule — see that file's header for the wire-up and
 // ../backup-timer/README.md for the operator runbook of BOTH legs.
 //
 // SELF-CONTAINED by necessity: box scripts can't import the workspace. The pure dump

@@ -84,7 +84,7 @@ describe("the include / exclude rule", () => {
       expect(candidates).toContain(expected);
     }
 
-    // The chat gateway's leftovers are not state this box runs on.
+    // Chat-agent runtime files are not state this box runs on.
     for (const retired of ["/opt/data/state.db", "/opt/data/config.yaml", "/opt/data/memories"]) {
       expect(candidates).not.toContain(retired);
     }

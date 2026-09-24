@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-social-capture — rave-02 host trigger for the social-URL-capture sweep (migrated off the Hermes gateway cron runner)
+Description=fluncle-social-capture — rave-02 host trigger for the social-URL-capture sweep
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/social-capture-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service

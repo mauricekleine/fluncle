@@ -4,7 +4,7 @@
 //
 // LIVE. Version-controlled source; the repo is canonical and the box is a
 // deploy target (fluncle-hermes-operator skill). Invoked by the bash wrapper
-// (artist-sweep.sh) the cron runner execs on a schedule.
+// (artist-sweep.sh) its host timer execs on a schedule.
 //
 // THE WORKER-PACED MODEL. The box holds NO Firecrawl key, no YouTube OAuth,
 // and no MusicBrainz credentials (the Worker does them all). So the actual work —

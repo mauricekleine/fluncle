@@ -4,14 +4,13 @@
 //
 // Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (fluncle-healthcheck.sh)
-// which a rave-02 HOST systemd timer `docker exec`s every ~10m — NOT a Hermes
-// `--no-agent` gateway cron. It was moved to a host timer so the prober isn't starved
-// by the busy gateway it monitors; see ../healthcheck-timer/README.md (the units + the
+// which its own rave-02 HOST systemd timer `docker exec`s every ~10m, so no long sweep
+// it monitors can delay or starve it; see ../healthcheck-timer/README.md (the units + the
 // one-time deploy) and that .sh's header for the env keys.
 //
 // THE TICK (all deterministic — no model time):
 //   1. PROBE each service in parallel, each with a short timeout (3–5s) so one hung
-//      target can't blow the runner's ~120s budget:
+//      target can't stall the tick:
 //        web         — GET ${HEALTHCHECK_WORKER_URL}/api/v1/health, timed.
 //        r2          — HEAD ${HEALTHCHECK_R2_PROBE_URL}.
 //        sonar       — GET ${HEALTHCHECK_SONAR_URL}/health; ok ONLY when the body
@@ -22,7 +21,7 @@
 //        disk        — `df` the box's root fs (via the /opt/data mount); degraded
 //                      past ~85% full, down past ~93% — catches a filling disk
 //                      before it strands the next pin-watch rebuild.
-//        cron.*      — read ~/.hermes/cron/output/<job>/ per Hermes cron: newest *.md,
+//        cron.*      — read ~/.hermes/cron/output/<job>/ per box cron: newest *.md,
 //                      fresh within ~3× the cron's cadence, AND carrying the sweep's
 //                      contracted JSON summary with `.ok !== false`. A marker with NO
 //                      summary is a run that was KILLED before it could speak → down (see
@@ -33,7 +32,7 @@
 //                      missing = "not yet provisioned", ok). NEVER wakes the box.
 //        hermes      — self-evident: this prober runs ON the box, so ok.
 //        cron.healthcheck — self-evident: this IS the prober; reaching here means its
-//                      host timer fired → ok (it has no gateway output dir to read).
+//                      host timer fired → ok (it writes no cron output dir to read).
 //      (onion — OUT OF SCOPE for v1; see the TODO below.)
 //   2. TRANSITIONS + STREAKS: load ${HOME}/.healthcheck/state.json (service → last
 //      status + how many consecutive ticks it has been down); a probe `transitioned`
@@ -124,8 +123,8 @@ const TICK_INTERVAL_MS = Number.parseInt(process.env.HEALTHCHECK_TICK_MS ?? "", 
 const STATE_DIR = join(HOME, ".healthcheck");
 const STATE_FILE = join(STATE_DIR, "state.json");
 
-// Where the Hermes cron runner saves each job's per-run output.
-// The Hermes gateway writes per-run cron output to <data-root>/cron/output/<job-id>/.
+// Where each sweep's per-run output lands (cron-output.sh writes it).
+// Per-run cron output lives at <data-root>/cron/output/<job-dir>/.
 // The data root is the parent of the cron user's HOME (HOME=/opt/data/home → the
 // /opt/data mount); operator-overridable via HEALTHCHECK_CRON_OUTPUT_DIR for a
 // non-standard layout.
@@ -591,7 +590,7 @@ function probeDisk(): Check {
 }
 
 // ---------------------------------------------------------------------------
-// PROBE: crons — the on-box Hermes crons, ONE service row PER cron (not one
+// PROBE: crons — the on-box sweep crons, ONE service row PER cron (not one
 // aggregate). For each known cron, find its output dir (dirs are named by job id,
 // so each is resolved to its cron via the run-file's `# Cron Job:` header), take the
 // newest *.md, parse its LAST content line as JSON and check `.ok !== false`, AND
@@ -693,8 +692,8 @@ export const AUTOMATION_CRONS: CronDef[] = [
   // kill switch or an unready queue; the findings themselves stay in the /admin attention
   // queue, which is where a HELD finding is visible.)
   { cadenceMs: 30 * 60_000, match: "publish-advance", service: "cron.publish-advance" },
-  // NB: cron.healthcheck is NOT here — this prober IS that cron, now run by a host
-  // systemd timer (../healthcheck-timer/), so it has no gateway output dir to read and
+  // NB: cron.healthcheck is NOT here — this prober IS that cron, run by its own host
+  // systemd timer (../healthcheck-timer/), so it writes no cron output dir to read and
   // a self-read would be circular. Its /status row is emitted self-evidently by
   // probeHealthcheck() below instead.
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
@@ -783,7 +782,7 @@ export const PROJECTION_JUDGEMENT_LOOKBACK_MARKERS = 20;
 /**
  * The cron NAME a given output dir belongs to (from the newest run-file's
  * `# Cron Job: <name>` header, e.g. `fluncle-enrich`), plus that file's mtime. The
- * runner names dirs by job id, so the header is the only link to the cron; the mtime
+ * dir name need not match the cron, so the header is the only link to the cron; the mtime
  * lets a recreated cron's CURRENT dir outrank a stale leftover with the same name.
  * jobName is "" if the dir has no readable run file.
  */
@@ -868,7 +867,7 @@ function claimCronDirs(crons: CronDef[]): Map<string, string> {
  * point of `cron-output.sh`'s "the LAST line is the sweep's JSON summary". But the marker is
  * WRITTEN BY THE WRAPPER, not by the sweep: `emit_cron_output` runs the payload, captures its
  * stdout, and writes the header + whatever it captured. So a sweep that is SIGKILLed (an OOM,
- * the runner's ~120s budget) still leaves a marker — a 28-byte file whose only line is the
+ * the unit's TimeoutStartSec) still leaves a marker — a 28-byte file whose only line is the
  * `# Cron Job: …` header. Reading just the LAST non-empty line and shrugging when it isn't
  * JSON therefore grades a dead run as healthy.
  *
@@ -1081,7 +1080,7 @@ export function judgeCron(
   if (!summary) {
     // NO SUMMARY AT ALL. The wrapper wrote a marker but the sweep never emitted its
     // contracted JSON line — the signature of a run that was KILLED mid-flight (OOM, the
-    // runner budget). Unlike `ok: false` (a sweep reporting a handled, usually transient
+    // unit timeout). Unlike `ok: false` (a sweep reporting a handled, usually transient
     // failure and retrying on its own cadence) this is the process dying, so it does NOT get
     // the one-miss grace: it is a failure the first time it is seen. Three OOM-killed backup
     // nights read green under the old lenience; never again.
@@ -1211,7 +1210,7 @@ export function cronCheck(
 }
 
 /**
- * Probe every known Hermes cron and emit ONE Check PER cron (service id = its registry
+ * Probe every known box cron and emit ONE Check PER cron (service id = its registry
  * surface name, e.g. `cron.enrich`). Claim each output dir to its most-specific cron
  * first (handles "note" ⊂ "context-note"), then judge each cron against the dir it
  * actually owns. Each cron stands or falls on its own row — "look how many systems are
@@ -1990,12 +1989,12 @@ function probeHermes(): Check {
 }
 
 // ---------------------------------------------------------------------------
-// PROBE: cron.healthcheck — this prober IS the healthcheck cron, now run by its own
+// PROBE: cron.healthcheck — this prober IS the healthcheck cron, run by its own
 // rave-02 host systemd timer (../healthcheck-timer/). Reaching this line means the
 // timer fired and the tick is executing, so its liveness is self-evident → ok. It is
-// deliberately NOT in AUTOMATION_CRONS: a host-timer prober has no Hermes gateway
-// output dir to read, and reading its own would be circular. Emitting the row here
-// keeps the `cron.healthcheck` line populated on /status without a gateway-dir read.
+// deliberately NOT in AUTOMATION_CRONS: the prober writes no cron output dir of its
+// own, and reading its own would be circular. Emitting the row here keeps the
+// `cron.healthcheck` line populated on /status without a cron-dir read.
 // ---------------------------------------------------------------------------
 
 function probeHealthcheck(): Check {
@@ -2643,7 +2642,7 @@ async function main(): Promise<void> {
 
   // Network probes run concurrently; the file/state probes are synchronous and
   // cheap. All probes are individually timeout-bounded, so the whole tick stays
-  // well under the runner's ~120s kill.
+  // well under the unit's TimeoutStartSec.
   const [web, db, r2, sonar, ssh] = await Promise.all([
     probeWeb(),
     probeDb(),
@@ -2659,14 +2658,14 @@ async function main(): Promise<void> {
   const crons = probeCrons(claimed);
   const renderBox = probeRenderBox();
   const hermes = probeHermes();
-  // The prober's own row — self-evident (it's run by a host timer, not the gateway,
-  // so it has no cron output dir for probeCrons() to read).
+  // The prober's own row — self-evident (it's run by its own host timer and writes
+  // no cron output dir for probeCrons() to read).
   const healthcheck = probeHealthcheck();
 
   // One row per cron (cron.*) instead of a single `automation` aggregate, so /status
   // shows every humming system on its own line. Transitions still fire per-service
   // (the state map is keyed by service id), so a single cron going down/recovering
-  // pings on its own. cron.healthcheck rides alongside the gateway crons even though
+  // pings on its own. cron.healthcheck rides alongside the sweep crons even though
   // it's emitted self-evidently.
   // Transitions + strain both read the same state file.
   const { services: prev, strain: prevStrain } = loadState();

@@ -4,7 +4,7 @@
 //
 // LIVE. Version-controlled source; the repo is canonical and the box is a
 // deploy target (fluncle-hermes-operator skill). Invoked by the bash wrapper
-// (backfill-sweep.sh) the cron runner execs on a schedule — see that file's header
+// (backfill-sweep.sh) its host timer execs on a schedule — see that file's header
 // for the `host-timer` wire-up and ../cron/README.md for the cron model.
 //
 // THE DISCOGS SPLIT. The box performs only paced Discogs reads from its own egress. Bounded release

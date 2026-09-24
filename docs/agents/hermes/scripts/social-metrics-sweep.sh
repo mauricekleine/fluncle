@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # social-metrics-sweep.sh — the social-metrics snapshot cron's job ENTRY (`fluncle-social-metrics`).
 #
-# SCHEDULED BY A HOST SYSTEMD TIMER (../social-metrics-timer/), not a Hermes gateway cron. The
+# SCHEDULED BY A HOST SYSTEMD TIMER (../social-metrics-timer/). The
 # rave-02 host timer docker-execs this script inside the container once a day; a manual
 # `bash /opt/hermes-scripts/social-metrics-sweep.sh` runs it the same way. This thin bash wrapper is
 # the entry; all the work lives in the bun orchestrator beside it (social-metrics-sweep.ts).
@@ -22,7 +22,7 @@
 #   - NO new secret: the Postiz key (and the SA key) live Worker-side, so the box is a bare trigger.
 set -euo pipefail
 
-# The docker-exec / runner context hands this a minimal PATH that omits /usr/local/bin (the bun
+# The docker-exec context may hand this a minimal PATH that omits /usr/local/bin (the bun
 # symlink) and /root/.bun/bin — prepend the known install dirs so `bun` resolves regardless.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
@@ -42,7 +42,7 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the /status
+# Host timers write no per-run output file, so self-report the /status
 # freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) — WRAP the payload
 # (never `exec`) so the marker is written even on a nonzero run. The token is `social-metrics`
 # (the fluncle-social-metrics dir + `# Cron Job: fluncle-social-metrics` header the prober matches).

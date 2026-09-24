@@ -38,20 +38,20 @@
 # gets struck.
 set -euo pipefail
 
-# The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that omits
+# A caller may exec this with a minimal PATH that omits
 # /usr/local/bin (the curl/bun symlinks) and /root/.bun/bin, so a bare command can be "not
 # found" → exit 127. Prepend the known install dirs so `curl` resolves regardless.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
-# The Worker origin (the agent-scoped token is a custom var that passes Hermes'
-# provider-cred blocklist, so it rides the cron env like the other sweeps).
+# The Worker origin (the agent-scoped token rides the container env like the other
+# sweeps).
 API_BASE_URL="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
 DRIP_PATH="/api/v1/admin/clips/drip"
 
 # A JSON body is REQUIRED even when empty: the oRPC handler builds its input from the
 # request body, and a bodyless POST deserializes to `undefined` → a 400 `invalid_request`.
 # Send `{}` with a JSON content-type. A short --max-time keeps a hung Worker from ever
-# blowing the runner's ~120s kill; -fsS fails on a non-2xx so a bad tick exits nonzero
+# stalling the tick; -fsS fails on a non-2xx so a bad tick exits nonzero
 # (visible in the run output) instead of swallowing an error.
 curl -fsS --max-time 30 \
   -X POST "${API_BASE_URL}${DRIP_PATH}" \

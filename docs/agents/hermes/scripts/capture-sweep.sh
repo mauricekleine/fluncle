@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # capture-sweep.sh — the full-song CAPTURE sweep's job ENTRY (`fluncle-capture`).
 #
-# SCHEDULED BY A HOST SYSTEMD TIMER, not a Hermes gateway cron: a proxied yt-dlp fetch has
-# an unbounded tail that would starve the latency-sensitive 5-min sweeps on the shared
-# serial runner. The rave-02 host timer `docker exec`s this script inside the container
-# every 5m — see ../capture-timer/README.md for the unit files + install. The container
-# runner dispatches by extension (bash for `.sh`), and a manual `bash /opt/hermes-scripts/
-# capture-sweep.sh` runs it the same way, so this thin bash wrapper is the entry; all the
+# SCHEDULED BY A HOST SYSTEMD TIMER: a proxied yt-dlp fetch has an unbounded tail, so it
+# runs on its own timer and never delays the latency-sensitive 5-min sweeps. The rave-02
+# host timer `docker exec`s this script inside the container every 5m — see
+# ../capture-timer/README.md for the unit files + install. The unit runs `bash <sweep>.sh`,
+# and a manual `bash /opt/hermes-scripts/capture-sweep.sh` runs it the same way, so this
+# thin bash wrapper is the entry; all the
 # work lives in the bun orchestrator beside it (capture-sweep.ts). Its stdout is the run
 # output the /status prober reads.
 #
@@ -63,19 +63,19 @@
 # `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/capture-sweep.sh`.
 set -euo pipefail
 
-# The runner / docker-exec hands this a minimal PATH, so a bare `bun`/`yt-dlp`/`ffprobe`
+# A caller or docker-exec may hand this a minimal PATH, so a bare `bun`/`yt-dlp`/`ffprobe`
 # is "not found" → exit 127. Prepend the known install dirs so this wrapper's tools resolve
 # regardless: /opt/hermes-scripts holds the BAKED yt-dlp (Unit A/D — pinned into the image,
-# no longer a hand-cp'd volume copy — see capture-timer/README), /usr/local/bin the bun symlink.
+# see capture-timer/README), /usr/local/bin the bun symlink.
 export PATH="/opt/hermes-scripts:/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
-# Belt-and-suspenders: pin the absolute interpreter path too (the runner can lose the
-# PATH export above).
+# Belt-and-suspenders: pin the absolute interpreter path too (an exec context can lose
+# the PATH export above).
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
 # Source the shared 0600 secrets file (the same single source every other sweep reads;
-# provider creds are dropped from the cron env by Hermes' blocklist, so the proxy/R2/API
-# creds can only arrive via this file — they are unrecognized custom vars, so they pass).
+# the container env carries only the agent token and the alert webhook, so the proxy/R2/API
+# creds arrive via this file).
 CAPTURE_ENV_FILE="${CAPTURE_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${CAPTURE_ENV_FILE}" ]; then
   set -a
@@ -87,7 +87,7 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# Host timers write no per-run output file, so self-report the
 # /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
 # WRAP the payload (never `exec`) so the marker is written even on a nonzero run. Before
 # this, capture (a host timer since day one) never wrote a marker → cron.capture was cosmetic.

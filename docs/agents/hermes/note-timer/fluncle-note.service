@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-note — rave-02 host trigger for the auto-note authoring sweep (migrated off the Hermes gateway cron runner)
+Description=fluncle-note — rave-02 host trigger for the auto-note authoring sweep
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/note-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service

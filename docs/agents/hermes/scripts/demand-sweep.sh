@@ -8,9 +8,8 @@
 # no docker cp. See ../demand-timer/README.md. Box activation is OPERATOR-GATED (a new cron;
 # nothing to retire).
 #
-# Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by extension —
-# bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts` would be fed to Python.
-# This thin wrapper is the bash entry; all the JSON work lives in the bun orchestrator beside it
+# Why a .sh that execs a .ts: the host timer runs the sweep as `bash <sweep>.sh`, so this thin
+# wrapper is the bash entry; all the JSON work lives in the bun orchestrator beside it
 # (demand-sweep.ts). Its stdout is the cron's run output.
 #
 # THE WORKER-PACED MODEL (the reach-collect / catalogue-rank shape): the box holds NO Simple
@@ -22,15 +21,15 @@
 # token drives it — NO new secret. Zero LLM tokens.
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../demand-timer/, installed by
-# ../install-host-timers.sh), NOT a gateway `hermes cron create`. Per-run output is a freshness
+# ../install-host-timers.sh), which `docker exec`s it in the container. Per-run output is a freshness
 # marker the sweep self-writes via cron-output.sh under ~/.hermes/cron/output/fluncle-demand/
 # (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
-# The cron runner execs this with a minimal PATH that omits /usr/local/bin (the bun + fluncle
+# A caller may exec this with a minimal PATH that omits /usr/local/bin (the bun + fluncle
 # symlinks) and /root/.bun/bin, so a bare `bun`/`fluncle` is "not found" → exit 127. Prepend the
 # known install dirs so this wrapper's `bun` AND the orchestrator's `fluncle` spawn resolve
-# regardless of the runner's PATH.
+# regardless of the caller's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
 # Belt-and-suspenders: pin ABSOLUTE paths for the interpreter + the CLI (the orchestrator reads
@@ -41,7 +40,7 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the /status
+# Host timers write no per-run output file, so self-report the /status
 # freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) — WRAP the payload
 # (never `exec`) so the marker is written even on a nonzero run. The bare token `demand` becomes
 # the fluncle-demand output dir + the `# Cron Job: fluncle-demand` header the prober matches on.

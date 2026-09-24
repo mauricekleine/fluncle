@@ -1,20 +1,18 @@
 # shellcheck shell=bash
 # cron-output.sh — the shared `/status` freshness-marker helper for the HOST-TIMER sweeps.
 #
-# Fluncle's automation sweeps need the same run-file contract as the Hermes GATEWAY cron runner:
+# Fluncle's automation sweeps share one run-file contract:
 #     <data-root>/cron/output/<job-dir>/<ts>.md
 # The `/status` prober (fluncle-healthcheck.ts, `probeCrons()` + `AUTOMATION_CRONS`) reads
 # those files to decide whether each cron is fresh + healthy: it claims each dir by the
 # newest file's `# Cron Job: <name>` header, parses that file's LAST non-empty line as JSON
 # (`.ok !== false`), and requires the file mtime within ~3x the cron's cadence.
 #
-# Now each sweep runs from a repo-checked-in HOST systemd timer (`docker exec … bash
-# <sweep>.sh`), whose stdout goes to JOURNALD — NOT to that output dir. So a migrated sweep
-# reads as "no runs yet / ok" on /status and MASKS real failures. capture + embed were the
-# first host timers and had exactly this blind spot (`cron.capture` was permanently cosmetic:
-# the sweep just `exec`'d bun and never wrote a marker). This helper closes it: every
-# host-timer sweep SELF-REPORTS the marker the prober already expects, so the prober stays
-# HONEST and UNCHANGED.
+# Each sweep runs from a repo-checked-in HOST systemd timer (`docker exec … bash
+# <sweep>.sh`), whose stdout goes to JOURNALD — NOT to that output dir. A sweep that wrote no
+# marker would read as "no runs yet / ok" on /status and MASK real failures (a sweep that
+# just `exec`s bun never writes one). This helper closes that gap: every host-timer sweep
+# SELF-REPORTS the marker the prober expects, so the prober stays HONEST.
 #
 # USAGE — source it (after SCRIPT_DIR is defined), then WRAP the sweep's payload so it can
 # never `exec`-replace the shell before the marker is written:

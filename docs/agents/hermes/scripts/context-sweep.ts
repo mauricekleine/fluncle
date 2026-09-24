@@ -4,7 +4,7 @@
 //
 // LIVE. Version-controlled source; the repo is canonical and the box is a
 // deploy target (fluncle-hermes-operator skill). Invoked by the bash wrapper
-// (context-sweep.sh) the cron runner execs on a schedule — see that file's header
+// (context-sweep.sh) its host timer execs on a schedule — see that file's header
 // for the `host-timer` wire-up and ../cron/README.md for the cron model.
 //
 // THE WORKER-PACED MODEL. The box holds NO Firecrawl key (the Worker does), and the

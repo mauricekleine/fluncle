@@ -22,7 +22,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-cluster -- bash /opt/hermes-scripts/cluster-sweep.sh
 # The nightly tick is sub-second CPU (nearest-centroid + mean over ~hundreds of vectors) plus
 # a handful of write round-trips; a split consumption adds one small k=2 fit. Give it ample
-# headroom well past the gateway's ~300s budget so a slow network write never trips it.
+# headroom well past ~300s so a slow network write never trips it.
 TimeoutStartSec=730
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true

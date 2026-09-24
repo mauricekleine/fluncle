@@ -7,10 +7,9 @@
 # and auto-updates from main via pin-watch; a rave-02 HOST systemd timer docker-execs it —
 # no docker cp. See ../cron/README.md and docs/fluncle-studio.md.
 #
-# Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
-# extension — bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts` would
-# be fed to Python. This thin wrapper is the bash entry; all the JSON work lives in the
-# bun orchestrator beside it. Its stdout is the cron's run output.
+# Why a .sh that execs a .ts: the host timer runs the sweep as `bash <sweep>.sh`, so
+# this thin wrapper is the bash entry; all the JSON work lives in the bun orchestrator
+# beside it. Its stdout is the cron's run output.
 #
 # PURE-TRIGGER (the enrich-sweep shape, NOT the note/observe hybrid): there is NO
 # `claude -p` step. The cut is a deterministic ffmpeg job driven entirely by the
@@ -24,17 +23,17 @@
 #   - the baked `bun` + `fluncle` CLI (already in the image).
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../studio-clip-timer/, installed by
-# ../install-host-timers.sh), NOT a gateway `hermes cron create`. `presign_clip_upload`/
+# ../install-host-timers.sh), which `docker exec`s it in the container. `presign_clip_upload`/
 # `finalize_clip_cut` are AGENT tier, so the box's existing agent-scoped token drives them —
 # no operator token needed. Per-run output is a freshness marker the sweep self-writes via
 # cron-output.sh under ~/.hermes/cron/output/fluncle-studio-clip/ (read by the /status
 # prober). See ../cron/README.md.
 set -euo pipefail
 
-# The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that omits
+# A caller may exec this with a minimal PATH that omits
 # the bun + fluncle symlink dirs, so a bare `bun`/`fluncle` is "not found" → exit 127.
 # Prepend the known install dirs so this wrapper's `bun` AND the orchestrator's
-# `fluncle`/`bun`/`ffmpeg` spawns resolve regardless of the runner's PATH.
+# `fluncle`/`bun`/`ffmpeg` spawns resolve regardless of the caller's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
 # Belt-and-suspenders: pin ABSOLUTE paths for the interpreter + the CLI; the orchestrator
@@ -56,7 +55,7 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# Host timers write no per-run output file, so self-report the
 # /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
 # WRAP the payload (never `exec`) so the marker is written even on a nonzero run.
 # shellcheck source=./cron-output.sh

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# render-conductor.sh — the `fluncle-render` `--no-agent` Hermes cron.
+# render-conductor.sh — the `fluncle-render` host-timer sweep.
 #
 # LIVE. Version-controlled source; the repo is canonical and the
-# box is a deploy target (fluncle-hermes-operator skill). Deployed onto the Hermes
-# orchestrator box; the `fluncle-render` cron is wired there. See ../cron/README.md.
+# box is a deploy target (fluncle-hermes-operator skill). Baked into the rave-02 sweep
+# image; the `fluncle-render` host timer triggers it. See ../cron/README.md.
 #
 # WHAT IT DOES: drives the per-finding video render on a SCALE-TO-ZERO boat.dev
 # render box. It wakes the box, triggers the `@fluncle-video` render of
@@ -12,11 +12,10 @@
 # it NEVER posts to social (the prompt's hard rail). Social posting stays manual.
 #
 # WHY A STATE MACHINE, NOT A BLOCKING JOB: a swangle (software-GL) render runs
-# ~85 min, but the Hermes `--no-agent` runner KILLS any job at ~120s (../cron/
-# README.md § Operational gotchas). So this cannot block on the render. Instead
-# the render runs DETACHED ON THE BOX (render-detached.sh, survives a Hermes
-# container restart — it's decoupled), and the conductor is a quick (<120s) tick
-# that drives a two-state machine persisted under ~/.hermes:
+# ~85 min, far past what one timer tick should hold (../render-timer/). So this
+# cannot block on the render. Instead the render runs DETACHED ON THE BOX
+# (render-detached.sh, survives a hermes container restart — it's decoupled), and
+# the conductor is a quick tick that drives a two-state machine persisted under ~/.hermes:
 #
 #   RENDERING -> ONE remote probe answers both the done-marker (as the word MARKER-PRESENT
 #                or MARKER-ABSENT) and the liveness question (a claude process, the run log's
@@ -34,13 +33,12 @@
 # every cycle — it is the primary safety, not a rare one.
 #
 # SECRETS (../cron/README.md § the render cron + § Operational gotchas):
-#   - FLUNCLE_API_TOKEN — the agent-scoped token; arrives via the CRON ENV (an
-#     unrecognized custom var passes Hermes' provider-cred blocklist, like the
-#     other sweeps). Used for the queue gate here AND injected to the box.
+#   - FLUNCLE_API_TOKEN — the agent-scoped token; arrives via the CONTAINER ENV
+#     (like the other sweeps). Used for the queue gate here AND injected to the box.
 #   - CLAUDE_CODE_OAUTH_TOKEN + BOAT_API_KEY — file-sourced from a 0600
-#     ${HOME}/.fluncle-secrets.env. CLAUDE_CODE_OAUTH_TOKEN is a RECOGNIZED
-#     provider cred Hermes HARD-BLOCKS from the cron env (GHSA-rhgp-j443-p4rf),
-#     so it can only reach this script via a file; the boat.dev key rides along.
+#     ${HOME}/.fluncle-secrets.env. CLAUDE_CODE_OAUTH_TOKEN is a sweep
+#     credential, not in the container env, so it reaches this script via the file;
+#     the boat.dev key rides along.
 #     Written from the configured 1Password items (see the ops runbook note).
 #     The pre-rename name BOX_API_KEY is still accepted, so a secrets template that
 #     has not been re-cut yet keeps the conductor authenticated.
@@ -51,12 +49,12 @@
 # It is the first thing to run on the box after a CLI cutover.
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../render-timer/, installed by
-# ../install-host-timers.sh), NOT a gateway `hermes cron create`. Per-run output is a
+# ../install-host-timers.sh), which `docker exec`s it in the container. Per-run output is a
 # freshness marker the sweep self-writes via cron-output.sh under
 # ~/.hermes/cron/output/fluncle-render/ (read by the /status prober). See ../cron/README.md.
 set -uo pipefail
 
-# --- PATH + absolute bins: the --no-agent runner strips PATH (../cron/README.md
+# --- PATH + absolute bins: an exec context may carry a minimal PATH (../cron/README.md
 #     § Operational gotchas), so a bare bun/fluncle/boat is "not found". ---
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 # The boat.dev CLI (the vendor renamed `box` -> `boat`; same account, same API host,
@@ -96,7 +94,7 @@ for arg in "$@"; do
   esac
 done
 
-# --- file-sourced secrets (provider creds are blocked from the cron env) ---
+# --- file-sourced secrets (the sweep credentials live in the secrets file) ---
 CONDUCTOR_ENV="${CONDUCTOR_ENV:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "$CONDUCTOR_ENV" ]; then
   set -a
@@ -724,12 +722,15 @@ FRESH
 }
 
 # --- single-flight: only one tick mutates state at a time. An atomic `mkdir`
-#     lock (portable; no util-linux `flock` dependency). A tick killed by the
-#     ~120s runner can't run its EXIT trap, so first break a lock older than the
-#     kill window (a held lock that old is necessarily orphaned). ---
+#     lock (portable; no util-linux `flock` dependency). A tick that is killed
+#     can't run its EXIT trap, so first break a lock older than the stale window
+#     below (a held lock that old is treated as orphaned). The window sits past the
+#     unit's TimeoutStartSec (1500s in fluncle-render.service), so a live tick's lock
+#     is never broken: by then systemd has already killed its holder. ---
+LOCK_STALE_SECONDS=1560
 if [ -d "$LOCK_DIR" ]; then
   lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || printf '0')"
-  if [ "$(($(now) - lock_mtime))" -gt 130 ]; then
+  if [ "$(($(now) - lock_mtime))" -gt "$LOCK_STALE_SECONDS" ]; then
     rmdir "$LOCK_DIR" 2>/dev/null || true
   fi
 fi
