@@ -1,26 +1,19 @@
 // `/fresh` — the shared render primitives every variant leans on.
 //
-// The register rules live HERE, once, so no variant can break them: a lit finding leads with its
-// cover and its Log ID coordinate and may heat to gold; an unlit catalogue row stays coverless and
-// dust-inked (DESIGN.md's Unlit Rule). A variant owns the LAYOUT around these; it never re-decides
-// what a finding or a catalogue row is allowed to look like.
-//
-// The unlit row now leads to the recording's own `/track/<trackId>` destination rather than
-// straight out to Spotify, with the Spotify mark kept beside it as the explicit way out. That is a
-// change of DESTINATION, not of register: still no cover, still no coordinate, still no gold, and
-// still never introduced or named.
+// The register rules live in the shared discovery row (`components/discovery-row.tsx`), once, so no
+// variant can break them: a lit finding shows its cover in full colour with its Log ID coordinate
+// and may heat to gold; a catalogue row shows its real cover desaturated and dimmed, carries no
+// coordinate, and never catches gold (DESIGN.md's Unlit Rule). A variant owns the LAYOUT around
+// these; it never re-decides what a finding or a catalogue row is allowed to look like.
 //
 // A note on dates: this is the ONE surface whose dates are RELEASE dates, not Found dates. So the
 // stamp reads "Out Jul 3", never "Found" (VOICE.md's Found Rule; lib/server/fresh.ts).
 
-import { CaretRightIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
-import { siSpotify } from "simple-icons";
-import { ArtistAvatar } from "@/components/artist-avatar";
-import { BrandIcon } from "@/components/brand-icon";
+import { DiscoveryRow } from "@/components/discovery-row";
 import { TrackArtwork } from "@/components/track-artwork";
-import { tracksCount } from "@/lib/format";
-import { hasTrackPageIdentity } from "@/lib/track-page";
+import { freshEntryToDiscoveryTrack } from "@/lib/discovery-tracks";
+import { formatReleaseDate, tracksCount } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { type FreshCover, type FreshStreamEntry } from "./data";
@@ -151,106 +144,55 @@ export function FreshCoverCard({
 }
 
 /**
- * A compact list row for one release in the merged stream, with a leading date column so the
- * newest-first sort reads down the page. A finding carries its cover thumb and its Log ID (and the
- * row link opens its log page); a catalogue row stays unlit — no cover, no coordinate, dust ink,
- * out to Spotify (the Unlit Rule). `showDate` drops the column where a group header already owns it.
+ * The compact release rows under their DAY: `/fresh` and the front door's release band list their
+ * tracks as discovery rows (`components/discovery-row.tsx`: the cover plays, the rest opens the
+ * track, no date column), grouped under one header per release day. The day is the one date that
+ * matters here, so it heads its group once, in the archive's one release-date form
+ * (`formatReleaseDate`), instead of repeating down a column.
+ *
+ * Renders rows only: the caller owns the queue boundary (`DiscoveryPlayableList`), because on
+ * `/fresh` the headlines above and these rows are one list to the player.
  */
-export function FreshStreamRow({
-  entry,
-  showDate = true,
+export function FreshReleaseRows({
+  className,
+  entries,
+  heading: Heading = "h3",
 }: {
-  entry: FreshStreamEntry;
-  showDate?: boolean;
+  className?: string;
+  entries: FreshStreamEntry[];
+  /** The header level that fits the host page's outline. */
+  heading?: "h2" | "h3";
 }) {
-  const dateCell = showDate ? (
-    <time className="fresh-row-date" dateTime={entry.releaseDate}>
-      {freshDate(entry.releaseDate)}
-    </time>
-  ) : undefined;
+  const days: { date: string; entries: FreshStreamEntry[] }[] = [];
 
-  if (entry.kind === "finding") {
-    const finding = entry.finding;
-    const line = `${finding.artists.join(", ")} — ${finding.title}`;
+  for (const entry of entries) {
+    const date = entry.releaseDate.slice(0, 10);
+    const current = days.at(-1);
 
-    return (
-      <li className="fresh-row fresh-row-lit">
-        {dateCell}
-        <ArtistAvatar
-          className="fresh-row-avatar"
-          name={finding.artists[0] ?? finding.title}
-          src={freshAvatarSrc(finding.artistAvatarUrl)}
-        />
-        {finding.logId ? (
-          <Link
-            aria-label={`Open the log page for ${line}`}
-            className="fresh-row-main"
-            params={{ logId: finding.logId }}
-            to="/log/$logId"
-          >
-            <span className="fresh-row-coordinate">{finding.logId}</span>
-            <span className="fresh-row-title">{line}</span>
-          </Link>
-        ) : (
-          <a
-            aria-label={`Listen to ${line} on Spotify`}
-            className="fresh-row-main"
-            href={finding.spotifyUrl}
-            rel="noreferrer"
-            target="_blank"
-          >
-            <span className="fresh-row-title">{line}</span>
-          </a>
-        )}
-        <CaretRightIcon aria-hidden="true" className="fresh-row-caret" size={16} weight="bold" />
-      </li>
-    );
+    if (current && current.date === date) {
+      current.entries.push(entry);
+    } else {
+      days.push({ date, entries: [entry] });
+    }
   }
 
-  const track = entry.track;
-  const line = `${track.artists.join(", ")} — ${track.title}`;
-
   return (
-    <li className="fresh-row fresh-row-unlit">
-      {dateCell}
-      {/* A DIMMED lead-artist avatar — identifies who without lighting the row up (the same 0.66
-          dimming the catalogue grid uses on artist avatars). No album cover: the Unlit Rule holds. */}
-      <ArtistAvatar
-        className="fresh-row-avatar fresh-row-avatar-unlit"
-        name={track.artists[0] ?? track.title}
-        src={freshAvatarSrc(track.artistAvatarUrl)}
-      />
-      {hasTrackPageIdentity(track) ? (
-        <Link className="fresh-row-main" params={{ trackId: track.trackId }} to="/track/$trackId">
-          <span className="fresh-row-title">{line}</span>
-        </Link>
-      ) : track.spotifyUrl ? (
-        <a
-          aria-label={`${line} on Spotify`}
-          className="fresh-row-main"
-          href={track.spotifyUrl}
-          rel="noreferrer"
-          target="_blank"
-        >
-          <span className="fresh-row-title">{line}</span>
-          <BrandIcon className="fresh-row-mark" icon={siSpotify} />
-        </a>
-      ) : (
-        <span className="fresh-row-main fresh-row-plain">
-          <span className="fresh-row-title">{line}</span>
-        </span>
-      )}
-      {hasTrackPageIdentity(track) && track.spotifyUrl ? (
-        <a
-          aria-label={`Listen to ${line} on Spotify`}
-          className="fresh-row-out"
-          href={track.spotifyUrl}
-          rel="noreferrer"
-          target="_blank"
-        >
-          <BrandIcon className="fresh-row-mark" icon={siSpotify} />
-        </a>
-      ) : undefined}
-    </li>
+    <div className={cn("fresh-days", className)}>
+      {days.map((day) => (
+        <section className="fresh-day" key={day.date}>
+          <Heading className="fresh-day-heading">
+            <time dateTime={day.date}>{formatReleaseDate(day.date)}</time>
+          </Heading>
+          <ol className="discovery-list">
+            {day.entries.map((entry) => (
+              <DiscoveryRow
+                key={entry.kind === "finding" ? entry.finding.trackId : entry.track.trackId}
+                track={freshEntryToDiscoveryTrack(entry)}
+              />
+            ))}
+          </ol>
+        </section>
+      ))}
+    </div>
   );
 }

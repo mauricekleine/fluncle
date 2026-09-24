@@ -9560,3 +9560,357 @@ html[data-player-docked] .nav-shell--workbench {
     transition: none;
   }
 }
+
+/* ── The discovery row (DESIGN.md §5, Track Row) ────────────────────────────────
+   One row for every public track list. Grid: the cover-as-play (3.25rem), the
+   body (title over the Stardust credit line over the chips), and the tail (a
+   finding's coordinate, then the ⋮ menu). The title link stretches over the
+   whole row; the cover, the credits and the menu sit above it. A finding heats
+   to gold (Gold Veil, the coordinate to Eclipse Glow, the cover's edge); a
+   catalogue row catches the Dust Veil and shows its real cover desaturated and
+   dimmed, with no gold anywhere at rest or on hover (The Unlit Rule). */
+.discovery-list {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.discovery-row {
+  align-items: center;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+  min-height: 4.75rem;
+  padding: 0.7rem 0.75rem;
+  position: relative;
+  transition: background-color 150ms ease-out;
+}
+
+.discovery-row:last-child {
+  border-bottom: none;
+}
+
+.discovery-row[data-lit]:hover,
+.discovery-row[data-lit]:focus-within {
+  background: var(--accent);
+}
+
+.discovery-row:not([data-lit]):hover,
+.discovery-row:not([data-lit]):focus-within {
+  background: var(--muted);
+}
+
+.discovery-row-still {
+  display: block;
+  flex: none;
+}
+
+.discovery-row-art.track-artwork,
+.discovery-row-art.artist-avatar {
+  aspect-ratio: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-artwork);
+  display: block;
+  object-fit: cover;
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease-out,
+    filter 180ms ease-out;
+  width: 3.25rem;
+}
+
+/* A finding's cover lifts behind a gold-tinted edge. */
+.discovery-row[data-lit]:hover .discovery-row-art,
+.discovery-row[data-lit]:focus-within .discovery-row-art {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  transform: scale(1.06);
+}
+
+/* The unlit cover: the real record, seen from a distance. Desaturated and
+   dimmed at rest; on hover it comes a step closer, never lit. */
+.discovery-row:not([data-lit]) .discovery-row-art {
+  filter: grayscale(0.85) brightness(0.62);
+}
+
+.discovery-row:not([data-lit]):hover .discovery-row-art,
+.discovery-row:not([data-lit]):focus-within .discovery-row-art {
+  filter: grayscale(0.6) brightness(0.78);
+}
+
+/* No eclipse tint on an unlit fallback: its gold-to-red is the certification
+   light's colour, so a catalogue row's missing cover is dust and grain. */
+.discovery-row:not([data-lit]) .track-artwork-fallback {
+  background:
+    var(--grain-tile) repeat,
+    var(--muted);
+  background-blend-mode: overlay;
+}
+
+.discovery-row-body {
+  min-width: 0;
+}
+
+.discovery-row-link {
+  color: inherit;
+  outline: none;
+  text-decoration: none;
+}
+
+.discovery-row-link::after {
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
+.discovery-row:has(.discovery-row-link:focus-visible) {
+  box-shadow: inset 0 0 0 2px var(--ring);
+}
+
+/* The loudest text on the row (the Title tier). */
+.discovery-row-title {
+  color: var(--foreground);
+  display: block;
+  font-size: 1.02rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.18;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discovery-row-meta {
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  line-height: 1.3;
+  margin: 0.25rem 0 0;
+  overflow: hidden;
+  position: relative;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: fit-content;
+  max-width: 100%;
+  z-index: 1;
+}
+
+/* The credit line keeps its own ink (a cream name here would out-shout the
+   title): only the dotted underline announces the link; the heat is the link's. */
+.discovery-row-meta .graph-link {
+  color: var(--muted-foreground);
+}
+
+.discovery-row-meta .graph-link:hover,
+.discovery-row-meta .graph-link:focus-visible {
+  color: var(--accent-foreground);
+}
+
+.discovery-row:not([data-lit]) .discovery-row-meta .graph-link:hover,
+.discovery-row:not([data-lit]) .discovery-row-meta .graph-link:focus-visible {
+  color: var(--foreground);
+}
+
+.discovery-row-year {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+}
+
+.discovery-row-chips {
+  margin-top: 0.35rem;
+}
+
+.discovery-row-tail {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+  justify-self: end;
+  position: relative;
+  z-index: 1;
+}
+
+.discovery-row-coordinate {
+  color: var(--muted-foreground);
+  font-family: var(--font-display);
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  pointer-events: none;
+  transition: color 150ms ease-out;
+}
+
+.discovery-row[data-lit]:hover .discovery-row-coordinate,
+.discovery-row[data-lit]:focus-within .discovery-row-coordinate {
+  color: var(--accent-foreground);
+}
+
+/* The ⋮ menu is quiet at rest: a row's rarer actions recede until reached for. */
+.discovery-row .track-menu-trigger {
+  color: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
+}
+
+@media (max-width: 639px) {
+  .discovery-row {
+    gap: 0.75rem;
+    padding: 0.65rem 0.5rem;
+  }
+
+  .discovery-row-coordinate {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .discovery-row,
+  .discovery-row-art.track-artwork,
+  .discovery-row-art.artist-avatar,
+  .discovery-row-coordinate {
+    transition: none;
+  }
+
+  .discovery-row[data-lit]:hover .discovery-row-art,
+  .discovery-row[data-lit]:focus-within .discovery-row-art {
+    transform: none;
+  }
+}
+
+/* ── Playable lists on the discovery pages ──────────────────────────────────── */
+
+/* The release rows under their day (`/fresh`, the front door's release band):
+   the day heads its group once, a quiet Stardust label in Oxanium tabular. */
+.fresh-days {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.fresh-day-heading {
+  color: var(--muted-foreground);
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin: 0 0 var(--space-3xs);
+  padding: 0 0.75rem;
+}
+
+/* A `/fresh` headline's portrait is its play button: round like the portrait,
+   and never under a 44px target. */
+.fresh-mq-play {
+  align-self: center;
+  border-radius: 999px;
+}
+
+.fresh-mq-play .play-cover-glyph {
+  border-radius: 999px;
+}
+
+.fresh-mq-play .fresh-mq-avatar {
+  width: clamp(2.75rem, 4vw, 3rem);
+}
+
+/* A catalogue headline's portrait stays dimmed while it plays. */
+.fresh-mq-play:not([data-lit]) .fresh-mq-avatar-unlit {
+  opacity: 0.62;
+}
+
+/* The findings band: the cover plays, the caption beneath opens the log page. */
+.fd-finding-tile {
+  display: grid;
+  gap: var(--space-3xs);
+  grid-template-rows: auto 1fr;
+}
+
+.fd-finding-play {
+  width: 100%;
+}
+
+.fd-finding-play:hover .fd-finding-cover,
+.fd-finding-play:focus-visible .fd-finding-cover {
+  transform: scale(1.06);
+}
+
+.fd-finding-tile:hover .fd-finding-coordinate {
+  color: var(--accent-foreground);
+}
+
+/* The lead's actions: its play is the band's one gold (The One Sun Rule), so
+   the coordinate above it steps back to cream. */
+.fd-lead-coordinate {
+  color: var(--foreground);
+}
+
+.fd-lead-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  margin-top: var(--space-sm);
+}
+
+.fd-lead-actions .fd-lead-open {
+  margin-top: 0;
+}
+
+.fd-lead-play {
+  align-items: center;
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: var(--rounded-md);
+  color: var(--primary-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.85rem;
+  font-weight: 700;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  padding: 0 var(--space-sm);
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.fd-lead-play:hover,
+.fd-lead-play:focus-visible {
+  background: var(--accent-foreground);
+  border-color: var(--accent-foreground);
+}
+
+.fd-lead-play:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+  outline: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fd-lead-play:active {
+    transform: translateY(1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fd-lead-play {
+    transition: none;
+  }
+
+  .fd-finding-play:hover .fd-finding-cover,
+  .fd-finding-play:focus-visible .fd-finding-cover {
+    transform: none;
+  }
+}
+
+/* A cover grid of findings (graph pages, galaxies, "Close in sound"): the
+   cover plays, the caption beneath opens the log page. */
+.finding-grid-tile {
+  align-content: start;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.finding-grid-play {
+  width: 100%;
+}
+
+.finding-grid-play:hover .track-artwork,
+.finding-grid-play:focus-visible .track-artwork {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+}

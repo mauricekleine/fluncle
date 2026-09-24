@@ -163,6 +163,7 @@ describe("public discovery event coverage", () => {
       "components/chat/neighbour-card.tsx",
       "components/player/track-actions-menu.tsx",
       "components/track-destination.tsx",
+      "components/track-row.tsx",
       "routes/artist.$slug.tsx",
       "routes/artists.index.tsx",
       "routes/log.$logId.tsx",

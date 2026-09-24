@@ -493,8 +493,14 @@ test("the surface is fully keyboard-operable with a visible focus indicator", as
   await page.goto(`/search?q=${encodeURIComponent("Aurora")}`, { waitUntil: "networkidle" });
 
   // Every control the PAGE owns must be reachable by Tab, and must paint a real ring when it is.
-  // (The chrome's own controls are covered by the other public specs.)
-  const targets = [".search-page-input", ".search-page-submit", ".search-page-row"];
+  // (The chrome's own controls are covered by the other public specs.) A result row is two stops:
+  // its cover (the preview's play button) and its title (the stretched link that opens the track).
+  const targets = [
+    ".search-page-input",
+    ".search-page-submit",
+    ".play-cover",
+    ".discovery-row-link",
+  ];
   const found = new Set<string>();
 
   for (let step = 0; step < 150 && found.size < targets.length; step += 1) {
@@ -511,7 +517,8 @@ test("the surface is fully keyboard-operable with a visible focus indicator", as
 
       // The canon focus affordance is an Eclipse-Gold ring, so a focused control must paint a real
       // outline (or a ring drawn as a box-shadow) — never `none`. The input hands its own ring to
-      // the field wrapper it sits in, so that case reads the wrapper.
+      // the field wrapper it sits in, and a row's stretched title link hands its ring to the row it
+      // covers, so those cases read the host.
       const visible = await page.evaluate((inputSelector) => {
         const active = document.activeElement;
 
@@ -519,8 +526,11 @@ test("the surface is fully keyboard-operable with a visible focus indicator", as
           return { outlineStyle: "none", outlineWidth: "0px", shadow: "none" };
         }
 
-        const painted =
-          active.matches(inputSelector) && active.parentElement ? active.parentElement : active;
+        const painted = active.matches(".discovery-row-link")
+          ? (active.closest(".discovery-row") ?? active)
+          : active.matches(inputSelector) && active.parentElement
+            ? active.parentElement
+            : active;
         const style = getComputedStyle(painted);
 
         return {
@@ -582,6 +592,10 @@ test.describe("reduced motion", () => {
         ".search-example",
         ".search-page-row",
         ".search-cover",
+        ".discovery-row",
+        ".discovery-row-art",
+        ".play-cover-glyph",
+        ".track-menu-trigger",
       ];
       const offenders: string[] = [];
 
@@ -730,7 +744,7 @@ test("the surface reads at both widths, and the evidence is retained", async ({ 
 
     // The field, the count, and the results all render with height — a control that collapsed to
     // zero at one width is not "responsive", it is missing.
-    for (const selector of [".search-page-form", ".search-page-matchline", ".search-page-rows"]) {
+    for (const selector of [".search-page-form", ".search-page-matchline", ".discovery-list"]) {
       const part = page.locator(selector).first();
       await expect(part, `${selector} should render at ${name}`).toBeVisible();
       const box = await part.boundingBox();

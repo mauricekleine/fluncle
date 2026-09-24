@@ -12,6 +12,7 @@ import {
   claimPageContinuation,
   pausePreview,
   playQueue,
+  type PreviewStatus,
   type QueueContinuation,
   type QueueTrack,
   togglePlayback,
@@ -67,31 +68,19 @@ export function PlayableList({
 }
 
 /**
- * The cover IS the play button (DESIGN.md Track Row). The glyph shows on hover and focus, and
- * always, small, on a touch screen; the playing row holds a pause glyph. A track whose preview
- * came back empty dims its glyph and stays tappable (a second try is cheap and honest).
- *
- * `children` is the artwork itself, so every row keeps its own cover treatment (lit, unlit,
- * avatar fallback) and this component only adds the control around it.
+ * One track's play control inside (or outside) a list: its status, whether its preview came back
+ * empty, and the press that plays the list from this track, pauses it, or resumes it in place.
  */
-export function PlayCover({
-  children,
-  className,
-  glyphClassName,
-  lit,
-  track,
-}: {
-  children: ReactNode;
-  className?: string;
-  glyphClassName?: string;
-  lit?: boolean;
-  track: QueueTrack;
-}): ReactNode {
+function useListPlay(track: QueueTrack): {
+  active: boolean;
+  missing: boolean;
+  onClick: () => void;
+  status: PreviewStatus;
+} {
   const list = useContext(PlayableListContext);
   const status = usePreviewStatus(track.id);
   const missing = usePreviewMissing(track.id);
   const active = status === "playing" || status === "loading";
-  const credit = trackCredit(track);
 
   const onClick = () => {
     if (active) {
@@ -117,6 +106,33 @@ export function PlayCover({
     playQueue([track], 0);
   };
 
+  return { active, missing, onClick, status };
+}
+
+/**
+ * The cover IS the play button (DESIGN.md Track Row). The glyph shows on hover and focus, and
+ * always, small, on a touch screen; the playing row holds a pause glyph. A track whose preview
+ * came back empty dims its glyph and stays tappable (a second try is cheap and honest).
+ *
+ * `children` is the artwork itself, so every row keeps its own cover treatment (lit, unlit,
+ * avatar fallback) and this component only adds the control around it.
+ */
+export function PlayCover({
+  children,
+  className,
+  glyphClassName,
+  lit,
+  track,
+}: {
+  children: ReactNode;
+  className?: string;
+  glyphClassName?: string;
+  lit?: boolean;
+  track: QueueTrack;
+}): ReactNode {
+  const { active, missing, onClick, status } = useListPlay(track);
+  const credit = trackCredit(track);
+
   return (
     <button
       aria-label={active ? `Pause the preview of ${credit}` : `Play the preview of ${credit}`}
@@ -132,6 +148,45 @@ export function PlayCover({
       <span aria-hidden="true" className={cn("play-cover-glyph", glyphClassName)}>
         {active ? <PauseIcon weight="fill" /> : <PlayIcon weight="fill" />}
       </span>
+    </button>
+  );
+}
+
+/**
+ * The same control as a labelled button, for a placement that is not a cover (the front door's
+ * lead finding). The caller supplies the visible label for each state; the accessible name adds
+ * the track, so a screen reader hears what will play.
+ */
+export function PlayButton({
+  className,
+  labels,
+  track,
+}: {
+  className?: string;
+  labels: { pause: string; play: string };
+  track: QueueTrack;
+}): ReactNode {
+  const { active, missing, onClick, status } = useListPlay(track);
+  const credit = trackCredit(track);
+  const label = active ? labels.pause : labels.play;
+
+  return (
+    <button
+      aria-label={`${label}: ${credit}`}
+      aria-pressed={active}
+      className={className}
+      data-discovery-play=""
+      data-missing={missing ? "" : undefined}
+      data-status={status}
+      onClick={onClick}
+      type="button"
+    >
+      {active ? (
+        <PauseIcon aria-hidden="true" weight="fill" />
+      ) : (
+        <PlayIcon aria-hidden="true" weight="fill" />
+      )}
+      {label}
     </button>
   );
 }

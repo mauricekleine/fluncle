@@ -21,21 +21,19 @@
 // or on hover, linking to its own destination. The row's appearance is the whole distinction, and
 // no word anywhere says which is which.
 
-import { CaretRightIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
-import { Link } from "@tanstack/react-router";
+import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useMemo } from "react";
 import { siApplemusic, siBeatport, siDeezer, siSpotify, siYoutube } from "simple-icons";
 import { type SimpleIcon } from "simple-icons";
 import { Button, buttonVariants } from "@fluncle/ui/components/button";
 import { BrandIcon } from "@/components/brand-icon";
+import { DiscoveryList } from "@/components/discovery-row";
 import { GraphLink } from "@/components/graph-link";
-import { TrackArtwork } from "@/components/track-artwork";
 import { formatDuration, formatReleaseDate } from "@/lib/format";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
-import { artistTitleLine } from "@/lib/log-prose";
-import { albumCoverAtSize } from "@/lib/media";
 import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
+import { sonicNeighbourToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { cn } from "@/lib/utils";
 import {
   type ListenDestination,
@@ -261,54 +259,18 @@ export function TrackArtistCredits({ track }: { track: TrackDestination }) {
  * dark sonar all arrive here as an empty list, and all three degrade to the same honest absence.
  */
 export function SonicNeighbours({ neighbours }: { neighbours: SonicNeighbour[] }) {
+  const tracks = useMemo(() => neighbours.map(sonicNeighbourToDiscoveryTrack), [neighbours]);
+
   if (neighbours.length === 0) {
     return undefined;
   }
 
+  // The neighbours are discovery rows (`components/discovery-row.tsx`), one list to the player: a
+  // finding lit with its coordinate, an archive track with its cover dimmed and no coordinate
+  // (DESIGN.md's Unlit Rule). The marker makes a row's link a similar hop for the beacons.
   return (
-    <ul className="track-neighbours" data-discovery="similar">
-      {neighbours.map((neighbour) => {
-        const line = artistTitleLine(neighbour);
-
-        return neighbour.logId ? (
-          <li className="track-neighbour track-neighbour-lit" key={neighbour.trackId}>
-            <Link
-              className="track-neighbour-link"
-              params={{ logId: neighbour.logId }}
-              to="/log/$logId"
-            >
-              {/* The lit row leads with its cover — cover-led canon, and half of what tells it
-                  from the unlit row beneath it. The `small` rung matches the 2.5rem slot. */}
-              <TrackArtwork
-                alt=""
-                className="track-neighbour-cover"
-                src={albumCoverAtSize(neighbour.albumImageUrl, "small")}
-              />
-              <span className="track-neighbour-body">
-                <span className="track-neighbour-coordinate">{neighbour.logId}</span>
-                <span className="track-neighbour-line">{line}</span>
-              </span>
-              <CaretRightIcon aria-hidden="true" className="track-neighbour-caret" size={16} />
-            </Link>
-          </li>
-        ) : (
-          <li className="track-neighbour track-neighbour-unlit" key={neighbour.trackId}>
-            {/* No cover and no coordinate: it has neither, and the absence IS the register
-                (DESIGN.md's Unlit Rule). It still goes somewhere — its own destination — which is
-                the one thing that changed. */}
-            <Link
-              className="track-neighbour-link"
-              params={{ trackId: neighbour.trackId }}
-              to="/track/$trackId"
-            >
-              <span className="track-neighbour-body">
-                <span className="track-neighbour-line">{line}</span>
-              </span>
-              <CaretRightIcon aria-hidden="true" className="track-neighbour-caret" size={16} />
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
+    <div data-discovery="similar">
+      <DiscoveryList className="track-neighbours" tracks={tracks} />
+    </div>
   );
 }

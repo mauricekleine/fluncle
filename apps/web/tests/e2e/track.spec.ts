@@ -246,14 +246,18 @@ test("the archive links INTO the destination rather than straight back out", asy
 
   await expect(row).toBeVisible();
 
-  // The record's own page carries the same rows, with the way out kept beside the way in.
+  // The record's own page carries the same rows, with the way out kept one tap away in the row's
+  // ⋮ menu (the same actions the player carries).
   await page.goto("/album/undertow-ledger", { waitUntil: "networkidle" });
+  await expect(page.locator("html[data-discovery-listening]")).toBeAttached({ timeout: 30_000 });
   await expect(page.locator(`a[href="${DESTINATION_PATH}"]`).first()).toBeVisible();
-  await expect(
-    page.getByRole("link", {
-      name: `Listen to Ashen Relay — ${SEEDED_DESTINATION_TRACK.title} on Spotify`,
-    }),
-  ).toBeVisible();
+  await page
+    .getByRole("button", { name: `Actions for Ashen Relay — ${SEEDED_DESTINATION_TRACK.title}` })
+    .click();
+  await expect(page.getByRole("menuitem", { name: "Listen on Spotify" })).toHaveAttribute(
+    "href",
+    /open\.spotify\.com/,
+  );
 });
 
 test.describe("the cold-arrival journey", () => {

@@ -1,155 +1,23 @@
-// The `/tracks` hub row — the two-register list row, its own component (NOT `/fresh`'s
-// `FreshStreamRow`, which stays a cover-card variant). A reference-list row: dense, quiet, cover-led.
+// The `/tracks` hub row: the shared discovery row (`components/discovery-row.tsx`), fed from the
+// hub's two-register entry.
 //
-// Both registers lead with the ALBUM COVER through the shared `TrackArtwork` (cover-led canon). A
-// LIT finding shows its real cover and links its title to `/log/<logId>`; an UNLIT catalogue row
-// shows the eclipse fallback (TrackArtwork with no src) and links its title to its own
-// `/track/<trackId>` destination. Either way the artist credits link to `/artist/<slug>` and the
-// imprint to `/label/<slug>` wherever the entity exists.
+// Both registers lead with the REAL album cover, and the cover is the play button: a finding shows
+// it in full colour, links its title to `/log/<logId>` and carries its coordinate; a catalogue row
+// shows the same kind of cover desaturated and dimmed (its lead artist's portrait, dimmed, when the
+// record has no cover), links its title to its own `/track/<trackId>` destination, and carries no
+// coordinate and no gold. The artists and the imprint are GraphLinks on the metadata line, with the
+// release year beside them; the readout chips sit beneath. There is no date column.
 //
-// THE SPLIT STAYS VISUAL, and only visual. The unlit row is coverless, coordinate-free, and
-// dust-inked, and it is never introduced as a tier (DESIGN.md's Unlit Rule) — the fact that it now
-// has somewhere to go is not a name, a badge, or a claim, and no word on the row says which
-// register it is in. A row the destination would refuse (no title, no credit) keeps its plain
-// title text and its Spotify mark exactly as before.
+// THE SPLIT STAYS VISUAL, and only visual (DESIGN.md's Unlit Rule): no word on the row says which
+// register it is in. The mapping from the hub's entry lives in `lib/discovery-tracks.ts`, beside
+// every other list's, so the hub cannot drift from `/search`, `/fresh` or the entity pages.
 
-import { CaretRightIcon } from "@phosphor-icons/react";
-import { Link } from "@tanstack/react-router";
-import { siSpotify } from "simple-icons";
-import { BrandIcon } from "@/components/brand-icon";
-import { GraphLink } from "@/components/graph-link";
-import { TrackArtwork } from "@/components/track-artwork";
-import { formatReleaseDate } from "@/lib/format";
-import { hasTrackPageIdentity } from "@/lib/track-page";
-import { albumCoverAtSize } from "@/lib/media";
-import { type TracksHubArtistLink, type TracksHubEntry } from "@/lib/server/tracks-hub";
-
-/** The artist credits: a resolved artist is a GraphLink to `/artist/<slug>` (DESIGN.md §5 — wherever
-    a surface names a graph node, the name is a GraphLink, never a bespoke link; the dotted underline
-    is the affordance that tells it from an unresolved plain-text name). Commas between, the
-    tracklist convention. The resting ink defers to the meta line's Stardust via the host override in
-    styles.css (the `.track-label .graph-link` precedent); the heat stays the component's own. */
-function ArtistCredits({ artists }: { artists: TracksHubArtistLink[] }) {
-  return (
-    <>
-      {artists.map((artist, index) => (
-        <span key={`${artist.name}-${index}`}>
-          {index > 0 ? ", " : null}
-          {artist.slug ? (
-            <GraphLink kind="artist" slug={artist.slug}>
-              {artist.name}
-            </GraphLink>
-          ) : (
-            artist.name
-          )}
-        </span>
-      ))}
-    </>
-  );
-}
-
-/** The imprint credit — a GraphLink to `/label/<slug>` when the label has a page, plain text when it
-    does not, and nothing at all when the track carries no label. Rides after the artists. */
-function LabelCredit({ label, slug }: { label?: string; slug?: string }) {
-  if (!label) {
-    return null;
-  }
-
-  return (
-    <>
-      {" · "}
-      {slug ? (
-        <GraphLink kind="label" slug={slug}>
-          {label}
-        </GraphLink>
-      ) : (
-        label
-      )}
-    </>
-  );
-}
+import { type ReactNode } from "react";
+import { DiscoveryRow } from "@/components/discovery-row";
+import { hubEntryToDiscoveryTrack } from "@/lib/discovery-tracks";
+import { type TracksHubEntry } from "@/lib/server/tracks-hub";
 
 /** One row of the `/tracks` hub, in the register its entry declares. */
-export function TracksHubRow({ entry }: { entry: TracksHubEntry }) {
-  const releaseLabel = formatReleaseDate(entry.releaseDate);
-
-  if (entry.kind === "finding") {
-    const { finding } = entry;
-
-    return (
-      <li className="tracks-hub-row tracks-hub-row-lit">
-        <span className="tracks-hub-row-date">{releaseLabel}</span>
-        <TrackArtwork
-          alt=""
-          className="tracks-hub-row-cover"
-          src={albumCoverAtSize(finding.albumImageUrl, "medium")}
-        />
-        <div className="tracks-hub-row-body">
-          {finding.logId ? (
-            <Link
-              aria-label={`Open the log page for ${finding.title}`}
-              className="tracks-hub-row-title tracks-hub-row-title-link"
-              params={{ logId: finding.logId }}
-              to="/log/$logId"
-            >
-              {finding.title}
-            </Link>
-          ) : (
-            <span className="tracks-hub-row-title">{finding.title}</span>
-          )}
-          <p className="tracks-hub-row-meta">
-            <ArtistCredits artists={entry.artistLinks} />
-            <LabelCredit label={finding.label} slug={finding.labelSlug} />
-          </p>
-        </div>
-        {finding.logId ? (
-          <CaretRightIcon
-            aria-hidden="true"
-            className="tracks-hub-row-caret"
-            size={16}
-            weight="bold"
-          />
-        ) : null}
-      </li>
-    );
-  }
-
-  const { track } = entry;
-
-  return (
-    <li className="tracks-hub-row tracks-hub-row-unlit">
-      <span className="tracks-hub-row-date">{releaseLabel}</span>
-      {/* No cover on an unlit row — TrackArtwork's eclipse fallback stands in (the coverless dust
-          row is half of what tells a catalogue row from a finding; the Unlit Rule holds). */}
-      <TrackArtwork alt="" className="tracks-hub-row-cover" />
-      <div className="tracks-hub-row-body">
-        {hasTrackPageIdentity(track) ? (
-          <Link
-            className="tracks-hub-row-title tracks-hub-row-title-link"
-            params={{ trackId: track.trackId }}
-            to="/track/$trackId"
-          >
-            {track.title}
-          </Link>
-        ) : (
-          <span className="tracks-hub-row-title">{track.title}</span>
-        )}
-        <p className="tracks-hub-row-meta">
-          <ArtistCredits artists={entry.artistLinks} />
-          <LabelCredit label={entry.label} slug={entry.labelSlug} />
-        </p>
-      </div>
-      {track.spotifyUrl ? (
-        <a
-          aria-label={`Listen to ${track.title} on Spotify`}
-          className="tracks-hub-row-listen"
-          href={track.spotifyUrl}
-          rel="noreferrer"
-          target="_blank"
-        >
-          <BrandIcon className="tracks-hub-row-mark" icon={siSpotify} />
-        </a>
-      ) : null}
-    </li>
-  );
+export function TracksHubRow({ entry }: { entry: TracksHubEntry }): ReactNode {
+  return <DiscoveryRow track={hubEntryToDiscoveryTrack(entry)} />;
 }

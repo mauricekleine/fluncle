@@ -7,7 +7,11 @@
 // "Artist — Title" em dash never orphans mid-wrap). Wide screens flow them inline as one line.
 
 import { Link } from "@tanstack/react-router";
+import { type ReactNode, useMemo } from "react";
 import { ArtistAvatar } from "@/components/artist-avatar";
+import { DiscoveryPlayableList } from "@/components/discovery-row";
+import { PlayCover } from "@/components/player/playable-list";
+import { discoveryQueueTrack, freshEntryToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { type FreshReleases } from "@/lib/server/fresh";
 import { FreshAlbumsBoard, FreshAlbumsRail } from "./albums-rail";
 import {
@@ -18,7 +22,7 @@ import {
   type FreshView,
 } from "./data";
 import { FreshMasthead } from "./masthead";
-import { freshAvatarSrc, freshDateParts, FreshStreamRow } from "./shared";
+import { freshAvatarSrc, freshDateParts, FreshReleaseRows } from "./shared";
 import { FreshViewControl } from "./view-control";
 
 const MARQUEE_HEADLINE_COUNT = 6;
@@ -33,6 +37,24 @@ function MarqueeLine({ artists, title }: { artists: string[]; title: string }) {
       </span>
       <span className="fresh-mq-title">{title}</span>
     </>
+  );
+}
+
+/**
+ * A headline's portrait, and its play control when the release has a live preview: the headline
+ * plays the stream from its own place, exactly as a row's cover does.
+ */
+function HeadlinePlay({ avatar, entry }: { avatar: ReactNode; entry: FreshStreamEntry }) {
+  const track = freshEntryToDiscoveryTrack(entry);
+
+  if (!track.previewable) {
+    return avatar;
+  }
+
+  return (
+    <PlayCover className="fresh-mq-play" lit={track.lit} track={discoveryQueueTrack(track)}>
+      {avatar}
+    </PlayCover>
   );
 }
 
@@ -52,10 +74,15 @@ function MarqueeHeadline({ entry }: { entry: FreshStreamEntry }) {
     return (
       <li className="fresh-mq-row fresh-mq-lit">
         {stamp}
-        <ArtistAvatar
-          className="fresh-mq-avatar"
-          name={finding.artists[0] ?? finding.title}
-          src={freshAvatarSrc(finding.artistAvatarUrl)}
+        <HeadlinePlay
+          avatar={
+            <ArtistAvatar
+              className="fresh-mq-avatar"
+              name={finding.artists[0] ?? finding.title}
+              src={freshAvatarSrc(finding.artistAvatarUrl)}
+            />
+          }
+          entry={entry}
         />
         {finding.logId ? (
           <Link
@@ -87,10 +114,15 @@ function MarqueeHeadline({ entry }: { entry: FreshStreamEntry }) {
   return (
     <li className="fresh-mq-row fresh-mq-unlit">
       {stamp}
-      <ArtistAvatar
-        className="fresh-mq-avatar fresh-mq-avatar-unlit"
-        name={track.artists[0] ?? track.title}
-        src={freshAvatarSrc(track.artistAvatarUrl)}
+      <HeadlinePlay
+        avatar={
+          <ArtistAvatar
+            className="fresh-mq-avatar fresh-mq-avatar-unlit"
+            name={track.artists[0] ?? track.title}
+            src={freshAvatarSrc(track.artistAvatarUrl)}
+          />
+        }
+        entry={entry}
       />
       {track.spotifyUrl ? (
         <a
@@ -113,7 +145,9 @@ function MarqueeHeadline({ entry }: { entry: FreshStreamEntry }) {
     with the 30-day albums rail; the "Tracks" view drops the rail and shows the stream alone. An empty
     stream (records but no tracks in the window) reads as a quiet line, never an empty bordered board. */
 function FreshTrackStream({ data, view }: { data: FreshReleases; view: "all" | "tracks" }) {
-  const stream = freshStream(data);
+  const stream = useMemo(() => freshStream(data), [data]);
+  // The whole stream is one list to the player: a headline or a row plays from its own place.
+  const discoveryTracks = useMemo(() => stream.map(freshEntryToDiscoveryTrack), [stream]);
   const headlines = stream.slice(0, MARQUEE_HEADLINE_COUNT);
   const rest = stream.slice(MARQUEE_HEADLINE_COUNT);
 
@@ -126,7 +160,7 @@ function FreshTrackStream({ data, view }: { data: FreshReleases; view: "all" | "
   }
 
   return (
-    <>
+    <DiscoveryPlayableList tracks={discoveryTracks}>
       <ol className="fresh-mq-board">
         {headlines.map((entry) => (
           <MarqueeHeadline
@@ -137,18 +171,11 @@ function FreshTrackStream({ data, view }: { data: FreshReleases; view: "all" | "
       </ol>
 
       {rest.length > 0 ? (
-        <ol className="fresh-rows fresh-mq-rest">
-          {rest.map((entry) => (
-            <FreshStreamRow
-              entry={entry}
-              key={entry.kind === "finding" ? entry.finding.trackId : entry.track.trackId}
-            />
-          ))}
-        </ol>
+        <FreshReleaseRows className="fresh-mq-rest" entries={rest} heading="h2" />
       ) : undefined}
 
       {view === "all" ? <FreshAlbumsRail albums={freshTrackWindowRecordCovers(data)} /> : undefined}
-    </>
+    </DiscoveryPlayableList>
   );
 }
 

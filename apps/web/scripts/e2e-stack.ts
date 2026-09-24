@@ -25,6 +25,8 @@
  * lives here, ahead of Vite, where it can prepare `.dev.vars` before Vite reads it.
  */
 import { type Subprocess } from "bun";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { seedE2eData } from "../tests/e2e/seed";
 import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import {
@@ -78,6 +80,12 @@ async function main(): Promise<void> {
   }
 
   materializeDevVars();
+
+  // The Worker's edge cache (`caches.default`, Miniflare's CacheObject) persists under this
+  // checkout's `.wrangler/state` across runs. The database is fresh every boot, so the cached HTML
+  // must be too: a document rendered by an earlier build of the code would hydrate under the new
+  // client and fail the suite's clean-console gate for a reason no spec is about.
+  rmSync(join(WEB_ROOT, ".wrangler", "state", "v3", "cache"), { force: true, recursive: true });
 
   console.log(`e2e-stack: starting libSQL on :${LIBSQL_PORT}…`);
   turso = await startLibsql();
