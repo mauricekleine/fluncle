@@ -9735,13 +9735,20 @@ html[data-player-docked] .nav-shell--workbench {
   margin-top: 0.35rem;
 }
 
+/* The tail sits above the stretched title link only where it holds a control: the coordinate
+   (and any gap beside it) lets a click fall through to the row, the ⋮ trigger takes its own. */
 .discovery-row-tail {
   align-items: center;
   display: flex;
   gap: 0.35rem;
   justify-self: end;
+  pointer-events: none;
   position: relative;
   z-index: 1;
+}
+
+.discovery-row-tail .track-menu-trigger {
+  pointer-events: auto;
 }
 
 .discovery-row-coordinate {
@@ -9750,7 +9757,6 @@ html[data-player-docked] .nav-shell--workbench {
   font-size: 0.86rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
-  pointer-events: none;
   transition: color 150ms ease-out;
 }
 
@@ -9925,4 +9931,11 @@ html[data-player-docked] .nav-shell--workbench {
   .player-title-link::after {
     content: none;
   }
+}
+
+/* The archive row's ⋮ carries the story now, so it is a full 44px target, like every row menu. */
+.track-action--menu {
+  justify-content: center;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
 }

@@ -500,6 +500,7 @@ test("the surface is fully keyboard-operable with a visible focus indicator", as
     ".search-page-submit",
     ".play-cover",
     ".discovery-row-link",
+    ".track-menu-trigger",
   ];
   const found = new Set<string>();
 

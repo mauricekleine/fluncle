@@ -1056,6 +1056,9 @@ export type CatalogueSlice = {
 };
 
 type CatalogueTrackRow = {
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
   album_image_url: string | null;
   artists_json: string;
   bpm: number | null;
@@ -1090,7 +1093,11 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
     // gate keys off the same set the page renders. The crawler leaves most twins unstamped, so the
     // slice is folded again below (`dedupeByRecordingIdentity`) before it crosses the wire.
     sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url,
-                 tracks.album_image_url, tracks.duration_ms, tracks.bpm, tracks.key,
+                 tracks.album_image_url,
+                 (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
+                 (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
+                 (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
+                 tracks.duration_ms, tracks.bpm, tracks.key,
                  tracks.preview_url, tracks.isrc, tracks.release_date, count(*) over () as total
           from tracks
           left join findings on findings.track_id = tracks.track_id
@@ -1119,9 +1126,9 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
     total: Math.max(rawTotal - (rows.length - deduped.length), deduped.length),
     tracks: deduped.map((row) => ({
       albumImageUrl: bestAlbumCoverUrl({
-        imageKey: null,
-        imageState: null,
-        imageUpdatedAt: null,
+        imageKey: row.album_image_key,
+        imageState: row.album_image_state,
+        imageUpdatedAt: row.album_image_updated_at,
         spotifyUrl: row.album_image_url,
       }),
       artists: parseArtistsJson(row.artists_json),

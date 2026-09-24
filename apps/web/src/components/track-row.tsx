@@ -223,7 +223,10 @@ function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger aria-label={`Links for ${track.title}`} className="track-action">
+      <DropdownMenuTrigger
+        aria-label={`Links for ${track.title}`}
+        className="track-action track-action--menu"
+      >
         <DotsThreeIcon aria-hidden="true" size={18} weight="bold" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
@@ -277,7 +280,10 @@ function TrackLinksMenu({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger aria-label={`Actions for ${trackLine}`} className="track-action">
+      <DropdownMenuTrigger
+        aria-label={`Actions for ${trackLine}`}
+        className="track-action track-action--menu"
+      >
         <DotsThreeIcon aria-hidden="true" size={18} weight="bold" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44 shadow-none">

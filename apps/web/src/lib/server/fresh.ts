@@ -154,6 +154,9 @@ export type FreshReleases = {
 };
 
 type FreshCatalogueRow = LeadArtistRow & {
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
   album_image_url: string | null;
   artists_json: string;
   bpm: number | null;
@@ -236,6 +239,12 @@ export async function listFreshReleases(
       sql: `select tracks.track_id, tracks.title, tracks.artists_json,
                    tracks.spotify_url, tracks.release_date, tracks.album_image_url,
                    tracks.duration_ms, tracks.bpm, tracks.key, tracks.preview_url, tracks.isrc,
+                   -- The album's owned cover master: a primary-key lookup per EMITTED row (the
+                   -- index-ordered scan stops at the limit), so a record whose raw cover is gone
+                   -- still shows its master here as it does on the hub and the entity pages.
+                   (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
+                   (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
+                   (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
                    ${LEAD_ARTIST_SELECT}
             from tracks
             ${LEAD_ARTIST_JOIN}
@@ -291,9 +300,9 @@ export async function listFreshReleases(
   const catalogue: FreshCatalogueItem[] = typedRows<FreshCatalogueRow>(catalogueResult.rows).map(
     (row) => ({
       albumImageUrl: bestAlbumCoverUrl({
-        imageKey: null,
-        imageState: null,
-        imageUpdatedAt: null,
+        imageKey: row.album_image_key,
+        imageState: row.album_image_state,
+        imageUpdatedAt: row.album_image_updated_at,
         spotifyUrl: row.album_image_url,
       }),
       artistAvatarUrl: leadArtistAvatarUrl(row),
