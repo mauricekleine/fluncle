@@ -3,9 +3,10 @@ name: Hermes Pin Drift
 # The server-side drift sweep for the box's baked supply chain — the missing
 # bump-PR half of fluncle-maintenance (the rave-02 fluncle-pin-watch timer is the
 # DEPLOY half; this is what feeds it). It checks the `fluncle` CLI, the Claude
-# Code CLI, and bun against their registries and, for a clearly-safe same-major
-# bump, opens a PR; a major bump or a newer Hermes base image is reported as an
-# issue, never auto-bumped. On merge of a Dockerfile pin, rave-02 self-deploys it.
+# Code CLI, bun (the `oven/bun` base image tag + digest), and yt-dlp against their
+# registries and, for a clearly-safe bump, opens a PR; a major bump (a bun major is
+# a base-image change) is reported as an issue, never auto-bumped. On merge of a
+# Dockerfile pin, rave-02 self-deploys it.
 #
 # Auth: PIN_DRIFT_TOKEN (a fine-scoped PAT: Contents + Pull requests read/write)
 # is effectively REQUIRED — this repo blocks the default GITHUB_TOKEN from creating

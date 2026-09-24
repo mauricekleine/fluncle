@@ -71,7 +71,7 @@ journalctl -u fluncle-reconcile-hub-counts.service --since '7 days ago' | grep A
 
 ## Why a host timer + the /status marker
 
-Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-reconcile-hub-counts`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper, so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.reconcile-hub-counts` row stays honest. The prober's `AUTOMATION_CRONS` mirror carries the matching entry.
+Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is code. Because a `docker exec` sends stdout to journald, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-reconcile-hub-counts`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper, so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.reconcile-hub-counts` row stays honest. The prober's `AUTOMATION_CRONS` mirror carries the matching entry.
 
 ## Activation (OPERATOR-GATED — the repo half ships; the box enable does not)
 

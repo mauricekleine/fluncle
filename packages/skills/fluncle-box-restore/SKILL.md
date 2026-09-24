@@ -75,8 +75,9 @@ Self-deploy resumes on its own once the box is up: [`pin-watch`](../../../docs/a
 
 ## The gotchas
 
-- **Container before sweep env, then sync again.** The secrets sync writes the sweep env file _into the container's bind mount_, which does not exist until the container has started once. On a fresh box the first sync half-succeeds: the gateway env lands, the sweep env does not, and every sweep runs credential-less. Sequence is **bootstrap → sync → container → sync again**.
-- **Restore box state into a STOPPED container.** `state.db` is live SQLite; unpacking over a running gateway corrupts it. Untar with `tar` (not a copy tool that drops modes) — it preserves the `0600` on the restored env files, and that is load-bearing.
+- **Container before sweep env, then sync again.** The secrets sync writes the sweep env file _into the container's bind mount_, which does not exist until the container has started once. On a fresh box the first sync half-succeeds: the container env lands, the sweep env does not, and every sweep runs credential-less. Sequence is **bootstrap → sync → container → sync again**.
+- **The image never chowns the data mount.** Nothing runs at container start except an idle `sleep`, so the host `~/.hermes` (`/opt/data` in the container) must already be owned by uid/gid 10000 before the first `docker run`, or the `hermes` user every sweep runs as cannot write its markers or state. The secrets sync creates `home/` with that owner when it is missing; the directory above it is yours to create with that owner (`chown -R 10000:10000` it if it is ever found root-owned).
+- **Restore box state into a STOPPED container.** A sweep `docker exec`d into a running container can write into the tree mid-unpack. Untar with `tar` (not a copy tool that drops modes) — it preserves the `0600` on the restored env files, and that is load-bearing.
 - **Tailscale key expiry, before anything else.** No public inbound TCP means an expired node key is a total lockout with no fallback path. Disable expiry (or join the node tag-owned so it is exempt), then verify access from a second terminal before closing the first connection.
 - **`op` before any secret is read.** Confirm `op --version` before placing the bootstrap environment; secret rendering depends on it.
 - **pin-watch cannot bootstrap itself.** It is steady-state only: it harvests the runtime env off the _running_ container via `docker inspect` and reads nothing from `op`. With no container there is nothing to harvest. The first image build and `docker run` are manual, every time.
@@ -89,7 +90,7 @@ The nightly [`fluncle-backup`](../../../docs/agents/hermes/backup-timer/README.m
 - the `/status` prober's target env (the `HEALTHCHECK_*` values) — hand-placed, in no sync
 - the render box's SSH key — its only other copy is on the operator's Mac
 
-The durable fix for each is to fold it into the `op` sync as another template rather than to re-place it by hand next time; the labs doc tracks these as open operator items. Everything else the box accumulates — gateway state db, memories, kanban, cron markers, the render conductor's `box-id` and poison ledger — **is** in leg 2, provided the encryption key was provisioned. With no key, leg 2 skips silently and uploads nothing; `preflight.ts` fails loudly on exactly that.
+The durable fix for each is to fold it into the `op` sync as another template rather than to re-place it by hand next time; the labs doc tracks these as open operator items. Everything else the box accumulates — the cron markers, the render conductor's `box-id` and poison ledger, the prober's transition memory, the hand-placed env files — **is** in leg 2, provided the encryption key was provisioned. With no key, leg 2 skips silently and uploads nothing; `preflight.ts` fails loudly on exactly that.
 
 The big git checkouts (audit and triage workspaces) are deliberately excluded — `git clone` restores them exactly, and including them would turn a few-MB nightly into a 5 GB one.
 

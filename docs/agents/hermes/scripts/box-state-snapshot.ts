@@ -10,10 +10,6 @@
 // ORPHANS a paid provisioned render box nobody can then find or delete.
 //
 // WHAT IS IN (small, unrecoverable, load-bearing):
-//   - the gateway state db (`state.db` + its `-wal`/`-shm`) — sessions, memories index,
-//     kanban, and the Discord channel binding
-//   - `config.yaml` — the gateway's expanded config, the other half of the Discord binding
-//   - `memories/` — the agent's own memory files
 //   - `cron/output/` — the run markers `/status` judges every cron by
 //   - `<home>/.render-conductor/` — the `box-id` and the poison ledger
 //   - `<home>/.healthcheck/` — the prober's transition memory (tiny; keeps /status from
@@ -109,9 +105,8 @@ export type BoxStateInclude = {
   /** The path, relative to `base`. */
   path: string;
   /**
-   * True when a restore that lacks this entry is not a restore. False for the entries that are
-   * transient (the SQLite sidecars exist only while the db is open) or re-derivable from the
-   * repo/image (`config.yaml` is deployed, `.healthcheck` re-baselines itself).
+   * True when a restore that lacks this entry is not a restore. False for the entries a restore
+   * can do without (`.healthcheck` re-baselines itself).
    */
   required: boolean;
   /** What it is, in words, so a drill's failure names the thing rather than the path. */
@@ -120,12 +115,7 @@ export type BoxStateInclude = {
 
 /** Every archived path, declared once. `boxStateCandidates` and the restore drill both read it. */
 export const BOX_STATE_INCLUDES: readonly BoxStateInclude[] = [
-  { base: "dataRoot", path: "state.db", required: true, what: "the gateway state db" },
-  { base: "dataRoot", path: "state.db-wal", required: false, what: "the state db's WAL" },
-  { base: "dataRoot", path: "state.db-shm", required: false, what: "the state db's shared memory" },
-  { base: "dataRoot", path: "config.yaml", required: false, what: "the gateway's expanded config" },
   { base: "dataRoot", path: ".env", required: false, what: "the data root's env file" },
-  { base: "dataRoot", path: "memories", required: true, what: "the agent's memories" },
   { base: "dataRoot", path: join("cron", "output"), required: true, what: "the cron run markers" },
   {
     base: "home",

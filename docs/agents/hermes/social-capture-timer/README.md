@@ -6,7 +6,7 @@ The sweep WORK is BAKED at `/opt/hermes-scripts/` — a lone [`../scripts/social
 
 ## Why a host timer + the /status marker
 
-Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-social-capture`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper — it wraps the `curl` so the marker lands even when the trigger fails — so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.social-capture` row stays honest. The prober is UNCHANGED.
+Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is code. Because a `docker exec` sends stdout to journald, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-social-capture`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper — it wraps the `curl` so the marker lands even when the trigger fails — so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.social-capture` row stays honest. The prober is UNCHANGED.
 
 ## Deploy (on rave-02, one time)
 
@@ -23,5 +23,3 @@ sudo systemctl start fluncle-social-capture.service            # one tick now
 journalctl -u fluncle-social-capture.service -n 40 --no-pager  # expect a 2xx (no output on an empty backlog)
 systemctl list-timers fluncle-social-capture.timer
 ```
-
-Then RETIRE the gateway copy (`hermes cron list` → `hermes cron delete <id>` for `fluncle-social-capture`) so it is not double-scheduled — green the timer first, never both live at once.

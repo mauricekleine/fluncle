@@ -27,5 +27,3 @@ sudo systemctl start fluncle-render.service            # one tick now
 journalctl -u fluncle-render.service -n 40 --no-pager  # expect a render-conductor: … summary line
 systemctl list-timers fluncle-render.timer
 ```
-
-Then RETIRE the gateway copy (`hermes cron list` → `hermes cron delete <id>` for `fluncle-render`) so it is not double-scheduled — green the timer first, never both live at once.

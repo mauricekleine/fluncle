@@ -4,7 +4,7 @@
 // A backup that has never restored is a hope, not a backup. The database dump has had its
 // drill since day one (apps/web/scripts/restore-drill.ts); this is its sibling for the box-state
 // archive, and it exists because leg 2 protects the things that are GONE if the box's disk goes:
-// the gateway state db, the agent's memories, the cron markers, the hand-placed 0600 env files,
+// the cron markers, the hand-placed 0600 env files,
 // and the render conductor's `box-id` — whose loss orphans a paid provisioned render box nobody
 // can then find or delete.
 //
@@ -321,7 +321,7 @@ export function checkRestoredTree(options: {
   checks.push(`${options.manifest.entryCount} archived entries present at the recorded sizes`);
 
   // Coverage is judged from what is ON DISK, not from what the manifest claims — a manifest
-  // that lists `memories` the archive never carried must fail here, not read as covered.
+  // that lists `cron/output` the archive never carried must fail here, not read as covered.
   const shortfalls = checkBoxStateCoverage({
     entries: present,
     exists: (relativePath) => existsSync(join(options.root, relativePath)),
@@ -333,7 +333,7 @@ export function checkRestoredTree(options: {
 
   if (shortfalls.length === 0) {
     checks.push(
-      "the load-bearing set is present (gateway state db, memories, cron markers, the render conductor's box-id, a 0600 env file)",
+      "the load-bearing set is present (cron markers, the render conductor's box-id, a 0600 env file)",
     );
   }
 

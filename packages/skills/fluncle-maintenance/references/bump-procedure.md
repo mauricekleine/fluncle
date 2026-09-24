@@ -9,11 +9,11 @@ A bump is two halves: **the repo edit** (committed, reviewed in git, CI-gated) a
 | **Repo edit**  | the CI deploy-gate (`format:check` + Go `go:check` + `lint` + `typecheck` + `test` + `test:scripts`) + gitleaks | merging the green PR to `main`.                                                                                             |
 | **Box deploy** | the **pin-watch pre-smoke** (CI never rebuilds the image — pin-watch is the validation it can't do)             | the on-box `fluncle-pin-watch` timer: rebuild → pre-smoke → swap → auto-rollback on fail (`docs/agents/hermes/pin-watch/`). |
 
-Two inventory items (`package.json` `packageManager`, the workflow `bun-version:` + the Actions SHA-pins) are **fully** repo-side — they ship the moment the PR merges; **no box step**. The other half (the Dockerfile `FROM` / `npm -g` pins) only reaches the box on a **rebuild** — and that rebuild is the on-box pin-watch timer's, not the routine's.
+Two inventory items (`package.json` `packageManager` and the Actions SHA-pins) are **fully** repo-side — they ship the moment the PR merges; **no box step**. The other half (every Dockerfile pin, the `FROM` base included) only reaches the box on a **rebuild** — and that rebuild is the on-box pin-watch timer's, not the routine's.
 
 ## The flow for a clearly-safe bump (edit → PR → merge)
 
-1. **Edit the pin in place** on a branch — the inventory tells you the exact line/marker per item. For bun, edit all three places in one commit.
+1. **Edit the pin in place** on a branch — the inventory tells you the exact line/marker per item. For bun, move the `FROM` tag + digest and `package.json` `packageManager` in one commit.
 2. **Run the repo-side gate locally**, then **open a PR** with the drift table, the per-item safety call, and (for a Dockerfile edit) a note that the on-box `fluncle-pin-watch` timer will self-deploy it after the merge (`docs/agents/hermes/pin-watch/`).
 3. **Wait for the PR's CI to go green** (Quality Checks + gitleaks + the Cloudflare build). A red check → **do not merge**; report and leave the PR for a human.
 4. **Merge** the green PR (`gh pr merge --squash --admin --delete-branch`). That is the routine's delivery.
@@ -26,7 +26,8 @@ The rebuild, smoke, rollback, and single-flight for a baked-pin merge are all th
 ## When the box self-deploy does NOT apply
 
 - **A BRAKE item** never reaches merge, so it never reaches the box — it's a report.
-- **A base-image bump** is always a BRAKE: report the newer tag, let the operator pull it (the rebuild's failure mode there is the whole gateway, too coarse and too consequential to ship unattended even with pin-watch's pre-smoke safety).
+- **A bun major** (a new base image) is a BRAKE: report it, let the operator take it deliberately. A same-major bun bump self-deploys like any other baked pin.
+- **node, uv, and gh** are pinned but MANUAL-watch: the routine reports their drift; the operator bumps them by hand and pin-watch deploys the merge.
 - **boat.dev** is pinned but MANUAL-watch: the routine never bumps it, and the pin-watch post-smoke re-verifies the conductor after any rebuild it does.
 
 ## Public-repo rule (applies to every file in this skill)

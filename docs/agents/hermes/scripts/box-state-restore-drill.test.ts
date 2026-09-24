@@ -398,18 +398,18 @@ describe("the load-bearing set — derived from the producer's include list", ()
     ]);
   });
 
-  test("the memories and the cron markers are required, the optional entries are not", () => {
+  test("the cron markers are required, the optional entries are not", () => {
     expect(
       checkBoxStateCoverage({
-        entries: ["state.db", "home/.render-conductor", "home/x.env"],
+        entries: ["home/.render-conductor", "home/x.env"],
         exists: () => true,
       }).map((shortfall) => shortfall.what),
-    ).toEqual(["the agent's memories", "the cron run markers"]);
+    ).toEqual(["the cron run markers"]);
 
-    // config.yaml / .healthcheck / the SQLite sidecars are re-derivable — never a drill failure.
+    // .healthcheck and the data root's env file are optional — never a drill failure.
     expect(
       checkBoxStateCoverage({
-        entries: ["state.db", "memories", "cron/output", "home/.render-conductor", "home/x.env"],
+        entries: ["cron/output", "home/.render-conductor", "home/x.env"],
         exists: () => true,
       }),
     ).toEqual([]);

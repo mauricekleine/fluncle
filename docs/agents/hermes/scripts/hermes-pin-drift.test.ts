@@ -47,7 +47,7 @@ describe("hermes-pin-drift parses every pin it claims to watch", () => {
     { pattern: /^\d+\.\d+\.\d+$/, variable: "CUR_CLAUDE" },
     { pattern: /^\d+\.\d+\.\d+$/, variable: "CUR_BUN" },
     { pattern: /^\d{4}\.\d{2}\.\d{2}$/, variable: "CUR_YTDLP" },
-    { pattern: /^v\d+\.\d+\.\d+$/, variable: "CUR_BASE" },
+    { pattern: /^sha256:[0-9a-f]{64}$/, variable: "CUR_BUN_DIGEST" },
   ];
 
   for (const { pattern, variable } of PINS) {
@@ -126,7 +126,7 @@ describe("yt-dlp is assessed as a calendar version", () => {
   });
 });
 
-describe("the base-image report", () => {
+describe("bun is the base image", () => {
   /** Source one of the script's shell functions by name and run an expression after it. */
   function withFunction(name: string, expression: string, input: string): string {
     const body = new RegExp(`^${name}\\(\\) \\{[\\s\\S]+?^\\}$`, "m").exec(script)?.[0] ?? "";
@@ -139,36 +139,55 @@ describe("the base-image report", () => {
     }).trim();
   }
 
-  const tagsPage = (names: readonly string[]) =>
-    JSON.stringify({ results: names.map((name) => ({ name })) });
+  it("the FROM line carries the tag and digest the apply branch rewrites together", () => {
+    // Rewriting the tag without its digest would keep building the old image under a new
+    // name; the marker below is the exact string `inplace` searches for.
+    const from = dockerfile.split("\n").find((line) => line.startsWith("FROM ")) ?? "";
 
-  it("picks the plain release tag over a variant that ties with it", () => {
-    // Upstream lists `v2026.9.24-desktop` first; comparing digits alone ties it with the
-    // plain `v2026.9.24`, and the report then names an image this box never runs.
-    const page = tagsPage([
-      "latest-desktop",
-      "latest",
-      "v2026.9.24-desktop",
-      "v2026.9.24",
-      "v2026.9.21",
-    ]);
-
-    expect(withFunction("pick_base_tag", "pick_base_tag", page)).toBe("v2026.9.24");
+    expect(from).toBe(
+      `FROM oven/bun:${resolvePin("CUR_BUN")}-debian@${resolvePin("CUR_BUN_DIGEST")}`,
+    );
+    expect(script).toContain(
+      'inplace "$DOCKERFILE" "oven/bun:$CUR_BUN-debian@$CUR_BUN_DIGEST" "oven/bun:$APPLY_BUN-debian@$APPLY_BUN_DIGEST"',
+    );
   });
 
-  it("compares calendar parts numerically", () => {
+  it("reads a published tag's digest from its Docker Hub record", () => {
+    const record = JSON.stringify({ digest: "sha256:abc", name: "1.4.3-debian" });
+
+    expect(withFunction("bun_image_digest", "bun_image_digest", record)).toBe("sha256:abc");
+  });
+
+  it("reads nothing for a tag Docker Hub does not carry yet", () => {
+    // A bun release lands on GitHub before its image; an empty digest holds the bump for
+    // the next run instead of writing a FROM line no build can pull.
     expect(
-      withFunction("pick_base_tag", "pick_base_tag", tagsPage(["v2026.9.24", "v2026.12.1"])),
-    ).toBe("v2026.12.1");
+      withFunction("bun_image_digest", "bun_image_digest", '{"message":"tag not found"}'),
+    ).toBe("");
+    expect(withFunction("bun_image_digest", "bun_image_digest", "not json")).toBe("");
   });
+});
+
+describe("the brake report", () => {
+  /** Source one of the script's shell functions by name and run an expression after it. */
+  function withFunction(name: string, expression: string, input: string): string {
+    const body = new RegExp(`^${name}\\(\\) \\{[\\s\\S]+?^\\}$`, "m").exec(script)?.[0] ?? "";
+
+    expect(body).not.toBe("");
+
+    return execFileSync("bash", ["-c", `${body}\n${expression}`], {
+      encoding: "utf8",
+      input,
+    }).trim();
+  }
 
   it("signs the brake items alone, so an unchanged brake yields the same signature", () => {
     const sign = (lines: string) => withFunction("brake_signature", "brake_signature", lines);
-    const brake = "- **Nous Hermes base image** `v2026.8.3` → `v2026.9.24`\n";
+    const brake = "- **bun** `1.4.2` → `2.0.0` — major bump.\n";
 
     expect(sign(brake)).toMatch(/^[0-9a-f]{16}$/);
     expect(sign(brake)).toBe(sign(brake));
-    expect(sign(brake)).not.toBe(sign("- **Nous Hermes base image** `v2026.8.3` → `v2026.9.28`\n"));
+    expect(sign(brake)).not.toBe(sign("- **bun** `1.4.2` → `2.0.1` — major bump.\n"));
   });
 
   it("the issue body carries the signature the workflow compares against", () => {

@@ -9,7 +9,7 @@
 //   the backup. Turso's managed point-in-time restore is the belt; this is the braces.
 //
 //   LEG 2 (the box's own state) — snapshots the LOAD-BEARING subset of the agent data dir
-//   (gateway state db, memories, the render conductor's box-id + poison ledger, the
+//   (the render conductor's box-id + poison ledger, the
 //   hand-placed 0600 env files, the cron markers), ENCRYPTS it, and uploads it beside the
 //   dump under its own prefix + retention. See box-state-snapshot.ts for the include /
 //   exclude list and the encryption contract. This leg is SKIPPED (never a plaintext

@@ -1,33 +1,40 @@
-# Fluncle's Hermes agent image: the pinned Nous Research Hermes gateway plus the
-# Fluncle CLI and the Claude Code CLI. Architecture, build, and run details live in
-# docs/agents/hermes-agent.md.
+# Fluncle's rave-02 sweep runtime: a digest-pinned bun base plus the toolchain every
+# host-timer sweep `docker exec`s into (the fluncle CLI, Claude Code, gh, ffmpeg, the MuQ
+# embedder, yt-dlp, boat). The container is still named `hermes` and keeps the `hermes`
+# user (uid 10000, home /opt/data) so the timer units and the /opt/data mount carry over
+# unchanged. Architecture, build, and run details live in docs/agents/hermes-agent.md.
 #
-# BUILD CONTEXT: build from the REPO ROOT (not docs/agents/hermes/) so the
-# `copywriting-fluncle` skill is reachable for the COPY below:
-#   docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.7.1 .
+# BUILD CONTEXT: build from the REPO ROOT (not docs/agents/hermes/) so the skills and the
+# shared app sources the sweeps import are reachable for the COPYs below:
+#   docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:vYYYY.M.D .
 #
-# RUNTIME SECRET (not baked): the `fluncle-observation` `--no-agent` cron shells out
-# to `claude -p` (Claude Code, SUBSCRIPTION auth), which authenticates from the
-# CLAUDE_CODE_OAUTH_TOKEN env var. That token is a secret — it is NEVER baked into
-# the image; it is pulled from the configured 1Password item (see the ops runbook note).
-# The image only carries the `claude` binary + the skill; the credential arrives at run
-# time. NOTE: --env-file (/etc/hermes.env) delivers it to `docker exec` + AGENT crons, but
-# Hermes BLOCKS provider credentials from `--no-agent` cron script envs (GHSA-rhgp-j443-p4rf),
-# so observe-sweep.sh reads the token from a 0600 file instead — see
-# docs/agents/hermes/cron/README.md § Operational gotchas (do not re-debug these).
+# RUNTIME SECRETS (never baked): the container env carries only the agent-scoped
+# FLUNCLE_API_TOKEN and the alert webhook (`--env-file /etc/hermes.env`). The sweep
+# credentials (CLAUDE_CODE_OAUTH_TOKEN and the rest) live in the 0600 sweep secrets file
+# under /opt/data/home, which each sweep sources at run time.
 #
-# DURABILITY (RFC Unit B): the base is DIGEST-PINNED (not the mutable :v2026.8.3 tag) so a
-# cached venv layer can never sit on a silently-drifted base — the flake that once shipped a
-# broken embed engine. To bump the base deliberately, re-resolve the digest + update this line:
-#   docker inspect nousresearch/hermes-agent:v2026.8.3 --format '{{index .RepoDigests 0}}'
-FROM nousresearch/hermes-agent@sha256:16788311e2fa3035456bdc1bafb8ec2b1777db64ebf020af9bb7eb73c3712c9e
+# THE BASE: oven/bun on Debian trixie, DIGEST-PINNED so a cached layer can never sit on a
+# silently-drifted base. hermes-pin-drift.sh reads the bun pin from the tag on the FROM line
+# and, on a safe same-major bump, rewrites the tag together with its re-resolved digest.
+FROM oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73
+
+# Node + npm — Claude Code installs through npm and runs on node, and the audit agent drives
+# the repo's node tooling. Copied from the matching Debian-trixie node image so the binary
+# links against the same glibc; digest-pinned for the same reason as the base.
+COPY --from=node:26.5.1-trixie-slim@sha256:deae974a69e140f44f434ab29cb519fb5f8fe250fd364b8ca446bd0761acdc6a /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:26.5.1-trixie-slim@sha256:deae974a69e140f44f434ab29cb519fb5f8fe250fd364b8ca446bd0761acdc6a /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+  && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+# uv — installs the standalone Python 3.11 the MuQ venv below needs (Debian trixie ships
+# only 3.13 in apt, and muq requires <3.12).
+COPY --from=ghcr.io/astral-sh/uv:0.11.6@sha256:b1e699368d24c57cda93c338a57a8c5a119009ba809305cc8e86986d4a006754 /uv /uvx /usr/local/bin/
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
 # shells out to `ffmpeg` to decode the preview, so the box needs both on PATH for
-# the `--no-agent` enrich-sweep cron. The Nous Hermes base is Debian-based, so
-# ffmpeg comes from apt; unzip is also required because bun's installer (below)
-# unpacks the binary from a zip; openssh-client because the boat.dev CLI's
+# the `--no-agent` enrich-sweep cron. The base is Debian, so
+# ffmpeg comes from apt; unzip for the release archives the sweeps unpack; openssh-client because the boat.dev CLI's
 # `boat ssh`/`boat scp` — the `fluncle-render` conductor's transport to the render
 # box — shells out to system ssh/scp; dnsutils (`dig`) because the
 # `fluncle-healthcheck` cron's dns probe shells out to `dig` to query the
@@ -44,10 +51,15 @@ FROM nousresearch/hermes-agent@sha256:16788311e2fa3035456bdc1bafb8ec2b1777db64eb
 # DEGRADE HONESTLY when the binary is absent (they stamp `unverified` / report
 # `fpcalc_missing`, never crash), so the repo half of the gate merges safely ahead of the
 # rebake that bakes this in.
+# curl, git, ripgrep, procps, less and python3 are the general shell tools the sweeps and the
+# nightly audit agent use; tini is PID 1 (the entrypoint at the bottom); libatomic1 is the one
+# shared library the copied node binary needs beyond the base.
 # One layer, lists cleaned, no recommends.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils fonts-dejavu-core libchromaprint-tools jq util-linux \
-  && rm -rf /var/lib/apt/lists/*
+       curl git ripgrep tini procps python3 less libatomic1 \
+  && rm -rf /var/lib/apt/lists/* \
+  && node --version && npm --version
 
 # Bake a PINNED yt-dlp (the fluncle-capture sweep's fetcher) in its OWN EARLY layer — above the
 # frequently-bumped fluncle/claude pins — so a routine pin-watch rebuild never busts this 40MB
@@ -77,12 +89,11 @@ RUN mkdir -p /opt/hermes-scripts \
 # `pip install`), in its own venv, with the model weights baked so `from_pretrained`
 # resolves offline on a cold start. Heavy + rarely-changing → early for cache reuse.
 #
-# THE PYTHON 3.11 SOURCE: muq requires Python <3.12, but the Nous Hermes base is now
+# THE PYTHON 3.11 SOURCE: muq requires Python <3.12, but the base is
 # Debian trixie (13), which ships only python3.13 in apt (verified: the apt-python3.11
-# path failed a build). The base already carries `uv` (astral), so we install a
-# standalone python3.11 with it (`uv python install 3.11` → a cp311 python-build-
-# standalone) and seed a venv from it — no PPA, no from-source build. Re-verify on a
-# base bump: if `uv` ever leaves the base, install it (curl https://astral.sh/uv).
+# path failed a build). `uv` (copied in above) installs a standalone python3.11
+# (`uv python install 3.11` → a cp311 python-build-standalone) and seeds a venv from it —
+# no PPA, no from-source build.
 #
 # THE ORDERING LAW (spike-verified on rave-02 CPX32; a mismatch is why the ad-hoc
 # install took four attempts): install the CPU torch TRIO from the pytorch CPU index
@@ -148,19 +159,8 @@ RUN "${MUQ_VENV}/bin/pip" install --no-cache-dir \
   && "${MUQ_VENV}/bin/python" -c "import sklearn, scipy; print(sklearn.__version__, scipy.__version__)" \
   && chmod -R a+rX "${MUQ_VENV}"
 
-# Bun — pinned to the repo's toolchain (packageManager bun@1.4.2) so the box runs
-# the same interpreter the skill is authored against. The official installer drops
-# the binary in /root/.bun (root's HOME, mode 700). The `--no-agent` cron runner
-# execs as a NON-root user that can't traverse /root, so a symlink there fails
-# (126 Permission denied). COPY the binary to /usr/local/bin (world-traversable)
-# instead — a real file outside /root that any user can exec. `fluncle` is the standalone
-# binary copied to /usr/local/bin (the install block below), already world-accessible, so
-# only bun needs this cp-out-of-/root dance.
-ENV BUN_INSTALL=/root/.bun
-ENV PATH=/usr/local/bin:$PATH
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2" \
-  && cp /root/.bun/bin/bun /usr/local/bin/bun \
-  && chmod 755 /usr/local/bin/bun
+# Bun comes from the base image (/usr/local/bin/bun, world-executable), so its version is the
+# base tag above.
 
 # boat.dev CLI — the `fluncle-render` `--no-agent` conductor cron drives a
 # SCALE-TO-ZERO boat.dev render box: wake it, trigger the render via a
@@ -307,7 +307,7 @@ RUN chmod -R a+rX /opt/fonts
 # voice (subscription auth via CLAUDE_CODE_OAUTH_TOKEN at run time; zero OpenRouter
 # tokens). Pinned for reproducible rebuilds (the version line busts the layer cache on
 # a bump) — matches the box's proven spike version. Bump deliberately, never float
-# `latest` (Hermes is pre-1.0; pin the whole toolchain). `npm -g` lands in
+# `latest`. `npm -g` lands in
 # /usr/local/lib + a /usr/local/bin/claude symlink, both world-accessible, so the
 # NON-root cron user can exec it (same world-readable property the `fluncle` CLI relies
 # on). Bump lever: this version line.
@@ -346,3 +346,16 @@ RUN chmod -R a+rX /opt/hermes-skills
 # the baked content does, so keep it cheap. Default marks a manual/legacy build.
 ARG FLUNCLE_BAKED_FP=unknown
 RUN printf '%s' "$FLUNCLE_BAKED_FP" > /opt/.hermes-baked-fp
+
+# The `hermes` user every sweep runs as (`docker exec -u hermes`): uid/gid 10000 to match the
+# ownership of the persistent /opt/data mount, home /opt/data like the sweeps expect.
+RUN groupadd --gid 10000 hermes \
+  && useradd --uid 10000 --gid 10000 --home-dir /opt/data --no-create-home --shell /bin/sh hermes
+
+# The container's main process only keeps it alive for the host timers to exec into; tini
+# reaps the sweeps' orphaned children and forwards SIGTERM so a stop is immediate.
+COPY docs/agents/hermes/box-entrypoint.sh /usr/local/bin/box-entrypoint
+RUN chmod 755 /usr/local/bin/box-entrypoint
+WORKDIR /opt/data
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/box-entrypoint"]
+CMD []
