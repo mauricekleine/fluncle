@@ -344,7 +344,7 @@ export function LogFootage({ track }: { track: Track }) {
 
       {track.previewUrl ? (
         <Button
-          aria-label={preview.isActive ? "Stop the preview" : "Play the preview"}
+          aria-label={preview.isActive ? "Pause the preview" : "Play the preview"}
           aria-pressed={preview.isActive}
           className="log-footage-preview"
           onClick={preview.toggle}

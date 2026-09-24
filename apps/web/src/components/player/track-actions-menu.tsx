@@ -1,11 +1,11 @@
 // The quiet ⋮ menu: the SAME actions on every row and on the player for the playing track
 // (DESIGN.md Track Row, The Quiet Surface Rule). Only what exists is offered — the Spotify mark
-// when the track has a Spotify link, and "More like this" into `/search`'s sonic view. A row
+// when the track has a Spotify link, and "Similar tracks" into `/search`'s sonic view. A row
 // can add its own entries (a finding with footage adds its story) through `children`, which
 // render first.
 //
 // Both entries are real anchors, so the one capture-phase discovery listener classifies them by
-// where they go: Spotify as an outbound listen, "More like this" as a similar hop (the
+// where they go: Spotify as an outbound listen, "Similar tracks" as a similar hop (the
 // `data-discovery="similar"` marker on the item — the menu renders in a portal, so the marker
 // rides the anchor itself rather than a wrapper).
 
@@ -41,12 +41,12 @@ export function TrackActionsMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={`Options for ${credit}`}
+        aria-label={`Actions for ${credit}`}
         className={cn("track-menu-trigger", className)}
       >
         <DotsThreeVerticalIcon aria-hidden="true" size={18} weight="bold" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-44" side={side}>
+      <DropdownMenuContent align="end" className="min-w-44 shadow-none" side={side}>
         {children}
         {track.spotifyUrl ? (
           <DropdownMenuItem
@@ -71,7 +71,7 @@ export function TrackActionsMenu({
           }
         >
           <WaveformIcon aria-hidden="true" className="size-4" />
-          More like this
+          Similar tracks
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

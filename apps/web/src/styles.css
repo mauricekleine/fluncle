@@ -9205,9 +9205,19 @@ a.catalogue-letter:focus-visible {
 }
 
 /* The page leaves room for the docked bar, so the last row and the colophon are
-   never trapped under it. */
+   never trapped under it, and a focused row scrolls clear of it. The workbench
+   (/chat) is locked to the viewport, so it gives the bar its height instead. */
+html[data-player-docked] {
+  --player-dock: calc(4.5rem + env(safe-area-inset-bottom));
+  scroll-padding-bottom: var(--player-dock);
+}
+
 html[data-player-docked] body {
-  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  padding-bottom: var(--player-dock);
+}
+
+html[data-player-docked] .nav-shell--workbench {
+  height: calc(100dvh - var(--player-dock));
 }
 
 .player-progress {
@@ -9253,11 +9263,12 @@ html[data-player-docked] body {
 .player-text {
   flex: 1 1 auto;
   min-width: 0;
+  position: relative;
 }
 
-/* The title is the loudest text on the bar, as on the row. */
+/* The title is the loudest text on the bar, as on the row (the Title tier). */
 .player-title {
-  font-size: 0.95rem;
+  font-size: 1.02rem;
   font-weight: 800;
   letter-spacing: -0.01em;
   line-height: 1.2;
@@ -9271,6 +9282,14 @@ html[data-player-docked] body {
   color: inherit;
   text-decoration: none;
   transition: color 150ms ease-out;
+}
+
+/* The whole text block is the title's target, so a thumb never has to find a
+   19px line. */
+.player-title-link::after {
+  content: "";
+  inset: 0;
+  position: absolute;
 }
 
 .player-title-link:hover,
@@ -9321,7 +9340,7 @@ html[data-player-docked] body {
   align-items: center;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--rounded-md);
   color: var(--muted-foreground);
   cursor: pointer;
   display: inline-flex;
@@ -9347,29 +9366,40 @@ html[data-player-docked] body {
 .player-button:focus-visible,
 .track-menu-trigger:focus-visible,
 .player-keep-going:focus-visible,
-.player-cover-link:focus-visible,
 .player-title-link:focus-visible {
-  box-shadow: 0 0 0 2px var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
   outline: none;
 }
 
-/* The one filled control: play/pause, cream on the sleeve. */
+/* The one filled control: play/pause, cream on the sleeve. It heats on hover
+   (The Ignition Rule): to Eclipse Glow while a finding plays, to a Dust Line
+   ring while a catalogue track does (The Unlit Rule). */
 .player-button--main {
   background: var(--foreground);
   color: var(--sleeve-black);
 }
 
-.player-button--main:hover,
-.player-button--main:focus-visible {
-  background: var(--starlight-cream);
-  color: var(--sleeve-black);
+.player-bar[data-lit] .player-button--main:hover {
+  background: var(--accent-foreground);
+  color: var(--primary-foreground);
+}
+
+.player-bar:not([data-lit]) .player-button--main:hover {
+  outline: 3px solid var(--border);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .player-button:active,
+  .player-keep-going:active {
+    transform: translateY(1px);
+  }
 }
 
 .player-keep-going {
   align-items: center;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--rounded-md);
   color: var(--foreground);
   cursor: pointer;
   display: inline-flex;
@@ -9390,9 +9420,16 @@ html[data-player-docked] body {
   border-color: color-mix(in oklch, var(--foreground) 40%, transparent);
 }
 
-.player-keep-going:disabled {
+.player-keep-going[aria-busy="true"] {
   cursor: progress;
   opacity: 0.6;
+}
+
+/* A thumb-sized menu row on a touch screen. */
+@media (pointer: coarse) {
+  [data-slot="dropdown-menu-item"] {
+    min-height: 2.75rem;
+  }
 }
 
 @media (max-width: 639px) {

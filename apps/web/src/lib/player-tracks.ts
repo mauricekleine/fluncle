@@ -1,7 +1,7 @@
 // The client-safe glue between the archive's row shapes and the preview player's queue.
 //
 // Every list hands the player the same small `QueueTrack`, built here or beside the list from its
-// own DTO, so `lib/preview-player.ts` never learns a surface's row type. "More like this" and the
+// own DTO, so `lib/preview-player.ts` never learns a surface's row type. "Similar tracks" and the
 // end-of-list "keep going" both ask the archive the one sonic question the resolver already
 // answers deterministically (docs/search.md, tier 3½): tracks that sound like a real track.
 //
@@ -27,7 +27,7 @@ export function similarQuery(track: Pick<QueueTrack, "artists" | "title">): stri
   return `tracks that sound like ${trackCredit(track)}`;
 }
 
-/** Where "More like this" goes: `/search`'s sonic view for the track. */
+/** Where "Similar tracks" goes: `/search`'s sonic view for the track. */
 export function similarSearchHref(track: Pick<QueueTrack, "artists" | "title">): string {
   return searchPagePath(similarQuery(track));
 }

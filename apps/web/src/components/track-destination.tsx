@@ -95,7 +95,7 @@ function TrackPreviewButton({ track }: { track: TrackDestination }) {
       ) : (
         <PlayIcon aria-hidden="true" weight="fill" />
       )}
-      {preview.isActive ? "Stop the preview" : "Play the preview"}
+      {preview.isActive ? "Pause the preview" : "Play the preview"}
     </Button>
   );
 }

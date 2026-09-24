@@ -96,7 +96,7 @@ describe("classifyDiscoveryHref — resolved destination, not the English on the
     });
   });
 
-  it('counts a rail-marked "More like this" into the sonic view as a similar hop', () => {
+  it('counts a rail-marked "Similar tracks" into the sonic view as a similar hop', () => {
     const href =
       "/search?q=tracks%20that%20sound%20like%20Cobalt%20Mirage%20%E2%80%94%20Night%20Bus";
 
