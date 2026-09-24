@@ -12,9 +12,11 @@ import {
   CataloguePageOutOfRangeError,
   type CatalogueGroupPage,
   type CatalogueSort,
+  type UpcomingTrackPage,
 } from "@/lib/catalogue";
 import { type ArtistChip, listArtistsByLabel } from "@/lib/server/artists";
-import { listLabelCatalogue } from "@/lib/server/catalogue-groups";
+import { listLabelCatalogue, listLabelUpcoming } from "@/lib/server/catalogue-groups";
+import { releaseTodayUtc } from "@/lib/server/release-day";
 import {
   getConfirmedAliasNames,
   getLabelBySlug,
@@ -39,6 +41,7 @@ export type LabelPageData =
       /** The Discogs label id → the Organization JSON-LD's `sameAs` (`discogs.com/label/<id>`). */
       discogsLabelId: number | undefined;
       findings: TrackListItem[];
+      upcoming: UpcomingTrackPage;
       /** The label's founding place (MusicBrainz `area.name`) — the dateline + Organization `location`. */
       foundedLocation: string | undefined;
       /** The label's founding date (MusicBrainz `life-span.begin`) — the dateline + `foundingDate`. */
@@ -87,7 +90,9 @@ export async function resolveLabelPageData(
   slug: string,
   sort: CatalogueSort,
   page: number,
+  upcomingPage = 1,
 ): Promise<LabelPageData> {
+  const today = releaseTodayUtc(new Date());
   const label = await getLabelBySlug(slug);
 
   if (!label) {
@@ -107,7 +112,7 @@ export async function resolveLabelPageData(
   // all four key only off `label.id` and are mutually independent. A page past the end of the
   // pager throws `CataloguePageOutOfRangeError`; map ONLY that to null here so it no longer
   // blocks the batch, and 404 once the wave settles. Any other error still throws.
-  const cataloguePromise = listLabelCatalogue(label.id, sort, page).catch(
+  const cataloguePromise = listLabelCatalogue(label.id, sort, page, today).catch(
     (error: unknown): CatalogueGroupPage<CatalogueArtistGroup> | null => {
       if (error instanceof CataloguePageOutOfRangeError) {
         return null;
@@ -117,14 +122,22 @@ export async function resolveLabelPageData(
     },
   );
 
-  const [catalogue, findings, artists, alternateNames] = await Promise.all([
+  const [catalogue, findings, artists, alternateNames, upcoming] = await Promise.all([
     cataloguePromise,
-    getFindingsByLabel(label.id),
+    getFindingsByLabel(label.id, today),
     listArtistsByLabel(label.id),
     getConfirmedAliasNames(label.id),
+    listLabelUpcoming(label.id, today, upcomingPage).catch(
+      (error: unknown): UpcomingTrackPage | null => {
+        if (error instanceof CataloguePageOutOfRangeError) {
+          return null;
+        }
+        throw error;
+      },
+    ),
   ]);
 
-  if (catalogue === null) {
+  if (catalogue === null || upcoming === null) {
     // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
     // hand-typed `?page=99` gets an honest 404, never a duplicate of page 1 under a new URL.
     return { status: "missing" };
@@ -155,5 +168,6 @@ export async function resolveLabelPageData(
     sort,
     status: "found",
     subLabels: label.subLabels ?? [],
+    upcoming,
   };
 }

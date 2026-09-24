@@ -33,6 +33,7 @@ const countArtistFindings = vi.hoisted(() => vi.fn());
 const getFindingsByArtist = vi.hoisted(() => vi.fn());
 const getArtistNeighbours = vi.hoisted(() => vi.fn());
 const listArtistCatalogue = vi.hoisted(() => vi.fn());
+const listArtistUpcoming = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artists")>()),
@@ -52,6 +53,7 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
 vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/catalogue-groups")>()),
   listArtistCatalogue,
+  listArtistUpcoming,
 }));
 
 /** The empty grouped catalogue — an artist the crawler has not touched. */
@@ -158,11 +160,36 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getFindingsByArtist.mockReset();
     getArtistNeighbours.mockReset();
     listArtistCatalogue.mockReset();
+    listArtistUpcoming.mockReset();
     getPublicArtistSocials.mockResolvedValue([]);
     getPublicArtistAliasNames.mockResolvedValue([]);
     getArtistNeighbours.mockResolvedValue([]);
     listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
+    listArtistUpcoming.mockResolvedValue({
+      findings: [],
+      page: 1,
+      pageCount: 1,
+      total: 0,
+      tracks: [],
+    });
     getPublicArtistBySlug.mockResolvedValue(ARTIST);
+  });
+
+  it("passes upcoming rows into their own page block", async () => {
+    getFindingsByArtist.mockResolvedValue([]);
+    countArtistFindings.mockResolvedValue(0);
+    listArtistUpcoming.mockResolvedValue({
+      findings: [],
+      page: 1,
+      pageCount: 1,
+      total: 1,
+      tracks: [{ artists: ["Drift"], title: "Next", trackId: "future" }],
+    });
+
+    const data = await resolveArtistPageData("drift", "name", 1);
+    expect(
+      data.status === "found" ? data.upcoming.tracks.map((track) => track.trackId) : [],
+    ).toEqual(["future"]);
   });
 
   it("renders (noindex) a findings-free artist with no catalogue — a thin crawl-minted page", async () => {
@@ -415,7 +442,9 @@ describe("Fix 2: the artist route dropped the 'Quiet sector.' empty state", () =
   });
 
   it("renders its findings band through the shared FindingsGrid component", () => {
-    expect(source).toContain('import { FindingsGrid } from "@/components/graph-sections"');
+    expect(source).toContain(
+      'import { FindingsGrid, UnlitTracks } from "@/components/graph-sections"',
+    );
     expect(source).toContain("<FindingsGrid");
   });
 });

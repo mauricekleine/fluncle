@@ -16,6 +16,7 @@ import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { composeAppleArtworkUrl } from "./apple-music";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
+import { releasedByTodaySql } from "./release-day";
 import { countDueWorkNow } from "./due-work";
 import { discogsReleaseUrl } from "./discogs";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
@@ -858,13 +859,15 @@ export async function getBoardTracksByIds(
 export async function getFindingsByArtist(
   artistId: string,
   artistName: string,
+  today?: string,
 ): Promise<GraphFindingItem[]> {
   const db = await getDb();
   const viaJoin = await db.execute({
-    args: [artistId],
+    args: [artistId, ...(today === undefined ? [] : [today])],
     sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
           join track_artists on track_artists.track_id = tracks.track_id
           where track_artists.artist_id = ? and findings.log_id is not null
+            ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           order by findings.added_at desc, tracks.track_id desc`,
   });
 
@@ -878,10 +881,11 @@ export async function getFindingsByArtist(
   // kept display cache, then keep only exact-name members (case-insensitive).
   const needle = artistName.toLowerCase();
   const viaJson = await db.execute({
-    args: [needle],
+    args: [needle, ...(today === undefined ? [] : [today])],
     sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
           where findings.log_id is not null
             and lower(tracks.artists_json) like '%' || ? || '%'
+            ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           order by findings.added_at desc, tracks.track_id desc`,
   });
 
@@ -890,14 +894,41 @@ export async function getFindingsByArtist(
     .filter((finding) => finding.artists.some((name) => name.toLowerCase() === needle));
 }
 
+/** Hydrate only the certified rows of one already bounded upcoming entity page. */
+export async function getGraphFindingsByIds(ids: string[]): Promise<GraphFindingItem[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  const db = await getDb();
+  const placeholders = ids.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: ids,
+    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
+          where tracks.track_id in (${placeholders}) and findings.log_id is not null`,
+  });
+  const byId = new Map(
+    typedRows<TrackRow>(result.rows).map((row) => [
+      row.track_id,
+      toPublicTrackListItem(toGraphFindingItem(row)),
+    ]),
+  );
+  return ids.flatMap((id) => {
+    const item = byId.get(id);
+    return item ? [item] : [];
+  });
+}
+
 /**
  * Every coordinate-bearing finding on one label / one album, newest-first — the cover grid
  * that LEADS each graph page. Reads through the `tracks.label_id` / `tracks.album_id`
  * pointer (an indexed seek, never a fold over the catalogue; see schema.ts) and drives
  * from `FINDINGS_FROM`, so it can only ever return findings.
  */
-export async function getFindingsByLabel(labelId: string): Promise<GraphFindingItem[]> {
-  return findingsByEntity("tracks.label_id", labelId);
+export async function getFindingsByLabel(
+  labelId: string,
+  today?: string,
+): Promise<GraphFindingItem[]> {
+  return findingsByEntity("tracks.label_id", labelId, today);
 }
 
 export async function getFindingsByAlbum(albumId: string): Promise<GraphFindingItem[]> {
@@ -909,12 +940,14 @@ export async function getFindingsByAlbum(albumId: string): Promise<GraphFindingI
 async function findingsByEntity(
   column: "tracks.album_id" | "tracks.label_id",
   entityId: string,
+  today?: string,
 ): Promise<GraphFindingItem[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [entityId],
+    args: [entityId, ...(today === undefined ? [] : [today])],
     sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
           where ${column} = ? and findings.log_id is not null
+            ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           order by findings.added_at desc, tracks.track_id desc`,
   });
 

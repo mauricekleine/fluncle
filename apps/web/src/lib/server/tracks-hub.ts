@@ -103,6 +103,7 @@ import {
 import { logPageUrl } from "../fluncle-links";
 import { hasTrackPageIdentity, trackPageUrl } from "../track-page";
 import { fold } from "./track-match";
+import { releasedByTodaySql, releaseTodayUtc, upcomingAfterTodaySql } from "./release-day";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
 
 // Note: this hub deliberately does NOT drive through `tracks.ts`'s inner `FINDINGS_FROM` join — it
@@ -218,10 +219,15 @@ export async function resolveTracksHubEntities(
 export function tracksHubClauses(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
+  today?: string,
 ): Clause[] {
   // The shared six, compiled by the SAME function `/search` uses. The hub type carries only that
   // subset — never `artist`/`album`/`text` — so the compiled SQL is exactly the hub's vocabulary.
   const clauses = compileFilters(filters, resolved);
+
+  if (today !== undefined) {
+    clauses.push({ args: [today], sql: releasedByTodaySql("tracks.release_date") });
+  }
 
   if (filters.galaxy) {
     clauses.push(galaxyClause(filters.galaxy));
@@ -539,11 +545,12 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
 export function tracksHubCountQuery(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
+  today?: string,
 ): {
   args: (number | string)[];
   sql: string;
 } {
-  const clauses = tracksHubClauses(filters, resolved);
+  const clauses = tracksHubClauses(filters, resolved, today);
   const { args, where } = whereFor(clauses);
 
   return {
@@ -568,8 +575,9 @@ export function tracksHubIdPageQuery(
   limit: number,
   offset: number,
   resolved: ResolvedFilterEntities = {},
+  today?: string,
 ): { args: (number | string)[]; sql: string } {
-  const clauses = tracksHubClauses(filters, resolved);
+  const clauses = tracksHubClauses(filters, resolved, today);
   const query = hubOffsetPageQuery(tracksHubOrderedShape(clauses), limit, offset);
 
   return {
@@ -582,8 +590,11 @@ export function tracksHubIdPageQuery(
 export function tracksHubAnchorExtractionQuery(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
+  today?: string,
 ): { args: (number | string)[]; sql: string } {
-  return hubAnchorExtractionQuery(tracksHubOrderedShape(tracksHubClauses(filters, resolved)));
+  return hubAnchorExtractionQuery(
+    tracksHubOrderedShape(tracksHubClauses(filters, resolved, today)),
+  );
 }
 
 /** Step 1 as an anchored seek plus the nearest-boundary offset remainder. */
@@ -592,9 +603,10 @@ export function tracksHubSeekIdPageQuery(
   page: number,
   anchors: HubPageAnchor[],
   resolved: ResolvedFilterEntities = {},
+  today?: string,
 ): { args: (number | string)[]; remainder: number; sql: string } {
   const query = hubSeekPageQuery(
-    tracksHubOrderedShape(tracksHubClauses(filters, resolved)),
+    tracksHubOrderedShape(tracksHubClauses(filters, resolved, today)),
     page,
     anchors,
   );
@@ -721,9 +733,10 @@ export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: str
 async function countTracksHub(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities,
+  today?: string,
 ): Promise<number> {
-  const clauses = tracksHubClauses(filters, resolved);
-  const query = tracksHubCountQuery(filters, resolved);
+  const clauses = tracksHubClauses(filters, resolved, today);
+  const query = tracksHubCountQuery(filters, resolved, today);
 
   return memoizedAggregate(aggregateKey("count", clauses), async () => {
     const db = await getDb();
@@ -739,9 +752,10 @@ async function countTracksHub(
 async function extractTracksHubAnchors(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities,
+  today?: string,
 ): Promise<HubPageAnchor[]> {
   const db = await getDb();
-  const query = tracksHubAnchorExtractionQuery(filters, resolved);
+  const query = tracksHubAnchorExtractionQuery(filters, resolved, today);
   const result = await db.execute(query);
 
   return hubPageAnchorsFromRows(
@@ -787,13 +801,16 @@ function scheduleTracksHubAnchorRefresh(): void {
 export async function listTracksHubPage(
   filters: TracksHubFilters,
   page: number,
+  now: Date = new Date(),
 ): Promise<CatalogueHubNumberedPage<TracksHubEntry>> {
   const db = await getDb();
   const limit = TRACKS_HUB_PAGE_SIZE;
+  const boundary = releaseTodayUtc(now);
+  const today = (await hasUpcomingTrack(db, boundary)) ? boundary : undefined;
   // The imprint name → `labels.id`, ONCE for both reads below, so the pager total and the id slice
   // compile the same clause set (the memo key is that clause set) and both ride `tracks_label_id_idx`.
   const resolved = await resolveTracksHubEntities(filters);
-  const clauses = tracksHubClauses(filters, resolved);
+  const clauses = tracksHubClauses(filters, resolved, today);
   let total: number;
   let idsResult: Awaited<ReturnType<typeof db.execute>>;
 
@@ -812,25 +829,27 @@ export async function listTracksHubPage(
     // The bounded front of the pager stays on today's direct offset path; the total remains
     // page-independent and memoized.
     [total, idsResult] = await Promise.all([
-      countTracksHub(filters, resolved),
-      db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved)),
+      countTracksHub(filters, resolved, today),
+      db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved, today)),
     ]);
   } else if (clauses.length > 0) {
     // Filter combinations are unbounded, so their anchors live only in the existing exact-clause
     // TTL memo. The first deep request pays one SQL window extraction; later pages seek from it.
     const anchorsPromise = memoizedAggregate(aggregateKey("anchors", clauses), () =>
-      extractTracksHubAnchors(filters, resolved),
+      extractTracksHubAnchors(filters, resolved, today),
     );
-    const result = await Promise.all([countTracksHub(filters, resolved), anchorsPromise]);
+    const result = await Promise.all([countTracksHub(filters, resolved, today), anchorsPromise]);
     total = result[0];
-    idsResult = await db.execute(tracksHubSeekIdPageQuery(filters, page, result[1], resolved));
+    idsResult = await db.execute(
+      tracksHubSeekIdPageQuery(filters, page, result[1], resolved, today),
+    );
   } else {
     // The crawler highway persists its sparse boundary set. A missing record deliberately falls
     // back to the old offset once while a detached rebuild starts; a stale record serves by seek
     // immediately and self-heals in the same non-blocking way.
     const firstQuery = tracksHubIdPageQuery({}, 1, 0);
     const [resolvedTotal, stored, firstResult] = await Promise.all([
-      countTracksHub(filters, resolved),
+      countTracksHub(filters, resolved, today),
       loadPersistedHubPageAnchors(
         TRACKS_HUB_ANCHOR_ADDRESS.hub,
         TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
@@ -896,10 +915,31 @@ export async function listTracksHubPage(
  * UNFILTERED view the page read's own total already IS this, so the route reuses it and skips this.
  * Page-independent, so it rides the same TTL memo as the pager's total.
  */
-export async function countAllTracks(): Promise<number> {
-  return memoizedAggregate(aggregateKey("count", []), async () => {
+async function hasUpcomingTrack(client: Pick<Client, "execute">, today: string): Promise<boolean> {
+  const result = await client.execute({
+    args: [today],
+    sql: `select tracks.track_id from tracks indexed by tracks_release_date_track_id_idx
+          where ${upcomingAfterTodaySql("tracks.release_date")} limit 1`,
+  });
+  return result.rows.length > 0;
+}
+
+export async function countAllTracks(now: Date = new Date()): Promise<number> {
+  const today = releaseTodayUtc(now);
+  const clauses = tracksHubClauses({}, {}, today);
+  return memoizedAggregate(aggregateKey("count", clauses), async () => {
     const db = await getDb();
-    return readDefaultTracksHubTotal(db);
+    const projected = await readProjectedDefaultTrackTotal(db);
+    if (projected !== undefined) {
+      const future = await db.execute({
+        args: [today],
+        sql: `select count(*) as total from tracks indexed by tracks_release_date_track_id_idx
+              where ${upcomingAfterTodaySql("tracks.release_date")}`,
+      });
+      return projected - Number(typedRows<{ total: number }>(future.rows)[0]?.total ?? 0);
+    }
+    const result = await db.execute(tracksHubCountQuery({}, {}, today));
+    return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
   });
 }
 
@@ -960,6 +1000,7 @@ export function yearPages(
 export function tracksHubYearLaneQuery(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
+  today?: string,
 ): {
   args: (number | string)[];
   clauses: Clause[];
@@ -967,7 +1008,7 @@ export function tracksHubYearLaneQuery(
 } {
   const clauses: Clause[] = [
     { args: [], sql: `tracks.release_date is not null` },
-    ...tracksHubClauses(filters, resolved),
+    ...tracksHubClauses(filters, resolved, today),
   ];
   const { args, where } = whereFor(clauses);
 
@@ -989,13 +1030,16 @@ export function tracksHubYearLaneQuery(
 
 export async function listTracksHubYearLane(
   filters: TracksHubFilters,
+  now: Date = new Date(),
 ): Promise<TracksHubYearLaneEntry[]> {
+  const db = await getDb();
+  const boundary = releaseTodayUtc(now);
+  const today = (await hasUpcomingTrack(db, boundary)) ? boundary : undefined;
   const resolved = await resolveTracksHubEntities(filters);
-  const hubClauses = tracksHubClauses(filters, resolved);
-  const { clauses, ...query } = tracksHubYearLaneQuery(filters, resolved);
+  const hubClauses = tracksHubClauses(filters, resolved, today);
+  const { clauses, ...query } = tracksHubYearLaneQuery(filters, resolved, today);
 
   return memoizedAggregate(aggregateKey("years", clauses), async () => {
-    const db = await getDb();
     if (hubClauses.length === 0) {
       const projected = await readProjectedAggregateBuckets(db, "release_date_bucket");
       if (projected !== undefined) {

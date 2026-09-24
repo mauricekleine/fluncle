@@ -33,6 +33,7 @@ import { blockExternalRequests } from "./browser";
 import {
   SEEDED_CATALOGUE_RELEASE,
   SEEDED_FINDING_TITLES,
+  SEEDED_FUTURE_RELEASE,
   SEEDED_LEAD,
   SEEDED_LEAD_COVER_URL,
   SEEDED_LEAD_NOTE,
@@ -105,6 +106,7 @@ test("the front door SSRs every band from real data, hydrates its search, and lo
   expect(rawHtml, "the release band should carry the uncertified row").toContain(
     SEEDED_CATALOGUE_RELEASE.title,
   );
+  expect(rawHtml).not.toContain(SEEDED_FUTURE_RELEASE.title);
   for (const forbidden of ["Uncertified", "uncertified", "Catalogue track", "Not certified"]) {
     expect(rawHtml, `no shipped copy may name the tier ("${forbidden}")`).not.toContain(forbidden);
   }

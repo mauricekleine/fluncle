@@ -150,6 +150,23 @@ beforeEach(async () => {
 });
 
 describe("listTracksHubPage — the register split + the linked row", () => {
+  it("holds future full and partial dates out of rows, counts, and year lanes", async () => {
+    const now = new Date("2026-10-01T00:00:00Z");
+    await seedTrack({ releaseDate: "2026-10-01", trackId: "today" });
+    await seedTrack({ releaseDate: "2026-10", trackId: "month" });
+    await seedTrack({ releaseDate: "2026", trackId: "year" });
+    await seedTrack({ releaseDate: null, trackId: "undated" });
+    await seedTrack({ releaseDate: "2026-10-02", trackId: "tomorrow" });
+    await seedTrack({ releaseDate: "2026-11", trackId: "next-month" });
+    await seedTrack({ releaseDate: "2027", trackId: "next-year" });
+
+    const page = await listTracksHubPage({}, 1, now);
+    expect(ids(page.items)).toEqual(["today", "month", "year", "undated"]);
+    expect(page.total).toBe(4);
+    expect(await countAllTracks(now)).toBe(4);
+    expect(await listTracksHubYearLane({}, now)).toEqual([{ page: 1, year: "2026" }]);
+  });
+
   it("returns findings lit (a coordinate) and catalogue rows unlit (no coordinate)", async () => {
     await seedTrack({ releaseDate: "2022-01-01", trackId: "f1" });
     await certify({ logId: "200.7.1A", trackId: "f1" });

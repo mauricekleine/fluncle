@@ -123,7 +123,7 @@ const FINDINGS_HEADING = "Recommended by Fluncle";
  * actually there. A page with no findings is not a broken findings page; it is a page about
  * something else.
  */
-export function FindingsGrid({ findings }: { findings: TrackListItem[] }) {
+export function FindingsGrid({ findings, label }: { findings: TrackListItem[]; label?: string }) {
   const grid = findings.filter((finding) => finding.logId);
 
   if (grid.length === 0) {
@@ -134,10 +134,16 @@ export function FindingsGrid({ findings }: { findings: TrackListItem[] }) {
     <section className="artist-findings">
       {/* A real H2 (styled by .artist-similar-label) so the visible section heading joins the page
           outline — H1 (entity) → H2 (this) → the sibling H2s. Its `aria-labelledby` names the grid. */}
-      <h2 className="artist-similar-label" id="findings-grid-heading">
-        {FINDINGS_HEADING}
-      </h2>
-      <ul aria-labelledby="findings-grid-heading" className="artist-grid">
+      {label === undefined ? (
+        <h2 className="artist-similar-label" id="findings-grid-heading">
+          {FINDINGS_HEADING}
+        </h2>
+      ) : undefined}
+      <ul
+        aria-label={label}
+        aria-labelledby={label === undefined ? "findings-grid-heading" : undefined}
+        className="artist-grid"
+      >
         {grid.map((finding, index) =>
           finding.logId ? (
             <li key={finding.trackId}>

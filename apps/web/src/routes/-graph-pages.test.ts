@@ -32,6 +32,7 @@ const listArtistsByAlbum = vi.hoisted(() => vi.fn());
 const getFindingsByLabel = vi.hoisted(() => vi.fn());
 const getFindingsByAlbum = vi.hoisted(() => vi.fn());
 const listLabelCatalogue = vi.hoisted(() => vi.fn());
+const listLabelUpcoming = vi.hoisted(() => vi.fn());
 const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/labels", async (importOriginal) => ({
@@ -56,6 +57,7 @@ vi.mock("@/lib/server/artists", async (importOriginal) => ({
 vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/catalogue-groups")>()),
   listLabelCatalogue,
+  listLabelUpcoming,
 }));
 
 vi.mock("@/lib/server/tracks", async (importOriginal) => ({
@@ -169,10 +171,31 @@ beforeEach(() => {
   getFindingsByLabel.mockResolvedValue([]);
   getFindingsByAlbum.mockResolvedValue([]);
   listLabelCatalogue.mockResolvedValue(NO_LABEL_CATALOGUE);
+  listLabelUpcoming.mockResolvedValue({
+    findings: [],
+    page: 1,
+    pageCount: 1,
+    total: 0,
+    tracks: [],
+  });
   listCatalogueTracksByAlbum.mockResolvedValue(NO_ALBUM_CATALOGUE);
 });
 
 describe("the label page", () => {
+  it("passes upcoming rows into their own page block", async () => {
+    listLabelUpcoming.mockResolvedValue({
+      findings: [],
+      page: 1,
+      pageCount: 1,
+      total: 1,
+      tracks: [{ artists: ["Nu:Tone"], title: "Next", trackId: "future" }],
+    });
+    const data = await resolveLabelPageData("hospital-records", "name", 1);
+    expect(
+      data.status === "found" ? data.upcoming.tracks.map((track) => track.trackId) : [],
+    ).toEqual(["future"]);
+  });
+
   it("404s on a slug with no label entity", async () => {
     getLabelBySlug.mockResolvedValue(undefined);
 

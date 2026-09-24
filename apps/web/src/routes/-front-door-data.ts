@@ -91,7 +91,7 @@ export async function loadFrontDoorData(now: Date = new Date()): Promise<FrontDo
     // than what the hub itself lists: `hubInclusionWhere` also admits a sub-floor entity that
     // carries a certified finding. The card therefore never promises more than the page holds,
     // which is the direction to be wrong in; the alternative would have a count outrun its own hub.
-    countAllTracks(),
+    countAllTracks(now),
     countIndexableArtists(),
     countIndexableLabels(),
     countIndexableAlbums(),

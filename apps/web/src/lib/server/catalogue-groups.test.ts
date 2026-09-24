@@ -33,7 +33,9 @@ import {
   GRAPH_GROUP_ROW_CEILING,
   GRAPH_GROUP_TRACK_LIMIT,
   listArtistCatalogue,
+  listArtistUpcoming,
   listLabelCatalogue,
+  listLabelUpcoming,
   pageNumbers,
   parseCatalogueSort,
 } from "./catalogue-groups";
@@ -147,6 +149,89 @@ beforeEach(async () => {
     args: ["lbl_1", "Hospital Records", "hospital-records", "enabled", "x", "x"],
     sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?)`,
+  });
+});
+
+describe("upcoming entity tracks", () => {
+  it("pages every future row without dropping the tail", async () => {
+    await seedArtist("art_future", "Future Artist", "future-artist");
+    const rows = Array.from(
+      { length: GRAPH_GROUP_ROW_CEILING + 1 },
+      (_, index) => `future-${String(index).padStart(3, "0")}`,
+    );
+    await db.batch(
+      rows.flatMap((trackId) => [
+        {
+          args: [trackId, trackId, '["Future Artist"]', "2026-11-01", "lbl_1"],
+          sql: `insert into tracks(track_id,title,artists_json,release_date,label_id,duration_ms) values (?,?,?,?,?,0)`,
+        },
+        {
+          args: [trackId, "art_future"],
+          sql: `insert into track_artists(track_id,artist_id,position) values (?,?,1)`,
+        },
+      ]),
+      "write",
+    );
+
+    for (const list of [
+      listArtistUpcoming("art_future", "2026-10-01", 1),
+      listLabelUpcoming("lbl_1", "2026-10-01", 1),
+    ]) {
+      const first = await list;
+      expect(first.tracks).toHaveLength(GRAPH_GROUP_ROW_CEILING);
+      expect(first.pageCount).toBe(2);
+    }
+    const artistTail = await listArtistUpcoming("art_future", "2026-10-01", 2);
+    const labelTail = await listLabelUpcoming("lbl_1", "2026-10-01", 2);
+    expect(artistTail.tracks.map((track) => track.trackId)).toEqual([rows.at(-1)]);
+    expect(labelTail.tracks.map((track) => track.trackId)).toEqual([rows.at(-1)]);
+  });
+
+  it("separates full and partial future dates from both released catalogues", async () => {
+    await seedArtist("art_future", "Future Artist", "future-artist");
+    for (const [trackId, releaseDate] of [
+      ["today", "2026-10-01"],
+      ["month", "2026-10"],
+      ["future-day", "2026-10-02"],
+      ["future-month", "2026-11"],
+    ] as const) {
+      await seedCatalogueTrack({
+        album: "Next Record",
+        artists: ["Future Artist"],
+        labelId: "lbl_1",
+        releaseDate,
+        trackId,
+      });
+    }
+    await backfillArtistLinks(db);
+    await seedCertifiedFinding("future-certified", "art_future", "Future Artist");
+    await db.execute({
+      args: ["2026-10-03", "lbl_1", "future-certified"],
+      sql: `update tracks set release_date = ?, label_id = ? where track_id = ?`,
+    });
+
+    const artistUpcoming = await listArtistUpcoming("art_future", "2026-10-01");
+    const labelUpcoming = await listLabelUpcoming("lbl_1", "2026-10-01");
+    expect(artistUpcoming.tracks.map((track) => track.trackId)).toEqual([
+      "future-day",
+      "future-month",
+    ]);
+    expect(labelUpcoming.tracks.map((track) => track.trackId)).toEqual([
+      "future-day",
+      "future-month",
+    ]);
+    expect(artistUpcoming.findings.map((finding) => finding.trackId)).toEqual(["future-certified"]);
+    expect(labelUpcoming.findings.map((finding) => finding.trackId)).toEqual(["future-certified"]);
+    expect(
+      flattenRecords((await listArtistCatalogue("art_future", "recent", 1, "2026-10-01")).groups)
+        .map((track) => track.trackId)
+        .sort(),
+    ).toEqual(["month", "today"]);
+    expect(
+      flattenArtistGroups((await listLabelCatalogue("lbl_1", "recent", 1, "2026-10-01")).groups)
+        .map((track) => track.trackId)
+        .sort(),
+    ).toEqual(["month", "today"]);
   });
 });
 

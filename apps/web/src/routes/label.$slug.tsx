@@ -5,7 +5,12 @@ import {
   CataloguePager,
   CatalogueSortControl,
 } from "@/components/catalogue-groups";
-import { ArtistChips, FindingsGrid, graphPageTracks } from "@/components/graph-sections";
+import {
+  ArtistChips,
+  FindingsGrid,
+  UnlitTracks,
+  graphPageTracks,
+} from "@/components/graph-sections";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { WatchButton } from "@/components/watch-button";
 import { entityFreshChannel } from "@/lib/fresh-feed-rss";
@@ -17,8 +22,8 @@ import { albumCoverAtSize } from "@/lib/media";
 import {
   CATALOGUE_SORT_DEFAULT,
   type CatalogueSort,
-  cataloguePageHref,
   catalogueSortParam,
+  entityPageHref,
   flattenArtistGroups,
   parseCatalogueSort,
 } from "@/lib/catalogue";
@@ -45,16 +50,18 @@ import { type LabelPageData } from "./-label-page-data";
 // type-checks without a `search` prop (the `HomeSearch.story?` precedent). The default page and
 // sort are applied in `loaderDeps`, never here — the URL stays clean (`/label/x`, not
 // `/label/x?sort=name&page=1`) for the canonical, crawlable view.
-type LabelSearch = { page?: number; sort?: CatalogueSort };
+type LabelSearch = { page?: number; sort?: CatalogueSort; upcomingPage?: number };
 
 // The resolver arrives by a DYNAMIC import inside the handler, and its type by `import type`,
 // so this route module never statically references `lib/server/**` — see `-label-page-data.ts`.
 const fetchLabel = createServerFn({ method: "GET" })
-  .validator((data: { page: number; slug: string; sort: CatalogueSort }) => data)
-  .handler(async ({ data: { page, slug, sort } }): Promise<LabelPageData> => {
+  .validator(
+    (data: { page: number; slug: string; sort: CatalogueSort; upcomingPage: number }) => data,
+  )
+  .handler(async ({ data: { page, slug, sort, upcomingPage } }): Promise<LabelPageData> => {
     const { resolveLabelPageData } = await import("./-label-page-data");
 
-    return resolveLabelPageData(slug, sort, page);
+    return resolveLabelPageData(slug, sort, page, upcomingPage);
   });
 
 function labelHead(loaderData: LabelPageData | undefined) {
@@ -67,6 +74,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
     artists,
     bio,
     catalogue,
+    upcoming,
     discogsLabelId,
     findings,
     foundedLocation,
@@ -83,10 +91,13 @@ function labelHead(loaderData: LabelPageData | undefined) {
   // 1) but SORT-COLLAPSING: it always drops the sort param, so `?sort=recent` and the default
   // A–Z view of the same page fold to one canonical URL rather than diluting each other. Page 1
   // stays the bare `/label/<slug>`.
-  const pageUrl =
-    catalogue.page > 1
-      ? `${siteUrl}/label/${slug}?page=${catalogue.page}`
-      : `${siteUrl}/label/${slug}`;
+  const pageUrl = entityPageHref(
+    `${siteUrl}/label/${slug}`,
+    catalogue.page,
+    CATALOGUE_SORT_DEFAULT,
+    CATALOGUE_SORT_DEFAULT,
+    upcoming.page,
+  );
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
   // lives only in the on-page voice frame.
   const baseTitle = `${name} · Fluncle`;
@@ -204,13 +215,23 @@ export const Route = createFileRoute("/label/$slug")({
   validateSearch: (search: Record<string, unknown>): LabelSearch => ({
     page: pageParam(search["page"]),
     sort: catalogueSortParam(search["sort"]),
+    upcomingPage: pageParam(search["upcomingPage"]),
   }),
   // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
   // implicit. `parseCatalogueSort` folds anything to the default A–Z.
-  loaderDeps: ({ search }) => ({ page: search.page ?? 1, sort: parseCatalogueSort(search.sort) }),
+  loaderDeps: ({ search }) => ({
+    page: search.page ?? 1,
+    sort: parseCatalogueSort(search.sort),
+    upcomingPage: search.upcomingPage ?? 1,
+  }),
   loader: async ({ deps, params }): Promise<LabelPageData> => {
     const data = await fetchLabel({
-      data: { page: deps.page, slug: params.slug, sort: deps.sort },
+      data: {
+        page: deps.page,
+        slug: params.slug,
+        sort: deps.sort,
+        upcomingPage: deps.upcomingPage,
+      },
     });
 
     if (data.status === "redirect") {
@@ -260,8 +281,19 @@ function LabelPage() {
     return null;
   }
 
-  const { artists, bio, catalogue, findings, foundedLocation, foundingDate, id, name, slug, sort } =
-    data;
+  const {
+    artists,
+    bio,
+    catalogue,
+    findings,
+    foundedLocation,
+    foundingDate,
+    id,
+    name,
+    slug,
+    sort,
+    upcoming,
+  } = data;
   const dateline = labelDateline(foundingDate, foundedLocation);
 
   return (
@@ -283,6 +315,29 @@ function LabelPage() {
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page
             is only ever about what it actually carries (components/graph-sections.tsx). */}
+        {upcoming.total > 0 ? (
+          <section aria-labelledby="label-upcoming-heading" className="catalogue-section">
+            <h2 className="artist-similar-label" id="label-upcoming-heading">
+              Upcoming
+            </h2>
+            <FindingsGrid findings={upcoming.findings} label="Upcoming" />
+            <UnlitTracks label="Upcoming" tracks={upcoming.tracks} />
+            <CataloguePager
+              buildHref={(nextPage) =>
+                entityPageHref(
+                  `/label/${slug}`,
+                  catalogue.page,
+                  sort,
+                  CATALOGUE_SORT_DEFAULT,
+                  nextPage,
+                )
+              }
+              label="Upcoming"
+              page={upcoming.page}
+              pageCount={upcoming.pageCount}
+            />
+          </section>
+        ) : undefined}
         <FindingsGrid findings={findings} />
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
@@ -312,7 +367,7 @@ function LabelPage() {
 
             <CataloguePager
               buildHref={(page) =>
-                cataloguePageHref(`/label/${slug}`, page, sort, CATALOGUE_SORT_DEFAULT)
+                entityPageHref(`/label/${slug}`, page, sort, CATALOGUE_SORT_DEFAULT, upcoming.page)
               }
               label={`Artists on ${name}, more pages`}
               page={catalogue.page}
