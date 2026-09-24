@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The graph pages' thin-content gate (`/label/<slug>` + `/album/<slug>`), pinned as a pure
 // unit — the `-artist-page.test.ts` precedent.
 //
-// The contract: `noindex` (and sitemap absence) keys off the same indexed renderable-track
-// count, including Upcoming rows because they are real content on the page. A page that
+// The contract: `noindex` (and sitemap absence) keys off the same stored renderable-track count
+// the sitemap reads, which includes Upcoming rows because they are real content on the page. A page that
 // declares itself indexable is always in the sitemap and one that declares `noindex` never is.
 // An indexable page that the sitemap orphans is the bug these pin.
 //
@@ -32,12 +32,6 @@ const getFindingsByAlbum = vi.hoisted(() => vi.fn());
 const listLabelCatalogue = vi.hoisted(() => vi.fn());
 const listLabelUpcoming = vi.hoisted(() => vi.fn());
 const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn());
-const countRenderedLabelTracks = vi.hoisted(() => vi.fn());
-
-vi.mock("@/lib/server/entity-indexability", () => ({
-  countRenderedLabelTracks,
-  publicEntityIndexable: (count: number, floor: number) => count >= floor,
-}));
 
 vi.mock("@/lib/server/labels", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/labels")>()),
@@ -171,10 +165,6 @@ const NO_LABEL_CATALOGUE = labelCatalogue(0);
 const NO_ALBUM_CATALOGUE = { total: 0, tracks: [] };
 
 beforeEach(() => {
-  countRenderedLabelTracks.mockReset();
-  countRenderedLabelTracks.mockImplementation(
-    async () => (await getLabelBySlug("hospital-records"))?.renderableTrackCount ?? 0,
-  );
   vi.clearAllMocks();
   getLabelBySlug.mockResolvedValue(LABEL);
   getAlbumBySlug.mockResolvedValue(ALBUM);

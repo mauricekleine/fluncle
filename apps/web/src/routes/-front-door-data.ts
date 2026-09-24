@@ -32,9 +32,9 @@ import { type TrackListItem } from "@fluncle/contracts";
 import { type FreshStreamEntry, freshStream } from "@/components/fresh/data";
 import { type FrontDoorCounts } from "@/lib/front-door";
 import { countIndexableAlbums } from "@/lib/server/albums";
-import { countArtistPagesForDisplay } from "@/lib/server/artists";
+import { countIndexableArtists } from "@/lib/server/artists";
 import { listFreshReleases } from "@/lib/server/fresh";
-import { countLabelPagesForDisplay } from "@/lib/server/labels";
+import { countIndexableLabels } from "@/lib/server/labels";
 import { getLiveState, type LiveState } from "@/lib/server/live";
 import { countAllTracks } from "@/lib/server/tracks-hub";
 import { releaseTodayUtc } from "@/lib/server/release-day";
@@ -88,15 +88,14 @@ export async function loadFrontDoorData(now: Date = new Date()): Promise<FrontDo
     // One extra row, so dropping the lead (when it is also the newest finding) still fills the block.
     listTracks({ lean: true, limit: FRONT_DOOR_FINDINGS + 1, releaseThrough }),
     listFreshReleases(now),
-    // The four shelf sizes. Each entity count is the maintained floor gate — every entity whose
-    // linked tracks clear the thin-content floor — read off one indexed counter, because a shelf
-    // number rides every front-door render. It is a hair NARROWER than what the hub itself lists
-    // (`hubInclusionWhere` also admits a sub-floor entity that carries a certified finding) and can
-    // sit a hair above the exact indexable set the sitemap submits (an entity whose linked tracks
-    // are mostly duplicates or dismissed); `lib/server/artists.ts` `countArtistPagesForDisplay`.
+    // The four shelf sizes. Each entity count is the INDEXABLE set — every entity whose page
+    // clears the thin-content floor, the same set the sitemap submits — which is a hair NARROWER
+    // than what the hub itself lists: `hubInclusionWhere` also admits a sub-floor entity that
+    // carries a certified finding. The card therefore never promises more than the page holds,
+    // which is the direction to be wrong in; the alternative would have a count outrun its own hub.
     countAllTracks(now),
-    countArtistPagesForDisplay(),
-    countLabelPagesForDisplay(),
+    countIndexableArtists(),
+    countIndexableLabels(),
     countIndexableAlbums(),
     // The live-set callout, read server-side so the banner SSRs with no flash. Offline almost
     // always — a quiet, cheap read.

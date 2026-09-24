@@ -5,7 +5,7 @@ import {
   validReleaseDateSql,
 } from "../../src/lib/server/release-day";
 import { DUE_WORK_COLUMNS, DUE_WORK_COLUMN_NAMES } from "../../src/lib/server/due-work-columns";
-import { artistCandidateIdsSql } from "../../src/lib/server/entity-indexability";
+import { artistCandidateIdsSql } from "../../src/lib/server/artist-membership";
 import {
   trackSitemapIndexCountStatement,
   trackSitemapWindowStatement,

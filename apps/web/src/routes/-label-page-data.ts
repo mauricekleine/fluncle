@@ -17,7 +17,6 @@ import {
 import { type ArtistChip, listArtistsByLabel } from "@/lib/server/artists";
 import { listLabelCatalogue, listLabelUpcoming } from "@/lib/server/catalogue-groups";
 import { releaseTodayUtc } from "@/lib/server/release-day";
-import { countRenderedLabelTracks, publicEntityIndexable } from "@/lib/server/entity-indexability";
 import {
   getConfirmedAliasNames,
   getLabelBySlug,
@@ -81,8 +80,9 @@ export type LabelPageData =
  * point of having crawled it. The HOLLOW RENDERING was the doorway-page bug, never the page's
  * existence, and conditional sections (graph-sections.tsx) fixed that at the source.
  *
- * What stops a 2-row stub from being indexed is the shared thin-content gate over the maintained
- * indexed renderable-track count. Upcoming rows count because they are content on the page.
+ * What stops a 2-row stub from being indexed is the thin-content gate over the maintained
+ * `renderable_track_count`, the same stored gate the sitemap reads. Upcoming rows count because
+ * they are content on the page.
  *
  * A slug with no `labels` row at all is still MISSING, and still 404s.
  */
@@ -122,23 +122,20 @@ export async function resolveLabelPageData(
     },
   );
 
-  const [catalogue, findings, artists, alternateNames, upcoming, renderedCount] = await Promise.all(
-    [
-      cataloguePromise,
-      getFindingsByLabel(label.id, today),
-      listArtistsByLabel(label.id),
-      getConfirmedAliasNames(label.id),
-      listLabelUpcoming(label.id, today, upcomingPage).catch(
-        (error: unknown): UpcomingTrackPage | null => {
-          if (error instanceof CataloguePageOutOfRangeError) {
-            return null;
-          }
-          throw error;
-        },
-      ),
-      countRenderedLabelTracks(label.id, today, LABEL_INDEX_MIN_TRACKS),
-    ],
-  );
+  const [catalogue, findings, artists, alternateNames, upcoming] = await Promise.all([
+    cataloguePromise,
+    getFindingsByLabel(label.id, today),
+    listArtistsByLabel(label.id),
+    getConfirmedAliasNames(label.id),
+    listLabelUpcoming(label.id, today, upcomingPage).catch(
+      (error: unknown): UpcomingTrackPage | null => {
+        if (error instanceof CataloguePageOutOfRangeError) {
+          return null;
+        }
+        throw error;
+      },
+    ),
+  ]);
 
   if (catalogue === null || upcoming === null) {
     // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
@@ -156,8 +153,9 @@ export async function resolveLabelPageData(
     foundedLocation: label.foundedLocation,
     foundingDate: label.foundingDate,
     id: label.id,
-    // The rendered-membership count includes Upcoming and is the sitemap's gate as well.
-    indexable: publicEntityIndexable(renderedCount, LABEL_INDEX_MIN_TRACKS),
+    // Thin-content gate: the maintained `renderable_track_count` against the floor — the same
+    // stored gate `listLabelSitemapRows` keys off, so the page and the sitemap can never disagree.
+    indexable: (label.renderableTrackCount ?? 0) >= LABEL_INDEX_MIN_TRACKS,
     logoImageUrl: label.logoImageUrl,
     mbLabelId: label.mbLabelId,
     name: label.name,

@@ -17,8 +17,10 @@ import { FindingsGrid } from "@/components/graph-sections";
 //
 //   · REACHABILITY: any artist ROW renders 200 (a crawl-minted, findings-free artist has a public
 //     catalogue page); only a slug with no row 404s.
-//   · INDEXABILITY: the page and sitemap use the same indexed rendered-membership count,
-//     including Upcoming rows and bounded `artists_json` fallback findings.
+//   · INDEXABILITY: the page is `noindex` (and out of the sitemap) below ARTIST_INDEX_MIN_FINDINGS
+//     linked tracks, read off the maintained `renderable_track_count` — the same stored gate the
+//     sitemap keys off, so an indexable page is never an orphan. Upcoming rows are linked tracks and
+//     count; the `artists_json` completeness fallback in the grid is deliberately NOT part of it.
 //
 // These tests pin that contract.
 
@@ -30,12 +32,6 @@ const getFindingsByArtist = vi.hoisted(() => vi.fn());
 const getArtistNeighbours = vi.hoisted(() => vi.fn());
 const listArtistCatalogue = vi.hoisted(() => vi.fn());
 const listArtistUpcoming = vi.hoisted(() => vi.fn());
-const isArtistIndexable = vi.hoisted(() => vi.fn());
-
-vi.mock("@/lib/server/entity-indexability", () => ({
-  isArtistIndexable,
-  publicEntityIndexable: (count: number, floor: number) => count >= floor,
-}));
 
 vi.mock("@/lib/server/artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artists")>()),
@@ -164,10 +160,6 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getArtistNeighbours.mockReset();
     listArtistCatalogue.mockReset();
     listArtistUpcoming.mockReset();
-    isArtistIndexable.mockReset();
-    isArtistIndexable.mockImplementation(
-      async () => ((await getPublicArtistBySlug("drift"))?.renderableTrackCount ?? 0) >= 3,
-    );
     getPublicArtistSocials.mockResolvedValue([]);
     getPublicArtistAliasNames.mockResolvedValue([]);
     getArtistNeighbours.mockResolvedValue([]);
@@ -214,7 +206,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("indexes a findings-free artist once its CATALOGUE clears the floor", async () => {
-    // The count is the same membership the sitemap gate reads.
+    // The stored counter the sitemap gate reads.
     getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 5 });
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
@@ -226,8 +218,10 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(robotsMeta(data)).toBeUndefined();
   });
 
-  it("counts JSON-only findings in the rendered membership gate", async () => {
-    // Display-credit findings are page content even when no artist edge exists.
+  it("keeps the gate off the artists_json fallback — grid covers alone do not index a page", async () => {
+    // The completeness fallback (`getFindingsByArtist` reads `artists_json`) can show covers, but
+    // the gate reads the stored counter the sitemap reads, zero here, so the page stays noindex
+    // exactly as its sitemap entry stays absent.
     getFindingsByArtist.mockResolvedValue([
       finding("001.1.1A"),
       finding("002.1.1A"),
@@ -235,9 +229,10 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     ]);
     countArtistFindings.mockResolvedValue(0);
 
-    isArtistIndexable.mockResolvedValue(true);
-    const indexed = await resolveArtistPageData("drift", "name", 1);
-    expect(indexed).toMatchObject({ indexable: true, status: "found" });
+    const data = await resolveArtistPageData("drift", "name", 1);
+
+    expect(data).toMatchObject({ indexable: false, status: "found" });
+    expect(robotsMeta(data)).toBe("noindex, follow");
   });
 
   it("renders (noindex) an artist with one or two certified findings, below the index threshold", async () => {
@@ -256,7 +251,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(robotsMeta(data)).toBe("noindex, follow");
   });
 
-  it("indexes a page once rendered membership clears the threshold", async () => {
+  it("indexes a page once the stored counter clears the threshold", async () => {
     getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 3 });
     getFindingsByArtist.mockResolvedValue([
       finding("001.1.1A"),

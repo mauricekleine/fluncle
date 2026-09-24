@@ -16,7 +16,7 @@ import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { composeAppleArtworkUrl } from "./apple-music";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
-import { artistCandidateIdsSql } from "./entity-indexability";
+import { artistCandidateIdsSql } from "./artist-membership";
 import { releasedByTodaySql } from "./release-day";
 import { countDueWorkNow } from "./due-work";
 import { discogsReleaseUrl } from "./discogs";

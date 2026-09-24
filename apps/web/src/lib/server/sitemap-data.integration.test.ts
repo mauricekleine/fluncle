@@ -317,12 +317,6 @@ beforeEach(async () => {
     args: ["track-3", "artist-adele"],
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
   });
-  for (const trackId of ["track-1", "track-2"]) {
-    await db.execute({
-      args: [trackId, "artist-adele"],
-      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
-    });
-  }
   // A SECOND visible artist, so the artists child is genuinely multi-shard at shard size 1 and the
   // boundary probe actually runs. Without it the gated total is 1 and every page past the first is
   // short-circuited as past-end, which is how an ungated probe hid.
@@ -337,12 +331,6 @@ beforeEach(async () => {
     args: ["track-3", "artist-eleven"],
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
   });
-  for (const trackId of ["track-1", "track-2"]) {
-    await db.execute({
-      args: [trackId, "artist-eleven"],
-      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
-    });
-  }
   await db.execute({
     args: ["11111111-1111-4111-8111-111111111111"],
     sql: `insert into artist_rules
@@ -494,37 +482,7 @@ describe("a child sitemap fetches only its own bag", () => {
           args: statement.args,
           sql: `explain query plan ${statement.sql}`,
         });
-        const rows = typedRows<{ detail: string; id: number; parent: number }>(plan.rows);
-        // The artist gate's credit-name fallback is one materialized table per statement, fed only
-        // by two index-ordered windows of at most ARTIST_JSON_FALLBACK_LIMIT rows each; grouping
-        // that bounded set is allowed. Everything OUTSIDE it (the window itself) must still be a
-        // pure index search with no temporary sort.
-        const fallbackRoot = rows.find((row) => row.detail === "MATERIALIZE artist_fallback");
-        const inFallback = new Set<number>(fallbackRoot ? [fallbackRoot.id] : []);
-
-        for (const row of rows) {
-          if (inFallback.has(row.parent)) {
-            inFallback.add(row.id);
-          }
-        }
-
-        if (kind === "artists") {
-          const fallback = rows
-            .filter((row) => inFallback.has(row.id))
-            .map((row) => row.detail)
-            .join("\n");
-
-          expect(fallback, `artists fallback\n${fallback}`).toMatch(
-            /SEARCH f USING COVERING INDEX findings_added_at_track_id_idx/,
-          );
-          expect(fallback, `artists fallback\n${fallback}`).toMatch(
-            /SEARCH t USING COVERING INDEX tracks_release_date_track_id_idx/,
-          );
-          expect(fallback, `artists fallback\n${fallback}`).not.toMatch(/^SCAN (?:f|t)\b/m);
-        }
-
-        const details = rows
-          .filter((row) => !inFallback.has(row.id))
+        const details = typedRows<{ detail: string }>(plan.rows)
           .map((row) => row.detail)
           .join("\n");
 

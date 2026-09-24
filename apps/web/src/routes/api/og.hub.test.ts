@@ -5,13 +5,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // valid hub renders exactly its own count read, mirrored into the page's masthead line.
 
 const countIndexableAlbums = vi.hoisted(() => vi.fn(async () => 0));
-const countArtistPagesForDisplay = vi.hoisted(() => vi.fn(async () => 0));
-const countLabelPagesForDisplay = vi.hoisted(() => vi.fn(async () => 0));
+const countIndexableArtists = vi.hoisted(() => vi.fn(async () => 0));
+const countIndexableLabels = vi.hoisted(() => vi.fn(async () => 0));
 const countAllTracks = vi.hoisted(() => vi.fn(async () => 0));
 
 vi.mock("@/lib/server/albums", () => ({ countIndexableAlbums }));
-vi.mock("@/lib/server/artists", () => ({ countArtistPagesForDisplay }));
-vi.mock("@/lib/server/labels", () => ({ countLabelPagesForDisplay }));
+vi.mock("@/lib/server/artists", () => ({ countIndexableArtists }));
+vi.mock("@/lib/server/labels", () => ({ countIndexableLabels }));
 vi.mock("@/lib/server/tracks-hub", () => ({ countAllTracks }));
 
 // Raster nothing: a fake ImageResponse just carries the html + headers it was handed,
@@ -42,12 +42,7 @@ async function getCard(query: string): Promise<CardResponse> {
   })) as unknown as CardResponse;
 }
 
-const COUNTS = [
-  countIndexableAlbums,
-  countArtistPagesForDisplay,
-  countLabelPagesForDisplay,
-  countAllTracks,
-];
+const COUNTS = [countIndexableAlbums, countIndexableArtists, countIndexableLabels, countAllTracks];
 
 describe("the hub OG card", () => {
   beforeEach(() => {
@@ -77,9 +72,9 @@ describe("the hub OG card", () => {
   });
 
   it.each([
-    ["artists", countArtistPagesForDisplay, "1,234 drum & bass artists, A to Z."],
+    ["artists", countIndexableArtists, "1,234 drum & bass artists, A to Z."],
     ["albums", countIndexableAlbums, "1,234 drum & bass records, A to Z."],
-    ["labels", countLabelPagesForDisplay, "1,234 drum & bass labels, A to Z."],
+    ["labels", countIndexableLabels, "1,234 drum & bass labels, A to Z."],
     ["tracks", countAllTracks, "1,234 drum & bass tracks, newest first."],
   ])("renders %s from its own count read", async (hub, count, line) => {
     count.mockResolvedValue(1234);
@@ -101,7 +96,7 @@ describe("the hub OG card", () => {
   });
 
   it("drops the count clause at a count of one (the masthead's own rule)", async () => {
-    countArtistPagesForDisplay.mockResolvedValue(1);
+    countIndexableArtists.mockResolvedValue(1);
 
     const res = await getCard("?hub=artists");
 

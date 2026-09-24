@@ -21,7 +21,7 @@ There is no follow/champion state on the row — the graph is purely who the art
 
 The `track_artists` edge is what lets `/artist/<slug>` show the rest of an artist's catalogue by an indexed seek (`track_artists_artist_id_idx`) rather than a full `artists_json` scan (the shape AGENTS.md forbids). A CERTIFIED track gets its edge at publish (`upsertTrackArtists`, folded on the stable `spotify_artist_id`). A CRAWLED track earns it two ways, in priority order:
 
-The findings grid and Upcoming section also start at that indexed edge. A legacy finding or future release with no artist edge can still appear when an exact `artists_json` credit matches: each fallback examines at most 5,000 candidates from its time-ordered index, then checks the credit only for those candidates. The page and sitemap use the same membership and exclude dismissed or duplicate rows from their indexability count.
+The findings grid and Upcoming section also start at that indexed edge. A legacy finding or future release with no artist edge can still appear when an exact `artists_json` credit matches: each fallback examines at most 5,000 candidates from its time-ordered index, then checks the credit only for those candidates. The page's indexability and its sitemap entry do not read this membership; both read the stored `renderable_track_count` (below).
 
 Spotify-anchored tracks connect artists by stable Spotify ID. Tracks without Spotify identity may link by guarded name-fold matching. `scripts/backfill-artist-links.ts` reconciles missing name-linked edges, and `scripts/backfill-artist-graph.ts` fills stable-ID edges where possible.
 

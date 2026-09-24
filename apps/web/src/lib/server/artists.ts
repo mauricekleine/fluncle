@@ -9,11 +9,6 @@ import { listedArtistWhere } from "./artist-visibility";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
-import {
-  artistRenderPrefilterSql,
-  renderedArtistGateSql,
-  withArtistFallback,
-} from "./entity-indexability";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   batchDueWorkMutationGroups,
@@ -130,8 +125,8 @@ export type ArtistRecord = {
   lastfmUrl: string | undefined;
   mbid: string | undefined;
   name: string;
-  /** The maintained total used by this page and its sitemap row. */
-  renderableTrackCount?: number;
+  /** The maintained `renderable_track_count`: the page's robots gate, the same one the sitemap reads. */
+  renderableTrackCount: number;
   slug: string;
   spotifyUrl: string | undefined;
   wikidataQid: string | undefined;
@@ -200,7 +195,7 @@ async function resolveArtistBySlug(
     lastfmUrl: optionalText(row["lastfm_url"]),
     mbid: optionalText(row["mbid"]),
     name: row["name"],
-    renderableTrackCount: Number(row["renderable_track_count"]),
+    renderableTrackCount: Number(row["renderable_track_count"] ?? 0),
     slug: typeof row["slug"] === "string" ? row["slug"] : slug,
     spotifyUrl: optionalText(row["spotify_url"]),
     wikidataQid: optionalText(row["wikidata_qid"]),
@@ -432,8 +427,11 @@ export async function getArtistSlugMap(trackId: string): Promise<Record<string, 
 }
 
 /**
- * The edge-linked coordinate-bearing finding count for one artist. The public
- * indexability gate separately includes the bounded display-credit fallback.
+ * The CANONICAL coordinate-bearing finding count for one artist — the pure
+ * `track_artists` inner join (NO `artists_json` fallback). It is the artist page's
+ * FINDING count (the masthead line, the dossier); the page's `indexable` gate adds
+ * the catalogue total to it (findings PLUS renderable catalogue tracks), keyed off the
+ * canonical join both sides so an indexable page is never orphaned from the sitemap.
  */
 export async function countArtistFindings(artistId: string): Promise<number> {
   const db = await getDb();
@@ -459,16 +457,19 @@ export async function countArtistFindings(artistId: string): Promise<number> {
  * artist with enough catalogue tracks belongs here — orphaning its page from the sitemap would
  * break the same invariant album-entity.md states.
  *
- * The floor is applied in SQL through the same per-artist indexed membership count the page
- * uses. The edge seek owns the primary set; two fixed index windows cover legacy display credits.
+ * The floor is applied in SQL, never in the isolate, and it reads the STORED `renderable_track_count`
+ * (keystone 2) — an indexed pre-filter on `artists` rather than a `having` over a grouped scan
+ * of `track_artists ⋈ tracks`, the ~2×-`tracks` edge table and the most expensive of the three
+ * sitemap walks. The join SURVIVES for the two per-row columns a `<url>` needs and the artist row does
+ * not carry: `lastmod` (the freshest certified finding's date, undefined for an artist that carries
+ * none — catalogue rows have no `added_at`, and `max` ignores nulls) and the cover.
  */
 export function artistSitemapWindowStatement(minTracks: number, limit: number, afterSlug?: string) {
   const seek = afterSlug === undefined ? "a.slug >= ?" : "a.slug > ?";
 
   return {
     args: [afterSlug ?? "", minTracks, limit],
-    sql: `${withArtistFallback("date('now')")}
-          select a.slug as slug,
+    sql: `select a.slug as slug,
                  (select max(f.added_at)
                     from track_artists ta
                     join tracks t on t.track_id = ta.track_id
@@ -487,8 +488,7 @@ export function artistSitemapWindowStatement(minTracks: number, limit: number, a
                         where ta2.artist_id = a.id and f2.log_id is not null)
                     limit 1) as cover_url
           from artists a
-          where ${seek} and ${artistRenderPrefilterSql("a", ARTIST_INDEX_MIN_FINDINGS)}
-            and ${renderedArtistGateSql("a.id", "a.name", "date('now')", ARTIST_INDEX_MIN_FINDINGS)} >= ?
+          where ${seek} and a.renderable_track_count >= ?
             and ${listedArtistWhere("a")}
           order by a.slug asc
           limit ?`,
@@ -501,7 +501,25 @@ export async function listArtistSitemapRows(
 ): Promise<EntitySitemapRow[]> {
   const db = await getDb();
   const result = await db.execute(
-    artistSitemapWindowStatement(minTracks, window?.limit ?? 2_147_483_647, window?.afterSlug),
+    window
+      ? artistSitemapWindowStatement(minTracks, window.limit, window.afterSlug)
+      : {
+          args: [minTracks],
+          sql: `select a.slug as slug,
+                 max(findings.added_at) as lastmod,
+                 (select t2.album_image_url
+                    from (findings join tracks on tracks.track_id = findings.track_id) t2
+                    join track_artists ta2 on ta2.track_id = t2.track_id
+                    where ta2.artist_id = a.id and t2.log_id is not null
+                    order by t2.added_at desc limit 1) as cover_url
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          join tracks on tracks.track_id = ta.track_id
+          left join findings on findings.track_id = tracks.track_id
+          where a.renderable_track_count >= ? and ${listedArtistWhere("a")}
+          group by a.id
+          order by a.slug asc`,
+        },
   );
 
   return typedRows<{
@@ -580,52 +598,10 @@ export const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
   visibilityWhere: listedArtistWhere("a"),
 };
 
-/**
- * How many artist pages a SHELF shows (the front door's browse band, the OG hub card, the funnel):
- * the maintained `renderable_track_count` against the floor, one indexed read. It is a display
- * number, not a decision, so it takes the cheap maintained gate; it can run a hair above the
- * indexable set by the few artists whose linked tracks are mostly duplicates or dismissed. What a
- * crawler is told (the page's robots and the sitemap) always comes from the exact gate below.
- */
-export function countArtistPagesForDisplay(): Promise<number> {
+/** The count of INDEXABLE `/artist/<slug>` pages — the floor-clearing set `listArtistSitemapRows`
+    enumerates, for `/admin/funnel`'s public-surfaces card. Reuses `ARTISTS_HUB_QUERY` (scan + floor). */
+export function countIndexableArtists(): Promise<number> {
   return countIndexableHubEntities(ARTISTS_HUB_QUERY);
-}
-
-/**
- * The artists the exact gate may admit: the listed artists that clear the maintained-counter
- * prefilter. It never reads `tracks`, so it is the number that SIZES the artist sitemap (how many
- * children the index lists); it is never below the exact count, and the gap is the few artists whose
- * linked tracks are mostly duplicates or dismissed.
- */
-export async function countArtistSitemapCandidates(): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [],
-    sql: `${withArtistFallback("date('now')")}
-          select count(*) as n from artists a
-          where ${listedArtistWhere("a")}
-            and ${artistRenderPrefilterSql("a", ARTIST_INDEX_MIN_FINDINGS)}`,
-  });
-  return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
-}
-
-/**
- * The same rendered-membership gate as the artist page and sitemap row reader, over the whole
- * archive. It walks every candidate's rendered rows, so it runs only where the exact number decides
- * a document (see `countArtistSitemapRows`); `atMost` stops the walk once that many artists pass.
- */
-export async function countIndexableArtists(atMost?: number): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: atMost === undefined ? [ARTIST_INDEX_MIN_FINDINGS] : [ARTIST_INDEX_MIN_FINDINGS, atMost],
-    sql: `${withArtistFallback("date('now')")}
-          select count(*) as n from (select 1 from artists a
-          where ${listedArtistWhere("a")}
-            and ${artistRenderPrefilterSql("a", ARTIST_INDEX_MIN_FINDINGS)}
-            and ${renderedArtistGateSql("a.id", "a.name", "date('now')", ARTIST_INDEX_MIN_FINDINGS)} >= ?
-          ${atMost === undefined ? "" : "limit ?"})`,
-  });
-  return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
 /**

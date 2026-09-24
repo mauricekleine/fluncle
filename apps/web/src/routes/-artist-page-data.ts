@@ -30,7 +30,6 @@ import {
 } from "@/lib/catalogue";
 import { listArtistCatalogue, listArtistUpcoming } from "@/lib/server/catalogue-groups";
 import { releaseTodayUtc } from "@/lib/server/release-day";
-import { isArtistIndexable } from "@/lib/server/entity-indexability";
 import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
 
 // The socials row's shape travels with the page data, so the route renders it without
@@ -87,8 +86,8 @@ export type ArtistPageData =
 // label/album does: a `getPublicArtistBySlug` row renders, and the thin-content gate below (not a
 // certified-finding gate) decides whether it indexes. The grid's `findings` come from
 // `getFindingsByArtist` (which has an `artists_json` fallback so a pre-backfill artist still shows
-// its covers). The indexability gate counts the same visible edge and bounded fallback members
-// as the sitemap, including Upcoming rows.
+// its covers). The indexability gate is the maintained `renderable_track_count` against the
+// floor, the same stored gate the sitemap reads, so an indexable page is never orphaned from it.
 export async function resolveArtistPageData(
   slug: string,
   sort: CatalogueSort,
@@ -116,25 +115,23 @@ export async function resolveArtistPageData(
     },
   );
 
-  const [catalogue, findings, socials, neighbours, alternateNames, upcoming, artistIndexable] =
-    await Promise.all([
-      cataloguePromise,
-      getFindingsByArtist(artist.id, artist.name, today),
-      getPublicArtistSocials(artist.id),
-      getArtistNeighbours(artist.id),
-      // The trusted MB/operator aliases — keyed off `artist.id`, mutually independent, so it rides
-      // the same parallel wave as the finding/social/neighbour reads (the MusicBrainz identity layer).
-      getPublicArtistAliasNames(artist.id),
-      listArtistUpcoming(artist.id, today, upcomingPage).catch(
-        (error: unknown): UpcomingTrackPage | null => {
-          if (error instanceof CataloguePageOutOfRangeError) {
-            return null;
-          }
-          throw error;
-        },
-      ),
-      isArtistIndexable(artist.id, today, ARTIST_INDEX_MIN_FINDINGS),
-    ]);
+  const [catalogue, findings, socials, neighbours, alternateNames, upcoming] = await Promise.all([
+    cataloguePromise,
+    getFindingsByArtist(artist.id, artist.name, today),
+    getPublicArtistSocials(artist.id),
+    getArtistNeighbours(artist.id),
+    // The trusted MB/operator aliases — keyed off `artist.id`, mutually independent, so it rides
+    // the same parallel wave as the finding/social/neighbour reads (the MusicBrainz identity layer).
+    getPublicArtistAliasNames(artist.id),
+    listArtistUpcoming(artist.id, today, upcomingPage).catch(
+      (error: unknown): UpcomingTrackPage | null => {
+        if (error instanceof CataloguePageOutOfRangeError) {
+          return null;
+        }
+        throw error;
+      },
+    ),
+  ]);
 
   if (catalogue === null || upcoming === null) {
     // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
@@ -159,8 +156,12 @@ export async function resolveArtistPageData(
     findings,
     id: artist.id,
     imageUrl: artist.imageUrl,
-    // The same gate as the sitemap rows (rendered membership, Upcoming included).
-    indexable: artistIndexable,
+    // Thin-content gate: index only past ARTIST_INDEX_MIN_FINDINGS linked tracks, read off the
+    // maintained `renderable_track_count` — the same stored gate `listArtistSitemapRows` keys off,
+    // so the page and the sitemap can never disagree. It counts every linked track, Upcoming ones
+    // included, because they render on the page. Below the floor the page still serves 200 (deep
+    // links, link equity) but is noindex + out of the sitemap (docs/artist-relationship.md).
+    indexable: artist.renderableTrackCount >= ARTIST_INDEX_MIN_FINDINGS,
     lastfmUrl: artist.lastfmUrl,
     mbid: artist.mbid,
     name: artist.name,

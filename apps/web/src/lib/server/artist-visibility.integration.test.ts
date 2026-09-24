@@ -158,20 +158,6 @@ beforeEach(async () => {
     logId: "001.A.02",
     trackId: "track-dnb",
   });
-  for (const index of [3, 4]) {
-    await seedFinding({
-      artistId: "R_pop",
-      labelId: "L_hospital",
-      logId: `001.A.0${index * 2 - 1}`,
-      trackId: `track-remix-${index}`,
-    });
-    await seedFinding({
-      artistId: "R_dnb",
-      labelId: "L_hospital",
-      logId: `001.A.0${index * 2}`,
-      trackId: `track-dnb-${index}`,
-    });
-  }
 });
 
 describe("before the ruling, the pop act is an ordinary public artist", () => {

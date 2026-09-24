@@ -51,12 +51,12 @@
 // the small `crawl_frontier` / `catalogue_snapshots` tables.
 
 import { countIndexableAlbums } from "./albums";
-import { countArtistPagesForDisplay } from "./artists";
+import { countIndexableArtists } from "./artists";
 import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 import { type CatalogueCaptureState, getCatalogueCaptureState } from "./capture-budget";
 import { getFrontierCounts } from "./crawl";
 import { getDb, typedRow, typedRows } from "./db";
-import { countLabelPagesForDisplay } from "./labels";
+import { countIndexableLabels } from "./labels";
 import { clampSnapshotWindow } from "./snapshot-window";
 import { ANCHOR_REASK_AFTER_DAYS, countTrackWork, kindClause, workHalfClause } from "./track-work";
 import { readDefaultTracksHubTotal } from "./tracks-hub";
@@ -671,9 +671,9 @@ async function gatherLiveFunnel(): Promise<LiveFunnelData> {
       // no filter = every publicly-rendered row); the three entity counts are the sitemap's
       // INDEXABLE sets (the stored `renderable_track_count` against each hub's floor).
       countPublicTracks(),
-      countArtistPagesForDisplay(),
+      countIndexableArtists(),
       countIndexableAlbums(),
-      countLabelPagesForDisplay(),
+      countIndexableLabels(),
     ]);
 
   return {

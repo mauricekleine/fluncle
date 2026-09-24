@@ -60,7 +60,6 @@ import {
 import {
   ARTIST_INDEX_MIN_FINDINGS,
   artistSitemapWindowStatement,
-  countArtistSitemapCandidates,
   countIndexableArtists,
   listArtistSitemapRows,
   maxArtistSitemapLastmod,
@@ -68,12 +67,6 @@ import {
 } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
-import {
-  artistRenderPrefilterSql,
-  renderedArtistGateSql,
-  renderedLabelCountSql,
-  withArtistFallback,
-} from "./entity-indexability";
 import {
   countPublicIndexableGalaxies,
   GALAXY_INDEX_MIN_FINDINGS,
@@ -128,12 +121,9 @@ export function sitemapBoundaryStatement(
       // `countIndexableArtists`.
       return {
         args: [start, ARTIST_INDEX_MIN_FINDINGS, limit],
-        sql: `${withArtistFallback("date('now')")}
-              select max(slug) as boundary, count(*) as n from (
+        sql: `select max(slug) as boundary, count(*) as n from (
                 select slug from artists
-                where slug ${operator} ?
-                  and ${artistRenderPrefilterSql("artists", ARTIST_INDEX_MIN_FINDINGS)}
-                  and ${renderedArtistGateSql("artists.id", "artists.name", "date('now')", ARTIST_INDEX_MIN_FINDINGS)} >= ?
+                where slug ${operator} ? and renderable_track_count >= ?
                   and ${listedArtistWhere("artists")}
                 order by slug asc limit ?
               )`,
@@ -143,8 +133,7 @@ export function sitemapBoundaryStatement(
         args: [start, LABEL_INDEX_MIN_TRACKS, limit],
         sql: `select max(slug) as boundary, count(*) as n from (
                 select slug from labels
-                where slug ${operator} ?
-                  and ${renderedLabelCountSql("labels.id", "date('now')", LABEL_INDEX_MIN_TRACKS)} >= ?
+                where slug ${operator} ? and renderable_track_count >= ?
                 order by slug asc limit ?
               )`,
       };
@@ -526,14 +515,16 @@ async function readSitemapPageInputs(): Promise<SitemapPageInputs> {
  * gates. Every read in it is a `count(*)` or a `max()` — nothing here pulls a row set into the
  * isolate to size it (AGENTS.md), and they all go out in parallel.
  *
- * The label count uses the same per-entity indexed rendered-membership gate as its page and child
- * rows; the artist count is sized from its candidates (`countArtistSitemapRows`). Album count uses its stored renderable counter. The three entity dates
- * are driven from `findings` outward (see `maxLabelSitemapLastmod`).
+ * The three ENTITY counts read the STORED `renderable_track_count` through the same
+ * `countIndexableHubEntities` gate `/admin/funnel` uses — an index range scan on
+ * `<entity>_renderable_count_idx` — so the index, the funnel card and the children cannot drift
+ * apart on what "indexable" means. The three entity DATES are driven from `findings` OUTWARD (see
+ * `maxLabelSitemapLastmod`), bounded by the certified corpus rather than by the growing tables.
  */
 async function readSitemapAggregates(): Promise<SitemapAggregates> {
   const [pageInputs, artistCount, labelCount, albumCount, archiveTrackCount] = await Promise.all([
     readSitemapPageInputs(),
-    countArtistSitemapRows(),
+    countIndexableArtists(),
     countIndexableLabels(),
     countIndexableAlbums(),
     // The archive-track destinations past the EVIDENCE gate. The one-row count locks the exact
@@ -585,26 +576,6 @@ function sitemapPagesFrom(aggregates: SitemapPageInputs): SitemapPages {
  * different index than the children serve.
  */
 /**
- * The artist sitemap's size, as the index and the child numbering need it: how many children to
- * list. The exact gate walks every candidate's rendered rows, a whole-archive read of `tracks`, so
- * the index sizes itself from the candidates (`countArtistSitemapCandidates`, no `tracks` read)
- * whenever they all fit ONE child: the index then lists that one child when the exact gate admits
- * at least one artist, and the child still admits each row only through the exact gate. Past one
- * child, the exact count decides where the last child ends, so the index never advertises a child
- * past the end. The number is therefore exact at child granularity, which is all it decides.
- */
-async function countArtistSitemapRows(): Promise<number> {
-  const candidates = await countArtistSitemapCandidates();
-
-  if (candidates > sitemapMaxUrls("artists")) {
-    return countIndexableArtists();
-  }
-
-  // One child, as long as the exact gate admits anyone: the walk stops at the first artist it does.
-  return candidates > 0 && (await countIndexableArtists(1)) > 0 ? candidates : 0;
-}
-
-/**
  * Drop the artist sitemap documents after a write that changes which artists are indexable — the
  * global `unlisted` visibility ruling (lib/server/artist-visibility.ts).
  *
@@ -612,11 +583,11 @@ async function countArtistSitemapRows(): Promise<number> {
  * without this a newly unlisted artist keeps being ADVERTISED for indexing at a URL that now 404s.
  * The index goes too, because its per-child count moves with the same write.
  *
- * Bounded by construction: the artist child count comes off the same `countArtistSitemapRows` the
- * index itself reports, so this purges exactly the shards that exist and never a guessed range.
+ * Bounded by construction: the artist child count comes off the same gated `countIndexableArtists`
+ * the index itself reports, so this purges exactly the shards that exist and never a guessed range.
  */
 export async function purgeArtistSitemapCachesNow(): Promise<void> {
-  const total = await countArtistSitemapRows();
+  const total = await countIndexableArtists();
   const shards = Math.max(1, Math.ceil(total / sitemapMaxUrls("artists")));
   const paths = ["/sitemap.xml"];
 
@@ -659,7 +630,7 @@ async function sitemapWindowCount(kind: SitemapSqlWindowedKind): Promise<number>
     case "albums":
       return countIndexableAlbums();
     case "artists":
-      return countArtistSitemapRows();
+      return countIndexableArtists();
     case "labels":
       return countIndexableLabels();
     case "logbook":

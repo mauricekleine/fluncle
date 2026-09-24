@@ -115,7 +115,7 @@ import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import { dedupeByRecordingIdentity, type RecordingIdentity } from "./track-match";
 import { type CatalogueTrackItem, getGraphFindingsByIds } from "./tracks";
-import { artistCandidateIdsSql } from "./entity-indexability";
+import { artistCandidateIdsSql } from "./artist-membership";
 import { releasedByTodaySql, upcomingAfterTodaySql } from "./release-day";
 
 // The sort vocabulary, the page bounds, the group SHAPES and the pure helpers live in the
