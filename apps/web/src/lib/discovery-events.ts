@@ -163,6 +163,12 @@ export function classifyDiscoveryHref(
   const query = url.searchParams.get("q")?.trim() ?? "";
 
   if (pathname === "/search" && query.length > 0) {
+    // "More like this" is a /search link into the sonic view, and it is a similar hop by
+    // behaviour: a rail-marked sonic query counts as one, never as a typed search.
+    if (options.similar && classifySearchQueryKind(query) === "sonic") {
+      return { event: "discovery_similar", metadata: { kind: "track" } };
+    }
+
     const exampleKind = EXAMPLE_BY_QUERY.get(query);
 
     if (exampleKind) {

@@ -36,6 +36,7 @@ import { Input } from "@fluncle/ui/components/input";
 import { Skeleton } from "@fluncle/ui/components/skeleton";
 import { formatDateLong } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
+import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import {
   filterSavedFindings,
@@ -312,7 +313,11 @@ function SavedFindingLitRow({
   // Key the preview off the trackId (the row's own identity, and what `/api/preview`
   // resolves). One shared <audio> element backs every row, so `toggle` starts this
   // finding and stops whatever was playing.
-  const preview = usePreviewPlayer(finding.trackId, { publicPreview: true });
+  const queued = useMemo(
+    () => toQueueTrack({ ...finding, albumImageUrl: finding.imageUrl }),
+    [finding],
+  );
+  const preview = usePreviewPlayer(finding.trackId, { publicPreview: true, track: queued });
 
   return (
     <li className="saves-row">

@@ -1,9 +1,11 @@
+import { useMemo } from "react";
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
 import { formatKey, type KeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
+import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer, usePreviewProgress } from "@/lib/preview-player";
 
 // THE FINDING CARD — what Fluncle FOUND, rendered (ChatDnB Phase 1).
@@ -82,7 +84,23 @@ export function FindingCard({
   // hook is called unconditionally with a stable key ("" never matches an active track) so hooks
   // stay unconditional even when this finding is not playable.
   const playable = Boolean(finding.hasPreview && logId);
-  const { isActive, isLoading, toggle } = usePreviewPlayer(logId ?? "", { publicPreview: true });
+  // The relay is keyed by the coordinate here, so the queued track is too.
+  const queued = useMemo(
+    () =>
+      toQueueTrack({
+        albumImageUrl: finding.albumImageUrl,
+        artists: finding.artists ?? [],
+        logId,
+        spotifyUrl: finding.spotifyUrl,
+        title,
+        trackId: logId ?? "",
+      }),
+    [finding.albumImageUrl, finding.artists, finding.spotifyUrl, logId, title],
+  );
+  const { isActive, isLoading, toggle } = usePreviewPlayer(logId ?? "", {
+    publicPreview: true,
+    track: queued,
+  });
 
   const artwork = <TrackArtwork alt={`${trackLine} cover art`} src={coverSrc} />;
 

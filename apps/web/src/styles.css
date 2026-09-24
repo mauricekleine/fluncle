@@ -9159,3 +9159,351 @@ a.catalogue-letter:focus-visible {
 .nav-content:focus {
   outline: none;
 }
+
+/* ── The player bar (DESIGN.md §5, Player Bar) ─────────────────────────────────
+   The persistent preview player of the public chrome, docked to the bottom of
+   the viewport from the first play until the listener closes it. The ground is
+   the colophon's sleeve (a warm near-opaque pane, so its text holds AA over the
+   brightest sky — The Legible Sky Rule) with grain under the content, a Dust
+   Line top edge and no shadow (Through-the-Glass). Gold is spent on one thing:
+   the progress hairline of a FINDING. A catalogue track's hairline is Stardust
+   (The Unlit Rule). Full width on every size; the content keeps the page's own
+   measure. */
+.player-bar {
+  --player-bar-height: 4.5rem;
+  background: color-mix(in oklch, var(--sleeve-black) 94%, transparent);
+  border-top: 1px solid var(--border);
+  bottom: 0;
+  color: var(--foreground);
+  isolation: isolate;
+  left: 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  position: fixed;
+  right: 0;
+  z-index: 40;
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .player-bar {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--sleeve-black) 86%, transparent);
+  }
+}
+
+/* Pane-tooth: the grain lives under the content, never over the reading text. */
+.player-bar::before {
+  background: var(--grain-tile) repeat;
+  background-size: 160px;
+  content: "";
+  inset: 0;
+  mix-blend-mode: overlay;
+  opacity: 0.3;
+  pointer-events: none;
+  position: absolute;
+  z-index: -1;
+}
+
+/* The page leaves room for the docked bar, so the last row and the colophon are
+   never trapped under it. */
+html[data-player-docked] body {
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+}
+
+.player-progress {
+  background: color-mix(in oklch, var(--border) 60%, transparent);
+  height: 2px;
+  left: 0;
+  overflow: hidden;
+  position: absolute;
+  right: 0;
+  top: -1px;
+}
+
+.player-progress-fill {
+  background: var(--muted-foreground);
+  height: 100%;
+  transform-origin: left;
+  transition: transform 200ms linear;
+}
+
+.player-progress[data-lit] .player-progress-fill {
+  background: var(--primary);
+}
+
+.player-bar-inner {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  margin: 0 auto;
+  max-width: 80rem;
+  min-height: var(--player-bar-height);
+  padding: 0.6rem 1.25rem;
+}
+
+.player-cover-link {
+  flex: none;
+  outline: none;
+}
+
+.player-cover.track-artwork {
+  width: 2.75rem;
+}
+
+.player-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The title is the loudest text on the bar, as on the row. */
+.player-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-title-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 150ms ease-out;
+}
+
+.player-title-link:hover,
+.player-title-link:focus-visible {
+  color: var(--accent-foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.player-bar:not([data-lit]) .player-title-link:hover,
+.player-bar:not([data-lit]) .player-title-link:focus-visible {
+  color: var(--foreground);
+}
+
+.player-artists {
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  line-height: 1.25;
+  margin: 0.15rem 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The place in the list: an instrument numeral (Oxanium, tabular). */
+.player-position {
+  color: var(--muted-foreground);
+  flex: none;
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.player-position--inline {
+  display: none;
+}
+
+.player-controls {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+}
+
+.player-button,
+.track-menu-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 1.1rem;
+  height: 2.75rem;
+  justify-content: center;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+  width: 2.75rem;
+}
+
+.player-button:hover,
+.player-button:focus-visible,
+.track-menu-trigger:hover,
+.track-menu-trigger:focus-visible,
+.track-menu-trigger[data-popup-open] {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.player-button:focus-visible,
+.track-menu-trigger:focus-visible,
+.player-keep-going:focus-visible,
+.player-cover-link:focus-visible,
+.player-title-link:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+  outline: none;
+}
+
+/* The one filled control: play/pause, cream on the sleeve. */
+.player-button--main {
+  background: var(--foreground);
+  color: var(--sleeve-black);
+}
+
+.player-button--main:hover,
+.player-button--main:focus-visible {
+  background: var(--starlight-cream);
+  color: var(--sleeve-black);
+}
+
+.player-keep-going {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.85rem;
+  font-weight: 600;
+  gap: 0.35rem;
+  height: 2.75rem;
+  padding: 0 0.95rem;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+  white-space: nowrap;
+}
+
+.player-keep-going:hover,
+.player-keep-going:focus-visible {
+  background: var(--muted);
+  border-color: color-mix(in oklch, var(--foreground) 40%, transparent);
+}
+
+.player-keep-going:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+@media (max-width: 639px) {
+  .player-bar-inner {
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .player-cover.track-artwork {
+    width: 2.5rem;
+  }
+
+  /* On a phone the position rides the artist line instead of its own column. */
+  .player-position:not(.player-position--inline) {
+    display: none;
+  }
+
+  .player-position--inline {
+    display: inline;
+    font-size: 0.8rem;
+    margin-left: 0.4rem;
+  }
+
+  .player-position--inline::before {
+    content: "·";
+    margin-right: 0.4rem;
+  }
+
+  .player-controls {
+    gap: 0;
+  }
+
+  .player-keep-going {
+    padding: 0 0.7rem;
+  }
+}
+
+/* ── The cover as the play button (DESIGN.md Track Row) ──────────────────────
+   The glyph sits over a Deep Field scrim so it holds AA over any artwork. It
+   shows on hover and focus, holds while the row is sounding, and on a touch
+   screen (no hover) rides the corner, small, always. A missing preview dims it. */
+.play-cover {
+  background: none;
+  border: none;
+  border-radius: var(--rounded-artwork);
+  cursor: pointer;
+  display: block;
+  flex: none;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.play-cover:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+  outline: none;
+}
+
+.play-cover-glyph {
+  align-items: center;
+  background: color-mix(in oklch, var(--deep-field) 55%, transparent);
+  border-radius: var(--rounded-artwork);
+  color: var(--starlight-cream);
+  display: flex;
+  font-size: 1.25rem;
+  inset: 0;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  transition: opacity 150ms ease-out;
+}
+
+.play-cover:hover .play-cover-glyph,
+.play-cover:focus-visible .play-cover-glyph,
+.play-cover[aria-pressed="true"] .play-cover-glyph,
+.play-cover[data-status="paused"] .play-cover-glyph {
+  opacity: 1;
+}
+
+.play-cover[data-missing] .play-cover-glyph {
+  color: color-mix(in oklch, var(--starlight-cream) 45%, transparent);
+}
+
+@media (hover: none) {
+  .play-cover-glyph {
+    background: color-mix(in oklch, var(--deep-field) 70%, transparent);
+    border-radius: 999px;
+    bottom: 0.25rem;
+    font-size: 0.8rem;
+    height: 1.4rem;
+    inset: auto;
+    opacity: 1;
+    right: 0.25rem;
+    width: 1.4rem;
+  }
+
+  .play-cover[aria-pressed="true"] .play-cover-glyph {
+    background: color-mix(in oklch, var(--deep-field) 80%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-progress-fill,
+  .player-button,
+  .player-title-link,
+  .player-keep-going,
+  .track-menu-trigger,
+  .play-cover-glyph {
+    transition: none;
+  }
+}
