@@ -226,38 +226,70 @@ function runQuiet(
 // ---------------------------------------------------------------------------
 // PROBE: web — GET ${WORKER_URL}/api/v1/health, timed. ok on a 200; down otherwise.
 // The message reports the code + elapsed ms (no host).
+//
+// THE RECORDED LATENCY GATES EVERY BOX WRITER. The database admission coordinator closes the write
+// lane while this probe's last `latency_ms` is over its public-latency limit, and the reading stands
+// until the next tick. So one sample that landed on a Worker cold start (the handler itself answers
+// in milliseconds; the isolate's start-up is what is slow) would pause the whole write fleet for a
+// full tick. A 200 over the limit is therefore sampled once more and the faster reading recorded: a
+// cold start does not repeat on the warmed isolate, while genuine slowness reads slow twice.
 // ---------------------------------------------------------------------------
 
-async function probeWeb(): Promise<Check> {
+/** The coordinator's public-latency limit (`DATABASE_ADMISSION_PUBLIC_LATENCY_LIMIT_MS`). */
+export const WEB_RESAMPLE_OVER_MS = 500;
+
+type WebSample = { latencyMs: number; status: number } | { error: unknown; latencyMs: number };
+
+export async function probeWebWith(
+  workerUrl: string | undefined,
+  transport: (url: string, init: RequestInit) => Promise<Response> = fetchWithTimeout,
+  now: () => number = Date.now,
+): Promise<Check> {
   const service = "web";
 
-  if (!WORKER_URL) {
+  if (!workerUrl) {
     return { latencyMs: null, message: msg("not configured"), service, status: "down" };
   }
 
-  const started = Date.now();
-
-  try {
-    const response = await fetchWithTimeout(`${WORKER_URL}/api/v1/health`, { method: "GET" });
-    const latencyMs = Date.now() - started;
-
-    if (response.status === 200) {
-      return { latencyMs, message: msg(`200 in ${latencyMs}ms`), service, status: "ok" };
+  const sample = async (): Promise<WebSample> => {
+    const started = now();
+    try {
+      const response = await transport(`${workerUrl}/api/v1/health`, { method: "GET" });
+      return { latencyMs: now() - started, status: response.status };
+    } catch (error) {
+      return { error, latencyMs: now() - started };
     }
+  };
 
-    return {
-      latencyMs,
-      message: msg(`HTTP ${response.status} in ${latencyMs}ms`),
-      service,
-      status: "down",
-    };
-  } catch (error) {
-    const latencyMs = Date.now() - started;
+  let reading = await sample();
+  if ("status" in reading && reading.status === 200 && reading.latencyMs > WEB_RESAMPLE_OVER_MS) {
+    const second = await sample();
+    if ("status" in second && second.status === 200 && second.latencyMs < reading.latencyMs) {
+      reading = second;
+    }
+  }
+
+  const { latencyMs } = reading;
+  if (!("status" in reading)) {
     const reason =
-      error instanceof Error && error.name === "AbortError" ? "timeout" : "unreachable";
-
+      reading.error instanceof Error && reading.error.name === "AbortError"
+        ? "timeout"
+        : "unreachable";
     return { latencyMs, message: msg(`${reason} after ${latencyMs}ms`), service, status: "down" };
   }
+  if (reading.status === 200) {
+    return { latencyMs, message: msg(`200 in ${latencyMs}ms`), service, status: "ok" };
+  }
+  return {
+    latencyMs,
+    message: msg(`HTTP ${reading.status} in ${latencyMs}ms`),
+    service,
+    status: "down",
+  };
+}
+
+function probeWeb(): Promise<Check> {
+  return probeWebWith(WORKER_URL);
 }
 
 // ---------------------------------------------------------------------------
