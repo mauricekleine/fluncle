@@ -143,6 +143,19 @@ describe("loadFrontDoorData — the empty archive", () => {
 });
 
 describe("loadFrontDoorData — the edited lead", () => {
+  it("holds future noted findings out of the lead and findings band", async () => {
+    await seedFinding("released", "001.1.1A", day(2));
+    await writeNote("released", "Still on the deck.");
+    await releaseOn("released", "2026-02-10");
+    await seedFinding("future", "002.1.1A", day(3));
+    await writeNote("future", "Waiting for release.");
+    await releaseOn("future", "2026-02-11");
+
+    const data = await loadFrontDoorData(RELEASE_NOW);
+    expect(data.lead?.trackId).toBe("released");
+    expect(data.findings.map((finding) => finding.trackId)).not.toContain("future");
+  });
+
   it("leads with the finding Fluncle WROTE about, not the newest one", async () => {
     await seedFinding("t-newest", "001.1.1A", day(4));
     await seedFinding("t-noted", "002.1.1A", day(3));

@@ -17,6 +17,7 @@ import {
 import { type ArtistChip, listArtistsByLabel } from "@/lib/server/artists";
 import { listLabelCatalogue, listLabelUpcoming } from "@/lib/server/catalogue-groups";
 import { releaseTodayUtc } from "@/lib/server/release-day";
+import { publicEntityIndexable } from "@/lib/server/entity-indexability";
 import {
   getConfirmedAliasNames,
   getLabelBySlug,
@@ -80,9 +81,8 @@ export type LabelPageData =
  * point of having crawled it. The HOLLOW RENDERING was the doorway-page bug, never the page's
  * existence, and conditional sections (graph-sections.tsx) fixed that at the source.
  *
- * What stops a 2-row stub from being indexed is the thin-content gate below, and it counts
- * TOTAL content rather than findings — the findings plus the entity's TRUE uncertified total
- * (`catalogue.totalTracks`, counted in SQL over the whole label, never the rendered page).
+ * What stops a 2-row stub from being indexed is the shared thin-content gate over the maintained
+ * renderable-track count. Upcoming rows count because they are content on the page.
  *
  * A slug with no `labels` row at all is still MISSING, and still 404s.
  */
@@ -153,13 +153,9 @@ export async function resolveLabelPageData(
     foundedLocation: label.foundedLocation,
     foundingDate: label.foundingDate,
     id: label.id,
-    // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
-    // findings PLUS the quieter rows, because both are real content on the page, and a page is
-    // thin or not thin on what it renders, never on who wrote it. Below the floor the page
-    // still serves 200 (deep links, link equity) but is noindex + out of the sitemap; the
-    // sitemap keys off the same sum, so the two can never disagree. It counts the entity's TRUE
-    // total, never the rendered page.
-    indexable: findings.length + catalogue.totalTracks >= LABEL_INDEX_MIN_TRACKS,
+    // The maintained count includes Upcoming and is the sitemap's gate as well. It stays
+    // stable across release-day transitions; a thin page still serves 200 with noindex.
+    indexable: publicEntityIndexable(label.renderableTrackCount ?? 0, LABEL_INDEX_MIN_TRACKS),
     logoImageUrl: label.logoImageUrl,
     mbLabelId: label.mbLabelId,
     name: label.name,

@@ -103,7 +103,7 @@ import {
 import { logPageUrl } from "../fluncle-links";
 import { hasTrackPageIdentity, trackPageUrl } from "../track-page";
 import { fold } from "./track-match";
-import { releasedByTodaySql, releaseTodayUtc, upcomingAfterTodaySql } from "./release-day";
+import { releasedByTodaySql, releaseTodayUtc, validReleaseDateSql } from "./release-day";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
 
 // Note: this hub deliberately does NOT drive through `tracks.ts`'s inner `FINDINGS_FROM` join — it
@@ -734,14 +734,15 @@ async function countTracksHub(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities,
   today?: string,
+  futureCount = 0,
 ): Promise<number> {
   const clauses = tracksHubClauses(filters, resolved, today);
   const query = tracksHubCountQuery(filters, resolved, today);
 
   return memoizedAggregate(aggregateKey("count", clauses), async () => {
     const db = await getDb();
-    if (clauses.length === 0) {
-      return readDefaultTracksHubTotal(db);
+    if (tracksHubClauses(filters, resolved).length === 0) {
+      return (await readDefaultTracksHubTotal(db)) - futureCount;
     }
     const result = await db.execute(query);
 
@@ -806,7 +807,8 @@ export async function listTracksHubPage(
   const db = await getDb();
   const limit = TRACKS_HUB_PAGE_SIZE;
   const boundary = releaseTodayUtc(now);
-  const today = (await hasUpcomingTrack(db, boundary)) ? boundary : undefined;
+  const { futureCount, retainedHeadCount } = await releaseHeadCounts(db, boundary);
+  const today = futureCount > 0 ? boundary : undefined;
   // The imprint name → `labels.id`, ONCE for both reads below, so the pager total and the id slice
   // compile the same clause set (the memo key is that clause set) and both ride `tracks_label_id_idx`.
   const resolved = await resolveTracksHubEntities(filters);
@@ -814,22 +816,50 @@ export async function listTracksHubPage(
   let total: number;
   let idsResult: Awaited<ReturnType<typeof db.execute>>;
 
+  // The projection keeps whole-corpus ranks. Count the date-index head at request time so the
+  // valid-future shift changes at UTC midnight without a write. Malformed dates above today are
+  // retained at the head and read separately; they cannot displace a projected page start.
+  const logicalRank = (page - 1) * limit;
+  const retainedHeadRows = Math.min(limit, Math.max(0, retainedHeadCount - logicalRank));
+  const projectedRank = futureCount + Math.max(logicalRank, retainedHeadCount);
+  const projectedPage = Math.floor(projectedRank / limit) + 1;
+  const projectedSkip = projectedRank % limit;
   const projectedStart =
-    clauses.length === 0
-      ? await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, limit, page)
+    tracksHubClauses(filters, resolved).length === 0
+      ? await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, limit, projectedPage)
       : undefined;
 
   if (projectedStart !== undefined) {
-    total = projectedStart.total;
-    if (projectedStart.start === undefined || page > Math.max(Math.ceil(total / limit), 1)) {
+    total = projectedStart.total - futureCount;
+    if (page > Math.max(Math.ceil(total / limit), 1)) {
       throw new CatalogueHubPageOutOfRangeError();
     }
-    idsResult = await readProjectedTracksHubIdPage(db, projectedStart.start, limit);
+    const headResult =
+      retainedHeadRows > 0
+        ? await db.execute({
+            args: [boundary, retainedHeadRows, logicalRank],
+            sql: `select tracks.track_id as track_id
+            from tracks indexed by tracks_release_date_track_id_idx
+            where tracks.release_date > ? and not ${validReleaseDateSql("tracks.release_date")}
+            order by ${TRACKS_HUB_ORDER_BY} limit ? offset ?`,
+          })
+        : undefined;
+    const tailLimit = limit - retainedHeadRows;
+    const projectedRows =
+      projectedStart.start !== undefined && tailLimit > 0
+        ? await readProjectedTracksHubIdPage(db, projectedStart.start, tailLimit + projectedSkip)
+        : undefined;
+    const baseResult =
+      projectedRows ?? headResult ?? (await db.execute(`select track_id from tracks where 0`));
+    idsResult = {
+      ...baseResult,
+      rows: [...(headResult?.rows ?? []), ...(projectedRows?.rows.slice(projectedSkip) ?? [])],
+    };
   } else if (isShallowHubPage(page, limit)) {
     // The bounded front of the pager stays on today's direct offset path; the total remains
     // page-independent and memoized.
     [total, idsResult] = await Promise.all([
-      countTracksHub(filters, resolved, today),
+      countTracksHub(filters, resolved, today, futureCount),
       db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved, today)),
     ]);
   } else if (clauses.length > 0) {
@@ -838,7 +868,10 @@ export async function listTracksHubPage(
     const anchorsPromise = memoizedAggregate(aggregateKey("anchors", clauses), () =>
       extractTracksHubAnchors(filters, resolved, today),
     );
-    const result = await Promise.all([countTracksHub(filters, resolved, today), anchorsPromise]);
+    const result = await Promise.all([
+      countTracksHub(filters, resolved, today, futureCount),
+      anchorsPromise,
+    ]);
     total = result[0];
     idsResult = await db.execute(
       tracksHubSeekIdPageQuery(filters, page, result[1], resolved, today),
@@ -849,7 +882,7 @@ export async function listTracksHubPage(
     // immediately and self-heals in the same non-blocking way.
     const firstQuery = tracksHubIdPageQuery({}, 1, 0);
     const [resolvedTotal, stored, firstResult] = await Promise.all([
-      countTracksHub(filters, resolved, today),
+      countTracksHub(filters, resolved, today, futureCount),
       loadPersistedHubPageAnchors(
         TRACKS_HUB_ANCHOR_ADDRESS.hub,
         TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
@@ -915,13 +948,20 @@ export async function listTracksHubPage(
  * UNFILTERED view the page read's own total already IS this, so the route reuses it and skips this.
  * Page-independent, so it rides the same TTL memo as the pager's total.
  */
-async function hasUpcomingTrack(client: Pick<Client, "execute">, today: string): Promise<boolean> {
+async function releaseHeadCounts(
+  client: Pick<Client, "execute">,
+  today: string,
+): Promise<{ futureCount: number; retainedHeadCount: number }> {
   const result = await client.execute({
     args: [today],
-    sql: `select tracks.track_id from tracks indexed by tracks_release_date_track_id_idx
-          where ${upcomingAfterTodaySql("tracks.release_date")} limit 1`,
+    sql: `select count(*) as after_today,
+          coalesce(sum(case when ${validReleaseDateSql("tracks.release_date")} then 1 else 0 end), 0) as future_count
+          from tracks indexed by tracks_release_date_track_id_idx
+          where tracks.release_date > ?`,
   });
-  return result.rows.length > 0;
+  const row = typedRows<{ after_today: number; future_count: number }>(result.rows)[0];
+  const futureCount = Number(row?.future_count ?? 0);
+  return { futureCount, retainedHeadCount: Number(row?.after_today ?? 0) - futureCount };
 }
 
 export async function countAllTracks(now: Date = new Date()): Promise<number> {
@@ -931,12 +971,7 @@ export async function countAllTracks(now: Date = new Date()): Promise<number> {
     const db = await getDb();
     const projected = await readProjectedDefaultTrackTotal(db);
     if (projected !== undefined) {
-      const future = await db.execute({
-        args: [today],
-        sql: `select count(*) as total from tracks indexed by tracks_release_date_track_id_idx
-              where ${upcomingAfterTodaySql("tracks.release_date")}`,
-      });
-      return projected - Number(typedRows<{ total: number }>(future.rows)[0]?.total ?? 0);
+      return projected - (await releaseHeadCounts(db, today)).futureCount;
     }
     const result = await db.execute(tracksHubCountQuery({}, {}, today));
     return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
@@ -1034,17 +1069,18 @@ export async function listTracksHubYearLane(
 ): Promise<TracksHubYearLaneEntry[]> {
   const db = await getDb();
   const boundary = releaseTodayUtc(now);
-  const today = (await hasUpcomingTrack(db, boundary)) ? boundary : undefined;
+  const today = (await releaseHeadCounts(db, boundary)).futureCount > 0 ? boundary : undefined;
   const resolved = await resolveTracksHubEntities(filters);
-  const hubClauses = tracksHubClauses(filters, resolved, today);
   const { clauses, ...query } = tracksHubYearLaneQuery(filters, resolved, today);
 
   return memoizedAggregate(aggregateKey("years", clauses), async () => {
-    if (hubClauses.length === 0) {
-      const projected = await readProjectedAggregateBuckets(db, "release_date_bucket");
+    if (tracksHubClauses(filters, resolved).length === 0) {
+      const projected = await readProjectedAggregateBuckets(db, "release_date_bucket", today);
       if (projected !== undefined) {
         return yearPages(
-          projected.map(({ bucket, count }) => ({ n: count, year: bucket })),
+          projected
+            .filter(({ count }) => count > 0)
+            .map(({ bucket, count }) => ({ n: count, year: bucket })),
           TRACKS_HUB_PAGE_SIZE,
         );
       }

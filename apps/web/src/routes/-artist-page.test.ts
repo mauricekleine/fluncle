@@ -17,12 +17,9 @@ import { FindingsGrid } from "@/components/graph-sections";
 //
 //   · REACHABILITY: any artist ROW renders 200 (a crawl-minted, findings-free artist has a public
 //     catalogue page); only a slug with no row 404s.
-//   · INDEXABILITY: the page is `noindex` (and out of the sitemap) below ARTIST_INDEX_MIN_FINDINGS
-//     RENDERABLE tracks — the certified findings (`countArtistFindings`, the canonical
-//     `track_artists` join) PLUS the quieter catalogue rows (the catalogue's SQL-counted
-//     `totalTracks`). Both read through the canonical join, the same source the sitemap keys off, so
-//     an indexable page is never an orphan. The `artists_json` completeness fallback in the grid is
-//     deliberately NOT part of the gate.
+//   · INDEXABILITY: the page and sitemap use the same maintained renderable-track count. It
+//     includes Upcoming rows because they are visible page content. The `artists_json`
+//     completeness fallback in the grid is deliberately not part of the gate.
 //
 // These tests pin that contract.
 
@@ -77,6 +74,7 @@ const ARTIST = {
   lastfmUrl: undefined,
   mbid: undefined,
   name: "Drift",
+  renderableTrackCount: 0,
   slug: "drift",
   spotifyUrl: undefined,
   wikidataQid: undefined,
@@ -207,9 +205,8 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("indexes a findings-free artist once its CATALOGUE clears the floor", async () => {
-    // No certified finding, but the crawl has filled enough of its catalogue: canonical count 0 +
-    // catalogue totalTracks 5 = 5 >= ARTIST_INDEX_MIN_FINDINGS. It is a real page and indexes,
-    // exactly as a findings-free label/album with enough tracks does.
+    // The stored count is the same value the sitemap gate reads.
+    getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 5 });
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
     listArtistCatalogue.mockResolvedValue({ ...NO_CATALOGUE, totalTracks: 5 });
@@ -253,7 +250,8 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(robotsMeta(data)).toBe("noindex, follow");
   });
 
-  it("indexes a page once the canonical join count clears the threshold", async () => {
+  it("indexes a page once the maintained count clears the threshold", async () => {
+    getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 3 });
     getFindingsByArtist.mockResolvedValue([
       finding("001.1.1A"),
       finding("002.1.1A"),

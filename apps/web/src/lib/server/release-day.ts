@@ -18,7 +18,7 @@ export function isUpcomingRelease(releaseDate: null | string, today: string): bo
   );
 }
 
-function validReleaseDateSql(column: string): string {
+export function validReleaseDateSql(column: string): string {
   return `(${column} glob '[0-9][0-9][0-9][0-9]'
     or ${column} glob '[0-9][0-9][0-9][0-9]-[0-9][0-9]'
     or ${column} glob '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')`;

@@ -38,6 +38,7 @@ import {
   markCrawlProjectionRepairsFromSelectStatement,
 } from "./crawl-due-work";
 import { getDb, typedRows } from "./db";
+import { publicEntityIndexable } from "./entity-indexability";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   type DueWorkStatement,
@@ -396,6 +397,8 @@ export type LabelRecord = {
    */
   mbLabelId: string | undefined;
   name: string;
+  /** The maintained total used by this page and its sitemap row. */
+  renderableTrackCount?: number;
   /**
    * The label this one is a SUBLABEL / imprint of (`labels.parent_label_id`), resolved to its
    * name + slug, or undefined. Emitted as the Organization's `parentOrganization` `@id` edge.
@@ -460,7 +463,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${LABEL_COLUMNS}, bio, discogs_label_id, parent_label_id
+    sql: `select ${LABEL_COLUMNS}, bio, discogs_label_id, parent_label_id, renderable_track_count
           from labels where slug = ? limit 1`,
   });
 
@@ -469,6 +472,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
       bio: string | null;
       discogs_label_id: number | null;
       parent_label_id: string | null;
+      renderable_track_count: number;
     }
   >(result.rows)[0];
 
@@ -494,6 +498,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
     mbLabelId: typeof row.mb_label_id === "string" && row.mb_label_id ? row.mb_label_id : undefined,
     name: row.name,
     parentLabel: lineage.parentLabel,
+    renderableTrackCount: row.renderable_track_count,
     slug: row.slug,
     subLabels: lineage.subLabels,
   };
@@ -721,7 +726,7 @@ export function labelSitemapWindowStatement(minTracks: number, limit: number, af
                         where t2.label_id = labels.id and f2.log_id is not null)
                     limit 1) as cover_url
           from labels
-          where ${seek} and labels.renderable_track_count >= ?
+          where ${seek} and ${publicEntityIndexable("labels", minTracks)}
           order by labels.slug asc
           limit ?`,
   };
@@ -746,7 +751,7 @@ export async function listLabelSitemapRows(
           from labels
           join tracks on tracks.label_id = labels.id
           left join findings on findings.track_id = tracks.track_id
-          where labels.renderable_track_count >= ?
+          where ${publicEntityIndexable("labels", minTracks)}
           group by labels.id
           order by labels.slug asc`,
         },

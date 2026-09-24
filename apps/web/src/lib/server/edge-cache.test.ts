@@ -16,6 +16,7 @@ import {
   purgeEntityCache,
   purgeEntityCaches,
   purgeLogCache,
+  releaseBoundFeedCacheControl,
   SITEMAP_CACHE_POLICY,
   SITEMAP_FRESH_SECONDS,
   SITEMAP_SWR_SECONDS,
@@ -244,6 +245,26 @@ describe("isCacheableHubRequest", () => {
 });
 
 describe("edgeCachePolicyFor", () => {
+  it("ends release-sensitive fresh and stale windows at the next UTC midnight", () => {
+    const before = new Date("2026-10-31T23:59:30.000Z");
+    const after = new Date("2026-11-01T00:00:01.000Z");
+    for (const path of [
+      "/",
+      "/tracks",
+      "/tracks/",
+      "/fresh",
+      "/fresh/",
+      "/artist/drift",
+      "/label/hospital",
+    ]) {
+      expect(edgeCachePolicyFor(path, "", before)?.storedMaxAge).toBeLessThanOrEqual(30);
+      expect(edgeCachePolicyFor(path, "", after)?.storedMaxAge).toBeGreaterThan(30);
+    }
+    expect(edgeCachePolicyFor("/album/drift", "", before)).toBe(PAGE_CACHE_POLICY);
+    expect(releaseBoundFeedCacheControl(before)).toContain("s-maxage=30");
+    expect(releaseBoundFeedCacheControl(after)).toBe(PAGE_CACHE_POLICY.cacheControl);
+  });
+
   it("routes each cacheable surface to its policy", () => {
     expect(edgeCachePolicyFor("/log", "")).toBe(PAGE_CACHE_POLICY);
     expect(edgeCachePolicyFor("/log/2026.A.7Q", "")).toBe(PAGE_CACHE_POLICY);

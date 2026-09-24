@@ -552,11 +552,11 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "The anchor worklist's unanchorable-credit filter (`lower(t.artists_json) not in (…)`) — a residual on a worklist the surrounding clauses already narrowed, and an exclusion list rather than a lookup key, so no btree could serve it in any spelling.",
   },
   {
-    count: 4,
+    count: 3,
     file: "lib/server/tracks.ts",
     pattern: "fn-wrapped:lower-tracks",
     reason:
-      "The FINDINGS-pinned reads (searchArtistFindings' pre-backfill fallback + searchTracks). Both drive from FINDINGS_FROM (`findings join tracks`), so the scan is bounded by the certified corpus — the small table — never by the growing catalogue.",
+      "The FINDINGS-pinned reads (searchArtistFindings and searchTracks) drive from FINDINGS_FROM (`findings join tracks`), so the scan is bounded by the certified corpus — the small table — never by the growing catalogue.",
   },
   {
     count: 1,
@@ -580,7 +580,7 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "The artist substring FALLBACK — the same clause as the Wave 3-2 entry above, counted once more under the leading-wildcard shape. It was the hottest search shape in the app; it is now the path a name Fluncle holds no linked artist entity for takes, which is the only case where a scan can still find what the `track_artists` seek cannot.",
   },
   {
-    count: 4,
+    count: 3,
     file: "lib/server/tracks.ts",
     pattern: "fn-wrapped:leading-wildcard-like",
     reason:

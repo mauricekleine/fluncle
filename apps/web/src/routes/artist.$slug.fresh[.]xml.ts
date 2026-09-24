@@ -6,6 +6,7 @@ import {
 } from "../lib/fresh-feed-rss";
 import { siteUrl } from "../lib/fluncle-links";
 import { listArtistFreshTracks } from "../lib/server/fresh-entity";
+import { releaseBoundFeedCacheControl } from "../lib/server/edge-cache";
 
 // The per-ARTIST sibling of /fresh.xml — the whole-archive release feed narrowed to one artist:
 // what just came OUT from this artist, over the same trailing 30-day release-date window. Only the
@@ -20,7 +21,8 @@ export const Route = createFileRoute("/artist/$slug/fresh.xml")({
   server: {
     handlers: {
       GET: async ({ params }) => {
-        const feed = await listArtistFreshTracks(params.slug);
+        const now = new Date();
+        const feed = await listArtistFreshTracks(params.slug, { now });
         if (!feed) {
           return new Response("Not found", { status: 404 });
         }
@@ -31,7 +33,7 @@ export const Route = createFileRoute("/artist/$slug/fresh.xml")({
           title,
           tracks: feed.tracks,
         });
-        return freshFeedResponse(xml);
+        return freshFeedResponse(xml, releaseBoundFeedCacheControl(now));
       },
     },
   },

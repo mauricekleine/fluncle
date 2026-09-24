@@ -588,6 +588,61 @@ describe("countAllTracks", () => {
     // Filtered requests remain exact legacy reads; all three fixture BPMs are null.
     expect((await listTracksHubPage({ bpmMin: 1 }, 1)).total).toBe(0);
   });
+
+  it("keeps projected totals, page starts, and year buckets with future releases", async () => {
+    const now = new Date("2026-10-01T12:00:00.000Z");
+    for (let index = 0; index < 110; index += 1) {
+      await seedTrack({
+        releaseDate: "2026-09-01",
+        trackId: `released-${String(index).padStart(3, "0")}`,
+      });
+    }
+    await seedTrack({ releaseDate: "2026-11-01", trackId: "future-month" });
+    await seedTrack({ releaseDate: "2027", trackId: "future-year" });
+    await seedTrack({ releaseDate: "20x?long", trackId: "malformed-retained" });
+    const { rebuildDefaultTrackHubAnchors, rebuildPublicProjection } =
+      await import("./public-projections");
+    await rebuildPublicProjection(db, "public_aggregates", {
+      generation: "future-aggregate",
+      limit: 50,
+    });
+    await rebuildDefaultTrackHubAnchors(db, { generation: "future-aggregate" });
+    await db.execute({
+      args: [PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY, "true"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+
+    const projectedOnly = {
+      ...db,
+      execute: async (statement: InStatement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (
+          sql.includes("row_number() over") ||
+          sql.includes("group by year") ||
+          sql.includes("select count(*) as total\n          from tracks")
+        ) {
+          throw new Error("growing legacy hub shape reached");
+        }
+        return db.execute(statement);
+      },
+    } as Client;
+    holder.db = projectedOnly;
+    resetTracksHubAggregateCache();
+
+    expect(await countAllTracks(now)).toBe(111);
+    expect((await listTracksHubPage({}, 1, now)).total).toBe(111);
+    expect(ids((await listTracksHubPage({}, 1, now)).items)[0]).toBe("malformed-retained");
+    expect(ids((await listTracksHubPage({}, 3, now)).items)).toEqual(
+      Array.from({ length: 15 }, (_, index) => `released-${String(14 - index).padStart(3, "0")}`),
+    );
+    expect(await listTracksHubYearLane({}, now)).toEqual([{ page: 1, year: "2026" }]);
+    const releaseDay = new Date("2026-11-01T00:00:01.000Z");
+    expect(ids((await listTracksHubPage({}, 1, releaseDay)).items).slice(0, 2)).toEqual([
+      "malformed-retained",
+      "future-month",
+    ]);
+    expect(await countAllTracks(releaseDay)).toBe(112);
+  });
 });
 
 // The scanning reads carry `left join findings` ONLY when a predicate reads a findings column.

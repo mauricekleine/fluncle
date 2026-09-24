@@ -153,6 +153,22 @@ beforeEach(async () => {
 });
 
 describe("upcoming entity tracks", () => {
+  it("keeps a future finding credited only in artists_json on its artist page", async () => {
+    await seedArtist("art_future", "Future Artist", "future-artist");
+    await seedCertifiedFinding("future-no-edge", "art_future", "Future Artist");
+    await db.execute({
+      args: ["future-no-edge"],
+      sql: `delete from track_artists where track_id = ?`,
+    });
+    await db.execute({
+      args: ["2026-11-01", "future-no-edge"],
+      sql: `update tracks set release_date = ? where track_id = ?`,
+    });
+
+    const page = await listArtistUpcoming("art_future", "2026-10-01");
+    expect(page.findings.map((finding) => finding.trackId)).toEqual(["future-no-edge"]);
+  });
+
   it("pages every future row without dropping the tail", async () => {
     await seedArtist("art_future", "Future Artist", "future-artist");
     const rows = Array.from(

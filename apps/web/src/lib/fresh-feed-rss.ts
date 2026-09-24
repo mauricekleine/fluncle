@@ -89,12 +89,12 @@ ${items.join("\n")}
 }
 
 /** The cache + content-type headers every fresh feed serves (verbatim from /fresh.xml). */
-export function freshFeedResponse(xml: string): Response {
+export function freshFeedResponse(xml: string, cacheControl: string): Response {
   return new Response(xml, {
     headers: {
       // Readers get a short max-age; the CDN holds s-maxage; SWR keeps every repeat poll free
       // while a background refresh runs.
-      "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+      "Cache-Control": cacheControl,
       "Content-Type": "application/rss+xml; charset=utf-8",
       // A feed is for readers, never a search result. Every artist/label page advertises its
       // fresh feed via rel=alternate, so crawlers discover thousands of them — most an empty

@@ -114,7 +114,7 @@ import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import { dedupeByRecordingIdentity, type RecordingIdentity } from "./track-match";
-import { type CatalogueTrackItem, getGraphFindingsByIds } from "./tracks";
+import { artistMembershipSql, type CatalogueTrackItem, getGraphFindingsByIds } from "./tracks";
 import { releasedByTodaySql, upcomingAfterTodaySql } from "./release-day";
 
 // The sort vocabulary, the page bounds, the group SHAPES and the pure helpers live in the
@@ -251,12 +251,17 @@ export async function listArtistUpcoming(
 ): Promise<UpcomingTrackPage> {
   const db = await getDb();
   const predicate = `${upcomingAfterTodaySql("tracks.release_date")}
-            and exists (select 1 from track_artists ta
-                        where ta.track_id = tracks.track_id and ta.artist_id = ?)
+            and ${artistMembershipSql("tracks", "(select lower(name) from artists where id = ?)")}
             and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null`;
   const [result, count] = await Promise.all([
     db.execute({
-      args: [today, artistId, GRAPH_GROUP_ROW_CEILING, (page - 1) * GRAPH_GROUP_ROW_CEILING],
+      args: [
+        today,
+        artistId,
+        artistId,
+        GRAPH_GROUP_ROW_CEILING,
+        (page - 1) * GRAPH_GROUP_ROW_CEILING,
+      ],
       sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url, findings.log_id
           from tracks indexed by tracks_release_date_track_id_idx
           left join findings on findings.track_id = tracks.track_id
@@ -265,7 +270,7 @@ export async function listArtistUpcoming(
           limit ? offset ?`,
     }),
     db.execute({
-      args: [today, artistId],
+      args: [today, artistId, artistId],
       sql: `select count(*) as total from tracks indexed by tracks_release_date_track_id_idx where ${predicate}`,
     }),
   ]);

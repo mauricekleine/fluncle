@@ -124,7 +124,7 @@ describe("/artist/$slug/fresh.xml — release-framed, two tiers, one artist", ()
 
     expect(res.headers.get("Content-Type")).toBe("application/rss+xml; charset=utf-8");
     expect(res.headers.get("Cache-Control")).toBe(
-      "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+      "public, max-age=0, s-maxage=300, stale-while-revalidate=3600",
     );
     // Feeds are for readers, never search results — noindex keeps the thousands of
     // rel=alternate-discovered entity feeds out of GSC's crawled-not-indexed churn.

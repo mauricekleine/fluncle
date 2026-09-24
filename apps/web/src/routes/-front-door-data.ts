@@ -37,6 +37,7 @@ import { listFreshReleases } from "@/lib/server/fresh";
 import { countIndexableLabels } from "@/lib/server/labels";
 import { getLiveState, type LiveState } from "@/lib/server/live";
 import { countAllTracks } from "@/lib/server/tracks-hub";
+import { releaseTodayUtc } from "@/lib/server/release-day";
 import { listTracks, toPublicTrackListItem } from "@/lib/server/tracks";
 
 /** How many findings render under the lead. Small on purpose: this is a door, not the feed. */
@@ -79,12 +80,13 @@ export type FrontDoorData = {
  * precedent it forwards to).
  */
 export async function loadFrontDoorData(now: Date = new Date()): Promise<FrontDoorData> {
+  const releaseThrough = releaseTodayUtc(now);
   const [leadPage, findingsPage, fresh, tracks, artists, labels, albums, live] = await Promise.all([
     // The EDITED lead: newest finding carrying an operator-written note. `hasNote` is the same
     // predicate the auto-note queue reads, so "wrote about it" is a real column, not a heuristic.
-    listTracks({ countTotal: false, hasNote: true, lean: true, limit: 1 }),
+    listTracks({ countTotal: false, hasNote: true, lean: true, limit: 1, releaseThrough }),
     // One extra row, so dropping the lead (when it is also the newest finding) still fills the block.
-    listTracks({ lean: true, limit: FRONT_DOOR_FINDINGS + 1 }),
+    listTracks({ lean: true, limit: FRONT_DOOR_FINDINGS + 1, releaseThrough }),
     listFreshReleases(now),
     // The four shelf sizes. Each entity count is the INDEXABLE set — every entity whose page
     // clears the thin-content floor, the same set the sitemap submits — which is a hair NARROWER

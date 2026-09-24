@@ -255,7 +255,7 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
     expect(ids).toContain("t-failed-ready");
     // Newest-first: the just-added pending finding leads.
     expect(ids).toEqual(["t-new-pending", "t-null", "t-failed-ready"]);
-    expect(lastListSql()).toContain("order by findings.added_at desc, tracks.track_id desc");
+    expect(lastListSql()).toContain("order by findings.added_at desc, findings.track_id desc");
   });
 
   it("EXCLUDES terminal, cooling, capped, and coordinate-less findings", async () => {

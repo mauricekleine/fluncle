@@ -9,6 +9,7 @@ import { listedArtistWhere } from "./artist-visibility";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
+import { publicEntityIndexable } from "./entity-indexability";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   batchDueWorkMutationGroups,
@@ -125,6 +126,8 @@ export type ArtistRecord = {
   lastfmUrl: string | undefined;
   mbid: string | undefined;
   name: string;
+  /** The maintained total used by this page and its sitemap row. */
+  renderableTrackCount?: number;
   slug: string;
   spotifyUrl: string | undefined;
   wikidataQid: string | undefined;
@@ -168,7 +171,7 @@ async function resolveArtistBySlug(
   const result = await db.execute({
     args: [slug],
     sql: `select id, name, slug, spotify_url, mbid, wikidata_qid, discogs_url, lastfm_url, bio,
-                 image_url, image_key, image_state, image_updated_at
+                 image_url, image_key, image_state, image_updated_at, renderable_track_count
           from artists where slug = ?${visibility} limit 1`,
   });
 
@@ -193,6 +196,7 @@ async function resolveArtistBySlug(
     lastfmUrl: optionalText(row["lastfm_url"]),
     mbid: optionalText(row["mbid"]),
     name: row["name"],
+    renderableTrackCount: Number(row["renderable_track_count"]),
     slug: typeof row["slug"] === "string" ? row["slug"] : slug,
     spotifyUrl: optionalText(row["spotify_url"]),
     wikidataQid: optionalText(row["wikidata_qid"]),
@@ -485,7 +489,7 @@ export function artistSitemapWindowStatement(minTracks: number, limit: number, a
                         where ta2.artist_id = a.id and f2.log_id is not null)
                     limit 1) as cover_url
           from artists a
-          where ${seek} and a.renderable_track_count >= ?
+          where ${seek} and ${publicEntityIndexable("a", minTracks)}
             and ${listedArtistWhere("a")}
           order by a.slug asc
           limit ?`,
@@ -513,7 +517,7 @@ export async function listArtistSitemapRows(
           join track_artists ta on ta.artist_id = a.id
           join tracks on tracks.track_id = ta.track_id
           left join findings on findings.track_id = tracks.track_id
-          where a.renderable_track_count >= ? and ${listedArtistWhere("a")}
+          where ${publicEntityIndexable("a", minTracks)} and ${listedArtistWhere("a")}
           group by a.id
           order by a.slug asc`,
         },
