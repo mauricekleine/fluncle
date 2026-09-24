@@ -9305,6 +9305,7 @@ html[data-player-docked] .nav-shell--workbench {
 }
 
 .player-artists {
+  display: block;
   color: var(--muted-foreground);
   font-size: 0.82rem;
   line-height: 1.25;
@@ -9333,6 +9334,12 @@ html[data-player-docked] .nav-shell--workbench {
   display: flex;
   flex: none;
   gap: 0.25rem;
+}
+
+/* Close stands a step apart from the rest, so a thumb reaching for the menu never ends the
+   visit's listening by accident. */
+.player-button--close {
+  margin-left: 0.5rem;
 }
 
 .player-button,
@@ -9463,7 +9470,13 @@ html[data-player-docked] .nav-shell--workbench {
   }
 
   .player-keep-going {
-    padding: 0 0.7rem;
+    font-size: 0.8rem;
+    padding: 0 0.6rem;
+  }
+
+  /* The title keeps a readable width even beside "Keep going". */
+  .player-text {
+    min-width: 5.5rem;
   }
 }
 
@@ -9507,29 +9520,32 @@ html[data-player-docked] .nav-shell--workbench {
 
 .play-cover:hover .play-cover-glyph,
 .play-cover:focus-visible .play-cover-glyph,
-.play-cover[aria-pressed="true"] .play-cover-glyph,
+.play-cover[data-status="playing"] .play-cover-glyph,
+.play-cover[data-status="loading"] .play-cover-glyph,
 .play-cover[data-status="paused"] .play-cover-glyph {
   opacity: 1;
 }
 
+/* A preview that came back empty dims its glyph but keeps it at the 3:1 a live control needs:
+   a heavier scrim under a lighter glyph. */
 .play-cover[data-missing] .play-cover-glyph {
-  color: color-mix(in oklch, var(--starlight-cream) 45%, transparent);
+  background: color-mix(in oklch, var(--deep-field) 70%, transparent);
+  color: color-mix(in oklch, var(--starlight-cream) 70%, transparent);
 }
 
 @media (hover: none) {
   .play-cover-glyph {
     background: color-mix(in oklch, var(--deep-field) 70%, transparent);
     border-radius: 999px;
-    bottom: 0.25rem;
     font-size: 0.8rem;
     height: 1.4rem;
-    inset: auto;
+    inset: auto 0.25rem 0.25rem auto;
     opacity: 1;
-    right: 0.25rem;
     width: 1.4rem;
   }
 
-  .play-cover[aria-pressed="true"] .play-cover-glyph {
+  .play-cover[data-status="playing"] .play-cover-glyph,
+  .play-cover[data-status="loading"] .play-cover-glyph {
     background: color-mix(in oklch, var(--deep-field) 80%, transparent);
   }
 }

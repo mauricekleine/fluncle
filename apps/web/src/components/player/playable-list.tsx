@@ -119,7 +119,6 @@ export function PlayCover({
   return (
     <button
       aria-label={active ? `Pause the preview of ${credit}` : `Play the preview of ${credit}`}
-      aria-pressed={active}
       className={cn("play-cover", className)}
       data-discovery-play=""
       data-lit={lit ? "" : undefined}

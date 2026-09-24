@@ -129,6 +129,7 @@ function emitQueue(next: QueueState | undefined): void {
   queue = next;
   notify(queueListeners);
   syncMediaSessionMetadata();
+  syncMediaSessionState();
 }
 
 function markMissing(trackId: string): void {
@@ -754,10 +755,12 @@ function syncMediaSessionState(): void {
     return;
   }
 
+  // A list that ran out still holds its place (the bar keeps the last track and its way on), so
+  // the lock screen reads paused rather than empty until the player is closed.
   session.playbackState =
     state.status === "playing" || state.status === "loading"
       ? "playing"
-      : state.status === "paused"
+      : state.status === "paused" || queue !== undefined
         ? "paused"
         : "none";
 }

@@ -239,12 +239,18 @@ export function PlayerBar(): ReactNode {
               track.title
             )}
           </p>
-          <p className="player-artists">
-            {track.artists.join(", ")}
-            <span aria-hidden="true" className="player-position player-position--inline">
-              {position}
-            </span>
-          </p>
+          {/* At a list's end with nowhere further to go, the second line says so, once, instead
+              of the way on vanishing without a word. */}
+          {queue.ended && noWayOn ? (
+            <output className="player-artists">Nothing else close in sound yet.</output>
+          ) : (
+            <p className="player-artists">
+              {track.artists.join(", ")}
+              <span aria-hidden="true" className="player-position player-position--inline">
+                {position}
+              </span>
+            </p>
+          )}
           <span className="sr-only">{`Track ${queue.index + 1} of ${queue.tracks.length}`}</span>
         </div>
         <span aria-hidden="true" className="player-position">
