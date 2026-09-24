@@ -886,3 +886,395 @@ describe("continuations lapse on any newer intent, even from idle", () => {
     expect(claimPageContinuation(PAGE.href)).toBe(true);
   });
 });
+
+// ── AUTOMATIC ADVANCEMENT OBEYS THE SAME INTENT AS A PRESS ────────────────────────────────────
+// A clip's end runs as a queued task, so a pause, a close or another sound can land between the
+// clip reaching its end and the `ended` event running. Whatever came first wins.
+
+/** Run the end-of-clip task the browser queued while the clip was still sounding. */
+function endTaskRuns(element: BrowserLikeAudio): void {
+  element.ended = true;
+  element.dispatch("ended");
+  element.ended = false;
+}
+
+describe("automatic advancement stands down behind a newer intent", () => {
+  it("an end that runs after the listener paused does not start the next track", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    pausePreview();
+    endTaskRuns(element);
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(readPlayer().queue?.index).toBe(0);
+    expect(element.src).toBe("/api/preview/a");
+  });
+
+  it("an end that runs after another sound started neither advances nor silences it", async () => {
+    const element = installBrowserAudio();
+    const story = new OtherMedia();
+    const page = installPage([story]);
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    page.start(story);
+    endTaskRuns(element);
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(element.src).toBe("/api/preview/a");
+    expect(story.paused).toBe(false);
+    expect(story.pauses).toBe(0);
+  });
+
+  it("an end that runs after the player closed does not bring it back", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    dismissPlayer();
+    endTaskRuns(element);
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ queue: undefined, status: "idle" });
+    expect(element.src).toBe("");
+  });
+
+  it("an end that runs after a headset pause holds the list where it is", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    element.pause();
+    endTaskRuns(element);
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(readPlayer().queue?.index).toBe(0);
+  });
+
+  it("a missing preview reported after another sound started is remembered, never skipped over it", async () => {
+    const element = installBrowserAudio();
+    const story = new OtherMedia();
+    const page = installPage([story]);
+
+    playQueue(tracks("a", "b"), 0);
+    page.start(story);
+    element.failToLoad();
+    await settled();
+
+    expect(readPlayer().missing.has("a")).toBe(true);
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(element.src).toBe("/api/preview/a");
+    expect(story.pauses).toBe(0);
+  });
+
+  it("an uninterrupted end still plays the next track", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    element.finish();
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "loading", trackId: "b" });
+  });
+});
+
+describe("the player lives across pages", () => {
+  it("a sonic keep going still waiting plays after the listener moves to another page", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a"), 0);
+    element.arrive();
+    element.finish();
+    await settled();
+
+    const answer = deferred<QueueTrack[]>();
+    const outcome = keepGoing({ loadSimilar: () => answer.promise, navigate: () => {} });
+
+    expirePageContinuation("/fresh");
+    answer.resolve(tracks("x"));
+
+    expect(await outcome).toBe("moved");
+    expect(element.src).toBe("/api/preview/x");
+  });
+});
+
+// ── THE INTENT INVARIANT, OVER EVERY SHORT INTERLEAVING ───────────────────────────────────────
+// Every sequence of up to five events from the alphabet below runs against a fresh player. Five is
+// the shortest window that holds the race a queued end task creates: start, arrive, reach the end,
+// something newer, the end task. The
+// oracle knows only what the LISTENER did: a press (play a list, next, resume, keep going) asks
+// for sound; a pause, a close or another sound starting silences it. After every event:
+//
+//   - while silenced, the preview neither sounds nor tries to (no loading, no playing, the element
+//     paused) and the other sound was never paused by it;
+//   - the preview and the other sound never both sound at once.
+//
+// The automatic events (a clip arriving, reaching its end, its queued end task, a missing
+// preview, a late similar-tracks answer, the next page claiming its hand-off) may move the player
+// only while the listener's latest word was a press.
+
+const MODEL_PAGE = "/tracks?page=2";
+
+type Model = {
+  answer?: (tracks: QueueTrack[]) => void;
+  arrived: boolean;
+  element: BrowserLikeAudio;
+  endQueued: boolean;
+  outcome?: Promise<unknown>;
+  radio: OtherMedia;
+  radioPausesWhenSilenced: number;
+  silenced: boolean;
+  src: string;
+  start: (media: OtherMedia) => void;
+};
+
+type ModelEvent = { name: string; run: (model: Model) => void | Promise<void> };
+
+function sounding(model: Model): boolean {
+  const { status } = readPlayer();
+
+  return status === "playing" || status === "loading" || !model.element.paused;
+}
+
+function pressed(model: Model): void {
+  model.silenced = false;
+}
+
+function silenced(model: Model): void {
+  if (!model.silenced) {
+    model.radioPausesWhenSilenced = model.radio.pauses;
+  }
+
+  model.silenced = true;
+}
+
+const MODEL_EVENTS: readonly ModelEvent[] = [
+  {
+    name: "play a list",
+    run: (model) => {
+      pressed(model);
+      playQueue(tracks("a", "b"), 0);
+    },
+  },
+  {
+    name: "play a paged list",
+    run: (model) => {
+      pressed(model);
+      playQueue(tracks("a", "b"), 0, { continuation: { href: MODEL_PAGE, kind: "page" } });
+    },
+  },
+  {
+    name: "next",
+    run: (model) => {
+      if (readPlayer().queue) {
+        pressed(model);
+      }
+
+      skipNext();
+    },
+  },
+  {
+    name: "play/pause",
+    run: (model) => {
+      const { queue, status } = readPlayer();
+
+      if (status === "playing" || status === "loading") {
+        silenced(model);
+      } else if (status === "paused" || queue) {
+        pressed(model);
+      }
+
+      togglePlayback();
+    },
+  },
+  {
+    name: "pause",
+    run: (model) => {
+      silenced(model);
+      pausePreview();
+    },
+  },
+  {
+    name: "close",
+    run: (model) => {
+      silenced(model);
+      dismissPlayer();
+    },
+  },
+  {
+    name: "another sound starts",
+    run: (model) => {
+      silenced(model);
+      model.radio.paused = true;
+      model.start(model.radio);
+    },
+  },
+  {
+    name: "keep going",
+    run: (model) => {
+      if (readPlayer().queue) {
+        pressed(model);
+      }
+
+      model.outcome = keepGoing({
+        loadSimilar: () =>
+          new Promise((resolve) => {
+            model.answer = resolve;
+          }),
+        navigate: () => {},
+      });
+    },
+  },
+  {
+    name: "the clip arrives",
+    run: (model) => {
+      if (!model.element.paused && !model.arrived && model.element.src !== "") {
+        model.arrived = true;
+        model.element.arrive();
+      }
+    },
+  },
+  {
+    name: "the clip reaches its end",
+    run: (model) => {
+      if (model.arrived && !model.element.paused) {
+        model.endQueued = true;
+      }
+    },
+  },
+  {
+    name: "its end task runs",
+    run: (model) => {
+      if (model.endQueued) {
+        model.endQueued = false;
+        model.element.ended = true;
+
+        if (!model.element.paused) {
+          model.element.paused = true;
+          model.element.dispatch("pause");
+        }
+
+        model.element.dispatch("ended");
+        model.element.ended = false;
+      }
+    },
+  },
+  {
+    name: "the preview is missing",
+    run: (model) => {
+      if (!model.arrived && model.element.src !== "") {
+        model.element.failToLoad();
+      }
+    },
+  },
+  {
+    name: "a late similar-tracks answer",
+    run: async (model) => {
+      const answer = model.answer;
+
+      model.answer = undefined;
+      answer?.(tracks("x", "y"));
+      await model.outcome;
+    },
+  },
+  {
+    name: "the next page claims its hand-off",
+    run: () => {
+      if (claimPageContinuation(MODEL_PAGE)) {
+        playQueue(tracks("p1", "p2"), 0);
+      }
+    },
+  },
+];
+
+function* interleavings(length: number): Generator<ModelEvent[]> {
+  if (length === 0) {
+    yield [];
+
+    return;
+  }
+
+  for (const prefix of interleavings(length - 1)) {
+    for (const event of MODEL_EVENTS) {
+      yield [...prefix, event];
+    }
+  }
+}
+
+async function runInterleaving(events: readonly ModelEvent[]): Promise<string | undefined> {
+  resetPreviewPlayer();
+  vi.unstubAllGlobals();
+
+  const element = installBrowserAudio();
+  const radio = new OtherMedia();
+  const page = installPage([radio]);
+  const model: Model = {
+    arrived: false,
+    element,
+    endQueued: false,
+    radio,
+    radioPausesWhenSilenced: 0,
+    silenced: false,
+    src: "",
+    start: page.start,
+  };
+
+  for (const [step, event] of events.entries()) {
+    await event.run(model);
+    await settled();
+
+    // A new source is a new clip: the element drops the old one's queued end with it.
+    if (element.src !== model.src) {
+      model.src = element.src;
+      model.arrived = false;
+      model.endQueued = false;
+    }
+
+    const trace = events
+      .slice(0, step + 1)
+      .map((item) => item.name)
+      .join(" → ");
+
+    if (model.silenced && sounding(model)) {
+      return `sound without a live intent: ${trace} (status ${readPlayer().status})`;
+    }
+
+    if (model.silenced && radio.pauses !== model.radioPausesWhenSilenced) {
+      return `the preview silenced the other sound on its own: ${trace}`;
+    }
+
+    if (!radio.paused && sounding(model) && readPlayer().status === "playing") {
+      return `two sounds at once: ${trace}`;
+    }
+  }
+
+  return undefined;
+}
+
+describe("the intent invariant over every short interleaving", () => {
+  it("holds for every sequence of up to five events", async () => {
+    const failures: string[] = [];
+    let runs = 0;
+
+    for (let length = 1; length <= 5; length += 1) {
+      for (const events of interleavings(length)) {
+        runs += 1;
+
+        const failure = await runInterleaving(events);
+
+        if (failure && failures.length < 10) {
+          failures.push(failure);
+        }
+      }
+    }
+
+    expect(runs).toBeGreaterThan(MODEL_EVENTS.length ** 5);
+    expect(failures).toEqual([]);
+  }, 120_000);
+});

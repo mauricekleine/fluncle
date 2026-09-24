@@ -30,9 +30,14 @@
 //
 // SOUND STARTS ONLY ON A LIVE INTENT. There are exactly three ways a preview starts: a press
 // (a row's cover, the bar, a key, the lock screen while the preview holds the session); the list
-// the listener started running on (a clip ending, a missing clip skipped, never once paused); and
-// a continuation ("keep going": a sonic search or a next-page hand-off) that is honoured only
-// under the intent that asked for it. Every other event supersedes that intent.
+// the listener started running on (a clip ending, a missing clip skipped), which moves on only
+// while the intent that started the current clip is still the latest; and a continuation ("keep
+// going": a sonic search or a next-page hand-off) honoured only under the intent that asked for
+// it. A pause (the page's, the OS's, a headset's), a close and any competing sound supersede that
+// intent, so an `ended` or `error` event that arrives after one of them moves nothing. The player
+// lives across pages, so moving to another page is not a new intent: a sonic "keep going" still
+// waiting plays where the listener is, like a clip that keeps playing. A next-page hand-off plays
+// only on the page it asked for.
 
 import { useCallback, useSyncExternalStore } from "react";
 import {
@@ -126,6 +131,14 @@ const PAGE_HANDOFF_TTL_MS = 30_000;
 type PageHandoff = { at: number; generation: number; href: string };
 
 let pendingPageContinuation: PageHandoff | undefined;
+
+// The generation the current clip was asked to sound under (a start or a resume). The list moves
+// on by itself (`ended`, a missing clip skipped) only while it is still the latest one.
+let soundingGeneration = -1;
+
+function soundStillWanted(): boolean {
+  return soundingGeneration === playbackGeneration;
+}
 
 /** A new intent: every continuation asked under an older one lapses, idle or not. */
 function supersedeIntent(): void {
@@ -258,6 +271,12 @@ function stop(): void {
 // The current clip finished. Inside a queue the next track starts; at the end of the list the
 // bar keeps its place and offers the way on. Outside a queue the preview simply stops.
 function onEnded(): void {
+  // An end the listener has already moved past (they paused, closed the player, or another sound
+  // started before this event ran): the clip stays where it is and the list does not move.
+  if (!soundStillWanted()) {
+    return;
+  }
+
   if (!queue) {
     stop();
 
@@ -300,9 +319,9 @@ function failCurrent(token: number): void {
     markMissing(trackId);
   }
 
-  // The listener paused this clip while it was still arriving: it is remembered as missing, but
-  // the queue never moves on without them.
-  if (state.status === "paused") {
+  // The listener paused this clip while it was still arriving, closed the player, or another sound
+  // started: it is remembered as missing, but the queue never moves on without them.
+  if (state.status === "paused" || !soundStillWanted()) {
     return;
   }
 
@@ -337,6 +356,11 @@ function ensureAudio(): HTMLAudioElement {
     failCurrent(loadToken);
   });
   element.addEventListener("playing", () => {
+    // A late `playing` from an attempt the listener has since paused or closed reports nothing.
+    if (element.paused || !soundStillWanted()) {
+      return;
+    }
+
     emit({ status: "playing", trackId: state.trackId });
     consecutiveMisses = 0;
 
@@ -347,8 +371,10 @@ function ensureAudio(): HTMLAudioElement {
   });
   element.addEventListener("pause", () => {
     // A pause the page did not ask for (the OS, a headset button, the one-sound guard) still
-    // lands in the store, so every control reads the truth.
+    // lands in the store, so every control reads the truth, and it is the listener's newest
+    // intent: a queued `ended` or a waiting "keep going" behind it moves nothing.
     if (state.status === "playing" && !element.ended) {
+      supersedeIntent();
       emit({ status: "paused", trackId: state.trackId });
     }
   });
@@ -382,6 +408,7 @@ function load(trackId: string, options?: StartPreviewOptions): void {
   const element = ensureAudio();
   loadToken += 1;
   supersedeIntent();
+  soundingGeneration = playbackGeneration;
 
   element.src = options?.src ?? previewProxyUrl(trackId);
   emit({ status: "loading", trackId });
@@ -452,6 +479,7 @@ function pauseResume(): void {
 
   if (state.status === "paused") {
     supersedeIntent();
+    soundingGeneration = playbackGeneration;
     emit({ status: "loading", trackId: state.trackId });
     attemptPlay(audio, state.trackId);
   }
@@ -604,7 +632,8 @@ export function claimPageContinuation(href: string): boolean {
 
 /**
  * The listener arrived somewhere: a hand-off for any OTHER page lapses (they went elsewhere). The
- * page it was asked for claims it first, from its own list's mount.
+ * page it was asked for claims it first, from its own list's mount. A sonic "keep going" is not a
+ * page hand-off and is untouched: the player lives across pages, so it plays where they are.
  */
 export function expirePageContinuation(href: string): void {
   if (pendingPageContinuation !== undefined && !samePath(pendingPageContinuation.href, href)) {
@@ -736,6 +765,7 @@ export function resetPreviewPlayer(): void {
   mediaSessionOwned = false;
   playAttempt = 0;
   playbackGeneration = 0;
+  soundingGeneration = -1;
 }
 
 /** Elapsed/total seconds of the current preview — the bars' own clock. */
