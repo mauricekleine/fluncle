@@ -143,7 +143,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 - [docs/agents/enrichment-agent.md](./docs/agents/enrichment-agent.md) - bootstrap for the async track agent (enrich → video → publish).
 - [docs/agents/render-conductor.md](./docs/agents/render-conductor.md) - read when changing the per-finding video render pipeline or its conductor.
 - [packages/skills/fluncle-box-restore](./packages/skills/fluncle-box-restore) - read when rebuilding rave-02 or checking restore readiness.
-- [docs/agents/hermes-agent.md](./docs/agents/hermes-agent.md) - read when changing the Hermes chat agent, the box role model, or its secrets.
+- [docs/agents/hermes-agent.md](./docs/agents/hermes-agent.md) - read when changing the Hermes sweep box, its agent-token role model, or its secrets.
 - [docs/agents/observation-agent.md](./docs/agents/observation-agent.md) - read when changing the audio observation or its voice gate.
 - [docs/agents/note-agent.md](./docs/agents/note-agent.md) - read when changing the auto-authored finding note.
 - [docs/agents/bio-agent.md](./docs/agents/bio-agent.md) - read when changing artist, label, or album bios.

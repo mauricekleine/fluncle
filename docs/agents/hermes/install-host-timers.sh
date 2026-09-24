@@ -4,8 +4,8 @@
 #
 # This is the "schedule" half of the reset boundary (docs/agents/hermes-agent.md): a reset
 # restores CODE (baked into the image, Unit A) + SCHEDULE (these timer units) +
-# SECRETS (fluncle-secrets-sync from 1Password). The gateway then holds NO automation crons;
-# the Discord chat agent (`gateway run`) is untouched.
+# SECRETS (fluncle-secrets-sync from 1Password). The gateway holds NO automation crons and no
+# chat platform; `gateway run` only keeps the container alive.
 #
 # Run on the rave-02 HOST (not inside the container), from a repo checkout, as root:
 #     sudo bash docs/agents/hermes/install-host-timers.sh

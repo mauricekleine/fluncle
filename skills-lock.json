@@ -26,7 +26,7 @@
     "fluncle-box-restore": {
       "source": "packages/skills/fluncle-box-restore",
       "sourceType": "local",
-      "computedHash": "cda37189d54d1861d986e4e1744d3dee87b0235fec8e614a796165bb22b38e8a"
+      "computedHash": "340f0ee6f9ed8a5f0fcb74bfd5f2bb35836393fe99c7857986637ce7fd0d8338"
     },
     "fluncle-catalogue-prune": {
       "source": "packages/skills/fluncle-catalogue-prune",
@@ -46,7 +46,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "51335898046c45bae0eb5b6a6beb4fe6225d1e76c2c0ce7b6d6ecc3f47b2fa05"
+      "computedHash": "ddbd5af3797dc48979e0fc8345dc61603f7de07de238c0986aca8c7d41b926cd"
     },
     "fluncle-label-triage": {
       "source": "packages/skills/fluncle-label-triage",
@@ -61,7 +61,7 @@
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "b892659e4a5ecba78420c04c4f2504e4be816e91c89cab0dc11aee39bde267c8"
+      "computedHash": "944a0dc39d493f528de8e3e2147125f7a6140955bb40e2027490624dfb237e74"
     },
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",

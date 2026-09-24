@@ -1,16 +1,16 @@
 ---
 name: fluncle-box-restore
 description: >-
-  Rebuild or restore Fluncle's rave-02 agent box (the Hermes/devbox host running every automation sweep) after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — provision → harden → op → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (model, voice, pins, crons): that is fluncle-hermes-operator. NOT generic Hetzner VPS profiles: that is hetzner-devbox, which this skill calls and sequences.
+  Rebuild or restore Fluncle's rave-02 agent box (the Hermes/devbox host running every automation sweep) after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — provision → harden → op → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (pins, secrets, crons): that is fluncle-hermes-operator. NOT generic Hetzner VPS profiles: that is hetzner-devbox, which this skill calls and sequences.
 ---
 
 # Fluncle box restore — putting rave-02 back
 
-rave-02 is the box every Fluncle automation runs on: the Hermes chat gateway plus ~44 host systemd timers driving the `--no-agent` sweeps. This skill is the one entry point for **resurrecting it**, and for answering the cheaper question — _could we?_ — before you ever need to.
+rave-02 is the box every Fluncle automation runs on: the Hermes container (a long-lived runtime with no chat platform and no model) plus ~44 host systemd timers driving the `--no-agent` sweeps. This skill is the one entry point for **resurrecting it**, and for answering the cheaper question — _could we?_ — before you ever need to.
 
 The rebuild is assembled from the linked assets across the public repository and private companion; follow them in the order below. **Do not reconstruct any of it from source.** Each step below names the asset that does the work; follow the link, run the thing, come back.
 
-**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (model, voice, pins, secrets, crons). [`hetzner-devbox`](../hetzner-devbox) is the generic VPS provisioning kit. This skill is the box being **gone**, and it drives both of those in order.
+**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). [`hetzner-devbox`](../hetzner-devbox) is the generic VPS provisioning kit. This skill is the box being **gone**, and it drives both of those in order.
 
 ## Read this first — the two halves
 
@@ -88,7 +88,6 @@ The nightly [`fluncle-backup`](../../../docs/agents/hermes/backup-timer/README.m
 
 - the `/status` prober's target env (the `HEALTHCHECK_*` values) — hand-placed, in no sync
 - the render box's SSH key — its only other copy is on the operator's Mac
-- the gateway's own dotenv (the Discord home-channel and thread bindings)
 
 The durable fix for each is to fold it into the `op` sync as another template rather than to re-place it by hand next time; the labs doc tracks these as open operator items. Everything else the box accumulates — gateway state db, memories, kanban, cron markers, the render conductor's `box-id` and poison ledger — **is** in leg 2, provided the encryption key was provisioned. With no key, leg 2 skips silently and uploads nothing; `preflight.ts` fails loudly on exactly that.
 

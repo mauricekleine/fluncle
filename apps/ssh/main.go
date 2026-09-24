@@ -2551,7 +2551,7 @@ var statusServiceLabels = map[string]string{
 // SERVICE_SUBTITLES). Public-safe: every domain here is already public.
 var statusServiceSubtitles = map[string]string{
 	"dns":        "dig.fluncle.com",
-	"hermes":     "the Discord chat agent",
+	"hermes":     "the agent box that runs the automation",
 	"onion":      "the archive over Tor",
 	"r2":         "found.fluncle.com",
 	"render-box": "the scale-to-zero box's reachability",

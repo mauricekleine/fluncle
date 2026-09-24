@@ -182,7 +182,7 @@ export const INFRA_SERVICE_SUBTITLES: Record<string, string> = {
   db: "the archive's persistence",
   disk: "the agent box's free space",
   dns: "dig.fluncle.com",
-  hermes: "the Discord chat agent",
+  hermes: "the agent box that runs the automation",
   onion: "the archive over Tor",
   r2: "found.fluncle.com",
   "render-box": "the scale-to-zero box's reachability",

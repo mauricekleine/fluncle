@@ -31,8 +31,8 @@ The dump FORMAT is unchanged and byte-for-byte enforced: `backup-sweep.test.ts` 
 
 **What it takes** (small, unrecoverable, load-bearing):
 
-- the gateway state db (`state.db` + `-wal`/`-shm`) — sessions, memories index, kanban, the Discord channel binding
-- `config.yaml` — the gateway's expanded config, the other half of the Discord binding
+- the gateway state db (`state.db` + `-wal`/`-shm`) — sessions, memories index, kanban
+- `config.yaml` — the gateway's expanded config
 - `memories/` — the agent's own memory files
 - `cron/output/` — the run markers `/status` judges every cron by
 - the cron user's `.render-conductor/` (`box-id` + the poison ledger) and `.healthcheck/` (the transition memory, so a restore doesn't re-baseline every service)

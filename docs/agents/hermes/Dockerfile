@@ -206,7 +206,7 @@ RUN ver="1.0.9" \
 # Install the Fluncle CLI — the agent's only path to read/write the archive. There
 # is no local command gate: the box holds an `agent`-scoped token and the Worker
 # refuses publish-/irreversible-class actions for that role server-side, so the
-# CLI runs ungated and an attempted publish comes back as a 403 to relay in voice.
+# CLI runs ungated and an attempted publish comes back as a 403.
 #
 # This is the STANDALONE bun-compiled binary, NOT the `npm -g` thin client: the
 # clip-cut + media-upload commands use the Bun runtime (Bun.spawn/Bun.file), and the

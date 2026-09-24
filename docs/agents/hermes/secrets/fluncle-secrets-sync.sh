@@ -229,7 +229,7 @@ ts="$(mktemp)"
 _cleanup() { rm -f "$tg" "$ts"; }
 op inject -f -i "$TPL_DIR/hermes.env.tpl" -o "$tg"
 op inject -f -i "$TPL_DIR/fluncle-secrets.env.tpl" -o "$ts"
-grep -q OPENROUTER_API_KEY "$tg" || {
+grep -q FLUNCLE_API_TOKEN "$tg" || {
   ERRORS=$((ERRORS + 1))
   echo "gateway inject sanity fail" >&2
   exit 1

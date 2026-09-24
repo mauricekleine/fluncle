@@ -1062,7 +1062,7 @@ async function runSecretsSync(
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(tpl, { recursive: true });
-  writeFileSync(join(tpl, "hermes.env.tpl"), "OPENROUTER_API_KEY={{op}}\n", "utf8");
+  writeFileSync(join(tpl, "hermes.env.tpl"), "FLUNCLE_API_TOKEN={{op}}\n", "utf8");
   writeFileSync(join(tpl, "fluncle-secrets.env.tpl"), "CLAUDE_CODE_OAUTH_TOKEN={{op}}\n", "utf8");
 
   // An `op` that materializes exactly what the real one does: the gateway env, the sweep env
@@ -1085,7 +1085,7 @@ async function runSecretsSync(
       "  *fluncle-secrets.env.tpl)",
       `    [ "\${OP_INJECT_SWEEP:-ok}" = "ok" ] || exit 1`,
       `    printf 'CLAUDE_CODE_OAUTH_TOKEN=stub\\n' >"$out" ;;`,
-      `  *) printf 'OPENROUTER_API_KEY=stub\\n' >"$out" ;;`,
+      `  *) printf 'FLUNCLE_API_TOKEN=stub\\n' >"$out" ;;`,
       "esac",
     ].join("\n"),
   );
@@ -1159,7 +1159,7 @@ describe("secrets-sync reports a run", () => {
       });
       expect(derivedOk(code, summary.errors)).toBe(true);
       // The real work still happened — the summary is a report, not a replacement.
-      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
+      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("FLUNCLE_API_TOKEN");
       expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
         "CLAUDE_CODE_OAUTH_TOKEN",
       );
@@ -1229,7 +1229,7 @@ describe("secrets-sync reports a run", () => {
       expect(code).toBe(0);
       expect(stderr).toContain("run-ledger receipt did not land (missing-token)");
       expect(summary).toMatchObject({ errors: 0, produced: 2, runLedgerReceipt: false });
-      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
+      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("FLUNCLE_API_TOKEN");
       expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
         "CLAUDE_CODE_OAUTH_TOKEN",
       );
@@ -1254,7 +1254,7 @@ describe("secrets-sync reports a run", () => {
       expect(code).toBe(0);
       expect(stderr).toContain("run-ledger receipt did not land (post-failed)");
       expect(summary).toMatchObject({ errors: 0, produced: 2, runLedgerReceipt: false });
-      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
+      expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("FLUNCLE_API_TOKEN");
       expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
         "CLAUDE_CODE_OAUTH_TOKEN",
       );

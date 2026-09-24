@@ -40,8 +40,8 @@
 //   - the MCP prompts (lib/server/mcp.ts) — those are prompts Fluncle SERVES to other
 //     people's agents. They are a published API surface; changing one is an API change
 //     and belongs behind review.
-//   - the sprite image prompts, the Hermes gateway SOUL.md, the dev-time reviewer
-//     agents. Different runtimes, none of them on the artifact path.
+//   - the sprite image prompts and the dev-time reviewer agents. Different runtimes,
+//     neither of them on the artifact path.
 // See docs/agents/prompt-registry.md for the full inventory and the reasoning.
 
 import { randomUUID } from "node:crypto";

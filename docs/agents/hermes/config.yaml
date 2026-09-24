@@ -1,27 +1,13 @@
-# Fluncle Hermes gateway config. Non-secret only — secrets come from the env via
-# `--env-file /etc/hermes.env` (OPENROUTER_API_KEY, FLUNCLE_API_TOKEN, the Discord
-# bot token). Deployed to ~/.hermes/config.yaml on the devbox. See
-# docs/agents/hermes-agent.md.
+# Fluncle Hermes gateway config. Non-secret only — the container's env comes from
+# `--env-file /etc/hermes.env` (FLUNCLE_API_TOKEN, DISCORD_ALERT_WEBHOOK). Deployed to
+# ~/.hermes/config.yaml on the devbox. See docs/agents/hermes-agent.md.
 #
-# Model: OpenRouter BYO key. Must be >=64k context and pinned (a smaller window
-# takes the whole gateway down at startup). GLM 5.2 (z-ai/glm-5.2, 1M context)
-# chosen for cost ($0.94/$3 per 1M vs Sonnet's $3/$15): the crons run independently
-# on subscription auth (claude -p), so the gateway only carries the Discord chat
-# voice. It must still pass the Fluncle voice gate (flash/generic models slip the
-# deadpan + first-person voice); anthropic/claude-sonnet-5 is the premium fallback
-# if the voice ever slips.
-model:
-  provider: openrouter
-  default: z-ai/glm-5.2
+# The gateway carries no chat platform and no model: every recurring job is a host systemd
+# timer that `docker exec`s into this container, and every authoring step is `claude -p` on
+# subscription auth. The gateway process only keeps the container alive, so it holds no
+# OpenRouter key and no Discord bot token. Discord alerts post through the webhook.
 
-# Discord: reply inline in the channel; an @mention no longer spawns a thread.
-discord:
-  auto_thread: false
-
-# Cron: raise the `--no-agent` script timeout from the 120s default. The weekly
-# newsletter sweep (newsletter-sweep.sh) loads the copywriting-fluncle skill before it
-# authors (~2m12s end-to-end) — the canonical voice is worth the extra minute over a
-# faster-but-worse edition. Resolution order is env var (HERMES_CRON_SCRIPT_TIMEOUT) →
-# this setting → the 120s default. The other sweeps finish well under 120s regardless.
+# Cron: raise the `--no-agent` script timeout from the 120s default. Resolution order is env
+# var (HERMES_CRON_SCRIPT_TIMEOUT) → this setting → the 120s default.
 cron:
   script_timeout_seconds: 300

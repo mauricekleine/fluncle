@@ -124,7 +124,7 @@ systemctl list-timers pin-watch.timer
 
 The script is idempotent and a no-op when current, so the timer is safe to run as often as you like.
 
-The tokenless gateway smoke cannot open a second Discord connection and never mounts the real `/opt/data`; that is what makes it safe for both normal and `--dry-run` rebuilds. It proves image boot, the s6 bootstrap (UID remap, volume chown, default-config seeding), the privilege drop, gateway imports, and writes to fresh scratch state. Two things it deliberately does not prove: the versioned `config.yaml` (Hermes rewrites its config in place at boot, so mounting it read-only would break the seeding path — a config edit is validated by the attended `--dry-run` pilot instead), and that a future `USER hermes` image can write the existing production mount — that cutover still needs the stopped-container `chown -R 10000:10000` and an attended start against the real mount.
+The tokenless gateway smoke holds no credentials and never mounts the real `/opt/data`; that is what makes it safe for both normal and `--dry-run` rebuilds. It proves image boot, the s6 bootstrap (UID remap, volume chown, default-config seeding), the privilege drop, gateway imports, and writes to fresh scratch state. Two things it deliberately does not prove: the versioned `config.yaml` (Hermes rewrites its config in place at boot, so mounting it read-only would break the seeding path — a config edit is validated by the attended `--dry-run` pilot instead), and that a future `USER hermes` image can write the existing production mount — that cutover still needs the stopped-container `chown -R 10000:10000` and an attended start against the real mount.
 
 ## Testing the rollback rail
 

@@ -109,7 +109,7 @@ The registry owns the prompts that **author a Fluncle artifact in production**. 
 - **The video render-queue brief** (`packages/skills/fluncle-video/automation/render-queue.prompt.md`) — same reasoning: it versions with the video kit it drives.
 - **The MCP prompts** (`lib/server/mcp.ts`) — these are prompts Fluncle **serves to other people's agents**. They are a published API surface; changing one is an API change and belongs behind review.
 - **The ChatDnB system prompt** (`FLUNCLE_CHAT_SYSTEM_PROMPT` in `lib/server/chat.ts`) — the admin-gated chat station authors no persisted artifact (nothing to stamp a provenance version onto), and its grounding rules are pinned by tests, so it versions with the code.
-- **The Hermes gateway persona** (`docs/agents/hermes/SOUL.md`), **the sprite image prompts**, **the dev-time reviewer agents** (`.claude/agents/*.md`) — different runtimes, none of them on the artifact path.
+- **The sprite image prompts** and **the dev-time reviewer agents** (`.claude/agents/*.md`) — different runtimes, neither of them on the artifact path.
 
 ## Provenance
 
