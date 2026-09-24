@@ -125,3 +125,64 @@ describe("yt-dlp is assessed as a calendar version", () => {
     expect(brake).not.toBeNull();
   });
 });
+
+describe("the base-image report", () => {
+  /** Source one of the script's shell functions by name and run an expression after it. */
+  function withFunction(name: string, expression: string, input: string): string {
+    const body = new RegExp(`^${name}\\(\\) \\{[\\s\\S]+?^\\}$`, "m").exec(script)?.[0] ?? "";
+
+    expect(body).not.toBe("");
+
+    return execFileSync("bash", ["-c", `${body}\n${expression}`], {
+      encoding: "utf8",
+      input,
+    }).trim();
+  }
+
+  const tagsPage = (names: readonly string[]) =>
+    JSON.stringify({ results: names.map((name) => ({ name })) });
+
+  it("picks the plain release tag over a variant that ties with it", () => {
+    // Upstream lists `v2026.9.24-desktop` first; comparing digits alone ties it with the
+    // plain `v2026.9.24`, and the report then names an image this box never runs.
+    const page = tagsPage([
+      "latest-desktop",
+      "latest",
+      "v2026.9.24-desktop",
+      "v2026.9.24",
+      "v2026.9.21",
+    ]);
+
+    expect(withFunction("pick_base_tag", "pick_base_tag", page)).toBe("v2026.9.24");
+  });
+
+  it("compares calendar parts numerically", () => {
+    expect(
+      withFunction("pick_base_tag", "pick_base_tag", tagsPage(["v2026.9.24", "v2026.12.1"])),
+    ).toBe("v2026.12.1");
+  });
+
+  it("signs the brake items alone, so an unchanged brake yields the same signature", () => {
+    const sign = (lines: string) => withFunction("brake_signature", "brake_signature", lines);
+    const brake = "- **Nous Hermes base image** `v2026.8.3` → `v2026.9.24`\n";
+
+    expect(sign(brake)).toMatch(/^[0-9a-f]{16}$/);
+    expect(sign(brake)).toBe(sign(brake));
+    expect(sign(brake)).not.toBe(sign("- **Nous Hermes base image** `v2026.8.3` → `v2026.9.28`\n"));
+  });
+
+  it("the issue body carries the signature the workflow compares against", () => {
+    expect(script).toContain('echo "<!-- brake-signature: $BRAKE_SIGNATURE -->"');
+    expect(script).toContain('emit "brake_signature=$BRAKE_SIGNATURE"');
+  });
+
+  it("the workflow skips a comment that would repeat the last report", () => {
+    const workflow = readFileSync(
+      join(REPO_ROOT, ".github", "workflows", "hermes-pin-drift.yml"),
+      "utf8",
+    );
+
+    expect(workflow).toContain("BRAKE_SIGNATURE: ${{ steps.drift.outputs.brake_signature }}");
+    expect(workflow).toContain('grep -qF "brake-signature: $BRAKE_SIGNATURE"');
+  });
+});

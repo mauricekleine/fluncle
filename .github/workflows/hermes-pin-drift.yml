@@ -90,12 +90,20 @@ jobs:
         if: steps.drift.outputs.braked == 'true'
         env:
           GH_TOKEN: ${{ secrets.PIN_DRIFT_TOKEN || github.token }}
+          BRAKE_SIGNATURE: ${{ steps.drift.outputs.brake_signature }}
         run: |
           set -euo pipefail
           title="Hermes supply-chain: drift needs an operator decision"
           existing="$(gh issue list --state open --search "$title in:title" \
             --json number --jq '.[0].number')"
           if [ -n "$existing" ]; then
+            # The sweep runs hourly; a brake that has not changed is already on the issue.
+            latest="$(gh issue view "$existing" --json body,comments \
+              --jq 'if (.comments | length) > 0 then .comments[-1].body else .body end')"
+            if grep -qF "brake-signature: $BRAKE_SIGNATURE" <<<"$latest"; then
+              echo "brake items unchanged since the last report on #$existing — not re-commenting."
+              exit 0
+            fi
             gh issue comment "$existing" --body-file "${RUNNER_TEMP}/pin-drift-issue-body.md"
           else
             gh issue create --title "$title" --body-file "${RUNNER_TEMP}/pin-drift-issue-body.md"

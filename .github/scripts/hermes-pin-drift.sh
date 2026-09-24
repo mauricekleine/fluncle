@@ -19,7 +19,7 @@
 #   • RISKY drift — a MAJOR bump (fluncle, Claude Code or bun), or a newer Nous Research
 #     Hermes BASE image tag — is recorded for a report-only issue, never edited.
 #     A major could rename/remove a command a cron calls; the base image's failure
-#     mode is the whole gateway. Those stay the operator's call.
+#     mode is the runtime every sweep runs in. Those stay the operator's call.
 #
 # Deliberately NOT here: the boat.dev CLI and the GitHub Actions digests (Renovate's job —
 # see renovate.json). The boat.dev CLI IS pinned in the Dockerfile (a checksum-verified
@@ -54,6 +54,20 @@ log() { printf '%s\n' "$*" >&2; }
 ver_gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
 major()  { printf '%s' "${1#v}" | cut -d. -f1; }
 
+# pick_base_tag: stdin = a Docker Hub tags page; stdout = the newest plain release tag
+# (`v2026.9.24`). Upstream also publishes variants of each release (`v2026.9.24-desktop`)
+# whose numbers tie with the plain tag, so only a bare `v<digits>(.<digits>)*` qualifies.
+pick_base_tag() {
+  python3 -c 'import sys,json,re
+tags=[t["name"] for t in json.load(sys.stdin)["results"] if re.fullmatch(r"v\d+(\.\d+)*",t["name"])]
+print(max(tags,key=lambda v:[int(x) for x in re.findall(r"\d+",v)]) if tags else "")'
+}
+
+# brake_signature: stdin = the brake lines; stdout = a short stable digest of them.
+brake_signature() {
+  if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | cut -c1-16
+}
+
 # in-place literal replace, portable across macOS/Linux (perl \Q…\E quotes meta).
 inplace() { SRCH="$2" REPL="$3" perl -i -pe 's/\Q$ENV{SRCH}\E/$ENV{REPL}/g' "$1"; }
 
@@ -79,9 +93,7 @@ LATEST_BUN="$(curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/lates
 LATEST_YTDLP="$(curl -fsSL https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null || true)"
 LATEST_BASE="$(curl -fsSL "https://hub.docker.com/v2/repositories/nousresearch/hermes-agent/tags?page_size=50&ordering=last_updated" 2>/dev/null \
-  | python3 -c 'import sys,json,re
-tags=[t["name"] for t in json.load(sys.stdin)["results"] if t["name"].startswith("v")]
-print(max(tags,key=lambda v:[int(x) for x in re.findall(r"\d+",v)]) if tags else "")' 2>/dev/null || true)"
+  | pick_base_tag 2>/dev/null || true)"
 
 # ── classify ──────────────────────────────────────────────────────────────────
 declare -a TABLE=("| pin | current | latest | verdict |" "| --- | --- | --- | --- |")
@@ -126,11 +138,11 @@ assess claude-code "$CUR_CLAUDE" "$LATEST_CLAUDE"
 assess bun "$CUR_BUN" "$LATEST_BUN"
 assess yt-dlp "$CUR_YTDLP" "$LATEST_YTDLP" calendar
 
-# base image — always report-only (pre-1.0; failure mode is the whole gateway)
+# base image — always report-only (pre-1.0; failure mode is the runtime every sweep runs in)
 BASE_VERDICT="current"
 if [ -n "$LATEST_BASE" ] && ver_gt "${LATEST_BASE#v}" "${CUR_BASE#v}"; then
   BASE_VERDICT="NEWER → $LATEST_BASE (report)"
-  BRAKE_LINES+=("- **Nous Hermes base image** \`$CUR_BASE\` → \`$LATEST_BASE\` — always operator-reviewed (pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor). Take it deliberately for upstream security patches.")
+  BRAKE_LINES+=("- **Nous Hermes base image** \`$CUR_BASE\` → \`$LATEST_BASE\` — always operator-reviewed (pre-1.0; a base bump can change the runtime every sweep runs in). Take it deliberately for upstream security patches.")
 elif [ -z "$LATEST_BASE" ]; then
   BASE_VERDICT="unknown (fetch failed)"
 fi
@@ -192,6 +204,7 @@ fi
 
 # ── write the report issue body for risky drift ───────────────────────────────
 if [ ${#BRAKE_LINES[@]} -gt 0 ]; then
+  BRAKE_SIGNATURE="$(printf '%s\n' "${BRAKE_LINES[@]}" | brake_signature)"
   {
     echo "## Hermes supply-chain — drift that needs an operator decision"
     echo
@@ -204,8 +217,13 @@ if [ ${#BRAKE_LINES[@]} -gt 0 ]; then
     printf '%s\n' "${TABLE[@]}"
     echo
     echo "</details>"
+    echo
+    # The signature covers the brake items only (the table's other columns move every
+    # run), so the workflow can skip a comment that would repeat the last one.
+    echo "<!-- brake-signature: $BRAKE_SIGNATURE -->"
   } > "$ISSUE_BODY"
   emit "braked=true"
+  emit "brake_signature=$BRAKE_SIGNATURE"
   log "REPORTED: ${#BRAKE_LINES[@]} brake item(s)"
 else
   emit "braked=false"
