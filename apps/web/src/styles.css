@@ -1887,7 +1887,8 @@ body::before {
   text-decoration: none;
 }
 
-.log-related-list a:hover {
+.log-related-list a:hover,
+.log-related-list a:focus-visible {
   color: var(--starlight-cream);
 }
 
@@ -2336,7 +2337,8 @@ a.catalogue-letter:focus-visible {
   padding: 0.15rem;
 }
 
-.hub-year-lane-caret:hover:not(:disabled) {
+.hub-year-lane-caret:hover:not(:disabled),
+.hub-year-lane-caret:focus-visible {
   color: var(--starlight-cream);
 }
 
@@ -2481,11 +2483,13 @@ a.catalogue-letter:focus-visible {
   width: 100%;
 }
 
-.hub-grid .hub-tile-select:hover .artist-card-avatar {
+.hub-grid .hub-tile-select:hover .artist-card-avatar,
+.hub-grid .hub-tile-select:focus-visible .artist-card-avatar {
   border-color: color-mix(in oklch, var(--stardust) 25%, transparent);
 }
 
-.hub-grid .hub-tile-select:hover .artist-grid-line {
+.hub-grid .hub-tile-select:hover .artist-grid-line,
+.hub-grid .hub-tile-select:focus-visible .artist-grid-line {
   color: var(--starlight-cream);
 }
 
@@ -2632,7 +2636,8 @@ a.catalogue-letter:focus-visible {
   width: 0.9rem;
 }
 
-.unlit-link:hover .unlit-mark {
+.unlit-link:hover .unlit-mark,
+.unlit-link:focus-visible .unlit-mark {
   opacity: 0.85;
 }
 
@@ -2784,7 +2789,8 @@ a.catalogue-letter:focus-visible {
   text-decoration: none;
 }
 
-.catalogue-record-name a:hover {
+.catalogue-record-name a:hover,
+.catalogue-record-name a:focus-visible {
   color: var(--starlight-cream);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -2811,7 +2817,8 @@ a.catalogue-letter:focus-visible {
   text-underline-offset: 3px;
 }
 
-.catalogue-more a:hover {
+.catalogue-more a:hover,
+.catalogue-more a:focus-visible {
   color: var(--starlight-cream);
 }
 
@@ -3810,7 +3817,8 @@ a.catalogue-letter:focus-visible {
   transition: color 150ms ease-out;
 }
 
-.identity-title a:hover {
+.identity-title a:hover,
+.identity-title a:focus-visible {
   color: var(--accent-foreground);
   text-decoration-color: currentcolor;
 }
@@ -4141,7 +4149,9 @@ a.catalogue-letter:focus-visible {
    cells and the log index already key off accent-foreground); links on the
    plates underline-ignite the same way. */
 .log-decode a:hover,
-.log-plate-footer a:hover {
+.log-decode a:focus-visible,
+.log-plate-footer a:hover,
+.log-plate-footer a:focus-visible {
   color: var(--eclipse-glow);
 }
 
@@ -4209,7 +4219,8 @@ a.catalogue-letter:focus-visible {
   gap: 0.45rem;
 }
 
-.account-list a:hover {
+.account-list a:hover,
+.account-list a:focus-visible {
   color: var(--eclipse-glow);
 }
 
@@ -4365,7 +4376,8 @@ a.catalogue-letter:focus-visible {
   font-weight: 700;
 }
 
-.account-collection-cta:hover {
+.account-collection-cta:hover,
+.account-collection-cta:focus-visible {
   color: var(--eclipse-glow);
 }
 
@@ -5469,7 +5481,8 @@ a.catalogue-letter:focus-visible {
   transition: color 150ms ease-out;
 }
 
-.nav-wordmark:hover {
+.nav-wordmark:hover,
+.nav-wordmark:focus-visible {
   color: var(--eclipse-glow);
 }
 
@@ -5586,7 +5599,8 @@ a.catalogue-letter:focus-visible {
   transition: color 150ms ease-out;
 }
 
-.nav-breadcrumb a:hover {
+.nav-breadcrumb a:hover,
+.nav-breadcrumb a:focus-visible {
   color: var(--eclipse-glow);
 }
 
@@ -6894,7 +6908,8 @@ a.catalogue-letter:focus-visible {
   padding: 0.35rem;
 }
 
-.mix-row-out:hover {
+.mix-row-out:hover,
+.mix-row-out:focus-visible {
   color: var(--starlight-cream);
 }
 
@@ -6919,7 +6934,8 @@ a.catalogue-letter:focus-visible {
   width: fit-content;
 }
 
-.mix-colophon a:hover {
+.mix-colophon a:hover,
+.mix-colophon a:focus-visible {
   text-decoration: underline;
 }
 
@@ -7995,7 +8011,8 @@ a.catalogue-letter:focus-visible {
 
 .fresh-row-lit .fresh-row-main:hover .fresh-row-title,
 .fresh-row-lit .fresh-row-main:focus-visible .fresh-row-title,
-.fresh-row-lit .fresh-row-main:hover ~ .fresh-row-caret {
+.fresh-row-lit .fresh-row-main:hover ~ .fresh-row-caret,
+.fresh-row-lit .fresh-row-main:focus-visible ~ .fresh-row-caret {
   color: var(--eclipse-glow);
 }
 
@@ -8019,7 +8036,8 @@ a.catalogue-letter:focus-visible {
   width: 0.9rem;
 }
 
-.fresh-row-main:hover .fresh-row-mark {
+.fresh-row-main:hover .fresh-row-mark,
+.fresh-row-main:focus-visible .fresh-row-mark {
   opacity: 0.85;
 }
 
@@ -8037,7 +8055,8 @@ a.catalogue-letter:focus-visible {
   padding: 0.55rem 0.5rem;
 }
 
-.fresh-row-out:hover .fresh-row-mark {
+.fresh-row-out:hover .fresh-row-mark,
+.fresh-row-out:focus-visible .fresh-row-mark {
   color: var(--starlight-cream);
   opacity: 0.85;
 }
@@ -8111,7 +8130,8 @@ a.catalogue-letter:focus-visible {
   transition: color 150ms ease-out;
 }
 
-.fresh-footer a:hover {
+.fresh-footer a:hover,
+.fresh-footer a:focus-visible {
   color: var(--starlight-cream);
 }
 
