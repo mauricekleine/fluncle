@@ -626,11 +626,9 @@ export function SearchTrigger({ showTrigger = true }: { showTrigger?: boolean })
       ) : undefined}
 
       {/* THE ONE MOUNT POINT, and it sits HERE — inside the colophon bar — rather than beside the
-          provider. The Command dialog server-renders its own sr-only header, so its DOM position is
-          part of the SSR tree; mounting it anywhere else moves that markup and React's hydration
-          walk finds the shell's next element where the dialog's used to be. The state is the
-          provider's, so the front door's field opens this same dialog; only the rendering stays
-          put. */}
+          provider. The state is the provider's, so the front door's field opens this same dialog;
+          only the rendering stays put. The dialog's accessible name renders inside its popup, so a
+          closed palette adds nothing to the page's heading outline. */}
       <SearchDialog onOpenChange={setOpen} open={state} seed={seed} />
     </>
   );

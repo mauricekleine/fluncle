@@ -9108,3 +9108,33 @@ a.catalogue-letter:focus-visible {
     transform: none;
   }
 }
+
+/* ── The skip link ────────────────────────────────────────────────────────────
+   Off-screen until it takes focus, then a small Tape Black tab over the top
+   bar's corner with the gold focus ring (focus is an accessibility affordance,
+   not a claim about the music). The target takes focus without a ring of its
+   own: the page it lands on is the feedback. */
+.skip-link {
+  background: var(--tape-black);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 700;
+  left: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  position: fixed;
+  top: 0.75rem;
+  transform: translateY(-200%);
+  z-index: 60;
+}
+
+.skip-link:focus {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+  outline: none;
+  transform: none;
+}
+
+.nav-content:focus {
+  outline: none;
+}

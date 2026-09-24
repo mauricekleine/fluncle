@@ -74,6 +74,11 @@ export function PublicChrome({
         // so it changes no element and hydration is untouched.
         data-front-door={pathname === "/" ? "" : undefined}
       >
+        {/* The first stop for a keyboard: straight past the top bar to the page. Visually hidden
+            until it takes focus, then it surfaces over the bar's corner. */}
+        <a className="skip-link" href="#content">
+          Skip to the page
+        </a>
         <header className="nav-topbar">
           <div className="nav-topbar-inner">
             <Link aria-label="Fluncle home" className="nav-wordmark" to="/">
@@ -98,7 +103,11 @@ export function PublicChrome({
           </div>
         </header>
 
-        <div className="nav-content">{children}</div>
+        {/* The skip link's target. `tabIndex={-1}` lets it take focus programmatically, so the next
+            Tab continues from the page rather than from the top of the document. */}
+        <div className="nav-content" id="content" tabIndex={-1}>
+          {children}
+        </div>
 
         {workbench ? undefined : <NavFooter galaxiesLive={galaxiesLive} />}
       </div>
