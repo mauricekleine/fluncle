@@ -1,7 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { type Transaction } from "@libsql/client";
 import { parseArtistsJson } from "./artists";
-import { getCatalogueCaptureState, isCatalogueCaptureOpen } from "./capture-budget";
+import { isCatalogueCaptureOpen, readCatalogueCaptureAdmission } from "./capture-budget";
 import { getDb } from "./db";
 import {
   evaluateDueWorkQueue,
@@ -559,7 +559,7 @@ export async function prepareCaptureReconciliations(
       item.priorSnapshotToken === undefined,
   );
   const state = gated
-    ? await (options.captureState ?? readBatchCaptureBudgetState)()
+    ? await (options.captureState ?? readCatalogueCaptureAdmission)()
     : { open: true, remainingTracks: 0 };
   // What is left for THIS call, after everything the tick has already authorized. Clamped at zero,
   // so the carried total can shrink the budget and never grow it.
@@ -600,11 +600,6 @@ export async function prepareCaptureReconciliations(
   }
 
   return { deferred, reserved, results };
-}
-
-async function readBatchCaptureBudgetState(): Promise<{ open: boolean; remainingTracks: number }> {
-  const state = await getCatalogueCaptureState();
-  return { open: state.open, remainingTracks: state.remainingTracks };
 }
 
 export type CaptureCommitBatchItem = {

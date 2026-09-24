@@ -687,6 +687,32 @@ describe("the authorized capture backlog (real SQL)", () => {
     expect(detail).toContain("tracks_catalogue_capture_idx");
     expect(detail).not.toContain("TEMP B-TREE");
   });
+
+  // The daily snapshot persists only `counts`. The backlog, the public-surface counts, and (while
+  // paused) the capture spend have no column on the row, so the cron must not pay for them.
+  it("the daily snapshot runs none of the live-only reads", async () => {
+    const { catalogueCaptureBacklogStatement, computeCatalogueSnapshotCounts } =
+      await import("./funnel");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+
+    await setCatalogueCapturePaused(true);
+    await seedBacklog();
+
+    const spy = vi.spyOn(db, "execute");
+    const counts = await computeCatalogueSnapshotCounts();
+    const statements = spy.mock.calls.map((call) => {
+      const input = call[0] as string | { sql: string };
+      return typeof input === "string" ? input : input.sql;
+    });
+
+    spy.mockRestore();
+
+    expect(counts.crawled).toBe(4);
+    expect(statements.length).toBeGreaterThan(0);
+    expect(statements).not.toContain(catalogueCaptureBacklogStatement().sql);
+    expect(statements.filter((sql) => sql.includes("renderable_track_count"))).toEqual([]);
+    expect(statements.filter((sql) => sql.includes("source_audio_attempted_at >="))).toEqual([]);
+  });
 });
 
 // ── The self-healing snapshot ────────────────────────────────────────────────

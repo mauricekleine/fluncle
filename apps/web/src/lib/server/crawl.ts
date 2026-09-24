@@ -114,7 +114,14 @@ import {
 import { relinkTracksToEntity } from "./hub-counts";
 import { hasIsrc } from "./isrc";
 import { setLabelMbLabelId } from "./label-images";
-import { adoptLabelMbLabelId, ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
+import {
+  adoptLabelMbLabelId,
+  ensureLabel,
+  getEnabledSeedLabel,
+  labelFold,
+  labelSlug,
+  listLabels,
+} from "./labels";
 import { logEvent } from "./log";
 import { MUSICBRAINZ_API_HOST, mbFetch, musicbrainzUrl } from "./musicbrainz";
 import {
@@ -722,7 +729,11 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
  * write. The crawl commits inside a bounded transaction-op budget, so a read it already pays for
  * is the right place to learn that.
  *
- * Bounded: `labels` holds one row per DISTINCT label (tens), never one per track.
+ * NOT bounded by a constant: `labels` holds one row per DISTINCT label, never one per track, but
+ * the crawl mints a row for every newly identified label it walks into, so the table grows with
+ * discovery (thousands of rows, see `getCrawlStatus`). This is a lean three-column read of it
+ * once per release commit. The fold cannot be asked in SQL without a stored fold key, which is
+ * the change that would bound it.
  */
 async function canonicalLabelRow(
   name: string,
@@ -1538,8 +1549,7 @@ async function planCrawlNode(
     return { kind: "release" };
   }
   if (node.kind === "label" && node.source === "fluncle") {
-    const labels = await listLabels("enabled", client);
-    const label = labels.find((candidate) => candidate.slug === node.external_id);
+    const label = await getEnabledSeedLabel(node.external_id, client);
     return {
       kind: "seed",
       label: label
@@ -1833,8 +1843,7 @@ async function applySeedLabel(
   search: MbLabelSearch | null,
   client?: CrawlDbClient,
 ): Promise<Expansion> {
-  const labels = await listLabels("enabled", client);
-  const label = labels.find((candidate) => candidate.slug === node.external_id);
+  const label = await getEnabledSeedLabel(node.external_id, client);
 
   if (!label) {
     // The operator disabled it since the seed was minted. Crawl scope is the next

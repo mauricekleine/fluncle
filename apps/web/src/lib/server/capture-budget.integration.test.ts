@@ -238,4 +238,41 @@ describe("isCatalogueCaptureOpen — the brake asks the cheap question first", (
     expect(await isCatalogueCaptureOpen(NOW)).toBe(false);
     expect((await getCatalogueCaptureState(NOW)).closedReason).toBe("tracks_spent");
   });
+
+  // The capture BATCH consumes the budget row by row, so it needs the remaining count as well as
+  // the verdict. It rides the same short-circuit: a batch prepared while paused (every tick that
+  // carries a certified finding, on the default-deny resting state) reads no spend either.
+  it("the batch admission reads NO spend while paused, and agrees with the readout once open", async () => {
+    const {
+      getCatalogueCaptureState,
+      readCatalogueCaptureAdmission,
+      setCatalogueCaptureBudget,
+      setCatalogueCapturePaused,
+    } = await import("./capture-budget");
+
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await captured("cat1000000000000000000", NOW - HOUR, 1_000_000);
+
+    const paused = vi.spyOn(db, "execute");
+
+    expect(await readCatalogueCaptureAdmission(NOW)).toEqual({ open: false, remainingTracks: 0 });
+    expect(spendStatements(paused.mock.calls)).toEqual([]);
+
+    paused.mockRestore();
+
+    await setCatalogueCapturePaused(false);
+    await setCatalogueCaptureBudget({ dailyBytes: 10_000_000, dailyTracks: 3 });
+
+    const open = vi.spyOn(db, "execute");
+    const admission = await readCatalogueCaptureAdmission(NOW);
+
+    expect(spendStatements(open.mock.calls).length).toBe(1);
+
+    open.mockRestore();
+
+    const readout = await getCatalogueCaptureState(NOW);
+
+    expect(admission).toEqual({ open: true, remainingTracks: 2 });
+    expect(admission).toEqual({ open: readout.open, remainingTracks: readout.remainingTracks });
+  });
 });

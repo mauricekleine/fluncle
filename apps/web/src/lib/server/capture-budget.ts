@@ -324,14 +324,27 @@ export async function getCatalogueCaptureState(
  * meter that showed no spend would be a worse lie than a slow one.
  */
 export async function isCatalogueCaptureOpen(nowMs: number = Date.now()): Promise<boolean> {
+  return (await readCatalogueCaptureAdmission(nowMs)).open;
+}
+
+/**
+ * THE BRAKE plus how many catalogue rows it still admits: the two numbers a capture BATCH needs
+ * to consume the budget row by row (track-capture-reconciliation.ts). Same short-circuit as
+ * {@link isCatalogueCaptureOpen}, which is this function's `open`: while paused, the kill switch
+ * has already decided the verdict, so the spend is never read and nothing is admitted.
+ */
+export async function readCatalogueCaptureAdmission(
+  nowMs: number = Date.now(),
+): Promise<{ open: boolean; remainingTracks: number }> {
   if (await isCatalogueCapturePaused()) {
-    return false;
+    return { open: false, remainingTracks: 0 };
   }
 
   const [budget, spend] = await Promise.all([
     getCatalogueCaptureBudget(),
     readCatalogueCaptureSpend(nowMs),
   ]);
+  const { open, remainingTracks } = catalogueCaptureVerdict({ budget, paused: false, spend });
 
-  return catalogueCaptureVerdict({ budget, paused: false, spend }).open;
+  return { open, remainingTracks };
 }

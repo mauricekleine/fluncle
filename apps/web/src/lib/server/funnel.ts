@@ -393,7 +393,7 @@ function anchorSplitFromRow(row: AnchorSplitRow | undefined): AnchorSplit {
 /**
  * THE STAGE SCAN, standalone — one conditional aggregate over `tracks left join findings`, no where.
  * Kept as the pinned REFERENCE the fold-equivalence test compares against (the pattern
- * `computeCatalogueCounts` uses for its drift guard); `gatherLiveFunnel` reads the folded pass, not
+ * `computeCatalogueCounts` uses for its drift guard); `gatherSnapshotReads` reads the folded pass, not
  * this. Shares `STAGE_SCAN_SELECT` with the fold, so the two produce identical numbers by construction.
  */
 export async function runStageScan(): Promise<StageScanCounts> {
@@ -408,7 +408,7 @@ export async function runStageScan(): Promise<StageScanCounts> {
 
 /**
  * The drainable anchor worklist, partitioned ISRC × embedding in ONE pass — the pinned REFERENCE the
- * fold-equivalence test compares against (`gatherLiveFunnel` reads the folded pass). Reuses
+ * fold-equivalence test compares against (`gatherSnapshotReads` reads the folded pass). Reuses
  * `kindClause("anchor")` verbatim so the counts ARE the sweep's own worklist (docs/catalogue-crawler.md
  * § the anchor) — never a `union all` over a CTE (trap #4); four conditional sums over one scan.
  * `isrc is not null` gives the two verification paths (the persisted `anchorQueueIsrc/NoIsrc`);
@@ -594,66 +594,36 @@ type LiveFunnelData = {
 };
 
 /**
- * ONE full live computation — every read run exactly once: the stage scan, the anchor split (one
- * pass, both partitions), the re-ask bench, the three audio-queue counts, and the frontier group-bys.
- * The capture budget state is read once up front and threaded into the capture count (so
- * `getCatalogueCaptureState` is never read twice per request) and returned for the meters.
+ * The reads the persisted snapshot row is made of, and nothing else: the stage scan, the anchor
+ * split (one pass, both partitions), the re-ask bench, the three audio-queue counts, and the
+ * frontier group-bys. The daily cron runs exactly this, so it never pays for a live-only read whose
+ * answer the snapshot row has no column for.
  *
- * Both `getFunnel` (the page read, live on every load) and `recordCatalogueSnapshot` (the daily cron)
- * call it; `computeCatalogueSnapshotCounts` returns its persisted subset for the cron's row.
+ * `captureState` is threaded into the capture count when the caller already holds it (the page read
+ * does, for its meters). Omitted, the count consults the brake itself, which skips the spend read
+ * while catalogue capture is paused.
  */
-async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<LiveFunnelData> {
-  const state = captureState ?? (await getCatalogueCaptureState());
-
-  const [
-    scan,
-    captureBacklog,
-    captureQueue,
-    analyzeQueue,
-    embedQueue,
-    frontier,
-    publicTracks,
-    publicArtists,
-    publicAlbums,
-    publicLabels,
-  ] = await Promise.all([
+async function gatherSnapshotReads(captureState?: CatalogueCaptureState): Promise<{
+  anchorSplit: AnchorSplit;
+  counts: CatalogueSnapshotCounts;
+}> {
+  const [scan, captureQueue, analyzeQueue, embedQueue, frontier] = await Promise.all([
     // THE ONE PASS — the stage 7-col aggregate, the anchor-split 4-col, and the anchor-backoff count
     // folded into a SINGLE conditional-aggregate scan of `tracks left join findings` (was three
     // independent full scans fired in parallel — docs/db-scale-backlog Wave 1 #5). Same numbers by
     // construction (each query's WHERE becomes its own CASE arm over the superset), one scan not three.
     runFoldedFunnelScan(),
-    // THE CAPTURE BACKLOG — the same catalogue capture predicate, with the BRAKE DROPPED and
-    // grouped by tier × anchor in one pass. It is a SEPARATE read from the queue depth below rather
-    // than a substitute for it, and the reason is the due-work cutover: `countTrackWork` routes to
-    // the `due_work` projection when that flag is on, so a queue depth DERIVED from this
-    // source-table read would silently diverge from the worklist the sweep is actually served. The
-    // funnel's whole contract is that it reports the product's own numbers, so the queue keeps
-    // asking the product. The extra read costs nothing on a shut-budget day (the count short-
-    // circuits without a round trip) and is one bounded index seek when the window is open.
-    readCatalogueCaptureBacklog(state),
-    countTrackWork({ captureState: state, kind: "capture", scope: "catalogue" }),
+    countTrackWork({ captureState, kind: "capture", scope: "catalogue" }),
     countTrackWork({ kind: "analyze", scope: "catalogue" }),
     countTrackWork({ kind: "embed", scope: "catalogue" }),
     // The crawler's own frontier read — the lean by-state group-by variant (no growing-table scans).
     getFrontierCounts(),
-    // PUBLIC SURFACES — how much of the archive is live on the public web now, each through the
-    // SAME predicate its surface already obeys. `tracks` is the `/tracks` hub's own count (`{}` =
-    // no filter = every publicly-rendered row); the three entity counts are the sitemap's INDEXABLE
-    // sets (`renderable >= floor`, reusing each hub's scan + floor). Cheap grouped COUNT scans over
-    // the indexed join keys — same cost class as the stage/queue counts, no vector, no blob.
-    countPublicTracks(),
-    countIndexableArtists(),
-    countIndexableAlbums(),
-    countIndexableLabels(),
   ]);
 
   const { anchorSplit, stages } = scan;
 
   return {
-    anchorAwaitingAudio: anchorSplit.awaitingAudio,
-    anchorReady: anchorSplit.ready,
-    captureBacklog,
-    captureState: state,
+    anchorSplit,
     counts: {
       analyzeQueue,
       analyzed: stages.analyzed,
@@ -671,6 +641,47 @@ async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<L
       frontierPending: frontier.frontier.pending,
       recEligible: stages.recEligible,
     },
+  };
+}
+
+/**
+ * ONE full live computation for `/admin/funnel` — the snapshot reads, every one run exactly once,
+ * plus the live-only extras the snapshot row cannot carry (the capture backlog and the public
+ * surfaces). The capture budget state is read once up front and threaded into the capture count
+ * (so `getCatalogueCaptureState` is never read twice per request) and returned for the meters.
+ */
+async function gatherLiveFunnel(): Promise<LiveFunnelData> {
+  const state = await getCatalogueCaptureState();
+
+  const [snapshot, captureBacklog, publicTracks, publicArtists, publicAlbums, publicLabels] =
+    await Promise.all([
+      gatherSnapshotReads(state),
+      // THE CAPTURE BACKLOG — the same catalogue capture predicate, with the BRAKE DROPPED and
+      // grouped by tier × anchor in one pass. It is a SEPARATE read from the queue depth rather
+      // than a substitute for it, and the reason is the due-work cutover: `countTrackWork` routes
+      // to the `due_work` projection when that flag is on, so a queue depth DERIVED from this
+      // source-table read would silently diverge from the worklist the sweep is actually served.
+      // The funnel's whole contract is that it reports the product's own numbers, so the queue
+      // keeps asking the product. On a shut-budget day the queue count short-circuits without a
+      // round trip and this is the only capture read; with the window open it is a range walk of
+      // `tracks_catalogue_capture_idx` over the authorized catalogue rows, so it grows with them.
+      readCatalogueCaptureBacklog(state),
+      // PUBLIC SURFACES — how much of the archive is live on the public web now, each through the
+      // SAME predicate its surface already obeys. `tracks` is the `/tracks` hub's own count (`{}` =
+      // no filter = every publicly-rendered row); the three entity counts are the sitemap's
+      // INDEXABLE sets (the stored `renderable_track_count` against each hub's floor).
+      countPublicTracks(),
+      countIndexableArtists(),
+      countIndexableAlbums(),
+      countIndexableLabels(),
+    ]);
+
+  return {
+    anchorAwaitingAudio: snapshot.anchorSplit.awaitingAudio,
+    anchorReady: snapshot.anchorSplit.ready,
+    captureBacklog,
+    captureState: state,
+    counts: snapshot.counts,
     publicSurfaces: {
       albums: publicAlbums,
       artists: publicArtists,
@@ -682,16 +693,16 @@ async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<L
 
 /**
  * The whole set of catalogue counts, each through the product's own predicate. The result is
- * exactly the row `recordCatalogueSnapshot` persists — the persisted subset of one live gather.
+ * exactly the row `recordCatalogueSnapshot` persists, computed by the snapshot reads alone.
  */
 export async function computeCatalogueSnapshotCounts(): Promise<CatalogueSnapshotCounts> {
-  return (await gatherLiveFunnel()).counts;
+  return (await gatherSnapshotReads()).counts;
 }
 
 /**
  * The anchor RE-ASK BENCH — rows that WOULD be anchorable but were attempted inside the re-ask
  * window, so the sweep is sitting them out (not re-billing them) for now. The pinned REFERENCE the
- * fold-equivalence test compares against (`gatherLiveFunnel` reads the folded pass). It counts the
+ * fold-equivalence test compares against (`gatherSnapshotReads` reads the folded pass). It counts the
  * shared `ANCHOR_BACKOFF_WHERE` fragment — the exact COMPLEMENT of `kindClause("anchor")`'s window
  * guard — on the same `ANCHOR_REASK_AFTER_DAYS` clock as the queue, so bench and queue can only ever
  * agree.

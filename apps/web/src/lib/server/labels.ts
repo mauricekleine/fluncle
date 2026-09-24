@@ -2066,6 +2066,28 @@ export async function listLabels(
 }
 
 /**
+ * ONE enabled seed label by its slug — the crawler's seed-node resolve, which asks exactly "is the
+ * label this seed node names still enabled, and what is it?". `slug` is UNIQUE, so this is one seek
+ * on `labels.slug`'s index with `seed_state` as a residual on that single row: the same answer as
+ * `listLabels("enabled").find((label) => label.slug === slug)` without reading the whole enabled
+ * seed set (thousands of rows) to find it. Undefined = no such label, or it is no longer enabled.
+ */
+export async function getEnabledSeedLabel(
+  slug: string,
+  client?: Pick<Client, "execute">,
+): Promise<LabelSeedItem | undefined> {
+  const db = client ?? (await getDb());
+  const result = await db.execute({
+    args: [slug],
+    sql: `select ${LABEL_COLUMNS}
+          from labels where slug = ? and seed_state = 'enabled' limit 1`,
+  });
+  const row = typedRows<LabelRow>(result.rows)[0];
+
+  return row ? toLabelSeedItem(row) : undefined;
+}
+
+/**
  * The certified-finding aggregate the OPERATOR's station computes from the raw edge —
  * `sum(findings.log_id is not null)` per group. It is what every public hub read would otherwise compute
  * (schema.ts still names it `HUB_CERTIFIED` when it describes what the stored counters mirror), and
