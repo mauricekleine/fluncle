@@ -1084,6 +1084,64 @@ printf 'non-critical\\n' >> "$2"
     },
   );
 
+  it(
+    "retries a release the slow coordinator timed out, so a granted lease is never left orphaned",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeExecutable("sleep", ":");
+      const releaseAttempts = join(directory, "release-attempts");
+      // curl exit 28 is its own timeout: the first release outlives the ceiling, the second lands.
+      fakeCurl(`case "$*" in
+  *'"action":"release"'*)
+    printf x >> "${releaseAttempts}"
+    [ "$(wc -c < "${releaseAttempts}")" -ge 2 ] || exit 28
+    echo '{"ok":true}'
+    ;;
+  *) ${ACQUIRED_RESPONSE} ;;
+esac`);
+      const result = await run(["bash", "-c", "printf complete"]);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("complete");
+      const calls = readFileSync(curlLog, "utf8");
+      expect(calls.match(/"action":"release"/g)).toHaveLength(2);
+      expect(calls.match(/"fencingToken":7/g)).toHaveLength(2);
+      expect(result.stderr).toContain('"outcome":"released"');
+    },
+  );
+
+  it(
+    "stops retrying a terminal release against a dead coordinator after a bounded number of attempts",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeExecutable("sleep", ":");
+      fakeCurl(`case "$*" in
+  *'"action":"release"'*) exit 28 ;;
+  *) ${ACQUIRED_RESPONSE} ;;
+esac`);
+      const result = await run(["bash", "-c", "printf complete"]);
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(curlLog, "utf8").match(/"action":"release"/g)).toHaveLength(3);
+    },
+  );
+
+  it(
+    "never retries a release the coordinator definitively rejected",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeExecutable("sleep", ":");
+      fakeCurl(`case "$*" in
+  *'"action":"release"'*) printf '{"code":"invalid_request"}\\n409' ;;
+  *) ${ACQUIRED_RESPONSE} ;;
+esac`);
+      const result = await run(["bash", "-c", "printf complete"]);
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(curlLog, "utf8").match(/"action":"release"/g)).toHaveLength(1);
+    },
+  );
+
   it("leaves an acquired payload's own success evidence intact", PROCESS_TEST_OPTIONS, async () => {
     fakeCurl(ACQUIRED_RESPONSE);
     const result = await run([
