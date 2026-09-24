@@ -331,7 +331,7 @@ describe("keep going — the one way on", () => {
       navigate: () => {},
     });
 
-    expect(moved).toBe(true);
+    expect(moved).toBe("moved");
     expect(seen).toEqual(["b"]);
     expect(readPlayer().queue?.tracks.map((track) => track.id)).toEqual(["x", "y"]);
     expect(element.src).toBe("/api/preview/x");
@@ -344,7 +344,7 @@ describe("keep going — the one way on", () => {
 
     const moved = await keepGoing({ loadSimilar: async () => [], navigate: () => {} });
 
-    expect(moved).toBe(false);
+    expect(moved).toBe("none");
     expect(readPlayer().queue?.tracks.map((track) => track.id)).toEqual(["a"]);
   });
 
@@ -359,7 +359,7 @@ describe("keep going — the one way on", () => {
       navigate: (href) => visited.push(href),
     });
 
-    expect(moved).toBe(true);
+    expect(moved).toBe("moved");
     expect(visited).toEqual(["/tracks?page=2"]);
     expect(claimPageContinuation("/tracks?page=3")).toBe(false);
     expect(claimPageContinuation("/tracks?page=2")).toBe(false);
@@ -373,5 +373,366 @@ describe("keep going — the one way on", () => {
 
     expect(claimPageContinuation("/tracks?page=2")).toBe(true);
     expect(claimPageContinuation("/tracks?page=2")).toBe(false);
+  });
+});
+
+// ── THE RACES A BROWSER ACTUALLY PRODUCES ─────────────────────────────────────────────────────
+// A browser-shaped element: play() stays pending until the clip arrives, and a pause() or a new
+// source while it is pending rejects it with an AbortError (the HTML media spec's "pending play
+// promises" rejection), exactly the cancellation the player must not mistake for a missing clip.
+
+function domError(name: string, message: string): DOMException {
+  return new DOMException(message, name);
+}
+
+class BrowserLikeAudio {
+  currentTime = 0;
+  duration = Number.NaN;
+  ended = false;
+  muted = false;
+  paused = true;
+  preload = "";
+  #src = "";
+  #pending: { reject: (error: unknown) => void; resolve: () => void } | undefined;
+  readonly #listeners = new Map<string, Set<() => void>>();
+
+  get src(): string {
+    return this.#src;
+  }
+
+  set src(value: string) {
+    this.#abort("The play() request was interrupted by a new load request.");
+    this.paused = true;
+    this.#src = value;
+  }
+
+  addEventListener(type: string, listener: () => void): void {
+    const set = this.#listeners.get(type) ?? new Set();
+
+    set.add(listener);
+    this.#listeners.set(type, set);
+  }
+
+  dispatch(type: string): void {
+    for (const listener of this.#listeners.get(type) ?? []) {
+      listener();
+    }
+  }
+
+  play(): Promise<void> {
+    this.paused = false;
+
+    return new Promise((resolve, reject) => {
+      this.#pending = { reject, resolve };
+    });
+  }
+
+  pause(): void {
+    const wasPlaying = !this.paused;
+
+    this.paused = true;
+    this.#abort("The play() request was interrupted by a call to pause().");
+
+    if (wasPlaying) {
+      this.dispatch("pause");
+    }
+  }
+
+  removeAttribute(name: string): void {
+    if (name === "src") {
+      this.#src = "";
+    }
+  }
+
+  /** The clip arrived and started sounding. */
+  arrive(): void {
+    const pending = this.#pending;
+
+    this.#pending = undefined;
+    pending?.resolve();
+    this.dispatch("playing");
+  }
+
+  /** The relay answered with nothing playable. */
+  failToLoad(): void {
+    const pending = this.#pending;
+
+    this.#pending = undefined;
+    this.dispatch("error");
+    pending?.reject(domError("NotSupportedError", "The element has no supported sources."));
+  }
+
+  /** The clip played to its end. */
+  finish(): void {
+    this.paused = true;
+    this.ended = true;
+    this.dispatch("pause");
+    this.dispatch("ended");
+    this.ended = false;
+  }
+
+  #abort(message: string): void {
+    const pending = this.#pending;
+
+    this.#pending = undefined;
+    pending?.reject(domError("AbortError", message));
+  }
+}
+
+function installBrowserAudio(): BrowserLikeAudio {
+  const element = new BrowserLikeAudio();
+
+  vi.stubGlobal("Audio", function Audio() {
+    return element;
+  });
+
+  return element;
+}
+
+/** Another sound on the page: Stories' video, the radio's audio. */
+class OtherMedia {
+  muted = false;
+  paused = true;
+  pauses = 0;
+  volume = 1;
+
+  pause(): void {
+    this.paused = true;
+    this.pauses += 1;
+  }
+}
+
+/** A document that hears media events in the capture phase, as the real one does. */
+function installPage(others: OtherMedia[]): { start: (media: OtherMedia) => void } {
+  const listeners = new Map<string, ((event: Event) => void)[]>();
+
+  vi.stubGlobal("HTMLMediaElement", OtherMedia);
+  vi.stubGlobal("document", {
+    addEventListener: (type: string, listener: (event: Event) => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    },
+    querySelectorAll: () => others,
+  });
+
+  return {
+    start: (media) => {
+      media.paused = false;
+
+      for (const listener of listeners.get("play") ?? []) {
+        listener({ target: media } as unknown as Event);
+      }
+    },
+  };
+}
+
+type FakeSession = {
+  handlers: Map<string, (() => void) | null>;
+  metadata: unknown;
+  playbackState: string;
+  setActionHandler: (action: string, handler: (() => void) | null) => void;
+};
+
+function installMediaSession(): FakeSession {
+  const session: FakeSession = {
+    handlers: new Map(),
+    metadata: null,
+    playbackState: "none",
+    setActionHandler: (action, handler) => {
+      session.handlers.set(action, handler);
+    },
+  };
+
+  vi.stubGlobal("navigator", { mediaSession: session });
+  vi.stubGlobal(
+    "MediaMetadata",
+    class {
+      constructor(readonly init: unknown) {}
+    },
+  );
+
+  return session;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+
+  return { promise, resolve };
+}
+
+describe("cancellation — a pause is never a missing preview", () => {
+  it("pausing a clip that is still arriving cancels it without marking it missing or advancing", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b", "c"), 0);
+    pausePreview();
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(readPlayer().queue?.index).toBe(0);
+    expect(readPlayer().missing.size).toBe(0);
+    expect(element.src).toBe("/api/preview/a");
+  });
+
+  it("the player's Pause while loading cancels too, and Play resumes the same clip", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    expect(readPlayer().status).toBe("loading");
+
+    togglePlayback();
+    await settled();
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(element.paused).toBe(true);
+
+    togglePlayback();
+    expect(readPlayer().status).toBe("loading");
+    element.arrive();
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "playing", trackId: "a" });
+    expect(readPlayer().queue?.index).toBe(0);
+    expect(readPlayer().missing.size).toBe(0);
+  });
+
+  it("other audible media starting while a clip loads pauses it without advancing", async () => {
+    installBrowserAudio();
+
+    const story = new OtherMedia();
+    const page = installPage([story]);
+
+    playQueue(tracks("a", "b"), 0);
+    page.start(story);
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(readPlayer().queue?.index).toBe(0);
+    expect(readPlayer().missing.size).toBe(0);
+  });
+
+  it("a clip that fails after the listener paused it is remembered, but the queue stays put", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    pausePreview();
+    element.failToLoad();
+    await settled();
+
+    expect(readPlayer().missing.has("a")).toBe(true);
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(readPlayer().queue?.index).toBe(0);
+  });
+
+  it("a clip that fails while it is still wanted is still skipped", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.failToLoad();
+    await settled();
+
+    expect(readPlayer().missing.has("a")).toBe(true);
+    expect(readPlayer()).toMatchObject({ status: "loading", trackId: "b" });
+  });
+});
+
+describe("keep going — a late answer never overrides the listener", () => {
+  async function endedQueue(element: BrowserLikeAudio): Promise<void> {
+    playQueue(tracks("a"), 0);
+    element.arrive();
+    element.finish();
+    await settled();
+    expect(readPlayer().queue?.ended).toBe(true);
+  }
+
+  it("an answer that arrives after the player closed does not bring it back", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element);
+
+    const answer = deferred<QueueTrack[]>();
+    const outcome = keepGoing({ loadSimilar: () => answer.promise, navigate: () => {} });
+
+    dismissPlayer();
+    answer.resolve(tracks("x", "y"));
+
+    expect(await outcome).toBe("stale");
+    expect(readPlayer()).toMatchObject({ queue: undefined, status: "idle" });
+  });
+
+  it("an answer that arrives after a newer choice does not replace it", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element);
+
+    const answer = deferred<QueueTrack[]>();
+    const outcome = keepGoing({ loadSimilar: () => answer.promise, navigate: () => {} });
+
+    playQueue(tracks("n"), 0);
+    answer.resolve(tracks("x", "y"));
+
+    expect(await outcome).toBe("stale");
+    expect(readPlayer().queue?.tracks.map((track) => track.id)).toEqual(["n"]);
+    expect(element.src).toBe("/api/preview/n");
+  });
+
+  it("an answer that arrives while the listener is still waiting plays", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element);
+
+    const answer = deferred<QueueTrack[]>();
+    const outcome = keepGoing({ loadSimilar: () => answer.promise, navigate: () => {} });
+
+    answer.resolve(tracks("x", "y"));
+
+    expect(await outcome).toBe("moved");
+    expect(element.src).toBe("/api/preview/x");
+  });
+});
+
+describe("media session — the lock screen belongs to the live sound", () => {
+  it("hands the lock screen to other audio, and takes it back only when the listener resumes", async () => {
+    const element = installBrowserAudio();
+    const session = installMediaSession();
+    const radio = new OtherMedia();
+    const page = installPage([radio]);
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    await settled();
+    expect(typeof session.handlers.get("play")).toBe("function");
+    expect(session.playbackState).toBe("playing");
+
+    // The radio starts: the preview pauses and gives the lock screen up.
+    page.start(radio);
+    await settled();
+    expect(readPlayer().status).toBe("paused");
+    expect(session.handlers.get("play")).toBeNull();
+    expect(session.handlers.get("nexttrack")).toBeNull();
+    expect(session.metadata).toBeNull();
+    expect(session.playbackState).toBe("none");
+
+    // The listener resumes the preview from the bar: the radio stops first, the session returns.
+    togglePlayback();
+    expect(radio.paused).toBe(true);
+    expect(radio.pauses).toBe(1);
+    expect(typeof session.handlers.get("play")).toBe("function");
+    expect(session.metadata).not.toBeNull();
+  });
+
+  it("closing the player releases the lock screen", async () => {
+    const element = installBrowserAudio();
+    const session = installMediaSession();
+
+    playQueue(tracks("a"), 0);
+    element.arrive();
+    await settled();
+    dismissPlayer();
+
+    expect(session.handlers.get("play")).toBeNull();
+    expect(session.metadata).toBeNull();
+    expect(session.playbackState).toBe("none");
   });
 });

@@ -94,6 +94,17 @@ for (const viewport of VIEWPORTS) {
       await page.keyboard.press("k");
       await expect(player.getByRole("button", { exact: true, name: "Pause" })).toBeVisible();
 
+      // A modifier held means the key is not the transport's: Shift+K, Shift+L and Shift+Space
+      // leave playback exactly as it was (Shift+Space still scrolls the page up).
+      const position = await player.locator(".player-position").first().textContent();
+
+      for (const chord of ["Shift+K", "Shift+L", "Shift+J", "Shift+Space"]) {
+        await page.keyboard.press(chord);
+      }
+
+      await expect(player.getByRole("button", { exact: true, name: "Pause" })).toBeVisible();
+      await expect(player.locator(".player-position").first()).toHaveText(position ?? "");
+
       await player.getByRole("button", { name: "Close the player" }).click();
       await expect(player).toHaveCount(0);
       await expect.poll(() => mediaSessionState(page)).not.toBe("playing");

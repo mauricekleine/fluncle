@@ -134,12 +134,21 @@ describe("public discovery event coverage", () => {
 
     expect(playingHandler?.[1]).toContain('emitDiscoveryEvent("discovery_preview")');
 
-    const startBody = source.match(
-      /export function startPreview\([\s\S]*?element\.play\(\)\.catch/,
-    )?.[0];
+    // The start path (startPreview → load → attemptPlay) only arms the event; it never sends it.
+    const body = (signature: RegExp): string | undefined =>
+      source.match(new RegExp(`${signature.source}[\\s\\S]*?\\n}\\n`))?.[0];
+    const startPath = [
+      body(/export function startPreview\(/),
+      body(/function load\(/),
+      body(/function attemptPlay\(/),
+    ];
 
-    expect(startBody).toBeDefined();
-    expect(startBody).not.toContain("emitDiscoveryEvent");
+    for (const part of startPath) {
+      expect(part).toBeDefined();
+      expect(part).not.toContain("emitDiscoveryEvent");
+    }
+
+    expect(startPath[2]).toContain("element.play().catch");
   });
 
   it("marks neighbour rails as similar by behaviour, not by the English on the chip", () => {

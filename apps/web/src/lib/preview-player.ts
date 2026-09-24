@@ -102,6 +102,14 @@ let consecutiveMisses = 0;
 // Every start bumps the token, so a late error or play() rejection from a clip that has since
 // been replaced never acts on the one that replaced it.
 let loadToken = 0;
+// Every play() attempt gets its own number, and a pause cancels the attempt in flight: the
+// browser rejects an interrupted play() with an AbortError, and that rejection is a cancellation,
+// never a missing preview.
+let playAttempt = 0;
+// Every playback action the listener takes (a start, a pause, a resume, a close) bumps the
+// generation, so an answer that arrives late (a "keep going" search) can tell it was overtaken
+// and stand down instead of resurrecting a closed player or replacing a newer choice.
+let playbackGeneration = 0;
 let pendingPageContinuation: string | undefined;
 const listeners = new Set<() => void>();
 const progressListeners = new Set<() => void>();
@@ -165,6 +173,45 @@ function subscribeMisses(listener: () => void): () => void {
   return () => missListeners.delete(listener);
 }
 
+/** The DOMException name of a rejected play(), whatever realm or prototype it arrived with. */
+function errorName(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "name" in error
+    ? String((error as { name: unknown }).name)
+    : undefined;
+}
+
+/**
+ * One play() attempt on the shared element. An interrupted attempt (a pause, a new source)
+ * rejects with an AbortError: a cancellation the caller already handled, so it does nothing.
+ * Autoplay refusal leaves the clip waiting, paused, for a tap. Anything else is a clip that
+ * cannot play.
+ */
+function attemptPlay(element: HTMLAudioElement, trackId: string | undefined): void {
+  playAttempt += 1;
+
+  const attempt = playAttempt;
+  const token = loadToken;
+
+  claimMediaSession();
+  silenceOtherMedia();
+  element.play().catch((error: unknown) => {
+    const name = errorName(error);
+
+    if (attempt !== playAttempt || token !== loadToken || name === "AbortError") {
+      return;
+    }
+
+    if (name === "NotAllowedError") {
+      pendingPublicPreview = false;
+      emit({ status: "paused", trackId });
+
+      return;
+    }
+
+    failCurrent(token);
+  });
+}
+
 function readTime(): PreviewProgress {
   if (!audio) {
     return idleProgress;
@@ -179,6 +226,8 @@ function readTime(): PreviewProgress {
 function stop(): void {
   pendingPublicPreview = false;
   loadToken += 1;
+  playAttempt += 1;
+  playbackGeneration += 1;
   audio?.pause();
   audio?.removeAttribute("src");
   emit(idleState);
@@ -228,6 +277,12 @@ function failCurrent(token: number): void {
 
   if (trackId) {
     markMissing(trackId);
+  }
+
+  // The listener paused this clip while it was still arriving: it is remembered as missing, but
+  // the queue never moves on without them.
+  if (state.status === "paused") {
+    return;
   }
 
   if (queue && queue.tracks[queue.index]?.id === trackId) {
@@ -281,7 +336,6 @@ function ensureAudio(): HTMLAudioElement {
   element.addEventListener("durationchange", () => emitProgress(readTime()));
   audio = element;
   installOneSoundGuard();
-  installMediaSessionHandlers();
 
   return element;
 }
@@ -306,27 +360,12 @@ function load(trackId: string, options?: StartPreviewOptions): void {
 
   const element = ensureAudio();
   loadToken += 1;
-  const token = loadToken;
+  playbackGeneration += 1;
 
   element.src = options?.src ?? previewProxyUrl(trackId);
   emit({ status: "loading", trackId });
   emitProgress(idleProgress);
-  element.play().catch((error: unknown) => {
-    if (token !== loadToken) {
-      return;
-    }
-
-    // Autoplay refused (no user gesture yet, or the OS said no): the clip is fine, so it waits,
-    // paused, for a tap. Anything else is a clip that cannot play.
-    if (error instanceof Error && error.name === "NotAllowedError") {
-      pendingPublicPreview = false;
-      emit({ status: "paused", trackId });
-
-      return;
-    }
-
-    failCurrent(token);
-  });
+  attemptPlay(element, trackId);
 }
 
 function playAt(index: number): void {
@@ -377,34 +416,35 @@ function toggle(trackId: string, options?: StartPreviewOptions): void {
 }
 
 // Pause/resume the CURRENT preview in place (the bars + row overlays): the clip keeps its
-// position so a resume picks up where it left off. A no-op while idle or still loading.
+// position so a resume picks up where it left off. A clip still arriving is paused too: the
+// attempt in flight is cancelled and nothing starts behind the listener's back. A no-op while idle.
 function pauseResume(): void {
   if (!audio) {
     return;
   }
 
-  if (state.status === "playing") {
-    audio.pause();
-    emit({ status: "paused", trackId: state.trackId });
+  if (state.status === "playing" || state.status === "loading") {
+    pausePreview();
 
     return;
   }
 
   if (state.status === "paused") {
-    const token = loadToken;
-
+    playbackGeneration += 1;
     emit({ status: "loading", trackId: state.trackId });
-    audio.play().catch(() => {
-      if (token === loadToken) {
-        emit({ status: "paused", trackId: state.trackId });
-      }
-    });
+    attemptPlay(audio, state.trackId);
   }
 }
 
-/** Pause whatever is playing, keeping its place (the one-sound rule, the chromeless surfaces). */
+/**
+ * Pause whatever is playing or still arriving, keeping its place (the one-sound rule, the
+ * chromeless surfaces, the player's own Pause). The play() attempt in flight is cancelled, so its
+ * AbortError is never read as a missing preview.
+ */
 export function pausePreview(): void {
   if (audio && (state.status === "playing" || state.status === "loading")) {
+    playAttempt += 1;
+    playbackGeneration += 1;
     audio.pause();
     emit({ status: "paused", trackId: state.trackId });
   }
@@ -415,7 +455,7 @@ export function pausePreview(): void {
  * queue's current track (a list that ran out plays its last track again).
  */
 export function togglePlayback(): void {
-  if (state.status === "playing" || state.status === "paused") {
+  if (state.status === "playing" || state.status === "loading" || state.status === "paused") {
     pauseResume();
 
     return;
@@ -459,6 +499,7 @@ export function stopPreview(): void {
 export function dismissPlayer(): void {
   stop();
   emitQueue(undefined);
+  releaseMediaSession();
 }
 
 /**
@@ -467,13 +508,18 @@ export function dismissPlayer(): void {
  * search); `page` leaves the navigation to the caller and arms a one-shot hand-off that the next
  * page's list consumes to start itself from the top.
  */
+export type KeepGoingOutcome = "moved" | "none" | "stale";
+
 export async function keepGoing(options: {
   loadSimilar: (last: QueueTrack) => Promise<QueueTrack[]>;
   navigate: (href: string) => void;
-}): Promise<boolean> {
+}): Promise<KeepGoingOutcome> {
   if (!queue) {
-    return false;
+    return "none";
   }
+
+  const asked = queue;
+  const generation = playbackGeneration;
 
   const continuation = queue.continuation ?? { kind: "similar" };
 
@@ -481,25 +527,33 @@ export async function keepGoing(options: {
     pendingPageContinuation = continuation.href;
     options.navigate(continuation.href);
 
-    return true;
+    return "moved";
   }
 
-  const last = queue.tracks[queue.tracks.length - 1];
+  const last = asked.tracks[asked.tracks.length - 1];
 
   if (!last) {
-    return false;
+    return "none";
   }
 
-  const heard = new Set(queue.tracks.map((track) => track.id));
-  const next = (await options.loadSimilar(last)).filter((track) => !heard.has(track.id));
+  const heard = new Set(asked.tracks.map((track) => track.id));
+  const found = await options.loadSimilar(last);
+
+  // The listener moved on while the archive answered (closed the player, pressed play elsewhere,
+  // paused): the late answer stands down and changes nothing.
+  if (queue !== asked || playbackGeneration !== generation) {
+    return "stale";
+  }
+
+  const next = found.filter((track) => !heard.has(track.id));
 
   if (next.length === 0) {
-    return false;
+    return "none";
   }
 
   playQueue(next, 0, { continuation: { kind: "similar" } });
 
-  return true;
+  return "moved";
 }
 
 /**
@@ -640,7 +694,9 @@ export function resetPreviewPlayer(): void {
   consecutiveMisses = 0;
   pendingPageContinuation = undefined;
   oneSoundGuardInstalled = false;
-  mediaSessionInstalled = false;
+  mediaSessionOwned = false;
+  playAttempt = 0;
+  playbackGeneration = 0;
 }
 
 /** Elapsed/total seconds of the current preview — the bars' own clock. */
@@ -672,6 +728,30 @@ function onOtherMedia(event: Event): void {
 
   if (!target.paused && !target.muted && target.volume > 0) {
     pausePreview();
+    // The other sound owns the lock screen and the headset buttons now; a stray Play there must
+    // not bring the preview back over it.
+    releaseMediaSession();
+  }
+}
+
+/**
+ * The preview is about to sound: any other audible media on the page stops first, so resuming a
+ * preview (from the bar, a row, or the keyboard) never plays over Stories or a video.
+ */
+function silenceOtherMedia(): void {
+  if (typeof document === "undefined" || typeof HTMLMediaElement === "undefined") {
+    return;
+  }
+
+  for (const element of Array.from(document.querySelectorAll("audio, video"))) {
+    if (
+      element instanceof HTMLMediaElement &&
+      element !== audio &&
+      !element.paused &&
+      !element.muted
+    ) {
+      element.pause();
+    }
   }
 }
 
@@ -691,7 +771,12 @@ function installOneSoundGuard(): void {
 // matches the bar (play, pause, next, previous). Feature-detected; a browser without the API
 // simply has no lock-screen controls.
 
-let mediaSessionInstalled = false;
+// The session belongs to whichever sound is live. The preview claims it each time it starts or
+// resumes and gives it up when other audio takes over or the player closes, so the lock screen's
+// Play never resumes a preview over the radio or a story.
+let mediaSessionOwned = false;
+
+const MEDIA_SESSION_ACTIONS: MediaSessionAction[] = ["play", "pause", "nexttrack", "previoustrack"];
 
 function mediaSession(): MediaSession | undefined {
   if (typeof navigator === "undefined" || !("mediaSession" in navigator)) {
@@ -701,35 +786,55 @@ function mediaSession(): MediaSession | undefined {
   return navigator.mediaSession;
 }
 
-function installMediaSessionHandlers(): void {
-  const session = mediaSession();
+function setMediaSessionHandlers(session: MediaSession, own: boolean): void {
+  const handlers: Record<string, () => void> = {
+    nexttrack: skipNext,
+    pause: pausePreview,
+    play: togglePlayback,
+    previoustrack: skipPrevious,
+  };
 
-  if (mediaSessionInstalled || !session) {
-    return;
-  }
-
-  mediaSessionInstalled = true;
-
-  const handlers: [MediaSessionAction, () => void][] = [
-    ["play", togglePlayback],
-    ["pause", pausePreview],
-    ["nexttrack", skipNext],
-    ["previoustrack", skipPrevious],
-  ];
-
-  for (const [action, handler] of handlers) {
+  for (const action of MEDIA_SESSION_ACTIONS) {
     try {
-      session.setActionHandler(action, handler);
+      session.setActionHandler(action, own ? (handlers[action] ?? null) : null);
     } catch {
       // An action this browser does not support is simply absent from its controls.
     }
   }
 }
 
+function claimMediaSession(): void {
+  const session = mediaSession();
+
+  if (!session) {
+    return;
+  }
+
+  if (!mediaSessionOwned) {
+    mediaSessionOwned = true;
+    setMediaSessionHandlers(session, true);
+  }
+
+  syncMediaSessionMetadata();
+}
+
+function releaseMediaSession(): void {
+  const session = mediaSession();
+
+  if (!session || !mediaSessionOwned) {
+    return;
+  }
+
+  mediaSessionOwned = false;
+  setMediaSessionHandlers(session, false);
+  session.metadata = null;
+  session.playbackState = "none";
+}
+
 function syncMediaSessionMetadata(): void {
   const session = mediaSession();
 
-  if (!session || typeof MediaMetadata === "undefined") {
+  if (!session || !mediaSessionOwned || typeof MediaMetadata === "undefined") {
     return;
   }
 
@@ -751,7 +856,7 @@ function syncMediaSessionMetadata(): void {
 function syncMediaSessionState(): void {
   const session = mediaSession();
 
-  if (!session) {
+  if (!session || !mediaSessionOwned) {
     return;
   }
 

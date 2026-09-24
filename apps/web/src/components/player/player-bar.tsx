@@ -71,7 +71,7 @@ function isInsideOverlay(target: EventTarget | null): boolean {
 /**
  * The keyboard transport: Space or K plays and pauses, J and L step back and forward through the
  * playing list. Never while focus is in a field or an open dialog or menu, never with a modifier
- * held (⌘K stays search), and Space leaves any focused control to do its own job — it only
+ * held (⌘K stays search, Shift+Space still scrolls up), and Space leaves any focused control to do its own job — it only
  * toggles from the page itself. Mounted only while the bar is docked, so a visit that never
  * pressed play keeps every key it had.
  */
@@ -87,6 +87,7 @@ function usePlayerKeys(enabled: boolean): void {
         event.metaKey ||
         event.ctrlKey ||
         event.altKey ||
+        event.shiftKey ||
         isTypingTarget(event.target) ||
         isInsideOverlay(event.target)
       ) {
@@ -185,8 +186,13 @@ export function PlayerBar(): ReactNode {
       loadSimilar: loadSimilarTracks,
       navigate: (href) => void navigate({ href }),
     })
-      .then((moved) => {
-        setNoWayOn(!moved);
+      .then((outcome) => {
+        // A late answer the listener already moved past changes nothing on the bar.
+        if (outcome === "stale") {
+          return;
+        }
+
+        setNoWayOn(outcome === "none");
 
         // The control the listener pressed is about to go (a new list, or no way on): focus
         // lands on the play button rather than falling to the page.
