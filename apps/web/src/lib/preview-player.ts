@@ -271,9 +271,14 @@ function stop(): void {
 // The current clip finished. Inside a queue the next track starts; at the end of the list the
 // bar keeps its place and offers the way on. Outside a queue the preview simply stops.
 function onEnded(): void {
-  // An end the listener has already moved past (they paused, closed the player, or another sound
-  // started before this event ran): the clip stays where it is and the list does not move.
+  // An end the listener has already moved past (they paused, closed the player, pressed for more,
+  // or another sound started before this event ran): the list does not move. The clip did stop,
+  // so a store that still says it is sounding learns it is paused at its end.
   if (!soundStillWanted()) {
+    if (state.status === "playing" || state.status === "loading") {
+      emit({ status: "paused", trackId: state.trackId });
+    }
+
     return;
   }
 
@@ -343,6 +348,42 @@ function failCurrent(token: number): void {
   }
 }
 
+/**
+ * A pause the player did not ask for: the OS, a headset, the browser. The element says paused
+ * while the store still thinks the preview is sounding or arriving, which no request of the
+ * player's own ever leaves behind (its pauses and closes settle the store before any event runs).
+ * That pause is the listener's newest intent in EVERY status, a clip still arriving included: the
+ * attempt in flight is cancelled and nothing queued behind it (an `ended`, an `error`, a waiting
+ * "keep going") moves the player again.
+ *
+ * A pause reported once the clip has reached its end is the end's own pause (the browser pauses a
+ * finished clip in the same task that fires `ended`), so it is left to `ended`. An element-level
+ * pause landing in the instant between the clip reaching its end and that task cannot be told
+ * apart from it; the lock screen and headset buttons reach the player through the Media Session
+ * handlers instead, which pause through `pausePreview` and win outright.
+ */
+function noticeUnrequestedPause(element: HTMLAudioElement): void {
+  if (!element.paused || element.ended) {
+    return;
+  }
+
+  if (state.status === "playing" || state.status === "loading") {
+    supersedeIntent();
+    playAttempt += 1;
+    emit({ status: "paused", trackId: state.trackId });
+  }
+}
+
+/**
+ * A continuation is about to act: first settle a pause the element already shows but whose
+ * notification has not run yet, so an answer that lands in between never starts over it.
+ */
+function noticeLivePause(): void {
+  if (audio) {
+    noticeUnrequestedPause(audio);
+  }
+}
+
 function ensureAudio(): HTMLAudioElement {
   if (audio) {
     return audio;
@@ -350,14 +391,37 @@ function ensureAudio(): HTMLAudioElement {
 
   const element = new Audio();
   element.preload = "none";
-  element.addEventListener("ended", onEnded);
+  // Every media notification is a queued task, delivered after whatever the listener did in
+  // between. So each handler first reads the element's LIVE state: it settles a pause the player
+  // never asked for, then acts only when the element still says what the notification claims.
+  // (Tasks from a replaced source never arrive: a new `src` drops them.)
+  element.addEventListener("ended", () => {
+    noticeUnrequestedPause(element);
+
+    // The clip was restarted or replaced since it ended: this end is obsolete.
+    if (!element.ended) {
+      return;
+    }
+
+    onEnded();
+  });
   element.addEventListener("error", () => {
+    noticeUnrequestedPause(element);
+
+    // A newer load has cleared the failure this notification reports.
+    if (element.error === null) {
+      return;
+    }
+
     // A dead preview degrades to silence (or to the next track in a queue).
     failCurrent(loadToken);
   });
   element.addEventListener("playing", () => {
-    // A late `playing` from an attempt the listener has since paused or closed reports nothing.
-    if (element.paused || !soundStillWanted()) {
+    noticeUnrequestedPause(element);
+
+    // A late `playing` from an attempt that has since been paused, closed or finished reports
+    // nothing: the element itself says it is not sounding, or the intent behind it has lapsed.
+    if (element.paused || element.ended || !soundStillWanted()) {
       return;
     }
 
@@ -370,13 +434,7 @@ function ensureAudio(): HTMLAudioElement {
     }
   });
   element.addEventListener("pause", () => {
-    // A pause the page did not ask for (the OS, a headset button, the one-sound guard) still
-    // lands in the store, so every control reads the truth, and it is the listener's newest
-    // intent: a queued `ended` or a waiting "keep going" behind it moves nothing.
-    if (state.status === "playing" && !element.ended) {
-      supersedeIntent();
-      emit({ status: "paused", trackId: state.trackId });
-    }
+    noticeUnrequestedPause(element);
   });
   element.addEventListener("timeupdate", () => emitProgress(readTime()));
   element.addEventListener("loadedmetadata", () => emitProgress(readTime()));
@@ -593,6 +651,8 @@ export async function keepGoing(options: {
   const heard = new Set(asked.tracks.map((track) => track.id));
   const found = await options.loadSimilar(last);
 
+  noticeLivePause();
+
   // The listener moved on while the archive answered (closed the player, pressed play elsewhere,
   // paused): the late answer stands down and changes nothing.
   if (queue !== asked || playbackGeneration !== generation) {
@@ -618,6 +678,8 @@ export async function keepGoing(options: {
  * the listener reached some other way, later. Pure bookkeeping; the list starts itself.
  */
 export function claimPageContinuation(href: string): boolean {
+  noticeLivePause();
+
   const handoff = pendingPageContinuation;
 
   pendingPageContinuation = undefined;

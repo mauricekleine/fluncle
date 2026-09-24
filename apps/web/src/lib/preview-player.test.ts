@@ -15,14 +15,31 @@ import {
   togglePlayback,
 } from "./preview-player";
 
+/**
+ * The simple synchronous double: each `dispatch` runs its listeners at once, after setting the
+ * live state the browser would already show (`ended` for an end, `error` for a failure).
+ */
 class FakeAudio {
   currentTime = 0;
   duration = Number.NaN;
   ended = false;
+  error: { code: number } | null = null;
+  paused = true;
   playImpl: () => Promise<void> = () => Promise.resolve();
   preload = "";
-  src = "";
+  #src = "";
   readonly #listeners = new Map<string, Set<() => void>>();
+
+  get src(): string {
+    return this.#src;
+  }
+
+  set src(value: string) {
+    this.ended = false;
+    this.error = null;
+    this.paused = true;
+    this.#src = value;
+  }
 
   addEventListener(type: string, listener: () => void): void {
     const set = this.#listeners.get(type) ?? new Set();
@@ -32,22 +49,34 @@ class FakeAudio {
   }
 
   dispatch(type: string): void {
+    if (type === "ended") {
+      this.ended = true;
+      this.paused = true;
+    }
+
+    if (type === "error") {
+      this.error = { code: 4 };
+    }
+
     for (const listener of this.#listeners.get(type) ?? []) {
       listener();
     }
   }
 
   pause(): void {
-    // The singleton pauses before swapping src; tests do not assert paused.
+    this.paused = true;
   }
 
   play(): Promise<void> {
+    this.ended = false;
+    this.paused = false;
+
     return this.playImpl();
   }
 
   removeAttribute(name: string): void {
     if (name === "src") {
-      this.src = "";
+      this.#src = "";
     }
   }
 }
@@ -386,15 +415,31 @@ function domError(name: string, message: string): DOMException {
   return new DOMException(message, name);
 }
 
+type MediaNotification = "canplay" | "ended" | "error" | "pause" | "playing";
+
+type MediaTask = { name: MediaNotification; run: () => void };
+
+/**
+ * An <audio> element that behaves like the browser's where the player can tell: every media
+ * notification is its OWN queued task (`deliver`, in any order the test chooses), while the
+ * properties the browser sets synchronously (`paused` on play()/pause(), `ended` the moment the
+ * clip reaches its end) change before that task runs. A new `src` drops the queued tasks and
+ * rejects the pending play() with an AbortError, as the load algorithm does.
+ */
 class BrowserLikeAudio {
   currentTime = 0;
   duration = Number.NaN;
   ended = false;
+  error: { code: number } | null = null;
   muted = false;
   paused = true;
   preload = "";
+  /** The queued media tasks, oldest first. */
+  readonly tasks: MediaTask[] = [];
   #src = "";
-  #pending: { reject: (error: unknown) => void; resolve: () => void } | undefined;
+  #pending: { reject: (error: unknown) => void; resolve: () => void }[] = [];
+  #arrived = false;
+  #sounding = false;
   readonly #listeners = new Map<string, Set<() => void>>();
 
   get src(): string {
@@ -402,8 +447,15 @@ class BrowserLikeAudio {
   }
 
   set src(value: string) {
-    this.#abort("The play() request was interrupted by a new load request.");
+    this.tasks.length = 0;
+    this.#rejectPending(
+      domError("AbortError", "The play() request was interrupted by a new load request."),
+    );
     this.paused = true;
+    this.ended = false;
+    this.error = null;
+    this.#arrived = false;
+    this.#sounding = false;
     this.#src = value;
   }
 
@@ -421,22 +473,39 @@ class BrowserLikeAudio {
   }
 
   play(): Promise<void> {
+    if (this.ended) {
+      // Playing a finished clip starts it again from the top.
+      this.ended = false;
+      this.currentTime = 0;
+      this.#sounding = false;
+    }
+
     this.paused = false;
 
     return new Promise((resolve, reject) => {
-      this.#pending = { reject, resolve };
+      this.#pending.push({ reject, resolve });
     });
   }
 
   pause(): void {
-    const wasPlaying = !this.paused;
+    if (this.paused) {
+      return;
+    }
 
     this.paused = true;
-    this.#abort("The play() request was interrupted by a call to pause().");
+    this.#sounding = false;
 
-    if (wasPlaying) {
+    const interrupted = this.#takePending();
+
+    this.#queue("pause", () => {
       this.dispatch("pause");
-    }
+
+      for (const pending of interrupted) {
+        pending.reject(
+          domError("AbortError", "The play() request was interrupted by a call to pause()."),
+        );
+      }
+    });
   }
 
   removeAttribute(name: string): void {
@@ -445,38 +514,121 @@ class BrowserLikeAudio {
     }
   }
 
+  // ── what the network and the clock do ──
+
+  /** The clip's data arrived while it was wanted: `canplay`, then `playing`, each its own task. */
+  dataArrives(): boolean {
+    if (this.paused || this.ended || this.#arrived || this.#src === "") {
+      return false;
+    }
+
+    this.#arrived = true;
+    this.#queue("canplay", () => this.dispatch("canplay"));
+    this.#queue("playing", () => {
+      for (const pending of this.#takePending()) {
+        pending.resolve();
+      }
+
+      this.#sounding = !this.paused;
+      this.dispatch("playing");
+    });
+
+    return true;
+  }
+
+  /** A sounding clip reached its end: `ended` is true at once, the notification is queued. */
+  reachEnd(): boolean {
+    if (!this.#sounding || this.paused || this.ended) {
+      return false;
+    }
+
+    this.ended = true;
+    this.#queue("ended", () => {
+      if (!this.paused) {
+        this.paused = true;
+        this.#sounding = false;
+        this.dispatch("pause");
+      }
+
+      this.dispatch("ended");
+    });
+
+    return true;
+  }
+
+  /** The relay answered with nothing playable: the failure task sets `error` and reports it. */
+  loadFails(): boolean {
+    if (this.#arrived || this.#src === "") {
+      return false;
+    }
+
+    this.#arrived = true;
+    this.#queue("error", () => {
+      const failed = this.#takePending();
+
+      this.error = { code: 4 };
+      this.dispatch("error");
+
+      for (const pending of failed) {
+        pending.reject(domError("NotSupportedError", "The element has no supported sources."));
+      }
+    });
+
+    return true;
+  }
+
+  /** Run one queued task (the oldest by default). */
+  deliver(index = 0): boolean {
+    const [task] = this.tasks.splice(index, 1);
+
+    task?.run();
+
+    return task !== undefined;
+  }
+
+  /** Run every queued task in order, including any the delivered ones queue. */
+  deliverAll(): void {
+    while (this.deliver()) {
+      // Each task may queue another; drain until the element is quiet.
+    }
+  }
+
+  // ── the synchronous conveniences the scenario tests read as one step ──
+
   /** The clip arrived and started sounding. */
   arrive(): void {
-    const pending = this.#pending;
-
-    this.#pending = undefined;
-    pending?.resolve();
-    this.dispatch("playing");
+    this.dataArrives();
+    this.deliverAll();
   }
 
   /** The relay answered with nothing playable. */
   failToLoad(): void {
-    const pending = this.#pending;
-
-    this.#pending = undefined;
-    this.dispatch("error");
-    pending?.reject(domError("NotSupportedError", "The element has no supported sources."));
+    this.loadFails();
+    this.deliverAll();
   }
 
   /** The clip played to its end. */
   finish(): void {
-    this.paused = true;
-    this.ended = true;
-    this.dispatch("pause");
-    this.dispatch("ended");
-    this.ended = false;
+    this.reachEnd();
+    this.deliverAll();
   }
 
-  #abort(message: string): void {
+  #queue(name: MediaNotification, run: () => void): void {
+    this.tasks.push({ name, run });
+  }
+
+  #takePending(): { reject: (error: unknown) => void; resolve: () => void }[] {
     const pending = this.#pending;
 
-    this.#pending = undefined;
-    pending?.reject(domError("AbortError", message));
+    this.#pending = [];
+
+    return pending;
+  }
+
+  #rejectPending(error: DOMException): void {
+    for (const pending of this.#takePending()) {
+      pending.reject(error);
+    }
   }
 }
 
@@ -888,15 +1040,9 @@ describe("continuations lapse on any newer intent, even from idle", () => {
 });
 
 // ── AUTOMATIC ADVANCEMENT OBEYS THE SAME INTENT AS A PRESS ────────────────────────────────────
-// A clip's end runs as a queued task, so a pause, a close or another sound can land between the
-// clip reaching its end and the `ended` event running. Whatever came first wins.
-
-/** Run the end-of-clip task the browser queued while the clip was still sounding. */
-function endTaskRuns(element: BrowserLikeAudio): void {
-  element.ended = true;
-  element.dispatch("ended");
-  element.ended = false;
-}
+// A clip's end, its failure and its `playing` are queued tasks, so a pause, a close or another
+// sound can land between the browser deciding and the notification running. Whatever the
+// listener did first wins, and a notification the element no longer vouches for is ignored.
 
 describe("automatic advancement stands down behind a newer intent", () => {
   it("an end that runs after the listener paused does not start the next track", async () => {
@@ -904,8 +1050,9 @@ describe("automatic advancement stands down behind a newer intent", () => {
 
     playQueue(tracks("a", "b"), 0);
     element.arrive();
+    element.reachEnd();
     pausePreview();
-    endTaskRuns(element);
+    element.deliverAll();
     await settled();
 
     expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
@@ -920,8 +1067,9 @@ describe("automatic advancement stands down behind a newer intent", () => {
 
     playQueue(tracks("a", "b"), 0);
     element.arrive();
+    element.reachEnd();
     page.start(story);
-    endTaskRuns(element);
+    element.deliverAll();
     await settled();
 
     expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
@@ -935,25 +1083,13 @@ describe("automatic advancement stands down behind a newer intent", () => {
 
     playQueue(tracks("a", "b"), 0);
     element.arrive();
+    element.reachEnd();
     dismissPlayer();
-    endTaskRuns(element);
+    element.deliverAll();
     await settled();
 
     expect(readPlayer()).toMatchObject({ queue: undefined, status: "idle" });
     expect(element.src).toBe("");
-  });
-
-  it("an end that runs after a headset pause holds the list where it is", async () => {
-    const element = installBrowserAudio();
-
-    playQueue(tracks("a", "b"), 0);
-    element.arrive();
-    element.pause();
-    endTaskRuns(element);
-    await settled();
-
-    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
-    expect(readPlayer().queue?.index).toBe(0);
   });
 
   it("a missing preview reported after another sound started is remembered, never skipped over it", async () => {
@@ -984,6 +1120,70 @@ describe("automatic advancement stands down behind a newer intent", () => {
   });
 });
 
+describe("a pause the player did not ask for", () => {
+  it("cancels a clip that is still arriving, so its failure never skips to the next track", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.pause();
+    element.loadFails();
+    element.deliverAll();
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(readPlayer().queue?.index).toBe(0);
+    expect(readPlayer().missing.has("a")).toBe(true);
+    expect(element.src).toBe("/api/preview/a");
+  });
+
+  it("cancels it even when the failure is delivered before the pause", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.pause();
+    element.loadFails();
+    // The failure's task runs first: the element already says paused, and that is enough.
+    element.deliver(1);
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(element.src).toBe("/api/preview/a");
+  });
+
+  it("holds a playing list where it is", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    element.pause();
+    element.deliverAll();
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "paused", trackId: "a" });
+    expect(element.reachEnd()).toBe(false);
+  });
+
+  it("an obsolete pause notification never cancels the resume that followed it", async () => {
+    const element = installBrowserAudio();
+
+    playQueue(tracks("a", "b"), 0);
+    element.dataArrives();
+    pausePreview();
+    togglePlayback();
+    // The old `canplay`, `playing` and `pause` run after the resume, in the order they were queued.
+    element.deliverAll();
+    await settled();
+
+    expect(element.paused).toBe(false);
+    expect(readPlayer()).toMatchObject({ status: "playing", trackId: "a" });
+
+    // The resumed clip still carries the list on when it ends.
+    element.finish();
+    await settled();
+    expect(readPlayer()).toMatchObject({ status: "loading", trackId: "b" });
+  });
+});
+
 describe("the player lives across pages", () => {
   it("a sonic keep going still waiting plays after the listener moves to another page", async () => {
     const element = installBrowserAudio();
@@ -1004,43 +1204,36 @@ describe("the player lives across pages", () => {
   });
 });
 
-// ── THE INTENT INVARIANT, OVER EVERY SHORT INTERLEAVING ───────────────────────────────────────
-// Every sequence of up to five events from the alphabet below runs against a fresh player. Five is
-// the shortest window that holds the race a queued end task creates: start, arrive, reach the end,
-// something newer, the end task. The
-// oracle knows only what the LISTENER did: a press (play a list, next, resume, keep going) asks
-// for sound; a pause, a close or another sound starting silences it. After every event:
+// ── THE INTENT INVARIANT, OVER THE INTERLEAVINGS ─────────────────────────────────────────────
+// A fresh player runs every sequence of up to four events from the alphabet below, then a fixed
+// set of seeded longer sequences. The element's notifications are queued tasks that only a
+// delivery event runs, oldest or newest first, so a notification can land before or after
+// anything the listener does. The oracle knows only what the LISTENER did: a press (play a list,
+// next, resume, keep going) asks for sound; a pause (the page's or the OS's), a close or another
+// sound starting silences it. After EVERY event:
 //
-//   - while silenced, the preview neither sounds nor tries to (no loading, no playing, the element
-//     paused) and the other sound was never paused by it;
-//   - the preview and the other sound never both sound at once.
+//   - while silenced, the element is paused (nothing sounds), and the other sound was never paused
+//     by the preview;
+//   - the preview and the other sound never both sound;
+//   - once no notification is waiting, the store tells the truth: it says playing or loading
+//     exactly when the element is not paused, and never while the listener has silenced it.
 //
-// The automatic events (a clip arriving, reaching its end, its queued end task, a missing
-// preview, a late similar-tracks answer, the next page claiming its hand-off) may move the player
-// only while the listener's latest word was a press.
+// The OS pause is issued only before the clip reaches its end: once it has, the browser's own
+// end-of-clip pause is indistinguishable from it at the element (see `noticeUnrequestedPause`).
 
 const MODEL_PAGE = "/tracks?page=2";
 
 type Model = {
   answer?: (tracks: QueueTrack[]) => void;
-  arrived: boolean;
   element: BrowserLikeAudio;
-  endQueued: boolean;
   outcome?: Promise<unknown>;
   radio: OtherMedia;
   radioPausesWhenSilenced: number;
   silenced: boolean;
-  src: string;
   start: (media: OtherMedia) => void;
 };
 
 type ModelEvent = { name: string; run: (model: Model) => void | Promise<void> };
-
-function sounding(model: Model): boolean {
-  const { status } = readPlayer();
-
-  return status === "playing" || status === "loading" || !model.element.paused;
-}
 
 function pressed(model: Model): void {
   model.silenced = false;
@@ -1116,6 +1309,15 @@ const MODEL_EVENTS: readonly ModelEvent[] = [
     },
   },
   {
+    name: "the OS pauses the preview",
+    run: (model) => {
+      if (!model.element.paused && !model.element.ended) {
+        silenced(model);
+        model.element.pause();
+      }
+    },
+  },
+  {
     name: "keep going",
     run: (model) => {
       if (readPlayer().queue) {
@@ -1131,47 +1333,13 @@ const MODEL_EVENTS: readonly ModelEvent[] = [
       });
     },
   },
+  { name: "its data arrives", run: (model) => void model.element.dataArrives() },
+  { name: "it reaches its end", run: (model) => void model.element.reachEnd() },
+  { name: "its preview is missing", run: (model) => void model.element.loadFails() },
+  { name: "the oldest notification runs", run: (model) => void model.element.deliver(0) },
   {
-    name: "the clip arrives",
-    run: (model) => {
-      if (!model.element.paused && !model.arrived && model.element.src !== "") {
-        model.arrived = true;
-        model.element.arrive();
-      }
-    },
-  },
-  {
-    name: "the clip reaches its end",
-    run: (model) => {
-      if (model.arrived && !model.element.paused) {
-        model.endQueued = true;
-      }
-    },
-  },
-  {
-    name: "its end task runs",
-    run: (model) => {
-      if (model.endQueued) {
-        model.endQueued = false;
-        model.element.ended = true;
-
-        if (!model.element.paused) {
-          model.element.paused = true;
-          model.element.dispatch("pause");
-        }
-
-        model.element.dispatch("ended");
-        model.element.ended = false;
-      }
-    },
-  },
-  {
-    name: "the preview is missing",
-    run: (model) => {
-      if (!model.arrived && model.element.src !== "") {
-        model.element.failToLoad();
-      }
-    },
+    name: "the newest notification runs",
+    run: (model) => void model.element.deliver(model.element.tasks.length - 1),
   },
   {
     name: "a late similar-tracks answer",
@@ -1207,6 +1375,60 @@ function* interleavings(length: number): Generator<ModelEvent[]> {
   }
 }
 
+/** A small deterministic generator (mulberry32), so the long sequences are the same every run. */
+function seededRandom(seed: number): () => number {
+  let state = seed;
+
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+function* longInterleavings(count: number, length: number): Generator<ModelEvent[]> {
+  const random = seededRandom(1456);
+
+  for (let run = 0; run < count; run += 1) {
+    yield Array.from(
+      { length },
+      () => MODEL_EVENTS[Math.floor(random() * MODEL_EVENTS.length)] ?? MODEL_EVENTS[0],
+    ).filter((event): event is ModelEvent => event !== undefined);
+  }
+}
+
+function modelViolation(model: Model): string | undefined {
+  const { element, radio } = model;
+  const { status } = readPlayer();
+  const storeSounding = status === "playing" || status === "loading";
+
+  if (model.silenced && !element.paused) {
+    return "sound without a live intent";
+  }
+
+  if (model.silenced && radio.pauses !== model.radioPausesWhenSilenced) {
+    return "the preview silenced the other sound on its own";
+  }
+
+  if (!radio.paused && !element.paused) {
+    return "two sounds at once";
+  }
+
+  if (element.tasks.length === 0 && storeSounding !== !element.paused) {
+    return `the store says ${status} while the element is ${element.paused ? "paused" : "sounding"}`;
+  }
+
+  if (element.tasks.length === 0 && model.silenced && storeSounding) {
+    return `the store says ${status} after the listener silenced it`;
+  }
+
+  return undefined;
+}
+
 async function runInterleaving(events: readonly ModelEvent[]): Promise<string | undefined> {
   resetPreviewPlayer();
   vi.unstubAllGlobals();
@@ -1215,13 +1437,10 @@ async function runInterleaving(events: readonly ModelEvent[]): Promise<string | 
   const radio = new OtherMedia();
   const page = installPage([radio]);
   const model: Model = {
-    arrived: false,
     element,
-    endQueued: false,
     radio,
     radioPausesWhenSilenced: 0,
     silenced: false,
-    src: "",
     start: page.start,
   };
 
@@ -1229,52 +1448,47 @@ async function runInterleaving(events: readonly ModelEvent[]): Promise<string | 
     await event.run(model);
     await settled();
 
-    // A new source is a new clip: the element drops the old one's queued end with it.
-    if (element.src !== model.src) {
-      model.src = element.src;
-      model.arrived = false;
-      model.endQueued = false;
-    }
+    const violation = modelViolation(model);
 
-    const trace = events
-      .slice(0, step + 1)
-      .map((item) => item.name)
-      .join(" → ");
+    if (violation) {
+      const trace = events
+        .slice(0, step + 1)
+        .map((item) => item.name)
+        .join(" → ");
 
-    if (model.silenced && sounding(model)) {
-      return `sound without a live intent: ${trace} (status ${readPlayer().status})`;
-    }
-
-    if (model.silenced && radio.pauses !== model.radioPausesWhenSilenced) {
-      return `the preview silenced the other sound on its own: ${trace}`;
-    }
-
-    if (!radio.paused && sounding(model) && readPlayer().status === "playing") {
-      return `two sounds at once: ${trace}`;
+      return `${violation}: ${trace}`;
     }
   }
 
   return undefined;
 }
 
-describe("the intent invariant over every short interleaving", () => {
-  it("holds for every sequence of up to five events", async () => {
+describe("the intent invariant over the interleavings", () => {
+  it("holds for every sequence of up to four events and for long seeded ones", async () => {
     const failures: string[] = [];
     let runs = 0;
 
-    for (let length = 1; length <= 5; length += 1) {
-      for (const events of interleavings(length)) {
-        runs += 1;
+    async function check(events: readonly ModelEvent[]): Promise<void> {
+      runs += 1;
 
-        const failure = await runInterleaving(events);
+      const failure = await runInterleaving(events);
 
-        if (failure && failures.length < 10) {
-          failures.push(failure);
-        }
+      if (failure && failures.length < 10) {
+        failures.push(failure);
       }
     }
 
-    expect(runs).toBeGreaterThan(MODEL_EVENTS.length ** 5);
+    for (let length = 1; length <= 4; length += 1) {
+      for (const events of interleavings(length)) {
+        await check(events);
+      }
+    }
+
+    for (const events of longInterleavings(60_000, 14)) {
+      await check(events);
+    }
+
+    expect(runs).toBeGreaterThan(MODEL_EVENTS.length ** 4 + 60_000);
     expect(failures).toEqual([]);
-  }, 120_000);
+  }, 180_000);
 });
