@@ -27,6 +27,12 @@
 // ONE SOUND AT A TIME. Any other audible media element on the page (Stories, the
 // radio, a video someone unmutes) pauses the preview the moment it starts, and
 // the chrome pauses it on the way into a surface that never shows the bar.
+//
+// SOUND STARTS ONLY ON A LIVE INTENT. There are exactly three ways a preview starts: a press
+// (a row's cover, the bar, a key, the lock screen while the preview holds the session); the list
+// the listener started running on (a clip ending, a missing clip skipped, never once paused); and
+// a continuation ("keep going": a sonic search or a next-page hand-off) that is honoured only
+// under the intent that asked for it. Every other event supersedes that intent.
 
 import { useCallback, useSyncExternalStore } from "react";
 import {
@@ -106,11 +112,26 @@ let loadToken = 0;
 // browser rejects an interrupted play() with an AbortError, and that rejection is a cancellation,
 // never a missing preview.
 let playAttempt = 0;
-// Every playback action the listener takes (a start, a pause, a resume, a close) bumps the
-// generation, so an answer that arrives late (a "keep going" search) can tell it was overtaken
-// and stand down instead of resurrecting a closed player or replacing a newer choice.
+// THE LISTENER'S INTENT. Every playback action (a start, a pause, a resume, a close, a "keep
+// going") and every competing sound (Stories, the radio, a surface that never shows the player)
+// bumps the generation, WHETHER OR NOT anything is playing at that moment. A continuation (a "keep
+// going" search awaiting the archive, a next-page hand-off awaiting its page) carries the
+// generation it was asked under and acts only if nothing has happened since: nothing ever starts
+// sound on an intent the listener has already moved past.
 let playbackGeneration = 0;
-let pendingPageContinuation: string | undefined;
+
+/** The most a next-page hand-off waits for its page before it lapses. */
+const PAGE_HANDOFF_TTL_MS = 30_000;
+
+type PageHandoff = { at: number; generation: number; href: string };
+
+let pendingPageContinuation: PageHandoff | undefined;
+
+/** A new intent: every continuation asked under an older one lapses, idle or not. */
+function supersedeIntent(): void {
+  playbackGeneration += 1;
+  pendingPageContinuation = undefined;
+}
 const listeners = new Set<() => void>();
 const progressListeners = new Set<() => void>();
 const queueListeners = new Set<() => void>();
@@ -227,7 +248,7 @@ function stop(): void {
   pendingPublicPreview = false;
   loadToken += 1;
   playAttempt += 1;
-  playbackGeneration += 1;
+  supersedeIntent();
   audio?.pause();
   audio?.removeAttribute("src");
   emit(idleState);
@@ -360,7 +381,7 @@ function load(trackId: string, options?: StartPreviewOptions): void {
 
   const element = ensureAudio();
   loadToken += 1;
-  playbackGeneration += 1;
+  supersedeIntent();
 
   element.src = options?.src ?? previewProxyUrl(trackId);
   emit({ status: "loading", trackId });
@@ -430,7 +451,7 @@ function pauseResume(): void {
   }
 
   if (state.status === "paused") {
-    playbackGeneration += 1;
+    supersedeIntent();
     emit({ status: "loading", trackId: state.trackId });
     attemptPlay(audio, state.trackId);
   }
@@ -439,12 +460,14 @@ function pauseResume(): void {
 /**
  * Pause whatever is playing or still arriving, keeping its place (the one-sound rule, the
  * chromeless surfaces, the player's own Pause). The play() attempt in flight is cancelled, so its
- * AbortError is never read as a missing preview.
+ * AbortError is never read as a missing preview. Even with nothing sounding, a pause is a new
+ * intent: a "keep going" still waiting on the archive or on its next page lapses with it.
  */
 export function pausePreview(): void {
+  supersedeIntent();
+
   if (audio && (state.status === "playing" || state.status === "loading")) {
     playAttempt += 1;
-    playbackGeneration += 1;
     audio.pause();
     emit({ status: "paused", trackId: state.trackId });
   }
@@ -518,13 +541,16 @@ export async function keepGoing(options: {
     return "none";
   }
 
+  // The press is itself the newest intent: it supersedes any earlier continuation still waiting.
+  supersedeIntent();
+
   const asked = queue;
   const generation = playbackGeneration;
 
   const continuation = queue.continuation ?? { kind: "similar" };
 
   if (continuation.kind === "page") {
-    pendingPageContinuation = continuation.href;
+    pendingPageContinuation = { at: Date.now(), generation, href: continuation.href };
     options.navigate(continuation.href);
 
     return "moved";
@@ -558,19 +584,32 @@ export async function keepGoing(options: {
 
 /**
  * A list mounting under `href` claims a pending page hand-off: true once, for the page the
- * previous list asked for, so the new page plays from its first row. Pure bookkeeping; the list
- * starts itself.
+ * previous list asked for, so the new page plays from its first row. It is honoured only while
+ * the intent that asked for it is still the listener's latest (no close, no newer start, no pause,
+ * no competing sound since) and only for a short while: a hand-off never starts sound on a page
+ * the listener reached some other way, later. Pure bookkeeping; the list starts itself.
  */
 export function claimPageContinuation(href: string): boolean {
-  if (pendingPageContinuation === undefined) {
-    return false;
-  }
-
-  const matches = samePath(pendingPageContinuation, href);
+  const handoff = pendingPageContinuation;
 
   pendingPageContinuation = undefined;
 
-  return matches;
+  return (
+    handoff !== undefined &&
+    handoff.generation === playbackGeneration &&
+    Date.now() - handoff.at <= PAGE_HANDOFF_TTL_MS &&
+    samePath(handoff.href, href)
+  );
+}
+
+/**
+ * The listener arrived somewhere: a hand-off for any OTHER page lapses (they went elsewhere). The
+ * page it was asked for claims it first, from its own list's mount.
+ */
+export function expirePageContinuation(href: string): void {
+  if (pendingPageContinuation !== undefined && !samePath(pendingPageContinuation.href, href)) {
+    pendingPageContinuation = undefined;
+  }
 }
 
 function samePath(a: string, b: string): boolean {
@@ -726,6 +765,8 @@ function onOtherMedia(event: Event): void {
     return;
   }
 
+  // Another sound started, audibly: the preview pauses (if it was sounding) and every continuation
+  // still waiting lapses, so nothing the listener asked for earlier starts over it.
   if (!target.paused && !target.muted && target.volume > 0) {
     pausePreview();
     // The other sound owns the lock screen and the headset buttons now; a stray Play there must

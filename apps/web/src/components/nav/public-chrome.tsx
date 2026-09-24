@@ -15,7 +15,7 @@ import { NavBreadcrumb } from "@/components/nav/nav-breadcrumb";
 import { NavFooter } from "@/components/nav/nav-footer";
 import { PlayerBar } from "@/components/player/player-bar";
 import { SearchProvider, SearchTrigger } from "@/components/search/search-command";
-import { pausePreview } from "@/lib/preview-player";
+import { expirePageContinuation, pausePreview } from "@/lib/preview-player";
 
 // Surfaces that render WITHOUT the public chrome:
 // - /admin: its own AdminShell workspace chrome (never touched here).
@@ -75,6 +75,14 @@ export function PublicChrome({
       pausePreview();
     }
   }, [chromeless]);
+
+  // A next-page hand-off belongs to the page it asked for; arriving anywhere else lapses it. (The
+  // asked-for page's list claims it first: child effects run before this one.)
+  const href = useRouterState({ select: (state) => state.location.href });
+
+  useEffect(() => {
+    expirePageContinuation(href);
+  }, [href]);
 
   if (chromeless) {
     return <>{children}</>;

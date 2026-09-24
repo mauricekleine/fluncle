@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   claimPageContinuation,
   dismissPlayer,
+  expirePageContinuation,
   keepGoing,
   pausePreview,
   playQueue,
@@ -734,5 +735,154 @@ describe("media session — the lock screen belongs to the live sound", () => {
     expect(session.handlers.get("play")).toBeNull();
     expect(session.metadata).toBeNull();
     expect(session.playbackState).toBe("none");
+  });
+});
+
+// ── EVERY CONTINUATION ACTS ONLY ON THE LISTENER'S LATEST INTENT ──────────────────────────────
+// "Keep going" is pressed with the queue already over (idle), so these races start from idle: the
+// intent has to lapse on a pause, a close, a newer start or a competing sound even when nothing is
+// sounding at that moment.
+
+describe("continuations lapse on any newer intent, even from idle", () => {
+  async function endedQueue(
+    element: BrowserLikeAudio,
+    continuation?: { href: string; kind: "page" },
+  ): Promise<void> {
+    playQueue(tracks("a"), 0, continuation ? { continuation } : undefined);
+    element.arrive();
+    element.finish();
+    await settled();
+    expect(readPlayer()).toMatchObject({ status: "idle" });
+    expect(readPlayer().queue?.ended).toBe(true);
+  }
+
+  it("a similar-tracks answer that lands after the radio started never plays or silences it", async () => {
+    const element = installBrowserAudio();
+    const radio = new OtherMedia();
+    const page = installPage([radio]);
+
+    await endedQueue(element);
+
+    const answer = deferred<QueueTrack[]>();
+    const outcome = keepGoing({ loadSimilar: () => answer.promise, navigate: () => {} });
+
+    page.start(radio);
+    answer.resolve(tracks("x", "y"));
+
+    expect(await outcome).toBe("stale");
+    // Nothing was loaded: the finished list left the element empty, and it stays empty.
+    expect(element.src).toBe("");
+    expect(readPlayer().status).toBe("idle");
+    expect(radio.paused).toBe(false);
+    expect(radio.pauses).toBe(0);
+  });
+
+  it("a similar-tracks answer that lands after a chromeless surface paused the player stands down", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element);
+
+    const answer = deferred<QueueTrack[]>();
+    const outcome = keepGoing({ loadSimilar: () => answer.promise, navigate: () => {} });
+
+    pausePreview();
+    answer.resolve(tracks("x"));
+
+    expect(await outcome).toBe("stale");
+    expect(element.src).toBe("");
+    expect(readPlayer().status).toBe("idle");
+  });
+
+  it("a later press of keep going supersedes the earlier one", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element);
+
+    const first = deferred<QueueTrack[]>();
+    const second = deferred<QueueTrack[]>();
+    const firstOutcome = keepGoing({ loadSimilar: () => first.promise, navigate: () => {} });
+    const secondOutcome = keepGoing({ loadSimilar: () => second.promise, navigate: () => {} });
+
+    second.resolve(tracks("s"));
+    expect(await secondOutcome).toBe("moved");
+    first.resolve(tracks("f"));
+    expect(await firstOutcome).toBe("stale");
+    expect(element.src).toBe("/api/preview/s");
+  });
+
+  const PAGE = { href: "/tracks?page=2", kind: "page" as const };
+
+  it("a next-page hand-off is honoured when nothing happened in between", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element, PAGE);
+    expect(await keepGoing({ loadSimilar: async () => [], navigate: () => {} })).toBe("moved");
+    expect(claimPageContinuation(PAGE.href)).toBe(true);
+  });
+
+  it("a next-page hand-off lapses when the player is closed before the page arrives", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element, PAGE);
+    await keepGoing({ loadSimilar: async () => [], navigate: () => {} });
+    dismissPlayer();
+
+    expect(claimPageContinuation(PAGE.href)).toBe(false);
+  });
+
+  it("a next-page hand-off lapses when something newer starts first", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element, PAGE);
+    await keepGoing({ loadSimilar: async () => [], navigate: () => {} });
+    playQueue(tracks("n"), 0);
+
+    expect(claimPageContinuation(PAGE.href)).toBe(false);
+    expect(element.src).toBe("/api/preview/n");
+  });
+
+  it("a next-page hand-off lapses when another sound starts", async () => {
+    const element = installBrowserAudio();
+    const story = new OtherMedia();
+    const page = installPage([story]);
+
+    await endedQueue(element, PAGE);
+    await keepGoing({ loadSimilar: async () => [], navigate: () => {} });
+    page.start(story);
+
+    expect(claimPageContinuation(PAGE.href)).toBe(false);
+  });
+
+  it("a next-page hand-off lapses when the listener lands somewhere else", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element, PAGE);
+    await keepGoing({ loadSimilar: async () => [], navigate: () => {} });
+    expirePageContinuation("/fresh");
+
+    expect(claimPageContinuation(PAGE.href)).toBe(false);
+  });
+
+  it("a next-page hand-off lapses when its page takes too long to arrive", async () => {
+    const element = installBrowserAudio();
+    const clock = vi.spyOn(Date, "now");
+
+    clock.mockReturnValue(1_000_000);
+    await endedQueue(element, PAGE);
+    await keepGoing({ loadSimilar: async () => [], navigate: () => {} });
+    clock.mockReturnValue(1_000_000 + 30_001);
+
+    expect(claimPageContinuation(PAGE.href)).toBe(false);
+    clock.mockRestore();
+  });
+
+  it("arriving on the asked-for page does not expire its own hand-off", async () => {
+    const element = installBrowserAudio();
+
+    await endedQueue(element, PAGE);
+    await keepGoing({ loadSimilar: async () => [], navigate: () => {} });
+    expirePageContinuation(PAGE.href);
+
+    expect(claimPageContinuation(PAGE.href)).toBe(true);
   });
 });
