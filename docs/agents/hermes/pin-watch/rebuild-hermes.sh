@@ -95,16 +95,12 @@ RELEASE_HEAVY_TIMERS=(
 HERMES_CPUS="${PINWATCH_CPUS:-3}"
 HERMES_MEMORY_GIB="${PINWATCH_MEMORY_GIB:-6}"
 
-# The container keeps CHOWN/DAC_OVERRIDE/FOWNER for /opt/data, SETUID/SETGID to enter hermes, and KILL to signal that uid.
+# The container keeps no capabilities: its root main process only idles, and every sweep enters
+# as the unprivileged `hermes` user, which holds none anyway. `docker exec -u` switches user in
+# the runtime, outside the container's capability set.
 CONTAINER_SECURITY_ARGS=(
   --security-opt no-new-privileges
   --cap-drop ALL
-  --cap-add CHOWN
-  --cap-add DAC_OVERRIDE
-  --cap-add FOWNER
-  --cap-add KILL
-  --cap-add SETGID
-  --cap-add SETUID
 )
 
 MODE="--if-stale"

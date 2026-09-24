@@ -79,8 +79,6 @@ The Worker owns every platform secret (R2, Postiz, Turso, YouTube, Mixcloud, Las
 ```bash
 docker run -d --name hermes --restart unless-stopped \
   --security-opt no-new-privileges --cap-drop ALL \
-  --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
-  --cap-add KILL --cap-add SETGID --cap-add SETUID \
   --cpus=3 --memory=6g --memory-swap=6g --shm-size=1g \
   --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
   -v ~/.hermes:/opt/data \
@@ -91,7 +89,7 @@ docker run -d --name hermes --restart unless-stopped \
 - **The resource ceiling is `--cpus=3 --memory=6g`, and `--memory-swap` always equals `--memory`** (the host has no swap, so they must match or the cgroup gets unbounded swap it cannot use). A tighter cap throttles CPU periods and OOM-kills sweeps while the host sits idle. The same ceiling is the default in [`pin-watch/rebuild-hermes.sh`](./hermes/pin-watch/rebuild-hermes.sh) (`PINWATCH_CPUS` / `PINWATCH_MEMORY_GIB`), which is the only other place a live container is created (its run line also passes `gateway run`, which the current image ignores and an older rollback image needs) — and a rebake keeps a HIGHER live ceiling if the operator raised one by hand with `docker update`, so a manual raise is never undone. Change both together.
 - **The image never chowns `/opt/data`.** No bootstrap runs at start, so the host `~/.hermes` must be owned by uid/gid 10000 (mode 700) before the first run; `fluncle-secrets-sync` creates `home/` with that owner when it is missing.
 - **Never mount the Docker socket** — it would hand every sweep host root and moot every file-permission control. No in-scope job needs it.
-- The capability allow-list is what the container keeps under `--cap-drop ALL`. The main process runs as root under `tini` and does nothing but idle, and every sweep enters as `hermes`, so the list is wider than the runtime needs and could be tightened; nothing in the container needs a network, mount, setcap, or raw-socket capability.
+- **The container holds no capabilities** (`--cap-drop ALL`, nothing added). The main process runs as root under `tini` and only idles, every sweep enters as the unprivileged `hermes` user, and `docker exec -u` switches user in the runtime rather than inside the container, so nothing needs one.
 - The container publishes **no** ports and serves nothing.
 - Disable Tailscale node-key expiry on the box (no public fallback → an expired key is a total lockout).
 
@@ -145,9 +143,9 @@ docker run --rm --env-file <secret-env-file> --entrypoint fluncle \
 - The boundary is the **server-side role**: the box holds only the `agent`-scoped token, and publish-/irreversible-class actions are refused at the Worker for that role. The private no-public-TCP box shrinks the network surface.
 - An injected `fluncle admin tracks publish …` (say, from a `claude -p` authoring step steered by fetched content) is refused by the Worker no matter how it is dispatched (the CLI, raw `curl` with the printenv'd token), because the token is `agent`-scoped. There is no local wrapper to bypass; there is nothing the token can do that the server allows.
 - **Residual surface:** the sweeps' scoped token. A fully-compromised root box is bounded to the agent role — reads (incl. `enrich-queue`), analysis write-back (`track update`), a TikTok inbox draft. All reversible/internal, none public without the operator; all publish-class is blocked for everyone but the operator.
-- The scoped credential remains the publish boundary. Every host-timer sweep enters the container as `hermes`; the only root process inside is the idle `tini` → `sleep` main process, bounded by `no-new-privileges` and the capability allow-list.
+- The scoped credential remains the publish boundary. Every host-timer sweep enters the container as `hermes`; the only root process inside is the idle `tini` → `sleep` main process, bounded by `no-new-privileges` and an empty capability set.
 - Back up `~/.hermes` as an encrypted/snapshot copy only (it holds the sweep secrets file, the cron markers, and the render conductor's state) — never a plaintext off-box tarball.
 
 ## Status
 
-Live: the digest-pinned `oven/bun` image with the `fluncle` CLI (ungated; the Worker is the boundary); the container env via `op` → the root-owned secret env-file, carrying only the agent-scoped token and the ops-alert webhook; no chat platform, no model, no in-container scheduler — the main process only keeps the container alive for the host timers. The publish boundary is server-side: the Worker rejects publish- and irreversible-class actions made with the box's agent-scoped token. The long-lived container runs with `no-new-privileges` and a capability allow-list. The host-timer roster includes the pure sweeps, the hybrid note/observation/newsletter sweeps, and the render conductor. The `/status` prober (`fluncle-healthcheck`) and the image self-deploy (`pin-watch`) run from host systemd timers.
+Live: the digest-pinned `oven/bun` image with the `fluncle` CLI (ungated; the Worker is the boundary); the container env via `op` → the root-owned secret env-file, carrying only the agent-scoped token and the ops-alert webhook; no chat platform, no model, no in-container scheduler — the main process only keeps the container alive for the host timers. The publish boundary is server-side: the Worker rejects publish- and irreversible-class actions made with the box's agent-scoped token. The long-lived container runs with `no-new-privileges` and no capabilities. The host-timer roster includes the pure sweeps, the hybrid note/observation/newsletter sweeps, and the render conductor. The `/status` prober (`fluncle-healthcheck`) and the image self-deploy (`pin-watch`) run from host systemd timers.
