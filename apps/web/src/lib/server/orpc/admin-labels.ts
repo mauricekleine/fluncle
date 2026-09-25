@@ -234,17 +234,6 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/labels/{slug}/bio — agent tier (`adminAuth`), the note_track precedent:
-  // the on-box sweep authored the label's bio; this VOICE-GATES it and stores it
-  // FILL-EMPTY-ONLY. A bio already on file (operator OR previously auto-authored) is a
-  // skipped no-op. Deliberately AGENT tier (unlike the operator-tier `update_label`
-  // crawl-seed ruling): authoring a bio is enrichment, not an editorial crawl ruling.
-
-  // POST /admin/labels/{slug}/triage — agent tier (`adminAuth`), the describe_label precedent.
-  // A triage round records WHAT IT FOUND; it does not rule. This stamps the cursor and stores the
-  // round's proposal, and is structurally incapable of changing `seed_state` or writing an
-  // `artist_rules` row — those are `update_label` / `replace_label_artist_rules`, which 403 an
-  // agent token at `operatorGuard`. That is the whole safety argument for an unattended sweep.
   const recordLabelTriageHandler = os.record_label_triage
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -268,7 +257,6 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
->>>>>>> 30577a82a (feat(labels): record what a triage round found, without letting it rule)
   const describeLabelHandler = os.describe_label.use(adminAuth).handler(async ({ input }) => {
     try {
       const dryRun = input.dryRun === true;

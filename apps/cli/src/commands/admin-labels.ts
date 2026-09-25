@@ -168,10 +168,6 @@ export async function mintLabelCommand(
   return { label: response.label, outcome: response.outcome, takenOver: response.takenOver };
 }
 
-// ── The admin listing: the seed set, and the triage worklist ─────────────────
-// Thin HTTP client over the admin-tier `list_labels_admin` read. The crawler asks it for the
-// ENABLED seed set; the triage sweep asks it for `undecided` and sorts by the triage cursor to
-// decide what a round has never looked at. Countless by design — `findingCount` rides out as 0.
 export async function listLabelsAdminCommand(
   seedState?: LabelSeedState,
 ): Promise<LabelAdminItem[]> {
@@ -183,12 +179,6 @@ export async function listLabelsAdminCommand(
   return response.labels;
 }
 
-// ── The triage cursor: record what a round FOUND, without ruling ─────────────
-// Thin HTTP client over the AGENT-tier `record_label_triage` op. The box's unattended sweep drives
-// this, which is exactly why it is a different command from `update`: recording a finding is not
-// ruling on a label, and the token the sweep holds cannot do the latter. The payload rides as the
-// round produced it; the server drops rules that could never fire and supersedes the label's
-// previous proposal. See docs/label-entity.md and the fluncle-label-triage skill.
 export async function recordLabelTriageCommand(
   slug: string,
   payload: RecordLabelTriageBody,
@@ -207,14 +197,6 @@ export async function recordLabelTriageCommand(
   };
 }
 
-// ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────
-// The label sibling of `admin artists describe`: author the label's bio through the
-// agent-tier `describe_label` route. Fills an empty bio only; an operator bio is never
-// clobbered. Shares the body builder + result types with the artist command.
-
-// Author + store one label's bio (the voice-gated, fill-empty-only write). `--dry-run`
-// runs the voice gate and reports the verdict without storing anything.
->>>>>>> 81c432b7f (feat(cli): carry a triage round's finding to the archive)
 export async function describeLabelCommand(
   slug: string,
   options: { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number },

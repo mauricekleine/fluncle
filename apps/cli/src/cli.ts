@@ -3707,19 +3707,6 @@ JSON field reference:
       },
     );
 
-  // `mint_label` → `admin labels mint <mbid> [--seed-state <state>]` (operator). Bring a label into
-  // the archive BY ITS MUSICBRAINZ IDENTITY — the operator's own door beside the publish path and a
-  // crawl discovery, for a label no walk will reach (the half an upstream MusicBrainz split moved onto a
-  // new entity). Idempotent; without `--seed-state` a new row lands `undecided` and an existing
-  // row's ruling is left exactly as it was.
-  //
-  // `--take-over <slug>` is the explicit way through the identity conflict a MusicBrainz split
-  // leaves behind: the drum & bass half moves to a NEW entity carrying the SAME name, and the
-  // archive's row for that name still points at the original. It re-points THAT row's identity —
-  // the server honours it only for the exact conflicting row, only when it holds no tracks, and
-  // only when it is not an enabled seed (a row with tracks is `admin labels merge`).
-  // `list_labels_admin` → `admin labels list [--seed-state <state>]` (admin tier, agent-allowed).
-  // The crawler's seed-set read and the triage sweep's worklist, in one countless listing.
   labels
     .command("list")
     .description("List labels with their crawl-seed state and triage cursor")
@@ -3752,9 +3739,6 @@ JSON field reference:
       }
     });
 
-  // `record_label_triage` → `admin labels triage <slug> --payload <file>` (AGENT tier). The box's
-  // unattended sweep records what a round FOUND; it is a different command from `update` because
-  // recording a finding is not ruling, and the agent token the sweep holds cannot rule.
   labels
     .command("triage")
     .description("Record what a triage round found for a label (agent; never rules)")
@@ -3779,7 +3763,6 @@ JSON field reference:
       );
     });
 
->>>>>>> 81c432b7f (feat(cli): carry a triage round's finding to the archive)
   labels
     .command("mint")
     .description("Mint a label from its MusicBrainz MBID (operator; idempotent)")

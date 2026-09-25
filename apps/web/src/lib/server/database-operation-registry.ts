@@ -1886,9 +1886,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     wrapperSource: `${SCRIPTS}/isrc-recovery-sweep.sh`,
   }),
   defineOperation({
-    // A PURE trigger: one countless admin READ of the undecided pile and a sort. It spends no model
-    // tokens and writes nothing — recording a round's finding is `record_label_triage` (agent tier)
-    // and ruling is `update_label` (operator tier), neither of which this gate calls.
     accessClass: "read",
     cadence: calendar("*-*-* 06:40:00 Europe/Amsterdam", "90"),
     directory: "label-triage-timer",

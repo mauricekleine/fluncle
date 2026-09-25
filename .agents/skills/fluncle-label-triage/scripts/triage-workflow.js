@@ -40,11 +40,6 @@ const RULE_ITEM = {
   type: "object",
 };
 
-// A conflated MBID is always `unclear` (rail 5) — it is fixed upstream in MusicBrainz, never carved
-// with rules. These fields are what the split brief is generated from, so fill them whenever the
-// verdict is `unclear` BECAUSE of a conflation. `dnbStrandWorthRecovering` is the field that decides
-// work order: a split with a real drum & bass catalogue trapped inside unblocks a crawl seed, while
-// one where no strand is in lane is correct MusicBrainz hygiene that earns Fluncle nothing.
 const CONFLATION = {
   properties: {
     dnbStrandWorthRecovering: {

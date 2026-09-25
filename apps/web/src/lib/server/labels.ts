@@ -102,9 +102,6 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
     scopeChangedAt: row.scope_changed_at,
     seedState: row.seed_state,
     slug: row.slug,
-    // The triage cursor: what a ROUND looked at, beside `ruledAt`, which is what HE ruled. A label
-    // reading `unclear` with a reason is not an unread row — it is a researched one the round could
-    // not settle, and the station says which.
     triageCheckedAt: row.triage_checked_at,
     triageReason: row.triage_reason,
     triageVerdict: row.triage_verdict,
@@ -2115,22 +2112,6 @@ export async function mergeLabel(
   };
 }
 
-/**
- * THE TRIAGE CURSOR — what a round LOOKED at, which is not what the operator RULED.
- *
- * A triage round researches an undecided label and frequently cannot rule it: a conflated
- * MusicBrainz entity, a catalogue too thin to read, a genuinely mixed one only he can call. Without
- * a record of that, every round re-derives its own stuck core — affordable when a human chooses to
- * run one, and not when a timer does.
- *
- * This writes the cursor and the round's proposal in ONE batch, so a label never carries a stamp
- * whose evidence is missing. It CANNOT change `seed_state` and CANNOT write an `artist_rules` row:
- * ruling is `updateLabelSeedState` / `replaceLabelArtistRules`, both operator tier. That separation
- * is what lets the box run a round with an agent token and still be structurally unable to rule.
- *
- * Idempotent per label — one proposal row each, the newest round superseding the last — so a resumed
- * or re-run sweep re-states rather than accumulating.
- */
 export type TriageRuleProposal = {
   artistMbid: string;
   artistName: string;
@@ -2168,8 +2149,6 @@ export async function recordLabelTriage(
   const now = new Date().toISOString();
   const proposalId = `ltp_${randomUUID()}`;
 
-  // A proposal with no FIRST credits on the census can never fire, so it is dropped here rather
-  // than stored and re-dropped at apply time (the block-ANY intuition proposes exactly these).
   const offered = input.rules ?? [];
   const firing = offered.filter((rule) => rule.firstCreditCount > 0);
 
@@ -2181,14 +2160,12 @@ export async function recordLabelTriage(
 
   await db.batch(
     [
-      // The cursor. `ruled_at` is untouched on purpose: looking is not ruling.
       {
         args: [now, input.verdict, input.reason ?? null, now, label.id],
         sql: `update labels
               set triage_checked_at = ?, triage_verdict = ?, triage_reason = ?, updated_at = ?
               where id = ?`,
       },
-      // One proposal per label: the newest round replaces the last, and its rules go with it.
       {
         args: [label.id],
         sql: `delete from label_triage_rule_proposals
@@ -2246,7 +2223,6 @@ export async function recordLabelTriage(
   };
 }
 
-/** One label's staged triage proposal, with the rules it would write. Undefined = no round has one. */
 export type LabelTriageProposal = {
   censusSummary: string | null;
   confidence: string;
@@ -2267,14 +2243,6 @@ export type LabelTriageProposal = {
   verifyEvidence: string | null;
 };
 
-/**
- * The staged proposals for the labels ON ONE PAGE — the ratification read.
- *
- * Bounded to the ids the station already holds, never a whole-table fold: two indexed reads (the
- * unique `label_id` seek per proposal, then its rules by `proposal_id`) and one grouping in the
- * isolate over at most a page's worth of rows. A label with no proposal is simply absent from the
- * map, which is what "no round has looked at this" means on the read side.
- */
 export async function labelTriageProposalsByIds(
   labelIds: string[],
 ): Promise<Map<string, LabelTriageProposal>> {

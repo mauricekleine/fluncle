@@ -1331,6 +1331,13 @@
       "when": 1790343659162,
       "tag": "0189_lame_betty_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 190,
+      "version": "6",
+      "when": 1790348478295,
+      "tag": "0190_supreme_magik",
+      "breakpoints": true
     }
   ]
 }

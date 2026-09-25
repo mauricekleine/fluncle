@@ -124,22 +124,10 @@ export type GalaxiesAdminResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 
 export type LabelSeedState = z.infer<typeof LabelSeedStateSchema>;
-/** What a triage ROUND concluded — never a ruling. See `LabelTriageVerdictSchema`. */
 export type LabelTriageVerdict = z.infer<typeof LabelTriageVerdictSchema>;
 
-/**
- * The body of `record_label_triage` minus the path slug — what a round reports about one label.
- * Exported so the CLI and the box sweep carry the round's payload without re-spelling its shape.
- */
-/** What a round reports about one label — the `record_label_triage` body minus the path slug. */
 export type RecordLabelTriageBody = z.input<typeof RecordLabelTriageBodySchema>;
 
-/**
- * One label in the admin shape (`GET /api/v1/admin/labels`). Inferred from
- * `LabelAdminItemSchema` (./orpc/admin-labels.ts). `slug` is the identity + the join key
- * back to the raw `tracks.label` string; `findingCount` is derived, never stored.
- */
->>>>>>> 81c432b7f (feat(cli): carry a triage round's finding to the archive)
 export type LabelAdminItem = z.infer<typeof LabelAdminItemSchema>;
 
 export type ArtistRule = z.infer<typeof ArtistRuleSchema>;
