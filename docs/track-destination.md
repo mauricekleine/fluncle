@@ -67,6 +67,8 @@ Every band is conditional, and an empty one renders nothing at all — no headin
 
 ### Beatport is rendered, never asserted
 
+The Beatport resolver reads the public search page through Firecrawl because direct Worker requests receive 403; it does not use the partner-gated API or a client ID copied from Beatport's web player. It matches only an exact ISRC from the search page's `__NEXT_DATA__`, then stores only a track URL that Beatport rendered as a link. A matching result without a rendered link is a miss: a fabricated slug can serve a track while echoing that wrong slug as canonical. A missing or malformed data island is a failed lookup, not a clean miss. Scraped key, BPM, genre, label, and length are discarded; the stored URL stays out of derived search and AI corpora.
+
 `tracks.beatport_url`'s §F rail in `db/schema.ts` keeps the URL out of every derived corpus, because Beatport's terms bar using its content for text/data mining or for feeding AI. **A `sameAs` graph is a derived corpus** — `log-schema.ts` says in its own words that it exists "for crawlers + AI answer-engines" — and the certified `/log` page's `musicRecordingJsonLd` already withholds it. That shipped behaviour is the specification.
 
 Spotify `sameAs` values in structured data remain direct Spotify identity URLs even when visitor links use Fluncle's `/out/spotify/` redirect. A redirect URL inside `sameAs` would assert that the recording is identical to Fluncle's redirect resource instead of the Spotify recording; `log-schema-hop-carveout.test.ts` checks both the absence of hop URLs and the presence of the direct identity link.

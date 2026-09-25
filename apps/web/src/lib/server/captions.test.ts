@@ -2,13 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FOUND_BASE } from "../media";
 import { readCaptions } from "./captions";
 
-// The admin board's caption preload. Its contract is narrow but load-bearing on a surface
-// that cannot retry: the operator's copy tap must have the text already in hand, so every
-// way a bundle can fail to answer has to resolve to an OMITTED key rather than a throw or
-// an empty string the board would paste. `fetch` is stubbed — the suite never leaves the
-// process (see src/test/block-network.ts).
-
-/** Stub `fetch` with a per-URL answer; anything unlisted 404s. `readCaptions` fetches by URL string. */
 function stubBundles(answers: Record<string, Response | (() => Response)>) {
   const fetchMock = vi.fn((url: string) => {
     const answer = answers[url];
@@ -74,8 +67,6 @@ describe("readCaptions", () => {
   });
 
   it("omits a whitespace-only caption", async () => {
-    // An empty key would paste nothing on the operator's tap, which reads as a bug in the
-    // clipboard rather than an absent caption. Absent is the honest answer.
     stubBundles({ [noteUrl("004.7.2I")]: new Response("   \n  ") });
 
     await expect(readCaptions(["004.7.2I"])).resolves.toEqual({});
@@ -102,7 +93,7 @@ describe("readCaptions", () => {
     const fetchMock = vi.fn(async () => {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
-      // Yield so a sequential implementation would settle this call before the next starts.
+
       await Promise.resolve();
       inFlight -= 1;
 

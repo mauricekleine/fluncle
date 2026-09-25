@@ -1,101 +1,3 @@
-// THE GRAPH PAGES, GROUPED — and the bound that survives the crawl.
-//
-// A crawled label is not a list, it is a discography. Medschool alone came back from the
-// crawler pilot with 735 tracks; Hospital will be several times that, and there are 27
-// enabled seed labels behind it. Rendered flat, a page like that is not a page, it is a dump.
-// So the quieter rows are GROUPED: an artist page groups them by record, a label page groups
-// them by artist and then by record inside each one.
-//
-// ── GROUPING DOES NOT REMOVE THE BOUND, IT MOVES IT ────────────────────────────────────
-// The flat read was capped at 100 rows for a reason: uncapped, `/label/hospital-records`
-// served 4.34 MB of HTML on a 10,800-row synthetic catalogue. Grouping does not fix that — a
-// label with 200 artists cannot render every artist's every record either. It only changes
-// WHERE the bound has to go.
-//
-// It goes in three places, and all three are enforced in SQL:
-//
-//   1. A PAGE OF GROUPS. The page renders at most `GRAPH_GROUP_PAGE_SIZE` groups, ordered and
-//      windowed by SQL's own `limit`/`offset`, with the true group total counted by
-//      `count(*) over ()` and a crawlable `?page=N` pager for the rest. A cap becomes a PAGE
-//      SIZE, and nothing is unreachable — which is the answer to the obvious objection that
-//      "the top N artists" is an arbitrary slice. Page 4 of 11 is not arbitrary.
-//
-//   2. A CAP INSIDE EACH GROUP. `row_number() over (partition by …)` caps what any one group
-//      may contribute, so the page's row count is bounded BY CONSTRUCTION at
-//      `GRAPH_GROUP_PAGE_SIZE × GRAPH_GROUP_TRACK_LIMIT`, no matter how prolific one artist
-//      is. A group that hits its cap says so and points at its own page, which carries the
-//      rest — the drill-down target already exists (`/artist/<slug>`, `/album/<slug>`).
-//
-//   3. NOTHING UNBOUNDED CROSSES THE WIRE. Every read here is an indexed seek
-//      (`tracks.label_id`, `track_artists.artist_id`), aggregates and ranks in SQL, and never
-//      hands the isolate a row it will not render. The only folding the ISOLATE does is over
-//      a set already bounded to ≤ `GRAPH_GROUP_ROW_CEILING` rows — which is the line
-//      AGENTS.md draws: fold a few hundred rows in TypeScript, never 30,000.
-//
-// ── WHY THE COLLAPSED CONTENT IS STILL IN THE HTML ────────────────────────────────────
-// The groups render collapsed, and it is tempting to think "collapsed" is itself the bound —
-// fetch a group's tracks when the reader expands it. It is not, and that design would throw
-// away the entire point of having crawled the catalogue: content fetched on expand is not
-// reliably indexed, and these pages exist to BE indexed. So every rendered row is in the
-// server-rendered HTML; the panel collapses with `hidden="until-found"`, which keeps it in the
-// DOM, findable by the browser's own find-in-page, and readable by a crawler. Collapsing
-// bounds ATTENTION; only a limit bounds BYTES. This file is the limit.
-//
-// ── WHAT THE CRAWLER ACTUALLY GIVES US TO GROUP BY ────────────────────────────────────
-// A crawled track carries its release title in the RAW `tracks.album` string and its artist
-// names in `artists_json`, and now an `album_id` too — the catalogue crawler mints + links the
-// album entity inline (folded on the release group, docs/album-entity.md). The record grouping
-// keys on the RAW STRING, folded case-insensitively. A group links to `/album/<slug>` whenever
-// that record has an album entity (a `tracks.album_id` pointer): a crawl-minted, findings-free
-// record has a public page now — a tracklist bounded by the thin-content floor, exactly as a
-// discovered label does — so the heading is a live link, never a plain-text stub. A record with no
-// album entity (the nameless bucket) still renders as plain text. A heading here names a REAL
-// RECORD either way — never the tier the rows belong to (DESIGN.md's Unlit Rule).
-//
-// The artist side needs the same indexed edge: the LABEL page can group by
-// `json_each(artists_json)` because its `tracks.label_id` seek has already bounded the scan to one
-// label, but the ARTIST page has no such bound — finding an artist's tracks through `artists_json`
-// would be a full scan of a table that grows without limit, which is exactly the shape AGENTS.md
-// forbids. So a crawled track is LINKED into `track_artists` two ways: the crawler connect-or-creates
-// the artist by its stable `spotify_artist_id` at the Spotify-anchor step (minting the entity), and
-// the name-fold `linkTracksToArtistEntities` remains the fallback for a track with no Spotify
-// presence (link only, never mint). The artist page reads through that indexed edge, and a group
-// links to `/artist/<slug>` whenever the artist has an entity — a crawl-minted, findings-free artist
-// has a public catalogue page too. A credited name with no entity at all renders as plain text.
-//
-// ── WHERE AN UNDATED ROW SORTS, AND WHY IT NEVER VANISHES ─────────────────────────────
-// `tracks.release_date` is NULLABLE, and plenty of crawled rows have no date. SQLite sorts
-// NULL as the SMALLEST value, so a bare `release_date desc` floats every undated row to the
-// TOP of the page — the loudest possible position for the least certain data. So every sort
-// here leads with `release_date is null asc`: UNDATED SORTS LAST, under both directions, and
-// then falls back to A–Z. It is never filtered, so it can never silently disappear.
-//
-// The same rule covers a track with no record at all (`tracks.album` NULL). Those fold into
-// ONE nameless group, forced last under every sort, rendered with NO HEADING — bare unlit
-// rows, exactly as the flat list always did. There is no honest name for a bucket of tracks
-// whose record we do not know, so it is given none.
-//
-// ── ONE STATEMENT, ONE WALK ────────────────────────────────────────────────────────────
-// Both reads arrive in WAVES: the artist page runs a `group by` for the page of groups
-// and then a second statement for those groups' tracks; the label page ran three (a total, the
-// groups, the tracks). Every one of those waves is a Worker→Turso→Ireland round trip, and
-// `explain query plan` showed each wave repeating the SAME indexed walk of the entity's rows
-// (`track_artists_artist_id_idx` / `tracks_label_id_idx`) — the group-key filter on the second
-// wave is `lower(coalesce(album, ''))`, an expression no index can seek, so it never bounded
-// anything. Two waves, twice the walk, and the artist page's cost tracked discography size.
-//
-// So both reads are now ONE statement that walks the entity's rows ONCE. The group aggregates
-// that the `group by` produces come from WINDOWS over that single walk instead
-// (`min(…) over (partition by group_key)`), the page of groups is cut by `dense_rank()` over
-// the same group order rather than `limit`/`offset`, and the per-group cap stays exactly where
-// it was — a `row_number()` partition, applied in the same `where` as the group window. The
-// caps, the order, the totals and the pager are unchanged; the wire carries the same ≤
-// `GRAPH_GROUP_ROW_CEILING` rows. What changed is that it takes one trip to Ireland, not two.
-//
-// Nothing is materialised into a temp table on the way: each CTE level is referenced exactly
-// once, so there is no CTE-flattening re-execution to guard against and no copy of a growing
-// row set into temp storage (the trap docs/local-database.md records).
-
 import { type Client } from "@libsql/client";
 import {
   type CatalogueArtistGroup,
@@ -120,12 +22,6 @@ import { type CatalogueTrackItem, getGraphFindingsByIds } from "./tracks";
 import { artistCandidateIdsSql } from "./artist-membership";
 import { releasedByTodaySql, upcomingAfterTodaySql } from "./release-day";
 
-// The sort vocabulary, the page bounds, the group SHAPES and the pure helpers live in the
-// client-safe `lib/catalogue.ts` and are re-exported here, so every server caller and test
-// keeps importing them from this module. The split exists because the RENDERING side needs
-// them too: a client component importing them from here dragged `getDb` → `@libsql/client` +
-// `drizzle-orm` + `db/schema.ts` into the eager browser chunk (see lib/catalogue.ts). The SQL
-// and the reads stay below.
 export {
   CATALOGUE_SORT_DEFAULT,
   CATALOGUE_SORTS,
@@ -163,29 +59,22 @@ type GroupTrackRow = {
   track_id: string;
 };
 
-/**
- * One rendered row, carrying its GROUP's aggregates alongside its own columns — the shape the
- * single-statement read returns. The group columns repeat down every row of a group (a window
- * produced them, not a `group by`), which is what lets one statement answer both questions.
- */
 type GroupedTrackRow = GroupTrackRow & {
-  /** The group's rendered name — `''` for the artist page's nameless bucket. */
   group_name: string;
-  /** The newest release on the whole group — the group's sort key and rendered date. */
+
   group_release_date: string | null;
-  /** `/album/<slug>` or `/artist/<slug>` for the group's heading, when an entity exists. */
+
   group_slug: string | null;
-  /** How many records the WHOLE group carries (the label page's `recordCount`). */
+
   record_count: number;
-  /** Every group the entity carries, counted over the whole walk. */
+
   total_groups: number;
-  /** Every uncertified track the entity carries, counted over the whole walk. */
+
   total_tracks: number;
-  /** How many rows the WHOLE group carries, before the per-group cap. */
+
   track_count: number;
 };
 
-/** The recording identity a loaded catalogue row exposes to the render-time dedupe fold. */
 function groupRowIdentity(row: GroupTrackRow): RecordingIdentity {
   return {
     artists: parseArtistsJson(row.artists_json),
@@ -197,15 +86,6 @@ function groupRowIdentity(row: GroupTrackRow): RecordingIdentity {
   };
 }
 
-/**
- * The group ORDER, in SQL. Both sorts force the nameless bucket last, and both put undated
- * groups after dated ones — a group's date is the NEWEST release on it, so an artist whose
- * every release is undated sorts to the back rather than (as SQLite would have it) the front.
- *
- * It reads the group's WINDOWED aggregates (`group_name` / `group_release_date`), which repeat
- * down every row of the group, so the same expression that once ordered a `group by` result now
- * ranks the rows of one walk.
- */
 function groupOrderSql(sort: CatalogueSort): string {
   const namelessLast = `(group_key = '') asc`;
 
@@ -215,23 +95,10 @@ function groupOrderSql(sort: CatalogueSort): string {
     : `${namelessLast}, group_name collate nocase asc`;
 }
 
-/**
- * The group order with a STRICT tiebreaker, for the `dense_rank()` that cuts the page.
- *
- * A rank is what pagination keys off, so two different groups must never share one: `group_key`
- * is the group's identity, so appending it makes the order total. It can only ever break an
- * exact tie — a pair the old `limit`/`offset` ordered arbitrarily — so the page a reader sees is
- * unchanged and the pager is now stable across requests, which is the whole point of A–Z.
- */
 function groupRankOrderSql(sort: CatalogueSort): string {
   return `${groupOrderSql(sort)}, group_key asc`;
 }
 
-/**
- * The order WITHIN a group — the same rule, so a truncated group drops its tail, not its head.
- * `prefix` qualifies the track's own columns, which live on the walk's CTE rather than on
- * `tracks` once the read is one statement.
- */
 function trackOrderSql(sort: CatalogueSort, prefix: string): string {
   const namelessRecordLast = `(${prefix}album is null) asc`;
 
@@ -263,28 +130,16 @@ function toTrack(row: TrackRowColumns): CatalogueTrackItem {
   };
 }
 
-/** The columns one rendered track row reads: its own, plus its album's owned cover. */
 type TrackRowColumns = Omit<GroupTrackRow, "album" | "album_slug" | "group_key">;
 
 type UpcomingRow = TrackRowColumns & { log_id: string | null };
 
-/**
- * An Upcoming row carries everything any other track row does (the cover, the BPM/key/length
- * readout, whether a preview exists), so it renders as the same discovery row.
- */
 const UPCOMING_ROW_COLUMNS = `tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url,
           tracks.isrc, tracks.preview_url, tracks.album_image_url,
           al.image_key as album_image_key, al.image_state as album_image_state,
           al.image_updated_at as album_image_updated_at, tracks.duration_ms, tracks.bpm,
           tracks.key, tracks.release_date, findings.log_id`;
 
-/**
- * One Upcoming page: `pageSql` picks the page's track ids (and their release dates) off the
- * entity's own index, sorted and LIMITed with nothing else joined, and only those rows then read
- * their columns, their finding and their album. A LIMITed subquery under a join is never
- * flattened, so the album and finding seeks are bounded by the page, never by the entity's
- * future catalogue or the offset.
- */
 function upcomingPageSql(pageSql: string): string {
   return `select ${UPCOMING_ROW_COLUMNS}
           from (${pageSql}) upcoming_page
@@ -294,7 +149,6 @@ function upcomingPageSql(pageSql: string): string {
           order by upcoming_page.release_date asc, upcoming_page.track_id asc`;
 }
 
-/** The next release-date rows use each entity's existing ordered index and the page's row DTO. */
 export async function listArtistUpcoming(
   artistId: string,
   today: string,
@@ -381,13 +235,6 @@ async function upcomingPageFromRows(
 
 const EMPTY = { groups: [], page: 1, pageCount: 1, totalGroups: 0 };
 
-// ── THE ARTIST PAGE: the rest of an artist, grouped by record ───────────────────────────
-
-/**
- * An artist's uncertified tracks, grouped into their records. Reads through the indexed
- * `track_artists.artist_id` edge (which `linkTracksToArtistEntities` now stamps on crawled
- * tracks too) and anti-joins `findings`, so it can only ever return the quieter rows.
- */
 export async function listArtistCatalogue(
   artistId: string,
   sort: CatalogueSort,
@@ -397,12 +244,6 @@ export async function listArtistCatalogue(
   const db = await getDb();
   const offset = (page - 1) * GRAPH_GROUP_PAGE_SIZE;
 
-  // ONE walk of the artist's rows, through the indexed `track_artists.artist_id` seek. `base`
-  // is that walk; `ranked` hangs the record's aggregates off it as windows and caps each record
-  // at `GRAPH_GROUP_TRACK_LIMIT` rows; `paged` ranks the records in the reader's order; and
-  // `counted` reads the record total off that rank. The final `where` is where both bounds land
-  // at once — the page of records AND the per-record cap — so nothing past either crosses the
-  // wire. `count(*) over ()` in `ranked` runs over the walk, so it is the honest TRACK total.
   const result = await db.execute({
     args: [
       artistId,
@@ -493,9 +334,7 @@ export async function listArtistCatalogue(
     page,
     pageCount: Math.max(Math.ceil(totalGroups / GRAPH_GROUP_PAGE_SIZE), 1),
     totalGroups,
-    // The SQL total counts every unstamped twin in this artist's slice; the fold has collapsed
-    // them, so subtract what it removed. Clamped to what actually rendered so the thin-content
-    // gate never reports fewer tracks than the page shows.
+
     totalTracks: Math.max(
       Number(rows[0]?.total_tracks ?? 0) - removed,
       flattenRecords(groups).length,
@@ -503,26 +342,6 @@ export async function listArtistCatalogue(
   };
 }
 
-// ── THE LABEL PAGE: the rest of a label, grouped by artist, then by record ──────────────
-
-/**
- * A label's uncertified tracks, grouped by ARTIST and then by record inside each artist.
- *
- * Groups on `json_each(artists_json)` rather than the `track_artists` edge, and that is
- * deliberate: a crawl artist may have an `artists` row (the crawler mints one off the Spotify
- * anchor's stable id) or none at all (a track with no Spotify presence), so a `track_artists`
- * grouping would silently DROP every track of an unentitied artist from the label's page. Their
- * name is always on the track; the page groups by it regardless. The `/artist/<slug>` link is a
- * SEPARATE question: the `artists a` name-fold join lights the link whenever that artist has an
- * entity — a crawl-minted, findings-free artist has a public catalogue page now, so its heading is a
- * live link, exactly as the album heading is. A credited name with no entity renders as plain text,
- * and so does one whose entity a global `unlisted` rule has taken off the site. Nothing vanishes
- * either way.
- *
- * The `json_each` explosion is safe here because `tracks.label_id` is indexed: the scan is
- * bounded to ONE label's rows before the JSON is ever touched, and the aggregation happens
- * inside SQLite, never in the isolate.
- */
 export async function listLabelCatalogue(
   labelId: string,
   sort: CatalogueSort,
@@ -532,27 +351,6 @@ export async function listLabelCatalogue(
   const db = await getDb();
   const offset = (page - 1) * GRAPH_GROUP_PAGE_SIZE;
 
-  // ONE walk of the label's rows — the `tracks.label_id` seek, exploded through `json_each`
-  // exactly once instead of once per wave. The levels mirror the artist read; two of them earn
-  // their keep here specifically:
-  //
-  //   - `record_count` is a count of DISTINCT records, and SQLite has no `count(distinct …)`
-  //     window. `dense_rank()` over the record key inside the artist's partition numbers the
-  //     records 1…n, so its MAX over that partition IS the distinct count — over the whole
-  //     group, before the cap, exactly as the old `count(distinct …)` was.
-  //   - `artist_slug` joins `artist_slugs`, a name-folded view of `artists`, not `artists`
-  //     itself. Two artist entities can carry the same name (the crawler mints one per stable
-  //     Spotify id), and joining the raw table multiplies the credit row by however many of them
-  //     there are — harmless under a `group by`, but this statement carries the TRACK rows too,
-  //     so a bare join would render a track twice and inflate the group's counts. Folding first
-  //     picks the same slug the old `min(a.slug)` did and multiplies nothing. It is a join
-  //     rather than a per-row subquery on purpose: `artists.name` has no NOCASE index, so the
-  //     planner builds ONE transient index for the join, where a subquery would re-scan
-  //     `artists` for every credit on the label.
-  //   - `total_tracks` is the label's TRUE uncertified total, counted over TRACKS and never
-  //     over the exploded credits (a two-artist track is two credit rows and one track). It
-  //     stays its own uncorrelated count — SQLite evaluates it once — so the thin-content gate
-  //     keeps the honest number without costing a second trip to Ireland.
   const result = await db.execute({
     args: [
       labelId,
@@ -565,14 +363,7 @@ export async function listLabelCatalogue(
       offset,
       offset + GRAPH_GROUP_PAGE_SIZE,
     ],
-    // `artist_slugs` folds each artist NAME to one canonical slug (`min(a.slug)`, the same pick as
-    // before), but scoped to the label's OWN credited names via `label_credits` rather than a
-    // GROUP BY over the ENTIRE `artists` table — which grows to catalogue scale and was re-scanned
-    // in full on every `/label/<slug>` render. `label_credits` is the label's `json_each` credit
-    // set, bounded by the indexed `tracks.label_id` seek; `artist_slugs` then folds only the
-    // artists carrying one of those names. The fold picks the identical slug for every name `base`
-    // resolves (all artist entities with that name still join), so the duplicate-name semantics the
-    // comment below defends are unchanged — only the scan's WIDTH is.
+
     sql: `with label_credits as (
             select distinct credit.value as name
             from tracks
@@ -658,9 +449,6 @@ export async function listLabelCatalogue(
       throw new CataloguePageOutOfRangeError();
     }
 
-    // No credited row means nothing renders, so nothing counts: the thin-content gate reads
-    // what the page can actually show, and a label whose every uncertified track is credited to
-    // no one shows none of them.
     return { ...EMPTY, totalTracks: 0 };
   }
 
@@ -686,20 +474,11 @@ export async function listLabelCatalogue(
     page,
     pageCount: Math.max(Math.ceil(totalGroups / GRAPH_GROUP_PAGE_SIZE), 1),
     totalGroups,
-    // The SQL total counts every unstamped twin the label carries; the fold has collapsed the
-    // ones in this slice, so subtract them. Clamped to the rendered count so the thin-content
-    // gate never reports fewer tracks than the page shows.
+
     totalTracks: Math.max(totalTracks - removed, flattenArtistGroups(groups).length),
   };
 }
 
-// ── The shared machinery ────────────────────────────────────────────────────────────────
-
-/**
- * The rows come back in group order (the SQL's `group_rn`, then `rn`), so one consecutive pass
- * splits them back into groups — no map, no re-sort, and the SQL's order is what renders. Every
- * group on the page carries at least one row by construction, so no group can be lost here.
- */
 function intoGroups(
   rows: GroupedTrackRow[],
 ): Array<{ head: GroupedTrackRow; rows: GroupedTrackRow[] }> {
@@ -719,11 +498,6 @@ function intoGroups(
   return groups;
 }
 
-/**
- * Split one artist's rows (already ordered by SQL) into their records, order preserved, folding
- * the twins the stamping missed WITHIN each record (a reissue under a second barcode renders
- * once). Reports how many rows the fold removed so the caller can keep `totalTracks` honest.
- */
 function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; removed: number } {
   const buckets: GroupTrackRow[][] = [];
   const index = new Map<string, GroupTrackRow[]>();
@@ -749,8 +523,6 @@ function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; remov
 
     removed += bucket.length - deduped.length;
 
-    // Every row in a bucket shares the record's album/slug; the release date leads with the
-    // first (the SQL order already put the record's newest-or-A–Z row first).
     const head = bucket[0];
 
     return {

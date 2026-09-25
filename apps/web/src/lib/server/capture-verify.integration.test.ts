@@ -16,17 +16,6 @@ import {
   seedTrack,
 } from "./integration-db";
 
-// THE CAPTURE-VERIFICATION ROUTING, PROVEN — against the real schema (docs/the-ear.md § Wrong
-// audio). The box's verify-captures sweep only ever reports a plain verdict; everything that
-// MATTERS — who gets quarantined, who only gets flagged, what enters the bad-audio memory, and
-// what leaves the worklist — is decided here in `verifyCapture`, so it is proven here, on a real
-// libSQL engine built from the generated migrations.
-//
-// The line these cases hold: a MISMATCH on a CATALOGUE row is rewound by the machine (nothing
-// public was said about it), while a MISMATCH on a FINDING is only STAMPED — the operator's
-// attention queue picks it up and HE rules with flag_wrong_audio. A machine never rewinds a
-// public finding.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -35,7 +24,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-/** Store a capture on a row, the way the capture sweep's write-back leaves it. */
 async function capture(trackId: string, sha: string): Promise<void> {
   await db.execute({
     args: [`catalogue/${trackId}/${sha}.webm`, trackId],
@@ -44,7 +32,6 @@ async function capture(trackId: string, sha: string): Promise<void> {
   });
 }
 
-/** Give a row a (stand-in) vector, so a quarantine has something real to drop. */
 async function embed(trackId: string): Promise<void> {
   await seedEmbedding(
     db,
@@ -65,8 +52,7 @@ type Row = {
 async function readRow(trackId: string): Promise<Row> {
   const result = await db.execute({
     args: [trackId],
-    // LEFT JOIN the satellite: a quarantined row has no `track_embeddings` row at all, so the
-    // null this reports IS "the poisoned vector is gone".
+
     sql: `select t.capture_status, t.capture_verification, t.capture_verified_at,
                  t.capture_priority, emb.embedding_blob, t.source_audio_rejected
           from tracks t
@@ -94,7 +80,7 @@ describe("verifyCapture — the verdict routing", () => {
 
     expect(row.capture_verification).toBe("preview-match");
     expect(row.capture_verified_at).not.toBeNull();
-    // Idempotence's other half: a stamped row leaves the backfill's worklist.
+
     expect((await listUnverifiedCaptures()).map((item) => item.trackId)).not.toContain("cat_ok");
   });
 
@@ -107,8 +93,6 @@ describe("verifyCapture — the verdict routing", () => {
   });
 
   it("QUARANTINES a catalogue MISMATCH: rewound, sha remembered, back in the capture queue", async () => {
-    // A captured row was AUTHORIZED when it was bought (RFC artist-primary-capture, slice 1); seed
-    // it on an enabled label so the re-derived pre-audio tier keeps it in the capture queue.
     await db.execute({
       args: ["lbl-seed", "Critical Music", "critical-music", "enabled"],
       sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
@@ -131,16 +115,12 @@ describe("verifyCapture — the verdict routing", () => {
 
     const row = await readRow("cat_wrong");
 
-    // The wrong-audio rewind: status flipped, the poisoned vector dropped, the pre-audio tier
-    // re-derived (its enabled label lands tier 1 — back on the capture ladder for a fresh download).
     expect(row.capture_status).toBe(WRONG_AUDIO_STATUS);
     expect(row.embedding_blob).toBeNull();
     expect(row.capture_priority).toBe(1);
-    // The verdict IS kept on the quarantined row — the lens's honest WHY (a preview mismatch, not
-    // an archive collision); the fresh capture's ingest gate overwrites it when the re-download lands.
+
     expect(row.capture_verification).toBe("mismatch");
-    // The REJECTION MEMORY: the bad bytes' sha entered `source_audio_rejected`, so the re-capture's
-    // pre-download/backstop filters refuse the same master.
+
     const rejected = JSON.parse(row.source_audio_rejected ?? "[]") as { sha256: string }[];
 
     expect(rejected.map((entry) => entry.sha256)).toContain(SHA);
@@ -155,21 +135,14 @@ describe("verifyCapture — the verdict routing", () => {
 
     const row = await readRow("find_wrong");
 
-    // The suspicion is recorded (this is what the capture-suspect attention read keys on)…
     expect(row.capture_verification).toBe("mismatch");
-    // …and NOTHING is rewound: the status, the vector, and the memory are untouched until the
-    // operator rules with flag_wrong_audio.
+
     expect(row.capture_status).toBe("done");
     expect(row.embedding_blob).not.toBeNull();
     expect(row.source_audio_rejected).toBeNull();
   });
 
   it("RE-CHECKS a CONSENSUS-VERIFIED capture like any other — machine evidence gets no pass", async () => {
-    // The ladder's consensus (docs/the-ear.md § Wrong audio) is machine evidence, subordinate to a
-    // preview match and to the operator's pin: a verdict posted for it routes exactly as it would
-    // for a `preview-match` row. A mismatch on a FINDING is stamped and raised for the operator; a
-    // fresh match re-stamps the row. It sits off the unverified worklist only because its
-    // verification is non-null, like every stamped row.
     await seedTrack(db, { logId: "012.3.4B", trackId: "find_consensus" });
     await capture("find_consensus", SHA);
     await embed("find_consensus");
@@ -191,11 +164,6 @@ describe("verifyCapture — the verdict routing", () => {
   });
 
   it("steps aside from an OPERATOR-VERIFIED capture — never flags, never quarantines what the operator chose", async () => {
-    // The capture-source pin (docs/the-ear.md § Wrong audio): the sweep stamps a pinned capture
-    // `operator-verified`, which keeps it off the unverified worklist by construction; this is the
-    // server backstop for a box re-posting a verdict it measured before the pin landed. Proven on
-    // BOTH halves, with the harshest verdict: the finding is not flagged, the catalogue row is not
-    // rewound, and neither stamp moves.
     await seedTrack(db, { logId: "012.3.4A", trackId: "find_pinned" });
     await capture("find_pinned", SHA);
     await embed("find_pinned");
@@ -221,7 +189,7 @@ describe("verifyCapture — the verdict routing", () => {
       expect(row.embedding_blob).not.toBeNull();
       expect(row.source_audio_rejected).toBeNull();
     }
-    // …and the worklist never offered either row in the first place.
+
     const queued = (await listUnverifiedCaptures()).map((item) => item.trackId);
 
     expect(queued).not.toContain("find_pinned");
@@ -251,9 +219,9 @@ describe("listUnverifiedCaptures — the backfill's worklist", () => {
     await capture("find_pending", SHA);
     await seedCatalogueTrack(db, { trackId: "cat_pending" });
     await capture("cat_pending", "b".repeat(64));
-    // Not captured → not listable.
+
     await seedCatalogueTrack(db, { trackId: "cat_uncaptured" });
-    // Quarantined → excluded (its bytes are pending a fresh capture the gate will verify).
+
     await seedCatalogueTrack(db, { trackId: "cat_q" });
     await capture("cat_q", "c".repeat(64));
     await db.execute({
@@ -275,7 +243,6 @@ describe("listUnverifiedCaptures — the backfill's worklist", () => {
     expect(finding?.logId).toBe("001.1.1A");
     expect(items.find((item) => item.trackId === "cat_pending")?.certified).toBe(false);
 
-    // The opt-in gauge executes against the generated schema and counts the exact same worklist.
     expect(await countUnverifiedCaptures()).toBe(2);
 
     const plan = await db.execute({
@@ -286,8 +253,6 @@ describe("listUnverifiedCaptures — the backfill's worklist", () => {
       .map((row) => (typeof row.detail === "string" ? row.detail : ""))
       .join("\n");
 
-    // The leading `capture_verification is null` seek must stay on the documented btree; adding a
-    // gauge is acceptable here precisely because it does not scan the growing tracks table.
     expect(details).toContain("tracks_capture_verification_verified_at_idx");
   });
 });

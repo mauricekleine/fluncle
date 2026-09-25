@@ -15,13 +15,6 @@ import {
   listTracks,
 } from "./tracks";
 
-// The full-song CAPTURE queue (RFC full-audio § Unit 1): `captureQueue=true` is a
-// SEPARATE, status-aware queue served NEWEST-FIRST so a fresh add jumps ahead of the
-// backfill. `pending`/NULL are always eligible; a `failed` row BACKS OFF (re-picked only
-// past the cooldown + below the failure cap); `done`/`unmatched` are terminal; a
-// coordinate-less row is excluded. It must never leak a capture predicate into the
-// enrich/embed queues (capture does NOT gate them).
-
 type StoredTrack = {
   added_at: string;
   capture_status: string | null;
@@ -32,11 +25,10 @@ type StoredTrack = {
 };
 
 const NOW = Date.parse("2026-06-20T12:00:00.000Z");
-const TWO_HOURS_AGO = new Date(NOW - 2 * 60 * 60 * 1000).toISOString(); // past the 60m cooldown
-const TEN_MIN_AGO = new Date(NOW - 10 * 60 * 1000).toISOString(); // within the 60m cooldown
+const TWO_HOURS_AGO = new Date(NOW - 2 * 60 * 60 * 1000).toISOString();
+const TEN_MIN_AGO = new Date(NOW - 10 * 60 * 1000).toISOString();
 
 const archive: StoredTrack[] = [
-  // In the queue:
   {
     added_at: "2026-06-06T00:00:00.000Z",
     capture_status: "pending",
@@ -61,7 +53,7 @@ const archive: StoredTrack[] = [
     source_audio_failures: 2,
     track_id: "t-failed-ready",
   },
-  // Excluded:
+
   {
     added_at: "2026-06-03T00:00:00.000Z",
     capture_status: "failed",
@@ -104,10 +96,6 @@ const archive: StoredTrack[] = [
   },
 ];
 
-// Per-finding artist YouTube socials the mocked `artist_socials` batch read returns.
-// `t-new-pending`'s artists carry a duplicate `/channel/UC…` (deduped) plus a `/@handle`
-// link (ignored — not a directly usable channel id); `t-null` has none (field stays
-// undefined). Keyed by the finding's track_id, matching the join the attach query runs.
 const ARTIST_YOUTUBE_SOCIALS: Record<string, string[]> = {
   "t-failed-ready": ["https://www.youtube.com/channel/UC_BBB"],
   "t-new-pending": [
@@ -152,8 +140,6 @@ function fullRow(stored: StoredTrack) {
   };
 }
 
-// The JS mirror of the capture-queue SQL clause: pending/NULL always; failed backs off
-// (below the cap AND past the cooldown); log_id required; done/unmatched excluded.
 function matchesCaptureQueue(t: StoredTrack, cooldownCutoffMs: number): boolean {
   if (t.log_id === null) {
     return false;
@@ -176,9 +162,6 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   execute.mockReset();
   execute.mockImplementation(async (query: { args: unknown[]; sql: string }) => {
-    // The capture-queue-only artist-own-channel batch read: return each requested
-    // finding's canned YouTube socials as `{ track_id, url }` rows (the shape the join
-    // emits). Intercepted first — its SQL carries neither `count(*)` nor `capture_status`.
     if (query.sql.includes("artist_socials")) {
       const requestedIds = query.args as string[];
       const rows = requestedIds.flatMap((trackId) =>
@@ -190,11 +173,11 @@ beforeEach(() => {
 
     const isCount = query.sql.includes("count(*)");
     const wantsCapture = query.sql.includes("capture_status");
-    // listTracks binds the capture cooldown cutoff as the first filter arg.
+
     const cooldownCutoffMs = Date.parse(String(query.args[0]));
     const matched = archive
       .filter((t) => (wantsCapture ? matchesCaptureQueue(t, cooldownCutoffMs) : true))
-      // Newest-first (desc), tie-break track_id desc — the order the capture cron passes.
+
       .sort((a, b) =>
         a.added_at === b.added_at
           ? b.track_id.localeCompare(a.track_id)
@@ -229,9 +212,6 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
       (c[0] as { sql: string }).sql.includes("from findings join tracks"),
     )?.[0] as { args: unknown[]; sql: string };
 
-    // pending/NULL always eligible; failed gated on the cap + the cooldown; coord required.
-    // The queue straddles the pair: the coordinate gate is the CERTIFICATION's, the
-    // capture state the RECORDING's — so each predicate names the half it reads.
     expect(listCall.sql).toContain("findings.log_id is not null");
     expect(listCall.sql).toContain(
       "tracks.capture_status is null or tracks.capture_status = 'pending'",
@@ -240,7 +220,7 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
     expect(listCall.sql).toContain(
       "tracks.source_audio_attempted_at is null or tracks.source_audio_attempted_at < ?",
     );
-    // The cutoff is BOUND (now − cooldown), never string-concatenated into the SQL.
+
     const expectedCutoff = new Date(NOW - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
     expect(listCall.args[0]).toBe(expectedCutoff);
     expect(listCall.sql).not.toContain(expectedCutoff);
@@ -253,7 +233,7 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
     expect(ids).toContain("t-new-pending");
     expect(ids).toContain("t-null");
     expect(ids).toContain("t-failed-ready");
-    // Newest-first: the just-added pending finding leads.
+
     expect(ids).toEqual(["t-new-pending", "t-null", "t-failed-ready"]);
     expect(lastListSql()).toContain("order by findings.added_at desc, findings.track_id desc");
   });
@@ -262,19 +242,17 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
     const { tracks } = await listTracks({ captureQueue: true, limit: 50, order: "desc" });
     const ids = tracks.map((t) => t.trackId);
 
-    expect(ids).not.toContain("t-done"); // terminal
-    expect(ids).not.toContain("t-unmatched"); // terminal
-    expect(ids).not.toContain("t-failed-cooling"); // within the cooldown
-    expect(ids).not.toContain("t-failed-capped"); // at the failure cap
-    expect(ids).not.toContain("t-no-logid"); // coordinate-less
+    expect(ids).not.toContain("t-done");
+    expect(ids).not.toContain("t-unmatched");
+    expect(ids).not.toContain("t-failed-cooling");
+    expect(ids).not.toContain("t-failed-capped");
+    expect(ids).not.toContain("t-no-logid");
   });
 
   it("re-includes a failed row once its attempt is past the cooldown", async () => {
-    // Before cooldown: excluded.
     const before = await listTracks({ captureQueue: true, limit: 50, order: "desc" });
     expect(before.tracks.map((t) => t.trackId)).not.toContain("t-failed-cooling");
 
-    // Advance past the cooldown → the same row is now eligible.
     vi.setSystemTime(NOW + CAPTURE_FAILED_COOLDOWN_MS);
     const after = await listTracks({ captureQueue: true, limit: 50, order: "desc" });
     expect(after.tracks.map((t) => t.trackId)).toContain("t-failed-cooling");
@@ -289,9 +267,7 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
     await listTracks({ limit: 50, order: "asc", status: "queue" });
     const sql = lastListSql();
     expect(sql).toContain("enrichment_status");
-    // `capture_status` is unique to the capture WHERE clause (it is never in TRACK_SELECT,
-    // unlike `source_audio_failures` which is now a surfaced DTO column), so its absence
-    // proves the enrich queue carries no capture predicate.
+
     expect(sql).not.toContain("capture_status");
   });
 
@@ -303,20 +279,14 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
   });
 });
 
-// The artist-own-channel trust signal (the sweep's strongest tier): the capture-queue
-// read populates each finding's `artistYoutubeChannelIds` from its artists'
-// `artist_socials` YouTube links — a single batched read, capture-queue only, off the
-// shared TRACK_SELECT path.
 describe("listTracks captureQueue — artistYoutubeChannelIds", () => {
   it("populates artistYoutubeChannelIds (deduped, /channel/UC… only) on the capture queue", async () => {
     const { tracks } = await listTracks({ captureQueue: true, limit: 50, order: "desc" });
     const byId = new Map(tracks.map((t) => [t.trackId, t]));
 
-    // Deduped, and the /@handle link is ignored (no directly usable channel id).
     expect(byId.get("t-new-pending")?.artistYoutubeChannelIds).toEqual(["UC_AAA"]);
     expect(byId.get("t-failed-ready")?.artistYoutubeChannelIds).toEqual(["UC_BBB"]);
-    // A finding whose artists carry no /channel/UC… link keeps the field undefined
-    // (an empty set is omitted, never surfaced as []).
+
     expect(byId.get("t-null")?.artistYoutubeChannelIds).toBeUndefined();
   });
 
@@ -327,7 +297,7 @@ describe("listTracks captureQueue — artistYoutubeChannelIds", () => {
     )?.[0] as { args: unknown[]; sql: string };
 
     expect(socialsCall.sql).toContain("artist_socials.platform = 'youtube'");
-    // The queue's three findings are BOUND as `?` placeholders, not concatenated.
+
     expect(socialsCall.args).toEqual(["t-new-pending", "t-null", "t-failed-ready"]);
     expect(socialsCall.sql).toContain("in (?, ?, ?)");
     for (const id of socialsCall.args) {
@@ -349,10 +319,10 @@ describe("groupArtistYoutubeChannelIds", () => {
   it("groups by track_id, dedupes, and ignores non-/channel URLs", () => {
     const grouped = groupArtistYoutubeChannelIds([
       { track_id: "a", url: "https://www.youtube.com/channel/UC_1" },
-      { track_id: "a", url: "https://www.youtube.com/channel/UC_1" }, // duplicate
-      { track_id: "a", url: "https://www.youtube.com/channel/UC_2" }, // a second artist
-      { track_id: "a", url: "https://www.youtube.com/@handle" }, // ignored
-      { track_id: "b", url: "https://www.youtube.com/user/name" }, // ignored → b absent
+      { track_id: "a", url: "https://www.youtube.com/channel/UC_1" },
+      { track_id: "a", url: "https://www.youtube.com/channel/UC_2" },
+      { track_id: "a", url: "https://www.youtube.com/@handle" },
+      { track_id: "b", url: "https://www.youtube.com/user/name" },
     ]);
 
     expect(grouped.get("a")).toEqual(["UC_1", "UC_2"]);

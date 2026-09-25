@@ -1,10 +1,3 @@
-// The attention queue's server reads — the thin impure half behind the `/admin`
-// home. Each source gets one honest, scoped read (the trust rule:
-// never surface a row the system can't confirm is actionable), then the pure
-// model (lib/attention.ts) derives the rows. The render-queue depth rides along
-// as the queue's one pulse datum (a number in the header, never a row), and the
-// newest finding's cover is the zero state's fresh-load fallback.
-
 import {
   type AttentionItem,
   type CaptureSuspectInput,
@@ -29,9 +22,9 @@ import { FINDINGS_FROM, listTracks } from "./tracks";
 
 export type AttentionSnapshot = {
   items: AttentionItem[];
-  /** The zero state's fresh-load cover (the newest finding) when nothing cleared yet. */
+
   latestCoverUrl?: string;
-  /** Enriched findings still waiting on the box's video render — the pulse datum. */
+
   renderQueueDepth: number;
 };
 
@@ -47,31 +40,8 @@ type ClipRow = {
   youtube_status: SocialStatus | null;
 };
 
-/**
- * The most clip-distribution rows the attention queue will ever carry.
- *
- * The queue takes only dressed findings with a pending distribution leg — right when the
- * only clips in flight were the handful the operator was actively distributing, but a growing
- * catalogue of rendered-but-not-fully-distributed findings turns that into an unbounded list
- * serialized into the `/admin` SSR payload, the react-query cache, and one-per-line by
- * `fluncle admin queue` + the Raycast menu bar, even though the pure model only ever RENDERS the
- * focus clip's two legs plus the (TikTok-capped, ≤5/24h) inbox drafts.
- *
- * So the read takes a WORKING SET, oldest-first, matching {@link LABEL_REVIEW_QUEUE_LIMIT}'s
- * discipline. The cap sits comfortably above the working set: the pure model surfaces distribution
- * legs one focus clip at a time, so the rest of the array is only the `waiting` datum's fuel, and
- * 50 is far above any live in-flight distribution count. Capping never hides a clip from the
- * operator — the focus (oldest pending) is always in-set — it stops one source from drowning the
- * other twelve.
- */
 export const CLIP_QUEUE_LIMIT = 50;
 
-// Every dressed finding with a still-pending distribution leg, joined to its per-platform
-// post state — one `social_posts` row per (track, platform) (the unique index), so the LEFT
-// JOINs stay 1:1. A leg is settled once published/scheduled; a clip with BOTH legs settled
-// drops out of this read. Oldest first — the pure model picks the focus clip and derives the
-// per-platform todos. Log ID required: the caption/cover actions key off it. Capped at
-// {@link CLIP_QUEUE_LIMIT} (oldest-first), so a distribution backlog can't drown the queue.
 async function listClipRows(): Promise<ClipInput[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -114,10 +84,6 @@ type SubmissionRow = {
   triage_verdict: string | null;
 };
 
-// Every pending crew submission awaiting the operator's approve/reject — one queue row
-// each, oldest first, carrying its pre-chew triage verdict when the sweep has visited.
-// Scoped to `status = 'pending'` (the trust rule: a reviewed submission is not the
-// operator's business anymore); the pure model deep-links each to the review tray.
 async function listSubmissionRows(): Promise<SubmissionInput[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -147,13 +113,6 @@ type CaptureSuspectRow = {
   track_id: string;
 };
 
-// Every FINDING whose captured audio failed the fingerprint check against its official preview
-// (docs/the-ear.md § Wrong audio) — `capture_verification = 'mismatch'`, stamped by the
-// verify-captures backfill, which never rewinds a public finding on its own. One queue row each,
-// oldest suspicion first; the operator auditions and rules with `flag_wrong_audio` (which nulls
-// the verdict, so a ruled row leaves this read — the trust rule). Only findings can carry
-// `'mismatch'` (a catalogue mismatch is quarantined instead), but the finding join is kept as the
-// honest scope anyway.
 async function listCaptureSuspectRows(): Promise<CaptureSuspectInput[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -182,10 +141,6 @@ type EditionDraftRow = {
   subject: string | null;
 };
 
-// Every drafted-but-unsent newsletter edition — one queue row each, oldest first, so the
-// Friday sweep's draft (persisted then offered on Discord, but sendable only by the operator)
-// stops waiting invisibly. Scoped to `status = 'draft'` (the trust rule: a sent back-issue is
-// not the operator's business); the pure model deep-links each to /admin/newsletter.
 async function listDraftEditionRows(): Promise<NewsletterInput[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -210,15 +165,6 @@ type LatestCoverRow = {
   album_image_url: string | null;
 };
 
-/**
- * The zero state's fresh-load fallback: the single newest finding's display cover, and NOTHING
- * else. It rides `findings(added_at, track_id)` for exactly one row — no `count(*)` over the whole
- * findings⋈tracks join and no fat track projection (both of which the previous
- * `listTracks({ limit: 1, order: "desc" })` paid for to consume one image URL). It resolves the
- * SAME best-cover chain the track DTO does (`bestAlbumCoverUrl`: the album's owned Cloudflare-Images
- * master once the sweep resolved one, else the Spotify chain), so the zero-state cover matches every
- * other surface — only the three album subqueries `bestAlbumCoverUrl` needs, evaluated for the one row.
- */
 async function readLatestCoverUrl(): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -245,7 +191,6 @@ async function readLatestCoverUrl(): Promise<string | undefined> {
   });
 }
 
-/** One pass over the sources + the pulse datum + the zero-state fallback. */
 export async function readAttentionSnapshot(now: number = Date.now()): Promise<AttentionSnapshot> {
   const [
     clips,
@@ -268,37 +213,24 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     listRecordings(),
     listMixtapes({ includeUnpublished: true }),
     listClipPosts(),
-    // Every un-anchored catalogue row whose anchor gate found a same-duration candidate under a
-    // DIFFERENT version name — the miss the gate writes down instead of forgetting (the trust rule:
-    // any anchor, and either ruling, clears the note, so a row here is genuinely still open).
+
     listAnchorReviewRows(),
     listArtistReviewRows(),
-    // Every bio the final-attempt acceptance stored despite the voice gate refusing it, and
-    // nobody has ruled on yet (the trust rule: either ruling clears the stamp, so a row here is
-    // genuinely still open). The bypass is an operator ruling and stays; this is the reader it
-    // never had.
+
     listBioReviewRows(),
-    // Every finding whose captured audio failed the fingerprint check (the trust rule: a
-    // ruled/flagged row leaves this read — flag_wrong_audio nulls the verdict).
+
     listCaptureSuspectRows(),
-    // Every label still awaiting the operator's ruling (the trust rule: a ruled label is
-    // not the operator's business anymore). Ruling is crawl scope, never storage.
+
     listLabelReviewRows(),
     listSubmissionRows(),
     listDraftEditionRows(),
-    // Every auto-note the echo gate held back and nobody has ruled on yet (the trust rule:
-    // a note he has already kept or binned is not his business anymore). The gate refuses
-    // to STORE these — it always did — but it no longer destroys them, so he can read what
-    // the model wrote and decide whether the gate was right.
+
     listNoteRejectionReviewRows(),
-    // Every observation the echo gate held back and nobody has ruled on yet — the spoken
-    // sibling of the held notes (the trust rule: a ruled row leaves this read).
+
     listObservationRejectionReviewRows(),
-    // The render queue's canonical read (`fluncle admin tracks queue`): findings
-    // with context gathered but no video yet.
+
     listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
-    // The zero state's fresh-load cover — a dedicated one-row read (the newest finding's display
-    // cover), not a full `listTracks` scan whose count(*) + fat projection this consumed one field of.
+
     readLatestCoverUrl(),
   ]);
 

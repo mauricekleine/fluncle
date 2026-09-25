@@ -1,18 +1,3 @@
-// THE BATCHED ADMITTED PHASES' CONTRACT — crawl, capture and embed, proved at the table.
-//
-// Every DB-touching phase a box sweep runs takes a lease on the single `write` lane
-// (docs/database-performance.md), so a per-row phase paid that toll once per row. These ops moved
-// the batch inside one phase WITHOUT collapsing the rows, and the four properties that makes
-// load-bearing are exactly what this file pins:
-//
-//   1. PER-ITEM RECEIPTS — a poisoned item answers for itself and its neighbours still commit.
-//   2. THE WALL BUDGET — a batch stops itself inside the admission watchdog window and hands the
-//      unprocessed tail back as a retryable per-item verdict.
-//   3. THE CAPTURE BUDGET, CUMULATIVELY — a batched prepare can never authorize more downloads than
-//      the rolling count cap has left, which the per-row prepare could.
-//   4. THE ADMISSION MARKER INVARIANT — a batched commit still mints fewer repair markers than the
-//      next claim can drain, checked at module load where both constants are literal.
-
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -60,8 +45,7 @@ describe("the batched crawl commit", () => {
       "failed",
       "committed",
     ]);
-    // The receipt is keyed by the item's OWN operation key, never a batch-wide one: that identity
-    // is what keeps `catalogue.crawl` non-replayable and lets a caller reconcile exactly one node.
+
     expect(receipts.map((receipt) => receipt.operationKey)).toEqual([
       "catalogue.crawl:0",
       "catalogue.crawl:1",
@@ -92,7 +76,6 @@ describe("the batched crawl commit", () => {
       wallBudgetMs: 30_000,
     });
 
-    // The first item always runs, so the batch overshoots by at most one item and never stalls.
     expect(commit).toHaveBeenCalledTimes(1);
     expect(deferred).toBe(2);
     expect(receipts.map((receipt) => receipt.outcome)).toEqual([
@@ -115,15 +98,11 @@ describe("the batched crawl commit", () => {
   });
 
   it("keeps a batched commit's marker mint under the next claim's node drain capacity", () => {
-    // Invariant (d), restated as a value rather than only as a module-load throw: one admitted
-    // phase now mints K nodes' worth of NODE repair markers, and the claim that follows has to be
-    // able to clear all of them or the crawl stops claiming rows entirely.
     const drainCapacity =
       CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.nodeChunks * CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.nodeChunkRows;
 
     expect(CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND).toBeLessThan(drainCapacity);
-    // With margin, not by one: the bound is what a future widening of the claim or the browse page
-    // is measured against.
+
     expect(CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND * 2).toBeLessThan(drainCapacity);
   });
 });
@@ -183,7 +162,6 @@ describe("the batched capture commit", () => {
 describe("the batched capture prepare's budget accounting", () => {
   const catalogueRow = (trackId: string) => ({ kind: "capture" as const, trackId });
 
-  /** A prepare that answers `prepared` exactly when the batch says the budget is open for it. */
   function recordingPrepare(certified: (trackId: string) => boolean) {
     const asked: { open: boolean | undefined; trackId: string }[] = [];
     const prepare = (async (
@@ -193,9 +171,7 @@ describe("the batched capture prepare's budget accounting", () => {
       options?: { catalogueCaptureOpen?: boolean },
     ) => {
       asked.push({ open: options?.catalogueCaptureOpen, trackId });
-      // The real prepare consults the budget verdict ONLY for an uncertified row: `budgeted` is
-      // derived from the snapshot it just read, so a certified finding is never gated whatever the
-      // batch hands down. The fake mirrors that, because it is the guarantee under test.
+
       if (options?.catalogueCaptureOpen === false && !certified(trackId)) {
         return { prepared: false as const, reason: "ineligible" as const };
       }
@@ -216,9 +192,6 @@ describe("the batched capture prepare's budget accounting", () => {
   }
 
   it("cannot authorize more uncertified downloads than the rolling count cap has left", async () => {
-    // The per-row prepare asked "is the budget open" once per row and each row saw the same
-    // untouched ledger, so a batch of six could be authorized against a budget with two left. The
-    // batch consumes the cap in request order instead.
     const { asked, prepare } = recordingPrepare(() => false);
 
     const { results } = await prepareCaptureReconciliations(
@@ -235,8 +208,6 @@ describe("the batched capture prepare's budget accounting", () => {
   });
 
   it("never gates a certified finding, and never lets one consume the catalogue's budget", async () => {
-    // capture-budget.ts § "the findings are never gated": the archive must not be starved by the
-    // speculative half, whatever the catalogue's ledger says.
     const certified = new Set(["a", "c"]);
     const { asked, prepare } = recordingPrepare((trackId) => certified.has(trackId));
 
@@ -245,16 +216,11 @@ describe("the batched capture prepare's budget accounting", () => {
       { captureState: async () => ({ open: true, remainingTracks: 1 }), prepare },
     );
 
-    // Two certified rows prepare, and neither spends the reservation the uncertified rows draw on,
-    // so exactly one uncertified row (the first) is authorized while the other is refused.
     expect(asked.map((ask) => ask.open)).toEqual([true, true, false, false]);
     expect(results.map((row) => row.prepared)).toEqual([true, true, true, false]);
   });
 
   it("subtracts what the tick already authorized, so a second call cannot re-spend the cap", async () => {
-    // THE COUNT-CAP HOLE THIS CLOSES. The ledger is charged at COMMIT, so a tick's second prepare
-    // call reads the same pre-tick remaining count its first already reserved against. Carrying the
-    // running total is what makes two calls behave as one budget.
     const { asked, prepare } = recordingPrepare(() => false);
 
     const first = await prepareCaptureReconciliations(["a", "b"].map(catalogueRow), {
@@ -269,7 +235,6 @@ describe("the batched capture prepare's budget accounting", () => {
       reservedThisTick: first.reserved,
     });
 
-    // Three left, two already spent: exactly one more authorization across the whole tick.
     expect(second.reserved).toBe(1);
     expect(asked.map((ask) => ask.open)).toEqual([true, true, true, false, false]);
   });
@@ -280,8 +245,7 @@ describe("the batched capture prepare's budget accounting", () => {
     const overReported = await prepareCaptureReconciliations(["a", "b"].map(catalogueRow), {
       captureState: async () => ({ open: true, remainingTracks: 2 }),
       prepare,
-      // More than the ledger has left. The clamp is at zero, so this authorizes nothing rather
-      // than wrapping into a larger budget.
+
       reservedThisTick: 99,
     });
     expect(overReported.reserved).toBe(0);
@@ -289,7 +253,7 @@ describe("the batched capture prepare's budget accounting", () => {
     const negative = await prepareCaptureReconciliations(["a", "b"].map(catalogueRow), {
       captureState: async () => ({ open: true, remainingTracks: 2 }),
       prepare,
-      // A nonsense value cannot ADD budget: it is floored at zero before it subtracts.
+
       reservedThisTick: -50,
     });
     expect(negative.reserved).toBe(2);
@@ -304,7 +268,6 @@ describe("the batched capture prepare's budget accounting", () => {
       reservedThisTick: 50,
     });
 
-    // capture-budget.ts § "the findings are never gated": both prepare, and neither is counted.
     expect(page.results.map((row) => row.prepared)).toEqual([true, true]);
     expect(page.reserved).toBe(0);
   });

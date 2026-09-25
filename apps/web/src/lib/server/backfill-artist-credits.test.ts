@@ -1,13 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The MB credit sweep (RFC artist-primary-capture, slice 1b). The PASS is tested with a mocked
-// db.execute (no real database), a mocked MusicBrainz client (`mbFetch`), and mocked mbid WRITES
-// (`mintArtistByMbid` / `adoptArtistMbid`) — so the three-rung resolve (exact mbid → ADOPT → mint),
-// the homonym / different-mbid fail-closed rungs, idempotence, the no-identity terminal skip, the
-// budget pause, the circuit breaker, arity, and slice-0-stamp non-interference are all pinned without
-// a network or a DB. The fold map + `fold` are the REAL slice-0 matcher (pure), driven off the corpus
-// the execute mock returns.
-
 const execute = vi.fn();
 const mbFetch = vi.fn();
 const mintArtistByMbid = vi.fn();
@@ -19,10 +11,6 @@ vi.mock("./db", async () => {
   return {
     ...actual,
     getDb: async () => ({
-      // `batch` delegates statement-by-statement to the same `execute` mock, so the ordered result
-      // queue, the per-statement assertions and the arity guard below all see a batched write exactly
-      // as they see a lone one. The edge insert rides a batch now because it carries the maintained
-      // hub-count deltas (keystone 2, lib/server/hub-counts.ts).
       batch: async (statements: Array<{ args?: unknown[]; sql: string }>) =>
         Promise.all(statements.map((statement) => execute(statement))),
       execute,
@@ -40,7 +28,6 @@ vi.mock("./due-work-cutover", () => ({
 
 const { resolveArtistCredits } = await import("./backfill-artist-credits");
 
-/** A `mbFetch` resolve carrying the given artist-credits (each `{ artist: { id, name } }`). */
 function credits(list: Array<{ id: string; name: string }>): {
   data: { "artist-credit": Array<{ artist: { id: string; name: string } }> };
   rateLimited: false;
@@ -48,13 +35,12 @@ function credits(list: Array<{ id: string; name: string }>): {
   return { data: { "artist-credit": list.map((a) => ({ artist: a })) }, rateLimited: false };
 }
 
-/** Queue the two per-pass corpus reads (artists corpus with mbid, then trusted aliases). */
 function primeCorpus(
   artists: Array<{ id: string; mbid: string | null; name: string }>,
   aliases: Array<{ alias: string; artist_id: string }> = [],
 ): void {
-  execute.mockResolvedValueOnce({ rows: artists }); // loadArtists
-  execute.mockResolvedValueOnce({ rows: aliases }); // loadAliases
+  execute.mockResolvedValueOnce({ rows: artists });
+  execute.mockResolvedValueOnce({ rows: aliases });
 }
 
 beforeEach(() => {
@@ -73,8 +59,8 @@ afterEach(() => {
 describe("resolveArtistCredits — the three-rung resolve", () => {
   it("MINTS when the credit matches no mbid and no existing name fold", async () => {
     execute.mockResolvedValueOnce({ rows: [{ mb_recording_id: "rec-1", track_id: "t1" }] });
-    primeCorpus([]); // empty corpus ⇒ no mbid, no fold
-    execute.mockResolvedValue({ rowsAffected: 1 }); // insert + stamp
+    primeCorpus([]);
+    execute.mockResolvedValue({ rowsAffected: 1 });
     mbFetch.mockResolvedValueOnce(credits([{ id: "mba-1", name: "Logistics" }]));
     mintArtistByMbid.mockResolvedValueOnce("art-new");
 
@@ -101,12 +87,10 @@ describe("resolveArtistCredits — the three-rung resolve", () => {
     expect(mintArtistByMbid).not.toHaveBeenCalled();
     expect(adoptArtistMbid).not.toHaveBeenCalled();
     const insert = execute.mock.calls.find((c) => String(c[0].sql).includes("insert or ignore"));
-    expect(insert?.[0].args).toEqual(["t1", "art-x", 1]); // the existing row, not a new mint
+    expect(insert?.[0].args).toEqual(["t1", "art-x", 1]);
   });
 
   it("ADOPTS a Spotify-keyed row with NO mbid when the credit name folds onto it (no mint)", async () => {
-    // The compound-credit case: "Sub Focus & Dimension" as one artists_json string slice 0 could not
-    // match, but "Sub Focus" exists as a Spotify-keyed row with mbid still null.
     execute.mockResolvedValueOnce({ rows: [{ mb_recording_id: "rec-1", track_id: "t1" }] });
     primeCorpus([{ id: "art-sf", mbid: null, name: "Sub Focus" }]);
     execute.mockResolvedValue({ rowsAffected: 1 });
@@ -115,7 +99,7 @@ describe("resolveArtistCredits — the three-rung resolve", () => {
     const result = await resolveArtistCredits(40, false);
 
     expect(adoptArtistMbid).toHaveBeenCalledWith("art-sf", "mba-sf");
-    expect(mintArtistByMbid).not.toHaveBeenCalled(); // NO duplicate row
+    expect(mintArtistByMbid).not.toHaveBeenCalled();
     expect(result.adoptedArtists).toBe(1);
     expect(result.mintedArtists).toBe(0);
     const insert = execute.mock.calls.find((c) => String(c[0].sql).includes("insert or ignore"));
@@ -124,7 +108,7 @@ describe("resolveArtistCredits — the three-rung resolve", () => {
 
   it("FAILS CLOSED to a MINT on a homonym (an ambiguous fold two distinct rows share)", async () => {
     execute.mockResolvedValueOnce({ rows: [{ mb_recording_id: "rec-1", track_id: "t1" }] });
-    // Two distinct rows named "Nucleus" ⇒ buildArtistFoldMap drops the fold (ambiguous, fail-closed).
+
     primeCorpus([
       { id: "art-a", mbid: null, name: "Nucleus" },
       { id: "art-b", mbid: null, name: "Nucleus" },
@@ -135,7 +119,6 @@ describe("resolveArtistCredits — the three-rung resolve", () => {
 
     const result = await resolveArtistCredits(40, false);
 
-    // A homonym must never be wrongly merged — mint a fresh identity-true row instead of adopting.
     expect(adoptArtistMbid).not.toHaveBeenCalled();
     expect(mintArtistByMbid).toHaveBeenCalledWith("Nucleus", "mba-nucleus");
     expect(result.mintedArtists).toBe(1);
@@ -151,16 +134,12 @@ describe("resolveArtistCredits — the three-rung resolve", () => {
 
     const result = await resolveArtistCredits(40, false);
 
-    // The name folds onto Calibre, but that row's mbid differs ⇒ a distinct MB identity ⇒ mint, never
-    // overwrite (a wrong merge is unrecoverable).
     expect(adoptArtistMbid).not.toHaveBeenCalled();
     expect(mintArtistByMbid).toHaveBeenCalledWith("Calibre", "mba-new");
     expect(result.mintedArtists).toBe(1);
   });
 
   it("is idempotent across the ADOPT path within a pass (adopts once, then matches the same mbid)", async () => {
-    // Two tracks, each crediting the same artist by the same mbid. The first adopts; the second must
-    // resolve to the SAME row via the now-populated mbid map — no second adopt, no mint.
     execute.mockResolvedValueOnce({
       rows: [
         { mb_recording_id: "rec-1", track_id: "t1" },
@@ -173,11 +152,11 @@ describe("resolveArtistCredits — the three-rung resolve", () => {
 
     const result = await resolveArtistCredits(40, false);
 
-    expect(adoptArtistMbid).toHaveBeenCalledTimes(1); // adopted ONCE across both tracks
+    expect(adoptArtistMbid).toHaveBeenCalledTimes(1);
     expect(mintArtistByMbid).not.toHaveBeenCalled();
     expect(result.adoptedArtists).toBe(1);
-    expect(result.matchedArtists).toBe(1); // t2's credit resolved by the freshly-set mbid
-    // Both tracks got an edge to the same adopted row.
+    expect(result.matchedArtists).toBe(1);
+
     const inserts = execute.mock.calls
       .filter((c) => String(c[0].sql).includes("insert or ignore"))
       .map((c) => c[0].args);
@@ -197,7 +176,7 @@ describe("resolveArtistCredits — the pass mechanics", () => {
       data: {
         "artist-credit": [
           { artist: { id: "89ad4ac3-39f7-470e-963a-56509c546377", name: "Various Artists" } },
-          { name: "No Id Here" }, // no artist.id
+          { name: "No Id Here" },
           { artist: { id: "mba-real", name: "Real Artist" } },
         ],
       },
@@ -211,12 +190,12 @@ describe("resolveArtistCredits — the pass mechanics", () => {
     expect(mintArtistByMbid).toHaveBeenCalledWith("Real Artist", "mba-real");
     expect(result.mintedArtists).toBe(1);
     const insert = execute.mock.calls.find((c) => String(c[0].sql).includes("insert or ignore"));
-    expect(insert?.[0].args).toEqual(["t1", "art-real", 3]); // position from the ORIGINAL credit index
+    expect(insert?.[0].args).toEqual(["t1", "art-real", 3]);
   });
 
   it("terminally skips a zero-matched track with NO MB identity (stamped, no vendor call)", async () => {
     execute.mockResolvedValueOnce({ rows: [{ mb_recording_id: null, track_id: "spotify-xyz" }] });
-    primeCorpus([]); // resolver still built (the page is non-empty), but no credit is resolved
+    primeCorpus([]);
     execute.mockResolvedValue({ rowsAffected: 1 });
 
     const result = await resolveArtistCredits(40, false);
@@ -247,7 +226,7 @@ describe("resolveArtistCredits — the pass mechanics", () => {
     execute.mockResolvedValue({ rowsAffected: 1 });
     mbFetch.mockResolvedValueOnce(credits([{ id: "mba-1", name: "A" }]));
 
-    const result = await resolveArtistCredits(1, false); // batch limit 1, page of 1 ⇒ full
+    const result = await resolveArtistCredits(1, false);
 
     expect(result.scanned).toBe(1);
     expect(result.nextCursor).toBe("t1");
@@ -284,12 +263,11 @@ describe("resolveArtistCredits — the pass mechanics", () => {
     execute.mockResolvedValue({ rowsAffected: 1 });
     mbFetch.mockResolvedValue(credits([{ id: "mba-1", name: "A" }]));
 
-    // deadline = Date.now()+60000. Handle row1, then the top-of-loop check for row2 sees it spent.
     const now = vi
       .spyOn(Date, "now")
-      .mockReturnValueOnce(1_000) // deadline base → 61_000
-      .mockReturnValueOnce(1_000) // row1 top check: under budget
-      .mockReturnValue(62_000); // row2 top check: budget spent → pause
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValue(62_000);
 
     const result = await resolveArtistCredits(40, false);
 
@@ -317,7 +295,7 @@ describe("resolveArtistCredits — the pass mechanics", () => {
     expect(result.mintedArtists).toBe(0);
     expect(result.adoptedArtists).toBe(0);
     expect(mbFetch).not.toHaveBeenCalled();
-    expect(execute).toHaveBeenCalledTimes(1); // just the worklist read — no corpus load
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("an empty worklist is a single-query no-op (no corpus read, idempotent re-run)", async () => {
@@ -346,24 +324,20 @@ describe("resolveArtistCredits — the pass mechanics", () => {
   });
 });
 
-// THE ARITY GUARD (the recording-mbids discipline). A multi-row `insert or ignore` builds its
-// placeholders dynamically, so a drifted args/placeholder count could ship unseen by a mock. Every
-// statement this module ISSUES must bind exactly as many args as it declares placeholders (the
-// adopt/mint writes live in ./artists and are mocked here, so they are guarded by that module's tests).
 describe("every statement binds exactly its placeholders", () => {
   it("holds across a full wet pass (worklist + corpus + insert + stamp + a no-identity skip)", async () => {
     execute.mockResolvedValueOnce({
       rows: [
-        { mb_recording_id: "rec-1", track_id: "t1" }, // identity → mbFetch + insert + stamp
-        { mb_recording_id: null, track_id: "spotify-2" }, // no identity → stamp only
+        { mb_recording_id: "rec-1", track_id: "t1" },
+        { mb_recording_id: null, track_id: "spotify-2" },
       ],
     });
     primeCorpus([{ id: "art-sf", mbid: null, name: "Sub Focus" }]);
     execute.mockResolvedValue({ rowsAffected: 2 });
     mbFetch.mockResolvedValueOnce(
       credits([
-        { id: "mba-1", name: "Sub Focus" }, // adopt
-        { id: "mba-2", name: "Brand New Name" }, // mint
+        { id: "mba-1", name: "Sub Focus" },
+        { id: "mba-2", name: "Brand New Name" },
       ]),
     );
 

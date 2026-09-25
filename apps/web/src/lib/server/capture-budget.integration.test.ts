@@ -3,21 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 
-// THE LEDGER, PROVEN — against the REAL schema, on a real libSQL engine.
-//
-// The budget's arithmetic is pure and is proven at the table (capture-budget.test.ts). What
-// only a real engine can prove is the SQL the arithmetic is fed:
-//
-//   1. IT COUNTS THE CATALOGUE, AND ONLY THE CATALOGUE. A finding's capture must be invisible
-//      to this budget — it can neither consume it nor be stopped by it.
-//   2. IT COUNTS ATTEMPTS, NOT SUCCESSES. A failed download still pulled bytes through the
-//      metered proxy. A ledger that only counted successes would let a day of failures spend
-//      real money against a meter reading zero.
-//   3. THE WINDOW ROLLS. Yesterday's spend is not today's.
-//
-// No audio is downloaded here (or anywhere in this suite): the capture is simulated by
-// writing exactly the columns the sweep writes.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -29,7 +14,6 @@ vi.mock("./db", async (importOriginal) => {
 const NOW = Date.parse("2026-07-11T12:00:00.000Z");
 const HOUR = 60 * 60 * 1000;
 
-/** Simulate what the capture sweep writes on a SUCCESS: the stamp, and the size it landed. */
 async function captured(trackId: string, atMs: number, bytes: number): Promise<void> {
   const at = new Date(atMs).toISOString();
 
@@ -42,7 +26,6 @@ async function captured(trackId: string, atMs: number, bytes: number): Promise<v
   });
 }
 
-/** …and what it writes on a FAILURE: the attempt stamp, and no bytes (the pull is unknowable). */
 async function attemptFailed(trackId: string, atMs: number): Promise<void> {
   await db.execute({
     args: [new Date(atMs).toISOString(), trackId],
@@ -66,9 +49,7 @@ describe("readCatalogueCaptureSpend — what the catalogue actually spent", () =
 
     await captured("cat1000000000000000000", NOW - HOUR, 5_000_000);
     await captured("cat2000000000000000000", NOW - 2 * HOUR, 3_000_000);
-    // A failure billed a proxy request too — it counts against the COUNT cap. Its partial
-    // transfer is genuinely unknowable from the server, so it is under-counted in bytes
-    // rather than guessed at. (An honest under-count beats an invented number.)
+
     await attemptFailed("cat3000000000000000000", NOW - 3 * HOUR);
 
     expect(await readCatalogueCaptureSpend(NOW)).toEqual({ bytes: 8_000_000, tracks: 3 });
@@ -77,8 +58,6 @@ describe("readCatalogueCaptureSpend — what the catalogue actually spent", () =
   it("is BLIND to a finding's capture — the archive can never consume the catalogue budget", async () => {
     const { readCatalogueCaptureSpend } = await import("./capture-budget");
 
-    // A certified finding captures ~a handful a week. It is not the spend, it was never the
-    // concern, and if it consumed this budget then logging bangers would starve the telescope.
     await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
     await captured("aaaaaaaaaaaaaaaaaaaaaa", NOW - HOUR, 9_000_000);
 
@@ -91,11 +70,9 @@ describe("readCatalogueCaptureSpend — what the catalogue actually spent", () =
     await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
     await seedCatalogueTrack(db, { trackId: "cat2000000000000000000" });
 
-    await captured("cat1000000000000000000", NOW - 23 * HOUR, 1_000_000); // inside
-    await captured("cat2000000000000000000", NOW - 25 * HOUR, 7_000_000); // outside
+    await captured("cat1000000000000000000", NOW - 23 * HOUR, 1_000_000);
+    await captured("cat2000000000000000000", NOW - 25 * HOUR, 7_000_000);
 
-    // Rolling, not calendar — a midnight reset is a cliff to game (and a cliff to be surprised
-    // by at 00:01).
     expect(await readCatalogueCaptureSpend(NOW)).toEqual({ bytes: 1_000_000, tracks: 1 });
   });
 
@@ -111,8 +88,6 @@ describe("readCatalogueCaptureSpend — what the catalogue actually spent", () =
             where track_id = 'cat1000000000000000000'`,
     });
 
-    // A row captured before the meter existed. It still counts as an ATTEMPT (it happened);
-    // its size is simply not known, and `sum()` over a NULL must not return NULL.
     expect(await readCatalogueCaptureSpend(NOW)).toEqual({ bytes: 0, tracks: 1 });
   });
 
@@ -128,8 +103,6 @@ describe("getCatalogueCaptureState — what the operator reads, and the queue ob
     const { getCatalogueCaptureState, DEFAULT_DAILY_BYTES, DEFAULT_DAILY_TRACKS } =
       await import("./capture-budget");
 
-    // No `settings` row at all — which is exactly what a fresh deploy, a preview branch, and a
-    // restored-from-backup database all look like. Every one of them must read as PAUSED.
     const state = await getCatalogueCaptureState(NOW);
 
     expect(state.paused).toBe(true);
@@ -156,7 +129,6 @@ describe("getCatalogueCaptureState — what the operator reads, and the queue ob
     const { getCatalogueCaptureState } = await import("./capture-budget");
     const { setSetting } = await import("./settings");
 
-    // The default-deny property, tested against the values a bug or a hand-edit could write.
     for (const value of ["true", "", "0", "no", "FALSE", "off", "running", "1"]) {
       await setSetting("catalogue_capture_paused", value);
       expect((await getCatalogueCaptureState(NOW)).paused).toBe(true);
@@ -188,14 +160,7 @@ describe("getCatalogueCaptureState — what the operator reads, and the queue ob
   });
 });
 
-// THE BRAKE'S OWN COST. `isCatalogueCaptureOpen` fires on every capture tick — 288 times a day —
-// where the `/admin` readout fires when someone looks. The kill switch WINS over both caps in
-// `catalogueCaptureVerdict`, so on the paused path (the default-deny resting state) the spend read
-// could never change the answer — and that read is the one query in this module whose cost tracks
-// how much the archive has been spending. These pin the short-circuit in both directions: no spend
-// statement while paused, and the same verdict as the readout once it is open.
 describe("isCatalogueCaptureOpen — the brake asks the cheap question first", () => {
-  /** Every statement the ledger's window read is recognisable by. */
   const spendStatements = (calls: readonly unknown[][]): unknown[][] =>
     calls.filter((call) => JSON.stringify(call[0] ?? "").includes("source_audio_attempted_at"));
 
@@ -231,7 +196,6 @@ describe("isCatalogueCaptureOpen — the brake asks the cheap question first", (
 
     spy.mockRestore();
 
-    // …and the cap still binds through the short-circuit, exactly as the readout reports it.
     await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
     await captured("cat1000000000000000000", NOW - HOUR, 1_000_000);
 
@@ -239,9 +203,6 @@ describe("isCatalogueCaptureOpen — the brake asks the cheap question first", (
     expect((await getCatalogueCaptureState(NOW)).closedReason).toBe("tracks_spent");
   });
 
-  // The capture BATCH consumes the budget row by row, so it needs the remaining count as well as
-  // the verdict. It rides the same short-circuit: a batch prepared while paused (every tick that
-  // carries a certified finding, on the default-deny resting state) reads no spend either.
   it("the batch admission reads NO spend while paused, and agrees with the readout once open", async () => {
     const {
       getCatalogueCaptureState,
