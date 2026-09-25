@@ -17,6 +17,7 @@ import {
   markCrawlProjectionRepairsFromSelectStatement,
 } from "./crawl-due-work";
 import { getDb, typedRows } from "./db";
+import { FRESH_WINDOW_DAYS, releaseTodayUtc, releaseWindowLowerBound } from "./release-day";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   type DueWorkStatement,
@@ -537,6 +538,8 @@ function hubRenderableColumn(alias: string): string {
 }
 
 type CatalogueHubRow = {
+  latest_release_date?: string | null;
+  artists_json?: string | null;
   certified?: number | null;
   cover_json?: string | null;
   cover_url?: string | null;
@@ -589,7 +592,6 @@ function escapeLikePattern(term: string): string {
 
 export type CatalogueHubNumberedPage<Entry> = {
   items: Entry[];
-
   letters?: CatalogueHubLetter[];
   page: number;
   pageCount: number;
@@ -602,6 +604,28 @@ export type CatalogueHubLetter = { letter: string; page: number };
 export class CatalogueHubPageOutOfRangeError extends Error {}
 
 export const ENTITY_HUB_ORDER_BY = "g.slug asc, g.id asc";
+
+export type HubOrder = "az" | "most" | "recent";
+
+function orderedHubSql(query: CatalogueEntityPageQuery, order: HubOrder): string {
+  if (order === "most") {
+    return `-${query.alias}.renderable_track_count asc, ${query.slugExpr} asc`;
+  }
+  if (order === "recent") {
+    return `${query.alias}.latest_release_date desc, ${query.slugExpr} desc`;
+  }
+  return entityHubOrderBy(query);
+}
+
+function filteredHubSql(order: HubOrder): string {
+  if (order === "most") {
+    return "-g.track_count asc, g.slug asc";
+  }
+  if (order === "recent") {
+    return "g.latest_release_date desc, g.slug desc";
+  }
+  return ENTITY_HUB_ORDER_BY;
+}
 
 export function entityHubOrderBy(query: Pick<CatalogueEntityPageQuery, "idExpr" | "slugExpr">) {
   return `${query.slugExpr} asc, ${query.idExpr} asc`;
@@ -625,6 +649,7 @@ function catalogueEntityPageShape(
   query: CatalogueEntityPageQuery,
   pageSize: number,
   projection: string,
+  order: HubOrder = "az",
 ): HubOrderedPageShape {
   return {
     clauses: [{ args: [], sql: entityGateWhere(query) }],
@@ -632,7 +657,7 @@ function catalogueEntityPageShape(
     idExpr: query.idExpr,
     keyAlias: "slug",
     keyExpr: query.slugExpr,
-    orderBy: entityHubOrderBy(query),
+    orderBy: orderedHubSql(query, order),
     pageSize,
     projection,
     seekAfter: (anchor) => entityHubSeekClause(query, anchor),
@@ -642,9 +667,10 @@ function catalogueEntityPageShape(
 export function catalogueEntityAnchorExtractionQuery(
   query: CatalogueEntityPageQuery,
   pageSize: number,
+  order: HubOrder = "az",
 ) {
   return hubAnchorExtractionQuery(
-    catalogueEntityPageShape(query, pageSize, entityBoundaryColumns(query)),
+    catalogueEntityPageShape(query, pageSize, entityBoundaryColumns(query), order),
   );
 }
 
@@ -653,9 +679,10 @@ export function catalogueEntityOffsetPageQuery(
   pageSize: number,
   offset: number,
   projection = entityBoundaryColumns(query),
+  order: HubOrder = "az",
 ) {
   return hubOffsetPageQuery(
-    catalogueEntityPageShape(query, pageSize, projection),
+    catalogueEntityPageShape(query, pageSize, projection, order),
     pageSize,
     offset,
   );
@@ -667,8 +694,13 @@ export function catalogueEntitySeekPageQuery(
   page: number,
   anchors: HubPageAnchor[],
   projection = entityBoundaryColumns(query),
+  order: HubOrder = "az",
 ) {
-  return hubSeekPageQuery(catalogueEntityPageShape(query, pageSize, projection), page, anchors);
+  return hubSeekPageQuery(
+    catalogueEntityPageShape(query, pageSize, projection, order),
+    page,
+    anchors,
+  );
 }
 
 export function catalogueEntityCountQuery(query: CatalogueEntityPageQuery) {
@@ -684,13 +716,14 @@ function entityAnchorAddress(
   query: CatalogueEntityPageQuery,
   pageSize: number,
   surface: "browse" | "hub",
+  order: HubOrder = "az",
 ): { clauseHash: string; hub: string } {
   return {
     clauseHash: hubClauseHash(
       JSON.stringify({
         entity: query.entity,
         floor: query.floor,
-        orderBy: ENTITY_HUB_ORDER_BY,
+        orderBy: order === "az" ? ENTITY_HUB_ORDER_BY : orderedHubSql(query, order),
         pageSize,
 
         where: hubGateSql(query.alias, "?"),
@@ -719,11 +752,12 @@ async function refreshCatalogueEntityAnchors(
   query: CatalogueEntityPageQuery,
   pageSize: number,
   surface: "browse" | "hub",
+  order: HubOrder = "az",
 ): Promise<void> {
   const [anchorRows = [], countRows = [], firstRows = []] = await readOneSnapshot([
-    catalogueEntityAnchorExtractionQuery(query, pageSize),
+    catalogueEntityAnchorExtractionQuery(query, pageSize, order),
     catalogueEntityCountQuery(query),
-    catalogueEntityOffsetPageQuery(query, 1, 0),
+    catalogueEntityOffsetPageQuery(query, 1, 0, entityBoundaryColumns(query), order),
   ]);
   const anchors = hubPageAnchorsFromRows(
     typedRows<Record<string, unknown>>(anchorRows),
@@ -732,7 +766,7 @@ async function refreshCatalogueEntityAnchors(
   );
   const total = Number(typedRows<{ total: number }>(countRows)[0]?.total ?? 0);
   const firstId = typedRows<{ id: string }>(firstRows)[0]?.id;
-  const address = entityAnchorAddress(query, pageSize, surface);
+  const address = entityAnchorAddress(query, pageSize, surface, order);
 
   await persistHubPageAnchors(
     address.hub,
@@ -746,11 +780,12 @@ function scheduleCatalogueEntityAnchorRefresh(
   query: CatalogueEntityPageQuery,
   pageSize: number,
   surface: "browse" | "hub",
+  order: HubOrder = "az",
 ): void {
-  const address = entityAnchorAddress(query, pageSize, surface);
+  const address = entityAnchorAddress(query, pageSize, surface, order);
 
   scheduleHubPageAnchorRefresh(`${address.hub}:${address.clauseHash}`, () =>
-    refreshCatalogueEntityAnchors(query, pageSize, surface),
+    refreshCatalogueEntityAnchors(query, pageSize, surface, order),
   );
 }
 
@@ -811,21 +846,22 @@ async function anchoredCatalogueEntityRows(
   surface: "browse" | "hub",
   projection: string,
   withLetters = false,
+  order: HubOrder = "az",
 ): Promise<
   { letters: CatalogueHubLetter[]; rows: Record<string, unknown>[]; total: number } | undefined
 > {
-  const address = entityAnchorAddress(query, pageSize, surface);
+  const address = entityAnchorAddress(query, pageSize, surface, order);
   const stored = await loadPersistedHubPageAnchors(address.hub, address.clauseHash);
 
   if (!stored) {
-    scheduleCatalogueEntityAnchorRefresh(query, pageSize, surface);
+    scheduleCatalogueEntityAnchorRefresh(query, pageSize, surface, order);
     return undefined;
   }
 
   const [totalRows = [], firstRows = [], pageRows = []] = await readOneSnapshot([
     catalogueEntityTotalQuery(query, withLetters),
-    catalogueEntityOffsetPageQuery(query, 1, 0),
-    catalogueEntitySeekPageQuery(query, pageSize, page, stored.anchors, projection),
+    catalogueEntityOffsetPageQuery(query, 1, 0, entityBoundaryColumns(query), order),
+    catalogueEntitySeekPageQuery(query, pageSize, page, stored.anchors, projection, order),
   ]);
   const { letters, total } = catalogueEntityTotalFromRows(totalRows, withLetters, pageSize);
   const firstId = typedRows<{ id: string }>(firstRows)[0]?.id;
@@ -835,9 +871,8 @@ async function anchoredCatalogueEntityRows(
     stored,
     hubCorpusFingerprint(total, firstId),
   );
-
   if (decision.refresh) {
-    scheduleCatalogueEntityAnchorRefresh(query, pageSize, surface);
+    scheduleCatalogueEntityAnchorRefresh(query, pageSize, surface, order);
   }
 
   return {
@@ -854,8 +889,9 @@ async function unfilteredCatalogueEntityRows(
   surface: "browse" | "hub",
   projection: string,
   withLetters = false,
+  order: HubOrder = "az",
 ): Promise<{ letters: CatalogueHubLetter[]; rows: Record<string, unknown>[]; total: number }> {
-  if (!isShallowHubPage(page, pageSize)) {
+  if (order === "az" && !isShallowHubPage(page, pageSize)) {
     const anchored = await anchoredCatalogueEntityRows(
       query,
       page,
@@ -863,6 +899,7 @@ async function unfilteredCatalogueEntityRows(
       surface,
       projection,
       withLetters,
+      order,
     );
 
     if (anchored) {
@@ -872,7 +909,7 @@ async function unfilteredCatalogueEntityRows(
 
   const [totalRows = [], pageRows = []] = await readOneSnapshot([
     catalogueEntityTotalQuery(query, withLetters),
-    catalogueEntityOffsetPageQuery(query, pageSize, (page - 1) * pageSize, projection),
+    catalogueEntityOffsetPageQuery(query, pageSize, (page - 1) * pageSize, projection, order),
   ]);
 
   return {
@@ -886,6 +923,7 @@ export async function listHubPage<Entry>(
   page: number,
   withLetters = false,
   nameFilter?: string,
+  order: HubOrder = "az",
 ): Promise<CatalogueHubNumberedPage<Entry>> {
   const limit = CATALOGUE_HUB_DEFAULT_LIMIT;
   const term = typeof nameFilter === "string" ? nameFilter.trim() : "";
@@ -898,11 +936,15 @@ export async function listHubPage<Entry>(
       "hub",
       `${query.idExpr} as id, ${query.slugExpr} as slug,
        ${query.alias}.renderable_track_count as n, (${query.alias}.certified_finding_count > 0) as cert`,
-      withLetters,
+      withLetters && order === "az",
+      order,
     );
-    const sliced = (
-      served.rows as unknown as { cert: number; id: string; n: number; slug: string }[]
-    ).sort(compareSlugThenId);
+    const sliced = served.rows as unknown as {
+      cert: number;
+      id: string;
+      n: number;
+      slug: string;
+    }[];
 
     return {
       items: await hubTiles(query, sliced),
@@ -914,19 +956,20 @@ export async function listHubPage<Entry>(
   }
 
   const db = await getDb();
-
-  const letterArm = withLetters
-    ? `union all
+  const letterArm =
+    withLetters && order === "az"
+      ? `union all
        select 'letter' as kind, '' as id, substr(g.slug, 1, 1) as slug, count(*) as n, 0 as cert
        from gated g group by substr(g.slug, 1, 1)`
-    : "";
+      : "";
 
   const result = await db.execute({
     args: [`%${escapeLikePattern(term)}%`, limit, (page - 1) * limit],
     sql: `with gated as materialized (
             select ${query.idExpr} as id, ${query.slugExpr} as slug,
                    ${query.alias}.renderable_track_count as track_count,
-                   (${query.alias}.certified_finding_count > 0) as certified
+                   (${query.alias}.certified_finding_count > 0) as certified,
+                   ${query.alias}.latest_release_date as latest_release_date
             from ${query.entity}
             where ${query.nameExpr} like ? escape '\\' and ${entityGateWhere(query)}
           )
@@ -935,7 +978,7 @@ export async function listHubPage<Entry>(
           select * from (
             select 'row' as kind, g.id as id, g.slug as slug, g.track_count as n,
                    g.certified as cert
-            from gated g order by ${ENTITY_HUB_ORDER_BY} limit ? offset ?
+            from gated g order by ${filteredHubSql(order)} limit ? offset ?
           )
           ${letterArm}`,
   });
@@ -944,8 +987,7 @@ export async function listHubPage<Entry>(
     result.rows,
   );
   const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
-
-  const sliced = rows.filter((row) => row.kind === "row").sort(compareSlugThenId);
+  const sliced = rows.filter((row) => row.kind === "row");
   const letters = letterPages(
     rows
       .filter((row) => row.kind === "letter")
@@ -989,6 +1031,32 @@ async function hubTiles<Entry>(
       ? [query.mapRow({ ...tile, certified: Number(row.cert), track_count: Number(row.n) })]
       : [];
   });
+}
+
+export async function listHubThisMonth<Entry>(
+  query: CatalogueHubQuery<Entry>,
+  now = new Date(),
+  limit = 12,
+): Promise<Entry[]> {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > CATALOGUE_HUB_DEFAULT_LIMIT) {
+    throw new Error("hub strip limit must be 1 through the tile page size");
+  }
+  const windowDay = new Date(now);
+  windowDay.setUTCDate(windowDay.getUTCDate() - FRESH_WINDOW_DAYS);
+  const lower = releaseWindowLowerBound(releaseTodayUtc(windowDay));
+  const db = await getDb();
+  const result = await db.execute({
+    args: [lower, limit],
+    sql: `select ${query.slugExpr} as slug,
+                 ${query.alias}.renderable_track_count as n,
+                 (${query.alias}.certified_finding_count > 0) as cert
+          from ${query.entity}
+          where ${entityGateWhere(query)}
+            and ${query.alias}.latest_release_date >= ?
+          order by +(-${query.alias}.renderable_track_count) asc, ${query.slugExpr} asc
+          limit ?`,
+  });
+  return hubTiles(query, typedRows<{ cert: number; n: number; slug: string }>(result.rows));
 }
 
 export function letterPages(
@@ -1098,8 +1166,13 @@ export function countIndexableLabels(): Promise<number> {
 export function listLabelsHubPage(
   page: number,
   nameFilter?: string,
+  order: HubOrder = "az",
 ): Promise<CatalogueHubNumberedPage<LabelHubEntry>> {
-  return listHubPage(LABELS_HUB_QUERY, page, !nameFilter, nameFilter);
+  return listHubPage(LABELS_HUB_QUERY, page, !nameFilter, nameFilter, order);
+}
+
+export function listLabelsThisMonth(now?: Date, limit?: number): Promise<LabelHubEntry[]> {
+  return listHubThisMonth(LABELS_HUB_QUERY, now, limit);
 }
 
 const LABELS_BROWSE_QUERY: CatalogueBrowseQuery = {

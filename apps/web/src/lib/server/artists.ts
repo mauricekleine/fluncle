@@ -29,6 +29,7 @@ import {
   type CatalogueBrowseQuery,
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
+  type HubOrder,
   type CatalogueListPage,
   countIndexableHubEntities,
   type EntitySitemapRow,
@@ -38,6 +39,7 @@ import {
   hubInclusionWhere,
   listCatalogueBrowsePage,
   listHubPage,
+  listHubThisMonth,
 } from "./labels";
 import { logEvent } from "./log";
 import { bestArtistAvatarUrl } from "../media";
@@ -435,8 +437,13 @@ export function countIndexableArtists(): Promise<number> {
 export function listArtistsHubPage(
   page: number,
   nameFilter?: string,
+  order: HubOrder = "az",
 ): Promise<CatalogueHubNumberedPage<ArtistHubEntry>> {
-  return listHubPage(ARTISTS_HUB_QUERY, page, !nameFilter, nameFilter);
+  return listHubPage(ARTISTS_HUB_QUERY, page, !nameFilter, nameFilter, order);
+}
+
+export function listArtistsThisMonth(now?: Date, limit?: number): Promise<ArtistHubEntry[]> {
+  return listHubThisMonth(ARTISTS_HUB_QUERY, now, limit);
 }
 
 const ARTISTS_BROWSE_QUERY: CatalogueBrowseQuery = {

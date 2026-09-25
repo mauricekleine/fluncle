@@ -6,6 +6,7 @@ const HubCountsTableResultSchema = z
     corrected: z.number(),
 
     deferred: z.number(),
+    latestCorrected: z.number(),
   })
   .meta({ id: "HubCountsTableResult" });
 

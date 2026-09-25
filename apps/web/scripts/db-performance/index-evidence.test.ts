@@ -366,6 +366,12 @@ describe("final index plan evidence", () => {
         !file.endsWith(".test.ts") &&
         !file.endsWith(".test.tsx"),
     );
+    const sources = await Promise.all(
+      sourceFiles.map(async (absoluteFile) => ({
+        absoluteFile,
+        source: await readFile(absoluteFile, "utf8"),
+      })),
+    );
 
     for (const index of PRODUCTION_LOCK_INVENTORY.indexes) {
       const sitesByFile = new Map<string, number>();
@@ -373,8 +379,7 @@ describe("final index plan evidence", () => {
         sitesByFile.set(site.file, (sitesByFile.get(site.file) ?? 0) + 1);
       }
       const observedByFile = new Map<string, number>();
-      for (const absoluteFile of sourceFiles) {
-        const source = await readFile(absoluteFile, "utf8");
+      for (const { absoluteFile, source } of sources) {
         const literalCount =
           source.match(new RegExp(`\\bindexed\\s+by\\s+${index.name}\\b`, "gi"))?.length ?? 0;
         const constantCount =

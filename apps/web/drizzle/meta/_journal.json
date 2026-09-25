@@ -1324,6 +1324,13 @@
       "when": 1790339479056,
       "tag": "0188_uneven_captain_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 189,
+      "version": "6",
+      "when": 1790343659162,
+      "tag": "0189_lame_betty_ross",
+      "breakpoints": true
     }
   ]
 }
