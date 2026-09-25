@@ -1,30 +1,16 @@
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 
-// The line-level diff the /admin/prompts station reads with. A prompt is prose the whole
-// pipeline speaks through, and a live edit degrades every artifact it touches until a human
-// notices — so the operator never saves, and never rolls back, without SEEING what moves.
-//
-// Dependency-free on purpose: an LCS over lines is thirty lines of code and a prompt is a few
-// dozen lines long, so the O(n·m) table is free at this size and a diff library would be a
-// package added to the bundle for something the platform can already do.
-
 type DiffKind = "add" | "context" | "remove";
 
 export type DiffLine = { kind: DiffKind; text: string };
 
-/**
- * The classic longest-common-subsequence line diff: the lines both sides share stay as
- * context, everything else is a removal (only in `before`) or an addition (only in `after`).
- */
 export function diffLines(before: string, after: string): DiffLine[] {
   const left = before.split("\n");
   const right = after.split("\n");
   const rows = left.length;
   const columns = right.length;
 
-  // lengths[i][j] = the LCS length of left[i..] and right[j..]. Built bottom-up so the walk
-  // below can read it forwards.
   const lengths: number[][] = Array.from({ length: rows + 1 }, () =>
     Array.from({ length: columns + 1 }, () => 0),
   );
@@ -72,7 +58,6 @@ export function diffLines(before: string, after: string): DiffLine[] {
   return lines;
 }
 
-/** How many lines a diff actually moves — the number the operator reads before they commit. */
 export function diffTally(lines: DiffLine[]): { added: number; removed: number } {
   return {
     added: lines.filter((line) => line.kind === "add").length,
@@ -82,11 +67,6 @@ export function diffTally(lines: DiffLine[]): { added: number; removed: number }
 
 const GUTTER: Record<DiffKind, string> = { add: "+", context: " ", remove: "-" };
 
-/**
- * The rendered diff. Mono, because this is the machine's own words quoted verbatim (the One
- * Voice Rule): gold marks what arrives, the re-entry tint marks what leaves, and an unchanged
- * line stays quiet so the eye lands on the movement.
- */
 export function PromptDiff({
   after,
   afterLabel,
@@ -123,8 +103,6 @@ export function PromptDiff({
           <pre className="m-0 p-0 font-mono text-[0.78rem] leading-5">
             {lines.map((line, index) => (
               <div
-                // A diff line has no identity beyond its position, and the list is rebuilt
-                // whole on every keystroke, so the index IS the key here.
                 key={`${index}-${line.kind}`}
                 className={cn(
                   "flex gap-2 px-2",

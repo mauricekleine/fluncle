@@ -1,14 +1,6 @@
 import { type ComponentType, type ReactNode, type Ref } from "react";
 import { cn } from "@/lib/utils";
 
-// The canonical admin index list + row (docs/admin-shell.md, "The Object Row"). Every index
-// page — renders, mixtapes, recordings, playlists, artists — presents its objects through
-// this one primitive so a row reads and behaves the same wherever it lands: a leading visual,
-// an identity that grows, then a right-aligned zone for the object's quiet meta and its one
-// primary action, with anything rare tucked behind a ⋮ menu. Bordered, divide-y, one padding
-// rhythm. Track-shaped rows feed FindingIdentity as the lead; set-shaped rows (a recording, a
-// plan) use ObjectLead + ObjectGlyph. The trailing zone drops below the identity on a phone.
-
 export function ObjectList({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <ul
@@ -28,12 +20,11 @@ export function ObjectRow({
   ref,
   trailing,
 }: {
-  /** The identity block (FindingIdentity for tracks, or ObjectLead for sets). Grows. */
   children: ReactNode;
   className?: string;
-  /** The row element, so a deep-linked board can scroll its target into view. */
+
   ref?: Ref<HTMLLIElement>;
-  /** The right-aligned zone: quiet meta, then the primary action / ⋮ menu. */
+
   trailing?: ReactNode;
 }) {
   return (
@@ -54,10 +45,6 @@ export function ObjectRow({
   );
 }
 
-// A set-shaped object's identity: a leading visual (an ObjectGlyph or a cover node) + an
-// optional Log-ID coordinate over the title, and an optional quiet meta line below. Mirrors
-// FindingIdentity's stacked typography (mono 10px coordinate, sm/medium title, xs/muted meta)
-// so a set row and a track row sit on the same baseline.
 export function ObjectLead({
   className,
   coordinate,
@@ -113,9 +100,6 @@ export function ObjectLead({
   );
 }
 
-// A leading glyph tile for a set-shaped object with no cover — the eclipse-tinted fallback the
-// dashboard queue + track-row fallbacks use, at FindingIdentity's md plate footprint (size-11)
-// so glyph rows and cover rows share one baseline.
 export function ObjectGlyph({ icon: Icon }: { icon: ComponentType<{ className?: string }> }) {
   return (
     <div

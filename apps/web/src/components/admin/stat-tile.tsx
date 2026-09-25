@@ -1,9 +1,5 @@
 import { type ReactNode } from "react";
 
-// A headline stat tile — the shared vocabulary across the two Costs-group stations
-// (`/admin/usage` spend, `/admin/costs` ledger): a small labelled icon, the number in
-// Oxanium (the brand's numeric face), and a quiet hint under it. `accent` lights the
-// icon + value in Eclipse Gold for the one number that matters on the surface.
 const OXANIUM_STACK = '"Oxanium", ui-sans-serif, system-ui, sans-serif';
 
 export function StatTile({

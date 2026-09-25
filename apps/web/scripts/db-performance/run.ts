@@ -37,9 +37,7 @@ const PROFILE_PROCESS_DEADLINE_MS: Record<ScaleProfile, number> = {
   "2x": 8 * 60_000,
   "4x": 12 * 60_000,
 };
-// Hosted preseed verification performs identity plus one remote request for every census statement
-// before contract timing begins. Its whole-process cap therefore adds one scale-matched bootstrap
-// window to the unchanged exact-run cap; contract timing remains separately measured post-bootstrap.
+
 const HOSTED_BOOTSTRAP_ALLOWANCE_MS: Record<ScaleProfile, number> = {
   "1x": 5 * 60_000,
   "2x": 8 * 60_000,

@@ -8,10 +8,6 @@ import {
   parseTiktokProfile,
 } from "./handle-transfer-report";
 
-// PURE coverage for the handle-transfer report. The live TikTok probing is exercised by
-// running the script; this pins handle extraction (esp. the youtube channel-vs-@ rule),
-// the profile-marker parse, and the candidate builder (skip artists that already have tiktok).
-
 describe("handleFromUrl", () => {
   it("lifts the first path segment for instagram/soundcloud/twitter, dropping a leading @", () => {
     expect(handleFromUrl("instagram", "https://www.instagram.com/circadian_dnb")).toBe(
@@ -50,7 +46,7 @@ describe("handleVariants", () => {
 describe("isShortHandle — namesake-prone flag", () => {
   it("flags handles of 6 normalized chars or fewer", () => {
     expect(isShortHandle("camo")).toBe(true);
-    expect(isShortHandle("a.b.c-d")).toBe(true); // 4 after stripping punctuation
+    expect(isShortHandle("a.b.c-d")).toBe(true);
     expect(isShortHandle("circadian")).toBe(false);
   });
 });

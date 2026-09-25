@@ -659,9 +659,7 @@ describe("database performance release proof", () => {
         if (descendantPid !== null && processExists(descendantPid)) {
           try {
             process.kill(descendantPid, "SIGKILL");
-          } catch {
-            // The process exited between the liveness check and signal.
-          }
+          } catch {}
         }
         await rm(testDirectory, { force: true, recursive: true });
       }

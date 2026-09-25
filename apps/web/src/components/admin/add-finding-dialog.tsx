@@ -15,28 +15,12 @@ import { Textarea } from "@fluncle/ui/components/textarea";
 import { FindingIdentity } from "@/components/admin/finding-identity";
 import { spotifyTrackIdOf } from "@/lib/spotify-track-id";
 
-// The board's [Add finding] dialog — the web intake for the operator's own add
-// path. Paste a Spotify track link, optionally a note, and publish: the SAME
-// `publish_track` op the CLI's `fluncle add` posts to (`POST /api/admin/tracks`,
-// operator tier via the grant cookie), so certification is identical — playlist
-// + Telegram + the minted Log ID — and the async crons enrich behind it.
-//
-// The link is validated client-side with the shared grammar (lib/spotify-track-id,
-// the same module the server's parser delegates to), so a bad paste never
-// round-trips. A 409 duplicate is NOT an error here: the server's dedupe answer
-// becomes data — the existing finding, fetched via `get_track_admin`, rendered on
-// the gold confirmation veil with its coordinate link.
-
 type AddPhase =
-  /** The paste form (also the busy state while the publish runs). */
   | { kind: "form" }
-  /** Published: the fresh finding with its minted coordinate. */
   | { kind: "logged"; result: PublishTrackResult }
-  /** The server deduped: the finding already in the archive, shown as data. */
   | { kind: "found"; incomplete: boolean; track?: TrackListItem };
 
 type AddFindingDialogProps = {
-  /** Fired after a successful publish, so the board refetches. */
   onAdded: () => void;
   onOpenChange: (open: boolean) => void;
   open: boolean;
@@ -60,7 +44,6 @@ export function AddFindingDialog({ onAdded, onOpenChange, open }: AddFindingDial
       }
 
       if (!next) {
-        // Reset so the next open starts on a clean form.
         setLink("");
         setNote("");
         setLinkInvalid(false);
@@ -109,9 +92,6 @@ export function AddFindingDialog({ onAdded, onOpenChange, open }: AddFindingDial
           return;
         }
 
-        // The server's dedupe: the finding is already in the archive. Data, not a
-        // failure — fetch the existing row so the panel can name it and link its
-        // coordinate. A failed lookup still renders the found panel, just barer.
         if (
           response.status === 409 &&
           (data.code === "duplicate" || data.code === "incomplete_duplicate")
@@ -172,8 +152,6 @@ export function AddFindingDialog({ onAdded, onOpenChange, open }: AddFindingDial
                 onChange={(event) => {
                   setLink(event.target.value);
 
-                  // A paste that parses clears the hint immediately; a bad one
-                  // waits for blur/submit so typing isn't flagged mid-keystroke.
                   if (spotifyTrackIdOf(event.target.value)) {
                     setLinkInvalid(false);
                   }
@@ -223,9 +201,6 @@ export function AddFindingDialog({ onAdded, onOpenChange, open }: AddFindingDial
   );
 }
 
-// The fresh finding: the certified line, its minted coordinate, and the honest
-// "the rest fills in" note (enrichment is async — the board's cells catch up as
-// the crons write back).
 function LoggedPanel({ onDone, result }: { onDone: () => void; result: PublishTrackResult }) {
   const { track } = result;
 
@@ -247,8 +222,6 @@ function LoggedPanel({ onDone, result }: { onDone: () => void; result: PublishTr
         </p>
       </div>
 
-      {/* autoFocus: the submit button the operator just pressed unmounted with
-          the form — land keyboard focus on the panel's one action. */}
       {/* oxlint-disable-next-line jsx-a11y/no-autofocus -- recovers keyboard focus the unmounted submit button took with it; without it focus falls to <body>. */}
       <Button autoFocus className="w-full" onClick={onDone} variant="outline">
         Done
@@ -257,9 +230,6 @@ function LoggedPanel({ onDone, result }: { onDone: () => void; result: PublishTr
   );
 }
 
-// The dedupe answer as data: the finding is already in the archive, so name it
-// and hand over its coordinate. An incomplete earlier attempt states the two
-// certification facts plainly (the repair is a separate act).
 function FoundPanel({
   incomplete,
   onDone,
@@ -295,7 +265,6 @@ function FoundPanel({
         )}
       </div>
 
-      {/* autoFocus: same focus hand-off as the logged panel. */}
       {/* oxlint-disable-next-line jsx-a11y/no-autofocus -- recovers keyboard focus the unmounted submit button took with it; without it focus falls to <body>. */}
       <Button autoFocus className="w-full" onClick={onDone} variant="outline">
         Done
@@ -304,9 +273,6 @@ function FoundPanel({
   );
 }
 
-// One finding line: artwork, the artists — title, and the coordinate deep-link when a
-// Log ID exists (the shared FindingIdentity's inline/art form — the same block the plan
-// builder and the board render, bound to this dialog's plain track fields).
 function TrackLine({
   albumImageUrl,
   artists,
@@ -332,9 +298,6 @@ function TrackLine({
   );
 }
 
-// The existing row behind a 409 — `get_track_admin` by the parsed trackId (the
-// paste itself names the coordinate to look up). Best-effort: the found panel
-// renders without it.
 async function fetchExistingTrack(trackId: string): Promise<TrackListItem | undefined> {
   try {
     const response = await fetch(`/api/v1/admin/tracks/${encodeURIComponent(trackId)}`, {

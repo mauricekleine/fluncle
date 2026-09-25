@@ -1,13 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Capture the frozen context-distil fuel corpus. This script reads track metadata,
- * calls only Firecrawl Search and the Apple catalogue editorial leg, then writes the
- * raw snippets and sources. It never calls OpenRouter, resolves a prompt, writes a
- * database row, or imports the cost ledger.
- *
- * The output is rewritten after every captured track, so re-running resumes from the
- * first trackId not already present in distil-corpus.json.
- */
+
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,8 +162,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Bun scripts do not set Vite's import.meta.env.DEV flag. Force the same loader the
-  // app uses so apps/web/.dev.vars remains the single local-env path.
   await loadLocalEnv({ force: true });
 
   const firecrawlKey = await readOptionalEnv("FIRECRAWL_API_KEY");

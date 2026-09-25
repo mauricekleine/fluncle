@@ -17,28 +17,7 @@ import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
 import { type BlockedOn, type Stage } from "@/lib/track-stage";
 import { type BoardRow } from "@/components/admin/use-publish";
 
-/** A step glyph — a phosphor icon or a wrapped simple-icons brand mark, same call. */
 export type StepIcon = ComponentType<{ className?: string; weight?: IconWeight }>;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// The shared step model for the board's variant explorer.
-//
-// The board's real problem: a finding moves through ~a dozen steps that are NOT a
-// strict chain — most run on agents (enrich, embedding, context, note, observation,
-// video, discogs, a Last.fm love), the rest are the operator's own hands (the two
-// pushes, a mixtape), they fire in parallel, they fail and retry, and the order
-// drifts.
-// Every variant answers the same question — "roughly where is this finding?" — so
-// they all read from ONE derivation here. Add a step once, in STEP_DEFS, and every
-// variant renders it.
-//
-// State is carried by SHAPE first (DESIGN: gold ≤10%), so the board stays legible
-// without painting a dozen gold cells per row:
-//   kind   — `auto` (an agent does it) reads round; `human` (your hands) reads square.
-//   state  — open → running → partial → done, plus `planned` for a step that's
-//            designed-in but not wired yet, shown ghosted so a variant's density
-//            reflects where the pipeline is heading, not just where it is.
-// ─────────────────────────────────────────────────────────────────────────────
 
 export type StepKey =
   | "enrich"
@@ -53,27 +32,13 @@ export type StepKey =
   | "mixtape"
   | "socials";
 
-/** Who advances the step: an agent (`auto`) or the operator (`human`). */
 export type StepKind = "auto" | "human";
 
-/**
- * open    — nothing yet; for a human step this is your move (when not gated).
- * running — an agent step in flight (enrichment processing).
- * partial — touched, not closed (a pushed-but-not-live draft; context gathered but
- *           not voiced; a finding pencilled into a plan).
- * done    — closed.
- * stale   — pushed but the push has almost certainly bounced: a TikTok inbox draft
- *           past TikTok's 24h window (Postiz reports success, TikTok drops the 6th+
- *           pending draft silently). Your move again — re-push — so it never reads as
- *           gone-out. Distinct from `open` (never pushed) and `partial` (in-flight).
- * planned — designed-in, not wired yet; ghosted, never actionable.
- */
 export type StepState = "open" | "running" | "partial" | "done" | "stale" | "planned";
 
-/** The callbacks the board hands every variant — one per openable step dialog. */
 export type BoardActions = {
   onEnrich: (row: BoardRow) => void;
-  /** The Embeddings cell's dialog: the capture stage's source control (the operator's pin). */
+
   onCaptureSource: (row: BoardRow) => void;
   onContext: (row: BoardRow) => void;
   onObservation: (row: BoardRow) => void;
@@ -86,23 +51,22 @@ export type BoardActions = {
 export type BoardStep = {
   key: StepKey;
   kind: StepKind;
-  /** Full label for legends + tooltips ("Observation"). */
+
   label: string;
-  /** The resting state of the step for this finding. */
+
   state: StepState;
-  /** A one-glance status word ("Heard", "Drafted", "Live") for verbose variants. */
+
   statusLabel: string;
-  /** The icon glyph. */
+
   Icon: StepIcon;
-  /** A short tooltip / aria description. */
+
   hint: string;
-  /** Whether a click does anything for this finding right now. */
+
   actionable: boolean;
-  /** Gated: the prerequisite (a video) isn't there yet, so it's not your move. */
+
   gated: boolean;
 };
 
-/** A finding plus its derived lifecycle position and full step list. */
 export type BoardEntry = {
   row: BoardRow;
   stage: Stage;
@@ -110,25 +74,11 @@ export type BoardEntry = {
   steps: BoardStep[];
 };
 
-/** What the pipeline board renders from — the live findings + the action callbacks. */
 export type BoardProps = {
   entries: BoardEntry[];
   actions: BoardActions;
 };
 
-// The canonical order + identity of every step. Agents first, then your hands.
-// Within agents the order reads as the pipeline settles: the catalogue links
-// (Last.fm, Discogs), then the per-finding chain Enrich → Embeddings → Context →
-// Note → Observation → Video. Embeddings sits right after Enrich — both are on-box
-// analysis crons over the CAPTURED FULL SONG (Enrich derives BPM/key/features, falling
-// back to the 30s preview only when no capture has landed; the embed has no preview path
-// at all). Enrich's features are internal creative fuel for the video agent; the MuQ
-// embed is the sonic fingerprint the nightly `fluncle-cluster` sweep groups a finding's
-// galaxy from. The manual vibe map both once served is retired — the coordinates and the
-// tagging tool are gone.
-// NOTE sits among the agents because the `fluncle-note` cron authors it (fill-empty-only,
-// so an operator note is never clobbered); it stays clickable so you can still write or
-// override one. Within your hands: the social pushes, then the mixtape.
 const STEP_DEFS: { key: StepKey; kind: StepKind; label: string; Icon: StepIcon }[] = [
   { Icon: BroadcastIcon, key: "socials", kind: "auto", label: "Auto socials" },
   { Icon: VinylRecordIcon, key: "discogs", kind: "auto", label: "Discogs" },
@@ -151,15 +101,10 @@ function publishStep(
   const post = row.posts.find((entry) => entry.platform === platform);
   const status = post?.status;
   const hasLiveUrl = Boolean(post?.url);
-  // A TikTok inbox draft past the 24h window has almost certainly bounced (Postiz
-  // reports the push a success but TikTok silently drops the 6th+ pending draft), so
-  // it re-opens as `stale` — your move again — rather than reading `partial`/gone-out
-  // forever. The shared `isStaleTikTokDraft` rule is the one source of that cutoff.
+
   const staleDraft = post ? isStaleTikTokDraft(post, now) : false;
   const staleHours = post ? (tikTokDraftAgeHours(post, now) ?? 0) : 0;
-  // Live only closes the circuit once a public URL is recorded; YouTube auto-posts
-  // and TikTok is finished in-app, so both land "published" with the link missing —
-  // a partial, not done. A failed push re-opens it as a retry; a bounced draft as stale.
+
   const state: StepState = staleDraft
     ? "stale"
     : status === "published"
@@ -182,7 +127,7 @@ function publishStep(
           : status === "failed"
             ? "Retry"
             : "Push";
-  // Nothing to push until there's a video — unless a post already exists.
+
   const gated = !row.videoUrl && !post;
   const label = platform === "youtube" ? "YouTube" : "TikTok";
   const hint = gated
@@ -200,14 +145,8 @@ function publishStep(
   };
 }
 
-/** One line in the automated-socials Popover breakdown. */
 export type SocialBreakdownItem = { key: string; label: string; done: boolean; Icon: StepIcon };
 
-/**
- * The per-action breakdown behind the automated-socials cell: the Last.fm love. Powers the
- * board cell's Popover (each line an icon + a done/pending check). Kept beside the cell
- * derivation so the two never disagree.
- */
 export function automatedSocialsBreakdown(row: BoardRow): SocialBreakdownItem[] {
   return [
     {
@@ -223,9 +162,6 @@ export function automatedSocialsBreakdown(row: BoardRow): SocialBreakdownItem[] 
   ];
 }
 
-// The automated-socials cell (the repurposed LFM cell): the finding's hands-off Last.fm love
-// (workflow-tracker rule: `done` once the backfill RAN). `done` = actioned, `open` = not yet.
-// Not actionable (the love is automated); the cell's Popover shows the breakdown on hover.
 function socialsStep(
   row: BoardRow,
 ): Pick<BoardStep, "state" | "statusLabel" | "hint" | "actionable" | "gated"> {
@@ -322,17 +258,10 @@ function videoBoardStep(videoUrl: string | undefined): BoardStepPartial {
   };
 }
 
-/**
- * Derive every step for one finding. Pure over the row + an injected clock (`now`,
- * defaulting to the wall clock): the only time dependence is the TikTok stale-draft
- * cutoff. Reads the row's own fields plus its social posts and mixtape memberships,
- * exactly like the live board's cells, so the variants never drift from the real state.
- */
 export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[] {
   const note = row.note?.trim();
   const rendered = Boolean(row.observationAudioUrl);
-  // Every mixtape membership is a minted checkpoint now (drafts retired); a plan
-  // membership is the pencilled-in in-between.
+
   const onTape = row.mixtapes.length > 0;
   const inPlan = !onTape && row.plans.length > 0;
 
@@ -346,13 +275,6 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
     },
     discogs: discogsBoardStep(row),
     embedding: {
-      // A presence tracker the on-box `fluncle-embed` cron advances (it drains the
-      // `has_embedding = 0` queue over the CAPTURED full song and stamps a MuQ vector; `done`
-      // once the finding carries one, grey while it's still in the queue — the sonic
-      // fingerprint a finding's galaxy is clustered from; docs/track-lifecycle.md). The cell
-      // opens the CAPTURE-SOURCE dialog: an embedding needs a capture, and a finding the
-      // fingerprint gate keeps refusing never gets one — the operator's pin (docs/the-ear.md §
-      // Wrong audio) is the one control that reaches under the gate, and it lives here.
       actionable: true,
       gated: false,
       hint: row.hasEmbedding
@@ -380,7 +302,6 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
   }));
 }
 
-/** Dispatch a step's click to the right board action. */
 export function runStep(step: BoardStep, row: BoardRow, actions: BoardActions): void {
   switch (step.key) {
     case "enrich":
@@ -410,8 +331,6 @@ export function runStep(step: BoardStep, row: BoardRow, actions: BoardActions): 
     case "embedding":
       return actions.onCaptureSource(row);
     case "socials":
-      // A read-only presence tracker — the Last.fm cron advances it; the cell is a status
-      // mark, not a click target.
       return;
   }
 }

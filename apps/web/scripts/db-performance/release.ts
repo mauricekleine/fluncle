@@ -89,7 +89,6 @@ export type DominantRegressionRuntimeComponentAssignment = Readonly<{
   evidence: EvidenceLocation;
 }>;
 
-/** Runtime evidence with an existing component proof owner outside the dominant command. */
 export const DOMINANT_REGRESSION_RUNTIME_COMPONENT_ASSIGNMENTS = [
   {
     categories: ["sonar-rust", "sonar-scaled-delta-full-rebuild"],
@@ -610,7 +609,6 @@ function deviceSourceCounts(counts: FixtureCounts): Record<string, number> {
   };
 }
 
-/** The anchored cut includes embedding-backed tracks and all artist edges attached to them. */
 function anchoredDeviceParityCounts(counts: FixtureCounts): Record<string, number> {
   return {
     albums: counts.albums,
@@ -2042,9 +2040,7 @@ export async function captureChild(
         if (!signalProcessGroup(pid, "SIGTERM")) {
           try {
             subprocess.kill("SIGTERM");
-          } catch {
-            // The child exited between the liveness observation and the signal.
-          }
+          } catch {}
         }
       }
       await Promise.race([
@@ -2055,9 +2051,7 @@ export async function captureChild(
         if (!signalProcessGroup(pid, "SIGKILL")) {
           try {
             subprocess.kill("SIGKILL");
-          } catch {
-            // The child exited between the liveness observation and the signal.
-          }
+          } catch {}
         }
         await Promise.race([
           closed,

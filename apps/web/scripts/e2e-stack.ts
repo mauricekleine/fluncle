@@ -1,29 +1,5 @@
 #!/usr/bin/env bun
-/**
- * The E2E stack orchestrator — the process Playwright runs as its `webServer`
- * (see `playwright.config.ts`). It builds the whole isolated stack in order, then
- * runs Vite in the FOREGROUND so it becomes the long-lived server Playwright owns:
- *
- *   1. preflight this checkout's port pair (refuse, never kill, if either is taken)
- *   2. materialize `.dev.vars` from the committed dummy template (backing up a
- *      real one) — the file the Cloudflare vite plugin AND the scripts below read
- *   3. boot `turso dev` on the libSQL port over a FRESH empty db file
- *   4. `db:migrate` — the real generated migrations + the FTS5 index (the exact
- *      step prod / dev / the integration harness all run)
- *   5. seed the committed synthetic dataset
- *   6. boot Vite on the Vite port (foreground) and stay alive as its parent
- *
- * Playwright waits for `/api/v1/health`, runs the suite, then SIGTERMs this process
- * on teardown. The signal traps below kill turso + Vite and restore `.dev.vars`,
- * so the checkout is left exactly as it was found. A crash that skips the traps is
- * still self-healing: the next `materializeDevVars` restores from the backup it
- * finds under the gitignored `.dev/`.
- *
- * WHY THIS IS THE WEBSERVER COMMAND, NOT A PLAYWRIGHT `globalSetup`: Playwright
- * starts the `webServer` BEFORE `globalSetup` (globalSetup may even fetch it), and
- * the Playwright runner is Node — no `Bun` globals. So the Bun-driven stack build
- * lives here, ahead of Vite, where it can prepare `.dev.vars` before Vite reads it.
- */
+
 import { type Subprocess } from "bun";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -55,7 +31,7 @@ async function cleanup(): Promise<void> {
   cleanedUp = true;
   killProc(vite);
   killProc(turso);
-  // Let the children release the ports, then reap any straggler holding ours.
+
   await Bun.sleep(1000);
   await reapPorts();
   restoreDevVars();
@@ -68,9 +44,6 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 }
 
 async function main(): Promise<void> {
-  // Refuse (never kill) if either port is already taken — that is another stack, and
-  // clobbering it would be worse than a clear failure. The pair is per checkout (see
-  // `tests/e2e/stack.ts`), so a neighbouring worktree is not what lands here.
   for (const port of [VITE_PORT, LIBSQL_PORT]) {
     if (await isPortListening(port)) {
       throw new Error(
@@ -81,10 +54,6 @@ async function main(): Promise<void> {
 
   materializeDevVars();
 
-  // The Worker's edge cache (`caches.default`, Miniflare's CacheObject) persists under this
-  // checkout's `.wrangler/state` across runs. The database is fresh every boot, so the cached HTML
-  // must be too: a document rendered by an earlier build of the code would hydrate under the new
-  // client and fail the suite's clean-console gate for a reason no spec is about.
   rmSync(join(WEB_ROOT, ".wrangler", "state", "v3", "cache"), { force: true, recursive: true });
 
   console.log(`e2e-stack: starting libSQL on :${LIBSQL_PORT}…`);
@@ -108,19 +77,12 @@ async function main(): Promise<void> {
     ["bun", "run", "dev:vite", "--", "--host", "127.0.0.1", "--port", String(VITE_PORT)],
     {
       cwd: WEB_ROOT,
-      // Arms the SERVER half of the no-network rail (vite.config.ts's
-      // `e2eNoNetworkGuard`). The browser stub in tests/e2e/browser.ts covers what the
-      // page asks for; this covers what the dev server does behind those requests —
-      // otherwise a `/podcast.xml` render HEADs the production CDN and a preview lookup
-      // reaches itunes.apple.com, with the template's fake creds in hand.
+
       env: { ...process.env, FLUNCLE_E2E_BLOCK_OUTBOUND: "1" },
       stdio: ["ignore", "inherit", "inherit"],
     },
   );
 
-  // Block on Vite: this keeps the orchestrator (and thus turso) alive for the
-  // whole test session. If Vite exits on its own, tear the rest down and mirror
-  // its code so the failure surfaces.
   const code = await vite.exited;
   await cleanup();
   process.exit(code);

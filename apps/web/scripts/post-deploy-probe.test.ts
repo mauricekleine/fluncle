@@ -16,16 +16,11 @@ import {
   vectorLane,
 } from "./post-deploy-probe";
 
-// Unit coverage for the post-deploy probe's PURE derivation + judgement logic. The
-// live prod sweep is exercised by running the script; this pins the classification
-// so a contract/registry change can't silently mis-tier a surface or a wrong-status
-// assertion slip in.
-
 describe("tierOfPath", () => {
   it("classifies admin, private, and the /me public carve-out", () => {
     expect(tierOfPath("/admin/tracks")).toBe("admin");
     expect(tierOfPath("/admin/tracks/{trackId}")).toBe("admin");
-    // GET /me returns user-or-null and never 401s — a deliberate public carve-out.
+
     expect(tierOfPath("/me")).toBe("public");
     expect(tierOfPath("/me/saved-findings")).toBe("private");
     expect(tierOfPath("/me/csrf")).toBe("private");
@@ -45,7 +40,7 @@ describe("checkContent", () => {
 
   it("rejects malformed or empty bodies", () => {
     expect(checkContent("json", "application/json", "not json")).toBe("unparseable JSON");
-    expect(checkContent("xml", "text/html", "<html>error page</html>")).toBeNull(); // starts with < → xml-ish, ok
+    expect(checkContent("xml", "text/html", "<html>error page</html>")).toBeNull();
     expect(checkContent("xml", "text/plain", "Internal Error")).toBe("not XML");
     expect(checkContent("html", "text/plain", "plain text error")).toBe("not HTML");
     expect(checkContent("text", "text/plain", "   ")).toBe("empty body");
@@ -246,7 +241,7 @@ describe("promoteTrackParamOps", () => {
     expect(getTrack).toBeDefined();
     expect(getTrack?.url).toBe("https://www.fluncle.com/api/v1/tracks/ABC.1.23");
     expect(getTrack?.expect).toEqual({ content: "json", kind: "served" });
-    // A slug-keyed public read is NOT a track-id op, so it stays skipped.
+
     expect(remaining.some((skip) => skip.name === "get_artist")).toBe(true);
     expect(promoted.some((target) => target.name === "get_artist")).toBe(false);
   });
@@ -260,15 +255,11 @@ describe("promoteTrackParamOps", () => {
 
 describe("the vector-capable lane", () => {
   it("waits longer than the server is allowed to spend on a vector scan", () => {
-    // The probe's budget is DERIVED from the fallback deadline, never restated beside it: a
-    // client that gave up first would report a failure the server never committed.
     expect(VECTOR_ENDPOINT_PROBE_TIMEOUT_MS).toBeGreaterThan(VECTOR_FALLBACK_DEADLINE_MS);
     expect(fetchPolicy({ vectorCapable: true }).timeoutMs).toBe(VECTOR_ENDPOINT_PROBE_TIMEOUT_MS);
   });
 
   it("never stacks a second scan on a timeout", () => {
-    // libSQL cannot cancel remote work, so a retry does not replace the first scan — it adds one
-    // to the database that is already the bottleneck.
     expect(fetchPolicy({ vectorCapable: true }).attempts).toBe(1);
     expect(fetchPolicy({}).attempts).toBeGreaterThan(1);
   });
@@ -286,7 +277,7 @@ describe("the vector-capable lane", () => {
     expect(promoted.find((target) => target.name === "list_similar_tracks")?.vectorCapable).toBe(
       true,
     );
-    // `get_track` is a plain row read: it must not buy the long budget or leave the fast lane.
+
     expect(promoted.find((target) => target.name === "get_track")?.vectorCapable).toBeUndefined();
     expect(vectorLane("list_findings")).toEqual({});
   });

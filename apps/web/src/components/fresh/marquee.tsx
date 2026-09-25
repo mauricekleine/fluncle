@@ -1,11 +1,3 @@
-// `/fresh` — THE MARQUEE. A billboard of NOW, and the only treatment `/fresh` ships: the newest
-// handful of drops set at display scale, big Oxanium dates down the edge, the rest running compact
-// underneath. Loud on type, quiet on chrome — the energy of a board that just flipped.
-//
-// The headline is TWO parts — the credited artists and the title — so a narrow screen stacks them on
-// their own rows and truncates each on its own (a long title never shoves the artist off, and the
-// "Artist — Title" em dash never orphans mid-wrap). Wide screens flow them inline as one line.
-
 import { Link } from "@tanstack/react-router";
 import { type ReactNode, useMemo } from "react";
 import { ArtistAvatar } from "@/components/artist-avatar";
@@ -28,7 +20,6 @@ import { FreshViewControl } from "./view-control";
 
 const MARQUEE_HEADLINE_COUNT = 6;
 
-/** The two-part headline: artists, a hidden-on-mobile em dash, then the title — each truncatable. */
 function MarqueeLine({ artists, title }: { artists: string[]; title: string }) {
   return (
     <>
@@ -41,10 +32,6 @@ function MarqueeLine({ artists, title }: { artists: string[]; title: string }) {
   );
 }
 
-/**
- * A headline's portrait, and its play control when the release has a live preview: the headline
- * plays the stream from its own place, exactly as a row's cover does.
- */
 function HeadlinePlay({ avatar, entry }: { avatar: ReactNode; entry: FreshStreamEntry }) {
   const track = freshEntryToDiscoveryTrack(entry);
 
@@ -119,9 +106,7 @@ function MarqueeHeadline({ entry }: { entry: FreshStreamEntry }) {
         }
         entry={entry}
       />
-      {/* The headline opens the recording's own destination, as every catalogue row does; only a
-          row the destination would refuse goes out to Spotify. The visible name is the link's
-          name (no aria-label that differs from what a voice user reads). */}
+
       {hasTrackPageIdentity(track) ? (
         <Link className="fresh-mq-line" params={{ trackId: track.trackId }} to="/track/$trackId">
           {body}
@@ -142,12 +127,9 @@ function MarqueeHeadline({ entry }: { entry: FreshStreamEntry }) {
   );
 }
 
-/** The flat track stream — the marquee headlines over the compact rest-rows. The "All" view trails it
-    with the 30-day albums rail; the "Tracks" view drops the rail and shows the stream alone. An empty
-    stream (records but no tracks in the window) reads as a quiet line, never an empty bordered board. */
 function FreshTrackStream({ data, view }: { data: FreshReleases; view: "all" | "tracks" }) {
   const stream = useMemo(() => freshStream(data), [data]);
-  // The whole stream is one list to the player: a headline or a row plays from its own place.
+
   const discoveryTracks = useMemo(() => stream.map(freshEntryToDiscoveryTrack), [stream]);
   const headlines = stream.slice(0, MARQUEE_HEADLINE_COUNT);
   const rest = stream.slice(MARQUEE_HEADLINE_COUNT);

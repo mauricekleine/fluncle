@@ -132,11 +132,6 @@ export function getScaleManifest(profile: ScaleProfile): ScaleManifest {
   };
 }
 
-/**
- * A ratio-preserving derivative for fast local and CI contracts. It is deliberately not called a
- * scale profile: the selected 1x/2x/4x manifest remains in the report while materialized counts are
- * reported separately. Exact profile runs use {@link getScaleManifest} without this derivative.
- */
 export function createCiFixtureCounts(profile: ScaleProfile, tracks = 512): FixtureCounts {
   assertPositiveInteger(tracks, "CI track count");
 
@@ -153,9 +148,7 @@ export function createCiFixtureCounts(profile: ScaleProfile, tracks = 512): Fixt
     artists: ratio(source.artists, 1),
     crawlFrontier: ratio(source.crawlFrontier, 1),
     enabledLabelTracks: ratio(source.enabledLabelTracks),
-    // Every compact proof needs a certified row in the 90-day fresh window and the catalogue
-    // complement. Five evenly selected findings put the first certified row inside the compact
-    // fixture's day-precision 2026 population while retaining rows in the older/null buckets.
+
     findings: ratio(source.findings, 5),
     fullAnalysisBacklog: ratio(source.fullAnalysisBacklog),
     labels: ratio(source.labels, 1),

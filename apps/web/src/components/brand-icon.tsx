@@ -1,13 +1,7 @@
 import { type SVGProps } from "react";
 
-/** The shape simple-icons exports per glyph (we only read these two fields). */
 type SimpleIcon = { readonly title: string; readonly path: string };
 
-/**
- * Renders a simple-icons brand glyph at the current text color. Pass a `title`
- * to expose an accessible name; without one the icon is decorative (the link or
- * button around it carries the label, as in the home plate's social row).
- */
 export function BrandIcon({
   icon,
   title,

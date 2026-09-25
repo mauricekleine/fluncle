@@ -1,27 +1,15 @@
-// The shared vocabulary of the account area: the honest types every door and the
-// route agree on (one home for `Me`, never re-declared per module), plus the two
-// tiny primitives the doors reuse (a labelled field, an empty-or-list wrapper).
-// The section KIT (Class A–D enclosures) lives next door in kit.tsx; this module
-// is the plumbing beneath it.
-
 import { cloneElement, isValidElement, useId } from "react";
 import { Label } from "@fluncle/ui/components/label";
 
-/**
- * The `/me` identity shape (the `meResponse` body). `googleEnabled` gates the
- * "Continue with Google" button so it never renders dead; it is present whether or
- * not there is a session.
- */
 export type Me = {
   googleEnabled: boolean;
   ok: true;
   user: AccountUser | null;
 };
 
-/** The signed-in user as the account surfaces read them (the `PublicUser` subset). */
 export type AccountUser = {
   createdAt: string;
-  // The enlistment ordinal (Crew №NNN) — absent on a legacy row until the backfill.
+
   crewNumber?: number;
   displayUsername?: string;
   email: string;
@@ -61,8 +49,6 @@ export type Collection = {
   galaxies: GalaxyCompletion[];
 };
 
-// A saved track. `logId` rides only on a certified finding — an uncertified catalogue
-// save omits it, and its row renders in the unlit register (no coordinate, no /log link).
 export type SavedFinding = {
   artists: string[];
   imageUrl?: string;
@@ -73,11 +59,6 @@ export type SavedFinding = {
   trackId: string;
 };
 
-// The submission status arrives already folded to the reader's vocabulary
-// ("logged" / "passed_on" / "pending_review", from `listUserSubmissions`). Typed as
-// a plain string so the badge's rendering carries over from the monolith unchanged.
-// `logId` rides only on an approved (logged) submission whose recording became a
-// certified finding — the Sent ledger links that row to `/log/<id>`.
 export type Submission = {
   artists: string[];
   createdAt: string;
@@ -96,9 +77,6 @@ export type SavedSet = {
   updatedAt: string;
 };
 
-// A watched artist or label (D2a). `name`/`slug` come joined from the entity's own row, so
-// the account row links to `/artist/<slug>` or `/label/<slug>`. `includeSimilar` rides along
-// for completeness; it has no consumer or control yet (the deferred digest reads it).
 export type Watch = {
   createdAt: string;
   entityId: string;
@@ -109,20 +87,13 @@ export type Watch = {
   slug: string;
 };
 
-/** The three signed-in doors. Absent from the URL = the Galaxy (the default view). */
 export type AccountTab = "galaxy" | "saves" | "settings";
 
-/** Identity carried on every render: the current session + its mutation token. */
 export type AccountIdentity = {
   csrfToken: string;
   me: Me;
 };
 
-/**
- * The active door's payload, discriminated by `tab`. Only ONE door's data is ever
- * fetched (the loader/serverFn does the narrowing); settings rides on `me`, so it
- * carries nothing extra.
- */
 export type GalaxyDoorData = {
   collection?: Collection;
   progress?: Progress;
@@ -143,7 +114,6 @@ export type SettingsDoorData = {
 
 export type DoorData = GalaxyDoorData | SavesDoorData | SettingsDoorData;
 
-/** Only `saves` and `settings` ride in the URL; a bare `/account` is the Galaxy. */
 export function parseAccountTab(value: unknown): AccountTab | undefined {
   return value === "saves" || value === "settings" ? value : undefined;
 }
@@ -154,12 +124,10 @@ export function Field({
   label,
 }: {
   children: React.ReactElement<{ "aria-describedby"?: string; id?: string }>;
-  /** Helper text under the control, announced with it (`aria-describedby`). */
+
   hint?: string;
   label: string;
 }) {
-  // useId keeps the id unique even when two forms carry the same label text (the auth
-  // and settings forms both have a "Username" field).
   const id = `${useId()}-${label.toLowerCase().replaceAll(" ", "-")}`;
   const hintId = hint ? `${id}-hint` : undefined;
 

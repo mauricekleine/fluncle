@@ -8,13 +8,6 @@ import {
   VideoBehindTheScenes,
 } from "./behind-the-scenes";
 
-// The behind-the-scenes trigger is a for-the-curious detail: it appears ONLY when a
-// finding carries the video composition ledger (a rendered video AND the travelling
-// vehicle, written together at upload). Older findings that predate the ledger get no
-// trigger and no empty drawer. Assert the gate + that the trigger label ships in the
-// server-rendered HTML (the drawer body is portalled + closed, so it stays out).
-
-// The component reads only the video ledger fields + logId; a partial track is enough.
 function track(overrides: Partial<Track>): Track {
   return overrides as Track;
 }
@@ -32,9 +25,9 @@ const FULL = track({
 describe("hasVideoBehindTheScenes", () => {
   it("is true only with a video AND a vehicle", () => {
     expect(hasVideoBehindTheScenes(FULL)).toBe(true);
-    // A rendered video but no ledger (an older finding) — no trigger.
+
     expect(hasVideoBehindTheScenes(track({ ...FULL, videoVehicle: undefined }))).toBe(false);
-    // A ledger but no video — nothing to explain.
+
     expect(hasVideoBehindTheScenes(track({ ...FULL, videoUrl: undefined }))).toBe(false);
   });
 });
@@ -52,11 +45,11 @@ describe("copy transforms", () => {
 
   it("quotes the model telemetry verbatim — raw stored id plus effort, never a byline", () => {
     expect(modelTelemetry(FULL)).toBe("anthropic/claude-opus-5 · effort high");
-    // No stored effort: the raw model id alone.
+
     expect(modelTelemetry(track({ ...FULL, videoModelReasoning: undefined }))).toBe(
       "anthropic/claude-opus-5",
     );
-    // No stored model: no telemetry row at all.
+
     expect(modelTelemetry(track({ ...FULL, videoModel: undefined }))).toBeUndefined();
   });
 });

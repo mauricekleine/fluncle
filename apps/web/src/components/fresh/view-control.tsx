@@ -1,8 +1,3 @@
-// `/fresh` — the view pills. Three ways to read the frontier: everything at once (the default
-// layout), the flat track stream on its own, or the album records brought to the centre. The choice
-// rides the `?view=` search param, so a view is its own shareable link; the control is pure chrome, so
-// it is named in the plainest literal words there are (VOICE.md's Chrome Rule).
-
 import { SegmentedControl } from "@/components/segmented-control";
 import { type FreshView } from "./data";
 

@@ -1,11 +1,3 @@
-/**
- * The device database's complete column allowlist.
- *
- * This mapping is a security boundary: a mobile device connects directly to the derived
- * public-catalogue database, so a source column ships only when it is named here. Keep source-only
- * selection inputs (most importantly the MuQ vector) out even when a cut predicate reads them —
- * and the vector's own table, `track_embeddings`, is absent from this map entirely.
- */
 export const DEVICE_DB_COLUMNS = {
   albums: [
     "id",
@@ -129,11 +121,6 @@ export const DEVICE_SYNC_META_COLUMNS = [
 
 export const DEVICE_DB_SCHEMA_VERSION = 1;
 
-/**
- * Column-name patterns that can never cross the device boundary. The storage-key expression
- * deliberately permits the musical `tracks.key` while rejecting names such as `image_key`,
- * `source_audio_key`, and `preview_archive_key`.
- */
 export const BANNED_DEVICE_COLUMN_PATTERNS = [
   { name: "embedding", pattern: /embedding/i },
   { name: "vector", pattern: /vector/i },

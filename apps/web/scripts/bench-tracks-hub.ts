@@ -1,49 +1,5 @@
 #!/usr/bin/env bun
-/**
- * THROWAWAY HOSTED-SCALE BENCH — the ship gate for the `/tracks` hub (D4). NOT a test, NOT wired
- * into CI.
- *
- * ── WHO RUNS THIS, AND WHEN ───────────────────────────────────────────────────
- * THE OPERATOR runs it ONCE, by hand, against a SCRATCH hosted Turso Cloud DB, as the pre-merge
- * gate for the hub. It CANNOT run in this repo's CI or an agent's Bash session: it needs Turso Cloud
- * credentials for a throwaway database, which are operator-only. `turso dev` is NOT evidence here —
- * docs/local-database.md "Local is not production": the exact behaviours that decide whether a
- * growing-table scan survives (the index-vs-scan plan, a correlated re-scan) diverge between sqld
- * and hosted, and the local one is misleading in the DANGEROUS direction. An agent may self-check
- * the SQL shapes against local `turso dev` for CORRECTNESS only — never for a performance number.
- *
- * ── WHAT IT MEASURES ──────────────────────────────────────────────────────────
- *   1. A 25k-catalogue-row archive (+ a few thousand findings) with realistic release_date / bpm /
- *      key / label distributions — the big-catalogue regime the hub is born into.
- *   2. An ABSOLUTE p50 budget: every hub query shape must come in UNDER 800 ms hosted — the
- *      unfiltered first page, a DEEP offset page + the 48-id hydrate, a BPM-range filter, a KEY
- *      filter, a YEAR range, a COMBINED filter, and the whole-set YEAR LANE scan. No vectors here —
- *      this is pure btree-index verification.
- *   3. `EXPLAIN QUERY PLAN` per shape, so the operator can SEE that the primary sort rides
- *      `tracks_release_date_track_id_idx` (a reverse scan, never a full table scan of a growing
- *      table) and
- *      that `tracks_bpm_idx` is available to a narrow BPM range.
- *
- * ── THE SHAPE UNDER TEST IS THE REAL ONE ──────────────────────────────────────
- * The queries are built by `tracksHubIdPageQuery` / `tracksHubHydrateQuery` / `tracksHubCountQuery` /
- * `tracksHubYearLaneQuery` (lib/server/tracks-hub.ts) — the SAME builders the route's
- * `listTracksHubPage` + `listTracksHubYearLane` run — so the bench cannot drift from production. Only scalar filter/paging args are bound; there is no vector probe,
- * so none of the blob-binding traps apply.
- *
- * ── USAGE ─────────────────────────────────────────────────────────────────────
- *   SCRATCH_TURSO_DATABASE_URL=libsql://<scratch>.turso.io \
- *   SCRATCH_TURSO_AUTH_TOKEN=<token> \
- *   bun run apps/web/scripts/bench-tracks-hub.ts
- *
- * Seek-vs-offset proof (deep unfiltered + filtered tracks, anchor extraction, and all entity hub
- * + browse shapes): append `--seek-vs-offset`.
- *
- * Optional env (seed volumes — dial down for a faster smoke, up for the real gate):
- *   BENCH_CATALOGUE=25000   BENCH_FINDINGS=2000   BENCH_ENTITIES=25000   BENCH_ITERATIONS=12
- *
- * The operator CREATES the scratch DB before, and DESTROYS it after — this script only measures. It
- * NEVER points at `fluncle` or `fluncle-dev` (it refuses a URL containing either name as a guard).
- */
+
 import { createClient } from "@libsql/client/web";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
@@ -72,11 +28,9 @@ import {
   tracksHubYearLaneQuery,
 } from "../src/lib/server/tracks-hub";
 
-/** The absolute ship-gate budget — every hub query shape's p50 must be under this, hosted. */
 const BUDGET_MS = 800;
 const ANCHOR_BUILD_BUDGET_MS = 2_500;
 
-// The 24 canonical scale spellings (mirrors the hub's KEY_FILTER_OPTIONS) — the realistic key domain.
 const KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"].flatMap((pitch) => [
   `${pitch} major`,
   `${pitch} minor`,
@@ -114,11 +68,6 @@ const seekVsOffset = process.argv.includes("--seek-vs-offset");
 const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
-/**
- * A deterministic `YYYY-MM-DD` release date for a row index, spread across ~2005–2026 (≈3 rows per
- * day, so ties are common — the realistic case for the `track_id` tiebreak). Lower index = NEWER, so
- * a deep page is a high offset. Returned for the seed.
- */
 function releaseDateForIndex(index: number): string {
   const end = Date.UTC(2026, 11, 31);
   const day = Math.floor(index / 3);
@@ -142,7 +91,6 @@ async function timeIt(run: () => Promise<unknown>): Promise<number> {
   return performance.now() - start;
 }
 
-/** Insert `count` catalogue rows (a `tracks` row, no `findings` row) with realistic distributions. */
 async function seedCatalogue(count: number): Promise<void> {
   const chunk = 500;
 
@@ -152,8 +100,7 @@ async function seedCatalogue(count: number): Promise<void> {
 
     for (let index = start; index < end; index += 1) {
       const trackId = `cat-${index}`;
-      // BPM clusters around DnB tempo (160–199) with ~1-in-11 nulls; key cycles the 24 scales; label
-      // cycles the imprints — the columns the filters read, spread so a filter matches a real slice.
+
       const bpm = index % 11 === 0 ? null : 160 + (index % 40);
 
       statements.push({
@@ -181,7 +128,6 @@ async function seedCatalogue(count: number): Promise<void> {
   process.stdout.write("\n");
 }
 
-/** Insert `count` certified findings (a `tracks` row + its `findings` row) at the newest dates. */
 async function seedFindings(count: number): Promise<void> {
   const chunk = 500;
 
@@ -227,7 +173,6 @@ async function seedFindings(count: number): Promise<void> {
   process.stdout.write("\n");
 }
 
-/** Seed the three small entity tables with identical alphabetical depth and a passing hub gate. */
 async function seedEntities(count: number): Promise<void> {
   const chunk = 300;
 
@@ -268,7 +213,6 @@ async function seedEntities(count: number): Promise<void> {
   process.stdout.write("\n");
 }
 
-/** A libSQL cell → string (a raw `Value` may be an object), for the EXPLAIN dump. */
 function cell(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
 }
@@ -281,9 +225,9 @@ async function explain(sql: string, args: (number | string)[]): Promise<string> 
 
 type BenchShape = {
   args: (number | string)[];
-  /** Override for background window builds; request-path reads use the default budget. */
+
   budgetMs?: number;
-  /** Baseline offsets are comparisons, not ship gates. */
+
   gate?: boolean;
   name: string;
   sql: string;
@@ -304,21 +248,11 @@ async function main(): Promise<void> {
     await seedEntities(entityCount);
   }
 
-  // The numbered-page model: step 1 pages the bare ids
-  // (`limit ? offset ?`, no SELECT-list subqueries — the shape the OFFSET walk pays), step 2
-  // hydrates exactly one page's ids with the full column set, and the pager's `count(*)` runs
-  // beside them. A DEEP page is the shape the one-step read blew up on (it evaluated the per-row
-  // subqueries for every offset-skipped row — 9.3 s live at page 300), so it is the load-bearing
-  // number here.
   const limit = TRACKS_HUB_PAGE_SIZE;
   const deepOffset = Math.floor((catalogueCount * 0.8) / limit) * limit;
 
-  // A realistic hydrate arg: one page's worth of seeded ids (which ids barely matters — the cost is
-  // the ≤48 per-row subquery sets, identical for any id list of the same size).
   const hydrateIds = Array.from({ length: limit }, (_, index) => `cat-${index}`);
 
-  // The lane builder also hands back its compiled clauses (the memo key in production); the bench
-  // wants only the SQL + its args.
   const yearLane = tracksHubYearLaneQuery({});
 
   const shapes: BenchShape[] = [
@@ -330,11 +264,7 @@ async function main(): Promise<void> {
     },
     { name: "hydrate 48 ids", ...tracksHubHydrateQuery(hydrateIds) },
     { name: "count(*) (unfiltered)", ...tracksHubCountQuery({}) },
-    // The year fast lane — the hub's OTHER whole-set scan, and the one the `findings` join was
-    // costing most (it forced a bare `SCAN tracks` over the wide embedding-bearing row; without the
-    // join it is a covering read of `tracks_release_date_track_id_idx`). It is memoised per filter
-    // set in
-    // production, but the cold read still has to come in under budget.
+
     { args: yearLane.args, name: "year lane (unfiltered)", sql: yearLane.sql },
     {
       name: "id page (BPM 172–176)",
@@ -479,7 +409,6 @@ async function main(): Promise<void> {
       continue;
     }
 
-    // The primary order must ride the release_date index (a reverse scan), never a full table scan.
     const ridesReleaseIndex = /tracks_release_date_track_id_idx/.test(plan);
     const fullScan = /SCAN tracks\b(?! USING)/.test(plan);
     console.log(

@@ -1,22 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Regenerate the committed mixability ground-truth extract — the 17 tracks of
- * Fluncle's mixtape `019.F.1A`, joined to each finding's live `key` / `bpm` /
- * spectral `features`, in set order. The pure floor-check test
- * (`src/lib/server/mixability-ground-truth.test.ts`) runs on this committed file so
- * it lives inside `deploy:gate` WITHOUT a database (the local DB is gitignored +
- * CI-invisible).
- *
- * The 17 coordinates + their set order come from the video fixture
- * (`packages/video/src/set-video/__fixtures__/019.F.1A.tracklist.json`); the per-
- * finding `key`/`bpm`/`features` are all PUBLIC on every track chip, so this reads
- * them straight off the public API — no DB, no secret, reproducible by anyone. Point
- * `--base` at a local dev server to regenerate against a work-in-progress archive.
- *
- * Usage:
- *   bun run scripts/generate-mixability-ground-truth.ts
- *   bun run scripts/generate-mixability-ground-truth.ts --base http://localhost:3000
- */
+
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 

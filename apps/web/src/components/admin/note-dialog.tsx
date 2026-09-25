@@ -14,15 +14,9 @@ import { Textarea } from "@fluncle/ui/components/textarea";
 import { NOTE_MAX_LENGTH } from "@/lib/log-prose";
 import { usePreviewPlayer } from "@/lib/preview-player";
 
-// The Note cell's dialog — a short editorial note on one finding (the "why").
-// It's optional, and it isn't user-facing chrome so much as SEO/AEO fuel: the
-// note renders on the finding's /log/<id> page and feeds the definitional prose
-// + JSON-LD. "Save & next" walks the current worklist so a batch of notes is one
-// sitting, not one dialog-open per finding.
-
 type NoteDialogProps = {
   error?: string;
-  /** Whether a next finding exists in the current worklist (gates "Save & next"). */
+
   hasNext: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (note: string) => Promise<void> | void;
@@ -32,8 +26,6 @@ type NoteDialogProps = {
 };
 
 export function NoteDialog({ onOpenChange, row, ...rest }: NoteDialogProps) {
-  // Keyed on the finding's id so the textarea seeds fresh when the dialog moves
-  // to the next finding (Save & next) — no stale note carrying across.
   return (
     <Dialog onOpenChange={onOpenChange} open={row !== null}>
       <DialogContent className="sm:max-w-lg">
@@ -64,11 +56,6 @@ function NoteDialogBody({
         </DialogDescription>
       </DialogHeader>
 
-      {/* The echo gate's held note, when there is one. It sits ABOVE the textarea because it
-          is the reason he opened this dialog: the queue row sent him here to read a line the
-          model wrote and the gate refused to store. "Edit it" drops that line into the
-          textarea below, which is the common ruling — the model is usually right except for
-          the one clause it borrowed. */}
       <HeldNotePanel onUseAsDraft={setNote} trackId={row.trackId} />
 
       <Textarea

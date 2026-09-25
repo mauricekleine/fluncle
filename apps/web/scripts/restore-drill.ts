@@ -1,27 +1,5 @@
 #!/usr/bin/env bun
-/**
- * THE RESTORE DRILL — the backup's acceptance test.
- *
- * A backup that has never restored is a hope, not a backup. This drill takes a
- * dump artifact (`.sql` or `.sql.gz`) produced by the on-box backup sweep (or by
- * `db:pull-prod`), restores it into a THROWAWAY scratch libSQL database, and
- * verifies its integrity against the manifest captured at dump time:
- *
- *   - table count matches,
- *   - every table's row count matches,
- *   - the anchor table's content spot-check (count + min/max of its first column)
- *     matches — proving actual values survived, not just row counts.
- *
- * Exits 0 on a clean restore, non-zero (loudly) on any mismatch. Nothing here
- * touches production or the dev database — it builds a scratch db under the OS temp
- * dir and deletes it. The comparison logic is the shared, unit-tested
- * `verifyManifest` from src/lib/server/db-dump.ts.
- *
- * Usage:
- *   bun run scripts/restore-drill.ts <dump.sql.gz> [manifest.json]
- *
- * The manifest defaults to the dump's sibling `manifest.json` (or `<name>.manifest.json`).
- */
+
 import { createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { gunzipSync } from "node:zlib";
@@ -48,7 +26,6 @@ if (!existsSync(dumpPath)) {
   fail(`dump not found: ${dumpPath}`);
 }
 
-// Resolve the manifest: explicit arg, else a sibling manifest.json, else <name>.manifest.json.
 function resolveManifestPath(): string {
   if (manifestArg) {
     return manifestArg;
@@ -78,7 +55,6 @@ if (!existsSync(manifestPath)) {
 
 const expected = JSON.parse(readFileSync(manifestPath, "utf8")) as DumpManifest;
 
-// Decompress if gzipped; a plain .sql is read as-is.
 const raw = readFileSync(dumpPath);
 const sql = dumpPath.endsWith(".gz") ? gunzipSync(raw).toString("utf8") : raw.toString("utf8");
 
@@ -89,10 +65,6 @@ async function main(): Promise<void> {
   const started = Date.now();
   const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: `file:${scratchDb}` });
 
-  // Restore the whole dump as one script (the same executeMultiple the app's client
-  // speaks — proven to load the PRAGMA/BEGIN…COMMIT wrapper + blobs + escaped quotes).
-  // A malformed/truncated dump throws here — report it as a clean restore failure
-  // (the drill's whole point) instead of a raw stack trace.
   try {
     await client.executeMultiple(sql);
   } catch (error) {
@@ -107,7 +79,6 @@ async function main(): Promise<void> {
     fail(`RESTORE FAILED — the dump did not load cleanly: ${message}`);
   }
 
-  // Recompute the manifest shape against the restored database.
   const tableRows = await client.execute(
     `SELECT name FROM sqlite_master
      WHERE type = 'table'

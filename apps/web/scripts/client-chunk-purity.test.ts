@@ -1,10 +1,3 @@
-// The gate's own tripwire. A build gate is only worth its comment if it has been SEEN to fire, so
-// these drive it over the exact shapes the real leak had — the `/admin/artists` board's server
-// chain in a lazy route chunk, and a `head`-reached constant in the eager entry chunk — and assert
-// both that it fails and that a clean bundle passes. The plugin hook is driven too, with a
-// stand-in Rollup context, so the wiring between the real signal (`bundle`, `options.dir`,
-// `getModuleInfo`) and the predicate is covered rather than assumed.
-
 import { describe, expect, it, vi } from "vitest";
 import {
   clientChunkPurityGate,
@@ -126,8 +119,6 @@ describe("the gate plugin", () => {
       throw new TypeError("the gate must expose a generateBundle hook");
     }
 
-    // The hook is declared async-capable by Rollup's types; this gate is synchronous, and the
-    // assertion below reads `error` right after the call.
     void generateBundle.call(
       { error, getModuleInfo: () => null } as never,
       { dir } as never,

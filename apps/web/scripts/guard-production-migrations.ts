@@ -1,4 +1,3 @@
-/** Validate the generated journal and plan every migration not yet stamped in production. */
 import { type Client } from "@libsql/client/web";
 
 export type MigrationJournalEntry = {
@@ -22,7 +21,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Parse the generated Drizzle journal and reject structural drift instead of guessing. */
 export function parseMigrationJournal(journalJson: string): MigrationJournalEntry[] {
   let journal: unknown;
 
@@ -65,7 +63,6 @@ export function parseMigrationJournal(journalJson: string): MigrationJournalEntr
   });
 }
 
-/** Mirror Drizzle's ledger rule: every journal timestamp above the applied maximum is pending. */
 export function planProductionMigrations(
   entries: readonly MigrationJournalEntry[],
   lastAppliedWhen: null | number,
@@ -85,7 +82,6 @@ export function planProductionMigrations(
   };
 }
 
-/** Read the ledger and plan the complete pending journal for one atomic Cloudflare deployment. */
 export async function planPendingProductionMigrations(
   dependencies: GuardDependencies,
 ): Promise<ProductionMigrationPlan> {
@@ -112,7 +108,6 @@ function migrationTimestamp(value: unknown): number {
   return timestamp;
 }
 
-/** Read only the migration metadata Drizzle itself uses; a missing/empty ledger means all are pending. */
 export async function readLastAppliedMigrationWhen(
   client: Pick<Client, "execute">,
 ): Promise<null | number> {

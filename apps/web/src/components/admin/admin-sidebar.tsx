@@ -48,28 +48,6 @@ import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listTracks } from "@/lib/server/tracks";
 
-// The admin sidebar — the one navigation surface of the admin workspace
-// (docs/admin-shell.md). The object nav: every kind of thing the operator works
-// on is an entry, whether or not it has its own station yet. An entry whose
-// station doesn't exist points at the best CURRENT home for that object and only
-// lights up once a page declares it as its owner key — so the nav is stable
-// across waves while stations land behind it. Entries are grouped into sections
-// (ADM-01): a section renders as a Shadcn SidebarGroup, and a labelled section
-// gets a SidebarGroupLabel above it. The "Sets" group holds the set-level objects
-// (Playlists → Mixtapes); the "Studio" group (ADM-03) holds Recordings + Clips.
-//
-// Owner keys today: `/admin` (the attention queue, the landing) → dashboard;
-// `/admin/findings` (the pipeline board) → findings; `/admin/renders` → renders;
-// `/admin/plans` → plans (labelled "Playlists"); `/admin/recordings` (the
-// recordings index + the uploader) → recordings; `/admin/clips` (the clip library +
-// the drip kill-switch) → clips; `/admin/newsletter` → newsletter. A recording's
-// per-set workstation is the Studio (`/admin/studio/$recordingId`), opened from a
-// Recordings row. `/admin/mixtapes` (the minted-mixtape index + distribution
-// links) → mixtapes; `/admin/costs` (the operator's private cost ledger) → costs;
-// `/admin/prompts` (the prompt registry — every prompt Fluncle feeds a model,
-// versioned and rollback-able) → prompts. System is the live service map at /status.
-
-/** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
 export type AdminNavCurrent =
   | "artists"
   | "catalogue"
@@ -93,9 +71,6 @@ export type AdminNavCurrent =
   | "usage"
   | "users";
 
-// The nav targets, as literal route paths so each entry renders a typed TanStack
-// <Link> (client-side navigation, not a full document reload — the whole point of
-// the persistent shell). All are param-less; System deep-links the /status page.
 type AdminNavPath =
   | "/admin"
   | "/admin/artists"
@@ -120,7 +95,6 @@ type AdminNavPath =
   | "/status";
 
 type NavEntry = {
-  /** Which live count this entry carries, when a cheap read exists. */
   count?: keyof NavCounts;
   icon: Icon;
   key: AdminNavCurrent;
@@ -128,8 +102,6 @@ type NavEntry = {
   to: AdminNavPath;
 };
 
-// The landing — the attention queue: every action the system needs as a row;
-// zero rows is the success state.
 const HOME_ENTRY: NavEntry = {
   icon: SquaresFourIcon,
   key: "dashboard",
@@ -137,26 +109,14 @@ const HOME_ENTRY: NavEntry = {
   to: "/admin",
 };
 
-// A group of object entries. A section renders as one Shadcn SidebarGroup; a
-// `label` renders a SidebarGroupLabel above the entries (else the group is
-// unlabelled and reads as it did before).
 type NavSection = {
   entries: NavEntry[];
-  /** Stable React key for the section. */
+
   key: string;
-  /** The group heading. Omit for an unlabelled group. */
+
   label?: string;
 };
 
-// The objects, in pipeline order: a finding is logged, filmed into a render,
-// planned into a set, captured as a recording, promoted to a mixtape, clipped, and
-// written up. Renders sits with Findings (its object is a finding's video) and
-// carries the render backlog badge — the count's dedicated home now it has a page.
-//
-// "Sets" is the set-level objects: a Playlist (a plan) is lined up first and
-// promoted into a Mixtape, so Playlists leads. "Studio" (between Sets and
-// Newsletter) holds the capture-and-clip objects: a Recording is uploaded and
-// opened into its per-set Studio, then its cuts land in the Clips library.
 const OBJECT_SECTIONS: NavSection[] = [
   {
     entries: [
@@ -178,18 +138,11 @@ const OBJECT_SECTIONS: NavSection[] = [
     ],
     key: "objects",
   },
-  // The Catalogue group — the catalogue machine's own cockpit (the-funnel RFC). Funnel is the
-  // one-page view of the pipeline; Catalogue (The Ear) ranks the uncertified rows; Labels is
-  // the crawl-SEED control (it moved down here from the object nav because ruling on a label
-  // steers what the NEXT crawl digs — a catalogue-machine lever, not a pipeline object).
+
   {
     entries: [
       { icon: FunnelIcon, key: "funnel", label: "Funnel", to: "/admin/funnel" },
-      // The Ear: every track the archive knows and Fluncle never logged, ranked by how close
-      // it sits to something he did (docs/the-ear.md). The nav label is its NAME ("The Ear",
-      // the voice canon's — docs/the-ear.md owns the concept); the route stays /admin/catalogue
-      // (the domain key). No count badge: the honest number is "how many are worth your time",
-      // and a COUNT cannot answer that. A telescope with a backlog badge is a conveyor belt.
+
       { icon: BinocularsIcon, key: "catalogue", label: "The Ear", to: "/admin/catalogue" },
       { icon: TagIcon, key: "labels", label: "Labels", to: "/admin/labels" },
     ],
@@ -226,17 +179,13 @@ const OBJECT_SECTIONS: NavSection[] = [
         label: "Newsletter",
         to: "/admin/newsletter",
       },
-      // Reach: how each posted video is actually performing — day-over-day velocity and which
-      // creative axes land — read back from the social-metrics ledger.
+
       { icon: ChartLineUpIcon, key: "reach", label: "Reach", to: "/admin/reach" },
     ],
     key: "publish",
   },
   {
     entries: [
-      // The account roster — the operator's read-only window on the gated rollout of the
-      // account-backed features (saved findings, saved sets, the Galaxy). Ops, not a
-      // pipeline object: it monitors the platform, it does not move a finding along.
       { icon: UserCircleIcon, key: "users", label: "Users", to: "/admin/users" },
       { icon: ReceiptIcon, key: "costs", label: "Costs", to: "/admin/costs" },
       { icon: CurrencyDollarIcon, key: "usage", label: "Usage & cost", to: "/admin/usage" },
@@ -246,14 +195,7 @@ const OBJECT_SECTIONS: NavSection[] = [
   },
 ];
 
-// The machine itself, pinned to the foot of the rail: what Fluncle SAYS (the prompt
-// registry — machine config, not an object in the pipeline) and what he IS (the live
-// service map). The render backlog badge moved to the Renders entry (its dedicated
-// page); System stays the deep-link to /status. Neither carries a count: a prompt has
-// no backlog, and /status is a health read, not a queue.
 const SYSTEM_ENTRIES: NavEntry[] = [
-  // ChatDnB — the admin-gated spike where Fluncle answers over his own archive tools. Sits
-  // with the machine's own instruments (Prompts, System), not the pipeline objects.
   {
     icon: ChatCircleDotsIcon,
     key: "chat",
@@ -274,20 +216,12 @@ const SYSTEM_ENTRIES: NavEntry[] = [
   },
 ];
 
-// Every entry, flat — the lookup table behind navKeyForPath.
 const ALL_ENTRIES: NavEntry[] = [
   HOME_ENTRY,
   ...OBJECT_SECTIONS.flatMap((section) => section.entries),
   ...SYSTEM_ENTRIES,
 ];
 
-// Which nav entry a pathname belongs to. The shell is mounted ONCE in the /admin
-// layout now (route.tsx), above the Outlet, so it can't be told the active entry
-// by each page — it resolves it from the URL instead. The Studio has no entry of
-// its own; it's opened from a Recordings row and lights Recordings (the comment
-// above). Exact match wins first so "/admin" → dashboard never swallows a deeper
-// path; otherwise the longest `to` that prefixes the path lights its entry, so a
-// future nested station lights its parent.
 export function navKeyForPath(pathname: string): AdminNavCurrent {
   if (pathname === "/admin/studio" || pathname.startsWith("/admin/studio/")) {
     return "recordings";
@@ -305,26 +239,16 @@ export function navKeyForPath(pathname: string): AdminNavCurrent {
   return prefixed?.key ?? "dashboard";
 }
 
-// The live count with a cheap, honest server read TODAY (one scoped COUNT): the
-// render backlog (enriched findings still waiting on the box's video render). The
-// old "needs tagging" badge is gone with manual vibe-tagging — a finding's placement
-// is now the sonic galaxy the cluster cron assigns, not an operator gate.
-// Unposted-to-TikTok has no cheap global read yet (posts join per-page).
 type NavCounts = { renderQueue: number };
 
 const NAV_COUNTS_KEY = ["admin", "nav", "counts"] as const;
 
-// Directly callable like every server fn, so it re-checks the grant itself and
-// answers null (not a redirect) when unauthenticated — the sidebar only renders
-// on guarded pages, and counts must never leak.
 const fetchNavCounts = createServerFn({ method: "GET" }).handler(
   async (): Promise<NavCounts | null> => {
     if (!(await isAdminRequest())) {
       return null;
     }
 
-    // The render queue uses the box's own canonical read (`fluncle admin
-    // tracks queue`): findings with context but no video yet.
     const renders = await listTracks({ hasContext: true, hasVideo: false, limit: 1 });
 
     return { renderQueue: renders.totalCount };
@@ -332,8 +256,6 @@ const fetchNavCounts = createServerFn({ method: "GET" }).handler(
 );
 
 export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
-  // Fetched lazily on mount, then focus-refetched — tabbing back after a render
-  // run brings the badge back honest without a reload.
   const { data: counts } = useQuery({
     queryFn: () => fetchNavCounts(),
     queryKey: NAV_COUNTS_KEY,
@@ -352,8 +274,7 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
           render={
             <Link
               aria-current={active ? "page" : undefined}
-              // The visible label plus the live count, so a screen reader hears
-              // the number the badge shows (the badge div itself is presentational).
+
               aria-label={count > 0 ? `${entry.label} (${count})` : undefined}
               to={entry.to}
             />
@@ -375,13 +296,6 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
   return (
     <Sidebar collapsible="icon" variant="floating">
       <SidebarHeader>
-        {/* The nameplate + home link. The circular brand chip shows ALWAYS — the
-            mark alongside the wordmark when expanded, and the mark alone once the
-            rail collapses to icons (the wordmark hides, the chip stays, sized to
-            the icon-button footprint). The chip is a light disc so the mostly-dark
-            Fluncle art reads against the dark sidebar; the img alt carries the
-            link's accessible name in both states, so the visible wordmark is
-            marked decorative to avoid a doubled reading. */}
         <Link
           className="flex items-center gap-2 rounded-md p-1 focus-visible:ring-3 focus-visible:ring-ring/50 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
           to="/admin"
@@ -395,8 +309,6 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
         </Link>
       </SidebarHeader>
       <SidebarContent>
-        {/* display: contents keeps SidebarContent's flex layout intact while
-            giving assistive tech the navigation landmark. */}
         <nav aria-label="Admin" className="contents">
           <SidebarGroup>
             <SidebarGroupContent>
@@ -411,9 +323,7 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
               </SidebarGroupContent>
             </SidebarGroup>
           ))}
-          {/* The System cluster, pinned to the foot: Prompts (what he says) then System
-              (what he is). Unlabelled — the group would repeat the word its own /status
-              entry already carries. */}
+
           <SidebarGroup className="mt-auto">
             <SidebarGroupContent>
               <SidebarMenu>{SYSTEM_ENTRIES.map(renderEntry)}</SidebarMenu>
@@ -439,10 +349,6 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
   );
 }
 
-// The admin display-settings cog: a quiet gear opening a popover of per-operator
-// display preferences. Today it holds the key-notation toggle — musical scales
-// (default) vs the Camelot wheel DJs mix by — which flips every admin key
-// readout live via the useKeyNotation store.
 const NOTATION_OPTIONS: { label: string; value: KeyNotation }[] = [
   { label: "Scales", value: "scales" },
   { label: "Camelot", value: "camelot" },

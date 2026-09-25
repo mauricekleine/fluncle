@@ -2,9 +2,6 @@ import { describe, expect, it } from "vitest";
 import { type SavedFinding } from "./shared";
 import { filterSavedFindings, SAVES_POWER_SCALE, sortSavedFindings } from "./saves-filter";
 
-// The saved-findings power-scale tools are pure functions (kept out of the component
-// on purpose), so they carry their own focused tests: substring search + the two sorts.
-
 function finding(over: Partial<SavedFinding> & { title: string }): SavedFinding {
   return {
     artists: over.artists ?? ["Nobody"],
@@ -57,7 +54,7 @@ describe("sortSavedFindings", () => {
     const sorted = sortSavedFindings(list, "title");
 
     expect(sorted.map((f) => f.title)).toEqual(["Balaclava", "Come Alive", "Forsaken"]);
-    // The input array is not reordered — the toggle back to 'saved' still has it.
+
     expect(list.map((f) => f.title)).toEqual(["Come Alive", "Balaclava", "Forsaken"]);
   });
 });

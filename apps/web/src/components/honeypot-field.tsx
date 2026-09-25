@@ -1,7 +1,6 @@
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 
-// Spam honeypot: visually hidden, skipped by tab order, filled only by bots.
 export function HoneypotField({
   id,
   onChange,

@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { derivePillState, pillLabel, type StatusService } from "./status-pill";
 
-// The home status pill reads /api/status and collapses the services list into one
-// quiet footer signal. The derivation is the load-bearing part — the loudest
-// status wins, the count is the number of services that aren't ok, an empty/absent
-// list stays neutral (never falsely "operational"), and the copy stays terse and
-// on-voice. Test it in isolation; the fetch wiring is a thin best-effort wrapper.
-
 function svc(status: StatusService["status"]): StatusService {
   return { status };
 }
