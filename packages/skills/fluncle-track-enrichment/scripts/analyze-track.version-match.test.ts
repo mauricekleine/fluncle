@@ -1,10 +1,3 @@
-// Focused test for the version-aware gate in analyze-track.ts. The Deezer-search +
-// iTunes preview legs are gathered ALONGSIDE the ISRC candidate, and the run keeps
-// the highest-confidence read — so without this gate a REMIX's BPM/key/feature
-// vector could be computed from the ORIGINAL. Importing analyze-track.ts is safe:
-// the pipeline is guarded by `if (import.meta.main)`, so the import only loads
-// `versionMatches`.
-
 import { describe, expect, test } from "bun:test";
 
 import { versionMatches } from "./analyze-track.ts";

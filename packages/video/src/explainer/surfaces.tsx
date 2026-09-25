@@ -1,8 +1,3 @@
-// On-brand schematic stand-ins for the surfaces we will screen-capture later.
-// These are deliberately simple: enough to read what goes where, styled to the
-// Nostalgic Cosmos, so the FORMAT is legible before any real footage exists.
-// Everything here is deterministic (random(seed), never Math.random).
-
 import { useContext } from "react";
 import {
   AbsoluteFill,
@@ -56,8 +51,7 @@ const Window: React.FC<{ chrome?: string; children: React.ReactNode; mono?: bool
         <span style={{ marginLeft: 12 }}>{chrome}</span>
       </div>
     ) : null}
-    {/* Content is centered in the pane so short mocks (and letterboxed real
-        captures) sit in the middle of the window, not floating at the top. */}
+
     <div
       style={{
         display: "flex",
@@ -88,8 +82,7 @@ const Row: React.FC<{ left: string; right?: string; dim?: boolean }> = ({ left, 
     }}
   >
     <span>{left}</span>
-    {/* The right slot is the finding's coordinate: the brand's numeral, so
-        Oxanium tabular — never mono, which speaks only for the machine. */}
+
     {right !== undefined ? (
       <span style={{ ...coordType, color: c.eclipseGold, fontSize: 26 }}>{right}</span>
     ) : null}
@@ -128,7 +121,6 @@ const Log: React.FC = () => (
       }}
     />
     <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-      {/* The title reads — Space Grotesk 700, the loudest text on the surface. */}
       <div
         style={{
           color: c.starlightCream,
@@ -139,14 +131,14 @@ const Log: React.FC = () => (
       >
         Skantia — Nemesis
       </div>
-      {/* The Found date is a numeral: Oxanium tabular (The Tabular Rule). */}
+
       <div style={{ ...coordType, color: c.stardust, fontSize: 28, marginTop: 10 }}>
         Found Jun 3, 2026
       </div>
       <div style={{ ...coordType, color: c.eclipseGold, fontSize: 40, marginTop: 24 }}>
         004.7.2I
       </div>
-      {/* Still a coordinate, URI scheme or not. */}
+
       <div style={{ ...coordType, color: c.nebulaViolet, fontSize: 26, marginTop: 8 }}>
         fluncle://004.7.2I
       </div>
@@ -177,10 +169,6 @@ const Lens: React.FC = () => (
   </div>
 );
 
-/** A rendered track video, playing, inside a player frame (scrubber + timecode).
- *  With a `src` it plays real footage (Fluncle's own output); without one it
- *  falls back to a procedural shader tile that drifts on its own phase (no two
- *  the same). Either way this is the marquee "why does it DO that?!" beat. */
 const VideoTile: React.FC<{
   tint: string;
   glow: string;
@@ -193,13 +181,13 @@ const VideoTile: React.FC<{
   const { fps } = useVideoConfig();
   const t = frame / fps;
   const phase = random(`phase-${seed}`) * Math.PI * 2;
-  // The light source drifts, so the fallback tile looks like a shader evolving.
+
   const gx = 50 + Math.sin(t * 0.55 + phase) * 26;
   const gy = 42 + Math.cos(t * 0.47 + phase) * 24;
   const angle = 118 + Math.sin(t * 0.3 + phase) * 30;
   const runtime = 6 + random(`dur-${seed}`) * 5;
   const progress = (t / runtime) % 1;
-  // A plausible running timecode across a per-tile clip length (m:ss, always < 60s).
+
   const total = 20 + Math.floor(random(`len-${seed}`) * 39);
   const elapsed = Math.floor(progress * total);
   const tc = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
@@ -228,7 +216,7 @@ const VideoTile: React.FC<{
               background: `radial-gradient(120% 120% at ${gx}% ${gy}%, ${glow}, ${tint} 46%, ${c.deepField})`,
             }}
           />
-          {/* warp bands — the "shader" texture, drifting on the tile's own angle */}
+
           <AbsoluteFill
             style={{
               background: `repeating-linear-gradient(${angle}deg, rgba(255,255,255,0.08) 0 2px, transparent 2px 26px)`,
@@ -236,7 +224,7 @@ const VideoTile: React.FC<{
               transform: `translateY(${Math.sin(t + phase) * 12}px)`,
             }}
           />
-          {/* live waveform, pinned to the bottom */}
+
           <div
             style={{
               alignItems: "flex-end",
@@ -269,7 +257,7 @@ const VideoTile: React.FC<{
           </div>
         </>
       )}
-      {/* a scrim under the player chrome so the scrubber + timecode read on any footage */}
+
       <div
         style={{
           background: "linear-gradient(transparent, rgba(9,10,11,0.7))",
@@ -280,7 +268,7 @@ const VideoTile: React.FC<{
           right: 0,
         }}
       />
-      {/* scrubber + timecode — reads as a video player */}
+
       <div style={{ bottom: 34, left: 20, position: "absolute", right: 20 }}>
         <div
           style={{
@@ -299,8 +287,7 @@ const VideoTile: React.FC<{
             }}
           />
         </div>
-        {/* A timecode is a numeral, not machine text: Oxanium tabular so the
-            digits never jitter as it counts. */}
+
         <div style={{ ...coordType, color: c.starlightCream, fontSize: 20, marginTop: 12 }}>
           {tc}
         </div>
@@ -311,8 +298,7 @@ const VideoTile: React.FC<{
 
 const Videos: React.FC = () => {
   const { height, width } = useVideoConfig();
-  // Tiles keep a portrait-video aspect off frame WIDTH so three of them read the
-  // same in every orientation (tall thin columns on square/portrait otherwise).
+
   const w = width * 0.26;
   const h = Math.min(w * 1.66, height - 2 * SAFE);
   return (
@@ -474,7 +460,6 @@ const Crawler: React.FC = () => (
 const Mixtape: React.FC = () => (
   <div>
     <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-      {/* The mixtape's name is a title, not a brand mark: Space Grotesk 700. */}
       <div
         style={{ color: c.starlightCream, fontFamily: font.body, fontSize: 40, fontWeight: 700 }}
       >
@@ -499,7 +484,7 @@ const Mixtape: React.FC = () => (
 const Repo: React.FC = () => (
   <div style={{ color: c.starlightCream, fontFamily: font.mono, fontSize: 30, lineHeight: 1.8 }}>
     <div style={{ color: c.eclipseGold }}>github.com/mauricekleine/fluncle</div>
-    {/* Prose reads in the body face even on a mono surface (The One Voice Rule). */}
+
     <div style={{ color: c.stardust, fontFamily: font.body }}>
       open source · all of it · public forever
     </div>
@@ -533,7 +518,6 @@ const CHROME: Partial<Record<MockSurface, string>> = {
   terminal: "ssh rave.fluncle.com",
 };
 
-/** A talking-head placeholder: a soft portrait glow with a REC tick. */
 const Face: React.FC = () => (
   <AbsoluteFill
     style={{
@@ -574,8 +558,6 @@ const Face: React.FC = () => (
   </AbsoluteFill>
 );
 
-/** The mock surface: full-bleed for face/videos/galaxy/voice, windowed for the
- *  web/terminal surfaces. A dashed hint names the real capture that lands here. */
 export const MockSurfacePanel: React.FC<{ kind: MockSurface; label?: string }> = ({
   kind,
   label,
@@ -597,8 +579,7 @@ export const MockSurfacePanel: React.FC<{ kind: MockSurface; label?: string }> =
       style={{
         alignItems: "center",
         justifyContent: "center",
-        // Proportional to the broadcast-safe margin so the window leaves room for
-        // the surface tag (top) and the caption (bottom) on every aspect ratio.
+
         padding: `${SAFE + 96}px ${SAFE + 20}px ${SAFE + 104}px`,
       }}
     >
@@ -611,8 +592,7 @@ export const MockSurfacePanel: React.FC<{ kind: MockSurface; label?: string }> =
   return (
     <AbsoluteFill style={{ background: c.deepField }}>
       {inner}
-      {/* Build-time hint naming the real capture that lands here; off by default,
-          parked top-right (the one corner free of the tag, caption and PiP cam). */}
+
       {label !== undefined && showCaptureHints ? (
         <div
           style={{

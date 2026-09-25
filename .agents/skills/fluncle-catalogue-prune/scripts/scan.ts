@@ -1,19 +1,11 @@
 #!/usr/bin/env bun
-// READ-ONLY scan. Surfaces everything an operator needs to run a pruning pass:
-//   1. Artist buckets (keep vs safe-purge) + the headline count.
-//   2. Off-boundary labels (non-enabled labels behind off-genre artists) to RULE — with sample
-//      artists so you classify by NAME. (There is deliberately NO auto genre-classifier here;
-//      every automatic signal we tried over-prunes — see references/traps.md.)
-//   3. The original-of-remix RESIDUAL: protected artists (≤3 enabled tracks) with a large
-//      off-label back-catalogue — the ones a purge can't touch and a human must judge.
-// Writes nothing. Run this first, and after every label ruling, to see the effect.
+
 import { aggregateArtists, loadCatalogue, safePurgeArtists, slugify } from "./lib";
 
 const cat = await loadCatalogue();
 const agg = aggregateArtists(cat);
 const safe = safePurgeArtists(cat, agg);
 
-// ── 1. buckets ──────────────────────────────────────────────────────────────────
 let keepFinding = 0,
   keepEnabled = 0;
 for (const [, a] of agg) {
@@ -30,10 +22,6 @@ console.log(`  keep (has finding)          : ${keepFinding}`);
 console.log(`  keep (has enabled track)    : ${keepEnabled}`);
 console.log(`  SAFE-PURGE (no finding, no enabled track): ${safe.size}`);
 
-// ── 2. off-boundary labels to rule ──────────────────────────────────────────────
-// The non-enabled labels behind the safe-purge artists. Disabling the off-genre ones (and
-// enabling any real DnB ones) is what makes the purge clean. Classify by NAME, not by the
-// roster overlap — DnB acts cross onto majors/EDM, so overlap is a false signal.
 type L = { name: string; state: string; tracks: number; artists: Set<string>; sample: Set<string> };
 const byLabel = new Map<string, L>();
 for (const e of cat.edges) {
@@ -80,12 +68,6 @@ for (const l of undecided.slice(0, 60)) {
   );
 }
 
-// ── 3. original-of-remix residual ───────────────────────────────────────────────
-// Protected artists (survive the purge on a token enabled track) whose catalogue is dominated
-// by off-genre. MusicBrainz bills a remix to the ORIGINAL artist, so a DnB remix of a pop/reggae
-// song mints a page for the non-DnB original. These need a HUMAN: strip their off-genre tracks
-// but keep the DnB remix. The DnB remix often lives on a multi-genre DISABLED label
-// (fabric/StreetBeat/…) — so do NOT blanket-strip by disabled label; eyeball each.
 const remixish: {
   name: string;
   en: number;

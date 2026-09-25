@@ -1,34 +1,5 @@
 #!/usr/bin/env bun
-// THE CONFLATION REPAIR — separate two real-world acts that share ONE `artists` row.
-//
-//   # SPLIT: the impostor act keeps its tracks, on a NEW artists row of its own
-//   bun run packages/skills/fluncle-catalogue-prune/scripts/split-artist.ts \
-//     --artist k --labels "cutting-edge" --into "K." --into-mbid <mb-artist-id>
-//
-//   # STRIP: the impostor tracks are junk on a drum & bass archive — delete them
-//   bun run …/split-artist.ts --artist the-kaleidoscope --labels "cutting-edge" --strip
-//
-//   # …then re-run with --confirm. Dry-run by default. TAKE A FRESH BACKUP FIRST (SKILL.md § 3).
-//
-// WHY IT EXISTS. `purge-artists.ts` deletes an artist WHOLE. That is right for a pure namesake and
-// wrong for a CONFLATED row, where one `artists` row holds a drum & bass act AND an unrelated act of
-// the same name: deleting it takes the real act's page with it. `find-conflated-artists.ts` finds
-// these; this repairs one, per the operator's ruling, in the only two shapes that are honest:
-//
-//   SPLIT — mint a new `artists` row for the other act and RE-POINT its `track_artists` edges to it.
-//     No track is deleted. Use it when the other act is a real act worth keeping as its own page,
-//     or when you simply do not want to destroy data to fix an identity mistake. Reversible.
-//   STRIP — delete the impostor tracks outright, through the SAME cascade both purges use
-//     (`deleteTracksWithEdges` + the entanglement guard + a full per-row rollback). Use it when the
-//     other act's catalogue has no business on a drum & bass archive at all.
-//
-// THE RAILS, all hard aborts rather than skips — a refusal means the ruling is wrong:
-//   - the named artist slug must resolve to an `artists` row;
-//   - the artist must have tracks on BOTH sides (otherwise this is a whole-artist case for
-//     `purge-artists.ts`, not a split — refusing here stops a mis-typed label emptying a page);
-//   - a FINDING on the impostor side aborts (Maurice's logged work is never an impostor);
-//   - a SHARED track — credited to an artist outside this repair — is never moved or deleted;
-//   - STRIP additionally runs the entanglement guard (mixtape / save / post / edition).
+
 import { writeFileSync } from "node:fs";
 
 import { type Client } from "@libsql/client/web";
@@ -50,24 +21,15 @@ import {
 export type SplitMode = "split" | "strip";
 
 export type SplitPlan = {
-  /** Albums left with no tracks at all by a STRIP — deleted with them. */
   albumIds: string[];
-  /** Tracks on the impostor side credited ONLY to this artist: movable (split) or deletable (strip). */
+
   impostorTrackIds: string[];
-  /** Tracks the artist keeps either way. */
+
   keptTrackIds: string[];
-  /** Impostor-side tracks held back because another artist is credited too. */
+
   sharedTrackIds: string[];
 };
 
-/**
- * Which of an artist's tracks sit on the impostor labels, and which of those this repair may touch.
- *
- * The SHARED-CREDIT rule is `purge-artists.ts`'s, applied to a narrower set: a track credited to an
- * artist outside this repair is neither moved nor deleted, because re-pointing it would silently
- * change what the co-artist's page shows. Findings are excluded from the movable set by
- * construction here as well as by the abort below — belt and braces, as in both purges.
- */
 export function planSplit(
   cat: Catalogue,
   artistId: string,
@@ -120,7 +82,6 @@ export function planSplit(
   };
 }
 
-/** A slug nothing else holds — the `-2`, `-3`, … salt `mintArtistSlug` uses on the server. */
 export function mintSlug(base: string, taken: ReadonlySet<string>): string {
   const root = slugify(base) || "artist";
 
@@ -137,13 +98,6 @@ export function mintSlug(base: string, taken: ReadonlySet<string>): string {
   throw new Error(`split-artist: no free slug for "${base}" after 64 tries`);
 }
 
-/**
- * SPLIT: mint the new artist and re-point the impostor edges onto it, atomically per chunk.
- *
- * The edge move is an UPDATE of `artist_id`, not a delete-then-insert: the `track_artists` primary
- * key is `(track_id, artist_id)`, so an update carries the row's `position` and `role` across
- * untouched, and there is no window where the track has no artist at all.
- */
 export async function applySplit(
   db: Client,
   newArtist: { id: string; mbid: null | string; name: string; slug: string },
@@ -170,8 +124,6 @@ export async function applySplit(
 
   return moved;
 }
-
-// ── I/O ──────────────────────────────────────────────────────────────────────────────────────────
 
 const flag = (argv: string[], name: string): string | undefined => {
   const i = argv.indexOf(name);
@@ -354,8 +306,6 @@ export async function main(
     return 1;
   }
 
-  // THE CONFLATION RAIL. If the artist keeps NOTHING, this row is not conflated — it is a plain
-  // namesake, and deleting the whole artist is `purge-artists.ts`'s job, with its own guards.
   if (plan.keptTrackIds.length === 0) {
     console.log(
       `\nABORTED — this artist has NO tracks outside the impostor labels, so it is not a conflated` +
@@ -383,7 +333,6 @@ export async function main(
     return 0;
   }
 
-  // ── rollback, captured BEFORE anything changes ───────────────────────────────────────────────
   const rollback = await captureArtistCascadeRollback(
     db,
     [artist.id],
@@ -397,8 +346,6 @@ export async function main(
   await applySplitPlan(cat, artist, plan, mode, intoName, intoMbid, newId);
 
   console.log(`\nDONE. Rollback: ${path}`);
-  // HUB COUNTS lag exactly as they do after either purge — the nightly `reconcile_hub_counts` sweep
-  // recomputes them from truth within a day. See the note at the end of purge.ts.
 
   return 0;
 }

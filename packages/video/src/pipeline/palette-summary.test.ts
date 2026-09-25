@@ -55,7 +55,6 @@ describe("hueBucketOf", () => {
 
 describe("summarizePalette", () => {
   test("the amber attractor palette summarizes to amber-warm", () => {
-    // A warm-dark ground, gold accent+glow, cream ink — the 07-13 basin.
     const summary = summarizePalette({
       accent: "#e8a94b",
       background: "#171208",
@@ -68,7 +67,6 @@ describe("summarizePalette", () => {
   });
 
   test("the defining bucket comes from the more chromatic of accent/glow", () => {
-    // A near-grey accent but a saturated teal glow → teal-cool.
     const summary = summarizePalette({
       accent: "#888888",
       background: "#101012",
@@ -92,7 +90,7 @@ describe("summarizePalette", () => {
       background: "#e8a94b",
       glow: "#f2c976",
     });
-    // accent and background are the same colour (case-insensitive) → one entry.
+
     expect(summary.swatches.filter((s) => s === "#e8a94b").length).toBe(1);
   });
 });

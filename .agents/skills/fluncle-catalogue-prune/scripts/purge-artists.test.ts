@@ -9,11 +9,6 @@ import { type Client } from "@libsql/client/web";
 import { type Catalogue, tracksCreditedOnlyTo } from "./lib";
 import { main, parseArtistsFile, planNamedArtistPurge } from "./purge-artists";
 
-// The prune scripts talk to PRODUCTION and DELETE rows, so nothing here may touch a real database.
-// These tests drive a recording stub of the libSQL `Client` and pin the four rails that decide
-// whether the targeted namesake purge can do damage: the SHARED-CREDIT survival rule, the FINDINGS
-// hard abort, the ENTANGLEMENT abort, and that a dry-run performs ZERO writes.
-
 type Row = Record<string, unknown>;
 type Statement = { args?: unknown; sql: string };
 
@@ -23,12 +18,8 @@ type Stub = {
   executed: string[];
 };
 
-/** Every statement that could change the database. A dry-run must issue none of these. */
 const isWrite = (sql: string): boolean => /^\s*(delete|insert|replace|update)\b/i.test(sql);
 
-// Redirect the rollback snapshot before ANY test runs. The script defaults `PRUNE_OUT_DIR` to `.`,
-// so a confirm-path test without this writes a `*-rollback.json` into the repo — and in a real run
-// that file is verbatim production rows. Set once, at the top, so a future test cannot forget.
 const PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "prune-artists-"));
 process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
 
@@ -67,7 +58,6 @@ type CatalogueSpec = {
   tracks: { album_id: string | null; label: string | null; title: string; track_id: string }[];
 };
 
-/** A whole in-memory catalogue — the loader's return shape, built by hand instead of from prod. */
 function catalogue(spec: CatalogueSpec): Catalogue {
   const artists = spec.artists.map((a) => ({ ...a, spotify_url: null }));
   const enabledSlugs = new Set(spec.enabled ?? []);
@@ -93,7 +83,6 @@ function catalogue(spec: CatalogueSpec): Catalogue {
   };
 }
 
-/** Run `main` with `console.log` captured, so the suite stays readable and the output assertable. */
 async function run(argv: string[], cat: Catalogue): Promise<{ code: number; out: string }> {
   const lines: string[] = [];
   const original = console.log;
@@ -109,10 +98,6 @@ async function run(argv: string[], cat: Catalogue): Promise<{ code: number; out:
   }
 }
 
-/**
- * The namesake scenario, in miniature. `impostor` is the wrong same-named act the operator named;
- * `guest` is an artist nobody ruled on. `shared` is credited to both, so it must survive.
- */
 const namesake = (db: Client, opts: { findingTrackIds?: string[] } = {}) =>
   catalogue({
     artists: [
@@ -182,7 +167,7 @@ describe("the shared-credit survival rule", () => {
 
     expect(plan.trackIds.sort()).toEqual(["t_solo1", "t_solo2"]);
     expect(plan.survivors.get("A_IMP")).toEqual(["t_shared"]);
-    // The album still holding a surviving track is NOT orphaned; the all-deleted one is.
+
     expect(plan.albumIds).toEqual(["al_solo"]);
   });
 
@@ -206,7 +191,7 @@ describe("the findings hard abort", () => {
     expect(code).toBe(1);
     expect(out).toContain("FINDING");
     expect(out).toContain("ABORTED");
-    // Hard abort, not a skip: the OTHER named artists are not purged either.
+
     expect(s.executed.filter(isWrite)).toEqual([]);
     expect(s.batches).toEqual([]);
   });
@@ -266,7 +251,7 @@ describe("the dry run", () => {
     expect(out).toContain("DRY RUN — nothing written");
     expect(s.executed.filter(isWrite)).toEqual([]);
     expect(s.batches).toEqual([]);
-    // It DID read — the guard ran, so the absence of writes is not the absence of work.
+
     expect(s.executed.some((sql) => sql.includes("from mixtape_tracks"))).toBe(true);
   });
 
@@ -304,12 +289,12 @@ describe("--confirm runs the shared cascade", () => {
       "delete from artist_centroids where artist_id in (?)",
       "delete from artist_similar where artist_id in (?)",
       "delete from artist_similar where neighbour_artist_id in (?)",
-      // The purged artist's edge on the SURVIVING track, keyed by artist so `artists` can go.
+
       "delete from track_artists where artist_id in (?)",
       "delete from albums where id in (?)",
       "delete from artists where id in (?)",
     ]);
-    // The tracks and THEIR edges never ride a bare execute — always one write transaction.
+
     expect(s.batches).toHaveLength(1);
     expect(s.batches[0]?.mode).toBe("write");
     expect(s.batches[0]?.stmts[0]?.sql).toBe("delete from track_artists where track_id in (?,?)");

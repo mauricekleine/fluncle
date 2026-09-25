@@ -1,8 +1,3 @@
-// The Explainer chrome + building blocks: the framed stage, the four layouts,
-// the surface tag, burned-in captions, the chapter card, and the star-warp seam.
-// The grain + transition reuse the journey shader kit so it is genuinely the
-// Fluncle look, not a generic slideshow.
-
 import {
   AbsoluteFill,
   interpolate,
@@ -17,11 +12,7 @@ import { MockSurfacePanel } from "./surfaces";
 import { accentColor, c, coordType, font, pipHeight, pipWidth, SAFE } from "./theme";
 import { type ExplainerChapter, type ExplainerClip, type TagSubFace } from "./types";
 
-// ---------------------------------------------------------------------------
-// The stage — deep-field ground, a live grain wash, a vignette to seat the eye
-// ---------------------------------------------------------------------------
-
-const GRAIN_FRAGMENT = /* glsl */ `
+const GRAIN_FRAGMENT = `
 ${GLSL.hash}
 void main() {
   vec2 uv = gl_FragCoord.xy / u_res;
@@ -43,10 +34,6 @@ export const Frame: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   </AbsoluteFill>
 );
 
-// ---------------------------------------------------------------------------
-// Clip — real footage (OffthreadVideo over public/) or an on-brand mock
-// ---------------------------------------------------------------------------
-
 const Clip: React.FC<{ clip: ExplainerClip; radius?: number }> = ({ clip, radius = 0 }) => {
   if (clip.kind === "video") {
     return (
@@ -63,10 +50,6 @@ const Clip: React.FC<{ clip: ExplainerClip; radius?: number }> = ({ clip, radius
   );
 };
 
-// ---------------------------------------------------------------------------
-// Layouts
-// ---------------------------------------------------------------------------
-
 const FILL: React.CSSProperties = { height: "100%", width: "100%" };
 
 export const TalkingHead: React.FC<{ face: ExplainerClip }> = ({ face }) => (
@@ -81,7 +64,6 @@ export const ScreenFull: React.FC<{ screen: ExplainerClip }> = ({ screen }) => (
   </AbsoluteFill>
 );
 
-/** Picture-in-picture: the surface fills, the face sits cornered in a gold-hairline frame. */
 export const Pip: React.FC<{ screen: ExplainerClip; face: ExplainerClip }> = ({ screen, face }) => {
   const { width } = useVideoConfig();
   return (
@@ -106,7 +88,6 @@ export const Pip: React.FC<{ screen: ExplainerClip; face: ExplainerClip }> = ({ 
   );
 };
 
-/** Split: face beside walkthrough on wide frames, stacked (face over) when tall. */
 export const Split: React.FC<{ screen: ExplainerClip; face: ExplainerClip }> = ({
   screen,
   face,
@@ -126,13 +107,6 @@ export const Split: React.FC<{ screen: ExplainerClip; face: ExplainerClip }> = (
   );
 };
 
-// ---------------------------------------------------------------------------
-// Surface tag (top-left) — names what you are looking at
-// ---------------------------------------------------------------------------
-
-/** The sub-line's face, per DESIGN.md §3: mono is the machine's voice and speaks
- *  only for a literal command; a coordinate is the brand's numeral (Oxanium,
- *  tabular); everything else simply reads. */
 const subGlyph = (face: TagSubFace = "prose"): React.CSSProperties => {
   if (face === "command") {
     return { fontFamily: font.mono };
@@ -167,8 +141,6 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string; subFace?: TagSu
         transform: `translateX(${x}px)`,
       }}
     >
-      {/* A soft dark scrim so the tag holds AA on bright full-bleed surfaces
-          (the videos panel, the galaxy) and stays invisible on the dark ones. */}
       <div
         style={{
           background: "radial-gradient(140% 160% at 0% 0%, rgba(9,10,11,0.66), transparent 72%)",
@@ -179,8 +151,7 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string; subFace?: TagSu
       />
       <div style={{ alignItems: "center", display: "flex", gap: 12, position: "relative" }}>
         <div style={{ background: c.eclipseGold, height: 26, width: 4 }} />
-        {/* A section label ("the archive", "a finding"), not a brand mark: the
-            body face at its 700 ceiling. */}
+
         <span
           style={{
             color: c.starlightCream,
@@ -213,10 +184,6 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string; subFace?: TagSu
   );
 };
 
-// ---------------------------------------------------------------------------
-// Captions — burned in for silent autoplay; the active line only
-// ---------------------------------------------------------------------------
-
 export const Captions: React.FC<{ lines: ExplainerChapter["captions"]; reserveRight?: number }> = ({
   lines,
   reserveRight = 0,
@@ -231,8 +198,7 @@ export const Captions: React.FC<{ lines: ExplainerChapter["captions"]; reserveRi
   if (active === undefined) {
     return null;
   }
-  // The caption is centered in the band LEFT of the picture-in-picture cam:
-  // reserveRight is the cam's footprint, so long lines can never run under it.
+
   return (
     <div
       style={{
@@ -267,10 +233,6 @@ export const Captions: React.FC<{ lines: ExplainerChapter["captions"]; reserveRi
   );
 };
 
-// ---------------------------------------------------------------------------
-// Chapter card — the big Oxanium title flash
-// ---------------------------------------------------------------------------
-
 export const ChapterCard: React.FC<{ chapter: ExplainerChapter }> = ({ chapter }) => {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
@@ -294,7 +256,6 @@ export const ChapterCard: React.FC<{ chapter: ExplainerChapter }> = ({ chapter }
       }}
     >
       <div style={{ transform: `translateY(${rise}px)` }}>
-        {/* The act kicker is a numeral: Oxanium tabular (The Tabular Rule). */}
         {chapter.number !== undefined ? (
           <div
             style={{
@@ -329,12 +290,7 @@ export const ChapterCard: React.FC<{ chapter: ExplainerChapter }> = ({ chapter }
   );
 };
 
-// ---------------------------------------------------------------------------
-// Smear transition — a directioned star-warp over the seam (travel, not a fade).
-// Adapted from the set-video TravelTransition; progress is sequence-relative.
-// ---------------------------------------------------------------------------
-
-const TRANSITION_FRAGMENT = /* glsl */ `
+const TRANSITION_FRAGMENT = `
 ${GLSL.hash}
 void main() {
   vec2 uv = gl_FragCoord.xy / u_res;

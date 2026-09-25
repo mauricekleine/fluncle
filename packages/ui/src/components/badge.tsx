@@ -10,12 +10,7 @@ const badgeVariants = cva(
     defaultVariants: {
       variant: "default",
     },
-    // Gold as ignition (DESIGN.md, The Ignition Rule): a hover HEATS, it never dims.
-    // The stock Shadcn badge sends `ghost` and linked `outline` from Starlight Cream
-    // (16.6:1) down to Stardust (8.8:1) on hover — the sun dimming as you reach for it.
-    // Both take the same Gold Veil wash + Eclipse Glow text the sibling primitives use
-    // (`button.tsx`'s ghost/outline, `tabs.tsx`'s trigger), so the quiet variants speak
-    // one hover grammar across the system.
+
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",

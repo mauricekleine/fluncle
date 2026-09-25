@@ -1,30 +1,3 @@
-// The deterministic aliveness + safety metrics — the objective evaluation layer
-// that measures a rendered MP4 with NO LLM (RFC: Video Aliveness §4, Unit C).
-// Three blocks, one combined report `out/<trackId>.metrics.json`:
-//
-//   - flashSafety (C2)  HARD gate. WCAG 2.3.1 / ISO 9241-391 photosensitivity:
-//                       a coherent, large-area, high-magnitude, >3/sec luminance
-//                       (or saturated-red) strobe blocks ship. The area test is a
-//                       SLIDING 10° sub-window, not whole-frame, so a flashing
-//                       corner/quadrant/logo can't slip the gate.
-//   - coupling (C3)     ADVISORY in v1. The anti-dead counter-gate to beat-pull:
-//                       does the picture's structural change track the music? Read
-//                       against a SINGLE principled EMA-group-delay lag, the
-//                       INTENT-declared driving band only, and a per-clip
-//                       PERMUTATION NULL so "alive" has a defined false-positive
-//                       rate. (The naive max-over-bands-and-lags Pearson reads
-//                       "alive" on pure noise ~21% of the time — invalid.)
-//   - intent (C5)       ADVISORY. Checks the rendered pixels against the author's
-//                       declared render-intent (drop spike, the translation
-//                       tripwire, axis-group coverage, per-binding coupling).
-//
-// It folds in `scoreBeatPull` (the existing HARD gate) on the SAME 48×86 gray
-// extraction, so one report carries BOTH hard gates from one structural pass + one
-// rgb pass + one ffprobe.
-//
-// Determinism: no Math.random / Date.now anywhere. The permutation null uses a
-// FIXED-SEED PRNG (mulberry32) so a run and its test are reproducible.
-
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -43,56 +16,36 @@ import {
   validateRenderIntent,
 } from "./intent";
 
-// ---------------------------------------------------------------------------
-// Grids + constants
-// ---------------------------------------------------------------------------
-
 const GATE_W = 48;
 const GATE_H = 86;
 const FLASH_W = 64;
 const FLASH_H = 114;
 
-// The 10° visual field on a 1080×1920 portrait ≈ 341×256 px (WCAG/ISO, standard
-// screen at 22–26in). On the 64×114 flash grid that scales to ~20×15 px — the
-// sliding sub-window the area rule tests "≥25% flashing" inside.
-const FLASH_FIELD_W = Math.round((341 / 1080) * FLASH_W); // ~20
-const FLASH_FIELD_H = Math.round((256 / 1920) * FLASH_H); // ~15
-const FLASH_FIELD_STRIDE = 4; // coarse stride is fine — we take the max window
+const FLASH_FIELD_W = Math.round((341 / 1080) * FLASH_W);
+const FLASH_FIELD_H = Math.round((256 / 1920) * FLASH_H);
+const FLASH_FIELD_STRIDE = 4;
 
-// WCAG general-flash thresholds.
-const FLASH_MAGNITUDE = 0.1; // each opposing transition ≥ 0.10 of max rel-luminance
-const FLASH_DARK_STATE = 0.8; // the magnitude rule only counts when the darker state < 0.80
-const FLASH_DEADBAND = 0.02; // STATIC extrema deadband (5× headroom below 0.10); NOT self-calibrating
-const FLASH_AREA = 0.25; // ≥25% of a 10° window must flash coherently to count
-const FLASH_RATE_MAX = 3; // > 3 flashes in any 1s window is the rate violation
+const FLASH_MAGNITUDE = 0.1;
+const FLASH_DARK_STATE = 0.8;
+const FLASH_DEADBAND = 0.02;
+const FLASH_AREA = 0.25;
+const FLASH_RATE_MAX = 3;
 
-// Red-flash thresholds.
-const RED_SATURATION = 0.8; // R/(R+G+B) ≥ 0.8 = saturated red
-const RED_CHROMA_CHANGE = 0.2; // CIE-1976 u'v' chromaticity change > 0.2
+const RED_SATURATION = 0.8;
+const RED_CHROMA_CHANGE = 0.2;
 
-// Coupling: the permutation null.
-const NULL_N = 200; // ~200 deterministic shuffles
-const NULL_SEED = 0x9e3779b9; // a fixed seed (golden-ratio constant) — reproducible
-const NULL_BLOCK = 8; // block-shuffle block length (frames) — preserves short-range autocorr
-const ALIVE_PERCENTILE = 95; // provisional: alive = above the 95th null percentile
-const WEAK_PERCENTILE = 80; // provisional: weak = above the 80th null percentile
+const NULL_N = 200;
+const NULL_SEED = 0x9e3779b9;
+const NULL_BLOCK = 8;
+const ALIVE_PERCENTILE = 95;
+const WEAK_PERCENTILE = 80;
 
-// Dead-zone window read.
-const WINDOW_MS = 1000; // 1s sliding window
-const DEAD_ENERGY = 0.6; // a window is "energetic" at mean E ≥ 0.6 (top ~40%)
+const WINDOW_MS = 1000;
+const DEAD_ENERGY = 0.6;
 
-// Fault attribution: a raw-crest split point. Below this the source band itself
-// was flat (Layer-1 signal); above it with a crushed normalized curve points at
-// the normalizer (Layer-1 prime flattener).
 const RAW_CREST_FLAT = 1.4;
-const LOW_MASS_THRESHOLD = 0.05; // "low-mass tail" = fraction of samples below 5% of curve max
-const LOW_MASS_CRUSHED = 0.5; // a crushed curve has a huge low-mass tail
-
-// ---------------------------------------------------------------------------
-// mulberry32 — a fixed-seed PRNG. Deterministic: same seed → same sequence.
-// Used ONLY for the permutation null so the null distribution (and the tests)
-// are reproducible. Never Math.random.
-// ---------------------------------------------------------------------------
+const LOW_MASS_THRESHOLD = 0.05;
+const LOW_MASS_CRUSHED = 0.5;
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -104,10 +57,6 @@ function mulberry32(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-
-// ---------------------------------------------------------------------------
-// Small numeric helpers (pure)
-// ---------------------------------------------------------------------------
 
 function mean(xs: number[]): number {
   if (xs.length === 0) {
@@ -150,7 +99,6 @@ function pearson(a: number[], b: number[]): number {
   return num / den;
 }
 
-/** Percentile of `value` within `dist` (0..100), empirical (fraction strictly below). */
 function percentileOf(value: number, dist: number[]): number {
   if (dist.length === 0) {
     return 0;
@@ -164,7 +112,6 @@ function percentileOf(value: number, dist: number[]): number {
   return (below / dist.length) * 100;
 }
 
-/** Quantile of a distribution at percentile `p` (0..100), nearest-rank. */
 function quantile(dist: number[], p: number): number {
   if (dist.length === 0) {
     return 0;
@@ -173,11 +120,6 @@ function quantile(dist: number[], p: number): number {
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.round((p / 100) * (sorted.length - 1))));
   return sorted[idx];
 }
-
-// ---------------------------------------------------------------------------
-// Curve resampling — 20Hz EnergySample[] → per-frame, linear interp in timeMs,
-// matching the shader's sampleCurve (so the metric sees what the shader saw).
-// ---------------------------------------------------------------------------
 
 function sampleCurveAt(curve: EnergySample[], timeMs: number): number {
   if (curve.length === 0) {
@@ -206,7 +148,6 @@ function sampleCurveAt(curve: EnergySample[], timeMs: number): number {
   return last.energy;
 }
 
-/** Resample a 20Hz curve to `frameCount` samples at `fps` (frame f → f/fps*1000 ms). */
 function resampleToFrames(curve: EnergySample[], frameCount: number, fps: number): number[] {
   const out: number[] = [];
   for (let f = 0; f < frameCount; f++) {
@@ -214,17 +155,6 @@ function resampleToFrames(curve: EnergySample[], frameCount: number, fps: number
   }
   return out;
 }
-
-// ---------------------------------------------------------------------------
-// Band → EMA group delay (frames). The shader smooths the curve with a one-pole
-// EMA whose group delay ≈ the smoothingFrames constant of the hook. We align the
-// structural delta against the curve by THAT single principled lag — never a scan.
-//   useEnergy sf=4 (~135ms@30) · useBass/useMid sf=3 (~100ms) · useTreble/useFlux
-//   sf=2 (~70ms) · *Fast sf=1 (~33ms). drop/swell/hit/onset ride energy/smoothed
-//   bands → energy's delay. These MUST mirror each hook's default smoothingFrames
-//   (use-mid.ts is sf=3, use-treble.ts / use-flux.ts are sf=2) so the metric's lag
-//   matches the shader's group delay.
-// ---------------------------------------------------------------------------
 
 const BAND_SMOOTHING_FRAMES: Record<IntentBand, number> = {
   bass: 3,
@@ -264,14 +194,9 @@ function bandCurve(audio: CosmosAudio, band: IntentBand): EnergySample[] {
   }
 }
 
-/** The lag (frames) the structural delta trails the curve: round(sf) at the probed fps. */
 function lagFramesFor(band: IntentBand): number {
   return Math.max(0, Math.round(BAND_SMOOTHING_FRAMES[band]));
 }
-
-// ---------------------------------------------------------------------------
-// FLASH SAFETY (C2)
-// ---------------------------------------------------------------------------
 
 export type FlashSafetyResult = {
   deterministic: true;
@@ -292,12 +217,10 @@ function srgbToLinear(c8: number): number {
   return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 }
 
-/** WCAG relative luminance (BT.709) from an 8-bit sRGB triple. */
 function relLuminance(r: number, g: number, b: number): number {
   return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
 }
 
-/** CIE-1976 u'v' from an 8-bit sRGB triple (approximate, via linear RGB→XYZ). */
 function uvPrime(r: number, g: number, b: number): { u: number; v: number } {
   const rl = srgbToLinear(r);
   const gl = srgbToLinear(g);
@@ -315,17 +238,17 @@ function uvPrime(r: number, g: number, b: number): { u: number; v: number } {
 type FlashPerPixel = {
   width: number;
   height: number;
-  /** per-frame: per-pixel relative luminance */
+
   lum: Float32Array[];
-  /** per-frame: per-pixel saturated-red boolean (1/0) */
+
   red: Float32Array[];
-  /** per-frame: per-pixel u' */
+
   u: Float32Array[];
-  /** per-frame: per-pixel v' */
+
   v: Float32Array[];
-  /** per-frame spatial-mean relative luminance */
+
   meanL: number[];
-  /** per-frame spatial-mean saturated-red fraction */
+
   meanRed: number[];
 };
 
@@ -375,7 +298,6 @@ function decodeFlashFrames(rgb: RgbFrames): FlashPerPixel {
 
 type Extremum = { frame: number; value: number };
 
-/** Local extrema of a series with a STATIC deadband (a swing must exceed it to register). */
 function extremaWithDeadband(series: number[], deadband: number): Extremum[] {
   const n = series.length;
   if (n === 0) {
@@ -383,12 +305,11 @@ function extremaWithDeadband(series: number[], deadband: number): Extremum[] {
   }
   const out: Extremum[] = [{ frame: 0, value: series[0] }];
   let lastExt = series[0];
-  let dir = 0; // +1 rising, -1 falling, 0 unknown
+  let dir = 0;
   for (let i = 1; i < n; i++) {
     const x = series[i];
     const diff = x - lastExt;
     if (dir >= 0 && diff > deadband) {
-      // still / now rising
       if (dir === 0) {
         dir = 1;
       }
@@ -401,7 +322,6 @@ function extremaWithDeadband(series: number[], deadband: number): Extremum[] {
       lastExt = x;
       out[out.length - 1] = { frame: i, value: x };
     } else if (dir > 0 && -diff > deadband) {
-      // turned over: record the peak we were tracking, start falling
       out.push({ frame: i, value: x });
       lastExt = x;
       dir = -1;
@@ -416,11 +336,10 @@ function extremaWithDeadband(series: number[], deadband: number): Extremum[] {
 
 type FlashEvent = { midFrame: number; peakFrame: number; valleyFrame: number; magnitude: number };
 
-/** Count flashes on a mean series: opposing transition pairs each ≥mag with darker state <darkLimit. */
 function countFlashes(series: number[], mag: number, darkLimit: number): FlashEvent[] {
   const ext = extremaWithDeadband(series, FLASH_DEADBAND);
   const flashes: FlashEvent[] = [];
-  // A flash = two consecutive opposing transitions, each qualifying.
+
   for (let i = 2; i < ext.length; i++) {
     const a = ext[i - 2];
     const b = ext[i - 1];
@@ -442,7 +361,6 @@ function countFlashes(series: number[], mag: number, darkLimit: number): FlashEv
   return flashes;
 }
 
-/** Max flashes in any 1-second sliding window, keyed off the flashes' midpoint frame. */
 function maxFlashesPerSecond(flashes: FlashEvent[], fps: number): number {
   if (flashes.length === 0) {
     return 0;
@@ -463,13 +381,6 @@ function maxFlashesPerSecond(flashes: FlashEvent[], fps: number): number {
   return max;
 }
 
-/**
- * The 10°-field area rule (the P0 safety fix). For a peak↔valley frame pair, the
- * flash counts toward the gate only if ≥25% of the pixels inside SOME 10°-sized
- * sub-window flash coherently (|ΔL|≥0.10 AND the local darker state <0.80). Slide
- * the window across the grid; return the MAX per-window flashing fraction. A
- * whole-frame rule would miss a flashing corner/quadrant/logo.
- */
 function worstWindowFlashFraction(
   peakLum: Float32Array,
   valleyLum: Float32Array,
@@ -507,13 +418,6 @@ function worstWindowFlashFraction(
   return worst;
 }
 
-/**
- * The grain-only spatial-noise reference: the median per-frame spatial std of the
- * relative-luminance field, an estimate of incoherent texture INDEPENDENT of the
- * temporal flash signal. It may only LOWER, never raise, the safety floor — so it
- * is reported for transparency but does not arm the gate (the static 0.02 deadband
- * already sits 5× below WCAG's 0.10).
- */
 function grainFloor(perFrame: FlashPerPixel): number {
   const stds: number[] = [];
   for (let f = 0; f < perFrame.lum.length; f++) {
@@ -533,17 +437,13 @@ function grainFloor(perFrame: FlashPerPixel): number {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-/** Pure flash-safety scorer over decoded rgb frames. No ffmpeg. */
 export function scoreFlashSafety(rgb: RgbFrames): FlashSafetyResult {
   const perFrame = decodeFlashFrames(rgb);
   const fps = rgb.fps;
   const { width, height, lum, meanL, meanRed } = perFrame;
 
-  // General-flash rate, on the spatial-mean luminance series (grain cancels here).
   const generalFlashes = countFlashes(meanL, FLASH_MAGNITUDE, FLASH_DARK_STATE);
 
-  // Area-gate each candidate flash: keep only flashes that paint ≥25% of SOME 10°
-  // window. Track the worst (largest) window fraction + when it happens.
   let worstWindowArea = 0;
   let worstWindowStartMs = 0;
   const areaQualified: FlashEvent[] = [];
@@ -564,13 +464,9 @@ export function scoreFlashSafety(rgb: RgbFrames): FlashSafetyResult {
   }
   const maxGeneral = maxFlashesPerSecond(areaQualified, fps);
 
-  // Red-flash branch: a transition to/from saturated red with u'v' chroma change
-  // > 0.2, same rate + area rules. Detect on the meanRed series; area-gate via the
-  // saturated-red pixel fraction inside a 10° window.
   const redCandidates = countFlashes(meanRed, FLASH_MAGNITUDE, 1.0);
   const redQualified: FlashEvent[] = [];
   for (const flash of redCandidates) {
-    // chroma change across the pair (spatial-mean u'v')
     const peakU = mean([...perFrame.u[flash.peakFrame]]);
     const peakV = mean([...perFrame.v[flash.peakFrame]]);
     const valU = mean([...perFrame.u[flash.valleyFrame]]);
@@ -595,8 +491,6 @@ export function scoreFlashSafety(rgb: RgbFrames): FlashSafetyResult {
   }
   const maxRed = maxFlashesPerSecond(redQualified, fps);
 
-  // The stricter AAA advisory (WCAG 2.3.2): raw flashes/sec ignoring area/magnitude
-  // gate — every opposing extremum pair past the deadband.
   const rawFlashes = countFlashes(meanL, FLASH_DEADBAND, 1.0);
   const rawFlashesPerSec = maxFlashesPerSecond(rawFlashes, fps);
 
@@ -651,32 +545,28 @@ function worstWindowRedFraction(
   return worst;
 }
 
-// ---------------------------------------------------------------------------
-// COUPLING (C3)
-// ---------------------------------------------------------------------------
-
 export type CouplingResult = {
   deterministic: true;
   hard: false;
-  /** raw Pearson r of structural delta vs the headline (intent-declared) band at the principled lag. */
+
   coupling: number;
-  /** z-score of the raw coupling against the per-clip permutation null. */
+
   couplingZ: number;
-  /** empirical percentile of the raw coupling against the null (0..100). */
+
   couplingPercentile: number;
   headlineBand: IntentBand;
-  /** null if no valid intent declared a structural band (defaulted to energy). */
+
   intentDeclaredBand: IntentBand | null;
   lagFrames: number;
   lagMs: number;
-  /** diagnostics — never the headline (max-of-correlated-bands inflates). */
+
   diagnostics: { energy: number; bass: number; flux: number };
   pictureActivity: number;
   verdict: "alive" | "weak" | "dead";
   nullDesc: string;
   deadZones: DeadZone[];
   attribution: CouplingAttribution;
-  /** provisional null-derived cutoffs (alive/weak), reported for transparency; not calibrated. */
+
   provisionalThresholds: { alive: number; weak: number };
 };
 
@@ -695,7 +585,6 @@ export type CouplingAttribution = {
   rawCrest: number | null;
 };
 
-/** Pearson at a single fixed lag: structural delta[f] vs curve[f - lag] (curve leads). */
 function laggedPearson(delta: number[], curve: number[], lag: number): number {
   const n = delta.length;
   if (n < 4) {
@@ -710,13 +599,12 @@ function laggedPearson(delta: number[], curve: number[], lag: number): number {
   return pearson(a, b);
 }
 
-/** Block-shuffle a series with a fixed-seed PRNG (preserves short-range autocorrelation). */
 function blockShuffle(series: number[], block: number, rng: () => number): number[] {
   const blocks: number[][] = [];
   for (let i = 0; i < series.length; i += block) {
     blocks.push(series.slice(i, i + block));
   }
-  // Fisher–Yates over the block order.
+
   for (let i = blocks.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
     const tmp = blocks[i];
@@ -739,12 +627,9 @@ export type CouplingInput = {
   intent: RenderIntent | null;
 };
 
-/** Pure coupling scorer over a structural delta + the audio curves + intent. No ffmpeg. */
 export function scoreCoupling(input: CouplingInput): CouplingResult {
   const { delta, audio, fps, intent } = input;
 
-  // Headline band = the intent-declared structural driver (first binding whose
-  // axis is structural). If no/invalid intent, default to energy with the flag.
   let intentDeclaredBand: IntentBand | null = null;
   if (intent) {
     const structuralBinding = intent.bindings.find((bnd) => STRUCTURAL_AXES.includes(bnd.axis));
@@ -754,16 +639,12 @@ export function scoreCoupling(input: CouplingInput): CouplingResult {
   }
   const headlineBand: IntentBand = intentDeclaredBand ?? "energy";
 
-  // Resample the 20Hz curve to the structural-delta frame grid (linear interp,
-  // matching the shader's sampleCurve) so the metric sees what the shader saw.
   const curveFull = resampleToFrames(bandCurve(audio, headlineBand), delta.length, fps);
   const lag = lagFramesFor(headlineBand);
   const lagMs = Math.round((lag / fps) * 1000);
 
   const coupling = laggedPearson(delta, curveFull, lag);
 
-  // Diagnostics (energy/bass/flux) at their own principled lags — reported, never
-  // the headline (taking the max of correlated bands inflates the score).
   const eCurve = resampleToFrames(audio.energyCurve, delta.length, fps);
   const bCurve = resampleToFrames(audio.bassCurve, delta.length, fps);
   const fCurve = resampleToFrames(audio.fluxCurve ?? [], delta.length, fps);
@@ -773,12 +654,6 @@ export function scoreCoupling(input: CouplingInput): CouplingResult {
     flux: laggedPearson(delta, fCurve, lagFramesFor("flux")),
   };
 
-  // Per-clip PERMUTATION NULL: block-shuffle the (resampled) headline curve with a
-  // fixed-seed PRNG, re-run the IDENTICAL single-lag Pearson N times, build the
-  // null distribution. coupling is reported as z-score + percentile against it, so
-  // "alive" has a DEFINED false-positive rate (alive = above the 95th percentile →
-  // ~5% FP). The naive max-over-bands-and-lags estimator reads alive on noise
-  // ~21% of the time; this bounds it at the chosen percentile.
   const rng = mulberry32(NULL_SEED);
   const nullDist: number[] = [];
   for (let i = 0; i < NULL_N; i++) {
@@ -797,12 +672,7 @@ export function scoreCoupling(input: CouplingInput): CouplingResult {
 
   const aliveCut = quantile(nullDist, ALIVE_PERCENTILE);
   const weakCut = quantile(nullDist, WEAK_PERCENTILE);
-  // The verdict reads off the EMPIRICAL PERCENTILE against the null (the
-  // statistically principled measure with a defined FP rate), not a raw cutoff —
-  // a degenerate null (a flat driving curve → every shuffle correlates ~0, like
-  // the real value) yields a 0th-percentile coupling and reads "dead", which is
-  // correct (there is nothing to couple to). The cuts above are reported as the
-  // provisional thresholds. A near-zero coupling can't be "alive" by definition.
+
   let verdict: "alive" | "weak" | "dead";
   if (coupling > 1e-6 && couplingPercentile >= ALIVE_PERCENTILE) {
     verdict = "alive";
@@ -814,16 +684,8 @@ export function scoreCoupling(input: CouplingInput): CouplingResult {
 
   const pictureActivity = mean(delta);
 
-  // Windowed read REPLACES a separate dead-zone metric: slide the same estimator
-  // across 1s windows; an energetic window (mean E ≥ 0.6) with near-null coupling
-  // (below the alive cut) is a dead zone. A dead zone overlapping intent.dropMs is
-  // escalated to a named intent failure by the report assembler.
   const deadZones = findDeadZones(delta, eCurve, headlineBand, fps, intent, aliveCut);
 
-  // FAULT ATTRIBUTION (advisory): gate on couplingZ. Evidence = the low-mass tail
-  // (fraction of curve samples below 5% of the curve max). rawDynamicsHint splits
-  // "track was flat" (Layer 1 signal) from "the normalizer flattened it" (Layer 1
-  // prime flattener) from "the picture ignores a dynamic curve" (Layer 2 binding).
   const attribution = attribute(
     couplingZ,
     couplingPercentile,
@@ -890,7 +752,6 @@ function attribute(
   rawHint: CosmosAudio["rawDynamicsHint"],
   headlineBand: IntentBand,
 ): CouplingAttribution {
-  // Alive on the corrected z-score → no attribution needed.
   if (couplingPercentile >= ALIVE_PERCENTILE) {
     return {
       attributedLayer: null,
@@ -903,7 +764,6 @@ function attribute(
   const tail = lowMassTail(curve);
   const rawCrest = rawCrestFor(rawHint, headlineBand);
 
-  // Raw band itself flat → Layer-1 (signal): nothing for any binding to react to.
   if (rawCrest !== null && rawCrest < RAW_CREST_FLAT) {
     return {
       attributedLayer: 1,
@@ -913,8 +773,6 @@ function attribute(
     };
   }
 
-  // Raw band dynamic but the normalized curve is crushed (huge low-mass tail) →
-  // Layer-1 prime flattener (the normalizer ate the dynamics — a different fix).
   if (rawCrest !== null && rawCrest >= RAW_CREST_FLAT && tail >= LOW_MASS_CRUSHED) {
     return {
       attributedLayer: 1,
@@ -924,7 +782,6 @@ function attribute(
     };
   }
 
-  // Dynamic curve, picture ignores it → Layer-2 (binding).
   return {
     attributedLayer: 2,
     lowMassTail: tail,
@@ -933,7 +790,6 @@ function attribute(
   };
 }
 
-/** Fraction of curve samples below 5% of the curve max (the low-mass tail). */
 function lowMassTail(curve: number[]): number {
   if (curve.length === 0) {
     return 0;
@@ -975,14 +831,9 @@ function rawCrestFor(
     case "trebleFast":
       return rawHint.treble;
     default:
-      // energy/swell/drop/etc. have no single raw band — use the loudest band's crest.
       return Math.max(rawHint.bass, rawHint.mid, rawHint.treble);
   }
 }
-
-// ---------------------------------------------------------------------------
-// INTENT-VS-ACTUAL (C5)
-// ---------------------------------------------------------------------------
 
 export type IntentBindingCheck = {
   band: IntentBand;
@@ -1026,11 +877,9 @@ export type IntentCheckInput = {
   fps: number;
 };
 
-/** Pure intent-vs-actual checker. No ffmpeg. */
 export function checkIntent(input: IntentCheckInput): IntentCheckResult {
   const { intent, delta, meanL, audio, fps } = input;
 
-  // (i) Drop spike: a real luminance OR structural spike in [dropMs-500, dropMs+1000].
   const winStart = Math.max(0, Math.round(((intent.dropMs - 500) / 1000) * fps));
   const winEnd = Math.min(delta.length, Math.round(((intent.dropMs + 1000) / 1000) * fps));
   const deltaBaseline = median(delta) || 1e-9;
@@ -1043,7 +892,7 @@ export function checkIntent(input: IntentCheckInput): IntentCheckResult {
       peakFrame = f;
     }
   }
-  // luminance frame-to-frame delta baseline (median |ΔmeanL|)
+
   const lumDeltas: number[] = [];
   for (let f = 1; f < meanL.length; f++) {
     lumDeltas.push(Math.abs(meanL[f] - meanL[f - 1]));
@@ -1058,9 +907,7 @@ export function checkIntent(input: IntentCheckInput): IntentCheckResult {
       dropLuminance = ratio;
     }
   }
-  // Actual structural peak over the WHOLE clip vs the declared drop → the
-  // scripted-clock anti-pattern tell. A large gap means the arc is pinned to the
-  // wrong place.
+
   let globalPeakFrame = 0;
   let globalPeak = -1;
   for (let f = 0; f < delta.length; f++) {
@@ -1071,11 +918,9 @@ export function checkIntent(input: IntentCheckInput): IntentCheckResult {
   }
   const actualPeakMs = Math.round((globalPeakFrame / fps) * 1000);
   const arcPeakAlignmentMs = Math.abs(actualPeakMs - intent.dropMs);
-  // A drop "passes" if there is a clear spike (structural OR luminance) in window.
+
   const dropPass = dropStructural >= 2.0 || dropLuminance >= 1.5;
 
-  // (ii) Translation tripwire: any binding axis "translation" with a band NOT in
-  // SMOOTHED_BANDS is a self-reported beat-pull.
   const violations: string[] = [];
   for (const bnd of intent.bindings) {
     if (bnd.axis === "translation" && !SMOOTHED_BANDS.includes(bnd.band)) {
@@ -1083,7 +928,6 @@ export function checkIntent(input: IntentCheckInput): IntentCheckResult {
     }
   }
 
-  // (iii) Axis-group coverage: ≥1 structural, ≥1 light, ≥1 texture (doctrine 9).
   let hasStructural = false;
   let hasLight = false;
   let hasTexture = false;
@@ -1099,7 +943,6 @@ export function checkIntent(input: IntentCheckInput): IntentCheckResult {
     }
   }
 
-  // (iv) Per-binding band coupling + discrimination (ADVISORY, realistic floors).
   const bandList: IntentBand[] = ["energy", "bass", "mid", "treble", "flux"];
   const bindings: IntentBindingCheck[] = intent.bindings.map((bnd) => {
     const claimed = laggedPearson(
@@ -1107,7 +950,7 @@ export function checkIntent(input: IntentCheckInput): IntentCheckResult {
       resampleToFrames(bandCurve(audio, bnd.band), delta.length, fps),
       lagFramesFor(bnd.band),
     );
-    // discrimination: claimed band correlates ≥ the others (collinear bands → low-confidence).
+
     let maxOther = -2;
     for (const other of bandList) {
       if (other === bnd.band) {
@@ -1122,15 +965,13 @@ export function checkIntent(input: IntentCheckInput): IntentCheckResult {
         maxOther = r;
       }
     }
-    // Realistic floor: EMA-lagged binds rarely reach 0.8 on short clips. ~0.3 for
-    // a strong bind; gate on the corrected null in the report. Here pass = a
-    // modest positive Pearson at the principled lag.
+
     const floor = bnd.intendedStrength === "strong" ? 0.3 : 0.15;
     return {
       actualCoupling: claimed,
       axis: bnd.axis,
       band: bnd.band,
-      couplingPercentile: 0, // filled by assembler against the shared null if needed
+      couplingPercentile: 0,
       discriminates: claimed >= maxOther,
       discriminatesConfidence: "low-confidence on short clips",
       element: bnd.element,
@@ -1176,35 +1017,17 @@ function median(xs: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-// ---------------------------------------------------------------------------
-// Beat-grid reactivity + structural arc (R3 rebuild — the anti-dead measure that
-// WORKS on real-beat tracks). The legacy `coupling` block above correlates the
-// structural delta against the audio curve's VARIANCE; on a sustained beat the
-// energy curve is flat-high (no variance) so it collapses to ~0 ("dead") even on
-// a reacting clip, and it brightness-normalizes luminosity away (so a clip that
-// reacts via brightness reads negative). This block instead asks two questions
-// the operator's eye actually cares about (out/overnight/INSIGHTS.md): does the
-// picture's reactivity — structure AND luminosity — SPIKE on the beat-grid times
-// vs between, and does its CHARACTER shift calm->vibrant across the drop (the
-// prized "reactive scene-change")? Advisory; reported beside the legacy value.
-// NOTE: this measures the INTERNAL/anti-dead channel; it does NOT distinguish a
-// good in-place reaction from a whole-vehicle JUMP (both spike on the beat) —
-// beat-pull (reversal) is the gate that catches the jump.
-// ---------------------------------------------------------------------------
-
 export type BeatReactivity = {
   deterministic: true;
   hard: false;
-  /** On-beat minus off-beat reactivity, normalized to [-1,1], on a combined
-   *  structural+luminance delta. >0 = the picture reacts more ON the beats. */
+
   beatGridCoupling: number;
   structuralBeatContrast: number;
   luminanceBeatContrast: number;
-  /** Percentile of the real on-beat reactivity vs a phase-shuffled-beat null. */
+
   beatPercentile: number;
   verdict: "reactive" | "weak" | "dead";
-  /** Structural arc: does the character shift calm->vibrant across the drop?
-   *  Positive = more active/brighter after the drop (the prized scene-change). */
+
   arcScore: number;
   arcActivityDelta: number;
   arcLumaDelta: number;
@@ -1274,13 +1097,10 @@ export type BeatReactivityInput = {
   intent: RenderIntent | null;
 };
 
-/** Pure beat-grid reactivity + arc scorer over the structural delta + the per-frame
- *  luminance + the beat grid + intent. No ffmpeg. Advisory. */
 export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity {
   const { delta, meanL, audio, fps, intent } = input;
   const n = delta.length;
 
-  // Luminance delta, aligned to the structural delta (both index i = frame i->i+1).
   const lumaDelta: number[] = [];
   for (let i = 0; i < n; i++) {
     lumaDelta.push(Math.abs((meanL[i + 1] ?? meanL[i] ?? 0) - (meanL[i] ?? 0)));
@@ -1289,11 +1109,10 @@ export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity 
   const lumaN = minMaxNorm(lumaDelta);
   const combined = structN.map((s, i) => s + (lumaN[i] ?? 0));
 
-  // Beat frames in the delta index space.
   const beatFrames = audio.beatGrid
     .map((ms) => Math.round((ms / 1000) * fps))
     .filter((f) => f >= 0 && f < n);
-  const halfWin = Math.max(1, Math.round(fps * 0.06)); // ~60ms on-beat window (+ hook lag)
+  const halfWin = Math.max(1, Math.round(fps * 0.06));
 
   const structPair = onOffBeatMean(structN, beatFrames, halfWin);
   const lumaPair = onOffBeatMean(lumaN, beatFrames, halfWin);
@@ -1302,8 +1121,6 @@ export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity 
   const luminanceBeatContrast = contrast(lumaPair.on, lumaPair.off);
   const beatGridCoupling = contrast(combPair.on, combPair.off);
 
-  // Phase-shuffle null: shift the whole beat grid by a random frame offset, recompute
-  // the on-beat mean of the combined signal. ~200 deterministic shifts (mulberry32).
   let beatPercentile = 0;
   if (beatFrames.length >= 2 && n > 4) {
     const rng = mulberry32(NULL_SEED ^ 0x5bd1e995);
@@ -1324,7 +1141,6 @@ export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity 
     verdict = "dead";
   }
 
-  // Structural arc: drop frame from intent (preferred) or the energy-curve peak.
   let dropMs = intent && intent.dropMs > 0 ? intent.dropMs : 0;
   let dropSource: "intent" | "energyPeak" = "intent";
   if (dropMs <= 0) {
@@ -1365,83 +1181,17 @@ export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity 
   };
 }
 
-// ---------------------------------------------------------------------------
-// ARC / DEADNESS (C4 — the structural TWIN of beat-pull). Beat-pull is the HARD
-// gate on the SHORT timescale (the picture jitters back and forth on the beat);
-// this is the HARD gate on the LONG timescale (the picture never reorganizes at
-// all — a frozen field, a looping wallpaper, near-static bars). Neither survives
-// a still critique: beat-pull is invisible in stills, and a dead clip's stills
-// each look fine — the deadness only exists across the WHOLE span.
-//
-// Method: pick 5 anchor frames at ~5/25/50/75/95% of the clip and measure how far
-// the picture STRUCTURALLY reorganizes between adjacent anchors. Each pairwise
-// change combines three views, so no single laundering trick (recolor only, or
-// translate a fixed pattern only) passes:
-//   - grayMad   : mean-abs-diff of the downscaled+blurred luma plane (gross form).
-//   - edgeMad   : mean-abs-diff of the Sobel edge-magnitude map (where the
-//                 structure/contours sit — the strongest discriminator: a frozen
-//                 field's edges don't move even when its colour cycles).
-//   - colorDist : Bhattacharyya distance of an HSV histogram (palette evolution) —
-//                 weighted LIGHTLY (ARC_COLOR_WEIGHT) so a pure recolor of a frozen
-//                 field can't rescue it, but genuine colour arc still counts.
-// Grain robustness reuses the file's fencing tricks: frames arrive already
-// area-downscaled (frames.ts `flags=area` box-averages grain spatially), and a
-// 3×3 box blur pre-smooths each anchor before the diff (grain is incoherent, so
-// it cancels in both the MAD and the edge map).
-//
-// The headline scalar `wholeClipChange` = MEAN of the 4 adjacent combined changes:
-// the average magnitude by which the picture reorganizes across the arc. HARD gate
-// "dead clip": wholeClipChange < ARC_FLOOR exits non-zero like the other hard
-// gates. When intent declares an arc (a drop), the arc block also folds an
-// advisory actual-vs-intent read: does the declared-climax anchor segment carry at
-// least the clip's own mean change (the arc actually moves where it was promised)?
-//
-// CALIBRATED ON REAL GROUND TRUTH (footage.social.mp4, 64×114, 3×3 blur, colorW=0.25):
-//   032.0.4L (a real arc — must PASS)          wholeClipChange = 0.356
-//   032.0.6R (20s near-static bars — must FAIL) wholeClipChange = 0.220
-// ARC_FLOOR = 0.29 sits ~23% below the pass anchor and ~24% above the fail anchor
-// (symmetric margin). 6R's frozen middle shows plainly in the edge component
-// (adjacent edgeMad collapses to ~0.07 vs 4L's steady ~0.27). Re-earn the floor as
-// verdicts accumulate via calibrate.ts.
-// ---------------------------------------------------------------------------
-
 export const ARC_ANCHOR_PCTS = [0.05, 0.25, 0.5, 0.75, 0.95] as const;
 const ARC_COLOR_WEIGHT = 0.25;
 const ARC_FLOOR = 0.29;
-// The best-window (subregion) read — the presence carve-out, mirroring the flash
-// gate's sliding 10° sub-window. The whole-frame MEAN is a texture-era statistic: it
-// dilutes a change concentrated in PART of the frame (a distant ship crossing 15% of a
-// dark sky, a ruin resolving inside one fog band) below the floor even when that
-// change is dramatic. So beside `wholeClipChange` the gate also finds the strongest
-// reorganizing SUBREGION and passes when EITHER clears its floor — a field that
-// reorganizes as a whole (wholeClipChange ≥ ARC_FLOOR) OR a subject that
-// arrives/reveals/crosses in one region (bestWindowChange ≥ ARC_REGION_FLOOR). A
-// frame where nothing changes anywhere still fails both (the dead clip: its edges are
-// frozen in EVERY window, so no subregion clears the regional floor even as grain
-// churns). The regional floor is HIGHER than the whole-frame floor because a small
-// window naturally concentrates its change and averages grain less. PROVISIONAL —
-// calibrated so the frozen-bars anchor (032.0.6R, wholeClipChange ~0.220) stays DEAD
-// in every window and a concentrated reveal clears it; re-earn against the first real
-// presence exemplar (see calibration/verdicts.json). The window is ~1/3 of each
-// dimension so a quadrant-scale subject reads without a single hot pixel dominating.
+
 const ARC_REGION_FLOOR = 0.5;
-// The presence-quiet relief band (pilot 033.0.1O "The Passing Hull"). A
-// QUIET presence render is structurally UNABLE to reach the whole-frame floor — most
-// of the frame is intentional dark sky that breathes with the bass, so the mean of
-// the adjacent changes stays low by design (the pilot: wholeClipChange 0.136). The
-// region path is what carries it, and it can land JUST under ARC_REGION_FLOOR (the
-// pilot cleared it at 0.543, barely). When the whole-frame read misses AND the region
-// read is within STRIKING DISTANCE of its floor (≥ this) AND both HARD safety gates
-// passed (beat-pull flows, flash is safe — a quiet render that also jitters or strobes
-// earns no relief), the gate returns inconclusive("presenceQuiet") — an advisory
-// PASS-with-note to eyeball the reveal — instead of a hard dead-fail. PROVISIONAL:
-// re-earn the band as presence renders accumulate (calibration/verdicts.json).
+
 const ARC_PRESENCE_STRIKING = 0.4;
-const ARC_WINDOW_DIV = 3; // sub-window ≈ width/DIV × height/DIV
-const ARC_WINDOW_STRIDE_DIV = 2; // stride ≈ window / DIV (coarse — we take the max)
-const ARC_MIN_FRAMES = 10; // fewer frames → inconclusive (never a false dead-fail)
-// HSV histogram bins (hue×sat×val). Coarse on purpose — the arc cares about broad
-// palette drift, not fine colour, and coarse bins are grain-robust.
+const ARC_WINDOW_DIV = 3;
+const ARC_WINDOW_STRIDE_DIV = 2;
+const ARC_MIN_FRAMES = 10;
+
 const ARC_HUE_BINS = 8;
 const ARC_SAT_BINS = 4;
 const ARC_VAL_BINS = 4;
@@ -1454,13 +1204,12 @@ export type ArcSegmentChange = {
 };
 
 export type ArcIntentCheck = {
-  /** intent declares an arc (dropMs > 0). */
   declared: boolean;
   dropMs: number;
-  /** index of the anchor segment [k,k+1] whose time span contains the drop. */
+
   dropSegment: number;
   dropSegmentChange: number;
-  /** the declared-climax segment carries >= the clip's mean change. */
+
   meetsArc: boolean;
 };
 
@@ -1469,19 +1218,16 @@ export type ArcResult = {
   hard: true;
   dead: boolean;
   verdict: "evolving" | "dead" | "inconclusive";
-  /** the inconclusive reason when verdict is "inconclusive": "tooShort" (too few
-   *  frames to judge) or "presenceQuiet" (the presence-class relief — a near-miss
-   *  regional reveal on a clip that cleared both hard safety gates; advisory pass,
-   *  eyeball the reveal). Absent on evolving/dead. */
+
   inconclusive?: string;
-  /** headline: mean of the adjacent combined structural changes. */
+
   wholeClipChange: number;
-  /** the deadest adjacent transition (a sustained-freeze tell), reported. */
+
   minSegmentChange: number;
-  /** the strongest reorganizing SUBREGION across all adjacent pairs (the presence read). */
+
   bestWindowChange: number;
   floor: number;
-  /** the higher floor the best-window read must clear to rescue a small whole-frame mean. */
+
   regionFloor: number;
   anchorPcts: number[];
   anchorFrames: number[];
@@ -1489,7 +1235,6 @@ export type ArcResult = {
   intentArc: ArcIntentCheck | null;
 };
 
-/** Downscaled+blurred luma plane (0..1) of one rgb frame. 3×3 box blur = grain fence. */
 function arcLumaPlane(frame: Float32Array, width: number, height: number): Float32Array {
   const pix = width * height;
   const gray = new Float32Array(pix);
@@ -1517,7 +1262,6 @@ function arcLumaPlane(frame: Float32Array, width: number, height: number): Float
   return out;
 }
 
-/** Sobel edge-magnitude map of a luma plane (borders left 0). */
 function sobelMap(plane: Float32Array, width: number, height: number): Float32Array {
   const out = new Float32Array(plane.length);
   for (let y = 1; y < height - 1; y++) {
@@ -1543,7 +1287,6 @@ function sobelMap(plane: Float32Array, width: number, height: number): Float32Ar
   return out;
 }
 
-/** Normalized HSV histogram of one rgb frame (ARC_HUE_BINS×ARC_SAT_BINS×ARC_VAL_BINS). */
 function hsvHistogram(frame: Float32Array, width: number, height: number): Float32Array {
   const pix = width * height;
   const hist = new Float32Array(ARC_HUE_BINS * ARC_SAT_BINS * ARC_VAL_BINS);
@@ -1580,7 +1323,6 @@ function hsvHistogram(frame: Float32Array, width: number, height: number): Float
   return hist;
 }
 
-/** Bhattacharyya distance of two normalized histograms (0 identical, 1 disjoint). */
 function bhattacharyya(a: Float32Array, b: Float32Array): number {
   let bc = 0;
   for (let i = 0; i < a.length; i++) {
@@ -1597,7 +1339,6 @@ function madFloat(a: Float32Array, b: Float32Array): number {
   return d / a.length;
 }
 
-/** Mean-abs-diff of two planes restricted to a [x0,y0]+[w,h] sub-window. */
 function madFloatWindow(
   a: Float32Array,
   b: Float32Array,
@@ -1619,7 +1360,6 @@ function madFloatWindow(
   return count > 0 ? d / count : 0;
 }
 
-/** Normalized HSV histogram of one rgb frame restricted to a sub-window. */
 function hsvHistogramWindow(
   frame: Float32Array,
   width: number,
@@ -1669,14 +1409,6 @@ function hsvHistogramWindow(
   return hist;
 }
 
-/**
- * The strongest reorganizing SUBREGION between two anchor frames: slide a
- * ~(width/DIV × height/DIV) window across the frame and return the MAX windowed
- * `combined` (grayMad + edgeMad + colorW·colorDist) — the same metric as the
- * whole-frame read, restricted to a region. This is how a change concentrated in
- * part of the frame (a subject arriving/crossing) survives a small whole-frame mean.
- * Mirrors `worstWindowFlashFraction`'s sliding-window design.
- */
 function bestSubWindowChange(
   lumaA: Float32Array,
   lumaB: Float32Array,
@@ -1712,16 +1444,11 @@ export type ArcInput = {
   rgb: RgbFrames;
   fps: number;
   intent: RenderIntent | null;
-  /** Did the two HARD safety gates PASS? The presence-quiet relief fires only when
-   *  BOTH are true — a quiet presence render that clears beat-pull (flows) and flash
-   *  (safe) earns an advisory pass on a near-miss regional reveal instead of a hard
-   *  dead-fail. Omitted (a bare scoreArc call — a test, a calibration read) → the
-   *  relief never fires and the pre-relief dead logic holds unchanged. */
+
   beatPullPass?: boolean;
   flashPass?: boolean;
 };
 
-/** Pure arc/deadness scorer over the decoded rgb frames + intent. No ffmpeg. HARD. */
 export function scoreArc(input: ArcInput): ArcResult {
   const { rgb, fps, intent, beatPullPass, flashPass } = input;
   const { width, height, frames } = rgb;
@@ -1769,9 +1496,6 @@ export function scoreArc(input: ArcInput): ArcResult {
   const wholeClipChange = mean(combinedList);
   const minSegmentChange = Math.min(...combinedList);
 
-  // The best-window (subregion) read: the strongest reorganizing region across all
-  // adjacent anchor pairs. A subject that arrives/reveals/crosses in part of the
-  // frame produces a large windowed change even when the whole-frame mean is small.
   let bestWindowChange = 0;
   for (let k = 0; k < anchorFrames.length - 1; k++) {
     const w = bestSubWindowChange(
@@ -1789,30 +1513,16 @@ export function scoreArc(input: ArcInput): ArcResult {
     }
   }
 
-  // Evolving when the whole frame reorganizes OR a subregion does — a field that
-  // changes as a whole passes on wholeClipChange; a subject that reveals in one
-  // region passes on bestWindowChange.
   const evolving = wholeClipChange >= ARC_FLOOR || bestWindowChange >= ARC_REGION_FLOOR;
 
-  // Presence-quiet relief: a quiet presence render can't reach the whole-frame floor
-  // (intentional dark sky) and its region read lands JUST under the regional floor.
-  // When both HARD safety gates passed and the regional reveal is within striking
-  // distance, the would-be dead-fail downgrades to an ADVISORY inconclusive
-  // ("presenceQuiet") — pass-with-note, eyeball the reveal — never a block. The relief
-  // requires BOTH gate flags EXPLICITLY true, so a bare scoreArc call is unchanged.
   const presenceQuiet =
     !evolving &&
     beatPullPass === true &&
     flashPass === true &&
     bestWindowChange >= ARC_PRESENCE_STRIKING;
 
-  // Dead only when NOT evolving AND the relief did not apply — a frozen frame changes
-  // nowhere, so no subregion clears even the striking-distance band.
   const dead = !evolving && !presenceQuiet;
 
-  // Intent arc fold (advisory): if the intent declares a drop, locate the anchor
-  // segment whose [startPct,endPct] span contains it and check its change carries
-  // at least the clip mean — the promised climax actually reorganizes the picture.
   let intentArc: ArcIntentCheck | null = null;
   if (intent && intent.dropMs > 0) {
     const durationMs = (n / Math.max(1, fps)) * 1000;
@@ -1855,47 +1565,23 @@ export function scoreArc(input: ArcInput): ArcResult {
   };
 }
 
-// ---------------------------------------------------------------------------
-// SPATIAL SEAM (WARN — the branch-cut tell). A hard, static, one-line-wide
-// discontinuity the still critique rarely catches: the classic atan(y,x) ±π
-// branch cut fed into noise/warp draws a seam along the negative-x ray, and a
-// tiling / mirror fold leaves one too. Cheap detector: per sampled frame, the
-// row-to-row (and column-to-column) mean-abs-luma diff; a line-pair whose diff
-// SPIKES far above its neighbours AND holds at the SAME position across ≥3 sampled
-// frames is a seam. WARN, never FAIL — a legitimate hard horizon reads the same way
-// and presence renders will have them, so the report says to EYEBALL it (scrub the
-// negative-x ray) rather than blocking ship. Deterministic: fixed sample positions,
-// no Math.random / Date.now.
-//
-// TWO things keep it off the baked TEXT (measured on the real social cuts). (1) It
-// collects EVERY in-band spike per frame, not just the strongest — the softer
-// center seam would otherwise be masked by a text edge that spikes harder in the
-// same frame (032.0.4L's vortex cut sat under its title block). (2) It scans only a
-// CENTRAL BAND [margin, 1-margin]: a from-center atan cut is mid-frame, whereas the
-// fixed TypePlate / CloseCard homes (identity lower ~85%, telemetry upper, the
-// closing card) draw real hard horizontal edges near the top/bottom that are NOT
-// shader seams and are transient (they fade before the drop). The band is the
-// difference between flagging 032.0.4L's mid-frame cut and NOT flagging every
-// text-baked social cut (e.g. clean 027.9.5H, whose only edges are its text).
-// ---------------------------------------------------------------------------
-
-const SEAM_SAMPLES = 16; // evenly-spaced frames to sample across the clip
-const SEAM_MIN_FRAMES = 3; // a seam must persist across ≥3 sampled frames
-const SEAM_SPIKE_RATIO = 3; // the spike line's diff ≥ 3× its local-median neighbours
-const SEAM_ABS_FLOOR = 6; // …and ≥ 6 raw-luma units (a real discontinuity, not grain)
-const SEAM_NEIGHBORHOOD = 4; // ± lines for the local-median baseline
-const SEAM_POS_TOL = 2; // lines within ± this cluster as the same seam position
-const SEAM_BAND_MARGIN = 0.18; // scan only [margin, 1-margin] — mid-frame, off the text homes
+const SEAM_SAMPLES = 16;
+const SEAM_MIN_FRAMES = 3;
+const SEAM_SPIKE_RATIO = 3;
+const SEAM_ABS_FLOOR = 6;
+const SEAM_NEIGHBORHOOD = 4;
+const SEAM_POS_TOL = 2;
+const SEAM_BAND_MARGIN = 0.18;
 
 export type SeamAxis = "row" | "column";
 
 export type Seam = {
   axis: SeamAxis;
-  /** the discontinuity as a fraction 0..1 (y for a row seam, x for a column seam). */
+
   positionPct: number;
-  /** how many of the sampled frames showed the seam at this position. */
+
   frames: number;
-  /** the median spike ratio (line diff ÷ local-median baseline) across the hits. */
+
   ratio: number;
 };
 
@@ -1903,13 +1589,11 @@ export type SeamResult = {
   deterministic: true;
   hard: false;
   detected: boolean;
-  /** the strongest sustained seam, or null when none persisted. */
+
   seam: Seam | null;
   sampledFrames: number;
 };
 
-/** Raw 0..255 luma plane of one interleaved rgb frame (BT.601 weights, no blur —
- *  the sharp discontinuity is exactly the signal, so it must NOT be smoothed). */
 function seamLuma(frame: Float32Array, width: number, height: number): Float32Array {
   const pix = width * height;
   const out = new Float32Array(pix);
@@ -1919,7 +1603,6 @@ function seamLuma(frame: Float32Array, width: number, height: number): Float32Ar
   return out;
 }
 
-/** Per-row-pair mean-abs-luma diff (adjacent rows), length height-1. */
 function rowDiffs(luma: Float32Array, width: number, height: number): number[] {
   const out: number[] = [];
   for (let r = 0; r < height - 1; r++) {
@@ -1932,7 +1615,6 @@ function rowDiffs(luma: Float32Array, width: number, height: number): number[] {
   return out;
 }
 
-/** Per-column-pair mean-abs-luma diff (adjacent columns), length width-1. */
 function colDiffs(luma: Float32Array, width: number, height: number): number[] {
   const out: number[] = [];
   for (let c = 0; c < width - 1; c++) {
@@ -1945,14 +1627,8 @@ function colDiffs(luma: Float32Array, width: number, height: number): number[] {
   return out;
 }
 
-/** One qualifying spike: which sampled `frame` it came from, its line `index`, and
- *  the spike `ratio`. Tagged by frame so a cluster counts DISTINCT frames. */
 type SeamHit = { frame: number; index: number; ratio: number };
 
-/** EVERY in-band local-max spike in a diff series (≥ floor, ≥ ratio× its local
- *  median, higher than its immediate neighbours so a broad ramp never counts, and
- *  inside the central band so the fixed text homes are skipped). All spikes, not
- *  just the strongest, so the softer center seam is never masked by a harder edge. */
 function bandSpikes(diffs: number[], frame: number, extent: number): SeamHit[] {
   const out: SeamHit[] = [];
   for (let i = 0; i < diffs.length; i++) {
@@ -1964,8 +1640,7 @@ function bandSpikes(diffs: number[], frame: number, extent: number): SeamHit[] {
     if (here < SEAM_ABS_FLOOR) {
       continue;
     }
-    // A seam is a NARROW spike, never part of a gradual ramp — reject if either
-    // immediate neighbour is higher.
+
     if (i > 0 && diffs[i - 1] > here) {
       continue;
     }
@@ -1985,8 +1660,7 @@ function bandSpikes(diffs: number[], frame: number, extent: number): SeamHit[] {
     if (neighbours.length === 0) {
       continue;
     }
-    // Floor the baseline at 1 luma unit so a seam over a perfectly flat field
-    // (baseline ~0) reads a large finite ratio instead of dividing by ~0.
+
     const base = Math.max(median(neighbours), 1);
     const ratio = here / base;
     if (ratio >= SEAM_SPIKE_RATIO) {
@@ -1996,8 +1670,6 @@ function bandSpikes(diffs: number[], frame: number, extent: number): SeamHit[] {
   return out;
 }
 
-/** Cluster spike hits by position (within ±SEAM_POS_TOL); the largest cluster
- *  spanning ≥SEAM_MIN_FRAMES DISTINCT frames is a sustained seam, or null. */
 function clusterSeam(hits: SeamHit[], axis: SeamAxis, extent: number): Seam | null {
   if (hits.length < SEAM_MIN_FRAMES) {
     return null;
@@ -2005,8 +1677,7 @@ function clusterSeam(hits: SeamHit[], axis: SeamAxis, extent: number): Seam | nu
   let best: Seam | null = null;
   for (const anchor of hits) {
     const cluster = hits.filter((h) => Math.abs(h.index - anchor.index) <= SEAM_POS_TOL);
-    // One representative (max-ratio) spike per distinct frame — two nearby spikes in
-    // the same frame must not inflate the persistence count.
+
     const perFrame = new Map<number, SeamHit>();
     for (const hit of cluster) {
       const prev = perFrame.get(hit.frame);
@@ -2031,7 +1702,6 @@ function clusterSeam(hits: SeamHit[], axis: SeamAxis, extent: number): Seam | nu
   return best;
 }
 
-/** Pure spatial-seam scorer over the decoded rgb frames. No ffmpeg. Advisory. */
 export function scoreSeam(rgb: RgbFrames): SeamResult {
   const { width, height, frames } = rgb;
   const n = frames.length;
@@ -2070,10 +1740,6 @@ export function scoreSeam(rgb: RgbFrames): SeamResult {
   };
 }
 
-// ---------------------------------------------------------------------------
-// The orchestrator + report assembly (C6)
-// ---------------------------------------------------------------------------
-
 export type GateRollup = {
   hardPass: boolean;
   blockingFailures: string[];
@@ -2082,8 +1748,7 @@ export type GateRollup = {
 
 export type MotionReport = {
   trackId: string;
-  /** Whether `--allow-flash` was passed: ship honours a flash override only when the
-   *  record carries it (ship-gates.ts). */
+
   allowFlash: boolean;
   logId: string | null;
   video: string;
@@ -2159,16 +1824,11 @@ function rollupMotionGate(input: {
   if (input.beatPull.beatLocked) {
     blockingFailures.push("beatPull");
   } else if (input.beatPull.inconclusive) {
-    // Pass with a note: inconclusive beat-pull never blocks. The low-motion carve-out covers calm
-    // presence clips; the arc and coupling reads below own the deadness decision.
     advisories.push(`beatPull.inconclusive(${input.beatPull.inconclusive})`);
   }
   if (input.arc.dead) {
     blockingFailures.push("arc.dead");
   } else if (input.arc.verdict === "inconclusive") {
-    // Pass with a note: presenceQuiet is a near-miss regional reveal that cleared the safety
-    // gates, while tooShort is the too-few-frames case. Both ask for an operator eyeball, not a
-    // hard failure.
     advisories.push(
       input.arc.inconclusive === "presenceQuiet"
         ? "arc.inconclusive(presenceQuiet — eyeball the reveal)"
@@ -2178,8 +1838,7 @@ function rollupMotionGate(input: {
   if (input.arc.intentArc && !input.arc.intentArc.meetsArc) {
     advisories.push(`arc.intentMismatch(seg${input.arc.intentArc.dropSegment})`);
   }
-  // A legitimate hard horizon can look like a spatial seam, so this possible atan branch-cut or
-  // tiling seam is advisory only and stays available for the operator's eye.
+
   if (input.seam.detected && input.seam.seam) {
     const seam = input.seam.seam;
     const position = `${seam.axis === "row" ? "y" : "x"}≈${Math.round(seam.positionPct * 100)}%`;
@@ -2231,38 +1890,24 @@ function rollupMotionGate(input: {
   return { advisories, blockingFailures, hardPass: blockingFailures.length === 0 };
 }
 
-/**
- * Run all deterministic metrics on a target (trackId or video path), fold in the
- * beat-pull gate on the SAME 48×86 extraction, and assemble the combined report.
- * One gray pass (structure) + one rgb pass (flash) + one ffprobe.
- */
 export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}): MotionReport {
   const video = resolveVideo(target);
   const trackId = deriveTrackId(target, video);
 
-  // ONE structural extraction (48×86, probed fps for timeline alignment) serves
-  // beat-pull + coupling + dead-zone + intent.
   const gray = extractGrayFrames(video, { height: GATE_H, probeFps: true, width: GATE_W });
   const probedFps = gray.fps;
-  // Beat-pull PINS fps=30 internally (its calibration was earned there); a probed
-  // fps ≠ 30 marks the report unreliable (timeline alignment for coupling/intent
-  // would mis-align).
+
   const unreliable = Math.abs(probedFps - 30) > 0.5;
   const reportFps = probedFps;
 
-  const beatPullRaw = scoreBeatPull(gray.frames); // fps defaults to 30 internally
+  const beatPullRaw = scoreBeatPull(gray.frames);
   const beatPull = { ...beatPullRaw, deterministic: true as const, hard: true as const };
 
-  // The shared structural delta (the gate's representation: mean-subtract + fence).
   const delta = structuralDelta(gray.frames, { smoothFrames: 1 });
 
-  // ONE rgb extraction (64×114, probed fps) for flash safety.
   const rgb = extractRgbFrames(video, { height: FLASH_H, probeFps: true, width: FLASH_W });
   const flashSafety = scoreFlashSafety(rgb);
 
-  // Read intent + props. A PRESENT-but-invalid intent is a loud warning (a
-  // silently-swallowed parse error hides a real authoring bug — the checker then
-  // runs blind). A MISSING file stays warn-and-stub (v1 law): intent is optional.
   const intentFile = options.intentPath ?? path.join(OUT_DIR, `${trackId}.intent.json`);
   let intent: RenderIntent | null = null;
   if (existsSync(intentFile)) {
@@ -2301,13 +1946,8 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   const durationMs =
     audio?.durationMs ?? Math.round((gray.frames.length / Math.max(1, reportFps)) * 1000);
 
-  // The per-frame luminance series (reused by beat-reactivity + the intent check).
   const perFrame = decodeFlashFrames(rgb);
 
-  // ARC / DEADNESS — the long-timescale HARD gate, on the same rgb extraction. The
-  // two HARD safety verdicts (beat-pull flows, flash safe) feed the presence-quiet
-  // relief: a quiet presence render that cleared both earns an advisory pass on a
-  // near-miss regional reveal instead of a dead-fail.
   const arc = scoreArc({
     beatPullPass: !beatPull.beatLocked,
     flashPass: !flashSafety.unsafe,
@@ -2316,7 +1956,6 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
     rgb,
   });
 
-  // SPATIAL SEAM — the WARN-level branch-cut tell, on the same rgb extraction.
   const seam = scoreSeam(rgb);
 
   let coupling: CouplingResult | null = null;
@@ -2342,7 +1981,6 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
     intentCheck = checkIntent({ audio, delta, fps: reportFps, intent, meanL: perFrame.meanL });
   }
 
-  // Gate roll-up. TWO HARD gates: flashSafety + beatPull. Coupling is advisory.
   const gate = rollupMotionGate({
     allowFlash: options.allowFlash === true,
     arc,
@@ -2378,12 +2016,6 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   };
 }
 
-// ---------------------------------------------------------------------------
-// CLI: bun src/pipeline/analyze-motion.ts <trackId|video> [--json] [--intent <f>] [--allow-flash]
-// Exits non-zero ONLY on a HARD failure (flash unsafe without --allow-flash, or
-// beat-pull beatLocked). Everything else exits 0.
-// ---------------------------------------------------------------------------
-
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const target = args.find((a) => !a.startsWith("--"));
@@ -2400,12 +2032,9 @@ if (import.meta.main) {
   }
 
   const analyzed = analyzeMotion(target, { allowFlash, intentPath });
-  // The digest of the exact render measured: ship refuses a record whose digest does not
-  // match the render it packages, so a pass on an earlier render cannot clear a new one.
+
   const report = { ...analyzed, videoSha256: sha256File(analyzed.video) };
 
-  // Persist the combined report next to the other artifacts. It is ship's gate record,
-  // so a failed write is loud: ship refuses without it.
   const reportPath = path.join(OUT_DIR, `${report.trackId}.metrics.json`);
   try {
     writeFileSync(reportPath, JSON.stringify(report, null, 2));

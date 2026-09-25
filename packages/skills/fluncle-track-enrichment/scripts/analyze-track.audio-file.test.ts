@@ -1,15 +1,3 @@
-// Focused test for the `--audio-file` full-song seam in analyze-track.ts (RFC
-// docs/track-lifecycle.md). Exercises the factored decode seam
-// (`decodeToSamples` / `loadLocalFile`) and the arg-routing (`--audio-file` skips
-// preview resolution → the whole pipeline runs on a LOCAL file and never touches the
-// network). Importing analyze-track.ts is safe: the CLI pipeline is guarded by
-// `if (import.meta.main)`, so the import only loads the exported seam functions.
-//
-//   bun test packages/skills/fluncle-track-enrichment/scripts/analyze-track.audio-file.test.ts
-//
-// The ffmpeg-dependent cases skip when ffmpeg is absent (it is a documented skill
-// prereq, so on a real box / dev machine they run). No preview / network is involved.
-
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,9 +17,6 @@ afterAll(() => {
   rmSync(workdir, { force: true, recursive: true });
 });
 
-// Synthesize a real mono 16-bit PCM WAV click-track at a fixed BPM: a short decaying
-// tone burst every beat over silence. The onset envelope has a clean periodic peak, so
-// `estimateBpm` locks the tempo — a legitimate, deterministic full-song stand-in.
 function writeClickWav(path: string, opts: { bpm: number; seconds: number }): void {
   const total = Math.floor(opts.seconds * SAMPLE_RATE);
   const pcm = new Int16Array(total);
@@ -54,12 +39,12 @@ function writeClickWav(path: string, opts: { bpm: number; seconds: number }): vo
   buf.write("WAVE", 8, "ascii");
   buf.write("fmt ", 12, "ascii");
   buf.writeUInt32LE(16, 16);
-  buf.writeUInt16LE(1, 20); // PCM
-  buf.writeUInt16LE(1, 22); // mono
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
   buf.writeUInt32LE(SAMPLE_RATE, 24);
-  buf.writeUInt32LE(SAMPLE_RATE * 2, 28); // byte rate
-  buf.writeUInt16LE(2, 32); // block align
-  buf.writeUInt16LE(16, 34); // bits per sample
+  buf.writeUInt32LE(SAMPLE_RATE * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
   buf.write("data", 36, "ascii");
   buf.writeUInt32LE(dataBytes, 40);
   for (let i = 0; i < total; i++) {
@@ -77,15 +62,14 @@ describe.skipIf(!hasFfmpeg)("decodeToSamples (the shared decode seam)", () => {
     const samples = decodeToSamples(wav);
 
     expect(samples).toBeInstanceOf(Float32Array);
-    // ~8s of mono 22050 Hz audio — allow slack for ffmpeg's encoder priming/trim.
+
     expect(samples.length).toBeGreaterThan(SAMPLE_RATE * 6);
-    // PCM stays in the normalized [-1, 1] range — sample sparsely (a full-song array is
-    // hundreds of thousands of frames; asserting every one just floods the counter).
+
     let peak = 0;
     for (let i = 0; i < samples.length; i += 512) {
       peak = Math.max(peak, Math.abs(samples[i] ?? 0));
     }
-    expect(peak).toBeGreaterThan(0); // the click bursts are audible, not silence
+    expect(peak).toBeGreaterThan(0);
     expect(peak).toBeLessThanOrEqual(1);
   });
 });
@@ -97,7 +81,7 @@ describe.skipIf(!hasFfmpeg)("loadLocalFile (the --audio-file loader)", () => {
 
     const loaded = loadLocalFile(wav);
 
-    expect(loaded.bytes.length).toBeGreaterThan(44); // header + PCM
+    expect(loaded.bytes.length).toBeGreaterThan(44);
     expect(loaded.mime).toBe("audio/wav");
     expect(loaded.samples.length).toBeGreaterThan(SAMPLE_RATE * 6);
   });
@@ -106,7 +90,7 @@ describe.skipIf(!hasFfmpeg)("loadLocalFile (the --audio-file loader)", () => {
 describe.skipIf(!hasFfmpeg)("analyze-track --audio-file (end-to-end arg routing)", () => {
   test("skips preview resolution and emits BPM/key/features JSON from the local song", () => {
     const wav = join(workdir, "song.wav");
-    // 20s so the busiest-12s BPM window + autocorrelation have material.
+
     writeClickWav(wav, { bpm: 174, seconds: 20 });
 
     const result = spawnSync(
@@ -125,21 +109,16 @@ describe.skipIf(!hasFfmpeg)("analyze-track --audio-file (end-to-end arg routing)
       previews: Array<{ source: string }>;
     };
 
-    // The whole pipeline ran on the local file — the source is the full-song sentinel,
-    // not a Deezer/iTunes preview leg (which the --audio-file path never resolves).
     expect(output.previews).toHaveLength(1);
     expect(output.previews[0]?.source).toBe("audio-file");
     expect(output.bpmSource).toBe("audio-file");
 
-    // A clean 174 BPM click track produces a confident, in-band, non-null tempo.
     expect(typeof output.bpm).toBe("number");
     expect(output.bpm).toBeGreaterThanOrEqual(160);
     expect(output.bpm).toBeLessThanOrEqual(185);
-    expect(output.bpm).toBeGreaterThan(168); // ≈174, octave-folded into the DnB band
+    expect(output.bpm).toBeGreaterThan(168);
     expect(output.bpm).toBeLessThan(180);
 
-    // The spectral feature vector is present with its five fields (key may be null —
-    // a tonal click track need not clear the key-confidence floor, and that is fine).
     expect(output.features).toMatchObject({
       centroidHz: expect.any(Number),
       highRatio: expect.any(Number),

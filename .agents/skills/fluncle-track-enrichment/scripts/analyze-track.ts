@@ -1,23 +1,4 @@
 #!/usr/bin/env bun
-// analyze-track — self-contained audio analysis for a Fluncle track.
-//
-// Zero npm dependencies. External tools only: `ffmpeg` (on PATH) and network
-// access (Deezer/iTunes for the preview). It does NOT import any Fluncle code, so
-// it runs anywhere the skill is installed — a local session or the Hermes box.
-//
-// Given an artist + title (the agent gets these from `fluncle tracks get --json`),
-// it resolves a legal preview clip, decodes it, and emits an analysis JSON on
-// stdout: BPM, musical key (+confidence), and spectral features. The agent then
-// writes the result back with `fluncle admin tracks update`.
-//
-// With `--audio-file <path>` it skips preview resolution and analyzes THAT local file
-// (the captured full song the enrich sweep S3-GETs from the private fluncle-source-audio
-// bucket) — the whole song rather than a 30s preview (docs/track-lifecycle.md).
-//
-//   bun analyze-track.ts --artist "Loadstar" --title "Take a Deep Breath" [--isrc GB5KW1701923]
-//   bun analyze-track.ts --artist "Loadstar" --title "Take a Deep Breath" --audio-file /tmp/song.opus
-//
-// Output (stdout): a single JSON object. Diagnostics go to stderr.
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -34,20 +15,10 @@ const artist = arg("artist");
 const title = arg("title");
 const isrc = arg("isrc");
 const archiveDir = arg("archive-dir");
-// When set, analyze THIS local file (the captured full song the enrich sweep S3-GETs
-// from the private fluncle-source-audio bucket) instead of resolving a 30s preview —
-// docs/track-lifecycle.md. Everything downstream is source-agnostic.
+
 const audioFile = arg("audio-file");
 
 const log = (message: string) => console.error(`[analyze] ${message}`);
-
-// ---------------------------------------------------------------------------
-// Preview resolution (Deezer by ISRC + Deezer search + iTunes) — HTTP only.
-// We gather ALL candidates rather than first-hit: the platforms often return
-// DIFFERENT 30s windows of the same track (Deezer the intro, iTunes the drop).
-// Analyzing each and keeping the most-confident read per field beats betting on
-// one clip that might be a beatless build-up.
-// ---------------------------------------------------------------------------
 
 type Preview = { source: string; url: string };
 
@@ -55,13 +26,6 @@ function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-// Version-aware matching (self-contained; the skill imports no Fluncle code). A
-// finding's ISRC names the EXACT recording — an original and its remix carry
-// DIFFERENT ISRCs. The fuzzy Deezer-search + iTunes legs return the whole release
-// family, so without a version gate a REMIX finding's BPM/key/feature vector could
-// be computed from the ORIGINAL (the fuzzy candidate outvoting the ISRC one). These
-// helpers mirror packages/video's resolve-preview / apps/web's discogs resolver:
-// the candidate's version descriptor must AGREE with the finding's.
 const VERSION_MARKER =
   /\b(mix|edit|version|remix|dub|vip|bootleg|rework|re-?edit|flip|refix|remaster(?:ed)?|instrumental)\b/i;
 const REMIX_MARKER = /\b(remix|bootleg|vip|rework|re-?edit|flip|refix)\b/i;
@@ -91,11 +55,6 @@ function versionTokens(value: string): Set<string> {
   return new Set();
 }
 
-/**
- * Whether a candidate title is the SAME version as the finding (directional).
- * Exported so the focused test can exercise it without running the pipeline (the
- * full run is guarded by `import.meta.main`).
- */
 export function versionMatches(findingTitle: string, candidateTitle: string): boolean {
   const findingIsRemix = REMIX_MARKER.test(findingTitle);
   const candidateIsRemix = REMIX_MARKER.test(candidateTitle);
@@ -115,9 +74,6 @@ export function versionMatches(findingTitle: string, candidateTitle: string): bo
   return !candidateIsRemix;
 }
 
-// Exported (with an explicit params object) so the ground-truth key eval can resolve
-// the SAME preview windows the production pipeline analyzes. The CLI calls it with the
-// module-level args.
 export async function resolvePreviews(
   params: { artist?: string; isrc?: string; title?: string } = { artist, isrc, title },
 ): Promise<Preview[]> {
@@ -131,7 +87,6 @@ export async function resolvePreviews(
 
   const findingTitle = pTitle ?? "";
 
-  // 1. Deezer by ISRC — the most precise (exact recording).
   if (pIsrc) {
     try {
       const response = await fetch(
@@ -142,16 +97,9 @@ export async function resolvePreviews(
       if (!track.error) {
         push("deezer:isrc", track.preview);
       }
-    } catch {
-      // fall through
-    }
+    } catch {}
   }
 
-  // 2. Deezer search by artist + title, asked in FREE TEXT — Deezer's combined
-  //    `artist:"…" track:"…"` field syntax answers `{"data":[],"total":0}` for every
-  //    input, so a fielded ask is a permanent silent miss. Gated like the iTunes arm
-  //    below: the ARTIST is checked here rather than left to retrieval, and the VERSION
-  //    must match so a remix finding never pulls in the original's preview.
   try {
     const query = `${pArtist ?? ""} ${pTitle ?? ""}`.trim();
     const response = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`);
@@ -165,12 +113,8 @@ export async function resolvePreviews(
         versionMatches(findingTitle, item.title ?? ""),
     );
     push("deezer:search", hit?.preview);
-  } catch {
-    // fall through
-  }
+  } catch {}
 
-  // 3. iTunes — usually a different window of the song than Deezer. Also version-
-  //    gated (artist contains + same version) so it can't seed the wrong recording.
   try {
     const term = encodeURIComponent(`${pArtist} ${pTitle}`);
     const response = await fetch(
@@ -186,21 +130,14 @@ export async function resolvePreviews(
         versionMatches(findingTitle, item.trackName ?? ""),
     );
     push("itunes", hit?.previewUrl);
-  } catch {
-    // fall through
-  }
+  } catch {}
 
   return found;
 }
 
-// ---------------------------------------------------------------------------
-// Decode: download the preview, ffmpeg → mono 22050 Hz s16le WAV.
-// ---------------------------------------------------------------------------
-
 const SAMPLE_RATE = 22050;
 
 function decodeWav(buf: Buffer): Float32Array {
-  // Find the data chunk (skip RIFF/WAVE header + any chunks before `data`).
   let offset = 12;
   let dataOffset = -1;
   let dataLength = 0;
@@ -238,11 +175,6 @@ type LoadedPreview = {
   samples: Float32Array;
 };
 
-// The shared decode tail: ffmpeg reads `inputPath` (a fetched preview OR a captured
-// full song — any container/ext; ffmpeg probes the content, not the name) → mono
-// SAMPLE_RATE 16-bit WAV → PCM Float32. Factored out so the URL preview path and the
-// local `--audio-file` path share ONE decoder (docs/track-lifecycle.md).
-// Exported so a focused test can exercise the seam without the full pipeline.
 export function decodeToSamples(inputPath: string): Float32Array {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-decode-"));
 
@@ -286,11 +218,6 @@ async function loadPreview(previewUrl: string): Promise<LoadedPreview> {
   }
 }
 
-// Load a LOCAL audio file — the captured full song (`--audio-file`). ffmpeg reads
-// the path directly, any format.
-// `bytes`/`mime` are kept so the archive + `previews` output shape is identical to the
-// URL path; mime is inferred from the extension (ffmpeg itself probes the content).
-// Exported so the focused test can exercise the seam.
 export function loadLocalFile(filePath: string): LoadedPreview {
   return {
     bytes: readFileSync(filePath),
@@ -335,9 +262,6 @@ function inferPreviewMime(url: string): string | undefined {
   return undefined;
 }
 
-// Infer an audio content-type from a LOCAL file's extension (the `--audio-file`
-// path). Only for the output shape / archive metadata — ffmpeg probes the real
-// container regardless. Covers the yt-dlp `bestaudio` extensions capture produces.
 function inferFileMime(filePath: string): string {
   const lower = filePath.toLowerCase();
 
@@ -384,10 +308,6 @@ function previewExtension(mime: string): string {
   return "mp3";
 }
 
-// ---------------------------------------------------------------------------
-// FFT (iterative radix-2, in place).
-// ---------------------------------------------------------------------------
-
 function fft(re: Float64Array, im: Float64Array): void {
   const n = re.length;
 
@@ -432,19 +352,8 @@ function fft(re: Float64Array, im: Float64Array): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Spectral features (the archived creative-fuel vector) + key profiles.
-// ---------------------------------------------------------------------------
-
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-// Key profiles, verbatim from Essentia's `src/algorithms/tonal/key.cpp`
-// (github.com/MTG/essentia, AGPL) — the `krumhansl`, `temperley`, and Faraldo `edma`
-// (electronic-dance-music corpus) tables. EDMA won the Rekordbox ground-truth eval
-// (analyze-track.key-eval.ts): classical K-S profiles are weakest on the relative-key
-// axis, which is DnB's dominant error. Krumhansl/Temperley are kept so the eval can
-// re-measure them. Values not invented — copied from:
-// https://github.com/MTG/essentia/blob/master/src/algorithms/tonal/key.cpp
 type KeyProfiles = { major: number[]; minor: number[] };
 
 const KEY_PROFILE_EDMA: KeyProfiles = {
@@ -462,10 +371,6 @@ const KEY_PROFILE_TEMPERLEY: KeyProfiles = {
   minor: [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0],
 };
 
-// Faraldo `edmm` — the manually-tweaked EDM profile whose major table is uniform, so
-// it reports (rare, poorly-represented) EDM majors as minor. Kept for the eval; the
-// production estimator instead uses EDMA + a measured `majorBias` minor-prior, which
-// recovers the relative-minor reads without throwing away genuine majors.
 const KEY_PROFILE_EDMM: KeyProfiles = {
   major: [0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083],
   minor: [
@@ -474,16 +379,11 @@ const KEY_PROFILE_EDMM: KeyProfiles = {
   ],
 };
 
-// The production profile pair, the ground-truth eval winner: EDMA's major table (so a
-// genuinely strong EDM major still registers) with EDMM's manually-tuned minor table
-// (the better minor shape). Paired with KEY_DEFAULTS.majorBias it beat every single
-// profile on the 35-track Rekordbox set — 60% exact, zero relative-key errors.
 const KEY_PROFILE_DEFAULT: KeyProfiles = {
   major: KEY_PROFILE_EDMA.major,
   minor: KEY_PROFILE_EDMM.minor,
 };
 
-// Exported so the ground-truth eval can sweep profiles without re-declaring them.
 export const KEY_PROFILES = {
   default: KEY_PROFILE_DEFAULT,
   edma: KEY_PROFILE_EDMA,
@@ -516,9 +416,6 @@ type Spectral = {
   subBassRatio: number;
 };
 
-// The archived creative-fuel feature vector. Its 25 s window + linear-magnitude
-// semantics are frozen: the stored rows depend on these EXACT numbers, so the key
-// path was moved to its own whole-track chromagram below rather than widen this.
 function spectral(samples: Float32Array): Spectral {
   const N = 4096;
   const hop = 2048;
@@ -589,8 +486,6 @@ function spectral(samples: Float32Array): Spectral {
   };
 }
 
-// The whole-track chromagram key estimator. Tunable so the ground-truth eval can
-// sweep ingredients; the defaults are the config that won that eval.
 type KeyOptions = {
   compression: "log" | "none" | "sqrt";
   edgeSkipS: number;
@@ -607,26 +502,22 @@ type KeyOptions = {
 };
 
 const KEY_DEFAULTS: KeyOptions = {
-  compression: "sqrt", // tame the DnB sub-bass so it can't drown the mid thirds
-  edgeSkipS: 3, // skip intro/outro build-ups where the harmony is thin
-  harmonicDecay: 0.6, // HPCP-style decay across the harmonic ladder
-  harmonics: 4, // credit each peak to fundamentals f/h, h=1..4 (de-alias the 5th → III)
-  hopS: 6, // overlapping segments so a section vote has enough members
-  // EDM minor-prior: a note's relative major shares its diatonic set, so the
-  // correlation flips minor DnB to its relative MAJOR on thin margins. DnB is
-  // overwhelmingly minor, so subtract a small penalty from every major correlation —
-  // enough to reclaim the relative-minor reads without unseating a genuinely strong
-  // major. The value is the ground-truth eval winner (analyze-track.key-eval.ts).
+  compression: "sqrt",
+  edgeSkipS: 3,
+  harmonicDecay: 0.6,
+  harmonics: 4,
+  hopS: 6,
+
   majorBias: 0.15,
-  maxHz: 3520, // A7 — chroma band ceiling
-  minHz: 110, // A2 — below this is bass energy, not harmony
-  peakThreshold: 0.1, // peaks below 10% of the frame max are noise/percussion
+  maxHz: 3520,
+  minHz: 110,
+  peakThreshold: 0.1,
   profiles: KEY_PROFILE_DEFAULT,
-  segmentS: 12, // ~a phrase; long enough for a stable key, short enough to vote
-  tuning: false, // measured no gain on the eval — off keeps the estimator single-pass
+  segmentS: 12,
+  tuning: false,
 };
 
-const KEY_FFT = 8192; // 2.7 Hz bins at 22050 Hz — resolves semitones down to A2
+const KEY_FFT = 8192;
 const KEY_HOP = 4096;
 const KEY_HANN = (() => {
   const w = new Float64Array(KEY_FFT);
@@ -650,10 +541,6 @@ function compressMag(m: number, mode: KeyOptions["compression"]): number {
   return m;
 }
 
-// Spectral peaks of one analysis frame: local magnitude maxima above a per-frame
-// threshold, with parabolic interpolation for a precise peak frequency. Peaks are the
-// percussive-rejection mechanism — a broadband drum hit is noise-like (no sharp
-// maxima), so it never enters the chroma the way raw per-bin magnitude did.
 function framePeaks(
   samples: Float32Array,
   start: number,
@@ -710,9 +597,6 @@ function framePeaks(
   return peaks;
 }
 
-// Global tuning offset (semitone fraction, +sharp) as the circular mean of every
-// peak's deviation from the equal-tempered grid — so a track cut a few cents off
-// concert pitch still bins to the right pitch classes.
 function estimateTuning(samples: Float32Array, lo: number, hi: number, opts: KeyOptions): number {
   let sx = 0;
   let sy = 0;
@@ -730,12 +614,6 @@ function estimateTuning(samples: Float32Array, lo: number, hi: number, opts: Key
   return sx === 0 && sy === 0 ? 0 : Math.atan2(sy, sx) / (2 * Math.PI);
 }
 
-// One segment's 12-bin chroma. Each frame's peaks are de-aliased up the harmonic
-// ladder (a peak at f credits fundamentals f/h for h=1..H), which pulls the injected
-// energy of a note's overtones — its fifth (3rd harmonic) and, crucially, its MAJOR
-// THIRD (5th harmonic) — back toward the true root instead of biasing the mode. Each
-// frame is normalized to unit sum before summing, so a loud drop frame does not
-// outvote the rest of the phrase.
 function segmentChroma(
   samples: Float32Array,
   from: number,
@@ -786,15 +664,10 @@ function segmentChroma(
   return chroma;
 }
 
-// A key profile rotated so pitch class `root` is the tonic (matches the legacy K-S
-// rotation: index i draws from profile[(i - root + 12) % 12]).
 function rotateProfile(profile: number[], root: number): number[] {
   return profile.map((_, i) => profile[(i - root + 12) % 12] ?? 0);
 }
 
-// Best major/minor key for a 12-bin chroma, by Pearson correlation against the 24
-// rotated profiles. `majorBias` is subtracted from every MAJOR correlation (the EDM
-// minor-prior — see KEY_DEFAULTS.majorBias).
 function scoreChroma(
   chroma: number[],
   profiles: KeyProfiles,
@@ -825,12 +698,6 @@ function scoreChroma(
   return { corr: bestCorr, mode: bestMode, root: bestRoot };
 }
 
-// Estimate the musical key over the WHOLE track. Segment the audio into overlapping
-// phrase-length windows, build an HPCP-style chroma per segment, pick the key of the
-// summed (global) chroma, and report the fraction of segments that independently agree
-// as the confidence — a vote, not a single fragile correlation. `opts` is a test/eval
-// seam; production uses KEY_DEFAULTS. Output contract stays `{ confidence, key }` with
-// key sharp-spelled `"<Note> major|minor"`.
 export function estimateKey(
   samples: Float32Array,
   opts?: Partial<KeyOptions>,
@@ -840,7 +707,6 @@ export function estimateKey(
   const segLen = Math.round(o.segmentS * SAMPLE_RATE);
   const hop = Math.max(1, Math.round(o.hopS * SAMPLE_RATE));
 
-  // Analysis span: trim the intro/outro, but never trim away everything (short clips).
   let lo = edge;
   let hi = samples.length - edge;
 
@@ -855,7 +721,6 @@ export function estimateKey(
 
   const tuning = o.tuning ? estimateTuning(samples, lo, hi, o) : 0;
 
-  // Collect one chroma per overlapping segment.
   const segments: number[][] = [];
   const span = hi - lo;
   const window = Math.min(segLen, span);
@@ -882,7 +747,6 @@ export function estimateKey(
     return { confidence: 0, key: "unknown" };
   }
 
-  // Global chroma decides the key; segment agreement with it is the confidence.
   const global = Array.from({ length: 12 }, () => 0);
 
   for (const chroma of segments) {
@@ -894,10 +758,6 @@ export function estimateKey(
   const winner = scoreChroma(global, o.profiles, o.majorBias);
   const label = `${NOTES[winner.root]} ${winner.mode}`;
 
-  // An agreement VOTE needs voters: a clip too short for at least two overlapping
-  // segments (< ~18 s) would score a meaningless 1/1 = full confidence off a single
-  // segment trivially agreeing with itself. Report the read but at zero confidence,
-  // so the floor nulls it — a 30 s preview still yields 3 segments and a real vote.
   if (segments.length < 2) {
     return { confidence: 0, key: label };
   }
@@ -915,28 +775,16 @@ export function estimateKey(
   return { confidence: Number((agree / segments.length).toFixed(2)), key: label };
 }
 
-// ---------------------------------------------------------------------------
-// BPM (onset-envelope tempo comb over the D&B band).
-// ---------------------------------------------------------------------------
-
-// The tempo comb runs on a fine ~100 Hz onset envelope (10 ms hop). A 50 ms hop is
-// under-resolved for the 160–185 D&B band: at 174 BPM the beat period is only ~6.9
-// hops, so the autocorrelation at integer lags nearly vanishes and the picker lands on
-// syncopation intervals instead of the beat. The finer hop puts ~34 samples across one
-// beat, which is what lets the comb resolve tempo to the scan granularity.
 const BPM_HOP_MS = 10;
-// onsetRate stays on the ORIGINAL 50 ms hop so features.onsetRate remains
-// distribution-compatible with the archived rows — it is a busy-ness measure, not a
-// tempo, and shifting its hop would silently move every stored number.
+
 const ONSET_HOP_MS = 50;
-const BPM_WINDOW_S = 20; // score the busiest contiguous stretch — previews open on build-ups
-const BPM_CONFIDENCE_FLOOR = 0.15; // normalized comb score; below this → null (honest out-of-band)
-const BPM_BAND_MIN = 160; // the D&B tempo band; a comb winner outside it is not reliable
+const BPM_WINDOW_S = 20;
+const BPM_CONFIDENCE_FLOOR = 0.15;
+const BPM_BAND_MIN = 160;
 const BPM_BAND_MAX = 185;
-const BASS_CUTOFF_HZ = 150; // one-pole split: isolate the kick from pads/melody
+const BASS_CUTOFF_HZ = 150;
 const MID_CUTOFF_HZ = 2000;
 
-// One-pole low-pass coefficient for a given cutoff.
 function lowpassAlpha(cutoffHz: number, sampleRate: number): number {
   const dt = 1 / sampleRate;
   const rc = 1 / (2 * Math.PI * cutoffHz);
@@ -944,10 +792,6 @@ function lowpassAlpha(cutoffHz: number, sampleRate: number): number {
   return dt / (rc + dt);
 }
 
-// Octave-fold a raw tempo into the D&B band — WITHOUT clamping. Returns the
-// in-band tempo, or null when no ×2^k of it lands in [160,185]. A tempo that
-// can't fold is itself a low-confidence signal: better null than a fake number
-// (the old code clamped such values to exactly 160, which read as "confident").
 function foldToBand(bpm: number): number | null {
   for (const m of [1, 2, 0.5, 4, 0.25]) {
     const c = bpm * m;
@@ -960,13 +804,6 @@ function foldToBand(bpm: number): number | null {
   return null;
 }
 
-// AcousticBrainz-by-ISRC fallback — a clean, structured BPM source (ISRC → MusicBrainz
-// recording MBID → AcousticBrainz `rhythm.bpm`), reached only when the DSP itself yields
-// a null BPM. Best-effort: any error, 404, missing recording, or
-// non-numeric field → null, so the caller keeps the analyzer's honest null. The
-// AcousticBrainz BPM is a real measured tempo, so it should octave-fold cleanly
-// into the D&B band; if it can't fold, treat it as a miss (in-band discipline).
-// `fetchImpl` is injectable so this is testable without touching the network.
 export async function acousticBrainzBpmByIsrc(
   isrc: string | undefined,
   fetchImpl: typeof fetch = fetch,
@@ -975,13 +812,10 @@ export async function acousticBrainzBpmByIsrc(
     return null;
   }
 
-  // MusicBrainz requires a descriptive User-Agent and rate-limits to ~1 req/s.
   const userAgent = "fluncle-track-enrichment/1.0 ( hey@mauricekleine.com )";
   const headers = { "User-Agent": userAgent };
 
   try {
-    // ISRC → MusicBrainz recording MBID. Resolving by ISRC is exact-recording, so
-    // the first recording is the right one (zero matching risk).
     const mbResponse = await fetchImpl(
       `https://musicbrainz.org/ws/2/recording?query=isrc:${encodeURIComponent(isrc)}&fmt=json`,
       { headers },
@@ -998,8 +832,6 @@ export async function acousticBrainzBpmByIsrc(
       return null;
     }
 
-    // MBID → AcousticBrainz BPM. A 404 means "not in the archive" (the project
-    // froze in 2022) → miss.
     const abResponse = await fetchImpl(
       `https://acousticbrainz.org/api/v1/${encodeURIComponent(mbid)}/low-level`,
       { headers },
@@ -1024,14 +856,6 @@ export async function acousticBrainzBpmByIsrc(
   }
 }
 
-// Three-band (bass/mid/high) half-wave-rectified onset envelope at a given hop.
-// One-pole filters split the signal (per-hop RMS): the kick lives in the bass band,
-// so a band-summed onset envelope catches the beat even when pads dominate total
-// energy — the trick the video pipeline uses to lock onto beats a full-spectrum
-// envelope misses entirely. `bass` is returned alongside so the BPM window picker can
-// weight it and land on the section that actually carries the kick. `hopSamples` is
-// the ROUNDED integer hop (round(220.5) = 221 at 22050 Hz), returned so the caller can
-// derive the true envelope rate rather than assuming 1000 / hopMs.
 function onsetEnvelope(
   samples: Float32Array,
   hopMs: number,
@@ -1070,7 +894,6 @@ function onsetEnvelope(
     high[h] = Math.sqrt(sHigh / hopSamples);
   }
 
-  // Band-summed, half-wave-rectified onset envelope.
   const env = new Float32Array(hops);
 
   for (let h = 1; h < hops; h++) {
@@ -1083,10 +906,6 @@ function onsetEnvelope(
   return { bass, env, hopSamples, hops };
 }
 
-// Onset rate over the whole clip (busy-ness; jungle reads high). Kept on the 50 ms hop
-// so features.onsetRate stays distribution-compatible with the archive (see
-// ONSET_HOP_MS): the count of prominent onset peaks per second, threshold = mean +
-// 0.6·std of the envelope.
 function onsetRateOf(samples: Float32Array): number {
   const { env, hops } = onsetEnvelope(samples, ONSET_HOP_MS);
   let envMean = 0;
@@ -1109,14 +928,6 @@ function onsetRateOf(samples: Float32Array): number {
   return Number((onsets / Math.max(1e-6, (hops * ONSET_HOP_MS) / 1000)).toFixed(2));
 }
 
-// Tempo estimator: a comb over the D&B band scored against the onset envelope's
-// autocorrelation. Where a plain autocorrelation-peak picker at 50 ms lands on
-// syncopation intervals in the 160–185 band, the comb sums each candidate tempo's
-// harmonics, so the true beat and all its multiples reinforce one answer — and a
-// half-time track folds up through its even harmonics. Out-of-band music scores below
-// the confidence floor and returns null rather than a fabricated in-band number.
-// Exported so the focused BPM test can exercise it on decoded synthetic fixtures
-// without resolving previews or hitting the network.
 export function estimateBpm(samples: Float32Array): {
   bpm: number | null;
   bpmConfidence: number;
@@ -1124,12 +935,8 @@ export function estimateBpm(samples: Float32Array): {
 } {
   const onsetRate = onsetRateOf(samples);
 
-  // The comb runs on the fine 10 ms envelope.
   const { bass, env, hopSamples, hops } = onsetEnvelope(samples, BPM_HOP_MS);
 
-  // Energy window: previews often open on a beatless build-up. Slide a window and
-  // score it by onset energy + a bass weight, so it lands on the section that has
-  // the kick rather than a busy hi-hat fill or a pad swell.
   const winHops = Math.min(hops, Math.round((BPM_WINDOW_S * 1000) / BPM_HOP_MS));
   let winStart = 0;
 
@@ -1169,8 +976,6 @@ export function estimateBpm(samples: Float32Array): {
     }
   }
 
-  // 1-2-1 smoothing before autocorrelation: the fine envelope's onset spikes are only
-  // 1–2 hops wide, and un-smoothed narrow peaks biased the comb high by ~0.4 BPM.
   const smoothed = new Float32Array(hops);
 
   for (let h = 0; h < hops; h++) {
@@ -1187,12 +992,8 @@ export function estimateBpm(samples: Float32Array): {
   winMean /= Math.max(1, win.length);
   const centered = Float64Array.from(win, (v) => v - winMean);
 
-  // Lag→BPM MUST use the TRUE envelope rate SAMPLE_RATE / hopSamples, not
-  // 1000 / BPM_HOP_MS: hopSamples is rounded (round(220.5) = 221 at 22050 Hz), so an
-  // assumed 100 Hz rate is 0.23% off — a constant +0.40 BPM bias at 174.
   const envRate = SAMPLE_RATE / hopSamples;
 
-  // Full autocorrelation out to 8 beats at the slowest candidate tempo.
   const maxLag = Math.min(centered.length - 1, Math.ceil((60 / BPM_BAND_MIN) * envRate * 8) + 2);
   const ac = new Float64Array(maxLag + 1);
 
@@ -1203,19 +1004,15 @@ export function estimateBpm(samples: Float32Array): {
       acc += centered[i] * centered[i - lag];
     }
 
-    // Unbiased: divide by the overlap count so longer lags aren't tapered down, which
-    // would tilt the comb toward shorter lags (higher BPM).
     ac[lag] = acc / Math.max(1, centered.length - lag);
   }
 
-  const energy0 = ac[0]; // zero-lag = total windowed onset energy
+  const energy0 = ac[0];
 
   if (energy0 <= 0) {
     return { bpm: null, bpmConfidence: 0, onsetRate };
   }
 
-  // Quadratic (3-point) interpolation of the autocorrelation at a fractional lag —
-  // linear interpolation of these narrow peaks biased the comb by +0.4 BPM.
   const interp = (x: number): number => {
     const i = Math.round(x);
 
@@ -1226,15 +1023,11 @@ export function estimateBpm(samples: Float32Array): {
     const a = ac[i - 1];
     const b = ac[i];
     const c = ac[i + 1];
-    const f = x - i; // in [-0.5, 0.5]
+    const f = x - i;
 
     return b + 0.5 * f * (c - a) + 0.5 * f * f * (a - 2 * b + c);
   };
 
-  // Tempo comb: score each candidate BPM by the mean autocorrelation at k×period for
-  // k=1..8. The true beat and all its harmonics reinforce one candidate; a half-time
-  // track (e.g. 87 BPM) folds up because its even harmonics line up with 174. Scan a
-  // little past the band edges so an in-band winner is a genuine local best.
   let bestBpm = 0;
   let bestScore = -Infinity;
 
@@ -1266,8 +1059,6 @@ export function estimateBpm(samples: Float32Array): {
     }
   }
 
-  // Confidence = how strongly the winning comb stands out (normalized by zero-lag
-  // energy). Out-of-band music scores below the floor → honest null over a fake tempo.
   const confidence = Math.max(0, bestScore / energy0);
   const inBand = bestBpm >= BPM_BAND_MIN && bestBpm <= BPM_BAND_MAX;
   const reliable = inBand && confidence >= BPM_CONFIDENCE_FLOOR;
@@ -1279,16 +1070,7 @@ export function estimateBpm(samples: Float32Array): {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Run
-// ---------------------------------------------------------------------------
-
-// Key confidence is the segment-vote AGREEMENT FRACTION (0..1), not a Pearson
-// correlation. 0.6 = a clear majority of the whole-track segments landed on the same
-// key. On the Rekordbox ground-truth eval this floor nulled exactly the two
-// low-agreement (0.5) reads — both wrong — so precision on non-null outputs rose from
-// 60.0% to 63.6% exact with no correct read lost and a 5.7% null rate.
-const KEY_CONFIDENCE_FLOOR = 0.6; // below this, the vote is too split → honest null
+const KEY_CONFIDENCE_FLOOR = 0.6;
 
 type PreviewAnalysis = {
   bytes: Buffer;
@@ -1299,10 +1081,6 @@ type PreviewAnalysis = {
   tempo: { bpm: number | null; bpmConfidence: number; onsetRate: number };
 };
 
-// Only run the full pipeline when this file is the directly-invoked entry. On
-// import (e.g. from a test), `import.meta.main` is false, so the analyzer can be
-// imported to exercise `acousticBrainzBpmByIsrc` in isolation without resolving
-// previews or hitting the network.
 if (import.meta.main) {
   if (!artist || !title) {
     console.error(
@@ -1311,16 +1089,9 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  // Analyze each candidate window, keeping the most-confident read per field. One
-  // preview clip may be a beatless build-up while another holds the drop; a captured
-  // full song is a single whole-track window that is usually the confident read.
   const analyses: PreviewAnalysis[] = [];
 
   if (audioFile) {
-    // Full-song path (docs/track-lifecycle.md): the enrich sweep S3-GETs
-    // the captured source audio to a temp file and passes it here, so we analyze the
-    // WHOLE song instead of a 30s preview — skip preview resolution entirely.
-    // Everything downstream (spectral / key / BPM / fold) is source-agnostic.
     log(`analyzing captured full song ${audioFile}`);
 
     try {
@@ -1386,20 +1157,12 @@ if (import.meta.main) {
     process.exit(2);
   }
 
-  // The most beat-clear window (highest bpmConfidence) is the most rhythmically
-  // defined section, so its timbre best characterises the feature vector. BPM =
-  // the most confident NON-NULL read; key = the most confident read anywhere (key
-  // is a global property, section-independent).
   const primary = [...analyses].sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)[0];
   const bestBpm = [...analyses]
     .sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)
     .find((a) => a.tempo.bpm !== null);
   const bestKey = [...analyses].sort((a, b) => b.key.confidence - a.key.confidence)[0];
 
-  // BPM decision. The preview path is primary; when it yields null (e.g. a
-  // beatless build-up clip) AND we have an ISRC, fall back to the structured
-  // AcousticBrainz-by-ISRC source (best-effort, in-band folded). A miss leaves
-  // bpm null exactly as before — honest null over a fabricated number.
   let outputBpm = bestBpm?.tempo.bpm ?? null;
   let bpmSource = bestBpm?.source ?? null;
 
@@ -1424,14 +1187,6 @@ if (import.meta.main) {
       }
     | undefined;
 
-  // The preview archive holds ONE official 30s preview per finding — never a full song
-  // (the skill's hard rail, and the audio-source policy: captured full audio lives only in
-  // the private source-audio bucket under `source_audio_key`). `--archive-dir` therefore
-  // applies to the PREVIEW-resolution path only. On `--audio-file` the analyzed bytes ARE
-  // the captured song, so emitting `archivePreview` here would hand the caller a whole track
-  // named `preview.<ext>` — which the skill then tells them to upload into the preview slot.
-  // Refuse: there is nothing to preserve (the song is already durably in R2), so this is a
-  // no-op, announced rather than silent.
   if (archiveDir && audioFile) {
     log("archive-dir ignored: analyzing the captured full song (--audio-file) — the preview");
     log("archive takes 30s previews only, and the full song is already stored in private R2");

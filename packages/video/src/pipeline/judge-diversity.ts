@@ -1,31 +1,3 @@
-// The diversity metric — the automated counter to the package's founding law
-// (divergence) and the DESIGN "Retint Rule": every new finding must look UNLIKE its
-// neighbours, above all the one right before it. The failure mode this catches is
-// LAUNDERING BY RECOLOR: reusing the previous primitive with a fresh palette. A
-// naive colour-only distance is DEFEATED by exactly that (a recolor reads as very
-// different colour), so the metric is STRUCTURE-dominant.
-//
-// Distance per neighbour combines three views, weighted so a recolor can't rescue a
-// reused primitive:
-//   - edgeOrientation (0.60) : a 9-bin Sobel edge-ORIENTATION histogram — the
-//                              primitive's structural fingerprint, invariant under
-//                              recolor. THE discriminator (calibration: a
-//                              same-primitive recolored pair reads eo≈0.00; a
-//                              genuinely distinct pair reads eo≈0.64).
-//   - colorHistogram  (0.20) : HSV histogram Bhattacharyya — real palette diversity,
-//                              a secondary signal that can't by itself pass a clone.
-//   - lumaContrast    (0.20) : |Δmean| + |Δstd| of luminance (tonal/contrast feel).
-//
-// CALIBRATED ON REAL POSTERS (found.fluncle.com/<logId>/poster.jpg, 160×160, area):
-//   027.5.4D vs 025.5.5T (same primitive recolored — must read LOW)  combined = 0.229
-//   032.0.4L vs 032.0.6R (genuinely distinct — must read HIGH)       combined = 0.586
-// DIVERSITY_MIN = 0.35 sits ~34% above the too-similar pair and ~40% below the
-// distinct pair. Below it, the IMMEDIATE neighbour (the hard doctrine constraint) is
-// "too similar"; `--strict` exits non-zero. Advisory by default (exit 0 + verdict).
-//
-// CLI: bun src/pipeline/judge-diversity.ts <posterPathOrLogId> [--neighbours N]
-//      [--strict] [--json]
-
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -44,20 +16,10 @@ const DECODE_SIZE = 160;
 const DEFAULT_NEIGHBOURS = 4;
 export const DIVERSITY_MIN = 0.35;
 
-// The structural axis: the SAME dominant family within this many shipped findings is a
-// hard repeat (FAIL); within the wider window it is a soft rhyme (WARN). Distance-
-// weighted exactly like the poster gate — the immediate neighbours are the hard
-// constraint, a rhyme further back is tolerated.
 const STRUCTURE_FAIL_WINDOW = 4;
 const STRUCTURE_WARN_WINDOW = 8;
 const DEFAULT_STRUCTURE_NEIGHBOURS = STRUCTURE_WARN_WINDOW;
 
-// The plate-lane subject-kind axis: a plate render records its subject KIND
-// (hull / ruin / flora / creature / terrain / threshold …) in render.json as
-// `plateSubject`. Structural fingerprints can't see the subject (every plate comp
-// classifies by its treatment family's marks), so subject rotation gets its own
-// window: the SAME kind within this many shipped findings is a WARN — never a
-// fail (the axis is advisory; the poster distance still carries the verdict).
 const PLATE_SUBJECT_WARN_WINDOW = 4;
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
@@ -70,7 +32,7 @@ const HUE_BINS = 12;
 const SAT_BINS = 4;
 const VAL_BINS = 4;
 const ORIENT_BINS = 9;
-const EDGE_MAG_FLOOR = 0.05; // ignore near-flat pixels when building the orientation histogram
+const EDGE_MAG_FLOOR = 0.05;
 
 const W_EDGE = 0.6;
 const W_COLOR = 0.2;
@@ -78,10 +40,6 @@ const W_LUMA = 0.2;
 
 const FEED_URL = "https://www.fluncle.com/api/v1/findings";
 const posterUrl = (logId: string): string => `https://found.fluncle.com/${logId}/poster.jpg`;
-
-// ---------------------------------------------------------------------------
-// Feature extraction (pure over a decoded RgbImage)
-// ---------------------------------------------------------------------------
 
 export type DiversityFeature = {
   colorHist: Float32Array;
@@ -136,7 +94,6 @@ function hsvHistogram(img: RgbImage): Float32Array {
   return hist;
 }
 
-/** Magnitude-weighted Sobel edge-ORIENTATION histogram (0..π folded, ORIENT_BINS bins). */
 function edgeOrientation(gray: Float32Array, width: number, height: number): Float32Array {
   const hist = new Float32Array(ORIENT_BINS);
   let total = 0;
@@ -163,7 +120,7 @@ function edgeOrientation(gray: Float32Array, width: number, height: number): Flo
       }
       let a = Math.atan2(gy, gx);
       if (a < 0) {
-        a += Math.PI; // fold to [0,π): orientation, not direction
+        a += Math.PI;
       }
       const bin = Math.min(ORIENT_BINS - 1, Math.floor((a / Math.PI) * ORIENT_BINS));
       hist[bin] += mag;
@@ -213,7 +170,6 @@ export type DiversityDistance = {
   lumaContrast: number;
 };
 
-/** Structure-dominant distance between two poster features (0 identical → ~1 distinct). */
 export function diversityDistance(a: DiversityFeature, b: DiversityFeature): DiversityDistance {
   const edge = bhattacharyya(a.edgeOrient, b.edgeOrient);
   const color = bhattacharyya(a.colorHist, b.colorHist);
@@ -229,22 +185,16 @@ export function diversityDistance(a: DiversityFeature, b: DiversityFeature): Div
   };
 }
 
-// ---------------------------------------------------------------------------
-// Fetching (public surfaces only)
-// ---------------------------------------------------------------------------
-
 type FeedTrack = {
   logId?: string | null;
   videoVehicle?: string | null;
   videoStructure?: string | null;
 };
 
-/** A recent published finding that has a video: its coordinate + poetic vehicle name +
- *  the structural family recorded in the feed (when the feed already carries it). */
 export type LedgerEntry = {
   logId: string;
   vehicle: string | null;
-  /** The structure family from the feed, if it exposes one yet; else null (classify on the fly). */
+
   feedStructure: StructureFamily | null;
 };
 
@@ -254,7 +204,6 @@ function asFamily(value: unknown): StructureFamily | null {
     : null;
 }
 
-/** The most-recent published findings that HAVE a video (videoVehicle set), newest first. */
 export async function fetchRecentLedger(limit: number): Promise<LedgerEntry[]> {
   const res = await fetch(`${FEED_URL}?limit=${Math.max(limit * 3, 12)}`);
   if (!res.ok) {
@@ -274,25 +223,16 @@ export async function fetchRecentLedger(limit: number): Promise<LedgerEntry[]> {
   return entries.slice(0, limit);
 }
 
-/** Back-compat: just the logIds (the poster gate only needs coordinates). */
 export async function fetchRecentVideoLogIds(limit: number): Promise<string[]> {
   return (await fetchRecentLedger(limit)).map((e) => e.logId);
 }
 
-// ---------------------------------------------------------------------------
-// The structural axis — classify the shader body, not the vehicle NAME
-// ---------------------------------------------------------------------------
-
-/** Read a composition source for a logId: the local bundle first, then the public host.
- *  Returns null (never throws) when neither is reachable. */
 async function loadCompositionSource(logId: string): Promise<string | null> {
   const local = path.join(OUT_DIR, logId, "composition.tsx");
   if (existsSync(local)) {
     try {
       return readFileSync(local, "utf8");
-    } catch {
-      // fall through to the network copy
-    }
+    } catch {}
   }
   try {
     const res = await fetch(compositionUrl(logId));
@@ -305,9 +245,6 @@ async function loadCompositionSource(logId: string): Promise<string | null> {
   }
 }
 
-/** The structural family for a logId, resolved best-effort: the local render.json's
- *  recorded structure first (no re-classify), then a fresh classification of the
- *  composition source (local or fetched). Null when nothing is reachable. */
 export async function structureOfLogId(logId: string): Promise<StructureFamily | null> {
   const manifest = path.join(OUT_DIR, logId, "render.json");
   if (existsSync(manifest)) {
@@ -319,9 +256,7 @@ export async function structureOfLogId(logId: string): Promise<StructureFamily |
       if (recorded) {
         return recorded;
       }
-    } catch {
-      // fall through to classify
-    }
+    } catch {}
   }
   const source = await loadCompositionSource(logId);
   if (!source) {
@@ -334,19 +269,13 @@ function asPlateSubject(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
 }
 
-/** The plate-lane subject KIND recorded for a logId's render — the local bundle's
- *  render.json first, then the public copy (render.json ships in every bundle, so
- *  neighbours resolve over the network the way compositions do). Null when the
- *  render was plate-less or nothing is reachable. */
 export async function plateSubjectOfLogId(logId: string): Promise<string | null> {
   const manifest = path.join(OUT_DIR, logId, "render.json");
   if (existsSync(manifest)) {
     try {
       const parsed = JSON.parse(readFileSync(manifest, "utf8")) as { plateSubject?: unknown };
       return asPlateSubject(parsed.plateSubject);
-    } catch {
-      // fall through to the network copy
-    }
+    } catch {}
   }
   try {
     const res = await fetch(renderJsonUrl(logId));
@@ -360,7 +289,6 @@ export async function plateSubjectOfLogId(logId: string): Promise<string | null>
   }
 }
 
-/** A recent neighbour with its resolved structural family (null when unresolved). */
 export type StructureNeighbour = {
   logId: string;
   vehicle: string | null;
@@ -370,36 +298,19 @@ export type StructureNeighbour = {
 export type StructureGateStatus = "pass" | "warn" | "fail" | "skipped";
 
 export type StructureGate = {
-  /** The subject's dominant structural family, or null when it couldn't be resolved. */
   subject: StructureFamily | null;
   neighbours: StructureNeighbour[];
-  /** Index (0 = immediate) of the nearest neighbour sharing the subject's family, or null. */
+
   repeatAt: number | null;
   status: StructureGateStatus;
   verdict: string;
 };
 
-/** Ordinal helper: 1 → "1 finding ago", n → "n findings ago". */
 function findingsAgo(index: number): string {
   const n = index + 1;
   return `${n} finding${n === 1 ? "" : "s"} ago`;
 }
 
-/**
- * The PURE structural-gate decision: given the subject's family and the ordered
- * (newest-first) neighbour families, decide pass / warn / fail. A repeat inside the
- * FAIL window (the immediate neighbours) is a hard fail; inside the wider WARN window
- * a soft rhyme; beyond it, clear. A null subject family skips the gate (never fails a
- * ship because a body couldn't be classified). No fs, no network — heavily tested.
- *
- * The feed is ALL-REPRESENTATIONAL (see
- * docs/agents/hermes/scripts/assign-video-axes.ts): representational is a PREREQUISITE,
- * not one register among several. So the gate polices structural-family sameness WITHIN
- * representational — a same-family repeat inside the FAIL window is a hard FAIL regardless
- * of register. The SUBJECT-kind axis the structural fingerprint can't see
- * (a ship vs a ruin vs a creature all classify the same `metaball`/`other`) is policed by
- * evaluatePlateSubjectGate, which stays WARN-only as the softer second layer.
- */
 export function evaluateStructureGate(
   subject: StructureFamily | null,
   neighbours: StructureNeighbour[],
@@ -452,7 +363,6 @@ export function evaluateStructureGate(
   };
 }
 
-/** A recent neighbour with its recorded plate subject (null = plate-less/unresolved). */
 export type PlateSubjectNeighbour = {
   logId: string;
   plateSubject: string | null;
@@ -461,22 +371,14 @@ export type PlateSubjectNeighbour = {
 export type PlateSubjectGateStatus = "pass" | "warn" | "skipped";
 
 export type PlateSubjectGate = {
-  /** The subject render's plate subject kind, or null (plate-less → skipped). */
   subject: string | null;
   neighbours: PlateSubjectNeighbour[];
-  /** Index (0 = immediate) of the nearest neighbour sharing the kind, or null. */
+
   repeatAt: number | null;
   status: PlateSubjectGateStatus;
   verdict: string;
 };
 
-/**
- * The PURE plate-subject decision: WARN when the same subject KIND shipped inside
- * the recent window, else pass; a plate-less render (null subject) skips. Advisory
- * by design — never a fail: the structural gate already demotes representational
- * repeats to WARN because the fingerprint can't see the subject, and this axis is
- * exactly the subject-kind rotation that demotion defers to. No fs, no network.
- */
 export function evaluatePlateSubjectGate(
   subject: string | null,
   neighbours: PlateSubjectNeighbour[],
@@ -510,8 +412,6 @@ export function evaluatePlateSubjectGate(
   };
 }
 
-/** Resolve the recorded plate subject of each recent ledger entry (best-effort,
- *  local bundle then the public render.json). */
 export async function plateSubjectLedger(entries: LedgerEntry[]): Promise<PlateSubjectNeighbour[]> {
   const out: PlateSubjectNeighbour[] = [];
   for (const entry of entries) {
@@ -520,8 +420,6 @@ export async function plateSubjectLedger(entries: LedgerEntry[]): Promise<PlateS
   return out;
 }
 
-/** Fetch + classify the structural family of each recent ledger entry (best-effort).
- *  Feed values win; the local render.json fills gaps. */
 export async function classifyLedger(entries: LedgerEntry[]): Promise<StructureNeighbour[]> {
   const out: StructureNeighbour[] = [];
   for (const entry of entries) {
@@ -531,7 +429,6 @@ export async function classifyLedger(entries: LedgerEntry[]): Promise<StructureN
   return out;
 }
 
-/** Decode a poster given a local path or a logId (fetched from the public host). */
 async function decodePoster(pathOrLogId: string, scratchDir: string): Promise<RgbImage> {
   const isLocal =
     pathOrLogId.endsWith(".jpg") || pathOrLogId.endsWith(".png") || existsSync(pathOrLogId);
@@ -554,24 +451,17 @@ export type DiversityReport = {
   neighbours: { logId: string; immediate: boolean; distance: DiversityDistance }[];
   immediateDistance: number | null;
   threshold: number;
-  /** The structural-family axis (the checked claim beside the vehicle NAME). */
+
   structure: StructureGate;
-  /** The plate-lane subject-kind axis (advisory: warn on a repeat inside 4). */
+
   plateSubject: PlateSubjectGate;
-  /** Poster gate: distinct from the immediate neighbour's picture. */
+
   posterPass: boolean;
-  /** Overall: the poster gate AND the structural gate did not FAIL. */
+
   pass: boolean;
   verdict: string;
 };
 
-/**
- * Judge the subject against the recent published neighbours on BOTH axes: the poster
- * picture-distance (structure-of-the-image) and the shader STRUCTURAL family (the
- * checked claim the vehicle name can't carry). `structureNeighbours` sets the
- * structural window (default 8; the last 4 are the hard FAIL window). `assumeStructure`
- * overrides the subject's classified family — for what-if / dry runs of the gate.
- */
 export async function judgeDiversity(
   subject: string,
   opts: {
@@ -588,8 +478,6 @@ export async function judgeDiversity(
     const subjectImg = await decodePoster(subject, scratchDir);
     const subjectFeat = featureOf(subjectImg);
 
-    // Recent neighbours, excluding the subject itself if it is one of them. Fetch enough
-    // for the WIDER of the two windows, then slice each axis from the same ledger.
     const subjectLogId = subject.endsWith(".jpg") || subject.endsWith(".png") ? null : subject;
     const ledger = (await fetchRecentLedger(Math.max(wanted, structureWanted) + 1)).filter(
       (e) => e.logId !== subjectLogId,
@@ -616,15 +504,11 @@ export async function judgeDiversity(
           ? `distinct from the immediate neighbour (${immediateDistance.toFixed(3)} >= ${DIVERSITY_MIN})`
           : `TOO SIMILAR to the immediate neighbour ${neighbours[0].logId} (${immediateDistance.toFixed(3)} < ${DIVERSITY_MIN}) — likely the same primitive recolored`;
 
-    // The structural axis: classify the subject + the recent ledger, then the pure gate.
     const subjectFamily =
       opts.assumeStructure ?? (subjectLogId ? await structureOfLogId(subjectLogId) : null);
     const structureEntries = await classifyLedger(ledger.slice(0, structureWanted));
     const structure = evaluateStructureGate(subjectFamily, structureEntries);
 
-    // The plate-subject axis (advisory). Resolve the subject's kind first and only
-    // read the neighbours' render.jsons when there is a kind to compare — the
-    // common (plate-less) path stays network-free.
     const subjectPlateSubject =
       asPlateSubject(opts.assumePlateSubject) ??
       (subjectLogId ? await plateSubjectOfLogId(subjectLogId) : null);
@@ -734,7 +618,6 @@ if (import.meta.main) {
     }
     console.log(`${report.pass ? "✓" : "✗"} ${report.pass ? "diverse on both axes" : "FAIL"}`);
   }
-  // Advisory by default; --strict makes an immediate-neighbour clone OR a structural
-  // repeat inside the hard window a non-zero exit.
+
   process.exit(strict && !report.pass ? 1 : 0);
 }

@@ -1,21 +1,3 @@
-// The offline round-trip PROOF (RFC Unit S, proof obligation (a)): a NEW-contract
-// scene rendered from its manifest must match its source composition's render.
-//
-// It is a SCRIPT, not a bun:test, because it needs a real GL context (ANGLE/Metal
-// locally, swangle on a GPU-less host — same as every render). It:
-//   1. authors a minimal, self-contained, LIVE-READY composition fixture in the
-//      gitignored workbench (header uniforms only — the contract's teeth),
-//   2. emits its scene.json via the production extraction path (buildScene),
-//   3. authors a SceneHost wrapper fed that emitted scene,
-//   4. renders a still of BOTH (frame 0) through the same bundle,
-//   5. pixel-compares them: byte-identical is the strong pass; otherwise a PSNR
-//      floor catches trivial encoder nondeterminism.
-// The source's runtime `${GLSL.*}` template and the manifest's resolved body come
-// from the SAME GLSL object, so a faithful extraction + SceneHost wiring yields
-// identical pixels. A mismatch means the emitter or the host drifted.
-//
-// Usage: bun src/pipeline/scene-roundtrip.ts   (exit 0 = match, 1 = mismatch/error)
-
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -35,17 +17,12 @@ const WORKBENCH = path.resolve(import.meta.dirname, "../remotion/workbench");
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
 const OUT_DIR = path.resolve(PACKAGE_ROOT, "out");
 
-// A stable id suffix so the temp comps never collide with a real workbench drop-in.
 const TAG = "scene-roundtrip-proof";
 const SOURCE_ID = `${TAG}-source`;
 const HOST_ID = `${TAG}-host`;
 
-// The four palette stops both sides share (a warm-dark ground → cream).
 const STOPS: [string, string, string, string] = ["#0b0a10", "#8e0a2e", "#cc5374", "#f4ead7"];
 
-// A LIVE-READY fragment: header uniforms only, deps as bare ${GLSL.*} refs. The
-// SOURCE comp's runtime template resolves these via the SAME GLSL object the
-// emitter uses, so its body is byte-identical to scene.glsl.body.
 const FRAG_TEMPLATE = [
   "${GLSL.hash}",
   "${GLSL.valueNoise}",
@@ -60,8 +37,6 @@ const FRAG_TEMPLATE = [
   "}",
 ].join("\n");
 
-// The source composition (a real workbench-shaped comp). ShaderLayer draws the
-// header-only body; no TypePlate/CloseCard/audio file — so no staticFile load.
 const SOURCE_COMP = `import { type FC } from "react";
 import { AbsoluteFill } from "remotion";
 import { GLSL, ShaderLayer, type NostalgicCosmosProps } from "../cosmos";
@@ -87,7 +62,6 @@ const RoundtripSource: FC<NostalgicCosmosProps> = ({ audio, seed }) => (
 export default RoundtripSource;
 `;
 
-/** The host composition: SceneHost fed the emitted scene (embedded verbatim). */
 function hostComp(sceneJson: string): string {
   return `import { type FC } from "react";
 import { type Scene } from "../../pipeline/scene";
@@ -104,7 +78,6 @@ export default RoundtripHost;
 `;
 }
 
-/** A minimal props object: empty curves (audio uniforms read 0), ~3 frames. */
 function minimalProps(): NostalgicCosmosProps {
   return {
     audio: {
@@ -141,7 +114,6 @@ function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-/** PSNR (dB) between two images via ffmpeg; Infinity when identical, null on failure. */
 function psnr(a: string, b: string): number | null {
   const res = spawnSync("ffmpeg", ["-i", a, "-i", b, "-lavfi", "psnr", "-f", "null", "-"], {
     encoding: "utf8",
@@ -174,10 +146,8 @@ async function main(): Promise<void> {
   };
 
   try {
-    // 1. Author the source fixture.
     writeFileSync(sourcePath, SOURCE_COMP);
 
-    // 2. Emit its scene via the production extraction path.
     const { scene, warnings } = buildScene({
       at: "2026-07-03T00:00:00.000Z",
       glsl: GLSL as unknown as Record<string, string>,
@@ -200,10 +170,8 @@ async function main(): Promise<void> {
       );
     }
 
-    // 3. Author the host wrapper fed the emitted scene.
     writeFileSync(hostPath, hostComp(JSON.stringify(scene, null, 2)));
 
-    // 4. Bundle once (the workbench comps auto-register via root.tsx) + render both.
     console.error("[roundtrip] bundling…");
     const serveUrl = await bundle({ entryPoint: ENTRY_POINT, webpackOverride: (c) => c });
     const inputProps = minimalProps();
@@ -232,7 +200,6 @@ async function main(): Promise<void> {
       });
     }
 
-    // 5. Compare.
     const sameBytes = sha256(sourcePng) === sha256(hostPng);
     if (sameBytes) {
       console.error("[roundtrip] ✓ MATCH — the manifest render is byte-identical to its source.");

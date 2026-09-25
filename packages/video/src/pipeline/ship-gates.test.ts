@@ -1,6 +1,3 @@
-// Coverage for ship's hard gates: the metrics-record verdict (missing, stale, failed,
-// passing, recorded flash override), the palette verdict, and the render digest.
-
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

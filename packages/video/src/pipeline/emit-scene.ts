@@ -1,28 +1,3 @@
-// Standalone scene emission — the fluncle.scene/1 replay manifest WITHOUT shipping.
-//
-// ship.ts is otherwise the ONLY emitter of scene.json, and ship requires a full,
-// non-draft render bundle — so a PILOT (which must NOT ship) had no way to emit a
-// scene.json to lint with `validate:scene` or to read `liveReady` before committing
-// to a render. This wraps the SAME pure emitter (scene.ts `buildScene`) so a
-// workbench composition, a bundled logId, or a bare `.tsx` source can produce a
-// scene.json, touching nothing else — no render, no upload, no bundle.
-//
-// The emitter is reused VERBATIM; all this module owns is (1) resolving WHERE the
-// composition source + palette (props) + gate report live from a target, and (2)
-// writing the result. Both are exported as pure helpers so the wrapper is testable
-// without a render.
-//
-// CLI: bun src/pipeline/emit-scene.ts <logId | workbench-comp | source.tsx> [flags]
-//   --props <file>    props.json for the palette (default: auto-resolved for a bundle)
-//   --metrics <file>  the gate report folded into `cleared` (default: auto-resolved)
-//   --palette a,b,c,d override the four stops (background,accent,glow,ink)
-//   --grain <family>  the grain family id recorded in the manifest
-//   --id <id>         the scene id (default: the logId / comp filename)
-//   --kind <finding|default|holding>  (default: finding)
-//   --out <file>      where to write scene.json (default: beside the resolved source)
-//   --json            also print the emitted scene to stdout
-// Exit 0 = scene emitted, 1 = emission skipped (body unresolvable), 2 = usage/read error.
-
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -36,35 +11,25 @@ import { buildScene, type Scene, type SceneKind, type ScenePalette } from "./sce
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const REMOTION_DIR = path.resolve(import.meta.dirname, "../remotion");
 
-// The same warm-dark default ship falls back to when props carry no palette.
 export const DEFAULT_SCENE_PALETTE: ScenePalette = ["#0b0a10", "#171611", "#8e8378", "#f4ead7"];
 
 export type EmitTargetKind = "source-file" | "bundle" | "workbench";
 
 export type EmitTargetPaths = {
-  /** how the target was interpreted (a bare .tsx, a bundled logId, or a workbench comp). */
   targetKind: EmitTargetKind;
-  /** the composition source to emit from. */
+
   sourcePath: string;
-  /** the scene id (logId / comp filename). */
+
   id: string;
   kind: SceneKind;
-  /** where props.json (palette) lives — auto-resolved for a bundle, else undefined. */
+
   propsPath?: string;
-  /** where the gate report lives — auto-resolved for a bundle, else undefined. */
+
   metricsPath?: string;
-  /** the default output path (overridable by --out). */
+
   outPath: string;
 };
 
-/**
- * Resolve a target (a logId, a workbench comp id, or a `.tsx` path) into the paths
- * the emitter needs. Pure given `exists` (defaults to fs `existsSync`) so the test
- * drives all three branches without touching disk. Resolution order:
- *   1. ends with `.tsx`          → a bare source file (props/metrics via flags).
- *   2. `<outDir>/<t>/composition.tsx` exists → a bundled logId (props + metrics auto-resolve).
- *   3. otherwise                 → a workbench comp `<remotionDir>/workbench/<t>.tsx`.
- */
 export function resolveEmitTarget(
   target: string,
   opts: { outDir: string; remotionDir: string; exists?: (p: string) => boolean },
@@ -105,7 +70,6 @@ export function resolveEmitTarget(
   };
 }
 
-/** Pull the four palette stops (background, accent, glow, ink) from parsed props JSON, or null. */
 export function paletteFromProps(raw: unknown): ScenePalette | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
@@ -126,7 +90,6 @@ export function paletteFromProps(raw: unknown): ScenePalette | null {
   return null;
 }
 
-/** Parse a `--palette a,b,c,d` CSV into the four stops, or null when it isn't exactly four. */
 export function parsePaletteFlag(csv: string | undefined): ScenePalette | null {
   if (!csv) {
     return null;
@@ -141,42 +104,35 @@ export function parsePaletteFlag(csv: string | undefined): ScenePalette | null {
 export type EmitSceneOptions = {
   outDir: string;
   remotionDir: string;
-  /** override the props file (palette source). */
+
   propsPath?: string;
-  /** override the gate report folded into `cleared`. */
+
   metricsPath?: string;
-  /** override the four palette stops directly. */
+
   palette?: ScenePalette;
-  /** the grain family id recorded in the manifest. */
+
   grainFamily?: string | null;
-  /** override the scene id / kind. */
+
   id?: string;
   kind?: SceneKind;
-  /** override the output path. */
+
   outPath?: string;
-  /** the GLSL snippet object (defaults to the real `GLSL`; the test injects a fixture). */
+
   glsl?: Record<string, string>;
-  /** the ISO stamp folded into `cleared.at` (deterministic given this). */
+
   at: string;
-  /** skip writing the file (return the scene only) — the CLI writes, the test can too. */
+
   dryRun?: boolean;
 };
 
 export type EmitSceneResult = {
-  /** the emitted scene, or null when the body was unresolvable (skipped, never a throw). */
   scene: Scene | null;
   warnings: string[];
   resolved: EmitTargetPaths;
-  /** the path the scene WAS written to (null when dryRun or scene is null). */
+
   writtenTo: string | null;
 };
 
-/**
- * Resolve a target, read its source + palette + gate report, and run the SAME
- * `buildScene` emitter — WITHOUT shipping. Writes scene.json unless `dryRun`.
- * Degrades like ship: a missing palette/props/report falls back to a sane default
- * (with a warning); only an unresolvable shader body yields `scene: null`.
- */
 export function emitScene(target: string, options: EmitSceneOptions): EmitSceneResult {
   const resolved = resolveEmitTarget(target, {
     outDir: options.outDir,
@@ -194,8 +150,6 @@ export function emitScene(target: string, options: EmitSceneOptions): EmitSceneR
   }
   const source = readFileSync(resolved.sourcePath, "utf8");
 
-  // Palette: an explicit override wins; else read the props file (the finding's
-  // identity); else the warm-dark default (with a warning, exactly like ship).
   let palette = options.palette;
   if (!palette) {
     const propsPath = options.propsPath ?? resolved.propsPath;
@@ -217,7 +171,6 @@ export function emitScene(target: string, options: EmitSceneOptions): EmitSceneR
     }
   }
 
-  // Gate report: fold the metrics into `cleared` when present; absent → `unknown`.
   const metricsPath = options.metricsPath ?? resolved.metricsPath;
   let metricsReport: unknown = null;
   if (metricsPath && existsSync(metricsPath)) {

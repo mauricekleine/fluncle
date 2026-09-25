@@ -45,9 +45,6 @@ function CommandDialog({
         className={cn("top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0", className)}
         showCloseButton={showCloseButton}
       >
-        {/* The dialog's name lives INSIDE the popup, so it exists only while the dialog is open.
-            Rendered beside it, the sr-only heading would sit in every page's outline, ahead of the
-            page's own H1, for a dialog nobody opened. */}
         <DialogHeader className="sr-only">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

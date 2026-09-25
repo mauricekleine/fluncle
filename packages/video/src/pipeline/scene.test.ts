@@ -1,8 +1,3 @@
-// Coverage for the scene contract (fluncle.scene/1) + the emitter helpers. All
-// pure — no fs, no GL, no render. The round-trip PIXEL proof lives in
-// scene-roundtrip.ts (it needs a GL context); these lock the schema, the
-// interpolation guard, the live-ready scan, and the folds.
-
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -31,7 +26,6 @@ const GLSL_FIXTURE: Record<string, string> = {
   hash: "float hash21(vec2 p){ return fract(sin(dot(p, vec2(1.0,2.0)))*43758.5); }",
 };
 
-// A LIVE-READY body: header uniforms only, all deps bare `${GLSL.*}` refs.
 const LIVE_READY_SOURCE = `
 const FRAG = /* glsl */ \`
 \${GLSL.hash}
@@ -48,7 +42,6 @@ void main() {
 <ShaderLayer fragmentShader={FRAG} bloom={{ threshold: 0.72, intensity: 0.6, radius: 0.9 }} reactivity={{ drop: { riseMs: 900, holdMs: 400, fallMs: 2200, peakTimeMs: 8000 } }} />
 `;
 
-// A NOT-live-ready body: declares a custom clip-time uniform.
 const CUSTOM_UNIFORM_SOURCE = `
 const FRAG = /* glsl */ \`
 \${GLSL.hash}
@@ -59,8 +52,6 @@ void main() {
 \`;
 `;
 
-// A composition that HARD-CODES warm retint stops via a local const + paletteStops
-// (the 024.7.3Y / 026.4.0E shape) — these stops must win over the artwork palette.
 const RETINT_STOPS_SOURCE = `
 const stops: [string, string, string, string] = ["#0e0a06", "#7c391a", "#e59a3f", "#f3e7cf"];
 const FRAG = /* glsl */ \`
@@ -203,14 +194,13 @@ describe("extractPaletteStops — composition palette fidelity", () => {
   });
 
   test("returns undefined for a computed or prop palette (props stays the source of truth)", () => {
-    // `palette={paletteMix(palette.swatches)}` / `palette={palette}` == props.palette.
     expect(
       extractPaletteStops("<ShaderLayer fragmentShader={F} palette={mixedPalette} />"),
     ).toBeUndefined();
     expect(
       extractPaletteStops("<ShaderLayer fragmentShader={F} palette={palette} />"),
     ).toBeUndefined();
-    // A partial CloseCard palette is NOT a full four-role override.
+
     expect(
       extractPaletteStops('<CloseCard palette={{ accent: "#80c8a4", ink: "#e6f1ea" }} />'),
     ).toBeUndefined();
@@ -384,9 +374,9 @@ describe("buildScene", () => {
     });
     expect(scene.cleared.flash).toBe("pass");
     expect(warnings).toEqual([]);
-    // The scene round-trips through the defensive validator.
+
     expect(validateScene(scene)).not.toBeNull();
-    // And through the strict one.
+
     expect(validateSceneStrict(scene).valid).toBe(true);
   });
 
@@ -407,7 +397,7 @@ describe("buildScene", () => {
     }
     expect(scene.liveReady).toBe(false);
     expect(scene.liveReadyReasons[0]).toContain("u_settle");
-    // Still a structurally valid, uploadable scene.
+
     expect(validateSceneStrict(scene).valid).toBe(true);
   });
 
@@ -427,9 +417,6 @@ describe("buildScene", () => {
   });
 
   test("a composition's hard-coded paletteStops win over the artwork palette", () => {
-    // A COOL artwork palette (props) with a WARM hard-coded composition — the 026.4.0E
-    // divergence. The emitted scene must carry the WARM rendered stops so a replay
-    // re-tints the world the way the shipped footage looks, not the cool artwork.
     const artwork: [string, string, string, string] = ["#0a0f14", "#2f5d6b", "#4a8ea3", "#dfeaf0"];
     const { scene, warnings } = buildScene({
       at,
@@ -442,7 +429,7 @@ describe("buildScene", () => {
       source: RETINT_STOPS_SOURCE,
     });
     expect(scene?.palette).toEqual(["#0e0a06", "#7c391a", "#e59a3f", "#f3e7cf"]);
-    // A cleanly resolved override is NOT a divergence — no fallback warning.
+
     expect(warnings.some((w) => w.includes("DIVERGE"))).toBe(false);
   });
 

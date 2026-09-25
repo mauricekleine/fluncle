@@ -13,8 +13,6 @@ import {
   summarizeCoverCorpus,
 } from "./measure-cover-diversity";
 
-/** A feature whose histograms sit on one bin — two samples on the SAME bin read as
- *  identical (distance 0), on disjoint bins as maximally distinct (distance 1). */
 function feature(bin: number, luma = 0.5, size = 9): DiversityFeature {
   const color = new Float32Array(size);
   const edge = new Float32Array(size);
@@ -31,7 +29,6 @@ function sample(logId: string, bin: number, luma = 0.5): CoverSample {
   };
 }
 
-/** A solid-colour image, the smallest thing the palette extractor can be pinned on. */
 function solid(hexTriples: [number, number, number][], width = 4): RgbImage {
   const height = hexTriples.length;
   const data = new Float32Array(width * height * 3);
@@ -65,7 +62,7 @@ describe("coverPairs", () => {
   test("identical features read distance 0; disjoint ones read the edge+colour weight", () => {
     const twins = coverPairs([sample("a", 0), sample("b", 0)]);
     expect(twins[0].distance.combined).toBeCloseTo(0);
-    // Disjoint histograms with equal luma: edge 1 × 0.60 + colour 1 × 0.20 + luma 0.
+
     const distinct = coverPairs([sample("a", 0), sample("b", 4)]);
     expect(distinct[0].distance.combined).toBeCloseTo(0.8);
   });
@@ -74,7 +71,7 @@ describe("coverPairs", () => {
 describe("countEchoingPairs", () => {
   test("counts only pairs strictly under the reference line", () => {
     const pairs = coverPairs([sample("a", 0), sample("b", 0), sample("c", 4)]);
-    // a↔b are twins (0); a↔c and b↔c are disjoint (0.8).
+
     expect(countEchoingPairs(pairs)).toBe(1);
   });
 
@@ -87,7 +84,7 @@ describe("countEchoingPairs", () => {
     const pairs = coverPairs([sample("a", 0), sample("b", 4)]);
     expect(countEchoingPairs(pairs)).toBe(0);
     expect(countEchoingPairs(pairs, DIVERSITY_MIN)).toBe(0);
-    // A line above every possible distance catches everything.
+
     expect(countEchoingPairs(pairs, 1.5)).toBe(1);
   });
 });
@@ -102,7 +99,7 @@ describe("summarizeCoverCorpus", () => {
     expect(report.minDistance).toBeCloseTo(0);
     expect(report.maxDistance).toBeCloseTo(0.8);
     expect(report.meanDistance).toBeCloseTo(1.6 / 3);
-    // Two of three pairs are disjoint on both histograms; luma is constant across the corpus.
+
     expect(report.meanEdge).toBeCloseTo(2 / 3);
     expect(report.meanColor).toBeCloseTo(2 / 3);
     expect(report.meanLuma).toBeCloseTo(0);
@@ -166,7 +163,6 @@ describe("bucketHistogram", () => {
 
 describe("dominantSwatches / coverPaletteOf", () => {
   test("returns the most frequent colours first", () => {
-    // Three rows of orange, one of blue.
     const img = solid([
       [255, 153, 0],
       [255, 153, 0],
@@ -180,7 +176,6 @@ describe("dominantSwatches / coverPaletteOf", () => {
   });
 
   test("the DEFINING bucket is the most chromatic swatch, not the most frequent", () => {
-    // A cover that is mostly near-black field with one saturated teal accent.
     const img = solid([
       [6, 6, 8],
       [6, 6, 8],

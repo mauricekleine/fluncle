@@ -1,42 +1,3 @@
-// Package a rendered track video into an uploadable two-master bundle keyed by
-// Log ID:
-//
-//   out/<log-id>/
-//     footage.mp4        (square 1920×1920, audio, CLEAN — the crop source master;
-//                         MT crops it to portrait/landscape + strips audio on demand)
-//     footage.social.mp4 (portrait 1080×1920, audio, BAKED TEXT — the playable
-//                         social cut: Stories, YouTube as-is, TikTok via audio=false MT)
-//     footage.landscape.mp4        (optional — the clean landscape escape hatch,
-//                                   packaged only if out/<trackId>.notext.landscape.mp4 exists)
-//     footage.landscape.social.mp4 (optional — a baked-text landscape cut, if rendered)
-//     footage.notext.mp4           (optional — a clean portrait cut, if rendered)
-//     poster.jpg          (a late/drop frame ~80% in)
-//     cover.jpg           (the profile-grid cover: loud centered identity over art)
-//     note.txt            (the fixed-template caption)
-//     metrics.json  — the judge:metrics record that cleared this render
-//     composition.tsx — exact temporary Remotion composition source used
-//     props.json    — analyzed props: beat grid, energy/bass curves, palette
-//     render.json   — composition id + rerender pointers + the diversity-ledger
-//                     entries (vehicle/grain/model/reasoning/register)
-//
-// Usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>] [--register <abstract|representational|framed>]
-// Requires the PORTRAIT render to exist already (out/<trackId>.mp4) — run
-// social-preview first if it doesn't. The SQUARE crop source (out/<trackId>.square.mp4)
-// is rendered here in-process from the same composition + props if it's missing
-// (one composition, two renders). Any extra variant renders present at
-// out/<trackId>{.notext,.landscape,.notext.landscape}.mp4 (see EXTRA_VARIANT_SOURCES)
-// are packaged too. Upload the bundle with `fluncle admin track video`.
-//
-// Ship refuses before it writes anything into the bundle unless the hard gates clear
-// (ship-gates.ts): a passing judge:metrics record for THIS render (its digest must
-// match out/<trackId>.mp4), then the palette gate, which ship runs itself on the poster
-// it cuts. The verified metrics record ships in the bundle as metrics.json.
-//
-// Side effects run only when this file is the process entrypoint (import.meta.main) —
-// importing ship.ts (e.g. from a test) is side-effect-free. The pure bundle-
-// assembly logic (resolveBundlePaths, buildRenderJson, buildNoteText,
-// EXTRA_VARIANT_SOURCES) is exported and covered by ship.test.ts.
-
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -75,15 +36,9 @@ import {
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
 
-// The authoring AI model (<provider>/<model>) and reasoning effort, written into
-// render.json alongside the vehicle so the upload step records the full
-// diversity-ledger entry. Fall back to any value already in the render manifest.
 const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-5";
 const DEFAULT_VIDEO_REASONING = "high";
 
-// The register — the third diversity-ledger axis (composition style), written
-// into render.json beside vehicle/grain. A missing register WARNS loudly but
-// never fails the ship (a parallel apps/web PR consumes it from render.json).
 const REGISTERS = ["abstract", "representational", "framed"] as const;
 export type ShipRegister = (typeof REGISTERS)[number];
 
@@ -98,16 +53,10 @@ export type ShipFlags = {
   reasoning: string | undefined;
   register: ShipRegister | undefined;
   plateSubject: string | undefined;
-  /**
-   * Delete the shipped track's cached preview audio (public/<trackId>.m4a) after
-   * packaging. OFF by default — ship KEEPS the audio so a re-render (which re-bundles
-   * on any src/ edit) still finds it and never 404s (the bounded cache is already
-   * capped by sweepPreviewAudioCache in social-preview). Opt in for a clean public/.
-   */
+
   pruneAudio: boolean;
 };
 
-/** Parse + validate ship's CLI flags. Throws (with the usage string) on a bad invocation. */
 export function parseShipArgs(argv: string[]): ShipFlags {
   let parsed: ReturnType<
     typeof parseArgs<{
@@ -149,10 +98,7 @@ export function parseShipArgs(argv: string[]): ShipFlags {
   return {
     grain: parsed.flags.grain?.trim() || undefined,
     model: parsed.flags.model?.trim() || undefined,
-    // The plate-lane subject KIND (hull / ruin / flora / creature / terrain /
-    // threshold …) — recorded in render.json when a plate render ships, so
-    // judge:diversity can rotate the subject kind the way it rotates everything
-    // else. Free text by design (the kinds are a vocabulary, not an enum).
+
     plateSubject: parsed.flags["plate-subject"]?.trim().toLowerCase() || undefined,
     pruneAudio: parsed.flags["prune-audio"],
     reasoning: parsed.flags.reasoning?.trim() || undefined,
@@ -162,11 +108,6 @@ export function parseShipArgs(argv: string[]): ShipFlags {
   };
 }
 
-/**
- * Resolve the track (id or log-id → canonical trackId + metadata) via the
- * `fluncle` CLI. Throws with the spawn error, exit status, and stderr — never
- * silently swallows a broken/missing binary.
- */
 export function resolveTrack(input: string): CaptionTrack & { trackId: string } {
   const result = spawnSync(fluncleBin(), ["tracks", "get", input, "--json"], {
     encoding: "utf8",
@@ -214,7 +155,6 @@ export type BundlePaths = {
   sceneOutPath: string;
 };
 
-/** The file list: every path inside a bundle, joined once so writers can't drift. */
 export function resolveBundlePaths(outDir: string, logId: string): BundlePaths {
   const bundle = path.join(outDir, logId);
   return {
@@ -235,20 +175,12 @@ export function resolveBundlePaths(outDir: string, logId: string): BundlePaths {
   };
 }
 
-// The re-renderable-source contract: the bundle files that MUST exist after a ship
-// or the bundle is a PARTIAL (footage with no re-renderable source), the exact shape
-// the CLI upload guard also enforces. ship copies props.json only when the analyzed
-// props exist and composition.tsx only when the render manifest resolves a source, so
-// a missing input would otherwise ship a silently-incomplete bundle — this asserts
-// against that. Keyed by BundlePaths so writers and the check can't drift.
 export const RERENDER_CONTRACT_KEYS: ReadonlyArray<keyof BundlePaths> = [
   "compositionPath",
   "propsOutPath",
   "renderOutPath",
 ];
 
-/** The contract files missing from an assembled bundle (basenames). Pure over an
- *  existence predicate so ship.test.ts can exercise it without touching the fs. */
 export function missingContractFiles(paths: BundlePaths, exists: (p: string) => boolean): string[] {
   return RERENDER_CONTRACT_KEYS.filter((key) => !exists(paths[key])).map((key) =>
     path.basename(paths[key]),
@@ -258,23 +190,13 @@ export function missingContractFiles(paths: BundlePaths, exists: (p: string) => 
 type ExtraVariantMasterFlag = "footageLandscape" | "footageLandscapeSocial" | "footageNotext";
 
 export type ExtraVariantSource = {
-  /** The suffix social-preview.ts writes: out/<trackId><suffix>.mp4. */
   suffix: string;
-  /** The buildVariants() master flag this maps to. */
+
   masterFlag: ExtraVariantMasterFlag;
-  /** The resolveBundlePaths() key holding this variant's bundle destination. */
+
   pathKey: ExtraVariantMasterFlag;
 };
 
-/**
- * Extra non-default variant renders ship when present. Each entry's `suffix` is exactly the
- * variantSuffix that social-preview computes from `--no-overlay`/`--aspect landscape`;
- * `.notext.landscape` is the
- * documented clean-landscape escape hatch (docs/video-variants.md "The
- * square-crop quality dial") — footage.mp4 (square, clean) already covers the
- * plain `.notext`/`.square` cases via MT crop once a finding is squared, so
- * only these three combinations are worth a stored file.
- */
 export const EXTRA_VARIANT_SOURCES: ExtraVariantSource[] = [
   { masterFlag: "footageNotext", pathKey: "footageNotext", suffix: ".notext" },
   {
@@ -292,79 +214,52 @@ export type RenderManifestInput = {
   hasIntentFile: boolean;
   hasPropsFile: boolean;
   model: string;
-  /** The coarse palette HUE-BUCKET tag (palette-summary.ts) — the recorded palette
-   *  provenance the finalize path stores as video_palette and the axis assigner reads to
-   *  steer the next render off the worn hue. Null when no palette could be derived. */
+
   palette: string | null;
-  /** Up to three dominant hex swatches — the bundle's human-readable palette receipt. */
+
   paletteSwatches: string[];
-  /** The plate-lane subject KIND when a plate render ships (hull / ruin / flora /
-   *  creature / terrain / threshold …); null on abstract/procedural renders. */
+
   plateSubject: string | null;
   reasoning: string;
   register: string | null;
-  /** The structural family the resolved shader body classifies to (the CHECKED
-   *  diversity axis, beside the free-text vehicle NAME). Null when the body could
-   *  not be resolved/classified — a warn, never a ship blocker. */
+
   structure: StructureManifest | null;
   trackId: string;
   variants: ReturnType<typeof buildVariants>;
   vehicle: string | null;
 };
 
-/** The bundle render.json build: pure, so a change to its shape is testable without fs. */
 export function buildRenderJson(input: RenderManifestInput): Record<string, unknown> {
   return {
     compositionId: input.compositionId,
     compositionSource: input.hasCompositionFile ? "composition.tsx" : null,
-    // The grain-ledger entry: the upload endpoint reads this and stores it as the
-    // track's video_grain (surfaced in /api/tracks beside the vehicle).
+
     grain: input.grain,
-    // The render-intent spine: shipped beside props (the author's file or a stub).
+
     intent: input.hasIntentFile ? "intent.json" : null,
-    // The authoring AI model: the upload endpoint reads this and stores it as
-    // the track's video_model (surfaced in /api/tracks alongside the vehicle).
+
     model: input.model,
-    // The PALETTE-ledger entry (docs/planning/homogenisation-evidence.md — the axis that
-    // was invisible when four consecutive renders shared one amber palette): the coarse
-    // hue-bucket tag the finalize path stores as video_palette, so the axis assigner can
-    // steer the next render off the worn hue. Null when no palette was derivable.
+
     palette: input.palette,
-    // The dominant hex swatches behind the bucket — the human-readable receipt in the
-    // bundle (never stored on the row; the bucket tag is what the ledger carries).
+
     paletteSwatches: input.paletteSwatches,
-    // The plate-lane subject-kind ledger entry: judge:diversity reads it (from the
-    // local bundle or the public render.json) and WARNs on a same-kind repeat
-    // inside the recent window, so plate subjects rotate like every other axis.
-    // Null on plate-less renders.
+
     plateSubject: input.plateSubject,
     props: input.hasPropsFile ? "props.json" : null,
-    // The authoring model's reasoning effort: the upload endpoint reads this and
-    // stores it as the track's video_model_reasoning (surfaced in /api/tracks).
+
     reasoning: input.reasoning,
-    // The third diversity-ledger axis (composition style): abstract /
-    // representational / framed. Null when unset — a warn, not a ship blocker.
+
     register: input.register,
-    // The STRUCTURAL diversity axis: the family the resolved shader body classifies
-    // to (cellular / flow / caustic / filament / lattice / radial / metaball / other).
-    // The vehicle NAME is free poetic identity; this is the checked claim the gate
-    // reads so creatively-named repeats (three voronoi worlds under three names) can't
-    // slip through. Null when the body couldn't be resolved — a warn, not a blocker.
+
     structure: input.structure,
     trackId: input.trackId,
-    // The per-master render-flag provenance: ship produces the two-master
-    // bundle plus any extra variants it found on disk, so a future "clean
-    // re-render from source" reproduces the right cut per output.
+
     variants: input.variants,
-    // The diversity-ledger entry: the upload endpoint reads this and stores it
-    // as the track's video_vehicle (surfaced in /api/tracks for the next agent).
+
     vehicle: input.vehicle,
   };
 }
 
-/** Read the bundle's props.json and summarize its palette into a hue-bucket tag +
- *  swatches, or null when the props file is absent/unparseable or carries no palette.
- *  Best-effort by contract — never throws, so ship never fails on palette provenance. */
 export function readPropsPalette(
   propsPath: string,
   log: (message: string) => void,
@@ -391,25 +286,10 @@ export function readPropsPalette(
   }
 }
 
-/** The note.txt build: the fixed-template caption for this track + release year. */
 export function buildNoteText(track: CaptionTrack, year: number | null): string {
   return buildCaption(track, year);
 }
 
-/**
- * The square crop source's cache key: the fingerprint of everything the square
- * render is a pure function of — the bundle (src/ + public/, the same trees the
- * render bundle cache keys on), the composition id, and the props the portrait
- * rendered from. ship stamps this into a sidecar (`<trackId>.square.mp4.hash`)
- * beside the cached square; a re-ship recomputes it and reuses the cached square
- * ONLY when it still matches. A portrait re-render (a new composition shifts the
- * bundle hash, re-analyzed audio shifts the props) shifts this fingerprint, so the
- * now-stale square is re-rendered rather than silently shipped beside a diverged
- * portrait. The artifact twin of render.ts's bundle-hash correctness gate.
- *
- * NUL separators between the three inputs keep them from bleeding across the
- * boundary (comp "MyComp" + props "X" can't collide with comp "MyCom" + props "pX").
- */
 export function squareInputsHash(input: {
   bundleHash: string;
   compositionId: string;
@@ -425,15 +305,6 @@ export function squareInputsHash(input: {
     .slice(0, 16);
 }
 
-/**
- * Whether a cached square can be reused. A MISSING sidecar (cachedHash === null)
- * means the square was produced outside a ship render — a direct
- * `social-preview --aspect square` (the documented escape hatch) or one rendered
- * before this cache existed — so trust it, never force a wasteful re-render that
- * could clobber a deliberate manual square. Only a sidecar that EXISTS and
- * MISMATCHES marks a square stale (the ship → portrait-re-render → re-ship
- * divergence trap), so ship re-renders it.
- */
 export function shouldReuseSquare(currentHash: string, cachedHash: string | null): boolean {
   return cachedHash === null || cachedHash === currentHash;
 }
@@ -466,8 +337,6 @@ function readShipRenderManifest(
   }
 }
 
-/** Cut the poster (~80% in) from the square master into `posterPath`. Returns an error
- *  description on failure, null on success. */
 function renderPoster(footagePath: string, posterPath: string): string | null {
   const durProbe = spawnSync("ffprobe", [
     "-v",
@@ -504,8 +373,6 @@ function renderPoster(footagePath: string, posterPath: string): string | null {
     : `ffmpeg exited ${posterResult.status ?? "unknown"}${stderr ? `\n${stderr.slice(-1000)}` : ""}`;
 }
 
-/** The metrics gate: read out/<trackId>.metrics.json, refuse unless it measured this
- *  render and passed, and return the verified record (it ships as metrics.json). */
 function enforceMetricsGate(
   trackId: string,
   renderPath: string,
@@ -525,9 +392,6 @@ function enforceMetricsGate(
   return record;
 }
 
-/** The palette gate: cut the poster from the square master to `posterPath`, then refuse
- *  unless its palette clears the recent published posters. A failed cut refuses too,
- *  because the gate has no subject without it. */
 async function cutPosterAndEnforcePalette(
   squarePath: string,
   posterPath: string,
@@ -551,7 +415,6 @@ async function cutPosterAndEnforcePalette(
   enforceGate(paletteGateVerdict(gate), log);
 }
 
-/** Throw the refusal when a gate verdict fails; log its notes when it passes. */
 function enforceGate(verdict: GateVerdict, log: (message: string) => void): void {
   if (!verdict.ok) {
     throw new Error(`REFUSED: ${verdict.reason}`);
@@ -627,7 +490,6 @@ async function main(argv: string[]): Promise<void> {
   const flags = parseShipArgs(argv);
   const log = (message: string) => console.error(`[ship] ${message}`);
 
-  // 1. Resolve the track.
   const track = resolveTrack(flags.trackInput);
 
   if (!track.logId) {
@@ -635,11 +497,8 @@ async function main(argv: string[]): Promise<void> {
   }
   const logId = track.logId;
 
-  // 2. The render must already exist (renders are slow; keep ship fast + idempotent).
   const reviewSrc = path.join(OUT_DIR, `${track.trackId}.mp4`);
   if (!existsSync(reviewSrc)) {
-    // A draft is a half-res/jpeg proof with the load-bearing grain hidden — it must
-    // never reach R2. If only a draft exists, say so explicitly.
     if (existsSync(path.join(OUT_DIR, `${track.trackId}.draft.mp4`))) {
       throw new Error(
         `only a DRAFT render exists (${track.trackId}.draft.mp4). Drafts are half-res/jpeg proofs and are NOT shippable — run a full render first: bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id>`,
@@ -650,29 +509,12 @@ async function main(argv: string[]): Promise<void> {
     );
   }
 
-  // 3. The metrics gate, before anything is written: a passing judge:metrics record
-  // whose digest matches the render on disk now (ship-gates.ts).
   const metricsRecord = enforceMetricsGate(track.trackId, reviewSrc, log);
 
   const paths = resolveBundlePaths(OUT_DIR, track.logId);
 
-  // The render manifest (composition id + the props the portrait master rendered
-  // from) is read up front: the square crop source re-renders that same
-  // composition + props with aspect=square, hideOverlay=true.
   const renderManifest = readShipRenderManifest(track.trackId, log);
 
-  // footage.mp4 — the SQUARE crop source: 1920×1920, audio, CLEAN (no overlay). MT
-  // centre-crops it to portrait/landscape on the fly, so this is the one stored
-  // orientation master. Re-render it from the same composition + props with
-  // aspect=square + hideOverlay; cache it at out/<trackId>.square.mp4 so a re-ship
-  // is fast and idempotent.
-  //
-  // The cache is FINGERPRINTED (squareInputsHash → the `.square.mp4.hash` sidecar):
-  // a plain "reuse if the file exists" check let a stale square survive a portrait
-  // RE-render (a new composition), shipping two DIVERGED masters. ship now stamps
-  // the inputs' fingerprint when it renders the square and re-renders whenever the
-  // sidecar mismatches — the artifact twin of render.ts's bundle-hash gate (#307).
-  // Returns the cached square's path; the bundle copy waits until the gates clear.
   const prepareSquareMaster = async (): Promise<string> => {
     const squareSrc = path.join(OUT_DIR, `${track.trackId}.square.mp4`);
     const squareHashPath = `${squareSrc}.hash`;
@@ -692,11 +534,7 @@ async function main(argv: string[]): Promise<void> {
       : null;
 
     const squareExists = existsSync(squareSrc);
-    // Reuse the cached square when it exists AND either we can't fingerprint the
-    // inputs (no composition id / no props → can't re-render either; ship what's
-    // there and let the re-render-contract check below catch a truly broken bundle)
-    // or the sidecar still matches (see shouldReuseSquare for the missing-sidecar
-    // escape-hatch rule).
+
     const reuseSquare =
       squareExists &&
       (squareFingerprint === null || shouldReuseSquare(squareFingerprint, cachedSquareHash));
@@ -731,8 +569,6 @@ async function main(argv: string[]): Promise<void> {
       const { render } = await import("./render");
       await render(squareProps, squareSrc, renderManifest.compositionId);
 
-      // Stamp the sidecar with the fingerprint of the inputs this square rendered
-      // from, so the next ship trusts it — and, on any input change, invalidates it.
       writeFileSync(
         squareHashPath,
         squareInputsHash({
@@ -747,45 +583,26 @@ async function main(argv: string[]): Promise<void> {
 
   const squareSrc = await prepareSquareMaster();
 
-  // 4. The palette gate on the exact poster this bundle ships. The poster is cut to a
-  // staging path first, so a refusal leaves out/<log-id>/ untouched. The palette gate
-  // needs the poster, so a failed cut refuses the ship.
   log("poster.jpg (~80% in)");
   const stagedPoster = path.join(OUT_DIR, `${track.trackId}.poster.jpg`);
   await cutPosterAndEnforcePalette(squareSrc, stagedPoster, logId, log);
 
-  // 5. The gates cleared: assemble the bundle under out/<log-id>/.
   mkdirSync(paths.bundle, { recursive: true });
 
-  // footage.social.mp4 — the portrait, text, audio social cut: exactly the review
-  // render (out/<trackId>.mp4) the metrics gate measured. It is the playable cut for
-  // Stories, YouTube, and (audio-stripped via MT) TikTok.
   log("footage.social.mp4 (portrait, text, audio — the social cut)");
   copyFileSync(reviewSrc, paths.footageSocial);
   copyFileSync(squareSrc, paths.footage);
   copyFileSync(stagedPoster, paths.poster);
-  // metrics.json — the exact record the metrics gate verified (with any recorded
-  // --allow-flash override), shipped as the bundle's gate provenance.
+
   log("metrics.json (the judge:metrics record that cleared this render)");
   writeFileSync(paths.metricsOutPath, JSON.stringify(metricsRecord, null, 2));
 
   log("note.txt");
-  // Prefer the stored release_date (from `tracks get`); fall back to Deezer for any
-  // track not yet backfilled.
+
   const year = yearFromReleaseDate(track.releaseDate) ?? (await fetchReleaseYear(track.isrc));
   const note = buildNoteText(track, year);
   writeFileSync(paths.notePath, note);
 
-  // intent.json — the render-intent spine. The author writes out/<trackId>.intent.json
-  // at concept time; copy it into the bundle. v1 warn-and-stub: a missing intent is a
-  // WARNING, not a ship blocker — write a generated stub so the bundle always carries
-  // one and the metrics/judge never hit a missing-file path.
-  // cover.jpg — the profile-grid cover (loud, centered identity over a clean late
-  // frame). Needs props.json in the bundle; the operator AirDrops it to Photos and
-  // sets it as the post's cover. Render failure is non-fatal — the rest of the
-  // bundle still ships.
-  // Extra variants: package whichever landscape/notext cuts a prior social-preview
-  // run produced (see EXTRA_VARIANT_SOURCES). Never fabricated — only what's on disk.
   const extraMasters = await packageOptionalAssets(track, logId, paths, renderManifest, log);
 
   const register = flags.register ?? (renderManifest.register as ShipRegister | undefined) ?? null;
@@ -795,10 +612,6 @@ async function main(argv: string[]): Promise<void> {
     );
   }
 
-  // Classify the STRUCTURAL family from the RESOLVED shader body — the diversity axis
-  // the vehicle name can't carry. Best-effort by contract: any hiccup (no composition
-  // source, an unresolvable interpolation, a classifier throw) WARNS and omits the
-  // block — ship NEVER fails because structural classification stumbled.
   const vehicle = flags.vehicle ?? renderManifest.vehicle ?? null;
   let structure: StructureManifest | null = null;
   const classifyStructure = (): void => {
@@ -831,9 +644,6 @@ async function main(argv: string[]): Promise<void> {
 
   classifyStructure();
 
-  // Palette provenance: summarize the render's derived palette (social-preview's
-  // paletteMix, in props.json) into a coarse hue-bucket tag + dominant swatches. Best-
-  // effort — a missing/unparseable props palette leaves it null, exactly like structure.
   const paletteSummary = readPropsPalette(paths.propsOutPath, log);
   if (paletteSummary) {
     log(`palette: ${paletteSummary.bucket} (${paletteSummary.swatches.join(" ")})`);
@@ -867,18 +677,11 @@ async function main(argv: string[]): Promise<void> {
     ),
   );
 
-  // scene.json — the fluncle.scene/1 replay manifest (RFC Unit S). The offline/live
-  // hosts re-run the RESOLVED body from this file with no composition module in
-  // reach. Emission is best-effort by contract: a hiccup (no composition source, an
-  // unresolvable interpolation, a missing gate report) WARNS and skips the file —
-  // ship NEVER fails because scene emission stumbled.
   const emitScene = (): void => {
     try {
       if (existsSync(paths.compositionPath)) {
         const source = readFileSync(paths.compositionPath, "utf8");
 
-        // Palette + grain from props (the finding's identity) — the four stops the
-        // host feeds u_palette, dark→light.
         let palette: ScenePalette = ["#0b0a10", "#171611", "#8e8378", "#f4ead7"];
         if (existsSync(paths.propsOutPath)) {
           try {
@@ -896,7 +699,6 @@ async function main(argv: string[]): Promise<void> {
           }
         }
 
-        // Fold the ship-time gate verdicts from the metrics record the gate verified.
         const { scene, warnings } = buildScene({
           at: new Date().toISOString(),
           glsl: GLSL as unknown as Record<string, string>,
@@ -930,11 +732,6 @@ async function main(argv: string[]): Promise<void> {
 
   emitScene();
 
-  // Bundle-completeness self-check (fail loudly): ship's job is a COMPLETE,
-  // re-renderable bundle. If props.json (no analyzed props) or composition.tsx (no
-  // resolved render source) never got copied, the bundle would ship footage with no
-  // re-renderable source and desync render.json from the DB ledger downstream. Refuse
-  // to hand off a half-bundle — this is the ship-side twin of the CLI upload guard.
   const missingContract = missingContractFiles(paths, existsSync);
   if (missingContract.length > 0) {
     throw new Error(
@@ -944,13 +741,6 @@ async function main(argv: string[]): Promise<void> {
     );
   }
 
-  // Preview audio cache: KEEP the audio by default. The Remotion bundle bakes a
-  // COPY of public/ at bundle() time, so deleting public/<trackId>.m4a here left a
-  // later re-render (which re-bundles on any src/ edit) baking a public/ WITHOUT the
-  // audio → staticFile 404 until a manual re-download + bundle-cache clear. The
-  // bounded cache is already capped by sweepPreviewAudioCache (social-preview), so
-  // this delete was redundant AND load-bearing-in-the-wrong-direction. `--prune-audio`
-  // opts back into an immediate clean-up when a tidy public/ is wanted.
   if (flags.pruneAudio) {
     const removedPreviewAudio = await deletePreviewAudio(track.trackId);
     if (removedPreviewAudio) {

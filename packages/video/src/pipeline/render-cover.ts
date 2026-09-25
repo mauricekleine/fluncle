@@ -1,15 +1,3 @@
-// Render the profile-grid cover (a still) for one or more shipped bundles.
-//
-//   bun src/pipeline/render-cover.ts <bundleDir...>
-//
-// For each bundle (out/<log-id>/ holding footage.mp4 + props.json) it grabs a
-// vivid late frame of the footage (after the in-video TypePlate has cleared, so
-// the art is clean), then renders the <Cover> composition over it as cover.jpg.
-// The operator AirDrops cover.jpg to Photos and sets it as the post's cover.
-//
-// Exposed as renderCover() so `ship` produces the cover as part of the bundle;
-// the CLI entry below renders covers for existing bundles standalone.
-
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +10,6 @@ import { glRenderer } from "./gl";
 
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
 
-/** Probe a media file's duration in seconds via ffprobe. */
 function durationSec(file: string): number {
   const out = spawnSync(
     "ffprobe",
@@ -33,7 +20,6 @@ function durationSec(file: string): number {
   return Number.isFinite(d) && d > 0 ? d : 20;
 }
 
-/** Grab a single frame at `atSec` as a JPEG data URL (1080×1920 source frame). */
 function frameDataUrl(footage: string, atSec: number): string {
   const tmp = mkdtempSync(path.join(tmpdir(), "cover-"));
   const frame = path.join(tmp, "frame.jpg");
@@ -51,12 +37,6 @@ function frameDataUrl(footage: string, atSec: number): string {
   return `data:image/jpeg;base64,${b64}`;
 }
 
-/**
- * Render cover.jpg into each bundle dir. Bundles Remotion once, then renders a
- * still per track over a clean late frame of its own footage. Each bundle needs
- * footage.mp4 + props.json (track facts + palette ink); a bundle missing either
- * is skipped with a warning rather than failing the batch.
- */
 export async function renderCover(bundleDirs: string[]): Promise<void> {
   if (bundleDirs.length === 0) {
     return;
@@ -85,7 +65,6 @@ export async function renderCover(bundleDirs: string[]): Promise<void> {
       };
     };
 
-    // A clean late frame — past the type, into the pure-art drop window.
     const at = durationSec(footage) * 0.72;
     const background = frameDataUrl(footage, at);
 
@@ -125,7 +104,6 @@ export async function renderCover(bundleDirs: string[]): Promise<void> {
   }
 }
 
-// CLI entry: render covers for the given bundle dirs.
 if (import.meta.main) {
   const dirs = process.argv.slice(2);
   if (dirs.length === 0) {

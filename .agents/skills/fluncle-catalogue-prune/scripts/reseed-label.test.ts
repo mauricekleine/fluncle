@@ -8,11 +8,6 @@ import { type Client } from "@libsql/client/web";
 
 import { main, resolverNodeId, retiredNote, splitLabelNodes } from "./reseed-label";
 
-// Same rail as the rest of this suite: nothing here touches a real database. The stub routes rows
-// by SQL so one `main()` call can be given a whole frontier, and the assertions pin the refusals
-// (no label row / not enabled / no mb_label_id), the namesake classification, and that a dry-run
-// performs ZERO writes.
-
 type Row = Record<string, unknown>;
 type Statement = { args?: unknown[]; sql: string };
 
@@ -22,9 +17,6 @@ const isWrite = (sql: string): boolean => /^\s*(delete|insert|replace|update)\b/
 
 const writes = (s: Stub): Statement[] => s.executed.filter((st) => isWrite(st.sql));
 
-// Redirect the rollback snapshot before ANY test runs. The script defaults `PRUNE_OUT_DIR` to `.`,
-// so a confirm-path test without this writes a `*-rollback.json` into the repo — and in a real run
-// that file is verbatim production rows. Set once, at the top, so a future test cannot forget.
 const PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "reseed-label-"));
 process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
 
@@ -72,14 +64,12 @@ const node = (over: Row): Row => ({
   ...over,
 });
 
-/** A frontier holding the resolver node plus one right and one wrong-namesake MusicBrainz node. */
 const FRONTIER: Row[] = [
   node({ external_id: SLUG, id: resolverNodeId(SLUG), source: "fluncle", state: "done" }),
   node({ cursor: 25, external_id: RIGHT_MBID, id: `musicbrainz:label:${RIGHT_MBID}` }),
   node({ cursor: 400, external_id: WRONG_MBID, id: `musicbrainz:label:${WRONG_MBID}` }),
 ];
 
-/** Route the two reads `main` issues: the label row, then the frontier nodes. */
 const frontierStub = (label: Row | undefined, nodes: Row[] = FRONTIER) =>
   stub((sql) => {
     if (sql.includes("from labels")) {
@@ -214,7 +204,7 @@ describe("the dry run", () => {
     expect(out).toContain("to retire 1");
     expect(out).toContain("DRY RUN — nothing written");
     expect(writes(s)).toEqual([]);
-    // It DID read the frontier — no writes is not no work.
+
     expect(s.executed.some((st) => st.sql.includes("from crawl_frontier"))).toBe(true);
   });
 
@@ -243,11 +233,11 @@ describe("--confirm", () => {
       "update crawl_frontier set state = 'pending', cursor = 0, updated_at = ? where id = ?",
     );
     expect(w[0]?.args?.[1]).toBe(resolverNodeId(SLUG));
-    // The namesake node is NOTED, never deleted — the row is the record of what was walked.
+
     expect(w[1]?.sql).toBe("update crawl_frontier set note = ?, updated_at = ? where id = ?");
     expect(w[1]?.args?.[0]).toBe(retiredNote(new Date()));
     expect(w[1]?.args?.[2]).toBe(`musicbrainz:label:${WRONG_MBID}`);
-    // The CORRECT MB node is untouched.
+
     expect(w.some((st) => st.args?.includes(`musicbrainz:label:${RIGHT_MBID}`))).toBe(false);
   });
 

@@ -1,14 +1,6 @@
-// The Pipeline Tour manifest — the specific ~3:35 walkthrough of the galaxy
-// factory for X. Placeholder mock surfaces stand in until real screen captures
-// exist; drop mp4s in public/ and swap a chapter's clip to `{ kind: "video",
-// src: "…" }` to go live. Captions are illustrative stand-ins for the real VO
-// transcript. Cold open + close are the talking-head bookends; the factory and
-// the surfaces are the big beats, so they run picture-in-picture.
-
 import { FPS, HEIGHT, WIDTH } from "./theme";
 import { type ExplainerChapter, type ExplainerManifest } from "./types";
 
-// Annotated so the string-literal fields (layout, clip kind, mock) stay narrow.
 const chapters: Array<Omit<ExplainerChapter, "id"> & { id?: string }> = [
   {
     captions: [
@@ -77,8 +69,7 @@ const chapters: Array<Omit<ExplainerChapter, "id"> & { id?: string }> = [
     durationMs: 55_000,
     layout: "pip",
     number: 3,
-    // The videos surface now plays real rendered track footage (FACTORY_CLIPS),
-    // not a screen capture — no label, so no capture hint.
+
     screen: { kind: "placeholder", mock: "videos" },
     showCard: true,
     subtitle: "then my machines pull it apart and analyze it",
@@ -138,10 +129,6 @@ const chapters: Array<Omit<ExplainerChapter, "id"> & { id?: string }> = [
   },
 ];
 
-// One set of chapters, three aspect ratios. The layouts reflow off the frame
-// dimensions (responsive PiP, stacked split on tall frames), so the same tour
-// renders landscape for YouTube/X, portrait for the mobile timeline + Reels/
-// Shorts, and square for the in-feed post.
 const resolved: ExplainerChapter[] = chapters.map((chapter, index) => ({
   ...chapter,
   id: chapter.id ?? `ch-${index}`,
@@ -158,14 +145,14 @@ export const pipelineTour: ExplainerManifest = {
 
 export const pipelineTourPortrait: ExplainerManifest = {
   ...pipelineTour,
-  height: WIDTH, // 1920
+  height: WIDTH,
   id: "pipeline-tour-portrait",
-  width: HEIGHT, // 1080 → 1080×1920 (9:16)
+  width: HEIGHT,
 };
 
 export const pipelineTourSquare: ExplainerManifest = {
   ...pipelineTour,
-  height: HEIGHT, // 1080
+  height: HEIGHT,
   id: "pipeline-tour-square",
-  width: HEIGHT, // 1080 → 1080×1080 (1:1)
+  width: HEIGHT,
 };

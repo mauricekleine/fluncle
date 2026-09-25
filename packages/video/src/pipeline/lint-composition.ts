@@ -1,60 +1,19 @@
-// Static lint for the global-vs-internal motion law (out/overnight/INSIGHTS.md):
-// GLOBAL translation must be an audio-free constant-speed clock; ALL audio reactivity
-// belongs in INTERNAL deformation. This catches, at author time, the two whole-vehicle
-// JUMP bugs the round-2 labels traced — cheaper + more reliable than a post-render metric:
-//
-//   1. "no constant base"   — an audio uniform drives a translation term with NO
-//      u_time/sec/arc clock term (e.g. `float drift = u_audioSwell * 0.10;`): drift
-//      velocity = k·d(swell)/dt, which goes negative whenever swell dips → DJ scratch.
-//   2. "audio exceeds clock" — an audio coefficient ≥ the constant-clock coefficient on
-//      a translation term (e.g. `drift = sec*0.85 + swell*1.4 + drop*0.5;`): with swell
-//      uncapped (Part I, 0.64→1.0) its derivative surges the drift → the whole frame jumps.
-//
-// LAUNDERING GUARD (the taint pass). A naive token scan is defeated by JS-side
-// RENAMING: `uniforms={{ u_flowBend: audioRx.swell }}` binds an audio bus value to a
-// custom uniform name, then `float t = u_time + u_flowBend*1.1;` advances a phase
-// variable by an audio term — and `t` drives coordinates — with NO literal audio
-// token anywhere on the translation line. Two extra passes close that hole:
-//   a) Uniform-bag taint: parse `uniforms={{ name: <expr> }}` object literals; any
-//      custom uniform NAME whose value is an audio expression (audioRx.*, a bus field
-//      like `.swell`, a `use*()` hook result, or a JS var that itself holds one)
-//      is treated as an audio token inside the GLSL scan.
-//   3. "audio-tainted phase" — a TIME/PHASE variable (`float t = u_time + <audio>*k`)
-//      whose audio term is NOT dominated by a constant clock base, when `t` later
-//      feeds coordinates: the audio invisibly advances the phase → the same JUMP.
-//
-// Heuristic line scanner over the composition source (JS + GLSL). Advisory: it flags
-// translation-term lines that bind audio over (or without) a dominant constant base.
-// It cannot prove intent — review each finding — but it catches the named bugs reliably.
-
 import { readFileSync } from "node:fs";
 
-// Translation/coordinate-advance term: the LHS or the mutated thing is a global drift.
 const TRANSLATION_LHS =
   /\b(drift|travel|scroll|advance|glide|slide|pan|gust|flow)\b\s*=|(?:\b(?:p|q|uv|coord|coords|st|pos|position)\b\s*\+=)|\+=\s*[a-zA-Z_]*[dD]ir\b/;
 
-// Coordinate-FEED term (broader than TRANSLATION_LHS): a coordinate/position var
-// assigned OR advanced, or a *Dir/travel vector in play. Used to decide whether a
-// tainted phase variable actually reaches the geometry.
 const COORD_FEED =
   /\b(?:p|q|uv|coord|coords|st|pos|position)\b\s*(?:\+?=)|\b(drift|travel|scroll|advance|glide|slide|pan|gust|flow)\b\s*=|[a-zA-Z_]*[dD]ir\b/;
 
-// Audio-reactive tokens (the things that must stay OFF translation). Extended with the
-// incoming DSP band names (u_sub/sub, u_kickHit/kickHit, u_snareHit/snareHit, u_air/air,
-// u_downbeatPulse) so a translation term binding a new band is caught the day it lands.
 const AUDIO_TOKEN =
   /\bu_audio[A-Za-z]+\b|\bu_bass(?:Fast)?\b|\bu_mid(?:Fast)?\b|\bu_treble(?:Fast)?\b|\bu_energy(?:Fast)?\b|\bu_beatPulse\b|\bu_onsetPulse\b|\bu_flux\b|\bu_sub\b|\bu_kickHit\b|\bu_snareHit\b|\bu_air\b|\bu_downbeatPulse\b|\b(?:swell|drop|hit|onset|bass|mid|treble|energy|flux|beat|sub|kickHit|snareHit|air)(?:Fast)?\b/g;
 
-// An audio-bearing EXPRESSION on a JS RHS (for taint discovery): the reactivity bus by
-// object (`audioRx`, `reactivity`), a bus field access (`.swell`, `.bass`, …), or a
-// `use*()` audio hook call. Distinct from AUDIO_TOKEN (which scans GLSL identifiers).
 const AUDIO_EXPR =
   /\b(?:audioRx|reactivity)\b|\.\s*(?:swell|drop|hit|onset|bass|mid|treble|energy|flux|beat|sub|kickHit|snareHit|air|downbeatPulse)(?:Fast)?\b|\buse(?:Bass|Mid|Treble|Energy|Flux|Beat|Onset|AudioReactivity)\s*\(/;
 
-// Constant-clock / journey-arc tokens (audio-free; a legitimate translation base).
 const CLOCK_TOKENS = ["u_time", "sec", "u_progress", "u_rise", "u_open", "u_flowBend", "arc"];
-// The subset of clock tokens that also name a real audio-free time source when probing
-// a phase variable's base (u_flowBend is a *custom* name — excluded, it may be tainted).
+
 const PHASE_CLOCK_TOKENS = ["u_time", "sec", "u_progress", "u_rise", "u_open", "arc"];
 
 export type LintFinding = {
@@ -66,8 +25,6 @@ export type LintFinding = {
   clockCoeff: number;
 };
 
-/** The numeric coefficient multiplying `token` on a line: `token * 0.5` or `0.5 * token`.
- *  A non-numeric (variable) coefficient is treated as 1.0 — conservatively significant. */
 function coeffFor(line: string, token: string): number {
   const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let max = 0;
@@ -82,14 +39,14 @@ function coeffFor(line: string, token: string): number {
     found = true;
     max = Math.max(max, Number(m[1]));
   }
-  // The token is present but multiplied by a variable / added bare → assume coeff 1.0.
+
   return found ? max : 1.0;
 }
 
 function clockCoeffOnLine(line: string, tokens: readonly string[] = CLOCK_TOKENS): number {
   let max = 0;
   let any = false;
-  // Probe each clock token family for an explicit coefficient.
+
   for (const tok of tokens) {
     if (new RegExp(`\\b${tok}\\b`).test(line)) {
       any = true;
@@ -99,17 +56,13 @@ function clockCoeffOnLine(line: string, tokens: readonly string[] = CLOCK_TOKENS
   return any ? max : 0;
 }
 
-/** Strip `//` line comments and `/* *​/` block comments so commented-out terms never trip. */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
-/** JS identifiers that HOLD an audio value: `const x = audioRx.swell`, `const x = useBass(…)`,
- *  or a destructured bus `const { swell, bass } = useAudioReactivity(…)`. Lets the uniform-bag
- *  taint follow one hop of indirection (a renamed local that is really an audio signal). */
 function collectAudioVars(cleanSource: string): Set<string> {
   const vars = new Set<string>();
-  // Destructured bus: const { a, b } = useAudioReactivity(...) OR = audioRx
+
   for (const m of cleanSource.matchAll(
     /(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(use(?:AudioReactivity|Bass|Mid|Treble|Energy|Flux|Beat|Onset)\s*\(|audioRx\b|reactivity\b)/g,
   )) {
@@ -120,7 +73,7 @@ function collectAudioVars(cleanSource: string): Set<string> {
       }
     }
   }
-  // Direct: const x = <audio expr>
+
   for (const m of cleanSource.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
     if (AUDIO_EXPR.test(m[2])) {
       vars.add(m[1]);
@@ -129,7 +82,6 @@ function collectAudioVars(cleanSource: string): Set<string> {
   return vars;
 }
 
-/** Whether an expression string carries an audio value (a bus expr, a hook, or an audio var). */
 function exprIsAudio(expr: string, audioVars: Set<string>): boolean {
   if (AUDIO_EXPR.test(expr)) {
     return true;
@@ -146,14 +98,10 @@ function exprIsAudio(expr: string, audioVars: Set<string>): boolean {
   return false;
 }
 
-/** Custom uniform NAMES bound to an audio value inside a `uniforms={{ … }}` object literal.
- *  Walks each `uniforms` occurrence to its balanced `{ … }` body, splits top-level `key: expr`
- *  pairs, and taints keys whose value is audio. These names re-enter the GLSL scan as tokens. */
 function collectTaintedUniforms(cleanSource: string, audioVars: Set<string>): Set<string> {
   const tainted = new Set<string>();
   const re = /\buniforms\b\s*=?\s*\{\{?/g;
   for (let m = re.exec(cleanSource); m !== null; m = re.exec(cleanSource)) {
-    // Walk from the first `{` after `uniforms` to its matching close brace.
     let i = cleanSource.indexOf("{", m.index);
     if (i < 0) {
       continue;
@@ -176,13 +124,12 @@ function collectTaintedUniforms(cleanSource: string, audioVars: Set<string>): Se
       continue;
     }
     let body = cleanSource.slice(i + 1, end);
-    // JSX double-brace `={{ … }}`: the outer `{` is the expression container, so the
-    // captured body is itself `{ …object… }`. Unwrap one balanced brace layer.
+
     const trimmed = body.trim();
     if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
       body = trimmed.slice(1, -1);
     }
-    // Split into top-level pairs on commas that are not nested in (), [], {}.
+
     const pairs: string[] = [];
     let d = 0;
     let start = 0;
@@ -216,7 +163,6 @@ function collectTaintedUniforms(cleanSource: string, audioVars: Set<string>): Se
   return tainted;
 }
 
-/** Audio tokens present on a GLSL line: literal AUDIO_TOKEN matches ∪ any tainted uniform name. */
 function audioTokensOnLine(line: string, taintedUniforms: Set<string>): string[] {
   const found = new Set<string>();
   for (const m of line.matchAll(AUDIO_TOKEN)) {
@@ -230,13 +176,6 @@ function audioTokensOnLine(line: string, taintedUniforms: Set<string>): string[]
   return [...found];
 }
 
-/**
- * Audio-tainted PHASE variables. A `<type> name = <expr>` whose expr is a time/phase
- * expression (contains a clock token) AND carries an audio term that is NOT dominated by
- * the clock base (no base, or audio coeff ≥ clock coeff) is a laundered phase. If `name`
- * then feeds coordinates anywhere in the source, emit a finding at the DECLARATION line
- * (the real bug site). Mirrors the translation-line rules so a dominated bend is allowed.
- */
 function detectTaintedPhases(lines: string[], taintedUniforms: Set<string>): LintFinding[] {
   const findings: LintFinding[] = [];
   const declRe = /\b(?:float|vec2|vec3|vec4)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;]+)/;
@@ -248,23 +187,23 @@ function detectTaintedPhases(lines: string[], taintedUniforms: Set<string>): Lin
     }
     const name = decl[1];
     const rhs = decl[2];
-    // Must be a TIME/PHASE expression: a real audio-free clock token present.
+
     const clockCoeff = clockCoeffOnLine(rhs, PHASE_CLOCK_TOKENS);
     if (clockCoeff === 0) {
-      continue; // no clock base at all → not a "phase" (a pure-audio drift is caught by the main scan)
+      continue;
     }
     const audioTokens = audioTokensOnLine(rhs, taintedUniforms);
     if (audioTokens.length === 0) {
-      continue; // a clean clock phase
+      continue;
     }
     let audioCoeff = 0;
     for (const tok of audioTokens) {
       audioCoeff = Math.max(audioCoeff, coeffFor(rhs, tok));
     }
     if (audioCoeff < clockCoeff) {
-      continue; // a DOMINATED bend on the phase is allowed (like a bent translation speed)
+      continue;
     }
-    // Violating tainted phase — does `name` reach the geometry anywhere?
+
     const nameRe = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
     let feedsCoords = false;
     for (let j = 0; j < lines.length; j++) {
@@ -300,7 +239,7 @@ export function lintComposition(source: string): LintFinding[] {
   const lines = source.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
-    // Strip line comments so a commented-out term never trips the lint.
+
     const line = raw.replace(/\/\/.*$/, "");
     if (!TRANSLATION_LHS.test(line)) {
       continue;
@@ -335,14 +274,11 @@ export function lintComposition(source: string): LintFinding[] {
     }
   }
 
-  // The taint pass: laundered phase variables that reach the geometry.
   findings.push(...detectTaintedPhases(lines, taintedUniforms));
   findings.sort((a, b) => a.line - b.line);
   return findings;
 }
 
-// CLI: bun src/pipeline/lint-composition.ts <composition.tsx> [--json]
-// Exits non-zero when any translation term binds audio over/without a constant base.
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const asJson = args.includes("--json");

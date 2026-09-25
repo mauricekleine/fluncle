@@ -1,28 +1,5 @@
 #!/usr/bin/env bun
-// TARGETED artist purge — the namesake repair. Takes an EXPLICIT artist list and deletes exactly
-// those artists, the tracks credited ONLY to them, orphaned albums, and the same cascade `purge.ts`
-// runs (edges, socials, aliases, centroids/similar, cost_events). Full per-row rollback first.
-//
-//   bun run packages/skills/fluncle-catalogue-prune/scripts/purge-artists.ts --artists "slug-a|slug-b"
-//   bun run packages/skills/fluncle-catalogue-prune/scripts/purge-artists.ts --artists-file list.txt --confirm
-//
-// WHY IT EXISTS. `purge.ts` is LABEL-DRIVEN: an artist is purgeable because a label the operator
-// DISABLED is behind them. That cannot express the namesake case — the crawler's seed resolver
-// picked the wrong same-named MusicBrainz label under a seed the operator CORRECTLY enabled, so
-// the label ruling is right and the tracks under it belong to an impostor. No label-level signal
-// separates them; only a human naming the wrong artists does. See SKILL.md § Namesake repair.
-//
-// SO THIS TOOL DELETES TRACKS ON ENABLED LABELS. That is the point, and it is why the dry-run
-// prints the label breakdown with each label's seed state: you are meant to see "yes, these sit
-// under an enabled seed, and yes, they are the other band's".
-//
-// THE RAILS, all hard aborts rather than skips — a refusal means the operator's list is wrong:
-//   - a named slug with no `artists` row
-//   - a named artist carrying a `findings` track (Maurice's real work; the KEEP rule in lib.ts)
-//   - any deletable track entangled in a mixtape / save / post / frontier edition
-// And the shared-credit survival rule: a track credited to an artist you did NOT name survives.
-//
-// Dry-run by default; --confirm writes. TAKE A FRESH BACKUP FIRST (see SKILL.md).
+
 import { readFileSync, writeFileSync } from "node:fs";
 
 import {
@@ -41,7 +18,6 @@ import {
   tracksCreditedOnlyTo,
 } from "./lib";
 
-/** Pipe-separated list arg, e.g. `--artists "slug-a|slug-b"`. */
 export function listArg(argv: string[], flag: string): string[] {
   const i = argv.indexOf(flag);
   const raw = i >= 0 ? argv[i + 1] : undefined;
@@ -54,7 +30,6 @@ export function listArg(argv: string[], flag: string): string[] {
     : [];
 }
 
-/** One slug per line; `#` starts a comment so a hand-kept list can carry its reasoning. */
 export function parseArtistsFile(contents: string): string[] {
   return contents
     .split("\n")
@@ -65,12 +40,11 @@ export function parseArtistsFile(contents: string): string[] {
 export type PurgeArtistsPlan = {
   albumIds: string[];
   artistIds: string[];
-  /** Per named artist, the tracks that STAY because an artist outside the list is credited too. */
+
   survivors: Map<string, string[]>;
   trackIds: string[];
 };
 
-/** What the named set costs: which tracks and albums go, and which tracks are held back. */
 export function planNamedArtistPurge(
   cat: Catalogue,
   artistIds: ReadonlySet<string>,
@@ -94,7 +68,6 @@ export function planNamedArtistPurge(
   };
 }
 
-/** How the operator's label rulings read the raw `tracks.label` string this track carries. */
 function seedState(cat: Catalogue, label: string): string {
   const slug = slugify(label);
   if (cat.enabledSlugs.has(slug)) {
@@ -247,7 +220,6 @@ export async function main(
     return 0;
   }
 
-  // ── rollback (select * of everything, BEFORE deleting) ────────────────────────────────────
   const rollback = await captureArtistCascadeRollback(db, artistIds, trackIds, albumIds);
   const path = `${out}/purge-artists-rollback.json`;
   writeFileSync(path, JSON.stringify(rollback, null, 2));
@@ -257,8 +229,6 @@ export async function main(
 
   await deleteArtistCascade(db, artistIds, trackIds, albumIds);
   console.log(`\nDONE. Rollback: ${path}`);
-  // HUB COUNTS lag exactly as they do after purge.ts — the nightly `reconcile_hub_counts` sweep
-  // recomputes them from truth within a day. See the note at the end of purge.ts.
 
   return 0;
 }

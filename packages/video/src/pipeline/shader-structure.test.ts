@@ -1,18 +1,3 @@
-// Coverage for the structural classifier. Two layers:
-//
-//   1. REAL-BODY calibration (the ground truth): seven shipped compositions, fetched
-//      once and committed under __fixtures__/structure/ with provenance headers, are
-//      GLSL-resolved through the same scene resolver ship uses and classified. Their
-//      known families are the audit's truth — the three cellular offenders that shipped
-//      inside six findings (crystal scaffold / basalt organ / tidal cell field), plus a
-//      filament, a caustic, and two flow bodies. This is why the classifier exists, so
-//      it is locked hardest. Offline + deterministic (fixtures are text; GLSL is a local
-//      import) — no network.
-//
-//   2. SYNTHETIC unit tests: minimal bodies exercise each family (including lattice /
-//      radial / metaball, which have no real fixture here), the comment-stripping
-//      guarantee, the flow↔filament dataflow tiebreak, and the `other` fallback.
-
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -41,8 +26,6 @@ function classifyFixture(logId: string) {
   return result;
 }
 
-// The audit's ground truth: logId → known structural family (from the vehicle concept
-// AND the code), with the vehicle name that HID it in the name-only ledger.
 const GROUND_TRUTH: { logId: string; family: StructureFamily; vehicle: string }[] = [
   { family: "cellular", logId: "027.5.4D", vehicle: "crystal scaffold" },
   { family: "cellular", logId: "027.2.8R", vehicle: "basalt organ" },
@@ -58,7 +41,7 @@ describe("classifyCompositionStructure — real shipped bodies (ground truth)", 
     test(`${logId} "${vehicle}" ⇒ ${family}`, () => {
       const result = classifyFixture(logId);
       expect(result.dominant).toBe(family);
-      // Something must have actually fired.
+
       expect(result.confidence).toBeGreaterThan(0);
       expect(result.signals.length).toBeGreaterThan(0);
     });
@@ -68,15 +51,12 @@ describe("classifyCompositionStructure — real shipped bodies (ground truth)", 
     for (const logId of ["027.5.4D", "027.2.8R", "033.0.1O"]) {
       const result = classifyFixture(logId);
       expect(result.dominant).toBe("cellular");
-      // A voronoi min-distance loop is an uncontested signal.
+
       expect(result.confidence).toBeGreaterThanOrEqual(0.8);
     }
   });
 
   test("027.2.8R and 033.0.1O are caught via voronoi3 (no ${GLSL.voronoi} import)", () => {
-    // The name-only check and an import-grep for `${GLSL.voronoi}` both MISS these two —
-    // they reach cellular through voronoi3 (via GLSL.noise3). The resolved-body classifier
-    // catches them by the inlined min-distance loop + F2−F1 edge math.
     for (const logId of ["027.2.8R", "033.0.1O"]) {
       const source = readFileSync(path.join(FIXTURES, `${logId}.composition.tsx.txt`), "utf8");
       expect(source.includes("${GLSL.voronoi}")).toBe(false);
@@ -85,9 +65,6 @@ describe("classifyCompositionStructure — real shipped bodies (ground truth)", 
   });
 
   test("the flow↔filament pair is separated by dataflow, not by name", () => {
-    // 032.0.4L (wound filament): the warp field feeds ONLY the ridge → filament leads,
-    // flow trails. 024.7.3Y (groove canyon): the warp field is also a rendered surface
-    // (a `body` tone) → flow leads, filament trails. Same ridge code, opposite verdict.
     const filamentBody = classifyFixture("032.0.4L");
     expect(filamentBody.dominant).toBe("filament");
     expect(filamentBody.secondary).toBe("flow");
@@ -162,7 +139,6 @@ describe("classifyShaderStructure — synthetic families", () => {
 
 describe("robustness", () => {
   test("comments cannot invent a family (structure is the CODE, not the prose)", () => {
-    // A lying comment claims voronoi cells; the code is a plain domain-warp flow.
     const body = `
       // Vehicle: crystal voronoi cell lattice — worley cells everywhere, F2 - F1 walls
       /* cellular caustic ridge filament kaleido raymarch */

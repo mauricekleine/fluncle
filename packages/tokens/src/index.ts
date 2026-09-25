@@ -1,19 +1,3 @@
-// DESIGN.md is canonical. This package mirrors it verbatim.
-// Source of truth: DESIGN.md at the repo root (frontmatter + prose).
-// If a value here disagrees with DESIGN.md, DESIGN.md wins; fix this file.
-
-/**
- * Night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a
- * single committed gold. Camel-cased mirrors of DESIGN.md's kebab-cased keys.
- * `ruleDark` is the OPAQUE separator/non-focus border hex, for the surfaces that
- * cannot composite a translucent rule: the SSH TTY, the extension's injected CSS,
- * the mobile theme, the Remotion/Satori renders, the oEmbed card. It is NOT a
- * derived value and the arithmetic once claimed for it does not hold — Dust Line
- * (#d0b990 at 16%) over Deep Field composites to #292620, a visibly darker rule.
- * #3a342a is a hand-picked step brighter (~24% dust over Deep Field). It has no
- * entry in DESIGN.md's palette, so this file is currently its only definition; see
- * docs/audit-backlog.md for the open canon question.
- */
 export const colors = {
   deepField: "#090a0b",
   dustLine: "#d0b99029",
@@ -22,8 +6,7 @@ export const colors = {
   eclipseGold: "#f5b800",
   goldVeil: "#f5b8001a",
   inkOnGold: "#151006",
-  // The live-set colour — the one sanctioned second light, used ONLY for the
-  // cross-surface live-on-Twitch callout (DESIGN.md "The Live Exception").
+
   nebulaVeil: "#ab7bff1a",
   nebulaViolet: "#ab7bff",
   reentryRed: "#ff6b57",
@@ -34,10 +17,6 @@ export const colors = {
   tapeBlack: "#171611",
 } as const;
 
-/**
- * Type roles from DESIGN.md. Oxanium speaks for the brand (display, numeric);
- * Space Grotesk does the reading (title, body, label); mono is the machine.
- */
 export const typography = {
   body: {
     fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif",
@@ -77,10 +56,6 @@ export const typography = {
   },
 } as const;
 
-/**
- * Border radii from DESIGN.md's `rounded` frontmatter. `artwork` is the
- * 6px album-art radius; sm/md/lg ascend the standard scale.
- */
 export const radii = {
   artwork: "6px",
   lg: "0.625rem",
@@ -88,11 +63,6 @@ export const radii = {
   sm: "0.375rem",
 } as const;
 
-/**
- * Motion from DESIGN.md prose: state changes are 150ms ease-out; floats
- * (hover lift, caret drift) are 180ms on a gentle ease-out cubic-bezier.
- * Under prefers-reduced-motion the float collapses to the state transition.
- */
 export const motion = {
   float: {
     durationMs: 180,
