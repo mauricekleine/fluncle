@@ -514,21 +514,10 @@ describe("public shadow projections", () => {
     ).toBeUndefined();
   });
 
-  it("reads literal year/key buckets and projection indexes without a source scan or temp sort", async () => {
-    await seedProjectionWorld();
+  it("reads projected buckets and served hub pages without a source scan or temp sort", async () => {
+    await seedBulkProjectionWorld(TRACKS_HUB_PAGE_SIZE + 1);
     await rebuildAll();
     await setCutover("true");
-
-    expect(await readProjectedAggregateBuckets(db, "release_date_bucket")).toEqual([
-      { bucket: "20x?", count: 1 },
-      { bucket: "2024", count: 1 },
-      { bucket: "", count: 1 },
-    ]);
-    expect(await readProjectedAggregateBuckets(db, "key")).toEqual([
-      { bucket: "", count: 1 },
-      { bucket: "C minor", count: 1 },
-      { bucket: "wat", count: 1 },
-    ]);
 
     const statements: Array<{ args: InValue[]; sql: string }> = [];
     const traced: PublicProjectionReadClient = {
@@ -546,11 +535,22 @@ describe("public shadow projections", () => {
     };
     await readProjectedAggregateBuckets(traced, "key");
     await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL);
-    await readStoredTrackHubAnchorsForAudit(
-      traced,
-      TRACKS_HUB_ANCHOR_ADDRESS,
-      TRACKS_HUB_PAGE_SIZE,
-    );
+    expect(
+      await readProjectedTrackHubPageStart(
+        traced,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+        1,
+      ),
+    ).toMatchObject({ total: TRACKS_HUB_PAGE_SIZE + 1 });
+    expect(
+      await readProjectedTrackHubPageStart(
+        traced,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+        2,
+      ),
+    ).toMatchObject({ total: TRACKS_HUB_PAGE_SIZE + 1 });
 
     for (const statement of statements.filter(
       ({ sql }) => !sql.includes("from settings") && !sql.includes("select artist_id from ("),

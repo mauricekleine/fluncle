@@ -484,7 +484,6 @@ export async function readProjectedTrackHubPageStart(
     if (!isLeafAnchorDocument(head)) {
       const document = await readProjectedTrackHubAnchorsSnapshot(client, address, pageSize, {
         allowLegacyDocument: true,
-        requireCutover: false,
       });
       if (document === undefined) {
         return undefined;
@@ -556,7 +555,6 @@ export async function readCurrentProjectedTrackHubAnchors(
 ): Promise<ProjectedTrackHubAnchors | undefined> {
   return readProjectedTrackHubAnchorsSnapshot(client, address, pageSize, {
     allowLegacyDocument: false,
-    requireCutover: false,
   });
 }
 
@@ -620,12 +618,8 @@ async function readProjectedTrackHubAnchorsSnapshot(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,
   pageSize: number,
-  options: { allowLegacyDocument: boolean; requireCutover: boolean },
+  options: { allowLegacyDocument: boolean },
 ): Promise<ProjectedTrackHubAnchors | undefined> {
-  if (options.requireCutover && !(await isPublicProjectionCutoverEnabledFor(client))) {
-    return undefined;
-  }
-
   try {
     const head = await readProjectedAnchorDocumentHead(client, address);
     if (head === undefined) {
