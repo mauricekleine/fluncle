@@ -413,6 +413,7 @@ export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 30 * 60_000, match: "artist-bio", service: "cron.artist-bio" },
   { cadenceMs: 30 * 60_000, match: "label-bio", service: "cron.label-bio" },
   { cadenceMs: 30 * 60_000, match: "album-bio", service: "cron.album-bio" },
+  { cadenceMs: 24 * 60 * 60_000, match: "label-triage", service: "cron.label-triage" },
   { cadenceMs: 15 * 60_000, match: "triage", service: "cron.triage" },
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },

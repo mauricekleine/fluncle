@@ -3718,6 +3718,40 @@ JSON field reference:
   // archive's row for that name still points at the original. It re-points THAT row's identity —
   // the server honours it only for the exact conflicting row, only when it holds no tracks, and
   // only when it is not an enabled seed (a row with tracks is `admin labels merge`).
+  // `list_labels_admin` → `admin labels list [--seed-state <state>]` (admin tier, agent-allowed).
+  // The crawler's seed-set read and the triage sweep's worklist, in one countless listing.
+  labels
+    .command("list")
+    .description("List labels with their crawl-seed state and triage cursor")
+    .option("--seed-state <state>", "Only this state: enabled, disabled, or undecided")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { json: boolean; seedState?: string }) => {
+      const seedState = options.seedState;
+
+      if (
+        seedState !== undefined &&
+        seedState !== "enabled" &&
+        seedState !== "disabled" &&
+        seedState !== "undecided"
+      ) {
+        throw new Error("Pass --seed-state enabled|disabled|undecided");
+      }
+
+      const { listLabelsAdminCommand } = await import("./commands/admin-labels");
+      const labels = await listLabelsAdminCommand(seedState);
+
+      if (options.json) {
+        console.log(JSON.stringify({ labels }, null, 2));
+
+        return;
+      }
+
+      for (const label of labels) {
+        const looked = label.triageCheckedAt ? label.triageVerdict : "never looked";
+        console.log(`${label.slug}  ${label.seedState}  ${looked ?? ""}`.trimEnd());
+      }
+    });
+
   // `record_label_triage` → `admin labels triage <slug> --payload <file>` (AGENT tier). The box's
   // unattended sweep records what a round FOUND; it is a different command from `update` because
   // recording a finding is not ruling, and the agent token the sweep holds cannot rule.

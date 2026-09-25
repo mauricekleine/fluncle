@@ -168,6 +168,21 @@ export async function mintLabelCommand(
   return { label: response.label, outcome: response.outcome, takenOver: response.takenOver };
 }
 
+// ── The admin listing: the seed set, and the triage worklist ─────────────────
+// Thin HTTP client over the admin-tier `list_labels_admin` read. The crawler asks it for the
+// ENABLED seed set; the triage sweep asks it for `undecided` and sorts by the triage cursor to
+// decide what a round has never looked at. Countless by design — `findingCount` rides out as 0.
+export async function listLabelsAdminCommand(
+  seedState?: LabelSeedState,
+): Promise<LabelAdminItem[]> {
+  const query = seedState === undefined ? "" : `?seedState=${encodeURIComponent(seedState)}`;
+  const response = await adminApiGet<{ labels: LabelAdminItem[]; ok: boolean }>(
+    `/api/v1/admin/labels${query}`,
+  );
+
+  return response.labels;
+}
+
 // ── The triage cursor: record what a round FOUND, without ruling ─────────────
 // Thin HTTP client over the AGENT-tier `record_label_triage` op. The box's unattended sweep drives
 // this, which is exactly why it is a different command from `update`: recording a finding is not

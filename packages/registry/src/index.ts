@@ -1529,6 +1529,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin labels list --seed-state undecided",
+    exposedContent: ["read the undecided crawl-seed pile and report whether a triage round is due"],
+    kind: "cron",
+    name: "cron.label-triage",
+    operatorNotes:
+      "daily. A PURE trigger — zero model tokens, one countless admin read and a sort. Fires only when 40+ NEVER-LOOKED labels have accumulated; stale ones ride along but never trigger a round. It cannot rule: recording a finding is record_label_triage (agent tier) and ruling is update_label (operator tier), which 403s the box token. The batched research leg is deliberately unwired until the gate proves it reports honestly. Source: docs/agents/hermes/scripts/{label-triage-sweep.ts,label-triage-sweep.sh}.",
+    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-label-triage", kind: "cron" },
+    statusDescription: "reports when the label pile needs a round",
+    title: "Label triage gate",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin albums describe --queue",
     exposedContent: [
       "auto-author the /album/<slug> voiced bio, fill-empty-only (hybrid: one claude -p call)",
