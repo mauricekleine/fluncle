@@ -1,21 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The distil resolves its system prompt from the registry (./prompts.ts), which reads the
-// `prompt_versions` table. This suite drives a mocked global `fetch`, and an unmocked
-// libSQL client would try to reach the database THROUGH it — so stub the db to the cold
-// state (no override on file). The distil then runs on the registry's baked default at
-// version 0, which is exactly what production does before anyone edits a prompt.
 vi.mock("./db", () => ({
   getDb: async () => ({ execute: async () => ({ rows: [] }) }),
   typedRow: <T extends object>(rows: T[]) => rows[0],
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
-// The Apple editorial leg (RFC U5): the oracle read + the cross-cutting breaker/meter are
-// mocked so the gate-integration tests can drive Apple fuel + the breaker's allow/deny without a
-// live token or the settings KV. The breaker/meter themselves are proven in apple-breaker.test.ts;
-// what matters here is the CONTRACT — fetchTrackContext folds Apple in, meters the call, and runs
-// the n-gram gate on the authored note.
 const appleCatalogLookupByIsrc = vi.fn();
 const recordAppleCall = vi.fn();
 const recordAppleAuthOutcome = vi.fn();
@@ -48,10 +38,6 @@ import {
   stripEditorialHtml,
   wordsFromCartesia,
 } from "./observation";
-
-// The voice gate's automatable half (VOICE.md §3 bans + the Dry Rule + no
-// "we"-as-company). The North-Star human sign-off on the rendered audio is a
-// separate content control; this only covers the mechanical scan.
 
 const CLEAN =
   "Arrived on the dark side of the sector and this one moved at a hard, even pace. Knees went up before I clocked the coordinate. Logged it as fluncle://004.7.2I. Hope it gets an oof out of you, fam.";
@@ -108,15 +94,13 @@ describe("scanObservationScript", () => {
     ).toEqual([]);
   });
 
-  // The factual-dossier opt-out (`allowGeography`): the bio gate passes it so a Wikipedia-
-  // style bio may name a real country/city, while every other caller keeps the ban.
   it("allowGeography: true does NOT flag earthly geography", () => {
     expect(
       scanObservationScript("Netsky is a drum and bass producer from Belgium.", {
         allowGeography: true,
       }),
     ).toEqual([]);
-    // The dotted abbreviation the default catches is allowed too under the opt-out.
+
     expect(scanObservationScript("A long-running u.k. imprint.", { allowGeography: true })).toEqual(
       [],
     );
@@ -127,9 +111,9 @@ describe("scanObservationScript", () => {
       "A British transmission of rolling menace from London!",
       { allowGeography: true },
     );
-    // The geography ("british", "london") is allowed…
+
     expect(violations.some((v) => v.reason.includes("geography"))).toBe(false);
-    // …but the banned identity word and the Dry Rule still fire.
+
     expect(violations.some((v) => v.word === "transmission")).toBe(true);
     expect(violations.some((v) => v.reason.includes("exclamation"))).toBe(true);
   });
@@ -143,8 +127,6 @@ describe("scanObservationScript", () => {
   });
 });
 
-// The exempt set for a finding whose artist and title carry nothing banned — so these cases
-// exercise the gate exactly as they did before the name exemption existed.
 const NO_NAMES: readonly string[] = [];
 
 describe("gateObservationScript", () => {
@@ -180,23 +162,15 @@ describe("gateObservationScript", () => {
   });
 });
 
-// ── THE NAME EXEMPTION ────────────────────────────────────────────────────────────
-//
-// A spoken read is ABOUT a finding, so it must be able to say that finding's artist and title.
-// Scanning them made the gate unsatisfiable for a record by "Future Signal": no rewrite could
-// clear it, and it sat at the head of a cap-1 oldest-first queue blocking everything behind it.
-
 describe("gateObservationScript — the name exemption", () => {
   const FUTURE_SIGNAL = ["Future Signal", "Fractals"];
   const READ =
     "Future Signal built this one out of patience, and the knees went up before I clocked the coordinate, fam.";
 
   it("lets a read NAME an artist whose name carries a banned word", () => {
-    // Before the exemption this threw voice_gate on "signal" and could never be rewritten past it.
     expect(gateObservationScript(READ, FUTURE_SIGNAL)).toBe(READ);
   });
 
-  // The masking must not become a hole. Everything OUTSIDE the name is still Fluncle's prose.
   it("STILL rejects the same banned word used generically in the body", () => {
     expect(() =>
       gateObservationScript(
@@ -215,10 +189,6 @@ describe("gateObservationScript — the name exemption", () => {
     ).toThrowError(/geography/);
   });
 
-  // THE DEGENERATE CASE. A two-word name carries its own context; a name that IS the banned token
-  // carries none, so masking it would stop the gate policing that word for the whole read. Naming
-  // is optional here ("only if it sharpens the read") and there is no final-attempt bypass, so the
-  // honest trade is a read that doesn't say the name.
   it("REFUSES a name that is EXACTLY a banned word — that would be a total amnesty", () => {
     expect(() =>
       gateObservationScript(
@@ -228,8 +198,6 @@ describe("gateObservationScript — the name exemption", () => {
     ).toThrowError(/voice gate/);
   });
 
-  // …and the geography half, which the BIO's masking never had to answer: `gateBioText` scans with
-  // `allowGeography: true`, so a bio was never policing "london". This gate is.
   it("REFUSES a name that is EXACTLY a banned PLACE — the cosmos still replaces the map", () => {
     expect(() =>
       gateObservationScript(
@@ -240,13 +208,10 @@ describe("gateObservationScript — the name exemption", () => {
   });
 
   it("ignores a name with no word characters at all (it must not strip punctuation wholesale)", () => {
-    // With no `\w` in the name both boundary lookarounds collapse and the replace runs unanchored,
-    // so a subject named `!` would delete every exclamation mark and walk through the Dry Rule.
     expect(() => gateObservationScript(`${READ.slice(0, -1)}!`, ["!"])).toThrowError(/voice gate/);
   });
 
   it("does not let a SHORT name amnesty a longer banned word it sits inside", () => {
-    // The word-boundary rule: an artist called "Sign" must not mask the middle out of "signal".
     expect(() =>
       gateObservationScript(
         "Sign built this one out of patience, and the signal underneath never lets up before I clocked the coordinate, fam.",
@@ -256,8 +221,6 @@ describe("gateObservationScript — the name exemption", () => {
   });
 });
 
-// ── The context fetch + distil (the clean-note rework) ───────────────────────
-
 describe("buildContextQuery", () => {
   it("assembles artist + title + label + the genre anchor", () => {
     expect(
@@ -266,8 +229,6 @@ describe("buildContextQuery", () => {
   });
 
   it("DROPS the release date (a literal date breaks the search — 'Missing: <date>')", () => {
-    // The old query folded releaseDate in; the new one never references it, even if
-    // an extra field is present on the passed object.
     const query = buildContextQuery({
       artists: ["Calibre"],
       label: "Signature",
@@ -286,9 +247,6 @@ describe("buildContextQuery", () => {
   });
 });
 
-// A tiny URL-routing fetch mock (mirrors discogs.test.ts): map a URL substring to a
-// JSON body or a Response. Records calls + parsed bodies so a test can assert the
-// distil prompt assembly and the releaseDate-free query without a live vendor.
 function mockFetch(routes: Array<{ body?: unknown; match: string; response?: Response }>): {
   bodies: Record<string, unknown>;
   calls: string[];
@@ -320,7 +278,6 @@ function mockFetch(routes: Array<{ body?: unknown; match: string; response?: Res
 const FIRECRAWL_MATCH = "api.firecrawl.dev/v2/search";
 const OPENROUTER_MATCH = "openrouter.ai/api/v1/chat/completions";
 
-// A Firecrawl search payload with soupy snippets + a lyric-domain hit to filter.
 const SOUPY_FIRECRAWL = {
   data: {
     web: [
@@ -375,11 +332,6 @@ describe("distilContextNote", () => {
       sources: ["https://discogs.com/release/123"],
     });
 
-    // The distil now returns the note PLUS the prompt version that produced it (the
-    // provenance that lands on `findings.context_prompt_version`). With no override row
-    // on file — and, in this suite, no reachable database at all — it resolves to the
-    // registry's baked default, version 0. That fallback is the point: the distil runs
-    // exactly as it did when the prompt was a const.
     expect(note?.note).toBe("Mr Right On is a 2017 Calibre track.");
     expect(note?.promptVersion).toBe(0);
     const url = calls[0];
@@ -392,7 +344,7 @@ describe("distilContextNote", () => {
     expect(sent.model).toBe("anthropic/claude-haiku-4.5");
     expect(sent.messages[0]?.role).toBe("system");
     expect(sent.messages[0]?.content).toBe(CONTEXT_DISTIL_SYSTEM_PROMPT);
-    // The snippets + sources ride in the user turn as labelled DATA.
+
     expect(sent.messages[1]?.content).toContain("Mr Right On [Official]");
     expect(sent.messages[1]?.content).toContain("https://discogs.com/release/123");
   });
@@ -494,7 +446,7 @@ describe("fetchTrackContext (status transitions + distil/fallback)", () => {
     expect(result.distilled).toBe(true);
     expect(result.contextNote).toContain("Signature Recordings");
     expect(result.contextNote).toContain("Texture:");
-    // The lyric-domain hit is filtered out of the sources.
+
     expect(result.sources).toEqual([
       "https://youtube.com/watch?v=abc",
       "https://discogs.com/release/123",
@@ -502,14 +454,14 @@ describe("fetchTrackContext (status transitions + distil/fallback)", () => {
   });
 
   it("resolved with fallback: a distil failure stores the cleaned RAW note", async () => {
-    delete process.env.OPENROUTER_API_KEY; // distil no-ops → raw fallback
+    delete process.env.OPENROUTER_API_KEY;
     mockFetch([{ body: SOUPY_FIRECRAWL, match: FIRECRAWL_MATCH }]);
 
     const result = await fetchTrackContext("Calibre Mr Right On");
 
     expect(result.status).toBe("resolved");
     expect(result.distilled).toBe(false);
-    // The raw note carries the non-lyric snippet text and never the lyric hit.
+
     expect(result.contextNote).toContain("Mr Right On [Official]");
     expect(result.contextNote).not.toContain("Mr Right On Lyrics");
   });
@@ -544,7 +496,6 @@ describe("observationDurationFromAlignment", () => {
       ],
     });
 
-    // 38239 is the real audio end; add the observation tail pad rather than a flat duration.
     expect(duration).toBe(38239 + OBSERVATION_TAIL_PAD_MS);
   });
 
@@ -595,12 +546,6 @@ describe("wordsFromCartesia", () => {
   });
 });
 
-// ── The Apple editorial echo gate (RFC U5) ───────────────────────────────────────────────────
-// The mechanical, panel-mandated defence: a distil told to "summarise, never quote" Apple's
-// editorial copy is prompt-trust, not a guarantee, so the gate REJECTS any authored note that
-// lifts a contiguous ≥7-token span verbatim from an Apple source. The pure functions first, then
-// the end-to-end fold + gate through fetchTrackContext.
-
 describe("stripEditorialHtml", () => {
   it("drops tag spans and decodes the entities Apple emits", () => {
     expect(stripEditorialHtml("A <i>rolling</i> roller &amp; a <br/> stepper &#39;97")).toBe(
@@ -613,7 +558,7 @@ describe("longestVerbatimTokenSpan", () => {
   it("counts the longest contiguous shared token run, punctuation-insensitively", () => {
     const note = "It is a warm, rolling roller from the label, apparently.";
     const source = "They called it a warm rolling roller from the label of the year.";
-    // "a warm rolling roller from the label" = 7 contiguous tokens.
+
     expect(longestVerbatimTokenSpan(note, source)).toBe(7);
   });
 
@@ -637,8 +582,8 @@ describe("noteEchoesAppleEditorial (the n-gram gate)", () => {
   });
 
   it("boundary: exactly 7 tokens rejects, 6 passes", () => {
-    const seven = "warm rolling roller from the label that"; // 7 contiguous tokens of SOURCE
-    const six = "warm rolling roller from the label"; // 6
+    const seven = "warm rolling roller from the label that";
+    const six = "warm rolling roller from the label";
     expect(noteEchoesAppleEditorial(seven, [SOURCE])).toBe(true);
     expect(noteEchoesAppleEditorial(six, [SOURCE])).toBe(false);
   });
@@ -706,14 +651,14 @@ describe("fetchTrackContext (Apple editorial fuel + the echo gate)", () => {
 
     expect(result.status).toBe("resolved");
     expect(result.contextNote).toContain("amen backbone");
-    // Apple's song URL joins the provenance sources.
+
     expect(result.sources).toContain("https://music.apple.com/us/album/x?i=1");
-    // The Apple copy rode into the distil's user turn as LABELLED untrusted data.
+
     const orUrl = calls.find((u) => u.includes(OPENROUTER_MATCH)) ?? "";
     const sent = bodies[orUrl] as { messages: { content: string }[] };
     expect(sent.messages[1]?.content).toContain(APPLE_EDITORIAL_SNIPPET_LABEL);
     expect(sent.messages[1]?.content).toContain("amen-driven roller Apple loves");
-    // One real call → metered + its auth outcome fed to the breaker.
+
     expect(recordAppleCall).toHaveBeenCalledTimes(1);
     expect(recordAppleAuthOutcome).toHaveBeenCalledWith("ok");
   });
@@ -729,7 +674,6 @@ describe("fetchTrackContext (Apple editorial fuel + the echo gate)", () => {
           choices: [
             {
               message: {
-                // Lifts a verbatim ≥7-token span straight from Apple's copy.
                 content:
                   "Fluncle reckons it is a rolling amen roller that defined the Signature sound, basically.",
               },
@@ -742,7 +686,6 @@ describe("fetchTrackContext (Apple editorial fuel + the echo gate)", () => {
 
     const result = await fetchTrackContext("Calibre", { trackId: "t1" }, { isrc: "GB1234567890" });
 
-    // The honest empty floor — fill-empty-only leaves the finding as it was.
     expect(result.status).toBe("empty");
     expect(result.contextNote).toBe("");
     expect(result.distilled).toBe(false);
@@ -824,7 +767,7 @@ describe("fetchTrackContext (Apple editorial fuel + the echo gate)", () => {
 
     expect(recordAppleCall).toHaveBeenCalledTimes(1);
     expect(recordAppleAuthOutcome).toHaveBeenCalledWith("auth_failure");
-    // A failed Apple leg never blocks the Firecrawl-derived note.
+
     expect(result.status).toBe("resolved");
   });
 });

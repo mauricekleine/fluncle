@@ -7,42 +7,16 @@ import { readCoordinate, resourceUri, SHARED_TOOLS, toMcpTool } from "./tools/re
 import { searchTracks } from "./track-search";
 import { listTracks } from "./tracks";
 
-// A small, stateless Model Context Protocol server: the same drum & bass
-// archive the public API exposes, handed to agents over the Streamable HTTP
-// transport (a single JSON-RPC endpoint at /mcp). No sessions, no Durable
-// Objects — every request is self-contained, so it runs anywhere the Worker
-// does. It speaks the full protocol, not just tools:
-//   - TOOLS (tools/list, tools/call): the archive as verbs — list, read one,
-//     pull a random one, check systems, search Spotify, submit, subscribe. A
-//     thin layer over the internal functions the /api routes already use, so
-//     behaviour (validation, rate limits, the submitter hash) stays identical.
-//   - RESOURCES (resources/list, resources/read): the archive as a readable
-//     CORPUS — each finding/mixtape addressable at its coordinate
-//     (fluncle://finding/<logId>, fluncle://mixtape/<logId>), returning only
-//     the PUBLIC record its /log page shows.
-//   - PROMPTS (prompts/list, prompts/get): Fluncle-voiced starting points an
-//     agent can run against the tools + resources above.
-// The matching MCP Server Card (SEP-2127) is served at
-// /.well-known/mcp/server-card.json for agent discovery.
-//
-// The browser-side WebMCP surface (lib/webmcp.ts) mirrors this TOOL set for
-// agent-driving browsers; keep the two in step when the tools change. Resources
-// and prompts have no navigator.modelContext primitive, so they are server-MCP
-// only (webmcp.ts documents the asymmetry) — the browser read path is the
-// mirrored get_track tool.
-
 const PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
-// Reverse-DNS server name (SEP-2127 requires exactly one "/"); the short
-// identifier matches the published fluncle-api agent skill.
+
 const SERVER_NAME = "com.fluncle/fluncle-api";
 const SERVER_VERSION = "1.0.0";
 const MCP_ENDPOINT = `${siteUrl}/mcp`;
 
 const maxRecentLimit = 48;
 const minQueryLength = 2;
-// How many recent findings/mixtapes resources/list advertises — the same window
-// as the RSS feed and the markdown homepage, newest first.
+
 const resourceListLimit = 25;
 
 type JsonRpcId = number | string | null;
@@ -70,12 +44,6 @@ type McpTool = {
   title: string;
 };
 
-// The MCP-only tool: the Spotify candidate search (Epic-2 territory — it searches Spotify, not the
-// archive, and is not in the shared registry). Every other tool — the archive reads, the entity /
-// dossier reads, the set builder, "artists like this", and the two write verbs — is projected from
-// the shared registry below, so its name/description/schema never drifts from ChatDnB or WebMCP.
-// Not in the registry ⇒ nothing enforces its parity with the WebMCP twin, so
-// lib/mcp-webmcp-parity.test.ts pins the two by hand.
 export const mcpOnlyTools: McpTool[] = [
   {
     description:
@@ -87,11 +55,6 @@ export const mcpOnlyTools: McpTool[] = [
         throw new ApiError("invalid_query", "Search query must be at least 2 characters", 400);
       }
 
-      // MANDATORY: /mcp is public and unauthenticated, and this is the one tool that spends
-      // the operator's shared Spotify token. It goes through the guarded capability, so it
-      // shares the HTTP twin's per-IP budget (same `action`, same window ⇒ one limiter) —
-      // exactly like search_archive. Over the limit, assertRateLimit throws an ApiError the
-      // dispatcher renders as an isError tool result.
       return { ok: true, results: await searchTracks({ query, request }) };
     },
     inputSchema: {
@@ -110,40 +73,15 @@ export const mcpOnlyTools: McpTool[] = [
   },
 ];
 
-// The realized MCP tool set: the shared read tools projected from the registry, then the
-// MCP-only verbs. `toMcpTool` bridges the dispatcher's positional (args, request) call and
-// leaves the args un-validated, so the limit tools keep their tolerant clamp. The vocabulary
-// omits the `get_recent_tracks` deprecation alias — no back-compat shims — so the tool
-// set is exactly the shared MCP tools plus the MCP-only verbs.
 const tools: McpTool[] = [
   ...SHARED_TOOLS.filter((tool) => tool.transports.includes("mcp")).map(toMcpTool),
   ...mcpOnlyTools,
 ];
 
-// The realized MCP tool names, in tools/list order — the ONE source the discovery docs derive
-// their tool list from (agent-discovery.ts's SKILL.md) so it can never go stale as tools are
-// added or renamed.
 export const mcpToolNames: string[] = tools.map((tool) => tool.name);
 
-// ── Resources: the archive as a readable corpus ────────────────────────────
-//
-// Every finding/mixtape with a coordinate is addressable at its own MCP resource
-// URI. resources/list advertises the recent window; resources/read returns the
-// PUBLIC record — deliberately the same fields /log/<id> renders (and, for the
-// observation, the transcript /radio renders), never the private capture key,
-// the internal enrichment/video fields, or the raw vibe coordinates. The typed
-// URIs (fluncle://finding/…, fluncle://mixtape/…) let an agent see the kind
-// before reading; the read also accepts the bare fluncle://<logId> display form.
-
-// The public-record shapers (publicFindingRecord/publicMixtapeRecord) and the coordinate
-// resolver (readCoordinate) + resourceUri now live in the shared tool registry
-// (./tools/registry), so the get_track tool and these resources serve the identical record.
 const RESOURCE_SCHEME = "fluncle://";
 
-// Pull the Log ID out of a resource URI. Accepts the typed forms
-// (fluncle://finding/<id>, fluncle://mixtape/<id>) and the bare display form
-// (fluncle://<id>); the kind prefix is advisory since the resolver dispatches on
-// the coordinate itself. Returns undefined for anything not on the fluncle scheme.
 function coordinateFromUri(uri: string): string | undefined {
   if (!uri.startsWith(RESOURCE_SCHEME)) {
     return undefined;
@@ -156,8 +94,6 @@ function coordinateFromUri(uri: string): string | undefined {
   return coordinate.length > 0 ? coordinate : undefined;
 }
 
-// The list-descriptor for one coordinated item: name is "Artist — Title" (a
-// mixtape reads "Fluncle — <title>"), description is the note's first line.
 function resourceDescriptor(item: FeedItem): {
   description?: string;
   mimeType: string;
@@ -178,13 +114,6 @@ function resourceDescriptor(item: FeedItem): {
 
   return { mimeType: "application/json", name, uri, ...(description ? { description } : {}) };
 }
-
-// ── Prompts: Fluncle-voiced starting points ────────────────────────────────
-//
-// Each prompt expands to a single user message that tells the agent to work the
-// tools + resources above and answer in Fluncle's voice (the recovered narrator —
-// the warmth lives in what the agent PRODUCES, not in the machine-facing
-// description, VOICE.md narrator rule). Named verb_noun like the tools.
 
 type McpPrompt = {
   arguments: Array<{ description: string; name: string; required: boolean }>;
@@ -255,8 +184,6 @@ Fetch it with get_track (or the fluncle://finding/<coordinate> resource). Then, 
   },
 ];
 
-// The recent-window count for walk_recent_night: a positive integer, clamped to the
-// recent-list cap, defaulting to five when unset or unparseable.
 function clampPromptCount(value: unknown): number {
   const parsed = typeof value === "number" ? value : Number.parseInt(asTrimmedString(value), 10);
 
@@ -267,8 +194,6 @@ function clampPromptCount(value: unknown): number {
   return Math.min(parsed, maxRecentLimit);
 }
 
-// The first non-empty line of a note (the resource description). Undefined when the
-// note is empty or absent, so the descriptor omits the field entirely.
 function firstLine(note: string | undefined): string | undefined {
   const line = note
     ?.split("\n")
@@ -278,18 +203,12 @@ function firstLine(note: string | undefined): string | undefined {
   return line && line.length > 0 ? line : undefined;
 }
 
-// The capabilities this server advertises — tools, resources, and prompts, none
-// of which push list-changed notifications (the archive is polled, not subscribed).
-// Shared by the initialize response and the server card so the two never drift.
 const MCP_CAPABILITIES = {
   prompts: { listChanged: false },
   resources: { listChanged: false },
   tools: { listChanged: false },
 } as const;
 
-// The MCP Server Card (SEP-2127). Carries the canonical shape (top-level name,
-// remotes, capabilities object) plus the looser serverInfo/transport fields
-// some validators still expect, so one document satisfies both readings.
 function serverCard() {
   return {
     $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
@@ -319,8 +238,6 @@ function serverCard() {
   };
 }
 
-// Entry point, mounted ahead of the router in server.ts. Returns a Response for
-// the MCP endpoint and the server card, or undefined for any other path.
 export async function handleMcp(request: Request): Promise<Response | undefined> {
   const { pathname } = new URL(request.url);
 
@@ -346,7 +263,6 @@ export async function handleMcp(request: Request): Promise<Response | undefined>
     return new Response(null, { headers: corsHeaders(), status: 204 });
   }
 
-  // We don't offer a server-initiated SSE stream; tools speak over POST only.
   if (request.method !== "POST") {
     return methodNotAllowed("POST, OPTIONS");
   }
@@ -359,8 +275,6 @@ export async function handleMcp(request: Request): Promise<Response | undefined>
     return jsonRpcResponse(failure(null, -32700, "Parse error"), 400);
   }
 
-  // Accept JSON-RPC batches as a courtesy for clients that send them; handle a single
-  // message otherwise.
   if (Array.isArray(payload)) {
     const responses = (
       await Promise.all(payload.map((message) => dispatch(message, request)))
@@ -373,7 +287,6 @@ export async function handleMcp(request: Request): Promise<Response | undefined>
 
   const response = await dispatch(payload, request);
 
-  // Notifications get no body, just an acknowledgement.
   return response === undefined
     ? new Response(null, { headers: corsHeaders(), status: 202 })
     : jsonRpcResponse(response);
@@ -388,7 +301,6 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
   const params = isObject(message.params) ? message.params : undefined;
   const id = idOf(message);
 
-  // Notifications (notifications/initialized, …) are acknowledged, not answered.
   if (method.startsWith("notifications/")) {
     return undefined;
   }
@@ -435,8 +347,6 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       const resolved = await readCoordinate(coordinate);
 
       if (!resolved) {
-        // MCP's resource-not-found code, so a client can tell "no such coordinate"
-        // apart from a malformed request.
         return failure(id, -32002, `No finding found at ${uri}`);
       }
 
@@ -482,8 +392,6 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       const args = isObject(params?.arguments) ? params.arguments : {};
 
       try {
-        // Read the live state alongside the tool call so a successful result can
-        // carry the live-set note while Fluncle is on the decks (offline ⇒ no note).
         const [result, live] = await Promise.all([tool.execute(args, request), getLiveState()]);
         return success(id, toolResult(result, false, live));
       } catch (error) {
@@ -536,9 +444,6 @@ function failure(id: JsonRpcId, code: number, message: string): JsonRpcFailure {
   return { error: { code, message }, id, jsonrpc: "2.0" };
 }
 
-// A plain, agent-facing note teaching every tool's caller that Fluncle is on the
-// decks right now (machine-facing third-person, no faked warmth — VOICE.md narrator
-// rule). Appended as a second content block alongside the tool's data while live.
 function liveNote(live: LiveState): string {
   const set = live.title ? ` Set: “${live.title}”.` : "";
   return `Fluncle is on the decks right now, mixing live at ${twitchUrl}.${set}`;
@@ -547,8 +452,6 @@ function liveNote(live: LiveState): string {
 function toolResult(data: unknown, isError = false, live?: LiveState): ToolResult {
   const content: ToolResult["content"] = [{ text: JSON.stringify(data), type: "text" }];
 
-  // While Fluncle is live, ride a live-set note alongside the result so the agent
-  // learns the live state with every successful call (DESIGN.md "The Live Exception").
   if (live?.on) {
     content.push({ text: liveNote(live), type: "text" });
   }

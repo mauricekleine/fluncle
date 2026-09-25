@@ -1,19 +1,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
 
-// The `anchor_track` handler, driven end-to-end through `handleOrpc` against
-// `/api/v1/admin/catalogue/anchor`, so the REAL admin auth spine runs and the box's agent token is
-// proven to pass (it is agent tier). Only the anchor SERVICE (`../anchor`) is mocked — this suite
-// proves the HANDLER's own logic: candidate normalisation (uri/url → a bare Spotify id) and the
-// `AnchorTrackError` → HTTP status mapping (404 / 409). The verification + write are proven for real
-// against the schema in anchor.integration.test.ts.
-
 const anchorTrackMock = vi.fn();
 
 vi.mock("./anchor", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./anchor")>();
 
-  // Keep AnchorTrackError REAL (the handler's `instanceof` must match), stub only anchorTrack.
   return { ...actual, anchorTrack: (...args: unknown[]) => anchorTrackMock(...args) };
 });
 
@@ -101,8 +93,6 @@ describe("oRPC anchor_track (POST /admin/catalogue/anchor)", () => {
       }),
     );
 
-    // A malformed candidate is a 400 at the contract boundary — never silently dropped, and the
-    // service is never reached.
     expect(response?.status).toBe(400);
     expect(anchorTrackMock).not.toHaveBeenCalled();
   });

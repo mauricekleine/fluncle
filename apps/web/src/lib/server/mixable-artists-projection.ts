@@ -21,14 +21,6 @@ async function isProjectionReady(client: Client): Promise<boolean> {
   return Number(result.rows[0]?.["ready"] ?? 0) === 1;
 }
 
-// BOTH ARMS CARRY THE VISIBILITY GATE. The picker is a PUBLIC name search that renders an
-// artist's name and photo and writes the picked slug into a shareable URL, so an artist a global
-// `unlisted` rule has taken off the site must not appear in either. The gate also decides what a
-// URL that already carries an unlisted slug shows: the picker pre-selects by filtering THIS list
-// (`taste-picker.tsx`), so an unlisted slug resolves to no tile at all rather than a named one.
-// The set seeded from it still opens — `getMixOpeners` returns TRACKS, and a track is untouched
-// by a visibility ruling.
-
 function legacyQuery(q: string): string {
   return `select artists.name as name, artists.slug as slug, artists.image_url as image_url,
                  count(*) as track_count
@@ -45,9 +37,6 @@ function legacyQuery(q: string): string {
 }
 
 export function mixableArtistsProjectionQuery(q: string): string {
-  // The gate tests `slug`, which `artists_mixable_order_idx` carries, so the pinned
-  // `indexed by` access path still serves the order and the scan
-  // (`mixable-artists-projection.integration.test.ts` EXPLAINs it).
   return `select artists.name, artists.slug, artists.image_url,
                  artists.rankable_track_count as track_count
           from artists indexed by artists_mixable_order_idx
@@ -58,17 +47,6 @@ export function mixableArtistsProjectionQuery(q: string): string {
           limit ?`;
 }
 
-/**
- * Read the artist-grain mix projection only after its post-deploy reconciliation fence is complete.
- * Before cutover, fall back to the exact source query: slower, but semantically closed and never an
- * incomplete all-zero answer.
- *
- * The fence is re-read on EVERY call — not memoized — so an already-running isolate observes
- * activation without a redeploy. That is one `settings` primary-key point read per call, on a table
- * that does not grow; it is deliberately not the isolate-level memo `key-histogram.ts` uses, because
- * caching the true answer would also cache the false one somewhere and the whole point of this read
- * is that a flip is picked up live.
- */
 export async function readMixableArtistsProjection(
   client: Client,
   options: { limit: number; q: string },

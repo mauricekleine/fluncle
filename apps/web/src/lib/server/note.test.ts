@@ -2,21 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { gateNoteEcho, gateNoteText, scoreNoteEcho } from "./note";
 
-// The WRITTEN-note voice gate (the sibling of gateObservationScript). It reuses the
-// spoken gate's shared bans (banned identity words, earthly geography, the Dry
-// Rule's no-exclamation-marks, no "we"-as-company) and adds the written note's own
-// length bounds. A note lands straight on the public /log surface, so a violation
-// hard-fails the store.
-
 const GOOD = "Pure rolling menace, half-step and patient. That is why it is here.";
 
-// The exempt set for a finding whose artist and title carry nothing banned — so these cases
-// exercise the gate exactly as they did before the name exemption existed.
 const NO_NAMES: readonly string[] = [];
 
-// gateNoteText throws an ApiError carrying the wire `code` on `.code` (the human
-// message is separate). Capture the code so the assertions read against the same
-// codes the handler reproduces.
 function codeOf(run: () => unknown): string {
   try {
     run();
@@ -96,22 +85,12 @@ describe("gateNoteText", () => {
   });
 });
 
-// ── THE NAME EXEMPTION ────────────────────────────────────────────────────────────
-//
-// The gate scans the finding's OWN artist and title along with everything else, while the
-// authoring prompt tells the model that "naming the artist OR the title is fine". For a finding by
-// an artist called "Future Signal" those two rules cannot both hold: the note names the artist,
-// the scan sees "signal", and NO rewrite can ever clear it. That is an unsatisfiable gate, not a
-// strict one, and it sits at the head of a cap-1 oldest-first queue where it blocks every finding
-// behind it. The exemption masks the subject's names before the scan and nothing else.
-
 describe("gateNoteText — the name exemption", () => {
   const FUTURE_SIGNAL = ["Future Signal", "Fractals"];
 
   it("lets a note NAME an artist whose name carries a banned word", () => {
     const note = "Future Signal at their most patient, and the break still lands late enough.";
 
-    // Before the exemption this threw voice_gate on "signal" and could never be rewritten past it.
     expect(gateNoteText(note, FUTURE_SIGNAL)).toBe(note);
   });
 
@@ -121,7 +100,6 @@ describe("gateNoteText — the name exemption", () => {
     expect(gateNoteText(note, ["Rockwell", "Anomaly Detected"])).toBe(note);
   });
 
-  // The masking must not become a hole. Everything OUTSIDE the name is still Fluncle's prose.
   it("STILL rejects the same banned word used generically in the body", () => {
     expect(
       codeOf(() =>
@@ -158,7 +136,6 @@ describe("gateNoteText — the name exemption", () => {
   });
 
   it("rejects a PARTIAL reference — the exemption is the FULL name, not the word in it", () => {
-    // Conservative on purpose: the rewrite can simply use the whole name.
     expect(
       codeOf(() =>
         gateNoteText("Signal at their most patient, and the break still lands late enough.", [
@@ -169,7 +146,6 @@ describe("gateNoteText — the name exemption", () => {
   });
 
   it("does not let a SHORT name amnesty a longer banned word it sits inside", () => {
-    // The word-boundary rule: an artist called "Sign" must not mask the middle out of "signal".
     expect(
       codeOf(() =>
         gateNoteText("Sign made this, and the signal underneath never lets up all the way.", [
@@ -179,11 +155,6 @@ describe("gateNoteText — the name exemption", () => {
     ).toBe("voice_gate");
   });
 
-  // THE DEGENERATE CASE. A two-word name carries its own context, so masking it exposes every
-  // generic use of the word. A name that IS the banned token carries none — masking it would stop
-  // the gate policing that word for the whole note. That is a total amnesty, not an exemption, and
-  // on this surface naming is optional ("if it helps") with no final-attempt bypass, so the honest
-  // trade is a note that doesn't say the name.
   it("REFUSES a name that is EXACTLY a banned word — that would be a total amnesty", () => {
     expect(
       codeOf(() =>
@@ -199,8 +170,6 @@ describe("gateNoteText — the name exemption", () => {
     ).toBe("voice_gate");
   });
 
-  // …and the geography half, which the BIO's masking never had to answer: `gateBioText` scans with
-  // `allowGeography: true`, so a bio was never policing "london". This gate is.
   it("REFUSES a name that is EXACTLY a banned PLACE — the cosmos still replaces the map", () => {
     expect(
       codeOf(() =>
@@ -210,39 +179,23 @@ describe("gateNoteText — the name exemption", () => {
   });
 
   it("still exempts the multi-word names that carry their own context", () => {
-    // The control for the two above: dropping single-token names must not narrow the real fix.
     const note = "Future Signal made this one, and it still lands late enough to hurt.";
 
     expect(gateNoteText(note, ["Future Signal"])).toBe(note);
   });
 
   it("ignores a name with no word characters at all (it must not strip punctuation wholesale)", () => {
-    // With no `\w` in the name both boundary lookarounds collapse and the replace runs unanchored,
-    // so a subject named `!` would delete every exclamation mark and walk through the Dry Rule.
     expect(
       codeOf(() => gateNoteText("Pure rolling menace, half-step and patient. Banger!", ["!"])),
     ).toBe("voice_gate");
   });
 
   it("measures the LENGTH bounds on the whole note, name included", () => {
-    // The exemption is about what Fluncle is judged for SAYING; a long artist name still spends
-    // the public 280-char budget like any other word.
     expect(codeOf(() => gateNoteText(`${"a ".repeat(200)}Future Signal`, FUTURE_SIGNAL))).toBe(
       "note_too_long",
     );
   });
 });
-
-// ── The ECHO gate — the anti-sameness rail on the vibe-neighbour layer ────────────
-//
-// The auto-note is authored with the notes of the finding's sonic neighbours in the
-// prompt. That is the feature's whole risk: the neighbourhood is there to teach the
-// region's register, NOT to be paraphrased, and a note that reads like every other note
-// in its galaxy is worse than none. So the guardrail is mechanical.
-//
-// The neighbour notes below are REAL notes from the live archive (the ones the current
-// corpus actually echoes each other with), and the candidates are the echo shapes that
-// showed up when the layer was piloted.
 
 describe("scoreNoteEcho", () => {
   const NEIGHBORS = [
@@ -291,15 +244,12 @@ describe("scoreNoteEcho", () => {
       { logId: "011.1.3X", note: "This is one of the reasons S.P.Y still gets the first slot." },
     ]);
 
-    // "this is one of the" is five shared words and carries no editorial move.
     expect(echo.echoes).toBe(false);
   });
 
   it("has nothing to echo in an empty neighbourhood (the first note in a region)", () => {
     const echo = scoreNoteEcho("Pure rolling menace, half-step and patient.", []);
 
-    // `note` (the echoed neighbour's own note) is "" here for the same reason `logId` is
-    // null: there is no neighbour to have echoed.
     expect(echo).toEqual({ echoes: false, logId: null, note: "", overlap: 0, phrase: "" });
   });
 
@@ -346,25 +296,16 @@ describe("gateNoteEcho", () => {
   });
 });
 
-// ── The tunable dials ────────────────────────────────────────────────────────────
-//
-// The thresholds ship as defaults but are operator-tunable at runtime (the `settings`
-// KV — the gate has to be retunable without a deploy, because #502's calibration was a
-// measurement of one 61-note archive rather than a law). The scorer therefore takes them
-// as an argument, and these pin that the dials actually MOVE the verdict — a gate whose
-// thresholds are decorative would be worse than no thresholds at all.
-
 describe("the echo gate's tunable thresholds", () => {
   const NEIGHBORS = [
     { logId: "027.2.8R", note: "My shoulders dropped before the break even settled." },
   ];
-  // Shares the four-word run "my shoulders dropped before" — a lift at the default of 4.
+
   const LIFTS_FOUR = "My shoulders dropped before I knew the tune had turned.";
 
   it("rejects a four-word lift at the default, and lets it pass when the gate is loosened", () => {
     expect(scoreNoteEcho(LIFTS_FOUR, NEIGHBORS).echoes).toBe(true);
 
-    // Loosen the lift threshold past the run's length: the same note now clears.
     const loosened = scoreNoteEcho(LIFTS_FOUR, NEIGHBORS, { maxOverlap: 1, minPhraseWords: 9 });
 
     expect(loosened.echoes).toBe(false);
@@ -375,8 +316,6 @@ describe("the echo gate's tunable thresholds", () => {
 
     expect(scoreNoteEcho(distinct, NEIGHBORS).echoes).toBe(false);
 
-    // A maxOverlap of 0.05 is near the floor — almost any shared content word trips it.
-    // The point is not that this is a sensible setting; it is that the dial BITES.
     const tightened = scoreNoteEcho("The break settled and my shoulders dropped.", NEIGHBORS, {
       maxOverlap: 0.05,
       minPhraseWords: 20,
@@ -388,8 +327,6 @@ describe("the echo gate's tunable thresholds", () => {
   it("carries the echoed neighbour's own note, so a rejection can show the PAIR", () => {
     const echo = scoreNoteEcho(LIFTS_FOUR, NEIGHBORS);
 
-    // The ledger snapshots this: the operator has to read what it echoed, not just be told
-    // that it echoed. A rejection without the other half is an accusation, not evidence.
     expect(echo.note).toBe("My shoulders dropped before the break even settled.");
     expect(echo.logId).toBe("027.2.8R");
     expect(echo.phrase).toBe("my shoulders dropped before");

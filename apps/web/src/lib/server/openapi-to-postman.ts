@@ -1,12 +1,3 @@
-// A tiny, dependency-free OpenAPI 3.1 -> Postman Collection v2.1 converter,
-// scoped to exactly the constructs the Fluncle spec uses (the GENERATED public
-// spec from the oRPC contract registry, served at /api/v1/openapi.json): query/path
-// parameters, JSON request bodies, local $ref schemas, and one server. It runs at
-// request time over the live generated spec, so the collection is always
-// byte-faithful to the spec it was generated from and needs no separate
-// maintenance. It deliberately does not implement the whole OpenAPI surface;
-// anything outside what the Fluncle spec exercises is skipped, not guessed.
-
 type JsonObject = Record<string, unknown>;
 
 type OpenApiSpec = {
@@ -59,9 +50,6 @@ function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Resolve a local "#/components/schemas/Name" pointer against the spec. Only the
-// shapes the Fluncle spec uses appear, so a missing target yields undefined and
-// the caller falls back gracefully rather than throwing.
 function resolveRef(spec: OpenApiSpec, ref: string): JsonObject | undefined {
   const prefix = "#/components/schemas/";
   if (!ref.startsWith(prefix)) {
@@ -70,9 +58,6 @@ function resolveRef(spec: OpenApiSpec, ref: string): JsonObject | undefined {
   return spec.components?.schemas?.[ref.slice(prefix.length)];
 }
 
-// Build a representative JSON example from a schema, following local $refs and
-// honouring const/enum/default/format so request bodies are runnable, not blank.
-// Guards against recursive schemas via a seen-set on resolved ref names.
 function exampleForSchema(
   spec: OpenApiSpec,
   schema: unknown,
@@ -104,7 +89,6 @@ function exampleForSchema(
     return schema.default;
   }
 
-  // oneOf/anyOf: pick the first non-null branch so the example is useful.
   const union = schema.oneOf ?? schema.anyOf;
   if (Array.isArray(union)) {
     const branch = union.find((b) => !(isObject(b) && b.type === "null")) ?? union[0];
@@ -162,8 +146,6 @@ function splitServer(serverUrl: string): { host: string[]; basePath: string[] } 
   }
 }
 
-// Convert OpenAPI path templating ("{id}") into Postman path segments, mapping
-// "{id}" to ":id" (Postman's path-variable form).
 function pathSegments(path: string): string[] {
   return path
     .split("/")
@@ -181,9 +163,6 @@ function operationName(operation: JsonObject, method: string, path: string): str
   return `${method.toUpperCase()} ${path}`;
 }
 
-// Group operations into folders by their first non-variable path segment, so
-// "/me/*" lands under "me" and bare "/tracks" under "tracks". Keeps the
-// collection navigable without inventing structure the spec doesn't carry.
 function folderNameForPath(path: string): string {
   const first = path.split("/").filter(Boolean)[0] ?? "";
   return first.replace(/^\{(.+)\}$/, "$1") || "root";

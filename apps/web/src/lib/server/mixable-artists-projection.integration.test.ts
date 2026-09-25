@@ -72,7 +72,6 @@ describe("mixable artist projection cutover", () => {
       { imageUrl: undefined, name: "Beta", slug: "beta", trackCount: 1 },
     ]);
 
-    // Model an old-Worker write in the migration→deploy window. The fallback must still read it.
     await db.execute(
       `update tracks set key = '9A', has_embedding = 1 where track_id = 'not-rankable'`,
     );
@@ -93,14 +92,12 @@ describe("mixable artist projection cutover", () => {
       { imageUrl: undefined, name: "Alpha", slug: "alpha", trackCount: 2 },
     ]);
 
-    // Ordinary deploys do not re-walk a transactionally maintained, complete projection.
     const repeated = await backfillMixableArtistsProjection(db, { activate: true });
     expect(repeated).toEqual({ artists: 0, pages: 0, passes: 0, skipped: true });
     expect(await readMixableArtistsProjection(db, { limit: 1, q: "" })).toEqual([
       { imageUrl: undefined, name: "Alpha", slug: "alpha", trackCount: 2 },
     ]);
 
-    // Out-of-band source repair marks the fence dirty and still receives a complete reconciliation.
     await db.batch(
       [
         `update artists set rankable_track_count = 99 where id = 'art-a'`,

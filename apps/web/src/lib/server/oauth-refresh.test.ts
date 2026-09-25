@@ -4,14 +4,6 @@ import { type FetchImpl } from "./env";
 import { refreshInstagramToken } from "./instagram";
 import { requestTwitchToken } from "./twitch";
 
-// The Tier-2 token-REFRESH path (docs/reach-tier2-activation.md), fetch mocked so no
-// real network + no DB is touched. Each platform's raw token helper (twitch is
-// POSTs; instagram is a GET) is the DB-free core the DB-backed `get<Platform>AccessToken`
-// calls when the stored token nears expiry — this exercises that core: it parses the
-// refreshed token out of the response, throws a clean reason on a fault, and (twitch/
-// tiktok) throws a "not configured" error when the client creds are unset.
-
-/** A fake `fetch` that answers by URL SUBSTRING and records the calls it saw. */
 function recordingFetch(routes: { body: unknown; match: string; status?: number }[]): {
   calls: { body: string | null; url: string }[];
   fetchImpl: FetchImpl;
@@ -19,8 +11,7 @@ function recordingFetch(routes: { body: unknown; match: string; status?: number 
   const calls: { body: string | null; url: string }[] = [];
   const fetchImpl = ((input: URL | string, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.href;
-    // Every token POST sends a URLSearchParams body; narrow so the linter has a concrete
-    // stringifiable type (no-base-to-string), else fall back to a raw string body.
+
     const rawBody = init?.body;
     const body =
       rawBody instanceof URLSearchParams
@@ -117,7 +108,7 @@ describe("refreshInstagramToken", () => {
 
     expect(data.access_token).toBe("refreshed-long-token");
     expect(data.expires_in).toBe(5183944);
-    // No client secret in the refresh — the current token authorizes it.
+
     expect(calls[0]?.url).toContain("grant_type=ig_refresh_token");
     expect(calls[0]?.url).toContain("access_token=current-long-token");
   });

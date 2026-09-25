@@ -3,274 +3,143 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CONTRACT_OPERATION_NAMES, CONTRACT_OPERATION_ROUTES } from "@fluncle/contracts/orpc";
 
-// The ADMIN coverage scaffold for the oRPC migration. The sibling orpc-coverage.test.ts
-// draws the same net over the PUBLIC surface; this one extends it to ADMIN, which
-// the public net deliberately skips (it `continue`s past the `admin/` directory).
-//
-// The two nets PARTITION the registry, and the line between them is each op's
-// DECLARED ROUTE PATH: an `/admin` path belongs to this file, anything else to the
-// sibling. The path is a machine-readable fact the contract already carries, so
-// there is no gap and no overlap — where an op-name prefix list once decided it, a
-// destructive op could sit on an `/admin` path and still be waved through this net
-// because its name happened to start with `merge_` or `list_`.
-//
-// Every admin HTTP route is either:
-//   - CONVERTED — owned by an oRPC contract (named in the registry), or
-//   - PENDING   — on the explicit, shrinking allow-list below, awaiting the
-//                 fan-out waves after this pilot, or
-//   - a CARVE-OUT — staying on TanStack by design (OAuth browser redirects; the
-//                 multipart-file routes — see the carve-out note below).
-//
-// A route that is none of these fails the build — the SAME enforcement the public
-// net gives, now reaching admin so there is no admin-shaped gap in the "no
-// contract ⇒ build failure" coverage. A route may not be both converted AND
-// pending (the pending list must shrink as routes convert), and a pending entry
-// must map to a real route (no stale names).
-//
-// The admin PILOT converted the pattern-complete `admin-tracks` set (the
-// field-level role guard + the operator-tier observe + the JSON video
-// control-plane). The admin WAVE then fanned out the rest onto that exact pattern:
-// the backfills (`admin-backfills`), the submission-review queue
-// (`admin-submissions`), the mixtape authoring + distribution control plane
-// (`admin-mixtapes`), the per-finding social ops (`admin-social`), the
-// just-in-time credential reads + Last.fm desktop-auth JSON exchange
-// (`admin-tokens`), and the admin board list/add folded back into `admin-tracks`.
-// After the wave the PENDING list is EMPTY — every admin route is converted except
-// the carve-outs (the OAuth redirects, the admin `logout` redirect, and the two
-// multipart-file routes), which stay on TanStack by design.
-
-// Each admin API route, keyed by its `/api/v1`-relative `METHOD /path`, mapped to
-// the canonical Convention-B `verb_noun` op it should be served by — or the
-// PENDING sentinel for a route not yet converted. This is the admin-surface
-// registry the coverage net is drawn over.
 const PENDING = "__pending__" as const;
 
-// Keyed `METHOD /path`, sorted (the linter's sort-keys). After the admin wave
-// every route maps to its canonical converted op; the PENDING sentinel is retained
-// for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
-  // Global artist acquisition rules — contract-only oRPC. Writes are operator tier.
   "DELETE /admin/artist-rules/{id}": "remove_artist_rule",
-  // The `/admin/artists` review queue's inline remove (Unit 5) — contract-only oRPC
-  // (no TanStack route file; oRPC owns the path directly). Operator tier.
+
   "DELETE /admin/artists/socials/{socialId}": "remove_artist_social",
-  // The Fluncle Studio clip ops: clip CRUD +
-  // the hardened post-publish cue backfill. `list_clips` is admin tier
-  // (agent-allowed read); the writes are operator tier.
+
   "DELETE /admin/clips/{clipId}": "delete_clip",
-  // The operator's "unschedule" — contract-only oRPC. Operator tier: take a clip off the
-  // Instagram drip queue (delete its un-posted schedule row).
+
   "DELETE /admin/clips/{clipId}/schedule": "delete_clip_schedule",
-  // The label-alias reject (RFC musickit-second-authority, U2a) — contract-only oRPC. Operator
-  // tier: discard a proposed spelling; the agent token 403s.
+
   "DELETE /admin/labels/aliases/{id}": "reject_label_alias",
-  // The newsletter edition delete — contract-only oRPC (no TanStack route file).
-  // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
-  // test edition from the public archive); the agent token 403s.
+
   "DELETE /admin/newsletter/editions/{id}": "delete_edition",
-  // The RFC recording-primitive ops (Design B) — contract-only oRPC (no TanStack route
-  // files; oRPC owns the paths directly). Reads are admin tier (agent-allowed — the box's
-  // clip-cut cron resolves a recording); the writes + `promote` (mints a coordinate) are
-  // operator tier.
+
   "DELETE /admin/recordings/{recordingId}": "delete_recording",
-  // The operator's private cost ledger (COST-02) — contract-only oRPC (no TanStack
-  // route file; oRPC owns the paths directly). `list` is admin tier; create/update/
-  // delete are operator tier (the operator's private spend data — a valid agent token 403s).
+
   "DELETE /admin/subscriptions/{id}": "delete_subscription",
-  // The capture-source pin's counterpart (docs/the-ear.md § Wrong audio) — contract-only oRPC.
-  // Operator tier: it withdraws the operator's own ruling; the agent token 403s.
+
   "DELETE /admin/tracks/{trackId}/capture-source": "clear_capture_source",
-  // The three entity bio WORKLISTS — contract-only oRPC (no TanStack route file). Admin tier
-  // (agent-allowed reads): the box's bio sweeps drain them with the agent token.
+
   "GET /admin/albums/bio-queue": "list_albums_missing_bio",
-  // The album bio-draft — contract-only oRPC (no TanStack route file; oRPC owns the path
-  // directly). Agent tier: the box's bio sweep triggers this Worker-side grounding read
-  // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token; the
-  // describe_album sibling.
+
   "GET /admin/albums/{slug}/bio-draft": "draft_album_bio",
-  // The versioned artifact-log transport is contract-only oRPC. Filesystemful consumers use the
-  // agent tier to rebuild and advance; the prefix compactor alone is operator tier.
+
   "GET /admin/artifacts/changes": "list_artifact_changes",
   "GET /admin/artifacts/consumers/{consumerId}": "get_artifact_consumer",
   "GET /admin/artifacts/snapshots": "list_artifact_snapshot",
-  // Global artist acquisition rules — contract-only oRPC. The list is an agent-allowed read.
+
   "GET /admin/artist-rules": "list_artist_rules",
-  // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
-  // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
-  // drives both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
+
   "GET /admin/artists": "list_unresolved_artists",
   "GET /admin/artists/bio-queue": "list_artists_missing_bio",
-  // The artist review queue read (Unit 5) — contract-only oRPC (no TanStack route file).
-  // Admin tier (agent-allowed); the operator's review-queue station reads it.
+
   "GET /admin/artists/socials": "list_artist_socials",
-  // The artist bio-draft — contract-only oRPC (no TanStack route file; oRPC owns the path
-  // directly). Agent tier: the box's bio sweep triggers this Worker-side grounding read
-  // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token.
+
   "GET /admin/artists/{slug}/bio-draft": "draft_artist_bio",
-  // The `/admin` attention-queue digest read — contract-only oRPC (no TanStack route
-  // file; oRPC owns the path directly). Admin tier (agent-allowed): the operator's
-  // `fluncle admin queue` CLI + its Raycast menu bar read it.
+
   "GET /admin/attention": "get_attention",
-  // THE EAR (docs/the-ear.md) — the ranked catalogue. Contract-only oRPC (no TanStack route
-  // file; oRPC owns the path directly). Admin tier (agent-allowed).
+
   "GET /admin/catalogue": "list_catalogue_tracks",
-  // The Spotify anchor-search THROTTLE breaker's READ — contract-only oRPC (no TanStack route
-  // file). Admin tier (agent-allowed, the `get_capture_budget` precedent): the box's anchor sweep
-  // is entitled to know why its free Spotify rungs went quiet. Its RESET sibling is operator tier.
+
   "GET /admin/catalogue/anchor/apify-budget": "get_anchor_apify_budget",
   "GET /admin/catalogue/anchor/breaker": "get_spotify_anchor_breaker",
-  // THE CAPTURE BUDGET (docs/the-ear.md § The capture budget) — the spend readout behind the
-  // brake on metered per-GB audio capture. Contract-only oRPC (no TanStack route file). Admin
-  // tier (agent-allowed READ): seeing what a budget has left spends nothing.
+
   "GET /admin/catalogue/capture-budget": "get_capture_budget",
-  // THE CRAWLER (docs/catalogue-crawler.md) — the frontier's state. Contract-only oRPC (no
-  // TanStack route file). Admin tier (agent-allowed): the on-box `fluncle-crawl` sweep reads
-  // it with its agent token, and so does the operator.
+
   "GET /admin/catalogue/captures/unverified": "list_unverified_captures",
   "GET /admin/catalogue/crawl": "get_crawl_status",
   "GET /admin/clips": "list_clips",
-  // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
-  // TanStack route file). Admin tier (agent-allowed read); the clip library / CLI merge
-  // it onto the clips.
+
   "GET /admin/clips/social": "list_clip_posts",
-  // The built clip caption (clean copy + the fluncle:// coordinate line(s)) —
-  // contract-only oRPC (no TanStack route file). Admin tier (agent-allowed read); the
-  // clip-card UI (Wave 3-B) shows + copies it.
+
   "GET /admin/clips/{clipId}/caption": "get_clip_caption",
-  // The Frontier kill switch's READ — agent-allowed (contract-only oRPC; the
-  // get_capture_budget precedent: a read of an operator dial is not the dial).
+
   "GET /admin/frontier/minting": "get_frontier_minting",
-  // The catalogue funnel read (docs/admin-shell.md) — contract-only oRPC (no
-  // TanStack route file; oRPC owns the path directly). Admin tier.
+
   "GET /admin/funnel": "get_funnel",
-  // The sonic galaxy map's admin read (browse-by-feel RFC) — contract-only oRPC (no
-  // TanStack route file; oRPC owns the path directly). Admin tier (agent-allowed — the
-  // `fluncle-cluster` cron reads it).
+
   "GET /admin/galaxies": "list_galaxies_admin",
-  // The label entity + the operator's crawl-seed control — contract-only oRPC (no TanStack
-  // route file; oRPC owns the path directly). Admin tier (agent-allowed read): the
-  // catalogue crawler reads its seed set here (`?seedState=enabled`).
+
   "GET /admin/labels": "list_labels_admin",
-  // The label-alias review reads (RFC musickit-second-authority, U2a) — contract-only oRPC.
-  // Admin tier (agent-allowed read).
+
   "GET /admin/labels/aliases": "list_label_aliases",
   "GET /admin/labels/bio-queue": "list_labels_missing_bio",
-  // Per-label artist acquisition rules — contract-only oRPC. The list is an agent-allowed read.
+
   "GET /admin/labels/{id}/artists": "list_label_artist_rules",
-  // The label bio-draft — contract-only oRPC (no TanStack route file). Agent tier: the box's
-  // bio sweep triggers this Worker-side grounding read (Firecrawl facts + finding titles → a
-  // ready-to-author prompt) with its agent token; the describe_label sibling.
+
   "GET /admin/labels/{slug}/bio-draft": "draft_label_bio",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
-  // The logbook sweep's gap+material read — contract-only oRPC (no TanStack route
-  // file; oRPC owns the path directly). Admin tier (agent-allowed).
+
   "GET /admin/logbook/gaps": "list_logbook_gaps",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
-  // The newsletter edition list (drafts inclusive) — contract-only oRPC, no TanStack
-  // route file (oRPC serves it off the registry). Admin tier (agent-allowed): the
-  // Friday cron reads it from a fresh session to find an unsent draft + the window.
+
   "GET /admin/newsletter/editions": "list_editions_admin",
-  // The echo gate's ledger — the auto-notes it refused to store, kept with the reason so
-  // the operator can read them and rule. Contract-only oRPC (no TanStack route file).
-  // Admin tier (agent-allowed read).
+
   "GET /admin/note-rejections": "list_note_rejections",
-  // The observation echo gate's ledger — contract-only oRPC (no TanStack route file), the
-  // spoken sibling of the note-rejections ledger.
+
   "GET /admin/observation-rejections": "list_observation_rejections",
-  // The projection control plane is contract-only. Status is an agent-allowed bounded read;
-  // advance adds a handler-level agent allowlist for runtime-family repair only.
+
   "GET /admin/projections/status": "get_projection_status",
-  // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
-  // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is
-  // the AGENT-tier per-tick resolve the on-box sweeps live on — the box runs a pinned CLI
-  // and a baked image, so the API is the ONLY way a prompt reaches it without a rebake.
-  // `list_prompts` is OPERATOR tier.
+
   "GET /admin/prompts": "list_prompts",
   "GET /admin/prompts/{slug}": "get_prompt",
   "GET /admin/recordings": "list_recordings",
   "GET /admin/recordings/{recordingId}": "get_recording",
-  // The /admin/reach board — contract-only oRPC (no TanStack API route file; the UI page at
-  // /admin/reach reads it in-process, the get_funnel precedent). Admin tier: a pure read of the
-  // social_metrics ledger (per-post velocity + platform × creative-axis pivots).
+
   "GET /admin/social/metrics": "get_social_metrics",
   "GET /admin/submissions": "list_submissions",
   "GET /admin/submissions/{submissionId}": "get_submission",
-  // The cost-ledger read (COST-02) — contract-only oRPC (no TanStack route file).
-  // Admin tier.
+
   "GET /admin/subscriptions": "list_subscriptions",
-  // The run ledger's operator reader — contract-only oRPC, paired with the agent-tier POST on
-  // the same resource. It returns filtered evidence plus per-unit aggregates from the second DB.
+
   "GET /admin/telemetry/runs": "read_run_ledger",
   "GET /admin/tracks": "list_tracks_admin",
-  // The embedded corpus (browse-by-feel RFC) — contract-only oRPC (no TanStack route
-  // file; oRPC owns the path directly). Admin tier (agent-allowed): the `fluncle-cluster`
-  // cron's input. Static `/embeddings` beats the `/{trackId}` param in oRPC's matcher (the
-  // `/tracks/random` precedent).
+
   "GET /admin/tracks/embeddings": "list_track_embeddings",
-  // The dream-weaver order proposal (RFC mixability-engine) — contract-only oRPC (no
-  // TanStack route file; oRPC owns the path directly). Admin tier (agent-allowed read).
+
   "GET /admin/tracks/mixable-order": "get_mixable_order",
-  // The audio pipeline's WORKLIST (capture/analyse/embed), in the order the metered capture
-  // budget should be spent (docs/gpu-batch-embed.md) — contract-only oRPC (no TanStack route
-  // file). Admin tier (agent-allowed read); the box's sweeps drain it.
+
   "GET /admin/tracks/work": "list_track_work",
-  // The single-finding admin lookup — contract-only oRPC (no TanStack route file; oRPC
-  // owns the path directly, like context_track). Admin tier (agent-allowed read).
+
   "GET /admin/tracks/{trackId}": "get_track_admin",
-  // The box author's spent-move fuel (the observation vibe-neighbour layer) — contract-only
-  // oRPC. AGENT tier: the observe sweep reads it every tick with its agent token.
+
   "GET /admin/tracks/{trackId}/observation-neighbours": "list_observation_neighbours",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
-  // The user-account roster — contract-only oRPC (no TanStack route file; oRPC owns the
-  // path directly). Admin tier (agent-allowed read).
+
   "GET /admin/users": "list_users_admin",
-  // Contract-only operator diagnostic. It joins authenticated Sonar health to one bounded
-  // artifact-consumer status read and exposes no raw catalogue rows.
+
   "GET /admin/vectors/tracks/serving": "get_vector_serving",
-  // MusicBrainz drift-audit bookkeeping for either scope of artist rule. Operator tier, but not
-  // an acquisition-scope change: this cannot touch verdicts, re-arm watermarks, or label scope.
+
   "PATCH /admin/artist-rules/{id}": "update_artist_rule",
-  // The fresh-links INLINE EDIT (correct + approve a social's URL in one act) — contract-only
-  // oRPC (no TanStack route file; oRPC owns the path directly, sharing it with the DELETE remove
-  // above). Operator tier: it writes an operator-owned, confirmed, public link.
+
   "PATCH /admin/artists/socials/{socialId}": "update_artist_social",
   "PATCH /admin/clips/{clipId}": "update_clip",
-  // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
-  // set/override a clip's Instagram drip slot.
+
   "PATCH /admin/clips/{clipId}/schedule": "set_clip_schedule",
-  // The operator's galaxy naming write (browse-by-feel RFC) — contract-only oRPC (no
-  // TanStack route file). OPERATOR tier: naming mints a public URL, so the agent token
-  // 403s (the `note`/OPERATOR_ONLY precedent).
+
   "PATCH /admin/galaxies/{id}": "update_galaxy",
-  // The operator's ruling on a label's crawl-seed state — contract-only oRPC (no TanStack
-  // route file). OPERATOR tier: it steers what Fluncle crawls next (an editorial act), so
-  // the agent token 403s. It changes no stored data — crawl scope, never storage.
+
   "PATCH /admin/labels/{id}": "update_label",
-  // The operator's logbook overwrite/edit — contract-only oRPC (no TanStack route
-  // file). Operator tier: it can replace a cron-authored entry, so the agent 403s.
+
   "PATCH /admin/logbook/{sector}": "update_logbook_entry",
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
-  // The newsletter edition control plane. Contract-only oRPC — no TanStack route
-  // files under /api/admin/newsletter
-  // (oRPC serves them off the registry), so they have no file-enumeration entry;
-  // they live here to satisfy the "registry holds EXACTLY this map's ops" check.
-  // create/update are admin tier (agent-allowed drafting); send is operator-only.
+
   "PATCH /admin/newsletter/editions/{id}": "update_edition",
-  // Retuning the auto-note echo gate — contract-only oRPC (no TanStack route file).
-  // OPERATOR tier: the dials decide what Fluncle will and won't say about his archive, so
-  // the agent token 403s. They live in the `settings` KV — a flip, not a deploy.
+
   "PATCH /admin/note-gate": "update_note_gate",
-  // Retuning the observation echo gate — contract-only oRPC. OPERATOR tier, the settings KV.
+
   "PATCH /admin/observation-gate": "update_observation_gate",
   "PATCH /admin/recordings/{recordingId}": "update_recording",
-  // The cost-ledger edit (COST-02) — contract-only oRPC (no TanStack route file). Operator tier.
+
   "PATCH /admin/subscriptions/{id}": "update_subscription",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
-  // The album voiced-bio author (the entity-bio engine) — contract-only oRPC (no TanStack
-  // route file; oRPC owns the path directly). Agent tier: the box's bio sweep drives the
-  // fill-empty-only write with its agent token, the note_track precedent.
+
   "POST /admin/albums/{slug}/bio": "describe_album",
   "POST /admin/artifacts/changes/compact": "compact_artifact_changes",
   "POST /admin/artifacts/consumers": "register_artifact_consumer",
@@ -279,449 +148,242 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/artifacts/consumers/{consumerId}/inactivate": "inactivate_artifact_consumer",
   "POST /admin/artifacts/consumers/{consumerId}/rebuilds/{stream}/checkpoint":
     "checkpoint_artifact_rebuild",
-  // Add one global artist acquisition rule. Operator tier.
+
   "POST /admin/artist-rules": "add_artist_rule",
-  // The similar-artists precompute sweep (D6) — contract-only oRPC (no TanStack route file;
-  // oRPC owns the path directly). Agent tier: the box's agent-token cron drives one tick.
+
   "POST /admin/artists/rank": "rank_artists",
-  // The identity-graph per-social write (Unit 5) — contract-only oRPC (no TanStack route
-  // file; oRPC owns the path directly). Operator tier (the queue's manual confirm).
+
   "POST /admin/artists/socials/{socialId}/confirm": "confirm_artist_social",
-  // The per-link review — approve ONE fresh link in the board's fresh-links section. Operator tier.
+
   "POST /admin/artists/socials/{socialId}/review": "review_artist_social",
-  // The artist social-identity resolution (Unit 2.1 of the artist-relationship RFC) —
-  // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
-  // Agent tier: the box's `fluncle-artist-sweep` cron drives it with its agent token.
+
   "POST /admin/artists/{artistId}/resolve": "resolve_artist",
   "POST /admin/artists/{artistId}/review": "review_artist",
   "POST /admin/artists/{artistId}/socials": "add_artist_social",
-  // The artist voiced-bio author (the entity-bio engine) — contract-only oRPC (no TanStack
-  // route file; oRPC owns the path directly). Agent tier: the box's future bio sweep drives
-  // the fill-empty-only write with its agent token, the note_track precedent.
+
   "POST /admin/artists/{slug}/bio": "describe_artist",
-  // The admin session kill switch — contract-only oRPC (no TanStack route file; oRPC
-  // owns the path directly). Operator tier: bump the grant epoch so every outstanding
-  // browser grant cookie stops verifying at once.
+
   "POST /admin/auth/revoke-grants": "revoke_admin_grants",
-  // The artist-entity backfill (Unit 1 of the artist-relationship RFC) —
-  // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
-  // Agent tier: the box's `fluncle-artist-backfill` cron drives it with its agent token.
-  // The Apple catalogue drain (RFC musickit U1) — contract-only oRPC (no TanStack route file).
-  // Agent tier: the box's `fluncle-backfill` cron drives it with its agent token. It writes
-  // catalogue identity only (a URL on `tracks`, facts on `albums`), never a certification.
+
   "POST /admin/backfill/apple-catalogue": "backfill_apple_catalogue",
   "POST /admin/backfill/apple-music": "backfill_apple_music",
-  // Agent tier: the box's `fluncle-artist-credits` cron drives it. The MB credit sweep (RFC
-  // artist-primary-capture, slice 1b) — mints identity-true artists BY MB id + writes edges for slice
-  // 0's zero-matched residual, never a certification, never a publish.
+
   "POST /admin/backfill/artist-credits": "backfill_artist_credits",
-  // Agent tier: the box's `fluncle-artist-edges` cron drives it. The track_artists graph backfill
-  // (RFC artist-primary-capture, slice 0) — folds artists_json names onto existing identities, never
-  // a certification, never a publish.
+
   "POST /admin/backfill/artist-edges": "backfill_artist_edges",
   "POST /admin/backfill/artist-images": "backfill_artist_images",
   "POST /admin/backfill/artists": "backfill_artists",
-  // Agent tier: the box's `fluncle-backfill` cron drives it. Writes ONE store URL onto `tracks`
-  // off an exact ISRC match, never a certification, never a publish.
+
   "POST /admin/backfill/beatport": "backfill_beatport",
-  // Agent tier: the box's `fluncle-cover-masters` cron drives it. It owns an album's/artist's
-  // ≤1200² cover master in R2 (RFC U3b), never a certification, never a publish.
+
   "POST /admin/backfill/cover-masters": "backfill_cover_masters",
-  // Agent tier: the box's `fluncle-backfill` cron drives it. Writes ONE Deezer id + its provenance
-  // onto `tracks` off a duration-vouched ISRC match, never a certification, never a publish.
+
   "POST /admin/backfill/deezer": "backfill_deezer",
   "POST /admin/backfill/discogs": "backfill_discogs",
-  // Agent tier: the box's `fluncle-backfill` cron drives it. The FACTS sibling of the line above —
-  // it reads an already-resolved release's catalogue number + styles onto the `albums` row, never a
-  // certification, never a publish.
+
   "POST /admin/backfill/discogs-facts": "backfill_discogs_facts",
   "POST /admin/backfill/label-images": "backfill_label_images",
-  // The label-lineage fill (founding date/place + parent imprint from MusicBrainz) — contract-only
-  // oRPC (no TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-label-lineage`
-  // sweep drives it with the agent token, the `backfill_label_images` precedent.
+
   "POST /admin/backfill/label-lineage": "backfill_label_lineage",
-  // The freshness tap (D8): a bounded probe over ENABLED seed labels that mints day-one catalogue
-  // rows from Spotify's fresh releases (fuzzy label search + copyrights post-filter) — catalogue
-  // identity only, never a certification.
+
   "POST /admin/backfill/label-releases": "backfill_label_releases",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
-  // The MusicBrainz recording-MBID fill (the MusicBrainz identity layer) — contract-only oRPC (no
-  // TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-recording-mbids` sweep
-  // drives it with the agent token, the `backfill_label_images` precedent.
+
   "POST /admin/backfill/recording-mbids": "backfill_recording_mbids",
-  // The operator's ruling on a bio refused by the voice gate — contract-only oRPC.
-  // OPERATOR tier: `keep` blesses a public paragraph the gate refused and `rewrite` un-publishes
-  // one, so the agent token that authored it 403s (lib/server/bio-review.ts).
+
   "POST /admin/bio-reviews/{kind}/{slug}/resolve": "resolve_bio_review",
-  // The catalogue crawler's bounded pass — contract-only oRPC (no TanStack route file).
-  // ADMIN tier (agent-allowed): the on-box `fluncle-crawl` sweep drives it with the agent
-  // token. It certifies nothing (no `findings` row) and captures no audio, so it needs no
-  // operator gate; RULING on a seed label — what may be crawled at all — is `update_label`,
-  // and that stays operator tier.
-  // The Spotify anchor write — contract-only oRPC (no TanStack route file). AGENT tier (the
-  // rank_catalogue/verify_capture precedent): the box's `fluncle-anchor` Apify sweep POSTs verified
-  // candidates and the Worker writes only catalogue-identity columns (never a certification).
+
   "POST /admin/catalogue/anchor": "anchor_track",
-  // The Spotify anchor-search THROTTLE breaker's RESET — contract-only oRPC. OPERATOR tier: it
-  // re-arms the one catalogue path that shares the official Spotify app with user-facing mints and
-  // publish, and the breaker exists because that app starved under 429s (the `set_anchor_search`
-  // rule). The breaker self-heals on its cooldown; this is the early lift.
+
   "POST /admin/catalogue/anchor/breaker/reset": "reset_spotify_anchor_breaker",
-  // The anchor-backoff requeue — operator tier (the same re-arms-metered-spend class as the
-  // capture requeue below): clear named rows' 14-day re-ask stamp after a resolver improvement,
-  // leaving the lifetime attempts cap untouched.
+
   "POST /admin/catalogue/anchor/requeue": "requeue_anchor",
-  // The FREE first rung of the resolver waterfall (slice 1) — contract-only oRPC (no TanStack route
-  // file). AGENT tier (the anchor_track precedent): the box's `fluncle-anchor` sweep calls it first
-  // per row (server resolves ListenBrainz → Spotify by-id, verifies, writes) and spends Apify only on
-  // a miss. Static `/resolve` beats no param — it nests under the `/anchor` POST above.
+
   "POST /admin/catalogue/anchor/resolve": "resolve_anchor",
-  // The operator's ruling on a SUSPECTED VERSION MISMATCH the anchor gate held back — contract-only
-  // oRPC (no TanStack route file; the /admin attention queue calls it inline). OPERATOR tier, unlike
-  // every other anchor op here: `accepted` writes a `spotify_uri`, which is the row's public identity
-  // (the Telescope playlist, the certify path) and permanent if wrong — so the machine that raised
-  // the suspicion is deliberately barred from acting on it.
+
   "POST /admin/catalogue/anchor/reviews/{trackId}/resolve": "resolve_anchor_review",
-  // The operator's reset for the cross-cutting Apple failure-regime breaker (RFC musickit U1) —
-  // contract-only oRPC (no TanStack route file). OPERATOR tier: it re-arms a spend-adjacent
-  // external integration a machine should not silently un-brake (the `set_capture_budget` rule).
+
   "POST /admin/catalogue/apple-breaker/reset": "reset_apple_breaker",
-  // The terminal-unmatched rescue — contract-only oRPC. OPERATOR tier: it re-arms metered
-  // capture spend across hundreds of rows after a matcher improvement (the set_capture_budget
-  // money-judgement class); the duration vetoes keep hopeless rows terminal.
+
   "POST /admin/catalogue/captures/requeue-unmatched": "requeue_unmatched_captures",
-  // The capture-verification write — contract-only oRPC. Agent tier (the rank_catalogue
-  // precedent): the box's `fluncle-verify-captures` sweep fingerprints a capture against its
-  // official preview and reports the verdict; the SERVER routes it (docs/the-ear.md § Wrong
-  // audio) — a catalogue mismatch quarantines, a FINDING mismatch only raises the operator
-  // attention item (a machine never rewinds a public finding). Its worklist read is
-  // `list_unverified_captures`, above.
+
   "POST /admin/catalogue/captures/verify": "verify_capture",
-  // Certify an existing catalogue row in place — contract-only oRPC. OPERATOR tier: certifying is
-  // the one act the catalogue domain forbids a machine (docs/the-ear.md § The operator's actions).
+
   "POST /admin/catalogue/certify": "certify_track",
   "POST /admin/catalogue/crawl": "crawl_catalogue",
   "POST /admin/catalogue/crawl/commits": "commit_crawl_nodes",
-  // The demand reorder tick — contract-only oRPC (no TanStack route file). ADMIN tier
-  // (agent-allowed): the on-box `fluncle-demand` cron triggers it with the agent token. The
-  // Worker reads Simple Analytics + rewrites only the two derived reorder columns
-  // (demand_score / demand_rank), never a certification (docs/catalogue-crawler.md § Demand).
+
   "POST /admin/catalogue/demand": "record_demand",
-  // The dupe-veto escape hatch — contract-only oRPC. OPERATOR tier: overruling the sweep's own
-  // duplicate verdict so a WRONG-vetoed row can be captured (docs/the-ear.md § Duplicates).
+
   "POST /admin/catalogue/force-capture": "force_capture",
-  // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
-  // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
-  // (the box holds no Postiz key; the Worker owns it). Kill-switch aware, bounded, idempotent.
-  // The free Deezer pass's clean-miss requeue — operator tier. Clear `isrc_recovery_attempted_at`
-  // on rows retired as a Deezer-EMPTY miss inside a named window, so a window where the ASK was
-  // empty rather than the catalogue can be handed back to the sweep. Dry-run by default.
+
   "POST /admin/catalogue/isrc-recovery/requeue": "requeue_isrc_recovery",
-  // One tick of The Ear's precompute sweep — contract-only oRPC. Agent tier: it writes only
-  // DERIVED ranking columns on CATALOGUE rows (a `tracks` row with no `findings` row), so it
-  // cannot mint a coordinate or certify anything.
+
   "POST /admin/catalogue/rank": "rank_catalogue",
-  // The wrong-audio quarantine override — contract-only oRPC. OPERATOR tier: overruling The Ear's
-  // wrong-audio verdict on its own output is not an agent's call (docs/the-ear.md § Wrong audio).
+
   "POST /admin/catalogue/wrong-audio/clear": "clear_wrong_audio",
-  // The clear's counterpart — flag a FINDING's capture as the wrong recording, the side the sweep
-  // can never accuse. OPERATOR tier: it rewinds a public finding's enrichment on a human listen.
+
   "POST /admin/catalogue/wrong-audio/flag": "flag_wrong_audio",
   "POST /admin/clips/drip": "drip_clips",
-  // The batch-schedule op (the set_clip_schedule sibling) — contract-only oRPC (no TanStack
-  // route file). Operator tier: chain a whole selection onto the jittered drip queue in one
-  // move; the web clip library's batch bar drives it.
+
   "POST /admin/clips/schedule": "set_clip_schedules",
-  // The box's clip-cut finalize (Fluncle Studio Unit C) — contract-only oRPC (no
-  // TanStack route file; oRPC owns the path directly, like finalize_track_video). Agent
-  // tier: the box marks its own cut done + the handler purges the stale edge renditions.
+
   "POST /admin/clips/{clipId}/cut/finalize": "finalize_clip_cut",
-  // The box's clip-cut upload presign (Fluncle Studio Unit C) — contract-only oRPC.
-  // Agent tier: a single-PUT presign for the clip's `<clipId>/footage.mp4`. Path-symmetric
-  // with the finalize above (both nest under `/cut/`).
+
   "POST /admin/clips/{clipId}/cut/presign": "presign_clip_upload",
-  // The append-only cost ledger's write (COST-01) — contract-only oRPC (no TanStack
-  // route file; oRPC owns the path directly, like record_health). Admin tier
-  // (agent-allowed): the box's sweeps POST a tick's cost rows with the agent token.
+
   "POST /admin/costs/events": "record_cost",
-  // Registry-classified recurring units use this one agent-tier protocol endpoint for shadow
-  // observation and fenced acquire/heartbeat/release/cancel after the default-off cutover.
+
   "POST /admin/database-admission": "coordinate_database_admission",
-  // The weekly Frontier refresh (E2, the public recommendation machine) — contract-only
-  // oRPC (no TanStack route file; oRPC owns the path). Admin tier (agent-allowed): the
-  // box's `fluncle-frontier-refresh` cron re-mirrors every crew member's playlist with
-  // its agent token. It touches only playlists their owners already minted.
+
   "POST /admin/frontier-playlists/refresh": "refresh_frontier_playlists",
-  // The mint-cover retry drain (E2) — contract-only oRPC (no TanStack route file; oRPC owns the
-  // path). Admin tier (agent-allowed): the box cron + the operator render + upload every owing
-  // Frontier cover IN THE WORKER with the agent token.
+
   "POST /admin/frontier/covers": "upload_frontier_covers",
-  // record_catalogue_snapshot (the catalogue-funnel daily snapshot,
-  // docs/admin-shell.md) is contract-only oRPC — no TanStack route file; oRPC owns the
-  // path directly, like record_health. Admin tier (agent-allowed): the box's funnel-snapshot
-  // cron POSTs a bare trigger with its agent token; the Worker computes + upserts the day's row.
+
   "POST /admin/funnel/snapshot": "record_catalogue_snapshot",
-  // record_health (the public /status dashboard's write) is contract-only oRPC —
-  // no TanStack route file; oRPC owns the path directly, like context_track. Admin
-  // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.
+
   "POST /admin/health": "record_health",
-  // The hub-counts reconciliation sweep (docs/db-scale-backlog Wave 2 keystone 2, slice C) —
-  // contract-only oRPC (no TanStack route file; oRPC owns the path directly, like
-  // record_catalogue_snapshot). Admin tier (agent-allowed): the box's nightly
-  // `fluncle-reconcile-hub-counts` cron POSTs a bare trigger with its agent token and the Worker
-  // corrects the drifted counters in SQL.
+
   "POST /admin/hub-counts/reconcile": "reconcile_hub_counts",
-  // The operator's MINT of a label from its MusicBrainz identity — contract-only oRPC (no
-  // TanStack route file). OPERATOR tier (the `update_label` precedent): bringing a label into the
-  // archive decides what may be crawled and what earns a public page, so the agent token 403s.
-  // Idempotent connect-or-create on the MBID fold; it certifies nothing and rules nothing itself.
+
   "POST /admin/labels": "mint_label",
-  // The label-alias confirm (RFC musickit-second-authority, U2a) — contract-only oRPC. Operator
-  // tier: fold a candidate spelling into the label; the agent token 403s.
+
   "POST /admin/labels/aliases/{id}/confirm": "confirm_label_alias",
-  // The label voiced-bio author (the entity-bio engine) — contract-only oRPC (no TanStack
-  // route file; oRPC owns the path directly). Agent tier: the box's future bio sweep drives
-  // the fill-empty-only write with its agent token, the note_track precedent.
+
   "POST /admin/labels/{slug}/bio": "describe_label",
-  // The label MERGE — fold a losing label into the canonical one (re-point every FK, reconcile
-  // identity + facts). Contract-only oRPC (no TanStack route file). OPERATOR tier (the
-  // `update_label` precedent): collapsing two public entities into one is an editorial act, so
-  // the agent token 403s. Its `merge_` name once bought it an exemption from the "holds exactly"
-  // check (that prefix was allow-listed for the `/me` galaxy-progress merge); splitting the nets by
-  // PATH ended it — a destructive operator op cannot name its way out of this net.
+
   "POST /admin/labels/{slug}/merge": "merge_label",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
-  // The logbook nightly author — contract-only oRPC (no TanStack route file; oRPC owns
-  // the path directly, like note_track). Admin tier (agent-allowed): the on-box
-  // `fluncle-logbook` cron drives the fill-empty-only create with its agent token.
+
   "POST /admin/logbook/{sector}": "create_logbook_entry",
-  // The REF-05 preview-bucket migration — contract-only oRPC (no TanStack route file;
-  // oRPC owns the path directly). Operator tier: a one-off, destructive-capable data
-  // move (it can delete public R2 objects), dry-run by default.
+
   "POST /admin/migrations/preview-archive": "migrate_preview_archive",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
-  // The crew announcement — contract-only oRPC (no TanStack route file; oRPC owns the
-  // path directly). Operator tier: it posts a public Telegram crew callout, so the
-  // agent token 403s.
+
   "POST /admin/mixtapes/{mixtapeId}/announce": "announce_mixtape",
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
-  // The Mixcloud metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
-  // owns the path directly, like resync_mixtape_youtube). Operator tier: re-derives the
-  // live cloudcast's sections[] from the current cues via the Mixcloud edit endpoint.
+
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/resync": "resync_mixtape_mixcloud",
-  // The set-video staging presign (Fluncle Studio Unit A) — contract-only oRPC (no
-  // TanStack route file; oRPC owns the path directly). Operator tier: it opens a
-  // multipart direct-to-R2 upload for the mixtape's `<logId>/set.mp4` rendition.
+
   "POST /admin/mixtapes/{mixtapeId}/set-video/presign": "presign_set_video_upload",
   "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": "finalize_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": "initiate_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/publish": "publish_mixtape_youtube",
-  // The YouTube metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
-  // owns the path directly, like publish_mixtape_youtube). Operator tier: re-derives
-  // the live video's description + chapters from the current cues via videos.update.
+
   "POST /admin/mixtapes/{mixtapeId}/youtube/resync": "resync_mixtape_youtube",
   "POST /admin/newsletter/editions": "create_edition",
   "POST /admin/newsletter/editions/{id}/send": "send_edition",
-  // The operator's ruling on a held auto-note — contract-only oRPC (no TanStack route
-  // file). OPERATOR tier: `accepted` overrules the echo gate and writes the line onto the
-  // finding's public /log page (publish-class), so the agent token 403s. The write takes
-  // the same atomic fill-empty-only predicate as the agent's — it can never clobber an
-  // operator note.
+
   "POST /admin/note-rejections/{id}/resolve": "resolve_note_rejection",
-  // The operator's ruling on a held observation — contract-only oRPC. OPERATOR tier:
-  // `accepted` renders the held script (a Cartesia spend, publish-class), so the agent 403s.
+
   "POST /admin/observation-rejections/{id}/resolve": "resolve_observation_rejection",
   "POST /admin/operation-receipts/inspect": "get_operation_receipt",
   "POST /admin/operation-receipts/reconcile": "reconcile_operation_receipts",
   "POST /admin/operation-receipts/resolve": "resolve_operation_receipt",
-  // The push receipts sweep is a contract-only admin op (no TanStack route file —
-  // the whole devices domain is contract-first oRPC), so it has no file-enumeration
-  // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
-  // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
-  // Contract-only oRPC (no TanStack route file). The operator's lever for forcing one due-work
-  // queue back onto today's order definition; the automatic path is the stored definition version.
+
   "POST /admin/projections/due-work/{workKind}/rekey": "rekey_due_work_queue",
   "POST /admin/projections/{target}/advance": "advance_projection",
-  // Appending a prompt version — an edit, a rollback, or a reset (they are one op, because
-  // the history is append-only). OPERATOR tier: a prompt IS code, so an agent token 403s.
+
   "POST /admin/prompts/{slug}": "update_prompt",
   "POST /admin/push/receipts/sweep": "sweep_push_receipts",
-  // record_platform_stats (the public /reach page's write) is contract-only oRPC —
-  // no TanStack route file; oRPC owns the path directly, like record_health. Admin
-  // tier (agent-allowed): the box's reach cron POSTs a bare trigger with its agent
-  // token, and the Worker fetches every platform + writes the platform_stats snapshot.
+
   "POST /admin/reach/collect": "record_platform_stats",
   "POST /admin/recordings": "create_recording",
-  // create_clip is now recording-scoped (RFC recording-primitive, Design B): the legacy
-  // `POST /admin/mixtapes/{mixtapeId}/clips` path is retired.
+
   "POST /admin/recordings/{recordingId}/clips": "create_clip",
   "POST /admin/recordings/{recordingId}/promote": "promote_recording",
   "POST /admin/recordings/{recordingId}/set-video/presign": "presign_recording_upload",
-  // capture_post_urls — contract-only oRPC (no TanStack route file; oRPC owns the
-  // path directly). A collection-level sweep that recovers the public YouTube/TikTok
-  // post URLs Postiz withholds on create. Admin tier — the on-box capture cron drives
-  // it; it only fills the public url and links the analytics release-id.
-  // record_social_metrics — contract-only oRPC (no TanStack route file; oRPC owns the
-  // path directly). The daily per-post performance snapshot: reads each published post's
-  // Postiz per-post analytics into the append-only social_metrics ledger. Admin tier — the
-  // on-box `fluncle-social-metrics` cron drives it; the Worker holds the Postiz key.
+
   "POST /admin/social/metrics/record": "record_social_metrics",
   "POST /admin/social/posts/capture": "capture_post_urls",
-  // The render → publish auto-advance tick — contract-only oRPC (no TanStack route file).
-  // Admin tier (agent-allowed): the on-box `fluncle-publish-advance` cron triggers it and
-  // the Worker (which holds the Postiz key) does the push.
+
   "POST /admin/social/publish/advance": "advance_publish_queue",
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
-  // triage_submission (the pre-chew verdict write) is contract-only oRPC — no TanStack
-  // route file; oRPC owns the path directly, like note_track. Admin tier (agent-allowed).
+
   "POST /admin/submissions/{submissionId}/triage": "triage_submission",
-  // The cost-ledger create (COST-02) — contract-only oRPC (no TanStack route file). Operator tier.
+
   "POST /admin/subscriptions": "create_subscription",
-  // record_run (the run ledger's write) is contract-only oRPC — no TanStack route file;
-  // oRPC owns the path directly, like record_health. Admin tier (agent-allowed): the box's
-  // `emit_cron_output` wrapper POSTs one envelope per sweep tick with its agent token, and
-  // the Worker DERIVES `ok` and appends to `run_events` in the second telemetry database.
+
   "POST /admin/telemetry/runs": "record_run",
   "POST /admin/tracks": "publish_track",
-  // Capture is an agent-driven, snapshot-bound state machine. The server prepares current
-  // eligibility, owns the external officialness verdict, and commits through an atomic receipt.
-  // The BATCHED phases beside them: one admitted database lease per batch, per-item answers.
+
   "POST /admin/tracks/captures/commit": "commit_track_captures",
   "POST /admin/tracks/captures/prepare": "prepare_track_captures",
   "POST /admin/tracks/embeddings": "update_track_embeddings",
   "POST /admin/tracks/{trackId}/capture/authorize": "authorize_track_capture",
   "POST /admin/tracks/{trackId}/capture/commit": "commit_track_capture",
   "POST /admin/tracks/{trackId}/capture/prepare": "prepare_track_capture",
-  // context_track is served by oRPC at its own path; it has no TanStack route FILE
-  // (oRPC owns the path directly), so it lives here as a path→op entry without a
-  // `tracks.$trackId.context.ts` route file.
+
   "POST /admin/tracks/{trackId}/context": "context_track",
-  // note_track (the auto-note authoring step) is contract-only oRPC like context_track
-  // — no TanStack route file; oRPC owns the path directly.
+
   "POST /admin/tracks/{trackId}/note": "note_track",
   "POST /admin/tracks/{trackId}/observe": "observe_track",
   "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
   "POST /admin/tracks/{trackId}/video/finalize": "finalize_track_video",
-  // purge_video — contract-only oRPC (no TanStack route file; oRPC owns the path
-  // directly, like requeue_video). Operator tier: it acts on a LIVE published video
-  // (purges its edge renditions), so the agent token 403s.
+
   "POST /admin/tracks/{trackId}/video/purge": "purge_video",
-  // requeue_video — contract-only oRPC (no TanStack route file; oRPC owns the path
-  // directly, like context_track/note_track). Operator tier: it clears a LIVE
-  // published video (video_url + video_squared_at), so the agent token 403s.
+
   "POST /admin/tracks/{trackId}/video/requeue": "requeue_video",
   "POST /admin/tracks/{trackId}/video/uploads": "presign_track_video_uploads",
-  // record_live_state (the cross-surface live-set callout's write) is contract-only
-  // oRPC — no TanStack route file; oRPC owns the path directly, like record_health.
-  // Admin tier (agent-allowed): the box's `fluncle-live` poller POSTs the raw Twitch
-  // state with its agent token each minute.
+
   "POST /admin/twitch/live": "record_live_state",
   "POST /admin/youtube/token": "mint_youtube_token",
-  // The Apify anchor-fallback KILL-FLAG (slice 3, default ON) — contract-only oRPC (no TanStack route
-  // file). OPERATOR tier: it arms/disarms the catalogue's paid last-resort spend rail (out of Apify
-  // budget → a clean self-managing state), the `set_capture_budget`/`set_anchor_search` class. Static
-  // `/apify` nests under the `/anchor` POST above.
+
   "PUT /admin/catalogue/anchor/apify": "set_anchor_apify",
   "PUT /admin/catalogue/anchor/apify-budget": "set_anchor_apify_budget",
-  // The DARK flag for slice 2's Spotify anchor-search rungs — contract-only oRPC (no TanStack route
-  // file). OPERATOR tier: it arms the shared official Spotify app (mints/publish) against the
-  // catalogue, the `set_capture_budget` money/rate-judgement class. Static `/search` nests under the
-  // `/anchor` POST above.
+
   "PUT /admin/catalogue/anchor/search": "set_anchor_search",
-  // The catalogue capture budget + its kill switch — contract-only oRPC (no TanStack route
-  // file). OPERATOR tier: it decides how much of the operator's money a metered residential
-  // proxy may spend, so the box's agent token 403s on it (an agent may not raise its own
-  // budget). The read half is `get_capture_budget`, above.
+
   "PUT /admin/catalogue/capture-budget": "set_capture_budget",
-  // The catalogue "not for me" / restore toggle — contract-only oRPC. OPERATOR tier: steering
-  // what the telescope keeps pointing at is a taste ruling (docs/the-ear.md § The operator's
-  // actions), so the box's agent token 403s.
+
   "PUT /admin/catalogue/dismissed": "set_track_dismissed",
-  // The clip drip-feed kill switch — contract-only oRPC (no TanStack route file).
-  // Operator tier: pause/resume every future scheduled Instagram post.
+
   "PUT /admin/clips/drip/state": "set_clip_drip",
-  // The Frontier kill switch — OPERATOR only (the set_capture_budget class:
-  // opening minting grants the machine authority over the operator's Spotify account).
+
   "PUT /admin/frontier/minting": "set_frontier_minting",
-  // The cluster cron's transactional map write (browse-by-feel RFC) — contract-only oRPC
-  // (no TanStack route file). Admin tier (agent-allowed): the Worker mints new galaxy
-  // ids + handles server-side; the box's `fluncle-cluster` cron drives it.
+
   "PUT /admin/galaxies/map": "update_galaxy_map",
-  // Transactionally replace one label's complete artist-rule set. Operator tier.
+
   "PUT /admin/labels/{id}/artists": "replace_label_artist_rules",
-  // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
-  // re-times an existing minted tracklist's start_ms; operator tier.
+
   "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",
-  // The only supported projection-flag writer. Opening is convergence-gated; closing always works.
+
   "PUT /admin/projections/{target}/cutover": "set_projection_cutover",
-  // The PUT shares the `members` file/path with the POST above (append vs replace);
-  // oRPC routes the two methods to distinct ops, so each gets its own entry.
-  // Replace a recording's whole cue set (RFC plan→recording→mixtape §4) — contract-only
-  // oRPC (no TanStack route file; oRPC owns the path directly). Operator tier: the
-  // Wave-3 Rekordbox derivation script PUTs the ordered, finding-resolved cues here.
+
   "PUT /admin/recordings/{recordingId}/cues": "replace_recording_cues",
-  // The render → publish auto-advance KILL SWITCH — contract-only oRPC (no TanStack route
-  // file). Operator tier: pause/resume every future auto-publish, no deploy.
+
   "PUT /admin/social/publish/advance/state": "set_publish_advance",
-  // THE CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) — contract-only oRPC. Operator
-  // tier: the fingerprint gate is precision-over-recall and the operator's ear is the only
-  // thing that outranks it, so the pin is his alone; the agent token 403s.
+
   "PUT /admin/tracks/{trackId}/capture-source": "pin_capture_source",
-  // The tracks-only Sonar switch: first enable is readiness-gated; disable is unconditional.
+
   "PUT /admin/vectors/tracks/serving": "set_vector_serving",
 };
 
-// Routes that stay on TanStack by design (carve-outs), keyed by their TanStack
-// file basename (relative to the admin
-// route dir). NOT counted against coverage — they will never have a contract —
-// but listed so the enumeration is total and a new carve-out is a deliberate edit.
-//
-//   - OAuth browser-redirect callbacks/starts (Spotify / YouTube / Mixcloud, plus the
-//     /reach Tier-2 Twitch / TikTok / Instagram `*/auth/*`): they return 302 redirects,
-//     not RPC JSON. Permanent. (Last.fm's
-//     `auth/start` + `auth/session` are NOT redirects — they return RPC JSON — so
-//     they are CONVERTED, not carved out, in the admin wave.)
-//   - The admin `logout` (GET): a 302 that expires the grant cookie and bounces to
-//     /admin/login. Not RPC JSON, so it stays on TanStack like the OAuth redirects.
-//   - The multipart-FILE route (`preview`): it takes `request.formData()` with a
-//     `File` part. Per the brief, oRPC's multipart-file-body ergonomics on workerd
-//     are not adopted for this pilot — this single irregular route stays on
-//     TanStack, not the model for the wave. CARVED OUT (the decision the brief asks
-//     for at kickoff). (The legacy multipart `…/video.ts` POST that was carved out
-//     alongside it has since been REMOVED — no first-party caller posted a small
-//     multipart bundle; the CLI uses the presign/finalize JSON flow.)
 const ADMIN_CARVE_OUT_ROUTE_PREFIXES = [
   "spotify/auth/",
   "youtube/auth/",
   "mixcloud/auth/",
-  // The /reach Tier-2 OAuth starts + callbacks (docs/reach-tier2-activation.md): 302
-  // browser redirects like the others, not RPC JSON — permanent carve-outs.
+
   "twitch/auth/",
   "instagram/auth/",
-  // TikTok Display-API OAuth (per-video metrics ledger): 302 browser redirects like the
-  // others, not RPC JSON — a permanent carve-out.
+
   "tiktok/auth/",
-  // The CLI → browser handoff (lib/server/oauth-handoff.ts): the Fluncle-origin link a
-  // Bearer-carried connect prints. It answers a 302 to the provider (or to /admin/login),
-  // never RPC JSON — the same permanent carve-out class as the starts and callbacks above.
+
   "oauth/",
 ];
 
 const ADMIN_CARVE_OUT_ROUTES = new Set([
-  "chat", // ChatDnB (spike): streams an AI SDK UIMessage stream from streamText (the `useChat` wire protocol), not a single RPC JSON body — a streaming carve-out like the media proxies.
-  "logout", // a 302 redirect (expire the grant cookie, bounce to /admin/login), not RPC JSON.
-  "tracks.$trackId.preview", // multipart-file body (formData → File).
-  "tracks.$trackId.preview-audio", // a streaming media proxy: streams the archived 30s preview bytes from R2 (private, or the legacy public bucket), not RPC JSON.
-  "tracks.$trackId.silent-clip", // a same-origin download proxy: streams the audio-stripped social cut as an attachment, not RPC JSON.
-  "tracks.$trackId.source-audio", // a streaming media proxy: streams the captured full song from the private R2 bucket, not RPC JSON.
+  "chat",
+  "logout",
+  "tracks.$trackId.preview",
+  "tracks.$trackId.preview-audio",
+  "tracks.$trackId.silent-clip",
+  "tracks.$trackId.source-audio",
 ]);
 
 const ADMIN_DIR = fileURLToPath(new URL("../../routes/api/admin", import.meta.url));
 
-// The admin file-route basenames actually present (one level + nested),
-// excluding the `-`-prefixed non-route helpers and `.test.ts` files. Keeps
-// ADMIN_ROUTE_OPS honest: an admin route file with no entry fails the test.
 function listRouteBasenames(dir: string, prefix = ""): string[] {
   const out: string[] = [];
 
@@ -754,18 +416,10 @@ function isCarvedOut(basename: string): boolean {
   );
 }
 
-// Reduce a documented URL path and a TanStack file basename to the same canonical
-// key — the path segments with all separators and param markers stripped — so
-// `tracks.$trackId.observe` (file) and `/admin/tracks/{trackId}/observe` (path)
-// compare equal. The `admin/` segment is on the file tree but not the path key, so
-// prepend it to the path side.
 function canonical(value: string): string {
   return value.replace(/[./]/g, " ").replace(/[${}]/g, "").trim().split(/\s+/).join("/");
 }
 
-// The line between the two coverage nets. Matched on the segment boundary, not as a
-// bare prefix, so a future `/administration` path lands on the public net rather
-// than silently claiming admin exemption here.
 function isAdminPath(path: string): boolean {
   return path === "/admin" || path.startsWith("/admin/");
 }
@@ -794,7 +448,7 @@ describe("oRPC admin-route contract coverage", () => {
       }
 
       const isConverted = converted.has(op);
-      const isPending = false; // a non-PENDING value is a claim of conversion.
+      const isPending = false;
 
       expect(
         isConverted !== isPending,
@@ -804,13 +458,6 @@ describe("oRPC admin-route contract coverage", () => {
   });
 
   it("the admin registry holds EXACTLY the admin-path ops (no admin op outside the map)", () => {
-    // Every op served off an `/admin` PATH must be a NAMED (non-PENDING) entry here.
-    // Catches an op converted in another file whose route the map didn't record — the
-    // pending list must shrink, by name, as routes convert.
-    //
-    // The split is by the op's DECLARED PATH, never by its name: an op named
-    // `list_catalogue_tracks` or `merge_label` is admin because it is served at
-    // `/admin/...`, and no naming choice can move it out of this net.
     const namedAdminOps = new Set(Object.values(ADMIN_ROUTE_OPS).filter((op) => op !== PENDING));
 
     for (const op of converted) {
@@ -824,7 +471,6 @@ describe("oRPC admin-route contract coverage", () => {
         continue;
       }
 
-      // An admin-path op with no coverage entry slipped into the registry.
       expect.fail(
         `contract op "${op}" (${route.method} ${route.path}) is in the registry but absent from ADMIN_ROUTE_OPS — add its admin route entry`,
       );
@@ -832,9 +478,6 @@ describe("oRPC admin-route contract coverage", () => {
   });
 
   it("every admin map key matches the op's declared route", () => {
-    // The map is keyed by `METHOD /path`. Pin those keys to the contract's own
-    // declaration so a route the op moved can't leave a stale key behind — the map
-    // stays a true index of the admin surface rather than a parallel spelling of it.
     for (const [key, op] of Object.entries(ADMIN_ROUTE_OPS)) {
       if (op === PENDING) {
         continue;
@@ -856,8 +499,6 @@ describe("oRPC admin-route contract coverage", () => {
   });
 
   it("enumerates every admin route file (no undocumented admin routes)", () => {
-    // The path key already starts with `/admin/...`; the file basename is relative
-    // to the admin dir, so prefix it with `admin/` to compare on the same footing.
     const documented = new Set(
       Object.keys(ADMIN_ROUTE_OPS).map((key) => canonical(key.split(" ")[1] ?? key)),
     );
@@ -883,9 +524,6 @@ describe("oRPC admin-route contract coverage", () => {
       );
     }
 
-    // The prefix list was outside this guard, and a stale prefix is the worse half: it
-    // exempts a whole subtree rather than one file, so the next route to land under a
-    // retired OAuth provider's path would be carved out by an entry nobody meant to keep.
     for (const prefix of ADMIN_CARVE_OUT_ROUTE_PREFIXES) {
       expect(
         [...present].some((basename) => basename.startsWith(prefix)),

@@ -10,26 +10,8 @@ import {
   satoriText,
 } from "@/lib/server/satori-render";
 
-// The on-the-fly mixtape cover render, shared by the public cover route
-// (api/mixtape-cover.$logId.ts) and the YouTube finalize (which sets it as the
-// custom thumbnail). Both render IN-PROCESS — the finalize must NOT HTTP-fetch the
-// cover route: a Worker fetching its own origin loops to the SPA fallback (HTML,
-// not the image), so the thumbnail would silently never attach.
-//
-// TYPE: the cover carries only brand marks — `MIXTAPE #N` and the Log ID coordinate — so
-// it is Oxanium throughout, and legitimately so (DESIGN.md §3: Oxanium speaks for the brand
-// and the numbers). No body face is registered here: there is no reading text to set. The
-// One Box Rule is baked into the cuts (lib/server/satori-render.ts).
-
 const BG_BASE = `${FOUND_BASE}/mixtape`;
 
-// `square` (1500²) is the canonical artwork used for the actual distribution
-// uploads (Mixcloud/SoundCloud); never shrink it. `card` and `thumb` are
-// display-only square renditions for the on-site cover slots — both reuse the
-// square background and the same vmin-proportional stamp, so they read identically
-// to `square` at a fraction of the bytes (a 1500² Satori PNG is ~1 MB into a 52px
-// row; a 128² thumb is a few kB). `card` (640²) covers the /log plate at @2x
-// (min(100%, 20rem) = 320px); `thumb` (160²) covers the feed/index rows at @2x.
 const SIZES = {
   card: { background: `${BG_BASE}/bg-square.jpg`, height: 640, width: 640 },
   og: { background: `${BG_BASE}/bg-og.jpg`, height: 630, width: 1200 },
@@ -44,38 +26,25 @@ export function resolveCoverSize(requested: string | null | undefined): MixtapeC
   return (requested && requested in SIZES ? requested : "square") as MixtapeCoverSizeKey;
 }
 
-// One-sun palette. The rendered card has no CSS vars, so the hex is interpolated into
-// the markup — but READ from `@fluncle/tokens` (the generated mirror of DESIGN.md),
-// never hand-copied, so a palette change reaches the card without a manual sweep.
 const COLOR = {
   bg: colors.deepField,
   cream: colors.starlightCream,
 } as const;
 
-/**
- * Render a published/distributing mixtape's cover at the given size, or null if no
- * such mixtape exists. The result is an ImageResponse (a Response) — the route
- * returns it directly; the finalize reads `.arrayBuffer()` for the thumbnail.
- */
 export async function renderMixtapeCover(
   logId: string,
   size: MixtapeCoverSizeKey,
 ): Promise<ImageResponse | null> {
   const { background, height, width } = SIZES[size];
 
-  // getMixtapeForRender (not getMixtapeByLogId) so the cover renders while a
-  // mixtape is still `distributing` — the thumbnail the upload needs.
   const mixtape = await getMixtapeForRender(logId);
 
   if (!mixtape || mixtape.sequenceNumber === undefined) {
     return null;
   }
 
-  // The ground is a flat bundled PNG, so that is the fallback when the response omits a type.
   const bg = await fetchImageDataUri(background, "image/png");
 
-  // Mirror the Remotion composition's lower-band typography (vmin-based), so the
-  // stamped text matches mixtape-cover.tsx at every aspect.
   const vmin = Math.min(width, height) / 100;
   const titleSize = Math.round(6.4 * vmin);
   const coordSize = Math.round(3.4 * vmin);

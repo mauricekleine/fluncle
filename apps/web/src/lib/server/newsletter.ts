@@ -8,25 +8,14 @@ const rateLimitWindowMs = 60 * 60 * 1000;
 const rateLimitMaxAttempts = 5;
 const maxEmailLength = 254;
 
-// The subscribe body is the contract's inferred input (`@fluncle/contracts/orpc`),
-// the single source of truth — no parallel hand-mirror to drift. LOOSE/all-unknown
-// by design; `validateInput` narrows it.
 export type NewsletterInput = NewsletterBody;
 
-// `POST /newsletter` — validate, rate-limit, then add the email to the Fluncle
-// Resend SEGMENT. Resend is the sole list-of-record (no local subscribers table);
-// the endpoint returns a bare `{ ok: true }`. No on-subscribe confirmation
-// transactional: single-opt-in stays (RFC §1 non-goals keep today's posture), and
-// every broadcast carries the managed RFC-8058 unsubscribe.
 export async function subscribeToNewsletter(
   body: NewsletterInput,
   request: Request,
 ): Promise<void> {
   const email = validateInput(body);
 
-  // The shared atomic, DB-backed limiter prevents a per-isolate reset from becoming
-  // no limit at all against an email-bombing flood. Keyed on the signed-in user when present, else
-  // hash(cf-connecting-ip) (never x-forwarded-for, never the User-Agent).
   const publicUser = await getPublicSession(request);
 
   await assertRateLimit({
@@ -48,7 +37,6 @@ function validateInput(body: NewsletterInput): string {
 
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
 
-  // Deliberately loose shape check; Resend validates properly on its side.
   const looksLikeEmail =
     email.length >= 6 &&
     email.length <= maxEmailLength &&

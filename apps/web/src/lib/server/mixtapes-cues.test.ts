@@ -1,16 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMixtapeCues } from "./mixtapes";
 
-// setMixtapeCues' guards (Fluncle Studio Unit D, panel M1) — the hardened
-// post-publish cue backfill. We back getMixtapeById + the member read with a single
-// mutable state and answer each query by its SQL shape (the mixtapes.test.ts
-// precedent), so the four guards are exercised without a real libsql instance:
-//   - it backfills a PUBLISHED mixtape's start_ms (the happy path);
-//   - it rejects a non-member ref;
-//   - it rejects a non-start-at-0 / non-monotonic cue set;
-//   - it rejects an attempt that would change the member set;
-//   - (and it rejects an unminted claim, the inverse of assertUnmintedMixtape).
-
 type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({
@@ -18,8 +8,6 @@ const state = vi.hoisted(() => ({
   row: {} as Row,
 }));
 
-// Capture the writes the backfill batch issues so the happy path can assert the
-// per-member start_ms updates landed.
 const batchCalls = vi.hoisted(() => ({ last: [] as Array<{ args: unknown[]; sql: string }> }));
 
 const execute = vi.hoisted(() =>
@@ -28,7 +16,6 @@ const execute = vi.hoisted(() =>
       return { rows: state.members };
     }
 
-    // getMixtapeById's MIXTAPE_SELECT (or any other read) → the current mixtape row.
     return { rows: [{ member_count: state.members.length, ...state.row }] };
   }),
 );
@@ -91,8 +78,6 @@ describe("setMixtapeCues — post-publish cue backfill", () => {
 
     expect(result.status).toBe("published");
 
-    // One UPDATE per member (start_ms), each keyed by (mixtape_id, track_id), plus
-    // the mixtape updated_at bump.
     const updates = batchCalls.last.filter((s) => s.sql.includes("set start_ms"));
     expect(updates).toHaveLength(3);
     expect(updates.map((s) => s.args)).toEqual([

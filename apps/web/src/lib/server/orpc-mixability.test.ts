@@ -7,13 +7,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The mixability ops driven end-to-end through `handleOrpc` (RFC mixability-engine):
-//   - list_mixable_tracks (GET /tracks/{idOrLogId}/mixable) — public-unauth, the /mix
-//     rail. Passes the exclude/limit through, strips private fields, keeps the reason.
-//   - get_mixable_order (GET /admin/tracks/mixable-order) — admin tier (agent-allowed),
-//     the dream-weaver. Proves the STATIC route wins over /admin/tracks/{trackId}, the
-//     2..64 + Log-ID validation 400s, and the auth tier. Only the DB read is mocked.
-
 const getMixableTracks = vi.fn();
 const getMixableOrder = vi.fn();
 const getMixTracksByTokens = vi.fn();
@@ -29,9 +22,6 @@ vi.mock("./tracks", async (importOriginal) => {
   };
 });
 
-// A `/mix` candidate as `getMixableTracks` now returns it: the lean `MixTrack` DTO (no
-// finding-only or private fields exist on it) plus the reason chip. A CERTIFIED one carries
-// its coordinate; the output schema (`MixCandidateSchema`) drops anything not on this shape.
 const CERTIFIED_ITEM = {
   artists: ["Calibre"],
   certified: true,
@@ -85,10 +75,6 @@ describe("oRPC list_mixable_tracks (GET /tracks/{idOrLogId}/mixable)", () => {
     expect(body.findings[0]?.logId).toBe("004.7.2I");
   });
 
-  // `taste` STILL PARSES AND STILL 200s — it is a documented public parameter and a live `/mix`
-  // link carries it — but under single-probe-on-last the rail's probe is the chain's last track
-  // (`idOrLogId` itself), so an artist seed no longer reaches the rail at all. The seed keeps its
-  // real job on `list_mix_openers`. This pins the backward-compatible wire and the drop together.
   it("passes the exclude through, ignores the taste seed, and clamps the limit in-handler", async () => {
     getMixableTracks.mockResolvedValueOnce([]);
 
@@ -102,13 +88,10 @@ describe("oRPC list_mixable_tracks (GET /tracks/{idOrLogId}/mixable)", () => {
     expect(response?.status).toBe(200);
     expect(getMixableTracks).toHaveBeenCalledWith("004.7.2I", {
       exclude: ["004.7.2I", "011.1.6E"],
-      limit: 32, // clamped to MIXABLE_MAX_LIMIT
+      limit: 32,
     });
   });
 
-  // THE UNLIT RULE, enforced at the wire: an uncertified candidate has no coordinate, and the
-  // lean `MixTrack` shape has nowhere to put one even if a caller tried. `certified: false`
-  // arrives with `logId` absent, so a catalogue row can never be mistaken for a finding.
   it("keeps an uncertified candidate free of a Log ID (the unlit register)", async () => {
     getMixableTracks.mockResolvedValueOnce([
       {
@@ -220,11 +203,6 @@ describe("oRPC get_mixable_order (GET /admin/tracks/mixable-order)", () => {
 });
 
 describe("oRPC list_set_tracks (GET /mix/set-tracks)", () => {
-  // A certified finding is named by its Log ID; an uncertified track by its 22-char Spotify id.
-  // The op parses the `?set=` grammar with the SAME tolerant parseSetParam the /mix loader uses,
-  // hands the clean token list to getMixTracksByTokens, and returns the rows it resolves — in the
-  // order the tokens arrived (a set is a sequence). The DB read is mocked; the handler's job under
-  // test is the parse → resolve → envelope wiring.
   const CERTIFIED = {
     artists: ["Netsky"],
     certified: true,
@@ -247,14 +225,13 @@ describe("oRPC list_set_tracks (GET /mix/set-tracks)", () => {
   const URL_BASE = "https://www.fluncle.com/api/v1/mix/set-tracks";
 
   it("resolves a MIXED certified + uncertified chain in order, no auth needed", async () => {
-    // The resolver preserves token order; the handler returns its rows verbatim.
     getMixTracksByTokens.mockResolvedValueOnce([CERTIFIED, UNCERTIFIED]);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get(`${URL_BASE}?set=004.7.2I,4iV5W9uYEdYUVa79Axb7Rh`));
 
     expect(response?.status).toBe(200);
-    // The parsed token list — a Log ID + a Spotify id — reaches the resolver in order.
+
     expect(getMixTracksByTokens).toHaveBeenCalledWith(["004.7.2I", "4iV5W9uYEdYUVa79Axb7Rh"]);
 
     const body = (await readJson(response)) as {
@@ -266,7 +243,7 @@ describe("oRPC list_set_tracks (GET /mix/set-tracks)", () => {
       "track-rio",
       "4iV5W9uYEdYUVa79Axb7Rh",
     ]);
-    // The unlit register survives the round trip: the uncertified row carries no coordinate.
+
     expect(body.tracks[1]?.certified).toBe(false);
     expect(body.tracks[1]).not.toHaveProperty("logId");
   });
@@ -275,7 +252,7 @@ describe("oRPC list_set_tracks (GET /mix/set-tracks)", () => {
     getMixTracksByTokens.mockResolvedValueOnce([CERTIFIED]);
 
     const { handleOrpc } = await import("./orpc");
-    // "not-a-token" and "zzz" fail both grammars; the repeated Log ID collapses.
+
     await handleOrpc(get(`${URL_BASE}?set=004.7.2I,not-a-token,004.7.2I,zzz`));
 
     expect(getMixTracksByTokens).toHaveBeenCalledWith(["004.7.2I"]);
@@ -284,7 +261,6 @@ describe("oRPC list_set_tracks (GET /mix/set-tracks)", () => {
   it("caps the chain at 32 tokens (MAX_SET_LENGTH), the loader's own guard", async () => {
     getMixTracksByTokens.mockResolvedValueOnce([]);
 
-    // 40 distinct valid 22-char Spotify ids; only the first 32 survive the cap.
     const ids = Array.from({ length: 40 }, (_, i) =>
       `t${String(i).padStart(2, "0")}`.padEnd(22, "x"),
     );

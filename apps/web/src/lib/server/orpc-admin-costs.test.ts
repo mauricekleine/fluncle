@@ -1,12 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
 
-// COST-01 `record_cost` driven end-to-end through `handleOrpc` against
-// `/api/v1/admin/costs/events`, so the REAL admin auth spine runs and only the db
-// is mocked (an emulated append-only table with a UNIQUE id). Proves: agent-tier
-// auth (the box's agent token POSTs; anon 401s), the `{ ok, inserted }` ack, and
-// idempotency THROUGH the endpoint (a re-POST of the same ids inserts zero).
-
 const insertedIds = new Set<string>();
 
 const execute = vi.hoisted(() => vi.fn());
@@ -82,7 +76,7 @@ describe("record_cost — POST /admin/costs/events", () => {
     const response = await handleOrpc(req("/admin/costs/events", "POST", undefined, BATCH));
 
     expect(response?.status).toBe(401);
-    // Nothing reached the ledger.
+
     expect(insertedIds.size).toBe(0);
   });
 });

@@ -8,17 +8,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The admin wave's `admin-mixtapes` parity + auth proof, driven end-to-end
-// through `handleOrpc`. Covers the auth tiers (reads = admin; everything else =
-// operator), the retirement of the draft-authoring ops (create/members/publish/
-// delete no longer exist on the wire — a mixtape is only ever born via
-// `promote_recording`), and the distribution-step validation (mixcloud `url`,
-// youtube `not_distributed`).
-//
-//   - list_mixtapes_admin / get_mixtape_social — admin tier (live `requireAdmin`).
-//   - update + every distribution step — operator tier (live `requireOperator`):
-//     the agent is a 403.
-
 const listMixtapes = vi.fn();
 const updateMixtape = vi.fn();
 const announceMixtape = vi.fn();
@@ -106,7 +95,6 @@ const CLIP = {
   xOffset: 240,
 };
 
-// ── list_mixtapes_admin — admin tier ─────────────────────────────────────────
 describe("oRPC list_mixtapes_admin (GET /admin/mixtapes)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -125,12 +113,6 @@ describe("oRPC list_mixtapes_admin (GET /admin/mixtapes)", () => {
   });
 });
 
-// ── the absent draft-authoring ops ───────────────────────────────────────────
-// A mixtape is only ever born via `promote_recording`: the create/members/publish/delete
-// ops are OFF THE WIRE. `handleOrpc` returns undefined for an
-// unmatched route (it falls through to the file-route router, where none of these
-// paths exist either — returning null), so a null here proves no draft mixtape
-// can be created, seeded, minted, or deleted over HTTP.
 describe("oRPC draft-mixtape ops", () => {
   it("does not match POST /admin/mixtapes", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -166,7 +148,6 @@ describe("oRPC draft-mixtape ops", () => {
   });
 });
 
-// ── get_mixtape_social — admin tier ──────────────────────────────────────────
 describe("oRPC get_mixtape_social (GET .../social)", () => {
   it("lets the AGENT read", async () => {
     listMixtapeSocialPosts.mockResolvedValueOnce([
@@ -187,7 +168,6 @@ describe("oRPC get_mixtape_social (GET .../social)", () => {
   });
 });
 
-// ── announce_mixtape — operator tier + crew-post envelope ────────────────────
 describe("oRPC announce_mixtape (POST .../announce)", () => {
   it("403s the AGENT (it posts to a public channel)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -235,7 +215,6 @@ describe("oRPC announce_mixtape (POST .../announce)", () => {
   });
 });
 
-// ── finalize_mixtape_mixcloud — operator tier + url validation ───────────────
 describe("oRPC finalize_mixtape_mixcloud (POST .../mixcloud/finalize)", () => {
   it("403s the AGENT", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -281,7 +260,6 @@ describe("oRPC finalize_mixtape_mixcloud (POST .../mixcloud/finalize)", () => {
   });
 });
 
-// ── publish_mixtape_youtube — operator tier + distribution gate ──────────────
 describe("oRPC publish_mixtape_youtube (POST .../youtube/publish)", () => {
   it("403s the AGENT", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -306,7 +284,6 @@ describe("oRPC publish_mixtape_youtube (POST .../youtube/publish)", () => {
   });
 });
 
-// ── resync_mixtape_youtube — operator tier + description regeneration ─────────
 describe("oRPC resync_mixtape_youtube (POST .../youtube/resync)", () => {
   it("403s the AGENT (edits live published content)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -364,7 +341,6 @@ describe("oRPC resync_mixtape_youtube (POST .../youtube/resync)", () => {
           return new Response("{}", { status: 200 });
         }
 
-        // videos.list — return the current snippet (title + categoryId must survive).
         return new Response(
           JSON.stringify({
             items: [
@@ -388,8 +364,6 @@ describe("oRPC resync_mixtape_youtube (POST .../youtube/resync)", () => {
         videoId: "vid-1",
       });
 
-      // The update targets the right video and keeps the whole snippet, swapping only
-      // the description for the freshly-derived prose + breadcrumb + chapter block.
       expect(updateBody.id).toBe("vid-1");
       expect(updateBody.snippet?.title).toBe("Set title");
       expect(updateBody.snippet?.categoryId).toBe("10");
@@ -402,7 +376,6 @@ describe("oRPC resync_mixtape_youtube (POST .../youtube/resync)", () => {
   });
 });
 
-// ── resync_mixtape_mixcloud — operator tier + section-only edit ───────────────
 describe("oRPC resync_mixtape_mixcloud (POST .../mixcloud/resync)", () => {
   it("403s the AGENT (edits live published content)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -503,14 +476,10 @@ describe("oRPC resync_mixtape_mixcloud (POST .../mixcloud/resync)", () => {
         url: "https://www.mixcloud.com/fluncle/a-set/",
       });
 
-      // The edit endpoint URL carries the token as a query param (Mixcloud diverges
-      // from Bearer auth) and splices `edit/` after the cloudcast key.
       expect(editUrl).toContain(
         "https://api.mixcloud.com/upload/fluncle/a-set/edit/?access_token=mc-token",
       );
 
-      // ONLY the section fields are posted (no mp3/name/description) — the cued members
-      // in play order, un-cued members omitted, ms → integer seconds, artists joined.
       expect(postedFields).toEqual([
         ["sections-0-artist", "A"],
         ["sections-0-song", "One"],
@@ -525,7 +494,6 @@ describe("oRPC resync_mixtape_mixcloud (POST .../mixcloud/resync)", () => {
   });
 });
 
-// ── Fluncle Studio clips (Unit D): list = admin; create/update/delete = operator ─
 describe("oRPC list_clips (GET /admin/clips)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -546,7 +514,6 @@ describe("oRPC list_clips (GET /admin/clips)", () => {
   });
 });
 
-// create_clip is now recording-scoped (RFC recording-primitive, Design B).
 describe("oRPC create_clip (POST /admin/recordings/{recordingId}/clips)", () => {
   const RECORDING_ID = "rec-1";
 

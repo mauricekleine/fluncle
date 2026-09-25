@@ -65,6 +65,8 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 
 ### API — the public `/api/v1` surface
 
+Cross-origin browser reads are derived from the composed oRPC router: only unauthenticated GET operations receive `Access-Control-Allow-Origin: *`, including error responses and preflights. The matcher excludes `get_replica_token` because it returns a device credential and `get_current_private_user` because a cross-origin request without its session cookie would falsely report no user. An unrecognized path, authenticated operation, or write receives no CORS allowance.
+
 All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertises them.
 
 The oRPC Zod schemas in `packages/contracts/src/orpc` own wire response shapes; `packages/contracts/src/index.ts` derives response DTOs from them with type-only imports so the CLI and Raycast do not load Zod. Request DTOs remain typed send shapes because some boundary schemas deliberately accept `unknown` before server validation. The Go SSH app cannot import the TypeScript package: keep its `submissionRequest` and `newsletterRequest` structs in step when those request shapes change.
@@ -128,6 +130,8 @@ Backfill query controls stay optional strings in the contracts because their han
 | `discovery.cli-installer`   | `/cli/latest.sh`                       | `text/x-shellscript`       | the one-line CLI installer — picks the right `fluncle` binary for the machine off the latest GitHub release and drops it in place | tertiary  |
 
 ### MCP — the Model Context Protocol server
+
+The unauthenticated `search_tracks` MCP tool spends the shared Spotify credential through the same per-IP rate limit as its HTTP counterpart. MCP resources and `get_track` use the same public-record shapers, which exclude private capture and enrichment fields.
 
 The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs), **resources** (the archive as a readable corpus, one URI per coordinate), and **prompts** (Fluncle-voiced starting points). Streamable HTTP, no auth. Resources and prompts are server-MCP only — `navigator.modelContext` (the browser WebMCP surface, `lib/webmcp.ts`) has no resource/prompt primitive, so it mirrors the tool set alone (the browser read path is the `get_track` tool).
 
@@ -412,6 +416,8 @@ A surface is operator/agent-only where its only display weight is `hidden` (`cli
 `hidden` and `pending` are different shapes of "not loud." A `hidden` weight is a **live** surface that one context deliberately doesn't headline (it still probes, still serves, still answers). A surface marked **`pending: true`** is **not live at all yet**: registered (so it is reviewed and one field-flip away) but **DARK everywhere** — `liveSurfaces()` drops it, so every selector (`surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`) and every raw-catalog consumer that reads `liveSurfaces()` (the MCP `get_status` labels, the CLI status labels) skips it. It carries no `/status` probe and no service label, and it stays out of the §2/§3 tables (the parity test skips a `pending` surface) and off the hand-wired menus and crawler maps until it goes live.
 
 Three surfaces sit `pending` today: **`web.mix`** stays dark until the archive's own depth measurement opens the mixability engine to the world; **`web.chat`** and **`web.recommendations`** serve verified crew cohorts while their rollouts run and stay out of public navigation until they open to everyone. Adding the §2/§3 rows is part of each flip, never before it.
+
+The `/mix` gate measures chain depth from the archive's key histogram rather than a raw finding count. The scoring weights express a product choice: harmonic compatibility and phrase, tempo, and energy fit establish a playable shortlist, then sonic taste orders that shortlist. Missing terms never count as zero; the scorer requires enough present evidence to justify a pair, and an out-of-band stored BPM is surfaced as a data problem rather than silently folded again.
 
 Use `pending: true` for a surface awaiting external approval. On approval, remove `pending`, set the final address, and add the §2 and §3 inventory rows in the same change.
 
