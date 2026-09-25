@@ -51,21 +51,10 @@ import {
   type ArtistSocialStatus,
 } from "../artist-review";
 
-// The thin-content gate for artist pages: a `/artist/<slug>` page indexes (and
-// enters the sitemap) only at this many coordinate-bearing findings or more.
-// Below it the page still serves 200 (deep links + link equity) but is
-// `noindex,follow` and stays out of the sitemap. Shared by the route + the
-// sitemap so the gate is defined once (Unit 3, artist-relationship RFC §3).
 export const ARTIST_INDEX_MIN_FINDINGS = 3;
 
-// The platforms allowed onto the public artist page + `sameAs` (any known platform;
-// a row outside this set, or with a `candidate` status, never reaches the page).
 const PUBLIC_SOCIAL_PLATFORMS = new Set<string>(ARTIST_SOCIAL_PLATFORMS);
 
-// The public display order: the artist's own homepage/website FIRST (when one
-// exists), then every other platform alphabetically by key. Homepage leads because
-// it is the artist's canonical front door; the rest read as a plain, predictable
-// A–Z rank rather than a hand-curated hierarchy.
 function compareSocialLinks(left: ArtistSocialLink, right: ArtistSocialLink): number {
   if (left.platform === right.platform) {
     return 0;
@@ -80,41 +69,24 @@ function compareSocialLinks(left: ArtistSocialLink, right: ArtistSocialLink): nu
   return left.platform.localeCompare(right.platform);
 }
 
-/** The canonical artist identity record the pages + JSON-LD read. */
 export type ArtistRecord = {
-  /**
-   * The artist's voiced public bio (the entity sibling of a finding's `note`), or undefined
-   * when none is authored yet. Optional so the many callers that mint a bare `ArtistRecord`
-   * need not carry it; the surfacing PR reads it off `getArtistBySlug`. See lib/server/bio.ts.
-   */
   bio?: string;
-  /**
-   * The artist's Discogs page — a secondary KG anchor for `sameAs`, resolved from a MusicBrainz
-   * url-rel and NEVER guessed from a name. Undefined until the resolver walks one. It is an
-   * identity, not a channel: nothing on the page links to it (the `labels.discogs_label_id`
-   * precedent).
-   */
+
   discogsUrl: string | undefined;
   id: string;
-  /**
-   * The artist's OWN portrait — the owned avatar master (RFC U3b) when resolved, else the raw
-   * Spotify `image_url`, else undefined (a monogram tile / the album-cover fallback covers it).
-   * The entity's `image` in the MusicGroup JSON-LD and the page's og:image, preferred over an
-   * album cover; also the masthead ArtistAvatar's source.
-   */
+
   imageUrl: string | undefined;
-  /** The artist's Last.fm page — the second secondary KG anchor; see `discogsUrl`. */
+
   lastfmUrl: string | undefined;
   mbid: string | undefined;
   name: string;
-  /** The maintained `renderable_track_count`: the page's robots gate, the same one the sitemap reads. */
+
   renderableTrackCount: number;
   slug: string;
   spotifyUrl: string | undefined;
   wikidataQid: string | undefined;
 };
 
-/** A public (auto/confirmed) social link on the artist page + `sameAs`. */
 export type ArtistSocialLink = {
   platform: ArtistSocialPlatform;
   url: string;
@@ -124,22 +96,10 @@ function optionalText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-/**
- * Resolve one artist by its public slug (undefined = no such artist).
- *
- * The RAW resolve: it answers "does this row exist", which is what the operator surfaces ask. A
- * PUBLIC reader asks a narrower question — see {@link getPublicArtistBySlug}.
- */
 export async function getArtistBySlug(slug: string): Promise<ArtistRecord | undefined> {
   return resolveArtistBySlug(slug, "");
 }
 
-/**
- * Resolve one artist for a PUBLIC surface: the row, unless a global `unlisted` rule takes it off
- * the site, in which case this is indistinguishable from a slug that never existed. That is the
- * point — the page 404s down the same path a missing row does, rather than serving a `noindex`
- * shell. The predicate rides the same statement, so the read stays one round trip.
- */
 export async function getPublicArtistBySlug(slug: string): Promise<ArtistRecord | undefined> {
   return resolveArtistBySlug(slug, ` and ${listedArtistWhere()}`);
 }
@@ -166,8 +126,7 @@ async function resolveArtistBySlug(
     bio: optionalText(row["bio"]),
     discogsUrl: optionalText(row["discogs_url"]),
     id: row["id"],
-    // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url — the same
-    // `bestArtistAvatarUrl` ladder the /artists index + the graph chips use.
+
     imageUrl: bestArtistAvatarUrl({
       imageKey: optionalText(row["image_key"]),
       imageState: optionalText(row["image_state"]),
@@ -184,31 +143,6 @@ async function resolveArtistBySlug(
   };
 }
 
-// ── The voiced bio: fill-empty-only write + the worklist (the entity-bio engine) ──────
-//
-// The bio is the entity sibling of a finding's `note`, and it inherits the note's cardinal
-// safety guarantee: the agent NEVER overwrites an existing bio. `fillEmptyArtistBio` is the
-// AGENT-tier fill, where the `and (bio is null or trim(bio) = '')` predicate lives in the SQL
-// (not a JS check-then-act), so an operator bio — or a second agent tick — that lands between
-// the handler's read and this write can never lose the race and be clobbered: the loser
-// matches no row and writes nothing (mirrors `fillEmptyNote` in track-update.ts).
-
-/**
- * Fill an artist's bio ATOMICALLY, only when it is currently empty. The bio + its
- * PROVENANCE (`bio_prompt_version`) + `bio_status = 'resolved'` land in the SAME statement,
- * gated by the fill-empty-only predicate, so the version can never describe a different bio
- * than the one it wrote and an operator bio is never clobbered. Returns whether a row was
- * written (false = a non-empty bio was already there / the entity is gone). `promptVersion`
- * is undefined for an operator-typed bio and null when the sweep fell back to its baked
- * prompt — both store NULL ("no registry prompt wrote this"). The caller has already
- * voice-gated the bio (`gateBioText`).
- *
- * `gateBypass` carries the voice-gate reasons the FINAL-ATTEMPT ACCEPTANCE accepted, when this
- * bio is one that was accepted despite the scan refusing it (./bio-review.ts). It rides the SAME
- * statement as the bio so the review flag can never describe a different paragraph than the one
- * it flagged — and so a later bio that CLEARS the gate wipes the flag by construction rather
- * than by a follow-up nobody remembers to write.
- */
 export async function fillEmptyArtistBio(
   slug: string,
   bio: string,
@@ -245,28 +179,8 @@ export async function fillEmptyArtistBio(
   return (result?.rowsAffected ?? 0) > 0;
 }
 
-/** One row of the bio worklist: an artist with findings but no bio yet. */
 export type EntityBioWorkItem = { id: string; name: string; slug: string };
 
-/**
- * The bio worklist: bio-empty artists whose page is INDEXABLE, oldest-first — the worklist the
- * `describe_artist` cron drains. A bare read (no writes), bounded by `limit`. Two ways in, matching
- * exactly the two ways an `/artist/<slug>` page renders:
- *
- * - a CERTIFIED artist (at least one finding) — the original floor, preserved, so a
- *   certified-but-thin artist never regresses out of the queue; OR
- * - a findings-free CATALOGUE artist whose page clears the thin-content floor
- *   ({@link ARTIST_INDEX_MIN_FINDINGS}) on renderable tracks alone — a crawl-minted page that is
- *   indexable earns a bio too, so it stops showing a bare tracklist with no dossier.
- *
- * Both arms are the shared hub gate (`hubInclusionWhere`, labels.ts) — the STORED
- * `certified_finding_count` / `renderable_track_count` on the artist row, exactly the pair
- * `listArtistSitemapRows` and `/artists` now read. It replaced two correlated per-row subqueries over
- * `track_artists ⋈ tracks ⋈ findings`, the heaviest of the three (the edge table is ~2× `tracks`).
- * Bounding the findings-free arm to the indexable floor caps the Firecrawl + `claude -p` cost — a
- * wide crawl mints thousands of stub artists, and only the ones with a real page should ever enter
- * the sweep.
- */
 export async function listArtistsMissingBio(limit: number): Promise<EntityBioWorkItem[]> {
   const db = await getDb();
 
@@ -276,8 +190,6 @@ export async function listArtistsMissingBio(limit: number): Promise<EntityBioWor
       return [];
     }
 
-    // An unlisted artist has no page, so there is nothing to author a bio for — the filter sits on
-    // the hydration rather than on the promoted queue, which is keyed by subject id alone.
     const result = await db.execute({
       args: page.subjectIds,
       sql: `select id, name, slug from artists
@@ -293,7 +205,6 @@ export async function listArtistsMissingBio(limit: number): Promise<EntityBioWor
     });
   }
 
-  // GOAL H: unchanged generic legacy selector retained behind the default-off cutover flag.
   const result = await db.execute({
     args: [limit],
     sql: `select a.id, a.name, a.slug
@@ -314,12 +225,6 @@ export async function listArtistsMissingBio(limit: number): Promise<EntityBioWor
 
 const PUBLIC_SOCIAL_STATUSES = new Set<string>(["auto", "confirmed"]);
 
-/**
- * The artist's PUBLIC social links — `status IN (auto, confirmed)` only, so a
- * Firecrawl-only `candidate` never reaches the page or the `sameAs` until an
- * operator confirms it (the page-facing trust gate, RFC §2.1). Ordered by the
- * fixed display order; unknown platforms are dropped.
- */
 export async function getPublicArtistSocials(artistId: string): Promise<ArtistSocialLink[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -349,13 +254,6 @@ export async function getPublicArtistSocials(artistId: string): Promise<ArtistSo
   return links.sort(compareSocialLinks);
 }
 
-/**
- * An artist's PUBLIC alternate names, name-sorted — the `alternateName` array the artist page's
- * `MusicGroup` JSON-LD carries (the MusicBrainz identity layer, the label page's `getConfirmedAliasNames`
- * twin). Filters to the trusted, real-name rows: `status in ('auto','confirmed')` (a MusicBrainz-curated
- * or operator-added alias) AND `kind = 'name'` (a "Search hint" is kept in the table but never rendered).
- * Empty for an artist with no such alias — the caller omits the key entirely.
- */
 export async function getPublicArtistAliasNames(artistId: string): Promise<string[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -368,21 +266,6 @@ export async function getPublicArtistAliasNames(artistId: string): Promise<strin
   return typedRows<{ alias: string }>(result.rows).map((row) => row.alias);
 }
 
-/**
- * The name → slug map for a track's artists (via `track_artists`), so the log
- * page can link each artist name to `/artist/<slug>` and stamp the `@id` on the
- * `byArtist` MusicGroup node. Keyed by the NORMALIZED name (`fold`: lowercased,
- * accent-folded, punctuation-collapsed) so a casing/accent/`feat.` drift between
- * the canonical `artists.name` and the `artists_json` display cache the page
- * renders from still resolves — an EXACT-name key silently dropped both the link
- * AND the `@id` on any drift. Lookups (`byArtistNode`, the log link) fold the
- * display name the same way. A name with no resolved entity is simply absent
- * (the link/`@id` degrades to plain text).
- *
- * An UNLISTED artist is absent for the same reason and degrades the same way: the credit is still
- * spoken, it just stops being a link and stops asserting a URL, because there is no page to send
- * anyone to.
- */
 export async function getArtistSlugMap(trackId: string): Promise<Record<string, string>> {
   const db = await getDb();
   const result = await db.execute({
@@ -408,13 +291,6 @@ export async function getArtistSlugMap(trackId: string): Promise<Record<string, 
   return map;
 }
 
-/**
- * The CANONICAL coordinate-bearing finding count for one artist — the pure
- * `track_artists` inner join (NO `artists_json` fallback). It is the artist page's
- * FINDING count (the masthead line, the dossier); the page's `indexable` gate adds
- * the catalogue total to it (findings PLUS renderable catalogue tracks), keyed off the
- * canonical join both sides so an indexable page is never orphaned from the sitemap.
- */
 export async function countArtistFindings(artistId: string): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
@@ -431,21 +307,6 @@ export async function countArtistFindings(artistId: string): Promise<number> {
   return typeof count === "number" ? count : 0;
 }
 
-/**
- * Every ARTIST whose page clears the thin-content floor — findings or no findings. The exact twin
- * of `listAlbumSitemapRows` / `listLabelSitemapRows`: the `/artists` HUB is Fluncle's editorial
- * list (findings-joined, "every artist I've pulled a banger from"), while the SITEMAP is the
- * machine's complete map of pages that exist and may be indexed, so a crawl-minted, findings-free
- * artist with enough catalogue tracks belongs here — orphaning its page from the sitemap would
- * break the same invariant album-entity.md states.
- *
- * The floor is applied in SQL, never in the isolate, and it reads the STORED `renderable_track_count`
- * (keystone 2) — an indexed pre-filter on `artists` rather than a `having` over a grouped scan
- * of `track_artists ⋈ tracks`, the ~2×-`tracks` edge table and the most expensive of the three
- * sitemap walks. The join SURVIVES for the two per-row columns a `<url>` needs and the artist row does
- * not carry: `lastmod` (the freshest certified finding's date, undefined for an artist that carries
- * none — catalogue rows have no `added_at`, and `max` ignores nulls) and the cover.
- */
 export function artistSitemapWindowStatement(minTracks: number, limit: number, afterSlug?: string) {
   const seek = afterSlug === undefined ? "a.slug >= ?" : "a.slug > ?";
 
@@ -515,13 +376,6 @@ export async function listArtistSitemapRows(
   }));
 }
 
-/**
- * The FRESHEST `lastmod` across every indexable `/artist/<slug>` page — the one date the sitemap
- * INDEX needs from this bag. The exact twin of `maxLabelSitemapLastmod` (labels.ts), which carries
- * the reasoning: driven from `findings` outward through indexed lookups (`tracks.track_id` PK →
- * `track_artists.track_id` → `artists.id` PK), so the walk is bounded by the certified corpus and
- * never by `track_artists`, the ~2×-`tracks` edge table the row reader has to group over.
- */
 export async function maxArtistSitemapLastmod(minTracks: number): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -537,20 +391,16 @@ export async function maxArtistSitemapLastmod(minTracks: number): Promise<string
   return typedRows<{ lastmod: string | null }>(result.rows)[0]?.lastmod ?? undefined;
 }
 
-/** An artist tile in the unified `/artists` index — lit (certified) or unlit, one row shape for both. */
 export type ArtistHubEntry = {
-  /** True ⇔ the artist has ≥1 coordinate-bearing finding — the certification light, visual only. */
   certified: boolean;
-  /** The artist's avatar — their OWNED master when resolved, else the raw Spotify profile image
-      (undefined → the tile renders a monogram). */
+
   imageUrl: string | undefined;
   name: string;
   slug: string;
-  /** Renderable tracks credited to the artist — findings plus the quieter rows, the tile's "N tracks". */
+
   trackCount: number;
 };
 
-/** The ARTISTS hub's `?page=N` + A–Z reads, over every floor-clearing artist (certified + catalogue). */
 export const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
   alias: "a",
   entity: "artists a",
@@ -559,7 +409,7 @@ export const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
   idExpr: "a.id",
   mapRow: (row) => ({
     certified: Boolean(row.certified),
-    // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
+
     imageUrl: bestArtistAvatarUrl({
       imageKey: row.image_key ?? null,
       imageState: row.image_state ?? null,
@@ -574,35 +424,21 @@ export const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
   select: `a.name as name, a.image_url as image_url, a.image_key as image_key,
            a.image_state as image_state, a.image_updated_at as image_updated_at`,
   slugExpr: "a.slug",
-  // The one hub whose entity can be hidden independently of its counts: a global `unlisted` rule
-  // takes the artist off the site, so every read compiled from this descriptor — the hub page, the
-  // A–Z lane, the total, the seek boundaries, the MCP browse, the API list — drops it at once.
+
   visibilityWhere: listedArtistWhere("a"),
 };
 
-/** The count of INDEXABLE `/artist/<slug>` pages — the floor-clearing set `listArtistSitemapRows`
-    enumerates, for `/admin/funnel`'s public-surfaces card. Reuses `ARTISTS_HUB_QUERY` (scan + floor). */
 export function countIndexableArtists(): Promise<number> {
   return countIndexableHubEntities(ARTISTS_HUB_QUERY);
 }
 
-/**
- * One numbered page of the unified `/artists` index (the crawlable `?page=N` view) — every artist
- * Fluncle holds, certified and catalogue alike, carrying the A–Z fast lane: each present letter →
- * the page its first artist lands on.
- */
 export function listArtistsHubPage(
   page: number,
   nameFilter?: string,
 ): Promise<CatalogueHubNumberedPage<ArtistHubEntry>> {
-  // A name search hides the A–Z lane (the reader is looking an artist up by name, not browsing the
-  // alphabet), so the letter arm is skipped when a filter is active.
   return listHubPage(ARTISTS_HUB_QUERY, page, !nameFilter, nameFilter);
 }
 
-/** The ARTISTS full A–Z browse — every artist with a page, certified or catalogue-only. */
-// Derives its table + floor from ARTISTS_HUB_QUERY (the web hub's), so the MCP browse and the
-// /artists page can never diverge on which artists exist; only the projection differs (name inline).
 const ARTISTS_BROWSE_QUERY: CatalogueBrowseQuery = {
   alias: ARTISTS_HUB_QUERY.alias,
   entity: ARTISTS_HUB_QUERY.entity,
@@ -618,22 +454,12 @@ export function listArtistsBrowsePage(page: number): Promise<CatalogueBrowsePage
   return listCatalogueBrowsePage(ARTISTS_BROWSE_QUERY, page);
 }
 
-/** An artist chip on a graph page (the label's roster, the album's credits). */
 export type ArtistChip = {
   imageUrl: string | undefined;
   name: string;
   slug: string;
 };
 
-/**
- * Every artist Fluncle has a coordinate-bearing finding from ON one label / ON one album —
- * the artist row that cross-links a graph page back into the artist half of the graph.
- * Alphabetical; an artist appears once however many findings they have here.
- *
- * A chip IS a link, so an unlisted artist has no chip: there is no page to cross-link to.
- *
- * `column` is a CONSTANT from the call sites below (never user input); the id is bound.
- */
 async function listArtistsByEntity(
   column: "tracks.album_id" | "tracks.label_id",
   entityId: string,
@@ -661,7 +487,6 @@ async function listArtistsByEntity(
     name: string;
     slug: string;
   }>(result.rows).map((row) => ({
-    // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
     imageUrl: bestArtistAvatarUrl({
       imageKey: row.image_key,
       imageState: row.image_state,
@@ -681,18 +506,6 @@ export async function listArtistsByAlbum(albumId: string): Promise<ArtistChip[]>
   return listArtistsByEntity("tracks.album_id", albumId);
 }
 
-// ── THE PUBLIC CATALOGUE LIST/GET API OPS (list_artists / get_artist) ─────────────────────
-//
-// The artist twin of the label/album API ops (read labels.ts for the shared shape): the list is
-// the SAME unified `/artists` index the web page serves — built on the shared `listHubPage` off
-// `ARTISTS_HUB_QUERY`, so the API list, the web hub, and the MCP browse can never disagree on which
-// artists exist. The artist hub tile projects the AVATAR; the API row carries `spotifyUrl` instead
-// (the shape the CLI + SSH consume), plus the `findingCount` the tile omits — both fetched for the
-// page's ≤48 slugs. `get_artist` resolves ANY artist that has a page (below-floor artists render on
-// `/artist/<slug>` too, just noindex).
-
-/** Spotify profile URLs for a BOUNDED set of artist slugs — the ONE column `list_artists` carries
- *  that the artist hub tile does not (the tile projects the avatar; the API row carries spotify). */
 async function artistSpotifyUrlsBySlug(slugs: string[]): Promise<Map<string, string>> {
   if (slugs.length === 0) {
     return new Map();
@@ -716,12 +529,6 @@ async function artistSpotifyUrlsBySlug(slugs: string[]): Promise<Map<string, str
   return map;
 }
 
-/**
- * One alphabetical page of the unified `/artists` index over the API — the `list_artists` read: the
- * SAME floor-clearing set the `/artists` web page and the MCP browse serve (all three off
- * `hubInclusionWhere`). Reuses the hub reader for the page + pager, and stamps each row's
- * `spotifyUrl` + `findingCount` from bounded per-page reads over the same `artists` rows.
- */
 export async function listArtistsApiPage(page: number): Promise<CatalogueListPage<ArtistListItem>> {
   const hub = await listHubPage(ARTISTS_HUB_QUERY, page, false);
   const slugs = hub.items.map((item) => item.slug);
@@ -745,14 +552,6 @@ export async function listArtistsApiPage(page: number): Promise<CatalogueListPag
   };
 }
 
-/**
- * Look up one artist by slug for the public API — the `get_artist` read. Resolves ANY artist that
- * has a page (a below-floor, crawled artist the browse index omits still renders on `/artist/<slug>`,
- * just noindex), so get is intentionally wider than the list. Counts come from `hubCountsBySlug`
- * (the same aggregates the hub gate uses), so a certified artist's list row and get read agree.
- * Undefined when no artist carries the slug, and equally when a global `unlisted` rule takes that
- * artist off the site — the caller turns either into a 404, which is the whole point.
- */
 export async function getArtistListItemBySlug(slug: string): Promise<ArtistListItem | undefined> {
   const record = await getPublicArtistBySlug(slug);
 
@@ -772,21 +571,6 @@ export async function getArtistListItemBySlug(slug: string): Promise<ArtistListI
   };
 }
 
-// ── THE MULTI-ARTIST "SOUNDS LIKE THESE" READ (list_similar_artists + the /artists results view) ──
-//
-// Given a handful of artist slugs, the artists sitting sonically nearest to their AVERAGE position in
-// MuQ space — the "sounds like these" compare on /artists. The vector math + the exact
-// `vector_distance_cos` scan live in `listSimilarArtistNeighbours` (artist-dossier.ts); these two
-// projections add the counts the two consumers need, off the SHARED hub gate so `certified` /
-// `trackCount` / `findingCount` agree with everything else on the page. Both fetch counts for the
-// ≤12 result slugs in ONE indexed read (`hubCountsBySlugs`), never a round trip per neighbour.
-
-/**
- * The "sounds like these" results as HUB TILES — the shape the `/artists` results view renders, so it
- * reuses the exact hub tile treatment (a certified neighbour's name lit, an uncertified one plain —
- * DESIGN.md's Unlit Rule). `certified` + `trackCount` ride the shared gate. Empty when no selected
- * slug resolves to a stored centroid (nothing to rank from).
- */
 export async function listSimilarArtistTiles(slugs: string[]): Promise<ArtistHubEntry[]> {
   const neighbours = await listSimilarArtistNeighbours(slugs, SIMILAR_ARTISTS_LIMIT);
 
@@ -812,12 +596,6 @@ export async function listSimilarArtistTiles(slugs: string[]): Promise<ArtistHub
   });
 }
 
-/**
- * The "sounds like these" results as public API rows — the `list_similar_artists` op's shape (the
- * same `ArtistListItem` the list/get ops emit). Carries `findingCount` + `spotifyUrl` alongside the
- * shared-gate `certified` + `trackCount`, both fetched for the ≤12 result slugs in bounded reads.
- * Empty when no selected slug resolves to a stored centroid.
- */
 export async function listSimilarArtistsApi(slugs: string[]): Promise<ArtistListItem[]> {
   const neighbours = await listSimilarArtistNeighbours(slugs, SIMILAR_ARTISTS_LIMIT);
 
@@ -845,11 +623,6 @@ export async function listSimilarArtistsApi(slugs: string[]): Promise<ArtistList
   });
 }
 
-/**
- * The display NAMES for a bounded set of artist slugs, returned in the GIVEN slug order (an unknown
- * slug is dropped) — the "sounds like these" results view names its anchors from this ("Closest in
- * sound to X and Y."). One indexed `slug in (…)` read over the ≤6 compared slugs.
- */
 export async function artistNamesBySlugs(slugs: string[]): Promise<string[]> {
   if (slugs.length === 0) {
     return [];
@@ -876,30 +649,19 @@ export async function artistNamesBySlugs(slugs: string[]): Promise<string[]> {
 
 export { parseArtistsJson } from "./artist-names";
 
-// ── Artist entity ────────────────────────────────────────────────────────────
-// A canonical artist slug: real-name kebab-cased, lowercase, diacritics stripped,
-// only [a-z0-9-] characters. Empty result falls back to the first 8 chars of the
-// artist's surrogate id at call-site (the caller supplies the fallback).
 export function toArtistSlug(name: string): string {
   return name
     .normalize("NFD")
-    .replace(/\p{M}/gu, "") // strip diacritics (Unicode category Mn/Mc/Me)
+    .replace(/\p{M}/gu, "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-") // any run of non-alnum → single hyphen
-    .replace(/^-+|-+$/g, ""); // trim leading/trailing hyphens
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
-// Mint a unique slug for an artist name by checking the `artists` table for
-// collisions. Tries the base slug first, then `{base}-2` … `{base}-64`, then
-// falls back to `{base}-{id[:8]}` (guaranteed unique since id is a fresh UUID).
-// The collision check is done against the DB, so concurrent inserts on the same
-// name can still collide at the unique constraint level — callers should handle
-// that via an upsert.
 async function mintArtistSlug(id: string, name: string): Promise<string> {
   const db = await getDb();
   const base = toArtistSlug(name) || id.slice(0, 8);
 
-  // Try the base slug first.
   const first = await db.execute({
     args: [base],
     sql: `select 1 from artists where slug = ? limit 1`,
@@ -909,7 +671,6 @@ async function mintArtistSlug(id: string, name: string): Promise<string> {
     return base;
   }
 
-  // Try salt-suffixed variants.
   for (let i = 2; i <= 64; i++) {
     const candidate = `${base}-${i}`;
     const clash = await db.execute({
@@ -922,90 +683,11 @@ async function mintArtistSlug(id: string, name: string): Promise<string> {
     }
   }
 
-  // Final fallback: base + first 8 chars of the surrogate id (unique by construction).
   return `${base}-${id.slice(0, 8)}`;
 }
 
-/**
- * THE LINK STEP — the crawled half of the `track ↔ artist` edge, and the third member of a
- * family: `album_id` and `label_id` already work exactly this way (docs/album-entity.md).
- *
- *   MINT an entity only off a CERTIFIED FINDING, then LINK every track — certified or not —
- *   whose entity already has a row.
- *
- * `upsertTrackArtists` below is the MINT half, and it runs off Spotify artist IDs at publish.
- * A CRAWLED track has no Spotify anchor when it lands, so it got no `track_artists` row at all,
- * and its artist was therefore reachable only through the raw `artists_json` names. That was
- * fine while nothing asked the question — and it stopped being fine the moment `/artist/<slug>`
- * had to show the rest of an artist's catalogue, because answering THAT through `artists_json`
- * is a full scan of a table with no bound on its growth (AGENTS.md forbids exactly this).
- *
- * So: match a track's credited names against the artists Fluncle has ALREADY certified, and
- * stamp the edge. The bound survives — an artist Fluncle has never found a banger from still
- * has no entity, no page, and no row here, precisely as an album he has never touched has none.
- * What this earns is the artist he HAS certified: their crawled catalogue becomes reachable by
- * an INDEXED SEEK (`track_artists_artist_id_idx`) at any catalogue size.
- *
- * What it deliberately does NOT do is make a catalogue track countable as a finding. Every read
- * that means "finding" inner-joins `findings … log_id is not null` (`countArtistFindings`,
- * `listArtists`, `listArtistsByLabel`, the sitemap, the `/artists` index), so a link added here
- * moves none of them. `artists.test.ts` pins that: the counts are byte-identical before and
- * after a catalogue link lands.
- *
- * Idempotent (the composite PK absorbs a re-run), and bounded per call. `trackIds` scopes it to
- * a just-written batch — how the crawler calls it, per release, so the edge is live within the
- * tick rather than only after the next deploy's reconcile.
- *
- * ── SCOPED, AND NOW REQUIRED ─────────────────────────────────────────────────────────────────
- * `trackIds` is required; the unscoped form would link the WHOLE corpus in one
- * statement. Nothing called it that way (the crawler and the freshness tap both pass their
- * just-written batch), and the maintained artists hub counts (keystone 2) cannot be moved off an
- * unbounded write without dragging every new edge through the isolate — the shape AGENTS.md
- * forbids. So the argument is now required and the whole-corpus reconcile lives where it always
- * belonged: `scripts/backfill-artist-links.ts`, an operator one-off.
- *
- * ── THE COUNT DELTA ──────────────────────────────────────────────────────────────────────────
- * `RETURNING` carries the ACTUAL new `(track, artist)` edges and each source track's
- * `is_catalogue` flag out of `insert or ignore` (the returned-row count is the portable count;
- * local libSQL reports zero `rowsAffected` for data-returning statements). The per-artist deltas
- * and rank re-stales then ride the same explicit write transaction. There is one artist-resolution
- * pass, no predictive copy of the full selection, and an ignored duplicate can move neither
- * downstream projection.
- *
- * ── THE HOMONYM SEAL (`creditMbids`) ─────────────────────────────────────────────────────────
- * A bare name is not an identity. Folding one onto an `artists` row is how TWO real-world acts
- * that share a name end up on ONE Fluncle row — the CONFLATION class (docs/artist-relationship.md
- * § Conflated entities). Of 225 edges joining a namesake-walked
- * label's tracks to an artist that also holds clean enabled-label tracks, 181 were written by THIS
- * function's name join and only 15 by the mbid-keyed credit sweep, which refuses them by design.
- *
- * The crawler HAS each credit's MusicBrainz artist id in hand when it writes the track (it is
- * already collecting them for the artist hop) and passes them
- * as `creditMbids` — per track, positionally aligned with `artists_json` — and this function
- * applies the SAME ladder `backfill-artist-credits.ts` ratified for the credit sweep:
- *
- *   1. an `artists` row carrying that exact `mbid` → link it (identity-true);
- *   2. no such row → the name fold may link, but ONLY to a row whose OWN `mbid` is null (an
- *      identity nobody has claimed yet);
- *   3. a name-folded row already carrying a DIFFERENT `mbid` → NO EDGE. It is a homonym, and a
- *      wrong merge of two artists is unrecoverable (there is no artist merge op) while a missing
- *      edge is not. Fail closed, exactly as rung 2 of `createCreditResolver` does.
- *
- * Minting stays out of scope here (this function has never minted); an unclaimed MB identity is
- * the credit sweep's job. `creditMbids` is OPTIONAL and the SQL is byte-identical without it, so
- * the Spotify-sourced freshness tap (`label-releases.ts`, which has no MB ids to give) keeps its
- * exact behaviour and only the MusicBrainz-sourced crawler gains the rail.
- */
 export type CreditMbidsByTrack = ReadonlyMap<string, ReadonlyArray<null | string>>;
 
-/**
- * The `(track_id, position, mbid)` triples the seal binds, as ONE JSON argument.
- *
- * One bound arg rather than 3-per-credit placeholders: a caller may pass a couple of hundred track
- * ids, and 3 × credits × tracks would crowd libSQL's per-statement variable ceiling. Only credits
- * that actually carry an mbid become a triple — a null one is simply absent, which the `left join`
- * reads as "no identity for this credit" and falls through to the plain name fold.
- */
 export function creditMbidTriples(
   trackIds: readonly string[],
   creditMbids: CreditMbidsByTrack,
@@ -1036,20 +718,6 @@ type ArtistLinkStatement = {
   sql: string;
 };
 
-/**
- * Build the one artist-edge insertion statement for a requested track batch.
- *
- * `requested_credit` is deliberately MATERIALIZED: JSON expansion is bounded by and performed
- * once for `trackIds`, then the identity ladder branches over that small relation. The growing
- * `artists` table is never joined through `CASE` or `OR`: exact identity, anonymous-name fold, and
- * identified-name fallback are separate sargable branches. That leaves `artists_mbid_idx` and
- * `artists_name_nocase_idx` available to the planner independently.
- *
- * The anti-join preserves the first position when one real artist appears more than once on a
- * track without adding a temporary group sort. `RETURNING` reports only rows the composite key
- * really accepted; its primary-key lookup back to `tracks` carries the maintained-count
- * discriminator without repeating resolution.
- */
 export function buildArtistLinkStatement(
   trackIds: readonly string[],
   creditMbids?: CreditMbidsByTrack,
@@ -1211,21 +879,6 @@ export async function linkTracksToArtistEntities(
   }
 }
 
-/**
- * Stamp `track_artists.role = 'remixer'` for the remixer(s) a track's TITLE names, over a batch of
- * track ids (RFC label-lineage-remixer, U2). Fill-empty-only (`role is null`) and idempotent — a
- * re-run over already-stamped rows touches nothing, and it never DOWNGRADES a role. Derivation is
- * `deriveRemixerNames` (track-match.ts), the same pure function the JSON-LD emit reads, so the
- * column and the markup agree by construction.
- *
- * Runs after the track_artists edge is minted — from the publish path (`upsertTrackArtists`), the
- * crawler (`linkTracksToArtistEntities`), and the Spotify-anchor step — plus the deploy backfill
- * (`scripts/backfill-remixer-roles.ts`) for history. It reads the title + credited names off the
- * `tracks` row itself, so no caller threads the title through. NEVER guesses beyond an exact fold
- * match: a remixer with no linked `artists` row (uncertified) leaves no row to stamp. Returns the
- * count of rows stamped. Best-effort by contract — the callers wrap it so a failure never blocks
- * the write it follows.
- */
 export async function stampRemixerRoles(
   trackIds: string[],
   client?: Pick<Client, "batch" | "execute">,
@@ -1237,9 +890,6 @@ export async function stampRemixerRoles(
   const db = client ?? (await getDb());
   const placeholders = trackIds.map(() => "?").join(", ");
 
-  // One read: every UNSTAMPED (track, linked-artist) edge in the batch, carrying the track's title
-  // + `artists_json` so the derivation runs per track without a second query. Bounded by the batch
-  // (a crawler release is a handful of tracks; the publish path passes one).
   const rows = typedRows<{
     artist_id: string;
     artist_name: string;
@@ -1318,28 +968,6 @@ export async function stampRemixerRoles(
   return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
 }
 
-// Upsert artists + track_artists for a track that was just inserted. Called at
-// ingest (publish path), by the crawler's Spotify-anchor step, and by the backfill.
-// Idempotent: existing artist rows are matched by `spotify_artist_id` and their
-// `name` + `updated_at` are updated if the name changed; `track_artists` rows are
-// matched by the composite PK (track_id, artist_id). Silently no-ops when
-// `artistNames` is empty (a track with no parseable artist data, or a dry-run caller).
-//
-// `options.fillImages` (default true) controls the best-effort Spotify avatar fetch. The
-// publish path leaves it on so a freshly-logged artist has its avatar the moment its page can
-// be seen. The CRAWLER passes `false` and lets the batched `backfill-artist-images` sweep (the
-// `fluncle-artist-sweep` cron) fill its avatar in one call per 50 ids — per-track avatar calls at
-// crawl time would be uncounted Spotify load (outside the anchor breaker) for one image, spent on
-// the hot path. The graph edge is written either way; only the avatar fetch defers to the sweep.
-//
-// ── THE MAINTAINED ARTISTS HUB COUNTS (keystone 2) ───────────────────────────────────────────
-// A NEW `track_artists` row moves the credited artist's counters; a re-upsert of an edge that
-// already exists must move nothing. The upsert itself CANNOT tell those apart: `on conflict … do
-// update set position` reports `rowsAffected = 1` for the conflict case too (verified against the
-// libSQL client). So this reads the edges the track already holds — bounded, one to a handful of
-// rows — and the track's certification once, then diffs. `connectAnchorArtists` (anchor.ts) calls
-// this on tracks that are ALREADY certified, which is exactly the case the certified half has to
-// catch. See lib/server/hub-counts.ts.
 async function resolveTrackArtist(
   db: Awaited<ReturnType<typeof getDb>>,
   name: string,
@@ -1453,8 +1081,7 @@ export async function upsertTrackArtists(
     is_catalogue: bigint | number;
     is_rankable: bigint | number;
   }>(trackRow.rows)[0];
-  // No `tracks` row means no edge worth counting — the upsert still runs (it always has), the
-  // counters simply do not move.
+
   const edgeDelta: HubCountArtistDelta | undefined =
     catalogueFlag === undefined
       ? undefined
@@ -1463,8 +1090,7 @@ export async function upsertTrackArtists(
           rankable: Number(catalogueFlag.is_rankable) === 1 ? 1 : 0,
           renderable: 1,
         };
-  // Whether this call GENUINELY creates a `track_artists` edge — the trigger for the first-order rank
-  // re-stale a catalogue row owes The Ear (RFC artist-primary-capture; catalogue-rank-restale.ts).
+
   let anyNewEdge = false;
 
   for (let i = 0; i < artistNames.length; i++) {
@@ -1478,12 +1104,9 @@ export async function upsertTrackArtists(
 
     const artistId = await resolveTrackArtist(db, name, spotifyArtistId, nowIso);
 
-    // --- Upsert track_artists (+ the hub-count delta, when the edge is genuinely new) ---
     const isNewEdge = !held.has(artistId);
 
     if (isNewEdge) {
-      // Guard against a track that credits the same artist twice — the composite PK stores one
-      // row, so only the first occurrence may move the counters.
       held.add(artistId);
       anyNewEdge = true;
     }
@@ -1518,11 +1141,6 @@ export async function upsertTrackArtists(
     );
   }
 
-  // A genuinely-new edge on a CATALOGUE row changes what artist it credits, so its authorization
-  // answer may have moved — re-stale it for the next `rank_catalogue` tick (the fingerprint's
-  // qualified-set size stays put here, since this connects to an already-resolved artist). The
-  // helper's SQL is `is_catalogue = 1`-guarded, and the flag check skips the write for a certified
-  // (finding) track, which carries no rank corpus.
   if (anyNewEdge && catalogueFlag !== undefined && Number(catalogueFlag.is_catalogue) === 1) {
     await batchDueWorkSourceMutation(
       db,
@@ -1535,10 +1153,6 @@ export async function upsertTrackArtists(
     );
   }
 
-  // Fill the canonical Spotify avatar for any of this track's artists that lacks one
-  // (a freshly-minted artist always does). Best-effort: a Spotify hiccup must never
-  // block the fast synchronous add — the image backfill sweeps up anything missed. The
-  // crawler opts out (`fillImages: false`); its artists' avatars are filled by the sweep.
   if (options?.fillImages ?? true) {
     try {
       await fillMissingArtistImages(spotifyArtistIds);
@@ -1548,34 +1162,9 @@ export async function upsertTrackArtists(
   }
 }
 
-/**
- * MINT a fresh artist row keyed on a MusicBrainz artist id — the identity-true mint the MB credit
- * sweep (`backfill_artist_credits`, RFC artist-primary-capture slice 1b) reaches for LAST, after the
- * sweep has ruled out both an exact-mbid match AND an unambiguous name ADOPT (see the resolver in
- * `backfill-artist-credits.ts`). It is the SIBLING of `upsertTrackArtists`'s mint block above and
- * shares its slug primitive (`mintArtistSlug`), but keys on a DIFFERENT identity: a real MB artist
- * id, not a Spotify id or a bare name. That distinction is the whole licence to mint — the slice-0
- * backfill mints NOTHING because a bare name is not enough identity to create an entity, whereas an
- * MB artist id IS identity (a curated, dereferenceable MBID), so a row born from one is honest.
- *
- * WHY A DEDICATED HELPER, not `upsertTrackArtists`: that path resolves by `spotify_artist_id`/name
- * and fires a best-effort Spotify avatar fetch per call — neither fits an mbid-keyed catalogue-graph
- * fill (the avatar is the `backfill-artist-images` sweep's job). There is NO pre-existing mbid mint
- * path to reuse — `artists.mbid` is only ever set today by `artist-resolution.ts` as a `coalesce`
- * UPDATE on an already-existing certified artist, never at CREATE. So this is the one canonical mbid
- * mint, colocated with its Spotify twin. Returns the new artist id. Writes identity only — no edge,
- * no avatar, no certification.
- */
 export async function mintArtistByMbid(name: string, mbid: string): Promise<string> {
   const db = await getDb();
 
-  // `mintArtistSlug` is check-THEN-insert, so a concurrent writer (the Worker's Spotify-keyed
-  // mint at publish/anchor, or an overlapping sweep tick) can claim the probed slug between the
-  // probe and this insert — the Sentry-observed `UNIQUE constraint failed: artists.slug`
-  // (FLUNCLE-WORKER-13). On that conflict, the ORDER of recovery is the identity law: if the race
-  // twin minted the SAME artist (this mbid), ADOPT its row — salting a fresh slug there would mint
-  // the split-identity duplicate the adopt rung exists to prevent. Only a genuinely different
-  // artist sharing the name-fold earns a re-probe (which now sees the winner and salts).
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const newId = randomUUID();
     const slug = await mintArtistSlug(newId, name);
@@ -1613,21 +1202,9 @@ export async function mintArtistByMbid(name: string, mbid: string): Promise<stri
     }
   }
 
-  // Three probes lost three races on the same fold — something is systemically wrong; surface it.
   throw new Error(`mintArtistByMbid: slug contention for "${name}" persisted across retries`);
 }
 
-/**
- * ADOPT a MusicBrainz artist id onto an EXISTING artist row that has none — the rung the MB credit
- * sweep takes when a credited name folds UNAMBIGUOUSLY onto an artist Fluncle already holds (a
- * Spotify-keyed row minted at publish/anchor, `mbid` still NULL) but which slice 0 could not link
- * because it lived inside a compound credit string ("Sub Focus & Dimension"). Adopting instead of
- * minting is what stops this sweep becoming a mass generator of split-identity duplicates (the class
- * the label-merge op cleans for labels — artists have no merge op at all). NON-CLOBBERING via
- * `coalesce` + a `mbid is null` guard (never overwrite an mbid already there — a wrong merge is
- * unrecoverable), the `artist-resolution.ts` precedent; bumps `updated_at` because a resolved MBID is
- * a public identity fact (it feeds the artist page's `sameAs` / KG anchor).
- */
 export async function adoptArtistMbid(artistId: string, mbid: string): Promise<void> {
   const db = await getDb();
   const nowIso = new Date().toISOString();
@@ -1639,13 +1216,6 @@ export async function adoptArtistMbid(artistId: string, mbid: string): Promise<v
   });
 }
 
-/**
- * Fill `artists.image_url` for the given Spotify artist ids that still lack an image.
- * Only pending null-image rows are fetched (one Spotify `/v1/artists/{id}` call each), so a
- * repeat over already-imaged artists costs a single indexed read and no API call —
- * and a terminal `image_state='none'` verdict is never reopened by a later track
- * upsert. Returns how many rows were newly filled.
- */
 export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promise<number> {
   const ids = [...new Set(spotifyArtistIds.filter((id): id is string => Boolean(id)))];
 
@@ -1699,10 +1269,6 @@ export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promi
   return filled;
 }
 
-// ── The identity graph: artist_socials (Unit 5) ──────────────────────────────
-
-// Narrow an `unknown` DB cell to a string (a non-string — NULL, number — becomes ""),
-// so the row mappers never `String()` an object (oxlint's no-base-to-string).
 function textOf(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -1713,9 +1279,6 @@ function isArtistSocialPlatform(value: string): value is ArtistSocialPlatform {
   return KNOWN_PLATFORMS.has(value);
 }
 
-// Map a raw DB row to a typed `ArtistSocial`. Platform/status/source are validated
-// against their enums; an unknown value is coerced to a safe default so a malformed
-// row never crashes the queue (it just reads oddly, which the operator can fix).
 function toArtistSocial(row: Record<string, unknown>): ArtistSocial {
   const platform = typeof row["platform"] === "string" ? row["platform"] : "homepage";
   const status = typeof row["status"] === "string" ? row["status"] : "candidate";
@@ -1739,17 +1302,6 @@ function toArtistSocial(row: Record<string, unknown>): ArtistSocial {
   };
 }
 
-/**
- * The `/admin/artists` review queue: every artist that still has a `candidate` social
- * to confirm. Each artist carries ALL its socials so the operator sees the whole
- * identity graph in one card. Bounded so a huge archive never blows the payload; the
- * queue is small by construction (most socials arrive `auto` from MusicBrainz — the
- * RFC's design note).
- *
- * `fresh` widens the narrowing to the board's fresh-links rule (`reviewed_at IS NULL`),
- * so an artist whose only fresh links are trusted `auto` rows — no candidate anywhere —
- * still surfaces. The default stays candidate-only for the /admin attention count.
- */
 export async function listArtistSocialsQueue(
   limit = 100,
   fresh = false,
@@ -1794,34 +1346,19 @@ export async function listArtistSocialsQueue(
   return [...byArtist.values()];
 }
 
-// ── The `/admin/artists` board reads (paginated) ────────────────────────────────────────────
-// The board is ONE bounded page query — every artist × every social row, a correlated
-// 3-table finding-count scalar subquery re-run PER OUTPUT ROW, ordered so the whole result had to
-// materialise and sort, serialized whole into the SSR document and refetched whole on every focus.
-// The crawler mints artists without end, so that read grew without bound (measured: a 24.8 MB SSR
-// document). It is replaced by three bounded shapes: a keyset PAGE read (`listArtistsPage`), the
-// server-side FRESH-LINKS work queue (`listFreshLinks`), and a shared HYDRATE step that attaches
-// socials + a GROUPED (once-per-page, never per-row) finding count. A socialless artist still
-// lists so a link can be added; the finding count survives as a per-artist number.
-
-/** One page of the board — a bounded slice of the name-sorted artist list. */
 export type ArtistsPage = {
   items: ArtistOverviewItem[];
-  /** Opaque keyset cursor for the next page, or null at the end. */
+
   nextCursor: string | null;
-  /** Total artists matching the (optional) search — the board's honest header count. */
+
   totalCount: number;
 };
 
-/** The board's page read query: a keyset slice by (name, id), optionally name-filtered. */
 export type ArtistsPageQuery = { cursor?: string; limit?: number; search?: string };
 
 const ARTISTS_PAGE_SIZE = 50;
 const ARTISTS_PAGE_MAX = 100;
 
-// The (name, id) keyset cursor. It never rides a URL — it lives in the react-query key + the
-// serverFn body — so a plain separator-joined string is enough; the id is a UUID (no separator),
-// so `lastIndexOf` recovers the split even if a name somehow carried the separator character.
 const ARTIST_CURSOR_SEP = "\u0000";
 function encodeArtistCursor(name: string, id: string): string {
   return `${name}${ARTIST_CURSOR_SEP}${id}`;
@@ -1837,13 +1374,10 @@ function decodeArtistCursor(cursor: string | undefined): { id: string; name: str
   return { id: cursor.slice(at + 1), name: cursor.slice(0, at) };
 }
 
-// Escape LIKE metacharacters so a typed name matches as a literal substring
-// `includes`), not as a pattern — used with `like ? escape '\'`.
 function likeContains(term: string): string {
   return `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
 }
 
-/** The base artist columns the board hydrates from — one row per artist, before socials/counts. */
 type ArtistOverviewBase = { id: string; name: string; slug: string; spotifyUrl: string | null };
 
 function toOverviewBase(row: {
@@ -1860,11 +1394,6 @@ function toOverviewBase(row: {
   };
 }
 
-// Attach each artist's socials (sorted by platform IN THE ISOLATE — the SQL no longer sorts them)
-// and its coordinate-bearing finding count. Two bounded batch reads over the ≤N page ids: the
-// socials by the `artist_socials_artist_platform_idx` leading artist-id key, the counts GROUPED ONCE
-// over `track_artists ⋈ findings` (log_id not null) via `track_artists_artist_id_idx` — never a
-// per-output-row correlated scalar. So the cost is per PAGE, not per artist × social.
 async function hydrateArtistOverview(
   base: readonly ArtistOverviewBase[],
 ): Promise<ArtistOverviewItem[]> {
@@ -1920,14 +1449,6 @@ async function hydrateArtistOverview(
   }));
 }
 
-/**
- * The board's PAGE read — a keyset slice of every artist Fluncle features, name-sorted, each with
- * its full socials list (confirmed, auto, candidate) and finding count. The stable MANAGEMENT
- * surface: an artist never drops off for being resolved, so the operator can edit/add/remove a link
- * any time. Bounded by construction (≤{@link ARTISTS_PAGE_SIZE} artists, keyset on `(name, id)` over
- * `artists_name_idx`) and searched server-side, so the crawler minting artists without end never
- * grows this read. A socialless artist still lists (the hydrate left-joins its socials).
- */
 export async function listArtistsPage(query: ArtistsPageQuery = {}): Promise<ArtistsPage> {
   const db = await getDb();
   const limit = Math.max(1, Math.min(query.limit ?? ARTISTS_PAGE_SIZE, ARTISTS_PAGE_MAX));
@@ -1946,7 +1467,6 @@ export async function listArtistsPage(query: ArtistsPageQuery = {}): Promise<Art
   }
   const whereSql = where.length > 0 ? `where ${where.join(" and ")}` : "";
 
-  // Peek one past the page so we learn whether a next page exists (and its cursor) in one read.
   const pageResult = await db.execute({
     args: [...args, limit + 1],
     sql: `select a.id, a.name, a.slug, a.spotify_url
@@ -1980,33 +1500,14 @@ export async function listArtistsPage(query: ArtistsPageQuery = {}): Promise<Art
   return { items, nextCursor, totalCount };
 }
 
-/** The board's Fresh-links WORK QUEUE, read server-side: the artists carrying an unreviewed link
- *  (with their full socials + finding count so the mention-loop split can run), plus the true
- *  total so any overflow past the cap stays visible. */
 export type FreshLinksData = {
-  /** The capped set of artists with unreviewed links, name-sorted (the priority split re-orders). */
   artists: ArtistOverviewItem[];
-  /** Every artist with at least one unreviewed link — so the board can flag work beyond the cap. */
+
   total: number;
 };
 
-/**
- * The most fresh-link artists the board renders at once. Generous — the fresh set is the operator's
- * live work, not the whole archive — but bounded on the same principle as
- * {@link LABEL_REVIEW_QUEUE_LIMIT}: a crawl minting links faster than they are reviewed must never
- * serialize an unbounded work list into the SSR document (the 24.8 MB failure this rework fixes).
- * The full list drains as he reviews; {@link FreshLinksData.total} surfaces anything past the cap so
- * nothing hides.
- */
 export const FRESH_LINKS_LIMIT = 100;
 
-/**
- * Read the fresh-links work queue: every artist with an unreviewed (`reviewed_at IS NULL`) link,
- * oldest-first by its oldest fresh link (the queue's anchor), capped at {@link FRESH_LINKS_LIMIT},
- * then hydrated with full socials + finding count so {@link partitionFreshLinks} can split it by
- * mention-loop impact. The fresh scan rides `artist_socials_unreviewed_idx`; the cap bounds the
- * payload. Returned name-sorted so the "Everything else" group reads A–Z as it did before.
- */
 export async function listFreshLinks(): Promise<FreshLinksData> {
   const db = await getDb();
 
@@ -2052,31 +1553,14 @@ export async function listFreshLinks(): Promise<FreshLinksData> {
 export type ArtistReviewRow = {
   artistId: string;
   name: string;
-  /** The oldest unseen link's created stamp — the queue's oldest-first anchor. */
+
   anchorAt: string;
-  /** How many links are new since the operator last reviewed this artist. */
+
   pending: number;
 };
 
-/**
- * The most artists with unreviewed links the /admin attention queue will ever carry — the exact
- * twin of {@link LABEL_REVIEW_QUEUE_LIMIT}, and for the exact same reason. The crawler mints
- * `artist_socials` links continuously (a resolver pass fills a fresh handle per platform per
- * artist), so an uncapped one-row-per-artist read is hundreds of `AttentionItem`s in the /admin
- * SSR payload, the react-query cache, and `fluncle admin queue` — a cockpit you cannot read. So the
- * queue takes a WORKING SET, oldest-first, and `/admin/artists` (the fresh-links section) stays the
- * station where the full list is reviewed. Capping the queue hides no work; it stops one source
- * from drowning the other five.
- */
 export const ARTIST_REVIEW_QUEUE_LIMIT = 25;
 
-// The /admin attention row's honest read: one row per artist that has UNREVIEWED links
-// (`reviewed_at IS NULL`) — a fresh link the operator hasn't looked at yet — with the count of
-// those links and the oldest one's stamp (the queue's oldest-first anchor), capped at
-// {@link ARTIST_REVIEW_QUEUE_LIMIT} oldest-first. Mirrors artistNeedsLook; the pure model turns each
-// into a "Review →" deep-link onto /admin/artists (the manage surface, where the fresh-links section
-// lives), so the queue surfaces the work and the page does it. Review lands on the LINK, so a single
-// fresh Twitch link surfaces without re-flagging the whole already-reviewed artist.
 export async function listArtistReviewRows(): Promise<ArtistReviewRow[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -2103,8 +1587,6 @@ export async function listArtistReviewRows(): Promise<ArtistReviewRow[]> {
   });
 }
 
-// Fetch one social row by id, or undefined. Small helper for the operator writes,
-// which return the fresh row for the board's optimistic patch.
 async function getArtistSocialById(socialId: string): Promise<ArtistSocial | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -2117,7 +1599,6 @@ async function getArtistSocialById(socialId: string): Promise<ArtistSocial | und
   return row ? toArtistSocial(row) : undefined;
 }
 
-/** Thrown when an operator write targets an artist_social id that isn't there. */
 export class ArtistSocialNotFoundError extends Error {
   constructor(socialId: string) {
     super(`No artist social with id ${socialId}`);
@@ -2125,11 +1606,6 @@ export class ArtistSocialNotFoundError extends Error {
   }
 }
 
-/**
- * Promote a `candidate` social to `confirmed` — the operator's one-tap glance that
- * lets a Firecrawl-sourced link onto the public artist page. Idempotent for an already
- * `confirmed`/`auto` row (a no-op). Returns the fresh row.
- */
 export async function confirmArtistSocial(socialId: string): Promise<ArtistSocial> {
   const existing = await getArtistSocialById(socialId);
 
@@ -2137,8 +1613,6 @@ export async function confirmArtistSocial(socialId: string): Promise<ArtistSocia
     throw new ArtistSocialNotFoundError(socialId);
   }
 
-  // Defense for candidates written by OTHER units (the Firecrawl → candidate ingestion,
-  // Unit 2.1): never promote a stored URL whose scheme isn't http(s) onto the public page.
   assertHttpUrl(existing.url);
 
   const db = await getDb();
@@ -2159,7 +1633,6 @@ export async function confirmArtistSocial(socialId: string): Promise<ArtistSocia
   return social;
 }
 
-/** Thrown when add_artist_social gets a platform outside the enum, a malformed URL, or a non-http(s) scheme. */
 export class InvalidArtistSocialError extends Error {
   constructor(message: string) {
     super(message);
@@ -2167,14 +1640,6 @@ export class InvalidArtistSocialError extends Error {
   }
 }
 
-/**
- * Guard a social URL's scheme: parse it and allow ONLY `http:`/`https:`, returning the
- * trimmed, validated string. A `javascript:`/`data:`/`vbscript:` URL rendered into an
- * admin `<a href>` is click-to-execute stored XSS in the admin origin (React does NOT
- * sanitize `href`), and a promoted candidate carries it to the public artist page — so
- * every write AND the render run through this. Throws `InvalidArtistSocialError` on an
- * empty string, an unparseable URL, or a disallowed scheme.
- */
 export function assertHttpUrl(raw: string): string {
   const trimmed = raw.trim();
 
@@ -2197,13 +1662,6 @@ export function assertHttpUrl(raw: string): string {
   return trimmed;
 }
 
-/**
- * Add (or replace) an artist's social by platform — the operator's add in the Manage-links
- * dialog. An operator-entered link is trusted, so it lands `source=operator`,
- * `status=confirmed` (it renders publicly at once) and BORN REVIEWED (`reviewed_at = now`) —
- * the operator just wrote it, so it never surfaces in the fresh-links queue. Upserts on the
- * `(artist_id, platform)` unique index. Returns the fresh row.
- */
 export async function addArtistSocial(
   artistId: string,
   platform: string,
@@ -2244,14 +1702,6 @@ export async function addArtistSocial(
   return toArtistSocial(row);
 }
 
-/**
- * Mark an artist's WHOLE link list as reviewed — the operator's "Looks good". Bulk-stamps
- * `reviewed_at = now` on every one of the artist's still-unreviewed links (clearing needs-a-look
- * until a NEW link arrives), AND promotes any surviving `candidate` links to `confirmed`:
- * reviewing the list IS the trust gate (a wrong candidate is deleted in Manage links before this),
- * so what's left is good to go public. This is the per-artist bulk of the per-link `reviewArtistSocial`.
- * Idempotent. Returns the count of candidates promoted.
- */
 export async function reviewArtist(artistId: string): Promise<{ confirmed: number }> {
   const db = await getDb();
   const now = new Date().toISOString();
@@ -2271,12 +1721,6 @@ export async function reviewArtist(artistId: string): Promise<{ confirmed: numbe
   return { confirmed: promoted.rowsAffected ?? 0 };
 }
 
-/**
- * Mark ONE link as reviewed — the operator's "approve" in the board's fresh-links section.
- * Stamps `reviewed_at = now` (the link leaves the fresh-links queue) AND, mirroring "Looks good"
- * at the link grain, promotes it `candidate → confirmed` so approving a fresh Firecrawl link also
- * lets it onto the public artist page. Idempotent. Returns the fresh row.
- */
 export async function reviewArtistSocial(socialId: string): Promise<ArtistSocial> {
   const existing = await getArtistSocialById(socialId);
 
@@ -2284,8 +1728,6 @@ export async function reviewArtistSocial(socialId: string): Promise<ArtistSocial
     throw new ArtistSocialNotFoundError(socialId);
   }
 
-  // Reviewing a link is the trust gate onto the public page — never promote a stored URL whose
-  // scheme isn't http(s) (the same defense confirmArtistSocial applies).
   assertHttpUrl(existing.url);
 
   const db = await getDb();
@@ -2309,21 +1751,6 @@ export async function reviewArtistSocial(socialId: string): Promise<ArtistSocial
   return social;
 }
 
-/**
- * Correct an artist social's URL AND approve it in one act — the operator's inline edit in the
- * board's fresh-links section (fixing a resolver miss without leaving the row: a
- * `music.youtube.com/search` page or a label's Bandcamp the resolver mistook for the artist).
- *
- * Validates + normalizes the entered URL against the row's KNOWN platform through the resolver's
- * own helpers (`validateSocialUrlForPlatform` → `classifyMbUrl` + `normalizeProfileUrl`): a
- * YouTube row rejects an instagram.com URL; a pasted deep link collapses to its profile root
- * where it can, or is rejected with an honest reason (thrown as `InvalidArtistSocialError`).
- *
- * On success the row becomes OPERATOR-OWNED and public in one write, mirroring `add_artist_social`
- * / #544's operator write path: `source=operator`, `status=confirmed`, and BORN REVIEWED
- * (`reviewed_at = now`) — so the corrected link leaves the fresh-links queue and is immune to a
- * later re-resolve (persistResolution skips operator/confirmed rows). Returns the fresh row.
- */
 export async function updateArtistSocial(socialId: string, url: string): Promise<ArtistSocial> {
   const existing = await getArtistSocialById(socialId);
 
@@ -2356,7 +1783,6 @@ export async function updateArtistSocial(socialId: string, url: string): Promise
   return social;
 }
 
-/** Remove one artist social by id (the operator's inline delete). Idempotent. */
 export async function removeArtistSocial(socialId: string): Promise<void> {
   const db = await getDb();
 

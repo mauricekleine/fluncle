@@ -3,21 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedAlbum, seedTrack } from "./integration-db";
 
-// THE DISCOGS RELEASE-FACTS DRAIN, proven against the REAL generated schema on a real libSQL
-// engine. The claims on trial are the ones only a real engine can settle, because every one of
-// them is a property of the SQL rather than of the TypeScript around it:
-//
-//   - the worklist joins `tracks.in_release_id` to its album and GROUPS BY album, so ten findings
-//     off one record cost ONE release lookup rather than ten;
-//   - `discogs_state = 'pending'` is the drain gate, so a ruled album (either way) leaves the
-//     worklist for good and a re-run is a genuine no-op;
-//   - a release that carries a number resolves the album; one that carries none is TERMINAL;
-//   - a failed lookup advances the streak and leaves the album `pending` — nothing was concluded;
-//   - a THROTTLE stamps nothing at all, so every album stays eligible for the next tick.
-//
-// The vendor client is mocked (this proves the sweep's SQL, not Discogs' HTTP), the database is
-// real, and the DDL is the migration chain's own.
-
 let db: Client;
 
 const fetchDiscogsReleaseFacts = vi.fn();
@@ -48,7 +33,6 @@ vi.mock("./log", () => ({ logEvent: vi.fn() }));
 
 const { backfillDiscogsFacts } = await import("./backfill");
 
-/** Point a seeded track at an album and give it the Discogs release id the worklist starts from. */
 async function linkTrack(
   client: Client,
   trackId: string,
@@ -61,7 +45,6 @@ async function linkTrack(
   });
 }
 
-/** The album's Discogs ledger + facts, as the page and the next pass will read them. */
 async function albumFacts(
   client: Client,
   id: string,
@@ -159,8 +142,7 @@ describe("backfillDiscogsFacts (integration)", () => {
 
   it("buys ONE lookup per record, stores the number, and drains on the next pass", async () => {
     await seedAlbum(db, { id: "alb-ram", name: "Gate EP", slug: "gate-ep" });
-    // Three findings off the SAME record, each with its own resolved Discogs release id. A
-    // per-track worklist would spend three lookups on one catalogue number.
+
     for (const trackId of ["t1", "t2", "t3"]) {
       await seedTrack(db, { logId: `241.7.${trackId}`, trackId });
       await linkTrack(db, trackId, "alb-ram", 6414598);
@@ -185,7 +167,6 @@ describe("backfillDiscogsFacts (integration)", () => {
     expect(JSON.parse(stored.discogs_styles ?? "null")).toEqual(["Drum n Bass", "Neurofunk"]);
     expect(stored.discogs_state).toBe("resolved");
 
-    // THE DRAIN. A ruled album is out of the worklist, so the next tick is a free no-op.
     fetchDiscogsReleaseFacts.mockClear();
 
     const second = await backfillDiscogsFacts(10, false);
@@ -199,7 +180,6 @@ describe("backfillDiscogsFacts (integration)", () => {
     await seedTrack(db, { logId: "241.7.4", trackId: "t4" });
     await linkTrack(db, "t4", "alb-white", 999);
 
-    // The release answered, and the honest answer is "there is no catalogue number".
     fetchDiscogsReleaseFacts.mockResolvedValue({
       facts: { styles: ["Jungle"] },
       found: true,
@@ -215,7 +195,7 @@ describe("backfillDiscogsFacts (integration)", () => {
 
     expect(stored.discogs_state, "terminal — a pressing does not grow a number later").toBe("none");
     expect(stored.discogs_catno).toBeNull();
-    // The styles still land: a release can list them and carry no number.
+
     expect(JSON.parse(stored.discogs_styles ?? "null")).toEqual(["Jungle"]);
 
     fetchDiscogsReleaseFacts.mockClear();
@@ -266,8 +246,6 @@ describe("backfillDiscogsFacts (integration)", () => {
     );
     expect(result.resolvedCount + result.noneCount + result.failedCount).toBe(0);
 
-    // A budget-blocked album is not an answered one: nothing is stamped, so the next tick's fresh
-    // window sees both records exactly as it would have before.
     for (const albumId of ["alb-a", "alb-b"]) {
       const stored = await albumFacts(db, albumId);
 
@@ -280,7 +258,7 @@ describe("backfillDiscogsFacts (integration)", () => {
   it("ignores an album no Discogs-resolved track points at", async () => {
     await seedAlbum(db, { id: "alb-unresolved", name: "Unresolved", slug: "unresolved" });
     await seedTrack(db, { logId: "241.7.6", trackId: "t6" });
-    // Linked to the album, but the Discogs sweep never resolved a release for it.
+
     await linkTrack(db, "t6", "alb-unresolved", null);
 
     const result = await backfillDiscogsFacts(10, false);
@@ -304,9 +282,6 @@ describe("backfillDiscogsFacts (integration)", () => {
   });
 
   it("reports UNCONFIGURED on a dry run too, rather than previewing an armed sweep", async () => {
-    // A preview that says "configured" on a Worker with no token tells the operator the sweep is
-    // armed when the next live tick will do nothing. The worklist preview is still useful, so it
-    // still runs — only the flag has to be honest.
     readOptionalEnv.mockResolvedValue(undefined);
     await seedAlbum(db, { id: "alb-dry-inert", name: "Dry Inert", slug: "dry-inert" });
     await seedTrack(db, { logId: "241.7.9", trackId: "t9" });

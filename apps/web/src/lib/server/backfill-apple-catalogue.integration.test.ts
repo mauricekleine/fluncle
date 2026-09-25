@@ -3,13 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 
-// THE APPLE CATALOGUE DRAIN + ALBUM FACTS, PROVEN against the REAL schema (RFC musickit U1).
-//
-// The catalogue sweep reads a worklist off `tracks` (an anti-join onto the certification) and the
-// facts writer joins `tracks → albums` — both in SQL, so only a real engine proves them. The Apple
-// oracle and the breaker are mocked (no network, no durable breaker state): what is on trial is
-// the worklist, the catalogue-aware URL write (no findings lastmod), and the once-per-album facts.
-
 let db: Client;
 
 const appleCatalogLookupByIsrc = vi.fn();
@@ -21,9 +14,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 vi.mock("./apple-music", async (importOriginal) => {
-  // Partial mock: only the two network-touching lookups are stubbed. The pure helpers
-  // (composeAppleArtworkUrl etc.) stay real — the DTO under test calls them, and a
-  // whole-module mock fails the suite the day any pure helper is added.
   const actual = await importOriginal<typeof import("./apple-music")>();
 
   return {
@@ -32,7 +22,7 @@ vi.mock("./apple-music", async (importOriginal) => {
     appleCatalogLookupByIsrcs: (...a: unknown[]) => appleCatalogLookupByIsrcs(...a),
   };
 });
-// The breaker is proven in apple-breaker.test.ts; here it is open + a no-op so the drain runs.
+
 vi.mock("./apple-breaker", () => ({
   areAppleCallsAllowed: async () => true,
   isAppleCallBudgetAvailable: async () => true,
@@ -40,7 +30,6 @@ vi.mock("./apple-breaker", () => ({
   recordAppleCall: async () => {},
 }));
 
-/** Stamp a track's ISRC + optional album pointer. */
 async function withIsrc(trackId: string, isrc: string, albumId?: string): Promise<void> {
   await db.execute({
     args: [isrc, albumId ?? null, trackId],
@@ -48,7 +37,6 @@ async function withIsrc(trackId: string, isrc: string, albumId?: string): Promis
   });
 }
 
-/** Insert an `albums` row (the facts target). */
 async function seedAlbum(id: string, slug: string): Promise<void> {
   const at = "2026-07-01T00:00:00.000Z";
 
@@ -58,14 +46,12 @@ async function seedAlbum(id: string, slug: string): Promise<void> {
   });
 }
 
-/** Read one album row (facts inclusive). */
 async function readAlbum(id: string): Promise<Record<string, unknown> | undefined> {
   const result = await db.execute({ args: [id], sql: `select * from albums where id = ?` });
 
   return result.rows[0] as Record<string, unknown> | undefined;
 }
 
-/** Read one track row. */
 async function readTrack(trackId: string): Promise<Record<string, unknown> | undefined> {
   const result = await db.execute({
     args: [trackId],
@@ -75,7 +61,6 @@ async function readTrack(trackId: string): Promise<Record<string, unknown> | und
   return result.rows[0] as Record<string, unknown> | undefined;
 }
 
-/** A batched-oracle result mapping the given ISRC → a bare URL bundle. */
 function batchedUrl(isrc: string, url: string) {
   return {
     bundles: new Map([[isrc, { songId: `s-${isrc}`, songUrl: url }]]),
@@ -84,7 +69,6 @@ function batchedUrl(isrc: string, url: string) {
   };
 }
 
-/** A single-ISRC oracle result carrying a canonical album's facts. */
 function singleWithAlbum(url: string) {
   return {
     bundle: {
@@ -134,7 +118,7 @@ describe("backfillAppleMusicCatalogue — the catalogue drain", () => {
     const track = await readTrack("cat00000000000000000001");
     expect(track?.apple_music_url).toBe("https://music.apple.com/us/album/x/1?i=2");
     expect(track?.backfill_apple_music_done_at).toBeTruthy();
-    // No single-ISRC call: the row has no album_id, so there is nothing to fact-stamp.
+
     expect(appleCatalogLookupByIsrc).not.toHaveBeenCalled();
   });
 
@@ -163,8 +147,6 @@ describe("backfillAppleMusicCatalogue — the catalogue drain", () => {
     expect(album?.artwork_bg_color).toBe("000000");
     expect(album?.artwork_text_color4).toBe("cccccc");
 
-    // Second pass: the track now carries a URL (excluded from the worklist) and the album is
-    // stamped — nothing to do.
     const second = await backfillAppleMusicCatalogue(50, false);
     expect(second.resolvedCount).toBe(0);
     expect(second.albumFactsWritten).toBe(0);
@@ -173,7 +155,7 @@ describe("backfillAppleMusicCatalogue — the catalogue drain", () => {
   it("a clean no-match records TRIED (attempted, not done), leaves the URL null", async () => {
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000003" });
     await withIsrc("cat00000000000000000003", "ISRC003");
-    // Apple has no song for this ISRC — the batched map is empty.
+
     appleCatalogLookupByIsrcs.mockResolvedValueOnce({
       bundles: new Map(),
       configured: true,
@@ -258,7 +240,7 @@ describe("backfillAppleMusicUrls — the findings sweep also writes album facts"
 
     const track = await readTrack("finding0000000000000002");
     expect(track?.apple_music_url).toBe("https://music.apple.com/us/album/y/9?i=8");
-    // The finding's public lastmod moved (bumpFinding = true) — the sameAs advertised on /log.
+
     const finding = await db.execute({
       args: ["finding0000000000000002"],
       sql: `select updated_at from findings where track_id = ?`,

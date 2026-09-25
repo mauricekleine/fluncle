@@ -1,16 +1,3 @@
-// THE GROUPED QUIETER ROWS — the reads the /artist/<slug> and /label/<slug> pages are built on
-// once the crawl has filled them, proven against the REAL migrated schema on an in-memory libSQL
-// engine (the graph-entities.test.ts harness). Two halves:
-//
-//   1. The PURE helpers (sort order, the pager window) — no database, so the two rules that are
-//      easy to get wrong and impossible to see are pinned directly: an undated group sorts LAST
-//      (never first, which is where SQLite's NULL-is-smallest would put it), and the nameless
-//      bucket sorts after everything.
-//   2. The DB-backed grouped reads — the record grouping on the artist page, the artist→record
-//      grouping on the label page, the per-group cap, and the two catalogue-rail guarantees:
-//      a crawl-only artist with no entity still appears (grouped by their raw name, no link),
-//      and nothing here ever carries a coordinate.
-
 import { type Client, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -63,16 +50,8 @@ describe("pageNumbers", () => {
   });
 });
 
-// ── The DB-backed grouped reads ─────────────────────────────────────────────────────────
-
 let db: Client;
 
-/**
- * A crawled (uncertified) track: a `tracks` row with no `findings` row. `title` defaults to a
- * unique `Title <id>`; pass an explicit one (with matching `artists`) to seed a TWIN — two rows
- * the crawler left unstamped that share one recording identity. The stamping columns
- * (`duplicateOfTrackId` / `dismissedAt`) and the anchors (`spotifyUrl` / `isrc`) are optional.
- */
 async function seedCatalogueTrack(options: {
   album: null | string;
   artists: string[];
@@ -116,12 +95,6 @@ async function seedArtist(id: string, name: string, slug: string): Promise<void>
   });
 }
 
-/**
- * Certify an artist: a `findings` row (a real coordinate) crediting them, linked through
- * `track_artists`. A catalogue heading now links to ANY artist ENTITY (findings or not), so this
- * helper's job is to prove certified + findings-free entities both link; only an artist with no
- * `artists` row at all renders as plain text.
- */
 async function seedCertifiedFinding(
   trackId: string,
   artistId: string,
@@ -248,9 +221,9 @@ describe("upcoming entity tracks", () => {
         .join("\n");
 
       expect(pageRoot, sql).toBeDefined();
-      // The sorted, LIMITed page touches neither albums nor findings…
+
       expect(page).not.toMatch(/\b(?:al|albums|findings)\b/);
-      // …and the album and finding seeks run on the returned page only.
+
       expect(outside).toMatch(/SEARCH al USING INTEGER PRIMARY KEY|SEARCH al USING INDEX/);
       expect(outside).toMatch(/SEARCH findings USING/);
     }
@@ -341,7 +314,7 @@ describe("upcoming entity tracks", () => {
 describe("listArtistCatalogue (the artist page's records)", () => {
   beforeEach(async () => {
     await seedArtist("art_nutone", "Nu:Tone", "nu-tone");
-    // Two records, plus a track with no album (the nameless bucket).
+
     await seedCatalogueTrack({
       album: "Words Gone Forever",
       artists: ["Nu:Tone"],
@@ -390,13 +363,13 @@ describe("listArtistCatalogue (the artist page's records)", () => {
 
     expect(page.totalGroups).toBe(3);
     expect(page.totalTracks).toBe(4);
-    // A–Z by record, with the nameless record (undefined name) forced to the end.
+
     expect(page.groups.map((group) => group.name)).toEqual([
       "The Elements",
       "Words Gone Forever",
       undefined,
     ]);
-    // The two-track record carries both, in the same group.
+
     const words = page.groups.find((group) => group.name === "Words Gone Forever");
 
     expect(words?.tracks.map((track) => track.trackId).sort()).toEqual(["t_a1", "t_a2"]);
@@ -419,13 +392,12 @@ describe("listArtistCatalogue (the artist page's records)", () => {
 
     const page = await listArtistCatalogue(artist.id, "recent", 1);
 
-    // 2022 record before the 2018 one, the undated (nameless) record last.
     expect(page.groups.map((group) => group.name)).toEqual([
       "The Elements",
       "Words Gone Forever",
       undefined,
     ]);
-    // THE RAIL: not one quieter row carries a coordinate, so none can pose as a finding.
+
     expect(flattenRecords(page.groups).every((track) => !("logId" in track))).toBe(true);
   });
 
@@ -436,23 +408,16 @@ describe("listArtistCatalogue (the artist page's records)", () => {
       throw new Error("artist missing");
     }
 
-    // Drive the read with the SAME sort a param-free /artist/<slug> resolves to — the artist
-    // route's default. So this pins the on-first-load ordering, not merely the "recent" branch:
-    // the newest dated record leads, the older one follows, the undated (nameless) bucket sorts
-    // last and never vanishes.
     const page = await listArtistCatalogue(artist.id, ARTIST_CATALOGUE_SORT_DEFAULT, 1);
 
     expect(page.groups.map((group) => group.name)).toEqual([
-      "The Elements", // 2022 — newest release, first
-      "Words Gone Forever", // 2018
-      undefined, // the undated nameless bucket, forced last
+      "The Elements",
+      "Words Gone Forever",
+      undefined,
     ]);
   });
 
   it("links a record heading to its album ENTITY even when the album has no finding", async () => {
-    // Mint a findings-free album entity (as the crawler does inline) and stamp `album_id` on the
-    // two "Words Gone Forever" catalogue rows. The record now has a public `/album/<slug>` page, so
-    // its heading carries the slug — the album twin of the certified/findings-free artist link.
     await db.execute({
       args: ["alb_wgf", "Words Gone Forever", "words-gone-forever", "x", "x"],
       sql: `insert into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
@@ -470,7 +435,7 @@ describe("listArtistCatalogue (the artist page's records)", () => {
 
     const page = await listArtistCatalogue(artist.id, "name", 1);
     const words = page.groups.find((group) => group.name === "Words Gone Forever");
-    // The nameless bucket (t_loose) still carries no album entity, so it stays plain.
+
     const nameless = page.groups.find((group) => group.name === undefined);
 
     expect(words?.slug).toBe("words-gone-forever");
@@ -480,12 +445,6 @@ describe("listArtistCatalogue (the artist page's records)", () => {
 
 describe("listLabelCatalogue (the label page's artists, then records)", () => {
   it("links any artist ENTITY's heading (findings or not) — only a nameless credit renders plain", async () => {
-    // Three artists, three link outcomes, none of them DROPPED:
-    //   · Doc Scott — no `artists` row at all → grouped by raw name, no link.
-    //   · Calibre   — has an entity (the crawler minted it off a crawl anchor) but NO certified
-    //                 finding → LINKS now: a findings-free artist has a public catalogue page, so
-    //                 the heading points at `/artist/calibre`, exactly as the album heading does.
-    //   · Goldie    — has an entity AND a certified finding → its heading carries the link.
     await seedCatalogueTrack({
       album: "Platinum Breakz",
       artists: ["Doc Scott"],
@@ -516,7 +475,7 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
     });
     await seedArtist("art_calibre", "Calibre", "calibre");
     await seedArtist("art_goldie", "Goldie", "goldie");
-    // Goldie earns a certified finding (elsewhere) — that, not the mere row, is what lights the link.
+
     await seedCertifiedFinding("t_goldie_finding", "art_goldie", "Goldie");
     await backfillArtistLinks(db);
     await db.execute({
@@ -538,7 +497,7 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
     expect(docScott?.slug).toBeUndefined();
     expect(docScott?.recordCount).toBe(1);
     expect(docScott?.records[0]?.tracks).toHaveLength(2);
-    // The findings-free entity is grouped, its track kept, AND linked (it has a public page now).
+
     expect(calibre?.slug).toBe("calibre");
     expect(calibre?.records[0]?.tracks).toHaveLength(1);
     expect(calibre?.records[0]?.tracks[0]).toMatchObject({
@@ -549,9 +508,9 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
       previewable: true,
       releaseDate: "2001-01-01",
     });
-    // The certified entity carries the link too.
+
     expect(goldie?.slug).toBe("goldie");
-    // The whole flattened page is coordinate-less (the rail again).
+
     expect(flattenArtistGroups(page.groups).every((track) => !("logId" in track))).toBe(true);
   });
 
@@ -571,9 +530,8 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
     const page = await listLabelCatalogue("lbl_1", "name", 1);
     const group = page.groups[0];
 
-    // The group knows its TRUE record count (counted in SQL over the whole group)…
     expect(group?.recordCount).toBe(over);
-    // …but renders at most the cap, and says there is more.
+
     expect(flattenRecords(group?.records ?? [])).toHaveLength(GRAPH_GROUP_TRACK_LIMIT);
     expect(group?.truncated).toBe(true);
   });
@@ -600,15 +558,9 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
 });
 
 describe("the duplicate defence (a recording renders once)", () => {
-  // One artist, one record, seeded with the four cases the graph pages have to survive:
-  //   · an unstamped TWIN (two rows, one identity) the crawler never marked — folds to one;
-  //   · a STAMPED duplicate (`duplicate_of_track_id`) — vetoed in SQL;
-  //   · a DISMISSED row (`dismissed_at`) — vetoed in SQL;
-  //   · a genuinely distinct recording (a remix, distinct descriptor) — kept apart.
   beforeEach(async () => {
     await seedArtist("art_serum", "Serum", "serum");
-    // The twin: same title + artist, so one recording identity. Only one carries the Spotify
-    // anchor, so the fold must keep THAT row and drop the bare one.
+
     await seedCatalogueTrack({
       album: "Rudeboy",
       artists: ["Serum"],
@@ -627,7 +579,7 @@ describe("the duplicate defence (a recording renders once)", () => {
       title: "20 Man Down",
       trackId: "t_bare",
     });
-    // Stamped a duplicate by the operator → out of the SQL read entirely.
+
     await seedCatalogueTrack({
       album: "Rudeboy",
       artists: ["Serum"],
@@ -637,7 +589,7 @@ describe("the duplicate defence (a recording renders once)", () => {
       title: "Selecta",
       trackId: "t_stamped",
     });
-    // Dismissed → out of the SQL read too.
+
     await seedCatalogueTrack({
       album: "Rudeboy",
       artists: ["Serum"],
@@ -647,7 +599,7 @@ describe("the duplicate defence (a recording renders once)", () => {
       title: "On the Block",
       trackId: "t_dismissed",
     });
-    // A remix is a DIFFERENT recording (distinct descriptor + here a real gap) — never folded.
+
     await seedCatalogueTrack({
       album: "Rudeboy",
       artists: ["Serum"],
@@ -671,10 +623,8 @@ describe("the duplicate defence (a recording renders once)", () => {
     const page = await listLabelCatalogue("lbl_1", "name", 1);
     const rendered = flattenArtistGroups(page.groups).map((track) => track.trackId);
 
-    // The twin folds to the Spotify-anchored row; the bare twin, the stamped duplicate and the
-    // dismissed row are all gone; the two genuine recordings survive.
     expect(rendered.sort()).toEqual(["t_anchored", "t_orig", "t_remix"]);
-    // Total reflects what renders — never the four vetoed/folded rows.
+
     expect(page.totalTracks).toBe(3);
   });
 
@@ -693,7 +643,6 @@ describe("the duplicate defence (a recording renders once)", () => {
   });
 
   it("folds a '(Original Version)' reissue onto its base title (RC3 end to end)", async () => {
-    // Same identity as the anchored "20 Man Down", tagged as the original version — collapses onto it.
     await seedCatalogueTrack({
       album: "Rudeboy",
       artists: ["Serum"],
@@ -714,18 +663,7 @@ describe("the duplicate defence (a recording renders once)", () => {
   });
 });
 
-// ── The single-statement shape (P5) ─────────────────────────────────────────────────────
-//
-// Both grouped reads arrive in WAVES — the artist page in two statements, the label page
-// in three — and every wave is a round trip from the Worker to Turso in Ireland, each repeating
-// the SAME indexed walk of the entity's rows. They are now ONE statement each, with the page of
-// groups cut by `dense_rank()` instead of `limit`/`offset` and the group aggregates carried by
-// windows. That rewrite is invisible from the outside, which is exactly why it needs pinning:
-// the round-trip count is the guarantee, and the pager + the two SQL counts are what could
-// silently drift now that they ride on windows rather than a `group by`.
-
 describe("one statement, one walk", () => {
-  /** Counts the statements a read issues, so a re-introduced wave fails here. */
   function countStatements(): { calls: string[] } {
     const calls: string[] = [];
     const original = db.execute.bind(db);
@@ -783,7 +721,6 @@ describe("one statement, one walk", () => {
 });
 
 describe("the pager, now cut by dense_rank", () => {
-  // One group per record, more of them than fit on a page, so the pager has to carry the rest.
   const RECORDS = GRAPH_GROUP_PAGE_SIZE + 5;
 
   beforeEach(async () => {
@@ -794,8 +731,7 @@ describe("the pager, now cut by dense_rank", () => {
         album: `Record ${String(i).padStart(2, "0")}`,
         artists: ["Calibre"],
         labelId: "lbl_1",
-        // Dates ascend with the name, so "recent" is the exact reverse of "name" — a pager that
-        // silently ignored the sort would still look right under one of them.
+
         releaseDate: `20${String(10 + i).padStart(2, "0")}-01-01`,
         trackId: `t_${i}`,
       });
@@ -821,10 +757,9 @@ describe("the pager, now cut by dense_rank", () => {
 
     const names = [...first.groups, ...second.groups].map((group) => group.name ?? "");
 
-    // Every record appears exactly once, and the two pages read as one A–Z run.
     expect(new Set(names).size).toBe(RECORDS);
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
-    // The track total is the WHOLE artist's, not the page's — the thin-content gate reads it.
+
     expect(first.totalTracks).toBe(RECORDS);
   });
 
@@ -840,13 +775,11 @@ describe("the pager, now cut by dense_rank", () => {
     const names = [...first.groups, ...second.groups].map((group) => group.name ?? "");
 
     expect(new Set(names).size).toBe(RECORDS);
-    // Newest release leads, and the run descends across the page boundary.
+
     expect(names).toEqual([...names].sort((a, b) => b.localeCompare(a)));
   });
 
   it("holds the page's hard row ceiling when every group is over its own cap", async () => {
-    // Every record on the page carries more tracks than one group may contribute, so the ceiling
-    // is the only thing standing between a crawled artist and a dump.
     for (let record = 0; record < RECORDS; record++) {
       for (let track = 1; track <= GRAPH_GROUP_TRACK_LIMIT + 3; track++) {
         await seedCatalogueTrack({
@@ -880,9 +813,6 @@ describe("the pager, now cut by dense_rank", () => {
 
 describe("the label's two SQL counts, over the whole group", () => {
   it("counts a two-artist track ONCE in the total, while both artists still carry it", async () => {
-    // The total is counted over TRACKS; the groups are counted over CREDITS. One statement now
-    // carries both, so the two must not bleed into each other. Seeded past the page size so the
-    // total is genuinely the SQL count of the whole label rather than the rendered row count.
     const solo = GRAPH_GROUP_PAGE_SIZE + 2;
 
     for (let i = 0; i < solo; i++) {
@@ -895,7 +825,6 @@ describe("the label's two SQL counts, over the whole group", () => {
       });
     }
 
-    // One more track, credited to two of those same artists — one track, two credits.
     await seedCatalogueTrack({
       album: "Split",
       artists: ["Artist 00", "Artist 01"],
@@ -907,11 +836,10 @@ describe("the label's two SQL counts, over the whole group", () => {
     const page = await listLabelCatalogue("lbl_1", "name", 1);
 
     expect(page.totalGroups).toBe(solo);
-    // solo + 1 TRACKS (solo + 2 credits) — the total counts the tracks.
+
     expect(page.totalTracks).toBe(solo + 1);
     expect(page.groups).toHaveLength(GRAPH_GROUP_PAGE_SIZE);
 
-    // …and the shared track is still in BOTH artists' groups, credited twice, dropped nowhere.
     const first = page.groups.find((group) => group.name === "Artist 00");
     const second = page.groups.find((group) => group.name === "Artist 01");
 
@@ -920,9 +848,6 @@ describe("the label's two SQL counts, over the whole group", () => {
   });
 
   it("renders a credit ONCE when two artist entities share its name", async () => {
-    // The crawler mints an artist per stable Spotify id, so two entities can carry one name. The
-    // slug lookup must not multiply the credit's TRACK rows by however many of them there are —
-    // the group would render every track twice and count them twice.
     await seedArtist("art_serum_a", "Serum", "serum");
     await seedArtist("art_serum_b", "Serum", "serum-2");
     await seedCatalogueTrack({
@@ -941,13 +866,11 @@ describe("the label's two SQL counts, over the whole group", () => {
     expect(group?.recordCount).toBe(1);
     expect(group?.truncated).toBe(false);
     expect(flattenRecords(group?.records ?? []).map((track) => track.trackId)).toEqual(["t_one"]);
-    // The heading still links — to the first slug, exactly as the old `min(a.slug)` chose.
+
     expect(group?.slug).toBe("serum");
   });
 
   it("counts a truncated group's records over the WHOLE group, not the rendered slice", async () => {
-    // Two records, both far past the per-group cap. The cap drops rows from the SECOND record
-    // entirely, so a record count taken over what rendered would say one — it must say two.
     for (const album of ["Alpha", "Beta"]) {
       for (let i = 0; i < GRAPH_GROUP_TRACK_LIMIT; i++) {
         await seedCatalogueTrack({
@@ -966,9 +889,9 @@ describe("the label's two SQL counts, over the whole group", () => {
     expect(group?.recordCount).toBe(2);
     expect(group?.truncated).toBe(true);
     expect(flattenRecords(group?.records ?? [])).toHaveLength(GRAPH_GROUP_TRACK_LIMIT);
-    // Only the first record fits under the cap, so that is all the page renders.
+
     expect(group?.records.map((record) => record.name)).toEqual(["Alpha"]);
-    // The label's total still counts every track it carries.
+
     expect(page.totalTracks).toBe(GRAPH_GROUP_TRACK_LIMIT * 2);
   });
 });

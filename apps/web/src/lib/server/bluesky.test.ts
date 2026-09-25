@@ -2,15 +2,6 @@ import { describe, expect, it } from "vitest";
 import { type TrackMetadata } from "./spotify";
 import { formatBlueskyPost, linkFacet, normalizeIdentifier } from "./bluesky";
 
-// The Bluesky finding post is built by pure functions — formatBlueskyPost
-// (the text + external-card fields + the inlined-link facet), linkFacet (the
-// UTF-8 byte-offset link range), and normalizeIdentifier (the stored-handle →
-// createSession identifier form). No transport, no env, so these pin the SHAPE +
-// the voice (the 🛸 header mirroring Telegram, the note line, the Spotify listen
-// link, no hashtag spam) and the byte-offset correctness the AT Protocol needs.
-// The live crew-facing copy still gets a canon (VOICE.md) review; this guards the
-// machinery.
-
 const TRACK: TrackMetadata = {
   artists: ["Aktive", "Redeyes"],
   durationMs: 300000,
@@ -35,7 +26,7 @@ describe("formatBlueskyPost", () => {
         "🎧 Spotify: https://open.spotify.com/track/abc123",
       ].join("\n"),
     );
-    // One banger per post, no hashtag spam.
+
     expect(post.text).not.toContain("#");
   });
 
@@ -78,9 +69,6 @@ describe("formatBlueskyPost", () => {
       uri: "https://open.spotify.com/track/abc123",
     });
 
-    // The 🛸 (4 UTF-8 bytes) + the em dash (3 bytes) mean the byte offsets differ
-    // from the JS string indices — decode the byte slice to prove the range lands
-    // exactly on the URL.
     const bytes = new TextEncoder().encode(post.text);
     const slice = bytes.slice(facet?.index.byteStart, facet?.index.byteEnd);
     expect(new TextDecoder().decode(slice)).toBe("https://open.spotify.com/track/abc123");
@@ -105,7 +93,6 @@ describe("linkFacet", () => {
   it("computes UTF-8 byte offsets past a multi-byte glyph", () => {
     const facet = linkFacet("🛸 https://example.com", "https://example.com");
 
-    // "🛸 " is 4 + 1 = 5 bytes, so the URL starts at byte 5, not char index 3.
     expect(facet?.index.byteStart).toBe(5);
     expect(facet?.index.byteEnd).toBe(5 + "https://example.com".length);
   });

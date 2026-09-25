@@ -3,11 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import { amzDate, signS3Request } from "./aws-sigv4";
 
-// Pin the hand-rolled signer to `aws4fetch` (the trusted reference the app already
-// uses in r2-presign.ts): sign the same request both ways and assert byte-identical
-// Authorization. The box backup sweep mirrors `signS3Request`, so this is the guard
-// that the mirror — and the signer itself — stays correct.
-
 const CREDS = {
   accessKeyId: "AKIDEXAMPLE",
   region: "auto",
@@ -30,8 +25,6 @@ async function referenceAuth(
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
   const headers: Record<string, string> = {
-    // aws4fetch defaults S3 to UNSIGNED-PAYLOAD; force the real hash so both sign the
-    // signed-payload form our signer always uses.
     "x-amz-content-sha256": payloadHash,
   };
 
@@ -65,7 +58,7 @@ describe("signS3Request", () => {
     });
 
     expect(signed.authorization).toBe(await referenceAuth("PUT", url, body, "application/gzip"));
-    // Sends the x-amz set but never a Host header (fetch derives it from the URL).
+
     expect(signed.host).toBeUndefined();
     expect(signed["x-amz-date"]).toBe("20260706T123456Z");
     expect(signed["content-type"]).toBe("application/gzip");

@@ -1,27 +1,9 @@
-// Artist-avatar backfill: for existing artists minted before the `image_url` column,
-// fetch the largest Spotify profile image and stamp it onto `artists.image_url`.
-//
-// Mirrors the artist-entity backfill (backfill-artists.ts):
-//   - One bounded, cursor-resumable pass per request (MAX_BATCH artists).
-//   - Only PENDING artists still missing an image AND carrying a Spotify id are
-//     eligible. A genuine Spotify no-image response is terminal `none`; failures
-//     and shared-budget deferrals remain pending.
-//   - Spotify only permits this app's per-id `/v1/artists/{id}` path. The shared
-//     call meter stops a pass before it crowds out user-facing Spotify work.
-//
-// The create path (`upsertTrackArtists` → `fillMissingArtistImages`) covers every
-// artist minted from here on; this backfill catches the ~70 that predate the column.
-// The on-box `fluncle-artist-sweep` cron drains it a page per tick; the CLI
-// (`fluncle admin backfills artist-images`) loops the cursor for an ad-hoc run.
-
 import { fetchArtistImages } from "./spotify";
 import { getDb, typedRow, typedRows } from "./db";
 import { batchDueWorkSourceMutation } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
 
-// Keep the DB page bounded even though the per-id call meter normally pauses a
-// fresh-window pass after at most 24 lookups.
 const MAX_BATCH = 50;
 
 type BackfillRow = {
@@ -98,8 +80,6 @@ export async function backfillArtistImages(
       rows = restoreArtistImageOrder(typedRows<BackfillRow>(result.rows), page.subjectIds);
     }
   } else {
-    // GOAL H CONTRACTION: this is the unchanged source-table selector retained while Goal C's
-    // default-off cutover proves the due_work projection.
     rows = typedRows<BackfillRow>(
       (
         await db.execute({
@@ -147,8 +127,6 @@ export async function backfillArtistImages(
         const url = result.images.get(row.spotify_artist_id);
 
         if (url) {
-          // Keep image_state pending: the downstream owned-master sweep still has to
-          // ingest this Spotify source into Fluncle's R2.
           await batchDueWorkSourceMutation(
             db,
             [
@@ -167,8 +145,6 @@ export async function backfillArtistImages(
         }
 
         if (result.missingIds.has(row.spotify_artist_id)) {
-          // A matching 200 response with no usable image is a terminal verdict. It
-          // also removes the row from the owned-master sweep's pending source queue.
           await batchDueWorkSourceMutation(
             db,
             [
@@ -201,9 +177,6 @@ export async function backfillArtistImages(
     }
   }
 
-  // `queueDepth` is an exact public/CLI contract, so it is the explicit exception to replacing
-  // corpus counts with projection probes during Goal C. Producer retirement is not in this slice;
-  // a projection count or page sentinel would report stale/inexact work after the writes above.
   const queueDepthRow = typedRow<{ queue_depth: number }>(
     (
       await db.execute({
@@ -217,7 +190,6 @@ export async function backfillArtistImages(
   );
   const queueDepth = Number(queueDepthRow?.queue_depth ?? 0);
 
-  // Drained when the page came back short of the batch cap.
   const nextCursor =
     rateLimited || budgetLimited ? null : rows.length === batchLimit ? (lastId ?? null) : null;
 

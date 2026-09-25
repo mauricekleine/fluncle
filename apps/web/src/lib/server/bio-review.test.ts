@@ -1,14 +1,3 @@
-// The bio-review ledger, driven against a real in-memory libSQL engine (vitest env = node), so the
-// guarantees that live in SQL are proven by SQL rather than by a mock that agrees with the code.
-// `getDb` is mocked to hand back the per-test client (the artists-board.test.ts precedent).
-//
-// What these pin — the whole point of the slice. The entity-bio sweep's third draft LANDS even when
-// the voice scan refuses it, and the acceptance carries a review flag with a reader. So:
-//
-//   - a BYPASSED bio raises exactly ONE row, carrying its entity and the accepted reasons;
-//   - a CLEAN bio raises NONE (the false-positive case — a source that fires on good work is a
-//     source the operator stops reading, which is where this started);
-//   - both rulings CLEAR the row, and a later clean bio clears it too, by construction.
 import { type Client, createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,8 +16,6 @@ const { fillEmptyArtistBio } = await import("./artists");
 const { fillEmptyLabelBio } = await import("./labels");
 const { fillEmptyAlbumBio } = await import("./albums");
 
-// The three entity tables, trimmed to the bio engine's columns. `updated_at` is not null in the
-// real schema and every write sets it, so the shape here keeps that honest.
 const ENTITY_COLUMNS = `id text primary key, name text, slug text unique, bio text,
   bio_prompt_version integer, bio_status text, bio_gate_bypassed_at text,
   bio_voice_violations text, updated_at text`;
@@ -91,8 +78,6 @@ describe("the bio-review ledger", () => {
     )`);
   });
 
-  // ── The bypass raises a row ────────────────────────────────────────────────────────────────
-
   it("raises exactly one row for a bio that landed past the gate, carrying the entity and the accepted reasons", async () => {
     await seedEntity(db, "artists", { id: "a1", name: "Future Signal", slug: "future-signal" });
 
@@ -111,10 +96,9 @@ describe("the bio-review ledger", () => {
       "banned identity word: signal",
       "the Dry Rule: an exclamation mark",
     ]);
-    // The stamp is the queue's oldest-first anchor, so it has to be a real, parseable moment.
+
     expect(Number.isNaN(Date.parse(rows[0]?.anchorAt ?? ""))).toBe(false);
 
-    // The bio itself landed — the bypass is a REVIEW flag, never a rejection.
     const stored = await readEntity(db, "artists", "future-signal");
     expect(stored?.bio).toBe(GOOD_BIO);
     expect(stored?.bio_status).toBe("resolved");
@@ -131,28 +115,21 @@ describe("the bio-review ledger", () => {
     expect(rows.map((row) => row.kind).sort()).toEqual(["album", "label"]);
   });
 
-  // ── THE FALSE-POSITIVE CASE ────────────────────────────────────────────────────────────────
-
   it("raises NOTHING for a bio that cleared the gate", async () => {
     await seedEntity(db, "artists", { id: "a1", name: "Calibre", slug: "calibre" });
     await seedEntity(db, "labels", { id: "l1", name: "Signature", slug: "signature" });
     await seedEntity(db, "albums", { id: "b1", name: "Second Sun", slug: "second-sun" });
 
-    // The ordinary path: the gate passed, so no violations are handed to the write.
     await fillEmptyArtistBio("calibre", GOOD_BIO, 3);
     await fillEmptyLabelBio("signature", GOOD_BIO, 0, null);
     await fillEmptyAlbumBio("second-sun", GOOD_BIO, undefined, []);
 
     expect(await listBioReviewRows()).toEqual([]);
 
-    // …and the columns are explicitly NULL rather than merely unread, which is what makes a later
-    // clean bio able to clear a flag that stood.
     const stored = await readEntity(db, "artists", "calibre");
     expect(stored?.bio_gate_bypassed_at).toBeNull();
     expect(stored?.bio_voice_violations).toBeNull();
   });
-
-  // ── The rulings clear it ───────────────────────────────────────────────────────────────────
 
   it("clears the row on `keep` and leaves the paragraph exactly as it stands", async () => {
     await seedEntity(db, "artists", { id: "a1", name: "Future Signal", slug: "future-signal" });
@@ -181,8 +158,7 @@ describe("the bio-review ledger", () => {
 
     expect(await listBioReviewRows()).toEqual([]);
     const stored = await readEntity(db, "labels", "invaderz");
-    // Empty bio + `pending` is exactly the state the `describe --queue` worklist picks up, so the
-    // entity is genuinely re-authorable rather than merely unflagged.
+
     expect(stored?.bio).toBeNull();
     expect(stored?.bio_prompt_version).toBeNull();
     expect(stored?.bio_status).toBe("pending");
@@ -197,7 +173,6 @@ describe("the bio-review ledger", () => {
     await seedEntity(db, "artists", { id: "a1", name: "Future Signal", slug: "future-signal" });
     await fillEmptyArtistBio("future-signal", GOOD_BIO, 3, ["banned identity word: signal"]);
 
-    // The operator sends it back, and the next tick authors a paragraph the gate passes.
     await resolveBioReview({ kind: "artist", resolution: "rewrite", slug: "future-signal" });
     const refilled = await fillEmptyArtistBio("future-signal", `${GOOD_BIO} Rewritten.`, 4);
     expect(refilled).toBe(true);
@@ -213,13 +188,11 @@ describe("the bio-review ledger", () => {
     await seedEntity(db, "artists", { id: "a1", name: "Calibre", slug: "calibre" });
     await fillEmptyArtistBio("calibre", GOOD_BIO, 0);
 
-    // Never flagged: `rewrite` must not be a back door that empties any bio by slug.
     expect(await resolveBioReview({ kind: "artist", resolution: "rewrite", slug: "calibre" })).toBe(
       false,
     );
     expect((await readEntity(db, "artists", "calibre"))?.bio).toBe(GOOD_BIO);
 
-    // Unknown slug: reported, never silently ok.
     expect(await resolveBioReview({ kind: "artist", resolution: "keep", slug: "nobody" })).toBe(
       false,
     );
@@ -234,8 +207,6 @@ describe("the bio-review ledger", () => {
 
     expect(await listBioReviewRows()).toHaveLength(BIO_REVIEW_QUEUE_LIMIT);
   });
-
-  // ── The evidence column degrades, never throws ─────────────────────────────────────────────
 
   it("still raises the row when the reasons column is corrupt", async () => {
     await seedEntity(db, "artists", { id: "a1", name: "Calibre", slug: "calibre" });

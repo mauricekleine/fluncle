@@ -1,44 +1,18 @@
-// Bluesky (AT Protocol) publish side-channel. When a finding publishes, the
-// publish boundary posts it to @fluncle.com (the verified custom-domain handle)
-// as a link card pointing at the finding's /log page, with the finding's OG
-// card as the card thumbnail.
-//
-// This mirrors telegram.ts — a single non-platform HTTPS caller kept in
-// `apps/web`, so the Worker stays the one place that talks to a delivery service
-// (the AT Protocol app password lives in Worker secrets, never on the agent box).
-// Plain `fetch` against the XRPC endpoints — no @atproto/api dependency.
-//
-// The whole feature is a NO-OP until `BLUESKY_IDENTIFIER` + `BLUESKY_APP_PASSWORD`
-// are set: `readOptionalEnv` returns undefined, `postToBluesky` returns
-// immediately, and a publish is never touched. SAFETY: the publish call site
-// swallows any error this throws (same discipline as the Deezer / Last.fm /
-// artist-upsert side channels), so a Bluesky hiccup can never fail or delay a
-// finding going out — nor the Telegram leg that runs before it.
-
 import { logPageUrl, siteUrl } from "../fluncle-links";
 import { readOptionalEnv } from "./env";
 import { type TrackMetadata } from "./spotify";
 
-// The account lives on a Bluesky-hosted PDS (the @fluncle.com handle is a
-// custom domain, not a self-hosted PDS), so bsky.social is the XRPC host for
-// the session + the repo writes.
 const XRPC_BASE = "https://bsky.social/xrpc";
 
-// The default card description when the operator hasn't authored a finding note —
-// the entity tagline (docs/socials/), so the link preview never reads empty.
 const DEFAULT_CARD_DESCRIPTION = "Drum & bass bangers from another dimension.";
 
 const notePrefix = "Why I'm playing it:";
 
-// A richtext facet marking a byte range of the post text as a link (AT Protocol
-// works in UTF-8 byte offsets, not JS string indices).
 type Facet = {
   index: { byteEnd: number; byteStart: number };
   features: Array<{ $type: "app.bsky.richtext.facet#link"; uri: string }>;
 };
 
-// The external link-card embed (app.bsky.embed.external) with its optional thumb
-// blob, resolved from uploadBlob.
 type ExternalEmbed = {
   $type: "app.bsky.embed.external";
   external: {
@@ -49,7 +23,6 @@ type ExternalEmbed = {
   };
 };
 
-// The blob reference uploadBlob returns; passed straight back into the record.
 type BlobRef = {
   $type: "blob";
   mimeType: string;
@@ -59,11 +32,6 @@ type BlobRef = {
 
 type CreateSessionResponse = { accessJwt: string; did: string };
 
-// The pure shape of a finding's Bluesky post: the text (mirroring the Telegram
-// register — the 🛸 header, the artist line, the note, the 🎧 Spotify listen
-// link), the facet that turns the inlined Spotify URL into a tappable link, and
-// the external-card fields (the /log page + its OG card thumb). Exported +
-// transport-free so the text/facet builders can be unit-tested without the API.
 export function formatBlueskyPost(
   track: TrackMetadata,
   note?: string,
@@ -82,9 +50,6 @@ export function formatBlueskyPost(
     lines.push(`${notePrefix} ${trimmedNote}`);
   }
 
-  // The listen link, inlined like the Telegram post's Spotify line. The card
-  // below carries the /log home, so the text carries the direct Spotify link (a
-  // different URL) — one link per surface, no hashtag spam.
   const spotifyLine = `🎧 Spotify: ${track.spotifyUrl}`;
   lines.push("", spotifyLine);
 
@@ -93,8 +58,6 @@ export function formatBlueskyPost(
     Boolean(facet),
   );
 
-  // The card points at the finding's permanent home. Older findings predate the
-  // Log ID; fall back to the site root so the embed still resolves.
   const uri = logId?.trim() ? logPageUrl(logId) : `${siteUrl}/`;
 
   return {
@@ -108,10 +71,6 @@ export function formatBlueskyPost(
   };
 }
 
-// Build a link facet for the first occurrence of `url` in `text`, in UTF-8 byte
-// offsets (AT Protocol indexes richtext by bytes, so a multi-byte glyph like 🛸
-// before the URL shifts the range). Returns undefined when the URL isn't found.
-// Exported for the unit test.
 export function linkFacet(text: string, url: string): Facet | undefined {
   const charIndex = text.indexOf(url);
 
@@ -129,20 +88,12 @@ export function linkFacet(text: string, url: string): Facet | undefined {
   };
 }
 
-// Normalize the stored identifier for createSession: the operator stores the
-// HANDLE form ("@fluncle.com"), but the AT Protocol identifier is the bare
-// handle/DID with no leading "@" — strip it so the stored value works as-is.
-// Exported for the unit test.
 export function normalizeIdentifier(identifier: string): string {
   const trimmed = identifier.trim();
 
   return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
 }
 
-// Post a finding to @fluncle.com as an external link card. No-op when the
-// credentials are unset (the whole feature ships dark until provisioned). On a
-// real API failure it throws — mirroring postToTelegram — and the publish call
-// site swallows it so a Bluesky hiccup never fails the publish.
 export async function postToBluesky(
   track: TrackMetadata,
   note?: string,
@@ -160,9 +111,6 @@ export async function postToBluesky(
   const session = await createSession(normalizeIdentifier(identifier), appPassword);
   const post = formatBlueskyPost(track, note, logId);
 
-  // Best-effort thumb: fetch the finding's OG card and upload it as a blob. A
-  // miss (fetch/upload failure, oversize) drops the thumb rather than the post —
-  // the card still resolves with its title + description.
   const thumb = logId?.trim()
     ? await uploadOgThumb(session, logId).catch(() => undefined)
     : undefined;
@@ -205,7 +153,6 @@ export async function postToBluesky(
   }
 }
 
-// Exchange the identifier + app password for an access JWT + the account DID.
 async function createSession(
   identifier: string,
   appPassword: string,
@@ -224,9 +171,6 @@ async function createSession(
   return (await response.json()) as CreateSessionResponse;
 }
 
-// Fetch the finding's OG card (the same 1200×630 image the /log page points
-// og:image at) and upload it as a blob for the card thumbnail. Throws on any
-// non-2xx so the caller's `.catch` drops the thumb cleanly.
 async function uploadOgThumb(session: CreateSessionResponse, logId: string): Promise<BlobRef> {
   const ogResponse = await fetch(`${siteUrl}/api/og/${encodeURIComponent(logId)}`);
 

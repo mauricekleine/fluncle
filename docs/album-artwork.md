@@ -30,6 +30,8 @@ An entity with no usable source is terminal `image_state='none'` and falls throu
 
 ## Serving (Cloudflare Images)
 
+Account portraits use a separate `avatars/<session-user-id>.<ext>` key in the public R2 bucket. The binary upload route derives the owner from the session, requires a same-origin request and a valid CSRF token, and checks MIME type, byte size, and intrinsic dimensions before writing. The served image URL carries a version query so an overwrite cannot show a stale face; removing a portrait clears the database URL while the object may be overwritten by a later upload.
+
 Owned masters are served through **Cloudflare Images URL transforms** (`/cdn-cgi/image/…` — a SEPARATE zone toggle from the video `/cdn-cgi/media` one; decision B, source restricted to this zone). The URL shape (verified against the [Cloudflare Images docs](https://developers.cloudflare.com/images/optimization/features/), URL interface — `<ZONE>/cdn-cgi/image/<OPTIONS>/<SOURCE>`):
 
 ```

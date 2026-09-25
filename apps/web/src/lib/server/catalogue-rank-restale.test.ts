@@ -5,7 +5,6 @@ import {
   restaleCatalogueRankStatements,
 } from "./catalogue-rank-restale";
 
-/** Every `?` the builder emitted, so a chunk's bind list can be checked against its args. */
 function placeholderCount(sql: string): number {
   return (sql.match(/\?/g) ?? []).length;
 }
@@ -16,8 +15,6 @@ function ids(count: number, prefix = "t"): string[] {
 
 describe("restaleCatalogueRankStatements", () => {
   it("returns no statement for an empty batch, so a caller can spread it unconditionally", () => {
-    // Every caller splices the result into an existing write batch with `...`. A builder that
-    // returned a statement for zero ids would put an unbound `in ()` into that batch.
     expect(restaleCatalogueRankStatements([])).toEqual([]);
   });
 
@@ -30,15 +27,12 @@ describe("restaleCatalogueRankStatements", () => {
   });
 
   it("binds exactly one placeholder per argument in every chunk", () => {
-    // The bind list is the whole point of the chunking: a placeholder/arg mismatch is a
-    // runtime libSQL error inside somebody else's write batch, far from this file.
     for (const statement of restaleCatalogueRankStatements(ids(451))) {
       expect(placeholderCount(statement.sql)).toBe(statement.args.length);
     }
   });
 
   it("keeps a chunk at or under 200 ids and covers every id exactly once", () => {
-    // 200 is the chunk ceiling that keeps the bind list clear of SQLite's parameter cap.
     const input = ids(451);
     const statements = restaleCatalogueRankStatements(input);
 
@@ -52,9 +46,6 @@ describe("restaleCatalogueRankStatements", () => {
   });
 
   it("nulls the corpus by PRIMARY KEY and adds no `is_catalogue` guard", () => {
-    // The header's planner law: with no `sqlite_stat1` on hosted Turso an `is_catalogue = 1`
-    // predicate pulls the planner onto `tracks_is_catalogue_idx` and turns each restale into a
-    // full catalogue scan. Correctness comes from the selective key, so the guard must stay off.
     const [statement] = restaleCatalogueRankStatements(["track-1"]);
 
     expect(statement?.sql).toMatch(/set catalogue_rank_corpus = null/);
@@ -74,7 +65,6 @@ describe("restaleCatalogueRankByLabelStatement", () => {
   });
 
   it("adds no `is_catalogue` guard either", () => {
-    // Same planner law as the per-track form: the selective key is `tracks_label_id_idx`.
     expect(restaleCatalogueRankByLabelStatement("label-hospital").sql).not.toMatch(/is_catalogue/);
   });
 });

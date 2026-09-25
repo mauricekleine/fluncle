@@ -16,25 +16,7 @@ import {
   upsertTrackDuplicateKeyStatement,
 } from "./track-duplicate-keys";
 
-/** The digest segment of the fingerprint when no artist is qualified — the state of most fixtures here. */
 const EMPTY_DIGEST = qualifiedArtistsDigest([]);
-
-// THE EAR'S RANKING, PROVEN — against the REAL schema, with vectors we control.
-//
-// The claim The Ear makes to the operator is a specific one: "this track is close to THAT
-// finding." A ranking nobody verified is a ranking nobody can trust, and the SQL that
-// produces it (a cross join through `vector_distance_cos`, a window function picking each
-// candidate's single nearest finding) cannot be checked by reading it. So these cases seed
-// catalogue tracks whose embeddings are PERTURBATIONS of specific findings' embeddings, run
-// the sweep, and assert it picks the finding we know is nearest.
-//
-// The load-bearing case is `it("ranks by max-similarity to ANY finding, never to a centroid")`.
-// Everything else could pass with a centroid ranking; that one cannot. It is the whole
-// design decision, executable.
-//
-// Runs on the in-memory libSQL database built from the generated migrations, so the vector
-// SQL under test (`vector32`, `vector_distance_cos`, `row_number() over (partition by …)`)
-// is executed by a real engine against the real DDL — not a mock.
 
 let db: Client;
 let fixtureDirectory: string | undefined;
@@ -47,7 +29,6 @@ vi.mock("./db", async (importOriginal) => {
 
 const DIMS = 1024;
 
-/** A unit vector pointing along one axis — an "artificial genre" we can aim tracks at. */
 function axis(index: number): number[] {
   const vector = Array.from<number>({ length: DIMS }).fill(0);
   vector[index] = 1;
@@ -55,19 +36,16 @@ function axis(index: number): number[] {
   return vector;
 }
 
-/** Normalize, so every fixture vector is unit-length like a real MuQ vector. */
 function unit(vector: number[]): number[] {
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
 
   return vector.map((value) => value / norm);
 }
 
-/** A vector `weight` of the way from `from` toward `toward` — a controlled near-neighbour. */
 function blend(from: number[], toward: number[], weight: number): number[] {
   return unit(from.map((value, index) => value * (1 - weight) + (toward[index] ?? 0) * weight));
 }
 
-/** The write the agent-tier `update_track` path performs: the validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
   await seedEmbedding(db, trackId, vector);
 }
@@ -82,7 +60,6 @@ type SeedOptions = {
   vector?: number[];
 };
 
-/** A certified finding, optionally embedded / labelled / ISRC-stamped. */
 async function seedFinding(trackId: string, options: SeedOptions = {}): Promise<void> {
   await seedTrack(db, {
     artists: options.artists ?? ["Finding Artist"],
@@ -94,7 +71,6 @@ async function seedFinding(trackId: string, options: SeedOptions = {}): Promise<
   await applySeedOptions(trackId, options);
 }
 
-/** A catalogue track: a `tracks` row with NO `findings` row. Optionally embedded / stamped. */
 async function seedCatalogue(trackId: string, options: SeedOptions = {}): Promise<void> {
   await seedCatalogueTrack(db, {
     artists: options.artists ?? ["Catalogue Artist"],
@@ -144,13 +120,6 @@ async function setIsrc(trackId: string, isrc: string): Promise<void> {
   );
 }
 
-// ── The artist graph + label rulings, for AUTHORIZATION (RFC artist-primary-capture, slice 1) ──
-// Capture authorization is artist-driven: a track may be bought iff a credited artist is QUALIFIED
-// (an identity edge in `track_artists`, either to an artist with a certified finding or one with a
-// weighted release count ≥ 3 on enabled labels) OR its label is `enabled`. These helpers seed that
-// graph so the sweep's real SQL — not a mock — decides.
-
-/** Insert an `artists` row (the qualification set is keyed on `artists.id`). */
 async function seedArtistRow(id: string, name: string, slug: string): Promise<void> {
   await db.execute({
     args: [id, name, slug],
@@ -159,7 +128,6 @@ async function seedArtistRow(id: string, name: string, slug: string): Promise<vo
   });
 }
 
-/** Insert a `track_artists` edge — the identity link authorization reads. */
 async function edge(
   trackId: string,
   artistId: string,
@@ -172,7 +140,6 @@ async function edge(
   });
 }
 
-/** Point a track at a label entity (`tracks.label_id`) — the weighted-count join reads it. */
 async function linkLabel(trackId: string, labelId: string): Promise<void> {
   await db.execute({
     args: [labelId, trackId],
@@ -180,7 +147,6 @@ async function linkLabel(trackId: string, labelId: string): Promise<void> {
   });
 }
 
-/** Insert a `labels` row with a `seed_state` ruling (enabled seeds discovery AND authorizes). */
 async function ruleLabel(
   id: string,
   name: string,
@@ -194,7 +160,6 @@ async function ruleLabel(
   });
 }
 
-/** Read a catalogue row's stored ranking columns straight from the table. */
 async function rankingOf(trackId: string): Promise<{
   capture_priority: number | null;
   catalogue_rank_corpus: string | null;
@@ -232,13 +197,10 @@ describe("the ranking — the sweep picks the finding we know is nearest", () =>
   it("matches each catalogue track to the finding its vector was perturbed from", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // Three findings, mutually orthogonal — three "regions" of the operator's taste.
     await seedFinding("finding-liquid", { title: "Liquid Finding", vector: axis(0) });
     await seedFinding("finding-neuro", { title: "Neuro Finding", vector: axis(1) });
     await seedFinding("finding-jungle", { title: "Jungle Finding", vector: axis(2) });
 
-    // Three catalogue tracks, each pulled 15% of the way from one finding toward another.
-    // Every one is unambiguously nearest the finding it started at.
     await seedCatalogue("cat-liquid", { vector: blend(axis(0), axis(1), 0.15) });
     await seedCatalogue("cat-neuro", { vector: blend(axis(1), axis(2), 0.15) });
     await seedCatalogue("cat-jungle", { vector: blend(axis(2), axis(0), 0.15) });
@@ -270,21 +232,15 @@ describe("the ranking — the sweep picks the finding we know is nearest", () =>
     const nearScore = (await rankingOf("cat-near")).nearest_finding_score;
     const farScore = (await rankingOf("cat-far")).nearest_finding_score;
 
-    // The SQL's `1 - vector_distance_cos` agrees with the pure cosine, to float32 precision
-    // (the blob stores float32; the JS math is float64).
     expect(nearScore).toBeCloseTo(cosineSimilarity(near, axis(0)), 4);
     expect(farScore).toBeCloseTo(cosineSimilarity(far, axis(0)), 4);
-    // And the nearer track scores HIGHER — the column sorts DESC, so this is the direction
-    // the whole surface depends on.
+
     expect(nearScore ?? 0).toBeGreaterThan(farScore ?? 1);
   });
 
   it("ranks by max-similarity to ANY finding, never to a centroid", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // THE DESIGN DECISION, MADE EXECUTABLE. The operator's taste is multi-modal: here it is
-    // eight findings crowded on one axis and ONE lonely finding on another. The mean of that
-    // corpus sits almost exactly on the crowd — a place none of his taste actually lives.
     for (let index = 0; index < 8; index += 1) {
       await seedFinding(`finding-crowd-${index}`, {
         vector: blend(axis(0), axis(index + 10), 0.02),
@@ -292,11 +248,8 @@ describe("the ranking — the sweep picks the finding we know is nearest", () =>
     }
     await seedFinding("finding-lonely", { vector: axis(5) });
 
-    // A catalogue track that is a DEAD RINGER for the lonely finding (cos ≈ 0.995) — and
-    // essentially orthogonal to the crowd, so its similarity to the CENTROID is ~0.1.
     await seedCatalogue("cat-near-lonely", { vector: blend(axis(5), axis(6), 0.07) });
-    // A catalogue track that is a mediocre match for the crowd (cos ≈ 0.83) — but the crowd
-    // IS the centroid, so a centroid ranking would put this one on top.
+
     await seedCatalogue("cat-mid-crowd", { vector: blend(axis(0), axis(7), 0.4) });
 
     await rankCatalogue();
@@ -304,8 +257,6 @@ describe("the ranking — the sweep picks the finding we know is nearest", () =>
     const lonely = await rankingOf("cat-near-lonely");
     const crowd = await rankingOf("cat-mid-crowd");
 
-    // Max-similarity: the dead ringer matched the LONELY finding, and beats the mediocre
-    // crowd-match. Under a centroid ranking this assertion inverts — which is the point.
     expect(lonely.nearest_finding_track_id).toBe("finding-lonely");
     expect(lonely.nearest_finding_score ?? 0).toBeGreaterThan(0.99);
     expect(crowd.nearest_finding_score ?? 0).toBeLessThan(0.9);
@@ -321,7 +272,6 @@ describe("the ranking — the sweep picks the finding we know is nearest", () =>
 
     const summary = await rankCatalogue();
 
-    // Only the ONE catalogue row was a candidate; the two findings were anti-joined out.
     expect(summary.scored).toBe(1);
 
     for (const findingId of ["finding-a", "finding-b"]) {
@@ -347,16 +297,11 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     expect(first.corpus).toMatch(new RegExp(`^v6:1:1:0:${EMPTY_DIGEST}:[0-9a-f]{16}$`));
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-a");
 
-    // Nothing changed: the fingerprint matches, so there is no candidate at all.
     const second = await rankCatalogue();
     expect(second.scored).toBe(0);
     expect(second.prioritized).toBe(0);
     expect(second.remaining).toBe(0);
 
-    // A new finding lands, and it is a BETTER match for the catalogue track (closer than
-    // finding-a, but not a near-1.0 same-master — that would be wrong-audio territory). The
-    // fingerprint moves, the row goes stale on its own, and the next tick re-points it — no
-    // invalidation call from the publish path, which is the whole point of the fingerprint.
     await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.4) });
 
     const third = await rankCatalogue();
@@ -364,7 +309,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     expect(third.scored).toBe(1);
     expect(third.quarantined).toBe(0);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-b");
-    // Closer than finding-a's ~0.92, but comfortably below the wrong-audio line.
+
     expect((await rankingOf("cat-a")).nearest_finding_score ?? 0).toBeGreaterThan(0.95);
   });
 
@@ -377,9 +322,6 @@ describe("the sweep — batching, staleness, and self-healing", () => {
       await seedCatalogue(`cat-${index}`, { vector: blend(axis(0), axis(index + 1), 0.2) });
     }
 
-    // A FULL batch (`candidates.length >= limit`) reports the "> 0, run me again" SENTINEL without
-    // the ~19s anti-join COUNT — more rows are stale by construction (docs/db-scale-backlog Wave 1
-    // #1). It is a signal, not a live count (the sweep only reads it for its `=== 0` stop test).
     const first = await rankCatalogue(2);
     expect(first.scored).toBe(2);
     expect(first.remaining).toBeGreaterThan(0);
@@ -388,12 +330,10 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     expect(second.scored).toBe(2);
     expect(second.remaining).toBeGreaterThan(0);
 
-    // A SHORT batch (fewer than `limit` candidates) exhausted the stale set → remaining 0, loop stops.
     const third = await rankCatalogue(2);
     expect(third.scored).toBe(1);
     expect(third.remaining).toBe(0);
 
-    // The sentinel drove the WHOLE backlog through — every row is ranked, none left stale.
     for (let index = 0; index < 5; index += 1) {
       expect((await rankingOf(`cat-${index}`)).nearest_finding_track_id).toBe("finding-a");
     }
@@ -402,9 +342,6 @@ describe("the sweep — batching, staleness, and self-healing", () => {
   it("shapes rank maintenance at the 500-subject due-work API boundary", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // 501 moved tracks is the smallest public rank batch that needs two maintenance calls under the
-    // due-work helper's 500-subject API contract. Keep the fixture unvectored so each candidate
-    // contributes exactly one source update; this isolates the maintenance cardinality.
     const batchSize = 501;
     const transaction = await db.transaction("write");
     try {
@@ -440,8 +377,6 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     )?.[0];
     expect(rankBatch).toBeDefined();
 
-    // The marker is now a changed-row selection over a `values` row constructor, still chunked at
-    // the helper's 500-subject API bound: one 500-row selection, then one 1-row selection.
     const sourceRepairRows = (rankBatch ?? [])
       .filter(
         (statement) =>
@@ -466,7 +401,6 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     ).toBe(true);
     batchSpy.mockRestore();
 
-    // Chunking changes only the marker statement shape: the rank stamp still makes a retry a no-op.
     const retry = await rankCatalogue(batchSize);
     expect(retry.prioritized).toBe(0);
     expect(retry.scored).toBe(0);
@@ -491,14 +425,10 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     await seedFinding("finding-a", { vector: axis(0) });
 
-    // FOUR rows with BATCH 2 is the subtle case: two full batches drain everything, then the sentinel
-    // forces ONE more (empty) tick that reports 0 — so the loop must still terminate on an exact
-    // multiple of the batch size, never spin to the tick budget on a finite backlog.
     for (let index = 0; index < 4; index += 1) {
       await seedCatalogue(`cat-${index}`, { vector: blend(axis(0), axis(index + 1), 0.2) });
     }
 
-    // The EXACT loop rank-sweep.ts runs: call while `remaining > 0`, bounded by a hard tick budget.
     const MAX_CALLS = 8;
     let calls = 0;
     let scored = 0;
@@ -511,10 +441,9 @@ describe("the sweep — batching, staleness, and self-healing", () => {
       remaining = tick.remaining;
     }
 
-    // It STOPPED because the backlog drained (remaining 0), NOT because it hit the budget.
     expect(remaining).toBe(0);
     expect(calls).toBeLessThan(MAX_CALLS);
-    // Two full batches (4 rows) + one confirming empty tick.
+
     expect(calls).toBe(3);
     expect(scored).toBe(4);
     for (let index = 0; index < 4; index += 1) {
@@ -528,8 +457,6 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     await seedFinding("finding-a", { vector: axis(0) });
     await seedCatalogue("cat-a", { vector: blend(axis(0), axis(1), 0.2) });
 
-    // An empty BATCH is not an empty BACKLOG. A cron that trusted an assumed `remaining: 0`
-    // here would stop calling while the row was still stale.
     const summary = await rankCatalogue(0);
 
     expect(summary.scored).toBe(0);
@@ -545,21 +472,14 @@ describe("the sweep — batching, staleness, and self-healing", () => {
       await seedCatalogue(`cat-${index}`, { vector: blend(axis(0), axis(index + 1), 0.2) });
     }
 
-    // OPT-IN (`countRemaining = true`): a FULL batch of 2 reports the REAL live count of what is
-    // still stale — 6 seeded − 2 just ranked = 4. This is the human-facing CLI readout's behaviour.
     const counted = await rankCatalogue(2, true);
     expect(counted.scored).toBe(2);
     expect(counted.remaining).toBe(4);
 
-    // DEFAULT (`countRemaining = false`): the SAME full-batch shape reports the SENTINEL — a constant
-    // "> 0, run me again" flag (`RANK_MORE_REMAIN` = 1), NOT the true backlog. The box sweep's win.
     const sentinel = await rankCatalogue(2);
     expect(sentinel.scored).toBe(2);
     expect(sentinel.remaining).toBe(1);
 
-    // …and the sentinel really did understate it: a scan-only tick (limit 0 → the `limit <= 0`
-    // guard's real COUNT, ranking nothing) shows 2 genuinely still stale — exactly what the opt-in
-    // count restores for the operator's manual readout.
     const trueLeft = await rankCatalogue(0);
     expect(trueLeft.scored).toBe(0);
     expect(trueLeft.remaining).toBe(2);
@@ -568,22 +488,16 @@ describe("the sweep — batching, staleness, and self-healing", () => {
   it("re-scores a row whose OWN vector arrived after it was ranked (capture → embed)", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // The real lifecycle, in order: the crawler mints a vectorless row, the ranking sweep
-    // gives it a pre-audio capture tier, THEN the capture+embed pipeline gives it a vector.
-    // Neither corpus number moved, so the fingerprint alone would leave it on the ladder
-    // forever — the bug the 58 first-ever catalogue embeds hit. The scoring path always
-    // nulls `capture_priority`, so tier-still-set + vector-present is the stale signal.
     await seedArtistRow("art-fa", "Finding Artist", "finding-artist");
     await seedFinding("finding-a", { artists: ["Finding Artist"], vector: axis(0) });
-    await edge("finding-a", "art-fa"); // certifies the artist qualified
+    await edge("finding-a", "art-fa");
     await seedCatalogue("cat-a", { artists: ["Finding Artist"] });
-    await edge("cat-a", "art-fa"); // the row credits the qualified artist by identity
+    await edge("cat-a", "art-fa");
 
     const first = await rankCatalogue();
     expect(first.prioritized).toBe(1);
     expect((await rankingOf("cat-a")).capture_priority).toBe(3);
 
-    // The capture+embed side-channel lands the vector; the corpus is untouched.
     await embed("cat-a", blend(axis(0), axis(1), 0.2));
 
     const second = await rankCatalogue();
@@ -594,8 +508,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     const ranking = await rankingOf("cat-a");
     expect(ranking.nearest_finding_track_id).toBe("finding-a");
     expect(ranking.nearest_finding_score ?? 0).toBeGreaterThan(0.9);
-    // The tier is cleared by the scoring write, so the row has LEFT the stale set — a third
-    // tick must be a clean no-op (no re-pick loop).
+
     expect(ranking.capture_priority).toBeNull();
     const third = await rankCatalogue();
     expect(third.scored).toBe(0);
@@ -605,7 +518,6 @@ describe("the sweep — batching, staleness, and self-healing", () => {
   it("stamps a row it cannot score, so a hopeless row is never re-picked forever", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // No finding is embedded, so nothing can be a nearest neighbour.
     await seedFinding("finding-a");
     await seedCatalogue("cat-a", { vector: axis(0) });
 
@@ -613,7 +525,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     expect(summary.embeddedFindings).toBe(0);
     expect(summary.scored).toBe(1);
-    // Stamped, with an honest null score — not left stale to be re-picked every tick.
+
     const ranking = await rankingOf("cat-a");
     expect(ranking.nearest_finding_score).toBeNull();
     expect(ranking.catalogue_rank_corpus).toBe(summary.corpus);
@@ -623,7 +535,6 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
 describe("the capture queue — authorization, then the priority ladder", () => {
   beforeEach(async () => {
-    // A QUALIFIED artist (Krakota): an artists row + a certified finding crediting it by identity.
     await seedArtistRow("art-krakota", "Krakota", "krakota");
     await seedFinding("finding-a", {
       artists: ["Krakota"],
@@ -631,34 +542,29 @@ describe("the capture queue — authorization, then the priority ladder", () => 
       vector: axis(0),
     });
     await edge("finding-a", "art-krakota");
-    // Hospital Records: ENABLED (authorizes) AND carries a finding (the tier-2 hint).
+
     await ruleLabel("lbl-hospital", "Hospital Records", "hospital-records", "enabled");
-    // Critical Music: ENABLED, nothing certified on it yet (the tier-1 rung).
+
     await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
-    // The veto's real shape: a label the operator ruled OUT that nonetheless CARRIES a finding —
-    // a crossover remix. All 8 disabled labels in the live archive look like this.
+
     await seedFinding("finding-crossover", { artists: ["Above & Beyond"], label: "Anjunabeats" });
     await ruleLabel("lbl-out", "Anjunabeats", "anjunabeats", "disabled");
-    // Atlantic UK: NOT enabled, but CARRIES a finding — the label-mate counter-example.
+
     await seedFinding("finding-atlantic", { artists: ["A Crossover"], label: "Atlantic UK" });
   });
 
   it("tiers AUTHORIZED tracks by the priority ladder, and SINKS the unauthorized", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // No vectors on any of these — they have never been captured, which is exactly why the
-    // Ear cannot rank them and this ladder has to.
-    // A qualified artist (by identity edge) on an UNDECIDED label — authorized, tier 3.
     await seedCatalogue("cat-artist", { artists: ["Krakota"], label: "Some Other Label" });
     await edge("cat-artist", "art-krakota");
-    // Authorized via its ENABLED label, which also carries a finding — the tier-2 hint (via fold).
+
     await seedCatalogue("cat-label", { artists: ["Nobody"], label: "hospital records." });
-    // Authorized via its enabled label, nothing certified yet — tier 1.
+
     await seedCatalogue("cat-seed", { artists: ["Nobody"], label: "Critical Music" });
-    // No qualified artist, label not enabled — UNAUTHORIZED (the new negative tier).
+
     await seedCatalogue("cat-unauth", { artists: ["Nobody"], label: "Nobody's Imprint" });
-    // The veto, on real archive shape: Anjunabeats CARRIES a finding and is RULED OUT. Checked
-    // before authorization — a qualified artist (edge) still sinks to −1.
+
     await seedCatalogue("cat-vetoed", { artists: ["Krakota"], label: "Anjunabeats" });
     await edge("cat-vetoed", "art-krakota");
 
@@ -667,27 +573,20 @@ describe("the capture queue — authorization, then the priority ladder", () => 
     expect(summary.prioritized).toBe(5);
     expect(summary.scored).toBe(0);
 
-    // 3 — a credited artist is qualified (identity). Capture follows the artist, even onto an
-    // undecided label the operator has not ruled on.
     expect((await rankingOf("cat-artist")).capture_priority).toBe(3);
-    // 2 — authorized via its enabled label, which also carries a finding. Note the fold:
-    // `hospital records.` and `Hospital Records` are one label everywhere else in the archive.
+
     expect((await rankingOf("cat-label")).capture_priority).toBe(2);
-    // 1 — in-lane but unproven: an enabled label, nothing certified on it yet.
+
     expect((await rankingOf("cat-seed")).capture_priority).toBe(1);
-    // −3 — UNAUTHORIZED. No qualified artist, and its label is not enabled. Metadata welcome,
-    // money withheld — excluded from the capture queue by the existing `capture_priority >= 0`.
+
     expect((await rankingOf("cat-unauth")).capture_priority).toBe(-3);
-    // −1 — VETOED, checked FIRST. A qualified artist on a ruled-out label still sinks; his ruling
-    // beats the strongest signal. The veto has its own tier, distinct from `unauthorized` (−3).
+
     expect((await rankingOf("cat-vetoed")).capture_priority).toBe(-1);
   });
 
   it("authorizes an EDGE-LESS track via its enabled label (the pre-backfill common case)", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // ~2/3 of catalogue rows carry no graph edges until slice 0 drains. This one has none, and an
-    // unknown artist name — but its label is enabled, so it is authorized and captureable.
     await seedCatalogue("cat-edgeless", { artists: ["Unknown Name"], label: "Critical Music" });
 
     await rankCatalogue();
@@ -698,8 +597,6 @@ describe("the capture queue — authorization, then the priority ladder", () => 
   it("does NOT authorize a label-mate off a finding on a NON-enabled label (Atlantic-UK pin)", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // Atlantic UK carries a finding but is not enabled. A crawled label-mate with no qualified
-    // artist must NOT ride that lone finding into the budget — the exact overshoot this rule ends.
     await seedCatalogue("cat-atlantic", { artists: ["Nobody"], label: "Atlantic UK" });
 
     await rankCatalogue();
@@ -710,8 +607,6 @@ describe("the capture queue — authorization, then the priority ladder", () => 
   it("qualifies an artist by WEIGHTED release count ≥ 3 on enabled labels (no finding needed)", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // An artist with no certified finding, but three primary credits on enabled labels — weighted
-    // 3.0, exactly the threshold. He qualifies, so a catalogue row crediting him is authorized.
     await seedArtistRow("art-worker", "Session Worker", "session-worker");
 
     for (const index of [0, 1, 2]) {
@@ -731,8 +626,6 @@ describe("the capture queue — authorization, then the priority ladder", () => 
   it("holds the WEIGHTED arity guard — 2 primary + 1 remixer is 2.5, below the threshold", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // The weighting is load-bearing: primary credit 1.0, remixer 0.5. Two primaries and one remix
-    // sum to 2.5 — NOT qualified — so a row crediting this artist on an undecided label sinks.
     await seedArtistRow("art-light", "Light Credit", "light-credit");
     await seedCatalogue("rel-p0", { artists: ["Light Credit"], label: "Critical Music" });
     await linkLabel("rel-p0", "lbl-seed");
@@ -749,7 +642,6 @@ describe("the capture queue — authorization, then the priority ladder", () => 
 
     await rankCatalogue();
 
-    // 2.5 < 3 → not qualified, and the undecided label does not authorize → unauthorized.
     expect((await rankingOf("cat-light")).capture_priority).toBe(-3);
   });
 
@@ -757,35 +649,28 @@ describe("the capture queue — authorization, then the priority ladder", () => 
     const { rankCatalogue } = await import("./catalogue");
     const { linkTracksToArtistEntities } = await import("./artists");
 
-    // The load-bearing self-healing property (RFC slice 1), now via v5's TARGETED mechanism: slice 0's
-    // backfill (`linkTracksToArtistEntities`) adds an edge to an ALREADY-qualified artist, so the
-    // qualified-set fingerprint does NOT move — the re-stale comes from the write path nulling THIS
-    // row's `catalogue_rank_corpus`, and only this row's.
     await seedArtistRow("art-late", "Late Edge", "late-edge");
     await seedFinding("finding-late", { artists: ["Late Edge"], label: "Some Label" });
-    await edge("finding-late", "art-late"); // Late Edge is qualified (by finding)
-    // A catalogue row that credits Late Edge but has NO edge yet (pre-backfill) on an undecided label.
+    await edge("finding-late", "art-late");
+
     await seedCatalogue("cat-late", { artists: ["Late Edge"], label: "Undecided Imprint" });
-    // A sibling catalogue row that gains NO edge this time — the "exactly that row" control.
+
     await seedCatalogue("cat-bystander", {
       artists: ["Nobody At All"],
       label: "Undecided Imprint",
     });
 
     await rankCatalogue();
-    // Edge-less + undecided label → unauthorized, exactly as the strict identity rule requires.
+
     expect((await rankingOf("cat-late")).capture_priority).toBe(-3);
     const bystanderCorpusBefore = (await rankingOf("cat-bystander")).catalogue_rank_corpus;
     expect(bystanderCorpusBefore).not.toBeNull();
 
-    // Slice 0 folds the name onto the real artist row: the edge lands via the REAL write path.
     await linkTracksToArtistEntities(["cat-late"]);
 
-    // Exactly the edged row was re-staled; the bystander's fingerprint is untouched.
     expect((await rankingOf("cat-late")).catalogue_rank_corpus).toBeNull();
     expect((await rankingOf("cat-bystander")).catalogue_rank_corpus).toBe(bystanderCorpusBefore);
 
-    // The next tick re-derives the edged row's tier under the new graph; the bystander stays put.
     await rankCatalogue();
     expect((await rankingOf("cat-late")).capture_priority).toBe(3);
     expect((await rankingOf("cat-bystander")).capture_priority).toBe(-3);
@@ -804,8 +689,6 @@ describe("the capture queue — authorization, then the priority ladder", () => 
     const ear = await listCatalogueTracks("ear");
     const capture = await listCatalogueTracks("capture");
 
-    // The embedded one is in The Ear and NOT in the capture queue (it has already been
-    // captured — capturing it again is the one thing the queue must never ask for).
     expect(ear.map((track) => track.trackId)).toEqual(["cat-fed"]);
     expect(capture.map((track) => track.trackId)).toEqual(["cat-hungry"]);
     expect((await rankingOf("cat-fed")).capture_priority).toBeNull();
@@ -827,8 +710,6 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       vector: axis(1),
     });
 
-    // cat-best stays BELOW the duplicate display band (≥ 0.995 never ranks — the
-    // operator's ruling): a strong find, not a copy.
     await seedCatalogue("cat-best", { vector: blend(axis(1), axis(2), 0.15) });
     await seedCatalogue("cat-mid", { vector: blend(axis(0), axis(2), 0.25) });
     await seedCatalogue("cat-worst", { vector: blend(axis(0), axis(2), 0.5) });
@@ -839,8 +720,6 @@ describe("the read — the ranked page, and the WHY on every row", () => {
 
     expect(page.map((track) => track.trackId)).toEqual(["cat-best", "cat-mid", "cat-worst"]);
 
-    // THE WHY. Not a bare score: the row names the finding it matched, hydrated with the
-    // title, the artists, and the coordinate — the sentence the operator actually reads.
     const best = page[0];
     expect(best?.nearestFinding?.trackId).toBe("finding-nutone");
     expect(best?.nearestFinding?.title).toBe("Heaven's Gate");
@@ -859,8 +738,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     await edge("finding-a", "art-krakota");
     await ruleLabel("lbl-hospital", "Hospital Records", "hospital-records", "enabled");
     await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
-    // A qualified artist (edge) — tier 3. Authorized via its enabled label + a finding — tier 2.
-    // Authorized via its enabled label alone — tier 1.
+
     await seedCatalogue("cat-seed", { artists: ["Nobody"], label: "Critical Music" });
     await seedCatalogue("cat-artist", { artists: ["Krakota"] });
     await edge("cat-artist", "art-krakota");
@@ -871,8 +749,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     const page = await listCatalogueTracks("capture");
 
     expect(page.map((track) => track.trackId)).toEqual(["cat-artist", "cat-label", "cat-seed"]);
-    // The ladder rung is re-derived through the SAME pure function the sweep writes
-    // the tier, so the sort key and the explanation cannot drift apart.
+
     expect(page[0]?.captureReason).toEqual({ kind: "artist", name: "Krakota" });
     expect(page[1]?.captureReason).toEqual({ kind: "label", name: "Hospital Records" });
     expect(page[2]?.captureReason).toEqual({ kind: "seed-label", name: "Critical Music" });
@@ -893,8 +770,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     expect(await getCatalogueSummary()).toEqual({
       awaitingCapture: 0,
       awaitingRank: 0,
-      // The counts are now cached with a freshness stamp (the rank sweep wrote them); the six
-      // numbers are still exact, and `computedAt` is the ISO stamp of when the sweep computed them.
+
       computedAt: expect.any(String),
       dismissed: 0,
       quarantined: 0,
@@ -918,34 +794,24 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     expect(summary.total).toBe(3);
     expect(summary.ranked).toBe(1);
     expect(summary.awaitingCapture).toBe(1);
-    // The third row never made it into the batch of 2 — it has no fingerprint at all.
+
     expect(summary.awaitingRank).toBe(1);
   });
 
   it("keeps the cached summary IDENTICAL to a full recompute via the per-tick batch DELTA", async () => {
-    // Item 2 (docs/db-scale-backlog Wave 1 #2): an ACTIVE rank tick shifts the cached six counts by a
-    // BATCH delta (the moved rows' after − before buckets), NOT the O(catalogue) full recompute (that
-    // is gated to the idle/drain-end tick). This pins delta-application == full-recompute across a
-    // whole multi-batch drain, so the hoist can never silently corrupt a catalogue count.
     const { computeCatalogueCounts, getCatalogueSummary, rankCatalogue, refreshCatalogueSummary } =
       await import("./catalogue");
 
     await seedFinding("finding-a", { vector: axis(0) });
-    // A spread across buckets: rows that will SCORE (vectored) and rows that stay PRE-AUDIO (a capture
-    // tier, unvectored) — so the delta moves several buckets at once, every batch.
+
     await seedCatalogue("cat-score-0", { vector: blend(axis(0), axis(1), 0.2) });
     await seedCatalogue("cat-score-1", { vector: blend(axis(0), axis(2), 0.2) });
     await seedCatalogue("cat-score-2", { vector: blend(axis(0), axis(3), 0.2) });
     await seedCatalogue("cat-pre-0");
     await seedCatalogue("cat-pre-1");
 
-    // Warm the cache with the authoritative PRE-rank truth, so each tick applies a delta to a real
-    // cache (a cold cache is a documented no-op the next read cold-fills — proven elsewhere).
     await refreshCatalogueSummary();
 
-    // Drain in small batches; after EVERY tick the delta-updated cache must equal a fresh full
-    // recompute of the post-tick DB — the cache read is a KV hit (no recompute), so this compares the
-    // delta's arithmetic against the SQL aggregate directly.
     for (let tick = 0; tick < 6; tick += 1) {
       const summary = await rankCatalogue(2);
       const cached = await getCatalogueSummary();
@@ -967,25 +833,16 @@ describe("the read — the ranked page, and the WHY on every row", () => {
   });
 
   it("reads the archive affinity ONCE per tick — the pre-audio ladder feeds the display cache", async () => {
-    // Item 4 (docs/db-scale-backlog Wave 1 #4): the pre-audio ladder and the display-affinity cache
-    // both need `readArchiveAffinity`; the tick now computes it once and threads it into the cache
-    // refresh, so the weighted qualified-artist GROUP BY runs once per call, not twice.
     const { rankCatalogue } = await import("./catalogue");
 
     await seedFinding("finding-a", { vector: axis(0) });
-    // An UNVECTORED row makes the tick run the pre-audio ladder (needsPreAudio) AND refresh the
-    // display-affinity cache — the two reads item 4 collapses into one.
+
     await seedCatalogue("cat-unvectored");
 
     const executeSpy = vi.spyOn(db, "execute");
     await rankCatalogue();
 
-    // The weighted qualified-artist fragment (`having sum(case when ta.role = 'remixer' …)`) is now
-    // reached through the one cutover helper by both archive affinity and the rank fingerprint. With
-    // the default-off flag, each call executes the unchanged full legacy union exactly once.
     const calls = executeSpy.mock.calls.map((call) => {
-      // `Client.execute` is overloaded (string form + object form), so the mock-call arg is typed to
-      // the string overload; the affinity reads all use the object form (`{ sql, args }`).
       const arg = call[0] as string | { sql: string };
 
       return typeof arg === "string" ? arg : arg.sql;
@@ -995,24 +852,14 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     );
     executeSpy.mockRestore();
 
-    // One union feeds affinity and one feeds the fingerprint: no second affinity recompute.
     expect(weightedFragment).toHaveLength(2);
     expect(weightedFragment.every((sql) => sql.includes("union"))).toBe(true);
   });
 
   it("the pure bucket classifier agrees with the SQL aggregate, bucket-for-bucket (the delta drift guard)", async () => {
-    // THE DRIFT GUARD. The operator mutations keep the cached summary honest with a single-row ±1
-    // DELTA, driven by the pure `bucketsForRow` classifier — never the full recompute. That is only
-    // safe if the classifier agrees, arm for arm, with `computeCatalogueCounts`'s SQL CASE arms. So
-    // seed rows in every bucket (and every NULL edge case), then assert a TALLY of the classifier
-    // over those rows equals the SQL aggregate exactly. If either side drifts, this trips.
     const { WRONG_AUDIO_STATUS, bucketsForRow, computeCatalogueCounts, readRowBuckets } =
       await import("./catalogue");
 
-    // Set a catalogue row's summary-relevant columns directly, so each fixture lands in a KNOWN set
-    // of buckets. `undefined` leaves the seeded default (duration 270_000, everything else null) —
-    // and `capture_status` defaults to 'pending', because the column is NOT NULL (schema.ts) and can
-    // never hold NULL: a fresh crawled row is always 'pending'.
     const setCols = async (
       trackId: string,
       cols: {
@@ -1061,19 +908,17 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       await seedCatalogue(id);
     }
 
-    await setCols("b-awaiting-rank", { corpus: null }); // {total, awaitingRank}
-    await setCols("b-ranked", { corpus, score: 0.9 }); // {total, ranked}
-    await setCols("b-awaiting-capture", { capturePriority: 3, corpus }); // {total, awaitingCapture}
-    // The REAL fresh-crawled-row state: capture_status defaults to 'pending' (never NULL), a
-    // pre-audio tier assigned, no score, in the duration window → awaiting-capture, agreeing with SQL.
-    await setCols("b-fresh-pending", { capturePriority: 2, corpus }); // {total, awaitingCapture}
-    await setCols("b-quarantined", { captureStatus: WRONG_AUDIO_STATUS, corpus }); // {total, quarantined}
-    await setCols("b-dismissed", { dismissedAt: "2026-07-22T00:00:00.000Z" }); // {dismissed}
-    await setCols("b-duplicate", { corpus, duplicateOf: "finding-x", score: 0.99 }); // {total} — scored but a stored duplicate
-    await setCols("b-long-form", { corpus, durationMs: 20 * 60_000, score: 0.9 }); // {total} — scored but over the long-form line
-    await setCols("b-multi", { capturePriority: 3, corpus: null }); // {total, awaitingCapture, awaitingRank}
+    await setCols("b-awaiting-rank", { corpus: null });
+    await setCols("b-ranked", { corpus, score: 0.9 });
+    await setCols("b-awaiting-capture", { capturePriority: 3, corpus });
 
-    // The SQL aggregate (the authority) vs a tally of the pure classifier over the SAME rows.
+    await setCols("b-fresh-pending", { capturePriority: 2, corpus });
+    await setCols("b-quarantined", { captureStatus: WRONG_AUDIO_STATUS, corpus });
+    await setCols("b-dismissed", { dismissedAt: "2026-07-22T00:00:00.000Z" });
+    await setCols("b-duplicate", { corpus, duplicateOf: "finding-x", score: 0.99 });
+    await setCols("b-long-form", { corpus, durationMs: 20 * 60_000, score: 0.9 });
+    await setCols("b-multi", { capturePriority: 3, corpus: null });
+
     const sql = await computeCatalogueCounts();
     const tally = {
       awaitingCapture: 0,
@@ -1091,7 +936,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     }
 
     expect(tally).toEqual(sql);
-    // Pin the expected shape too, so a change that drifts BOTH sides in lockstep still trips.
+
     expect(sql).toEqual({
       awaitingCapture: 3,
       awaitingRank: 2,
@@ -1101,7 +946,6 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       total: 8,
     });
 
-    // And the pure classifier directly, on constructed rows — the discriminators explicitly.
     const base = {
       capturePriority: 3,
       captureStatus: "pending",
@@ -1111,12 +955,12 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       durationMs: 270_000,
       nearestFindingScore: null,
     } as const;
-    expect([...bucketsForRow(base)].sort()).toEqual(["awaitingCapture", "total"]); // fresh 'pending' ⇒ awaiting-capture
+    expect([...bucketsForRow(base)].sort()).toEqual(["awaitingCapture", "total"]);
     expect([...bucketsForRow({ ...base, captureStatus: WRONG_AUDIO_STATUS })].sort()).toEqual([
       "quarantined",
       "total",
-    ]); // 'wrong-audio' ⇒ quarantined, not awaiting-capture
-    expect([...bucketsForRow({ ...base, durationMs: null })]).toEqual(["total"]); // NULL duration ⇒ not awaiting-capture
+    ]);
+    expect([...bucketsForRow({ ...base, durationMs: null })]).toEqual(["total"]);
     expect([...(await readRowBuckets("b-multi"))].sort()).toEqual([
       "awaitingCapture",
       "awaitingRank",
@@ -1129,12 +973,9 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
   it("flags a pre-audio ISRC duplicate: tier −2, the finding STORED, still on the board with its WHY", async () => {
     const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
 
-    // THE REAL EVENT, in fixtures. The crawler pulled in a copy of a track already logged — same
-    // ISRC, cosmetically different formatting (hyphens/case), the shape a raw equality would miss.
     await seedFinding("finding-owned", { isrc: "GBAYE1234567", title: "Infinity" });
     await seedCatalogue("cat-dupe", { isrc: "gb-aye-12-34567", title: "Infinity (copy)" });
-    // A genuine candidate with no clash, on an ENABLED label so it is authorized — the queue must
-    // still hand THIS one out.
+
     await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
     await seedCatalogue("cat-real", {
       artists: ["Nobody"],
@@ -1145,14 +986,11 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     const summary = await rankCatalogue();
     expect(summary.prioritized).toBe(2);
 
-    // −2, strictly below the label veto's −1, and the finding it duplicates is stored so the
-    // board can NAME it (never a silent disappearance).
     const dupe = await rankingOf("cat-dupe");
     expect(dupe.capture_priority).toBe(-2);
     expect(dupe.duplicate_of_track_id).toBe("finding-owned");
     expect(dupe.nearest_finding_score).toBeNull();
 
-    // Still visible on the capture board, ordered LAST, carrying the finding as its WHY.
     const capture = await listCatalogueTracks("capture");
     expect(capture.map((track) => track.trackId)).toEqual(["cat-real", "cat-dupe"]);
     const dupeItem = capture.find((track) => track.trackId === "cat-dupe");
@@ -1166,33 +1004,24 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
       await import("./catalogue");
 
     await seedFinding("finding-owned", { title: "Infinity", vector: axis(0) });
-    // An ALTERNATE master lands in the display band: above DUPLICATE_SIMILARITY (a near-dup), but
-    // below WRONG_AUDIO_QUARANTINE — a genuinely different recording, so never vetoed. The
-    // operator's ruling (the Anwius "Trust" case): a known duplicate is not a
-    // discovery, so the EAR ranking excludes it — its perfect score would sit above every
-    // real find.
+
     await seedCatalogue("cat-identical", {
       title: "Infinity (copy)",
       vector: blend(axis(0), axis(1), 0.06),
     });
-    // A genuine near-neighbour — close, but a different recording, and clearly below threshold.
+
     await seedCatalogue("cat-near", { vector: blend(axis(0), axis(1), 0.2) });
 
     await rankCatalogue();
 
-    // The ear page carries ONLY the real discovery; the display-band duplicate is filtered out.
     const ear = await listCatalogueTracks("ear");
     expect(ear.map((track) => track.trackId)).toEqual(["cat-near"]);
     expect(ear[0]?.duplicateOf).toBeNull();
 
-    // The exclusion fired on the display band, not arbitrarily: the raw ranking proves the
-    // row scored into [DUPLICATE_SIMILARITY, WRONG_AUDIO_QUARANTINE).
     const stored = await rankingOf("cat-identical");
     expect(stored.nearest_finding_score ?? 0).toBeGreaterThanOrEqual(DUPLICATE_SIMILARITY);
     expect(stored.nearest_finding_score ?? 1).toBeLessThan(WRONG_AUDIO_QUARANTINE);
 
-    // And the similarity half stays DISPLAY-ONLY: nothing written to `duplicate_of_track_id`,
-    // no capture-ladder involvement — the row simply does not rank.
     expect(stored.duplicate_of_track_id).toBeNull();
     expect(stored.capture_priority).toBeNull();
   });
@@ -1207,35 +1036,22 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     expect(first.prioritized).toBe(1);
     expect((await rankingOf("cat-dupe")).duplicate_of_track_id).toBe("finding-owned");
 
-    // The row is stamped with the live fingerprint, so it is NOT stale — the next tick is a
-    // no-op and it is never re-picked (no loop).
     const second = await rankCatalogue();
     expect(second.prioritized).toBe(0);
     expect(second.scored).toBe(0);
     expect(second.remaining).toBe(0);
 
-    // Delete the finding it duplicated: the corpus fingerprint moves (findings count drops), so
-    // the row goes stale on its own and re-ranks — and the stale marker clears, because there is
-    // no longer anything it is a duplicate of. Self-healing, with no invalidation call.
     await db.execute({ args: ["finding-owned"], sql: `delete from findings where track_id = ?` });
 
     await rankCatalogue();
     const cleared = await rankingOf("cat-dupe");
     expect(cleared.duplicate_of_track_id).toBeNull();
-    // It falls back to the ordinary ladder — no qualified artist and no enabled label in the (now
-    // empty) archive, so it is UNAUTHORIZED: metadata welcome, money withheld.
+
     expect(cleared.capture_priority).toBe(-3);
   });
 });
 
-// ── The matchKey-vs-findings detector — a logged track's twin (the "Drifting Away" ruling)
-// A crawled catalogue row whose folded title+artist `matchKey` equals a certified finding's is that
-// same song — a DUPLICATE regardless of ISRC (a YouTube rip carries none) and regardless of embedding
-// score (the rip scored a merely-0.94 twin of the finding it copies). The ISRC-only pre-audio detector
-// and the ≥0.995 post-embed detector both missed it. This detector fires on BOTH sides of the audio
-// boundary — the pre-audio ladder and the scored path — stamping the −2 duplicate tier + the finding.
 describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind and score-blind", () => {
-  /** Stamp a catalogue row with the operator's force-capture sentinel, the way `forceCapture` would. */
   async function markCleared(trackId: string): Promise<void> {
     await db.execute({
       args: [trackId],
@@ -1246,9 +1062,6 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
   it("pre-audio: a no-ISRC row with the same folded title+artist as a finding is tier −2, finding stored, last on the board", async () => {
     const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
 
-    // THE LIVE CASE. The crawler pulled a YouTube-rip copy of a logged track — NO ISRC — with a
-    // cosmetically different formatting (reversed artist order, lowercase, a hyphen for the space).
-    // The folded `matchKey` sees through all of it: same recording.
     await seedFinding("finding-drifting", {
       artists: ["BOP", "Unquote"],
       title: "Drifting Away",
@@ -1257,8 +1070,7 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
       artists: ["unquote", "bop"],
       title: "DRIFTING-AWAY",
     });
-    // A genuine candidate with no clash, on an ENABLED label so it is authorized — the queue must
-    // still hand THIS one out first.
+
     await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
     await seedCatalogue("cat-real", {
       artists: ["Nobody"],
@@ -1269,14 +1081,11 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
     const summary = await rankCatalogue();
     expect(summary.prioritized).toBe(2);
 
-    // −2, strictly below the label veto's −1, the finding STORED so the board can name it — even
-    // though there is no ISRC anywhere and no vector to score against.
     const twin = await rankingOf("cat-twin");
     expect(twin.capture_priority).toBe(-2);
     expect(twin.duplicate_of_track_id).toBe("finding-drifting");
     expect(twin.nearest_finding_score).toBeNull();
 
-    // Still on the capture board, ordered LAST behind the real candidate, carrying its WHY.
     const capture = await listCatalogueTracks("capture");
     expect(capture.map((track) => track.trackId)).toEqual(["cat-real", "cat-twin"]);
     expect(capture.find((track) => track.trackId === "cat-twin")?.duplicateOf?.trackId).toBe(
@@ -1288,9 +1097,6 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
     const { DUPLICATE_SIMILARITY, listCatalogueTracks, rankCatalogue } =
       await import("./catalogue");
 
-    // The exact defect: a rip of the logged "Drifting Away" embedded to a merely-0.94 twin of the
-    // finding — far below the 0.995 post-embed band, so ISRC-only detectors sailed past it and it
-    // ranked as a top discovery. The title+artist identity catches it regardless of the score.
     await seedFinding("finding-drifting", {
       artists: ["BOP", "Unquote"],
       title: "Drifting Away",
@@ -1301,7 +1107,7 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
       title: "Drifting Away (copy)",
       vector: blend(axis(0), axis(1), 0.25),
     });
-    // A genuine discovery so the ear lens is not trivially empty.
+
     await seedCatalogue("cat-disco", { vector: blend(axis(0), axis(2), 0.3) });
 
     await rankCatalogue();
@@ -1309,12 +1115,10 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
     const twin = await rankingOf("cat-twin");
     expect(twin.duplicate_of_track_id).toBe("finding-drifting");
     expect(twin.capture_priority).toBe(-2);
-    // It KEEPS its score — the honest WHY of the number — and that score is genuinely below the
-    // near-identical band, proving the detector is score-blind, not a re-labelled 0.995 marker.
+
     expect(twin.nearest_finding_score ?? 0).toBeGreaterThan(0.85);
     expect(twin.nearest_finding_score ?? 1).toBeLessThan(DUPLICATE_SIMILARITY);
 
-    // And it never occupies a ranked ear slot — a known copy is not a discovery.
     const ear = await listCatalogueTracks("ear");
     const earIds = ear.map((track) => track.trackId);
     expect(earIds).toContain("cat-disco");
@@ -1324,8 +1128,6 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
   it("a VIP or a different artist is a DIFFERENT identity — not a duplicate, still ranks", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // A VIP is a different recording — its descriptor is part of the identity, so an original of a
-    // logged VIP (or a VIP of a logged original) is a real discovery, never a duplicate.
     await seedFinding("finding-dribble", {
       artists: ["Enei"],
       title: "Dribble",
@@ -1336,7 +1138,7 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
       title: "Dribble - VIP",
       vector: blend(axis(0), axis(1), 0.2),
     });
-    // Same title, DIFFERENT artist — also a different identity, also a real discovery.
+
     await seedFinding("finding-shared", {
       artists: ["Artist A"],
       title: "Shared Title",
@@ -1350,7 +1152,6 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
 
     await rankCatalogue();
 
-    // Neither is stamped a duplicate; both keep an ordinary scored ranking (tier cleared, score kept).
     for (const id of ["cat-vip", "cat-other-artist"]) {
       const row = await rankingOf(id);
       expect(row.duplicate_of_track_id).toBeNull();
@@ -1368,12 +1169,12 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
       title: "The Same Song",
       vector: axis(0),
     });
-    await edge("finding-twin", "art-known"); // Known is a qualified artist
-    // Pre-audio (no vector): a matchKey twin the operator already forced past the veto.
+    await edge("finding-twin", "art-known");
+
     await seedCatalogue("cat-preaudio", { artists: ["Known"], title: "The Same Song" });
     await edge("cat-preaudio", "art-known");
     await markCleared("cat-preaudio");
-    // Scored (a vector): same identity, also force-cleared.
+
     await seedCatalogue("cat-scored", {
       artists: ["Known"],
       title: "The Same Song",
@@ -1383,13 +1184,10 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
 
     await rankCatalogue();
 
-    // Pre-audio: NOT re-vetoed to −2 — it lands on its HONEST tier (artist "Known" is on the finding
-    // → 3) and re-enters the capture queue.
     const preaudio = await rankingOf("cat-preaudio");
     expect(preaudio.duplicate_of_track_id).toBeNull();
     expect(preaudio.capture_priority).toBe(3);
 
-    // Scored: NOT re-stamped either — it ranks on its own merits (tier cleared, score kept).
     const scored = await rankingOf("cat-scored");
     expect(scored.duplicate_of_track_id).toBeNull();
     expect(scored.capture_priority).toBeNull();
@@ -1398,7 +1196,6 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
 });
 
 describe("wrong audio — a cross-title near-1.0 capture is quarantined, never trusted (docs/the-ear.md § Wrong audio)", () => {
-  /** Give a catalogue row a captured-audio key, the way a real capture would. */
   async function withSourceKey(trackId: string, key: string): Promise<void> {
     await db.execute({
       args: [key, trackId],
@@ -1406,7 +1203,6 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     });
   }
 
-  /** Read the capture side-channel columns the quarantine touches, plus its vector. */
   async function stateOf(trackId: string): Promise<{
     capture_status: null | string;
     embedding_blob: unknown;
@@ -1414,8 +1210,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
   }> {
     const result = await db.execute({
       args: [trackId],
-      // LEFT JOIN, so a quarantined row (its satellite row deleted) still returns — with a null
-      // `embedding_blob`, which is exactly what "the vector is gone" now looks like.
+
       sql: `select t.capture_status, emb.embedding_blob, t.source_audio_key
             from tracks t
             left join track_embeddings emb on emb.track_id = t.track_id
@@ -1428,15 +1223,13 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
   it("quarantines a CROSS-TITLE near-1.0 row: the vector is dropped, the bad key kept, the row re-queued", async () => {
     const { WRONG_AUDIO_STATUS, rankCatalogue } = await import("./catalogue");
 
-    // The audit's real case: Flowidus "Find Your Love" captured the audio of the SAME artist's
-    // already-logged "Shelter", so its vector is identical to Shelter's under a different title.
     await seedArtistRow("art-flowidus", "Flowidus", "flowidus");
     await seedFinding("finding-shelter", {
       artists: ["Flowidus"],
       title: "Shelter",
       vector: axis(0),
     });
-    await edge("finding-shelter", "art-flowidus"); // Flowidus is a qualified artist
+    await edge("finding-shelter", "art-flowidus");
     await seedCatalogue("cat-fyl", {
       artists: ["Flowidus"],
       title: "Find Your Love",
@@ -1451,18 +1244,15 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
 
     const summary = await rankCatalogue();
     expect(summary.quarantined).toBe(1);
-    // A quarantined row is no longer a scored find — it never reaches the top of the ear lens.
+
     expect(summary.scored).toBe(0);
 
     const row = await rankingOf("cat-fyl");
-    // Rewound to the pre-audio ladder: no score, the restored capture tier (artist Flowidus is on
-    // a finding → 3), and the collided finding KEPT as the WHY.
+
     expect(row.nearest_finding_score).toBeNull();
     expect(row.nearest_finding_track_id).toBe("finding-shelter");
     expect(row.capture_priority).toBe(3);
 
-    // The vector is nulled (it was a lie), the bad key is KEPT (the re-capture's bad-audio memory),
-    // and the status marks it quarantined.
     const state = await stateOf("cat-fyl");
     expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
     expect(state.embedding_blob).toBeNull();
@@ -1476,11 +1266,6 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
   it("reads the archive's TITLE+ARTIST identity ONCE per tick, both directions off one statement", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // The near-1.0 path is the one that needs BOTH folds of the same rows: `matchKey → finding`
-    // (the duplicate detector, wanted on every tick) and `finding → matchKey` (the wrong-audio
-    // discriminator, wanted here). They are one shared read rather than two functions issuing the byte-identical
-    // `findings join tracks` statement, so a tick like this one read the archive twice — the shape
-    // shared by `readArchiveAffinity`.
     await seedArtistRow("art-flowidus", "Flowidus", "flowidus");
     await seedFinding("finding-shelter", {
       artists: ["Flowidus"],
@@ -1499,14 +1284,11 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     const spy = vi.spyOn(db, "execute");
     const summary = await rankCatalogue();
 
-    // The tick really did take the near-1.0 branch — otherwise this pins nothing.
     expect(summary.quarantined).toBe(1);
 
     const identityReads = spy.mock.calls.filter((call) => {
       const sql = String((call[0] as { sql?: string })?.sql ?? "");
 
-      // The identity read's own projection — title AND credits keyed by the finding, which is what
-      // distinguishes it from the affinity/ISRC reads over the same join.
       return (
         sql.includes("findings.track_id as track_id") &&
         sql.includes("tracks.title as title") &&
@@ -1522,7 +1304,6 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
   it("does NOT quarantine a SAME-TITLE near-1.0 row — it is a true duplicate (tier −2, finding stored, vector kept)", async () => {
     const { DUPLICATE_CAPTURE_TIER, rankCatalogue } = await import("./catalogue");
 
-    // Same artist AND same title → the crawler re-found a logged track, with the RIGHT audio.
     await seedFinding("finding-shelter", {
       artists: ["Flowidus"],
       title: "Shelter",
@@ -1538,7 +1319,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     expect(summary.quarantined).toBe(0);
 
     const row = await rankingOf("cat-shelter");
-    // The #545 duplicate handling: named, tier −2, and it KEEPS its vector + score (not quarantined).
+
     expect(row.duplicate_of_track_id).toBe("finding-shelter");
     expect(row.capture_priority).toBe(DUPLICATE_CAPTURE_TIER);
     expect(row.nearest_finding_score ?? 0).toBeGreaterThan(0.99);
@@ -1570,9 +1351,6 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     const first = await rankCatalogue();
     expect(first.quarantined).toBe(1);
 
-    // The next tick is a NO-OP: the quarantined row (vector nulled, corpus stamped) and the −2 true
-    // duplicate (a deliberate negative tier the staleness `>= 0` clause leaves stable) are neither
-    // re-scored nor re-quarantined.
     const second = await rankCatalogue();
     expect(second.quarantined).toBe(0);
     expect(second.scored).toBe(0);
@@ -1589,7 +1367,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
       title: "Shelter",
       vector: axis(0),
     });
-    await edge("finding-shelter", "art-flowidus"); // Flowidus is a qualified artist
+    await edge("finding-shelter", "art-flowidus");
     await seedCatalogue("cat-fyl", {
       artists: ["Flowidus"],
       title: "Find Your Love",
@@ -1601,12 +1379,9 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     await rankCatalogue();
     expect((await stateOf("cat-fyl")).capture_status).toBe("wrong-audio");
 
-    // The operator overrules the verdict — "this capture is fine".
     expect(await clearWrongAudio("cat-fyl")).toBe(true);
     expect((await stateOf("cat-fyl")).capture_status).toBe(QUARANTINE_CLEARED);
 
-    // Its kept audio re-embeds (simulate the embed cron), then a re-rank scores it NORMALLY — the
-    // near-1.0 does NOT re-quarantine, because the operator's override is sticky.
     await embed("cat-fyl", axis(0));
     const summary = await rankCatalogue();
     expect(summary.quarantined).toBe(0);
@@ -1615,15 +1390,12 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     expect(row.nearest_finding_score ?? 0).toBeGreaterThan(0.99);
     expect((await stateOf("cat-fyl")).capture_status).toBe(QUARANTINE_CLEARED);
 
-    // A second force-clear is a no-op — the row is not quarantined anymore.
     expect(await clearWrongAudio("cat-fyl")).toBe(false);
   });
 
   it("the operator flag rewinds a FINDING: vector out, provenance reset, bad key kept; findings-only", async () => {
     const { flagWrongAudio, WRONG_AUDIO_STATUS } = await import("./catalogue");
 
-    // The audit's real case, other side: the FINDING "Down With Your Love" captured Infinity's
-    // audio — the sweep can only accuse the catalogue side, so the operator flags the finding.
     await seedFinding("finding-dwyl", {
       artists: ["Freaks & Geeks"],
       title: "Down With Your Love",
@@ -1632,8 +1404,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     await withSourceKey("finding-dwyl", "005.9.9L/badbeef.webm");
     await db.execute({
       args: ["finding-dwyl"],
-      // A standing capture-source pin with its operator stamps, exactly as `pinCaptureSource` leaves
-      // them: this capture came from the operator's own pick.
+
       sql: `update tracks set analyzed_from = 'full', capture_status = 'done',
                               capture_source_pin = 'dQw4w9WgXcQ',
                               capture_source_pin_allow_duration = 1,
@@ -1654,11 +1425,6 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
         .rows[0]?.rankable_track_count,
     ).toBe(0);
 
-    // The pin RETIRES with the flag (docs/the-ear.md § Wrong audio): left standing, the re-queued
-    // sweep would re-buy the very upload just ruled wrong, on the operator's own authority, forever.
-    // Its `operator` stamps go with it, the way `clearCaptureSource` withdraws them: /identity must
-    // stop saying a human ruled for audio the human just rejected, and the provenance backfill
-    // (gated on `source_verification is null`) must be free to re-examine the row.
     const pinned = await db.execute({
       args: ["finding-dwyl"],
       sql: `select capture_source_pin, capture_source_pin_allow_duration, youtube_video_id,
@@ -1678,23 +1444,19 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
 
     const state = await stateOf("finding-dwyl");
     expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
-    // The poisoned vector leaves the ranking corpus immediately…
+
     expect(state.embedding_blob).toBeNull();
-    // …the bad bytes' key is KEPT (the sha memory the capture sweep hash-rejects)…
+
     expect(state.source_audio_key).toBe("005.9.9L/badbeef.webm");
-    // …and the analysis provenance resets, so the post-re-capture sweep re-enriches
-    // (shouldReenrichAfterCapture keys off exactly this).
+
     const provenance = await db.execute({
       args: ["finding-dwyl"],
       sql: `select analyzed_from from tracks where track_id = ?`,
     });
     expect(provenance.rows[0]?.analyzed_from ?? null).toBeNull();
 
-    // Idempotent: a second flag reports honestly that nothing changed.
     expect(await flagWrongAudio("finding-dwyl")).toBe(false);
 
-    // …while an id a FINGERPRINT sweep earned is not the operator's to lose: a flag on such a row
-    // leaves the YouTube trio and the SoundCloud evidence exactly where they were.
     await seedFinding("finding-fp", {
       artists: ["Freaks & Geeks"],
       title: "Fingerprinted",
@@ -1723,8 +1485,6 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
       youtube_video_official: 1,
     });
 
-    // The guard mirror of clearWrongAudio's: a CATALOGUE row is never flaggable — that side of
-    // the collision belongs to the sweep's own quarantine.
     await seedCatalogue("cat-inf", {
       artists: ["Freaks & Geeks"],
       title: "Infinity",
@@ -1740,19 +1500,17 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
     const { listCatalogueTracks, rankCatalogue, setTrackDismissed } = await import("./catalogue");
 
     await seedFinding("finding-a", { vector: axis(0) });
-    // One scored (ear-lens) row and one cold (capture-lens) row.
+
     await seedCatalogue("cat-scored", { vector: blend(axis(0), axis(1), 0.2) });
     await seedCatalogue("cat-cold");
     await rankCatalogue();
 
-    // Both are present before dismissal.
     expect((await listCatalogueTracks("ear")).map((t) => t.trackId)).toContain("cat-scored");
     expect((await listCatalogueTracks("capture")).map((t) => t.trackId)).toContain("cat-cold");
 
     expect(await setTrackDismissed("cat-scored", true)).toBe(true);
     expect(await setTrackDismissed("cat-cold", true)).toBe(true);
 
-    // Gone from the working lenses, present in the restore pile.
     expect((await listCatalogueTracks("ear")).map((t) => t.trackId)).not.toContain("cat-scored");
     expect((await listCatalogueTracks("capture")).map((t) => t.trackId)).not.toContain("cat-cold");
     expect((await listCatalogueTracks("dismissed")).map((t) => t.trackId).sort()).toEqual([
@@ -1760,14 +1518,11 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
       "cat-scored",
     ]);
 
-    // The sweep does not spend on a dismissed row: with both out, a fresh corpus leaves them stale
-    // to nobody — the candidate query excludes them, so the tick reports nothing prioritized/scored.
-    await seedFinding("finding-b", { vector: axis(2) }); // moves the corpus fingerprint
+    await seedFinding("finding-b", { vector: axis(2) });
     const tick = await rankCatalogue();
     expect(tick.scored).toBe(0);
     expect(tick.prioritized).toBe(0);
 
-    // Restore re-includes: the row is a candidate again and re-ranks on the next tick.
     expect(await setTrackDismissed("cat-scored", false)).toBe(true);
     await rankCatalogue();
     expect((await listCatalogueTracks("ear")).map((t) => t.trackId)).toContain("cat-scored");
@@ -1778,14 +1533,12 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
     const { setCatalogueCapturePaused } = await import("./capture-budget");
     const { listTrackWork } = await import("./track-work");
 
-    // The capture budget ships default-deny (paused), which narrows the queue to the findings.
-    // Open it so the catalogue half is actually served — that is what makes the exclusion visible.
     await setCatalogueCapturePaused(false);
 
     await seedArtistRow("art-known", "Known", "known");
     await seedFinding("finding-a", { artists: ["Known"], vector: axis(0) });
-    await edge("finding-a", "art-known"); // Known is a qualified artist
-    // A cold catalogue row crediting the qualified artist → capture tier 3, so it WOULD be captured.
+    await edge("finding-a", "art-known");
+
     await seedCatalogue("cat-hot", { artists: ["Known"] });
     await edge("cat-hot", "art-known");
     await rankCatalogue();
@@ -1802,21 +1555,16 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
   it("a deterministic duplicate (duplicate_of_track_id set) never occupies an ear-lens slot", async () => {
     const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
 
-    // A same-title near-1.0 vectored row is a TRUE duplicate: the sweep stores duplicate_of_track_id
-    // AND keeps its score. Maurice's ruling: an ISRC/identity match is nothing to validate, so it
-    // must not sit in "Closest to a finding" — even though it carries a score.
     await seedFinding("finding-owned", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
     await seedCatalogue("cat-dupe", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
-    // A genuine discovery in the same region, so the lens is not simply empty.
+
     await seedCatalogue("cat-real", { vector: blend(axis(0), axis(1), 0.2) });
     await rankCatalogue();
 
-    // The duplicate IS scored and stored (it is not deleted) …
     const stored = await rankingOf("cat-dupe");
     expect(stored.duplicate_of_track_id).toBe("finding-owned");
     expect(stored.nearest_finding_score ?? 0).toBeGreaterThan(0.99);
 
-    // … but it does NOT appear on the ear lens; the real discovery does.
     const ear = (await listCatalogueTracks("ear")).map((t) => t.trackId);
     expect(ear).not.toContain("cat-dupe");
     expect(ear).toContain("cat-real");
@@ -1831,23 +1579,17 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
     await seedCatalogue("cat-dismissed", { vector: blend(axis(0), axis(1), 0.3) });
     await rankCatalogue();
 
-    // After the rank tick, the cache is: 3 live, 2 ranked (cat-real + cat-dismissed; the dupe is
-    // excluded), 0 dismissed.
     const afterRank = await getCatalogueSummary();
     expect(afterRank.total).toBe(3);
     expect(afterRank.ranked).toBe(2);
     expect(afterRank.dismissed).toBe(0);
 
-    // The dismiss applies a single-row ±1 delta — NOT a full recompute — moving cat-dismissed out of
-    // {total, ranked} into {dismissed}. The summary reflects it immediately from the cache.
     await setTrackDismissed("cat-dismissed", true);
     const afterDismiss = await getCatalogueSummary();
-    expect(afterDismiss.ranked).toBe(1); // exactly the ear lens now: cat-real only
+    expect(afterDismiss.ranked).toBe(1);
     expect(afterDismiss.dismissed).toBe(1);
-    expect(afterDismiss.total).toBe(2); // the dismissed row is out of the live working set
+    expect(afterDismiss.total).toBe(2);
 
-    // The restore delta is the exact inverse — the cache returns to the post-rank shape without a
-    // sweep in between, so the delta is honest in both directions.
     await setTrackDismissed("cat-dismissed", false);
     const afterRestore = await getCatalogueSummary();
     expect(afterRestore.ranked).toBe(2);
@@ -1869,14 +1611,7 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
   });
 });
 
-// ── Catalogue-internal duplicate detection ────────────────────────────────────────────────
-// The crawler walks MusicBrainz, which carries a distinct recording MBID per release, so ONE
-// song enters `tracks` as several rows and each is captured + embedded separately. The sweep
-// must name one canonical sibling and veto the rest off both the capture queue (the money) and
-// the ear lens (the telescope), reusing `duplicate_of_track_id` + the −2 tier — never a second
-// mechanism, and never merging a remix (whose `matchKey` descriptor differs from the base).
 describe("catalogue-internal duplicates — one master, one row", () => {
-  /** Mark a catalogue row as CAPTURED (an R2 key on file), optionally with an ISRC. */
   async function capture(trackId: string, isrc?: string): Promise<void> {
     await db.execute({
       args: [`catalogue/${trackId}/x.webm`, trackId],
@@ -1890,7 +1625,6 @@ describe("catalogue-internal duplicates — one master, one row", () => {
   it("marks an already-captured sibling as a duplicate of the canonical (min id, kept vector)", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // Same title + artists under two MBIDs, both captured + embedded with the same vector.
     await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-a" });
     await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-b" });
     await capture("cat-a");
@@ -1901,11 +1635,11 @@ describe("catalogue-internal duplicates — one master, one row", () => {
     const summary = await rankCatalogue();
 
     expect(summary.catalogueDuplicates).toBe(1);
-    // cat-a (smaller id) is canonical and untouched; cat-b points at it, tiered −2, off the lens.
+
     expect((await rankingOf("cat-a")).duplicate_of_track_id).toBeNull();
     expect((await rankingOf("cat-b")).duplicate_of_track_id).toBe("cat-a");
     expect((await rankingOf("cat-b")).capture_priority).toBe(-2);
-    // The duplicate KEEPS its vector — it still reads "already in the archive" on the board.
+
     const kept = await db.execute({
       args: ["cat-b"],
       sql: "select embedding_blob from track_embeddings where track_id = ?",
@@ -1916,17 +1650,15 @@ describe("catalogue-internal duplicates — one master, one row", () => {
   it("vetoes an UNcaptured sibling off the capture queue before a byte is bought", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // One captured sibling, one still awaiting capture — the real spend saver.
     await seedCatalogueTrack(db, { artists: ["Bcee"], title: "Souls Apart", trackId: "cat-have" });
     await seedCatalogueTrack(db, { artists: ["Bcee"], title: "Souls Apart", trackId: "cat-want" });
     await capture("cat-have");
 
     await rankCatalogue();
 
-    // cat-want has no audio → the pre-audio branch sees the captured sibling and vetoes it.
     expect((await rankingOf("cat-want")).duplicate_of_track_id).toBe("cat-have");
     expect((await rankingOf("cat-want")).capture_priority).toBe(-2);
-    // The captured canonical is never marked a duplicate of itself.
+
     expect((await rankingOf("cat-have")).duplicate_of_track_id).toBeNull();
   });
 
@@ -1944,7 +1676,7 @@ describe("catalogue-internal duplicates — one master, one row", () => {
       trackId: "cat-isrc-y",
     });
     await capture("cat-isrc-x", "GBTEST0000001");
-    // A different title (a remaster tag) means matchKey differs, so ONLY the shared ISRC links them.
+
     await db.execute({
       args: ["catalogue/cat-isrc-y/x.webm", "cat-isrc-y"],
       sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
@@ -1982,7 +1714,6 @@ describe("catalogue-internal duplicates — one master, one row", () => {
   it("keeps canonical selection identical across processing, tie, ISRC, clear, and re-key cases", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // A more-processed sibling wins even with a lexicographically larger id.
     for (const trackId of ["proc-a", "proc-z", "proc-candidate"]) {
       await seedCatalogueTrack(db, { artists: ["Proc"], title: "Shared", trackId });
     }
@@ -1990,14 +1721,12 @@ describe("catalogue-internal duplicates — one master, one row", () => {
     await capture("proc-z");
     await embed("proc-z", unit(axis(8)));
 
-    // Equal processing state falls back to the smallest track id.
     for (const trackId of ["tie-a", "tie-b", "tie-candidate"]) {
       await seedCatalogueTrack(db, { artists: ["Tie"], title: "Shared", trackId });
     }
     await capture("tie-a");
     await capture("tie-b");
 
-    // Different match keys can still meet on the normalized ISRC fallback.
     await seedCatalogueTrack(db, {
       artists: ["ISRC"],
       title: "Original",
@@ -2011,7 +1740,6 @@ describe("catalogue-internal duplicates — one master, one row", () => {
     await capture("isrc-canonical", "GB-TEST-00-00001");
     await setIsrc("isrc-candidate", "gb test 00 00001");
 
-    // A force-cleared row is excluded from both sides: it neither points nor becomes canonical.
     for (const trackId of ["clear-a", "clear-z", "clear-candidate"]) {
       await seedCatalogueTrack(db, { artists: ["Clear"], title: "Shared", trackId });
     }
@@ -2022,7 +1750,6 @@ describe("catalogue-internal duplicates — one master, one row", () => {
       sql: `update tracks set capture_status = 'duplicate-cleared' where track_id = ?`,
     });
 
-    // This candidate starts on the old identity, then moves atomically to a different sibling.
     await seedCatalogueTrack(db, {
       artists: ["Old Artist"],
       title: "Old Title",
@@ -2075,16 +1802,7 @@ describe("catalogue-internal duplicates — one master, one row", () => {
   });
 });
 
-// ── The dupe-veto escape hatch — force_capture ────────────────────────────────────────────────
-// A duplicate veto (`duplicate_of_track_id` + the −2 tier) can be WRONG in rare cases — a shared or
-// mis-assigned ISRC, a `matchKey` collision on a genuinely different recording — and it is
-// self-sealing: an uncaptured vetoed row is excluded from capture forever, so the post-audio check
-// that would exonerate it never runs. `forceCapture` is the only exit. It stamps a STICKY
-// `capture_status` sentinel all three duplicate detectors respect, so the self-healing re-rank never
-// re-marks the row (docs/the-ear.md § Duplicates). It bypasses the DUPLICATE veto, never the
-// VERIFICATION gate — wrong audio still quarantines.
 describe("the dupe-veto escape hatch — force_capture", () => {
-  /** Read one row's capture_status (the sticky-override sentinel lives here). */
   async function statusOf(trackId: string): Promise<null | string> {
     const result = await db.execute({
       args: [trackId],
@@ -2094,7 +1812,6 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     return (result.rows[0]?.capture_status as null | string) ?? null;
   }
 
-  /** Mark a catalogue row CAPTURED (an R2 key on file), the way a real capture would. */
   async function capture(trackId: string): Promise<void> {
     await db.execute({
       args: [`catalogue/${trackId}/x.webm`, trackId],
@@ -2105,9 +1822,6 @@ describe("the dupe-veto escape hatch — force_capture", () => {
   it("lifts a catalogue-internal duplicate veto and SURVIVES a re-rank — the forced row is never re-marked", async () => {
     const { forceCapture, rankCatalogue } = await import("./catalogue");
 
-    // Two captured siblings, same identity → cat-b is marked a duplicate of cat-a (the min-id
-    // canonical). This is the RFC's `matchKey`-collision case: the operator says they are NOT one
-    // recording.
     await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-a" });
     await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-b" });
     await capture("cat-a");
@@ -2117,21 +1831,17 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     await rankCatalogue();
     expect((await rankingOf("cat-b")).duplicate_of_track_id).toBe("cat-a");
 
-    // The operator overrules the veto.
     expect(await forceCapture("cat-b")).toBe(true);
     expect((await rankingOf("cat-b")).duplicate_of_track_id).toBeNull();
     expect(await statusOf("cat-b")).toBe("duplicate-cleared");
 
-    // A second force is an idempotent no-op — the row is no longer vetoed.
     expect(await forceCapture("cat-b")).toBe(false);
 
-    // THE CORE PROOF: a re-rank re-stamps duplicates on every tick as the corpus moves, but the
-    // sticky override means it MUST NOT re-mark the forced row.
     const summary = await rankCatalogue();
     expect(summary.catalogueDuplicates).toBe(0);
     expect((await rankingOf("cat-b")).duplicate_of_track_id).toBeNull();
     expect(await statusOf("cat-b")).toBe("duplicate-cleared");
-    // The canonical is untouched, and it never becomes a duplicate of the forced row either.
+
     expect((await rankingOf("cat-a")).duplicate_of_track_id).toBeNull();
   });
 
@@ -2140,35 +1850,28 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     const { setCatalogueCapturePaused } = await import("./capture-budget");
     const { listTrackWork } = await import("./track-work");
 
-    // Open the catalogue budget so the capture work queue actually serves catalogue rows.
     await setCatalogueCapturePaused(false);
 
-    // A finding and an UNCAPTURED catalogue row share an ISRC (a mis-assigned one) → the pre-audio
-    // ISRC veto marks the catalogue row a duplicate at tier −2, so it is never bought. The artist is
-    // also on the finding, so its HONEST ladder tier is 3 (artist).
     await seedArtistRow("art-known", "Known", "known");
     await seedFinding("finding-owned", {
       artists: ["Known"],
       isrc: "GBTEST0000009",
       vector: axis(0),
     });
-    await edge("finding-owned", "art-known"); // Known is a qualified artist
+    await edge("finding-owned", "art-known");
     await seedCatalogue("cat-wrongisrc", { artists: ["Known"], isrc: "GBTEST0000009" });
     await edge("cat-wrongisrc", "art-known");
     await rankCatalogue();
     expect((await rankingOf("cat-wrongisrc")).duplicate_of_track_id).toBe("finding-owned");
     expect((await rankingOf("cat-wrongisrc")).capture_priority).toBe(-2);
 
-    // The operator forces it — the shared ISRC is wrong; this is a different recording.
     expect(await forceCapture("cat-wrongisrc")).toBe(true);
 
-    // A re-rank lands it back on the ladder at its honest tier (3), NOT re-vetoed to −2.
     await rankCatalogue();
     const row = await rankingOf("cat-wrongisrc");
     expect(row.duplicate_of_track_id).toBeNull();
     expect(row.capture_priority).toBe(3);
 
-    // And it is now capture-eligible: the next open-budget tick buys it.
     const work = await listTrackWork({ kind: "capture", scope: "catalogue" });
     expect(work.map((w) => w.trackId)).toContain("cat-wrongisrc");
   });
@@ -2179,13 +1882,11 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     await seedFinding("finding-owned", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
     await seedCatalogue("cat-dupe", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
     await rankCatalogue();
-    // A same-title near-1.0 vectored row is stamped a TRUE duplicate (tier −2, finding stored).
+
     expect((await rankingOf("cat-dupe")).duplicate_of_track_id).toBe("finding-owned");
 
     expect(await forceCapture("cat-dupe")).toBe(true);
 
-    // A re-rank scores it normally (near-1.0) and does NOT re-stamp the duplicate; it is NOT
-    // quarantined either (same title is never wrong audio), and the override stays sticky.
     const summary = await rankCatalogue();
     expect(summary.quarantined).toBe(0);
     const row = await rankingOf("cat-dupe");
@@ -2197,8 +1898,6 @@ describe("the dupe-veto escape hatch — force_capture", () => {
   it("still quarantines WRONG AUDIO on a duplicate-cleared row — bypasses the DUPLICATE veto, never the VERIFICATION gate", async () => {
     const { WRONG_AUDIO_STATUS, rankCatalogue } = await import("./catalogue");
 
-    // A forced row that then captures the WRONG audio (a cross-title near-1.0 to a DIFFERENT-titled
-    // finding) must still quarantine — the escape hatch never lets bad bytes through.
     await seedFinding("finding-shelter", {
       artists: ["Flowidus"],
       title: "Shelter",
@@ -2209,7 +1908,7 @@ describe("the dupe-veto escape hatch — force_capture", () => {
       title: "Find Your Love",
       vector: axis(0),
     });
-    // Simulate the row's post-capture state carrying the sticky override.
+
     await db.execute({
       args: ["cat-fyl"],
       sql: `update tracks
@@ -2228,29 +1927,19 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     await seedFinding("finding-a", { vector: axis(0) });
     await seedCatalogue("cat-plain");
 
-    // A finding is never a duplicate row → refused (the findings guard).
     expect(await forceCapture("finding-a")).toBe(false);
-    // A catalogue row that is not vetoed as a duplicate → nothing to force.
+
     expect(await forceCapture("cat-plain")).toBe(false);
-    // A row that does not exist → false.
+
     expect(await forceCapture("nope")).toBe(false);
   });
-
-  // ── The sentinel survives the capture it enables (the ruling guard, track-update.ts) ─────
-  // The forced row is EXPECTED to be captured, and the capture sweep's terminal PATCH
-  // (`captureStatus: 'done'`) would erase the sentinel at exactly the moment it must hold — the
-  // post-embed re-rank would then re-mark the row a duplicate, silently reversing the ruling
-  // right after the capture the operator paid for. These cases run the FULL arc through the SAME
-  // generic update path the box sweep PATCHes, so the guard is exercised for real.
 
   it("FULL ARC: force → capture done (real update path) → embed → re-rank — the ruling is never reversed", async () => {
     const { forceCapture, rankCatalogue } = await import("./catalogue");
     const { updateTrack } = await import("./track-update");
 
-    // A corpus finding so the scored path has something to rank against.
     await seedFinding("finding-x", { vector: axis(5) });
-    // The canonical captured+embedded sibling, and the uncaptured row the sweep vetoes as its
-    // duplicate — the matchKey-collision case the operator overrules.
+
     await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-can" });
     await seedCatalogueTrack(db, {
       artists: ["Whiney"],
@@ -2262,14 +1951,10 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     await rankCatalogue();
     expect((await rankingOf("cat-forced")).duplicate_of_track_id).toBe("cat-can");
 
-    // Force, then re-rank onto the honest ladder (nothing ties it to the archive → tier 0).
     expect(await forceCapture("cat-forced")).toBe(true);
     await rankCatalogue();
     expect((await rankingOf("cat-forced")).capture_priority).toBe(0);
 
-    // THE CAPTURE SUCCEEDS — through the generic update path, with the exact PATCH shape the box
-    // sweep sends on success. The ruling guard must keep the sentinel standing while every other
-    // capture column lands normally.
     const now = new Date().toISOString();
     await updateTrack(
       "cat-forced",
@@ -2289,9 +1974,6 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     });
     expect(captured.rows[0]?.source_audio_key).toBe("catalogue/cat-forced/fresh.webm");
 
-    // The fresh audio embeds; the row-half staleness re-picks it (vector + non-negative tier).
-    // Its identity STILL collides with cat-can — without the surviving sentinel this is the tick
-    // that would silently re-mark it −2. With it: scored normally, ruling intact.
     await embed("cat-forced", unit(axis(3)));
     const summary = await rankCatalogue();
     expect(summary.catalogueDuplicates).toBe(0);
@@ -2307,9 +1989,7 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     const { listTrackWork } = await import("./track-work");
 
     await setCatalogueCapturePaused(false);
-    // The post-capture window: sentinel standing, audio key landed, and the PRE-capture ladder
-    // tier (3) still stamped because the rank sweep has not ticked yet. Without the queue's
-    // key-null condition this row would be bought again.
+
     await seedFinding("finding-a", { artists: ["Known"], vector: axis(0) });
     await seedCatalogue("cat-forced", { artists: ["Known"] });
     await db.execute({
@@ -2351,7 +2031,7 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     const { updateTrack } = await import("./track-update");
 
     await setCatalogueCapturePaused(false);
-    // An uncaptured sibling pair → cat-want vetoed → forced → back on the honest ladder.
+
     await seedCatalogueTrack(db, { artists: ["Bcee"], title: "Souls Apart", trackId: "cat-have" });
     await seedCatalogueTrack(db, { artists: ["Bcee"], title: "Souls Apart", trackId: "cat-want" });
     await capture("cat-have");
@@ -2360,8 +2040,6 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     expect(await forceCapture("cat-want")).toBe(true);
     await rankCatalogue();
 
-    // The capture FAILS — the sweep's failure PATCH. The sentinel survives (the status never
-    // becomes 'failed'), so a later re-rank still honours the ruling…
     await updateTrack(
       "cat-want",
       {
@@ -2375,8 +2053,6 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     await rankCatalogue();
     expect((await rankingOf("cat-want")).duplicate_of_track_id).toBeNull();
 
-    // …and the retry is BOUNDED like a failed row: the fresh attempt stamp holds it out of the
-    // worklist until the cooldown passes; an old stamp re-admits it.
     const fresh = await listTrackWork({ kind: "capture", scope: "catalogue" });
     expect(fresh.map((w) => w.trackId)).not.toContain("cat-want");
 
@@ -2389,11 +2065,6 @@ describe("the dupe-veto escape hatch — force_capture", () => {
   });
 });
 
-// ── The long-form veto (docs/the-ear.md § The long-form veto) ─────────────────────────────
-// A "track" at/above LONG_FORM_MS is a continuous DJ mix riding a compilation release: unloggable
-// as a finding, centroid-like in vector space (it ranks ~0.92 against ANY finding), and the
-// fattest thing the metered capture can buy. The veto is a READ + QUEUE exclusion, never a
-// deletion — a captured mix keeps its bytes and vector.
 describe("the long-form veto — a continuous mix never reaches a lens or the money", () => {
   async function captureAt(trackId: string): Promise<void> {
     await db.execute({
@@ -2420,8 +2091,7 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     });
     await captureAt("cat-mix");
     await captureAt("cat-single");
-    // The mix's hour-long mean-pool sits NEARER the finding than the single — the exact
-    // pathology: without the veto it would occupy the top slot.
+
     await embed("cat-mix", blend(axis(0), axis(1), 0.05));
     await embed("cat-single", blend(axis(0), axis(1), 0.2));
 
@@ -2441,9 +2111,7 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
 
     await setCatalogueCapturePaused(false);
     await seedFinding("finding-a", { vector: axis(0) });
-    // Both rows are on an ENABLED label (authorized), so the ONLY thing separating them is
-    // duration — isolating the long-form veto (RFC artist-primary-capture keeps authorization
-    // orthogonal to the duration guard).
+
     await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
     await seedCatalogueTrack(db, {
       artists: ["Someone"],
@@ -2472,7 +2140,7 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
 
     await seedFinding("finding-a", { vector: axis(0) });
-    // No isrc, no preview_url seeded — the small-label case (the real "Talk to You" row).
+
     await seedCatalogueTrack(db, {
       artists: ["Changing Faces"],
       durationMs: 4 * 60_000 + 30_000,
@@ -2490,7 +2158,6 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     expect(row?.hasCapturedAudio).toBe(true);
   });
 
-  // ── requeue_unmatched_captures — the terminal-unmatched rescue ────────────────────────
   it("re-queues only clean-duration unmatched CATALOGUE rows; vetoed rows and findings stay put", async () => {
     const { requeueUnmatchedCaptures } = await import("./catalogue");
 
@@ -2505,9 +2172,6 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
 
     const result = await requeueUnmatchedCaptures();
 
-    // Only the clean-duration catalogue row is rescued; the missing-duration and long-form
-    // rows would be re-refused by the queue's vetoes, so re-queueing them buys a
-    // guaranteed-unmatched billed search — they stay terminal, counted honestly.
     expect(result).toEqual({ requeued: 1, skippedVetoed: 2 });
 
     const states = await db.execute({
@@ -2528,16 +2192,12 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     expect(byId.get("unm-clean")).toEqual({ failures: 0, status: "pending" });
     expect(byId.get("unm-nodur")?.status).toBe("unmatched");
     expect(byId.get("unm-long")?.status).toBe("unmatched");
-    // A FINDING marked unmatched is never this op's business — its own re-capture flows own it.
-    // All three of the op's statements read the maintained `is_catalogue` discriminator, so this
-    // row is excluded by an indexed column rather than by a per-row `findings` probe.
+
     expect(byId.get("unm-find")?.status).toBe("unmatched");
 
-    // Idempotent: the rescued row is gone from the unmatched set; the vetoed pile is stable.
     expect(await requeueUnmatchedCaptures()).toEqual({ requeued: 0, skippedVetoed: 2 });
   });
 
-  // ── the unmatched/failed observability lenses + the captureStatus DTO field ────────────
   it("exposes capture outcomes: the unmatched and failed lenses, newest attempt first, with captureStatus", async () => {
     const { listCatalogueTracks } = await import("./catalogue");
 
@@ -2569,23 +2229,21 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     const unmatched = await listCatalogueTracks("unmatched");
     expect(unmatched.map((t) => t.trackId)).toEqual(["obs-unm-new", "obs-unm-old"]);
     expect(unmatched[0]?.captureStatus).toBe("unmatched");
-    // The attempt instant rides the DTO — the lens orders by it, so the lens can SHOW it.
+
     expect(unmatched.map((t) => t.sourceAudioAttemptedAt)).toEqual([
       "2026-07-14T00:00:00Z",
       "2026-07-10T00:00:00Z",
     ]);
 
-    // The failed lens is catalogue-scoped: the failed FINDING never appears in it.
     const failed = await listCatalogueTracks("failed");
     expect(failed.map((t) => t.trackId)).toEqual(["obs-fail"]);
     expect(failed[0]?.captureStatus).toBe("failed");
     expect(failed[0]?.sourceAudioAttemptedAt).toBe("2026-07-12T00:00:00Z");
 
-    // The status rides every lens's DTO, so any view can say where a row stands.
     const capture = await listCatalogueTracks("capture");
     const pending = capture.find((t) => t.trackId === "obs-pending");
     expect(pending?.captureStatus).toBe("pending");
-    // A never-attempted row carries the null honestly rather than dropping the field.
+
     expect(pending?.sourceAudioAttemptedAt).toBeNull();
   });
 });
@@ -2596,7 +2254,6 @@ describe("the diversity decay — the ear page spreads artists, years, and keys"
 
     await seedFinding("finding-anchor", { vector: axis(0) });
 
-    // Three near-identical rows by ONE artist (the clone magnet), descending raw score...
     await seedCatalogue("cat-clone-1", {
       artists: ["Clone Artist"],
       key: "A Minor",
@@ -2615,8 +2272,7 @@ describe("the diversity decay — the ear page spreads artists, years, and keys"
       releaseDate: "2019-07-01",
       vector: blend(axis(0), axis(1), 0.2),
     });
-    // ...and a different artist scoring just below clone-2's raw score. Undecayed it ranks
-    // third; the artist decay on clone-2 (second Clone Artist row) drops it below.
+
     await seedCatalogue("cat-fresh", {
       artists: ["Fresh Artist"],
       key: "F Major",
@@ -2628,8 +2284,6 @@ describe("the diversity decay — the ear page spreads artists, years, and keys"
 
     const page = await listCatalogueTracks("ear");
 
-    // Raw order would be clone-1, clone-2, fresh, clone-3. Diversified: clone-1 leads (best
-    // raw), then FRESH (clone-2 pays the artist decay), then the remaining clones.
     expect(page.map((track) => track.trackId)).toEqual([
       "cat-clone-1",
       "cat-fresh",
@@ -2637,25 +2291,16 @@ describe("the diversity decay — the ear page spreads artists, years, and keys"
       "cat-clone-3",
     ]);
 
-    // The DISPLAYED score stays the raw similarity — the decay re-orders, never rewrites.
     const fresh = page.find((track) => track.trackId === "cat-fresh");
     expect(fresh?.nearestFindingScore ?? 0).toBeGreaterThan(0.9);
   });
 });
 
-// TARGETED RE-STALING (v5) — the churn fix, proven against the real sweep. v4 folded the raw
-// `track_artists` edge count + the two ruling counts into the fingerprint, so every daily crawler
-// edge write re-ranked all ~55k catalogue rows. v5 folds only the QUALIFIED-ARTIST SET SIZE (the
-// second-order authorization signal) and re-stales the FIRST-ORDER cases at their write paths. These
-// cases prove both halves: a label ruling touches exactly its own rows, a same-size graph write
-// touches nothing globally, and a genuine qualification crossing still re-ranks the artist's OTHER
-// tracks through the fingerprint.
 describe("the staleness fingerprint — v5 targeted re-staling", () => {
   it("a label ruling flip re-stales EXACTLY that label's rows, not the whole catalogue", async () => {
     const { rankCatalogue } = await import("./catalogue");
     const { updateLabelSeedState } = await import("./labels");
 
-    // An undecided label with two catalogue tracks, and an UNRELATED label with one — the control.
     await ruleLabel("lbl-x", "Label X", "label-x", "undecided");
     await ruleLabel("lbl-y", "Label Y", "label-y", "undecided");
     await seedCatalogue("cat-x1", { artists: ["Nobody"], label: "Label X" });
@@ -2666,22 +2311,19 @@ describe("the staleness fingerprint — v5 targeted re-staling", () => {
     await linkLabel("cat-y1", "lbl-y");
 
     await rankCatalogue();
-    // All three unauthorized on undecided labels (no qualified artist), all stamped.
+
     for (const id of ["cat-x1", "cat-x2", "cat-y1"]) {
       expect((await rankingOf(id)).capture_priority).toBe(-3);
       expect((await rankingOf(id)).catalogue_rank_corpus).not.toBeNull();
     }
     const yCorpusBefore = (await rankingOf("cat-y1")).catalogue_rank_corpus;
 
-    // Enable Label X. No artist here has ≥3 enabled releases, so the qualified set — and the
-    // fingerprint — does NOT move; only the per-label write nulls Label X's rows.
     await updateLabelSeedState("lbl-x", "enabled");
 
     expect((await rankingOf("cat-x1")).catalogue_rank_corpus).toBeNull();
     expect((await rankingOf("cat-x2")).catalogue_rank_corpus).toBeNull();
     expect((await rankingOf("cat-y1")).catalogue_rank_corpus).toBe(yCorpusBefore);
 
-    // The next tick authorizes Label X's rows (enabled = seed-label tier 1); Label Y stays sunk.
     await rankCatalogue();
     expect((await rankingOf("cat-x1")).capture_priority).toBe(1);
     expect((await rankingOf("cat-x2")).capture_priority).toBe(1);
@@ -2692,68 +2334,52 @@ describe("the staleness fingerprint — v5 targeted re-staling", () => {
     const { rankCatalogue } = await import("./catalogue");
     const { updateLabelSeedState } = await import("./labels");
 
-    // A row authorized via its enabled label — then the operator rules the label out.
     await ruleLabel("lbl-z", "Label Z", "label-z", "enabled");
     await seedCatalogue("cat-z1", { artists: ["Nobody"], label: "Label Z" });
     await linkLabel("cat-z1", "lbl-z");
 
     await rankCatalogue();
-    expect((await rankingOf("cat-z1")).capture_priority).toBe(1); // enabled seed-label
+    expect((await rankingOf("cat-z1")).capture_priority).toBe(1);
 
     await updateLabelSeedState("lbl-z", "disabled");
     expect((await rankingOf("cat-z1")).catalogue_rank_corpus).toBeNull();
 
     await rankCatalogue();
-    // Vetoed — never bought. Exactly the withdrawal a ruling must produce, or a wrong capture ships.
+
     expect((await rankingOf("cat-z1")).capture_priority).toBe(-1);
   });
 
   it("a qualification CROSSING re-ranks the artist's OTHER-label rows the tipping edge never touched", async () => {
-    // The second-order money/opportunity case the fingerprint's SET SIZE covers, and per-track nulling
-    // alone could not: an artist reaching their 3rd enabled-label release flips a track of theirs on a
-    // DIFFERENT (unenabled) label — a row the qualifying edge did not touch. This is the RFC's headline
-    // "an artist who moved to a major arrives by himself; his major-label tunes deserve the spend".
     const { rankCatalogue } = await import("./catalogue");
 
     await ruleLabel("lbl-enabled", "Enabled Imprint", "enabled-imprint", "enabled");
     await seedArtistRow("art-rise", "On The Rise", "on-the-rise");
 
-    // TWO enabled-label releases so far — weighted 2.0, NOT yet qualified.
     for (const index of [0, 1]) {
       await seedCatalogue(`rise-${index}`, { artists: ["On The Rise"], label: "Enabled Imprint" });
       await linkLabel(`rise-${index}`, "lbl-enabled");
       await edge(`rise-${index}`, "art-rise");
     }
-    // The artist's track on a DIFFERENT, unenabled (undecided) label — edge already present.
+
     await seedCatalogue("cat-major", { artists: ["On The Rise"], label: "Major Label" });
     await edge("cat-major", "art-rise");
 
     await rankCatalogue();
-    // Not yet qualified (2.0 < 3), major label not enabled → withheld.
+
     expect((await rankingOf("cat-major")).capture_priority).toBe(-3);
     const majorCorpusBefore = (await rankingOf("cat-major")).catalogue_rank_corpus;
 
-    // The THIRD enabled-label release lands (a brand-new catalogue row, born stale) with its edge —
-    // the artist crosses the weighted threshold. cat-major is NOT touched by this write.
     await seedCatalogue("rise-2", { artists: ["On The Rise"], label: "Enabled Imprint" });
     await linkLabel("rise-2", "lbl-enabled");
     await edge("rise-2", "art-rise");
 
-    // cat-major's stored fingerprint is unchanged by the raw edge write above — its re-stale can only
-    // come from the qualified-set SIZE moving. Under v5 it does; under a per-track-only design it would
-    // not, and cat-major would stay silently withheld.
     await rankCatalogue();
     expect((await rankingOf("cat-major")).capture_priority).toBe(3);
-    // Sanity: the fingerprint genuinely moved (a global re-stale was warranted here).
+
     expect((await rankingOf("cat-major")).catalogue_rank_corpus).not.toBe(majorCorpusBefore);
   });
 });
 
-// THE CHANGED-ROW RAIL. Repair debt is minted by real change, never by a visit. The rank tick
-// touches every candidate it ranks, but one track source marker buys a repair of three projection
-// families, and only five `tracks` columns feed any of them (`rankChangedSubjectSelection`). The
-// `catalogue-rank` projection is the exception the tick owns outright: it settles that row itself,
-// which is what makes a pure corpus restamp free.
 describe("the rank tick's repair markers — minted by real change", () => {
   async function sourceMarkersFor(trackId: string): Promise<number> {
     const result = await db.execute({
@@ -2780,10 +2406,6 @@ describe("the rank tick's repair markers — minted by real change", () => {
     expect(ranked.nearest_finding_track_id).toBe("find-nr1");
     await clearSourceMarkers();
 
-    // A second finding lands FAR from this row. The corpus fingerprint moves (the findings count is
-    // in it), so the row goes stale and is re-ranked — but its nearest finding, its score, its tier,
-    // its duplicate marker, its capture status and its embedding flag are all exactly where they
-    // were. Nothing any projection reads moved, so the tick owes no repair.
     await seedFinding("find-fr2", { vector: axis(7) });
 
     const restamp = await rankCatalogue();
@@ -2803,8 +2425,6 @@ describe("the rank tick's repair markers — minted by real change", () => {
     await rankCatalogue();
     await clearSourceMarkers();
 
-    // A NEARER finding lands: the row's `nearest_finding_score` moves, and the score is a declared
-    // track-source column, so the marker is owed.
     await seedFinding("find-nr3", { vector: unit([1, 0.4, ...axis(2).slice(2)]) });
 
     await rankCatalogue();
@@ -2816,11 +2436,7 @@ describe("the rank tick's repair markers — minted by real change", () => {
     const { rankCatalogue } = await import("./catalogue");
 
     await seedCatalogue("cat-raced");
-    // THE INTERLEAVING. `is_catalogue` and `dismissed_at` belong to other producers, so between the
-    // candidate read and this batch's commit one of them can legitimately re-project a DUE
-    // catalogue-rank row (a restore, an is_catalogue flip). A row stamped AFTER this tick's
-    // selection instant stands for exactly that write. An unconditional delete would drop it and
-    // mint nothing, taking the track out of the rank queue with no marker to bring it back.
+
     await db.execute(`insert into due_work
       (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
        source_version, generation, updated_at)
@@ -2842,11 +2458,6 @@ describe("the rank tick's repair markers — minted by real change", () => {
     await seedCatalogue("cat-flipped");
     await clearSourceMarkers();
 
-    // The real interleaving, in the one window that matters: a dismiss that lands AFTER the
-    // candidate read (so the row was a legitimate candidate, `dismissed_at` null) and BEFORE the
-    // batch commits. `dismissed_at` is not a rank write, so the five stamped columns are blind to
-    // it; it rides the comparison as the value OBSERVED at selection, which is what turns the
-    // concurrent change into a marker instead of letting the settled-row delete absorb it.
     const batchSpy = vi.spyOn(db, "batch").mockImplementation(async (statements, mode) => {
       batchSpy.mockRestore();
       await db.execute({
@@ -2866,8 +2477,7 @@ describe("the rank tick's repair markers — minted by real change", () => {
     const { rankCatalogue } = await import("./catalogue");
 
     await seedCatalogue("cat-settled");
-    // The projection row the rank batch reads from. After the tick's write the row is not due by
-    // construction, so the tick deletes it rather than marking the whole track for repair.
+
     await db.execute(`insert into due_work
       (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
        source_version, generation, updated_at)

@@ -1,7 +1,3 @@
-// The artist-image worklist and terminal no-image write, executed against the real
-// generated schema and real libSQL. Spotify's HTTP edge is stubbed, but the production
-// fetchArtistImages classification, selection/count SQL, and UPDATE all run unchanged.
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -77,8 +73,6 @@ describe("artist-image backfill SQL", () => {
       image_url: null,
     });
 
-    // The synchronous create-time helper shares the same pending-only predicate,
-    // so a later track upsert cannot reopen the terminal verdict either.
     await expect(fillMissingArtistImages(["spotify-1"])).resolves.toBe(0);
 
     const second = await backfillArtistImages(50, false);

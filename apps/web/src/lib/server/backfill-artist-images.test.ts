@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The artist-avatar backfill: one bounded, cursor-resumable pass that fills
-// `artists.image_url` from the largest Spotify image. The DB + Spotify helper are
-// mocked, so a test never hits a real database or the network.
-
 const execute = vi.fn();
 const fetchArtistImages = vi.fn();
 const projectionMaintenance = (sql: string) =>
@@ -44,7 +40,6 @@ beforeEach(() => {
 
 describe("backfillArtistImages", () => {
   it("fills images, terminally stamps genuine misses, and reports exact post-pass depth", async () => {
-    // The eligible SELECT, one UPDATE per classified row, then the exact queue count.
     execute.mockResolvedValueOnce({
       rows: [
         { id: "a1", spotify_artist_id: "s1" },
@@ -71,7 +66,7 @@ describe("backfillArtistImages", () => {
     expect(result.checkedCount).toBe(2);
     expect(result.failedCount).toBe(0);
     expect(result.queueDepth).toBe(0);
-    expect(result.nextCursor).toBeNull(); // page came back short of the cap.
+    expect(result.nextCursor).toBeNull();
     expect(execute).toHaveBeenCalledTimes(4);
     expect(execute.mock.calls[2]?.[0].sql).toContain("image_state = 'none'");
     expect(execute.mock.calls[2]?.[0].sql).not.toContain("updated_at");
@@ -145,7 +140,7 @@ describe("backfillArtistImages", () => {
     expect(result.checkedCount).toBe(1);
     expect(result.queueDepth).toBe(1);
     expect(fetchArtistImages).not.toHaveBeenCalled();
-    // Selection + exact queue count; no UPDATE on a dry run.
+
     expect(execute).toHaveBeenCalledTimes(2);
   });
 });

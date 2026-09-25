@@ -1,14 +1,3 @@
-// The Beatport resolve, tested against REAL search extracts.
-//
-// The two fixtures are trimmed captures of live beatport.com search pages, kept at
-// their real shape: Beatport's own `__NEXT_DATA__` island with genuine track ids and ISRCs, and the
-// absolute anchors the page rendered for them. Nothing about their STRUCTURE is synthetic — which is
-// the whole point, since every failure mode this module guards is a shape change on Beatport's side.
-//
-// They are trimmed twice over: to a handful of results, and to the identity fields the resolver
-// actually reads. Beatport's bpm/key/genre/label/price never enter the repo, for the same §F reason
-// they never enter the database (see `tracks.beatport_url` in db/schema.ts).
-
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -24,8 +13,6 @@ const VENUS_FLY = fixture("search-venus-fly.html");
 
 describe("beatportSearchUrl", () => {
   it("builds the same query the buy-then-mix link already uses", () => {
-    // The resolver scrapes the SAME lib/beatport.ts link the buy-then-mix UI offers, so the
-    // two surfaces cannot search differently.
     expect(beatportSearchUrl(["Rizzle"], "Pluto")).toBe(
       "https://www.beatport.com/search?q=Rizzle%20Pluto",
     );
@@ -45,8 +32,6 @@ describe("parseSearchTracks", () => {
   });
 
   it("returns null — never an empty list — when the data island is missing or broken", () => {
-    // THE DISTINCTION THAT MATTERS. A structural failure must not read as "Beatport has nothing":
-    // one is a redesign to fix, the other is a receipt telling a reader the search concluded.
     expect(parseSearchTracks("<html><body>no island here</body></html>")).toBeNull();
     expect(
       parseSearchTracks('<script id="__NEXT_DATA__" type="application/json">{oops</script>'),
@@ -84,9 +69,6 @@ describe("pickBeatportUrl", () => {
   });
 
   it("matches a remix on its own ISRC, not on its title", () => {
-    // Fluncle holds this as "Venus Fly - Seba Remix"; Beatport splits it into name "Venus Fly" plus
-    // mix "Seba Remix". No title comparison could equate those, and none is attempted — the ISRC is
-    // the whole gate, which is exactly why the leg survives every naming convention a store uses.
     expect(pickBeatportUrl(VENUS_FLY, "NLCK42416396")).toEqual({
       ok: true,
       url: "https://www.beatport.com/track/venus-fly/19501138",
@@ -101,8 +83,6 @@ describe("pickBeatportUrl", () => {
   });
 
   it("misses cleanly when no result carries the ISRC", () => {
-    // The page is full of real, valid ISRCs for OTHER recordings. A leg that matched on anything
-    // looser than equality would happily return one of them.
     expect(pickBeatportUrl(PLUTO, "GBAAA0000001")).toEqual({ ok: true, url: null });
   });
 
@@ -117,9 +97,6 @@ describe("pickBeatportUrl", () => {
   });
 
   it("misses cleanly when the ISRC matches a result Beatport rendered no link for", () => {
-    // The slug cannot be derived and a fabricated one does not announce itself (a wrong slug still
-    // serves the track, and the canonical tag echoes the wrong slug back). So an unlinked match is a
-    // miss, never a guess.
     const html =
       '<script id="__NEXT_DATA__" type="application/json">' +
       JSON.stringify({

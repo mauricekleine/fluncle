@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The track_artists graph backfill (RFC artist-primary-capture, slice 0). The matcher is pure and
-// tested directly; the PASS is tested with a mocked db.execute (no real database), which also pins
-// the arity guard — every statement binds exactly its placeholders.
-
 const execute = vi.fn();
 
 vi.mock("./db", async () => {
@@ -12,10 +8,6 @@ vi.mock("./db", async () => {
   return {
     ...actual,
     getDb: async () => ({
-      // `batch` delegates statement-by-statement to the same `execute` mock, so the ordered result
-      // queue, the per-statement assertions and the arity guard below all see a batched write exactly
-      // as they see a lone one. The edge insert rides a batch now because it carries the maintained
-      // hub-count deltas (keystone 2, lib/server/hub-counts.ts).
       batch: async (statements: Array<{ args?: unknown[]; sql: string }>) =>
         Promise.all(statements.map((statement) => execute(statement))),
       execute,
@@ -45,8 +37,6 @@ describe("buildArtistFoldMap", () => {
   it("keys artists by their FOLDED name (case/accent/punctuation-insensitive)", () => {
     const map = buildArtistFoldMap([{ id: "art-1", name: "Nu:Tone" }], []);
 
-    // The fold lowercases + turns punctuation into a space, so ":" becomes " " ("nu tone"), and any
-    // fold-equivalent spelling resolves to the same identity.
     expect(map.get("nu tone")).toBe("art-1");
   });
 
@@ -137,12 +127,6 @@ describe("matchTrackNames", () => {
   });
 });
 
-// ── The spelling rail: the punctuation half of the conflation seal ────────────────────────────
-//
-// The live case this pins: prod held the drum & bass act `K` (Audio Couture / Subtitles, an MB
-// identity) and the crawler brought in a Japanese pop act credited `K.`. `fold()` collapses the
-// period, so 23 of the J-pop act's tracks were stamped onto the DnB act's row and rendered on his
-// public page. An identity-claimed row now answers only to its own spellings.
 describe("buildIdentityClaimedNames", () => {
   const aliases = [{ alias: "Kay", artist_id: "art-k" }];
 
@@ -155,11 +139,9 @@ describe("buildIdentityClaimedNames", () => {
       aliases,
     );
 
-    // Indexed BY FOLD KEY, so an alias guards its own key rather than widening the real name's —
-    // the same shape `buildArtistFoldMap` uses, so the two maps are looked up with one key.
     expect(claimed.get("k")).toEqual(new Set(["k"]));
     expect(claimed.get("kay")).toEqual(new Set(["kay"]));
-    // The unclaimed row is absent entirely — it keeps the historical fold latitude.
+
     expect(claimed.has("luna")).toBe(false);
   });
 
@@ -187,7 +169,7 @@ describe("matchTrackNames — the identity spelling rail", () => {
     const match = matchTrackNames(["K."], map, claimed);
 
     expect(match.edges).toEqual([]);
-    // It stays in the residual, so the mbid-keyed credit sweep can mint it as its own artist.
+
     expect(match.matchedNames).toBe(0);
     expect(match.totalNames).toBe(1);
   });
@@ -216,14 +198,12 @@ describe("matchTrackNames — the identity spelling rail", () => {
 });
 
 describe("resolveArtistEdges", () => {
-  /** Prime the two corpus reads (artists, then aliases) a wet/dry pass runs after the worklist. */
   function primeCorpus() {
-    execute.mockResolvedValueOnce({ rows: [{ id: "art-logi", name: "Logistics" }] }); // loadArtists
-    execute.mockResolvedValueOnce({ rows: [{ alias: "Nu Tone", artist_id: "art-nutone" }] }); // loadAliases
+    execute.mockResolvedValueOnce({ rows: [{ id: "art-logi", name: "Logistics" }] });
+    execute.mockResolvedValueOnce({ rows: [{ alias: "Nu Tone", artist_id: "art-nutone" }] });
   }
 
   it("classifies a batch (full / partial / zero) and writes the matched edges", async () => {
-    // 1: the worklist page (3 tracks). 2: loadArtists. 3: loadAliases. 4: insertEdges. 5: stamp.
     execute.mockResolvedValueOnce({
       rows: [
         { artists_json: JSON.stringify(["Logistics"]), track_id: "tFull" },
@@ -232,20 +212,19 @@ describe("resolveArtistEdges", () => {
       ],
     });
     primeCorpus();
-    execute.mockResolvedValueOnce({ rowsAffected: 2 }); // insertEdges
-    execute.mockResolvedValueOnce({ rowsAffected: 3 }); // stampVisited
+    execute.mockResolvedValueOnce({ rowsAffected: 2 });
+    execute.mockResolvedValueOnce({ rowsAffected: 3 });
 
     const result = await resolveArtistEdges(200, false);
 
     expect(result.fullyMatched).toEqual(["tFull"]);
     expect(result.partiallyMatched).toEqual(["tPartial"]);
     expect(result.zeroMatched).toEqual(["tZero"]);
-    expect(result.edgesWritten).toBe(2); // reported from the insert's rowsAffected
-    expect(result.unmatchedNames).toBe(2); // "Ghost" + "Nobody"
+    expect(result.edgesWritten).toBe(2);
+    expect(result.unmatchedNames).toBe(2);
     expect(result.scanned).toBe(3);
-    expect(result.nextCursor).toBeNull(); // 3 rows < batch limit ⇒ drained
+    expect(result.nextCursor).toBeNull();
 
-    // The edge insert is a multi-row `insert or ignore`; the stamp updates every visited track.
     const sqls = execute.mock.calls.map((call) => String(call[0].sql));
     expect(sqls.some((sql) => sql.includes("insert or ignore into track_artists"))).toBe(true);
     expect(sqls.some((sql) => sql.includes("set artist_edges_backfilled_at = ?"))).toBe(true);
@@ -264,7 +243,7 @@ describe("resolveArtistEdges", () => {
     const result = await resolveArtistEdges(2, false);
 
     expect(result.scanned).toBe(2);
-    expect(result.nextCursor).toBe("tB"); // full page ⇒ resume from the last track id
+    expect(result.nextCursor).toBe("tB");
   });
 
   it("a dry run classifies + counts the edges it WOULD write, touching no write", async () => {
@@ -276,10 +255,10 @@ describe("resolveArtistEdges", () => {
     const result = await resolveArtistEdges(200, true);
 
     expect(result.dryRun).toBe(true);
-    expect(result.edgesWritten).toBe(1); // the tuple it WOULD write
+    expect(result.edgesWritten).toBe(1);
     expect(result.partiallyMatched).toEqual(["tPartial"]);
     expect(result.unmatchedNames).toBe(1);
-    // Worklist + two corpus reads + the indexed queue count ran — no insert, no stamp.
+
     expect(execute).toHaveBeenCalledTimes(4);
   });
 
@@ -291,13 +270,10 @@ describe("resolveArtistEdges", () => {
     expect(result.scanned).toBe(0);
     expect(result.edgesWritten).toBe(0);
     expect(result.nextCursor).toBeNull();
-    expect(execute).toHaveBeenCalledTimes(2); // worklist read + authoritative indexed count
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 });
 
-// THE ARITY GUARD (the recording-mbids discipline). A multi-row `insert or ignore` builds its
-// placeholders dynamically, so a drifted args/placeholder count could ship unseen by a mock. Every
-// statement this module issues must bind exactly as many args as it declares placeholders.
 describe("every statement binds exactly its placeholders", () => {
   it("holds across a full wet pass (worklist + corpus + insert + stamp)", async () => {
     execute.mockResolvedValueOnce({
@@ -312,7 +288,7 @@ describe("every statement binds exactly its placeholders", () => {
         { id: "art-nutone", name: "Nu:Tone" },
       ],
     });
-    execute.mockResolvedValueOnce({ rows: [] }); // loadAliases
+    execute.mockResolvedValueOnce({ rows: [] });
     execute.mockResolvedValue({ rows: [], rowsAffected: 2 });
 
     await resolveArtistEdges(200, false, "cursor-x");

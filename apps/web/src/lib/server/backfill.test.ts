@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The Worker-paced backfills' reliability gate: the per-finding cooldown/done state
-// that makes the sweeps resumable and keeps them from re-storming a vendor API.
-// The vendor clients (discogsResolveRelease / lastfmLove) and the DB are mocked so
-// these tests isolate the gate/backoff logic and the per-source state writes.
-
 const listTracks = vi.fn();
 const getTracksByIds = vi.fn();
 const discogsResolveRelease = vi.fn();
@@ -12,16 +7,12 @@ const lastfmLove = vi.fn();
 const appleMusicLookupByIsrc = vi.fn();
 const appleCatalogLookupByIsrc = vi.fn();
 const appleCatalogLookupByIsrcs = vi.fn();
-// The cross-cutting Apple breaker/meter — vi.fns so a test can flip the breaker/budget shut.
-// Default: allowed + budget available + record calls a no-op, so the reliability-gate tests are
-// isolated from the breaker (its own behaviour is proven in apple-breaker.test.ts).
+
 const areAppleCallsAllowed = vi.fn(async (..._a: unknown[]) => true);
 const isAppleCallBudgetAvailable = vi.fn(async (..._a: unknown[]) => true);
 const recordAppleAuthOutcome = vi.fn(async (..._a: unknown[]) => {});
 const recordAppleCall = vi.fn(async (..._a: unknown[]) => {});
 
-// The mocked libSQL client: `execute({ sql, args })`. SELECTs return a reliability
-// row from `reliabilityRows` (keyed by trackId); writes are captured in `writes`.
 type Reliability = {
   attempted_at: string | null;
   done_at: string | null;
@@ -33,7 +24,6 @@ const writes: Array<{ args: unknown[]; sql: string }> = [];
 
 const execute = vi.fn(async ({ args, sql }: { args: unknown[]; sql: string }) => {
   if (sql.trimStart().startsWith("select")) {
-    // The last arg is the trackId bound to `where track_id = ?`.
     const trackId = String(args[args.length - 1]);
     const row = reliabilityRows.get(trackId) ?? {
       attempted_at: null,
@@ -50,9 +40,6 @@ const execute = vi.fn(async ({ args, sql }: { args: unknown[]; sql: string }) =>
 });
 
 vi.mock("./db", () => ({
-  // The Discogs resolve writes across the tracks/findings pair (the release ids are the
-  // recording's catalogue identity; the lastmod bump is the finding's) as one batch —
-  // replayed through the same `execute` spy, one call per statement.
   getDb: async () => ({
     batch: (statements: { args: unknown[]; sql: string }[]) =>
       Promise.all(statements.map((statement) => execute(statement))),
@@ -86,7 +73,6 @@ vi.mock("./apple-breaker", () => ({
   recordAppleCall: (...a: unknown[]) => recordAppleCall(...a),
 }));
 
-// A minimal published finding (the only fields the backfill reads).
 function finding(trackId: string, over: Record<string, unknown> = {}) {
   return {
     addedAt: `2026-06-${trackId.padStart(2, "0")}T00:00:00.000Z`,
@@ -101,7 +87,6 @@ function finding(trackId: string, over: Record<string, unknown> = {}) {
   };
 }
 
-// One feed page that drains immediately (nextCursor null).
 function singlePage(tracks: unknown[]) {
   listTracks.mockResolvedValueOnce({ nextCursor: null, tracks });
 }
@@ -174,7 +159,6 @@ describe("backfillDiscogsIds — reliability gate", () => {
   });
 
   it("skips a finding attempted within its cooldown window (recently tried)", async () => {
-    // 0 failures → 24h base cooldown; attempted 1h ago is still cooling.
     reliabilityRows.set("1", {
       attempted_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
       done_at: null,
@@ -199,15 +183,11 @@ describe("backfillDiscogsIds — reliability gate", () => {
     expect(result.resolved).toEqual([
       { logId: "LOG-1", masterId: 9, releaseId: 42, source: "discogs" },
     ]);
-    // Two writes: set_discogs_ids + record done. The sweep's own PACING state is the one that
-    // resets the failure streak, which is what tells it apart from the tracks-side write below.
+
     const recordDone = writes.find((w) => w.sql.includes("backfill_discogs_failures = 0"));
     expect(recordDone, "a done record should be written").toBeTruthy();
     expect(recordDone?.sql).toContain("backfill_discogs_failures = 0");
 
-    // …and the ids carry the RECORDING-grain attempt record with them (schema.ts §
-    // `backfill_discogs_*` on `tracks`, RFC dnb-identity-graph Unit 1). Without this a finding the
-    // sweep resolved would read "attempted, no release" to the identity ledger while carrying one.
     const setIds = writes.find((w) => w.sql.includes("in_release_id = ?"));
     expect(setIds?.sql).toContain("backfill_discogs_attempted_at = ?");
     expect(setIds?.sql).toContain("backfill_discogs_done_at = ?");
@@ -215,10 +195,6 @@ describe("backfillDiscogsIds — reliability gate", () => {
   });
 
   it("a throttled miss trips the circuit breaker — stops the run, no cooldown (next tick retries); a clean miss records TRIED", async () => {
-    // Throttled miss: rateLimited true → the breaker trips. The run STOPS before
-    // the second finding (no march into the same 429 wall — the storm #119 missed),
-    // and the throttled finding is NOT recorded (no cooldown) so the next tick
-    // retries it with a fresh rate-limit window.
     discogsResolveRelease.mockResolvedValueOnce({
       rateLimited: true,
       rateLimitedBy: "musicbrainz",
@@ -243,7 +219,6 @@ describe("backfillDiscogsIds — reliability gate", () => {
     reliabilityRows.clear();
     discogsResolveRelease.mockClear();
 
-    // Clean no-match: {} → failures reset to 0 (a tried, not a failure).
     discogsResolveRelease.mockResolvedValueOnce({});
     singlePage([finding("2")]);
     await backfillDiscogsIds(10, false);
@@ -300,9 +275,6 @@ describe("backfillLastfmLoves — reliability gate", () => {
   });
 
   it("a rate-limited love trips the circuit breaker — stops the run, flags rateLimited, no failure record (next tick retries)", async () => {
-    // Symmetric with Discogs: a throttled love is NOT a failure (no cooldown), so the
-    // next tick retries it with a fresh window, and the flag tells the CLI to stop
-    // looping the cursor instead of grinding into the same wall to the 120s timeout.
     lastfmLove.mockResolvedValueOnce({ error: "rate", ok: false, rateLimited: true });
     singlePage([finding("1"), finding("2")]);
     const { backfillLastfmLoves } = await import("./backfill");
@@ -318,7 +290,6 @@ describe("backfillLastfmLoves — reliability gate", () => {
 });
 
 describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve (oracle)", () => {
-  // A resolved single-ISRC oracle bundle with just the URL (no album facts).
   function urlBundle(url: string) {
     return { bundle: { songId: "s1", songUrl: url }, configured: true, ok: true };
   }
@@ -376,17 +347,16 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve (orac
     expect(result.resolved).toEqual([
       { logId: "LOG-1", url: "https://music.apple.com/us/album/x/1?i=2" },
     ]);
-    // A finding bumps its lastmod — setAppleMusicUrl was called with bumpFinding=true, so the
-    // batch carries the findings updated_at write alongside the tracks url write.
+
     const urlWrite = writes.find((w) => w.sql.includes("set apple_music_url = ?"));
     expect(urlWrite?.args).toEqual(["https://music.apple.com/us/album/x/1?i=2", "1"]);
     expect(writes.find((w) => w.sql.includes("update findings set updated_at"))).toBeTruthy();
     const recordDone = writes.find((w) => w.sql.includes("backfill_apple_music_done_at = ?"));
     expect(recordDone, "a done record should be written").toBeTruthy();
-    // The Apple reliability write now targets `tracks`, not `findings` (RFC U1 — the move).
+
     expect(recordDone?.sql).toContain("update tracks");
     expect(recordDone?.sql).toContain("backfill_apple_music_failures = 0");
-    // A success feeds the breaker "ok" (resets any auth streak).
+
     expect(recordAppleAuthOutcome).toHaveBeenCalledWith("ok", expect.any(Number));
   });
 
@@ -423,7 +393,7 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve (orac
       appleCatalogLookupByIsrc,
       "the run halted before the second finding",
     ).toHaveBeenCalledTimes(1);
-    // A 429 is the OTHER regime — it does not advance the auth-failure breaker streak.
+
     expect(recordAppleAuthOutcome).toHaveBeenCalledWith("other", expect.any(Number));
   });
 
