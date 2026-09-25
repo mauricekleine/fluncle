@@ -96,6 +96,7 @@ const OPS_AUTOMATION_IDS = new Set([
   "cron.audit-review",
   "cron.backup",
   "cron.healthcheck",
+  "cron.pipeline-watch",
   "cron.reach",
   // The hub-counts drift backstop is DB hygiene, not track pipeline — it files with the backup
   // and the health prober, not with the crawl/rank/render crons.

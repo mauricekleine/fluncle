@@ -60,7 +60,7 @@ import {
   updateTrack,
 } from "../track-update";
 import { isDueWorkMaintenancePending } from "../due-work";
-import { countTrackWork, listTrackWork } from "../track-work";
+import { countTrackWork, listTrackWork, oldestQueuedEmbedCaptureOver24h } from "../track-work";
 import {
   authorizeCaptureReconciliation,
   commitCaptureReconciliation,
@@ -826,11 +826,16 @@ export function adminTracksHandlers(os: Implementer) {
       const queued = counting
         ? await countTrackWork({ kind: input.kind, scope: input.scope })
         : undefined;
+      const oldestQueuedCaptureOver24h =
+        counting && input.kind === "embed" && input.scope === "all" && input.age === "true"
+          ? await oldestQueuedEmbedCaptureOver24h()
+          : undefined;
 
       return {
         capabilities: TRACK_WORK_CAPABILITIES,
         debtPending: debtAware ? debtPending : undefined,
         ok: true,
+        oldestQueuedCaptureOver24h,
         queued,
         tracks,
       } as const;

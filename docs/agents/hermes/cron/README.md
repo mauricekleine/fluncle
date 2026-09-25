@@ -20,6 +20,8 @@ The per-cron sections below carry the full mechanism + schedule rationale for th
 
 ## Deploy model — host systemd timers
 
+The [`fluncle-pipeline-watch`](../pipeline-watch-timer/README.md) read-only sweep checks whether the catalogue pipeline produces work against a real ready backlog every 15 minutes. It reads the same bounded cron markers the healthcheck uses, plus agent-tier status, capture budget, and worklist counts; incident alerts open, repeat after one and four hours and daily, and recover after two healthy checks. A failed Discord POST remains pending in its local state. It writes its own marker through `cron-output.sh`, so the healthcheck reports a dead watchdog as stale. The installer, pin-watch quiesce, and timer-watchdog rosters discover its unit dynamically.
+
 **Code rides the image; the schedule rides repo-checked-in host systemd timers; the volume holds only state.** There is no in-container scheduler and no `docker cp` for automation:
 
 - **Code (baked).** The sweep scripts bake into the image at `/opt/hermes-scripts` and the enrichment DSP skill at `/opt/hermes-skills` (Dockerfile, RFC § Unit A). They auto-update from `main` via the hourly [`pin-watch`](../pin-watch/README.md) rebuild — which triggers on **baked-content drift** (a git-tree fingerprint of the scripts + skills + Dockerfile), not only on a CLI-pin bump, so a script-only change deploys on the next tick without needing a version bump. Consumers read them straight from the baked path — no `/opt/data/scripts` projection.
