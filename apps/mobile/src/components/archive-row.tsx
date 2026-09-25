@@ -5,20 +5,6 @@ import { Image } from "expo-image";
 import { findingLineParts, findingMetaSegments } from "@/lib/archive-state";
 import { color, font, radius } from "@/theme/tokens";
 
-// A finding OR an uncertified track as an archive row — the shared presentational
-// twin of finding-row.tsx, reused by the search results and the Saved view. It never
-// decides its own destination: the caller owns onPress and the a11y label, so the
-// same row serves a certified finding (taps to /log) and a track that links OUT to
-// Spotify.
-//
-// THE UNLIT RULE (DESIGN.md), mirrored from the web palette: a certified finding
-// carries its Log ID coordinate in Oxanium and heats to Eclipse Glow on press (the
-// Gold Veil washes the row). A track Fluncle never certified catches only the cold
-// Dust Veil, carries no coordinate, and shows a quiet "leaves the app" arrow instead
-// — never labelled, never introduced, never given a noun. "Finding" stays the only
-// named object. Layout is a plain inner View with a static StyleSheet style (a
-// Pressable style FUNCTION drops flexDirection under NativeWind — see finding-row.tsx).
-
 export type ArchiveRowProps = {
   accessibilityLabel: string;
   albumImageUrl?: string | null;
@@ -28,7 +14,7 @@ export type ArchiveRowProps = {
   galaxyName?: string | null;
   isLast?: boolean;
   logId?: string | null;
-  // Not named `key`: React reserves that prop. This is the musical key segment.
+
   musicalKey?: string | null;
   onPress: () => void;
   title: string;
@@ -94,9 +80,7 @@ export const ArchiveRow = memo(function ArchiveRow({
               </Text>
             ) : null}
           </View>
-          {/* An uncertified track has no coordinate; the cold "leaves the app" arrow
-              says it links out (the row's a11y label names Spotify). aria-hidden so the
-              icon doesn't double-read over that label. */}
+
           {showCoordinate ? null : (
             <Ionicons
               name="open-outline"

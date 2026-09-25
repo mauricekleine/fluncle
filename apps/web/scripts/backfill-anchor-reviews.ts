@@ -1,53 +1,5 @@
 #!/usr/bin/env bun
-/**
- * SEED the suspected-version-mismatch review queue from a scan — the one-off catch-up for rows the
- * live gate will not revisit.
- *
- * The gate now records a near-match the moment it misses (lib/server/anchor.ts §
- * `detectVersionMismatch`), so the queue fills itself from here on. But the rows this feature exists
- * for have ALREADY missed — repeatedly, for months — and many have hit `ANCHOR_MAX_ATTEMPTS`, which
- * means the worklist will never offer them again and the gate will never get another chance to
- * notice. An offline scan over the archive can spot them; this script writes what it found onto the
- * rows so they surface in the /admin attention queue like any freshly-detected one.
- *
- * ── WHAT IT WILL AND WILL NOT DO ─────────────────────────────────────────────────────────────
- * It writes ONE column and nothing else: `tracks.anchor_review_json`. It never anchors, never
- * stamps, never touches the retry counter, and never certifies — so the worst a wrong input can do
- * is put a question in front of the operator, which he answers with `resolve_anchor_review` exactly
- * as he would a live detection. The never-wrong-stamp rail is not reachable from here.
- *
- * It SKIPS, and reports, a row that: does not exist; is CERTIFIED (a finding's Spotify id is its
- * identity, not an anchor to fill); is already ANCHORED (the miss it describes is over); or already
- * carries a review (the live gate's note is fresher than a scan's, and a re-run must not churn it).
- * That last guard is what makes the script IDEMPOTENT: a second run writes zero rows.
- *
- * ── USAGE ────────────────────────────────────────────────────────────────────────────────────
- *   bun run apps/web/scripts/backfill-anchor-reviews.ts --file <scan.json> [--execute]
- *
- * DRY RUN BY DEFAULT (the `migrate_preview_archive` discipline): without `--execute` it reads,
- * decides, and prints the verdict per row without writing. The input is a JSON array of
- * `{ track_id, candidate }`, where `candidate` carries the near-match the scan found:
- *
- *   [
- *     {
- *       "track_id": "mb_9f0c…",
- *       "candidate": {
- *         "title": "Typical Description (Calibre Remix)",
- *         "artists": [{ "name": "Calibre", "id": "sp-calibre" }],
- *         "durationMs": 394000,
- *         "isrc": "GBCJY1300173",
- *         "spotifyTrackId": "3n9…",
- *         "albumImageUrl": "https://i.scdn.co/image/…",
- *         "source": "listenbrainz"
- *       }
- *     }
- *   ]
- *
- * `artists` also accepts bare strings (`["Calibre"]`) — a scan that only carried names loses the
- * stable-id artist link on ACCEPT and nothing else. `spotifyTrackId` is OPTIONAL: a candidate
- * without one (a Deezer-rung suspect) still seeds a queue row, but as INFORMATION — Accept is not
- * offered, and the operator uses the MusicBrainz link to fix the metadata upstream instead.
- */
+
 import { type Client, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
@@ -57,7 +9,6 @@ import { fileURLToPath } from "node:url";
 
 import { type AnchorReview, type AnchorReviewSource } from "../src/lib/server/anchor";
 
-/** One row of the scan's output — deliberately loose, because a scan is a script, not a contract. */
 export type AnchorReviewSeed = {
   candidate: {
     albumImageUrl?: null | string;
@@ -71,7 +22,6 @@ export type AnchorReviewSeed = {
   track_id: string;
 };
 
-/** Why a seed did not land — reported per row so a scan's misses are never silent. */
 type AnchorReviewSeedSkip =
   | "already_anchored"
   | "already_reviewed"
@@ -80,13 +30,11 @@ type AnchorReviewSeedSkip =
   | "not_found";
 
 export type AnchorReviewBackfillResult = {
-  /** `track_id` → why it was skipped, in input order. */
   skipped: { reason: AnchorReviewSeedSkip; trackId: string }[];
-  /** Rows that received (or, on a dry run, WOULD receive) a review. */
+
   written: string[];
 };
 
-/** Normalise the scan's artists into the stored `{ id, name }` shape; a bare string loses no name. */
 function normalizeSeedArtists(
   artists: AnchorReviewSeed["candidate"]["artists"],
 ): { id: null | string; name: string }[] {
@@ -101,11 +49,6 @@ function normalizeSeedArtists(
   });
 }
 
-/**
- * The idempotent core, taking any libSQL client so a test can drive it against an in-memory database
- * with the real migrations applied. `execute: false` (the default) decides everything and writes
- * nothing, so the operator sees the exact verdict list before committing to it.
- */
 export async function backfillAnchorReviews(
   client: Client,
   seeds: AnchorReviewSeed[],
@@ -122,8 +65,6 @@ export async function backfillAnchorReviews(
       continue;
     }
 
-    // The row's own state decides, not the scan's: it may have anchored, been certified, or picked up
-    // a fresher review since the scan ran.
     const found = await client.execute({
       args: [trackId],
       sql: `select t.title, t.spotify_uri, t.anchor_review_json,
@@ -167,16 +108,14 @@ export async function backfillAnchorReviews(
         title: seed.candidate.title,
       },
       reason: "version_mismatch",
-      // The row's title AS IT STANDS — the other half of the evidence, read from the database rather
-      // than trusted from the scan so the queue shows what the operator is actually deciding about.
+
       title: typeof row.title === "string" ? row.title : "",
     };
 
     if (execute) {
       await client.execute({
         args: [JSON.stringify(review), trackId],
-        // The guards above are re-asserted in SQL so a concurrent anchor (the box's sweep runs on its
-        // own timer) cannot be overwritten by a decision this loop made a moment earlier.
+
         sql: `update tracks
               set anchor_review_json = ?
               where track_id = ?
@@ -247,7 +186,6 @@ async function main(): Promise<void> {
       `${execute ? "wrote" : "would write"} ${result.written.length} review(s) of ${parsed.length} seed(s)`,
     );
 
-    // Alphabetical by reason, so two runs of the same scan print the same report.
     const ordered = [...counts].sort(([left], [right]) => left.localeCompare(right));
 
     for (const [reason, count] of ordered) {

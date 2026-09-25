@@ -1,46 +1,13 @@
 #!/usr/bin/env bun
-/**
- * The one-time COST-01 historical estimate (RFC §7) — IDEMPOTENT, and DELIBERATELY
- * NOT wired into the deploy. It writes `source: "estimated"` rows to the
- * `cost_events` ledger so the operator gets a COMPLETE comparison on day one
- * instead of waiting weeks for a low-volume archive to accumulate. Because it
- * writes to PROD, it is OPERATOR-GATED: a plain run is a DRY RUN (prints what it
- * would write); `--confirm` performs the writes.
- *
- * What is recoverable (the same `count × avg-rate` the ledger sanctions going
- * forward, pointed backward, badged `estimated`):
- *   - Cartesia TTS — every finding with a stored `observation_script` gets a
- *     `cash` characters row (fully recoverable: the exact char count × the rate).
- *   - Render — every finding with a shipped video gets a `subsidized` `self`
- *     seconds row (box-minutes; utilization-only under Decision B, so
- *     `estimated_usd` is NULL — a fixed-plan draw, never cash).
- *   - Enrich / embed — every finding with a BPM / embedding gets a `subsidized`
- *     `self` seconds row (an average per-item duration; utilization-only).
- *
- * What stays "—": pre-instrumentation LLM authoring TOKENS (physically discarded).
- *
- * Idempotent via the SAME deterministic `costEventId` key the live emitters use, so
- * a re-run inserts nothing new (ON CONFLICT(id) DO NOTHING). The `occurredAt` is a
- * STABLE per-finding timestamp (the finding's `added_at`), so the key is stable
- * across runs.
- *
- * Usage:
- *   bun run apps/web/scripts/backfill-cost-history.ts            # dry run (default)
- *   bun run apps/web/scripts/backfill-cost-history.ts --confirm  # write to the DB
- */
 
 import { type CostEventInput } from "@fluncle/contracts/orpc";
 import { costEventId, insertCostEvents, resolveEstimatedUsd } from "../src/lib/server/costs";
 import { sanitizeForCartesia } from "../src/lib/server/observation";
 import { getDb } from "../src/lib/server/db";
 
-// Average per-item durations for the utilization-only (`self`) steps. Coarse but
-// honest seeds — the box-minutes/seconds a typical item drew. They only scale a
-// column already fenced OUT of the cash total (Decision B), so a rough figure is
-// acceptable; retune from real timings once the live capture accumulates.
-const AVG_RENDER_SECONDS = 85 * 60; // an ~85-min render (render-detached.sh)
-const AVG_ENRICH_SECONDS = 20; // a preview analysis pass
-const AVG_EMBED_SECONDS = 8; // one MuQ embedding
+const AVG_RENDER_SECONDS = 85 * 60;
+const AVG_ENRICH_SECONDS = 20;
+const AVG_EMBED_SECONDS = 8;
 
 type FindingRow = {
   added_at: string;
@@ -52,7 +19,6 @@ type FindingRow = {
   video_url: string | null;
 };
 
-/** Finding-bounded source rows used to reconstruct the historical cost ledger. */
 export const FINDING_COST_HISTORY_SOURCE_SQL = `select tracks.track_id, findings.log_id,
              findings.added_at, findings.observation_script, findings.video_url, tracks.bpm,
              tracks.has_embedding as has_embedding
@@ -61,12 +27,10 @@ export const FINDING_COST_HISTORY_SOURCE_SQL = `select tracks.track_id, findings
 
 function buildEvents(row: FindingRow): CostEventInput[] {
   const events: CostEventInput[] = [];
-  // A STABLE per-finding instant so the idempotency key never drifts across runs.
+
   const occurredAt = row.added_at;
   const base = { logId: row.log_id, occurredAt, trackId: row.track_id };
 
-  // Cartesia TTS — recoverable + priced (cash). The stored script's char count is
-  // the exact billable quantity.
   if (row.observation_script?.trim()) {
     events.push({
       ...base,
@@ -80,7 +44,6 @@ function buildEvents(row: FindingRow): CostEventInput[] {
     });
   }
 
-  // Render box-minutes — subsidized/self, utilization-only (estimated_usd NULL).
   if (row.video_url?.trim()) {
     events.push({
       ...base,
@@ -94,7 +57,6 @@ function buildEvents(row: FindingRow): CostEventInput[] {
     });
   }
 
-  // Enrich seconds — subsidized/self (a BPM means the finding was analyzed).
   if (row.bpm !== null) {
     events.push({
       ...base,
@@ -108,7 +70,6 @@ function buildEvents(row: FindingRow): CostEventInput[] {
     });
   }
 
-  // Embed seconds — subsidized/self (an embedding means the finding was embedded).
   if (row.has_embedding) {
     events.push({
       ...base,
@@ -159,7 +120,6 @@ async function main() {
     return;
   }
 
-  // Idempotent: ON CONFLICT(id) DO NOTHING, so a re-run inserts nothing new.
   const inserted = await insertCostEvents(events);
   console.log(`\nWrote ${inserted} new rows (${events.length - inserted} already present).`);
 }

@@ -1,10 +1,3 @@
-/**
- * Positive target gate for the destructive hosted scale bench.
- *
- * A denylist can only recognize names it already knows. This gate additionally requires the
- * operator to supply the target URL's exact canonical host as an independent identity value before
- * the bench may construct a client, migrate, seed, or trial-drop an index.
- */
 export const SCALE_BENCH_URL_ENV = "SCRATCH_TURSO_DATABASE_URL";
 export const SCALE_BENCH_TOKEN_ENV = "SCRATCH_TURSO_AUTH_TOKEN";
 export const SCALE_BENCH_IDENTITY_ENV = "SCRATCH_TURSO_DATABASE_IDENTITY";
@@ -69,7 +62,6 @@ function parseHostedScratchUrl(rawUrl: string): { identity: string; url: string 
   return { identity: parsed.host, url };
 }
 
-/** Resolve and positively identify the hosted target before reading its token or constructing a client. */
 export function resolveScaleBenchTarget(gate: ScaleBenchTargetGate = {}): ScaleBenchTarget {
   const readEnvironment = gate.readEnvironment ?? ((name: string) => process.env[name]);
   const rawUrl = readEnvironment(SCALE_BENCH_URL_ENV);

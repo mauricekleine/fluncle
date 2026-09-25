@@ -23,19 +23,6 @@ import { KeyNotationToggle } from "@/components/key-notation-toggle";
 import { formatKey, syncKeyNotationFromAccount, useKeyNotation } from "@/lib/key-notation";
 import { color, font, radius } from "@/theme/tokens";
 
-// The /account modal (RFC: accounts in the pocket). An account is a QUIET, opt-in
-// convenience — nothing anywhere gates on it, and anonymous behaviour everywhere is
-// untouched. It rides the same public auth server the web does (public-auth.ts):
-// email/password + the username plugin, the Expo cookie handshake, and the CSRF-guarded
-// `/me` tier through `meFetch`. Presented as a modal off the archive header (the app's one
-// place for global actions, beside Submit + Notifications), the visual sibling of submit.tsx.
-//
-// Copy is REUSED VERBATIM from the web account page (apps/web/src/routes/account.tsx) — one
-// action, one label across surfaces (the Chrome Rule). Only the delete confirmation adopts
-// the app's own two-tap arm idiom (the Decks "Start over" precedent), since the web's
-// AlertDialog has no native analogue here.
-
-// The current session, user-or-null — the shape GET /api/v1/me returns (meResponse).
 type Me = {
   ok: true;
   user: null | {
@@ -49,8 +36,7 @@ type Me = {
 export default function AccountScreen() {
   const router = useRouter();
   const [me, setMe] = useState<Me | undefined>(undefined);
-  // A top-level notice that outlives a view switch: the sign-in welcome and the post-delete
-  // line both need to show against the view they land on.
+
   const [notice, setNotice] = useState("");
 
   async function refresh() {
@@ -76,8 +62,6 @@ export default function AccountScreen() {
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.flex}
         >
-          {/* The modal dismisses by swipe; this fixed control keeps that discoverable and
-              gives VoiceOver/TalkBack an explicit target (submit.tsx's grammar). */}
           <View style={styles.topBar}>
             <Pressable
               accessibilityLabel="Close"
@@ -111,7 +95,6 @@ export default function AccountScreen() {
   );
 }
 
-// SIGNED OUT — sign in or create a private account, with a "Forgot password?" side view.
 function AuthPanel({
   notice,
   onSignedIn,
@@ -146,14 +129,10 @@ function AuthPanel({
       }
 
       setNotice("Aboard. Your private Galaxy state is ready.");
-      // Ride the device-local saved findings onto the account: a union-merge, once per
-      // sign-in (fire-and-forget — the Saved view updates via the store's listeners when it
-      // lands; nothing here gates the UI). See @/lib/saved.
+
       void mergeSavedWithAccount();
       await onSignedIn();
-      // Adopt the profile's key-notation now that a session exists — force past the
-      // once-per-launch guard, since the anonymous sync likely already ran (mirrors the web
-      // account page). The Mix-tab toggle then mirrors changes back to the profile.
+
       void syncKeyNotationFromAccount({ force: true });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not sign in.");
@@ -266,10 +245,6 @@ function AuthPanel({
   );
 }
 
-// The "Forgot password?" side view: collect the account email, ask the server to send a
-// reset link, and always show the same enumeration-safe line (a send fault is swallowed —
-// the confirmation must not reveal whether the address is on an account). The emailed link
-// lands on the WEB /reset-password page.
 function ForgotPassword({ onBack }: { onBack: () => void }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -280,7 +255,6 @@ function ForgotPassword({ onBack }: { onBack: () => void }) {
     try {
       await authClient.requestPasswordReset({ email, redirectTo: `${API_BASE}/reset-password` });
     } catch {
-      // Swallow — the confirmation below is the same either way (enumeration-safe).
     } finally {
       setBusy(false);
       setSent(true);
@@ -318,8 +292,6 @@ function ForgotPassword({ onBack }: { onBack: () => void }) {
   );
 }
 
-// SIGNED IN — the identity line, sign out, and the App-Review-mandated (5.1.1(v)) account
-// deletion behind a two-tap arm (the app's destructive idiom; no AlertDialog on native).
 function SignedInPanel({
   notice,
   onChanged,
@@ -349,7 +321,6 @@ function SignedInPanel({
     }
   }
 
-  // Two-tap: the first tap arms, the second deletes (the Decks "Start over" precedent).
   async function onDelete() {
     if (!armed) {
       arm();
@@ -390,9 +361,6 @@ function SignedInPanel({
 
       <SavedSets />
 
-      {/* Preferences — the web account page's section, ported (operator ask 2026-07-14).
-          The toggle is the same store the Decks control writes; the preview line makes
-          the choice legible without leaving the screen. */}
       <View style={styles.prefs}>
         <Text style={[font.label, styles.sectionHeading]}>Preferences</Text>
         <Text style={[font.body, styles.muted]}>
@@ -400,20 +368,13 @@ function SignedInPanel({
           device you sign in on.
         </Text>
         <Text style={[font.label, styles.prefsFieldLabel]}>Key notation</Text>
-        {/* Hug the segments: the modal's column stretches children full-width, which
-            left the two small segments marooned in a plate-wide well. */}
+
         <View style={styles.prefsToggle}>
           <KeyNotationToggle />
         </View>
         <NotationPreview />
       </View>
 
-      {/* The infrequent actions live at the FOOT of the panel (operator ruling
-          2026-07-14: sign out was the first control the eye landed on — leaving and
-          destroying are rare acts and earn the least real estate, not the most).
-          Sign out stays quiet and separate from the fenced danger zone below it. */}
-      {/* Self-start, not full-bleed: the de-emphasis ruling's intent made execution —
-          a rare act at the least real estate, not a primary-CTA footprint. */}
       <View style={styles.signOut}>
         <HeatButton
           disabled={busy !== ""}
@@ -464,14 +425,6 @@ function SignedInPanel({
   );
 }
 
-// The account's saved `/mix` sets (RFC: accounts in the pocket, slice 5). A saved set has NO
-// device-local store (the set-in-progress lives on the phone; a SAVED set lives only on the
-// account), so this is an account-only read — no union-merge, no sign-in sync. Each row opens
-// back into the Decks (the stored tokens handed to the mix tab via router.dismissTo) or is
-// removed behind the app's two-tap arm. RENAME is out of scope for mobile v1 — it lives on the
-// web /account page (the AlertDialog form has no compact native analogue here).
-// The live example under the Preferences toggle — the choice previews itself
-// (mirrors the web account page's "Keys read as 1A." line).
 function NotationPreview() {
   const { notation } = useKeyNotation();
 
@@ -484,7 +437,7 @@ function NotationPreview() {
 
 function SavedSets() {
   const router = useRouter();
-  // `undefined` = not loaded yet (render nothing, no empty-state flash); an array once fetched.
+
   const [sets, setSets] = useState<RemoteSavedSet[] | undefined>(undefined);
   const [message, setMessage] = useState("");
 
@@ -493,7 +446,6 @@ function SavedSets() {
       const body = await meFetch(SAVED_SETS_PATH).then((res) => res.json());
       setSets(parseRemoteSetsList(body));
     } catch {
-      // A failed read leaves the section on its empty line rather than a broken control.
       setSets([]);
     }
   }, []);
@@ -502,12 +454,8 @@ function SavedSets() {
     void load();
   }, [load]);
 
-  // Open a set back on the Decks: dismiss this modal and land on the mix tab with the stored
-  // tokens as params (the tab hydrates them). `dismissTo` pops to the already-mounted tab.
   function openSet(set: RemoteSavedSet) {
     router.dismissTo({
-      // `savedSetName` rides so the Decks' Save-set dialog prefills with the set's name (the
-      // stable reference: a re-save keeps the name unless the reader changes it).
       params: {
         savedSetId: set.id,
         savedSetName: set.name,
@@ -524,7 +472,7 @@ function SavedSets() {
       const response = await meFetch(`${SAVED_SETS_PATH}/${encodeURIComponent(set.id)}`, {
         method: "DELETE",
       });
-      // Copy reused verbatim from the web /account SavedSetRow.
+
       setMessage(response.ok ? "Set removed." : "Could not remove that set.");
       if (response.ok) {
         await load();
@@ -538,8 +486,6 @@ function SavedSets() {
     <View style={styles.setsSection}>
       <Text style={[font.label, styles.sectionHeading]}>Saved sets</Text>
       {sets === undefined ? null : sets.length === 0 ? (
-        // Adapted from the web's "No saved sets yet. Chain one on /mix and save it here." — the
-        // "/mix" web locator is dropped (the Decks are one tab away, not a URL).
         <Text style={[font.body, styles.muted]}>
           No saved sets yet. Chain one and save it here.
         </Text>
@@ -564,12 +510,6 @@ function SavedSets() {
   );
 }
 
-// One saved-set row: tap the name to open it on the Decks; the trailing control removes it
-// behind the app's two-tap arm (the "Start over" / delete-account precedent — no native
-// AlertDialog). The visible "Delete" matches the web row action verbatim.
-// A disarmable two-tap arm (the critique's P1): arming announces itself to VoiceOver,
-// auto-disarms after a few seconds, and every armed control offers an explicit way back
-// — an accidental first tap must never leave a live destructive trigger on screen.
 const ARM_TIMEOUT_MS = 4000;
 
 function useArm(announcement: string): {
@@ -617,9 +557,7 @@ function SavedSetRow({
         </Text>
         <Text style={[font.numeric, styles.setDate]}>{touched}</Text>
       </Pressable>
-      {/* Removing a saved set is ROUTINE — it recedes to a quiet ghost so red keeps
-          meaning irreversible (the account delete below owns the red). Armed shows the
-          red word plus an explicit Cancel; the arm also times out on its own. */}
+
       {armed ? (
         <View style={styles.setRowActions}>
           <Pressable
@@ -656,7 +594,6 @@ function SavedSetRow({
   );
 }
 
-// A labelled text input, the submit.tsx field grammar (label above a bordered input).
 function Field({
   autoCapitalize,
   autoComplete,
@@ -694,8 +631,6 @@ function Field({
   );
 }
 
-// The two-tab mode switch (the app's SegmentedControl-equivalent), styled off the archive
-// FilterChip so it reads native and quiet.
 function SwitchTab({
   active,
   label,
@@ -764,8 +699,7 @@ const styles = StyleSheet.create({
   prefs: { gap: 8, marginTop: 8 },
   prefsFieldLabel: { color: color.starlightCream, fontSize: 15, marginTop: 4 },
   prefsToggle: { alignSelf: "flex-start" },
-  // The modal's type scale (typeset pass): heading 18 > body 16 > secondary 15 >
-  // caption 13 — size + weight + color stepping together, never size alone.
+
   sectionHeading: { color: color.starlightCream, fontSize: 18 },
   setDate: { color: color.stardust, fontSize: 13 },
   setDeleteGhost: { color: color.stardust },

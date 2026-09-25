@@ -1,11 +1,3 @@
-// The Ignition Rule as a control (DESIGN.md): interaction HEATS gold, press lands
-// 1px down. Reduced-motion drops the translate (color-only feedback). RFC Unit 4.
-//
-// Structure mirrors finding-row.tsx and submit.tsx's CandidateRow: a Pressable
-// style FUNCTION drops its output under NativeWind 4.2.5 (verified live — the
-// primary actions rendered as bare text on the backdrop), so the Pressable stays
-// layout-free and ALL visual styling lives on a plain inner View via StyleSheet;
-// only the pressed/heat conditionals ride the children-as-function `pressed` param.
 import { type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useReducedMotion } from "react-native-reanimated";
@@ -16,8 +8,7 @@ type Props = {
   onPress: () => void;
   variant?: "primary" | "outline";
   disabled?: boolean;
-  // Optional leading node (a Spotify mark, a magnifier, …). The caller owns the
-  // icon so this component stays free of any icon-library coupling.
+
   icon?: ReactNode;
 };
 
@@ -68,8 +59,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 6,
     justifyContent: "center",
-    // A real 44pt touch target (paddingVertical 9 + a ~15px label line only reached
-    // ~33pt); minHeight floors it to the platform minimum.
+
     minHeight: 44,
     paddingHorizontal: 14,
     paddingVertical: 9,
@@ -77,8 +67,6 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.6 },
   icon: { alignItems: "center", justifyContent: "center" },
   outline: {
-    // DESIGN.md Outline: Dust Line border over translucent Tape Black (30%). The
-    // fill lifts the border off Deep Field past WCAG 1.4.11's 3:1 boundary floor.
     backgroundColor: color.tapeBlackFill,
     borderColor: color.dustLine,
     borderWidth: 1,

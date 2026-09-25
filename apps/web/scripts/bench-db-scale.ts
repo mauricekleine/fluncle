@@ -1,47 +1,5 @@
 #!/usr/bin/env bun
-/**
- * THROWAWAY HOSTED-SCALE PROOF ENGINE — the per-item gate for the DB-scale backlog
- * (docs/db-scale-backlog.md, Wave 1 items 6 + 8–23). NOT a test, NOT wired into CI. Modelled 1:1 on
- * `bench-tracks-hub.ts` (same client/migrate/guard/`percentile`/`timeIt`/`explain` machinery).
- *
- * ── WHO RUNS THIS, AND WHY ────────────────────────────────────────────────────
- * THE OPERATOR runs it by hand against a SCRATCH hosted Turso Cloud DB, to PROVE — hosted, never
- * local — whether each candidate index / query-rewrite in the backlog actually helps at 150k rows.
- * It CANNOT run in CI or an agent's Bash session (Turso Cloud creds are operator-only), and
- * `turso dev` is not evidence: docs/local-database.md "Local is not production" — the exact
- * behaviours that decide scan-vs-seek diverge between sqld and hosted, misleadingly.
- *
- * ── WHAT IT MEASURES ──────────────────────────────────────────────────────────
- * It seeds the 150k regime (`seedScale`, ./lib/scale-seed.ts) and then, for EACH backlog item:
- *   1. Runs the CURRENT (baseline) query — the REAL production shape (the year clause is the actual
- *      `compileFilters` builder from `../src/lib/server/search`; every other shape is replicated
- *      verbatim from its server module, cited per item), captures p50 + `EXPLAIN QUERY PLAN`.
- *   2. Applies the fix — a runtime `create index`, a ruled `drop index`, or, for the pure REWRITE
- *      items (8 split-OR, 9 count−count, 10 sargable year-range), the rewritten SQL — then captures
- *      p50 + EXPLAIN again. DDL is timed so its hosted cost is evidence too.
- *   3. Emits a verdict row (speedup, plan scan→seek, whether the expected plan transition occurred).
- *
- * The index items use PLAIN-ASC btree indexes at runtime (never `libsql_vector_idx`, which wedges a
- * populated hosted table — docs/local-database.md). Every proof restores its own baseline DDL, so a
- * re-run over an already-used DB still measures a clean before/after.
- *
- * ── USAGE ─────────────────────────────────────────────────────────────────────
- *   SCRATCH_TURSO_DATABASE_URL=libsql://<scratch>.turso.io \
- *   SCRATCH_TURSO_AUTH_TOKEN=<token> \
- *   SCRATCH_TURSO_DATABASE_IDENTITY=<exact-scratch-host> \
- *   bun run apps/web/scripts/bench-db-scale.ts
- *
- * Optional env:
- *   BENCH_SCALE=150000       total tracks to seed (the seeder's per-table knobs live in scale-seed.ts)
- *   BENCH_ITERATIONS=12      samples per shape for the p50
- *   BENCH_ONLY=13,21,22,23   run only these item numbers (default: all)
- *   BENCH_SKIP_SEED=1        skip the seed phase and bench an already-seeded DB (iterate on benches)
- *
- * The operator CREATES the scratch DB before and DESTROYS it after — this only measures. Before a
- * client exists, the script requires a second, exact confirmation of the parsed URL host and also
- * rejects production/development/local-looking targets. The confirmation is the positive identity
- * gate; the denylist is defense in depth, never the authority.
- */
+
 import { createClient } from "@libsql/client/web";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
@@ -88,33 +46,28 @@ const client = createClient({
 });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
-// ── The stamps the seeder wrote are relative to SEED_NOW, so the bench's cutoffs are too ──────────
 const NOW_MS = Date.parse(SEED_NOW);
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** Item 13's Apple cooldown floor (a row attempted more recently than this is not yet eligible). */
+
 const APPLE_COOLDOWN_CUTOFF = new Date(NOW_MS - 7 * DAY_MS).toISOString();
-/** Item 16's re-arm floor (a label drained more recently than a day ago is not re-walked yet). */
+
 const REARM_CUTOFF = new Date(NOW_MS - 1 * DAY_MS).toISOString();
 
-// ── Replicated production constants (schema.ts / catalogue.ts) ────────────────────────────────────
 const LONG_FORM_MS = 15 * 60_000;
 const WRONG_AUDIO_STATUS = "wrong-audio";
-const MEGA_LABEL_ID = "label-0"; // the seeded mega-imprint (labelIdForIndex, ~20% of the catalogue)
+const MEGA_LABEL_ID = "label-0";
 
-/** `catalogue.ts` CATALOGUE_SELECT — replicated verbatim (a plain column list, no correlated subqueries). */
 const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image_url, ct.spotify_url,
   ct.apple_music_url, ct.isrc, ct.preview_url, ct.bpm, ct.key, ct.label, ct.release_date,
   ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.capture_status,
   ct.capture_verification, ct.catalogue_ranked_at, ct.duplicate_of_track_id, ct.dismissed_at,
   (ct.source_audio_key is not null) as has_captured_audio`;
 
-/** `track-work.ts` WORK_SELECT — replicated verbatim (the analyze/embed worklist page columns). */
 const WORK_SELECT = `t.track_id, t.title, t.artists_json, t.isrc, t.label, t.duration_ms,
   t.source_audio_key, t.source_audio_rejected, t.capture_priority, t.bpm, t.analyzed_from, t.source_audio_failures,
   f.log_id as log_id,
   (f.track_id is not null) as certified`;
 
-/** `track-work.ts` WORK_ORDER — the capture-ladder ORDER BY (analyze rides it via WORK_ORDER). */
 const WORK_ORDER = `order by (f.track_id is not null) desc,
   coalesce(t.capture_priority, 0) desc,
   coalesce(t.demand_score, 0) desc,
@@ -124,9 +77,8 @@ const WORK_ORDER = `order by (f.track_id is not null) desc,
 type Query = { args: (null | number | string)[]; sql: string };
 
 type IndexSpec = {
-  /** DDL applied between the before and after reads. Existing proofs create; drop proofs remove. */
   ddl: string;
-  /** Exact DDL that restores an existing index before a drop proof's baseline. */
+
   baselineDdl?: string;
   expected?: "load-bearing" | "redundant";
   mode?: "create" | "drop";
@@ -134,36 +86,25 @@ type IndexSpec = {
 };
 
 type Proof = {
-  /** The read(s) after the fix — index items re-run the baseline; rewrite items run the new SQL. */
   after: Query[];
-  /** The current production shape(s). Item 8's rewrite is two seeks, so a proof runs an array. */
+
   baseline: Query[];
-  /** The runtime index to drop-then-create between baseline and after; omitted for pure rewrites. */
+
   index?: IndexSpec;
   item: number;
-  /** Whether the fix is a query REWRITE (no new index) — shown in the verdict. */
+
   rewrite: boolean;
   title: string;
 };
 
-// ── Item 10's baseline year clauses come from the REAL builder, so the bench cannot drift from it ──
 const yearClauses = compileFilters({ yearMax: 2020, yearMin: 2015 });
 const yearBaselineSql = `select count(*) as n from tracks where ${yearClauses
   .map((clause) => clause.sql)
   .join(" and ")}`;
 const yearBaselineArgs = yearClauses.flatMap((clause) => clause.args);
 
-/**
- * The proofs. Order matters only in that each item's baseline is measured before ITS OWN index
- * exists (a later item's index cannot help an earlier item's baseline — the run is sequential and
- * every candidate index is on a different table/predicate). SQL is cited to its server module.
- */
 const PROOFS: Proof[] = [
   {
-    // demand.ts:310 — the nightly CLEAR (`update … where demand_rank <> 1`). Measured via a count-
-    // proxy on the identical driving predicate (the UPDATE's row-FINDING scan is what the index
-    // addresses) so the bench stays idempotent/re-runnable. The promotion half is a separate
-    // PK-lookup rewrite (`where id = 'musicbrainz:artist:<mbid>'`), planner-independent, not benched.
     after: [{ args: [], sql: `select count(*) as n from crawl_frontier where demand_rank = 0` }],
     baseline: [
       { args: [], sql: `select count(*) as n from crawl_frontier where demand_rank <> 1` },
@@ -177,9 +118,6 @@ const PROOFS: Proof[] = [
     title: "demand clear: <>1 full-scan → =0 partial-index count",
   },
   {
-    // recommendations.ts:250 findSeedTrack — the cross-table OR over a LEFT JOIN (neither index
-    // drives it → full scan). Rewrite: a PK seek on tracks, then (on a miss) the log_id unique-index
-    // seek. The seed value misses on track_id and hits on findings.log_id — the rewrite's worst case.
     after: [
       { args: ["no-such-track"], sql: `select track_id from tracks where track_id = ? limit 1` },
       {
@@ -200,8 +138,6 @@ const PROOFS: Proof[] = [
     title: "findSeedTrack: cross-table OR scan → two indexed seeks",
   },
   {
-    // crawl.ts:1471 getCrawlStatus catalogueTracks — the anti-join count. Rewrite: findings is a
-    // strict 1:1 subtype on the shared PK, so the catalogue count IS count(tracks) − count(findings).
     after: [
       {
         args: [],
@@ -220,9 +156,6 @@ const PROOFS: Proof[] = [
     title: "crawl status: anti-join count → count(tracks) − count(findings)",
   },
   {
-    // search.ts:678-690 compileFilters year — `substr(release_date,1,4)` wraps the column and defeats
-    // tracks_release_date_track_id_idx. Rewrite: a bare lexicographic range that rides the existing
-    // index.
     after: [
       {
         args: [],
@@ -236,11 +169,6 @@ const PROOFS: Proof[] = [
     title: "year range: substr() scan → sargable release_date range (existing idx)",
   },
   {
-    // catalogue-groups.ts:463-474 listLabelCatalogue artist_slugs — the NOCASE name fold. With only a
-    // BINARY artists.name index, SQLite builds a per-request AUTOMATIC COVERING INDEX over ALL artists.
-    // PROVEN hosted at 150k: the bare `(name collate nocase)` index did NOT flip the plan (the join still
-    // scans all artists to fetch slug); the COVERING form `(name collate nocase, slug)` did — the slug
-    // rides the index so the join becomes a seek. The +slug is essential; ship the covering index.
     after: [{ args: [MEGA_LABEL_ID], sql: labelCatalogueFoldSql() }],
     baseline: [{ args: [MEGA_LABEL_ID], sql: labelCatalogueFoldSql() }],
     index: {
@@ -252,12 +180,6 @@ const PROOFS: Proof[] = [
     title: "label render: automatic NOCASE index → artists_name_nocase_idx (covering, +slug)",
   },
   {
-    // track-work.ts:385-392 analyze kindClause (scope=all page read). No covering index today → scans
-    // captured rows every enrich tick. tracks_analyze_queue_idx mirrors tracks_embed_queue_idx.
-    // The index predicate is WIDENED to match the query's `analyzed_at is null` disjunct exactly (adding
-    // it here, not dropping it from the query). PROVEN hosted at 150k even so: the planner STILL won't
-    // pick it — the WORK_ORDER `ORDER BY` forces a table read (the sort columns aren't in the index), so
-    // the partial index buys nothing without an explicit `INDEXED BY` hint. DEFERRED — a design call.
     after: [{ args: [50], sql: analyzeWorklistSql() }],
     baseline: [{ args: [50], sql: analyzeWorklistSql() }],
     index: {
@@ -270,8 +192,6 @@ const PROOFS: Proof[] = [
     title: "analyze worklist: captured-row scan → tracks_analyze_queue_idx seek",
   },
   {
-    // backfill.ts listCatalogueAppleWork — the full vendor composite carries is_catalogue,
-    // nullable capture_priority, and the track-id tiebreak. Trial-drop the shadowed singleton.
     after: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql() }],
     baseline: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql() }],
     index: {
@@ -286,8 +206,6 @@ const PROOFS: Proof[] = [
     title: "catalogue Apple worklist: capture-priority singleton → vendor composite",
   },
   {
-    // catalogue.ts:2401-2412 quarantine lens — `capture_status = ?` is unindexed → full anti-join scan
-    // + sort on catalogue_ranked_at. Composite partial index serves both the seek and the ORDER BY.
     after: [{ args: [WRONG_AUDIO_STATUS, 50], sql: captureLensSql() }],
     baseline: [{ args: [WRONG_AUDIO_STATUS, 50], sql: captureLensSql() }],
     index: {
@@ -300,11 +218,6 @@ const PROOFS: Proof[] = [
     title: "capture terminal lens: status scan → tracks_capture_terminal_idx seek",
   },
   {
-    // labels.ts:492 LABEL_CATALOGUE_COVER_JSON (used :1283) — seeks label_id then SORTS by release_date
-    // with no composite index; a mega-imprint sorts thousands of rows per cover tile. The composite
-    // makes the label_id lookup a seek for sure; whether it ALSO retires the temp-sort depends on the
-    // planner handling the `release_date is null asc` leading ORDER BY term — watch plan_after for
-    // whether `USE TEMP B-TREE FOR ORDER BY` disappears at 150k.
     after: [{ args: [MEGA_LABEL_ID], sql: labelCoverSql() }],
     baseline: [{ args: [MEGA_LABEL_ID], sql: labelCoverSql() }],
     index: {
@@ -316,8 +229,6 @@ const PROOFS: Proof[] = [
     title: "label cover subquery: seek+filesort → tracks(label_id, release_date) composite",
   },
   {
-    // crawl.ts:547-570 rearmSeedLabels — the row-selecting subquery (measured directly; the wrapping
-    // UPDATE mutates). pick_idx seeks state='done' but residual-scans EVERY done row for kind/source.
     after: [{ args: [REARM_CUTOFF, 50], sql: rearmPickSql() }],
     baseline: [{ args: [REARM_CUTOFF, 50], sql: rearmPickSql() }],
     index: {
@@ -330,9 +241,6 @@ const PROOFS: Proof[] = [
     title: "rearm seed labels: done-partition scan → label-node partial index",
   },
   {
-    // artists.ts:1666 listArtistReviewRows — GROUP BY artist + min(created_at) over ALL unreviewed
-    // socials before LIMIT. The composite is the named fix; the full fix also needs the bounded
-    // head-walk rewrite (Wave-2 fallback), so this proves the index's effect on the current query.
     after: [{ args: [25], sql: artistReviewSql() }],
     baseline: [{ args: [25], sql: artistReviewSql() }],
     index: {
@@ -344,8 +252,6 @@ const PROOFS: Proof[] = [
     title: "artist review queue: unreviewed group-by scan → (reviewed_at, created_at) index",
   },
   {
-    // artists.ts:1243 listArtistSocialsQueue default path — the inner `distinct artist_id where
-    // status='candidate'` scans most of the table (status unindexed, candidates rare).
     after: [{ args: [100], sql: candidateQueueSql() }],
     baseline: [{ args: [100], sql: candidateQueueSql() }],
     index: {
@@ -357,8 +263,6 @@ const PROOFS: Proof[] = [
     title: "candidate queue: status='candidate' scan → partial index seek",
   },
   {
-    // The Ear's final read walks the active-catalogue prefix before its score order, so dismissed
-    // rows never become a growing residual prefix and the page remains bounded by its LIMIT.
     after: [{ args: [175], sql: earLensSql() }],
     baseline: [{ args: [175], sql: earLensSql() }],
     index: {
@@ -371,16 +275,6 @@ const PROOFS: Proof[] = [
     title: "Ear lens: residual prefix walk → active-catalogue composite seek",
   },
   {
-    // search.ts compileFilters — the name filters (backlog Wave 3-2). Baseline: the artist's
-    // leading-wildcard LIKE over `artists_json`, plus the label/album/key `lower()` wraps, each a
-    // full pass over `tracks`. After: the SAME builder handed resolved ids, so the clauses become
-    // the `track_artists` edge seek and the indexed `label_id`/`album_id` pointers, and the key
-    // compares the bare column (tracks_key_idx). No new index — every one of them already exists.
-    //
-    // Both sides come from the REAL builder, so the bench cannot drift from production. It compares
-    // SHAPES, not row-for-row equivalence: in the seeded world `tracks.label` (an imprint-name
-    // domain) and `tracks.label_id` (the mega-label distribution) are independent, and no `album`
-    // string is seeded at all — which changes what comes back, not what the planner has to read.
     after: searchFilterReads(true),
     baseline: searchFilterReads(false),
     item: 20,
@@ -389,9 +283,6 @@ const PROOFS: Proof[] = [
       "search name filters: JSON LIKE + lower() scans → track_artists / label_id / album_id / key seeks",
   },
   {
-    // backfill.ts listDeezerWork catalogue arm — the second metadata worklist with the same full
-    // vendor-composite order. Trial-drop the singleton independently so this proof cannot inherit
-    // item 13's DDL state.
     after: [{ args: [3, 100], sql: deezerCatalogueWorklistSql() }],
     baseline: [{ args: [3, 100], sql: deezerCatalogueWorklistSql() }],
     index: {
@@ -406,9 +297,6 @@ const PROOFS: Proof[] = [
     title: "catalogue Deezer worklist: capture-priority singleton → vendor composite",
   },
   {
-    // artists.ts getPublicArtistSocials + hydrateArtistOverview — equality and bounded IN reads.
-    // The single-column index is a strict prefix of the unique artist/platform composite; trial
-    // dropping it must leave both reads as indexed seeks through the composite.
     after: artistSocialReads(),
     baseline: artistSocialReads(),
     index: {
@@ -423,9 +311,6 @@ const PROOFS: Proof[] = [
     title: "artist socials: single-column artist_id index → unique composite prefix",
   },
   {
-    // anchor-apify.ts requeueOffWindowDeferrals, anchor.ts listAnchorReviewRows, and crawl.ts's
-    // anchorsPending gauge — every residual spotify_uri-null reader after the ranked worklist moved
-    // to tracks_anchor_order_idx. Trial-drop the old score-only queue and prove their own indexes hold.
     after: anchorResidualReads(),
     baseline: anchorResidualReads(),
     index: {
@@ -442,11 +327,6 @@ const PROOFS: Proof[] = [
   },
 ];
 
-/**
- * The four name/key filters as production executes them — one read each, through search's own LEFT
- * JOIN and ORDER BY. `resolved` picks the branch: the ids the entity resolution would have found
- * (the seeded `artist-0` / mega-label / `album-0`), or nothing, which is the string fallback.
- */
 function searchFilterReads(resolved: boolean): Query[] {
   const ids = resolved ? { albumId: "album-0", artistId: "artist-0", labelId: MEGA_LABEL_ID } : {};
   const filters = [
@@ -647,7 +527,6 @@ async function timeIt(run: () => Promise<unknown>): Promise<number> {
   return performance.now() - start;
 }
 
-/** A libSQL cell → string (a raw `Value` may be an object), for the EXPLAIN dump. */
 function cell(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
 }
@@ -667,7 +546,6 @@ async function explain(queries: Query[]): Promise<string> {
   return plans.join("\n      · ");
 }
 
-/** Run every query in the group in sequence (item 8's rewrite is two seeks timed as one read). */
 async function runGroup(queries: Query[]): Promise<void> {
   for (const query of queries) {
     await client.execute({ args: query.args, sql: query.sql });
@@ -684,7 +562,6 @@ async function measure(queries: Query[]): Promise<number> {
   return percentile(samples, 50);
 }
 
-/** A plan is a FULL SCAN if any line reads `SCAN <table>` with no `USING <INDEX>` on that line. */
 function hasFullScan(plan: string): boolean {
   return plan.split("\n").some((line) => /\bSCAN\b/.test(line) && !/USING/.test(line));
 }
@@ -705,8 +582,6 @@ type Verdict = {
 };
 
 async function proveItem(proof: Proof): Promise<Verdict> {
-  // Every index proof restores its own baseline state so BENCH_SKIP_SEED and repeated index names
-  // remain deterministic. Create proofs start absent; drop proofs start present.
   if (proof.index) {
     if (proof.index.mode === "drop") {
       const baselineDdl = proof.index.baselineDdl;
@@ -793,7 +668,6 @@ async function main(): Promise<void> {
     verdicts.push(await proveItem(proof));
   }
 
-  // ── The verdict table ─────────────────────────────────────────────────────────
   const header = [
     "item".padEnd(4),
     "baseline_p50".padStart(13),
@@ -824,7 +698,6 @@ async function main(): Promise<void> {
     );
   }
 
-  // ── The full before/after EXPLAIN dump ─────────────────────────────────────────
   console.log(`\n── EXPLAIN QUERY PLAN (before → after) ${"─".repeat(40)}`);
   for (const verdict of verdicts) {
     console.log(`\n  item ${verdict.item}: ${verdict.title}`);

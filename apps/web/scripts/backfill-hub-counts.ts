@@ -1,42 +1,5 @@
 #!/usr/bin/env bun
-/**
- * The hub-counts backfill — the one-time seed for the maintained per-entity counters
- * (docs/db-scale-backlog Wave 2 keystone 2), and a deploy-time no-op ever after.
- *
- * WHY IT EXISTS. The migration adds `renderable_track_count` / `certified_finding_count` to
- * `labels`, `albums` and `artists` with `DEFAULT 0`, so every EXISTING row lands at zero while the
- * edges it should be counting already exist. From deploy time onward every write path maintains the
- * pair as deltas (lib/server/hub-counts.ts) — but nothing in history was ever counted. This counts
- * it, once.
- *
- * THE SHAPE. One single-pass grouped aggregate per table is materialized into a uniquely named
- * ordinary staging relation, then both repair rails and the counter update read that bounded
- * relation. Create/populate/mark/apply/drop are one atomic write batch, so success leaves no table
- * and failure rolls its creation back. There is no per-entity loop and no repeated archive scan.
- * `certified` rides `tracks.is_catalogue = 0` (keystone 1's materialized discriminator), never a
- * `findings` join. The artists pass groups over `track_artists ⋈ tracks`, the ~2×-tracks edge table.
- * Every entity LEFT JOINs that aggregate: an already-empty entity stays untouched, while an entity
- * that lost its final track is staged back to zero.
- *
- * WHY THE GUARD, AND WHY IT IS NOT OPTIONAL. `db:backfill` runs on EVERY deploy, and this is the
- * one recompute-from-truth in the whole design — the exact shape the write paths are forbidden to
- * use, because at 150k hosted it measured 27,400 ms against ~200 ms for delta arithmetic. Paying
- * that on every deploy would be absurd, and re-running it over live counters would also silently
- * paper over a real maintenance bug (the drift a future reconciliation sweep is meant to REPORT).
- * So a token-owned `settings` marker state machine makes later deploys no-ops. A run must write and
- * read back its own `running:<uuid>` before any pass, and re-check that ownership immediately before
- * every corpus batch; only that token may conditionally transition to `complete:v1` after all three
- * bounded pass transactions succeed. A database completed by the older marker-less script pays one
- * safe recompute to adopt `complete:v1`, then never scans again.
- * `--force` claims a fresh token over the old completion — the operator's escape hatch after an
- * out-of-band bulk edge write (e.g. `scripts/backfill-artist-links.ts`, the whole-corpus artist-link
- * reconciler, or a prune that deleted tracks straight out of the database). Claim/completion writes
- * are read back and retried boundedly because a transport failure can be pre- or post-commit. If the
- * database stays unavailable, the run throws; retry explicitly with `--force` after it recovers.
- *
- * Reads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from the environment (locally from
- * apps/web/.dev.vars), exactly like `db:migrate`.
- */
+
 import { type Client, type InStatement, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
@@ -46,9 +9,8 @@ import { fileURLToPath } from "node:url";
 import { markDueWorkSourceMaintenanceFromSelectStatements } from "../src/lib/server/due-work";
 
 export type HubCountsBackfillResult = {
-  /** Rows written per entity table. Absent when the run was skipped. */
   filled?: { albums: number; artists: number; labels: number };
-  /** True when the durable completion marker exists and nothing ran. */
+
   skipped: boolean;
 };
 
@@ -72,7 +34,6 @@ function assertCanonicalRunId(runId: string): void {
   }
 }
 
-/** Build the only identifier shape this script is allowed to interpolate into staging SQL. */
 export function createHubCountStageTableName(key: HubCountKey, runId: string): HubCountStageTable {
   assertCanonicalRunId(runId);
 
@@ -98,9 +59,7 @@ async function readInitialCompletionMarker(client: Client): Promise<string | und
   for (let attempt = 0; attempt < HUB_COUNTS_MARKER_RETRY_LIMIT; attempt += 1) {
     try {
       return await readCompletionMarker(client);
-    } catch {
-      // A transient read before claiming is safe to retry: no backfill mutation has begun.
-    }
+    } catch {}
   }
 
   throw new Error(
@@ -130,9 +89,7 @@ async function claimBackfillRun(
               on conflict(key) do update set value = ?
               where ? = 1 or settings.value <> ?`,
       });
-    } catch {
-      // The write may have failed before commit or committed before the transport reported failure.
-    }
+    } catch {}
 
     let observed: string | undefined;
     try {
@@ -147,8 +104,6 @@ async function claimBackfillRun(
     if (!force && observed === HUB_COUNTS_BACKFILL_COMPLETE_VALUE) {
       return "complete";
     }
-    // Force must replace an old complete value. Any absent, stale, malformed, or competing running
-    // state is safe to retry because no archive mutation begins until our own token is read back.
   }
 
   throw new Error(
@@ -165,9 +120,7 @@ async function completeBackfillRun(client: Client, runId: string): Promise<void>
         args: [HUB_COUNTS_BACKFILL_COMPLETE_VALUE, HUB_COUNTS_BACKFILL_MARKER_KEY, runningValue],
         sql: `update settings set value = ? where key = ? and value = ?`,
       });
-    } catch {
-      // As with claim, only the read-back can distinguish a pre-commit failure from committed work.
-    }
+    } catch {}
 
     let observed: string | undefined;
     try {
@@ -239,7 +192,6 @@ function dropStageStatement(stageTable: HubCountStageTable): InStatement {
   return `drop table ${stageTable}`;
 }
 
-/** The three staged recomputes, in the order the result reports them. */
 const PASSES = [
   {
     applyHubCountsStatement: (stageTable) => ({
@@ -307,8 +259,7 @@ const PASSES = [
                or albums.certified_finding_count <> coalesce(src.certified, 0)`,
     }),
   },
-  // The artists edge is the join table, so the group is over `track_artists ⋈ tracks` — the inner
-  // join also drops an orphan edge whose track is gone, which is exactly right.
+
   {
     applyHubCountsStatement: (stageTable) => ({
       sql: `update artists
@@ -344,10 +295,6 @@ const PASSES = [
   },
 ] satisfies HubCountPass[];
 
-/**
- * The core, taking any libSQL client so a test can drive it against an in-memory DB with the real
- * migrations applied (the `backfillIsCatalogue` precedent).
- */
 export async function backfillHubCounts(
   client: Client,
   options: { force?: boolean } = {},

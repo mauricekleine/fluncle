@@ -2,11 +2,6 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { color, font } from "@/theme/tokens";
 
-// A quiet segmented toggle flipping every key readout on the Mix tab between musical scale
-// text ("G# minor") and the Camelot code ("1A") DJs mix by — the web KeyNotationToggle's
-// mobile twin, with its exact ratified labels. It writes the shared device preference
-// (key-notation.ts), so the chain rows, opener rows, and rail rows all switch together.
-// Sits in whichever section heading row is live; the two states never render both.
 const NOTATION_OPTIONS: { label: string; value: KeyNotation }[] = [
   { label: "Scales", value: "scales" },
   { label: "Camelot", value: "camelot" },

@@ -1,9 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Resume and audit the crawl/public shadow projections against a configured local database.
- * Importing this file is inert; direct invocation refuses hosted and non-loopback URLs before the
- * application client is opened.
- */
+
 import { getDb } from "../src/lib/server/db";
 import {
   auditCrawlDueWork,

@@ -1,6 +1,3 @@
-// One finding, full-screen (RFC Unit 2). Per-cell player, the media ladder, the
-// native overlay (a right action rail + bottom caption), the cover-card eclipse
-// drift, and the background-pause rule. The de-risk spike target.
 import { memo, type ReactNode, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { Pressable, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated, {
@@ -26,55 +23,16 @@ import { soundRail } from "@/lib/feed-rail";
 import { useBackgroundPause } from "@/audio/session";
 import { color, font } from "@/theme/tokens";
 
-// The floating iOS 26 tab bar's clearance. expo-router NativeTabs renders a real
-// native UITabBar and — unlike React Navigation's JS tab bar — exposes NO height hook
-// (only `usePlacement`, for bottom accessories). Its automatic content insets adjust
-// the scrolling content, not overlays absolutely positioned inside a full-bleed card,
-// so the caption + rail have to clear the bar themselves. ~49pt is the standard
-// UITabBar height, which the floating bar rides above the home-indicator safe area
-// (`insets.bottom`); a small per-element pad lifts the caption/rail just clear of it.
-// Documented constant, not a measured API — the operator verifies the exact clearance
-// in the simulator after merge.
 export const NATIVE_TAB_BAR_HEIGHT = 49;
 
-// The bounded wait the visual gives the audio bed before starting anyway (Bug B, 5.2.3
-// split). The muted visual (a raw CDN master) and the bed (a live-resolving proxy that
-// round-trips Deezer/iTunes) load at DIFFERENT rates, so starting each the instant it is
-// ready made the audio arrive after the visual, or the reverse — the "not synced" report.
-// The card now starts BOTH together once both are ready; this caps how long the visual
-// waits on a slow/absent bed, so a laggy preview degrades to a brief silent visual (the
-// bed joins when it lands) instead of freezing the card on its poster.
 const START_SYNC_WINDOW_MS = 2500;
 
-// The scrim supports text legibility without flattening the artwork. It reaches FULL opacity at the
-// bottom screen edge (behind the tab bar too) with an IMPERCEPTIBLE onset: many stops on an eased
-// curve where alpha
-// stays under ~0.05 through the first third of the gradient's height, so there is no
-// human-visible start line even on a pure-white cover. The per-glyph shadows below stay
-// — they COMPOSE with the scrim (the caption/rail sit in the gradient's ≥0.7 zone, and
-// the shadows carry the last mile). See SCRIM_* below for the exact stops.
 const TEXT_SHADOW = {
-  // Warm near-black (r>g>b, never pure black — DESIGN.md), wide + strong so a light
-  // glyph reads on light footage; composes over the scrim below it.
   textShadowColor: "rgba(9, 6, 3, 0.92)",
   textShadowOffset: { height: 1, width: 0 },
   textShadowRadius: 10,
 } as const;
 
-// THE SCRIM. A warm near-black (rgb(9,6,3) — never pure
-// #000, DESIGN.md) bottom-to-top gradient. Two properties are load-bearing:
-//
-//  1. IMPERCEPTIBLE ONSET AND RAMP — no visible start line AND no visible mid-ramp
-//     banding. The alpha follows one continuous curve —
-//     smootherstep((t−0.12)/0.88)^1.15 — sampled at 15 even stops: near-zero through
-//     the first ~28%, no segment's slope jumping against its neighbour, opaque only
-//     at the very bottom. Regenerate the arrays from that formula; never hand-tune
-//     individual stops (that reintroduces the kinks).
-//  2. OPAQUE FLOOR — alpha 1.0 at the very bottom edge, so the area behind the floating
-//     (translucent) native tab bar reads as solid warm-black, not a fading cover.
-//
-// Rendered bottom-anchored and sized by `scrimHeight()` so the highest overlay (the
-// rail's top) lands inside the ≥0.7 band. Colours and locations index-align.
 const SCRIM_RGB = "9, 6, 3";
 const SCRIM_COLORS = [
   `rgba(${SCRIM_RGB}, 0)`,
@@ -96,27 +54,13 @@ const SCRIM_COLORS = [
 const SCRIM_LOCATIONS = [
   0, 0.071, 0.143, 0.214, 0.286, 0.357, 0.429, 0.5, 0.571, 0.643, 0.714, 0.786, 0.857, 0.929, 1,
 ] as const;
-// The rail is the tallest bottom overlay: three RailAction stacks (icon box 36 + label,
-// gap 16) rising from the shared bottom line. This is the height of that band, used to
-// size the scrim so the rail's TOP sits inside the opaque ≥0.7 zone.
+
 const RAIL_BAND = 196;
 
-// The scrim's total height, from the opaque bottom edge up to its imperceptible toe.
-// Sized so the highest overlay (bottomLine + RAIL_BAND from the bottom) lands at ~0.72
-// down the gradient — alpha ≈ 0.78 on the smootherstep curve — while the first ~28%
-// stays under 0.03. Clamped to the screen (clamping pushes overlays DEEPER into the
-// curve — the safe direction); the operator verifies clearance on-device.
 function scrimHeight(overlayTop: number, screenHeight: number): number {
   return Math.min(screenHeight, overlayTop / 0.28);
 }
 
-// The firm TEXT_SHADOW above is right for the
-// thin text strokes (caption + rail labels), but on an Ionicons/MaterialCommunityIcons
-// glyph — a large, solid, font-rendered shape — a radius-10, 0.92-alpha shadow smears
-// into a dark blotchy backdrop behind every icon, very visible on light footage. Icons
-// carry a far tighter halo instead: a small radius at low alpha, enough to hold the
-// glyph's edge against a light cover without reading as a pane. The labels underneath
-// keep the firm shadow and do the real legibility work.
 const ICON_SHADOW = {
   textShadowColor: "rgba(9, 6, 3, 0.55)",
   textShadowOffset: { height: 1, width: 0 },
@@ -139,56 +83,32 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
-  // The floor every bottom overlay sits above: the home-indicator inset plus the
-  // floating tab bar (H3), keeping the caption/date and bottom rail controls visible.
+
   const bottomFloor = insets.bottom + NATIVE_TAB_BAR_HEIGHT;
-  // INVARIANT: the rail and the caption share a bottom line. Both bottom overlays anchor
-  // their bottom edge here, so the rail's last label ("Sound") bottom-aligns with the
-  // caption's last line (the coordinate + Found row) — one line, not two staggered ones
-  // (operator device pass). The -24 is the Decks-proven correction (mix.tsx's footer
-  // clearance): the iOS 26 floating pill hugs the bottom tighter than inset + bar-height
-  // implies. The -24 correction closes the dead band above the bar.
+
   const bottomLine = bottomFloor - 24;
-  // The scrim rises from the opaque bottom edge past the tallest overlay (the rail top)
-  // and fades to nothing above it — sized so the rail/caption band sits in its ≥0.7 zone.
+
   const scrimH = scrimHeight(bottomLine + RAIL_BAND, height);
-  // Stabilize the resolved media so effects can depend on the object itself (not
-  // computed `media.kind`/`media.previewUrl` member reads) and only re-run when the
-  // finding actually changes.
+
   const media = useMemo(() => resolveCardMedia(finding), [finding]);
 
-  // The video is a MUTED VISUAL — it never sounds its own baked track (App Store 5.2.3;
-  // see media.ts). Muted + `mixWithOthers` means it never claims/ducks the audio session,
-  // so it can't interrupt the preview bed below (verified against expo-video's iOS
-  // VideoManager: a non-outputting player inserts `.mixWithOthers`). It stays muted for
-  // life — nothing here ever flips `muted`.
   const player = useVideoPlayer(media.kind === "video" ? media.videoUrl : null, (p) => {
     p.loop = true;
     p.muted = true;
     p.audioMixingMode = "mixWithOthers";
   });
-  // The card's ONE audio path, for BOTH kinds: the 30s official preview bed. A card with
-  // no preview has no bed (a silent visual) — never a fall back to the video's own track.
+
   const audio = useAudioPlayer(media.previewUrl ?? null);
 
-  // Stable rail labels + a11y hints (the Chrome Rule); the icon + gold tint carry state.
-  // A card with no preview bed has nothing to toggle — the control disables (visual-only).
   const hasBed = media.previewUrl !== undefined;
   const soundControl = soundRail(soundOn);
 
-  // READINESS (Bug B). Each player has its own load clock; we couple their START on these.
-  // The visual is ready at `readyToPlay` — and an `error` (a cold-failing master) is treated
-  // as "ready" too, so a broken visual never strands the bed: the poster stays up and the
-  // audio plays over it rather than the card hanging silent. The bed is ready at `isLoaded`.
   const { status: videoStatus } = useEvent(player, "statusChange", { status: player.status });
   const audioStatus = useAudioPlayerStatus(audio);
   const videoReady =
     media.kind !== "video" || videoStatus === "readyToPlay" || videoStatus === "error";
   const bedReady = audioStatus.isLoaded;
 
-  // The bounded wait: while this card wants a bed that has not loaded, arm a timer; if it
-  // fires first, the visual starts without the bed (which joins on load). Reset whenever the
-  // finding, focus, sound toggle, or bed-readiness changes.
   const wantsBed = active && soundOn && hasBed;
   const [bedWaitElapsed, setBedWaitElapsed] = useState(false);
   useEffect(() => {
@@ -203,10 +123,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     return () => clearTimeout(timer);
   }, [wantsBed, bedReady, media]);
 
-  // Only the visible card plays, and the muted visual + the preview bed START TOGETHER: the
-  // visual holds on its poster until the bed is ready (bounded by the wait above), the bed
-  // waits for the visual to be ready, then both go on the same commit — no lonely gap. With
-  // sound off (or no bed) the muted visual just plays as soon as it is ready.
   const startVisual = active && videoReady && (!wantsBed || bedReady || bedWaitElapsed);
   const startBed = active && soundOn && hasBed && bedReady && videoReady;
   useEffect(() => {
@@ -226,10 +142,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     }
   }, [audio, media, player, startBed, startVisual]);
 
-  // Hold the wake lock while this card is the one actually making sound (the preview bed
-  // is playing) so a clip never lets the screen sleep mid-listen. A stable per-card tag
-  // keeps the calls idempotent; the cleanup always releases, so locks can't leak on
-  // pause/scroll/unmount.
   const keepAwakeTag = useId();
   const playing = startBed;
   useEffect(() => {
@@ -242,8 +154,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     };
   }, [keepAwakeTag, playing]);
 
-  // No background audio (reinforces the session rule; covers calls / route changes, and
-  // the radio taking the floor). Pause the preview bed always and the muted video too.
   const pauseAll = useCallback(() => {
     if (media.kind === "video") {
       player.pause();
@@ -252,7 +162,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   }, [audio, media, player]);
   useBackgroundPause(pauseAll);
 
-  // Cover rung: a slow eclipse drift (The Light-Years cover card is alive, not static).
   const drift = useSharedValue(0);
   useEffect(() => {
     drift.value =
@@ -283,11 +192,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
             nativeControls={false}
             pointerEvents="none"
           />
-          {/* The opening frame, edge-cached and vintage-versioned, sits OVER the video until
-              it has buffered enough to paint (`readyToPlay`). Without it the card was a blank
-              deep-field while the raw master loaded — and since the bed now waits on the
-              visual, that blank is exactly when audio must not sound. The poster IS the
-              video's first frame, so the handoff is seamless. */}
+
           {videoStatus !== "readyToPlay" ? (
             <Image
               source={media.posterUrl}
@@ -304,10 +209,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         </Animated.View>
       )}
 
-      {/* The scrim is a warm near-black gradient anchored to
-          the bottom edge, opaque at the very bottom (behind the tab bar) and fading to an
-          imperceptible onset above the overlays — no visible start line on a light cover.
-          Non-interactive so the rail below still takes every tap. */}
       <LinearGradient
         colors={SCRIM_COLORS}
         end={{ x: 0, y: 1 }}
@@ -317,12 +218,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         style={{ bottom: 0, height: scrimH, left: 0, position: "absolute", right: 0 }}
       />
 
-      {/* Right action rail (TikTok-style): Spotify / Share / Sound. Observation discovery belongs
-          to the Radio tab, outside this card rail. Each control keeps ONE stable label (the Chrome
-          Rule); the icon + the gold tint carry state, never the word. Every glyph renders inside a
-          fixed 36×36 centered box (styles.railIcon) so all three advance boxes center on the rail axis
-          identically, regardless of the glyph's internal artwork — no per-glyph nudges.
-          Icons carry the tight ICON_SHADOW halo; gold marks the active state (Ignition). */}
       <View style={[styles.rail, { bottom: bottomLine }]}>
         <RailAction
           icon={
@@ -330,8 +225,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
               name="spotify"
               size={30}
               color={color.starlightCream}
-              // Optical centering: MCI's grid pads this glyph left of the Ionicons axis —
-              // measured ~1.5pt off a rendered frame. The other two glyphs sit true.
+
               style={[styles.icon, { transform: [{ translateX: 1.5 }] }]}
             />
           }
@@ -351,9 +245,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           onPress={() => Share.share({ url: finding.logPageUrl ?? finding.spotifyUrl })}
         />
         <RailAction
-          // A card with no preview bed has nothing to sound: the control dims and goes
-          // inert (visual-only card). Drop the flipping hint then so the reader falls back
-          // to the stable "Sound" label + the disabled state — no promise of audio.
           accessibilityLabel={hasBed ? soundControl.accessibilityLabel : undefined}
           disabled={!hasBed}
           icon={
@@ -370,11 +261,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         />
       </View>
 
-      {/* Bottom caption (narrowed to clear the rail, sitting tight above the tab pill —
-          operator ruling: it floated too far above the bar). The title leads (PRODUCT.md
-          — artist + title first); the gold coordinate sits below it at reduced prominence,
-          still the identity mark but no longer out-shouting. Every glyph carries the firm
-          per-glyph shadow, which composes over the scrim so it reads on light footage. */}
       <View style={{ bottom: bottomLine, gap: 8, left: 16, position: "absolute", right: 100 }}>
         <Text
           style={[font.title, styles.captionShadow, { color: color.starlightCream }]}
@@ -444,25 +330,18 @@ function RailAction({
 }
 
 const styles = StyleSheet.create({
-  // The gold coordinate, demoted below the title: the identity gold (not the brighter
-  // Eclipse Glow) at a size under the title's, so it reads as a mark, not a headline.
   captionMeta: { alignItems: "baseline", flexDirection: "row", gap: 8 },
-  // The firm per-glyph shadow that composes over the scrim (operator ruling): every
-  // caption glyph carries this warm-dark halo on top of the gradient so it reads on light
-  // footage. The rail labels share it; the rail icons use the tighter ICON_SHADOW (the
-  // solid glyphs need the tighter halo to avoid a dark blotch).
+
   captionShadow: TEXT_SHADOW,
-  // Rail glyphs: the tight halo, not the firm text shadow (see ICON_SHADOW). Every icon
-  // renders inside the fixed 36×36 `railIcon` box, so its advance box centers on the rail
-  // axis on its own — no per-glyph translateX estimates.
+
   icon: ICON_SHADOW,
   logId: { color: color.eclipseGold, fontSize: 13 },
-  // right: 12 keeps the labels a real margin off the device edge (operator flag).
+
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 12 },
-  // A sound control with no preview bed to govern: dimmed + inert (visual-only card).
+
   railDisabled: { opacity: 0.35 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
-  // Wide enough for the longest stable label ("Spotify") on one line.
+
   railItem: { alignItems: "center", gap: 3, width: 80 },
   railLabel: {
     color: color.starlightCream,

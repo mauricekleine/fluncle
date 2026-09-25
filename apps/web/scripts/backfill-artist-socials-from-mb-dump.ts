@@ -1,34 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Bulk-backfill `artist_socials` from a local MusicBrainz artist JSON dump.
- *
- * The live resolver walks MusicBrainz one artist at a time at 1 req/s; at catalogue
- * scale that leaves most artists with no identity links for a long time. This does the
- * same join in bulk, offline: stream the dump once, ID-EXACTLY match each Fluncle artist
- * on its stored `spotify_artist_id` (present in the dump's `free streaming` relations),
- * `mbid` (the dump's line id), or `wikidata_qid`, classify + normalize the url-rels with
- * the SAME resolver functions, and insert the net-new links.
- *
- * ── Trust ────────────────────────────────────────────────────────────────────────────
- * A Spotify-ID or MBID match is ID-exact against an identity the resolver already vetted,
- * so those links are born `auto` (public) — the same trust bar as the live MB path. A
- * Wikidata-QID-only match is born `candidate`. Links are born REVIEWED (`reviewed_at` set):
- * an `auto` link is public/taggable regardless of its review stamp, so putting thousands of
- * ID-exact links on the fresh-links board would only clutter the operator's queue with no
- * added gate. `on conflict(artist_id, platform) do nothing` — an existing row (operator,
- * confirmed, or otherwise) is never touched.
- *
- * Operator-gated: a plain run is a DRY RUN; `--confirm` writes. Writes a rollback file
- * (every inserted id) before inserting, so the exact set is reversible.
- *
- * Prereq: the MusicBrainz artist dump at `data/artist.tar.xz` (json-dumps `artist` export),
- * or point `MB_ARTIST_DUMP` at it. Prod creds via `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`
- * in the environment (export them from 1Password before a prod run); falls back to `.dev.vars`.
- *
- * Usage:
- *   bun run apps/web/scripts/backfill-artist-socials-from-mb-dump.ts            # dry run
- *   bun run apps/web/scripts/backfill-artist-socials-from-mb-dump.ts --confirm  # write
- */
+
 import { type Client, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
@@ -49,7 +20,6 @@ const DUMP =
   process.env.MB_ARTIST_DUMP ?? join(SCRIPT_DIR, "..", "..", "..", "data", "artist.tar.xz");
 const OUT_DIR = join(SCRIPT_DIR, "..", ".dev", "artist-socials");
 
-/** The 11 social platforms (everything classifyMbUrl returns except the identity anchors). */
 export const SOCIAL_PLATFORMS: ReadonlySet<ArtistSocialPlatform> = new Set([
   "youtube",
   "mixcloud",
@@ -83,22 +53,14 @@ export type PlannedInsert = {
   url: string;
 };
 
-/** A Spotify/MBID match is ID-exact → `auto`; a Wikidata-only match → `candidate`. */
 export function statusForKey(key: MatchKey): "auto" | "candidate" {
   return key === "qid" ? "candidate" : "auto";
 }
 
-/** Higher-trust key wins when a dump record matches a Fluncle artist by more than one key. */
 export function betterKey(a: MatchKey, b: MatchKey): MatchKey {
   return KEY_RANK[a] >= KEY_RANK[b] ? a : b;
 }
 
-/**
- * Pure planner: for each matched artist, emit an insert for every social platform the
- * artist does NOT already have. `existingByArtist` maps artistId → set of platforms that
- * already exist (any status), which the do-nothing upsert would skip anyway — planning
- * them out keeps the count and the rollback exact.
- */
 export function planInserts(
   matches: Map<string, { key: MatchKey; socials: Map<string, string> }>,
   existingByArtist: Map<string, Set<string>>,
@@ -240,7 +202,6 @@ async function main(): Promise<void> {
       return;
     }
 
-    // cheap keying pass — skip the expensive classify/normalize on the ~99.8% that don't match
     const { qid: dumpQid, spotify: dumpSpotify } = dumpIdentityKeys(rels);
     const viaSpotify = dumpSpotify ? bySpotify.get(dumpSpotify) : undefined;
     const viaMbid = byMbid.get(record_.id);

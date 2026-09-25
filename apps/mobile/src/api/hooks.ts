@@ -1,22 +1,15 @@
-// Typed TanStack Query hooks — the only thing the UI imports for data. Phase 1:
-// these wrap the live oRPC client (the flat `orpc.*` ops from ./orpc.ts) over the
-// same public contract the web serves. The hook names + return shapes are stable,
-// so no UI file changes.
 import { useCallback } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FeedItem, type RadioNowPlaying, type TrackListItem } from "@fluncle/contracts";
 import { orpc } from "@/api/orpc";
 import { SUBMIT_TRACK_MUTATION_KEY, SUBMIT_TRACK_SCOPE } from "@/lib/persist-config";
 
-/** A feed page as the contract emits it (findings + published mixtapes interleaved). */
 type FeedPage = { nextCursor?: string; tracks: FeedItem[] };
 
-/** A finding (the `TrackListItem` arm of a feed item — not a mixtape). */
 function isFinding(item: FeedItem): item is TrackListItem {
   return item.type !== "mixtape";
 }
 
-/** The findings feed (the Stories pager + the archive both read this). */
 export function useFindingsFeed() {
   return useInfiniteQuery(
     orpc.list_findings.infiniteOptions({
@@ -27,31 +20,15 @@ export function useFindingsFeed() {
   );
 }
 
-/**
- * Flatten the infinite-query pages into one findings array. The merged feed can
- * carry published mixtapes; the app's surfaces render findings, so mixtapes are
- * dropped here (the UI only ever sees `TrackListItem`).
- */
 export function flattenFeed(pages: FeedPage[] | undefined): TrackListItem[] {
   return pages?.flatMap((p) => p.tracks.filter(isFinding)) ?? [];
 }
 
-/**
- * What a Log ID resolved to: a finding the app can render, a mixtape it can't
- * (those live on the web), or nothing (a dead coordinate). The screen tells the
- * three apart so a mixtape deep-link reads "open on web", not "not found".
- */
 export type FindingResolution =
   | { kind: "finding"; finding: TrackListItem }
   | { kind: "mixtape"; logId?: string }
   | { kind: "missing" };
 
-/**
- * A single finding by Spotify trackId or Log ID. `get_track` can resolve a Log ID
- * to a mixtape; the app renders findings, not mixtapes, so a mixtape resolves to
- * its own `mixtape` arm (the screen points the crew to the web) rather than the
- * same "not found" state as a dead coordinate.
- */
 export function useFinding(idOrLogId: string) {
   return useQuery(
     orpc.get_track.queryOptions({
@@ -62,8 +39,6 @@ export function useFinding(idOrLogId: string) {
           return { finding: res.track, kind: "finding" };
         }
 
-        // The op's third arm is the identity projection, and the app never asks for it (it
-        // passes no `identity` / `isrc` / `mbid` key), so this narrows rather than handles it.
         if (!("mixtape" in res)) {
           return { kind: "missing" };
         }
@@ -74,16 +49,6 @@ export function useFinding(idOrLogId: string) {
   );
 }
 
-/**
- * Search Fluncle's archive — the public `search_archive` op (GET /search/archive),
- * the same contract the web ⌘K palette reads. One op resolves a coordinate, an exact
- * entity, a full-text token, or a natural-language sentence (and a sonic "sounds
- * like"); the client only renders what comes back. Passing `undefined` (or a query
- * below the 2-char floor `search-state.ts` enforces) keeps the query disabled so a
- * keystroke never fires a round trip — the screen debounces and hands the settled
- * value here. The archive doesn't change while you look away, so results stay fresh
- * for a minute.
- */
 export function useArchiveSearch(query: string | undefined) {
   const trimmed = query?.trim() ?? "";
   return useQuery(
@@ -96,40 +61,14 @@ export function useArchiveSearch(query: string | undefined) {
   );
 }
 
-/**
- * Register this device's Expo push token for new-finding / new-mixtape pushes —
- * the live `register_device` op (POST /api/v1/devices), an idempotent upsert. The
- * token comes from the consent flow (src/push/notifications.ts); the actual send
- * stays dark until the server's EXPO_ACCESS_TOKEN is set.
- */
 export function useRegisterDevice() {
   return useMutation(orpc.register_device.mutationOptions());
 }
 
-/**
- * Spotify candidate search for the submit flow — the `search_tracks` op
- * (GET /api/v1/search?q=…). Driven imperatively (a Search button, not type-ahead)
- * so the operator's shared Spotify token isn't burned on every keystroke; the
- * server rate-limits it regardless. `.mutate({ q })` returns `{ ok, results }`.
- */
 export function useTrackSearch() {
   return useMutation(orpc.search_tracks.mutationOptions());
 }
 
-/**
- * Submit a picked candidate as a finding for review — the public anonymous-write
- * `submit_track` op (POST /api/v1/submissions), the same contract the web submit
- * dialog posts. No auth: a submission is a message in a bottle, and the server owns
- * its status (validation, the hourly rate limit, triage). `.mutate(SubmissionBody)`
- * resolves to `{ ok: true, submission }`; faults carry the server `{ status, data }`
- * the screen maps to its honest result states.
- *
- * The one mutation that is QUEUED AND REPLAYED offline: it is a real write the crew
- * member meant to make, and its variables are a plain JSON contract body, so it survives
- * a trip through storage intact. The stable key + scope are shared with the persist
- * policy and with the defaults registered on the client (see @/api/mutation-defaults) —
- * a replay after a cold start finds its function by this key alone.
- */
 export function useSubmitTrack() {
   return useMutation(
     orpc.submit_track.mutationOptions({
@@ -139,24 +78,10 @@ export function useSubmitTrack() {
   );
 }
 
-/**
- * Fluncle's published mixtapes, newest first — the `list_mixtapes` op (GET /mixtapes),
- * the same read the web `/mixtapes` surface uses. Selects the `mixtapes` array out of
- * the `{ ok, mixtapes }` envelope so the screen gets a plain list. The mixtape detail
- * reads the same cached query and finds its logId, so no per-mixtape op is needed.
- */
 export function useMixtapes() {
   return useQuery(orpc.list_mixtapes.queryOptions({ select: (res) => res.mixtapes }));
 }
 
-/**
- * The artists a mix can be seeded from — the taste picker's grid (`list_mixable_artists`,
- * GET /mix/artists), most-represented first. `q` filters by name for someone the grid
- * missed; below the debounce floor the query still runs with no `q` (the default grid), so
- * the picker is never blank. Selects the `artists` array out of the `{ ok, artists }`
- * envelope. The archive's roster of mixable artists doesn't churn while you browse, so it
- * stays fresh for a minute; a public read never refetches on focus.
- */
 export function useMixableArtists(q?: string) {
   const trimmed = q?.trim() ?? "";
   return useQuery(
@@ -169,12 +94,6 @@ export function useMixableArtists(q?: string) {
   );
 }
 
-/**
- * What to open a set WITH, for a seed of artists you like (`list_mix_openers`, GET
- * /mix/openers) — those artists' own tracks, certified first. Disabled with no seed (the
- * contract requires a `taste`, and an empty seed yields an empty list anyway), so the grid
- * stands alone until the reader names someone. Selects the `tracks` array.
- */
 export function useMixOpeners(taste: string[]) {
   return useQuery(
     orpc.list_mix_openers.queryOptions({
@@ -187,13 +106,6 @@ export function useMixOpeners(taste: string[]) {
   );
 }
 
-/**
- * The rail: the tracks that mix cleanly OUT of the chain's tail (`list_mixable_tracks`, GET
- * /tracks/{idOrLogId}/mixable), each carrying its reason chip. `exclude` is the whole chain
- * (Log IDs / Spotify ids mixed freely) applied server-side, and `taste` tilts the order to
- * the seeded artists. Disabled until there is a tail to rank from. Selects the `findings`
- * array; an unknown target / empty archive comes back `[]`, the screen's quiet-rail state.
- */
 export function useMixableTracks(params: {
   exclude: string[];
   idOrLogId: string | undefined;
@@ -215,17 +127,8 @@ export function useMixableTracks(params: {
   );
 }
 
-/** A timed now-playing sample: the slot plus the send/receive instants for NTP-lite skew. */
 export type RadioSlotFetch = { receivedAt: number; sentAt: number; slot: RadioNowPlaying };
 
-/**
- * An imperative fetcher for the radio's server-authoritative now-playing slot
- * (`get_radio_now_playing`, GET /radio/now-playing). Returned as a function (not a
- * subscribed query) because the radio controller polls it on its own cadence and needs
- * the send/receive timestamps AROUND each call to compute clock skew. Bypasses the
- * cache (`staleTime: 0`) so every poll is a genuine network sample of the server clock.
- * An empty eligible set is a 404 the caller catches into the quiet-sector state.
- */
 export function useRadioSlotFetcher(): () => Promise<RadioSlotFetch> {
   const queryClient = useQueryClient();
 

@@ -1,62 +1,5 @@
 #!/usr/bin/env bun
-/**
- * THROWAWAY HOSTED-SCALE BENCH — the ship gate for the similar-artists engine (D6). NOT a test, NOT
- * wired into CI.
- *
- * ── WHO RUNS THIS, AND WHEN ───────────────────────────────────────────────────
- * THE OPERATOR runs it ONCE, by hand, against a SCRATCH hosted Turso Cloud DB, as the pre-merge
- * gate for stored artist centroids + precomputed similar-artists edges. It CANNOT run in this repo's
- * CI or an agent's Bash session: it needs Turso Cloud credentials for a throwaway database, which
- * are operator-only. `turso dev` is NOT evidence here — docs/local-database.md "Local is not
- * production": the exact behaviours that decide whether a growing-table vector scan survives (the
- * blob-vs-text probe cliff, the scan plan) diverge between sqld and hosted, and the local one is
- * misleading in the DANGEROUS direction. An agent may (and this build did) self-check the SQL shapes
- * against local `turso dev` for CORRECTNESS only — never for a performance number.
- *
- * ── WHAT IT MEASURES ──────────────────────────────────────────────────────────
- *   A realistic archive: ~5k artists, ~25k embedded tracks (1024-d MuQ vectors stored as
- *   `F32_BLOB` via `vector32()`), each track credited to one artist, ~30% of artists certified
- *   (they carry a finding). Then the three shapes the engine runs:
- *     (a) The BATCHED centroid recompute for `RECOMPUTE_N` (100) artists — exactly `rankArtists`'
- *         pass 1: fetch each chunk's vectors in ONE `IN (…)` query, mean them in the isolate
- *         (`meanEmbedding`), flush the chunk's centroid upserts in ONE `client.batch`. HARD budget
- *         ≤ 4 s / 100 artists (this is the shape that was ROUND-TRIP-bound before batching).
- *     (b) The SQL edge RE-RANK scan for ONE artist probe: `vector_distance_cos` over the whole
- *         `artist_centroids` table (the probe is the STORED blob via a subquery). Its cost grows
- *         LINEARLY with the centroid count and IS the engine's scaling wall — there is no ANN index
- *         on Turso (ratified). We do NOT pretend it is cheap: we RECORD the per-probe p50 and PROJECT
- *         the full-tick + cold-drain durations from it.
- *     (c) The PAGE read (`getArtistNeighbours`): the ordered PK-prefix walk of one artist's stored
- *         edges joined to `artists`, with `certified` read off the artist row's MAINTAINED
- *         `certified_finding_count` (keystone 2). HARD budget < 100 ms (the only shape
- *         a user waits on).
- *   Plus `EXPLAIN QUERY PLAN`, so the operator SEES that (c) rides the `artist_similar` PK (never a
- *   table scan) and (b) is the single intended `artist_centroids` scan.
- *
- * ── THE SHIP GATE ─────────────────────────────────────────────────────────────
- * PASS requires: (a) ≤ 4 s / 100 artists, (c) < 100 ms, AND the PROJECTED cost of ONE full tick at
- * the DEFAULT limit (`ARTIST_RANK_BATCH_SIZE` × per-probe (b) + the scaled pass-1 (a)) fits inside
- * the 600 s box-timer window. The per-probe (b) number itself is reported, not gated — the `limit`
- * knob (not a faster probe) is what keeps a tick in budget, and the cold full-archive drain is
- * `ceil(artists / limit)` ticks the operator loops. The engine's escape hatch when the centroid
- * table outgrows the exact scan is the roadmap's Cloudflare Vectorize spike (an ANN index).
- *
- * ── THE SHAPES UNDER TEST MIRROR THE REAL ONES ────────────────────────────────
- * (a) reuses the app's `meanEmbedding`/`readEmbeddingBlob` + the batched IN-query/`client.batch`
- * shape of `rankArtists`; (b) and (c) inline the exact SQL from `lib/server/artist-dossier.ts` —
- * keep them in lockstep.
- *
- * ── USAGE ─────────────────────────────────────────────────────────────────────
- *   SCRATCH_TURSO_DATABASE_URL=libsql://<scratch>.turso.io \
- *   SCRATCH_TURSO_AUTH_TOKEN=<token> \
- *   bun run apps/web/scripts/bench-artist-rank.ts
- *
- * Optional env (seed volumes — dial down for a faster smoke, up for the real gate):
- *   BENCH_ARTISTS=5000   BENCH_TRACKS=25000   BENCH_ITERATIONS=12
- *
- * The operator CREATES the scratch DB before, and DESTROYS it after — this script only measures. It
- * NEVER points at `fluncle` or `fluncle-dev` (it refuses a URL containing either name as a guard).
- */
+
 import { createClient } from "@libsql/client/web";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
@@ -73,12 +16,11 @@ import {
 import { EMBEDDING_DIMS, readEmbeddingBlob } from "../src/lib/server/embedding";
 import { backfillHubCounts } from "./backfill-hub-counts";
 
-/** The request-path read (c) — a HARD ceiling; it is the only shape a user waits on. */
 const READ_BUDGET_MS = 100;
-/** The batched centroid recompute (a) — `RECOMPUTE_N` artists in chunked IN-queries + `client.batch`. */
+
 const RECOMPUTE_BUDGET_MS = 4_000;
 const RECOMPUTE_N = 100;
-/** The box host-timer window a single `rank_artists` tick at the DEFAULT limit must fit inside. */
+
 const TICK_TIMER_MS = 600_000;
 
 function fail(message: string): never {
@@ -110,7 +52,6 @@ const iterations = envInt("BENCH_ITERATIONS", 12);
 const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
-// A tiny deterministic RNG (mulberry32) so every run seeds the SAME vectors — comparable numbers.
 function makeRng(seed: number): () => number {
   let state = seed >>> 0;
 
@@ -124,7 +65,6 @@ function makeRng(seed: number): () => number {
   };
 }
 
-/** A pseudo-random UNIT vector of `EMBEDDING_DIMS` floats — the MuQ shape, normalized like a real one. */
 function randomUnitVector(rng: () => number): number[] {
   const vector = Array.from({ length: EMBEDDING_DIMS }, () => rng() * 2 - 1);
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
@@ -147,7 +87,6 @@ async function timeIt(run: () => Promise<unknown>): Promise<number> {
   return performance.now() - start;
 }
 
-/** Seed `artistCount` artists; every 3rd one is CERTIFIED (carries a finding) so the read's EXISTS works. */
 async function seedArtists(): Promise<void> {
   const now = new Date().toISOString();
   const chunk = 500;
@@ -173,12 +112,6 @@ async function seedArtists(): Promise<void> {
   process.stdout.write("\n");
 }
 
-/**
- * Seed `trackCount` embedded tracks: each is a `tracks` row with a `vector32()` embedding, credited
- * to one artist (round-robin). Every 3rd track is a certified FINDING (a `findings` row plus
- * `is_catalogue = 0`), so the read's `certified` mirror has something to be true about. Vectors are
- * the seeded RNG's, so the scan cost is real.
- */
 async function seedTracks(): Promise<void> {
   const rng = makeRng(0x5f_37_59_df);
   const now = new Date().toISOString();
@@ -193,9 +126,6 @@ async function seedTracks(): Promise<void> {
       const artistId = `ar-${index % artistCount}`;
       const vector = JSON.stringify(randomUnitVector(rng));
 
-      // `is_catalogue` is a MAINTAINED mirror (keystone 1) and a rig is only as honest as the world
-      // it seeds — a DDL default is what production never contains (docs/db-scale-backlog
-      // § Guardrail). Every 3rd row gets a `findings` row below, so it is certified (`0`) here.
       const isCatalogue = index % 3 === 0 ? 0 : 1;
 
       statements.push(
@@ -218,7 +148,6 @@ async function seedTracks(): Promise<void> {
 
       if (index % 3 === 0) {
         statements.push({
-          // The full index keeps log_id unique past 1000 findings (a %1000 fold collided at 3000).
           args: [trackId, `${String(index).padStart(6, "0")}.7.1A`, now],
           sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
         });
@@ -232,10 +161,6 @@ async function seedTracks(): Promise<void> {
   process.stdout.write("\n");
 }
 
-// ── The shapes under test ─────────────────────────────────────────────────────────────────────
-// (c) is IMPORTED from lib/server/artist-dossier.ts (`ARTIST_NEIGHBOURS_SQL`), so the bench can only
-// ever measure the statement the artist page actually runs. (b) is still a copy of `EDGE_RERANK_SQL`
-// there, kept local because that constant is not exported.
 const EDGE_RERANK_SQL = `select ac.artist_id as neighbour_id,
              vector_distance_cos(
                ac.centroid_blob,
@@ -246,12 +171,6 @@ const EDGE_RERANK_SQL = `select ac.artist_id as neighbour_id,
       order by dist asc, ac.artist_id asc
       limit ?`;
 
-/**
- * Recompute + upsert the centroids for `artistIds`, the way `rankArtists` pass 1 does it: fetch each
- * `ARTIST_RANK_CHUNK`-sized chunk's vectors in ONE `IN (…)` query, mean them, flush the chunk's
- * upserts in ONE `client.batch`. This is the shape (a) measures — one round trip per chunk, not per
- * artist. `rankCorpus` value is informational here (the bench does not re-rank on fingerprint).
- */
 async function recomputeCentroids(artistIds: string[]): Promise<void> {
   const now = new Date().toISOString();
 
@@ -311,7 +230,6 @@ async function recomputeCentroids(artistIds: string[]): Promise<void> {
   }
 }
 
-/** Compute + store a centroid AND top-K edges for every artist — the initial full drain. */
 async function seedCentroidsAndEdges(): Promise<void> {
   const now = new Date().toISOString();
   const allIds = Array.from({ length: artistCount }, (_, index) => `ar-${index}`);
@@ -319,7 +237,6 @@ async function seedCentroidsAndEdges(): Promise<void> {
   await recomputeCentroids(allIds);
   process.stdout.write(`  centroids ${artistCount}/${artistCount}\n`);
 
-  // Edges: rank each artist's top-K in SQL, store them — so shape (c) reads a populated table.
   for (let start = 0; start < artistCount; start += ARTIST_RANK_BATCH_SIZE) {
     const end = Math.min(artistCount, start + ARTIST_RANK_BATCH_SIZE);
     const writes = [];
@@ -351,7 +268,6 @@ async function seedCentroidsAndEdges(): Promise<void> {
   process.stdout.write("\n");
 }
 
-/** A libSQL cell → string, for the EXPLAIN dump. */
 function cell(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
 }
@@ -370,17 +286,14 @@ async function main(): Promise<void> {
   await seedArtists();
   console.log(`Seeding ${trackCount} embedded tracks…`);
   await seedTracks();
-  // The read (c) answers `certified` off the MAINTAINED `artists.certified_finding_count`, which the
-  // delta writers move in production and a raw fixture insert bypasses. Seed it from the edges with
-  // the REAL deploy backfill, so the bench measures the shape against counters that agree with the
-  // graph rather than against a table of zeroes.
+
   console.log("Seeding the maintained hub counters…");
   await backfillHubCounts(client, { force: true });
   console.log("Computing centroids + edges (the initial full drain)…");
   await seedCentroidsAndEdges();
 
   const probe = "ar-1";
-  // `RECOMPUTE_N` distinct artists for (a) — spread across the archive so the vector fetch is real.
+
   const recomputeIds = Array.from(
     { length: Math.min(RECOMPUTE_N, artistCount) },
     (_, index) => `ar-${(index * 7) % artistCount}`,
@@ -388,8 +301,6 @@ async function main(): Promise<void> {
 
   console.log("\n── p50 per shape ────────────────────────────────────────────────");
 
-  // (a) The BATCHED centroid recompute for RECOMPUTE_N artists — rankArtists pass 1, one round trip
-  //     per chunk. HARD budget.
   const recomputeSamples: number[] = [];
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     recomputeSamples.push(await timeIt(() => recomputeCentroids(recomputeIds)));
@@ -402,7 +313,6 @@ async function main(): Promise<void> {
     } ${RECOMPUTE_BUDGET_MS} ms`,
   );
 
-  // (b) The SQL edge re-rank scan for one artist probe — RECORDED, not gated (the scaling wall).
   const rerankSamples: number[] = [];
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     rerankSamples.push(
@@ -416,7 +326,6 @@ async function main(): Promise<void> {
     `  (b) edge re-rank scan (1 probe)     p50 ${rerankP50.toFixed(1).padStart(8)} ms  (recorded — the ${artistCount}-centroid scan wall)`,
   );
 
-  // (c) The page's getArtistNeighbours edge read. HARD budget.
   const readSamples: number[] = [];
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     readSamples.push(
@@ -431,10 +340,9 @@ async function main(): Promise<void> {
     } ${READ_BUDGET_MS} ms`,
   );
 
-  // ── Project one full tick + a cold drain at the DEFAULT limit from the measured shapes ──────
-  const perArtistPass1 = recomputeP50 / recomputeIds.length; // ms/artist for the batched recompute
+  const perArtistPass1 = recomputeP50 / recomputeIds.length;
   const projectedPass1 = perArtistPass1 * ARTIST_RANK_BATCH_SIZE;
-  const projectedPass2 = rerankP50 * ARTIST_RANK_BATCH_SIZE; // one probe scan per recomputed artist
+  const projectedPass2 = rerankP50 * ARTIST_RANK_BATCH_SIZE;
   const projectedTick = projectedPass1 + projectedPass2;
   const tickFits = projectedTick < TICK_TIMER_MS;
   const drainTicks = Math.ceil(artistCount / ARTIST_RANK_BATCH_SIZE);
@@ -455,7 +363,7 @@ async function main(): Promise<void> {
   console.log(`  (b) edge re-rank:\n      ${rerankPlan}\n`);
   const readPlan = await explain(ARTIST_NEIGHBOURS_SQL, [probe, 4]);
   console.log(`  (c) neighbours read:\n      ${readPlan}`);
-  // The read's primary walk must ride the artist_similar PK (a range scan), never a full table scan.
+
   const readRidesPk = /USING (PRIMARY KEY|INDEX)/.test(readPlan);
   const readFullScan = /SCAN artist_similar\b(?! USING)/.test(readPlan);
   console.log(
@@ -464,7 +372,6 @@ async function main(): Promise<void> {
     }\n`,
   );
 
-  // SHIP GATE: (a) + (c) hard budgets AND one full tick at the default limit fits the box timer.
   const pass = recomputeOk && readOk && tickFits;
   console.log(
     pass

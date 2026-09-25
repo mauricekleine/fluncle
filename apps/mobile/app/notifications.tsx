@@ -12,18 +12,12 @@ import { color, font } from "@/theme/tokens";
 
 type State = "idle" | "working" | "on" | "denied" | "error";
 
-// Push consent surface (RFC Unit 5 / Apple 4.5.4: in-app consent language before
-// the system prompt). Reached after first value, never cold on launch. Below consent
-// sit the two per-category toggles ("New findings", "New mixtapes"): they persist on
-// this device and re-register it with the updated `mutedCategories` so the crew hears
-// only the pushes they asked for. A toggle that couldn't reach Fluncle says so quietly.
 export default function NotificationsScreen() {
   const router = useRouter();
   const register = useRegisterDevice();
   const { prefs, setCategory } = useNotificationPrefs();
   const [state, setState] = useState<State>("idle");
-  // Set only when a category change couldn't reach the server; the choice is always
-  // saved on the device regardless.
+
   const [syncFailed, setSyncFailed] = useState(false);
 
   async function enable() {
@@ -45,9 +39,6 @@ export default function NotificationsScreen() {
     }
   }
 
-  // Persist the toggle locally (always), then — only once notifications are actually
-  // on — re-register the device with the fresh muted set. Before that, the choice just
-  // waits and rides along on the next enable().
   async function toggleCategory(category: PushCategory, enabled: boolean) {
     const next = setCategory(category, enabled);
     if (state !== "on") {
@@ -67,7 +58,6 @@ export default function NotificationsScreen() {
         },
       );
     } else if (res.status === "granted") {
-      // Granted but no token yet (no EAS project) — nothing to sync, saved on device.
       setSyncFailed(false);
     } else {
       setSyncFailed(true);
@@ -87,8 +77,6 @@ export default function NotificationsScreen() {
           settings.
         </Text>
 
-        {/* The two per-category toggles. Literal control labels (the Chrome Rule), the
-            same nouns the Android channels carry. Eclipse Gold rides the ON track. */}
         <View style={{ gap: 4 }}>
           <CategoryToggle
             label="New findings"
@@ -140,9 +128,6 @@ export default function NotificationsScreen() {
   );
 }
 
-// One per-category toggle row: the literal label and a Switch, the ON track in Eclipse
-// Gold (One Sun). The label doubles as the switch's a11y label so a screen reader
-// announces which category it toggles.
 function CategoryToggle({
   label,
   onValueChange,

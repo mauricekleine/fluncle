@@ -1,12 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Seed the maintained `track_duplicate_keys` projection after its migration lands.
- *
- * The worklist is the missing-key anti-join, read in PK order and committed in bounded batches.
- * Each batch is durable on its own, so an interrupted run resumes from the first still-missing row;
- * a completed run takes the fast count-equality exit. The final count assertion is the deployment
- * rail: the Worker must never rank against a partially materialized identity corpus.
- */
+
 import { type Client, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
@@ -46,7 +39,6 @@ async function counts(client: Client): Promise<Counts> {
   };
 }
 
-/** The idempotent, chunked core; accepts any libSQL client for real-schema integration tests. */
 export async function backfillTrackDuplicateKeys(
   client: Client,
   batchSize = DEFAULT_BATCH_SIZE,

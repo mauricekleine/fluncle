@@ -1,5 +1,3 @@
-// Builds one of three 1280×800 Web Store scenes, chosen by ?scene= in the URL.
-// Uses the extension's real ui.css / content.css so the shots match the product.
 const scene = new URLSearchParams(location.search).get("scene") || "1";
 const frame = document.getElementById("frame");
 

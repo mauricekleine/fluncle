@@ -1,10 +1,3 @@
-// The content script: the lens itself. It scans the page's text locally for
-// `fluncle://` coordinates, turns each into a link to the finding's log page, and
-// (when enabled) attaches a hover card with the finding's metadata. It keeps a live
-// registry of what it found so the popup can list it and the toolbar badge can count
-// it. The ONLY thing that ever leaves the browser is a per-id metadata read to
-// www.fluncle.com — never page text, URLs, or DOM.
-
 import { fetchFinding } from "./api";
 import { COORDINATE_PATTERN, digCommand, safeHref, sshCommand, webUrl } from "./coordinate";
 import { bangersLabel, COPY } from "./copy";
@@ -17,7 +10,6 @@ import {
   type GetFindingsMessage,
 } from "./types";
 
-// Elements whose text is structural, editable, or code — never linkified.
 const SKIP_TAGS = new Set([
   "BUTTON",
   "CODE",
@@ -31,20 +23,13 @@ const SKIP_TAGS = new Set([
   "TEXTAREA",
 ]);
 
-// The attribute that marks a linkified coordinate, so a node is never processed
-// twice (the dedupe marker). Also used to exclude the lens's own nodes from scans.
 const LENS_ATTR = "data-fluncle-lens";
 const HOVER_ATTR = "data-fluncle-lens-card";
 
-// One registry per page: Log ID → the finding and its loading state. Drives the
-// popup list, the badge count, and the per-id fetch dedupe.
 const registry = new Map<string, DetectedFinding>();
 
 let settings: LensSettings;
 
-// ── Skip logic ───────────────────────────────────────────────────────────────
-
-/** True when this element (or an ancestor) is a place we must not touch. */
 function isSkippable(element: Element | null): boolean {
   let node: Element | null = element;
 
@@ -57,7 +42,6 @@ function isSkippable(element: Element | null): boolean {
       return true;
     }
 
-    // The lens's own injected nodes (links, hover cards).
     if (node.hasAttribute(LENS_ATTR) || node.hasAttribute(HOVER_ATTR)) {
       return true;
     }
@@ -68,22 +52,10 @@ function isSkippable(element: Element | null): boolean {
   return false;
 }
 
-// ── Badge ────────────────────────────────────────────────────────────────────
-
 function pushBadge(): void {
-  chrome.runtime.sendMessage({ count: registry.size, type: "lens:badge" }).catch(() => {
-    // The worker may be asleep or the tab backgrounded; the badge is best-effort.
-  });
+  chrome.runtime.sendMessage({ count: registry.size, type: "lens:badge" }).catch(() => {});
 }
 
-/**
- * Drops registry entries whose linkified node has left the DOM. SPA route changes
- * (YouTube, TikTok, …) swap out whole subtrees without a reload, so the coordinates
- * the lens linkified on the old view are gone but their ids would otherwise linger —
- * inflating the badge count and the popup list with dead entries. An id stays only
- * while at least one of its `[data-fluncle-lens="<id>"]` links is still connected.
- * Returns true when it removed anything, so the caller can repaint the badge.
- */
 function pruneRegistry(): boolean {
   const dead: string[] = [];
 
@@ -98,9 +70,6 @@ function pruneRegistry(): boolean {
   for (const id of dead) {
     registry.delete(id);
 
-    // The hover card lives on <body> (not inside the link), so a pruned link leaves
-    // its card orphaned. Remove it here so SPA route changes don't leak detached
-    // cards into the DOM.
     for (const card of document.querySelectorAll(`[${HOVER_ATTR}="${cssEscape(id)}"]`)) {
       card.remove();
     }
@@ -109,9 +78,6 @@ function pruneRegistry(): boolean {
   return dead.length > 0;
 }
 
-// ── Metadata ─────────────────────────────────────────────────────────────────
-
-/** Repaints every hover card bound to a Log ID once its metadata settles. */
 function repaintCards(id: string): void {
   const finding = registry.get(id);
 
@@ -124,7 +90,6 @@ function repaintCards(id: string): void {
   }
 }
 
-/** Kicks off the single per-id metadata read, idempotently. */
 function ensureMeta(id: string): void {
   const finding = registry.get(id);
 
@@ -145,9 +110,6 @@ function ensureMeta(id: string): void {
     });
 }
 
-// ── Linkifying ───────────────────────────────────────────────────────────────
-
-/** Records a coordinate in the registry (loading on first sight) and returns it. */
 function register(id: string, raw: string): DetectedFinding {
   const existing = registry.get(id);
 
@@ -162,7 +124,6 @@ function register(id: string, raw: string): DetectedFinding {
   return finding;
 }
 
-/** Builds the <a> that replaces a coordinate's text. */
 function buildLink(id: string, raw: string): HTMLAnchorElement {
   const link = document.createElement("a");
 
@@ -181,11 +142,6 @@ function buildLink(id: string, raw: string): HTMLAnchorElement {
   return link;
 }
 
-/**
- * Walks one text node and, if it carries coordinates, splits it into text + link
- * fragments. Returns true when it changed the DOM. Runs the regex fresh (it's
- * stateful with the `g` flag) and rebuilds the run rather than mutating in place.
- */
 function linkifyTextNode(textNode: Text): boolean {
   const text = textNode.nodeValue;
 
@@ -230,7 +186,6 @@ function linkifyTextNode(textNode: Text): boolean {
   return true;
 }
 
-/** Scans a subtree's text nodes and linkifies any coordinates. */
 function scan(root: Node): void {
   if (!settings.scanAllWebsites) {
     return;
@@ -253,7 +208,6 @@ function scan(root: Node): void {
     },
   });
 
-  // Collect first, then mutate — mutating during the walk invalidates the walker.
   const targets: Text[] = [];
 
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -269,15 +223,10 @@ function scan(root: Node): void {
   }
 }
 
-// ── Hover card ───────────────────────────────────────────────────────────────
-
-// Log IDs are `[0-9A-Z.]` only, but escape defensively before building an attribute
-// selector. CSS.escape is standard in the extension's Chrome runtime.
 function cssEscape(value: string): string {
   return CSS.escape(value);
 }
 
-/** A small labelled button that copies `value` and flashes a confirmation. */
 function copyButton(label: string, value: string): HTMLButtonElement {
   const button = document.createElement("button");
 
@@ -297,16 +246,13 @@ function copyButton(label: string, value: string): HTMLButtonElement {
           button.textContent = original;
         }, 1200);
       },
-      () => {
-        // Clipboard denied (rare in a user-gesture context); leave the label as-is.
-      },
+      () => {},
     );
   });
 
   return button;
 }
 
-/** A link styled as a card action. */
 function linkAction(label: string, href: string): HTMLAnchorElement {
   const action = document.createElement("a");
 
@@ -320,7 +266,6 @@ function linkAction(label: string, href: string): HTMLAnchorElement {
   return action;
 }
 
-/** (Re)renders a hover card's body from the finding's current state. */
 function fillCard(card: HTMLElement, finding: DetectedFinding): void {
   card.replaceChildren();
 
@@ -351,10 +296,6 @@ function fillCard(card: HTMLElement, finding: DetectedFinding): void {
   card.append(buildActions(finding));
 }
 
-/**
- * The facts line: for a track, the release/label/tempo facts; for a mixtape, the
- * set's banger count (it has no album/tempo/key — those live on its members).
- */
 function factsFor(meta: FindingMeta): string[] {
   if (meta.kind === "mixtape") {
     return typeof meta.memberCount === "number" ? [bangersLabel(meta.memberCount)] : [];
@@ -385,7 +326,6 @@ function factsFor(meta: FindingMeta): string[] {
   return facts;
 }
 
-/** The metadata block: artist — title, then the tabular facts. */
 function renderMeta(body: HTMLElement, meta: FindingMeta): void {
   const title = document.createElement("div");
 
@@ -415,7 +355,6 @@ function renderMeta(body: HTMLElement, meta: FindingMeta): void {
   }
 }
 
-/** "2026-06-04T…" → "Jun 4, 2026"; falls back to the raw string. */
 function formatFound(iso: string): string {
   const date = new Date(iso);
 
@@ -426,7 +365,6 @@ function formatFound(iso: string): string {
   return date.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** The card's action row. */
 function buildActions(finding: DetectedFinding): HTMLElement {
   const actions = document.createElement("div");
   const target = safeHref(finding.meta?.webUrl, finding.id);
@@ -448,13 +386,6 @@ function buildActions(finding: DetectedFinding): HTMLElement {
   return actions;
 }
 
-/**
- * Places the fixed-position hover card next to its coordinate, fully on-screen.
- * The card defaults below the coordinate, but flips above it when there isn't room
- * below (the bottom-of-viewport clip seen on TikTok), and clamps to the left/right
- * edges with an 8px margin. Reads the card's measured size, so it must run while the
- * card is visible (hidden = false) and laid out.
- */
 function positionCard(link: HTMLElement, card: HTMLElement): void {
   const margin = 8;
   const gap = 6;
@@ -463,17 +394,13 @@ function positionCard(link: HTMLElement, card: HTMLElement): void {
   const viewportW = document.documentElement.clientWidth;
   const viewportH = document.documentElement.clientHeight;
 
-  // Vertical: below by default; flip above when the card would overflow the bottom
-  // and there's more room above than below.
   const roomBelow = viewportH - anchor.bottom;
   const roomAbove = anchor.top;
   const flipUp = roomBelow < cardH + gap + margin && roomAbove > roomBelow;
   let top = flipUp ? anchor.top - cardH - gap : anchor.bottom + gap;
 
-  // Final clamp so it never leaves the viewport even when neither side fits.
   top = Math.max(margin, Math.min(top, viewportH - cardH - margin));
 
-  // Horizontal: align to the coordinate's left, then clamp within the edges.
   let left = anchor.left;
 
   left = Math.max(margin, Math.min(left, viewportW - cardW - margin));
@@ -482,7 +409,6 @@ function positionCard(link: HTMLElement, card: HTMLElement): void {
   card.style.left = `${Math.round(left)}px`;
 }
 
-/** Attaches a lazily-rendered hover card to a linkified coordinate. */
 function attachHoverCard(link: HTMLAnchorElement, id: string): void {
   const card = document.createElement("span");
 
@@ -490,8 +416,6 @@ function attachHoverCard(link: HTMLAnchorElement, id: string): void {
   card.className = "fluncle-lens-card";
   card.hidden = true;
 
-  // The fixed card is positioned against the viewport, so it must escape the link's
-  // inline flow — append it to <body> rather than nesting it inside the <a>.
   (document.body ?? document.documentElement).append(card);
 
   let painted = false;
@@ -511,10 +435,6 @@ function attachHoverCard(link: HTMLAnchorElement, id: string): void {
     positionCard(link, card);
   };
 
-  // The card now lives on <body>, not inside the <a>, so moving the pointer from the
-  // coordinate onto the card crosses a gap. A short grace delay lets the pointer
-  // travel to the card (to click an action) without the card vanishing; entering the
-  // card cancels the hide.
   const scheduleHide = (): void => {
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
@@ -528,9 +448,6 @@ function attachHoverCard(link: HTMLAnchorElement, id: string): void {
   card.addEventListener("mouseleave", scheduleHide);
 }
 
-// ── Dynamic pages ────────────────────────────────────────────────────────────
-
-/** Debounced rescan of nodes the page added or changed (SPA-friendly). */
 function observe(): void {
   let pending: ReturnType<typeof setTimeout> | undefined;
   const queue = new Set<Node>();
@@ -573,13 +490,6 @@ function observe(): void {
   });
 }
 
-/**
- * Watches for SPA route changes and reconciles the registry. `history.pushState` /
- * `replaceState` don't fire any event, so they're patched to emit one; `popstate`
- * covers back/forward. On a URL change the old view's coordinates are pruned (their
- * nodes have left the DOM) and the fresh view is rescanned, keeping the badge count
- * and popup list honest across navigations without a reload.
- */
 function observeNavigation(): void {
   let lastHref = location.href;
 
@@ -590,7 +500,6 @@ function observeNavigation(): void {
 
     lastHref = location.href;
 
-    // Let the SPA swap its DOM in before reconciling.
     setTimeout(() => {
       const pruned = pruneRegistry();
 
@@ -598,8 +507,6 @@ function observeNavigation(): void {
         scan(document.body);
       }
 
-      // `scan` only repaints the badge when it adds findings; a route that only
-      // removed them still needs a repaint.
       if (pruned) {
         pushBadge();
       }
@@ -621,8 +528,6 @@ function observeNavigation(): void {
   window.addEventListener("popstate", onNavigate);
 }
 
-// ── Popup channel ────────────────────────────────────────────────────────────
-
 function answerPopup(): void {
   chrome.runtime.onMessage.addListener(
     (message: GetFindingsMessage, _sender, sendResponse: (response: FindingsResponse) => void) => {
@@ -635,8 +540,6 @@ function answerPopup(): void {
   );
 }
 
-// ── Boot ─────────────────────────────────────────────────────────────────────
-
 async function boot(): Promise<void> {
   settings = await loadSettings();
   answerPopup();
@@ -647,8 +550,6 @@ async function boot(): Promise<void> {
     observeNavigation();
   }
 
-  // React to a toggle flip without a reload: a fresh scan covers turning scanning
-  // on; hover-card visibility changes apply to coordinates found from then on.
   onSettingsChanged((next: LensSettings) => {
     const wasScanning = settings.scanAllWebsites;
 
