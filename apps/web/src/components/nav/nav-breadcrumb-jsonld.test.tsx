@@ -9,18 +9,6 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { NavBreadcrumb } from "./nav-breadcrumb";
 
-// ONE PAGE, ONE TRAIL. Every leaf family (a finding, an artist, a label, an album, a galaxy, a
-// Logbook entry, a newsletter edition, an archive track, a doc) marks its breadcrumb up in the
-// route's own `head`, from the entity's REAL name. This chrome sees nothing but the URL, so when
-// it marked the same trail up too the page carried TWO BreadcrumbLists that disagreed —
-// `/album/dub-pack-vol-2` read "Dub Pack Vol 2" here against "Dub Pack, Vol. 2" there, and
-// `/log/<id>` read "Log" against "The log". A crawler handed two trails for one path picks one
-// arbitrarily, so the slug-derived guess could win the snippet.
-//
-// The split this pins: the chrome marks up a HUB trail (no leaf, a fixed chrome label, no route
-// emits one), the route marks up a LEAF trail. The VISIBLE trail is unchanged either way and is
-// pinned separately by `resolveCrumbs` in ./nav-breadcrumb.test.ts.
-
 const PATHS = ["/log", "/log/$logId", "/labels", "/album/$slug", "/docs", "/docs/$", "/artists"];
 
 async function renderAt(pathname: string, tail?: string): Promise<string> {
@@ -50,7 +38,6 @@ describe("NavBreadcrumb JSON-LD", () => {
     for (const pathname of ["/album/dub-pack-vol-2", "/log/038.6.1J", "/docs/log-id"]) {
       const html = await renderAt(pathname);
 
-      // The VISIBLE trail still renders — only the duplicate markup is gone.
       expect(html).toContain('aria-label="Breadcrumb"');
       expect(html).not.toContain("application/ld+json");
     }

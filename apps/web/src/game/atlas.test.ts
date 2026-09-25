@@ -81,14 +81,12 @@ describe("atlas geometry", () => {
     const threadRadius = spiralRadius(atlasThreadEnd(stars));
 
     expect(atlasWorldRadius(stars, { x: 0, y: 0 })).toBe(threadRadius);
-    // A ship past the frontier stretches the fit so it stays on the map.
+
     expect(atlasWorldRadius(stars, { x: 0, y: -(threadRadius + 500) })).toBe(threadRadius + 500);
     expect(atlasWorldRadius([], { x: 0, y: 0 })).toBeGreaterThanOrEqual(CLEAR_SPACE);
   });
 
   it("zoom-to-fit keeps the whole spiral inside the view with margin", () => {
-    // The tight-fit contract: the world radius maps exactly onto the view's
-    // shorter half-axis minus the margin.
     expect(4200 * atlasScale(4200, 480, 270, ATLAS_MARGIN)).toBeCloseTo(135 - ATLAS_MARGIN, 9);
 
     const stars = placeStars(TRACKS);

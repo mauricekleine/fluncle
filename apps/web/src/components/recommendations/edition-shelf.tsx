@@ -1,19 +1,3 @@
-// THE EDITION SHELF — the COMMITTED right column: the latest frozen edition rendered as the
-// shelf, the exact same anatomy as the draft RecommendedPanel (cover, the fused Artist — Title,
-// the chips row with the Fluncle seal on a certified slot, the instrument readout, the Add
-// pill), the register split riding the LIGHT not the layout (the Unlit Rule). It reads the
-// STORED snapshot — no engine, no vector math — so a page view stays milliseconds at any pool
-// size (the invariant `lib/server/recs-gate.ts` codifies).
-//
-// Frozen rows carry no label/year (Slice A froze similarity + the seed meta, not the imprint),
-// so the Stardust imprint line is absent here — the honest-absence default (the Readout Rule);
-// everything the freeze DID carry still renders.
-//
-// A seed change never rewrites this edition (it is a checkpoint, not a live view). When the
-// picks and the edition have drifted apart the shelf shows one quiet, INFORMATIONAL line — the
-// next set (the Friday sweep) will line them up. There is no refresh button: the engine's only
-// user trigger is the one-time "Get playlist", and the only other trigger is Friday.
-
 import { useMemo, useState } from "react";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { cn } from "@/lib/utils";
@@ -43,8 +27,7 @@ export function EditionShelf({
   const [pending, setPending] = useState<Set<string>>(new Set());
 
   const pickedIds = useMemo(() => new Set(seeds.map((seed) => seed.trackId)), [seeds]);
-  // At the cap an un-picked pill disables (the cap discipline); a picked one always stays
-  // toggle-removable, so the reader can trade one pick for another without a dead end.
+
   const atCap = seeds.length >= SEED_CAP;
 
   const findings = useMemo(
@@ -77,10 +60,6 @@ export function EditionShelf({
     <section className="rec-recommended">
       <h2>Recommended</h2>
 
-      {/* INFORMATIONAL only — the picks moved since this set froze; Friday's refresh lines them
-          up. No action: the engine has no user-triggered recompute. The live region is mounted
-          UNCONDITIONALLY and only its text toggles, so a screen reader announces the change when
-          a reactive seed edit flips staleness (a region inserted with its content is skipped). */}
       <p aria-live="polite" className="rec-muted rec-skipped">
         {stale ? "New picks noted. They steer Friday's refresh." : null}
       </p>
@@ -131,8 +110,7 @@ export function EditionShelf({
               </li>
             ))}
           </ol>
-          {/* Committed, but the stored edition failed to load — the one dry wake line so the
-              skeleton is never wordless. */}
+
           <p className="rec-muted">Couldn&rsquo;t load your saved picks. Refresh the page.</p>
         </div>
       )}
@@ -144,12 +122,6 @@ export function EditionShelf({
   );
 }
 
-/**
- * One frozen row — the shared row anatomy, the register carried by the LIGHT: a certified
- * slot wears the gold Fluncle seal (a link to /log/<id>) and catches the gold veil; a catalogue
- * slot stays cold on the Dust Veil (the Unlit Rule) with no seal. No imprint line (the freeze
- * does not carry label/year) and no preview control — the shelf shows the frozen set.
- */
 function EditionRow({
   busy,
   disabled,

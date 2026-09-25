@@ -1,7 +1,3 @@
-// Shared renderers that turn a NavItem into the right element — a crawlable
-// internal `<a>` (TanStack `<Link>`), an off-site `<a>`, or a dialog CTA — so all
-// four variants render one item identically and differ only in layout/architecture.
-
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { navIcon } from "@/components/nav/nav-icons";
@@ -10,12 +6,6 @@ import { SubscribeDialog } from "@/components/subscribe-dialog";
 import { type NavItem } from "@/lib/nav-model";
 import { cn } from "@/lib/utils";
 
-/**
- * An internal route link. The nav model carries `to` as a plain string (data-driven
- * nav), so we cast at the single `<Link>` boundary — the string is a valid app route
- * (asserted by the nav-model completeness test), and TanStack builds the real `<a
- * href>` from it at runtime regardless of the compile-time union.
- */
 export function NavRouteLink({
   children,
   className,
@@ -42,7 +32,6 @@ export function NavRouteLink({
   );
 }
 
-/** An off-site link — always a real `<a>` opening in a new tab, safe `rel`. */
 export function NavExternalLink({
   children,
   className,
@@ -61,11 +50,6 @@ export function NavExternalLink({
   );
 }
 
-/**
- * Render one NavItem as an icon + label link (route or external). Action items are
- * handled by `NavActionItem` (they need their dialog), so this returns null for
- * them — callers render actions separately.
- */
 export function NavItemLink({
   className,
   item,
@@ -82,8 +66,6 @@ export function NavItemLink({
     </>
   );
 
-  // A future (not-yet-shipped) slot: shown as a disabled label with a "soon" tag so
-  // the architecture is visible, never a live link that 404s.
   if (item.future) {
     return (
       <span
@@ -117,7 +99,6 @@ export function NavItemLink({
   return undefined;
 }
 
-/** Render an `action` NavItem as its dialog CTA (submit a track / subscribe). */
 export function NavActionItem({
   className,
   item,

@@ -18,7 +18,9 @@ apps/web/src/game/
 apps/web/src/routes/galaxy.tsx   # the route
 ```
 
-The TypeScript placement and simulation authority is pinned by frozen golden fixtures under `apps/web/src/game/testdata/`; `golden-fixtures.test.ts` fails on drift. Asset workflow (the canon ramp, the Nano-Banana pass, the procedural-fallback contract) is [docs/galaxy-sprites.md](./galaxy-sprites.md).
+The TypeScript placement and simulation authority is pinned by frozen golden fixtures under `apps/web/src/game/testdata/`; `golden-fixtures.test.ts` fails on drift. Regenerate those outputs through Vitest's V8 runtime while preserving fixture inputs; Bun's JavaScriptCore can differ by one unit in the last place for `Math.sin` and `Math.cos`, which breaks the exact comparison. Asset workflow (the canon ramp, the Nano-Banana pass, the procedural-fallback contract) is [docs/galaxy-sprites.md](./galaxy-sprites.md).
+
+The carrier previews enter the Web Audio gain and pan graph through the same-origin `/api/preview` proxy so the graph can read them without third-party CORS failures. A missing preview stays silent while its star remains navigable.
 
 ## The atlas
 

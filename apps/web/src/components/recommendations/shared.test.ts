@@ -23,8 +23,6 @@ const EDITION = (number: number): FrontierEditionSummary => ({
   trackCount: 33,
 });
 
-/** A frozen edition detail whose summary carries the seed meta, for the staleness truth table.
- *  `refreshedAt` is fixed mid-window so seeds can sit clearly before or after the freeze. */
 const detail = (over: Partial<FrontierEditionSummary> = {}): FrontierEditionDetail => ({
   summary: {
     number: 1,
@@ -47,15 +45,8 @@ const seed = (trackId: string, addedAt: string): RecSeedItem => ({
 const BEFORE = "2026-07-09T12:00:00.000Z";
 const AFTER = "2026-07-11T12:00:00.000Z";
 
-// The /recommendations door is component-light by design; its judgment lives in PURE folds.
-// These pin what the reader sees: which gate state renders, how the frontier endpoint folds
-// to "closed", how the 12-seed cap's 409 surfaces, which past edition the dropdown opens, and
-// the register-aware save body (a finding carries its Log ID, a catalogue cut does not).
-
 describe("SEED_CAP", () => {
   it("mirrors the server's MAX_REC_SEEDS (12) — the picked-state UI's cap", () => {
-    // A drift guard: the server 409s a breach at MAX_REC_SEEDS; this literal only decides when
-    // an un-picked row disables, so the two must agree or the UI disables at the wrong count.
     expect(SEED_CAP).toBe(12);
   });
 });
@@ -282,15 +273,12 @@ describe("isEditionStale", () => {
   it("the frozen count includes skipped seeds, so a matching total is not stale", () => {
     const seeds = [seed("a", BEFORE), seed("b", BEFORE)];
 
-    // Frozen: 1 steered + 1 skipped = 2 total; current 2 all pre-freeze → no drift.
     expect(isEditionStale(detail({ seedsSkipped: ["z"], seedsUsed: 1 }), seeds)).toBe(false);
   });
 
   it("pre-migration NULL meta never nudges on the count half", () => {
     const seeds = [seed("a", BEFORE)];
 
-    // seedsUsed/seedsSkipped undefined — the count comparison is skipped; every pick predates
-    // the freeze, so the honest answer is not-stale even though the count would differ.
     expect(isEditionStale(detail({ seedsSkipped: undefined, seedsUsed: undefined }), seeds)).toBe(
       false,
     );
@@ -324,9 +312,6 @@ describe("resolvePlaylistCta", () => {
   });
 
   it("the committed phase NEVER exposes the mint gesture — no user path back into the engine", () => {
-    // The engine's only user trigger is the one-time draft commitment; a committed page view
-    // must offer no button that re-runs it. Whether or not a playlist exists, the CTA is
-    // `open` or `waiting`, never `get-playlist`.
     expect(resolvePlaylistCta({ phase: "committed" }).kind).not.toBe("get-playlist");
     expect(
       resolvePlaylistCta({ phase: "committed", playlistUrl: "https://open.spotify.com/playlist/x" })

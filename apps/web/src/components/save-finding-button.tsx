@@ -7,7 +7,6 @@ export function SaveFindingButton({ logId, trackId }: { logId: string; trackId: 
   const [label, setLabel] = useState("Save finding");
 
   async function save() {
-    // `undefined` means the session lapsed and the helper already sent them to sign in.
     const response = await authedJsonFetch("/api/v1/me/saved-findings", {
       body: JSON.stringify({ logId, trackId }),
       method: "POST",

@@ -52,11 +52,6 @@ function formReducer(state: FormState, action: FormAction): FormState {
   }
 }
 
-/**
- * `compact` renders the trigger as a tooltip'd icon. Otherwise it's a full
- * outline button; pass `className` (e.g. `flex-1`) and a shorter `label` to sit
- * it in the home plate's button row beside Playlist.
- */
 export function SubscribeDialog({
   compact = false,
   className,

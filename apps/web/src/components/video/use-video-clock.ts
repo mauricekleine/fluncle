@@ -2,16 +2,6 @@ import { type RefObject, useCallback, useEffect, useState } from "react";
 import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 import { clampSeconds } from "./video-format";
 
-// The one-clock state machine, extracted from the three players (mixtape, clip, the
-// studio editor) that each copy-pasted it. The video element's own clock is the
-// SINGLE source of truth: `currentTime` is sampled per presented frame via
-// `requestVideoFrameCallback` (rAF fallback) while playing, with `timeupdate`/`seeked`
-// covering the paused/seek cases the frame callback doesn't fire for — the radio "one
-// clock" discipline. `loadedmetadata`/`durationchange`/`resize` read the duration AND
-// the intrinsic geometry (the studio crop maps onto source pixels). The stall watchdog
-// re-arms a wedged faststart load while playback is expected.
-
-/** The intrinsic geometry of the loaded rendition (source pixels), for the crop math. */
 export type VideoSize = { height: number; width: number };
 
 export type VideoClock = {
@@ -24,8 +14,6 @@ export type VideoClock = {
   videoSize: VideoSize;
 };
 
-// A landscape 1080p default until the element reports its real geometry — the studio
-// crop starts centred against this and re-centres when the rendition loads.
 const DEFAULT_VIDEO_SIZE: VideoSize = { height: 1080, width: 1920 };
 
 export function useVideoClock({
@@ -109,15 +97,11 @@ export function useVideoClock({
     readMeta();
     sampleClock();
 
-    // Resume reflecting an element that's already playing on mount (a src change /
-    // remount) — the mixtape "resume-if-not-paused" case.
     if (!video.paused) {
       setPlaying(true);
       schedule();
     }
 
-    // Force-play on mount for an autoplay surface (the clip preview, mounted on the
-    // operator's click). Gesture rules can deny it; the control + scrubber still hold.
     if (autoPlay) {
       video.play().catch(() => {});
     }
@@ -141,8 +125,6 @@ export function useVideoClock({
       video.removeEventListener("durationchange", readMeta);
       video.removeEventListener("resize", readMeta);
     };
-    // `autoPlay` and `videoRef` are stable per surface, so in practice `src` is the
-    // only key that re-wires the machine; they're listed to satisfy the deps rule.
   }, [autoPlay, src, videoRef]);
 
   const togglePlay = useCallback(() => {
@@ -153,9 +135,7 @@ export function useVideoClock({
     }
 
     if (video.paused) {
-      video.play().catch(() => {
-        // Autoplay/gesture rules can deny play(); the poster + control hold.
-      });
+      video.play().catch(() => {});
     } else {
       video.pause();
     }
@@ -188,8 +168,6 @@ export function useVideoClock({
     [seek, videoRef],
   );
 
-  // The watchdog re-arms a wedged faststart load (a stall before the first frame)
-  // while playback is expected; a paused/idle element has no load to be stuck.
   const recoverStuck = useCallback(() => {
     videoRef.current?.load();
   }, [videoRef]);

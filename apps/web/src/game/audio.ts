@@ -1,15 +1,5 @@
 import { type SimEvent, type SimState, nearestCarrier } from "./sim";
 
-// The audio thesis: the only music in the galaxy is the
-// findings. The nearest uncollected banger fades in by distance and pans by
-// bearing; in orbit it plays full and centered (the listening moment), and a
-// collected star still sings on revisit. Everything else is diegetic 8-bit
-// SFX synthesized on the fly — no assets, square waves only.
-//
-// Previews stream through the same-origin proxy (/api/preview/:trackId) so
-// the gain/pan graph stays CORS-clean regardless of where the bytes live.
-
-/** Decoded 30s stereo previews are ~10MB each; keep a small LRU. */
 const BUFFER_CACHE_LIMIT = 6;
 const CROSSFADE_SECONDS = 0.3;
 
@@ -24,20 +14,19 @@ export type AudioManager = {
   destroy: () => void;
   handleEvent: (event: SimEvent, state: SimState) => void;
   muted: () => boolean;
-  /** The amen-break intro: a one-shot under the gate→boot, riding the unlock. */
+
   playIntro: () => void;
   resume: () => void;
   setMuted: (value: boolean) => void;
-  /** Park the context while the tab is hidden; resume() brings it back. */
+
   suspend: () => void;
   update: (state: SimState) => void;
 };
 
-/** The amen break births drum & bass, so it births the session: under full, fading out. */
 const INTRO_GAIN = 0.5;
-/** Seconds at level before it ducks into the ambient bed. */
+
 const INTRO_HOLD = 4;
-/** Fade time-constant for the duck-out (setTargetAtTime). */
+
 const INTRO_FADE_TC = 0.9;
 
 export function createAudioManager(): AudioManager {
@@ -78,7 +67,6 @@ export function createAudioManager(): AudioManager {
     sfxBus.gain.value = 0.5;
     sfxBus.connect(master);
 
-    // The engine: a barely-there low square, louder under boost.
     const osc = context.createOscillator();
     const thrustGain = context.createGain();
     const filter = context.createBiquadFilter();
@@ -123,8 +111,6 @@ export function createAudioManager(): AudioManager {
 
       buffers.set(trackId, decoded);
     } catch {
-      // A finding whose preview didn't survive the trip stays silent; the
-      // radar still finds it.
     } finally {
       loading.delete(trackId);
     }
@@ -172,9 +158,7 @@ export function createAudioManager(): AudioManager {
       () => {
         try {
           ending.source.stop();
-        } catch {
-          // Already stopped.
-        }
+        } catch {}
 
         ending.source.disconnect();
         ending.gain.disconnect();
@@ -184,10 +168,7 @@ export function createAudioManager(): AudioManager {
     );
   }
 
-  /** Which star should be singing right now, and how loud. */
   function audioFocus(state: SimState): { gain: number; pan: number; trackId: string } | undefined {
-    // In orbit: the listening moment. Full volume, dead center, fresh log or
-    // a revisit alike.
     if (state.orbitIndex >= 0) {
       const orbited = state.stars[state.orbitIndex];
       if (orbited !== undefined) {
@@ -195,8 +176,6 @@ export function createAudioManager(): AudioManager {
       }
     }
 
-    // Sticky carrier: between two stars the literal nearest flips constantly,
-    // so the playing tune holds focus until a challenger is clearly closer.
     const { config, ship } = state;
     let bestIndex = -1;
     let bestDistance = Number.POSITIVE_INFINITY;
@@ -278,7 +257,6 @@ export function createAudioManager(): AudioManager {
       playing.panner.pan.setTargetAtTime(focus.pan, context.currentTime, 0.15);
     }
 
-    // Pre-warm the next carrier's preview while it's still faint.
     const carrier = nearestCarrier(state);
 
     if (carrier && carrier.distance < state.config.audioRange * 1.5) {
@@ -300,7 +278,6 @@ export function createAudioManager(): AudioManager {
     }
   }
 
-  /** One square-wave blip. The whole SFX kit is built from these. */
   function blip(frequency: number, at: number, duration: number, volume = 0.25): void {
     if (!context || !sfxBus) {
       return;
@@ -327,7 +304,6 @@ export function createAudioManager(): AudioManager {
 
     switch (event.kind) {
       case "adrift":
-        // Power-down: a falling sweep.
         blip(220, 0, 0.3, 0.2);
         blip(140, 0.25, 0.35, 0.2);
         blip(80, 0.55, 0.6, 0.2);
@@ -339,16 +315,13 @@ export function createAudioManager(): AudioManager {
         blip(1100, 0.26, 0.3);
         break;
       case "asteroid-hit":
-        // A low thud: the hull takes it, fuel knocks loose.
         blip(120, 0, 0.12, 0.2);
         blip(90, 0.1, 0.18, 0.2);
         break;
       case "bolt-fired":
-        // A soft pew; it fires often, so it stays quiet.
         blip(900, 0, 0.05, 0.08);
         break;
       case "bolt-hit":
-        // A quick crunch as a rock breaks up.
         blip(300, 0, 0.04, 0.14);
         blip(160, 0.04, 0.08, 0.14);
         break;
@@ -360,7 +333,6 @@ export function createAudioManager(): AudioManager {
         stopAlarm();
         break;
       case "logged":
-        // The lock chime: three rising notes for a banger in the log.
         blip(523, 0, 0.09);
         blip(784, 0.1, 0.09);
         blip(1046, 0.2, 0.2);
@@ -380,7 +352,6 @@ export function createAudioManager(): AudioManager {
         stopAlarm();
         break;
       case "warped":
-        // Sucked down, then spat out: a falling sweep into a rising whoosh.
         blip(330, 0, 0.12, 0.18);
         blip(180, 0.1, 0.14, 0.18);
         blip(120, 0.22, 0.18, 0.2);
@@ -417,11 +388,6 @@ export function createAudioManager(): AudioManager {
     }
   }
 
-  // The amen-break intro. Rides the gate-tap unlock (resume() already ran), so
-  // autoplay-with-sound is never the issue. Plays once per session, below full
-  // volume, ducking into the ambient bed after a few bars. Routed through the
-  // music bus so the master mute covers it. A missing/placeholder asset just
-  // stays silent — the launch still works.
   async function playIntro(): Promise<void> {
     const ctx = ensureContext();
 
@@ -458,13 +424,9 @@ export function createAudioManager(): AudioManager {
         try {
           source.disconnect();
           gain.disconnect();
-        } catch {
-          // Already torn down.
-        }
+        } catch {}
       };
-    } catch {
-      // The amen didn't survive the trip; silence is fine, the launch holds.
-    }
+    } catch {}
   }
 
   return {

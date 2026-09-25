@@ -3,12 +3,6 @@ import { describe, expect, it } from "vitest";
 import { CLEAR_SPACE, placeStars, spiralPoint, spiralRadius } from "./placement";
 import { type GameTrack } from "./types";
 
-// The shared-curve invariant: placeStars places with spiralPoint and the atlas
-// draws spiralPoint, so every placed star must sit EXACTLY on the curve at its
-// θ — toBe, not toBeCloseTo, because it is the same function on the same
-// floats. If placement ever stops consuming its own export, this fails before
-// the map and the stars can drift apart.
-
 function track(logId: string, index: number): GameTrack {
   return {
     addedAt: "2026-05-30T00:00:00.000Z",
@@ -20,8 +14,6 @@ function track(logId: string, index: number): GameTrack {
   };
 }
 
-// A heavy day 0 (exercises the arc-spacing advance), a quiet gap, and far
-// sectors — the layouts the thread has to breathe through.
 const TRACKS: GameTrack[] = [
   track("000.0.1A", 0),
   track("000.4.2B", 1),

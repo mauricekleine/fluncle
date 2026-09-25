@@ -48,8 +48,7 @@ describe("Galaxy lifetime progress", () => {
     if (firstStar === undefined || secondStar === undefined) {
       throw new Error("expected two stars");
     }
-    // The first star was logged (any run marks it lifetime at collect time); the
-    // second was never reached.
+
     firstStar.lifetimeLogged = true;
     firstStar.collected = true;
     sim.collectedCount = 1;

@@ -17,1020 +17,182 @@ import {
   trackPageIndexableWhere,
 } from "./track-page-indexability";
 
-/**
- * libSQL's native fixed-width float32 vector column — `F32_BLOB(1024)`, the storage
- * form `vector32()` produces and `vector_distance_cos()` ranks IN SQL. 4,096 B/row
- * against the 21,804 B a 1024-d vector costs as a JSON array (measured on the prod
- * snapshot), and, far more importantly, it is the ONLY form the database can rank
- * without shipping every vector into the Worker isolate.
- *
- * `1024` must track `EMBEDDING_DIMS` (lib/server/embedding.ts) — inlined rather than
- * imported so this schema stays a leaf module for drizzle-kit.
- *
- * The driver reads a blob cell back as an `ArrayBuffer` (NOT a `Uint8Array`) — see
- * `readEmbeddingBlob` in lib/server/embedding.ts, the one place that decodes one.
- */
 const float32Vector = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   dataType: () => "F32_BLOB(1024)",
 });
 
-/**
- * THE UNIVERSAL MUSIC OBJECT — every track Fluncle knows about, certified or not.
- *
- * `tracks` is the SUPERTYPE half of the supertype/subtype pair it forms with `findings`
- * (below). It carries only what is true of a RECORDING, independent of whether Fluncle
- * ever certified it: identity (`track_id`, `isrc`, the Spotify ids, the Discogs release
- * ids, the MusicBrainz recording MBID `mb_recording_id`), the release metadata, the AUDIO ANALYSIS (bpm/key +
- * provenance, the spectral feature vector), the MuQ EMBEDDING, and the private full-song
- * capture side-channel. All of it is derivable from the recording itself.
- *
- * What it deliberately does NOT carry is everything that means "Fluncle logged this" —
- * the Log ID coordinate, the note, the video, the observation, the found date, the
- * publish state. Those live on `findings`, keyed 1:1 by `track_id`. That split is a
- * SAFETY PROPERTY, not tidiness: because `log_id` exists only on `findings`, any query
- * that wants a coordinate MUST join, so it structurally cannot mistake a raw catalogue
- * track for a certified finding. Do not denormalise a certification field back onto this
- * table — it would dissolve the guarantee.
- *
- * TODAY every `tracks` row has a `findings` row (the archive is all certified), so the
- * inner join every finding-read performs is behaviour-preserving. Catalogue-only tracks
- * (from MusicBrainz/Discogs, with no Spotify presence — hence the NULLABLE `spotify_uri`
- * / `spotify_url`) arrive with the catalogue epic; `track_id` stays the opaque PK and
- * will simply be minted rather than borrowed from Spotify. See docs/track-lifecycle.md.
- */
 export const tracks = sqliteTable(
   "tracks",
   {
     album: text("album"),
-    // The GRAPH POINTER to the normalized `albums` entity (`albums.id`), the twin of
-    // `labelId` below. `album` stays the raw captured string forever (the audit trail
-    // and the re-normalization input); this is an ADDITION, never a replacement — the
-    // pattern `docs/label-entity.md` recorded as the follow-up when the entity landed.
-    //
-    // WHY IT EXISTS. Slug-folding `album`/`label` in TS is fine over the FINDINGS join
-    // (bounded by how many tracks Fluncle certified — a `GROUP BY` of tens of rows), and
-    // that is all the entity needed while it was admin-only. The PUBLIC page asks a
-    // different question — "every track on this album, including the ones Fluncle never
-    // certified" — and answering that by folding the whole catalogue in the isolate is
-    // exactly the shape AGENTS.md forbids (never rank/scan a growing table in the
-    // Worker). An indexed equality on the entity id is a seek, at any catalogue size.
-    //
-    // NULL means "not linked yet": the track carries no album/label string, or its string
-    // folds to a slug no entity row exists for. A LABEL row is minted off a certified finding
-    // or discovered `undecided` by the crawl; an ALBUM row is minted off a certified finding OR
-    // inline by the catalogue crawler (folded on the release group), so a crawled track lands
-    // its `album_id` off the bat. The publish path and the crawler stamp these on the write;
-    // the one-off `backfill-album-graph.ts` is history's catch-up, not a recurring deploy step.
+
     albumId: text("album_id"),
     albumImageUrl: text("album_image_url"),
-    // BPM/key ANALYSIS PROVENANCE (RFC bpm-key-accuracy). The enrichment analyzer already
-    // emits where each value came from + how confident it was; these columns persist that so a
-    // preview-grade estimate is distinguishable from a full-song one, and the capture→enrich
-    // race can be closed (a finding enriched from a 30s preview BEFORE its full song was
-    // captured must be re-derived once the capture lands). All INTERNAL analysis metadata:
-    // they are listed in `PRIVATE_TRACK_FIELDS`, so `toPublicTrackListItem` strips them from
-    // every PUBLIC DTO, and writing them never bumps `findings.updated_at` (they move no
-    // public surface — NOT in `track-update.ts` VISIBLE_FIELDS). Internal does NOT mean
-    // stripped, though — the other two internal columns each reach the public boundary
-    // differently: `features_json` IS on the public DTO (parsed onto it as `features` —
-    // creative fuel for the video agent, deliberately surfaced), and the MuQ vector is
-    // simply never selected into a DTO at all. Neither passes through
-    // `toPublicTrackListItem`'s strip list.
-    //   - `analyzedAt`   — ISO timestamp of the analysis write.
-    //   - `analyzedFrom` — which audio class the analysis ran on: "full" (the captured full
-    //     song) or "preview" (a 30s preview). NULL = a legacy row written before this column;
-    //     semantically "unknown, assume preview-grade" (so the capture re-derive treats NULL
-    //     like "preview" — anything that is not confirmed "full" is re-enrichable).
+
     analyzedAt: text("analyzed_at"),
     analyzedFrom: text("analyzed_from", { enum: ["preview", "full"] }),
-    // THE SUSPECTED-VERSION-MISMATCH REVIEW (../lib/server/anchor.ts § the review). A JSON note
-    // the anchor gate leaves on a catalogue row when it MISSED for one specific, measured reason:
-    // a candidate that agreed with the row on artists, base title, and duration (inside the tight
-    // subset window) but carried a DIFFERENT version descriptor — the fingerprint of a row whose
-    // MusicBrainz metadata omits the version ("Typical Description" at 394s, where streaming has
-    // the plain mix at 313s and "(Calibre Remix)" at 394s). Those rows miss deterministically
-    // forever and now retire under the retry cap, so the near-match is written down instead of
-    // discarded and the operator rules on it from the /admin attention queue.
-    //
-    // It is EVIDENCE, never a verdict: the gate still refuses to anchor (the never-wrong-stamp
-    // rail), and only the operator's `resolve_anchor_review` can bind the row to the candidate.
-    // Overwritten on re-detection (the newest near-match is the one worth reading) and CLEARED
-    // the moment the row anchors by any path, so a review can never outlive the miss it describes.
-    //
-    // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule one screen
-    // down: a `.default()` on a `tracks` column makes drizzle regenerate the whole table and
-    // drop+recreate all ~125 indexes in the migration, a production stall. Readers treat NULL as
-    // "no review". Internal operator state — no public surface, no lastmod bump.
+
     anchorReviewJson: text("anchor_review_json"),
-    // The finding's Apple Music track URL — a public listen link, the Spotify twin.
-    // CATALOGUE identity (it describes the recording, not the certification), so it
-    // lives here and is just as true of an uncertified track. Resolved EXACTLY by
-    // ISRC via the Apple Music API (`filter[isrc]`) in the `apple-music` backfill —
-    // never a fuzzy artist/title guess, so a wrong link can never render on /log
-    // (the iTunes Search API has no ISRC lookup, only fuzzy term search; a term-search
-    // match is unsafe for a public link, so this leg is exact-or-nothing). Stored as
-    // Apple returns it (`music.apple.com/<storefront>/…`, which geo-redirects per the
-    // visitor's account region). NULL until the ISRC resolves (or forever, if it never
-    // does — a missing link is honest, a wrong one is not).
+
     appleMusicUrl: text("apple_music_url"),
-    // The MB CREDIT SWEEP's per-ROW reliability stamp (RFC artist-primary-capture, slice 1b). Slice
-    // 0's name-fold left a ~14.3k ZERO-MATCHED residual (a track slice 0 stamped but wrote no edge —
-    // no credited name folded to an existing identity). `backfill_artist_credits` picks up that
-    // residual: for a zero-matched track carrying a MusicBrainz recording identity (`mb_recording_id`,
-    // or the `mb_` PK prefix a crawler-born row carries) it fetches the recording's artist-credits
-    // through the shared MB client and MINTS identity-true `artists` rows by MB artist id (a real id
-    // IS identity), then writes the edges. This stamp retires EVERY visited row — one that gained
-    // edges, AND one terminally skipped for carrying no MB identity — so the worklist drains and a
-    // re-run is a cheap no-op (the `artist_edges_backfilled_at` discipline, one column over — and
-    // DISTINCT from it: this sweep never disturbs slice 0's stamp). NULL until this sweep has visited
-    // the row; a track that slice 0 already edged never enters the worklist (the anti-join excludes
-    // it). Internal reliability state — no public surface, no lastmod (a `tracks` write moves no
-    // finding).
+
     artistCreditsBackfilledAt: text("artist_credits_backfilled_at"),
-    // The track_artists graph backfill's per-ROW reliability stamp (RFC artist-primary-capture,
-    // slice 0). The graph is crawl-era-only — history carries artist NAMES in `artists_json` but no
-    // identity edge — and `backfill_artist_edges` folds those names onto EXISTING `artists` rows. A
-    // track whose names match NO identity writes no edge, so the "no edge yet" anti-join alone would
-    // re-chew it every tick forever; this stamp retires EVERY visited track (matched, partial, OR
-    // zero-match) so the worklist drains to empty and a re-run is a cheap no-op — the
-    // `mb_recording_id_attempted_at` discipline, one column over. NULL until the row has been
-    // attempted; a track minted WITH edges (publish / crawler link) never needs it. Internal
-    // reliability state — no public surface, no lastmod (a `tracks` write moves no finding).
+
     artistEdgesBackfilledAt: text("artist_edges_backfilled_at"),
     artistsJson: text("artists_json").notNull(),
-    // The Apple Music backfill's per-ROW reliability state (RFC musickit-second-authority,
-    // U1). These MOVED here from `findings` — and the move is the whole point. `apple_music_url`
-    // is CATALOGUE identity (it describes the recording, true of an uncertified track), so the
-    // Apple sweep now drains CATALOGUE rows too (a `tracks` row with no `findings` row). The
-    // The bookkeeping belongs on `tracks`, where a catalogue row has no `findings` row at all —
-    // `readReliability`/`recordAttempt` hard-coded `findings` and silently updated zero rows on
-    // a catalogue track, so a naive catalogue sweep would re-hit every ISRC every tick forever.
-    // Putting the bookkeeping on `tracks` (where the output already lives) is the capture-
-    // side-channel precedent, not the Discogs one: it makes the sweep resumable over the WHOLE
-    // catalogue. Same four-column shape + rules as the surviving `backfill_*` sets on `findings`
-    // (see the block there): *AttemptedAt drives the failure-scaled cooldown, *Failures is the
-    // consecutive-failure streak, *DoneAt stamps when the ISRC RESOLVED to a URL (a clean
-    // no-match is a `tried`, re-checkable if Apple's catalogue grows). Discogs/Last.fm/note stay
-    // on `findings` — they are finding-only sweeps. NULL/0 on rows that predate the columns.
-    // The one-time carry of existing findings' Apple state (a gated deploy step, the
-    // `labels_seeded_at` precedent) has run in production; its now-vestigial `findings`
-    // columns and the carry script were dropped once it proved out.
+
     backfillAppleMusicAttemptedAt: text("backfill_apple_music_attempted_at"),
     backfillAppleMusicAttempts: integer("backfill_apple_music_attempts").notNull().default(0),
     backfillAppleMusicDoneAt: text("backfill_apple_music_done_at"),
     backfillAppleMusicFailures: integer("backfill_apple_music_failures").notNull().default(0),
-    // The Beatport leg's per-ROW reliability state. Same four-column shape and rules as the
-    // `backfill_apple_music_*` set above: *AttemptedAt drives the failure-scaled cooldown,
-    // *Attempts is a monotone tally (the identity envelope PRINTS it, so it must stay honest),
-    // *DoneAt stamps when a candidate's ISRC matched, *Failures is the consecutive-failure streak.
-    //
-    // A CLEAN MISS IS NOT A FAILURE, and the distinction decides what the receipt says. Every
-    // candidate page read to the end without an ISRC equal to this row's is a `tried` — the
-    // search ran, Beatport does not carry this recording, and the row reads "Not found · checked
-    // <date>". A Firecrawl error, a timeout, or an unparseable page is a `failure`: nothing was
-    // learned, so the streak backs the row off instead of recording a conclusion nobody reached.
-    // Unconfigured (no FIRECRAWL_API_KEY) stamps NOTHING at all — the row stays eligible for the
-    // day the key lands, exactly as the Apple leg treats its missing MusicKit secrets.
+
     backfillBeatportAttemptedAt: text("backfill_beatport_attempted_at"),
     backfillBeatportAttempts: integer("backfill_beatport_attempts").notNull().default(0),
     backfillBeatportDoneAt: text("backfill_beatport_done_at"),
     backfillBeatportFailures: integer("backfill_beatport_failures").notNull().default(0),
-    // The Deezer leg's per-ROW reliability state — the HONEST-MISS LEDGER, and the reason it exists
-    // is the receipt. The `deezer_track_id` trio below records only what Fluncle WON, so a row with
-    // no id could say one thing and one thing only: "Not checked yet". True while nothing had ever
-    // looked; a lie the moment something does. These four columns are the other half — they let a
-    // concluded look that came back with nothing read "Not found · checked <date>" instead.
-    //
-    // Same four-column shape and rules as the `backfill_beatport_*` set above: *AttemptedAt is the
-    // last CONCLUDED look — a moving watermark that OVERWRITES, unlike the first-write-wins trio
-    // below (where the write guards it with a `coalesce`, that is "leave it alone unless this outcome
-    // concluded", never "keep the first one"). *Attempts is a monotone tally the identity envelope
-    // PRINTS (so it must stay honest), *DoneAt stamps when an id was actually written, and *Failures
-    // is the consecutive-failure streak.
-    //
-    // WHO STAMPS IT, and it is deliberately ONE path: the anchor rung's ISRC recovery
-    // (anchor.ts § recoverIsrcViaDeezer), on the two outcomes that SETTLE whether Deezer carries the
-    // recording — a hit that cleared the identity fold and brought an id back, and a gate-clean miss
-    // where Deezer answered with candidates and none cleared. Both stamp in the SAME statement as the
-    // write they conclude, so an attempt and its outcome cannot be recorded apart.
-    //
-    // AND WHO DELIBERATELY DOES NOT, because a stamp nobody can stand behind is worse than no stamp:
-    //   · `recoverIsrcViaDeezer`'s EMPTY-CANDIDATES exit. `searchDeezerCandidates` hands back the
-    //     same empty array for "Deezer has nothing" and for a quota/network failure, so the row
-    //     stays honestly unattempted — the identical reasoning that already keeps `isrc_attempted_at`
-    //     off that branch.
-    //   · `recoverIsrcViaDeezer`'s PRECONDITION exit (no title, no artists, or no duration to verify
-    //     against). No Deezer request is made at all; nothing was attempted.
-    //   · a cleared hit that arrived with NO id (a legacy-box-payload defence). Deezer demonstrably
-    //     carries that recording — the recovered ISRC came out of the hit — so `absent` would misstate
-    //     it while `verified` has no link to show. Neither state fits, so none is claimed.
-    //   · PUBLISH (publish.ts). Its two Deezer reads cannot report a conclusion: `lookupIsrcFromDeezer`
-    //     only runs when the row arrives WITHOUT an ISRC (so on most publishes no by-name look
-    //     happens at all), and both it and `enrichFromDeezer` collapse a clean miss, a non-ok
-    //     response, and a thrown request into the same empty return. `enrichFromDeezer` also withholds
-    //     its id when Deezer's duration disagrees — "found it, will not vouch for it", which is not
-    //     absence either. Ambiguity is not a conclusion, so publish stamps nothing and a
-    //     publish-born row keeps reading "Not checked yet" until a real look concludes.
-    //
-    // *Failures is therefore 0 by construction today: the one writer either concludes or declines to
-    // stamp, and no cooldown reads a streak here yet. It is carried so the catalogue-wide Deezer
-    // campaign has the column already in place rather than needing a second migration.
-    //
-    // Safe as NEW columns despite the `.default()` — the `deezer_track_id` note below warns that a
-    // default on an EXISTING `tracks` column makes drizzle rebuild the table and drop+recreate all
-    // ~125 indexes; an added column is a plain `ALTER TABLE … ADD COLUMN … DEFAULT 0 NOT NULL`, which
-    // is what the `backfill_beatport_*` set generated (drizzle/0140). NOT INDEXED. NULL/0 on rows
-    // that predate them. Internal reliability state with ONE public reader, the identity envelope.
+
     backfillDeezerAttemptedAt: text("backfill_deezer_attempted_at"),
     backfillDeezerAttempts: integer("backfill_deezer_attempts").notNull().default(0),
     backfillDeezerDoneAt: text("backfill_deezer_done_at"),
     backfillDeezerFailures: integer("backfill_deezer_failures").notNull().default(0),
-    // The RECORDING-GRAIN Discogs attempt record (RFC dnb-identity-graph, Unit 1 item 2). Same
-    // four-column shape and rules as the `backfill_apple_music_*` set above — and it exists for one
-    // reason: without it a CATALOGUE row cannot tell `absent` from `unattempted` for Discogs. The
-    // ids themselves (`in_release_id` / `in_master_id`) are catalogue identity and already live on
-    // this table; only the "did anyone ever look?" half was missing here.
-    //
-    // WHO WRITES IT — the two paths that conclude a Discogs-id fill for a `tracks` row, both at
-    // MINT time, both stamping in the SAME statement that writes (or declines to write) the ids:
-    //   - the CATALOGUE CRAWLER (crawl.ts § writeCatalogueTracks). Its ids come free with the
-    //     release read — MusicBrainz's `discogs` url-rels, parsed by `parseDiscogsUrl` — so every
-    //     crawled row has had exactly one Discogs look concluded by the time it lands. This is the
-    //     ONLY writer a catalogue row will ever see: the crawler inserts `on conflict do nothing`
-    //     and the per-finding sweep below cannot reach a row with no `findings` row.
-    //   - PUBLISH (publish.ts). A finding is born from a real Discogs API resolve
-    //     (`discogsResolveRelease`, confidence-gated), so it is born attempted too.
-    //
-    // AND THE ONE UPDATER: the per-finding sweep's `setDiscogsIds` (backfill.ts) stamps this set
-    // alongside the ids it lands, so a certified row the sweep later fills never reads "attempted,
-    // no release" while carrying one.
-    //
-    // WHAT IT IS NOT. The per-finding sweep keeps its OWN `backfill_discogs_*` set on `findings`,
-    // and that set is NOT this one and is deliberately not rewired here (the Apple move — a column
-    // move plus a one-time carry — is a separate act). The two answer different questions and both
-    // are true: `findings`' set is the SWEEP'S PACING state (the cooldown window, the consecutive-
-    // failure streak, the /admin board's Discogs cell); THIS set is the recording's attempt record,
-    // read by the identity ledger for every tier at once. Consequence, written down so no reader is
-    // surprised: the sweep's own no-match "tried" outcome bumps only the `findings` side, so on a
-    // certified row this set's `*_attempts` / `*_attempted_at` are a FLOOR — never wrong about
-    // whether a look happened, merely conservative about how many and how recently.
-    //
-    // `*AttemptedAt` = the last concluded look. `*Attempts` = total looks. `*Failures` = the
-    // consecutive-failure streak (0 here — a mint-time look either lands ids or cleanly does not).
-    // `*DoneAt` = when ids were actually WRITTEN; set ⇒ the recording resolved. A clean no-match
-    // leaves `*DoneAt` null with `*AttemptedAt` set: the honest "looked, not there" the ledger
-    // serves. NULL/0 on rows that predate the columns (see scripts/backfill-identity-ledger.ts,
-    // which stamps the history that provably resolved). Internal reliability state — no public
-    // surface, no lastmod bump.
+
     backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
     backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
     backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
     backfillDiscogsFailures: integer("backfill_discogs_failures").notNull().default(0),
-    // The recording's Beatport track URL — a public BUY link, the store sibling of the Spotify and
-    // Apple listen links. CATALOGUE identity (it describes the recording, not the certification),
-    // so it lives on `tracks` like `apple_music_url` and would be just as true of an uncertified
-    // row — though today only certified findings are ever swept for it (see the tier note in
-    // docs/planning/ROADMAP.md's identity tail).
-    //
-    // HOW IT IS WON, and the gate that makes it safe to render: a keyless two-hop through Firecrawl
-    // (lib/server/beatport-resolve.ts). Beatport's public search answers with candidate track
-    // pages; each candidate page embeds its own track entity in the Next.js page data, ISRC
-    // included; the link is kept ONLY when that ISRC exactly equals the ISRC Fluncle already holds
-    // for the row. There is no title-similarity fallback and no duration-only acceptance, so a
-    // wrong link cannot render — exact-or-nothing, the same bar `apple_music_url` clears. Stored
-    // as the page's OWN `<link rel="canonical">` href rather than built from a slug and an id, so
-    // Beatport stays the authority on its own URL shape. NULL until a candidate's ISRC matches
-    // (or forever, if none ever does — a missing link is honest, a wrong one is not).
-    //
-    // ── §F: A TERMINAL LINK ARTIFACT, AND NOTHING ELSE ────────────────────────────────────────
-    // Beatport's terms prohibit using site content, metadata included, for text/data mining or for
-    // training or feeding AI. This column and its `*_verified_at` stamp are therefore TERMINAL: a
-    // URL Fluncle points a reader at, and a date. They must NEVER enter the FTS5 index, the LLM
-    // search tier, an embedding, or any derived corpus — and STRUCTURED DATA IS A DERIVED CORPUS:
-    // a page's schema.org `sameAs` graph exists, in log-schema.ts's own words, "for crawlers + AI
-    // answer-engines", so a URL emitted there is fed to exactly the consumption this bars. The
-    // certified /log page's `musicRecordingJsonLd` therefore has no Beatport entry in its `sameAs`,
-    // and that shipped behaviour is the specification.
-    //
-    // The readers are exactly the surfaces that RENDER the link as a link: the identity envelope,
-    // the /identity page, and the /track/<trackId> destination's outbound band (where it reads
-    // "Buy on Beatport", because it opens a checkout). That last one composes a `sameAs` array from
-    // its outbound destinations, so it needs an explicit exclusion rather than an absence — the
-    // seam is `SAME_AS_EXCLUDED_LISTEN_KINDS` / `sameAsUrls` in lib/track-page.ts, keyed on the
-    // destination KIND so it survives a rename, and `track-page.test.ts` fails if a future edit
-    // lets the kind through. The rail is also enforced by what is NOT here: the resolver
-    // reads Beatport's key, BPM, genre, and length off the same page object and deliberately keeps
-    // NONE of them — the ISRC is compared in memory and dropped. Fluncle's own key/BPM come from
-    // his own audio analysis and stay that way. Convenience is not a licence.
+
     beatportUrl: text("beatport_url"),
-    // When the Beatport URL beside it was WRITTEN — a verification stamp, not an attempt stamp, and
-    // the identity envelope serves it as `atMeaning: "verified"` on that basis. There is no
-    // `beatport_verified_by` twin: exact ISRC equality is the only method this leg has or can have,
-    // so the envelope hardcodes `method: "isrc"` rather than storing one value forever.
+
     beatportVerifiedAt: text("beatport_verified_at"),
     bpm: real("bpm"),
-    // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
-    // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`
-    // verbatim ("audio-file" | "deezer:search" | "itunes" | "acousticbrainz" | …). Both
-    // INTERNAL (never in a public DTO, never bump `updated_at`). See `analyzedFrom` above.
+
     bpmConfidence: real("bpm_confidence"),
     bpmSource: text("bpm_source"),
-    // The full-song capture side-channel state (RFC full-audio). Models
-    // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
-    // `publishTrack`'s insert never names this column, so the DDL default is what
-    // lands `'pending'` on a new add AND backfills every existing row to `'pending'`
-    // on migration (which enqueues the whole archive for capture-backfill for free).
-    // Enum: pending (never attempted) → done (key written) | unmatched (no confident
-    // match — terminal) | failed (attempt threw — retriable under backoff).
-    // ── THE EAR: the precomputed catalogue ranking (docs/the-ear.md) ─────────────
-    // Six columns (the five below + `duplicate_of_track_id`), written ONLY by the
-    // `rank_catalogue` sweep, and meaningful ONLY on a CATALOGUE track (a `tracks` row with no
-    // `findings` row). They stay NULL on a
-    // certified finding — the sweep anti-joins `findings` and never touches one — so a
-    // non-null `nearest_finding_score` is itself a catalogue marker.
-    //
-    // WHY PRECOMPUTED. Ranking the catalogue against the findings at request time is a
-    // CROSS JOIN: 10k catalogue rows × 60 findings = 600k 1024-d cosine ops per page
-    // load. The sweep does that arithmetic once, in SQL, and stores the answer; `/admin/
-    // catalogue` then reads and sorts an indexed column — no vector math on the request
-    // path at all. Same shape as the cluster engine's assignment sweep
-    // (docs/agents/cluster-engine.md): a periodic job precomputes, the surface reads.
-    //
-    // `capture_priority` — 0..3, the PRE-AUDIO proximity tier, and the capture queue's
-    //   sort key. Audio capture is metered, so it cannot be run on everything: this is
-    //   how the queue decides who gets captured (and therefore embedded, and therefore
-    //   rankable) first. It exists because of a real chicken-and-egg — a track has no
-    //   vector until its audio is captured, so the vector cannot be what prioritises the
-    //   capture. The tiers are the cheap metadata signals that CAN: 3 = an artist on this
-    //   track is already on a finding, 2 = its label already carries a finding, 1 = its
-    //   label is one the operator seeds from, 0 = nothing ties it to the archive.
-    // `nearest_finding_score` — cosine similarity (1 − `vector_distance_cos`, so higher
-    //   is nearer) to the single NEAREST finding. NOT the distance to a centroid: the
-    //   operator's taste is multi-modal (the k=4 galaxy fit proved it), and a mean vector
-    //   is a place none of his taste actually lives. NULL until this row has a vector.
-    // `nearest_finding_track_id` — WHICH finding it matched. This is the row's WHY, and
-    //   it is not decoration: a bare score is not a reason, and a telescope you cannot
-    //   interrogate is one you stop trusting.
-    // `catalogue_rank_corpus` — the fingerprint of the finding corpus the two values above
-    //   were computed against, `"<findings>:<embedded findings>"`. It is the staleness
-    //   predicate and it makes the sweep self-healing: log a finding (or embed one) and
-    //   the fingerprint moves, so every catalogue row disagrees with it and re-ranks on
-    //   the next ticks. NULL = never ranked (the fresh-crawl queue).
-    // `catalogue_ranked_at` — ISO of that ranking. Freshness, for the operator and the
-    //   sweep's own summary; never a predicate.
+
     capturePriority: integer("capture_priority"),
-    // THE OPERATOR'S CAPTURE-SOURCE PIN (docs/track-lifecycle.md § Capture; docs/the-ear.md §
-    // Wrong audio) — a YouTube video id the capture sweep must download INSTEAD of walking its
-    // search ladder. The fingerprint gate is precision-over-recall by design, and for some
-    // recordings the only uploads that exist are a different master or edit of the same release:
-    // same length, but a bit-error rate the gate rightly refuses. The operator's ear is the only
-    // thing that outranks the gate, and this column is how he says "capture THIS one". A SOURCE
-    // HINT, never a certification: it lives on `tracks`, moves no `findings` column, and the
-    // duration guard still applies to what it points at (a wrong paste must never land a live
-    // set). The sweep stamps the resulting capture `operator-verified`, which the historic
-    // verification backfill leaves alone. Null = no pin (the ladder runs). Written by
-    // `pin_capture_source` / cleared by `clear_capture_source` (operator tier) and by
-    // `flag_wrong_audio` (a flagged capture retires the pin that produced it).
+
     captureSourcePin: text("capture_source_pin"),
-    // THE PIN'S DURATION OVERRIDE (`pin_capture_source … allowDurationMismatch`). True ⇒ the sweep
-    // waives the duration guard for the pinned id: the operator has deliberately chosen a
-    // different EDIT of the same recording (a radio cut, an extended mix) because it is the one
-    // that exists, and he has the two lengths in front of him. The row's own `duration_ms` is never
-    // rewritten from the captured file — the finding keeps its store length. Meaningful only
-    // beside a pin; reset to false by `clear_capture_source` and by `flag_wrong_audio` alongside
-    // the pin they retire.
+
     captureSourcePinAllowDuration: integer("capture_source_pin_allow_duration", {
       mode: "boolean",
     })
       .notNull()
       .default(false),
-    // The full-song capture side-channel state (RFC full-audio). Models
-    // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
-    // `publishTrack`'s insert never names this column, so the DDL default is what
-    // lands `'pending'` on a new add AND backfills every existing row to `'pending'`
-    // on migration (which enqueues the whole archive for capture-backfill for free).
-    // Enum: pending (never attempted) → done (key written) | unmatched (no confident
-    // match — terminal) | failed (attempt threw — retriable under backoff).
-    // Two more states carry the WRONG-AUDIO quarantine (docs/the-ear.md § Wrong audio),
-    // written by the `rank_catalogue` sweep on a CATALOGUE row, never on a finding:
-    //   - wrong-audio: the capture landed the wrong master (a near-1.0 cross-title match to a
-    //     finding). The vector + score are nulled and the row re-queues for a fresh download; the
-    //     bad `source_audio_key` is KEPT so the capture sweep can refuse the identical bytes. It
-    //     is a re-capture trigger in the capture queue and a guard the embed/analyze queues honour.
-    //   - quarantine-cleared: the operator's `clear_wrong_audio` override — "this capture is fine".
-    //     A sticky state the sweep never re-quarantines; its kept audio re-embeds and re-ranks.
+
     captureStatus: text("capture_status").notNull().default("pending"),
-    // THE CAPTURE VERIFICATION VERDICT (docs/the-ear.md § Wrong audio). The captured full song is
-    // fingerprint-checked (Chromaprint) against the track's ISRC-resolved OFFICIAL 30s preview at
-    // ingest — the one reference that is the RIGHT recording by construction, since every human
-    // surface plays it, not the captured file. This column records that verdict, so a wrong
-    // capture (inaudible everywhere but poisoning analysis + the MuQ ranking space) can be caught.
-    // Enum:
-    //   - preview-match: the captured audio matched the preview (same recording). The good case.
-    //   - unverified: the gate ABSTAINED — the track has no preview source to check against, or
-    //     fpcalc was absent/failed. Capture proceeded; this is an honest "no reference", not a pass.
-    //   - mismatch: the captured audio does NOT match the preview. On a FINDING it is a stamp and
-    //     nothing more (a machine does not rewind a public finding) — it raises an /admin attention
-    //     item and the operator rules with `flag_wrong_audio`. On a CATALOGUE row it rides ALONGSIDE
-    //     the wrong-audio quarantine (capture_status = 'wrong-audio') as the lens's honest WHY — a
-    //     preview mismatch, not a cross-title archive collision — and the fresh capture's ingest
-    //     gate overwrites it when the re-download lands.
-    //   - operator-verified: the capture came from the operator's pinned source (`capture_source_pin`);
-    //     the gate ran for the record and the pin outranks its verdict. The backfill steps aside.
-    //   - consensus-verified: the preview refused every duration-verified upload, but two or more
-    //     from different channels carry the same recording as each other. Machine evidence — the
-    //     backfill re-checks it like `preview-match`.
-    //   - null: pre-gate legacy (captured before verification shipped), or a fresh row not yet checked.
-    // Machine-measured provenance like `analyzed_from`: internal, never a public surface, never a
-    // lastmod bump. A fresh (re-)capture clears it so the new bytes are re-verified.
+
     captureVerification: text("capture_verification"),
-    // ISO of the last capture-verification check (paired with `capture_verification`). Null until
-    // verified. The historic backfill (verify-captures) never re-checks a stamped row, so this
-    // doubles as its resume watermark alongside the null-verification predicate.
+
     captureVerifiedAt: text("capture_verified_at"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),
-    // THE DEEZER LINK, AND HOW IT IS WON — the "keep what we already fetch" leg (operator ruling). Fluncle stores the
-    // Deezer track id whenever any of three existing paths receives it: the
-    // anchor rung's ISRC-recovery search (anchor.ts § recoverIsrcViaDeezer), the add flow's
-    // ISRC fallback (deezer.ts § lookupIsrcFromDeezer), and the add flow's label/preview enrichment
-    // by ISRC (deezer.ts § enrichFromDeezer, which needed the id to read the album at all). Keeping
-    // it costs NOTHING: not one extra Deezer request is made for these columns, which is the whole
-    // shape of the slice. FORWARD-ONLY — there is no sweep and no backfill, so a row only fills when
-    // one of those three paths next runs over it.
-    //
-    // `deezer_track_id` is Deezer's own track id, stored as TEXT because it is an opaque external
-    // identifier that only ever gets pasted into `https://www.deezer.com/track/<id>` — never
-    // arithmetic, never a range scan, and text cannot lose a digit the way a JS number can.
-    //
-    // `deezer_verified_by` is the SIGNAL that made the link trustworthy, the `spotify_anchor_
-    // verified_by` domain narrowed to the three values these paths can actually produce:
-    //   · "isrc"          — the id came back from Deezer's `/track/isrc:<isrc>` endpoint, keyed on
-    //                       the recording's real identity. That endpoint PICKS, with a measured ~7%
-    //                       silent title mismatch, so the caller confirms the returned track's
-    //                       duration against the row's before this is written.
-    //   · "search"        — the full verified triple cleared (same artist SET, same base title, same
-    //                       version descriptor, inside the ratified duration window).
-    //   · "search-subset" — the tighter proper-subset fallback cleared. A DISTINCT confidence from
-    //                       "search" for the same reason the anchor keeps them apart.
-    //
-    // `deezer_verified_at` is when the link was WRITTEN, so the identity envelope serves it with
-    // `atMeaning: "verified"` rather than passing an attempt time off as a verification.
-    //
-    // THE FILL RULE: first write wins. All three columns are written by the SAME statement on every
-    // path, each through a `coalesce`, so a row can never carry an id with someone else's provenance
-    // and a later path never clobbers an earlier one's answer.
-    //
-    // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule below: a
-    // `.default()` on a `tracks` column makes drizzle regenerate the whole table and drop+recreate
-    // all ~125 indexes in the migration, a production stall. NOT INDEXED: nothing queries by them.
-    // PUBLIC (the identity envelope serves them, and `/identity` renders a Deezer row off them), but
-    // no lastmod bump — a link on an existing recording moves no finding.
+
     deezerTrackId: text("deezer_track_id"),
     deezerVerifiedAt: text("deezer_verified_at"),
     deezerVerifiedBy: text("deezer_verified_by"),
-    // THE DEMAND SIGNAL (docs/catalogue-crawler.md § Demand). The summed Simple Analytics
-    // pageviews of the DEMANDED entities this track hangs off — an artist on it (via
-    // `track_artists`) or its `label_id` — that real visitors looked at over the trailing
-    // window. It is a RANK-ORDER-ONLY reorder key, never a magnitude and never an override:
-    // the capture work queue (track-work.ts) reads it as a SECONDARY sort AFTER
-    // `capture_priority` (within-tier only), and the `capture_priority >= 0` veto still wins,
-    // so a ruled-out-label row is never resurrected by demand. Written ONLY by the
-    // `record_demand` op, which CLEARS every score then re-sets — a bounded, idempotent,
-    // deterministic rewrite the derived sweeps (rank_catalogue's `capture_priority`) never
-    // touch. NULL on a row no demanded entity hangs off (the common case).
+
     demandScore: integer("demand_score"),
-    // THE OPERATOR'S "NOT FOR ME" (docs/the-ear.md § The operator's actions). An ISO stamp,
-    // written ONLY on a catalogue row when the operator dismisses it from the ear/capture
-    // workstation — "I looked, it is not for me." It is a REVERSIBLE veto (the operator can
-    // restore it), and it is exactly the ruled-out-label veto's class: it decides what The Ear
-    // keeps pointing at and what the capture ladder may buy, never what is stored. A dismissed
-    // row keeps its `tracks` row untouched; it simply drops out of every ranking read and the
-    // capture work queue (catalogue.ts + track-work.ts filter `dismissed_at is null`), and is
-    // restorable from the "Dismissed" lens. NULL on every live catalogue row and every finding —
-    // dismissal is a catalogue-only act. The partial index below keeps both the restore listing
-    // and the exclusion filter a seek rather than a scan of the growing catalogue.
+
     dismissedAt: text("dismissed_at"),
-    // THE DUPLICATE MARKER (docs/the-ear.md § Duplicates). The `track_id` of the certified
-    // finding this catalogue row is the SAME RECORDING as — set only by the `rank_catalogue`
-    // sweep, only on a catalogue row, when the row's `isrc` (non-null, non-empty) exactly
-    // matches a finding's `isrc`. NULL on every other row (no ISRC match, a finding, or a row
-    // whose match was cleared because the finding was deleted).
-    //
-    // It exists because a crawled duplicate of a logged track is worthless to buy: the money
-    // saver is catching it BEFORE audio is captured. The VETO itself rides `capture_priority`
-    // (a duplicate is written the −2 tier, so the capture queue's existing `capture_priority
-    // >= 0` predicate excludes it — no new predicate), and this column carries WHICH finding,
-    // so the board can name it ("already in the archive") instead of the row silently
-    // vanishing. The similarity half (a scored row at ≥ 0.995 cosine) is display-only and does
-    // NOT write here — it reads its finding off `nearest_finding_track_id`.
+
     duplicateOfTrackId: text("duplicate_of_track_id"),
     durationMs: integer("duration_ms").notNull(),
-    // UNREAD COMPATIBILITY COLUMN, AWAITING ITS DROP. The MuQ vector lives in the
-    // {@link trackEmbeddings} satellite, and NOTHING reads or writes this column — not the
-    // ranking, queues, or fixtures. It remains temporarily as
-    // the rollback copy of the data the split migration moved, because dropping a 169 MB
-    // column is a one-way door that must not ride in the same change as the code that
-    // stopped reading it. The next migration drops it; until then treat it as absent.
-    //
-    // Its history is the reason the satellite exists: a 4 KB `F32_BLOB(1024)` inline in the
-    // hottest table spills to overflow pages, so every scan reaching a column stored AFTER
-    // it walked that chain for bytes it never selected — the cost `has_embedding` below was
-    // materialized to dodge, paid again by every other predicate on the table.
+
     embeddingBlob: float32Vector("embedding_blob"),
     featuresJson: text("features_json"),
-    // THE EMBEDDING-PRESENCE MIRROR (docs/db-scale-backlog Wave 2 #4, the column half). `1` iff
-    // a {@link trackEmbeddings} row exists for this track, maintained in the SAME libSQL write
-    // BATCH as the satellite row itself. It is the AUTHORITY on presence: every queue, funnel
-    // arm and admin filter that asks "does this track have a vector" reads this column, and only
-    // a read that needs the BYTES joins the satellite.
-    //
-    // WHY A STORED MIRROR AND NOT A JOIN. It was measured against the inline blob it replaced:
-    // a ~4 KB `F32_BLOB(1024)` spills to overflow pages, and SQLite must WALK that overflow
-    // chain to reach any column stored after it in the record. So a scan whose predicates
-    // read `dismissed_at` / `nearest_finding_score` / `spotify_anchor_attempted_at` / `isrc`
-    // paid for a vector it never selected. The `/admin/funnel` stage scan took 9.5s cold / 0.38s
-    // warm, and three post-blob columns cost 3.32s versus 0.23s for three pre-blob columns.
-    // Mirroring the flag lets `tracks_funnel_scan_idx` COVER the whole scan, which never touches
-    // a table row at all: on a 54,860-row prod clone that is a 5 MB index against a 125 MB table;
-    // the scan is 12.6-19.9s cold, 1.70s first-touch, 0.30s after.
-    // Re-measure with `apps/web/scripts/bench-db-scale.ts`.
-    //
-    // THE SATELLITE SPLIT DID NOT RETIRE IT — it made it load-bearing twice over. An
-    // `exists (select 1 from track_embeddings …)` anti-join is a second b-tree probe per row and
-    // is not a predicate a PARTIAL INDEX can be matched against, so `tracks_embed_queue_idx` and
-    // `tracks_anchor_order_idx` would both fall back to scanning the growing table. A btree
-    // cannot key on an expression or on another table; a plain stored column is the only shape
-    // the planner covers.
-    //
-    // THE INVARIANT, AND WHY IT CANNOT DRIFT. `track_embeddings` has exactly ONE writing module
-    // (lib/server/embedding.ts — the `writeEmbeddingSatellite` insert and the
-    // `CLEAR_EMBEDDING_SATELLITE_SQL` delete), and each of its statements travels in the same
-    // `db.batch(…, "write")` as the `has_embedding` assignment beside it, so the pair provably
-    // cannot be written apart. The DELETE is even DRIVEN by the mirror the batch just wrote
-    // (`… and not exists (select 1 from tracks … has_embedding = 1)`), so a guarded update that
-    // matched nothing leaves the vector standing. `embedding-mirror.test.ts` scans the source and
-    // FAILS the build on a satellite write from anywhere else, and the funnel's fold-equivalence
-    // test pins the mirror against the live satellite-presence reference query on fixtures.
-    // `backfill-has-embedding.ts` is the standing reconciliation backstop.
-    // INTERNAL bookkeeping: never in a public DTO, never a lastmod bump.
+
     hasEmbedding: integer("has_embedding", { mode: "boolean" }).notNull().default(false),
-    // ISRC PRESENCE, MATERIALIZED — the `has_embedding` shape applied to `isrc is not null and
-    // trim(isrc) <> ''` (the trim matters: legacy rows carry empty-string ISRCs, which is why
-    // `recording-mbids.ts` spells its own worklist the same way). It exists for ONE consumer: the
-    // anchor worklist's drain order leads with it (`ANCHOR_ORDER`, track-work.ts), because in
-    // practice anchoring concludes almost exclusively through the exact-ISRC rung — an ISRC-less
-    // row at the head of the queue is a billed Apify search that cannot conclude, spent ahead of a
-    // row that can. A btree cannot key on the expression (see `has_embedding` above — measured, not
-    // assumed), so the presence has to be a stored column for `tracks_anchor_order_idx` to walk.
-    //
-    // THE INVARIANT, AND WHY IT CANNOT DRIFT. Every statement that assigns `isrc` assigns this
-    // mirror in the same statement — the fill-empty writers through the shared `FILL_ISRC_SQL`
-    // fragment (lib/server/isrc.ts), the inserts and the generic update through `hasIsrc()`.
-    // `isrc-mirror.test.ts` scans the server source and fails the build on an `isrc` write that
-    // does not carry the pair, and `scripts/backfill-has-isrc.ts` reconciles drift in both
-    // directions on every deploy (`db:backfill`), same posture as `backfill-has-embedding.ts`.
-    // INTERNAL bookkeeping: never in a public DTO, never a lastmod bump.
-    //
-    // NOTE ON PHYSICAL POSITION: `ALTER TABLE ADD COLUMN` appends to the end of the record, so on
-    // an existing database this column sits LAST; a freshly created table places it here. Neither
-    // matters — the anchor worklist reads it out of the index walk, never off a hot table row.
+
     hasIsrc: integer("has_isrc", { mode: "boolean" }).notNull().default(false),
-    // The Discogs release the finding resolves to (read-only enrichment, best-effort,
-    // matched by artist + title since Discogs has no ISRC search). inMasterId is the
-    // master that groups a release's versions (Discogs returns it on the search hit);
-    // inReleaseId is the specific release. The `discogs.com/release/{inReleaseId}` URL
-    // is a per-finding `sameAs` for the track (distinct from the artist-level sameAs).
-    // Both null until a confident match writes them on add.
+
     inMasterId: integer("in_master_id"),
     inReleaseId: integer("in_release_id"),
-    // THE CATALOGUE DISCRIMINATOR, MATERIALIZED (docs/db-scale-backlog Wave 2 keystone 1). A
-    // maintained mirror of the tracks/findings split: `is_catalogue = 1` iff this track has NO
-    // `findings` row (a raw catalogue track), `0` iff it HAS one (a certified finding). It carries
-    // the single most-repeated read shape in the app — `tracks LEFT JOIN findings WHERE
-    // findings.track_id IS NULL` — as a stored, indexable column, so the catalogue anti-join stops
-    // being a full left-join scan of the growing `tracks` table and becomes a `where is_catalogue = 1`
-    // seek on `tracks_is_catalogue_idx` (proven 5.7× the anti-join at 150k hosted).
-    //
-    // THE INVARIANT, AND WHY IT CANNOT DRIFT. A track is BORN catalogue — `notNull().default(true)`,
-    // so every crawler/label mint that never names this column lands `1` from the DDL default (and
-    // the migration backfills every pre-existing row to `1` for free). It flips `1 → 0` exactly when
-    // a `findings` row is inserted for it: `publishTrack` inserts the track already certified (`0` in
-    // its batch), and `certifyExistingTrack` flips it in the same write that mints the finding. The
-    // boundary is INSERT-only server-side — there is NO `delete from findings` anywhere in
-    // `apps/web/src/lib/server/**` — so the flag only ever moves one way (1 → 0), never back, which is
-    // what makes a maintained mirror safe. INTERNAL bookkeeping: never in a public DTO, never a
-    // lastmod bump (a `tracks` write moves no finding).
+
     isCatalogue: integer("is_catalogue", { mode: "boolean" }).notNull().default(true),
     isrc: text("isrc"),
-    // THE ISRC ATTEMPT STAMP (RFC dnb-identity-graph, Unit 1 item 1) — the column that lets a
-    // NULL `isrc` say WHICH kind of nothing it is. Without it "no ISRC" is one undifferentiated
-    // silence; with it the honest negative separates out: a stamped row means "we looked, the
-    // recording has no ISRC we can reach — stop asking", an unstamped one means "never looked yet".
-    // The `mb_recording_id_attempted_at` discipline one screen down, applied to the other key.
-    //
-    // AN ATTEMPT IS ANY ISRC FILL PATH CONCLUDING — hit AND clean miss alike, since a miss is the
-    // fact worth remembering. The four paths, each stamping in the same statement that writes (or
-    // declines to write) the ISRC:
-    //   - PUBLISH (publish.ts): Spotify's `external_ids` read, plus the `lookupIsrcFromDeezer`
-    //     fallback when Spotify omits it. The metadata fetch has returned by then, so the attempt
-    //     has concluded whichever way it went — every finding is born stamped.
-    //   - THE FRESHNESS TAP (label-releases.ts): Spotify's `external_ids.isrc` off the per-track
-    //     probe. The probe parse returns null on anything short of a real track response, so a row
-    //     that lands has had its look concluded.
-    //   - THE CRAWLER (crawl.ts § writeCatalogueTracks): MusicBrainz's `recording.isrcs`, read as
-    //     part of the release walk. Every crawled row is born stamped, so the catalogue's ISRC-less
-    //     rows are honestly "MusicBrainz has none", not "nobody has looked".
-    //   - THE DEEZER-RECOVERY RUNG (anchor.ts § recoverIsrcViaDeezer): stamped on a verified
-    //     recovery, and on a gate-clean miss (Deezer answered, no candidate cleared the identity
-    //     gate). NOT stamped when the search came back empty — `searchDeezerCandidates` returns the
-    //     same empty array for "no results" and for a quota/network failure, and a throttle is not
-    //     an answer. Untouched beats a stamp we cannot stand behind.
-    //
-    // WHAT A LEGACY STAMP MEANS. scripts/backfill-identity-ledger.ts stamps the rows that already
-    // carry an ISRC, since a filled ISRC is proof a path concluded — but it cannot know WHEN, so it
-    // reads "filled by then, at the latest", never "verified then": a certified row takes its
-    // finding's `added_at` (which IS the publish attempt's own instant, so those are exact), and a
-    // catalogue row — `tracks` carries no mint timestamp at all — takes the backfill's run time.
-    // Any consumer serving this value must say it means ATTEMPTED, never VERIFIED.
-    //
-    // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule below: a
-    // `.default()` on an EXISTING `tracks` column makes drizzle regenerate the whole table and
-    // drop+recreate all ~125 indexes. NULL is "never attempted". Internal reliability state — no
-    // public surface, no lastmod bump.
+
     isrcAttemptedAt: text("isrc_attempted_at"),
-    // THE FREE DEEZER-RECOVERY LEDGER. A timestamp means the box-supplied, tokenless Deezer
-    // recovery pass reached a settling answer for this row: recovered, gate-refused, or clean-empty.
-    // It is deliberately NOT `isrc_attempted_at`, whose multiple writers include the crawler's
-    // insert-time MusicBrainz look, and deliberately NOT `backfill_deezer_attempted_at`, whose
-    // ISRC-gated enrichment consumer must remain eligible if another source later fills the ISRC.
-    // This one owner lets the recovery worklist drain while retaining a 21-day re-ask window.
-    //
-    // NULLABLE with NO `.default()`, deliberately: adding it to the populated `tracks` table must
-    // generate one O(1) `alter table ... add column`, never the table rebuild that would recreate
-    // the table's ~125 indexes. NULL is "the box recovery pass has not settled yet". Internal
-    // reliability state — no public surface, no lastmod bump.
+
     isrcRecoveryAttemptedAt: text("isrc_recovery_attempted_at"),
     key: text("key"),
-    // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
-    // bpm-key-accuracy). `keySource` is the analyzer's `keySource` verbatim. `key` is NULL
-    // when confidence fell below the analyzer's floor, so `keyConfidence` records that the
-    // gate ran. Both INTERNAL (never in a public DTO, never bump `updated_at`). See
-    // `analyzedFrom` above.
+
     keyConfidence: real("key_confidence"),
     keySource: text("key_source"),
     label: text("label"),
-    // The GRAPH POINTER to the normalized `labels` entity (`labels.id`) — the twin of
-    // `albumId` above; see its comment for why the pointer exists and what NULL means.
+
     labelId: text("label_id"),
-    // ── THE CANONICAL KG JOIN KEY (the MusicBrainz identity layer) ───────────────────────────
-    // The MusicBrainz RECORDING MBID — the one identifier that reconciles a track to the wider
-    // open music graph (MusicBrainz, Wikidata, and everything that keys off them). CATALOGUE
-    // identity (it describes the recording, not the certification), so it lives here and is just
-    // as true of an uncertified track. Three fill paths (docs/catalogue-crawler.md):
-    //   - a CRAWLER-born row already carries it in its PK — `track_id` is `mb_<recording-mbid>`
-    //     by construction — so the crawler ALSO stamps it here at mint time (crawl.ts), and one
-    //     idempotent SQL strip backfills history (recording-mbids.ts § the prefix strip).
-    //   - a FINDING/Spotify-born row (`track_id` is a Spotify id) resolves it by ISRC through the
-    //     shared MusicBrainz client (`backfill_recording_mbids` — recording-mbids.ts).
-    // PUBLIC identity, like `isrc`: it feeds the `/log` MusicRecording's `sameAs`
-    // (`https://musicbrainz.org/recording/<mbid>`) + a KG `identifier` PropertyValue, so it is
-    // NOT in `PRIVATE_TRACK_FIELDS`. NULL until a fill path lands it (or forever if MB has no
-    // recording for the ISRC — a missing anchor is honest, never guessed).
+
     mbRecordingId: text("mb_recording_id"),
-    // The ISRC→recording resolve ATTEMPT stamp — the reliability marker that drains the
-    // `backfill_recording_mbids` worklist. Stamped on EVERY terminal attempt (a hit AND a clean
-    // miss), so a track whose ISRC MusicBrainz has no recording for is not re-queried on every
-    // tick forever (the `source_audio_attempted_at` / `spotify_anchor_attempted_at` discipline).
-    // NULL until the row has ever been attempted; a crawler/mint fill sets `mb_recording_id`
-    // directly and never needs this. Internal reliability state — no public surface, no lastmod.
+
     mbRecordingIdAttemptedAt: text("mb_recording_id_attempted_at"),
-    // The Ear's two ranking outputs. See the block comment on `capture_priority` above —
-    // these three columns are one unit and are written only by the `rank_catalogue` sweep.
+
     nearestFindingScore: real("nearest_finding_score"),
     nearestFindingTrackId: text("nearest_finding_track_id"),
     popularity: integer("popularity"),
-    // Operator-only archive path for the one official 30s preview preserved for
-    // private analysis/model training. Never exposed through public DTOs and
-    // never used by /api/preview playback.
+
     previewArchiveKey: text("preview_archive_key"),
     previewArchiveMime: text("preview_archive_mime"),
     previewArchiveSource: text("preview_archive_source"),
     previewArchivedAt: text("preview_archived_at"),
     previewUrl: text("preview_url"),
     releaseDate: text("release_date"),
-    // ISO of the last full-song capture ATTEMPT — stamped on EVERY terminal outcome
-    // (done | unmatched | failed), because every one of them is a metered proxy request
-    // that was billed. Two readers, and the second is why it is stamped on success too:
-    //   - the backoff-cooldown anchor (grows with `source_audio_failures`), which only
-    //     ever looks at `capture_status = 'failed'` rows, so the wider stamp is inert there;
-    //   - the CAPTURE BUDGET's rolling-24h ledger (./capture-budget.ts) — "how many
-    //     downloads did the catalogue buy today" is a range seek on THIS column, which is
-    //     only true if a success stamps it as well as a failure.
-    // Null until tried.
+
     sourceAudioAttemptedAt: text("source_audio_attempted_at"),
-    // The SIZE of the captured full song in bytes — the meter behind the capture budget's
-    // byte cap. Written by the capture sweep alongside the key; null on a legacy row
-    // captured before the meter existed (the ledger coalesces those to 0, so an old
-    // capture cannot silently inflate today's spend). See ./capture-budget.ts.
+
     sourceAudioBytes: integer("source_audio_bytes"),
-    // ISO stamp when the full-song bytes landed in R2. Null until captured.
+
     sourceAudioCapturedAt: text("source_audio_captured_at"),
-    // CONSECUTIVE capture failures (reset to 0 on success); drives the backoff window.
+
     sourceAudioFailures: integer("source_audio_failures").notNull().default(0),
-    // The R2 key of the captured full song (`<logId>/<sha256>.<ext>` in the private
-    // `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
+
     sourceAudioKey: text("source_audio_key"),
-    // THE BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) — a JSON array of the sources this
-    // track's captures have been REJECTED from, capped at the newest ~10 ({ videoId?, sha256,
-    // reason, at }). It is the rejected-source memory: two filters ride it in the capture sweep.
-    // a kept `source_audio_key`: two filters ride it in the capture sweep. The `videoId` is the
-    // cheap PRE-download filter (a known-bad candidate never costs proxy bytes again); the `sha256`
-    // is the deep backstop (the same audio re-uploaded under a NEW id is rejected post-download and
-    // remembered). Written by the sweep's ingest gate on a mismatch, and by the wrong-audio
-    // quarantine + the operator's `flag_wrong_audio` when they rewind a row. Null until the first
-    // rejection. Internal, like the rest of the capture side-channel — no public surface, no lastmod.
+
     sourceAudioRejected: text("source_audio_rejected"),
-    // Banked fingerprint evidence from a non-YouTube capture source. This stays beside the
-    // YouTube provenance trio because a SoundCloud match can never authorize a YouTube id.
+
     sourceVerification: text("source_verification"),
-    // THE ANCHOR RE-ASK STAMP (docs/catalogue-crawler.md § the anchor). ISO of the last
-    // Spotify-anchor ATTEMPT on a catalogue row, stamped on EVERY attempt — a hit AND a
-    // miss — by the agent-tier `anchor_track` op the box's Apify anchor sweep POSTs to. It
-    // is the backoff the anchor worklist reads: "not on Spotify today" is not "never on
-    // Spotify" (a small-label recording lands on Spotify weeks later), so a missed row is
-    // re-asked, but only after a window (track-work.ts `ANCHOR_REASK_AFTER_DAYS`) — every
-    // re-ask costs real Apify money. NULL until the row has ever been attempted. Internal,
-    // like the rest of the catalogue side-channel — no public surface, no lastmod bump.
+
     spotifyAnchorAttemptedAt: text("spotify_anchor_attempted_at"),
-    // THE ANCHOR RETRY COUNTER — the companion to the stamp above, and the thing that makes the
-    // re-ask backoff TERMINATE. The stamp alone is a window, not a budget: an un-anchored row was
-    // offered again every `ANCHOR_REASK_AFTER_DAYS` forever, so a recording genuinely absent from
-    // Spotify billed a fresh Apify search a fortnight at a time, indefinitely. This column is the
-    // count of FULL attempts, incremented in the SAME UPDATE that writes the stamp (anchor.ts — the
-    // hit + miss stamps in `anchorTrack`, and `stampAnchorAttempt`), and the anchor worklist stops
-    // offering a row at `ANCHOR_MAX_ATTEMPTS` (track-work.ts): ~3 months of tries, then the row is
-    // left to rest. The kill-flag's flip-ON requeue DECREMENTS it alongside the stamp it clears
-    // (anchor-apify.ts), because an off-window deferral was never actually tried — the counter moves
-    // with the stamp, always.
-    //
-    // NULLABLE with NO `.default()`, deliberately: a `.default()` on a `tracks` column makes drizzle
-    // regenerate the whole table and drop+recreate all ~125 indexes in the migration — a production
-    // stall. Every reader coalesces (`coalesce(spotify_anchor_attempts, 0)`), so NULL simply means
-    // "never attempted", exactly as the null stamp beside it does. Internal reliability state, like
-    // the rest of the catalogue side-channel — no public surface, no lastmod bump.
+
     spotifyAnchorAttempts: integer("spotify_anchor_attempts"),
-    // THE ANCHOR PROVENANCE PAIR (RFC dnb-identity-graph, Unit 1 item 4) — WHICH RUNG found the
-    // Spotify id, and HOW it was verified. Both were computed and returned on every anchor and then
-    // thrown away; the identity envelope has to say how it knows a link is right, so they are
-    // persisted now. Written in the SAME UPDATE as `spotify_uri` — the gate's hit (anchor.ts
-    // `anchorTrack`) and the operator's accepted review (`resolveAnchorReview`) — never separately,
-    // so a row can never carry an anchor with someone else's provenance.
-    //
-    // `spotify_anchor_source` = WHICH PATH produced the link (`AnchorSource` in anchor.ts): the
-    // five-member `AnchorReviewSource` verbatim ("apify" | "deezer" | "listenbrainz" |
-    // "spotify-isrc" | "spotify-search"), plus "publish" for the add flow. NULL on an
-    // operator-accepted review (no path fetched it — he did) and on every row anchored before these
-    // columns existed.
-    //
-    // `spotify_anchor_verified_by` = the SIGNAL that made the link trustworthy:
-    //   · "isrc"          — the candidate's ISRC equalled the row's. The recording's real identity.
-    //   · "search"        — the full verified triple (same artist SET, same base title, same version
-    //                       descriptor) inside ±ANCHOR_DURATION_TOLERANCE_MS.
-    //   · "search-subset" — the ±1s PROPER-SUBSET fallback (a platform crediting only the primary
-    //                       artist of a collab). A DISTINCT confidence from "search" on purpose: the
-    //                       artist signal was loosened and paid for with a hardened duration one, and
-    //                       an envelope that flattened the two would overstate what Fluncle checked.
-    //   · "operator"      — he read both titles and ruled (`resolve_anchor_review`). These are the
-    //                       best-provenance anchors in the corpus and must never read as legacy.
-    //   · "publish"       — the finding was ADDED from a Spotify URL, and the id was re-read through
-    //                       Spotify's own `GET /tracks/{id}`. No gate ran because there was nothing
-    //                       to gate: no candidate was compared, the id IS the identity and the
-    //                       platform's own record is the answer. That is a STRONGER claim than any
-    //                       search rung, so it must not read as legacy either.
-    //
-    // NULL on both ⇒ the envelope reads `unknown-legacy`: anchored before the columns existed.
-    // Honest — "we hold no record of how" — never a claim.
-    //
-    // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule above: a
-    // `.default()` on a `tracks` column makes drizzle regenerate the whole table and drop+recreate
-    // all ~125 indexes. PUBLIC (the identity envelope serves them, `get_track`'s identity
-    // projection), but no lastmod bump: provenance for an existing link moves no finding.
+
     spotifyAnchorSource: text("spotify_anchor_source"),
     spotifyAnchorVerifiedBy: text("spotify_anchor_verified_by"),
-    // THE ANCHOR HIT TIME (RFC dnb-identity-graph, Unit 1 item 4) — when the Spotify link was
-    // actually WRITTEN, as distinct from `spotify_anchor_attempted_at` one screen up, which is a
-    // LAST-ATTEMPT stamp. The two look interchangeable and are not: the attempt stamp is NULL on a
-    // publish-born finding (publish never runs the anchor gate), and on a re-asked row it moves with
-    // every miss. Serving an attempt time as "verified at" would be a false claim, which is why the
-    // envelope carries `atMeaning` and why this column exists to make the honest answer available at
-    // all.
-    //
-    // Written in the same statement as `spotify_uri` by all three writers: the gate's hit, the
-    // operator's accepted review, and PUBLISH (its own `nowIso` — publish resolves the id through
-    // Spotify's own API read, so the moment it writes the row IS the moment the link was verified).
-    // NULL on every row anchored before this column existed ⇒ the envelope serves `at: null` with
-    // `atMeaning: null` rather than inventing one.
-    //
-    // NULLABLE, no `.default()` (the ~125-index rebuild trap). Public via the identity envelope; no
-    // lastmod bump.
+
     spotifyAnchoredAt: text("spotify_anchored_at"),
-    // THE FREE EXACT-ISRC ASK RECEIPT (docs/catalogue-crawler.md § the anchor) — ISO of the moment
-    // the FREE exact-ISRC Spotify rung (`findSpotifyTrackByIsrc`, anchor.ts `resolveViaSpotifySearch`)
-    // genuinely ASKED Spotify about this row and got a CLEAN MISS. Only a real ask writes it: a row
-    // whose ask was deferred by the box's per-tick budget or night window, refused by the breaker or
-    // the shared meter, throttled (429), or rejected by an unauthorized grant leaves it NULL, because
-    // none of those put the question to Spotify at all.
-    //
-    // IT IS THE PAID RUNG'S ADMISSION TICKET. The waterfall's free exact-ISRC rung answers ~78% of the
-    // asks it is given, and the metered Apify fallback answers the SAME question for money — so an
-    // ISRC-bearing row may only reach Apify once this receipt exists (anchor.ts `resolveAnchorFree`'s
-    // eligibility rule, enforced again in `anchorTrack`). NULL therefore means "not yet asked, keep its
-    // turn", never "asked and missed".
-    //
-    // IT LIVES FOR ONE RE-ASK WINDOW. Every write of `spotify_anchor_attempted_at` beside it clears
-    // this column in the same statement (the hit + miss writes in `anchorTrack`, and
-    // `stampAnchorAttempt`), so a row returning after `ANCHOR_REASK_AFTER_DAYS` must be asked for free
-    // again before it can be bought — a receipt from a previous window is not evidence about this one.
-    //
-    // NULLABLE with NO `.default()`, on the `spotify_anchor_attempts` rule above. NOT INDEXED: it is
-    // read per row inside the resolver (which has already fetched the row) and appears in no worklist
-    // predicate or ordering, so no btree walk depends on it and `tracks_funnel_scan_idx`'s coverage is
-    // untouched. Internal reliability state — no public surface, no lastmod bump.
+
     spotifyIsrcAskedAt: text("spotify_isrc_asked_at"),
-    // NULLABLE (they were NOT NULL until the tracks/findings split): a catalogue track
-    // resolved from MusicBrainz/Discogs may have no Spotify presence at all. `track_id`
-    // stays the opaque PK — today it happens to be the Spotify id; a catalogue-only track
-    // gets a minted one. Everything keyed on `track_id` (track_artists, mixtape_tracks,
-    // social_posts, user_saved_findings, user_galaxy_collections) is unaffected.
+
     spotifyUri: text("spotify_uri"),
     spotifyUrl: text("spotify_url"),
     title: text("title").notNull(),
     trackId: text("track_id").primaryKey(),
-    // THE CAPTURE'S YOUTUBE PROVENANCE, AND WHETHER IT MAY BE SHOWN (operator ruling).
-    // The capture sweep already searches YouTube, downloads the audio, and FINGERPRINT-VERIFIES it
-    // against the ISRC-resolved official preview (capture-sweep.ts § the fingerprint gate). The
-    // winner's id is stored alongside rejected ids, so every capture records which upload carries
-    // this recording, PROVEN by his own ears — and not one YouTube Data
-    // API call is made to learn it.
-    //
-    // AND THE ROWS CAPTURED BEFORE THAT are reached by the PROVENANCE BACKFILL, a budgeted phase
-    // inside the capture sweep's tick (docs/agents/hermes/scripts/capture-sweep.ts). A discarded id
-    // cannot be recovered from the stored bytes, so the backfill re-derives it the only honest way:
-    // it runs the whole ladder again — search, rank, download, fingerprint — and then DISCARDS the
-    // candidate audio. That discard is a ruling, not an optimisation. The obvious shape (just
-    // re-capture the row) was piloted and rejected on what it did: a recapture REPLACED a finding's
-    // clean archived audio with a fan BLEND that legitimately passed the fingerprint gate, because
-    // a blend contains the original's preview segment. So the backfill moves the three columns
-    // below and NOT ONE capture column — `source_audio_key`, `capture_status` and their kin are
-    // untouchable from that path, pinned by tests on both sides of the wire.
-    //
-    // THE TWO QUESTIONS ARE DIFFERENT, and conflating them is the whole risk here:
-    //
-    // `youtube_verified_at` is when the officialness check ran, NOT when the fingerprint matched.
-    // The identity envelope serves it with `atMeaning: "verified"` — the moment the link was
-    // written — on the Deezer precedent.
-    //
-    // `youtube_video_id` is the ACCEPTED upload's id, stored as TEXT (an opaque external id, never
-    // arithmetic). It means "a video whose audio FINGERPRINT-MATCHED this recording" — never "the
-    // official video": a blend, a rip, or a fan upload carries the original's audio and passes the
-    // gate for exactly that reason. Written ONLY beside a real `preview-match` verdict — the
-    // sweeps' abstain path (no preview reference, nothing compared) reports no id, because this
-    // column is served as `method: "fingerprint"` and must never front a match that never ran.
-    //
-    // A fingerprint match proves the AUDIO is this recording. It proves NOTHING about whether the
-    // upload is legitimate: a rip carries the same bytes as the master, which is exactly why the
-    // fingerprint passes it.
-    //
-    // `youtube_video_official` is therefore the LOAD-BEARING GATE, and the only column the public
-    // surface reads as permission. 1 = the upload's own channel is an auto-generated
-    // `<Artist> - Topic` art track, an artist channel this recording is credited to, or THIS
-    // recording's own label; 0 = it is none of those; NULL = nobody has checked, which is NOT a
-    // verdict. A row at 0 or NULL is re-asked by the RE-VERDICT phase, which is how a widened rule
-    // reaches rows ruled under a narrower one; a row at 1 is never re-asked, so a re-ask can only
-    // ever promote and never retract a link. Decided server-side against
-    // YouTube's KEYLESS oEmbed endpoint (lib/server/youtube-official.ts), whose `author_name` is
-    // the upload's channel. The check is deliberately CONSERVATIVE and its false-negative bias is
-    // the point: a missed official upload merely stays internal, while a rip shown as Fluncle's
-    // link is a lie the /identity page exists to prevent. An oEmbed failure leaves this NULL — the
-    // id is still kept, because it is real capture provenance, and it simply never surfaces.
-    //
-    // ONLY `official = 1` REACHES A READER. The id alone is internal provenance: `/identity`
-    // renders nothing and the API answers `unattempted` for an unchecked or non-official id, which
-    // is honest — no per-recording YouTube SEARCH ever concludes here, so there is no `absent` to
-    // serve and never will be.
-    //
-    // NULLABLE with NO `.default()`, on the `spotify_anchor_attempts` rule the Deezer block above
-    // records: a `.default()` on a `tracks` column makes drizzle regenerate the whole table and
-    // drop+recreate all ~125 indexes, a production stall. NOT INDEXED: nothing queries by them.
-    //
-    // `youtube_provenance_failures` counts the times the provenance ladder RAN and settled nothing —
-    // an exhausted row (every rung concluded, nothing vouchable) and an inconclusive one (the CDN
-    // refused every section it tried). It exists for one reason: a row that can never be concluded
-    // is otherwise handed back by the worklist every single tick, forever, starving everything
-    // queued behind it. This counter prevents a provenance row from starving later work: the
-    // worklist retires the row at the cap (`YOUTUBE_PROVENANCE_MAX_FAILURES`, track-work.ts), and
-    // the identity envelope never reads this column, so a retired row's receipt honestly stays
-    // "Not checked yet" rather than acquiring a
-    // verdict it never earned.
-    //
-    // `youtube_verified_by` is HOW the held id came to be trusted, on the `deezer_verified_by`
-    // precedent, and it exists because there is now more than one way. A fingerprint match (the
-    // capture gate, the findings backfill, the catalogue ladder's segment rung) is `fingerprint`; an
-    // `<Artist> - Topic` art track accepted on artist + title + length alone is `search` — a real
-    // claim, and a weaker one, so it must not be able to render as the other. NULL means the row
-    // predates the column, which is `fingerprint` by construction (it was the only path that wrote
-    // an id), so no backfill is needed and no existing receipt changes.
-    //
-    // All three NULLABLE with NO `.default()`, on the `spotify_anchor_attempts` rule above.
+
     youtubeProvenanceFailures: integer("youtube_provenance_failures"),
     youtubeVerifiedAt: text("youtube_verified_at"),
     youtubeVerifiedBy: text("youtube_verified_by"),
     youtubeVideoId: text("youtube_video_id"),
     youtubeVideoOfficial: integer("youtube_video_official"),
   },
-  // Every list/queue/feed order and predicate for a FINDING lives on the certification
-  // half (added_at, log_id, video_url, enrichment_status, galaxy_id), so the four former
-  // `tracks_*` indexes moved wholesale to `findings` below; a finding read drives from
-  // `findings` and joins `tracks` by its PRIMARY KEY.
-  //
-  // Everything indexed HERE is a CATALOGUE-half scan shape — a read that drives from
-  // `tracks` (the table the catalogue grows), not from `findings`, and therefore must stay
-  // a seek rather than a scan as it does. Three PRs index this table for three jobs:
-  //
-  // The GRAPH pages read `tracks` BY ENTITY: every track on this album / this label,
-  // certified or not (the public `/album/<slug>` + `/label/<slug>` pages, docs/album-entity.md).
-  // Both pointers also serve a backfill's `… _id is null` drain — `label_id` the recurring
-  // labels deploy backfill, `album_id` the one-off `backfill-album-graph.ts` catch-up.
-  //   - `album_id` / `label_id` — the entity a track hangs off.
-  //
-  // The EAR's two ordered reads are the whole reason its request path does no vector math
-  // (docs/the-ear.md). Both walk their index DESC and stop at the page's LIMIT, so the cost
-  // is the page, not the corpus. NULLs sort first in an ASC index, so a DESC walk hits the
-  // ranked rows first and never pays for the unranked tail. Neither column is ever non-null
-  // on a finding (the sweep anti-joins `findings`), so both hold catalogue rows only.
-  //   - `nearest_finding_score` — the Ear's rank: "closest to a finding, not yet logged."
-  //   - `capture_priority`      — the capture queue's rank: who gets captured next.
-  //
-  // The CAPTURE BUDGET's rolling-24h ledger (./capture-budget.ts) asks one question of this
-  // table — "what did the catalogue spend in the last 24h?" — and it must stay a SEEK, because
-  // it is read on every capture-queue tick and every /admin/catalogue load, against the one
-  // table the crawler grows without bound. It is a range predicate on the attempt stamp, so:
-  //   - `source_audio_attempted_at` — the ledger's window. NULLs sort first in an ASC index,
-  //     so a `>= cutoff` seek skips every never-attempted row (which is nearly all of them)
-  //     and reads only the window — and the window is itself bounded by the budget the ledger
-  //     is enforcing. The cost of the brake cannot grow with the catalogue.
-  //
-  // The CRAWLER's two write-side reads (docs/catalogue-crawler.md). The Ear ranks what
-  // exists and the graph pages render it; the crawler is what makes the rows exist, and its
-  // two hot predicates are properties of the RECORDING rather than of the certification.
-  //   - `isrc`                — the idempotence check, before minting a row.
-  //   - the partial anchor idx — the derived Spotify-anchor worklist.
+
   (table) => [
     index("tracks_album_id_idx").on(table.albumId),
     index("tracks_label_id_idx").on(table.labelId),
-    // THE LABEL COVER PICK (labels.ts `LABEL_COVER_PICK`, the `/labels` tile + `get_label` cover).
-    // The pick is two seeks, `max(release_date)` over a label's tracks with art and then the lowest
-    // `track_id` with art on that date, and this index answers both from its entries alone:
-    // `(label_id=?)` read from the end of the label's range, then `(label_id=? AND release_date=?)`
-    // walked in `track_id` order to the first entry. A label's whole catalogue is never read.
-    //
-    // `album_image_url` is a KEY COLUMN, not a partial `where`, because the pick's own
-    // `album_image_url is not null` term references the column: a partial index on that predicate
-    // still plans as `USING INDEX` and seeks each entry's table row, and a row read for `label_id`
-    // or anything else stored past the legacy inline vector walks the vector's overflow pages. With
-    // the URL in the key the plan is `USING COVERING INDEX` and the pick reads no `tracks` row.
-    //
-    // Plain ASC (a `desc()` index poisons the drizzle snapshot into rebuilding every index), a plain
-    // btree, never `libsql_vector_idx`. Building it reads every `tracks` row, so its migration holds
-    // the write lock for a full table walk.
+
     index("tracks_label_cover_idx").on(
       table.labelId,
       table.releaseDate,
       table.trackId,
       table.albumImageUrl,
     ),
-    // THE CATALOGUE ANTI-JOIN, MATERIALIZED (docs/db-scale-backlog Wave 2 keystone 1). The single
-    // most-repeated read shape in the app — `tracks LEFT JOIN findings WHERE findings.track_id IS
-    // NULL` — a full left-join scan of the growing `tracks` table with a per-row
-    // findings probe. With `is_catalogue` maintained (see the column comment), that anti-join becomes
-    // `where is_catalogue = 1`, and this PARTIAL index over exactly the catalogue slice turns it into
-    // an index seek (proven 5.7× the anti-join at 150k hosted). PARTIAL `where is_catalogue = 1` — not
-    // a full two-value index — because every consumer asks the catalogue question (`= 1`), never the
-    // certified one; the certified rows are the minority and stay out of the index. Plain ASC (a
-    // `desc()` index would poison the drizzle snapshot into rebuilding every index on the next
-    // migration — the ratified trap), and a plain btree, never the vector `libsql_vector_idx` that
-    // wedges hosted Turso, so it builds like `tracks_isrc_idx` beside it.
+
     index("tracks_is_catalogue_idx")
       .on(table.isCatalogue)
       .where(sql`${table.isCatalogue} = 1`),
-    // The exact evidence-membership index remains part of the retained compatibility schema.
+
     index(TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX)
       .on(table.trackId)
       .where(sql.raw(trackPageIndexableWhere())),
-    // THE ARCHIVE-TRACK SITEMAP COUNT. The simple catalogue partial index covers every remaining
-    // evidence column, so the two destination branches can count without table reads.
-    // The child keyset retains its established active-catalogue index.
+
     index(TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX)
       .on(
         table.duplicateOfTrackId,
@@ -1044,86 +206,15 @@ export const tracks = sqliteTable(
         table.artistsJson,
       )
       .where(sql.raw(trackPageIndexableCoverIndexWhere())),
-    // THE FRESH CATALOGUE WINDOW. `is_catalogue` stopped discriminating: the crawler grew the
-    // catalogue into 99,637 of 99,729 rows, so the partial index above now matches 99.9% of the
-    // table and selects essentially everything. `/fresh`'s unlit half asks for a DATE WINDOW off
-    // that near-total set and orders by it (`is_catalogue = 1 and release_date between ? and ?
-    // order by release_date desc, track_id desc limit ?`), and with only the two single-column
-    // indexes to choose from the planner took `tracks_is_catalogue_idx` and then sorted the whole
-    // catalogue to return 24 rows — `USE TEMP B-TREE FOR ORDER BY` over ~100k rows.
-    //
-    // That is a PLAN COIN-FLIP, not a slow query, which is why it read as random: hosted Turso
-    // carries no ANALYZE statistics, so the same SQL measured 189ms / 756ms / 14,024ms in
-    // production within one hour (Sentry `db.query` spans on `GET /fresh`), and 2,605ms / 170ms /
-    // 213ms / 176ms back-to-back on a direct connection. Forcing the range path instead measured
-    // 45/53/41/59ms — flat, because a date seek early-terminates at the LIMIT.
-    //
-    // IT LEADS WITH `is_catalogue`, AND THAT IS LOAD-BEARING — the same lesson `tracks_funnel_scan_idx`
-    // records below, re-learned here at the cost of a deploy. Shipped first as
-    // `(release_date, track_id)` PARTIAL on `is_catalogue = 1`, this index was simply never chosen:
-    // the planner kept `SEARCH tracks USING INDEX tracks_is_catalogue_idx (is_catalogue=?)` plus the
-    // temp B-tree, because with no statistics SQLite prefers an equality seek it can see over a range
-    // on an index whose predicate is hidden in a `where` clause. Demoting the discriminator to a
-    // partial predicate hides it. Measured on prod, same query, same rows:
-    //
-    //   partial (release_date, track_id):        SEARCH … tracks_is_catalogue_idx + TEMP B-TREE
-    //   leading (is_catalogue, release_date, …): SEARCH … (is_catalogue=? AND release_date>? AND <?)
-    //                                            no temp B-tree — 58/45/43/42/44ms
-    //
-    // So `is_catalogue` is a COLUMN here, not a `where`: it makes the equality visible, `release_date`
-    // then serves the range, and `track_id` carries the ORDER BY's last term so nothing is sorted at
-    // all. NOT partial, for exactly that reason. Plain ASC (SQLite walks a btree backwards for the
-    // DESC order; a `desc()` index would poison the drizzle snapshot into rebuilding every index —
-    // the ratified trap), and a plain btree, never `libsql_vector_idx`. It builds in ~4s at 100k rows.
+
     index("tracks_fresh_catalogue_idx").on(table.isCatalogue, table.releaseDate, table.trackId),
-    // THE ACTIVE-CATALOGUE WALK — the same collapse as the index above, on the sweep side. Every
-    // "walk the live catalogue in track_id order" read pairs `is_catalogue = 1` with
-    // `dismissed_at is null`, and neither predicate discriminates on its own now that the catalogue
-    // is 99.9% of `tracks`. `rankCatalogue`'s stale pick (catalogue.ts) is the hot one: it wants at
-    // most 250 rows and was taking `tracks_is_catalogue_idx` plus `USE TEMP B-TREE FOR ORDER BY`
-    // over the whole table to get them. Measured on prod, same query, same rows:
-    //
-    //   before: 19,131 / 19,842 / 17,331ms   SEARCH … tracks_is_catalogue_idx + TEMP B-TREE
-    //   after:       66 /     52 /     62ms   SEARCH … (is_catalogue=? AND dismissed_at=?)
-    //
-    // Note it is NOT a coin-flip like the fresh one — this shape lost every time, which is why
-    // `POST /api/v1/admin/catalogue/rank` sat at 80–113s in Sentry across its whole span history.
-    // `dismissed_at` is second because it is the other equality (`is null`); `track_id` is third so
-    // the ORDER BY comes off the index and the sweep can early-terminate at its batch cap.
-    //
-    // It does NOT cover every catalogue sweep read: `readCatalogueIdentity` adds a
-    // `source_audio_key is not null` boundary and was measured STILL taking the old plan with this
-    // index present (15–24s), so it needs its own and is not silently fixed by this one. Probe
-    // before adding it — an index the planner ignores is worse than none, because it costs writes
-    // and buys nothing.
+
     index("tracks_catalogue_active_track_id_idx").on(
       table.isCatalogue,
       table.dismissedAt,
       table.trackId,
     ),
-    // THE TWO /admin/catalogue LENS READS, which the index above does NOT reach. Both walk the live
-    // catalogue and then RANK it — `ear` by nearest-finding score, the capture queue by capture
-    // priority — so `(is_catalogue, dismissed_at, track_id)` gives them the seek and then leaves
-    // them sorting ~100k rows in a temp B-tree for their 60. That sort is what put 70–124s
-    // `db.query` spans inside `POST /api/v1/admin/catalogue/rank`, and because libSQL has a single
-    // writer it starved the whole sweep fleet: unrelated crons died on `The operation timed out.`
-    //
-    // Each carries its ranking column as the third entry, so the range and the ORDER BY come off
-    // one structure. Measured on prod (plan only — EXECUTING these to time them is itself an
-    // outage, which is how the fleet got starved in the first place):
-    //
-    //   ear     before: … tracks_catalogue_active_track_id_idx + USE TEMP B-TREE FOR ORDER BY
-    //           after:  … (is_catalogue=? AND dismissed_at=? AND nearest_finding_score>?), no sort
-    //   capture before: … tracks_catalogue_active_track_id_idx + USE TEMP B-TREE FOR ORDER BY
-    //           after:  … (is_catalogue=? AND dismissed_at=? AND capture_priority>?), no sort
-    //
-    // BOTH depend on their lens ordering `DESC, DESC` so the read is one reverse walk of the ASC
-    // index. A mixed `DESC, ASC` tiebreak keeps a `TEMP B-TREE FOR LAST TERM` — that is exactly
-    // what the ear lens had, and its tiebreak was flipped to DESC alongside this index. If either
-    // lens's tiebreak direction is ever changed back, the sort returns and so does the wall.
-    //
-    // These build in 50–130s at ~110k rows (not the ~4s the earlier ones took) and the time is
-    // growing with the table, so treat a migration carrying them as a minutes-long step.
+
     index("tracks_catalogue_ear_idx").on(
       table.isCatalogue,
       table.dismissedAt,
@@ -1136,67 +227,9 @@ export const tracks = sqliteTable(
       table.capturePriority,
       table.trackId,
     ),
-    // THE VENDOR WORKLIST ORDER (backfill.ts — the Apple, Deezer and Beatport catalogue legs). Same
-    // shape as the lens index above minus `dismissed_at`, because these three do NOT filter on it:
-    // they pick "next N to enrich" straight off `is_catalogue = 1` ordered by capture priority.
-    //
-    // Without this they took `tracks_is_catalogue_idx` — which matches 99.9% of rows and therefore
-    // filters nothing — and then sorted the whole table in a temp B-tree to return 50. Measured on
-    // prod: `POST /api/v1/admin/backfill/apple-catalogue` at 147–179s and `…/deezer` at 90s.
-    //
-    // The tiebreak is `track_id DESC` for the reason the lens indexes already record: the whole
-    // `ORDER BY … DESC, … DESC` is ONE reverse walk of this ASC index and stops at LIMIT, while a
-    // mixed `DESC, ASC` cannot ride it and keeps `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`.
-    // Measured on prod, plan only, with this index present:
-    //
-    //   order by capture_priority desc, track_id       SEARCH … + TEMP B-TREE FOR LAST TERM
-    //   order by capture_priority desc, track_id desc  SEARCH … , no sort at all
-    //
-    // The direction only orders rows of EQUAL priority and these worklists take a bare `limit` with
-    // no offset and no keyset cursor, so nothing depends on it — but if a tiebreak is ever flipped
-    // back to ASC, the sort returns and so does the wall.
+
     index("tracks_vendor_worklist_idx").on(table.isCatalogue, table.capturePriority, table.trackId),
-    // THE FUNNEL STAGE SCAN, COVERED (docs/db-scale-backlog Wave 2 #7). `/admin/funnel`'s
-    // folded pass (`runFoldedFunnelScan`) is one conditional aggregate over the WHOLE catalogue —
-    // twelve `SUM(CASE)` arms, no WHERE to seek on — so it is a full scan by construction and the
-    // only lever left is HOW MANY BYTES the scan touches. Every column those arms read is here, in
-    // one index, so the planner reads `SCAN tracks USING COVERING INDEX` and never fetches a table
-    // row. On a 54,860-row clone of production, it reads a 5 MB index instead of a 125 MB table:
-    // 12.6-19.9s cold, 1.70s first-touch, 0.30s after. Re-measure with
-    // `apps/web/scripts/bench-db-scale.ts` if the scale changes; all twelve counts are identical by
-    // construction, being the same predicates read off the two
-    // mirrors. Without this the scan drags every 4 KB vector's overflow pages to reach the post-blob
-    // columns (see `has_embedding`).
-    //
-    // WHY IT LEADS WITH `is_catalogue`, AND WHY THAT IS LOAD-BEARING: a leading `is_catalogue`
-    // makes this index both seekable and covering for the per-stage catalogue reads, which is what
-    // lets the planner PREFER it. Measured: with `is_catalogue` demoted to a partial `where` clause
-    // instead, the planner picked the narrower `tracks_is_catalogue_idx` seek and fell back to table
-    // rows — losing the whole win. Do not reorder the leading column.
-    //
-    // The column order after that is the arms' own reading order and carries no seek duty. `isrc`
-    // and `source_audio_key` are the two widest entries and are most of the index's 5 MB; they are
-    // here because the anchor-split and capture arms test their null-ness and a
-    // plain btree cannot store the test without the value. PLAIN ASC throughout (a `desc()` index
-    // would poison the drizzle snapshot into rebuilding every index on the next migration — the
-    // ratified trap), and a plain btree, never the vector `libsql_vector_idx` that wedges hosted
-    // Turso. NOT partial: the `certified` arm counts `is_catalogue = 0`, so both values are read.
-    //
-    // COVERAGE IS ALL-OR-NOTHING, so this list is a CONTRACT with `kindClause("anchor")` and
-    // `REC_ELIGIBLE_WHERE`: one column those fragments read that is missing here, and the planner
-    // abandons the index for the whole statement — same numbers, the full 9.5s cold scan back. The
-    // last two entries are exactly that lesson: `spotify_anchor_attempts` and `artists_json` are the
-    // anchor clause's unanchorable-credits filter (`coalesce(attempts,0) < N`,
-    // `lower(artists_json) not in (…)`), added because the clause grew them after the covering shape
-    // was first proven. `artists_json` looks alarming in an index and is not — it averages 16 bytes
-    // on prod (max 195, under 1 MB across the table), and `lower()` computes fine off the indexed
-    // value. `label_id` is the same lesson once more: the anchor clause grew the ruled-out-label veto
-    // (track-work.ts `ANCHOR_RULED_OUT_LABEL_CLAUSE`, which excludes a row whose label the operator
-    // ruled out from the metered anchor queue), and without the pointer here the planner dropped the
-    // whole statement back to `SCAN t`. The veto's subquery is deliberately UNCORRELATED so it
-    // materialises once per arm instead of seeking `labels` per row — see that clause's own note.
-    // The funnel integration test EXPLAINs the real statement and fails on any regression, so
-    // the contract is enforced rather than remembered.
+
     index("tracks_funnel_scan_idx").on(
       table.isCatalogue,
       table.hasEmbedding,
@@ -1213,294 +246,75 @@ export const tracks = sqliteTable(
       table.artistsJson,
       table.labelId,
     ),
-    // Entity-scoped freshness reads retain the narrow release-date tree: their artist/label join
-    // drivers otherwise spill the final order to a temporary btree and exceed the hosted 2x
-    // contract. The projected `/tracks` anchor document separately needs the exact strict
-    // `(release_date, track_id)` suffix below. Both are load-bearing despite the prefix overlap.
+
     index("tracks_release_date_idx").on(table.releaseDate),
     index("tracks_release_date_track_id_idx").on(table.releaseDate, table.trackId),
-    // The `/tracks` hub's BPM-range filter (`bpm >= ? and bpm <= ?`) over the whole-archive
-    // browse list. A plain ASC btree — SQLite reverse-scans it, and a `desc()` index would poison
-    // the drizzle snapshot into rebuilding every index on the next migration (the ratified trap).
-    // The hub's primary sort still rides `tracks_release_date_track_id_idx`; this index earns its
-    // keep for a narrow BPM range the planner can seek rather than filtering every scanned row.
-    // Builds like the `tracks_key_idx` btree beside it (never the vector `libsql_vector_idx` that
-    // wedges hosted Turso).
+
     index("tracks_bpm_idx").on(table.bpm),
     index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),
-    // THE CAPTURE-MISMATCH ATTENTION READ (attention.ts `listCaptureSuspectRows`, docs/the-ear.md
-    // § Wrong audio). The /admin attention queue's suspect list is `capture_verification =
-    // 'mismatch'` ordered `capture_verified_at ASC` — over a table designed to grow to five figures,
-    // an unindexed filter on `capture_verification` is the full scan of a growing table AGENTS.md
-    // forbids (measured ~5s p95 in prod). A COMPOSITE btree seeks it: the leading column turns the
-    // `= 'mismatch'` filter into a range seek, and the trailing column serves the `ORDER BY
-    // capture_verified_at ASC` from the index instead of a sort (`track_id` is the PK tiebreaker, so
-    // it need not be in the index). It also serves the backfill worklist's `capture_verification is
-    // null` seek (catalogue.ts `listUnverifiedCaptures`) off the same leading column. PLAIN ASC
-    // columns — a `desc()` index would poison the drizzle snapshot into rebuilding every index on the
-    // next migration (the ratified trap) — and a plain btree, never the vector `libsql_vector_idx`
-    // that wedges hosted Turso, so it builds like `tracks_key_idx` beside it.
+
     index("tracks_capture_verification_verified_at_idx").on(
       table.captureVerification,
       table.captureVerifiedAt,
     ),
-    // The crawler's idempotence check — "do we already hold this ISRC?" — before minting a
-    // row. A predicate on `tracks.isrc` over a table designed to grow to five figures, so
-    // it is indexed. NOT unique: an ISRC is not guaranteed distinct across the archive's
-    // history, and a unique index would turn a vendor's duplicate ISRC into a failed
-    // migration; the crawler dedupes by READING this index, never by trusting a constraint.
+
     index("tracks_isrc_idx").on(table.isrc),
-    // The Spotify-anchor GAUGE index, and a PARTIAL index because the queue is DERIVED rather
-    // than bookkept: "which catalogue rows have an ISRC but no Spotify id yet" is the ISRC-bearing
-    // slice `get_crawl_status` reports as `anchorsPending`. The partial predicate keeps this index
-    // tiny and — the nice part — SHRINKING as the anchors fill, instead of growing with the table.
-    // (The anchor WORKLIST the box drains is wider — every un-anchored catalogue row — and rides
-    // `tracks_anchor_order_idx` below; see track-work.ts `kind: "anchor"`.)
+
     index("tracks_anchor_queue_idx")
       .on(table.isrc)
       .where(sql`${table.spotifyUri} is null and ${table.isrc} is not null`),
-    // The MusicBrainz-recording-MBID fill queue — "no `mb_recording_id` yet, and not yet
-    // attempted" (recording-mbids.ts, `backfill_recording_mbids`). PARTIAL for the anchor
-    // queue's reason: the worklist is DERIVED, and this predicate matches a SHRINKING slice of a
-    // growing table (a row leaves the moment it is filled OR its ISRC resolve is stamped a miss),
-    // so the index shrinks as the backlog drains rather than growing with the catalogue. It backs
-    // BOTH the op's reads: the bounded `mb_` prefix-strip (history's crawler rows) and the
-    // ISRC→recording API drain (findings/Spotify-born rows), both ordered by `track_id`.
+
     index("tracks_mb_recording_id_queue_idx")
       .on(table.trackId)
       .where(sql`${table.mbRecordingId} is null and ${table.mbRecordingIdAttemptedAt} is null`),
-    // The MBID VALUE index — "which row IS this MusicBrainz recording?" (RFC dnb-identity-graph,
-    // Unit 2: `get_track`'s `?mbid=` key). The partial queue index above cannot answer it: its
-    // predicate is `mb_recording_id is null`, so it indexes precisely the rows that have no MBID.
-    // Without this, an MBID lookup is a full scan of a table where every embedded row drags a 4 KB
-    // vector blob off the page — the ratified post-blob overflow trap.
-    //
-    // NOT unique and not partial, on purpose. Not unique: MBID is not deduped across birth paths (a
-    // crawler row and a Spotify-born finding can name the same recording), and a unique index would
-    // turn that into a failed migration rather than the `relation: "ambiguous"` the envelope is
-    // built to say. Not partial: this one is a VALUE lookup over the filled slice, which GROWS with
-    // the catalogue — the shrinking-slice logic that justifies the partial queue indexes above
-    // argues the other way here.
-    //
-    // COST OF THE BUILD: 104s at 66,096 rows, because
-    // `mb_recording_id` sits post-blob and the build drags every row's overflow pages. It runs in
-    // the Cloudflare deploy's migrate step and holds the single writer for that window — reads
-    // proceed under WAL and the box sweeps retry, but the merge belongs at a quiet hour.
+
     index("tracks_mb_recording_id_idx").on(table.mbRecordingId),
-    // The DISCOGS-RESOLVED slice — the only rows the `backfill_discogs_facts` worklist can start
-    // from (a track with no `in_release_id` has no release to re-read). PARTIAL for the
-    // `tracks_artist_edges_backfill_queue_idx` reason, and here the ratio is extreme: a resolved
-    // release id exists on the low hundreds of rows the Discogs sweep has confidently matched,
-    // against a `tracks` table in the tens of thousands. Without it the worklist is a full scan of
-    // a growing table on every tick — precisely the shape AGENTS.md forbids; with it, the pass
-    // walks only the rows that could possibly qualify and joins `albums` by primary key.
+
     index("tracks_discogs_release_idx")
       .on(table.inReleaseId)
       .where(sql`${table.inReleaseId} is not null`),
-    // THE PLATFORM-URL VALUE INDEXES — "which row IS this Spotify link / this Deezer link?"
-    // (`get_track`'s `?spotify=` / `?deezer=` keys, and the same two keys on `/identity`). Exactly
-    // the `tracks_mb_recording_id_idx` case above, one identifier over: a VALUE lookup over the
-    // filled slice, which GROWS with the catalogue, so a plain non-unique btree rather than one of
-    // the partial `is null` queue indexes.
-    //
-    // WHY THEY ARE NOT OPTIONAL, measured in this worktree with `explain query plan` over the
-    // migrated schema: `where spotify_uri = ?` and `where deezer_track_id = ?` both planned as
-    // `SCAN tracks` before these existed, and `where track_id = ? or spotify_uri = ?` degraded the
-    // WHOLE statement to a scan because one arm was unindexed. A scan of `tracks` drags every
-    // embedded row's 4 KB vector blob off the page — the ratified post-blob overflow trap — on a
-    // public, metered read whose common case is a MISS (a refugee pasting a link the archive does
-    // not hold). With them, the same statements plan `SEARCH … USING INDEX` and the Spotify OR
-    // plans `MULTI-INDEX OR` across the primary key and `tracks_spotify_uri_idx`.
-    //
-    // NOT unique, for `tracks_mb_recording_id_idx`'s reason: neither id is deduped across birth
-    // paths, and a unique index would turn a real collision into a failed migration rather than the
-    // `relation: "ambiguous"` the identity envelope exists to say out loud.
-    //
-    // COST OF THE BUILD: both columns sit post-blob, so each build drags every row's overflow pages
-    // exactly as `tracks_mb_recording_id_idx` did (measured 104s at 66,096 rows, hosted). They run
-    // in the Cloudflare deploy's migrate step and hold the single writer for that window — reads
-    // proceed under WAL and the box sweeps retry, but the merge belongs at a quiet hour.
+
     index("tracks_spotify_uri_idx").on(table.spotifyUri),
     index("tracks_deezer_track_id_idx").on(table.deezerTrackId),
-    // The track_artists graph-backfill queue — "not yet attempted by the name-fold backfill"
-    // (backfill-artist-edges.ts, `backfill_artist_edges`, RFC artist-primary-capture slice 0).
-    // PARTIAL for the `tracks_mb_recording_id_queue_idx` reason: the worklist is DERIVED and this
-    // predicate matches a SHRINKING slice of a growing table (a row leaves the moment it is
-    // stamped), so the index shrinks as the backlog drains rather than growing with the catalogue.
-    // The worklist's second leg — "no `track_artists` edge yet" — is an anti-join that rides
-    // `track_artists_track_id_idx`, so this index carries only the ordered `track_id` candidate walk
-    // the stamp gates.
+
     index("tracks_artist_edges_backfill_queue_idx")
       .on(table.trackId)
       .where(sql`${table.artistEdgesBackfilledAt} is null`),
-    // The MB CREDIT-SWEEP queue — "slice 0 attempted it, this sweep has not" (backfill-artist-
-    // credits.ts, `backfill_artist_credits`, RFC artist-primary-capture slice 1b). PARTIAL for the
-    // `tracks_artist_edges_backfill_queue_idx` reason: the worklist is DERIVED and this predicate
-    // matches a SHRINKING slice of a growing table (a row leaves the moment this sweep stamps it).
-    // Both conditions ARE the worklist's non-join gates, so the index precisely fronts the candidate
-    // walk: `artist_edges_backfilled_at is not null` (slice 0 has ruled) keeps out the ~12k rows
-    // minted WITH edges (publish/crawler) that slice 0 never visited, and `artist_credits_backfilled_at
-    // is null` is the drain gate. The worklist's third leg — "no `track_artists` edge yet" (the
-    // zero-matched residual) — is an anti-join riding `track_artists_track_id_idx`, so this index
-    // carries only the ordered `track_id` candidate walk the two stamps gate.
+
     index("tracks_artist_credits_backfill_queue_idx")
       .on(table.trackId)
       .where(
         sql`${table.artistCreditsBackfilledAt} is null and ${table.artistEdgesBackfilledAt} is not null`,
       ),
-    // The MuQ EMBED queue — "audio on file, no vector yet" (track-work.ts, `kind: "embed"`).
-    // PARTIAL, for the same reason the anchor queue is: the worklist is DERIVED, and the
-    // predicate matches a shrinking slice of a growing table, so the index shrinks as the
-    // backlog drains instead of growing with the archive.
-    //
-    // It earns its keep twice. The predicate is what makes `countTrackWork` affordable — the
-    // honest "how many are still queued" the batch reports is an index count, not a scan of the
-    // growing archive — and it is paid on every 5-minute box tick and on every page of the GPU
-    // batch, so the difference between reading the backlog and reading the table is the whole
-    // cost of the sweep.
-    //
-    // IT READS THE MIRROR, NOT THE SATELLITE, and that is forced rather than chosen: the vector
-    // now lives in `track_embeddings`, and SQLite only considers a partial index when the
-    // query's WHERE provably IMPLIES its predicate — which an `exists (select 1 from
-    // track_embeddings …)` anti-join can never do across a table boundary. So the queue's
-    // predicate and this index are both spelled `has_embedding = 0` (track-work.ts
-    // `kindClause("embed")` and `listTracks`'s `hasEmbedding` filter carry it literally); if
-    // either is reworded past recognition the planner silently drops back to the scan.
+
     index("tracks_embed_queue_idx")
       .on(table.trackId)
       .where(sql`${table.sourceAudioKey} is not null and ${table.hasEmbedding} = 0`),
-    // THE ANCHOR WORKLIST'S DRAIN ORDER (docs/db-scale-backlog Wave 2 #4; the box's hourly Apify
-    // sweep, docs/catalogue-crawler.md § the anchor). The queue above indexes the worklist's
-    // SECOND sort key; this one indexes the whole ORDER BY, in order, so the sweep's page is an
-    // index walk that stops at LIMIT instead of a materialise-and-sort of the entire un-anchored
-    // catalogue (the bulk of it, growing toward 150k, shrinking only as metered anchoring catches
-    // up).
-    //
-    // PARTIAL on `spotify_uri is null`, and that predicate is a CONTRACT with
-    // `kindClause("anchor")` (track-work.ts), which carries the identical clause literally: SQLite
-    // only considers a partial index when the query's WHERE provably implies its predicate, so if
-    // that clause is ever reworded past recognition the planner silently drops back to the scan.
-    // The worklist's other gates (`duration_ms > 0`, `dismissed_at is null`, the re-ask backoff,
-    // the retry cap, the unanchorable credits) stay residual filters on the page the walk hands
-    // back — same class as on the queue above.
-    //
-    // WHY `has_isrc` LEADS: anchorability before sunk cost. Every offer this queue makes is a
-    // billed Apify search, and in practice a search concludes almost exclusively through the
-    // exact-ISRC rung — so an ISRC-less row served first is money spent on an ask that cannot
-    // conclude while an answerable row waits. `has_embedding` follows as the sunk-cost key ("a row
-    // Fluncle already spent capture + embed money on is the one he most wants recommendable"),
-    // then the Ear's ranking. Both leads are stored mirrors, not the raw facts they stand for (a
-    // `track_embeddings` row exists / `isrc is not null and trim(isrc) <> ''`): a btree cannot key
-    // on an expression or on another table, and the planner never chooses an index on one. Each
-    // mirror is maintained in the same write BATCH as every write of what it mirrors (see
-    // `has_embedding` / `has_isrc` above), so this index is walking the truth, not a copy of it.
-    //
-    // PLAIN ASC throughout (a `desc()` index would poison the drizzle snapshot into rebuilding
-    // every index on the next migration — the ratified trap), and a plain btree, never the vector
-    // `libsql_vector_idx` that wedges hosted Turso. The query's `desc, desc, desc, desc` reads it
-    // as ONE REVERSE WALK — which is exactly why `track_id` is here as the last column AND why the
-    // query's tiebreak is `desc` rather than `asc`: a mixed `desc, …, asc` cannot ride the
-    // composite and forces a temp B-tree over the whole un-anchored set. Same law as
-    // `tracks_capture_priority_track_id_idx` below.
+
     index("tracks_anchor_order_idx")
       .on(table.hasIsrc, table.hasEmbedding, table.nearestFindingScore, table.trackId)
       .where(sql`${table.spotifyUri} is null`),
-    // THE ANCHOR-REVIEW READ (the /admin attention queue's `anchor-review` source, anchor.ts
-    // `listAnchorReviewRows`). PARTIAL for the anchor-fill queue's reason and then some: a
-    // suspected version mismatch is RARE (a small, operator-drained slice of a growing table), so
-    // this index holds almost nothing and shrinks as he rules. It matters because the read runs on
-    // every `/admin` load and every `fluncle admin queue` tick, against the one table that carries
-    // a 4 KB `F32_BLOB(1024)` per embedded row — an unindexed `anchor_review_json is not null`
-    // filter is the blob-dragging full scan of a growing table AGENTS.md forbids. Indexed on
-    // `track_id` (the read's ordering + the identity it hands back) under the presence predicate,
-    // so the queue walks the reviews and never the catalogue. Plain ASC (a `desc()` index would
-    // poison the drizzle snapshot into rebuilding every index on the next migration — the ratified
-    // trap) and a plain btree, never the vector `libsql_vector_idx` that wedges hosted Turso.
+
     index("tracks_anchor_review_idx")
       .on(table.trackId)
       .where(sql`${table.anchorReviewJson} is not null`),
-    // THE OPERATOR'S DISMISSALS — "not for me" (docs/the-ear.md § The operator's actions).
-    // PARTIAL, exactly like the anchor + embed queues above: dismissals are rare (an operator
-    // act, never a machine one), so the index holds a tiny, near-static slice of a growing
-    // table. It serves the "Dismissed" restore listing (a seek to the dismissed rows, ordered
-    // by when) and backs the `dismissed_at is null` exclusion the ranking + capture reads apply.
+
     index("tracks_dismissed_idx")
       .on(table.dismissedAt)
       .where(sql`${table.dismissedAt} is not null`),
-    // THE DEMAND CLEAR (docs/catalogue-crawler.md § Demand). `record_demand` re-writes the demand
-    // columns clear-then-set every night, and the clear is `where demand_score is not null`. At
-    // catalogue scale only a few hundred rows are ever scored, so this partial index makes the
-    // nightly clear (and the `tracksScored` recount) a seek to exactly those rows rather than a
-    // scan of the growing `tracks` table — the `tracks_dismissed_idx` shape.
+
     index("tracks_demand_score_idx")
       .on(table.demandScore)
       .where(sql`${table.demandScore} is not null`),
-    // The MIXABILITY pre-filter, and the one index `/mix` cannot be public without.
-    //
-    // The key is MANDATORY to be rankable (`scoreMix`'s floor: a pair whose key we do not
-    // know is a pair we cannot justify), so a keyed row is exactly a mixable row — which
-    // makes this the ratified "btree pre-filter ahead of an exact vector scan" shape from
-    // docs/local-database.md, not a nice-to-have. It carries two reads:
-    //
-    //   - The candidate scan (`getMixableTracks`). The rail only ever wants the ~8 Camelot
-    //     classes a named harmonic move can reach, so the scan is `key in (…)` — an index
-    //     range, roughly a third of the archive, instead of a full scan of a table designed
-    //     to grow to five figures and beyond.
-    //   - The key histogram (`getMixChainDepth`). A `group by key` over 24-ish distinct
-    //     values, which this index answers WITHOUT touching the table at all.
-    //
-    // Both run on a public page load once the depth gate opens, over a table designed to
-    // grow to five figures and beyond. Unindexed, `/mix` is a full archive scan per
-    // keystroke of a chain.
+
     index("tracks_key_idx").on(table.key),
-    // The /admin/catalogue CAPTURE LENS: the pre-audio queue reads `where nearest_finding_score
-    // is null and capture_priority is not null … order by capture_priority desc, track_id asc`
-    // (docs/the-ear.md — "the order IS the metered capture budget"). Unindexed, that is a full
-    // scan of the crawler-swollen tracks table into a temp B-tree sort every page load. A PARTIAL
-    // index over exactly the un-scored, capture-eligible slice: the partial predicate keeps the
-    // index OFF the scored half (the growing certified/ranked body) so it bounds write
-    // amplification on the exploding table, and it stays small. Composite `(capture_priority,
-    // track_id)` so both sort keys ride one index. Plain ASC — SQLite reverse-scans it for the
-    // `desc, asc` order (a `desc()` index would poison the drizzle snapshot, the ratified trap);
-    // a follow-up flips the query's tiebreak to `track_id desc` so one reverse walk serves the
-    // whole ORDER BY.
+
     index("tracks_capture_priority_track_id_idx")
       .on(table.capturePriority, table.trackId)
       .where(sql`${table.capturePriority} is not null`),
   ],
 );
 
-/**
- * THE VECTOR SATELLITE — one row per track that carries a MuQ audio embedding, and the SOLE
- * stored form of that vector. `vector_distance_cos(track_embeddings.embedding_blob, ?)` is what
- * every similarity read ranks (`list_similar_tracks`, the `/mix` rail, the sonic search tier,
- * `/recommendations`, a galaxy's core-first order, The Ear's near-duplicate scan, the
- * `fluncle-cluster` corpus read) — IN SQL, shipping back only the winners, never the vectors.
- * The agent-tier `update_track` path writes it through `vector32(?)` (the validated JSON
- * converted server-side; the Worker never encodes a vector). Internal analysis fuel like
- * `features_json`, so writing it moves no public lastmod. ABSENT until the `fluncle-embed` cron
- * drains the `has_embedding = 0` queue. lib/server/embedding.ts holds the read contract
- * (`readEmbeddingBlob`), the raw-blob probe binding, and the only statements that write here.
- *
- * WHY IT IS NOT A `tracks` COLUMN ANY MORE. It was one, and the column is what made `tracks`
- * expensive to be wrong about. A 4 KB `F32_BLOB(1024)` inline in a 116,989-row / 91-column /
- * 31-index table is ~169 MB — a quarter of the whole database — sitting on OVERFLOW PAGES that
- * SQLite must walk to reach any column stored after it. Hosted Turso cannot run `ANALYZE`
- * (libsql-server rejects it as an unsupported statement), so `sqlite_stat1` does not exist and
- * the planner picks among those 31 indexes by heuristic, permanently. We cannot make it guess
- * better, so the lever is making a wrong guess CHEAP: with the vector out of the record, a
- * mistaken scan of `tracks` drags no blob and fits far more rows per 4 KB page. The urgency is
- * the crawler — `crawl_frontier` holds ~208k pending rows against ~117k in `tracks`, and
- * scan-and-sort shapes degrade superlinearly.
- *
- * A SATELLITE, NOT A SECOND SOURCE OF TRUTH. `tracks.has_embedding` mirrors the EXISTENCE of a
- * row here and is what every presence predicate reads (see its note above for why a partial
- * index cannot be matched against a cross-table `exists`). The pair moves in one libSQL write
- * batch, so it cannot drift; `embedding-mirror.test.ts` fails the build on a write from outside
- * embedding.ts. `on delete cascade` is the one place this schema takes a real foreign key rather
- * than the house's logical one: an orphan vector is not merely untidy, it is a vector the
- * ranking can still reach for a track that no longer exists.
- */
 export const trackEmbeddings = sqliteTable("track_embeddings", {
   embeddingBlob: float32Vector("embedding_blob").notNull(),
   trackId: text("track_id")
@@ -1508,16 +322,6 @@ export const trackEmbeddings = sqliteTable("track_embeddings", {
     .references(() => tracks.trackId, { onDelete: "cascade" }),
 });
 
-/**
- * The maintained identity projection used by catalogue-sibling duplicate detection.
- *
- * `match_key` is deliberately materialized here rather than recomputed in SQL: its exact fold is
- * the shared TypeScript `matchKey()` function, and a second SQL spelling would eventually drift.
- * The rank sweep joins these tiny keys back to `tracks` for live capture/vector/dismissal state, so
- * none of that mutable state is duplicated here. One row per track makes inserts and identity
- * repairs local writes; the two composite indexes make a rank tick seek only the keys carried by
- * its bounded candidate batch.
- */
 export const trackDuplicateKeys = sqliteTable(
   "track_duplicate_keys",
   {
@@ -1533,21 +337,6 @@ export const trackDuplicateKeys = sqliteTable(
   ],
 );
 
-/**
- * The single maintained backlog projection for recurring database work.
- *
- * A row exists only while one subject has work outstanding, so an empty check probes this backlog
- * rather than the growing source table. `sort_key` is a pre-normalized binary-order key: every
- * queue maps its existing multi-column order onto one ascending value, which lets the shared ready
- * index preserve each queue's exact priority without a temporary sort. Future retry windows stay
- * `scheduled` until an indexed due-time promotion makes them `ready`; a lease never removes the row,
- * so expiry can safely make the same unique subject claimable again.
- *
- * `repair` rows are transactionally coupled source-change markers. They live in this table rather
- * than a second backlog, keeping one durable resume query for both projection maintenance and work
- * claims. Reconciliation replaces a marker with the subject's complete derived work set in one
- * write transaction. Built-in CDC is deliberately not part of the contract.
- */
 export const dueWork = sqliteTable(
   "due_work",
   {
@@ -1575,8 +364,7 @@ export const dueWork = sqliteTable(
       "due_work_subject_type_check",
       sql`${table.subjectType} in ('track', 'artist', 'album', 'label')`,
     ),
-    // `sort_key` already encodes every DESC/NULLS FIRST term, so this stays plain ASC. A `.desc()`
-    // index would make drizzle-kit rebuild it on later snapshots and is unnecessary here.
+
     index("due_work_ready_idx")
       .on(table.workKind, table.state, table.sortKey, table.subjectId)
       .where(sql`${table.state} = 'ready'`),
@@ -1605,21 +393,12 @@ export const dueWork = sqliteTable(
   ],
 );
 
-/**
- * Durable per-queue checkpoints for the chunked source-of-truth rebuild.
- *
- * A generation is reused across retries until its final audit and stale-row prune commit together.
- * Zero, midpoint, and complete restarts therefore resume from the last committed source cursor;
- * starting a new generation is explicit rather than an accidental consequence of process restart.
- */
 export const dueWorkRebuilds = sqliteTable(
   "due_work_rebuilds",
   {
     completedAt: text("completed_at"),
     cursor: text("cursor"),
-    // The DEFINITION version this generation was projected under. A stored value that differs from
-    // the running code's means the projected `sort_key`s were computed by an older definition, so
-    // the next rebuild step restarts the generation (lib/server/due-work-definition-fingerprint.ts).
+
     definitionVersion: text("definition_version"),
     generation: text("generation").notNull(),
     projectedCount: integer("projected_count").notNull().default(0),
@@ -1640,13 +419,6 @@ export const dueWorkRebuilds = sqliteTable(
   ],
 );
 
-/**
- * Crawl-specific due state. The crawler has a two-lane claim law that the generic `due_work`
- * projection cannot express: reserve up to half the page for storable-first releases, then fill
- * the remainder from the whole frontier's breadth-first order. Keeping frontier nodes here avoids
- * widening `due_work.subject_type`, while the lease position makes a retried owner/token return the
- * exact same combined page.
- */
 export const crawlDueWork = sqliteTable(
   "crawl_due_work",
   {
@@ -1666,8 +438,7 @@ export const crawlDueWork = sqliteTable(
     repairEnteredAt: text("repair_entered_at"),
     sourceVersion: text("source_version").notNull(),
     state: text("state", { enum: ["ready", "scheduled", "leased", "repair"] }).notNull(),
-    // 0 sorts a release whose current provenance can store ahead of 1. Non-release rows carry NULL
-    // because storage priority is a release-lane heuristic, never an authorization decision.
+
     storableRank: integer("storable_rank"),
     updatedAt: text("updated_at").notNull(),
   },
@@ -1726,10 +497,6 @@ export const crawlDueWork = sqliteTable(
   ],
 );
 
-/**
- * Source fanout markers for crawl due-state repair. Keeping these separate preserves each affected
- * frontier node's ready or scheduled lifecycle while a bounded source-epoch walk fans out repairs.
- */
 export const crawlProjectionRepairs = sqliteTable(
   "crawl_projection_repairs",
   {
@@ -1755,13 +522,12 @@ export const crawlProjectionRepairs = sqliteTable(
   ],
 );
 
-/** One resumable generation/checkpoint for rebuilding crawl due state from `crawl_frontier`. */
 export const crawlDueWorkRebuilds = sqliteTable(
   "crawl_due_work_rebuilds",
   {
     completedAt: text("completed_at"),
     cursor: text("cursor"),
-    // See `due_work_rebuilds.definition_version`: the frontier family carries the same contract.
+
     definitionVersion: text("definition_version"),
     generation: text("generation").notNull(),
     projectedCount: integer("projected_count").notNull(),
@@ -1787,11 +553,6 @@ export const crawlDueWorkRebuilds = sqliteTable(
   ],
 );
 
-/**
- * Exact qualified-artist projection. Primary credits contribute two half-units and remixer credits
- * one, so the three-credit threshold stays integer-exact. The qualification bit is stored for its
- * sorted-ID partial index and constrained to agree with the two authoritative counters.
- */
 export const artistQualification = sqliteTable(
   "artist_qualification",
   {
@@ -1819,10 +580,6 @@ export const artistQualification = sqliteTable(
   ],
 );
 
-/**
- * Per-track artist contributions retained for exact repair deltas. A certified track contributes
- * one finding and an enabled primary/remixer credit contributes two/one half-units respectively.
- */
 export const artistQualificationContributions = sqliteTable(
   "artist_qualification_contributions",
   {
@@ -1848,11 +605,6 @@ export const artistQualificationContributions = sqliteTable(
   ],
 );
 
-/**
- * The clean-through epoch and resumable sorted-ID digest checkpoint for artist qualification.
- * Source writers advance `source_epoch`; readers may trust the projection only when no repair rows
- * remain and `projection_epoch = source_epoch`.
- */
 export const artistQualificationState = sqliteTable(
   "artist_qualification_state",
   {
@@ -1891,11 +643,6 @@ export const artistQualificationState = sqliteTable(
   ],
 );
 
-/**
- * Literal public counts only: every non-NULL `substr(release_date, 1, 4)` bucket (including empty
- * or malformed values) and every non-NULL key. Arbitrary filter combinations deliberately remain
- * outside this projection.
- */
 export const publicAggregateCounts = sqliteTable(
   "public_aggregate_counts",
   {
@@ -1922,7 +669,6 @@ export const publicAggregateCounts = sqliteTable(
   ],
 );
 
-/** Literal aggregate membership retained per track so repairs can apply exact old-to-new deltas. */
 export const publicAggregateMembership = sqliteTable(
   "public_aggregate_membership",
   {
@@ -1941,10 +687,6 @@ export const publicAggregateMembership = sqliteTable(
   ],
 );
 
-/**
- * Exact default-track total plus the monotonic epoch for `release_date DESC, track_id DESC`.
- * Rebuild state is colocated because both aggregate families are rebuilt in one track-ID walk.
- */
 export const publicAggregateState = sqliteTable(
   "public_aggregate_state",
   {
@@ -1985,7 +727,6 @@ export const publicAggregateState = sqliteTable(
   ],
 );
 
-/** Transactionally coupled source-change markers for the materialized public projections. */
 export const projectionRepairs = sqliteTable(
   "projection_repairs",
   {
@@ -2020,11 +761,6 @@ export const projectionRepairs = sqliteTable(
   ],
 );
 
-/**
- * Public-safe idempotency receipts for operations whose effect and terminal receipt will later be
- * committed atomically. Request bodies are represented only by their digest; accepted is the sole
- * in-progress state, and terminal rows carry one bounded identity plus canonical JSON.
- */
 export const operationReceipts = sqliteTable(
   "operation_receipts",
   {
@@ -2075,14 +811,6 @@ export const operationReceipts = sqliteTable(
   ],
 );
 
-/**
- * The two global background-work admission lanes.
- *
- * One row owns the monotone fencing sequence for either background writers or the explicitly
- * classified heavy reader. Active ownership itself lives on `database_admission_contenders`; the
- * lane row survives release and abandoned-owner recovery so a fencing token is never reused.
- * Rows are created only when the admission coordinator first serves a lane.
- */
 export const databaseAdmissionLanes = sqliteTable(
   "database_admission_lanes",
   {
@@ -2099,15 +827,6 @@ export const databaseAdmissionLanes = sqliteTable(
   ],
 );
 
-/**
- * The bounded, durable FIFO behind the global background-work lanes.
- *
- * Queue order is `(lane, enqueued_at_ms, contender_id)`. A granted contender remains in the same
- * row with a lease expiry and fencing token; release/cancellation removes it, so the table is
- * bounded by live and recoverable contenders rather than run history. Run history belongs in the
- * separate fleet ledger. The partial unique index is the final concurrency backstop: even if two
- * acquisition requests race, the database can hold at most one active row per lane.
- */
 export const databaseAdmissionContenders = sqliteTable(
   "database_admission_contenders",
   {
@@ -2165,11 +884,6 @@ export const databaseAdmissionContenders = sqliteTable(
   ],
 );
 
-/**
- * Append-only artifact/vector producer log. `AUTOINCREMENT` makes sequence values globally
- * monotonic without reuse; producer revisions make a retry idempotent; delete events are explicit
- * tombstones and therefore cannot carry a stale vector payload.
- */
 export const artifactChanges = sqliteTable(
   "artifact_changes",
   {
@@ -2207,12 +921,6 @@ export const artifactChanges = sqliteTable(
   ],
 );
 
-/**
- * Durable producer idempotency receipts. Compaction may remove an acknowledged event body, but a
- * producer that lost the original commit response must still recover the same sequence instead of
- * re-emitting that material revision. The digest proves immutable content without duplicating the
- * JSON or vector bytes retained in the bounded log.
- */
 export const artifactChangeRevisions = sqliteTable(
   "artifact_change_revisions",
   {
@@ -2244,11 +952,6 @@ export const artifactChangeRevisions = sqliteTable(
   ],
 );
 
-/**
- * Registered artifact-log consumers. Active rows always expose a non-NULL compaction barrier;
- * inactive rows retain no reusable snapshot or checkpoint, so reactivation structurally begins as
- * a new rebuild instead of resuming after events may have been compacted.
- */
 export const artifactChangeConsumers = sqliteTable(
   "artifact_change_consumers",
   {
@@ -2275,7 +978,6 @@ export const artifactChangeConsumers = sqliteTable(
   ],
 );
 
-/** Structured declaration of every stream/format contract a registered consumer supports. */
 export const artifactChangeConsumerContracts = sqliteTable(
   "artifact_change_consumer_contracts",
   {
@@ -2298,7 +1000,6 @@ export const artifactChangeConsumerContracts = sqliteTable(
   ],
 );
 
-/** Per-consumer, per-stream resumable source rebuild and deterministic drift-audit checkpoints. */
 export const artifactChangeCheckpoints = sqliteTable(
   "artifact_change_checkpoints",
   {
@@ -2339,64 +1040,13 @@ export const artifactChangeCheckpoints = sqliteTable(
   ],
 );
 
-/**
- * THE CERTIFICATION LAYER — present ONLY for a track Fluncle certified.
- *
- * The SUBTYPE half of the pair: 1:1 with `tracks`, sharing its primary key
- * (`track_id`), and carrying everything that means "Fluncle logged this" — the Log ID
- * coordinate, the editorial note, the video, the spoken observation, the found date, the
- * enrichment/publish state, and the per-source backfill bookkeeping. A row here IS the
- * finding; a `tracks` row with no `findings` row is a catalogue track Fluncle has not
- * certified.
- *
- * WHY IT IS ITS OWN TABLE. A track is a track; certification is a RELATIONSHIP Fluncle
- * has with it. Keeping `log_id` here — and nowhere else — means every query that wants a
- * coordinate has to join, so it structurally cannot mistake a raw catalogue track for a
- * certified finding. That is the whole point of the split, and it is why nothing here may
- * be denormalised back onto `tracks`.
- *
- * `log_id` is NULLABLE (not the PK): a certified straggler can exist for a moment before
- * its coordinate is minted (the one-time `logId: "auto"` backfill in track-update.ts), and
- * a `/log` surface skips a coordinate-less finding. So "is a finding" = a `findings` row;
- * "has a coordinate" = `findings.log_id IS NOT NULL` — the same two-step every surface
- * already performed, now honest about it.
- *
- * `track_id` is the PK and a logical foreign key to `tracks.track_id`, declared without a
- * SQL FK constraint — matching every other relation in this schema (`social_posts`,
- * `mixtape_tracks`, `tracks.galaxy_id`, `mixtape_clips.recording_id` … "this schema
- * declares none"). See docs/track-lifecycle.md.
- */
 export const findings = sqliteTable(
   "findings",
   {
-    // The FOUND date — when Fluncle certified this track. The feed's sort key and the
-    // sitemap's lastmod floor. It belongs to the certification, not the recording: a
-    // catalogue track has a release date (on `tracks`), never a found date.
     addedAt: text("added_at").notNull(),
     addedToSpotify: integer("added_to_spotify", { mode: "boolean" }).notNull().default(false),
     addedToSpotifyAt: text("added_to_spotify_at"),
-    // Per-finding backfill reliability state for the two Worker-paced catalogue
-    // sweeps (Discogs release-id resolve, Last.fm love), one column-set per source.
-    // The sweeps are best-effort side-channels over already-published findings; this
-    // state makes them RESUMABLE and keeps them from re-storming a vendor API:
-    //   - *AttemptedAt — ISO of the last attempt; the sweep skips a finding tried
-    //     within a cooldown window (the window grows with the failure count, so a
-    //     repeatedly-failing finding backs off instead of being retried every tick).
-    //   - *Attempts    — total attempts (diagnostic / unbounded-retry guard).
-    //   - *Failures    — CONSECUTIVE failures (reset to 0 on success); drives the
-    //     exponential backoff window. A done/resolved finding has 0.
-    //   - *DoneAt      — ISO when the source completed for this finding (Discogs:
-    //     ids written; Last.fm: loved). Set ⇒ the sweep skips it forever (idempotent
-    //     no-op). Null until done. All four are null on rows that predate the column.
-    // The Discogs sweep's OUTPUT (`in_release_id`/`in_master_id`) is catalogue identity
-    // and lives on `tracks`; only the per-finding sweep BOOKKEEPING lives here.
-    //
-    // The Apple Music sweep once kept the same per-source bookkeeping here, but its four
-    // `backfill_apple_music_*` columns MOVED to `tracks` (RFC musickit U1) — `apple_music_url`
-    // is catalogue identity and the sweep now drains catalogue rows that have no `findings`
-    // row, so the bookkeeping had to live where the output does. The one-time carry of the old
-    // findings state has run in production; the vestigial columns were dropped here. See the
-    // `backfill_apple_music_*` block on `tracks`.
+
     backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
     backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
     backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
@@ -2405,376 +1055,166 @@ export const findings = sqliteTable(
     backfillLastfmAttempts: integer("backfill_lastfm_attempts").notNull().default(0),
     backfillLastfmDoneAt: text("backfill_lastfm_done_at"),
     backfillLastfmFailures: integer("backfill_lastfm_failures").notNull().default(0),
-    // The auto-note authoring "ran" stamp (the written-note sibling of the observation
-    // pipeline). Unlike Discogs/Last.fm this is NOT a vendor sweep — `note_track`
-    // (agent tier) stamps `backfill_note_attempted_at` on EVERY authoring attempt and
-    // `backfill_note_done_at` only when an empty `note` was actually FILLED. It reuses
-    // the same backfill_* column convention purely so the admin board's "done-when-ran"
-    // semantics and ran-flag read (observation-board.ts) work for the Note cell exactly
-    // like Discogs/Last.fm: grey/`open` = never run, `done` = the workflow ran (a note
-    // exists). The operator override always wins — the handler fills an EMPTY note only,
-    // never clobbering an operator-written one, so a hand-written note can carry no
-    // attempt stamp and still read `done` off the `note` column itself.
+
     backfillNoteAttemptedAt: text("backfill_note_attempted_at"),
     backfillNoteAttempts: integer("backfill_note_attempts").notNull().default(0),
     backfillNoteDoneAt: text("backfill_note_done_at"),
     backfillNoteFailures: integer("backfill_note_failures").notNull().default(0),
-    // Firecrawl-derived FACTUAL context about the track (label/year/release
-    // context/artist background), gathered during the observe step as CREATIVE
-    // FUEL for the observation script and the video agent. Internal only: never
-    // rendered on /log, never in JSON-LD/RSS/llms.txt, never quotes lyrics. This
-    // is NOT the editorial `note` (the operator's public "why").
+
     contextNote: text("context_note"),
-    // PROVENANCE — the `context_distil` prompt version this note was distilled under
-    // (docs/agents/prompt-registry.md). NULL means the prompt was not resolved from the
-    // registry at all: either the row predates the registry, or the resolve fell back to
-    // the module's baked-in default. A number is the `prompt_versions.version` that was
-    // live at authoring time; `0` is the registry default (no operator override on file).
-    // Without this column "the context notes got worse last week" is unanswerable.
+
     contextPromptVersion: integer("context_prompt_version"),
-    // The context-fetch reliability marker (mirrors the backfill_* state above). The
-    // `context_track` queue picks `pending` rows (never-attempted); this column lets a
-    // CONFIRMED-EMPTY fetch (`empty`) be distinct from never-attempted, so the cron does
-    // not re-burn Firecrawl + the distil LLM on a hopeless find every tick. States:
-    //   - pending  — never attempted (the default; the queue's pick set).
-    //   - resolved — a distilled (or cleaned-raw fallback) note was stored.
-    //   - empty    — the fetch returned nothing usable; intentionally left blank. The
-    //                queue skips it unless `--retry-empty` widens the pick set.
-    //   - failed   — the attempt threw (vendor down); eligible for a later retry.
-    // Internal only — never surfaced through public DTOs. Rows that predate the column
-    // read NULL and are treated as `pending`.
+
     contextStatus: text("context_status", {
       enum: ["pending", "resolved", "empty", "failed"],
     }),
     enrichmentStatus: text("enrichment_status").notNull().default("pending"),
-    // The sonic galaxy this finding belongs to — a nullable logical FK to `galaxies.id`,
-    // the internal-grouping precedent of the MuQ vector. Hard assignment (one galaxy
-    // per finding), written by the on-box `fluncle-cluster` cron via the agent-tier
-    // `update_track` path (assignment-only nightly step). Internal like the embedding, so
-    // writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`); it surfaces on
-    // the public DTO only once the galaxy is operator-NAMED. NULL until the finding is
-    // embedded AND assigned. Member counts are derived, never stored. A galaxy is a
-    // property of the CERTIFIED archive (the browse-by-feel map is a map of findings), so
-    // it sits here even though the vector it is derived from lives on `tracks`.
-    // See docs/agents/cluster-engine.md + docs/track-lifecycle.md.
+
     galaxyId: text("galaxy_id"),
-    // THE COORDINATE — the permanent Galaxy waypoint (`fluncle://<id>`), and the reason
-    // this table exists. It lives HERE and nowhere else, so a query cannot reach a Log ID
-    // without joining through the certification. NULL only for a straggler awaiting its
-    // one-time backfill.
+
     logId: text("log_id").unique(),
     note: text("note"),
-    // PROVENANCE — the `note_author` prompt version this editorial note was drafted
-    // under. Same contract as `context_prompt_version` above. An OPERATOR-typed note
-    // leaves it NULL (no prompt produced it), which is itself the honest reading.
+
     notePromptVersion: integer("note_prompt_version"),
-    // Word-level caption timings for the spoken observation, as a JSON string
-    // (`{ source, words: [{ text, startMs, endMs }] }` — see lib/server/observation.ts
-    // `ObservationAlignment`). Drives the synced subtitles on the radio player (and,
-    // later, /log): the current word is highlighted off `audio.currentTime`. Captured
-    // at render time from Cartesia's word timestamps; existing rows may also carry backfill data.
-    // Internal-but-PUBLIC: unlike the script, the
-    // word timings ARE surfaced (the public TrackListItem carries them so the radio
-    // caption render can read them), but they describe an EXISTING artifact, so writing
-    // them does NOT bump updated_at (a backfill must move no public lastmod).
+
     observationAlignmentJson: text("observation_alignment_json"),
-    // The audio observation (Fluncle's recovered field observation, spoken).
-    // observationAudioUrl is the R2 read URL for <log-id>/observation.mp3 — set
-    // when the render is uploaded; its presence is the "has observation" flag. The
-    // script (observation.txt) and the structured artifact + render metadata
-    // (observation.json) live by CONVENTION at <log-id>/<name> with no column,
-    // exactly like poster.jpg / cover.jpg (see lib/media.ts).
+
     observationAudioUrl: text("observation_audio_url"),
     observationDurationMs: integer("observation_duration_ms"),
     observationGeneratedAt: text("observation_generated_at"),
-    // PROVENANCE — the `observation_script` prompt version this spoken script was
-    // authored under. Same contract as `context_prompt_version` above.
+
     observationPromptVersion: integer("observation_prompt_version"),
-    // The spoken observation SCRIPT — the voice-gated prose the agent authored and
-    // passed to the observe render. It already lives
-    // in the R2 `observation.json` (field `text`) + `observation.txt`; this column
-    // mirrors it on the row so the admin observation dialog can show the transcript
-    // without an R2 round-trip, and radio.fluncle.com renders it as synced captions
-    // over the footage. Internal like `context_note`: never on the
-    // public TrackListItem contract — surfaced only through the admin-only board path.
+
     observationScript: text("observation_script"),
     postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
     postedToTelegramAt: text("posted_to_telegram_at"),
     spotifyError: text("spotify_error"),
     telegramError: text("telegram_error"),
-    // The logical FK to `tracks.track_id` AND this table's primary key — the 1:1 that
-    // makes `findings` a subtype rather than a child collection. No SQL FK constraint,
-    // matching the rest of this schema.
+
     trackId: text("track_id").primaryKey(),
-    // Last content change to the finding's record: every write path (publish,
-    // curation/enrichment update, social-post state) bumps it. Null for rows that
-    // predate the column; readers fall back to added_at (sitemap lastmod).
+
     updatedAt: text("updated_at"),
-    // The grain FAMILY of the track's video (e.g. "grainCoarseSilver"). Set when the
-    // video is uploaded; surfaced in /api/tracks beside the vehicle so the next agent
-    // reads recent grain families and diversifies (the grain ledger).
+
     videoGrain: text("video_grain"),
-    // The AI model that authored the track's video, in <provider>/<model> notation
-    // (e.g. "anthropic/claude-opus-5"). Set when the video is uploaded; surfaced in
-    // /api/tracks alongside the vehicle.
-    //
-    // The STORED DEFAULT stays on Opus 4.8 deliberately — do not "fix" it. It is a
-    // legacy backfill placeholder: the insert in publish.ts omits video_model, so it
-    // only ever lands on a finding that has no video yet, and the real authoring model
-    // is written explicitly at upload time. No render ever reports this value. Changing
-    // it means an ALTER COLUMN, which forces drizzle-kit to drop and recreate EVERY
-    // index in the database (~125 of them, 20 on the ~150k-row tracks table) — not a
-    // price worth paying to relabel a placeholder that is always overwritten.
+
     videoModel: text("video_model").default("anthropic/claude-opus-4-8"),
-    // The reasoning/thinking effort the authoring model ran at (e.g. "high",
-    // "medium", "low"). Set when the video is uploaded; surfaced in /api/tracks so
-    // we can compare model × thinking level. Defaults to "high" — the existing
-    // videos were authored at high reasoning, so existing rows backfill.
+
     videoModelReasoning: text("video_model_reasoning").default("high"),
-    // The coarse palette HUE-BUCKET tag of the track's video (e.g. "amber-warm"), derived
-    // deterministically from the render's palette (palette-summary.ts). Set when the video
-    // is uploaded; surfaced beside vehicle/grain/register so the next (ephemeral) video
-    // agent — via the deterministic axis assigner — steers off a worn hue. This is the
-    // palette axis that was invisible when four consecutive renders shared one amber look
-    // (docs/planning/homogenisation-evidence.md). Null = not recorded (older rows / no
-    // palette derivable).
+
     videoPalette: text("video_palette"),
-    // The plate-lane SUBJECT KIND of the track's video (e.g. "hull" / "ruin" / "flora" /
-    // "creature" / "terrain" / "threshold"), lifted from the bundle's render.json `plateSubject`.
-    // Set when the video is uploaded; the plate-subject diversity axis judge:diversity reads to
-    // rotate plate subjects. NULL on plate-less (abstract/procedural) renders and older rows that
-    // predate the column — the provenance render.json always carried but never persisted (Wave-1 C).
+
     videoPlateSubject: text("video_plate_subject"),
-    // The visual REGISTER of the track's video — the composition's mode:
-    // "abstract" | "representational" | "framed". Set when the video is uploaded;
-    // surfaced in /api/tracks alongside the vehicle and grain so the next
-    // (ephemeral) video agent reads recent registers and diversifies (the register
-    // ledger). Null = not recorded (older rows predate the column).
+
     videoRegister: text("video_register"),
-    // The two-master video layout signal. NON-NULL once
-    // the SQUARE crop source has been uploaded as footage.mp4 — i.e. this finding's
-    // footage.mp4 is now the clean 1920×1920 master MT crops on the fly, and a baked
-    // portrait footage.social.mp4 rides alongside. NULL = the legacy single-file
-    // layout (footage.mp4 is still the old portrait+text cut); consumers fall back to
-    // today's behavior. Set by the video finalize/upload path, never by the
-    // footage.mp4 → footage.social.mp4 R2 rename migration (that copy alone doesn't
-    // make footage.mp4 square). The presence of the timestamp is the only thing read.
+
     videoSquaredAt: text("video_squared_at"),
-    // The dominant STRUCTURAL family the render's resolved shader body classifies to
-    // (cellular / flow / caustic / filament / lattice / radial / metaball / other), lifted from
-    // the bundle's render.json `structure.dominant`. The CHECKED diversity axis beside the
-    // free-text vehicle NAME — set when the video is uploaded so a creatively-named repeat can't
-    // hide. NULL when the body couldn't be classified or on rows that predate the column (Wave-1 C).
+
     videoStructure: text("video_structure"),
     videoUrl: text("video_url"),
-    // The travelling vehicle of the track's video (e.g. "voronoi cellular",
-    // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so
-    // the next (ephemeral) video agent can read recent vehicles and diversify.
+
     videoVehicle: text("video_vehicle"),
   },
   (table) => [
-    // The feed/cursor order every list surface pages by (listTracks:
-    // `order by added_at, track_id` + the keyset cursor comparator). It drives from
-    // `findings` and joins `tracks` by PK, so this index carries the whole feed.
     index("findings_added_at_track_id_idx").on(table.addedAt, table.trackId),
-    // The galaxy lens + the ratified vector-scan btree pre-filter (tracks.ts documents
-    // the shape; `getFindingsByGalaxyRanked` is the predicate).
+
     index("findings_galaxy_id_idx").on(table.galaxyId),
-    // Radio/video eligibility (`where video_url is not null`).
+
     index("findings_video_url_idx").on(table.videoUrl),
-    // Enrichment queue filters (listTracks' `status` filter).
+
     index("findings_enrichment_status_idx").on(table.enrichmentStatus),
-    // The /admin/renders queue: the render conductor pulls the oldest un-rendered finding
-    // (`where video_url is null order by added_at asc, track_id asc`), walking a prefix that
-    // GROWS as the rendered history piles up in front of it. A PARTIAL index over exactly the
-    // un-rendered slice, so the scan is the un-rendered backlog — not the whole findings table —
-    // and it SHRINKS as renders ship. Plain ASC (SQLite reverse-scans when asked).
+
     index("findings_render_queue_idx")
       .on(table.addedAt, table.trackId)
       .where(sql`${table.videoUrl} is null`),
-    // listRecentlyRenderedFindings sorts the WHOLE rendered history on `video_squared_at`
-    // (`where video_url is not null order by video_squared_at desc, …`), an unindexed column —
-    // a full scan + temp B-tree sort that grows with every ship. A PARTIAL index over exactly
-    // the rendered slice serves the sort as an index walk. Plain ASC (SQLite reverse-scans it);
-    // a `desc()` index would poison the drizzle snapshot (the ratified trap).
+
     index("findings_video_squared_at_idx")
       .on(table.videoSquaredAt)
       .where(sql`${table.videoUrl} is not null`),
   ],
 );
 
-// The radio.fluncle.com shared-schedule anchor (the radio-broadcast RFC, Unit A).
-// ONE row (PK = service = "radio") holding the wall-clock `epoch` the modulo
-// schedule is measured from and the `version` fingerprint of the eligible set it
-// was computed for (`${count}:${maxObservationGeneratedAt}`). The broadcast is a
-// pure function of (deterministic eligible list, per-segment duration, epoch):
-// `p = (now − epoch) mod T`. The stored epoch is the ONE thing a pure function
-// can't derive — *when* a catalogue change takes effect. When the eligible set
-// changes (`version` no longer matches the live fingerprint), `now-playing`
-// rolls the epoch forward to the next loop boundary (`epoch += ⌈(now−epoch)/T⌉·T`)
-// and rewrites this row, so a grown catalogue applies at the seam and no current
-// listener's playhead jumps. This is a lazy self-heal on the READ path — the
-// eligibility-changing agent writes (observe / square backfill) never touch it.
 export const radioSchedule = sqliteTable("radio_schedule", {
-  // The wall-clock anchor (ms since epoch) the modulo schedule is measured from.
   epochMs: integer("epoch_ms").notNull(),
-  // When this row was last (re)computed — provenance for the boundary roll.
+
   generatedAt: text("generated_at").notNull(),
-  // Single-row table: a fixed PK so the row is upserted, never duplicated.
+
   service: text("service").primaryKey(),
-  // The eligible-set fingerprint this epoch was computed for:
-  // `${count}:${maxObservationGeneratedAt}`. A mismatch with the live fingerprint
-  // is the "the schedule changed" trigger.
+
   version: text("version").notNull(),
 });
 
-// The public status dashboard's current-state snapshot — ONE row per probed
-// service (PK = `service`, so each check upserts its single row, the
-// `radio_schedule`/`spotify_auth` single-row precedent). A Hermes cron probes
-// the services and POSTs a snapshot to the agent-tier `record_health` op; this
-// table is what /status reads. `status` is the three-state health enum (plain
-// TEXT, the enum only narrows the type — widening needs no migration). `since`
-// is when the CURRENT status began (carried forward across an upsert while the
-// status is unchanged, reset to `checked_at` on a transition), so the page can
-// render "up 3d" / "down 12m". PUBLIC-SAFE by construction: only the service
-// name, status, a short message, latency, and timestamps live here — never an
-// IP, hostname, op-path, or raw error body.
 export const serviceStatus = sqliteTable("service_status", {
-  // When this row was last refreshed by a probe (ISO). Equals the POSTed `at`.
   checkedAt: text("checked_at").notNull(),
-  // Round-trip latency of the last probe, in ms. Null when not measured.
+
   latencyMs: integer("latency_ms"),
-  // A short, public-safe human message (e.g. "elevated p95", "timed out"). Null
-  // when nothing to say. NEVER a raw error body / internal address.
+
   message: text("message"),
-  // The probed service (PK): one of web/db/r2/dns/ssh/onion/hermes/render-box,
-  // but plain TEXT so a new service needs no migration.
+
   service: text("service").primaryKey(),
-  // When the CURRENT status began (ISO) — preserved across upserts while the
-  // status is unchanged, reset to `checked_at` on a transition. Drives the
-  // human "up 3d" / "down 12m" uptime/downtime read on /status.
+
   since: text("since").notNull(),
-  // The three-state health enum (plain TEXT; the enum only narrows the type).
+
   status: text("status", { enum: ["ok", "degraded", "down"] }).notNull(),
 });
 
-// The append-only status TRANSITION ledger — one row per status change (the
-// probe POSTs `transitioned: true` for the check that flipped). Feeds the
-// compact "recent events" feed on /status. Pruned to the most recent 200 rows
-// on every write (a status page never needs deep history), indexed on `at` for
-// the recent-first read + the prune's keep-set. PUBLIC-SAFE like
-// `service_status`: service + status + short message + time only.
 export const statusEvents = sqliteTable(
   "status_events",
   {
-    // When the transition happened (ISO). Equals the POSTed snapshot `at`.
     at: text("at").notNull(),
     id: text("id").primaryKey(),
-    // A short, public-safe human message for the transition. Null when none.
+
     message: text("message"),
-    // The service that transitioned.
+
     service: text("service").notNull(),
-    // The status it transitioned INTO (same three-state enum as service_status).
+
     status: text("status", { enum: ["ok", "degraded", "down"] }).notNull(),
   },
   (table) => [index("status_events_at_idx").on(table.at)],
 );
 
-// The append-only per-check SAMPLE ledger — one row per probed service per snapshot
-// (every ~10m tick). Drives the recent-uptime bar on /status: a strip of the last N
-// checks per service, coloured by status, that fills in over time. Pruned per-service
-// to the most recent samples on every write (bounded without a cron), indexed on
-// (service, at) for the per-service recent-first read + the prune's keep-set.
-// PUBLIC-SAFE like the others: service + status + latency + time only.
 export const serviceCheckSamples = sqliteTable(
   "service_check_samples",
   {
-    // When the sample was taken (ISO). Equals the POSTed snapshot `at`.
     at: text("at").notNull(),
     id: text("id").primaryKey(),
-    // Round-trip latency of this probe, in ms. Null when not measured.
+
     latencyMs: integer("latency_ms"),
-    // The probed service.
+
     service: text("service").notNull(),
-    // The three-state health enum at this sample (same enum as service_status).
+
     status: text("status", { enum: ["ok", "degraded", "down"] }).notNull(),
   },
   (table) => [index("service_check_samples_service_at_idx").on(table.service, table.at)],
 );
 
-// The live-set callout flag — the single, ephemeral "Fluncle is on the decks
-// right now" beat that fans out across every surface while the Twitch stream is
-// on, then clears the moment it ends. ONE row (PK = the constant `"twitch"`),
-// upserted each minute by the on-box `fluncle-live` poller via the agent-tier
-// `record_live_state` op — exactly the `service_status` shape (a box cron writes, every
-// surface reads), just a single boolean+title instead of a per-service grid.
-//
-// Auto-clear is READ-side: a consumer treats the flag as offline when `updated_at`
-// is older than the staleness window, so a dead cron mid-set can never strand a
-// permanent "LIVE" banner — it self-heals regardless of cron health.
-//
-// PUBLIC-SAFE by construction: only the live boolean, the public stream title,
-// the Twitch `started_at`, and our own timestamps live here. `tg_message_id` is
-// the pinned crew message's id (so the on→off transition can unpin it) — a
-// Telegram message id in our own channel, not sensitive.
 export const liveState = sqliteTable("live_state", {
-  // Single-row PK — the constant "twitch". One channel, one row.
   id: text("id").primaryKey(),
-  // Whether Fluncle is live on the decks right now (the last POSTed Twitch state).
+
   live: integer("live", { mode: "boolean" }).notNull(),
-  // When the current stream started (ISO, Twitch `started_at`). Null when offline.
+
   startedAt: text("started_at"),
-  // The pinned crew Telegram message's id — captured on go-live so the on→off
-  // transition can unpin it. Null when nothing is pinned.
+
   tgMessageId: integer("tg_message_id"),
-  // The stream title, when live (public Twitch metadata). Null when offline.
+
   title: text("title"),
-  // When this row was last refreshed by the poller (ISO) — the staleness anchor
-  // the read-side auto-clear measures against.
+
   updatedAt: text("updated_at").notNull(),
 });
 
-// An append-only per-step COST ledger (COST-01) — one row per billable unit of
-// work spent on a finding (or a non-finding step). Sibling of
-// serviceCheckSamples / statusEvents: id PK + occurred_at time index + query keys
-// indexed. NEVER pruned (full history is the point; volume is trivial — dozens of
-// rows/day). Written two ways: Worker-local insertCostEvents() for Worker-side
-// vendor calls, and the agent-tier record_cost POST for box-side numbers (the
-// record_health precedent, MADE IDEMPOTENT — see id).
-//
-// costBasis is the load-bearing axis: `cash` = real incremental money (the
-// headline "cost per finding" sums THIS only); `subsidized` = a resource draw
-// under a fixed plan (subscription LLM tokens + on-box compute) — shown as
-// usage/proportion, NEVER summed into the cash total. source is the ORTHOGONAL
-// quantity-confidence: `measured` (a real usage number / timestamp diff) vs
-// `estimated` (a rate×count heuristic, incl. the one-time backfill).
-//
-// The enum-ish columns are plain TEXT with an inline `enum` that only NARROWS the
-// TS type — widening the vendor/step list needs ZERO DDL (the serviceCheckSamples
-// idiom).
 export const costEvents = sqliteTable(
   "cost_events",
   {
     costBasis: text("cost_basis", { enum: ["cash", "subsidized"] }).notNull(),
-    // ISO write time — kept DISTINCT from occurred_at because a box row's spend
-    // time (occurred_at) precedes its Worker write time under clock skew / retry.
+
     createdAt: text("created_at").notNull(),
-    // NULLABLE on purpose: a rate-miss (unknown vendor/unit) must surface as
-    // "—/unpriced", never launder to $0 (indistinguishable from a genuinely-free
-    // row). cash: real $; subsidized: API-equivalent / allocated (never summed
-    // into cash); null: unpriced.
+
     estimatedUsd: real("estimated_usd"),
-    // A client-generated STABLE id = the idempotency key. Emitters build a
-    // deterministic key (e.g. `${step}:${logId ?? trackId ?? "global"}:${vendor}:${unitType}:${occurredAt}`)
-    // so a retried best-effort POST re-inserts the SAME id and is ignored (INSERT
-    // … ON CONFLICT(id) DO NOTHING) — an append-only ledger with a retried write
-    // DOUBLE-COUNTS without this.
+
     id: text("id").primaryKey(),
-    logId: text("log_id"), // Log ID snapshot (coordinate-first read); NULL for non-finding steps
-    model: text("model"), // e.g. claude-sonnet-4-6 (from modelUsage, never assumed); NULL for non-LLM rows
-    occurredAt: text("occurred_at").notNull(), // ISO when the work was spent
-    // total tokens / characters / seconds / requests (the step's natural unit;
-    // real, since seconds/chars can be fractional).
+    logId: text("log_id"),
+    model: text("model"),
+    occurredAt: text("occurred_at").notNull(),
+
     quantity: real("quantity").notNull(),
     source: text("source", { enum: ["measured", "estimated"] }).notNull(),
     step: text("step", {
@@ -2792,71 +1232,39 @@ export const costEvents = sqliteTable(
         "newsletter",
         "studio-clip",
         "cluster",
-        // The only step that is not per-finding pipeline work: the search resolver's
-        // language→filters LLM call (lib/server/search-llm.ts). It carries no log_id/
-        // track_id (a search is not about one track), which the ledger already allows.
+
         "search",
       ],
     }).notNull(),
-    // finding id (no declared FK — socialPosts.trackId / user_galaxy_collections
-    // precedent); NULL for non-finding steps.
+
     trackId: text("track_id"),
     unitType: text("unit_type", {
       enum: ["tokens", "characters", "seconds", "requests", "emails"],
     }).notNull(),
     vendor: text("vendor", {
       enum: ["anthropic", "openrouter", "cartesia", "firecrawl", "apify", "resend", "self"],
-    }).notNull(), // "self" = on-box compute (no invoice → subsidized)
+    }).notNull(),
   },
   (table) => [
-    // Index the QUERY SHAPE, not every column. The two aggregations group by step /
-    // track_id and window by occurred_at; a plain occurred_at serves the global
-    // window. No vendor index (nothing groups by vendor).
     index("cost_events_step_occurred_at_idx").on(table.step, table.occurredAt),
     index("cost_events_track_id_occurred_at_idx").on(table.trackId, table.occurredAt),
     index("cost_events_occurred_at_idx").on(table.occurredAt),
   ],
 );
 
-// The public REACH snapshot ledger — one append-only row per (platform, metric)
-// per day: how far Fluncle's tentacles reach across the web, over time. Sibling of
-// serviceCheckSamples / costEvents (id PK + a time-indexed query shape), and the
-// noun-swap of the record_health discipline: a daily on-box trigger fires the
-// agent-tier record_platform_stats op, the Worker fetches each platform with the
-// auth it already holds, and one snapshot row lands per number. NEVER pruned — the
-// series IS the point (the day-one row is the genesis baseline), and daily × ~14
-// metrics is trivial volume.
-//
-// `platform`/`metric` are plain TEXT so a NEW platform (or a new metric on one) is
-// a data row, never a migration — exactly the serviceCheckSamples idiom. The
-// standardization taxonomy (audience / reach / depth buckets) is NOT stored: the
-// rows stay raw and the page decides how to group them.
-//
-// PUBLIC-SAFE by construction: every number here is already public on its own
-// platform (a follower count, a star count, a play count), so nothing sensitive
-// ever lives in this table.
 export const platformStats = sqliteTable(
   "platform_stats",
   {
-    // ISO instant the snapshot was collected. The series' x-axis; one point per day.
     capturedAt: text("captured_at").notNull(),
-    // The client-STABLE idempotency key: `${platform}:${metric}:${yyyy-mm-dd}` (the
-    // day derived from the collection `at`). A second collect on the same UTC day
-    // re-inserts the SAME id and is ignored (INSERT … ON CONFLICT(id) DO NOTHING),
-    // so the daily snapshot is idempotent — the record_cost discipline.
+
     id: text("id").primaryKey(),
-    // The measured number (followers / listens / stars / subscribers / …). Always a
-    // non-negative integer count; no fractional platform metric exists in Tier 1.
+
     metric: text("metric").notNull(),
-    // The platform this metric belongs to (mixcloud / bluesky / github / npm /
-    // lastfm / appstore / telegram / newsletter / spotify_playlist / youtube). Plain
-    // TEXT — a new platform needs no DDL.
+
     platform: text("platform").notNull(),
     value: integer("value").notNull(),
   },
   (table) => [
-    // The page read groups by (platform, metric) and windows by captured_at (last N
-    // days), so one composite index serves both the grouping and the bounded window.
     index("platform_stats_platform_metric_captured_at_idx").on(
       table.platform,
       table.metric,
@@ -2865,62 +1273,38 @@ export const platformStats = sqliteTable(
   ],
 );
 
-// THE CATALOGUE FUNNEL LEDGER — one row per UTC day, the growth history behind the
-// /admin/funnel page (docs/admin-shell.md). Live counts are cheap; the
-// growth-per-day charts need history nobody records (there is no `anchored_at`, no per-day
-// ledger), so this is the `platform_stats` daily-snapshot pattern applied to the catalogue
-// pipeline: a daily on-box trigger fires the agent-tier `record_catalogue_snapshot` op, the
-// Worker computes every stage total + queue depth + frontier count (all through the SAME
-// predicates the sweeps run — lib/server/funnel.ts, so the funnel can never drift from the
-// real gates), and one row lands per day.
-//
-// `day` (UTC yyyy-mm-dd) is the PRIMARY KEY, so the daily snapshot is UNIQUE + idempotent by
-// construction: a re-fired tick the same day is one `insert … on conflict(day) do update`
-// that OVERWRITES the row with fresh counts, never doubling a bar. Every count is an integer.
-//
-// NO backfill: the series starts with the first real snapshot and grows honestly (invented
-// history is worse than a short chart). NEVER pruned — the series IS the point.
-//
-// The series read is a plain ASC index walk on the `day` PK (`where day >= ? order by day
-// asc`), a lexicographic-equals-chronological window — no `desc()` index (the ratified trap).
 export const catalogueSnapshots = sqliteTable("catalogue_snapshots", {
-  // Queue depth — the `analyze` worklist backlog (track-work.ts `kindClause`), catalogue half.
   analyzeQueue: integer("analyze_queue").notNull(),
-  // Stage total — uncertified catalogue rows carrying full-song analysis (bpm/key from the audio).
+
   analyzed: integer("analyzed").notNull(),
-  // Queue depth — the anchor worklist's re-ask BENCH: rows that WOULD be anchorable but were
-  // attempted inside the 14-day re-ask window, so they sit out (not re-billed) for now.
+
   anchorBackoff: integer("anchor_backoff").notNull(),
-  // Queue depth — anchor worklist rows WITH an ISRC (the exact-ISRC anchor path).
+
   anchorQueueIsrc: integer("anchor_queue_isrc").notNull(),
-  // Queue depth — anchor worklist rows with NO ISRC (the search-triple anchor path).
+
   anchorQueueNoIsrc: integer("anchor_queue_no_isrc").notNull(),
-  // Stage total — uncertified catalogue rows that have gained a Spotify anchor (`spotify_uri`).
+
   anchored: integer("anchored").notNull(),
-  // Queue depth — the `capture` worklist backlog (catalogue half). Reflects the capture BRAKE:
-  // a shut budget narrows the catalogue capture queue to 0 (the budget meter says why).
+
   captureQueue: integer("capture_queue").notNull(),
-  // Stage total — uncertified catalogue rows whose full-song audio has been captured.
+
   captured: integer("captured").notNull(),
-  // Stage total — CERTIFIED tracks (a `findings` row exists). The right edge of the funnel:
-  // the catalogue → archive exit is a number.
+
   certified: integer("certified").notNull(),
-  // Stage total — CRAWLED / uncertified: every catalogue track (a `tracks` row with no
-  // `findings` row). The funnel's left edge.
+
   crawled: integer("crawled").notNull(),
   createdAt: text("created_at").notNull(),
-  // The UTC day (yyyy-mm-dd) this snapshot covers. PK ⇒ one row per day, idempotent upsert.
+
   day: text("day").primaryKey(),
-  // Queue depth — the `embed` worklist backlog (catalogue half).
+
   embedQueue: integer("embed_queue").notNull(),
-  // Stage total — uncertified catalogue rows carrying a MuQ embedding vector.
+
   embedded: integer("embedded").notNull(),
-  // Frontier — crawl_frontier nodes fully drained (`done`).
+
   frontierDone: integer("frontier_done").notNull(),
-  // Frontier — crawl_frontier nodes still waiting (`pending`); 0 means the reachable graph is drained.
+
   frontierPending: integer("frontier_pending").notNull(),
-  // Stage total — the rec-eligibility pool: uncertified rows that clear the EXACT gate
-  // `listRecommendations` scans by (the shared `REC_ELIGIBLE_WHERE`, lib/server/recommendations.ts).
+
   recEligible: integer("rec_eligible").notNull(),
 });
 
@@ -2933,10 +1317,6 @@ export const spotifyAuth = sqliteTable("spotify_auth", {
   updatedAt: text("updated_at").notNull(),
 });
 
-// Our own YouTube OAuth for mixtape video distribution — same shape as
-// spotify_auth. The Worker holds the durable refresh token here and mints a
-// short-lived access token for the CLI's resumable upload PUT + the server-side
-// unlisted→public flip (videos.update). Single row, service PK = "youtube".
 export const youtubeAuth = sqliteTable("youtube_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),
@@ -2946,25 +1326,12 @@ export const youtubeAuth = sqliteTable("youtube_auth", {
   updatedAt: text("updated_at").notNull(),
 });
 
-// Our own Mixcloud OAuth for mixtape audio distribution — kept server-side like
-// spotify_auth / youtube_auth (the CLI stays a thin client). Mixcloud tokens don't
-// expire and there's no refresh token, so the table is just the durable access
-// token; the Worker hands it to the CLI just-in-time for the direct upload (the
-// bytes are CLI-direct; the credential is not). Single row, service PK = "mixcloud".
 export const mixcloudAuth = sqliteTable("mixcloud_auth", {
   accessToken: text("access_token").notNull(),
   service: text("service").primaryKey(),
   updatedAt: text("updated_at").notNull(),
 });
 
-// The /reach Tier-2 OAuth token stores (docs/reach-tier2-activation.md), one row per
-// platform — the same shape as spotify_auth / youtube_auth (the CLI/box never holds the
-// durable credential; the Worker mints an access token on demand). DORMANT until the
-// operator connects each: the reach collector skips a platform whose row is absent.
-
-// Twitch — the broadcaster's OWN user token + refresh, for the Helix follower total
-// (moderator:read:followers). Access token ~4h; refreshed via the stored refresh token.
-// Single row, service PK = "twitch".
 export const twitchAuth = sqliteTable("twitch_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),
@@ -2974,13 +1341,6 @@ export const twitchAuth = sqliteTable("twitch_auth", {
   updatedAt: text("updated_at").notNull(),
 });
 
-// TikTok — the Display API OAuth store (Login Kit v2), same shape as youtube_auth /
-// twitch_auth (the box never holds the durable credential; the Worker mints an access
-// token on demand). The refresh token lives ~365 days and ROTATES on refresh (a new
-// value replaces the stored one), the access token ~24h. Used by the daily social-metrics
-// snapshot to read `POST /v2/video/list/` per-video metrics into the `social_metrics`
-// ledger under the `tiktok_display` source. DORMANT until the operator runs
-// `fluncle admin auth tiktok` and connects. Single row, service PK = "tiktok".
 export const tiktokAuth = sqliteTable("tiktok_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),
@@ -2990,11 +1350,6 @@ export const tiktokAuth = sqliteTable("tiktok_auth", {
   updatedAt: text("updated_at").notNull(),
 });
 
-// Instagram — the "Instagram API with Instagram Login" LONG-LIVED token (60 days) for
-// followers_count. There is NO refresh_token: the token itself is refreshed in place
-// (graph.instagram.com/refresh_access_token), so this table has no refresh column and
-// no scope column, just the durable token + its expiry. Single row, service PK =
-// "instagram".
 export const instagramAuth = sqliteTable("instagram_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),
@@ -3019,16 +1374,9 @@ export const submissions = sqliteTable(
     status: text("status", { enum: ["pending", "approved", "rejected"] }).notNull(),
     submitterHash: text("submitter_hash").notNull(),
     title: text("title").notNull(),
-    // PROVENANCE — the `triage_verdict` prompt version the verdict below was phrased
-    // under (docs/agents/prompt-registry.md). NULL when the sweep fell back to its
-    // baked-in default (or never visited); `0` is the registry default; a number is the
-    // live `prompt_versions.version`.
+
     triagePromptVersion: integer("triage_prompt_version"),
-    // The pre-chew triage verdict — a short one-line "looks like a find / already
-    // logged / not our lane" read the on-box `fluncle-triage` sweep authors for a
-    // pending submission before the operator gets to it. Operator-internal (never
-    // public), advisory only: approve/reject authority never moves. NULL until the
-    // sweep visits (or forever, if the sweep is not installed).
+
     triageVerdict: text("triage_verdict"),
     userId: text("user_id"),
   },
@@ -3044,15 +1392,7 @@ export const user = sqliteTable("user", {
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),
-  // The crew number — the account's enlistment ordinal on the manifest (the
-  // account-redesign brief, ruling #1). A stamped `№007` position in join order,
-  // deliberately NOT coordinate-shaped (a crew member is not certified music), fixed
-  // for life. NULLABLE + UNIQUE: SQLite lets many rows carry NULL under a UNIQUE
-  // index, so an unstamped row (a legacy user before the backfill, or the instant
-  // between the better-auth insert and the `user.create.after` assignment) coexists
-  // with the unique numbers. Assigned atomically by `assignCrewNumber` (public-auth.ts)
-  // as `max(crew_number) + 1`; backfilled for existing users by the one-time
-  // `scripts/backfill-crew-numbers.ts`.
+
   crewNumber: integer("crew_number").unique(),
   deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
   displayUsername: text("display_username"),
@@ -3137,13 +1477,6 @@ export const verification = sqliteTable(
   (table) => [index("verification_identifier_idx").on(table.identifier)],
 );
 
-// The OAuth 2.0 Device Authorization Grant ledger (RFC 8628) — Better Auth's
-// `deviceAuthorization` plugin model. One row per `fluncle login`: minted on
-// /api/auth/device/code (status "pending"), flipped to "approved"/"denied" when
-// the user acts at /device, and consumed when the CLI exchanges the device code
-// for a session at /api/auth/device/token. Rows expire (`expiresAt`) and the
-// plugin sweeps them. Column names are snake_case to match the rest of the auth
-// schema; the Better Auth model name is `deviceCode`.
 export const deviceCode = sqliteTable(
   "device_code",
   {
@@ -3193,20 +1526,13 @@ export const rateLimitEvents = sqliteTable(
   ],
 );
 
-// Fixed-window rate-limit counters: one row per (action, bucket, window_start),
-// incremented by a single atomic conditional upsert (see lib/server/rate-limit.ts).
-// This is the durable, race-free backbone for every action limiter — the
-// `count < max` guard lives in the upsert's `WHERE`, so two concurrent requests
-// can never both pass the limit.
-// The `bucket` is `hash(cf-connecting-ip)` for anonymous callers or `userId` for
-// authenticated ones — never the spoofable x-forwarded-for, never the User-Agent.
 export const rateLimitCounters = sqliteTable(
   "rate_limit_counters",
   {
     action: text("action").notNull(),
     bucket: text("bucket").notNull(),
     count: integer("count").notNull().default(0),
-    // ISO timestamp of the start of the current fixed window (windowMs-aligned).
+
     windowStart: text("window_start").notNull(),
   },
   (table) => [
@@ -3246,17 +1572,6 @@ export const userGalaxyCollections = sqliteTable(
   ],
 );
 
-// A signed-in user's recommendation SEEDS — the ≤12 tracks their personal
-// telescope points from (the per-user recommendation engine, docs/the-ear.md
-// § The per-user telescopes). A seed references ANY `tracks` row — a certified
-// finding or an uncertified catalogue track — because a listener seeds with what
-// they like, not with what Fluncle certified. The (user_id, track_id) PRIMARY KEY
-// is the natural identity (a track is a seed once per user; re-adding refreshes
-// `added_at`), and the `user_id` index serves the per-user reads (the seed list +
-// the seed-vector probe read, both bounded by the 12-seed cap — enforced in the
-// op, not the schema: SQLite has no per-group row cap). Like every sibling
-// per-user table, `user_id` is a logical FK (no SQL cascade) — deletion is
-// application-code (`accountDeletionStatements`), never a constraint.
 export const userRecSeeds = sqliteTable(
   "user_rec_seeds",
   {
@@ -3270,29 +1585,6 @@ export const userRecSeeds = sqliteTable(
   ],
 );
 
-// A signed-in user's ONE public Spotify playlist — "Fluncle's Frontier" (E2, the
-// public recommendation machine). It lives on FLUNCLE'S OWN Spotify account (no
-// per-user OAuth, so the dev-mode 5-user allow-list cap never applies), holds the
-// user's current recommendations (the E1 blend), and is refreshed weekly. ONE row
-// per user (the `user_id` primary key): the playlist is created once and mirrored
-// thereafter, never a second one.
-//
-//   - `playlist_id`      — the Spotify playlist id, minted once by the first sync.
-//   - `created_at`       — when the playlist was minted (the rolling daily MINT-cap
-//                          window reads this: `count(created_at >= now-24h)`).
-//   - `last_synced_at`   — the last successful item PUT (null until the first sync
-//                          lands), so `/me` can say when the Frontier last moved.
-//   - `last_uri_hash`    — the sha256 of the last URI list the mirror PUT (the
-//                          telescope's `last_mirror` change-detector, per-row): an
-//                          unchanged list skips the PUT, so a weekly refresh that
-//                          finds nothing new is one read, not a needless write.
-//   - `cover_uploaded_at`— when the custom cover last landed on Spotify, or NULL. The
-//                          cover is a NODE-SIDE render leg (Remotion can't run in the
-//                          Worker), keyed on `cover_uploaded_at IS NULL`; it stays
-//                          INERT until the operator re-auths with `ugc-image-upload`.
-//
-// `user_id` is a logical FK (no SQL cascade), matching every sibling per-user table —
-// deletion is application-code (accountDeletionStatements), never a constraint.
 export const userFrontierPlaylists = sqliteTable("user_frontier_playlists", {
   coverUploadedAt: text("cover_uploaded_at"),
   createdAt: text("created_at").notNull(),
@@ -3302,42 +1594,11 @@ export const userFrontierPlaylists = sqliteTable("user_frontier_playlists", {
   userId: text("user_id").primaryKey(),
 });
 
-// THE PACED-DRAIN CURSOR — one row per committed Frontier user, stamping WHEN the paced
-// refresh sweep last PROCESSED them (`refreshed_at`, ISO). It exists because the sweep
-// stopped bursting every playlist in one tick (which 429'd Spotify's shared per-app budget)
-// and became a bounded, RESUMABLE drain: each tick refreshes only a batch of users whose
-// stamp is older than ~6 days, stamps each as it goes, and the next tick picks up where it
-// left off — so a weekly refresh of the whole crew spreads across the day instead of dying
-// in one overloaded tick. A user with NO row here (never processed, or a pending mint the
-// hot path deferred under a hot budget) reads as DUE, so a fresh mint is picked up first.
-//
-// It lives here rather than on `user_frontier_playlists` because a PENDING-MINT user (their
-// edition is written but the Spotify create was deferred) has no playlist row yet — the
-// stamp must survive the gap between commitment and the paced create. `user_id` is a logical
-// FK (no SQL cascade), matching every sibling per-user table; deletion is application code.
 export const userFrontierRefresh = sqliteTable("user_frontier_refresh", {
   refreshedAt: text("refreshed_at").notNull(),
   userId: text("user_id").primaryKey(),
 });
 
-// A user's FRONTIER EDITIONS — one FROZEN snapshot per real weekly refresh of their
-// Frontier playlist, read two ways: (a) the NOVELTY LEDGER the engine re-derives its
-// last-N-editions exclusion set from (so the weekly playlist rotates), and (b) the
-// HISTORY the "past editions" dropdown/dialog reads for track recovery. Modeled on the
-// `mixtapes` + `mixtape_tracks` frozen-snapshot precedent (child rows, not a JSON column
-// — novelty is then a plain indexed join, no per-row `json_each` hosted trap).
-//
-// `user_id` is a logical FK (no SQL cascade), matching every sibling per-user table —
-// deletion is application-code (`accountDeletionStatements`), never a constraint.
-// `number` is per-user monotonic (`coalesce(max(number),0)+1`), and is the ONE name
-// used everywhere (column, DTO, path param). No status/uri_hash/playlist_id/iso_*
-// columns: nothing reads them — the date label derives its civil date from `created_at`.
-//
-// `seeds_used`/`seeds_skipped_json` FREEZE the engine's seed accounting at write time so
-// the shelf's honesty strings ("these two picks aren't steering yet") survive the freeze
-// without a re-run of the engine on a read (the shelf reads the edition, never the scan).
-// Both are NULLABLE: a pre-migration edition cannot back them, and the surface degrades to
-// omitting what it cannot honestly say (the Readout Rule's honest absence).
 export const frontierEditions = sqliteTable(
   "frontier_editions",
   {
@@ -3348,24 +1609,9 @@ export const frontierEditions = sqliteTable(
     seedsUsed: integer("seeds_used"),
     userId: text("user_id").notNull(),
   },
-  (table) => [
-    // The `(user_id, number)` btree serves every read: it bounds the last-8 novelty
-    // derive to one user, and SQLite walks it in REVERSE for the newest-first dropdown
-    // and the derive's `order by number desc limit N` — a dedicated DESC index would be
-    // redundant (and drizzle-kit's turso dialect cannot round-trip a `desc()` index
-    // expression through a later column ALTER, so it must not exist).
-    uniqueIndex("frontier_editions_user_number_idx").on(table.userId, table.number),
-  ],
+  (table) => [uniqueIndex("frontier_editions_user_number_idx").on(table.userId, table.number)],
 );
 
-// A frontier edition's FROZEN tracklist — the de-duped PUT order the playlist actually
-// sent (A2). `track_id` is the id novelty excludes on and the id the Save action files.
-// `log_id` is set only for certified-finding slots (the unnamed catalogue tier stays
-// unnamed). `title_text`/`artists_text` mirror `mixtape_tracks` naming; the readouts
-// (`bpm`/`key`/`duration_ms`) are frozen so the dialog renders the chips without a JOIN.
-// `slot` drives the UI register split (finding vs catalogue). `similarity` FREEZES the
-// engine's honest max-similarity for the row (the shelf displays the number and the
-// readout chips) — NULLABLE, so a pre-migration edition degrades to omitting it.
 export const frontierEditionTracks = sqliteTable(
   "frontier_edition_tracks",
   {
@@ -3390,12 +1636,6 @@ export const frontierEditionTracks = sqliteTable(
   ],
 );
 
-// A signed-in user's saved tracks. `track_id` is the identity a save files against
-// (the unique key with `user_id`); `log_id` is the certified finding's coordinate,
-// present ONLY when the saved track IS a finding — an uncertified catalogue track
-// saves with a null `log_id` (the unlit tier stays unnamed). The `user_saved_findings`
-// name is a legacy artifact from the findings-only era; the list now holds any track,
-// and a later pass may rename it to `user_saved_tracks`.
 export const userSavedFindings = sqliteTable(
   "user_saved_findings",
   {
@@ -3409,16 +1649,6 @@ export const userSavedFindings = sqliteTable(
   (table) => [uniqueIndex("user_saved_findings_user_track_idx").on(table.userId, table.trackId)],
 );
 
-// A signed-in user's saved `/mix` sets — the account-backed home for a chained
-// set. `/mix` stays fully usable anonymous (the set + taste live in the URL, the
-// wire format); signing in only SAVES a chain so it survives the tab. `set_tokens`
-// is the serialized `?set=` chain stored VERBATIM (same codec the route uses), and
-// `taste` the serialized `?taste=` seed, so opening a saved set round-trips through
-// the exact serializer that wrote it. There is no natural unique key (a user may
-// keep two differently-named sets of the same tracks), so the row `id` is the
-// identity; the index serves the newest-first list. `user_id` is a logical FK (no
-// SQL cascade), matching every sibling per-user table — deletion is application-code
-// (accountDeletionStatements), never a constraint.
 export const userSavedSets = sqliteTable(
   "user_saved_sets",
   {
@@ -3433,24 +1663,6 @@ export const userSavedSets = sqliteTable(
   (table) => [index("user_saved_sets_user_updated_idx").on(table.userId, table.updatedAt)],
 );
 
-// A signed-in user's WATCHED entities — the artists and labels they asked to keep an eye
-// on. The saved-sets sibling exactly (a per-user list keyed by the Better Auth user, a
-// logical FK with no SQL cascade — deletion is application code in
-// `accountDeletionStatements`, never a constraint). THE ACCOUNT NEVER GATES THE FEATURE:
-// a signed-out visitor sees no watch control at all (the control simply does not render,
-// the SaveSetDialog precedent), and the per-entity fresh feeds (`/artist/<slug>/fresh.xml`)
-// stay the anonymous watcher equivalent, untouched.
-//
-// `kind` + `entity_id` point at the `artists.id` / `labels.id` this watch is for — resolved
-// by ID at write time and stored WITHOUT any denormalized name/slug (the entity's own row
-// stays the source of truth; the account list joins for the display name at read time). The
-// UNIQUE on (user_id, kind, entity_id) makes watching twice idempotent — a second watch of
-// the same entity upserts rather than duplicating.
-//
-// `include_similar` is HEADROOM with no consumer yet: the email digest will read it to decide
-// whether a watch also pulls in sonically-near
-// entities. It defaults OFF in storage and has no UI — nothing writes anything but the
-// default today. Do not build a control for it until the digest lands.
 export const userWatches = sqliteTable(
   "user_watches",
   {
@@ -3462,28 +1674,12 @@ export const userWatches = sqliteTable(
     userId: text("user_id").notNull(),
   },
   (table) => [
-    // Watching twice is a no-op, not a duplicate row — the save path upserts on this key.
     uniqueIndex("user_watches_user_kind_entity_idx").on(table.userId, table.kind, table.entityId),
-    // The `/account` list read: `where user_id = ? order by created_at desc`. A plain ASC
-    // btree (SQLite reverse-scans it) — never a `desc()` index, which poisons the drizzle
-    // snapshot into rebuilding every index on the next migration (the ratified trap).
+
     index("user_watches_user_created_idx").on(table.userId, table.createdAt),
   ],
 );
 
-// A signed-in user's cross-device preferences — the account-backed home for a
-// setting that today lives device-local (the Scales/Camelot key-notation choice in
-// localStorage). ONE row per user (the `user_id` primary key), holding a single
-// zod-validated JSON `preferences` blob. This is the FIRST user preference, not the
-// last: a new preference extends the shared zod object (`UserPreferencesSchema` in
-// `@fluncle/contracts/orpc`) + its consumers, never this schema — the column is a
-// closed object, so growing it needs no migration. THE ACCOUNT NEVER GATES A
-// FEATURE: an anonymous visitor keeps the device-local toggle exactly as before;
-// this row only carries the choice ACROSS devices when signed in. `user_id` is a
-// logical FK (no SQL cascade), matching every sibling per-user table — deletion is
-// application-code (`accountDeletionStatements`), never a constraint, because the
-// deletion flow ANONYMIZES the user row rather than dropping it, so a SQL cascade
-// would never fire.
 export const userPreferences = sqliteTable("user_preferences", {
   preferences: text("preferences").notNull().default("{}"),
   updatedAt: text("updated_at").notNull(),
@@ -3520,14 +1716,6 @@ export const userDeletionRequests = sqliteTable(
   ],
 );
 
-// Per-platform publication state for a track's video. One row per (track,
-// platform); the generic track pipeline tops out at "video in R2" (video_url),
-// and publication is tracked here. Today: TikTok via Postiz (push draft → manual
-// review/publish in-app → status updated by the operator) and YouTube Shorts
-// (direct PUBLIC upload → `published`; the public `url` is auto-recorded from
-// Postiz `/missing`, falling back to the operator's manual entry). The `platform`
-// enum is plain TEXT, so widening it (e.g. to Instagram Reels) needs no migration.
-// `external_id` holds the Postiz post id; `url` the public post URL.
 export const socialPosts = sqliteTable(
   "social_posts",
   {
@@ -3545,121 +1733,68 @@ export const socialPosts = sqliteTable(
   (table) => [uniqueIndex("social_posts_track_platform_idx").on(table.trackId, table.platform)],
 );
 
-// THE SOCIAL-METRICS LEDGER — append-only per-post performance snapshots, one row per
-// (post × source × captured day). The `platform_stats` daily-snapshot pattern applied to a
-// finding's INDIVIDUAL posts: `platform_stats` counts the whole channel (followers, total likes),
-// this counts each posted video's own reach, so per-video velocity (day-over-day deltas) becomes
-// measurable. A daily on-box trigger fires the agent-tier `record_social_metrics` op; the Worker
-// reads each published `social_posts` row's Postiz per-post analytics and APPENDS today's numbers.
-//
-// APPEND-ONLY BY DESIGN — never an upsert-latest: velocity matters, so the series keeps every day's
-// snapshot rather than overwriting a single "latest" row. Idempotence is per-DAY, not per-write:
-// the `(external_id, source, captured_day)` unique index means a second run the same UTC day is a
-// no-op (INSERT … ON CONFLICT DO NOTHING), so a re-fired tick never doubles a day's point.
-//
-// `captured_day` (UTC yyyy-mm-dd, derived from `captured_at` at write time) is stored as its own
-// column so the idempotency index is a plain btree — a SQLite unique index can't span an expression,
-// and deriving the day in SQL at index time is exactly what libSQL won't do. Every metric column is
-// NULLABLE: Postiz returns a platform-dependent subset of labels, so an absent metric is null (never
-// zero — a real zero and "the platform didn't report it" must stay distinguishable).
 export const socialMetrics = sqliteTable(
   "social_metrics",
   {
-    // Average length of a single playback, in whole seconds — YouTube Analytics' `averageViewDuration`
-    // (the retention twin of `averageViewPercentage`: how LONG, not just what %). Its own column
-    // because `watch_time_seconds` is TOTAL watch time (a cumulative), whereas this is a per-view
-    // AVERAGE — folding them into one column would make a cross-source series lie. Null when the
-    // source doesn't report it (Postiz/TikTok don't; the `youtube_analytics` source does).
     averageViewDurationSeconds: integer("average_view_duration_seconds"),
-    // Average % of the video watched (0–100), a real — the only fractional metric. Null when unreported.
+
     averageViewPercentage: real("average_view_percentage"),
-    // The ISO instant this snapshot was taken. The series' fine-grained x-axis.
+
     capturedAt: text("captured_at").notNull(),
-    // The UTC day (yyyy-mm-dd) derived from `captured_at`. The idempotency key's day component:
-    // one snapshot per (post, source) per day. A plain column so the unique index below is a btree.
+
     capturedDay: text("captured_day").notNull(),
     comments: integer("comments"),
     createdAt: text("created_at").notNull(),
-    // The Postiz post id (`social_posts.external_id`) this snapshot measures. The join back to the post.
+
     externalId: text("external_id").notNull(),
     id: text("id").primaryKey(),
     impressions: integer("impressions"),
     likes: integer("likes"),
-    // The platform the post lives on. Plain TEXT with an enum narrow (a new platform needs no DDL).
+
     platform: text("platform", { enum: ["tiktok", "youtube"] }).notNull(),
     saves: integer("saves"),
     shares: integer("shares"),
-    // Where the numbers came from. `postiz` today; room for `youtube_analytics` / `tiktok_display` /
-    // `csv` later without a migration — the source is part of the idempotency key, so two sources can
-    // snapshot the same post on the same day without colliding.
+
     source: text("source", { enum: ["postiz", "youtube_analytics", "tiktok_display", "csv"] })
       .notNull()
       .default("postiz"),
-    // The finding this post belongs to (`social_posts.track_id` → `findings.track_id`). Denormalised
-    // onto the row so a per-finding read never has to re-join `social_posts`. No declared FK (this
-    // schema declares none).
+
     trackId: text("track_id").notNull(),
     views: integer("views"),
-    // Watch time in whole seconds. Null when unreported.
+
     watchTimeSeconds: integer("watch_time_seconds"),
   },
   (table) => [
-    // The idempotency guard: one snapshot per (post, source, UTC day). The daily INSERT … ON
-    // CONFLICT DO NOTHING keys on this, so a re-fired tick never doubles a day's point.
     uniqueIndex("social_metrics_external_source_day_idx").on(
       table.externalId,
       table.source,
       table.capturedDay,
     ),
-    // The per-finding series read (a finding's posts over time), a plain ASC walk — no desc() index
-    // (the ratified drizzle-kit turso trap); readers order in the query.
+
     index("social_metrics_track_captured_at_idx").on(table.trackId, table.capturedAt),
   ],
 );
 
-// Distribution links no longer live here — they are the single source of truth in
-// `mixtape_social_posts` (one row per platform, with status + external_id). The
-// public DTO's `externalUrls` is derived from the published rows via a subquery in
-// MIXTAPE_SELECT; nothing is dual-written onto the mixtape row.
 export const mixtapes = sqliteTable(
   "mixtapes",
   {
     addedAt: text("added_at"),
-    // When set (an ISO timestamp), the mixtape has been announced to the crew (the
-    // Telegram crew channel), so `announce_mixtape` won't double-post. A one-shot
-    // marker, filled by the operator-tier announce op the moment the post lands
-    // (released back to NULL only if the Telegram send fails, so a retry works).
+
     announcedAt: text("announced_at"),
     createdAt: text("created_at").notNull(),
     durationMs: integer("duration_ms"),
     id: text("id").primaryKey(),
     logId: text("log_id").unique(),
     note: text("note"),
-    // `planned_for` moved to the PLAN (`recordings.planned_for`) in the
-    // plan→recording→mixtape Deploy-2 cutover (RFC §6, D-plannedFor): upcoming live
-    // sessions are plans now, and `/calendar.ics` reads them there.
+
     publishedAt: text("published_at"),
     recordedAt: text("recorded_at"),
-    // The `recordings` row this mixtape was PROMOTED from (RFC recording-primitive,
-    // Design B). Nullable: a mixtape without a promoted recording has none;
-    // set only when `promote` links a coordinate-less recording to this mixtape.
-    // Plain text id, no declared FK — this schema declares none. ADDED beside the
-    // existing columns (SQLite ADD COLUMN can't be NOT NULL without a default;
-    // pre-existing rows carry NULL).
+
     recordingId: text("recording_id"),
     sequenceNumber: integer("sequence_number").unique(),
-    // When set (an ISO timestamp), the full set video has been uploaded to R2 at
-    // `<log-id>/set.mp4` and the mixtape `/log` page shows the branded scrubber
-    // player. Set by the operator in the admin surface AFTER the upload; null until
-    // then. A flag, not a URL — the URL derives from the Log ID (mixtapeSetVideoUrl).
+
     setVideoAt: text("set_video_at"),
-    // "distributing" is the minted-but-uploading state before published (see
-    // MixtapeStatus in @fluncle/contracts). Plain TEXT, the enum only narrows the
-    // type — there is no "draft": a mixtape is only ever born via
-    // `promote_recording`, whose claim inserts `distributing` explicitly (unminted
-    // while `log_id` is null). The raw-SQL `'draft'` default is vestigial and kept
-    // byte-identical so the narrow emits ZERO DDL (RFC §9/SF-4: no insert relies
-    // on the default; changing it would rebuild the table for nothing).
+
     status: text("status", { enum: ["distributing", "published"] })
       .notNull()
       .default(sql`'draft'`),
@@ -3669,14 +1804,6 @@ export const mixtapes = sqliteTable(
   (table) => [index("mixtapes_recording_id_idx").on(table.recordingId)],
 );
 
-// Per-platform distribution state for a mixtape's audio/video, mirroring
-// `social_posts` for findings: one row per (mixtape, platform). This is the SINGLE
-// source of truth for a mixtape's listen links — the public DTO's `externalUrls`
-// derives from the `published` rows here (no `mixtapes.*_url` columns). YouTube +
-// Mixcloud are recorded by the CLI `distribute` flow (it moves the multi-GB bytes
-// the Worker can't proxy); SoundCloud is set manually from the admin editor.
-// `external_id` holds the YouTube videoId / Mixcloud cloudcast key; `url` the
-// public URL.
 export const mixtapeSocialPosts = sqliteTable(
   "mixtape_social_posts",
   {
@@ -3695,15 +1822,6 @@ export const mixtapeSocialPosts = sqliteTable(
   ],
 );
 
-// Push-notification device registry (the mobile app):
-// one row per Expo push token, which IS the natural key (the `userGalaxyState`
-// natural-PK precedent, not a surrogate id). `token` is `ExponentPushToken[…]`;
-// `userId` is nullable — the V1 app is anonymous, so it binds only once accounts
-// arrive (a future "linked to user" privacy-label flip). `mutedJson` is a TEXT
-// JSON array of muted categories (the `tracks.features_json` JSON-column
-// precedent), e.g. `["mixtapes"]`. `lastSeenAt` is bumped on every re-register so
-// a staleness reaper can prune long-dead anonymous rows. The send module reads
-// this table; the GDPR sweep (account-data.ts) clears a deleted user's tokens.
 export const pushTokens = sqliteTable(
   "push_tokens",
   {
@@ -3721,14 +1839,6 @@ export const pushTokens = sqliteTable(
   ],
 );
 
-// The pending push-receipt ledger. Expo's send
-// returns one TICKET per message; an "ok" ticket carries a RECEIPT id you fetch
-// ~15min+ later (getReceipts) to learn the real delivery outcome —
-// `DeviceNotRegistered` (the dead-token signal) arrives HERE, not on the ticket.
-// So each ok ticket's `{ receiptId → token }` is parked here at send time; the
-// receipts-sweep admin op (an external cron) drains it: fetch the receipts, prune
-// the tokens Expo reports gone, delete the resolved ledger rows. `id` is the Expo
-// receipt id (its natural key); `token` is the device it was sent to.
 export const pushReceipts = sqliteTable(
   "push_receipts",
   {
@@ -3739,16 +1849,6 @@ export const pushReceipts = sqliteTable(
   (table) => [index("push_receipts_created_at_idx").on(table.createdAt)],
 );
 
-// A published mixtape's FROZEN tracklist (RFC plan→recording→mixtape). Under the
-// two-table model this stays the immutable published copy: `promote` COPIES the
-// winning take's `recording_cues` in here; editing a take's cues afterwards never
-// touches these rows. Deploy-1 additions (all nullable, additive):
-//   - `finding_id` — the eventual rename of the NOT-NULL `track_id` (the finding
-//     link). The folded `db:backfill` fills it (`= track_id`) on every deploy;
-//     a later slice repoints readers and drops `track_id`. Nullable so a published
-//     mixtape can later carry a NON-finding live-added track as a plain row.
-//   - `artists_text`/`title_text` — the snapshot for those non-finding rows.
-//     Finding-backed rows keep NULL snapshots (the tracks JOIN stays the truth).
 export const mixtapeTracks = sqliteTable(
   "mixtape_tracks",
   {
@@ -3765,26 +1865,11 @@ export const mixtapeTracks = sqliteTable(
     uniqueIndex("mixtape_tracks_mixtape_position_idx").on(table.mixtapeId, table.position),
     uniqueIndex("mixtape_tracks_mixtape_track_idx").on(table.mixtapeId, table.trackId),
     index("mixtape_tracks_finding_id_idx").on(table.findingId),
-    // listMixtapeMembershipsForTracks filters `where track_id in (…)` to tell each finding which
-    // mixtapes carry it. The existing composites are all `mixtape_id`-leftmost, so a track_id-only
-    // lookup had no index to seek — this is the missing seek key. NOT unique: one track can appear
-    // on many mixtapes.
+
     index("mixtape_tracks_track_id_idx").on(table.trackId),
   ],
 );
 
-// A CLIP — a lightweight 9:16 derivative cut from a recording's set video
-// (the Fluncle Studio drip-feed). One set yields
-// MANY clips (a backlog to drip-feed), so this is one-to-many via `recording_id`.
-// NOT a spine object: a clip carries NO Log ID — the spine namespace is
-// scarce/collectible, and a clip is a re-cuttable trailer, not a checkpoint.
-// `in_ms`/`out_ms` are the cut window into the set; `x_offset` is the 9:16 framing
-// offset baked at the ffmpeg cut (MT crop is centre-only, so the framing lives
-// here, not as an MT param); `caption` is the operator/agent-authored copy (stored
-// clean — the `fluncle://` coordinate is appended only at payload-build). `status`
-// tracks the cut queue (`pending` → `done`) AND drives the clip-library filter.
-// Distribution state lives in the sibling `mixtape_clip_social_posts` table
-// (below), never `*_url` columns here.
 export const mixtapeClips = sqliteTable(
   "mixtape_clips",
   {
@@ -3793,12 +1878,7 @@ export const mixtapeClips = sqliteTable(
     id: text("id").primaryKey(),
     inMs: integer("in_ms").notNull(),
     outMs: integer("out_ms").notNull(),
-    // The `recordings` row this clip was cut from — a clip's ONE owner since the
-    // plan→recording→mixtape Deploy-2 cutover dropped the legacy `mixtape_id`
-    // (every legacy mixtape-owned clip was repointed onto its mixtape's recording
-    // by the folded `db:backfill` first). Still nullable at the DDL level (the
-    // column predates the cutover); `createClip` always sets it. Plain text id,
-    // no declared FK — matching the sibling tables (this schema declares none).
+
     recordingId: text("recording_id"),
     status: text("status", { enum: ["pending", "done"] })
       .notNull()
@@ -3809,17 +1889,6 @@ export const mixtapeClips = sqliteTable(
   (table) => [index("mixtape_clips_recording_id_idx").on(table.recordingId)],
 );
 
-// The clip drip-feed schedule + distribution state — the sibling to `social_posts`
-// (findings) and `mixtape_social_posts` (mixtapes), one row per (clip, platform).
-// Unlike those two (passive after-the-fact tracking), THIS IS THE SCHEDULE: a
-// `scheduled` row carries the `scheduled_for` due time the drip cron fires at, so
-// creating a clip auto-enrols it (clip-drip-feed RFC §3). `platform` is
-// instagram-only today (the drip is an IG experiment); the enum leaves room to grow.
-// `caption` is the built caption SNAPSHOT taken when the row was scheduled (the drip
-// op rebuilds it fresh at fire time, so this is provenance, not the posted copy).
-// `postiz_id` is the Postiz post id; `posted_url` the IG permalink (captured back
-// later). Status: `scheduled` → `posted` (idempotent — a posted row never re-fires) or
-// `failed` (retryable by the operator rescheduling it).
 export const mixtapeClipSocialPosts = sqliteTable(
   "mixtape_clip_social_posts",
   {
@@ -3840,335 +1909,161 @@ export const mixtapeClipSocialPosts = sqliteTable(
   ],
 );
 
-// A lean global-flag key/value store — the reusable home for cross-cutting runtime
-// switches that don't belong on any one domain row. First key: `clip_drip_paused`
-// (the clip drip-feed kill switch — `'true'` pauses every future scheduled IG post
-// while leaving the schedule intact; clearing it resumes the drip). `value` is opaque
-// text; a boolean flag is stored as the string `'true'`/`'false'`. Add a new key here
-// rather than a new single-purpose table when a flag is genuinely global.
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
 });
 
-// THE ECHO GATE'S LEDGER — every auto-note the echo gate REFUSED to store, kept.
-//
-// The auto-note is authored with the notes of the finding's sonic neighbours in the
-// prompt, and `gateNoteEcho` (lib/server/note.ts) hard-fails a line that lifts a phrase
-// from one or reuses its words wholesale. That gate is doing real work and stays exactly
-// as strict as it was. What it must NOT do is work in the DARK: a pipeline that throws
-// the model's output away without telling anyone is a pipeline nobody can supervise —
-// the operator cannot read what was binned, cannot judge whether it was actually worse
-// than nothing, and cannot see whether the THRESHOLDS are wrong, because the evidence is
-// gone. So a rejection is no longer a deletion; it is a row here, and a row in the
-// operator's `/admin` attention queue.
-//
-// ONE OPEN ROW PER FINDING (the partial unique index below). The sweep re-authors once
-// per tick and the finding stays in the note queue forever while it is note-less, so an
-// append-only row-per-attempt would let a single stubbornly-echoing finding write
-// hundreds of rows a day. Instead a re-rejection UPDATES the open row — freshest note,
-// `attempts` incremented — so the ledger is bounded by the ARCHIVE, not by the cron's
-// tick rate, and the finding raises exactly one queue row. Resolved rows (accepted /
-// discarded) are kept forever: they are the evidence trail behind any future retune.
-//
-// The thresholds IN FORCE at the moment of rejection are snapshotted onto the row
-// (`min_phrase_words` / `max_overlap`). They are operator-tunable at runtime through the
-// `settings` KV, so without the snapshot a retune would silently rewrite the meaning of
-// every historical rejection ("why was this 0.31 note binned? the gate says 0.40").
-//
-// A CATALOGUE track can never appear here: the only writer is the `note_track` handler,
-// which drives through `requireTrack`'s `findings ⋈ tracks` join and 404s an uncertified
-// track long before a note is gated. See docs/agents/note-agent.md.
 export const noteRejections = sqliteTable(
   "note_rejections",
   {
-    // How many times this finding's auto-note has bounced off the gate while THIS
-    // rejection stayed open (the sweep's re-author makes 2 a normal tick). A high count
-    // is the signal that the region is exhausted or the gate is too tight.
     attempts: integer("attempts").notNull().default(1),
-    // The FIRST time this finding's note was held — and it never moves, even though the row
-    // is updated in place on a re-bounce. It is the attention queue's oldest-first anchor,
-    // and that is exactly why it must not track the latest bounce: the sweep re-authors this
-    // finding every tick while it stays note-less, so an anchor that moved with each bounce
-    // would reset the row's age forever and it could NEVER age into the operator's working
-    // set. The row that needs his eye most is the one that keeps failing; anchoring on the
-    // last failure would bury it the hardest.
+
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
-    // The overlap threshold in force when this note was rejected (the `settings` value,
-    // else the built-in default) — snapshotted so a later retune cannot rewrite history.
+
     maxOverlap: real("max_overlap").notNull(),
-    // The lifted-phrase threshold in force when this note was rejected.
+
     minPhraseWords: integer("min_phrase_words").notNull(),
-    // The neighbour it echoed hardest — the finding whose note the gate matched it against.
+
     neighborLogId: text("neighbor_log_id"),
-    // A SNAPSHOT of the neighbour's note as it read at rejection time. Stored rather than
-    // joined because the neighbour's own note can be edited or replaced later, and the
-    // operator must be able to read the exact PAIR the gate compared.
+
     neighborNote: text("neighbor_note"),
-    // THE EVIDENCE: the note the model actually wrote. The whole point of this table —
-    // the operator reads this and decides for himself whether the gate was right.
+
     note: text("note").notNull(),
-    // The measured content-word Jaccard against that neighbour (0..1).
+
     overlap: real("overlap").notNull(),
-    // The run of words lifted from the neighbour; '' when the rejection was overlap-only.
+
     phrase: text("phrase").notNull().default(""),
-    // The operator's ruling. NULL = still open (it raises a queue row). `accepted` = he
-    // read it, judged it good, and it was written to the finding (through the same
-    // fill-empty-only path the agent uses). `discarded` = the gate was right.
+
     resolution: text("resolution", { enum: ["accepted", "discarded"] }),
     resolvedAt: text("resolved_at"),
-    // The finding whose note was rejected (no declared FK — the socialPosts.trackId /
-    // cost_events.trackId precedent).
+
     trackId: text("track_id").notNull(),
-    // The LATEST bounce — this one DOES move with `note`/`attempts` on every re-hold. It is
-    // the diagnostic ("when did it last try"), never the queue's anchor (see `createdAt`).
+
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    // ONE open rejection per finding — the bound that keeps a stubbornly-echoing finding
-    // from flooding the ledger, and keeps the attention queue to one row per finding.
-    // PARTIAL, so a finding may accumulate any number of RESOLVED rejections over its
-    // life (the retune evidence) while only ever holding one open.
     uniqueIndex("note_rejections_open_track_idx")
       .on(table.trackId)
       .where(sql`${table.resolvedAt} is null`),
-    // The queue read: "every rejection still waiting on the operator's eye", oldest first.
+
     index("note_rejections_open_idx").on(table.resolvedAt, table.createdAt),
   ],
 );
 
-// THE SPOKEN sibling of `note_rejections` — an observation script the echo gate refused to
-// RENDER because it echoed a sonic neighbour's script, held for the operator's eye rather
-// than binned. Same shape as the note ledger, one column renamed: the evidence is the SCRIPT
-// the model wrote, and the snapshot is the NEIGHBOUR SCRIPT it echoed. The gate rejects BEFORE
-// the Cartesia render, so a held rejection never cost a cent.
 export const observationRejections = sqliteTable(
   "observation_rejections",
   {
-    // How many times this finding's observation has bounced off the gate while THIS rejection
-    // stayed open (the sweep's one re-author makes 2 a normal tick). A high count is the signal
-    // that the region is exhausted or the gate is too tight.
     attempts: integer("attempts").notNull().default(1),
-    // The FIRST time this finding's observation was held — the attention queue's oldest-first
-    // anchor. It never moves on a re-bounce (the `created_at` invariant note_rejections carries).
+
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
-    // The overlap threshold in force when this script was rejected — snapshotted so a later
-    // retune cannot rewrite history.
+
     maxOverlap: real("max_overlap").notNull(),
-    // The lifted-phrase threshold in force when this script was rejected.
+
     minPhraseWords: integer("min_phrase_words").notNull(),
-    // The neighbour it echoed hardest — the finding whose script the gate matched it against.
+
     neighborLogId: text("neighbor_log_id"),
-    // A SNAPSHOT of the neighbour's script as it read at rejection time (the neighbour's own
-    // script can be re-rendered later; the operator must read the exact PAIR the gate compared).
+
     neighborScript: text("neighbor_script"),
-    // The measured content-word Jaccard against that neighbour (0..1).
+
     overlap: real("overlap").notNull(),
-    // The run of words lifted from the neighbour; '' when the rejection was overlap-only.
+
     phrase: text("phrase").notNull().default(""),
-    // The operator's ruling. NULL = still open (it raises a queue row). `accepted` = he read it,
-    // judged it good, and it was RENDERED to the finding (the observe render path, `force`).
-    // `discarded` = the gate was right.
+
     resolution: text("resolution", { enum: ["accepted", "discarded"] }),
     resolvedAt: text("resolved_at"),
-    // THE EVIDENCE: the observation script the model actually wrote.
+
     script: text("script").notNull(),
-    // The finding whose observation was rejected (no declared FK — the note_rejections precedent).
+
     trackId: text("track_id").notNull(),
-    // The LATEST bounce — moves with `script`/`attempts` on every re-hold. Diagnostic, never the anchor.
+
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    // ONE open rejection per finding — bounds the ledger and keeps the attention queue to one
-    // row per finding. PARTIAL, so a finding may accumulate any number of RESOLVED rejections.
     uniqueIndex("observation_rejections_open_track_idx")
       .on(table.trackId)
       .where(sql`${table.resolvedAt} is null`),
-    // The queue read: "every rejection still waiting on the operator's eye", oldest first.
+
     index("observation_rejections_open_idx").on(table.resolvedAt, table.createdAt),
   ],
 );
 
-// THE PROMPT HISTORY — the append-only override store behind the prompt registry
-// (docs/agents/prompt-registry.md). Every prompt Fluncle feeds a model at runtime has
-// a BAKED-IN DEFAULT in the repo (the registry, lib/server/prompts.ts); a row here
-// OVERRIDES that default, so the operator can tune a prompt from /admin or the CLI
-// with no deploy and no box rebake — which is the whole point, because a prompt is an
-// iterative object and shipping a code change to reword one line is a heavy loop.
-//
-// WHY ITS OWN TABLE AND NOT THE `settings` KV ABOVE. The KV is the right home for a
-// SCALAR whose only history is "what is it now" (a kill switch, a budget). A prompt is
-// none of that: it is a versioned DOCUMENT. A bad edit silently degrades every artifact
-// it touches until a human notices, so the operator must be able to see WHAT changed,
-// WHEN, and put it back — and an artifact must be able to record which version drafted
-// it (the `*_prompt_version` columns). A single mutable `value` cell can carry neither
-// the history nor the version integer the provenance columns point at. So: one row per
-// EDIT, never an update.
-//
-// APPEND-ONLY, and that is load-bearing. A row is never mutated and never deleted; the
-// ACTIVE prompt for a slug is simply its highest `version`. That makes every operation
-// a forward move with an audit trail:
-//   - edit     → insert version N+1
-//   - ROLL BACK to version K → insert version N+1 carrying version K's body
-//   - reset    → insert version N+1 carrying the repo's baked-in default body
-// A rollback is therefore just an edit whose body came from history — one operator
-// action, no destructive path, and the thing you rolled back FROM stays readable.
-//
-// `slug` is the registry key (`note_author`, `observation_script`, …), never free text:
-// an unknown slug is rejected at the API boundary, so this table cannot accumulate
-// orphan prompts for sweeps that do not exist. No row for a slug ⇒ the baked default is
-// live, and a sweep runs perfectly well having never read this table at all.
 export const promptVersions = sqliteTable(
   "prompt_versions",
   {
-    // The full prompt template. `{{variable}}` placeholders and `{{#if variable}}…
-    // {{/if}}` blocks are substituted at authoring time by `renderPrompt`
-    // (lib/server/prompts.ts); every other character is passed to the model verbatim.
     body: text("body").notNull(),
     createdAt: text("created_at").notNull(),
-    // Who made the edit. `operator` for a /admin or CLI edit (the only path today);
-    // `agent` is reserved so a future self-tuning pass is legible as such in the
-    // history rather than indistinguishable from a human's hand.
+
     createdBy: text("created_by", { enum: ["operator", "agent"] })
       .notNull()
       .default("operator"),
     id: text("id").primaryKey(),
-    // The operator's WHY, shown beside the version in the history ("shortened the
-    // neighbour block", "rolled back to v3"). Optional but strongly encouraged — it is
-    // what makes the history readable a month later.
+
     note: text("note"),
-    // The registry key. Validated against the registry before insert.
+
     slug: text("slug").notNull(),
-    // Monotonic per slug, starting at 1 (version `0` is reserved, in the provenance
-    // columns and nowhere else, to mean "the repo's baked-in default was live").
+
     version: integer("version").notNull(),
   },
-  (table) => [
-    // The active-prompt read is `where slug = ? order by version desc limit 1`, which
-    // this index serves from its leftmost column; it also enforces the one-body-per-
-    // (slug, version) invariant that makes the version integer a stable citation.
-    uniqueIndex("prompt_versions_slug_version_idx").on(table.slug, table.version),
-  ],
+  (table) => [uniqueIndex("prompt_versions_slug_version_idx").on(table.slug, table.version)],
 );
 
-// Fluncle's Logbook — one first-person travelogue entry per SECTOR-DAY (the
-// canonical days-since-epoch number from sectorDay()). Every day that had at least
-// one finding gets a written log entry, authored nightly by the on-box
-// `fluncle-logbook` sweep (a hybrid `--no-agent` cron: deterministic gap-find +
-// gather, one `claude -p` authoring call, deterministic write-back via the
-// agent-tier `create_logbook_entry` op). The public /logbook + /logbook/<sector>
-// pages render `body` (markdown) with `[[<logId>]]` figure tokens swapped for the
-// findings' poster images (docs/agents/logbook-agent.md).
-//
-// `sector` is the PK: one entry per sector-day, so the agent create is
-// idempotent-by-construction and the fill-empty-only guarantee is a pure insert
-// guard (a row already present ⇒ no-op; the operator override always wins).
-// `generatedBy` records provenance — `agent` for a cron-authored entry, `operator`
-// once a human has edited it (a sacred entry the agent never re-touches). The body
-// is a live PUBLIC Fluncle-voice surface, so it clears the same shared voice gate
-// the written note uses (banned identity words / earthly geography / the Dry Rule /
-// no "we"-as-company), scanned over the prose with the figure tokens stripped.
 export const logbookEntries = sqliteTable("logbook_entries", {
-  // The entry body — markdown prose with `[[<logId>]]` figure tokens on their own
-  // lines (the renderer swaps each for the finding's poster "photo").
   body: text("body").notNull(),
   createdAt: text("created_at").notNull(),
-  // When the CURRENT body was authored/last (re)generated (ISO). Drives the public
-  // page's lastmod + the sitemap freshness; distinct from created_at (first write).
+
   generatedAt: text("generated_at").notNull(),
-  // Provenance: `agent` = cron-authored, `operator` = human-edited (sacred — the
-  // fill-empty-only agent create never clobbers it). Plain TEXT, the enum narrows.
+
   generatedBy: text("generated_by", { enum: ["agent", "operator"] })
     .notNull()
     .default("agent"),
-  // PROVENANCE — the `logbook_entry` prompt version this entry was authored under
-  // (docs/agents/prompt-registry.md). NULL for an operator-written entry or an agent
-  // fallback to the baked-in default; `0` is the registry default; a number is the live
-  // `prompt_versions.version`. Pairs with `generated_by`: that says WHO wrote it, this
-  // says under WHICH prompt.
+
   promptVersion: integer("prompt_version"),
-  // The sector-day (days since the 2026-05-30 epoch — sectorDay() in
-  // lib/log-id-shared.ts). The natural key: one entry per day.
+
   sector: integer("sector").primaryKey(),
-  // The entry title (e.g. "Sector 036 — a slow drift through the low end").
+
   title: text("title").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
 
-// A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
-// recording-primitive, Design B; extended by the plan→recording→mixtape RFC's
-// two-table model: a PLAN is just a recording with no video and untimed cues, a
-// TAKE is a recording with video). The clip pipeline (Fluncle Studio + the cut
-// engine) cuts clips from a recording's set video WITHOUT minting a scarce Log ID
-// coordinate; only `promote` (→ a full published mixtape) ever mints one. So a
-// recording is deliberately COORDINATE-LESS — no `logId`, no spine entry — and
-// OWNS its own R2 key (unlike a mixtape, whose set video derives from its logId).
-// Standalone recordings live at `recordings/<id>/set.mp4` in the existing
-// `fluncle-videos` bucket (unguessable, never listed — accept-obscurity, no
-// private bucket). Plain text id, no declared FK (this schema declares none).
 export const recordings = sqliteTable(
   "recordings",
   {
     createdAt: text("created_at").notNull(),
     durationMs: integer("duration_ms"),
-    // `randomUUID()` at insert — the repo's universal id. A recording is
-    // coordinate-less, so there is no `logId` here.
+
     id: text("id").primaryKey(),
-    // The plan's public editorial note (moves here from the draft mixtape per
-    // D-plannedFor's sibling move; NULL for takes/legacy rows).
+
     note: text("note"),
-    // The take→plan link: a take points at its plan; NULL for a plan or an
-    // orphan take (e.g. the rolling set). Plain text id, no declared FK.
+
     parentId: text("parent_id"),
-    // The scheduled date/time (ISO) of the upcoming live session this PLAN is
-    // for — the plan-side home of the retired `mixtapes.planned_for`
-    // (D-plannedFor). `/calendar.ics` reads upcoming sessions from here.
+
     plannedFor: text("planned_for"),
-    // The R2 object key the recording OWNS (unlike a mixtape, which derives its
-    // key from its logId). Standalone recordings: `recordings/<id>/set.mp4` in
-    // the existing `fluncle-videos` bucket. NULLABLE since Deploy-1: a PLAN has
-    // no video — "has video" = `r2_key IS NOT NULL`, an explicit signal.
+
     r2Key: text("r2_key"),
     recordedAt: text("recorded_at"),
     title: text("title").notNull(),
-    // The legacy `tracklist_json` column was dropped in the plan→recording→mixtape
-    // Deploy-2 cutover: `recording_cues` is a recording's ONE cue home (the folded
-    // `db:backfill` migrated every legacy row there first).
+
     updatedAt: text("updated_at").notNull(),
-    // A human display label ("v2") for a take among its plan's takes — stable and
-    // explicit rather than derived from created_at order (D-version). Assigned by
-    // an atomic `INSERT … SELECT coalesce(max(version),0)+1` when take-creation
-    // lands (a later slice); every existing/plan row is v1.
+
     version: integer("version").notNull().default(1),
   },
   (table) => [
     index("recordings_parent_id_idx").on(table.parentId),
-    // SQLite treats NULLs as distinct in a unique index, so orphan takes/plans
-    // (parent_id NULL) coexist freely; versions are only unique WITHIN a plan.
+
     uniqueIndex("recordings_parent_version_idx").on(table.parentId, table.version),
   ],
 );
 
-// A recording's CUE — the recording-side unified cue row (RFC
-// plan→recording→mixtape §2). One owner, always: `recording_id` is NOT NULL (the
-// ownership invariant is structural — no XOR `check()` is needed beyond the NOT
-// NULL itself; the checks below guard the two genuine remaining data invariants).
-// Cues are MUTABLE working state (a plan's intended order, a take's played
-// order); the published mixtape's tracklist stays the separate, frozen
-// `mixtape_tracks` copy. `finding_id` is NULL for a played track that is not a
-// Fluncle finding; `artists_text`/`title_text` snapshot the identity so a
-// non-finding cue survives (and feeds the clip overlay). `start_ms` is NULL
-// until the operator marks the cue's start on the set timeline in the Studio.
-// Plain text ids, no declared FK (this schema declares none).
 export const recordingCues = sqliteTable(
   "recording_cues",
   {
     artistsText: text("artists_text"),
     createdAt: text("created_at").notNull(),
     findingId: text("finding_id"),
-    // A stable cue ref (the clip overlay keys off it) — `randomUUID()` at insert.
+
     id: text("id").primaryKey(),
     position: integer("position").notNull(),
     recordingId: text("recording_id").notNull(),
@@ -4180,142 +2075,31 @@ export const recordingCues = sqliteTable(
     uniqueIndex("recording_cues_recording_position_idx").on(table.recordingId, table.position),
     index("recording_cues_recording_id_idx").on(table.recordingId),
     index("recording_cues_finding_id_idx").on(table.findingId),
-    // The repo's first `check()` constraints (the RFC asked the invariants to be
-    // structural): positions are 1-based like `mixtape_tracks`, and a marked
-    // start time is never negative.
+
     check("recording_cues_position_positive", sql`"position" >= 1`),
     check("recording_cues_start_ms_non_negative", sql`"start_ms" is null or "start_ms" >= 0`),
   ],
 );
 
-// The artist entity — the canonical identity record for a music artist, keyed on the
-// Spotify artist ID (the most reliable cross-platform anchor). One row per unique
-// artist regardless of how many findings feature them; name variants collapse here.
-// `spotifyArtistId` is nullable to admit white-label or unsigned artists whose Spotify
-// profile is absent; the unique index still guards against duplicates when the id is
-// present. `slug` is the real-name kebab-cased public path segment, minted once and
-// never changed (collision-salted: "dimension", "dimension-2", ...). `mbid`,
-// `wikidataQid`, `discogsUrl` and `lastfmUrl` are the KG anchors (the resolver fills
-// them; the artist pages build `sameAs` from them). `resolvedAt` is the single
-// resolution stamp (null = never attempted; the artist-sweep queue).
 export const artists = sqliteTable(
   "artists",
   {
-    // ── THE VOICED BIO (the artist/label bio engine) ────────────────────────────────
-    // A short, Fluncle-voiced public bio for the artist — the written sibling of a
-    // finding's editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has
-    // actually LOGGED (never a fabricated discography). Authored by the future on-box
-    // sweep via the agent-tier `describe_artist` route, which VOICE-GATES it and writes
-    // it FILL-EMPTY-ONLY (an operator-written bio is never clobbered). Nullable until
-    // authored; not surfaced anywhere yet (the surfacing PR reads it). See lib/server/bio.ts.
     bio: text("bio"),
-    // ── THE BYPASS FLAG — THE CANONICAL DEFINITION (labels + albums carry the same pair) ──
-    //
-    // WHEN IT IS SET. The entity-bio sweep gives an entity three authoring attempts, and the
-    // THIRD draft LANDS even when the voice scan refuses it (`--final-attempt` →
-    // `acceptFinalDraftBio`, lib/server/bio.ts). That is an explicit operator ruling and it
-    // stands: without it the queue spins on one entity forever. What it costs is that a
-    // paragraph the gate said NO to is live on `/artist/<slug>`, in its JSON-LD, and on the
-    // unauthenticated `/mcp` surface.
-    //
-    // WHY THE COLUMNS EXIST. A `FINAL-ATTEMPT ACCEPTANCE` line in the cron's stderr is not a review
-    // channel, so these columns are the reader: they are visible to the attention queue and carry
-    // the gate's own reasons. They mirror `labels.seed_state = 'undecided'` in the bio engine, so a
-    // bypassed bio raises a
-    // `bio-review` row on the `/admin` attention queue exactly the way an unruled label does.
-    //
-    // `bio_gate_bypassed_at` — WHEN the acceptance happened, and the queue's oldest-first
-    // anchor. NULL ⇒ nothing to review (either the bio cleared the gate, or the operator has
-    // already ruled). `bio_voice_violations` — WHAT was accepted: the gate's own reasons, a
-    // JSON array of strings, verbatim from `gateOrAcceptBio`. A reason with no timestamp is
-    // not evidence, so the two always move together.
-    //
-    // SELF-CLEARING BY CONSTRUCTION. Both are written in the SAME statement as the bio
-    // (`fillEmptyArtistBio`), so a later bio that clears the gate writes NULL into them —
-    // there is no path that stores a clean bio and leaves a stale flag behind. The operator's
-    // own ruling (`resolve_bio_review`) nulls them too.
+
     bioGateBypassedAt: text("bio_gate_bypassed_at"),
-    // PROVENANCE — the `describe_artist` prompt version this bio was authored under (0 =
-    // the registry's baked default, N = operator override N), or NULL when no registry
-    // prompt produced it (an operator-typed bio). Same contract as `note_prompt_version`.
+
     bioPromptVersion: integer("bio_prompt_version"),
-    // The bio-authoring reliability marker, mirroring `context_status`. The future
-    // bio worklist picks `pending`/NULL rows; a CONFIRMED-EMPTY fact-gather (`empty`)
-    // is distinct from never-attempted so the sweep does not re-burn Firecrawl on a
-    // hopeless entity. States: pending (never attempted) · resolved (a bio is stored) ·
-    // empty (no usable facts) · failed (the fetch threw). Internal reliability state.
+
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
-    // The voice-gate reasons the final-attempt acceptance ACCEPTED, as a JSON array of
-    // strings (see `bio_gate_bypassed_at` above for the whole contract).
+
     bioVoiceViolations: text("bio_voice_violations"),
-    // ── THE MAINTAINED HUB COUNTS (docs/db-scale-backlog Wave 2 keystone 2) ─────────────
-    // THE CANONICAL DEFINITION for all three entity tables (`artists` here, `labels` and
-    // `albums` carry the same pair and point back at this block).
-    //
-    // WHAT THEY ARE. Two stored mirrors of the catalogue-scale hub group-by — the second-most
-    // repeated read shape in the app after the catalogue anti-join:
-    //   `entity ⋈ tracks left join findings group by entity having (certified > 0 or renderable >= floor)`
-    // an O(tracks) / O(track_artists) grouped scan re-run on every hub `?page=N`, every API/MCP
-    // list read, every sitemap request, the search entity gate and the bio worklists. Stored, the
-    // gate filters and orders the SMALL entity table by two indexed integers — no tracks join, no
-    // group-by. Measured 5.8× (labels hub) / 46× (artists hub, over ~225k `track_artists` edges)
-    // at 150k hosted.
-    //
-    //   - `renderable_track_count`  — the TOTAL tracks linked to this entity: certified findings
-    //     PLUS raw catalogue rows, everything the edge points at. It mirrors `HUB_RENDERABLE`
-    //     exactly, which means NO dismissed/duplicate exclusion — "renderable" is the count of
-    //     linked tracks, nothing subtler. That is what makes a maintained counter tractable: the
-    //     number reacts ONLY to an edge move, never to a per-track flag.
-    //   - `certified_finding_count` — the subset of those that HAVE a `findings` row, mirroring
-    //     `HUB_CERTIFIED`. Keystone 1 gives the cheap discriminator: `tracks.is_catalogue = 0` ⇔
-    //     certified, so this half is read off the flag, never a `findings` join.
-    //
-    // The edge is `track_artists` for artists, `tracks.label_id` / `tracks.album_id` for labels
-    // and albums.
-    //
-    // HOW THEY STAY TRUE. Written as DELTAS — never recomputed — in the SAME `db.batch` as the
-    // edge write they mirror, so a crash can never half-apply the pair. Every path that moves an
-    // edge carries one (lib/server/hub-counts.ts holds the statement builders): the publish +
-    // certify sites, the per-track and bulk link helpers (which read the OLD pointer first, so a
-    // re-point debits the old entity and credits the new), the artist-edge upserts (which diff
-    // against the existing edge set, because `on conflict do update` counts conflict rows in
-    // `rowsAffected` and so cannot drive a delta), and `mergeLabel` (which adds the loser's
-    // measured counts to the canonical — the loser's own die with its row).
-    //
-    // DELTA ARITHMETIC IS THE LAW ON A BULK PATH. Recompute-from-truth measured 27,400 ms at 150k
-    // hosted versus ~200 ms for count-the-moved-set-once-then-`+=`/`-=` — 137× worse. A bulk
-    // re-point counts the moved set ONCE and moves the two totals; it never re-derives them.
-    //
-    // INTERNAL bookkeeping, exactly like `tracks.is_catalogue`: never in a public DTO, never a
-    // lastmod bump (a count move is not a public fact about the entity). Born 0 via the DDL
-    // default, seeded onto history by `scripts/backfill-hub-counts.ts` at deploy time.
+
     certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
-    // ── THE SECONDARY KG ANCHORS (the label precedent, cloned onto the artist) ────────
-    // Two more off-site identities for the artist page's `sameAs`, alongside `mbid` +
-    // `wikidata_qid`. They follow `labels.discogs_label_id` EXACTLY: an identity column on
-    // the entity, emitted into JSON-LD, with NO rendered link and NO `artist_socials` row —
-    // Discogs and Last.fm are catalogue pages, not the artist's own channels, and the socials
-    // table is the SOCIAL surfaces only (see the `artist_socials` header). They are stored as
-    // whole URLs rather than ids because MusicBrainz hands us the URL and neither host has a
-    // stable id we could re-render from (a Discogs artist path is `<id>-<name>`).
-    //
-    // MB-RELATION-SOURCED ONLY. `classifyMbAnchorUrl` (artist-resolution.ts) mints these from a
-    // MusicBrainz url-rel and nothing else — a URL guessed from an artist's name is a fabricated
-    // anchor, and a wrong `sameAs` edge misidentifies the entity to every crawler that reads it.
-    // Written `coalesce(?, …)` by `persistResolution`, so a re-resolve never clears a known one.
+
     discogsUrl: text("discogs_url"),
     id: text("id").primaryKey(),
-    // ── THE OWNED AVATAR MASTER (RFC musickit-second-authority, U3b) ─────────────────
-    // The same image state machine as `albums`, so an artist serves its OWN 1200²-capped
-    // avatar from our R2 instead of hotlinking `i.scdn.co`. The `backfill_cover_masters`
-    // sweep (kind=artist) downloads the stored `image_url` (Spotify's largest profile
-    // image — the floor, ≤640; an Apple artist-artwork template is the future higher-res
-    // source decision A leaves room for) into `artists/<slug>.<ext>`, byte-verified ≤1200,
-    // and stamps `image_source`. The worklist selects only artists that already carry an
-    // `image_url` (a source to own), so an imageless artist stays `pending` until the
-    // Spotify backfill fills it. Served via `bestArtistAvatarUrl` (media.ts) — owned master
-    // preferred, raw `image_url` the fallback, the label `logo_key ?? image_url` precedent.
+
     imageAttemptedAt: text("image_attempted_at"),
     imageFailures: integer("image_failures").notNull().default(0),
     imageKey: text("image_key"),
@@ -4324,30 +2108,18 @@ export const artists = sqliteTable(
       .notNull()
       .default("pending"),
     imageUpdatedAt: text("image_updated_at"),
-    // The artist's canonical avatar SOURCE — the largest Spotify profile image (an
-    // `i.scdn.co` URL, the same host/precedent as `tracks.album_image_url`).
-    // Filled from the Spotify `/v1/artists` lookup at entity create + by the
-    // image backfill; null until fetched (the render falls back to a monogram
-    // tile). The owned-master sweep downloads THIS into R2 (image_key above).
+
     imageUrl: text("image_url"),
-    /** The artist's Last.fm page — the second secondary KG anchor; see `discogs_url` above. */
+
     lastfmUrl: text("lastfm_url"),
     mbid: text("mbid"),
     name: text("name").notNull(),
-    /**
-     * Tracks credited to this artist that the mix engine can actually place: a non-null key and a
-     * stored MuQ embedding. Maintained atomically with key/embedding and `track_artists` writes so
-     * `/mix/artists` reads the artist-grain projection instead of grouping the growing edge table.
-     */
+
     rankableTrackCount: integer("rankable_track_count").notNull().default(0),
-    /** Total linked tracks (certified + catalogue) — see `certified_finding_count` above. */
+
     renderableTrackCount: integer("renderable_track_count").notNull().default(0),
     resolvedAt: text("resolved_at"),
-    // LEGACY per-artist review stamp — superseded by `artist_socials.reviewed_at` (review
-    // moved down to the link). It is no longer written or read for needs-a-look; it survives
-    // only as the ONE-TIME derivation source for the per-link backfill
-    // (scripts/backfill-artist-social-reviews.ts), which reads it to seed each link's stamp,
-    // then never touches it again. Droppable once that backfill has run in prod.
+
     reviewedAt: text("reviewed_at"),
     slug: text("slug").notNull().unique(),
     spotifyArtistId: text("spotify_artist_id").unique(),
@@ -4357,83 +2129,27 @@ export const artists = sqliteTable(
   },
   (table) => [
     index("artists_name_idx").on(table.name),
-    // The `/artists` hub read + the name lookups sort/seek by `name collate nocase`. The
-    // `name` column is BINARY-collated, so the sort key carries `collate nocase` VERBATIM
-    // (the `labels_seed_state_name_idx` precedent). `slug` is a COVERING trailer, not
-    // decoration: a bare nocase index did NOT flip the plan — the planner still scanned every
-    // artist — but with `slug` in the index the read is served entirely from it (name + slug),
-    // so the planner SEEKS via this index instead. Plain ASC (SQLite reverse-scans it). Keeps
-    // the binary `artists_name_idx` above for exact-case seeks.
+
     index("artists_name_nocase_idx").on(sql`${table.name} collate nocase`, table.slug),
-    // The taste picker's exact order: most rankable tracks first, then name ASC. Negating the count
-    // makes both terms ASC so one ordinary expression index serves the mixed-direction order without
-    // a temporary sort (and avoids a DESC declaration changing unrelated generated migrations).
+
     index("artists_mixable_order_idx")
       .on(sql`-${table.rankableTrackCount}`, table.name, table.slug)
       .where(sql`${table.rankableTrackCount} > 0`),
-    // The maintained hub gate's ordering/filtering column (keystone 2): the hub read becomes a
-    // walk of THIS index over the small artists table instead of a grouped scan of the ~225k-edge
-    // `track_artists`. Plain ASC — SQLite reverse-scans it, and a drizzle `desc()` index poisons
-    // the snapshot (the ratified trap).
+
     index("artists_renderable_count_idx").on(table.renderableTrackCount),
-    // THE HUB LISTING — the canonical shape for all three entity tables. Its key is the hub's
-    // ORDER (`slug`) and its partial WHERE is the hub's MEMBERSHIP, spelled exactly as
-    // `hubInclusionWhere` (lib/server/labels.ts) spells it for `ARTIST_INDEX_MIN_FINDINGS` (3).
-    // SQLite admits a partial index for a statement carrying that same expression, and it drops the
-    // term from the per-row check only when the floor is the same LITERAL: with a bound `?` the
-    // planner still picks the index but seeks the table row for every entry to re-test the
-    // counters. So the gate inlines its floor, and the hub total, the A–Z lane counts, the page
-    // slice, the MCP browse, the boundary extraction, and the deep-page first row + seek all read
-    // this index instead of the whole table; the slice touches the table only for the rows it
-    // returns. UNIQUE because `slug` already is: a distinct key lets `order by slug, id` stream
-    // with no sort. entity-hub-seek.integration.test.ts pins the literal to the constant, so a
-    // floor change fails the build until a migration re-creates the index. Plain ASC.
+
     uniqueIndex("artists_hub_listing_idx")
       .on(table.slug)
       .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
-    // The identity seek behind the artist-edge HOMONYM SEAL (lib/server/artists.ts). Both of its
-    // mbid clauses — "is there a row carrying this credit's mbid" and "does the name-folded row
-    // carry a different one" — run per credited artist inside the crawler's per-release link, so
-    // without an index each one scans the whole artists table. Not unique on purpose: `mbid` is
-    // nullable and overwhelmingly null today, and a UNIQUE index would turn the credit sweep's
-    // rare double-mint into a write error rather than a row for the operator to merge.
-    //
-    // `slug` RIDES ALONG as a trailing column so the index also COVERS the visibility read: the
-    // global `unlisted` artist rule is keyed on the MBID, and every public artist read resolves it
-    // to the slugs it hides through exactly this seek (lib/server/artist-visibility.ts). Without
-    // the trailing column that resolution seeks a table row per hidden artist; with it the whole
-    // subquery is index-only, which is what keeps the hub's aggregate reads off the table. It costs
-    // the seal nothing: `mbid` still leads. Plain ASC.
+
     index("artists_mbid_idx").on(table.mbid, table.slug),
-    // THE BIO-REVIEW ATTENTION READ — the canonical shape for all three entity tables.
-    // `where bio_gate_bypassed_at is not null order by bio_gate_bypassed_at asc limit 25`
-    // (listBioReviewRows, lib/server/bio-review.ts). PARTIAL, on the `labels_undecided_queue_idx`
-    // precedent and for the same reason with more force: the flag is set only by the sweep's
-    // third-attempt acceptance, so the lit slice is a handful of rows against a crawler-swollen
-    // table, and a NON-partial index would carry an entry for every artist (SQLite indexes NULLs)
-    // to serve a read that wants none of them. It also SHRINKS to nothing as the operator rules
-    // the rows out. Plain ASC (SQLite reverse-scans it); a `desc()` index poisons the snapshot.
+
     index("artists_bio_review_queue_idx")
       .on(table.bioGateBypassedAt)
       .where(sql`${table.bioGateBypassedAt} is not null`),
   ],
 );
 
-// The sonic galaxy — a stable-ID, operator-named cluster over the MuQ embedding
-// space (docs/agents/cluster-engine.md). The FIRST time galaxy identity lives in the database:
-// the four vibe-quadrant galaxies were a hardcoded constant (`lib/galaxies.ts`),
-// derived per-track from the dead vibe axes; these are the real, sound-derived map.
-// The structural precedent is `artists` (the slug-addressable public entity), with
-// `artists.spotifyArtistId` as the nullable-`.unique()` precedent — SQLite treats
-// NULLs as distinct in a UNIQUE index, so many unnamed galaxies coexist. `handle` is
-// the permanent machine-minted admin/CLI identity (the plan-handle precedent, via
-// `galaxySlug(id, attempt)`), minted once at birth, never renamed, never public;
-// `name`/`slug` are the operator-authored public identity, NULL until named (an
-// unnamed galaxy is admin-only). `centroidJson` is the 1024-d nightly assignment
-// anchor. `retiredAt` is set when a galaxy empties (row kept, ID never recycled);
-// `splitRequestedAt` is the operator's split trigger the nightly tick consumes.
-// Member counts are DERIVED (`COUNT(*) GROUP BY galaxy_id`), never stored. See
-// docs/agents/cluster-engine.md.
 export const galaxies = sqliteTable("galaxies", {
   centroidJson: text("centroid_json").notNull(),
   createdAt: text("created_at").notNull(),
@@ -4446,19 +2162,6 @@ export const galaxies = sqliteTable("galaxies", {
   updatedAt: text("updated_at").notNull(),
 });
 
-// The many-to-many join between tracks (findings) and their artists. `position` is
-// 1-based and records the original Spotify artist order (first = lead). Composite PK
-// (track_id, artist_id) enforces uniqueness.
-//
-// ── `role` — the credit KIND (RFC label-lineage-remixer, U2) ──────────────────────
-// NULL = a performer (the default, and the ONLY kind v1 had — a lead/featured artist).
-// `'remixer'` is the first non-null value, DERIVED — never guessed — where the title's
-// "(X Remix)" descriptor names a remixer who EXACTLY folds to one of the track's linked
-// artists (`deriveRemixerNames`, track-match.ts; stamped by `stampRemixerRoles`,
-// artists.ts, at the publish / crawler / anchor write paths + the deploy backfill). An
-// unmatched remixer name (an uncertified remixer with no `artists` row) stays absent —
-// there is no row to stamp. The credit is markup-only for now: it becomes a schema.org
-// `contributor` Role on the MusicRecording (log-schema.ts); the visible page is unchanged.
 export const trackArtists = sqliteTable(
   "track_artists",
   {
@@ -4474,27 +2177,6 @@ export const trackArtists = sqliteTable(
   ],
 );
 
-// ── The similar-artists engine's derived artifacts (artist-relationship doc, D6) ─────────────
-//
-// Two precomputed tables that lift the `/artist/<slug>` "similar artists" rail off the
-// page-load whole-corpus vector read. They are to the artist graph what the `catalogue_*`
-// ranking columns are to The Ear (docs/the-ear.md): a nightly-style precompute, self-healing
-// off a PER-ARTIST fingerprint, so the request path does no vector math. The `rank_artists` sweep
-// (lib/server/artist-dossier.ts) writes them; `getArtistNeighbours` reads `artist_similar`.
-
-// One artist's position in MuQ embedding space — the MEAN over EVERY embedded track that
-// credits them, findings AND catalogue alike (the rail is catalogue-wide by design; the only
-// filter is "the track has a `track_embeddings` row"). The artist-level mean is the accepted
-// shape here:
-// The Ear's max-similarity-never-a-centroid doctrine is about a per-USER taste that is
-// multi-modal, whereas an artist's own discography IS the thing being summarised, so its
-// centroid is a faithful identity point. `vector_count` is how many track vectors folded into
-// the mean (0 means the artist lost all embeddings — its row + edges are dropped). `rank_corpus`
-// is the PER-ARTIST staleness fingerprint the sweep stamped (`"<version>:<this artist's embedded-track
-// count>"`): a row whose fingerprint disagrees with the artist's live count is stale and recomputes
-// on a later tick — so a new finding re-stales only the artists it credits, never the whole archive.
-// `centroid_blob` is a native `F32_BLOB(1024)` so the edge re-rank ranks it IN SQL
-// (`vector_distance_cos`), never in the isolate.
 export const artistCentroids = sqliteTable("artist_centroids", {
   artistId: text("artist_id").primaryKey(),
   centroidBlob: float32Vector("centroid_blob").notNull(),
@@ -4503,14 +2185,6 @@ export const artistCentroids = sqliteTable("artist_centroids", {
   vectorCount: integer("vector_count").notNull(),
 });
 
-// The precomputed top-K sonically-nearest neighbours for each artist — the edges the rail reads.
-// K is 8 (the rail shows 4; the headroom is for the MCP `get_similar_artists` tool). `similarity`
-// is cosine similarity to the target's centroid (1 − `vector_distance_cos`), `rank` is its 0-based
-// position (0 = nearest). The PK is (artist_id, rank): the read is an ordered PK-prefix walk of one
-// artist's edges (`order by rank limit N`), a btree range scan, never a table scan of a growing
-// table — no `desc()` anywhere (SQLite reverse-scans a plain ASC index for a descending read).
-// `rank_corpus` is the edge-freshness fingerprint (the same value the centroids carry), so the
-// sweep can tell an artist's edges from an older corpus apart from fresh ones and re-rank the drift.
 export const artistSimilar = sqliteTable(
   "artist_similar",
   {
@@ -4527,15 +2201,6 @@ export const artistSimilar = sqliteTable(
   ],
 );
 
-// The artist social identity graph — one row per (artist, platform). Mirrors
-// `mixtape_social_posts` structurally. `platform` covers the social surfaces only
-// (spotify|youtube|mixcloud|soundcloud|instagram|tiktok|bandcamp|twitter|facebook|
-// homepage); the KG anchors mbid/wikidata live as `artists` columns, NOT here.
-// `source` records who found the link. `status` is the trust state: MB-sourced or
-// operator-added links are `auto` (trusted); Firecrawl-found links are `candidate`
-// until an operator confirms them — `candidate` rows are excluded from the public
-// artist page and `sameAs` JSON-LD until promoted to `confirmed`. This is the identity
-// graph that feeds the public artist page + `sameAs`; there is no follow/champion state.
 export const artistSocials = sqliteTable(
   "artist_socials",
   {
@@ -4559,12 +2224,7 @@ export const artistSocials = sqliteTable(
         "homepage",
       ],
     }).notNull(),
-    // When the operator last acknowledged THIS link — the review stamp, moved down from
-    // the artist (docs/artist-relationship.md). Review lands on the LINK, not the artist:
-    // a link "needs a look" when `reviewed_at IS NULL`. A resolver INSERT (a new link) or a
-    // URL CHANGE nulls this (born/re-armed unreviewed); an untouched re-resolve keeps it; an
-    // operator add/edit is born reviewed (`reviewed_at = now`, they just wrote it). "Looks
-    // good" bulk-stamps every one of an artist's links; the fresh-links section stamps one.
+
     reviewedAt: text("reviewed_at"),
     source: text("source", { enum: ["musicbrainz", "firecrawl", "operator"] }).notNull(),
     status: text("status", { enum: ["auto", "candidate", "confirmed"] }).notNull(),
@@ -4573,224 +2233,72 @@ export const artistSocials = sqliteTable(
   },
   (table) => [
     uniqueIndex("artist_socials_artist_platform_idx").on(table.artistId, table.platform),
-    // The fresh-links queue + the board's fresh-links section both look for the unreviewed links
-    // (`reviewed_at IS NULL`). This is a FULL index on the column, not a partial one: NULLs sort
-    // first in an ASC index, so the unreviewed slice is a seek at its head — but every reviewed row
-    // is indexed and paid for on write too, and the NULL slice itself grows with every
-    // resolver-minted link (nothing stamps them in bulk). So it bounds the SEEK, not the SET, and
-    // the aggregate reads over it (`listFreshLinks`, `listArtistReviewRows` in lib/server/artists.ts)
-    // still group the whole unreviewed partition before their LIMIT — docs/db-scale-backlog Wave 1
-    // item 17, DEFERRED: the index alone cannot bound that GROUP BY. Narrowing this to a partial
-    // `where reviewed_at is null` is a schema change and therefore a hosted-Turso question, not a
-    // local one.
+
     index("artist_socials_unreviewed_idx").on(table.reviewedAt),
     index("artist_socials_platform_idx").on(table.platform),
-    // The candidate-links read per artist (`where artist_id = ? and status = 'candidate'`).
-    // A PARTIAL index over just the rare `candidate` slice — most links are `auto`/`confirmed`,
-    // so the index scans only the handful awaiting a ruling instead of every link on the
-    // artist (proven: it scans only the candidate slice on the 150k scratch DB). The shrinking-
-    // partial precedent is `tracks_embed_queue_idx` / `crawl_frontier`'s demand-rank clear — NOT
-    // `artist_socials_unreviewed_idx` above, which despite its name carries no `where` at all.
+
     index("artist_socials_candidate_idx")
       .on(table.artistId)
       .where(sql`${table.status} = 'candidate'`),
   ],
 );
 
-// The record LABEL — a first-class entity, and the operator's CRAWL-SEED control.
-//
-// `tracks.label` stays what it has always been: the raw captured string Deezer
-// handed back on the add. This table is its normalized twin, related by `slug`
-// (`slugify(tracks.label) = labels.slug`), so `Pilot.` and `Pilot` fold into one
-// label without a destructive rewrite of the findings. Every label appearing on a
-// finding gets a row automatically (the publish path upserts it; the deploy-time
-// reconcile is the self-healing backstop).
-//
-// ── `seed_state` IS CRAWL SCOPE, NEVER STORAGE ──────────────────────────────────
-// This column answers exactly one question: MAY THE FUTURE CATALOGUE CRAWLER SEED
-// FROM THIS LABEL? Nothing else. It is the operator's explicit ruling, and it must
-// stay that way in every reader:
-//   - `enabled`    — the next crawl may seed from this label.
-//   - `disabled`   — the next crawl may NOT. It removes the label from the NEXT
-//                    crawl's seed set and touches NOTHING already stored: no
-//                    deletion, no hiding, no retroactive effect on tracks, on
-//                    findings, or on anything a previous crawl already brought in.
-//                    A disabled label's findings keep rendering exactly as before.
-//   - `undecided`  — the operator has not ruled yet. A brand-new label enters HERE
-//                    (the DDL default): never silently crawled, never silently
-//                    dropped. It surfaces as an `/admin` attention row until ruled.
-// "What we crawl FROM" and "what we KEEP" are separate concepts. Never join this
-// column to a read that decides what is shown, kept, or deleted.
-//
-// `ruled_at` is the OPERATOR's stamp — set only by the operator-tier `update_label`
-// write. NULL means no human has ruled this label, which is what lets the one-time
-// D7 bootstrap (scripts/backfill-labels.ts) seed a state without ever clobbering an
-// operator's decision. `slug` is the identity + the join key. The catalogue crawler
-// reads the enabled set via `list_labels_admin?seedState=enabled`. See docs/label-entity.md.
-// ── THE LABEL'S OWN IMAGE (its real logo, not a borrowed album cover) ───────────
-// A label surface (the /labels cards, the /label/<slug> page, search, the hover
-// card) shows the label's OWN image rather than a finding's album art, which would be an
-// arbitrary sleeve for every label whose cover doesn't happen to carry the logo.
-// These columns give a label its OWN image, resolved from Discogs (labels are
-// first-class there and `GET /labels/{id}` returns a real logo), with a Wikidata
-// P154 fallback and the freshest-cover as the floor. The identity is walked once
-// (MusicBrainz label search → its curated Discogs/Wikidata url-rels), the image is
-// downloaded ONCE and stored in our own R2 (never hotlinked — Discogs' ToS forbids
-// it and image requests need the authed token), and the resolve state keeps a
-// failure from being retried forever. See docs/label-entity.md + label-images.ts.
-//   - `mb_label_id` / `discogs_label_id` — the resolved external identity. The
-//     crawler already resolves the MB id at walk time and now persists it here;
-//     the resolve sweep backfills the rest (and the labels the crawler never walks).
-//   - `image_key` — the R2 object key of the stored logo (served from
-//     found.fluncle.com via `labelLogoUrl`, up the shared owned-cover ladder). NULL = no own
-//     image, fall to the cover.
-//   - `image_updated_at` — the `?v` bust vintage, the albums/artists column cloned across.
-//   - `image_state` — the resolve lifecycle: `pending` (needs a pass; the DDL
-//     default, so every existing + future label enters the worklist), `resolved`
-//     (has a logo), `none` (checked, no image anywhere — terminal, floors to cover).
-//   - `image_attempted_at` / `image_failures` — the reliability pair (the shipped
-//     backfill convention): a transient failure backs off and is retried; a
-//     persistent one gives up (→ `none`), so the sweep never storms a vendor.
 export const labels = sqliteTable(
   "labels",
   {
-    // ── THE VOICED BIO (the artist/label bio engine) ────────────────────────────────
-    // A short, Fluncle-voiced public bio for the label — the written sibling of a finding's
-    // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
-    // on this label (never a fabricated roster). Authored by the future on-box sweep via the
-    // agent-tier `describe_label` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
-    // (an operator-written bio is never clobbered). Nullable until authored; not surfaced
-    // anywhere yet (the surfacing PR reads it). See lib/server/bio.ts.
     bio: text("bio"),
-    // The final-attempt bypass flag — WHEN a bio the voice scan refused was stored anyway,
-    // and the `bio-review` attention row's oldest-first anchor. The canonical explanation of
-    // the pair lives on `artists.bio_gate_bypassed_at` above.
+
     bioGateBypassedAt: text("bio_gate_bypassed_at"),
-    // PROVENANCE — the `describe_label` prompt version this bio was authored under (0 = the
-    // registry's baked default, N = operator override N), or NULL when no registry prompt
-    // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
+
     bioPromptVersion: integer("bio_prompt_version"),
-    // The bio-authoring reliability marker, mirroring `context_status`: pending (never
-    // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
-    // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
+
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
-    // The voice-gate reasons that acceptance ACCEPTED, a JSON array of strings. See
-    // `artists.bio_gate_bypassed_at`.
+
     bioVoiceViolations: text("bio_voice_violations"),
-    /**
-     * Linked tracks that HAVE a `findings` row (`tracks.is_catalogue = 0`) — the maintained
-     * mirror of `HUB_CERTIFIED` over `tracks.label_id`. The canonical explanation of the pair
-     * (semantics, the delta contract, why recompute is banned on a bulk path) is on
-     * `artists.certified_finding_count` above.
-     */
+
     certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
-    // MusicBrainz's DISAMBIGUATION comment — the parenthetical an editor writes when a label
-    // name is not unique ("UK drum & bass label", "1990s US hip-hop imprint"). It is the one
-    // fact that answers "WHICH Helix?" at ruling time, so it rides the `/admin/labels` station's
-    // identity line beside the founding facts and the MBID. Walked by the lineage sweep from the
-    // same `/label/<mbid>` lookup that already carries it (label-lineage.ts) and stored VERBATIM;
-    // NULL until walked, and NULL for the many labels MusicBrainz never needed to disambiguate.
-    // OPERATOR-FACING only — the public `/label/<slug>` page never speaks it.
+
     disambiguation: text("disambiguation"),
-    // The Discogs label id (from the MB label's curated Discogs url-rel) — the source
-    // of the logo image. NULL until the resolve sweep walks it (or MB carried no link).
+
     discogsLabelId: integer("discogs_label_id"),
-    // ── LABEL LINEAGE (RFC label-lineage-remixer, U1) ───────────────────────────────
-    // The label's founding place — MusicBrainz's `area.name` (e.g. "London", "United
-    // Kingdom"). Emitted as the Organization's `location` Place on `/label/<slug>` and
-    // (with `founding_date`) as the visible "Founded 1996 · London" reference line. NULL
-    // until the lineage sweep walks it, or when MB carries no area. See label-lineage.ts.
+
     foundedLocation: text("founded_location"),
-    // The label's founding date — MusicBrainz's `life-span.begin`, stored VERBATIM (a bare
-    // year "1996" or a full date "1996-04-29"; never re-formatted). Emitted as the
-    // Organization's `foundingDate` (schema.org accepts a year or a full date). NULL until
-    // walked, or when MB carries no begin date.
+
     foundingDate: text("founding_date"),
     id: text("id").primaryKey(),
-    // The last time the image resolve sweep attempted this label (reliability/backoff).
+
     imageAttemptedAt: text("image_attempted_at"),
-    // Consecutive resolve failures — drives the backoff and the give-up cap (→ `none`).
+
     imageFailures: integer("image_failures").notNull().default(0),
-    // The R2 object key of the stored logo (e.g. `labels/<slug>.jpg`), served from
-    // found.fluncle.com. NULL = no own image; the surface falls back to the cover.
+
     imageKey: text("image_key"),
-    // The image resolve lifecycle (see the header). `pending` is the DDL default so
-    // every label — existing and future — enters the worklist automatically.
+
     imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
       .notNull()
       .default("pending"),
-    // The `?v` bust VINTAGE, the `albums`/`artists` column cloned onto the label: a replaced
-    // logo bumps it, re-keying every Cloudflare Images rendition of the master (the
-    // video-variants `?v` lesson — a transform cache survives a zone purge). NULL for a logo
-    // resolved before this column existed, which floors the bust to a constant rather than
-    // failing. Read by `labelLogoUrl` (media.ts), which serves the logo up the SAME
-    // 64/300/640/1200 owned-cover ladder every album and artist image rides.
+
     imageUpdatedAt: text("image_updated_at"),
-    // ── THE FRESHNESS TAP (D8) ───────────────────────────────────────────────────────
-    // A second vendor (Spotify) taps day-one freshness for ENABLED seed labels only: a bounded
-    // per-label probe that mints METADATA-ONLY catalogue rows with day-one release dates, closing
-    // the ~2-week MusicBrainz-editorial-lag cliff on /fresh. MusicBrainz still WALKS the graph
-    // (crawl.ts); the tap only TAPS freshness — it never expands the graph (no new labels, no artist
-    // hops) and never certifies. There is NO id-resolution step: the label NAME is the Spotify
-    // `label:` query, corroborated by the album's copyrights. See label-releases.ts.
-    //   - `label_releases_checked_at`   — when the probe last SUCCESSFULLY tapped this label's fresh
-    //                                     releases. Drives the oldest-first rotation + the re-probe
-    //                                     cadence. NULL until first probed.
-    //   - `label_releases_attempted_at` / `label_releases_failures` — the reliability pair (the
-    //                                     label-images convention): the last attempt that hit a
-    //                                     TRANSIENT Spotify error + the consecutive-error streak,
-    //                                     driving the failure-scaled backoff.
+
     labelReleasesAttemptedAt: text("label_releases_attempted_at"),
     labelReleasesCheckedAt: text("label_releases_checked_at"),
     labelReleasesFailures: integer("label_releases_failures").notNull().default(0),
-    // ── LABEL LINEAGE reliability (the label-images convention, cloned) ──────────────────────
-    // The lineage sweep (label-lineage.ts) walks each label's MusicBrainz life-span + area +
-    // its label-label relationships once, up its own terminal state machine — the label-images
-    // triple, applied to lineage instead of the logo, so a resolved/none label is never re-walked
-    // and a persistent failure gives up.
-    //   - `lineage_attempted_at` — the last attempt (drives the cooldown backoff).
-    //   - `lineage_failures` — consecutive failures (drives the give-up cap → `none`).
-    //   - `lineage_state` — `pending` (the DDL default, so every existing + future label enters
-    //     the worklist), `resolved` (walked; whatever MB carried is stored), `none` (no MB
-    //     identity to walk — terminal).
+
     lineageAttemptedAt: text("lineage_attempted_at"),
     lineageFailures: integer("lineage_failures").notNull().default(0),
     lineageState: text("lineage_state", { enum: ["pending", "resolved", "none"] })
       .notNull()
       .default("pending"),
-    // ── THE DISCOVERED-LABEL FOLD KEY (catalogue-graph, inline label linking) ────────────────
-    // The MusicBrainz label MBID — the STABLE identity a DISCOVERED label folds on, so a crawled
-    // release's label edge collapses two spellings that slugify apart ("Med School" ⇄ "Medschool")
-    // onto one row, rather than minting a duplicate. The crawler resolves it at walk time (the seed
-    // path via `expandSeedLabel` → `setLabelMbLabelId`; the discovered path via `ensureLabel(name,
-    // mbLabelId)`), and the image sweep walks it for the label's curated Discogs + Wikidata url-rels.
-    // Nullable and NON-KEYING for existing rows: a publish-minted / pre-crawl label folds on `slug`
-    // and carries NULL here until the one-off `backfill-label-mbid.ts` populates it, and a discovered
-    // label with no MBID still folds by the slug/alias path. UNIQUE index below — SQLite treats NULLs
-    // as distinct, so the many NULL rows never collide. See docs/label-entity.md.
+
     mbLabelId: text("mb_label_id"),
-    // The display name — the first raw `tracks.label` spelling seen for this slug.
+
     name: text("name").notNull(),
-    // ── THE PARENT EDGE (RFC label-lineage-remixer, U1) ─────────────────────────────
-    // The `labels.id` this label is a SUBLABEL / imprint of — MusicBrainz's `label ownership`
-    // / `imprint` label-rel walked with `direction = 'backward'` (verified against real MB data:
-    // Med School → Hospital Records). A self-reference, nullable; the smallest honest model, since
-    // an imprint has one parent in practice and the SUBLABELS are the reverse read (`where
-    // parent_label_id = ?`). Set fill-empty-only by the lineage sweep, and ONLY when the parent MB
-    // label already exists in `labels` by MBID — this path NEVER mints a label (an unmatched parent
-    // is counted in the sweep summary, never created). Emitted as the Organization's
-    // `parentOrganization` / `subOrganization` `@id` edges. See label-lineage.ts.
+
     parentLabelId: text("parent_label_id"),
-    /**
-     * Total tracks pointing at this label (certified + catalogue) — the maintained mirror of
-     * `HUB_RENDERABLE` over `tracks.label_id`, with NO dismissed/duplicate exclusion. See
-     * `artists.certified_finding_count` for the full contract.
-     */
+
     renderableTrackCount: integer("renderable_track_count").notNull().default(0),
     ruledAt: text("ruled_at"),
-    // The crawl tick's label-scope re-arm watermark. An enable or explicit operator re-walk
-    // stamps it; other rulings preserve the previous watermark. Nullable, with no DDL default.
+
     scopeChangedAt: text("scope_changed_at"),
     seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
       .notNull()
@@ -4799,86 +2307,38 @@ export const labels = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    // The discovered-label fold: `where mb_label_id = ?` resolves an existing label before the
-    // alias/slug path, so one MusicBrainz label is one row across every spelling it walks in under.
     uniqueIndex("labels_mb_label_id_idx").on(table.mbLabelId),
-    // The SUBLABELS reverse read (`where parent_label_id = ?`) — the `/label/<slug>` page's
-    // `subOrganization` edges. An indexed seek, not a scan of the growing labels table.
+
     index("labels_parent_label_id_idx").on(table.parentLabelId),
-    // The lineage sweep's worklist: `where lineage_state = 'pending'`, slug-cursored. A PARTIAL
-    // index over exactly the un-walked slice, so its cost SHRINKS as the backlog drains rather
-    // than scanning the whole (crawler-swollen) labels table each tick (the recording-mbids
-    // `tracks_mb_recording_id_queue_idx` discipline).
+
     index("labels_lineage_queue_idx")
       .on(table.slug)
       .where(sql`${table.lineageState} = 'pending'`),
-    // The freshness-tap worklist (D8): the probe reads ENABLED seed labels oldest-probe first
-    // (`order by label_releases_checked_at asc`). A PARTIAL index over exactly that allowlisted
-    // slice, so the probe never scans the crawler-swollen labels table — the seed set is tens of
-    // rows, the table is thousands. Plain ASC (SQLite reverse-scans it); a `desc()` index poisons
-    // the snapshot (the drizzle-kit desc-index trap).
+
     index("labels_label_releases_queue_idx")
       .on(table.labelReleasesCheckedAt)
       .where(sql`${table.seedState} = 'enabled'`),
-    // The /admin dashboard's label-review attention queue: the oldest labels still awaiting the
-    // operator's ruling (`where seed_state = 'undecided' order by created_at asc limit 25`,
-    // listLabelReviewRows). A PARTIAL index over exactly the un-ruled slice — the seed_state=
-    // 'enabled' and lineage_state='pending' worklists above set the precedent — so it never scans
-    // the crawler-swollen labels table and SHRINKS as the operator rules rows out of `undecided`.
-    // Plain ASC (SQLite reverse-scans it); a `desc()` index poisons the snapshot (the ratified trap).
+
     index("labels_undecided_queue_idx")
       .on(table.createdAt)
       .where(sql`${table.seedState} = 'undecided'`),
-    // The /admin/labels station read (listLabels): `where seed_state = ? order by name collate
-    // nocase`. The `name` column is BINARY-collated, so the sort key is `name collate nocase` —
-    // the index column carries that collation VERBATIM so the composite serves BOTH the equality
-    // filter and the case-insensitive ORDER BY as one index walk (no temp B-tree sort). Plain ASC
-    // (SQLite reverse-scans it).
+
     index("labels_seed_state_name_idx").on(table.seedState, sql`${table.name} collate nocase`),
-    // The maintained hub gate's ordering/filtering column (keystone 2) — the `/labels` hub, the
-    // API/MCP list, the sitemap rows and the bio worklist all filter on it instead of grouping
-    // `tracks`. Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
+
     index("labels_renderable_count_idx").on(table.renderableTrackCount),
-    // The hub listing for `LABEL_INDEX_MIN_TRACKS` (3), exactly as `artists_hub_listing_idx` —
-    // see the reasoning there. Plain ASC.
+
     uniqueIndex("labels_hub_listing_idx")
       .on(table.slug)
       .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
-    // A label NAME on its own (`name = ? collate nocase`, `name like ?`): search's label name arm
-    // and its tier-2 exact-label probe. `labels_seed_state_name_idx` leads with `seed_state`, so it
-    // cannot serve a name alone. Bare on purpose: both reads take the id and the gate counters off
-    // the row anyway, and a bare key keeps equal names in rowid order, the order a table scan
-    // returns them in, so the probe's `limit 1` still lands on the same row. Plain ASC.
+
     index("labels_name_nocase_idx").on(sql`${table.name} collate nocase`),
-    // The bio-review attention read (`where bio_gate_bypassed_at is not null order by … asc`).
-    // PARTIAL, exactly as `artists_bio_review_queue_idx` — see the reasoning there. Plain ASC.
+
     index("labels_bio_review_queue_idx")
       .on(table.bioGateBypassedAt)
       .where(sql`${table.bioGateBypassedAt} is not null`),
   ],
 );
 
-// ARTIST RULES — the exact-MBID exceptions, on two axes that are read independently.
-//
-//   - ACQUISITION (`allow` / `block`): what a future crawl takes. Per-label (`label_id` set) or
-//     global (`label_id` null); per-label beats global, and both beat the label's seed state.
-//   - VISIBILITY (`unlisted`): whether the artist ENTITY has a public page. GLOBAL ONLY — a page
-//     is not per-label — and inert at crawl time, so an `unlisted` act's records still store
-//     exactly as the label seed state decides. This is the DnB-remix-of-a-pop-song disposition:
-//     MusicBrainz bills the remix to the original artist, so the remix belongs in the archive
-//     while the pop act never earns a `/artist/<slug>` page.
-//
-// THE TWO AXES SHARE ONE GLOBAL SLOT. `artist_rules_global_artist_idx` is unique on `artist_mbid`
-// where `label_id` is null, so an artist carries at most ONE global ruling and all three verdicts
-// compete for it: `unlisted` and a global `allow`/`block` are mutually exclusive, and a second
-// global add is a 409 naming the verdict already held. A PER-LABEL `allow`/`block` is a different
-// slot and coexists with a global `unlisted` freely — which is the combination that matters, since
-// visibility and acquisition are then both expressible at once. "Global allow AND no page" is the
-// one combination the storage cannot express; splitting visibility onto its own column would be
-// the fix, and is deliberately not this table's shape today.
-//
-// Visibility is derived at read time from this row, never stamped onto `artists`, so authoring or
-// removing the rule flips the page with no backfill.
 export const artistRules = sqliteTable(
   "artist_rules",
   {
@@ -4908,37 +2368,6 @@ export const artistRules = sqliteTable(
   ],
 );
 
-// LABEL ALIASES — two spellings, one label, ISRC-anchored trust (RFC musickit-second-authority,
-// U2a). The `artist_socials` precedent: a per-label side table of alternative spellings, each
-// carrying its source + a candidate/confirmed status, so a second metadata authority (Apple's
-// album `recordLabel`, corroborated by MusicBrainz over a shared ISRC) can propose that
-// "Med School Recordings" is the same label as "Medschool" WITHOUT ever rewriting the immutable
-// `tracks.label` string or auto-changing `labels.name`. A JSON column was rejected on the label
-// entity's own no-denormalization principle (docs/label-entity.md).
-//
-// ── WHAT EACH COLUMN IS ─────────────────────────────────────────────────────────
-//   - `label_id`   — the CANONICAL label this alias belongs to. The alias is another spelling
-//                    OF this label, never a label of its own.
-//   - `alias`      — the raw alternative spelling (Apple's `recordLabel`, an operator's typing).
-//   - `alias_slug` — `slugify(alias)`, INDEXED: the join key the resolution wiring reads by, so
-//                    a CONFIRMED alias's slug resolves to `label_id` BEFORE `ensureLabel` /
-//                    `reconcileLabels` would otherwise re-mint it as a new label. This is the
-//                    whole correctness point — the immutable `tracks.label` re-mints merged-away
-//                    slugs on every deploy backfill unless the mint path consults this first.
-//   - `source`     — where the spelling came from. `apple` is the U2a writer; `operator` is a
-//                    hand-added alias; `musicbrainz`/`discogs`/`spotify` are reserved for future
-//                    corroboration sources.
-//   - `kind`       — `name` (a corroborated alternate spelling — Apple AND MusicBrainz agree on
-//                    the same label over the ISRC) or `hint` (a weaker lead — Apple names a label
-//                    the archive does not recognise as this one, or a distributor string). Only
-//                    the operator's CONFIRM promotes either to the public graph.
-//   - `status`     — `candidate` (awaiting the operator) or `confirmed` (ruled the same label).
-//                    ONLY `confirmed` feeds resolution + the public `alternateName` JSON-LD
-//                    (decision C); `candidate`/`hint` stay admin-only. Reject deletes the row.
-//
-// The derivation is IDEMPOTENT and never clobbers a ruling: the unique index is
-// `(label_id, alias_slug, source)` with `on conflict do nothing`, so a re-run over a
-// `confirmed` row is a no-op. See docs/label-entity.md + scripts/backfill-label-aliases.ts.
 export const labelAliases = sqliteTable(
   "label_aliases",
   {
@@ -4954,52 +2383,18 @@ export const labelAliases = sqliteTable(
     status: text("status", { enum: ["candidate", "confirmed"] }).notNull(),
   },
   (table) => [
-    // One spelling per (label, source): the derivation upserts `on conflict do nothing`, so a
-    // second pass never duplicates a candidate and never reverts a confirmed row.
     uniqueIndex("label_aliases_label_slug_source_idx").on(
       table.labelId,
       table.aliasSlug,
       table.source,
     ),
-    // The resolution read (`ensureLabel` / `reconcileLabels`): `where alias_slug = ? and
-    // status = 'confirmed'`. Bounded as aliases grow.
+
     index("label_aliases_alias_slug_idx").on(table.aliasSlug),
-    // The `/admin/labels` review section reads the open candidates (`where status = 'candidate'`).
+
     index("label_aliases_status_idx").on(table.status),
   ],
 );
 
-// ARTIST ALIASES — DnB's many-names problem, solved the label_aliases way (the MusicBrainz
-// identity layer). The exact structural twin of `label_aliases` above: a per-artist side table
-// of alternative spellings, each carrying its source + a status, so the many names a DnB act
-// records under (the alias, the real name, the sort name, a locale variant) reconcile to ONE
-// artist entity WITHOUT ever rewriting `artists.name`. MusicBrainz curates these directly
-// (`inc=aliases` on the artist lookup), so the resolve pipeline harvests them on the same walk it
-// already makes for socials + KG anchors (artist-resolution.ts).
-//
-// ── WHAT EACH COLUMN IS (the label_aliases shape) ───────────────────────────────
-//   - `artist_id`  — the CANONICAL artist this alias belongs to (`artists.id`). The alias is
-//                    another spelling OF this artist, never an artist of its own.
-//   - `alias`      — the raw alternative spelling (a MusicBrainz alias, an operator's typing).
-//   - `alias_slug` — `slugify(alias)`, INDEXED: the fold key. A confirmed/auto alias's slug is
-//                    the artist under another name, kept off the canonical `artists.name`.
-//   - `source`     — where the spelling came from. `musicbrainz` is the harvester; `operator` is
-//                    a hand-added alias; the rest are reserved for future corroboration sources.
-//   - `kind`       — `name` (a real display name — a MusicBrainz "Artist name"/"Legal name"
-//                    alias, or an operator's) or `hint` (a MusicBrainz "Search hint" — a weaker
-//                    lead kept for the record but NEVER rendered publicly).
-//   - `status`     — the TRUST state, mirroring `artist_socials` (not `label_aliases`' weaker
-//                    candidate/confirmed): `auto` (a MusicBrainz-curated alias — authoritative
-//                    and DIRECT, so trusted/public exactly as MB socials are born `auto`) or
-//                    `confirmed` (an operator-added/ruled alias). ONLY `auto`/`confirmed` of
-//                    `kind='name'` feed the public `alternateName` JSON-LD. There is deliberately
-//                    NO `candidate` tier: a MusicBrainz alias is a direct statement of identity,
-//                    not the fuzzy cross-source inference `label_aliases`' Apple×ISRC candidate
-//                    guards — the same reason MB socials skip `candidate` and are born `auto`.
-//
-// IDEMPOTENT and never clobbers a ruling: the unique index is `(artist_id, alias_slug, source)`
-// with `on conflict do nothing`, so a re-resolve over an existing alias is a no-op. See
-// docs/artist-relationship.md.
 export const artistAliases = sqliteTable(
   "artist_aliases",
   {
@@ -5015,56 +2410,20 @@ export const artistAliases = sqliteTable(
     status: text("status", { enum: ["auto", "confirmed"] }).notNull(),
   },
   (table) => [
-    // One spelling per (artist, source): the harvest upserts `on conflict do nothing`, so a
-    // re-resolve never duplicates an alias and never reverts an operator ruling.
     uniqueIndex("artist_aliases_artist_slug_source_idx").on(
       table.artistId,
       table.aliasSlug,
       table.source,
     ),
-    // The public read (`where artist_id = ? and status in ('auto','confirmed') and kind='name'`)
-    // and the fold read (`where alias_slug = ?`). Bounded as aliases grow.
+
     index("artist_aliases_artist_id_idx").on(table.artistId),
     index("artist_aliases_alias_slug_idx").on(table.aliasSlug),
   ],
 );
 
-// The ALBUM — the fourth node of the graph (log ↔ artist ↔ label ↔ album), and the
-// structural twin of `labels` above: `tracks.album` stays the raw captured string
-// forever, this table is its normalized twin related by `slug`
-// (`slugify(tracks.album) = albums.slug`), and `tracks.album_id` is the indexed pointer
-// the public page reads by. Everything true of `labels` is true here, minus the seed
-// control: an album is not a crawl seed, so it carries NO `seed_state` and NO `ruled_at`.
-// There is nothing for an operator to rule on — which is why there is no `/admin/albums`.
-//
-// A row is minted two ways, and folded on two identities. The publish path mints one off a
-// CERTIFIED finding, keyed on the `slug`. The catalogue crawler mints one INLINE for the
-// release it walks (`ensureAlbum` in crawl.ts), keyed on the `release_group_mbid` — the stable
-// fold over a record's pressings — falling back to the slug when MusicBrainz has no release
-// group. So an album entity now exists for a catalogue-only record too (the crawler is to
-// albums what it already is to `labels`: a mint path), and `tracks.album_id` is stamped off the
-// bat rather than at a deploy backfill. The `/albums` index lists every record Fluncle holds in
-// one alphabetical list (`listAlbumsHubPage`) — a certified record reads lit, a crawl-minted one
-// unlit — and a crawl-minted record reaches a public `/album/<slug>` only through the
-// renderable-track thin-content gate.
-//
-// The known limit, inherited from the slug identity: two different albums that share a
-// name fold into one row (`labels`' `Pilot.`/`Pilot` fold, run the other way). The
-// disambiguation answer is the alias map docs/label-entity.md already records as the
-// eventual fix for both entities; it is not a normalizer's job. See docs/album-entity.md.
 export const albums = sqliteTable(
   "albums",
   {
-    // ── Apple Music ALBUM FACTS (RFC musickit-second-authority, U1) ────────────────────────
-    // Written ONCE per album by the Apple sweep, off the single-ISRC oracle's canonical-album
-    // picker (`appleCatalogLookupByIsrc` → `canonicalAlbum`). recordLabel is an ALBUM attribute,
-    // so storing it at album grain fixes "recordLabel differs per pressing" structurally: U2
-    // reads `record_label_raw` as its second label authority, U3 reads the artwork template as a
-    // ≥1920 cover source. NULL-safe: an honest miss (no album included, or a compilation-only
-    // pressing set) writes nothing, and `apple_album_id IS NULL` is the "not yet fetched" gate
-    // that makes the fetch once-per-album. `artwork_url_template` keeps Apple's `{w}x{h}` tokens
-    // intact (substituted by `appleArtworkUrl`); the palette (`artwork_bg_color`/`text_color1..4`)
-    // is what Apple derives from the cover. `upc` is the album's barcode.
     appleAlbumId: text("apple_album_id"),
     artworkBgColor: text("artwork_bg_color"),
     artworkHeight: integer("artwork_height"),
@@ -5074,64 +2433,20 @@ export const albums = sqliteTable(
     artworkTextColor4: text("artwork_text_color4"),
     artworkUrlTemplate: text("artwork_url_template"),
     artworkWidth: integer("artwork_width"),
-    // ── THE VOICED BIO (the artist/label/album bio engine) ──────────────────────────
-    // A short, Fluncle-voiced public bio for the album — the written sibling of a finding's
-    // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
-    // off this record (never a fabricated tracklist). Authored by the on-box sweep via the
-    // agent-tier `describe_album` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
-    // (an operator-written bio is never clobbered). Nullable until authored. See lib/server/bio.ts.
+
     bio: text("bio"),
-    // The final-attempt bypass flag — WHEN a bio the voice scan refused was stored anyway,
-    // and the `bio-review` attention row's oldest-first anchor. The canonical explanation of
-    // the pair lives on `artists.bio_gate_bypassed_at` above.
+
     bioGateBypassedAt: text("bio_gate_bypassed_at"),
-    // PROVENANCE — the `describe_album` prompt version this bio was authored under (0 = the
-    // registry's baked default, N = operator override N), or NULL when no registry prompt
-    // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
+
     bioPromptVersion: integer("bio_prompt_version"),
-    // The bio-authoring reliability marker, mirroring `context_status`: pending (never
-    // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
-    // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
+
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
-    // The voice-gate reasons that acceptance ACCEPTED, a JSON array of strings. See
-    // `artists.bio_gate_bypassed_at`.
+
     bioVoiceViolations: text("bio_voice_violations"),
-    /**
-     * Linked tracks that HAVE a `findings` row (`tracks.is_catalogue = 0`) — the maintained
-     * mirror of `HUB_CERTIFIED` over `tracks.album_id`. The canonical explanation of the pair
-     * lives on `artists.certified_finding_count`.
-     */
+
     certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
-    // ── THE DISCOGS RELEASE FACTS (the catalogue number + the styles) ───────────────────────
-    // Two facts Fluncle ALREADY fetched and threw away. The Discogs resolver (lib/server/
-    // discogs.ts) pulls a full release payload to SCORE it, and that payload carries
-    // `labels[].catno` (the label's own catalogue number — RAMM###, HOSP###, the code printed
-    // on the sleeve) and `styles[]` ("Drum n Bass", "Jungle", "Neurofunk"). Both are RELEASE
-    // attributes, so they land on the album — the same grain ruling `record_label_raw` above
-    // already carries, and for the same reason: a fact that varies per pressing is stored once
-    // at album grain rather than smeared across every track of the record.
-    //
-    // THE PRESSING CAVEAT, stated plainly. `albums` folds on the release GROUP (MusicBrainz's
-    // abstraction over pressings) while a Discogs release id names ONE pressing, so the stored
-    // catno is the catno of the pressing Fluncle actually resolved — representative, not
-    // exhaustive. That is the honest thing to print beside a record, and it is why the column
-    // is a single text field rather than a list.
-    //
-    //   - `discogs_catno`        — the label catalogue number, verbatim from Discogs. Rendered
-    //                              on `/album/<slug>` and stamped into the MusicRelease JSON-LD
-    //                              as `catalogNumber`.
-    //   - `discogs_styles`       — the release's styles, a JSON array of strings. STORE-ONLY
-    //                              today: the album page has no honest home for a style band
-    //                              (its genre is Drum and Bass by construction), so nothing
-    //                              public reads this yet. See docs/album-entity.md.
-    //   - `discogs_state`        — the resolve lifecycle, the `image_state` machine verbatim:
-    //                              `pending` (DDL default; every album enters the worklist),
-    //                              `resolved` (facts stored), `none` (the release carries no
-    //                              catno — terminal, so the sweep never re-reads it).
-    //   - `discogs_attempted_at` / `discogs_failures` — the reliability pair (the
-    //                              failure-scaled cooldown + the give-up), exactly as the image
-    //                              sweep uses them.
+
     discogsAttemptedAt: text("discogs_attempted_at"),
     discogsCatno: text("discogs_catno"),
     discogsFailures: integer("discogs_failures").notNull().default(0),
@@ -5140,27 +2455,7 @@ export const albums = sqliteTable(
       .default("pending"),
     discogsStyles: text("discogs_styles"),
     id: text("id").primaryKey(),
-    // ── THE OWNED COVER MASTER (RFC musickit-second-authority, U3b) ─────────────────────────
-    // The `labels` image state machine, cloned onto the album so every album serves its OWN
-    // 1200²-capped cover derivative from our R2 (found.fluncle.com) instead of hotlinking a
-    // third party. The `backfill_cover_masters` sweep (cover-masters.ts) fetches a ≤1200
-    // rendition from the BEST source — Apple's stored `artwork_url_template` substituted to
-    // ≤1200 (native downscale, no local resize), then Cover Art Archive, then Spotify's 640 as
-    // the floor — and stores it at `albums/<slug>.<ext>`, downscale-guaranteed by the requested
-    // size and byte-verified ≤1200 before the R2 put. The 3000² original is NEVER stored or
-    // served (the REF-05 line); the video render still fetches Apple's full-res at render time,
-    // never persisted. Served via Cloudflare Images `/cdn-cgi/image/…` (decision B) — see
-    // media.ts `ownedCoverUrl` + `bestAlbumCoverUrl`, and docs/album-artwork.md.
-    //   - `image_key`        — the R2 object key of the stored master (e.g. `albums/<slug>.jpg`).
-    //                          NULL = no owned master; the DTO falls through to the Spotify chain.
-    //   - `image_source`     — which rung won: `apple` | `coverart` | `spotify`. NULL until resolved.
-    //   - `image_state`      — `pending` (DDL default; every album enters the worklist), `resolved`
-    //                          (has a master), `none` (no source anywhere — terminal, floors to the
-    //                          stored Spotify cover).
-    //   - `image_updated_at` — the `?v` bust VINTAGE: a replaced master bumps it, re-keying the
-    //                          Cloudflare Images rendition cache (the video-variants `?v` lesson —
-    //                          a transform cache survives a zone purge).
-    //   - `image_attempted_at` / `image_failures` — the reliability pair (backoff + give-up).
+
     imageAttemptedAt: text("image_attempted_at"),
     imageFailures: integer("image_failures").notNull().default(0),
     imageKey: text("image_key"),
@@ -5169,144 +2464,66 @@ export const albums = sqliteTable(
       .notNull()
       .default("pending"),
     imageUpdatedAt: text("image_updated_at"),
-    // The display name — the first raw `tracks.album` spelling seen for this slug.
+
     name: text("name").notNull(),
     recordLabelRaw: text("record_label_raw"),
-    // ── THE CATALOGUE FOLD KEY (catalogue-graph, inline album linking) ──────────────────────
-    // The MusicBrainz release-group MBID — the STABLE identity the catalogue crawler folds an
-    // album on, so a crawled track's album edge is written inline at crawl time rather than
-    // deferred to a deploy backfill. A release group is MusicBrainz's "album" abstraction over
-    // its pressings, and every release belongs to exactly one, so it is the right grain to
-    // dedupe on. Nullable and NON-KEYING for existing rows: a finding-minted album folds on
-    // `slug` and carries NULL here until the one-off `backfill-album-graph.ts` populates it, and
-    // a crawled track whose release has no release group still links by the slug path. `upc`
-    // stays a stored FACT (the album barcode), never the fold key. UNIQUE index below — SQLite
-    // treats NULLs as distinct, so the many NULL rows never collide. See docs/album-entity.md.
+
     releaseGroupMbid: text("release_group_mbid"),
-    /**
-     * Total tracks pointing at this album (certified + catalogue) — the maintained mirror of
-     * `HUB_RENDERABLE` over `tracks.album_id`. See `artists.certified_finding_count`.
-     */
+
     renderableTrackCount: integer("renderable_track_count").notNull().default(0),
     slug: text("slug").notNull().unique(),
     upc: text("upc"),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    // The catalogue crawler's connect-or-create fold: `where release_group_mbid = ?` resolves an
-    // existing album before the slug path, so one release group is one row across every pressing.
     uniqueIndex("albums_release_group_mbid_idx").on(table.releaseGroupMbid),
-    // The maintained hub gate's ordering/filtering column (keystone 2) — the `/albums` hub, the
-    // API/MCP list, the sitemap rows and the bio worklist read it instead of grouping `tracks`.
-    // Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
+
     index("albums_renderable_count_idx").on(table.renderableTrackCount),
-    // The hub listing for `ALBUM_INDEX_MIN_TRACKS` (3), exactly as `artists_hub_listing_idx` —
-    // see the reasoning there. Plain ASC.
+
     uniqueIndex("albums_hub_listing_idx")
       .on(table.slug)
       .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
-    // Search's album name arm (`name = ? collate nocase` exact, `name like ?` prefix): no other
-    // index carries the album name. Bare on purpose: the arm reads the id and the gate counters off
-    // the row anyway, and a bare key keeps equal names in rowid order, the order a table scan
-    // returns them in. Plain ASC.
+
     index("albums_name_nocase_idx").on(sql`${table.name} collate nocase`),
-    // The bio-review attention read (`where bio_gate_bypassed_at is not null order by … asc`).
-    // PARTIAL, exactly as `artists_bio_review_queue_idx` — see the reasoning there. Plain ASC.
+
     index("albums_bio_review_queue_idx")
       .on(table.bioGateBypassedAt)
       .where(sql`${table.bioGateBypassedAt} is not null`),
   ],
 );
 
-// THE CRAWL FRONTIER — the catalogue crawler's durable, resumable work queue.
-//
-// The crawler walks the MusicBrainz release graph outward from the labels the operator
-// ENABLED (`labels.seed_state`), writing catalogue rows into `tracks` and never a
-// `findings` row. It runs as a bounded, polite, `--no-agent` sweep: one tick expands a
-// handful of nodes at ~1 req/s and stops. So the walk's whole state has to live HERE,
-// not in a process — a tick that dies mid-label must be resumed by the next one, not
-// restarted. See docs/catalogue-crawler.md.
-//
-// ── ONE ROW = ONE NODE OF THE GRAPH, AND ONE UNIT OF WORK ──────────────────────
-//   - `label`   — hop 0. Two flavours, and the pair is what makes label resolution
-//                 itself resumable: the SEED (`source: 'fluncle'`, `external_id` = the
-//                 `labels.slug` the operator enabled) expands into the MB entity
-//                 (`source: 'musicbrainz'`, `external_id` = the MB label MBID), which
-//                 expands into its releases.
-//   - `release` — expands into the tracks it carries (the write) + the artists on them.
-//   - `artist`  — expands into that artist's OTHER releases.
-//
-// ── `hop` IS THE BOUNDARY GATE ─────────────────────────────────────────────────
-// The operator drew the lane when he ruled on the labels; the crawler simply does not
-// leave the neighbourhood. It is graph DISTANCE from an enabled label, never a genre
-// guess (no MusicBrainz/Discogs tag inference — that ruling is ratified):
-//   hop 0 = a release ON an enabled label · hop 1 = an artist on such a release
-//   hop 2 = a release that artist ALSO appears on · then STOP (a configurable limit).
-// A node at `hop > maxHop` is never enqueued, so the walk terminates by construction.
-//
-// ── RELIABILITY: the shipped `backfill_*` convention, verbatim ─────────────────
-// `attempted_at` / `attempts` / `failures` / `done_at` mean exactly what they mean on
-// `findings` (see the backfill columns there): a FAILED node backs off exponentially on
-// its consecutive-failure count and is retried by a later tick; past MAX_FAILURES it
-// stays `failed` and is never picked again. `cursor` is the browse OFFSET a paginated
-// node (a label's or an artist's release list) has consumed — a node with more pages
-// stays `pending` with an advanced cursor, so a 900-release label drains across ticks
-// instead of blowing one. `parent_id` records the edge that discovered the node, so a
-// bad subtree is traceable (and prunable); `label_slug` carries the enabled seed the
-// whole subtree descends from.
-//
-// `id` is DETERMINISTIC — `<source>:<kind>:<external_id>` — which is what makes the
-// crawl idempotent at the graph level: re-discovering a node the walk already holds is
-// an `on conflict do nothing`, not a second traversal of the same subtree.
 export const crawlFrontier = sqliteTable(
   "crawl_frontier",
   {
     attemptedAt: text("attempted_at"),
     attempts: integer("attempts").notNull().default(0),
     createdAt: text("created_at").notNull(),
-    // The browse offset already consumed (paginated `label` / `artist` nodes only).
+
     cursor: integer("cursor").notNull().default(0),
-    // THE DEMAND REORDER (docs/catalogue-crawler.md § Demand). 0 = a node belonging to an
-    // entity real visitors looked at (its seed label's subtree, via `label_slug`, or an
-    // artist node matched by MBID); 1 = every other node. Written ONLY by the `record_demand`
-    // op (clear-all-to-1 then set-0). The pick order is `(state, hop, demand_rank, created_at,
-    // id)`, so demand only REORDERS WITHIN A HOP — breadth-first by hop is preserved, and a
-    // ruled-out label never becomes a seed node, so demand can never resurrect one.
+
     demandRank: integer("demand_rank").notNull().default(1),
     doneAt: text("done_at"),
-    // The MB entity's MBID — or, for a seed `label` node, the operator's `labels.slug`.
+
     externalId: text("external_id").notNull(),
     failures: integer("failures").notNull().default(0),
     hop: integer("hop").notNull(),
     id: text("id").primaryKey(),
     kind: text("kind", { enum: ["artist", "label", "release"] }).notNull(),
-    // The enabled seed label this node's subtree descends from (provenance + pruning).
+
     labelSlug: text("label_slug"),
-    // Why a node was skipped or how it last failed — the crawl's honest audit trail.
+
     note: text("note"),
     parentId: text("parent_id"),
-    // A `release` node's OWN label, as MusicBrainz credits it on the browse that listed the
-    // release, resolved to the `labels` row the archive knows it by (null when the archive holds no
-    // such label, or on a non-release node). It is what the claim ranks a release's storability on,
-    // because the storage gate judges the release's own label, never its provenance: a release
-    // reached through an artist found on an enabled label is usually on some OTHER label.
+
     releaseLabelSlug: text("release_label_slug"),
     source: text("source", { enum: ["fluncle", "musicbrainz"] }).notNull(),
-    // pending → done (expanded) | failed (retriable under backoff, terminal past
-    // MAX_FAILURES) | skipped (deterministically un-expandable — e.g. no MB label
-    // matches the operator's spelling; recorded rather than retried forever).
+
     state: text("state", { enum: ["done", "failed", "pending", "skipped"] })
       .notNull()
       .default("pending"),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    // The pick: `where state in (…) order by hop, demand_rank, created_at, id` — breadth-first
-    // and deterministic, so two runs over the same graph expand the same nodes in the same
-    // order. `demand_rank` sits AFTER `hop` (a within-hop tiebreak only: a demanded node is
-    // picked before an undemanded sibling at the same hop, never ahead of a nearer hop), so
-    // the demand reorder cannot break breadth-first. Leading with `state` keeps a drained
-    // frontier's tick a cheap no-op.
     index("crawl_frontier_pick_idx").on(
       table.state,
       table.hop,
@@ -5314,57 +2531,30 @@ export const crawlFrontier = sqliteTable(
       table.createdAt,
       table.id,
     ),
-    // The per-seed status read (and the subtree prune, when one is needed).
+
     index("crawl_frontier_label_idx").on(table.labelSlug),
-    // The demand CLEAR (`record_demand`): before each additive rewrite, every prior
-    // demand-0 node is reset (`update crawl_frontier set demand_rank = 1 where demand_rank
-    // = 0`). `demand_rank` is only ever {0,1}, so the predicate exactly matches this PARTIAL
-    // index over the demanded slice — a handful of rows, never the whole crawler-swollen
-    // frontier. It SHRINKS to nothing between rewrites (the `tracks_mb_recording_id_queue_idx`
-    // shrinking-partial discipline); `state` is the indexed column so the reset seeks the
-    // demanded rows directly instead of scanning the frontier for `demand_rank <> 1`.
+
     index("crawl_frontier_demand_rank0_idx")
       .on(table.state)
       .where(sql`${table.demandRank} = 0`),
-    // The MusicBrainz label-node walk (`where kind = 'label' and source = 'musicbrainz'
-    // order by state, done_at`) — the label-expansion worklist. A PARTIAL index over exactly
-    // the label/MB slice, so it never touches the artist/release nodes; the composite serves
-    // both the equality filters and the ordered walk as one index pass (proven 5.8× on the
-    // 150k scratch DB). Plain ASC (SQLite reverse-scans it); a `desc()` index poisons the
-    // snapshot (the ratified drizzle-kit trap).
+
     index("crawl_frontier_label_node_idx")
       .on(table.state, table.doneAt)
       .where(sql`${table.kind} = 'label' and ${table.source} = 'musicbrainz'`),
   ],
 );
 
-// A newsletter EDITION — the weekly dispatch from the mothership, now persisted so
-// every Friday letter has a permanent home.
-// Modeled on the `mixtapes` table SHAPE (own table + counter + a draft→sent
-// lifecycle) but NOT its identity: an edition is content, not a collectible, so its
-// identity is a plain integer `number` minted on send (`max(number)+1`) — NO Log
-// ID, no coordinate, no spine resolver branch. The stored `contentJson` is the
-// single source that renders BOTH the web archive page and the email HTML.
 export const editions = sqliteTable("editions", {
-  // RSS/index ordering — set on send.
   addedAt: text("added_at"),
-  // The structured JSON payload the agent authors (intro, galaxy-grouped finding
-  // refs by logId + per-edition "why", the optional mixtape ref, the tidbits +
-  // sources, the window, the subject). NOT raw LMX — the web page and the email
-  // HTML both render FROM this one source. Stored as JSON text.
+
   contentJson: text("content_json").notNull(),
   createdAt: text("created_at").notNull(),
   id: text("id").primaryKey(),
-  // The sequential edition number — minted on send (`max(number)+1`), null while a
-  // draft. A plain integer never exhausts (no cap-54 like the mixtape spine).
+
   number: integer("number").unique(),
-  // PROVENANCE — the `newsletter_edition` prompt version this edition was authored
-  // under (docs/agents/prompt-registry.md). NULL for an operator-written draft or an
-  // agent fallback to the baked-in default; `0` is the registry default; a number is
-  // the live `prompt_versions.version`.
+
   promptVersion: integer("prompt_version"),
-  // Provenance of the send so a re-send is idempotent and the archive records how
-  // it went out. "resend" + the Resend broadcast id.
+
   sendExternalId: text("send_external_id"),
   sendProvider: text("send_provider"),
   sentAt: text("sent_at"),
@@ -5373,60 +2563,42 @@ export const editions = sqliteTable("editions", {
     .default("draft"),
   subject: text("subject"),
   updatedAt: text("updated_at").notNull(),
-  // The discovery window this edition covered — `windowUntil` anchors the next
-  // window's self-heal (the agent reads the last SENT edition's cutoff).
+
   windowSince: text("window_since"),
   windowUntil: text("window_until"),
 });
 
-// The operator's private cost ledger (COST-02) — the single source of truth for
-// Fluncle's recurring + one-off spend. It was pulled from the public repo docs on
-// purpose: vendor names and amounts are the operator's private data, so they live
-// in the DB at runtime, never in a committed file. The `/admin/costs` station is
-// operator-tier; the table ships EMPTY (no seed) and the operator fills it in-app.
 export const subscriptions = sqliteTable("subscriptions", {
-  // The charge in minor units (cents) — an integer never drifts the way a float
-  // does. A one-off or usage line still records its last/expected amount here.
   amount: integer("amount").notNull(),
-  // A billing dashboard / invoice URL, so the operator can jump straight to the
-  // vendor's account page from the row. Nullable.
+
   billingUrl: text("billing_url"),
-  // How the charge recurs: a monthly/annual subscription, a single one-off, or a
-  // metered usage line (variable, amount is the running/estimate).
+
   cadence: text("cadence", { enum: ["monthly", "annual", "one-off", "usage"] }).notNull(),
-  // What bucket the spend falls in — a small closed set so the ledger totals by
-  // category. A CHECK constraint (drizzle's typed enum) keeps a typo out.
+
   category: text("category", {
     enum: ["infra", "AI", "media", "distribution", "domains", "tooling"],
   }).notNull(),
   createdAt: text("created_at").notNull(),
-  // ISO 4217. Fluncle bills across a few currencies; store each line's own.
+
   currency: text("currency").notNull().default("EUR"),
   id: text("id").primaryKey(),
-  // The human name of the line item (e.g. the plan/product name).
+
   name: text("name").notNull(),
-  // A free-text operator note — anything worth remembering about the line.
+
   notes: text("notes"),
-  // Which Fluncle surface or cron this spend powers — the "what breaks if I cancel
-  // it" link back to the system. Nullable free text.
+
   powers: text("powers"),
-  // ISO date of the next renewal/charge, when known. Null for a one-off or an
-  // untracked cadence.
+
   renewsAt: text("renews_at"),
-  // Lifecycle: an active line, a cancelled one (kept for the record), or a trial.
+
   status: text("status", { enum: ["active", "cancelled", "trial"] })
     .notNull()
     .default("active"),
   updatedAt: text("updated_at").notNull(),
-  // The vendor/provider the money goes to (e.g. Cloudflare, Anthropic).
+
   vendor: text("vendor").notNull(),
 });
 
-// A tiny once-a-day cache of foreign-exchange reference rates (ECB, via the free
-// keyless Frankfurter API), so the Costs ledger can show ONE aggregate "what you pay
-// today" figure in EUR without converting each fixed-price line. A singleton row keyed
-// by `base` ("EUR"): `ratesJson` maps EUR→currency (e.g. { "USD": 1.18 }); `ratesDate`
-// is the ECB publish date; `fetchedAt` gates the read-through refresh (>12h ⇒ refetch).
 export const exchangeRates = sqliteTable("exchange_rates", {
   base: text("base").primaryKey(),
   fetchedAt: text("fetched_at").notNull(),
@@ -5434,11 +2606,6 @@ export const exchangeRates = sqliteTable("exchange_rates", {
   ratesJson: text("rates_json").notNull(),
 });
 
-// The sparse seek boundaries behind the public numbered hub pagers. One compact JSON document per
-// exact `(hub, clause-set)` shape keeps every boundary read to a single small PK lookup; filtered
-// `/tracks` combinations stay in-isolate and never enter this table. `fingerprint` detects corpus
-// drift without hashing or reading the corpus, while `computed_at` is operational evidence rather
-// than an expiry gate — stale boundaries remain usable as a nearest-anchor + offset remainder.
 export const hubPageAnchors = sqliteTable(
   "hub_page_anchors",
   {
@@ -5451,11 +2618,6 @@ export const hubPageAnchors = sqliteTable(
   (table) => [primaryKey({ columns: [table.hub, table.clauseHash] })],
 );
 
-/**
- * Version/epoch proof for a persisted anchor document. It is separate from the populated anchor
- * table so phase-one expansion stays CREATE-only; a future reader accepts an anchor only when this
- * row's format and release-hub order epoch match the current aggregate state.
- */
 export const hubPageAnchorValidity = sqliteTable(
   "hub_page_anchor_validity",
   {

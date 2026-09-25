@@ -17,10 +17,6 @@ function manyTracks(count: number): GameTrack[] {
   }));
 }
 
-// The entity spine: stars are deterministic kind:"star" entities (the parallel
-// collected[] is folded in), the session RNG is reproducible, and the frontier
-// behavior table dispatches per kind over a drifting entity array.
-
 const TRACKS: GameTrack[] = [
   {
     addedAt: "2026-05-30T00:00:00.000Z",
@@ -54,12 +50,11 @@ describe("placeStars", () => {
       expect(star.vx).toBe(0);
       expect(star.vy).toBe(0);
       expect(star.id).toBe(star.logId);
-      // Placed on its ring: world position matches the radial distance.
+
       expect(Math.hypot(star.x, star.y)).toBeCloseTo(star.radius, 5);
       expect(isStar(star)).toBe(true);
     }
 
-    // The frontier sector pushes the newer finding to a larger ring.
     const [first, second] = stars;
     if (first === undefined || second === undefined) {
       throw new Error("expected at least two placed stars");
@@ -95,7 +90,7 @@ describe("frontier behavior table", () => {
     registerBehavior("roadster", {
       onStep: (entity) => {
         stepped += 1;
-        // Behaviors can read/modify the entity each step.
+
         entity.spin = (entity.spin ?? 0) + 1;
       },
     });
@@ -118,7 +113,7 @@ describe("frontier behavior table", () => {
 
     expect(stepped).toBe(1);
     expect(roadster.spin).toBe(1);
-    // Drift integrated over a 1s step.
+
     expect(roadster.x).toBeCloseTo(12, 5);
     expect(roadster.y).toBeCloseTo(96, 5);
   });
@@ -139,7 +134,6 @@ describe("black holes", () => {
       expect(hole.kind).toBe("blackhole");
       expect(hole.exits).toHaveLength(4);
 
-      // The navigable-lane invariant: no hole sits on the route to a star.
       for (const star of stars) {
         expect(Math.hypot(star.x - hole.x, star.y - hole.y)).toBeGreaterThan(150);
       }
@@ -169,7 +163,6 @@ describe("black holes", () => {
     sim.ship.vy = 0;
     stepSim(sim, STILL, 1 / 60);
 
-    // The hole is at +x; the pull gives the ship velocity toward it.
     expect(sim.ship.vx).toBeGreaterThan(0);
   });
 
@@ -195,7 +188,7 @@ describe("black holes", () => {
 
     expect(sim.events.map((event) => event.kind)).toContain("warped");
     expect(sim.phase).toBe("flying");
-    // Topped up to the slingshot floor (minus the single frame's burn).
+
     expect(sim.ship.fuel).toBeGreaterThan(sim.config.tankCapacity * 0.55);
 
     const landedOnExit = exits.some(
@@ -242,7 +235,6 @@ describe("asteroids + the auto-clearing laser", () => {
   it("auto-fires at a rock dead ahead and clears it (bolts never touch stars)", () => {
     const sim = lasersSim();
 
-    // Isolate one rock directly ahead (the ship launches heading toward -y).
     sim.entities = [asteroidAt(sim.ship.x, sim.ship.y - 220)];
 
     const kinds = new Set<string>();
@@ -262,7 +254,7 @@ describe("asteroids + the auto-clearing laser", () => {
     expect(kinds.has("bolt-fired")).toBe(true);
     expect(kinds.has("bolt-hit")).toBe(true);
     expect(sim.entities.some((entity) => entity.kind === "asteroid")).toBe(false);
-    // A bolt over a banger does nothing: bolts only ever resolve against rocks.
+
     expect(kinds.has("logged")).toBe(false);
     expect(sim.collectedCount).toBe(0);
   });
