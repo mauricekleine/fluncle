@@ -1,50 +1,14 @@
-// Unit O · chapter prep — turn an archived per-track composition into a
-// chapter-ready one for the hour-long set render.
-//
-// THE PROBLEM: an archived
-// composition re-drives correctly at chapter length INSIDE a <Sequence> — Remotion
-// scopes `useVideoConfig().durationInFrames` to the sequence and `useCurrentFrame()`
-// to its start, so everything driven off `useJourney()`/`u_progress`/the audio bus
-// reflows for free. The ONE defect is ABSOLUTE-SECOND keyframes: a scene that eases
-// its arc with `interpolate(sec, [0, 13, 20], …)` (sec = frame / fps) clamps at the
-// authored 20 s — so in a 4-minute chapter the ramp hits 1 at 20 s and FREEZES for
-// the rest (a permanent settle-dim + a spent one-shot climax over an otherwise-alive
-// field). The fix is semi-mechanical: find each sec/frame-clock `interpolate(…)`,
-// CLASSIFY it, and rescale/suppress it onto chapter length.
-//
-// This module is the transform (pure, tested), plus the R2 fetch + orchestration
-// that writes chapter-ready comps into the gitignored set-workbench and a per-comp
-// audit report (what was rescaled/suppressed, judgment flags where the classifier is
-// unsure) for an agent/human to eyeball. It does NOT fork the video kit — the
-// prepped comp still imports the exact same `../cosmos` surface and renders through
-// the same ShaderLayer; only its clock keyframes change.
-//
-// Overlay policy (shared with 032-class comps that need no rescale): the parent set
-// composition renders with `hideOverlay: true`, so every chapter's own TypePlate +
-// CloseCard self-suppress (they read `getInputProps().hideOverlay`). The set draws
-// the per-chapter Log-ID moment + the final F-coordinate CloseCard itself. So the
-// transform leaves the type layer untouched and only strips <TrackAudio> (the set
-// audio is muxed once, at the end, from the mastered set — never per chapter).
-
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { type NostalgicCosmosProps } from "../remotion/types";
 
-// The composition FPS (root.tsx / set-root.tsx both render at 30). A frame-domain
-// clock keyframe is normalized against authoredDurationMs/1000 * FPS.
 export const SET_FPS = 30;
 
 const MEDIA_BASE = process.env.FLUNCLE_MEDIA_URL ?? "https://found.fluncle.com";
 
-// ---------------------------------------------------------------------------
-// Arithmetic evaluator (no eval): numbers with `_` separators, + - * /, parens,
-// and identifiers resolved from a const map. Returns null when un-evaluable.
-// ---------------------------------------------------------------------------
-
 type ConstMap = Map<string, number>;
 
-/** Tokenize + evaluate a small arithmetic expression against a const map. */
 export function evalArithmetic(expr: string, consts: ConstMap): number | null {
   const src = expr.trim();
   if (src === "") {
@@ -58,8 +22,6 @@ export function evalArithmetic(expr: string, consts: ConstMap): number | null {
     }
   };
 
-  // Grammar: expr = term (('+'|'-') term)*; term = factor (('*'|'/') factor)*;
-  // factor = number | ident | '(' expr ')' | ('+'|'-') factor.
   const parseExpr = (): number | null => {
     let left = parseTerm();
     if (left === null) {
@@ -120,7 +82,7 @@ export function evalArithmetic(expr: string, consts: ConstMap): number | null {
       pos += 1;
       return inner;
     }
-    // Number literal (with `_` digit separators + exponent).
+
     const numMatch = /^[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9]+)?/.exec(src.slice(pos));
     if (numMatch) {
       pos += numMatch[0].length;
@@ -131,7 +93,7 @@ export function evalArithmetic(expr: string, consts: ConstMap): number | null {
       pos += floatMatch[0].length;
       return Number(floatMatch[0].replace(/_/g, ""));
     }
-    // Identifier resolved from the const map.
+
     const idMatch = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(src.slice(pos));
     if (idMatch) {
       pos += idMatch[0].length;
@@ -146,7 +108,6 @@ export function evalArithmetic(expr: string, consts: ConstMap): number | null {
   return pos === src.length ? result : null;
 }
 
-/** Top-level numeric `const NAME = <expr>;` declarations, evaluated in file order. */
 export function parseConsts(source: string): ConstMap {
   const consts: ConstMap = new Map();
   const re = /(?:^|\n)\s*const\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([^;\n]+);/g;
@@ -161,21 +122,11 @@ export function parseConsts(source: string): ConstMap {
   return consts;
 }
 
-// ---------------------------------------------------------------------------
-// Clock-var detection + interpolate() extraction
-// ---------------------------------------------------------------------------
-
 export type ClockVar = { name: string; domain: "sec" | "frame" };
 
-/**
- * The clock variables an interpolate() input can be a function of. `sec` vars are
- * `frame / fps` (seconds domain); the raw `frame` from `useCurrentFrame()` is the
- * frames domain. Both are sequence-relative but authored against the CLIP length,
- * so both clamp at chapter length and need rescaling.
- */
 export function findClockVars(source: string): ClockVar[] {
   const vars: ClockVar[] = [];
-  // sec = frame / fps  (any identifier assigned frame/fps)
+
   const secRe = /const\s+([A-Za-z_$][\w$]*)\s*=\s*frame\s*\/\s*fps\s*;/g;
   let m: RegExpExecArray | null;
   while ((m = secRe.exec(source))) {
@@ -183,7 +134,7 @@ export function findClockVars(source: string): ClockVar[] {
       vars.push({ domain: "sec", name: m[1] });
     }
   }
-  // frame = useCurrentFrame()  (the frames-domain clock)
+
   const frameRe = /const\s+([A-Za-z_$][\w$]*)\s*=\s*useCurrentFrame\s*\(\s*\)\s*;/g;
   while ((m = frameRe.exec(source))) {
     if (m[1]) {
@@ -196,17 +147,11 @@ export function findClockVars(source: string): ClockVar[] {
 export type CallArg = { text: string; start: number; end: number };
 export type InterpolateCall = { callStart: number; callEnd: number; args: CallArg[] };
 
-/**
- * Every `interpolate(...)` call in the source, with balanced-paren spans and the
- * absolute offsets of each top-level argument (so a rewrite can target one arg
- * without disturbing the rest). String/template/comment-agnostic bracket matching.
- */
 export function extractInterpolateCalls(source: string): InterpolateCall[] {
   const calls: InterpolateCall[] = [];
   const needle = "interpolate";
   let i = 0;
   while ((i = source.indexOf(needle, i)) !== -1) {
-    // Must be a call to the identifier `interpolate` (not `…interpolateColors`).
     const before = source[i - 1];
     const afterIdx = i + needle.length;
     if (before && /[\w$.]/.test(before)) {
@@ -232,7 +177,6 @@ export function extractInterpolateCalls(source: string): InterpolateCall[] {
   return calls;
 }
 
-/** Scan a balanced `( … )` starting at `open`, splitting top-level `,` into args. */
 function scanArgs(source: string, open: number): { args: CallArg[]; end: number } | null {
   let depth = 0;
   const args: CallArg[] = [];
@@ -274,7 +218,6 @@ function scanArgs(source: string, open: number): { args: CallArg[]; end: number 
   return null;
 }
 
-/** Parse a `[a, b, c]` array-literal arg into evaluated numbers (null when a member is non-numeric). */
 export function parseNumericArray(text: string, consts: ConstMap): (number | null)[] | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
@@ -284,7 +227,7 @@ export function parseNumericArray(text: string, consts: ConstMap): (number | nul
   if (inner.trim() === "") {
     return [];
   }
-  // Split on top-level commas (members may contain parens/other brackets).
+
   const members: string[] = [];
   let depth = 0;
   let start = 0;
@@ -303,10 +246,6 @@ export function parseNumericArray(text: string, consts: ConstMap): (number | nul
   return members.map((mm) => evalArithmetic(mm, consts));
 }
 
-// ---------------------------------------------------------------------------
-// Classification + the plan
-// ---------------------------------------------------------------------------
-
 export type DriverClass =
   | "whole-clip-ramp"
   | "tail-settle"
@@ -320,7 +259,7 @@ export type DriverReport = {
   raw: string;
   clock: string;
   domain: "sec" | "frame";
-  /** Input keyframes as fractions of the authored clip length (0..1+). */
+
   inputFractions: (number | null)[];
   outputs: (number | null)[];
   classification: DriverClass;
@@ -341,7 +280,6 @@ export type PrepReport = {
   notes: string[];
 };
 
-/** Round to a compact literal (drops trailing zeros; keeps determinism readable). */
 const lit = (n: number): string => {
   const r = Number(n.toFixed(4));
   return String(r);
@@ -349,26 +287,10 @@ const lit = (n: number): string => {
 
 type Plan = {
   report: DriverReport;
-  /** A source edit: replace [start,end) with `replacement`. Omitted = no rewrite. */
+
   edit?: { start: number; end: number; replacement: string };
 };
 
-/**
- * Classify one clock-driven interpolate() and plan its rewrite.
- *
- * authoredUnit / chapterUnit are in the clock's own domain (seconds for `sec`
- * clocks, frames for the `frame` clock). scale = chapterUnit / authoredUnit is
- * dimensionless and identical across domains.
- *
- * - whole-clip ramp (starts ~0, ends ~authored length): RESCALE the input
- *   keyframes by `scale` so the ease spans the whole chapter.
- * - tail settle/event (a short window pinned to the authored end, output dips):
- *   interior chapter → SUPPRESS (collapse to the pre-settle constant, so the
- *   field never dims mid-set); final chapter → SHIFT to the chapter's own tail.
- * - mid-event (an interior one-shot, e.g. a hard-timed climax): LEAVE — it is
- *   data; flag it so an agent can decide to drive it from the chapter drop.
- * - unclassified (non-numeric keyframes): LEAVE + flag.
- */
 export function planDriver(
   call: InterpolateCall,
   clock: ClockVar,
@@ -407,8 +329,6 @@ export function planDriver(
   const outFirst = numericOut[0] ?? 0;
   const outLast = numericOut[numericOut.length - 1] ?? 0;
 
-  // Rewrite the input array with each member transformed by `fn` (member TEXT
-  // preserved for provenance, wrapped so the arithmetic is explicit).
   const rewriteInputs = (fn: (memberText: string) => string): string => {
     const inner = inputArg.text.trim().slice(1, -1);
     const members: string[] = [];
@@ -429,7 +349,6 @@ export function planDriver(
     return `[${members.map((mm) => fn(mm.trim())).join(", ")}]`;
   };
 
-  // whole-clip ramp: from the top, spanning most of the clip.
   if (firstFrac <= 0.25 && lastFrac >= 0.7) {
     base.classification = "whole-clip-ramp";
     base.action = "rescaled";
@@ -437,7 +356,6 @@ export function planDriver(
     return { edit: { end: inputArg.end, replacement, start: inputArg.start }, report: base };
   }
 
-  // tail window: pinned near the authored end.
   if (firstFrac >= 0.55 && lastFrac >= 0.85) {
     const isSettle = outLast < outFirst;
     base.classification = isSettle ? "tail-settle" : "tail-event";
@@ -448,7 +366,7 @@ export function planDriver(
       flags.push("final chapter — shifted to the set's own tail so the piece resolves");
       return { edit: { end: inputArg.end, replacement, start: inputArg.start }, report: base };
     }
-    // Interior chapter — collapse to the pre-settle constant (no mid-set dim).
+
     base.action = "suppressed";
     flags.push("interior chapter — suppressed the tail settle-dim (held at the pre-settle value)");
     return {
@@ -457,7 +375,6 @@ export function planDriver(
     };
   }
 
-  // interior one-shot — leave it; it fires once, early in the chapter.
   base.classification = "mid-event";
   base.action = "left";
   flags.push(
@@ -465,10 +382,6 @@ export function planDriver(
   );
   return { report: base };
 }
-
-// ---------------------------------------------------------------------------
-// The transform
-// ---------------------------------------------------------------------------
 
 export type TransformInput = {
   logId: string;
@@ -480,9 +393,7 @@ export type TransformInput = {
 
 export type TransformResult = { code: string; report: PrepReport };
 
-/** Strip every `<TrackAudio … />` element (the set audio is muxed once, at the end). */
 function stripTrackAudio(source: string): { code: string; stripped: boolean } {
-  // Self-closing (the canonical form) and paired, non-greedy.
   const selfClosing = /\n?[ \t]*<TrackAudio\b[^>]*\/>/g;
   const paired = /\n?[ \t]*<TrackAudio\b[\s\S]*?<\/TrackAudio>/g;
   let stripped = false;
@@ -497,11 +408,6 @@ function stripTrackAudio(source: string): { code: string; stripped: boolean } {
   return { code, stripped };
 }
 
-/**
- * Transform an archived composition into a chapter-ready one: rescale/suppress the
- * absolute-clock interpolate() drivers, strip <TrackAudio>, and report every
- * decision. Pure — no I/O — so it is fully unit-testable on fixture sources.
- */
 export function transformChapterSource(input: TransformInput): TransformResult {
   const { logId, source, authoredDurationMs, chapterDurationMs, isFinalChapter } = input;
   const scale = chapterDurationMs / authoredDurationMs;
@@ -515,13 +421,13 @@ export function transformChapterSource(input: TransformInput): TransformResult {
   const plans: Plan[] = [];
   for (const call of calls) {
     const arg0 = call.args[0]?.text.trim() ?? "";
-    // The clock is either a detected clock var or the raw `frame / fps` token.
+
     let clock = clockByName.get(arg0);
     if (!clock && /^frame\s*\/\s*fps$/.test(arg0)) {
       clock = { domain: "sec", name: "frame / fps" };
     }
     if (!clock) {
-      continue; // duration-scoped input (progress/arc/an audio value) — reflows for free.
+      continue;
     }
     const input1 = call.args[1];
     if (!input1) {
@@ -539,7 +445,6 @@ export function transformChapterSource(input: TransformInput): TransformResult {
     );
   }
 
-  // Apply edits descending so earlier offsets stay valid.
   const edits = plans.flatMap((p) => (p.edit ? [p.edit] : [])).sort((a, b) => b.start - a.start);
   let code = source;
   for (const edit of edits) {
@@ -579,17 +484,12 @@ export function transformChapterSource(input: TransformInput): TransformResult {
   };
 }
 
-// ---------------------------------------------------------------------------
-// R2 fetch + orchestration
-// ---------------------------------------------------------------------------
-
 export type ArchivedChapter = {
   logId: string;
   source: string;
   props: NostalgicCosmosProps;
 };
 
-/** Fetch a finding's archived composition.tsx + props.json from the public R2 archive. */
 export async function fetchArchivedChapter(logId: string): Promise<ArchivedChapter> {
   const base = `${MEDIA_BASE}/${encodeURIComponent(logId)}`;
   const [srcRes, propsRes] = await Promise.all([
@@ -609,13 +509,6 @@ export async function fetchArchivedChapter(logId: string): Promise<ArchivedChapt
 
 const SET_WORKBENCH = path.resolve(import.meta.dirname, "../remotion/set-workbench");
 
-/**
- * Prep one chapter: fetch its archived comp + props, transform the source to
- * chapter length, write the chapter-ready comp into the set-workbench (keyed by
- * logId so the set composition can resolve it), and return the report + the
- * archived identity props (track/palette/seed — the finding's own look; the audio
- * is replaced by the freshly-analyzed chapter slice, see chapter-props.ts).
- */
 export async function prepChapter(opts: {
   logId: string;
   chapterDurationMs: number;
@@ -631,13 +524,11 @@ export async function prepChapter(opts: {
     source: archived.source,
   });
   mkdirSync(SET_WORKBENCH, { recursive: true });
-  // The set composition resolves chapter components by logId (the filename).
+
   writeFileSync(path.join(SET_WORKBENCH, `${opts.logId}.tsx`), code);
   return { archived, authoredDurationMs, report };
 }
 
-// Run directly to prep + audit a single chapter (fast eyeball of the transform):
-//   bun src/set-video/chapter-prep.ts <logId> <chapterDurationMs> [--final]
 if (import.meta.main) {
   const [, , logId, durMs, finalFlag] = process.argv;
   if (!logId || !durMs) {

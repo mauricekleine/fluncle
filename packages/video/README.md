@@ -52,6 +52,8 @@ There is **no imposed look** here — no `Grain` overlay, no `Starfield`. Textur
 - **`paletteMix`** (`palette-mix.ts`) — derives the palette from the artwork swatches, **scene-led**: the only imposed rule is Warm Dark (the field stays a warm near-black, nudged toward the artwork's darkest). `accent` is the artwork's OWN most-chromatic swatch (no gold lean), `glow` is that accent's hot light, `ink` stays cream. Gold appears only if the artwork is genuinely warm — it is never imposed. Falls back to the brand palette only when no swatches are supplied.
 - **Color/font helpers** — `hexToRgb`, `rgbToHex`, `withAlpha`, `mix`, `luminance`, `warmth`, `saturation` (`color.ts`); the three canon faces embedded as base64 `@font-face` — `OXANIUM`/`OXANIUM_STACK` (display: marks, mastheads, every numeral), `SPACE_GROTESK`/`SPACE_GROTESK_STACK` (body: reading text, titles, labels; max weight 700), `MONASPACE`/`MONO_STACK` (mono: terminal surfaces only) plus `loadFonts` (`fonts.ts`); the `NostalgicCosmosProps`/`CosmosTrack`/`CosmosAudio`/`CosmosPalette`/`EnergySample` contract types (`types.ts`).
 
+Render fonts use embedded CSS `@font-face` rules because the FontFace loading API can leave `delayRender()` waiting indefinitely in the software GL renderer. Keep their metric overrides aligned byte for byte with `apps/web/src/styles.css`; mixed-face coordinates and titles rely on the shared 1.25em box. The curve sampler uses a leftmost-match binary search so duplicate timestamps keep their first-match behavior without a linear scan on long set renders.
+
 #### The hard laws, restated
 
 These are guarantees the code makes; a track must not defeat them.

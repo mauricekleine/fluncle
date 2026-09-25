@@ -1,21 +1,3 @@
-// Unit tests for the box-state RESTORE DRILL (box-state-restore-drill.ts) — the acceptance test
-// that turns leg 2 of the backup cron from a hypothesis into a tested path.
-//
-// The drill only means something if it FAILS on a bad artifact, so every case here is driven
-// through the REAL producer (`buildBoxStateArchive` from box-state-snapshot.ts) rather than a
-// hand-rolled fake: the round trip proves producer and drill agree, and each corruption case
-// proves the drill refuses what a restore must never accept.
-//
-//   1. Happy path — produce → verify → decrypt → unpack → the load-bearing set is there.
-//   2. Corrupted ciphertext, a wrong key, a truncated artifact, a manifest that disagrees on the
-//      SHA-256 or the length: every one is a hard failure with a message naming the mismatch.
-//   3. The key is read the way the producer reads it — 64 hex chars OR base64.
-//   4. Coverage is judged from the producer's own include list: drop the render conductor's
-//      `box-id` (or the env file, or the memories) and the drill says so.
-//   5. The bucket half — latest-daily resolution and a signed GET — against a loopback fixture.
-//
-//   bun test docs/agents/hermes/scripts/box-state-restore-drill.test.ts
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,7 +32,6 @@ afterEach(() => {
   }
 });
 
-/** The message a rejected promise carries — `expect().rejects` is not type-aware-lint clean. */
 async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   try {
     await promise;
@@ -63,10 +44,6 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
 
 type Produced = { cipher: Uint8Array; manifest: BoxStateManifest; root: string };
 
-/**
- * A miniature data root shaped like the box's, run through the REAL producer. `omit` names path
- * TAILS to leave out, so a test can ask what the drill does about a hole in the archive.
- */
 async function produce(omit: readonly string[] = []): Promise<Produced> {
   const root = mkdtempSync(join(tmpdir(), "fluncle-drill-src-"));
   temporaryDirectories.push(root);
@@ -107,7 +84,6 @@ async function produce(omit: readonly string[] = []): Promise<Produced> {
   return { cipher: new Uint8Array(readFileSync(outPath)), manifest, root };
 }
 
-/** The drill's own steps, run end to end the way `main()` runs them. */
 async function drill(
   produced: Produced,
   key: Uint8Array = KEY,
@@ -140,7 +116,6 @@ describe("the happy path — a produced artifact restores and verifies", () => {
 
       const restored = join(scratch, "restored");
 
-      // Not merely "some files": the things a rebuild needs, with their contents intact.
       expect(readFileSync(join(restored, "state.db"), "utf8")).toBe("gateway-state");
       expect(readFileSync(join(restored, "memories", "crew.md"), "utf8")).toBe("the crew");
       expect(readFileSync(join(restored, "home", ".render-conductor", "box-id"), "utf8")).toBe(
@@ -251,7 +226,6 @@ describe("everything a restore must refuse", () => {
   });
 
   test("a truncated artifact whose manifest agrees ⇒ still fails, on the tag", async () => {
-    // The nastier case: someone re-recorded the length after the truncation. GCM is the backstop.
     const produced = await produce();
     const cipher = produced.cipher.subarray(0, produced.cipher.length - 64);
 
@@ -376,7 +350,6 @@ describe("the load-bearing set — derived from the producer's include list", ()
   });
 
   test("a .render-conductor archived WITHOUT its box-id fails too", () => {
-    // The nested requirement: the directory is there, the one file that matters is not.
     const shortfalls = checkBoxStateCoverage({
       entries: ["state.db", "memories", "cron/output", "home/.render-conductor", "home/x.env"],
       exists: (path) => path !== "home/.render-conductor/box-id",
@@ -406,7 +379,6 @@ describe("the load-bearing set — derived from the producer's include list", ()
       }).map((shortfall) => shortfall.what),
     ).toEqual(["the cron run markers"]);
 
-    // .healthcheck and the data root's env file are optional — never a drill failure.
     expect(
       checkBoxStateCoverage({
         entries: ["cron/output", "home/.render-conductor", "home/x.env"],
@@ -515,7 +487,6 @@ describe("the bucket half — read-only", () => {
   });
 
   test("the drill signs its reads with the same signer the sweep writes with", async () => {
-    // Not a second signing implementation: the same exported `signS3Request`, GET-side.
     const headers = await signS3Request({
       accessKeyId: "test-access-key",
       method: "GET",

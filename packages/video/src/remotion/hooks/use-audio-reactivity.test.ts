@@ -1,7 +1,3 @@
-// Unit tests for the PURE composite math inside the audio-reactivity bus
-// (bun:test, named blocks). Only the exported pure helpers are exercised — no
-// React rendering, no Remotion context.
-
 import { expect, test } from "bun:test";
 
 import { type EnergySample } from "../types";
@@ -14,15 +10,11 @@ import {
   resolveDropPeakTimeMs,
 } from "./use-audio-reactivity";
 
-// ---------------------------------------------------------------------------
-// findPeakTimeMs + resolveDropPeakTimeMs (the drop default)
-// ---------------------------------------------------------------------------
-
 const spikyCurve: EnergySample[] = [
   { energy: 0.4, timeMs: 0 },
-  { energy: 1.0, timeMs: 2000 }, // the loudest instantaneous sample (a lone kick)
+  { energy: 1.0, timeMs: 2000 },
   { energy: 0.3, timeMs: 4000 },
-  { energy: 0.9, timeMs: 9000 }, // the actual drop's level
+  { energy: 0.9, timeMs: 9000 },
 ];
 
 test("findPeakTimeMs: empty curve yields undefined", () => {
@@ -47,10 +39,6 @@ test("resolveDropPeakTimeMs: falls back to the loudest sample without dropMs", (
   expect(resolveDropPeakTimeMs(undefined, [])).toBeUndefined();
 });
 
-// ---------------------------------------------------------------------------
-// dropEnvelope
-// ---------------------------------------------------------------------------
-
 test("dropEnvelope: no peak at all reads 0", () => {
   expect(dropEnvelope(1000, undefined, undefined)).toBe(0);
 });
@@ -58,13 +46,13 @@ test("dropEnvelope: no peak at all reads 0", () => {
 test("dropEnvelope: 1.0 at the peak, 0 well before the rise and after the fall", () => {
   const peak = 5000;
   expect(dropEnvelope(peak, peak, undefined)).toBe(1);
-  expect(dropEnvelope(peak - 2000, peak, undefined)).toBe(0); // default rise 700ms
-  expect(dropEnvelope(peak + 3000, peak, undefined)).toBe(0); // hold 250 + fall 900
+  expect(dropEnvelope(peak - 2000, peak, undefined)).toBe(0);
+  expect(dropEnvelope(peak + 3000, peak, undefined)).toBe(0);
 });
 
 test("dropEnvelope: holds 1.0 through the hold window and rises monotonically", () => {
   const peak = 5000;
-  expect(dropEnvelope(peak + 200, peak, undefined)).toBe(1); // inside default 250ms hold
+  expect(dropEnvelope(peak + 200, peak, undefined)).toBe(1);
   const a = dropEnvelope(peak - 600, peak, undefined);
   const b = dropEnvelope(peak - 300, peak, undefined);
   expect(a).toBeGreaterThan(0);
@@ -81,22 +69,18 @@ test("dropEnvelope: floor is kept outside the drop window", () => {
   expect(dropEnvelope(20_000, 20_000, { floor: 0.2 })).toBe(1);
 });
 
-// ---------------------------------------------------------------------------
-// Composites
-// ---------------------------------------------------------------------------
-
 test("computeHit: default weights and the 0..1 clamp", () => {
   expect(computeHit(0, 0)).toBe(0);
-  expect(computeHit(0.5, 0)).toBeCloseTo(0.31, 6); // 0.5 * 0.62
-  expect(computeHit(0, 0.5)).toBeCloseTo(0.25, 6); // 0.5 * 0.5
-  expect(computeHit(1, 1)).toBe(1); // 0.62 + 0.5 clamps
+  expect(computeHit(0.5, 0)).toBeCloseTo(0.31, 6);
+  expect(computeHit(0, 0.5)).toBeCloseTo(0.25, 6);
+  expect(computeHit(1, 1)).toBe(1);
   expect(computeHit(1, 1, 0.3, 0.3)).toBeCloseTo(0.6, 6);
 });
 
 test("computeSwell: bass+energy sum to 1.0 at a real drop; the beat term defaults OFF", () => {
-  expect(computeSwell(0, 1, 1)).toBe(1); // 0.6 + 0.4 — the Motion-law guarantee
-  expect(computeSwell(1, 0, 0)).toBe(0); // per-beat weight defaults to 0 (no jitter)
-  expect(computeSwell(1, 0, 0, 0.2)).toBeCloseTo(0.2, 6); // opt-in beat weight
+  expect(computeSwell(0, 1, 1)).toBe(1);
+  expect(computeSwell(1, 0, 0)).toBe(0);
+  expect(computeSwell(1, 0, 0, 0.2)).toBeCloseTo(0.2, 6);
   expect(computeSwell(0, 0.5, 0.5)).toBeCloseTo(0.5, 6);
 });
 
@@ -105,5 +89,5 @@ test("computeDisturbance: hit+swell+drop weighting, clamped", () => {
   expect(computeDisturbance(1, 0, 0)).toBeCloseTo(0.6, 6);
   expect(computeDisturbance(0, 1, 0)).toBeCloseTo(0.45, 6);
   expect(computeDisturbance(0, 0, 1)).toBeCloseTo(0.25, 6);
-  expect(computeDisturbance(1, 1, 1)).toBe(1); // 1.3 clamps to 1
+  expect(computeDisturbance(1, 1, 1)).toBe(1);
 });

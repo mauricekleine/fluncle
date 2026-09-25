@@ -1,7 +1,3 @@
-// Audio-reactive hooks for the Nostalgic Cosmos primitives. All compute from
-// useCurrentFrame()/fps and the props arrays only: pure and deterministic, safe
-// for headless renders. Feed them the composition's audio.* arrays.
-
 export { useBeat, type BeatState, type UseBeatOptions } from "./use-beat";
 export { useDownbeat } from "./use-downbeat";
 export { useOnset } from "./use-onset";

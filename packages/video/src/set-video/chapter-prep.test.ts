@@ -9,9 +9,6 @@ import {
   transformChapterSource,
 } from "./chapter-prep";
 
-// A fixture modeled on the real 012.2.4L (caustic web): a whole-clip RAMP
-// (`rise`), a TAIL SETTLE (`settle`), a pinned drop peak, a <TrackAudio>, and a
-// TypePlate/CloseCard the overlay policy leaves untouched.
 const RAMP_AND_SETTLE = `import { interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 const DROP_MS = 13_000;
 const Comp = ({ audio }) => {
@@ -27,8 +24,6 @@ const Comp = ({ audio }) => {
   );
 };`;
 
-// A "clean" 032-class comp: no absolute-clock drivers — drives only off the
-// duration-scoped useJourney + the audio bus, so it needs no rescale.
 const CLEAN_032 = `import { useJourney } from "../cosmos";
 const Comp = ({ audio }) => {
   const { arc, progress } = useJourney();
@@ -85,7 +80,7 @@ describe("extractInterpolateCalls + parseNumericArray", () => {
 
 describe("transformChapterSource", () => {
   const authoredDurationMs = 20_000;
-  const chapterDurationMs = 148_200; // the real 012.2.4L chapter length in 019.F.1A
+  const chapterDurationMs = 148_200;
 
   test("interior chapter: rescales the ramp, suppresses the settle, strips TrackAudio", () => {
     const withAudio = RAMP_AND_SETTLE.replace(
@@ -106,16 +101,15 @@ describe("transformChapterSource", () => {
     expect(settle?.action).toBe("suppressed");
     expect(report.scale).toBeCloseTo(7.41, 1);
 
-    // The ramp keyframes are multiplied by the scale so the ease spans the chapter.
     expect(code).toContain("(0) * 7.41");
     expect(code).toContain("(20) * 7.41");
-    // The settle collapses to its pre-settle constant (no mid-set dim).
+
     expect(code).toContain("const settle = 1;");
     expect(code).not.toContain("18.3");
-    // TrackAudio is gone; the type layer (self-suppressing) is untouched.
+
     expect(code).not.toContain("TrackAudio");
     expect(report.strippedTrackAudio).toBe(true);
-    // The pinned drop peak is surfaced as a judgment note.
+
     expect(report.notes.join(" ")).toContain("peakTimeMs");
   });
 
@@ -129,7 +123,7 @@ describe("transformChapterSource", () => {
     });
     const settle = report.drivers.find((d) => d.classification === "tail-settle");
     expect(settle?.action).toBe("shifted");
-    // delta = (148.2 - 20) = 128.2 s added to each settle keyframe.
+
     expect(code).toContain("(18.3) + 128.2");
     expect(code).toContain("(20) + 128.2");
   });
@@ -142,7 +136,7 @@ describe("transformChapterSource", () => {
       logId: "032.0.4L",
       source: CLEAN_032,
     });
-    // interpolate(progress, …) is duration-scoped — left untouched.
+
     expect(code).toContain("interpolate(progress, [0, 0.5, 1], [0, 1, 0])");
     expect(report.drivers.length).toBe(0);
     expect(report.notes.join(" ")).toContain("032-class");

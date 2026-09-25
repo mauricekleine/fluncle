@@ -1,12 +1,3 @@
-// The box-sized verification ladder's contract: what it runs, what it refuses to run, and the
-// record it leaves behind for the driver to fold into the run ledger.
-//
-// Every check command is a temp-PATH stub writing to a log file, and the cgroup accounting is a
-// pair of fixture files, so the suite never runs a real lint, typecheck, or test and never reads
-// the host's memory state.
-//
-//   bun test docs/agents/hermes/scripts/audit/verify.test.ts
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -44,8 +35,6 @@ function executable(path: string, body: string): void {
 }
 
 function git(cwd: string, ...args: string[]): void {
-  // The fixture repo must be independent of whatever the developer's own git config does — no
-  // signing key, no hook path, no template dir.
   const result = spawnSync(
     "git",
     ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=", ...args],
@@ -85,9 +74,7 @@ function box(options: { stubExitCode?: number; stubSleepSeconds?: number } = {})
 
   git(repo, "init", "--quiet", "--initial-branch=main");
   writeFileSync(join(repo, "README.md"), "fixture\n", "utf8");
-  // The real `.oxlintrc.json` is JSONC (it carries `//` comments) and holds the type-aware switch
-  // under `options`. The fixture mirrors BOTH, because the ladder derives a type-aware-off config
-  // from this file by text edit: a fixture without it let a derivation that could never work pass.
+
   writeFileSync(
     join(repo, ".oxlintrc.json"),
     [
@@ -106,9 +93,7 @@ function box(options: { stubExitCode?: number; stubSleepSeconds?: number } = {})
 
   const callLog = join(root, "calls.log");
   writeFileSync(callLog, "", "utf8");
-  // One stub stands in for every check command. It records the invocation, then obeys the
-  // fixture's chosen exit code and delay. The `bun -e` package.json probe is NOT a check and is
-  // passed through to the real interpreter, so the ladder's script detection stays honest.
+
   const stub = `#!/usr/bin/env bash
 if [ "\${1:-}" = "-e" ]; then exec ${JSON.stringify(process.execPath)} "$@"; fi
 printf '%s %s\\n' "$(basename "$0")" "$*" >>"${callLog}"
@@ -166,14 +151,13 @@ describe("the audit verification ladder", () => {
   test("the lint config it derives has the type-aware switch off, at the repo root", () => {
     const fixture = box();
     writeFileSync(join(fixture.repo, "touched.ts"), "export const a = 1;\n", "utf8");
-    // The stub records the config path it was handed; the ladder removes the file afterwards, so
-    // the assertion is on WHERE it was written and that the switch was actually flipped.
+
     const { status } = fixture.run();
     expect(status).toBe(0);
     const call = fixture.calls().find((entry) => entry.startsWith("bunx oxlint -c "));
     expect(call).toBeDefined();
     const configPath = (call ?? "").split(" ")[3] ?? "";
-    // Relative to the repo root: a config in a temp directory resolves its ignorePatterns there.
+
     expect(configPath.startsWith("/")).toBe(false);
     expect(existsSync(join(fixture.repo, configPath))).toBe(false);
   });
@@ -183,8 +167,7 @@ describe("the audit verification ladder", () => {
     writeFileSync(join(fixture.repo, ".oxlintrc.json"), '{ "options": {} }\n', "utf8");
     writeFileSync(join(fixture.repo, "touched.ts"), "export const a = 1;\n", "utf8");
     const { record, status } = fixture.run();
-    // The ladder keeps going (its other legs are still worth running) but the night's record says
-    // the lint leg did not run, and it must never fall through to the repo's type-aware config.
+
     expect(status).toBe(1);
     expect(record).toMatchObject({ failed: 1 });
     expect(fixture.calls().some((entry) => entry.startsWith("bunx oxlint"))).toBe(false);
@@ -200,11 +183,10 @@ describe("the audit verification ladder", () => {
     expect(record).toMatchObject({ failed: 0, ran: 2 });
     const calls = fixture.calls();
     expect(calls).toContain("bunx oxfmt --check touched.ts");
-    // The lint runs from a DERIVED config with the type-aware rules off (the whole-program load
-    // is what the box cannot afford), so the call carries `-c <file>` before the paths.
+
     expect(calls.some((call) => /^bunx oxlint -c \S+ touched\.ts$/.test(call))).toBe(true);
     expect(calls.some((call) => /^bunx oxlint touched\.ts$/.test(call))).toBe(false);
-    // The whole-repo forms are what the box cannot afford; none of them may appear.
+
     expect(calls.some((call) => /^bunx oxlint$/.test(call))).toBe(false);
     expect(calls.some((call) => call.includes("run check"))).toBe(false);
     expect(calls.some((call) => call.endsWith("typecheck") && !call.includes("--cwd"))).toBe(false);
@@ -279,7 +261,7 @@ describe("the audit verification ladder", () => {
   test("a step with no memory headroom is skipped rather than started into an OOM kill", () => {
     const fixture = box();
     writeFileSync(join(fixture.repo, "touched.ts"), "export const a = 1;\n", "utf8");
-    // Leaves well under the lint step's headroom requirement, and under the format step's too.
+
     fixture.cgroupCurrentBytes(6 * 1024 * MIB - 64 * MIB);
 
     const { record } = fixture.run();

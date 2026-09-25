@@ -1,22 +1,3 @@
-// Unit tests for backfill-sweep.ts — two contracts.
-//
-// 1. The `fluncleJson` parse-first contract that keeps a partial-failure batch RECORDED
-//    instead of discarded: a sweep command with per-item failures exits 1 but still prints
-//    its full JSON summary (`ok: false` + the counts), and the helper must return that
-//    summary rather than throw.
-// 2. The TICK's leg ORDER + tally: the catalogue Apple leg runs LAST (leg 3's certified
-//    rows get first call on the shared Apple meter), its counts land in the summary, and an
-//    unconfigured leg is a recorded no-op rather than a failed tick.
-//
-// The box-script sweep is self-contained (it can't import the workspace) and lives outside
-// any package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/backfill-sweep.test.ts
-//
-// The entrypoint is guarded behind `import.meta.main` in the sweep, so importing it here is
-// side-effect free (no fluncle spawn, no network). The fluncle CLI itself is stubbed with a
-// tiny executable selected via FLUNCLE_BIN (read at module load, hence the dynamic import in
-// beforeAll).
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
@@ -30,16 +11,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The stub fluncle. For the helper tests the FIRST arg selects the response shape; for the
-// tick tests the real invocation shape (`admin backfills <source> --limit N --json`) is matched
-// on the THIRD arg, and every call is appended to a log file so the test can assert the leg
-// ORDER and the exact flags. A second file switches the catalogue leg's response.
-//
-// Both control channels are FILES with absolute paths baked into the script, not env vars: the
-// sweep's own `spawnSync` passes no `env`, and under Bun a `process.env` mutation made after
-// startup does not reach the child — an env-var switch silently reads as unset.
-//
-// fluncleJson always appends --json as the last arg.
 function stubSource(
   callsFile: string,
   modeFile: string,
@@ -149,7 +120,6 @@ afterAll(() => {
   rmSync(stubDir, { force: true, recursive: true });
 });
 
-/** The stub's recorded invocations, one arg-string per leg, in the order they were spawned. */
 function recordedCalls(): string[] {
   if (!existsSync(callsFile)) {
     return [];
@@ -158,7 +128,6 @@ function recordedCalls(): string[] {
   return readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
 }
 
-/** Run the async sweep with direct Worker HTTP and Discogs vendor reads fully stubbed. */
 async function runBackfillSweep(): Promise<Record<string, unknown>> {
   const seenOperations = new Set<string>();
   const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -428,7 +397,7 @@ describe("the tick's legs", () => {
       throttled: false,
       unresolved: 0,
     });
-    // The unconfigured Apple leg is a no-op, while the remaining healthy legs still report.
+
     expect(summary.ok).toBe(true);
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
   });
@@ -470,9 +439,6 @@ describe("the tick's legs", () => {
   });
 
   test("the Beatport CATALOGUE tier is tallied apart from the certified one", async () => {
-    // The two tiers are different money — ~85 certified rows versus a five-figure catalogue where
-    // every row is a Firecrawl credit — so the operator has to be able to read the catalogue spend
-    // on its own line rather than inferring it from a merged total.
     const summary = await runBackfillSweep();
     const beatport = summary.beatport as Record<string, number>;
 
@@ -485,17 +451,6 @@ describe("the tick's legs", () => {
   test("canonical counters use handled rows, exclude reliability skips, and omit queue depth", async () => {
     const summary = await runBackfillSweep();
 
-    // checked:
-    //   Discogs 1 resolved + 2 unresolved
-    //   Last.fm 4 loved + 0 failed
-    //   Apple findings 6 resolved + 7 unresolved + 0 failed
-    //   Apple catalogue 9 resolved + 10 unresolved + 11 failed
-    //   Beatport 13 resolved + 14 unresolved + 15 failed, PLUS its catalogue tier's 20 + 21 + 22
-    //   Discogs facts 17 resolved + 18 concluded-none
-    //   Deezer 23 resolved + 24 unresolved + 26 failed
-    // The 3 + 5 + 8 + 16 reliability skips are deliberately excluded, and so are Deezer's 25
-    // UNVOUCHABLE rows: Deezer answered, but nothing was concluded and nothing was stamped, so
-    // counting them as checked would overstate the tick's real work.
     expect(summary.checked).toBe(263);
     expect(summary.produced).toBe(93);
     expect(summary.failed).toBe(74);
@@ -511,10 +466,6 @@ describe("the tick's legs", () => {
 
     const summary = await runBackfillSweep();
 
-    // The configured legs still did measured work, while the two unconfigured legs contribute real
-    // zeroes rather than unknown/null values. Deezer has no key to be unconfigured BY, so it keeps
-    // reporting: 3 + 4 + 13 from the first three legs, the facts leg's 17 + 18, plus its own
-    // 23 + 24 + 26.
     expect(summary.checked).toBe(128);
     expect(summary.produced).toBe(51);
     expect(summary.errors).toBe(0);
@@ -540,9 +491,6 @@ describe("the tick's legs", () => {
   });
 
   test("a Beatport leg that crashes records its error and leaves every earlier leg intact", async () => {
-    // The containment that matters: Beatport is the newest and slowest leg, and it reaches a
-    // Cloudflare-walled site through a third party. It must never be able to cost the sweep the
-    // four legs that ran before it.
     writeFileSync(beatportModeFile, "crash");
 
     const summary = await runBackfillSweep();
@@ -579,10 +527,6 @@ describe("the tick's legs", () => {
   });
 
   test("the Discogs-facts leg runs AFTER the Discogs one and asks for its own small batch", async () => {
-    // The order is the priority: this leg shares leg 1's Discogs rate window, and leg 1's
-    // release-ID resolves (which a finding's public `sameAs` depends on) must get first call on it.
-    // It is no longer the sweep's LAST leg — Deezer is — but its position relative to Discogs is
-    // the part that carries meaning, so that is what this pins.
     await runBackfillSweep();
 
     const calls = recordedCalls();
@@ -677,9 +621,6 @@ describe("the tick's legs", () => {
   });
 
   test("the Deezer leg runs LAST and asks for its own per-IP-safe batch", async () => {
-    // It shares no budget with any leg above (its own vendor, and no key at all), so its position
-    // carries no priority meaning — but the LIMIT does: Deezer's quota is per-IP and the Worker
-    // egresses from Cloudflare's shared edge, so the batch stays modest by design.
     await runBackfillSweep();
 
     const calls = recordedCalls();
@@ -704,9 +645,6 @@ describe("the tick's legs", () => {
   });
 
   test("a throttled Deezer leg reads as THROTTLED, not as a silent zero", async () => {
-    // Deezer signals its quota inside an HTTP-200 body, which is exactly how this failure hid for a
-    // week the last time: a throttle that reads as "nothing found" is indistinguishable from a
-    // drained worklist. The tick must be able to say which happened.
     writeFileSync(deezerModeFile, "throttled");
 
     const summary = await runBackfillSweep();
@@ -719,7 +657,7 @@ describe("the tick's legs", () => {
       unresolved: 0,
       unvouchable: 0,
     });
-    // A throttle is not a failed tick — nothing was stamped and every row stays eligible.
+
     expect(summary.ok).toBe(true);
   });
 

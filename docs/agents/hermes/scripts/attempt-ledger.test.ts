@@ -1,16 +1,3 @@
-// Unit tests for attempt-ledger.ts — the per-item attempt budget the note / observation / logbook
-// sweeps share. The box scripts are self-contained (they cannot import the workspace) and live
-// outside any package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/attempt-ledger.test.ts
-//
-// The bug this bounds: a gate rejection was a plain skip that left the item queued with nothing
-// counting the tries, so "retry" meant "forever". The entity-bio version of the same shape burned
-// ~270 model calls on three entities over two days. The siblings' queues are worse — BATCH_CAP=1
-// over an oldest-first worklist — so the half of this module that matters most is `selectWork`:
-// without it a permanently-failing HEAD blocks every item behind it, which trades an unbounded
-// loop for a permanent stall.
-
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,8 +52,7 @@ describe("the attempt ledger (the count that survives a tick)", () => {
     expect(planAttempt(ledger, "x", MAX)).toEqual({ attempt: 2, exhausted: false, spent: 1 });
 
     recordAttempt(ledger, "x", 2);
-    // The LAST pass. The bio sweep marks this one "final" and publishes its draft regardless; the
-    // siblings deliberately carry no such flag — a refused third draft is discarded like the first.
+
     expect(planAttempt(ledger, "x", MAX)).toEqual({ attempt: 3, exhausted: false, spent: 2 });
 
     recordAttempt(ledger, "x", 3);
@@ -107,7 +93,6 @@ describe("the attempt ledger (the count that survives a tick)", () => {
     const dir = mkdtempSync(join(tmpdir(), "attempt-ledger-test-"));
 
     try {
-      // A FILE where the state DIR should be, so mkdirSync + writeFileSync both fail.
       const blocker = join(dir, "blocked");
 
       writeFileSync(blocker, "not a directory", "utf8");
@@ -118,9 +103,7 @@ describe("the attempt ledger (the count that survives a tick)", () => {
         writeAttemptLedger(attemptLedgerPath(blocker), new Map(), (message) => lines.push(message)),
       ).not.toThrow();
       expect(lines.join("\n")).toContain("could not persist the attempt ledger");
-      // …and it stays on the strain detector's item-rate path, because a budget that silently
-      // stops persisting is a budget that silently stops bounding anything. This helper attempted
-      // one item, so its real `checked` denominator is one.
+
       expect(countDistressLines(lines.join("\n"), 1)).toBeGreaterThan(0);
     } finally {
       rmSync(dir, { force: true, recursive: true });
@@ -131,12 +114,6 @@ describe("the attempt ledger (the count that survives a tick)", () => {
     expect(defaultStateDir("note-sweep").endsWith("/.note-sweep")).toBe(true);
   });
 });
-
-// ── THE HEAD-OF-LINE RULE ──────────────────────────────────────────────────────────────
-//
-// The reason this module exists at all. These sweeps take BATCH_CAP=1 off the FRONT of an
-// oldest-first worklist, so a budget alone is not enough: an exhausted item at the head would be
-// picked every tick, skipped, and nothing behind it would ever be worked again.
 
 describe("selectWork (an exhausted item must not block the queue)", () => {
   const QUEUE = [{ id: "spent" }, { id: "fresh" }, { id: "also-fresh" }];
@@ -156,8 +133,7 @@ describe("selectWork (an exhausted item must not block the queue)", () => {
     const { exhausted, work } = selectWork(QUEUE, ledger, keyOf, 1, MAX);
 
     expect(exhausted.map((row) => row.id)).toEqual(["spent"]);
-    // Without this the sweep would spend every tick meeting the same dead head forever, and the
-    // findings behind it would never be reached — a permanent stall, worse than the retry loop.
+
     expect(work.map((row) => row.id)).toEqual(["fresh"]);
   });
 
@@ -204,9 +180,6 @@ describe("the summary arithmetic", () => {
   });
 
   test("the per-tick exhausted RECAP is silent to the strain detector", () => {
-    // It repeats every tick for as long as the dead items sit in the queue. Each exhaustion was
-    // already reported as distress once, on the tick it happened; scoring the recap too would
-    // accrue a point per tick forever for a known steady state — a `degraded` that can never clear.
     const recap = exhaustedRecapLine("finding", ["011.5.9D", "012.1.0A"], MAX);
 
     expect(recap).toContain("2 exhausted findings");
@@ -214,8 +187,6 @@ describe("the summary arithmetic", () => {
   });
 
   test("…and pluralises the way the rest of the box's operator lines do", () => {
-    // `fluncle-healthcheck.ts` writes `${n === 1 ? "" : "s"}`; the repo's operator register has no
-    // `(s)` parenthetical anywhere, and this line is read by a human at 01:00.
     expect(exhaustedRecapLine("finding", ["011.5.9D"], MAX)).toContain("1 exhausted finding —");
     expect(exhaustedRecapLine("day", ["sector 12", "sector 13"], MAX)).toContain(
       "2 exhausted days",

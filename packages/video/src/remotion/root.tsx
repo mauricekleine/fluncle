@@ -1,13 +1,3 @@
-// Composition registry — a permanent template, never hand-edited per render.
-//
-// Generated track compositions are output, not codebase history. An agent drops
-// its composition into the gitignored `./workbench/` dir; this file AUTO-REGISTERS
-// every `.tsx` there via webpack's require.context (Remotion bundles with
-// webpack, in both render and Studio). So a render touches no tracked file: no
-// registration edit, no cleanup, no commit hazard. The durable copy is the R2
-// bundle (`ship` copies the source into out/<log-id>/composition.tsx). The
-// composition id is the workbench filename without its extension.
-
 import { Composition, type CalculateMetadataFunction } from "remotion";
 import { colors } from "@fluncle/tokens";
 
@@ -15,12 +5,7 @@ import { Cover } from "./cover";
 import { GlProbe } from "./gl-probe";
 import { type NostalgicCosmosProps } from "./types";
 
-// webpack 5 directory globbing. It must be called as a LITERAL
-// `import.meta.webpackContext(...)` so webpack can statically replace it at
-// build time (aliasing it breaks that). Typed via this ImportMeta augmentation.
 declare global {
-  // Must be an interface (declaration merging augments the global ImportMeta);
-  // a `type` alias cannot merge, and `oxlint --fix` would otherwise break it.
   // oxlint-disable-next-line typescript/consistent-type-definitions
   interface ImportMeta {
     webpackContext: (
@@ -34,23 +19,13 @@ declare global {
 }
 
 const FPS = 30;
-// Portrait is the unchanged default for every clip to date. Landscape is the
-// 1920×1080 radio.fluncle.com full-screen cut; square is the 1920×1920 clean
-// source master MT crops to either orientation on the fly.
-// Each is selected per-render via the `aspect` prop (the bespoke 9:16 shaders
-// reflow under landscape/square — expected, scaffold not catalogue). WIDTH/HEIGHT
-// remain the portrait Composition defaults so Studio and any aspect-less producer
-// stay exactly as before.
+
 const WIDTH = 1080;
 const HEIGHT = 1920;
 const LANDSCAPE_WIDTH = 1920;
 const LANDSCAPE_HEIGHT = 1080;
 const SQUARE_SIZE = 1920;
 
-// durationInFrames is derived from audio.durationMs so the video always matches
-// the audio clip length regardless of the default placeholder duration. Width and
-// height follow `props.aspect` (default portrait), so one composition renders the
-// vertical social cut, the landscape radio cut, and the square crop source.
 const calculateMetadata: CalculateMetadataFunction<NostalgicCosmosProps> = ({ props }) => {
   const dimensions =
     props.aspect === "landscape"
@@ -65,12 +40,8 @@ const calculateMetadata: CalculateMetadataFunction<NostalgicCosmosProps> = ({ pr
   };
 };
 
-// Contract-default props. Real values come from the social-preview pipeline.
 const defaultProps: NostalgicCosmosProps = {
   audio: {
-    // Real analysed clip from the social-preview pipeline (gitignored .m4a under
-    // public/). Per-track props come from out/<trackId>.props.json; these
-    // defaults just let Studio open a composition with matching audio.
     bassCurve: [],
     beatGrid: [],
     bpm: 174,
@@ -102,10 +73,6 @@ const defaultProps: NostalgicCosmosProps = {
   },
 };
 
-// Auto-register every composition in the gitignored ./workbench/ dir. id = the
-// filename (sans .tsx); the component is the default export (or the sole
-// React component the file exports). Keys are sorted so registration order is
-// deterministic. An empty workbench (just .gitkeep) registers nothing.
 const workbenchContext = import.meta.webpackContext("./workbench", {
   recursive: false,
   regExp: /\.tsx$/,
@@ -151,8 +118,7 @@ export const RemotionRoot: React.FC = () => {
         id="GlProbe"
         width={1080}
       />
-      {/* The profile-grid cover (a still). Rendered by render-cover; real track +
-          nebula-still background arrive via inputProps. */}
+
       <Composition
         component={Cover}
         defaultProps={{

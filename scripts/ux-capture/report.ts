@@ -1,4 +1,3 @@
-/** The DOM probe returns geometry and heading data without interpreting it. */
 export type RawPageMetrics = {
   playHookCount: number;
   playHeuristicCount: number;
@@ -92,7 +91,6 @@ export type CaptureReport = {
   orphanAudio: OrphanAudioProbe | null;
 };
 
-/** Keeps the interpretation of DOM geometry identical across both viewports. */
 export function normalizePageMetrics(raw: RawPageMetrics): PageMetrics {
   const headings = raw.headings.map(({ level, text }) => ({ level, text: text.trim() }));
   const firstHeading = headings[0] ?? null;
@@ -168,7 +166,6 @@ function table(headers: string[], rows: string[][]): string {
   ].join("\n");
 }
 
-/** Renders the automated columns in the same scoreboard and tap table shapes as the baseline. */
 export function renderSummary(report: CaptureReport): string {
   const mobilePages = report.pages.filter(({ viewport }) => viewport === "mobile");
   const scoreboard = mobilePages.map((page) => {

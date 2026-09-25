@@ -1,28 +1,8 @@
-// Unit tests for artist-edges-sweep.ts — the `--no-agent` track_artists graph-backfill cron's
-// orchestrator (RFC artist-primary-capture, slice 0).
-//
-// The sweep is a PURE trigger (zero LLM tokens): it drives ONE bounded `fluncle admin backfills
-// artist-edges` pass and reports it. So the contract worth pinning is exactly the recording-mbids
-// sweep's — parse-first, so a partial pass (some tracks failed, exit 1) is RECORDED with its real
-// counts rather than discarded as a crash — plus the summary the cron output (and the /status
-// marker) is read from.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live outside any
-// package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/artist-edges-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is side-effect
-// free (no fluncle spawn, no network). The fluncle CLI itself is stubbed with a tiny executable
-// selected via FLUNCLE_BIN (read at module load, hence the dynamic import in beforeAll).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The stub fluncle: a mode FILE beside it selects the response shape. (The sweep builds its own
-// argv, so the mode cannot ride on an arg — and Bun's spawnSync snapshots the environment, so it
-// cannot ride on an env var either.)
 const STUB = `#!/bin/bash
 case "$(cat "$(dirname "$0")/mode")" in
   drained) printf '{"ok":true,"dryRun":false,"scanned":0,"edgesWritten":0,"fullyMatched":[],"fullyMatchedCount":0,"partiallyMatched":[],"partiallyMatchedCount":0,"queueDepth":0,"zeroMatched":[],"zeroMatchedCount":0,"unmatchedNames":0}\\n' ;;
@@ -36,7 +16,6 @@ let dir: string;
 let fluncleJson: typeof import("./artist-edges-sweep").fluncleJson;
 let main: typeof import("./artist-edges-sweep").main;
 
-/** Point the stub at one of its canned responses. */
 function mode(name: string): void {
   writeFileSync(join(dir, "mode"), name);
 }

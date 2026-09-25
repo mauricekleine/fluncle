@@ -1,69 +1,4 @@
 #!/usr/bin/env bun
-// backup-sweep.ts — the bun orchestrator behind the `--no-agent` database-backup
-// cron (`fluncle-backup`). TWO LEGS, one nightly run:
-//
-//   LEG 1 (the database) — dumps the PRODUCTION Turso (libSQL) database to a gzipped
-//   SQL artifact and uploads it — plus an integrity manifest — to a PRIVATE R2 bucket,
-//   then prunes to the retention window. An OWNED, off-Cloudflare backup: it runs on the
-//   box and talks to Turso + R2 directly, so a Worker/Cloudflare fault can't also take out
-//   the backup. Turso's managed point-in-time restore is the belt; this is the braces.
-//
-//   LEG 2 (the box's own state) — snapshots the LOAD-BEARING subset of the agent data dir
-//   (the render conductor's box-id + poison ledger, the
-//   hand-placed 0600 env files, the cron markers), ENCRYPTS it, and uploads it beside the
-//   dump under its own prefix + retention. See box-state-snapshot.ts for the include /
-//   exclude list and the encryption contract. This leg is SKIPPED (never a plaintext
-//   tarball) until the operator provisions FLUNCLE_BOXSTATE_KEY.
-//
-// LIVE. Version-controlled source; the repo is canonical and the box is a deploy
-// target (fluncle-hermes-operator skill). Invoked by the bash wrapper (backup-sweep.sh)
-// the host timer execs on a schedule — see that file's header for the wire-up and
-// ../backup-timer/README.md for the operator runbook of BOTH legs.
-//
-// SELF-CONTAINED by necessity: box scripts can't import the workspace. The pure dump
-// FORMAT (`sqlLiteral` / `quoteIdent` / `chooseAnchor` / `selectExpiredBackupKeys`)
-// MIRRORS apps/web/src/lib/server/db-dump.ts and the S3 signer MIRRORS
-// apps/web/src/lib/server/aws-sigv4.ts — keep them in step (the same discipline the
-// healthcheck prober uses for the registry).
-//
-// TWO DELIBERATE DIVERGENCES FROM THE MIRRORS (2026-07-26, the OOM fix):
-//   1. `buildDumpSql` (returns the whole dump as ONE string) is NOT mirrored here any
-//      more — this file has `streamDumpSql`, which emits the SAME BYTES incrementally
-//      into a writer instead of materialising them. The repo-side builder stays as it is
-//      (a Worker holding a dev-seed dump is a different, bounded problem). The equivalence
-//      is ENFORCED, not asserted: backup-sweep.test.ts imports the real `buildDumpSql`
-//      from apps/web/src/lib/server/db-dump.ts and asserts byte-for-byte equality with the
-//      streamed output. If the repo-side builder changes, that test goes red.
-//   2. `signS3Request` gains an OPTIONAL `payloadHashSha256` so a caller can sign a body
-//      it never holds in memory (the gzip file is hashed by streaming it). Omit it and the
-//      function behaves exactly as the mirror does.
-//
-// WHY THIS FILE IS STREAMING (the incident, so nobody re-flattens it). Until 2026-07-26 the
-// sweep built the entire dump as one JavaScript string, then `Buffer.from(sql)`, then
-// `gzipSync(...)` — three simultaneous full copies of the payload, and a JS string is UTF-16,
-// so the 323 MB dump of 2026-07-23 wanted ≈650 MB for the string alone. The container is
-// capped at 4 GiB with no swap; the sweep was OOM-killed (status=137, CONSTRAINT_MEMCG) on
-// three consecutive nights (Jul 24/25/26) and the last good backup was Jul 23. That shape
-// never self-heals — it worsens as the archive grows. So: rows are paged out of libSQL a
-// batch at a time, rendered straight into a gzip stream, and the gzip lands in a temp FILE
-// that is uploaded by streaming it back. Peak RSS is bounded by the page size, not the
-// database size. Keep it that way: never join the dump, never `Buffer.from` it, never read
-// the artifact back with `readFileSync`.
-//
-// THE DUMP METHOD: the libSQL HTTP pipeline (POST <http-url>/v2/pipeline, Bearer auth) —
-// the same over-the-wire access `db-pull-prod.ts` uses via @libsql/client, but with no
-// dependency, so it runs on the box with only bun. No `turso` CLI, no image change.
-//
-// stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
-//
-// Modes:
-//   (default)              both legs → upload to R2 (daily + monthly) → prune. Needs the
-//                          Turso creds + the backup-bucket R2 creds in the env.
-//   --out <dir>            LOCAL DRY RUN of LEG 1: dump → gzip → write <dir>/fluncle.sql.gz
-//                          + <dir>/manifest.json, NO R2. Used to verify against the local
-//                          dev db and to feed the restore drill. Needs only the Turso creds.
-//   --box-state-out <dir>  LOCAL DRY RUN of LEG 2: build + encrypt the box-state archive
-//                          into <dir>, NO R2. Needs only FLUNCLE_BOXSTATE_KEY.
 
 import { createWriteStream, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -82,8 +17,6 @@ import {
   selectBoxStatePaths,
 } from "./box-state-snapshot";
 
-// ── Config (env; the shared .fluncle-secrets.env supplies the secrets on the box) ──
-
 function argValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
 
@@ -97,24 +30,15 @@ const DRY_RUN = OUT_DIR !== undefined || BOX_STATE_OUT_DIR !== undefined;
 const TURSO_URL = process.env.TURSO_DATABASE_URL ?? "";
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN ?? "";
 
-/** The backup bucket's connection, from the env. */
 export type BackupR2Config = {
   accessKeyId: string;
   accountId: string;
   bucket: string;
-  /** The bucket's S3 base URL — `<endpoint>/<bucket>`, with no trailing slash. */
+
   bucketUrl: string;
   secretAccessKey: string;
 };
 
-/**
- * Read the backup bucket's connection from the env — the ONE config path. The restore drill
- * (box-state-restore-drill.ts) reads it through here too, so there is no second set of names
- * to keep in step, and a rotated credential moves both at once.
- *
- * A dedicated, least-privilege R2 token: Object Read & Write on the PRIVATE backup bucket ONLY
- * (never fluncle-videos, which is world-served at found.fluncle.com).
- */
 export function backupR2Config(env: NodeJS.ProcessEnv = process.env): BackupR2Config {
   const accountId = env.R2_ACCOUNT_ID ?? "";
   const bucket = env.FLUNCLE_BACKUP_R2_BUCKET ?? "fluncle-backups";
@@ -133,42 +57,28 @@ const R2 = backupR2Config();
 const KEEP_DAILY = Number(process.env.FLUNCLE_BACKUP_KEEP_DAILY ?? "30");
 const KEEP_MONTHLY = Number(process.env.FLUNCLE_BACKUP_KEEP_MONTHLY ?? "12");
 
-// Leg 2 keeps a SHORTER window than the database: box state is operational scaffolding
-// (re-derivable in part, and stale copies age badly), the database is the archive.
 const BOXSTATE_KEEP_DAILY = Number(process.env.FLUNCLE_BOXSTATE_KEEP_DAILY ?? "14");
 const BOXSTATE_KEEP_MONTHLY = Number(process.env.FLUNCLE_BOXSTATE_KEEP_MONTHLY ?? "6");
 
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK ?? "";
 
-// How many rows are pulled from libSQL — and held in the isolate — at once. THE memory
-// dial: peak RSS scales with this, never with the table's size. 1,000 rows of the widest
-// table (tracks, with a MuQ embedding blob) is a few MB of response JSON.
 const ROW_BATCH = Math.max(1, Number(process.env.FLUNCLE_BACKUP_ROW_BATCH ?? "1000"));
 
-// Coalesce emitted SQL into ~512 KB writes before pushing them at the gzip stream: one
-// `write()` per INSERT is correct but syscall-heavy, and a bounded buffer keeps the
-// memory promise intact.
 const WRITE_CHUNK_BYTES = 512 * 1024;
 
 const PREFIX = "db-backups/";
 const DAILY_PREFIX = `${PREFIX}daily/`;
 const MONTHLY_PREFIX = `${PREFIX}monthly/`;
 
-// Leg 2's own keyspace, beside the database's and pruned on its own retention. Exported
-// because the restore drill reads the same objects — one declaration of where they live.
 export const BOXSTATE_PREFIX = "box-state/";
 export const BOXSTATE_DAILY_PREFIX = `${BOXSTATE_PREFIX}daily/`;
 export const BOXSTATE_MONTHLY_PREFIX = `${BOXSTATE_PREFIX}monthly/`;
 
-/** The sealed artifact's object name inside a daily/monthly folder. */
 export const BOXSTATE_ARTIFACT_NAME = "box-state.tar.gz.enc";
 
-/** The plaintext manifest that sits beside every artifact, in both legs. */
 export const MANIFEST_NAME = "manifest.json";
 
 const log = (message: string) => console.error(`[backup-sweep] ${message}`);
-
-// ── MIRROR of apps/web/src/lib/server/db-dump.ts — keep in step ──────────────
 
 type SqlValue = ArrayBuffer | ArrayBufferView | bigint | boolean | number | string | null;
 type SchemaObject = { name: string; sql: string; type: string };
@@ -274,10 +184,8 @@ export function selectExpiredBackupKeys(
   return expired.sort();
 }
 
-// ── MIRROR of apps/web/src/lib/server/aws-sigv4.ts — keep in step ────────────
-
 const encoder = new TextEncoder();
-/** Copy a view's exact byte window into an ArrayBuffer-backed WebCrypto input. */
+
 function webCryptoBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(bytes);
 }
@@ -329,9 +237,7 @@ export async function signS3Request(options: {
   contentType?: string;
   method: string;
   now: Date;
-  // DIVERGENCE from the mirror: a precomputed payload hash, so a body that is never held
-  // in memory (the gzip artifact, hashed by streaming it off disk) can still be signed.
-  // Omitted ⇒ hash `body` exactly as the mirror does.
+
   payloadHashSha256?: string;
   region: string;
   secretAccessKey: string;
@@ -378,8 +284,6 @@ export async function signS3Request(options: {
   };
 }
 
-// ── The libSQL HTTP pipeline client (Hrana over HTTP, zero deps) ─────────────
-
 type HranaCell = { base64?: string; type: string; value?: unknown };
 
 function decodeCell(cell: HranaCell): SqlValue {
@@ -393,7 +297,6 @@ function decodeCell(cell: HranaCell): SqlValue {
     case "blob":
       return new Uint8Array(Buffer.from(cell.base64 ?? "", "base64"));
     default:
-      // text (+ any unrecognised scalar) — the cell value is a JSON primitive.
       return cell.value == null ? "" : String(cell.value as number | string);
   }
 }
@@ -433,20 +336,10 @@ async function pipeline(sqls: string[]): Promise<HranaResult[]> {
     });
 }
 
-// ── R2 (S3 API) helpers ──────────────────────────────────────────────────────
-
-/** Percent-encode an object key for a URL without eating its `/` separators. */
 export function encodeKey(key: string): string {
   return key.split("/").map(encodeURIComponent).join("/");
 }
 
-/**
- * One signed S3 PUT. `body` is either bytes already in hand (a manifest — always small)
- * or a `{ path, bytes, sha256 }` handle to a file that is STREAMED off disk, so a 100 MB
- * artifact never becomes a 100 MB Buffer. Exported so backup-sweep.test.ts can drive it
- * against a loopback fixture server and prove the streamed PUT carries the right
- * content-length, payload hash, and bytes.
- */
 export async function signedPut(
   url: string,
   options: {
@@ -465,8 +358,7 @@ export async function signedPut(
     contentType: options.contentType,
     method: "PUT",
     now: options.now ?? new Date(),
-    // A file is signed with the hash the CALLER streamed off disk; bytes in hand are hashed
-    // here, exactly as the aws-sigv4 mirror always did.
+
     payloadHashSha256: onDisk === null ? undefined : (options.body as { sha256: string }).sha256,
     region: "auto",
     secretAccessKey: options.secretAccessKey,
@@ -477,8 +369,6 @@ export async function signedPut(
 
   const sent = { ...headers, "content-type": options.contentType };
 
-  // Two literal call sites rather than one union-typed body: Bun sets Content-Length from a
-  // BunFile and streams it, so the artifact is never resident.
   const res =
     onDisk === null
       ? await fetch(url, { body: inHand, headers: sent, method: "PUT" })
@@ -524,11 +414,6 @@ async function r2Delete(key: string): Promise<void> {
   }
 }
 
-/**
- * Every key under `prefix`, following the continuation tokens. Credentials + bucket URL are
- * arguments rather than module state so the READ-ONLY restore drill can reuse the exact
- * listing this sweep prunes by, without importing the sweep's write path.
- */
 export async function signedList(options: {
   accessKeyId: string;
   bucketUrl: string;
@@ -580,8 +465,6 @@ async function r2List(prefix: string): Promise<string[]> {
   });
 }
 
-// ── LEG 1: the streaming dump ────────────────────────────────────────────────
-
 export type DumpManifest = {
   generatedAt: string;
   source: string;
@@ -597,44 +480,23 @@ export type DumpManifest = {
   tables: Record<string, number>;
 };
 
-/**
- * Everything `streamDumpSql` needs from the database, as three narrow reads. Injected so
- * the tests can drive the writer with a synthetic table of any size (the memory-bound
- * proof) without a database.
- */
 export type DumpSource = {
-  /** Every `sqlite_master` object, already ordered tables → indexes → triggers → rest. */
   fetchSchema: () => Promise<SchemaObject[]>;
-  /**
-   * One page of a table, `limit` rows from `offset`. Returns null when the table cannot be
-   * read at all (the old code's `if (!result) continue` — such a table is skipped whole).
-   * Rows come back in the table's natural scan order, which is what an un-ORDERed
-   * `SELECT *` gave before, so the dump's row order is unchanged.
-   */
+
   fetchPage: (
     table: string,
     limit: number,
     offset: number,
   ) => Promise<{ columns: string[]; rows: SqlValue[][] } | null>;
-  /** The manifest's content spot-check over the chosen anchor. */
+
   fetchSpot: (
     table: string,
     column: string,
   ) => Promise<{ count: number; max: unknown; min: unknown } | null>;
 };
 
-/** Where the dump text goes. Called with large-ish coalesced chunks, never per row. */
 export type DumpWriter = (chunk: string) => Promise<void> | void;
 
-/**
- * Emit the dump — byte-for-byte what `buildDumpSql` would have returned — into `write`,
- * and return the manifest. Nothing larger than one page of rows plus one ~512 KB text
- * buffer is ever resident, so peak memory is independent of the database size.
- *
- * The order is SQLite's own `.dump` order and must not drift: header, pragma, BEGIN, every
- * CREATE TABLE, every table's INSERTs (empty tables emit none), then indexes/triggers/views,
- * then COMMIT — each part on its own line, with a trailing newline.
- */
 export async function streamDumpSql(
   source: DumpSource,
   write: DumpWriter,
@@ -656,7 +518,6 @@ export async function streamDumpSql(
     await write(chunk);
   };
 
-  // One dump "part" — the same unit `buildDumpSql` joined with "\n".
   const emit = async (part: string): Promise<void> => {
     const line = `${part}\n`;
     sqlBytes += Buffer.byteLength(line, "utf8");
@@ -692,7 +553,7 @@ export async function streamDumpSql(
     const first = await source.fetchPage(object.name, batchRows, 0);
 
     if (!first) {
-      continue; // unreadable table — skipped whole, exactly as before
+      continue;
     }
 
     tableCount += 1;
@@ -768,10 +629,8 @@ export async function streamDumpSql(
   };
 }
 
-/** A produced artifact on disk: where it is, how big, and its SHA-256 (for SigV4). */
 export type ArtifactFile = { bytes: number; path: string; sha256: string };
 
-/** SHA-256 a file by streaming it — the hash of a 100 MB artifact costs 64 KB of RAM. */
 export async function hashFile(path: string): Promise<string> {
   const hash = createHash("sha256");
 
@@ -782,10 +641,6 @@ export async function hashFile(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
-/**
- * Run the dump straight into `path` as gzip. The gzip stream applies backpressure, so a
- * slow disk throttles the reader instead of queueing the dump in memory.
- */
 export async function writeGzippedDump(
   source: DumpSource,
   path: string,
@@ -813,7 +668,6 @@ export async function writeGzippedDump(
   };
 }
 
-/** The production source: the libSQL HTTP pipeline. */
 function libsqlSource(): DumpSource {
   return {
     fetchPage: async (table, limit, offset) => {
@@ -873,8 +727,6 @@ function libsqlSource(): DumpSource {
   };
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-
 async function alertDiscord(message: string): Promise<void> {
   if (!DISCORD_ALERT_WEBHOOK) {
     return;
@@ -886,12 +738,9 @@ async function alertDiscord(message: string): Promise<void> {
       method: "POST",
       signal: AbortSignal.timeout(5000),
     });
-  } catch {
-    /* best-effort */
-  }
+  } catch {}
 }
 
-/** Upload one artifact + its manifest into a daily folder, promoting the month's first. */
 async function uploadTier(options: {
   artifact: ArtifactFile;
   artifactName: string;
@@ -914,7 +763,6 @@ async function uploadTier(options: {
   await r2PutFile(dailyArtifact, options.artifact, options.contentType);
   await r2PutBytes(dailyManifest, manifestBytes, "application/json");
 
-  // Promote the FIRST successful backup of each month to the monthly tier.
   const monthlyExists = options.existing.some((key) =>
     key.startsWith(`${options.monthlyPrefix}${options.month}/`),
   );
@@ -924,7 +772,6 @@ async function uploadTier(options: {
     await r2PutBytes(monthlyManifest, manifestBytes, "application/json");
   }
 
-  // Prune to the retention window over the full (existing + just-uploaded) keyspace.
   const allKeys = new Set([
     ...options.existing,
     dailyArtifact,
@@ -950,7 +797,6 @@ type BoxStateOutcome =
   | { ok: true; reason: string; skipped: true }
   | { error: string; ok: false; skipped: false };
 
-/** Canonical ledger counters over the top-level backup operations this tick actually attempts. */
 export type BackupRunCounters = {
   checked: number;
   errors: number;
@@ -962,17 +808,14 @@ export function createBackupRunCounters(): BackupRunCounters {
   return { checked: 0, errors: 0, failed: 0, produced: 0 };
 }
 
-/** Mark a database or encrypted box-state operation as attempted before it can throw. */
 export function beginBackupOperation(counters: BackupRunCounters): void {
   counters.checked += 1;
 }
 
-/** Mark one attempted operation's durable artifact as successfully produced. */
 export function completeBackupOperation(counters: BackupRunCounters): void {
   counters.produced += 1;
 }
 
-/** A box-state leg may fail as an item while the completed tick still emits its full summary. */
 export function failBackupOperation(counters: BackupRunCounters): void {
   counters.failed += 1;
 }
@@ -986,13 +829,10 @@ function resetRunCounters(): void {
   runCounters.produced = 0;
 }
 
-/** LEG 2 — build, encrypt, upload, prune. Never throws; the caller decides what it means. */
 async function runBoxStateLeg(now: Date, tempDir: string): Promise<BoxStateOutcome> {
   const key = boxStateKeyFromEnv(process.env);
 
   if (!key) {
-    // THE PLAINTEXT RAIL: the archive carries 0600 credential-bearing env files, so with no
-    // key there is no artifact at all. Never a plaintext tarball, not even once.
     return { ok: true, reason: "no_encryption_key", skipped: true };
   }
 
@@ -1045,8 +885,6 @@ async function main(): Promise<void> {
   resetRunCounters();
 
   if (OUT_DIR !== undefined && BOX_STATE_OUT_DIR !== undefined) {
-    // Two different artifacts with two different verifications — run them one at a time so a
-    // dry run's summary always describes exactly one thing.
     console.log(
       JSON.stringify({
         ...runCounters,
@@ -1058,7 +896,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // A LEG-2-ONLY dry run needs no database at all.
   if (BOX_STATE_OUT_DIR !== undefined) {
     mkdirSync(BOX_STATE_OUT_DIR, { recursive: true });
     const key = boxStateKeyFromEnv(process.env);
@@ -1113,7 +950,6 @@ async function main(): Promise<void> {
     sourceName: DRY_RUN ? "local-dev" : "fluncle-prod",
   };
 
-  // LOCAL DRY RUN: write the artifacts to a directory, skip R2 entirely.
   if (OUT_DIR !== undefined) {
     mkdirSync(OUT_DIR, { recursive: true });
 
@@ -1164,10 +1000,9 @@ async function main(): Promise<void> {
   try {
     dump = await writeGzippedDump(libsqlSource(), dumpPath, dumpOptions);
 
-    const date = now.toISOString().slice(0, 10); // YYYY-MM-DD
-    const month = now.toISOString().slice(0, 7); // YYYY-MM
+    const date = now.toISOString().slice(0, 10);
+    const month = now.toISOString().slice(0, 7);
 
-    // Snapshot the current keyspace once (for the monthly-exists check + prune).
     tier = await uploadTier({
       artifact: dump.file,
       artifactName: "fluncle.sql.gz",
@@ -1186,8 +1021,6 @@ async function main(): Promise<void> {
     await rm(dumpPath, { force: true });
   }
 
-  // LEG 2 runs only AFTER the database leg is durable in R2, so a box-state fault can
-  // never cost the night's dump.
   const boxStateConfigured = boxStateKeyFromEnv(process.env) !== null;
 
   if (boxStateConfigured) {
@@ -1204,8 +1037,6 @@ async function main(): Promise<void> {
     completeBackupOperation(runCounters);
   }
 
-  // `ok` covers BOTH legs. A half-backup reporting green is the failure mode that let three
-  // OOM-killed nights read healthy on /status — the whole run tells the truth or none of it does.
   console.log(
     JSON.stringify({
       ...runCounters,

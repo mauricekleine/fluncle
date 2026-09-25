@@ -1,7 +1,5 @@
 #!/usr/bin/env bun
-// Tests for the pure parts of the SEO fetch helper (the network I/O isn't unit-tested — it needs
-// live creds; these cover the date window, the JWT assembly + signature, and the normalizers).
-// Run: bun test docs/agents/hermes/scripts/audit/fetch-seo-data.test.ts
+
 import { describe, expect, it } from "bun:test";
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { b64url, buildJwt, normalizeBing, normalizeGscRows, searchWindow } from "./fetch-seo-data";
@@ -9,8 +7,8 @@ import { b64url, buildJwt, normalizeBing, normalizeGscRows, searchWindow } from 
 describe("searchWindow", () => {
   it("is a 28-day window ending 3 days back, UTC YYYY-MM-DD", () => {
     const w = searchWindow(new Date("2026-07-08T12:00:00Z"));
-    expect(w.endDate).toBe("2026-07-05"); // 3 days back
-    expect(w.startDate).toBe("2026-06-07"); // 28 days before end
+    expect(w.endDate).toBe("2026-07-05");
+    expect(w.startDate).toBe("2026-06-07");
   });
 });
 
@@ -33,7 +31,6 @@ describe("buildJwt", () => {
     const [h, c, sig] = jwt.split(".");
     expect(h && c && sig).toBeTruthy();
 
-    // Header + claim decode to the expected shape.
     const header = JSON.parse(Buffer.from(h, "base64url").toString());
     const claim = JSON.parse(Buffer.from(c, "base64url").toString());
     expect(header).toEqual({ alg: "RS256", typ: "JWT" });
@@ -41,7 +38,6 @@ describe("buildJwt", () => {
     expect(claim.scope).toContain("webmasters.readonly");
     expect(claim.exp - claim.iat).toBe(3600);
 
-    // The signature verifies over `header.claim` with the matching public key.
     const ok = createVerify("RSA-SHA256")
       .update(`${h}.${c}`)
       .verify(publicKey, Buffer.from(sig, "base64url"));

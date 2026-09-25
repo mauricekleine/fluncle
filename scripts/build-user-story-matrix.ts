@@ -1,8 +1,3 @@
-// Builds the user-story × surface matrix artifacts from docs/user-stories.json:
-// docs/user-stories.html (self-contained pager) + docs/user-stories.csv (derived, never
-// hand-edited). Validates the JSON first and exits non-zero on any violation, so a bad
-// edit fails `bun run stories:build` instead of shipping a lying matrix.
-
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -35,7 +30,6 @@ const ENTITIES = ["track", "artist", "album", "label", "galaxy", "mixtape", "acc
 
 const spec: Spec = JSON.parse(readFileSync(SPEC_PATH, "utf8"));
 
-// ── Validation ───────────────────────────────────────────────────────────────────────────
 const surfaceIds = spec.surfaces.map((s) => s.id);
 const errors: string[] = [];
 const seen = new Set<string>();
@@ -72,7 +66,6 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-// ── CSV (derived) ───────────────────────────────────────────────────────────────────────
 const csvEscape = (v: string) => (/[",\n]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v);
 const csvRows = [["register", "entity", "id", "story", ...surfaceIds].join(",")];
 
@@ -85,7 +78,6 @@ for (const story of spec.stories) {
 
 writeFileSync(CSV_PATH, `${csvRows.join("\n")}\n`);
 
-// ── HTML pager ──────────────────────────────────────────────────────────────────────────
 const GLYPH: Record<CellState, string> = {
   "n/a": "—",
   no: "·",
@@ -225,7 +217,6 @@ console.log(
   `stories: ${spec.stories.length} · cells: yes=${totals.yes} partial=${totals.partial} planned=${totals.planned} no=${totals.no} n/a=${totals["n/a"]}`,
 );
 
-// Format emitted artifacts here because API-pushed files bypass the staged-file pre-commit hook.
 Bun.spawnSync(["bunx", "oxfmt", HTML_PATH, CSV_PATH, SPEC_PATH], { stdout: "ignore" });
 
 console.log(`wrote ${HTML_PATH} + ${CSV_PATH} (oxfmt applied)`);

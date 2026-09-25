@@ -21,6 +21,8 @@ Fluncle validates the minimum sufficient evidence for a change's dependency clos
 
 The package graph is read from workspace manifests and selection walks reverse dependencies. The comparison uses full history and explicit base/head SHAs, including the pull request base rather than the synthetic merge ref. Scheduled and operator-dispatched Quality Checks are full backstops. Playwright's changed-test heuristic may be used for early local feedback, but it is never the CI authority.
 
+A linked worktree must resolve workspace packages inside its own checkout before its checks run. Node can otherwise walk to a parent checkout's `node_modules`, producing a passing check against another revision; `scripts/quality/workspace-install.mjs` checks the resolved package location.
+
 Security retains separate full-history Gitleaks and dependency-audit workflows. Audit still produces the raw report and applies the repository's policy gate in separate invocations. These inexpensive policy contracts are not path-pruned.
 
 ## Local start early, join late

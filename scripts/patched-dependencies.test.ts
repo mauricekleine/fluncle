@@ -2,13 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// bun keys `patchedDependencies` by EXACT version ("pkg@1.2.3") while the catalog ranges
-// float ("~1.2.3") — so a routine bump silently orphans the key and the patch stops applying,
-// with no error anywhere. That failure mode is invisible until runtime (for the Remotion
-// patch: a crash inside every bundle, discovered at render time). This test turns a detached
-// patch into a red deploy gate: every patch key must still resolve in bun.lock, and every
-// patch's marker must actually be present in the installed package.
-
 const root = join(import.meta.dir, "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   patchedDependencies?: Record<string, string>;
@@ -32,11 +25,10 @@ describe("patchedDependencies", () => {
     });
 
     it(`${key} is actually applied in node_modules`, () => {
-      // Every fluncle patch marks its edit with this literal so application is verifiable.
       const marker = "PATCHED (fluncle)";
       const patch = readFileSync(join(root, patchPath), "utf8");
       expect(patch).toContain(marker);
-      // The files the patch touches, from its `+++ b/<path>` headers.
+
       const touched = [...patch.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? "");
       expect(touched.length).toBeGreaterThan(0);
       const applied = touched.some((file) =>

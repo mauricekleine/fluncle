@@ -1,10 +1,3 @@
-// Unit tests for the pure helpers in assign-video-axes.ts — the deterministic diversity
-// assigner (docs/planning/homogenisation-evidence.md). Box scripts are self-contained (they
-// cannot import the workspace) and live outside any package's test runner, so this uses
-// `bun:test` and runs directly:
-//
-//   bun test docs/agents/hermes/scripts/assign-video-axes.test.ts
-
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -18,7 +11,6 @@ import {
   toEnvLines,
 } from "./assign-video-axes";
 
-// Newest-first (feed order), the same order the vehicles ledger returns.
 const entry = (grain: string, register?: string, palette?: string): LedgerEntry => ({
   grain,
   ...(register ? { register } : {}),
@@ -34,7 +26,6 @@ describe("assignGrain — LRU excluding the last 3", () => {
   });
 
   test("prefers a never-used family over one used long ago", () => {
-    // grainFineEmulsion appears (old); grainVhsScanline & grainChemicalDye never do.
     const entries = [
       entry("grainHalftone"),
       entry("grainDither"),
@@ -42,20 +33,18 @@ describe("assignGrain — LRU excluding the last 3", () => {
       entry("grainFineEmulsion"),
     ];
     const grain = assignGrain(entries);
-    // A never-used family is maximally stale; baked order breaks the tie → grainChemicalDye.
+
     expect(grain).toBe("grainChemicalDye");
   });
 
   test("among used families, picks the least-recently-used", () => {
-    // Every baked family used; the last 3 are excluded, so eligible = the older ones, and
-    // the STALEST (largest index) wins. grainVhsScanline is oldest here.
     const entries = [
-      entry("grainFineEmulsion"), // 0
-      entry("grainCoarseSilver"), // 1
-      entry("grainHalftone"), // 2 (last 3 = indices 0..2, excluded)
-      entry("grainChemicalDye"), // 3
-      entry("grainDither"), // 4
-      entry("grainVhsScanline"), // 5 — oldest, the LRU
+      entry("grainFineEmulsion"),
+      entry("grainCoarseSilver"),
+      entry("grainHalftone"),
+      entry("grainChemicalDye"),
+      entry("grainDither"),
+      entry("grainVhsScanline"),
     ];
     expect(assignGrain(entries)).toBe("grainVhsScanline");
   });
@@ -65,7 +54,6 @@ describe("assignGrain — LRU excluding the last 3", () => {
   });
 
   test("unions ledger-only grain values into the universe", () => {
-    // A novel family the skill added later, used long ago, should be reachable.
     const entries = [
       entry("grainHalftone"),
       entry("grainDither"),
@@ -75,17 +63,13 @@ describe("assignGrain — LRU excluding the last 3", () => {
       entry("grainVhsScanline"),
       entry("grainNovelExperimental"),
     ];
-    // Everything baked is used more recently than the novel one at index 6, and the last 3
-    // are excluded; the novel family is the stalest eligible → picked.
+
     expect(assignGrain(entries)).toBe("grainNovelExperimental");
   });
 });
 
 describe("register — representational is a prerequisite (operator ruling 2026-07-20)", () => {
   test("every assignment is representational regardless of the recent window", () => {
-    // The register rotation is retired: an abstract-heavy window, a representational-heavy
-    // window, and an empty ledger all assign representational. Diversity lives in the
-    // grain / palette / plate-subject axes, which vary WITHIN the register.
     const abstractHeavy = Array.from({ length: 12 }, () => entry("grainDither", "abstract"));
     const repHeavy = Array.from({ length: 12 }, () =>
       entry("grainFineEmulsion", "representational"),
@@ -175,7 +159,7 @@ describe("computeAssignment + toEnvLines", () => {
     expect(lines).toContain("FLUNCLE_VIDEO_GRAIN='");
     expect(lines).toContain("FLUNCLE_VIDEO_REGISTER='");
     expect(lines).toContain("FLUNCLE_VIDEO_PALETTE_AVOID='");
-    // Single-quoted, sources cleanly under `set -a`.
+
     for (const line of lines.split("\n")) {
       expect(line).toMatch(/^FLUNCLE_VIDEO_[A-Z_]+='[^']*'$/);
     }
