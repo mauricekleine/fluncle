@@ -1,8 +1,3 @@
-// The Galaxy door: the default signed-in view — the game scoreboard + the Fly CTA,
-// then the collection browser. Lifted from the account monolith unchanged; the full
-// voyage-sentence redesign is a later phase. The metric-line skeleton renders only on
-// a client-side door switch before the data lands (first paint is always SSR'd).
-
 import { Link } from "@tanstack/react-router";
 import { Button } from "@fluncle/ui/components/button";
 import { Skeleton } from "@fluncle/ui/components/skeleton";
@@ -31,9 +26,6 @@ export function GalaxyDoor({ data }: { data: GalaxyDoorData }) {
         {hasProgress ? (
           <VoyageScoreboard collection={collection} progress={progress} />
         ) : (
-          // A 0/0/0 scoreboard is not a welcome. Before the first flight, the page
-          // leads with the door into the game and lets the collection's teaching
-          // empty-state carry the rest.
           <div className="account-row account-identity">
             <p className="account-muted">
               Every star you reach in the Galaxy gets logged here, along with your runs home.
@@ -49,11 +41,6 @@ export function GalaxyDoor({ data }: { data: GalaxyDoorData }) {
   );
 }
 
-/**
- * The voyage told in one first-person line (ruling #2), the numbers inline in Oxanium
- * tabular, with the gold Fly CTA beside it as the view's One Sun — until a galaxy is
- * fully logged, when the CTA yields to outline and the completion carries the gold.
- */
 function VoyageScoreboard({
   collection,
   progress,
@@ -93,8 +80,6 @@ function VoyageScoreboard({
   );
 }
 
-/** The voyage-line pending state, shown only on a client-side switch into the Galaxy:
- *  the sentence row (two wrapped lines) beside the Fly CTA, matching the loaded shape. */
 export function GalaxyDoorSkeleton() {
   return (
     <div className="account-tab-panel" aria-hidden>
@@ -116,14 +101,6 @@ export function GalaxyDoorSkeleton() {
   );
 }
 
-/**
- * The collection browser: the named galaxies as a map of the archive with the user's
- * progress written into it. Every NAMED galaxy renders a completion line ("4 of 17
- * logged"); a finished galaxy earns the page's one gold note. Collected findings
- * whose galaxy is not yet named group under "Uncharted" — present, never introduced
- * (they get a coordinate and a date, no galaxy name until the operator names one).
- * Dates are the user's own first-collected moments, not the archive's.
- */
 function CollectionSection({ collection }: { collection?: Collection }) {
   if (!collection) {
     return (
@@ -182,10 +159,6 @@ function CollectionSection({ collection }: { collection?: Collection }) {
         />
       ))}
       {ungrouped.length > 0 ? (
-        // Findings whose galaxy is not yet named (or whose galaxy retired) render
-        // UNHEADED — coordinate, cover, and date, no galaxy clause, no heading, no
-        // count. An unnamed tier is never introduced and never given a noun; until
-        // the map is fully named this block IS the whole collection.
         <ul className="account-list account-collection-unheaded">
           {ungrouped.map((item) => (
             <CollectionRow item={item} key={item.trackId} />
@@ -213,10 +186,6 @@ function CollectionGroup({
   slug: string;
   total: number;
 }) {
-  // A slim completion meter under the count line: how full this galaxy is at a
-  // glance. Gold only when finished (One Sun — the completion earns the gold),
-  // quiet stardust while in progress. Built from tokens, not the shadcn Progress
-  // primitive, whose flex/gap chrome fights the account rows.
   const pct = total > 0 ? Math.min(100, Math.round((collected / total) * 100)) : 0;
 
   return (

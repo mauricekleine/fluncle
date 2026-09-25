@@ -1,36 +1,5 @@
 #!/usr/bin/env bun
-/**
- * The Frontier cover leg (E2, the public recommendation machine) — an OPERATOR-RUN,
- * idempotent pass that renders + uploads the custom cover for every Frontier playlist
- * that does not have one yet.
- *
- * ── WHY THIS IS A NODE-SIDE SCRIPT, NOT PART OF THE MINT ─────────────────────
- * The cover is a per-user Remotion render (the Nostalgic Cosmos base + the crew №
- * stamped in a corner). Remotion needs a real headless Chromium and does NOT run in a
- * Cloudflare Worker, so the render CANNOT happen where the playlist is minted. The
- * honest split (frontier-playlist.ts documents the other half):
- *   - `mintOrRefreshFrontierPlaylist` (Worker) creates the playlist and leaves the
- *     row's `cover_uploaded_at` NULL;
- *   - THIS script (Node) reads the "cover_uploaded_at IS NULL" worklist, shells out to
- *     `@fluncle/media`'s `render:frontier-cover` to make the JPEG, and calls
- *     `putFrontierCover` (Worker-importable — a plain Spotify PUT) to upload it and
- *     stamp `cover_uploaded_at`.
- *
- * ── INERT BY DESIGN UNTIL THE SCOPE EXISTS ──────────────────────────────────
- * The upload needs the `ugc-image-upload` Spotify scope. Until the operator re-auths
- * with it, every PUT 403s the missing scope, `putFrontierCover` returns
- * `{ uploaded: false, reason: "missing_scope" }`, and nothing is stamped — so the row
- * stays on the worklist and the next run retries for free. Running this today is safe:
- * it renders (cheap) and degrades cleanly on every upload.
- *
- * ── RUN IT ──────────────────────────────────────────────────────────────────
- *   bun run --cwd apps/web scripts/render-frontier-covers.ts [--limit <n>] [--dry-run]
- *
- * Reads `TURSO_*` + `SPOTIFY_*` from the environment (locally from apps/web/.dev.vars,
- * auto-loaded), exactly like the other operator scripts. `--dry-run` renders but skips
- * the upload (proves the render leg without touching Spotify). It is operator/box-run,
- * NOT a repo deploy step.
- */
+
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -64,7 +33,6 @@ function parseArgs(argv: string[]): Args {
   return { dryRun, limit };
 }
 
-/** Render one cover to a temp JPEG via the media package's render CLI. Throws on failure. */
 function renderCover(crewNumber: null | number, out: string): void {
   const result = spawnSync(
     "bun",

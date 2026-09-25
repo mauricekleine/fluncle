@@ -1,10 +1,3 @@
-// Regression net for public discovery instrumentation.
-//
-// Walks apps/web/src and classifies controls by RESOLVED behaviour (the href they go to, the
-// preview singleton they start, the neighbour rail they sit in) rather than by the English on
-// the button. A new public control of an instrumented class that ships without its event fails
-// this file. The sweep result is the list of classes below; keep it honest when adding a class.
-
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -134,7 +127,6 @@ describe("public discovery event coverage", () => {
 
     expect(playingHandler?.[1]).toContain('emitDiscoveryEvent("discovery_preview")');
 
-    // The start path (startPreview → load → attemptPlay) only arms the event; it never sends it.
     const body = (signature: RegExp): string | undefined =>
       source.match(new RegExp(`${signature.source}[\\s\\S]*?\\n}\\n`))?.[0];
     const startPath = [
@@ -196,7 +188,6 @@ describe("public discovery event coverage", () => {
         const body = match[1] ?? "";
 
         if (body.includes("emitDiscoveryEvent") || body.includes("emitDiscoveryFromHref")) {
-          // The palette debounce is a committed query, not a render. It must skip example clicks.
           if (
             file.rel === "components/search/search-command.tsx" &&
             body.includes("exampleClick")

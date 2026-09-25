@@ -1,6 +1,3 @@
-// The artist-review queue's pure predicates (lib/artist-review.ts): "needs a look" is a per-link
-// fact — a link is fresh iff its `reviewedAt` is null — and the /admin/artists board splits the
-// fresh links into the high-priority and everything-else queues. Client-safe, so no DB.
 import { describe, expect, it } from "vitest";
 import {
   artistNeedsLook,
@@ -47,7 +44,6 @@ describe("unreviewedSocials", () => {
 });
 
 describe("partitionFreshLinks", () => {
-  // Small builders so each case reads as data, not boilerplate.
   function social(over: Partial<ArtistSocial> & { id: string }): ArtistSocial {
     return {
       artistId: "artist",
@@ -93,18 +89,16 @@ describe("partitionFreshLinks", () => {
   });
 
   it("leads high-priority with the mention-loop platforms (tiktok, youtube), then artist name", () => {
-    // One findings-artist with a non-mention link that sorts BEFORE a mention link by name, to prove
-    // the platform key beats the name key: the tiktok/youtube links must still come first.
     const aardvark = artist({
       findingCount: 1,
       id: "a1",
-      name: "Aardvark", // sorts first by name
+      name: "Aardvark",
       socials: [social({ artistId: "a1", id: "insta", platform: "instagram" })],
     });
     const zomby = artist({
       findingCount: 1,
       id: "a2",
-      name: "Zomby", // sorts last by name
+      name: "Zomby",
       socials: [
         social({ artistId: "a2", id: "tik", platform: "tiktok" }),
         social({ artistId: "a2", id: "yt", platform: "youtube" }),
@@ -113,8 +107,6 @@ describe("partitionFreshLinks", () => {
 
     const { highPriority } = partitionFreshLinks([aardvark, zomby]);
 
-    // Mention-loop platforms lead (tiktok + youtube, both from Zomby), THEN the instagram row —
-    // even though Aardvark sorts first by name, its non-mention platform ranks it after.
     expect(highPriority.map((e) => e.social.id)).toEqual(["tik", "yt", "insta"]);
   });
 
@@ -137,7 +129,6 @@ describe("partitionFreshLinks", () => {
 
     const { highPriority } = partitionFreshLinks([beta, alpha]);
 
-    // All tiktok (same platform rank) → by artist name (Alpha < Beta), then oldest-first within Beta.
     expect(highPriority.map((e) => e.social.id)).toEqual(["a-tik", "b-old", "b-new"]);
   });
 
@@ -148,8 +139,7 @@ describe("partitionFreshLinks", () => {
       name: "Calibre",
       socials: [
         social({ id: "reviewed", reviewedAt: "2026-01-02T00:00:00.000Z" }),
-        // A fresh AUTO link (not a candidate) still belongs in the queue — the split partitions, it
-        // does not filter by status.
+
         social({ id: "fresh-auto", platform: "tiktok", source: "musicbrainz", status: "auto" }),
       ],
     });

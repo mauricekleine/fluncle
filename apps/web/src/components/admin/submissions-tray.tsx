@@ -25,24 +25,10 @@ import { formatDate } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
-// The candidates tray — the crew's pending submissions (`fluncle submit`, the SSH
-// terminal, the web dialog), reviewed where the operator already works. A quiet
-// sheet off the board header: who sent what, when, with their note; each row
-// approves or rejects.
-//
-// Approve is the CLI's exact two-step (`fluncle admin submissions approve`):
-// publish through the add path first (`publish_track` with the submission's link
-// + note), then flip the submission approved. A 409 duplicate from the publish
-// still approves — the candidate IS in the archive, which is what approval
-// asserts. Both verbs are a real act (a publish posts to Telegram; a reject
-// discards a crew member's candidate), so each sits behind a confirm that names
-// the track, per the placement contract.
-
 type SubmissionsTrayProps = {
-  /** The attention-queue deep-link target (`?submission=<id>`): scroll it into view + ring it. */
   focusId?: string;
   loading: boolean;
-  /** Fired after an approve/reject lands, so the queries refetch. */
+
   onChanged: () => void;
   onOpenChange: (open: boolean) => void;
   open: boolean;
@@ -63,9 +49,6 @@ export function SubmissionsTray({
   const [error, setError] = useState<string | undefined>();
   const [confirm, setConfirm] = useState<PendingConfirm | undefined>();
 
-  // Scroll the deep-linked candidate into view once the sheet has opened and its rows
-  // exist (the operator landed here from the /admin attention queue). Best-effort: a
-  // stale id — the submission was already reviewed away — is a harmless no-op.
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
   useEffect(() => {
     if (!open || !focusId) {
@@ -208,19 +191,12 @@ export function SubmissionsTray({
                       <p className="text-xs text-muted-foreground">“{submission.note}”</p>
                     ) : undefined}
 
-                    {/* The pre-chew sweep's advisory verdict (the on-box triage cron):
-                        a quiet read to orient the operator, never a decision. Absent
-                        until the sweep visits. */}
                     {submission.triageVerdict ? (
                       <p className="text-xs italic text-muted-foreground">
                         {submission.triageVerdict}
                       </p>
                     ) : undefined}
 
-                    {/* Right-aligned per the placement contract's row-action rule;
-                        quiet variants (One Sun: five gold rows would be five suns
-                        in one pane) — the gold lives on the confirm's "Publish it",
-                        the actual publish moment. */}
                     <div className="flex items-center justify-end gap-1.5">
                       <Button
                         disabled={busyId !== undefined}
@@ -258,8 +234,6 @@ export function SubmissionsTray({
         </SheetContent>
       </Sheet>
 
-      {/* One confirm for both verbs, naming the object (the placement contract):
-          approving publishes (playlist + Telegram), rejecting discards. */}
       <AlertDialog onOpenChange={(next) => !next && setConfirm(undefined)} open={Boolean(confirm)}>
         <AlertDialogContent size="sm">
           <AlertDialogHeader>
@@ -295,10 +269,6 @@ function formatTrackLine(submission: Submission): string {
   return `${submission.artists.join(", ")} — ${submission.title}`;
 }
 
-// The approve's publish leg — the same `publish_track` op the [Add finding]
-// dialog and the CLI use, with the submission's own link + note. A 409
-// duplicate/incomplete_duplicate is a pass: the finding is already in the
-// archive, which is exactly what approving asserts.
 async function publishSubmission(submission: Submission): Promise<void> {
   const response = await fetch("/api/v1/admin/tracks", {
     body: JSON.stringify({

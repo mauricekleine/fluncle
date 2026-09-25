@@ -34,16 +34,6 @@ import {
   youtubeUrl,
 } from "@/lib/fluncle-links";
 
-// The cover column's link hub. Top to bottom: the gold Galaxy CTA (the ONE sun),
-// the two listen + contribute button rows, the Join-the-Crew button (its own
-// glowing moving border), then the quiet sections sunk to the BOTTOM (mt-auto) —
-// "Follow Fluncle" and its socials, the About/Logs/Mixtapes/Docs row, the "For the
-// nerds" dev-surface row, and the live status pill at the very bottom. Rendered as
-// a direct flex child of the <aside> (which stretches to the grid row height on
-// desktop), so flex-1 + mt-auto actually push the lower group down.
-
-// Fluncle off-site, alphabetical (docs/socials/). Spotify stays the Playlist
-// button above, so it isn't duplicated in the icon strip.
 const socialLinks = [
   { href: blueskyUrl, icon: siBluesky, label: "Fluncle on Bluesky" },
   { href: instagramUrl, icon: siInstagram, label: "Fluncle on Instagram" },
@@ -56,12 +46,9 @@ const socialLinks = [
   { href: youtubeUrl, icon: siYoutube, label: "Fluncle on YouTube" },
 ];
 
-// The shared treatment for every quiet text link at the bottom (About, Logs,
-// Mixtapes, Docs — and the developer row: CLI, DIG, GIT, MCP, SSH).
 const linkClassName =
   "font-semibold text-muted-foreground transition-colors hover:text-accent-foreground";
 
-/** A muted dot separator between inline links. */
 function Dot() {
   return (
     <span aria-hidden="true" className="text-muted-foreground/55">
@@ -70,8 +57,6 @@ function Dot() {
   );
 }
 
-/** A quiet centered section header — a muted label between two divider lines.
-    Shared by "Follow Fluncle" and "For the nerds" so they read identically. */
 function SectionHeader({ children, className = "" }: { children: string; className?: string }) {
   return (
     <div className={`flex w-full items-center gap-3 ${className}`}>
@@ -82,16 +67,9 @@ function SectionHeader({ children, className = "" }: { children: string; classNa
   );
 }
 
-// `galaxiesLive` gates the Galaxies nav link on the browse-by-feel launch gate
-// (decision 5): the /galaxies lens 404s until the operator has NAMED the whole
-// sonic map, so the link only shows once the map is fully named — resolved on the
-// home loader (isGalaxyMapFullyNamed) so the homepage never links a dead lens.
 export function FindingsLinkHub({ galaxiesLive = false }: { galaxiesLive?: boolean }) {
   return (
     <div className="mt-3 flex flex-1 flex-col">
-      {/* The actions: the gold Galaxy CTA (One Sun), the listen pair (Playlist +
-          Radio), and the contribute pair (Newsletter + Submit a track). Join the
-          Crew lives in the masthead's top-right now (the sign-up convention). */}
       <div className="flex flex-col gap-2.5">
         <Button
           className="w-full"
@@ -108,8 +86,6 @@ export function FindingsLinkHub({ galaxiesLive = false }: { galaxiesLive?: boole
           Enter Fluncle's Galaxy
         </Button>
 
-        {/* The listen pair: Playlist (Spotify) + Radio (radio.fluncle.com). Both
-            outline/secondary — neither is a second sun. */}
         <div className="flex items-center gap-2">
           <Button
             className="flex-1"
@@ -140,17 +116,12 @@ export function FindingsLinkHub({ galaxiesLive = false }: { galaxiesLive?: boole
           </Button>
         </div>
 
-        {/* The contribute pair: the newsletter sign-up + the track submission. */}
         <div className="flex items-center gap-2">
           <SubscribeDialog className="flex-1" label="Newsletter" />
           <SubmitTrackDialog className="flex-1" />
         </div>
       </div>
 
-      {/* The site links sit directly under Join the Crew — About · Logs · Mixtapes ·
-          Galaxies. Radio left this row (it's a Listen-pair button now), and Docs left
-          it too: the colophon carries Docs, and the developer row right below already
-          points at the machinery. */}
       <nav
         aria-label="More from Fluncle"
         className="mt-4 flex items-center justify-center gap-3 text-sm"
@@ -176,15 +147,9 @@ export function FindingsLinkHub({ galaxiesLive = false }: { galaxiesLive?: boole
         ) : undefined}
       </nav>
 
-      {/* The quiet sections sink to the bottom of the column (mt-auto): the socials,
-          the dev-surface row, and the live status pill. */}
       <div className="mt-auto flex flex-col items-center gap-3 pt-8">
         <SectionHeader>Follow Fluncle</SectionHeader>
-        {/* Nine icons must fit the narrowest columns this row lives in — 280px on
-            desktop (the grid caps the aside at minmax(240px,280px)) and 264px on a
-            320px phone: size-7 buttons at gap-px total 260px, one line everywhere,
-            with flex-wrap as the never-clip fallback below that — 28px stays above
-            the WCAG 2.5.8 24px target minimum. */}
+
         <nav
           aria-label="Fluncle on other platforms"
           className="flex flex-wrap items-center justify-center gap-px"
@@ -217,15 +182,11 @@ export function FindingsLinkHub({ galaxiesLive = false }: { galaxiesLive?: boole
           ))}
         </nav>
 
-        {/* The dev-surface section: its own header (matching "Follow Fluncle")
-            over the terminal-voiced CLI/DIG/GIT/MCP/SSH row. */}
         <SectionHeader className="mt-3">For the nerds</SectionHeader>
         <nav
           aria-label="Developer tools and connections"
           className="flex items-center justify-center gap-3 text-[13px] font-mono"
         >
-          {/* CLI/DIG/MCP/SSH are docs pages served by the /docs/$ catch-all, so
-              they navigate via the splat param (exact URLs /docs/cli etc.). */}
           <Link className={linkClassName} params={{ _splat: "cli" }} to="/docs/$">
             CLI
           </Link>
@@ -247,7 +208,6 @@ export function FindingsLinkHub({ galaxiesLive = false }: { galaxiesLive?: boole
           </Link>
         </nav>
 
-        {/* The live heartbeat: a ping-dot pill that fetches /api/status on mount. */}
         <HomeStatusPill />
       </div>
     </div>

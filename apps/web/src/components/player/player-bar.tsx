@@ -1,20 +1,3 @@
-// THE PLAYER BAR — the persistent preview player of the public chrome (DESIGN.md §5, Player Bar).
-//
-// Hidden until the first play; from then on it docks to the bottom of every public page for the
-// rest of the visit, playing or paused, until the listener closes it. It shows the one thing that
-// is sounding (cover, `Artist — Title`), its place in the list (`4/30`, Oxanium tabular), the
-// transport a preview needs (play/pause, next) and the playing track's actions (the same ⋮ menu a
-// row carries). At the end of a list it stops and offers one way on: "Keep going".
-//
-// It reads as the sleeve the liner notes print on, not a streaming app's dock: a warm near-opaque
-// pane (the colophon's ground) with grain under the content, a Dust Line top edge, no shadow, and
-// gold spent on one hairline — the progress of a FINDING. A catalogue track's progress catches
-// Stardust instead (The Unlit Rule).
-//
-// Mounted once by the public chrome. It portals to document.body so no ancestor's
-// backdrop-filter becomes its containing block (the plate trap), and renders nothing on the
-// server: there is no queue before the first click, so hydration never sees it.
-
 import { CaretRightIcon, PauseIcon, PlayIcon, SkipForwardIcon, XIcon } from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -34,7 +17,6 @@ import {
   usePreviewStatus,
 } from "@/lib/preview-player";
 
-/** A field the keyboard belongs to: typing there is never a transport command. */
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -49,7 +31,6 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
-/** A control Space already means something on (a button presses, a link follows, a switch flips). */
 function isActivatable(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -59,7 +40,6 @@ function isActivatable(target: EventTarget | null): boolean {
   );
 }
 
-/** A dialog or menu owns the keyboard while it is open (Stories binds Space and the arrows). */
 function isInsideOverlay(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
@@ -68,13 +48,6 @@ function isInsideOverlay(target: EventTarget | null): boolean {
   );
 }
 
-/**
- * The keyboard transport: Space or K plays and pauses, J and L step back and forward through the
- * playing list. Never while focus is in a field or an open dialog or menu, never with a modifier
- * held (⌘K stays search, Shift+Space still scrolls up), and Space leaves any focused control to do its own job — it only
- * toggles from the page itself. Mounted only while the bar is docked, so a visit that never
- * pressed play keeps every key it had.
- */
 function usePlayerKeys(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) {
@@ -121,7 +94,6 @@ function usePlayerKeys(enabled: boolean): void {
   }, [enabled]);
 }
 
-/** A thin hairline for progress: light placed, not a scrubber (the /mix bar's grammar). */
 function ProgressLine({ lit }: { lit: boolean }): ReactNode {
   const { currentTime, duration } = usePreviewProgress();
   const fraction = duration > 0 ? Math.min(1, currentTime / duration) : 0;
@@ -145,11 +117,8 @@ export function PlayerBar(): ReactNode {
 
   useEffect(() => setMounted(true), []);
 
-  // A fresh list clears the last list's dead end.
   useEffect(() => setNoWayOn(false), [queue?.tracks]);
 
-  // The page leaves room for the bar while it is docked, so the last row and the colophon are
-  // never trapped under it.
   const docked = mounted && track !== undefined;
 
   usePlayerKeys(docked);
@@ -187,15 +156,12 @@ export function PlayerBar(): ReactNode {
       navigate: (href) => void navigate({ href }),
     })
       .then((outcome) => {
-        // A late answer the listener already moved past changes nothing on the bar.
         if (outcome === "stale") {
           return;
         }
 
         setNoWayOn(outcome === "none");
 
-        // The control the listener pressed is about to go (a new list, or no way on): focus
-        // lands on the play button rather than falling to the page.
         mainButton.current?.focus();
       })
       .finally(() => setContinuing(false));
@@ -204,7 +170,6 @@ export function PlayerBar(): ReactNode {
   const onClose = () => {
     dismissPlayer();
 
-    // The bar unmounts under the focus it held; hand focus back to the page.
     const page = document.getElementById("content") ?? document.querySelector("main");
 
     if (page instanceof HTMLElement) {
@@ -221,8 +186,6 @@ export function PlayerBar(): ReactNode {
       <ProgressLine lit={track.lit === true} />
       <div className="player-bar-inner">
         {track.href ? (
-          // The same page the title opens: a mouse target only, hidden from the keyboard and from
-          // assistive tech so the one link is announced once.
           <Link
             aria-hidden="true"
             className="player-cover-link"
@@ -235,7 +198,6 @@ export function PlayerBar(): ReactNode {
           <TrackArtwork alt="" className="player-cover" src={cover} />
         )}
         <div className="player-text">
-          {/* Announces the track on change; the ticking progress lives outside it. */}
           <p aria-live="polite" className="player-title">
             {track.href ? (
               <Link className="player-title-link" to={track.href as never}>
@@ -245,8 +207,7 @@ export function PlayerBar(): ReactNode {
               track.title
             )}
           </p>
-          {/* At a list's end with nowhere further to go, the second line says so, once, instead
-              of the way on vanishing without a word. */}
+
           {queue.ended && noWayOn ? (
             <output className="player-artists">Nothing else close in sound yet.</output>
           ) : (

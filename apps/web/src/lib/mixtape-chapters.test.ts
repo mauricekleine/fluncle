@@ -7,8 +7,6 @@ import {
   youtubeDescription,
 } from "./mixtape-chapters";
 
-// A MixtapeMember is a full TrackListItem + startMs; fill the required fields with
-// dummies and vary only what the helpers read (artists, title, startMs).
 function member(
   artists: string[],
   title: string,
@@ -67,15 +65,15 @@ describe("mixtapeChapters", () => {
     const result = mixtapeChapters(members);
 
     expect(result.youtubeChapters).toBeNull();
-    // Mixcloud still gets both sections — no ≥3 rule there.
+
     expect(result.mixcloudSections).toHaveLength(2);
   });
 
   it("drops chapters closer than 10s to the prior, and nulls if that falls below 3", () => {
     const members = [
       member(["Alpha"], "First", 0, "a"),
-      member(["Beta"], "Second", 5_000, "b"), // 5s after — dropped
-      member(["Gamma"], "Third", 8_000, "c"), // 8s after first kept (0:00) — dropped
+      member(["Beta"], "Second", 5_000, "b"),
+      member(["Gamma"], "Third", 8_000, "c"),
     ];
 
     expect(mixtapeChapters(members).youtubeChapters).toBeNull();
@@ -84,7 +82,7 @@ describe("mixtapeChapters", () => {
   it("filters un-cued members from both YouTube and Mixcloud", () => {
     const members = [
       member(["Alpha"], "First", 0, "a"),
-      member(["Beta"], "Second", undefined, "b"), // no cue
+      member(["Beta"], "Second", undefined, "b"),
       member(["Gamma"], "Third", 120_000, "c"),
       member(["Delta"], "Fourth", 240_000, "d"),
     ];

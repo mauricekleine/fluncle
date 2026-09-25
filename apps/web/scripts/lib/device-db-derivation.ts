@@ -144,10 +144,6 @@ function selectedTracksWhere(cut: DeviceDbCut, recEligibleWhere: string): string
     or (t.dismissed_at is null and t.duplicate_of_track_id is null)`;
 }
 
-/**
- * Build the anchored-ID relation once. Every corpus copy query below reads this TEMP table and
- * therefore cannot accidentally re-run the growing recommendation-eligibility scan.
- */
 export function materializeSelectedTrackIdsSql(
   cut: DeviceDbCut,
   recEligibleWhere: string,
@@ -181,11 +177,6 @@ function selectedSourceSql(
   const sourceTable = `${schema}.${quoteDeviceDbIdentifier(table)}`;
   const selected = `temp.${quoteDeviceDbIdentifier(DEVICE_SELECTED_TRACKS_TABLE)}`;
 
-  // The visibility rule the public web reads at request time, applied HERE instead: a replica
-  // leaves the server and carries no `artist_rules`, so it cannot be evaluated device-side. The
-  // artifact therefore ships only listed artists — and only the edges into them, because an edge to
-  // a row the artifact does not carry fails its own `track_artists.artist_id -> artists.id` closure
-  // check. A track's CREDIT is untouched: the device reads it from `tracks.artists_json`.
   const listedArtist = (alias: string) => listedArtistWhere(alias, `${schema}.`);
 
   if (table === "track_artists") {
@@ -223,8 +214,6 @@ function selectedSourceSql(
   }
 
   if (table === "labels") {
-    // The parent pointer ships, so its complete ancestry must ship as well. UNION (not UNION ALL)
-    // both deduplicates shared ancestry and terminates a malformed parent cycle deterministically.
     return `WITH RECURSIVE selected_labels(id) AS (
         SELECT track.label_id
         FROM ${schema}.${quoteDeviceDbIdentifier("tracks")} AS track
@@ -280,7 +269,6 @@ export function insertDeviceTableSql(table: DeviceSourceTable, cut: DeviceDbCut)
     ${selectDeviceRowsSql(table, cut)}`;
 }
 
-/** Every pointer copied into the public artifact has a matching copied destination row. */
 export function deviceDbClosureChecksSql(schemaName = "main"): readonly DeviceDbClosureCheck[] {
   const schema = quoteDeviceDbIdentifier(schemaName);
   const table = (name: DeviceSourceTable) => `${schema}.${quoteDeviceDbIdentifier(name)}`;

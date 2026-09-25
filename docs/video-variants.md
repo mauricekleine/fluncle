@@ -50,6 +50,8 @@ All from the square `footage.mp4` master unless noted. URL construction lives in
 
 The native widths above are the crop's ceiling, not what every surface asks for. The DOM surfaces measure the pane they actually paint into and request the ladder rung that covers it (`useResponsiveWidth`): Stories sizes its full-screen reel, and `/log` sizes its `min(100%, 19rem)` plate pane — so a phone on `/log` fetches a 720-wide crop, not the native 1080×1920. Only radio's genuinely full-bleed head takes the native width. When a load WEDGES, the stall watchdog steps that rung one rung DOWN the same ladder (`stepDownRenditionWidth`) rather than falling back to the raw master: a stall is a bytes problem, and the master is the heaviest object in the bundle. The master fallback stays where it is correct — a transform that cannot be derived answers with an HTTP error, which the `<video>`'s one-shot `onError` catches.
 
+The `/log` poster is the pane's first paint. Its route preload uses `firstPaintFootagePoster`, which must match the component's unmeasured portrait URL exactly; a mismatch fetches two posters. The poster uses a frame crop one rung below the clip and keeps that width when a stalled clip steps down, avoiding another poster fetch. A frame crop needs an explicit width because an unsized Media Transformation frame can resolve to a tiny default image. Preload only when footage exists, since the fallback poster or cover cannot be known from the route.
+
 Cost is negligible: MT bills $0.50 per 1,000 monthly **unique** transformation operations with 5,000 free per month, so with `Cache Everything` + a long TTL on the MT URLs, each unique crop is one billed op per month and we likely never leave the free tier.
 
 ## Surface → asset map

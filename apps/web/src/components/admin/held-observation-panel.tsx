@@ -6,17 +6,6 @@ import { Button } from "@fluncle/ui/components/button";
 import { Separator } from "@fluncle/ui/components/separator";
 import { markPhrase } from "./held-note-panel";
 
-// THE HELD OBSERVATION — the observation echo gate's rejection, made readable. The spoken
-// sibling of the held-note panel, and the same design: the script the model wrote next to the
-// neighbour script it echoed, the lifted words marked in BOTH, and the score beside the
-// threshold it was judged against. Evidence, not a verdict.
-//
-// Two rulings (one fewer than the note's — there is no script textarea to edit into):
-// RENDER IT (the operator overrules the gate; the held script goes through the same render
-// path the observe endpoint uses — this SPENDS a Cartesia render, which is why the ruling is
-// operator-tier), or BIN IT (the gate was right; the finding stays unvoiced and the sweep is
-// free to try a colder read next tick).
-
 const REJECTIONS_KEY = (trackId: string) => ["admin", "observation-rejections", trackId] as const;
 
 type HeldObservationResponse = {
@@ -65,8 +54,7 @@ type HeldObservationPanelProps = {
 
 export function HeldObservationPanel({ trackId }: HeldObservationPanelProps) {
   const queryClient = useQueryClient();
-  // A secondary, on-demand panel (the held-note precedent): the board's loader does not carry
-  // the ledger, and most findings have no held observation, so this is its own unseeded query.
+
   const { data } = useQuery({
     queryFn: () => fetchHeldObservation(trackId),
     queryKey: REJECTIONS_KEY(trackId),
@@ -86,7 +74,6 @@ export function HeldObservationPanel({ trackId }: HeldObservationPanelProps) {
       return resolveHeldObservation(heldId, resolution);
     },
     onSuccess: async () => {
-      // A ruling can render an observation onto the finding AND clears a queue row.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: REJECTIONS_KEY(trackId) }),
         queryClient.invalidateQueries({ queryKey: ["admin", "board"] }),
@@ -102,8 +89,7 @@ export function HeldObservationPanel({ trackId }: HeldObservationPanelProps) {
   const overlapPercent = Math.round(held.overlap * 100);
   const gateOverlapPercent = Math.round(held.maxOverlap * 100);
   const liftedWords = held.phrase ? held.phrase.split(" ").length : 0;
-  // The gate has been retuned since this script was judged — say so, rather than showing a
-  // threshold that is not the one that actually rejected it.
+
   const retuned =
     gate.maxOverlap !== held.maxOverlap || gate.minPhraseWords !== held.minPhraseWords;
 
@@ -142,7 +128,6 @@ export function HeldObservationPanel({ trackId }: HeldObservationPanelProps) {
         ) : undefined}
       </div>
 
-      {/* The score next to the threshold it was judged against — the held-note rule. */}
       <p className="text-xs tabular-nums text-muted-foreground">
         {liftedWords > 0
           ? `lifted ${liftedWords} words · gate at ${held.minPhraseWords}`
@@ -150,8 +135,6 @@ export function HeldObservationPanel({ trackId }: HeldObservationPanelProps) {
         {retuned ? " · the gate has been retuned since" : ""}
       </p>
 
-      {/* One Sun + the disclosure law, as on the held note: the overrule leads as an outline
-          (it costs a render, so the label says what it does), the destructive act is a ghost. */}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           disabled={rule.isPending}

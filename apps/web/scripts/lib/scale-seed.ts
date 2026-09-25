@@ -1,49 +1,17 @@
-/**
- * THROWAWAY HOSTED-SCALE SEEDER — the shared 150k regime behind `bench-db-scale.ts`. NOT a test,
- * NOT wired into CI, NOT a migration.
- *
- * ── WHAT IT IS ────────────────────────────────────────────────────────────────
- * `seedScale(client, opts)` populates EVERY table the DB-scale backlog (docs/db-scale-backlog.md,
- * Wave 1 items 6 + 8–19) touches — `tracks` / `findings` / `artists` / `track_artists` / `labels` /
- * `albums` / `crawl_frontier` / `artist_socials` — at a realistic 150k-track regime, with the exact
- * columns each item's predicate reads, in distributions that make each proof meaningful (a big
- * imprint for the label cover subquery, a rare terminal-capture slice for the quarantine lens, a
- * near-1.0 duplicate prefix for the Ear lens, a mostly-unreviewed socials set for the review queue).
- *
- * It is DETERMINISTIC (every value derives from the row index — no `Math.random`, no `Date.now`; the
- * one "now" is `opts.nowIso`, default {@link SEED_NOW}) and IDEMPOTENT (`insert or ignore` in 500-row
- * `client.batch(…, "write")` chunks), so a re-seed of a half-populated scratch DB converges.
- *
- * ── WHO RUNS IT ───────────────────────────────────────────────────────────────
- * The OPERATOR, against a SCRATCH hosted Turso Cloud DB, via `bench-db-scale.ts`. It never points at
- * `fluncle`/`fluncle-dev`/local (the bench guards the URL). `turso dev` is NOT a valid target for the
- * numbers this feeds (docs/local-database.md "Local is not production").
- *
- * ── A NOTE ON `crawl_frontier.demand_rank` ───────────────────────────────────
- * The brief's parenthetical said "mostly 0", but item 6's own fix — a partial index that "seeks
- * exactly the promoted rows" — only reads as a proof when `demand_rank = 0` is the RARE promoted
- * slice (production: `record_demand` clears every node to 1, then promotes a handful to 0). So the
- * default seeds `demand_rank = 0` on ~1-in-`demandZeroEvery` nodes (rare); set `demandZeroEvery = 1`
- * (or `SCALE_FRONTIER_DEMAND_ZERO_EVERY=1`) to force the literal "mostly 0" if wanted.
- */
 import { type Client } from "@libsql/client/web";
 
-/** The one fixed "now" — every derived stamp is relative to this, so a seed is fully deterministic. */
 export const SEED_NOW = "2026-07-24T00:00:00.000Z";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CHUNK = 500;
 
-/** The 24 canonical scale spellings — the realistic key domain (mirrors the tracks-hub bench). */
 const KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"].flatMap((pitch) => [
   `${pitch} major`,
   `${pitch} minor`,
 ]);
 
-/** The raw `tracks.label` string domain (the imprint names, distinct from the `label_id` graph key). */
 const LABELS = ["Hospital Records", "Shogun Audio", "Critical Music", "Metalheadz", "V Recordings"];
 
-/** The `artist_socials.platform` enum (schema.ts) — the social surfaces only. */
 const PLATFORMS = [
   "spotify",
   "youtube",
@@ -61,12 +29,6 @@ const PLATFORMS = [
 
 const SOCIAL_SOURCES = ["musicbrainz", "firecrawl", "operator"];
 
-/**
- * A raw 4096-byte blob (1024 × float32) — the width a MuQ vector occupies, so a seeded
- * `track_embeddings` row weighs exactly what a real one does. The bytes are a deterministic
- * pattern; the value never matters here (no bench probes it), only the width and whether the row
- * exists at all. Reused by reference across every embedded row.
- */
 const EMBEDDING_BLOB = new Uint8Array(1024 * 4);
 for (let byte = 0; byte < EMBEDDING_BLOB.length; byte += 1) {
   EMBEDDING_BLOB[byte] = (byte * 31 + 7) % 251;
@@ -79,16 +41,16 @@ export type ScaleSeedOptions = {
   albums?: number;
   artistSocials?: number;
   artists?: number;
-  /** How often a `crawl_frontier` node is born `demand_rank = 0` (1-in-N). Default 50 (~2% rare). */
+
   demandZeroEvery?: number;
   findings?: number;
   frontier?: number;
   labels?: number;
-  /** The fixed "now" every stamp derives from. Default {@link SEED_NOW}. */
+
   nowIso?: string;
-  /** Progress sink. Default writes `\r <table> <n>/<count>` to stdout (the exemplar's shape). */
+
   onProgress?: (line: string) => void;
-  /** Total `tracks` rows (catalogue + findings-backed). Default 150_000. */
+
   scale?: number;
 };
 
@@ -98,17 +60,10 @@ function envInt(name: string, fallback: number): number {
   return raw ? Number.parseInt(raw, 10) : fallback;
 }
 
-/** ISO of `days` before `nowMs` — the deterministic past stamp helper. */
 function isoDaysBefore(nowMs: number, days: number): string {
   return new Date(nowMs - days * DAY_MS).toISOString();
 }
 
-/**
- * A deterministic `YYYY-MM-DD` release date for a row, spread across 2005–2026 with ties common
- * (the realistic case for the `track_id` tiebreak). Lower index = NEWER. Adapted from the tracks-hub
- * bench's `releaseDateForIndex`, which hard-codes 3 rows/day and so overflows the window at 150k —
- * here the span is divided by the row count so the whole set lands inside 2005–2026 at any scale.
- */
 function releaseDateForIndex(index: number, total: number): string {
   const start = Date.UTC(2005, 0, 1);
   const end = Date.UTC(2026, 11, 31);
@@ -118,10 +73,6 @@ function releaseDateForIndex(index: number, total: number): string {
   return new Date(end - day * DAY_MS).toISOString().slice(0, 10);
 }
 
-/**
- * The `label_id` graph key for a catalogue row — a FEW mega-labels holding tens of thousands of rows
- * (so item 15's cover subquery sorts a big imprint) plus a long tail. `label-0` is the mega imprint.
- */
 function labelIdForIndex(index: number, labelCount: number): string {
   const bucket = index % 100;
 
@@ -148,7 +99,6 @@ function labelIdForIndex(index: number, labelCount: number): string {
   return `label-${5 + (index % Math.max(1, labelCount - 5))}`;
 }
 
-/** The display name for an artist, with deliberate case variety so item 11's NOCASE fold has work. */
 function artistName(artistIndex: number): string {
   const base = `Artist ${artistIndex}`;
 
@@ -173,12 +123,6 @@ function emit(opts: ScaleSeedOptions, line: string): void {
   process.stdout.write(`\r${line}`);
 }
 
-/**
- * One chunk's batch write, retried through TRANSIENT transport failures. A ~45-minute hosted seed
- * crosses thousands of HTTP round trips, so one timed-out request must not kill the whole run.
- * Three attempts with a short backoff absorb the blip. A chunk that fails all three throws because
- * a PERSISTENTLY failing write path is a real signal the run must surface, not ride over.
- */
 async function batchWithRetry(client: Client, statements: SeedStatement[]): Promise<void> {
   const attempts = 3;
 
@@ -197,7 +141,6 @@ async function batchWithRetry(client: Client, statements: SeedStatement[]): Prom
   }
 }
 
-/** Chunked idempotent write of a generated statement stream, with `\r` progress like the exemplar. */
 async function writeChunked(
   client: Client,
   opts: ScaleSeedOptions,
@@ -220,20 +163,6 @@ async function writeChunked(
   process.stdout.write("\n");
 }
 
-/**
- * THE MAINTAINED MIRRORS ARE SEEDED EXPLICITLY, and this is load-bearing rather than tidy.
- * `is_catalogue` (Wave 2 keystone 1), `has_embedding` (Wave 2 #4/#7), and `has_isrc` (the anchor
- * drain order's lead) are stored columns the app
- * MAINTAINS on every write, and each carries a DDL default that is wrong for half the rows this
- * seeder makes: `is_catalogue` defaults to 1 (so every findings-backed row would land claiming to
- * be raw catalogue) and `has_embedding` defaults to 0 (so every row this seeder gives a vector
- * would land claiming to have none). Production has no such rows — the write sites keep both in
- * lockstep and `db:backfill` reconciles history — so a scratch DB seeded without them is not a
- * small-error model of prod, it is a DIFFERENT WORLD, and the queries this bench exists to prove
- * are exactly the ones that read these two columns. Left unseeded, `bench-db-scale.ts` would time
- * the funnel's covering scan against a uniformly-0 flag and the catalogue anti-join against 150k
- * rows that all claim to be catalogue — a green benchmark for a query that never ran.
- */
 const TRACK_COLUMNS = `track_id, title, artists_json, duration_ms, release_date, bpm, key, label,
   label_id, album_id, album_image_url, capture_status, capture_priority, nearest_finding_score,
   nearest_finding_track_id, duplicate_of_track_id, catalogue_ranked_at, source_audio_key,
@@ -244,11 +173,6 @@ const TRACK_COLUMNS = `track_id, title, artists_json, duration_ms, release_date,
 const TRACK_SQL = `insert or ignore into tracks (${TRACK_COLUMNS})
   values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-/**
- * The vector's own row, in the satellite the app ranks (schema.ts § `trackEmbeddings`). It is a
- * SEPARATE statement because the vector is a separate table now, and it rides the same chunk as
- * its `tracks` row so the `has_embedding` mirror seeded above is never momentarily a lie.
- */
 const TRACK_EMBEDDING_SQL = `insert or ignore into track_embeddings (track_id, embedding_blob)
   values (?, ?)`;
 
@@ -263,21 +187,6 @@ type Resolved = {
   labels: number;
 };
 
-/**
- * One catalogue track (a `tracks` row with NO `findings` row) — the crawler's output, and the body
- * every anti-join / Ear / capture / worklist item scans. The distributions are chosen per item:
- *   - `capture_status`   — a RARE terminal slice (wrong-audio / unmatched / failed) for item 14.
- *   - `nearest_finding_score` + `duplicate_of_track_id` — a near-1.0 duplicate prefix for item 19.
- *   - `source_audio_key` / `analyzed_from` — a captured analyze backlog for item 12.
- *   - `apple_music_url` / `backfill_apple_music_*` / `isrc` — the barely-shrinking Apple slice (13).
- *   - `label_id` — the mega-imprint + long tail for item 15.
- */
-/**
- * Which catalogue rows carry a vector — CAPTURED and even-indexed, so roughly a fifth of the body.
- * Named once because the answer is now needed in two places: the `has_embedding` mirror on the
- * `tracks` row, and whether a `track_embeddings` row is written beside it. Two spellings of this
- * rule would seed exactly the drift the mirror exists to be checked against.
- */
 function catalogueIsEmbedded(index: number): boolean {
   return index % 5 < 2 && index % 2 === 0;
 }
@@ -324,8 +233,7 @@ function catalogueTrackArgs(index: number, nowMs: number, opts: Resolved): SeedV
         ? "preview"
         : "full"
     : null;
-  // A row is analyzed only once analysis ran — a captured-but-never-analyzed row (analyzed_from
-  // null) keeps analyzed_at null, so it lands honestly in item 12's analyze backlog.
+
   const analyzedAt =
     captured && analyzedFrom !== null ? isoDaysBefore(nowMs, 2 + (index % 180)) : null;
 
@@ -367,16 +275,13 @@ function catalogueTrackArgs(index: number, nowMs: number, opts: Resolved): SeedV
     index % 20 === 0 ? `https://music.apple.com/us/song/${index}` : null,
     appleDone,
     appleAttempted,
-    // The maintained mirrors (see TRACK_COLUMNS). A catalogue row HAS no findings row, so
-    // `is_catalogue` is 1; `has_embedding` and `has_isrc` track the vector and the ISRC this same
-    // row was just given, never the DDL default.
+
     1,
     hasEmbedding ? 1 : 0,
     index % 23 === 0 ? 0 : 1,
   ];
 }
 
-/** One certified finding — a `tracks` row PLUS its `findings` row (the certification half). */
 function findingStatements(index: number, nowMs: number, opts: Resolved): SeedStatement[] {
   const trackId = `find-${index}`;
   const albumId = `album-${index % opts.albums}`;
@@ -394,7 +299,7 @@ function findingStatements(index: number, nowMs: number, opts: Resolved): SeedSt
     albumId,
     `https://i.scdn.co/image/${albumId}`,
     "done",
-    // Catalogue-only ranking columns stay NULL on a finding (the rank sweep anti-joins findings).
+
     null,
     null,
     null,
@@ -408,9 +313,7 @@ function findingStatements(index: number, nowMs: number, opts: Resolved): SeedSt
     index % 4 === 0 ? `https://music.apple.com/us/song/f${index}` : null,
     index % 4 === 0 ? isoDaysBefore(nowMs, 10 + (index % 60)) : null,
     index % 3 === 0 ? isoDaysBefore(nowMs, 10 + (index % 200)) : null,
-    // The maintained mirrors (see TRACK_COLUMNS). This row gets a `findings` row below, so
-    // `is_catalogue` is 0 — the DDL default of 1 would make every certified row read as raw
-    // catalogue — and it is unconditionally embedded and ISRC-keyed, so both flags are 1.
+
     0,
     1,
     1,
@@ -426,11 +329,6 @@ function findingStatements(index: number, nowMs: number, opts: Resolved): SeedSt
   ];
 }
 
-/**
- * Seed the whole 150k regime. See the file header. Every count is `opts.X ?? env ?? default`, so the
- * bench can pass an explicit `scale` and let the rest fall to env knobs (`SCALE_ARTISTS`, `SCALE_LABELS`,
- * `SCALE_ALBUMS`, `SCALE_FRONTIER`, `SCALE_ARTIST_SOCIALS`, `SCALE_FINDINGS`, `SCALE_FRONTIER_DEMAND_ZERO_EVERY`).
- */
 export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Promise<void> {
   const scale = opts.scale ?? envInt("BENCH_SCALE", 150_000);
   const findings = opts.findings ?? envInt("SCALE_FINDINGS", 2_000);
@@ -455,7 +353,6 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
       `crawl_frontier=${resolved.frontier}, artist_socials=${resolved.artistSocials}`,
   );
 
-  // ── labels (slug-keyed; the first 5 ENABLED so item 16's enabled-set join has seeds) ──────────
   await writeChunked(client, opts, "labels", resolved.labels, (index) => {
     const seedState = index < 5 ? "enabled" : index % 7 === 0 ? "disabled" : "undecided";
     const stamp = isoDaysBefore(nowMs, index % 400);
@@ -469,7 +366,6 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
     ];
   });
 
-  // ── albums (slug-keyed) ───────────────────────────────────────────────────────────────────────
   await writeChunked(client, opts, "albums", resolved.albums, (index) => {
     const stamp = isoDaysBefore(nowMs, index % 400);
 
@@ -481,7 +377,6 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
     ];
   });
 
-  // ── artists (NOCASE-varied names for item 11; image_url / spotify_artist_id on a subset) ──────
   await writeChunked(client, opts, "artists", resolved.artists, (index) => {
     const stamp = isoDaysBefore(nowMs, index % 400);
 
@@ -502,11 +397,9 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
     ];
   });
 
-  // ── tracks (catalogue body + findings-backed rows, each with its findings row) ────────────────
   await writeChunked(client, opts, "catalogue", resolved.catalogue, (index) => [
     { args: catalogueTrackArgs(index, nowMs, resolved), sql: TRACK_SQL },
-    // Only the embedded half gets a satellite row — its absence IS "this track has no vector",
-    // which is exactly the shape the queue predicates and the funnel's reference scan read.
+
     ...(catalogueIsEmbedded(index)
       ? [{ args: [`cat-${index}`, EMBEDDING_BLOB], sql: TRACK_EMBEDDING_SQL }]
       : []),
@@ -515,7 +408,6 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
     findingStatements(index, nowMs, resolved),
   );
 
-  // ── track_artists (~1.5 edges/track: one lead always, a second on even rows) ──────────────────
   await writeChunked(client, opts, "track_artists", scale, (index) => {
     const isCatalogue = index < resolved.catalogue;
     const trackId = isCatalogue ? `cat-${index}` : `find-${index - resolved.catalogue}`;
@@ -539,10 +431,6 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
     return statements;
   });
 
-  // ── crawl_frontier (~90k; most `done` once the graph drains; ~a few hundred label/mb nodes for
-  // item 16) ─ The kind/state/demand moduli are PRIME and pairwise-coprime so they never collude:
-  // a naive `kind at i%200` + `state pending at i%20` would make EVERY label node pending (200 is a
-  // multiple of 20), leaving item 16's `state='done' AND kind='label'` proof with zero rows. ──────
   await writeChunked(client, opts, "crawl_frontier", resolved.frontier, (index) => {
     const kind = index % 211 === 0 ? "label" : index % 3 === 0 ? "release" : "artist";
     const source = kind === "label" ? "musicbrainz" : index % 499 === 0 ? "fluncle" : "musicbrainz";
@@ -554,8 +442,7 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
           : index % 89 === 0
             ? "skipped"
             : "done";
-    // A label node carries its own seed label as `label_slug`; biasing ~half of them into the
-    // ENABLED set (label-0..4) gives item 16 a healthy done+enabled+recent qualifying set to seek.
+
     const nodeSeq = Math.floor(index / 211);
     const labelSlug =
       kind === "label" && nodeSeq % 2 === 0
@@ -587,7 +474,6 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
     ];
   });
 
-  // ── artist_socials (~40k; rare `candidate` slice, mostly-unreviewed set — items 17/18) ─────────
   await writeChunked(client, opts, "artist_socials", resolved.artistSocials, (index) => {
     const artistIndex = index % resolved.artists;
     const platform =
@@ -619,21 +505,6 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
   await reconcileHubCounts(client, opts);
 }
 
-/**
- * THE ENTITY HUB COUNTERS (Wave 2 keystone 2), written from the edges this seeder just laid.
- *
- * Same rule as the two `tracks` mirrors: a DDL default is what production never contains. Left at
- * 0 these are not a cosmetic gap — every read that gates on them (the `/labels` + `/albums` hub
- * inclusion gate, search's entity offer, and the Wave 3-2 name→id filter resolution, which declines
- * to seek an entity whose counter says it holds nothing) would take its OTHER branch, so the bench
- * would time a world where the fast path never runs.
- *
- * Derived, never invented: `renderable_track_count` is the linked-track count exactly as
- * `HUB_RENDERABLE` defines it, and `certified_finding_count` reads keystone 1's `is_catalogue = 0`
- * discriminator rather than joining `findings`. Each correlated count is index-served
- * (`tracks_label_id_idx` / `tracks_album_id_idx` / `track_artists_artist_id_idx`), so this is a pass
- * of range counts over the entity tables, not a scan per row.
- */
 async function reconcileHubCounts(client: Client, opts: ScaleSeedOptions): Promise<void> {
   const statements = [
     `update labels set

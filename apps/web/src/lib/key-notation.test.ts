@@ -8,10 +8,7 @@ describe("formatKey", () => {
     expect(formatKey("C# major", "scales")).toBe("C# major");
   });
 
-  // The full 24-key Camelot wheel: 12 major (B ring) + 12 minor (A ring). Sharps are
-  // what enrichment writes; the flat equivalents share a pitch class and code.
   const wheel: [string, string][] = [
-    // Majors (outer ring, B)
     ["C major", "8B"],
     ["G major", "9B"],
     ["D major", "10B"],
@@ -24,7 +21,7 @@ describe("formatKey", () => {
     ["D# major", "5B"],
     ["A# major", "6B"],
     ["F major", "7B"],
-    // Minors (inner ring, A)
+
     ["A minor", "8A"],
     ["E minor", "9A"],
     ["B minor", "10A"],

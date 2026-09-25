@@ -27,14 +27,6 @@ import {
   uploadFileToPresign,
 } from "@/lib/recording-upload";
 
-// The browser recording uploader (admin-shell doctrine — the one primary action on the
-// Recordings surface, top-right in the page header). The operator picks a captured set-video
-// master and it streams straight to R2 as a multipart upload (the CLI's `recordings create`
-// leg, minus ffmpeg), so a multi-GB set no longer needs the terminal. A dropped part retries;
-// a cancel or a failure aborts the R2 upload AND drops the just-created recording row, so a
-// failed upload never leaves a phantom recording behind. On success the new recording lands
-// in the shelf without a reload (`onUploaded` invalidates the recordings query).
-
 type Phase = "idle" | "uploading" | "done" | "error";
 
 export function UploadRecordingDialog({ onUploaded }: { onUploaded: () => void }) {
@@ -49,8 +41,6 @@ export function UploadRecordingDialog({ onUploaded }: { onUploaded: () => void }
   const abortRef = useRef<AbortController | null>(null);
   const uploading = phase === "uploading";
 
-  // Warn on a tab close while bytes are in flight — a half-finished multi-GB upload is a lot
-  // to lose. (The browser shows its own generic prompt; the string is ignored by design.)
   useEffect(() => {
     if (!uploading) {
       return;
@@ -76,8 +66,6 @@ export function UploadRecordingDialog({ onUploaded }: { onUploaded: () => void }
   };
 
   const onOpenChange = (next: boolean) => {
-    // Never let an outside click / Escape / X close the dialog mid-upload — the explicit
-    // Cancel button is the only way to stop (it aborts + cleans up first).
     if (uploading) {
       return;
     }
@@ -96,8 +84,7 @@ export function UploadRecordingDialog({ onUploaded }: { onUploaded: () => void }
 
     setFile(picked);
     setError(undefined);
-    // Smart defaults: the title from the file name (extension stripped), the recorded date
-    // from the file's own last-modified stamp (when OBS wrote the master).
+
     setTitle((current) => current || picked.name.replace(/\.[^.]+$/, ""));
     setRecordedAt((current) => current || toDatetimeLocal(picked.lastModified));
   };
@@ -141,14 +128,11 @@ export function UploadRecordingDialog({ onUploaded }: { onUploaded: () => void }
       setPhase("done");
       onUploaded();
     } catch (caught) {
-      // A failed OR cancelled upload must never leave a phantom recording: the R2 multipart
-      // was already aborted inside `uploadFileToPresign`; now drop the row too.
       if (recordingId) {
         await deleteRecording(recordingId).catch(() => {});
       }
 
       if (isAbortError(caught)) {
-        // Operator cancelled — back to a clean picker.
         setProgress(null);
         setPhase("idle");
       } else {
@@ -237,8 +221,6 @@ export function UploadRecordingDialog({ onUploaded }: { onUploaded: () => void }
   );
 }
 
-// The file picker: a native file input behind a labelled button, showing the chosen master's
-// name + size once picked. `accept="video/*"` so the OS picker leads with videos.
 function FileField({
   file,
   onPick,
@@ -255,8 +237,7 @@ function FileField({
   return (
     <div className="space-y-1.5">
       <Label id={labelId}>Set-video master</Label>
-      {/* A proxy input the visible button opens — kept out of the tab order + the a11y tree so
-          keyboard users get one labelled control (the button), not a stray unlabelled tab stop. */}
+
       <input
         accept="video/*"
         aria-hidden="true"
@@ -290,15 +271,12 @@ function FileField({
   );
 }
 
-// The live upload meter: the progress bar plus an honest byte/part read-out and a retry note.
 function UploadMeter({ progress }: { progress: UploadProgress }) {
   const percent =
     progress.totalBytes > 0 ? (progress.uploadedBytes / progress.totalBytes) * 100 : 0;
 
   return (
     <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
-      {/* Drive the bar by PERCENT (0–100) so a screen reader announces "…%", not a raw byte
-          count. The wrapper renders its own track+indicator after these children. */}
       <Progress
         aria-label="Upload progress"
         className="gap-2"
@@ -322,7 +300,6 @@ function UploadMeter({ progress }: { progress: UploadProgress }) {
   );
 }
 
-// The success state — a quiet confirmation; the recording is already in the shelf behind it.
 function DoneState({ onClose, title }: { onClose: () => void; title: string }) {
   return (
     <div className="space-y-4">
@@ -344,7 +321,6 @@ function DoneState({ onClose, title }: { onClose: () => void; title: string }) {
   );
 }
 
-// Create the coordinate-less recording row the presign + upload target (same-origin admin API).
 async function createRecording(
   title: string,
   recordedAtLocal: string,
@@ -370,7 +346,6 @@ async function createRecording(
   return { id: body.recording.id, title: body.recording.title ?? title };
 }
 
-// Drop a recording after a failed/cancelled upload — the "never a phantom recording" cleanup.
 async function deleteRecording(id: string): Promise<void> {
   await fetch(`/api/v1/admin/recordings/${encodeURIComponent(id)}`, {
     credentials: "same-origin",

@@ -78,7 +78,7 @@ export type FixtureBatchSink = {
 
 export type GenerateFixtureOptions = {
   chunkSize?: number;
-  /** Tests and CI may supply a ratio-preserving derivative. Exact runs omit this field. */
+
   counts?: FixtureCounts;
 };
 
@@ -327,9 +327,6 @@ export function releaseDateForIndex(
       return entry.bucket;
     }
 
-    // Keep the exact release-year histogram while giving the public fresh-window contracts real
-    // day-precision rows. Monotonic assignment means release_date DESC, id DESC remains one reverse
-    // index walk, including repeated dates at 2x and 4x.
     const dayOffset = Math.floor(((index - start) * 365) / entry.count);
     return new Date(Date.UTC(2026, 0, 1 + dayOffset)).toISOString().slice(0, 10);
   }
@@ -916,7 +913,6 @@ function padded(index: number): string {
   return index.toString().padStart(9, "0");
 }
 
-/** Crawler-born rows use the production `mb_` prefix and remain linked through every fixture edge. */
 function syntheticTrackId(index: number): string {
   const prefix = index > 0 && index % 97 === 0 ? "mb_" : "synthetic-track-";
   return `${prefix}${padded(index)}`;
@@ -981,8 +977,6 @@ function syntheticTrackCredits(index: number, artistCount: number): string[] {
     return ["Synthetic Alias"];
   }
 
-  // One exact-profile and one compact-profile finding exercise the certified half of the artist
-  // link contract while retaining identical synthetic identity semantics at every scale.
   if (index === 511 || index === 1272) {
     return ["Synthetic Identity"];
   }
@@ -1106,10 +1100,6 @@ async function* generatedChunks(
   }
 }
 
-/**
- * Streams a stable, public-safe fixture. No generated value is derived from a production row or
- * identifier, and at most one configured chunk plus one shared embedding blob is resident.
- */
 export async function* generateFixture(
   profile: ScaleProfile,
   options: GenerateFixtureOptions = {},
@@ -1761,7 +1751,6 @@ export async function* generateFixture(
     table: "perf_public_aggregate_state",
   };
 
-  // Keep projection readiness clean while giving index evidence every marker subject type.
   const projectionRepairMarkers = ["label", "artist", "track"] as const;
   yield* generatedChunks(
     "perf_projection_repairs",
@@ -1862,7 +1851,6 @@ export async function applyFixtureSchema(sink: FixtureBatchSink): Promise<void> 
   );
 }
 
-/** Drops only the harness-owned allowlist so an exact profile cannot inherit rows from a prior run. */
 export async function resetFixture(sink: FixtureBatchSink): Promise<void> {
   await sink.batch(
     [FIXTURE_IDENTITY_TABLE, ...FIXTURE_TABLES]
@@ -1999,11 +1987,6 @@ export function assertBoundedFixtureDistributionCoverage(
   }
 }
 
-/**
- * Fresh fixture construction creates every allowlisted rowid table once and inserts its stable rows
- * in order, guaranteeing dense rowids 1..N. The census proves that construction invariant; the
- * separate boundary sentinel prevents a deletion and an out-of-range insert from compensating.
- */
 function boundedCensusQueriesForSource(options: {
   expectedRows: number;
   maxRowsPerStatement: number;
@@ -2068,8 +2051,7 @@ function buildBoundedCensusQueries(
     boundedCensusQueriesForSource({
       expectedRows: expectedTables[table],
       maxRowsPerStatement,
-      // Embeddings are deterministically selected across the full track-key domain rather than
-      // packed into its first N keys, so the covering-index windows must span every synthetic track.
+
       rangeRows: table === "perf_track_embeddings" ? expectedDistributions.tracks : undefined,
       table,
       target: { kind: "table", table },
@@ -2223,7 +2205,6 @@ async function auditBoundedFixtureCardinality(
   };
 }
 
-/** Reads the committed database state after fixture writes; generator attempt counts are not proof. */
 export async function auditFixtureCardinality(
   client: Client,
   expectedDistributions: FixtureCounts,
@@ -2302,7 +2283,6 @@ export async function auditFixtureCardinality(
   };
 }
 
-/** A streaming fingerprint used to prove repeatability without retaining generated rows. */
 export async function fixtureFingerprint(
   profile: ScaleProfile,
   options: GenerateFixtureOptions = {},

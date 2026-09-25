@@ -1,13 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Local dev orchestrator.
- *
- * When TURSO_DATABASE_URL points at a local libSQL server (http://127.0.0.1:…),
- * this boots that server (`turso dev` over this worktree's .dev/local.db),
- * waits for it, applies any pending Drizzle migrations, then runs Vite. On a
- * remote URL it just runs Vite (the legacy behaviour). The local server is
- * cleaned up on exit.
- */
+
 import { $, type Subprocess } from "bun";
 import { createClient } from "@libsql/client/web";
 import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
@@ -35,18 +27,10 @@ function shutdown(): void {
   for (const child of children) {
     try {
       child.kill();
-    } catch {
-      // Already gone.
-    }
+    } catch {}
   }
 }
 
-// `turso dev` is a launcher: it boots an embedded `sqld` child and runs a
-// startup version check against GitHub. On a freshly provisioned worktree's
-// first run — competing with the rest of the concurrent turbo dev fan-out for
-// CPU/IO — that cold start can take well over a few seconds. Once warm it's
-// ~200ms. Budget for the cold case (30s) so the first `bun run dev` doesn't
-// lose the race, and bail immediately with turso's own output if it exits.
 async function waitForDb(dbUrl: string, server: Subprocess, attempts = 300): Promise<void> {
   const client = createClient({
     authToken: process.env.TURSO_AUTH_TOKEN ?? "local-dev",

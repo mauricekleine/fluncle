@@ -24,7 +24,6 @@ const INDEX_EVIDENCE_LIMIT = 25;
 const INDEX_EVIDENCE_ITERATIONS = 2;
 const INDEX_EVIDENCE_WARMUP_ITERATIONS = 1;
 
-/** Inventory indexes whose production consumer deliberately carries an `INDEXED BY` lock. */
 export const INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES = [
   "artist_qualification_qualified_idx",
   "crawl_due_work_cleanup_idx",
@@ -56,7 +55,7 @@ type IndexPlanSpec = {
 type ComparisonSpec = IndexPlanSpec & {
   productionPlanPolicies: ExplainPlanPolicy[];
   references: PerformanceStatement[];
-  /** Supplemental same-shape statements, normally the planner-unforced counterpart. */
+
   supplementalPlanPolicies?: ExplainPlanPolicy[];
   supplementalStatements: PerformanceStatement[];
 };
@@ -539,9 +538,6 @@ function planFor(
   if (definition.requiredIndexName === "artifact-changes-integer-primary-key") {
     requiredDetails.push(/INTEGER PRIMARY KEY.*rowid[<>]/i);
   } else if (definition.requiredIndexName === "bounded-consumer-control-table") {
-    // The exact compaction barrier spans active and rebuilding consumers, so the removed active-only
-    // partial index is unusable. The registered-consumer table is a bounded control set, not corpus
-    // data; its explicit scan is the structural proof for this drop.
     requiredDetails.push(/(?:SCAN|SEARCH) perf_artifact_change_consumers/i);
   } else if (definition.requiredIndexName === "artifact-change-checkpoints-primary-key") {
     requiredDetails.push(/sqlite_autoindex_perf_artifact_change_checkpoints_1/i);
@@ -583,7 +579,6 @@ function explainDetails(result: PerformanceResult): string[] {
   });
 }
 
-/** Time only the statement a production consumer runs; structural proof requests stay untimed. */
 async function executeTimedFinalStatement(
   context: ContractContext,
   statement: PerformanceStatement,
@@ -854,7 +849,6 @@ async function executeComparisonStatements(
   };
 }
 
-/** Terminal-only structural proof; measured comparison statements run in executeComparisonStatements. */
 async function executeComparisonProof(
   definition: IndexEvidenceDefinition,
   spec: ComparisonSpec,
@@ -1366,9 +1360,6 @@ function planSpecFor(
   }
 
   if (entry.name === "tracks_capture_priority_idx") {
-    // The compact fixture has no vendor reliability columns. Project equivalent fixture state under
-    // the production names, then run the unchanged catalogue predicate/order/result shapes so the
-    // surviving vendor-worklist index is still tested without widening the fixture schema.
     const apple = statement(
       `with vendor_tracks as (
         select t.id as track_id, t.isrc, t.album_id,

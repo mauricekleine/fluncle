@@ -6,6 +6,8 @@ How the bespoke 8-bit assets for **Fluncle's Galaxy** (`apps/web/src/game/*`, se
 
 **The source of truth is `packages/sprites/assets/galaxy/` — the `@fluncle/sprites` package.** `apps/web/public/galaxy/*.png` is a **generated mirror**: `apps/web/scripts/copy-sprites.ts` copies the package's assets into `public/` on every `dev` boot and before every `build`, and those five sprite PNGs (`ship` / `earth` / `roadster` / `ufo` / `asteroid`) are **gitignored**. Edit or regenerate a sprite in `public/galaxy/` and your work is untracked and overwritten on the next build — always write to `packages/sprites/assets/galaxy/`, then mirror it with `bun apps/web/scripts/copy-sprites.ts`.
 
+Declare each sprite in `SPRITES` in `packages/sprites/src/index.ts`: the mirror copies through that manifest. A declared sprite without a PNG fails the copy because the app would serve a broken URL; an undeclared PNG warns so a stray scratch render does not block development.
+
 The two non-sprite assets in `public/galaxy/` — `og.png` and `amen.mp3` — are **not** mirrored and stay tracked in git; edit those in place.
 
 ## The fallback contract

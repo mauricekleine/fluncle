@@ -1,113 +1,28 @@
 #!/usr/bin/env bun
-/**
- * The post-deploy production probe — the RESOLUTION half of Fluncle's monitoring,
- * fired automatically once a push to `main` has deployed (the
- * `.github/workflows/post-deploy-probe.yml` wait loop calls this after prod's
- * /api/v1/health reports the pushed SHA). It is the automated form of the
- * `fluncle-smoke` skill: sweep every public surface and go red the instant one
- * stops resolving — the class a service-health probe (/status, up/down) sails past,
- * where a moved/deleted route quietly returns 404 while the box still reads "up".
- *
- * ANTI-DRIFT — the target list is DERIVED LIVE every run, never hardcoded:
- *   - Web pages, feeds, discovery docs, and subdomains come from `@fluncle/registry`
- *     (`liveSurfaces()` / `statusProbes()`), the single in-code source of truth for
- *     where Fluncle is reachable.
- *   - The API surface comes from `@fluncle/contracts/orpc` — every oRPC op's
- *     `route.method` + `route.path` (+ its tier, read structurally from the path).
- * So a surface that ships, moves, or is retired is picked up automatically; a stale
- * list can never lie.
- *
- * STRICTLY READ-ONLY. Only GET is ever sent, so the probe is side-effect-free and
- * safe against production. Write ops (POST/PATCH/PUT/DELETE) are catalogued but NOT
- * fired; their auth gates are covered by the CI `orpc-auth*` tests instead.
- *
- * Per-class assertions (see `Expectation`):
- *   - web / subdomain     → 2xx + non-empty HTML.
- *   - feed / discovery    → 2xx + parseable XML / JSON / non-empty text (by format).
- *   - public API (GET)    → 2xx + parseable JSON. A 400 counts as SERVED (the route
- *                           resolved and rejected missing input, e.g. search needs a
- *                           query) — served, never a regression.
- *   - auth-gated API (GET, admin/`/me`) → 401/403. Probed UNAUTHENTICATED on purpose:
- *                           the auth gate is itself under test, so a 2xx here is a
- *                           CRITICAL failure (an endpoint that stopped requiring auth).
- *
- * Usage:
- *   bun run scripts/post-deploy-probe.ts                 # prod (default)
- *   bun run scripts/post-deploy-probe.ts --base-url http://127.0.0.1:3000
- *   bun run scripts/post-deploy-probe.ts --json          # machine-readable results
- *
- * Exit code is non-zero if any surface FAILED (or was CRITICAL); SKIPs never fail
- * the run.
- */
+
 import { contract } from "@fluncle/contracts/orpc";
 import { liveSurfaces, statusProbes, type Surface } from "@fluncle/registry";
-// The worked search examples, imported from their ONE owner rather than re-listed here — the same
-// anti-drift rule the registry and the contract get. A pure, dependency-free module (it is shared
-// with the browser), so a standalone Bun script can read it.
+
 import { SEARCH_EXAMPLES } from "../src/lib/search-results";
-// The vector budget, imported from the ONE module that owns it rather than restated here. A probe
-// that gave up before the deadline the server is allowed to spend would report a failure the
-// server never committed; deriving the budget makes that drift impossible. Pure and
-// dependency-free for exactly this reason (a `lib/server/**` module cannot be read from a
-// standalone Bun script).
+
 import { VECTOR_ENDPOINT_PROBE_TIMEOUT_MS } from "../src/lib/vector-budget";
 
-// The canonical production origin — the ONE piece of topology this probe hardcodes,
-// and it is fully public (this repo is open source). `--base-url` retargets it for a
-// local/preview run.
 const PROD_BASE_URL = "https://www.fluncle.com";
 
-// The versioned API prefix every contract op is mounted under (the bare `/api`
-// alias serves the same handlers; we probe the canonical one).
 const API_PREFIX = "/api/v1";
 
-// Placeholder substituted for a `{param}` in an AUTH-gated op's path. Admin/`/me`
-// auth middleware runs BEFORE path-param resolution, so a gated op answers 401
-// regardless of the value — verified against prod (`GET /api/v1/admin/tracks/probe`
-// → 401). It never reaches a handler, so it is inert.
 const PARAM_PLACEHOLDER = "probe";
 
-// Subdomains that do NOT serve a 200 at their bare root, so a root GET is not a
-// resolution probe for them (documented, small, like status.ts's RETIRED_SERVICE_IDS):
-//   - subdomain.found — the R2 object store; its root 404s by design (the box probes a
-//     real object instead). The `fluncle-smoke` skill notes this exact carve-out.
-// `.onion` subdomains are skipped separately (not routable from GitHub Actions).
 const NON_ROOT_200_SUBDOMAINS = new Set<string>(["subdomain.found"]);
 
-// Public ops that legitimately ship DARK — deployed with their env deliberately absent,
-// answering a typed unavailability fault until the operator wires the bindings
-// (documented, small, like NON_ROOT_200_SUBDOMAINS above):
-//   - get_replica_token — the device-replica key mint; dark until the replica DB +
-//     Turso platform credential exist (offline-first slice 2). Its dark answer is a
-//     503 whose JSON body carries `replica_unavailable`.
 const DARK_CAPABLE_OPERATIONS = new Map<string, { darkStatus: number; darkCode: string }>([
   ["get_replica_token", { darkCode: "replica_unavailable", darkStatus: 503 }],
 ]);
 
-// Politeness + resilience knobs — gentle on prod.
 const CONCURRENCY = 4;
 const TIMEOUT_MS = 10_000;
-const NETWORK_RETRIES = 1; // one retry, on a thrown/timeout error only (never on an HTTP status).
+const NETWORK_RETRIES = 1;
 
-// ── The vector-capable lane ───────────────────────────────────────────────────
-//
-// Three rules, and all three exist because a request-time Turso vector scan is a DIFFERENT KIND
-// OF WORK from every other GET here:
-//
-//  1. BUDGET. `VECTOR_FALLBACK_DEADLINE_MS` is how long the server is permitted to spend on one,
-//     so a shorter client timeout would fail a request the server was still legitimately serving.
-//     The budget is that deadline plus documented headroom (`VECTOR_ENDPOINT_PROBE_TIMEOUT_MS`).
-//  2. SOLITUDE. A Worker isolate admits ONE heavy read at a time
-//     (`WORKER_DB_HEAVY_READ_CONCURRENCY`), so two vector-capable targets fired together do not
-//     run together — the second waits out the first's whole scan and then gets blamed for the
-//     total. The probe would be measuring its own contention. They run alone, last.
-//  3. NO RETRY. libSQL cannot cancel remote work, so retrying a timeout does not replace the
-//     first scan, it STACKS a second one on a database that is already the bottleneck. A
-//     vector-capable target gets exactly one attempt.
-//
-// The membership list is the set of PUBLIC GET ops whose handler can reach `executeVectorFallback`
-// (`lib/server/vector-fallback.ts` — grep its call sites). It is a probe-side judgement about
-// cost, never about correctness: an op wrongly left out is merely probed on the ordinary budget.
 const VECTOR_CAPABLE_OPERATIONS = new Set<string>([
   "list_mixable_tracks",
   "list_similar_artists",
@@ -115,63 +30,35 @@ const VECTOR_CAPABLE_OPERATIONS = new Set<string>([
   "search_archive",
 ]);
 
-/**
- * A served target slower than this is REPORTED, never failed. The generous budget above is what
- * keeps a working endpoint from being called dead; this is what keeps a working endpoint from
- * quietly sliding toward that budget unnoticed. Comfortably under the deadline, so a drift shows
- * up here long before it shows up as a failure.
- */
 const SLOW_WARNING_MS = 5_000;
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
-/** The body shape a served (2xx) response must satisfy for its class. */
 type ContentKind = "html" | "json" | "text" | "xml";
 
-/** What a target's response must look like to pass. */
 type Expectation =
-  | { kind: "served"; content: ContentKind } // 2xx (+content); 400 = served-with-input-required.
-  | { kind: "auth-gate" } // 401/403 unauthenticated; a 2xx here is a CRITICAL leak.
+  | { kind: "served"; content: ContentKind }
+  | { kind: "auth-gate" }
   | { kind: "dark-or-served"; content: ContentKind; darkStatus: number; darkCode: string }
-  | { kind: "search-example" }; // 2xx + a NON-EMPTY, undegraded answer (see below).
-// search-example: the one place this probe asserts on CONTENT rather than liveness, and it is the
-// only assertion that can hold the worked examples' promise. `SEARCH_EXAMPLES` is shown to readers
-// in three places as a set of queries that WORK; an example that finds nothing teaches the
-// opposite of what it is for. Whether a query still returns rows depends on the LIVE ARCHIVE — a
-// certified finding retired, a label pruned, an anchor un-embedded — so no offline test can know
-// it, and only a probe against production can. The offline half (that each is answered by a
-// deterministic tier, never the model) is `lib/server/search-examples.integration.test.ts`.
-// dark-or-served: an op that legitimately SHIPS DARK until the operator wires its env
-// (see DARK_CAPABLE_OPERATIONS). Its typed dark fault still PROVES the route resolves —
-// the handler answered with its documented shape — so it passes; the wrong status, or the
-// dark status with the wrong body, still fails. Once lit it is judged exactly like served.
+  | { kind: "search-example" };
 
-/** Coarse grouping for the report, one row per surface. */
 type TargetClass = "api-auth" | "api-public" | "discovery" | "feed" | "subdomain" | "web";
 
-/** One thing to GET, fully resolved to an absolute URL. */
 type Target = {
   name: string;
   className: TargetClass;
   url: string;
   expect: Expectation;
-  /** True when the URL is on the primary www origin, so `--base-url` can retarget it. */
+
   rewritable: boolean;
-  /** True for a vector-capable op: the long budget, the solitary lane, and no retry (see above). */
+
   vectorCapable?: true;
 };
 
-/** A GET target we deliberately did NOT fire, with the reason (shown in the report). */
 type SkippedTarget = {
   name: string;
   className: TargetClass | "api-write";
   reason: string;
 };
 
-// WARN is a PASS that took too long: the surface resolved and answered correctly, so it never
-// fails the run, but the report says so out loud and names the latency. It is the probe's
-// regression sensitivity — without it, a budget generous enough to survive a legitimate vector
-// scan would also swallow a slow drift right up to the moment it became an outage.
 type Verdict = "CRIT" | "FAIL" | "PASS" | "SKIP" | "WARN";
 
 type ProbeResult = {
@@ -181,27 +68,10 @@ type ProbeResult = {
   verdict: Verdict;
   status: number | null;
   detail: string;
-  /** Wall-clock milliseconds for the attempt that answered; null for a target never fired. */
+
   durationMs: number | null;
 };
 
-// ── Tier / classification (pure) ──────────────────────────────────────────────
-
-/**
- * An oRPC op's auth tier, derived STRUCTURALLY from its path — the same structural
- * truth `orpc.ts` relies on to build the public OpenAPI doc (it filters the admin
- * surface by exactly the `/admin/*` prefix) and that the coverage tests enforce:
- *   - `/admin/*`        → admin-tier (any admin principal; unauthenticated → 401).
- *   - `/me` (exact)     → PUBLIC: `get_current_private_user` returns `user: null`
- *                         when signed out and never 401s (a deliberate carve-out).
- *   - `/me/*`           → private-session tier (unauthenticated → 401).
- *   - everything else   → public.
- * The reference-equal-middleware derivation in `orpc-auth-coverage.test.ts` is the
- * authoritative tier source, but it needs the server router (which pulls
- * `cloudflare:workers`, unavailable to this standalone Bun script). This path rule
- * agrees with it for every current op; if a future op ever broke the structural
- * convention, the auth-coverage test would fail in CI first.
- */
 export function tierOfPath(path: string): "admin" | "private" | "public" {
   if (path.startsWith("/admin")) {
     return "admin";
@@ -218,7 +88,6 @@ export function tierOfPath(path: string): "admin" | "private" | "public" {
   return "public";
 }
 
-/** Read an oRPC contract op's `{ method, path }` off its `~orpc` route metadata. */
 function routeOf(op: unknown): { method: string; path: string } {
   const orpc = (op as Record<string, unknown>)["~orpc"] as Record<string, unknown> | undefined;
   const route = (orpc?.route ?? {}) as { method?: string; path?: string };
@@ -226,7 +95,6 @@ function routeOf(op: unknown): { method: string; path: string } {
   return { method: route.method ?? "GET", path: route.path ?? "" };
 }
 
-/** Map a registry surface's `apiFormat` to the body kind we assert on it. */
 function contentKindForFormat(apiFormat: string | undefined): ContentKind {
   const format = (apiFormat ?? "").toLowerCase();
 
@@ -241,8 +109,6 @@ function contentKindForFormat(apiFormat: string | undefined): ContentKind {
   return "text";
 }
 
-/** The absolute URL a registry surface is probed at (its explicit `url`, else the
- * www route, else the subdomain host). */
 function surfaceUrl(surface: Surface): string | null {
   if (surface.url) {
     return surface.url;
@@ -259,30 +125,17 @@ function surfaceUrl(surface: Surface): string | null {
   return null;
 }
 
-// ── Target derivation (pure) ──────────────────────────────────────────────────
-
-/**
- * Build the full probe target list from the registry + the contract. Pure and
- * deterministic (no I/O), so it is unit-tested directly.
- *
- * Returns both the FIRED targets and the deliberately-SKIPPED GET/write targets, so
- * the report can show exactly what was and was not covered.
- */
 export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } {
   const targets: Target[] = [];
   const skipped: SkippedTarget[] = [];
 
-  // ── Registry: web pages + subdomains ───────────────────────────────────────
-  // Only surfaces the registry marks as http-probeable (its author already vouched
-  // they answer 200) — this respects the gate/redirect signals (e.g. /mix has no
-  // probeConfig because a closed gate 302s a bare GET).
   for (const surface of statusProbes()) {
     if (surface.probeConfig.kind !== "http") {
       continue;
     }
 
     if (surface.kind !== "web_route" && surface.kind !== "subdomain") {
-      continue; // API/feed/discovery handled from their authoritative sources below.
+      continue;
     }
 
     const url = surfaceUrl(surface);
@@ -291,8 +144,6 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
       continue;
     }
 
-    // Tor onion — not routable from CI; its liveness is covered by the existing
-    // watchdog cross-ping, not a www-origin GET.
     if (new URL(url).hostname.endsWith(".onion")) {
       skipped.push({
         className: "subdomain",
@@ -322,9 +173,6 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
     });
   }
 
-  // ── Registry: feeds + discovery docs ────────────────────────────────────────
-  // Static syndication/discovery documents — always GET-able, no gate — so we sweep
-  // ALL concrete (non-parameterised) ones, not just the curated /status subset.
   for (const surface of liveSurfaces()) {
     if (surface.kind !== "feed" && surface.kind !== "discovery") {
       continue;
@@ -332,7 +180,6 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
 
     const route = surface.route ?? surface.url;
 
-    // Parameterised feeds (e.g. /artist/:slug/fresh.xml) have no fixed address to GET.
     if (!route || route.includes(":")) {
       if (route?.includes(":")) {
         skipped.push({
@@ -360,11 +207,9 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
     });
   }
 
-  // ── Contract: the API surface ───────────────────────────────────────────────
   for (const [name, op] of Object.entries(contract as Record<string, unknown>)) {
     const { method, path } = routeOf(op);
 
-    // Read-only rule: never fire a write. Catalogue it as skipped.
     if (method !== "GET") {
       skipped.push({
         className: "api-write",
@@ -379,8 +224,6 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
     const hasParams = path.includes("{");
 
     if (tier === "admin" || tier === "private") {
-      // Auth-gated. Substitute the inert placeholder for any param (auth 401s before
-      // the param is read) and assert the gate holds.
       const resolvedPath = path.replaceAll(/\{[^}]+\}/g, PARAM_PLACEHOLDER);
 
       targets.push({
@@ -394,9 +237,6 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
       continue;
     }
 
-    // Public GET. A parameterised one needs a real id — a bogus id 404s
-    // indistinguishably from a dead route — so skip it rather than raise a false
-    // alarm. (The bootstrap step below resolves the common track-id family.)
     if (hasParams) {
       skipped.push({
         className: "api-public",
@@ -426,12 +266,6 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
     });
   }
 
-  // ── The worked search examples ─────────────────────────────────────────────
-  // Derived from `SEARCH_EXAMPLES`, so a fifth example is probed the day it ships and a retired
-  // one stops being probed — the same live-derivation rule as the registry and the contract above.
-  // Read-only GETs against the public, unauthenticated `search_archive` op, like every other
-  // target here; the difference is only what counts as a pass (see the `search-example`
-  // expectation).
   for (const example of SEARCH_EXAMPLES) {
     targets.push({
       className: "api-public",
@@ -446,23 +280,12 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
   return { skipped, targets };
 }
 
-/** The vector lane's marker, spread into a target so the flag is set in exactly one place. */
 export function vectorLane(operation: string): { vectorCapable?: true } {
   return VECTOR_CAPABLE_OPERATIONS.has(operation) ? { vectorCapable: true } : {};
 }
 
-// The param names that identify a finding/mixtape by id or Log ID — the one family
-// the bootstrap resolves so the flagship `get_track` read is actually covered.
 const TRACK_ID_PARAMS = new Set(["idOrLogId", "logId", "trackId"]);
 
-/**
- * Promote the track-id-family public parameterised GET ops from skipped → fired,
- * substituting a REAL Log ID fetched from the public archive list. Ops whose single
- * param is a track id (`get_track`, `list_similar_tracks`, `list_mixable_tracks`)
- * gain live coverage; every other parameterised public read stays skipped.
- * Best-effort: if no sample id is available, nothing is promoted (the ops remain
- * honestly skipped).
- */
 export function promoteTrackParamOps(
   skipped: SkippedTarget[],
   sampleLogId: string | null,
@@ -502,21 +325,16 @@ export function promoteTrackParamOps(
   return { promoted, remaining };
 }
 
-/** Rewrite a target's prod-origin URL onto `baseUrl` (leaves cross-origin ones as-is). */
 export function retarget(target: Target, baseUrl: string): { url: string; crossOrigin: boolean } {
   if (target.rewritable && baseUrl !== PROD_BASE_URL) {
     return { crossOrigin: false, url: target.url.replace(PROD_BASE_URL, baseUrl) };
   }
 
-  // Not rewritable (a distinct subdomain host) and we are off prod → cannot map it.
   const crossOrigin = !target.rewritable && baseUrl !== PROD_BASE_URL;
 
   return { crossOrigin, url: target.url };
 }
 
-// ── Assertions (pure) ─────────────────────────────────────────────────────────
-
-/** Does a 2xx body satisfy the expected content kind? Returns a failure reason or null. */
 export function checkContent(
   content: ContentKind,
   contentType: string,
@@ -544,25 +362,14 @@ export function checkContent(
       }
     }
     case "xml": {
-      // XML/RSS/Atom/sitemap all begin with a `<` (optionally an XML prolog). An
-      // error page would be HTML or plain text, which this catches.
       return trimmed.startsWith("<") ? null : "not XML";
     }
     case "text": {
-      return null; // non-empty already asserted.
+      return null;
     }
   }
 }
 
-/**
- * A worked example's answer, judged on what it actually holds.
- *
- * Two ways to fail, and they are different regressions. EMPTY means the archive no longer answers
- * a query the product advertises — the finding behind it moved, the label fell below the hub gate,
- * the anchor lost its embedding. DEGRADED means the deterministic tiers all declined and the query
- * fell through to the language tier, whose answer varies run to run; an example that is a coin
- * flip is not a worked example, whether or not this particular roll came back with rows.
- */
 export function judgeSearchExample(body: string): { verdict: Verdict; detail: string } {
   let payload: { degraded?: unknown; entities?: unknown; results?: unknown };
 
@@ -589,7 +396,6 @@ export function judgeSearchExample(body: string): { verdict: Verdict; detail: st
   return { detail: `200 ok (${results + entities})`, verdict: "PASS" };
 }
 
-/** Turn a response (status + body) into a verdict for a target's expectation. */
 export function judge(
   expect: Expectation,
   status: number,
@@ -605,13 +411,6 @@ export function judge(
       return { detail: `${status} — auth gate OPEN (expected 401/403)`, verdict: "CRIT" };
     }
 
-    // An admin op with REQUIRED query input (e.g. `get_mixable_order` needs `ids`,
-    // `list_track_work` needs `scope`, `get_prompt` a known-enum slug) validates
-    // that input BEFORE the auth middleware resolves, so an unauthenticated GET with
-    // missing/placeholder input answers 400 — the route is SERVED and returned no
-    // data (not a 404 dead route, not a 2xx leak). We cannot construct valid input
-    // generically to force the 401, so the gate itself is left to the CI `orpc-auth*`
-    // tests; here a 400 is a pass (it resolves).
     if (status === 400) {
       return { detail: "400 served (input required — gate not exercised)", verdict: "PASS" };
     }
@@ -620,9 +419,6 @@ export function judge(
   }
 
   if (expect.kind === "dark-or-served" && status === expect.darkStatus) {
-    // The op's documented dark state: the handler answered its typed fault, which
-    // proves the route resolves. The body must actually carry the dark code — a bare
-    // gateway 503 or an unrelated error page must not pass as "dark".
     return body.includes(expect.darkCode)
       ? { detail: `${status} dark (typed ${expect.darkCode} — env not wired)`, verdict: "PASS" }
       : {
@@ -647,8 +443,6 @@ export function judge(
       : { detail: `${status} ok`, verdict: "PASS" };
   }
 
-  // A 400 means the route RESOLVED and rejected missing/invalid input (e.g. search
-  // needs a query) — served, not a regression.
   if (status === 400) {
     return { detail: "400 served (input required)", verdict: "PASS" };
   }
@@ -656,11 +450,8 @@ export function judge(
   return { detail: `${status} (expected 2xx)`, verdict: "FAIL" };
 }
 
-// ── Fetch (I/O) ───────────────────────────────────────────────────────────────
-
 type FetchLike = typeof fetch;
 
-/** How long this target may take before it is called dead, and how many attempts it gets. */
 export function fetchPolicy(target: Pick<Target, "vectorCapable">): {
   attempts: number;
   timeoutMs: number;
@@ -670,7 +461,6 @@ export function fetchPolicy(target: Pick<Target, "vectorCapable">): {
     : { attempts: NETWORK_RETRIES + 1, timeoutMs: TIMEOUT_MS };
 }
 
-/** GET a URL with a timeout and the target's retry budget (never a retry on an HTTP status). */
 async function fetchWithRetry(
   url: string,
   fetchImpl: FetchLike,
@@ -698,7 +488,6 @@ async function fetchWithRetry(
   throw lastError;
 }
 
-/** Downgrade a clean PASS to WARN when it took longer than the soft threshold. */
 export function applySlowWarning(
   verdict: Verdict,
   detail: string,
@@ -752,12 +541,6 @@ function formatDuration(durationMs: number): string {
   return durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(2)}s`;
 }
 
-/**
- * Fire every target: the ordinary ones through a polite fixed-size pool, then the vector-capable
- * ones ALONE, one after another. That ordering is the whole point — the Worker serializes heavy
- * reads per isolate, so anything fired alongside a vector scan is not being measured, it is being
- * queued behind one. The report keeps the derived target order regardless of run order.
- */
 async function runProbes(
   targets: { target: Target; url: string }[],
   fetchImpl: FetchLike,
@@ -773,7 +556,6 @@ async function runProbes(
   return results;
 }
 
-/** Run `entries` through a fixed-size worker pool, writing each result at its derived index. */
 async function runPool(
   entries: { index: number; target: Target; url: string }[],
   results: ProbeResult[],
@@ -793,9 +575,6 @@ async function runPool(
   await Promise.all(Array.from({ length: Math.min(concurrency, entries.length) }, () => worker()));
 }
 
-// ── Bootstrap a real Log ID (I/O) ─────────────────────────────────────────────
-
-/** Fetch one real Log ID from the public archive list, for the track-param ops. Null on any failure. */
 async function bootstrapSampleLogId(baseUrl: string, fetchImpl: FetchLike): Promise<string | null> {
   try {
     const response = await fetchWithRetry(`${baseUrl}${API_PREFIX}/findings?limit=1`, fetchImpl);
@@ -813,8 +592,6 @@ async function bootstrapSampleLogId(baseUrl: string, fetchImpl: FetchLike): Prom
   }
 }
 
-// ── Report (pure) ─────────────────────────────────────────────────────────────
-
 const VERDICT_ORDER: Record<Verdict, number> = { CRIT: 0, FAIL: 1, PASS: 3, SKIP: 4, WARN: 2 };
 
 export function formatTable(results: ProbeResult[]): string {
@@ -830,8 +607,6 @@ export function formatTable(results: ProbeResult[]): string {
 
   return lines.join("\n");
 }
-
-// ── Main ──────────────────────────────────────────────────────────────────────
 
 type Args = { baseUrl: string; json: boolean };
 
@@ -870,7 +645,6 @@ async function main(): Promise<void> {
   const { promoted, remaining } = promoteTrackParamOps(built.skipped, sampleLogId);
   const allTargets = [...built.targets, ...promoted];
 
-  // Resolve every target onto the requested origin; cross-origin subdomains become SKIPs off prod.
   const toRun: { target: Target; url: string }[] = [];
   const crossOriginSkips: ProbeResult[] = [];
 
@@ -922,8 +696,7 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ baseUrl, counts, results, sampleLogId }, null, 2));
   } else {
     console.log(`\nPost-deploy probe → ${baseUrl}\n`);
-    // Suppress the (many, uninteresting) write-op skips from the visible table; they
-    // are counted in the summary line. Everything actually probed + notable skips show.
+
     const visible = results.filter((result) => result.className !== "api-write");
     console.log(formatTable(visible));
     console.log(
@@ -933,8 +706,6 @@ async function main(): Promise<void> {
       `\nSummary: ${counts.PASS} passed · ${counts.WARN} slow · ${counts.FAIL} failed · ${counts.CRIT} critical · ${counts.SKIP} skipped · ${results.length} total`,
     );
 
-    // Non-fatal, and deliberately printed as its own block: a slow surface that never fails is
-    // exactly the signal a table this long buries.
     if (counts.WARN > 0) {
       console.log("\nSLOW (passed, but above the soft threshold):");
       for (const result of results.filter((r) => r.verdict === "WARN")) {
@@ -955,7 +726,6 @@ async function main(): Promise<void> {
   }
 }
 
-// Run only when invoked directly (not when imported by the test).
 if (import.meta.main) {
   await main();
 }

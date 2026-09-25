@@ -1,6 +1,3 @@
-// The crawlable hub components render REAL anchors into the SSR HTML — that is the whole point of
-// this slice, so it is pinned here with `renderToStaticMarkup` (vitest env = node, no DOM needed).
-// A crawler that runs no JS must be able to walk the A–Z lane and the pager as plain <a href>.
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { CataloguePager } from "./catalogue-groups";
@@ -21,13 +18,12 @@ describe("HubLetterLane", () => {
       />,
     );
 
-    // The present letters resolve to real hrefs — "a" folds to the bare hub, "m" to its page.
     expect(html).toContain('<a class="catalogue-letter" href="/artists">A</a>');
     expect(html).toContain('<a class="catalogue-letter" href="/artists?page=3">M</a>');
-    // An absent letter is a non-link, aria-hidden so a crawler ignores the dead glyph.
+
     expect(html).toContain('aria-hidden="true"');
     expect(html).toContain(">B</span>");
-    // The nav carries its literal accessible name.
+
     expect(html).toContain('aria-label="Artists A to Z"');
   });
 
@@ -53,13 +49,12 @@ describe("HubYearLane (the /tracks single-row year scroller)", () => {
       />,
     );
 
-    // Every year is a crawlable anchor, using the same chip chrome as the letter lane.
     expect(html).toContain('<a class="catalogue-letter" href="/tracks">2026</a>');
     expect(html).toContain('<a class="catalogue-letter" href="/tracks?page=3">2024</a>');
-    // The scroller carries the nav's literal accessible name; the shared wrapping class is NOT used.
+
     expect(html).toContain('aria-label="Tracks by year"');
     expect(html).not.toContain("catalogue-letters");
-    // A real <button> on each side, keyboard-reachable, with literal chrome labels.
+
     expect(html).toContain('aria-label="Scroll years left"');
     expect(html).toContain('aria-label="Scroll years right"');
     expect(html).toContain("<button");
@@ -106,9 +101,8 @@ describe("CataloguePager (the hub's numbered pager) renders real anchors", () =>
       />,
     );
 
-    // Real anchors, the crawlable spine of the paged variants.
-    expect(html).toContain('href="/artists"'); // Previous → page 1 → the bare hub
-    expect(html).toContain('href="/artists?page=3"'); // Next → page 3
+    expect(html).toContain('href="/artists"');
+    expect(html).toContain('href="/artists?page=3"');
     expect(html).toContain("Previous");
     expect(html).toContain("Next");
     expect(html).toContain("Page 2 of 4");

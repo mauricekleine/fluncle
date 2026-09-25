@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSaveSetBody, canSaveSet } from "./mix-save";
 
-// The Save-set dialog's two pure pieces. `canSaveSet` is the disabled gate the ruling
-// mandates (Save blocked on an empty chain OR a blank name — never a server error after the
-// fact); `buildSaveSetBody` assembles the `{ name, set, taste }` the POST/PATCH both send.
-
 describe("canSaveSet — the dialog's disabled gate", () => {
   it("allows a save when there is a chain and a non-blank name", () => {
     expect(canSaveSet({ chainLength: 3, name: "Friday warmup" })).toBe(true);

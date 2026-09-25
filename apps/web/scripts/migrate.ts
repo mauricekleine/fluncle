@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** Apply the generated migration suffix not yet stamped in production. */
+
 import { createClient, type Client, type InStatement } from "@libsql/client";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,6 @@ import {
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const journalUrl = new URL("../drizzle/meta/_journal.json", import.meta.url);
 
-/** Prove Drizzle's file reader and the parsed journal still describe the same ordered chain. */
 export function pairJournalWithMigrations(
   entries: readonly MigrationJournalEntry[],
   migrations: readonly MigrationMeta[],
@@ -38,7 +37,6 @@ export function pairJournalWithMigrations(
   });
 }
 
-/** Build the exact atomic libSQL batch for the pending journal entries. */
 export function statementsForMigrationPlan(
   pairs: ReadonlyArray<{ entry: MigrationJournalEntry; migration: MigrationMeta }>,
   plan: ProductionMigrationPlan,

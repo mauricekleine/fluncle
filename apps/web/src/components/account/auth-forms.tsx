@@ -1,9 +1,3 @@
-// The signed-OUT and just-arrived surfaces of the account area: the sign-in / create
-// forms, the forgot-password panel, and the claim-username dialog a fresh Google
-// arrival meets. Lifted out of the account monolith unchanged — every flow mutates
-// then refreshes (the route repoints `refresh` to a react-query invalidation, so the
-// same call still re-reads the session).
-
 import { useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import {
@@ -34,7 +28,7 @@ export function AuthForms({
   setMessage: (message: string) => void;
 }) {
   const [view, setView] = useState<"auth" | "reset">("auth");
-  // "Join the crew" is the door most arrivals came through — default to joining.
+
   const [mode, setMode] = useState<"signin" | "signup">("signup");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -50,17 +44,13 @@ export function AuthForms({
       const result =
         mode === "signup"
           ? await authClient.signUp.email({
-              // Where the email-verification link lands the user once they click it
-              // (Better Auth signs them in first via autoSignInAfterVerification).
               callbackURL: "/account",
               email,
               name: username,
               password,
               username,
             })
-          : // The recall-friendly identifier: a returning user remembers their
-            // email more reliably than a handle picked in passing — accept either.
-            username.includes("@")
+          : username.includes("@")
             ? await authClient.signIn.email({ email: username, password })
             : await authClient.signIn.username({ password, username });
 
@@ -70,8 +60,7 @@ export function AuthForms({
       }
 
       await refresh();
-      // Signing in needs no toast — the account appearing is the confirmation. A
-      // sign-up keeps one useful line: where the verification link went.
+
       setMessage(
         mode === "signup"
           ? "I sent a link to verify your email. You're already signed in, so there's no rush."
@@ -90,9 +79,6 @@ export function AuthForms({
     }
   }
 
-  // "Continue with Google" — a full-page OAuth redirect to Google, back to /account.
-  // On success the browser navigates away (no busy reset needed); on a synchronous
-  // failure to start the flow, surface it and re-enable the form.
   async function continueWithGoogle() {
     setMessage("");
     setBusy(true);
@@ -207,11 +193,6 @@ export function AuthForms({
   );
 }
 
-// The "Forgot password?" panel: collect the account email and ask Better Auth to
-// send a reset link (its `/request-password-reset` endpoint, delivered by the
-// server's `sendResetPassword` → Resend). The confirmation is deliberately identical
-// whether or not the email is on an account — email-enumeration-safe — so the send
-// error (if any) is swallowed and the same line always shows.
 function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -227,7 +208,6 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
         redirectTo: `${siteUrl}/reset-password`,
       });
     } catch {
-      // Swallow — the confirmation below is the same either way (enumeration-safe).
     } finally {
       setBusy(false);
       setSent(true);
@@ -269,19 +249,12 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
   );
 }
 
-// The dismissal marker for the claim-username dialog: per-tab-session, so "Not now"
-// holds for the visit but the door knocks again next time — a missing handle keeps
-// saves and submissions nameless, which is worth one quiet re-ask.
-// Durable per ACCOUNT (localStorage, keyed by user id): "Not now" means not now for
-// this account on this browser — the door doesn't knock again every session. The
-// username prompt keeps a durable home in Settings → Profile either way.
 const CLAIM_DISMISSED_KEY = "fluncle-claim-username-dismissed";
 
 function claimDismissedKey(userId: string): string {
   return `${CLAIM_DISMISSED_KEY}:${userId}`;
 }
 
-/** The email's local part, folded into a valid handle suggestion ("hey@…" → "hey"). */
 function suggestUsername(email: string): string {
   return (email.split("@")[0] ?? "")
     .toLowerCase()
@@ -290,12 +263,6 @@ function suggestUsername(email: string): string {
     .slice(0, 24);
 }
 
-/**
- * The claim-username moment. A fresh Google arrival lands signed in but nameless —
- * instead of hiding a hint in Settings, the page opens one small dialog with the
- * handle prefilled from their email. Claiming is one tap; "Not now" dismisses it
- * for the session and Settings keeps the field either way.
- */
 export function ClaimUsernameDialog({
   csrfToken,
   refresh,

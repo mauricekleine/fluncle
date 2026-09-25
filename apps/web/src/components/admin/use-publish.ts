@@ -5,56 +5,21 @@ import { type PlanMembership } from "@/lib/server/recordings";
 import { type SocialPostItem } from "@/lib/server/social";
 import { type BoardTrackListItem } from "@/lib/server/tracks";
 
-// The publish engine for the admin board (`/admin`). It reads the
-// `social_posts`-joined infinite query and pushes/records posts through the same
-// gated admin API the CLI uses; the mutations + optimistic cache patching live
-// here. The board passes its react-query key; the hook patches that cache in place
-// after each mutation and the next window-focus refetch reconciles with the server.
-
-/** A page row: a finding (in the lean BOARD projection — the graph/discovery subquery
- * fields the board never renders are dropped, so reaching for one is a compile error)
- * plus its per-platform posts and mixtape memberships. */
 export type BoardRow = BoardTrackListItem & {
-  // Whether the Discogs backfill has RUN for this finding — the presence of
-  // `backfill_discogs_attempted_at`, stamped on every real attempt (a resolve OR a
-  // clean no-match). The board's Discogs cell is a WORKFLOW tracker: `done` once it
-  // ran (whether or not it linked a release), grey only while it's never run. Paired
-  // with `discogsReleaseUrl` to tell "Linked" from "Checked — no release". Pulled
-  // through the admin-only board path (reliability columns never ride the public
-  // `TrackListItem` contract).
   discogsRan: boolean;
-  // Whether the finding carries an internal `context_note` (the firecrawl-derived
-  // facts that fuel the observation script). Pulled through the admin-only board
-  // path, never the public `TrackListItem` contract — see observation-board.ts.
+
   hasContextNote: boolean;
-  // Whether the finding carries a MuQ audio embedding (a `track_embeddings` row).
-  // Drives the Embeddings cell: the embed cron drains the `has_embedding = 0`
-  // queue and stamps the vector. The vector is internal analysis fuel, so only its
-  // presence rides this admin-only board path, never the public `TrackListItem`
-  // contract — see tracks.ts listEmbeddingPresenceForTracks + docs/track-lifecycle.md.
+
   hasEmbedding: boolean;
-  // Whether the finding is already loved on Last.fm — the presence of
-  // `backfill_lastfm_done_at`, the same stamp the Last.fm backfill writes on a
-  // successful `track.love`. Pulled through the admin-only board path (the
-  // backfill-reliability columns never ride the public `TrackListItem` contract).
+
   lastfmLoved: boolean;
-  // Whether the Last.fm backfill has RUN for this finding — the presence of
-  // `backfill_lastfm_attempted_at`, stamped on every real attempt. Like Discogs, the
-  // Last.fm cell is a workflow tracker: `done` once it ran, grey only while it's
-  // never run; paired with `lastfmLoved` to tell "Loved" from "Checked — not loved".
+
   lastfmRan: boolean;
-  // The MINTED mixtapes this finding is on (published/distributing — drafts
-  // retired for plans).
+
   mixtapes: MixtapeMembership[];
-  // Whether the auto-note authoring has RUN for this finding — the presence of
-  // `backfill_note_attempted_at`, stamped on every authoring attempt by `note_track`.
-  // Like Discogs/Last.fm the Note cell is a workflow tracker: `done` once a note
-  // exists, grey only while none does (the cron hasn't authored one and the operator
-  // hasn't typed one). Pulled through the admin-only board path, never the public
-  // `TrackListItem` contract.
+
   noteRan: boolean;
-  // The PLANS this finding is pencilled into — the pre-publish sibling of
-  // `mixtapes` (a plan is a videoless recording; its cues carry the finding link).
+
   plans: PlanMembership[];
   posts: SocialPostItem[];
 };
@@ -65,9 +30,6 @@ export function usePublish(boardKey: readonly unknown[]) {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | undefined>();
 
-  // Merge a platform post into a row after a successful mutation, so the board
-  // reflects the new state without a full refetch. Patches the cached infinite
-  // pages directly; the next window-focus refetch reconciles with the server.
   const applyPost = useCallback(
     (trackId: string, platform: string, patch: Partial<SocialPostItem>) => {
       const now = new Date().toISOString();

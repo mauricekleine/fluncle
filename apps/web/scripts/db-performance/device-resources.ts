@@ -464,8 +464,6 @@ async function deriveAndPublish(
     },
     {
       publish: async (temporaryPath, destinationPath) => {
-        // The populated temporary artifact coexists with the old generation and target here.
-        // This is the physical directory peak, before the atomic rename removes the tmp name.
         temporarySample = await storage();
         await publishDeviceArtifactAtomically(temporaryPath, destinationPath);
       },
@@ -474,7 +472,6 @@ async function deriveAndPublish(
   const generation = inspectDeviceGeneration(generationPath);
   await publishDeviceGeneration(target, generation, 200, {
     beforeCutover: async () => {
-      // Keep the semantic generation overlap separate from the physical tmp peak above.
       publicationSample = await storage();
     },
   });

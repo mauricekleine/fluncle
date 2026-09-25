@@ -185,7 +185,6 @@ type ComparisonContractOptions = Omit<
   plan: NonNullable<PerformanceContract["plan"]>;
 };
 
-/** Keep baseline plans and equivalence reads in terminalProof; execute measures only `after`. */
 function comparisonContract(options: ComparisonContractOptions): PerformanceContract {
   const { after, before, normalizeRows, plan, ...contract } = options;
   const measuredRequestCount = contract.iterations + (contract.warmupIterations ?? 0);
@@ -308,7 +307,6 @@ const productionTrackSitemapWindow = trackSitemapWindowStatement(
   TRACK_SITEMAP_WINDOW_AFTER,
 );
 
-/** The production query translated only onto the synthetic performance fixture's table names. */
 export const TRACK_SITEMAP_PERFORMANCE_WINDOW = {
   args: productionTrackSitemapWindow.args,
   sql: productionTrackSitemapWindow.sql
@@ -320,7 +318,6 @@ export const TRACK_SITEMAP_PERFORMANCE_WINDOW = {
 
 const productionTrackSitemapIndexCount = trackSitemapIndexCountStatement();
 
-/** The production count translated only onto the synthetic fixture's table and index names. */
 export const TRACK_SITEMAP_INDEX_COUNT = {
   args: productionTrackSitemapIndexCount.args,
   sql: productionTrackSitemapIndexCount.sql
@@ -1367,9 +1364,6 @@ for (const contract of [
   });
 }
 
-// Release membership moves at UTC midnight without a source write. These statements use the
-// projection's small state rows and the release-date index; the findings reads drive from the
-// small certified set in found order and probe one track by primary key per candidate.
 const RELEASE_CONTRACT_DAY = "2026-06-30";
 const RELEASE_FRONT_DOOR_DAY = "2026-12-31";
 const RELEASE_AGGREGATE_READY = `aggregate.state = 'complete'

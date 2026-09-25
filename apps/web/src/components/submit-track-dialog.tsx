@@ -90,11 +90,6 @@ function formReducer(state: FormState, action: FormAction): FormState {
   }
 }
 
-/**
- * Defaults to a full outline "Submit a track" button. Pass `className` (e.g.
- * `w-full` or `flex-1`) to size it within a row; `compact` renders a tooltip'd
- * icon trigger for the tightest layouts.
- */
 export function SubmitTrackDialog({
   className,
   compact = false,

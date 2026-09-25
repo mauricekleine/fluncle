@@ -1,21 +1,3 @@
-// Purge the zone's edge cache as the LAST step of a production deploy (deploy:cf).
-//
-// Why: every deploy replaces the hashed /assets/* files, but edge-cached HTML keeps
-// referencing the OLD hashes until its TTL runs out (fresh + stale-while-revalidate,
-// see lib/server/edge-cache.ts). In that window a cached page loads a 404 stylesheet
-// and renders unstyled after a rapid deploy train. The purge closes the window so new HTML and new
-// assets go live together.
-//
-// Credentials: the zone id is the committed public identifier in wrangler.jsonc (it
-// grants nothing alone); the token must come from the Cloudflare BUILD environment as
-// CF_CACHE_PURGE_TOKEN — a Worker runtime secret is NOT visible to the build shell, so
-// the operator adds it to the build env once. Absent token = a loud no-op, never a
-// failed deploy: a missing purge only re-opens the pre-existing TTL window.
-//
-// Scope: hostname-scoped purge for the app host first (keeps found.fluncle.com's
-// derived media warm); if the zone plan rejects hostname purge, fall back to
-// purge_everything — a briefly cold media cache beats an unstyled site.
-
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,8 +51,6 @@ if (everything.ok) {
   process.exit(0);
 }
 
-// A failed purge must not fail the deploy — the artifact is already live; the only
-// cost of skipping is the same TTL window that existed before this script.
 console.error(
   `purge-edge-cache: purge failed (${everything.status}) ${(await everything.text()).slice(0, 200)} — continuing; the TTL window applies.`,
 );

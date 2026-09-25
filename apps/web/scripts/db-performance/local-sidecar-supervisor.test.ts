@@ -142,9 +142,7 @@ describe("local libSQL sidecar supervisor", () => {
           if (pid !== null && processExists(pid)) {
             try {
               process.kill(pid, "SIGKILL");
-            } catch {
-              // The process exited between the liveness check and signal.
-            }
+            } catch {}
           }
         }
         await rm(testDirectory, { force: true, recursive: true });
@@ -201,8 +199,6 @@ describe("local libSQL sidecar supervisor", () => {
           return sidecarPid !== null;
         });
 
-        // Closing the read ends reproduces the window where a SIGKILLed owner can no longer
-        // receive supervisor diagnostics. The supervisor must still observe owner death itself.
         supervisor.stdout.destroy();
         supervisor.stderr.destroy();
         const supervisorExited = new Promise<void>((resolve) =>
@@ -231,9 +227,7 @@ describe("local libSQL sidecar supervisor", () => {
           if (pid !== null && processExists(pid)) {
             try {
               process.kill(pid, "SIGKILL");
-            } catch {
-              // The process exited between the liveness check and signal.
-            }
+            } catch {}
           }
         }
         await rm(testDirectory, { force: true, recursive: true });
@@ -286,9 +280,7 @@ describe("local libSQL sidecar supervisor", () => {
         if (supervisorPid !== undefined && processExists(supervisorPid)) {
           try {
             process.kill(supervisorPid, "SIGKILL");
-          } catch {
-            // The supervisor exited between the liveness check and signal.
-          }
+          } catch {}
         }
         await rm(testDirectory, { force: true, recursive: true });
       }
@@ -337,9 +329,7 @@ describe("local libSQL sidecar supervisor", () => {
         if (supervisorPid !== undefined && processExists(supervisorPid)) {
           try {
             process.kill(supervisorPid, "SIGKILL");
-          } catch {
-            // The supervisor exited between the liveness check and signal.
-          }
+          } catch {}
         }
         await rm(testDirectory, { force: true, recursive: true });
       }

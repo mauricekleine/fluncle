@@ -1,16 +1,3 @@
-// THE RECOMMENDED PANEL — what the engine lines up from your picks, below the tracklist
-// (Spotify's own playlist page order). Every row wears the EXACT SAME anatomy — cover,
-// the fused Artist — Title, the Stardust imprint, the instrument readout, the Add pill —
-// because this is a workbench, not a billboard: no notes, no coordinates column, no
-// section labels. The register split rides the LIGHT, never the layout (the Unlit Rule):
-// a finding catches the gold veil on hover and wears the Fluncle seal (the gold
-// coordinate pill in its chips row, a link to /log/<id>); a catalogue cut hovers cold on
-// the Dust Veil with a cold cover. Endorse a row and it moves into the tracklist — a
-// seeded track is never recommended back, so the shelf reshuffles on the refetch.
-//
-// With zero picks the shelf renders its ghost — skeleton rows and the one line that says
-// how it wakes.
-
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
@@ -45,14 +32,11 @@ export function RecommendedPanel({
   const [pending, setPending] = useState<Set<string>>(new Set());
 
   const pickedIds = useMemo(() => new Set(seeds.map((seed) => seed.trackId)), [seeds]);
-  // At the cap an UN-picked pill disables (the cap discipline); a picked one always stays
-  // toggle-removable, so the reader can trade one pick for another without a dead end.
+
   const atCap = seeds.length >= SEED_CAP;
   const hasPicks = seeds.length > 0;
   const hasAny = findings.length > 0 || catalogue.length > 0;
 
-  // The pick gesture, pending-guarded per track — a click adds when un-picked, removes when
-  // picked (the toggle), and the door refetches both the picks and the recommendations.
   async function pick(trackId: string, picked: boolean) {
     setPending((current) => new Set(current).add(trackId));
 
@@ -136,12 +120,6 @@ export function RecommendedPanel({
   );
 }
 
-/**
- * A recommended finding — the same row anatomy as every other row, the register carried
- * by the LIGHT and the SEAL: the gold coordinate pill in the chips row (a link to
- * /log/<id>), the gold veil on hover, the preview control on the cover. No note, no
- * lead column — the workbench shows the music; the WHY lives behind the seal.
- */
 function FindingRow({
   busy,
   disabled,
@@ -212,10 +190,6 @@ function FindingRow({
   );
 }
 
-/**
- * A recommended catalogue cut — the same row anatomy, cold: the Dust Veil hover, the
- * desaturated cover, the ink deferring at rest (the Unlit Rule), and no seal.
- */
 function CatalogueRow({
   busy,
   disabled,

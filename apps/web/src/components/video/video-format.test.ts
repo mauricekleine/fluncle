@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { clampSeconds, formatClock, pointerFraction } from "./video-format";
 
-// The scrubber's pure pointer→time mapping (the VibeMap model): a pointer x over
-// a track rect → a 0..1 fraction → seconds against the set duration. Unit-tested
-// here without a DOM, the same way the stall watchdog's verdict is tested.
 describe("pointerFraction", () => {
   const left = 100;
   const width = 400;
@@ -28,7 +25,6 @@ describe("pointerFraction", () => {
   });
 
   it("composes fraction × duration into the seek target seconds", () => {
-    // A ~72-min set; a click a quarter across seeks to ~18 min.
     const durationSeconds = 72 * 60;
     const fraction = pointerFraction(left + width * 0.25, left, width);
 
@@ -55,12 +51,8 @@ describe("formatClock", () => {
   });
 });
 
-// The seek clamp — the one-clock machine's only mutation of `currentTime` runs through
-// this. A negative seek floors at 0; a seek past the end pins to the duration; before
-// the duration is known the request itself is the ceiling (so an early seek still
-// floors at 0 and never goes backwards past the request).
 describe("clampSeconds", () => {
-  const duration = 4320; // a 72-min set
+  const duration = 4320;
 
   it("floors a negative seek at 0", () => {
     expect(clampSeconds(-30, duration)).toBe(0);

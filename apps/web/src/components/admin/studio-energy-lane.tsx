@@ -6,28 +6,10 @@ import {
   msToFraction,
 } from "@/lib/studio-clip";
 
-// The Studio editor's one quiet energy lane: the
-// set's loudness curve under the preview, drawn in the warm-neutral ink ramp —
-// Stardust curve, Starlight-Cream played portion (NOT galaxy tints; the panel found
-// they fail AA on the dark plate). It reads the ONE clock (the video's currentMs)
-// for the playhead and renders three region families with the canon colour
-// governance: dashed-Stardust suggestion ghosts (candidates), a Gold-Veil committed
-// band per existing clip, and a brighter dashed Starlight-Cream active band.
-//
-// It is suggestion-FIRST but degrades gracefully: with no envelope (the box hasn't
-// staged it) there is no curve and no suggestions — just the rail, the playhead, the
-// committed clips, and the active band, so manual in/out still works.
-//
-// Interaction (the VibeMap pointer model): a click seeks; a horizontal drag paints
-// an in/out band. Keyboard seek/in/out/mark/create live at the page (the lane is a
-// supplementary visual; its values are mirrored into the page aria-live readout).
-
-// Downsample the ~100ms-hop curve (a 72-min set is ~43k points) to a screen-scale
-// column count via max-pooling — peaks survive, the path stays light.
 const CURVE_COLUMNS = 600;
 const VIEW_W = 1000;
 const VIEW_H = 120;
-// A drag past this fraction of the lane counts as a band paint, not a seek click.
+
 const DRAG_THRESHOLD = 0.01;
 
 function maxPool(values: number[], columns: number): number[] {
@@ -61,7 +43,6 @@ function maxPool(values: number[], columns: number): number[] {
   return out;
 }
 
-// Build a closed SVG area path (baseline → curve → baseline) for a 0..1 curve.
 function areaPath(curve: number[]): string {
   if (curve.length === 0) {
     return "";
@@ -82,7 +63,6 @@ function areaPath(curve: number[]): string {
 
 type Clip = { id: string; inMs: number; outMs: number };
 
-/** A member's cue pinned on the lane: its start offset (ms) + whether it's out of order. */
 type CueTick = { outOfOrder: boolean; startMs: number; trackId: string };
 
 export function StudioEnergyLane({
@@ -96,20 +76,19 @@ export function StudioEnergyLane({
   onSeekFraction,
   suggestions,
 }: {
-  /** The active hand-pick band as two edge fractions, or null when none is pending. */
   band: { aFraction: number; bFraction: number } | null;
   clips: Clip[];
-  /** The member cues to pin (start_ms). Empty when nothing is marked yet. */
+
   cues?: CueTick[];
-  /** The playhead, from the one clock (ms). */
+
   currentMs: number;
   durationMs: number;
   envelope: StudioEnvelope | undefined;
-  /** A horizontal drag painted a band (two edge fractions, unordered). */
+
   onBandPaint: (aFraction: number, bFraction: number) => void;
-  /** A click (no drag) sought to this fraction of the set. */
+
   onSeekFraction: (fraction: number) => void;
-  /** The suggestion windows to ghost (already derived from the envelope). */
+
   suggestions: TimelineRegion[];
 }) {
   const laneRef = useRef<HTMLDivElement>(null);
@@ -150,9 +129,6 @@ export function StudioEnergyLane({
         return;
       }
 
-      // Record the grab; don't paint a band yet — a bare click is a SEEK and must
-      // not wipe a pending band to zero width. The band is painted only once the
-      // pointer actually drags past the threshold (handlePointerMove).
       dragStart.current = fraction;
       dragMoved.current = false;
       laneRef.current?.setPointerCapture(event.pointerId);
@@ -178,7 +154,6 @@ export function StudioEnergyLane({
         dragMoved.current = true;
       }
 
-      // Paint only once it's a real drag, so a click-to-seek leaves the band alone.
       if (dragMoved.current) {
         onBandPaint(start, fraction);
       }
@@ -195,7 +170,6 @@ export function StudioEnergyLane({
         return;
       }
 
-      // A click with no real drag is a seek; a drag leaves the band painted.
       if (!dragMoved.current) {
         const fraction = fractionFromEvent(event) ?? start;
         onSeekFraction(fraction);
@@ -225,9 +199,6 @@ export function StudioEnergyLane({
         // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a labelled pointer-driven lane, not a form-control grouping; `fieldset`/`legend` would be wrong markup here.
         role="group"
       >
-        {/* The curve (warm-neutral ramp): Stardust rail + a Starlight-Cream played
-            portion, clipped to the playhead. With no envelope only the flat rail
-            shows. */}
         <svg
           aria-hidden="true"
           className="studio-lane-svg"
@@ -253,8 +224,6 @@ export function StudioEnergyLane({
           )}
         </svg>
 
-        {/* Committed clips — Gold-Veil bands (one sun governance: the only gold-tinted
-            fill; the Create action is the only saturated gold). */}
         {clips.map((clip) => {
           const region = clipToRegion(clip, durationMs);
 
@@ -270,11 +239,10 @@ export function StudioEnergyLane({
           );
         })}
 
-        {/* Suggestion ghosts — dashed Stardust candidates. */}
         {suggestions.map((region, index) => (
           <span
             className="studio-region studio-region-suggestion"
-            // Suggestions are positional ghosts off the same ordered envelope list.
+
             key={`suggestion-${index}`}
             style={{
               left: `${region.leftFraction * 100}%`,
@@ -283,7 +251,6 @@ export function StudioEnergyLane({
           />
         ))}
 
-        {/* The active hand-pick band — a brighter dashed Starlight-Cream band. */}
         {bandRegion ? (
           <span
             className="studio-region studio-region-band"
@@ -291,9 +258,6 @@ export function StudioEnergyLane({
           />
         ) : null}
 
-        {/* Cue pins — one per marked member (start_ms): a thin Stardust tick with a
-            Starlight-Cream notch, so the operator sees each cue against the drops. An
-            out-of-order cue reddens (the same warning the rail shows). */}
         {(cues ?? []).map((cue) => (
           <span
             className="studio-cue-tick"
@@ -303,7 +267,6 @@ export function StudioEnergyLane({
           />
         ))}
 
-        {/* The playhead — Starlight Cream (clock-tracked content motion, never gated). */}
         <span className="studio-playhead" style={{ left: `${playheadFraction * 100}%` }} />
       </div>
     </div>

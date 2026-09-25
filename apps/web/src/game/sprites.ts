@@ -1,9 +1,6 @@
 import { palette } from "./palette";
 import { fnv1a } from "./placement";
 
-// Pixel art for the two heroes (ship, Earth), hand-mapped and procedural in
-// canon colors; everything here draws once to an offscreen canvas at boot.
-
 const INK: Record<string, string> = {
   D: palette.creamDim,
   G: palette.goldBright,
@@ -18,9 +15,6 @@ const INK: Record<string, string> = {
   t: palette.coolTeal,
 };
 
-// Paint a char-grid sprite onto a fresh canvas; '.' is transparent, every
-// other char maps through INK. Width is the first row's length (all rows
-// share it). The shared maker for the procedural fallbacks below.
 function makeSprite(map: string[]): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   const w = map[0]?.length ?? 1;
@@ -54,8 +48,6 @@ function makeSprite(map: string[]): HTMLCanvasElement {
   return canvas;
 }
 
-// The ship, seen from behind: cream hull, gold canopy, red wingtips, twin
-// engine pods. 15x15 so the fuselage owns a true center column.
 const SHIP_MAP = [
   ".......o.......",
   "......oGo......",
@@ -108,11 +100,6 @@ export function makeShipSprite(): HTMLCanvasElement {
   return canvas;
 }
 
-// Frontier set-dressing fallbacks (Unit B). Bespoke Nano-Banana PNGs load over
-// these from /galaxy/roadster.png and /galaxy/ufo.png the same way the ship and
-// Earth heroes do; until those land (or if they fail), these procedural sprites
-// draw. The Roadster: a cream wedge with a Re-entry-Red accent (the Retint Rule
-// keeps "Tesla red" our red), dark wheels — a derelict tumbling by.
 const ROADSTER_MAP = [
   "................",
   "......rrrr......",
@@ -131,9 +118,6 @@ export function makeRoadsterSprite(): HTMLCanvasElement {
   return makeSprite(ROADSTER_MAP);
 }
 
-// The UFO: a cream saucer with a dim coolTeal underglow — the one sanctioned
-// cool counter-accent (Retint Rule), used sparingly. No competing gold bloom
-// (One Sun Rule): the gold stays the bangers and the sun.
 const UFO_MAP = [
   "......cccc......",
   "....cddddddc....",
@@ -150,9 +134,6 @@ export function makeUfoSprite(): HTMLCanvasElement {
   return makeSprite(UFO_MAP);
 }
 
-// A lumpy pixel rock, cream-dust ramp with a shadow side and a couple of lit
-// chips. Tumbles in render; the per-entity body radius varies the size so a
-// wave doesn't read as one rock cloned (Maurice's "never same-y" gate).
 const ASTEROID_MAP = [
   "....dddddd....",
   "..ddddddDddd..",
@@ -171,8 +152,6 @@ export function makeAsteroidSprite(): HTMLCanvasElement {
   return makeSprite(ASTEROID_MAP);
 }
 
-// Earth's own shade ramp, derived from the two sanctioned cool counter-accents
-// (the Retint Rule's one cold surface in the whole game).
 const EARTH_SHADES = {
   landDark: "#26352f",
   landLit: "#55806d",
@@ -186,10 +165,6 @@ function noiseAt(seed: string, x: number, y: number, cell: number): number {
   return (fnv1a(`${seed}:${Math.floor(x / cell)},${Math.floor(y / cell)}`) % 1000) / 1000;
 }
 
-// Earth, procedurally pixeled: the one place the Retint Rule's cool blue gets
-// to be a surface. Two-octave value-noise continents, a dithered terminator
-// instead of a hard shadow line, polar caps, and a thin lit limb toward the
-// sun out there.
 export function makeEarthSprite(diameter: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
 
@@ -221,8 +196,6 @@ export function makeEarthSprite(diameter: number): HTMLCanvasElement {
       const land = elevation > 0.58;
       const polar = Math.abs(dy) / radius > 0.82 && distance < radius - 1;
 
-      // Lit limb toward the top-right; the terminator dithers instead of
-      // cutting (checkerboard pixels across the twilight band).
       const lit = (dx - dy) / (radius * 1.1);
       const dither = (x + y) % 2 === 0;
 

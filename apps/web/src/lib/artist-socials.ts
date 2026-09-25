@@ -1,10 +1,3 @@
-// Client-safe artist-socials surface: the platform vocabulary + a pure http(s) URL guard.
-// This lives OUTSIDE lib/server on purpose — the `/admin/artists` route renders the
-// platform Select and the href guard in client code, so importing these VALUES from the
-// server module (`lib/server/artists`, which pulls in node:crypto + spotify/youtube/db)
-// dragged that whole module into the client bundle and crashed the page (node:crypto
-// externalized). The server module imports the type + list back from here.
-
 export type ArtistSocialPlatform =
   | "spotify"
   | "youtube"
@@ -20,7 +13,6 @@ export type ArtistSocialPlatform =
   | "twitch"
   | "homepage";
 
-// The canonical platform order — the operator's add-platform Select renders in this order.
 export const ARTIST_SOCIAL_PLATFORMS: ArtistSocialPlatform[] = [
   "spotify",
   "youtube",
@@ -37,10 +29,6 @@ export const ARTIST_SOCIAL_PLATFORMS: ArtistSocialPlatform[] = [
   "homepage",
 ];
 
-// A pure http(s)-scheme guard (self-contained, no server deps). The render side only emits
-// an `<a href>` when this passes; `lib/server/artist-resolution` calls the same guard on
-// ingestion, and the server WRITE path uses `assertHttpUrl` (which throws) in
-// `lib/server/artists`.
 export function isHttpUrl(raw: string): boolean {
   try {
     const { protocol } = new URL(raw.trim());
@@ -51,13 +39,6 @@ export function isHttpUrl(raw: string): boolean {
   }
 }
 
-// Map a URL's host → the social platform it belongs to, for the fresh-links inline editor's
-// INSTANT client-side feedback ONLY. The SERVER is authoritative: on Save it re-validates and
-// normalizes through `classifyMbUrl` + `normalizeProfileUrl` (lib/server/artist-resolution).
-// This mirrors that classifier's common host rules so a plainly-wrong paste (an instagram.com
-// URL in a YouTube row) is caught before the round-trip; a host it can't place returns null and
-// defers to the server's ruling. Kept client-safe (no server deps) for the same bundle reason
-// as `isHttpUrl` above.
 function platformOfHost(raw: string): ArtistSocialPlatform | null {
   let host: string;
 
@@ -107,10 +88,6 @@ function platformOfHost(raw: string): ArtistSocialPlatform | null {
   return null;
 }
 
-// The cheap client-side gate the inline editor's Save uses: does this URL's host plausibly
-// belong to the row's platform? A `homepage` accepts any host that ISN'T a recognized social
-// (those belong in their own row); every other platform requires an exact host match. Loose by
-// design — an unrecognized host passes (returns true) so the SERVER makes the final call.
 export function urlHostMatchesPlatform(platform: ArtistSocialPlatform, raw: string): boolean {
   const detected = platformOfHost(raw);
 

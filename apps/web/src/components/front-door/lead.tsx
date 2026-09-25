@@ -1,36 +1,3 @@
-// THE EDITED LEAD — one finding, placed.
-//
-// It is the newest finding Fluncle actually WROTE about (`hasNote`, resolved in
-// `-front-door-data.ts`), which is what makes this an edited placement rather than a "latest" slot.
-// The note is the whole reason it earns the size: a lead with nothing to say is just a bigger row.
-//
-// ── LIGHT AND PLACEMENT ──────────────────────────────────────────────────────────────────────
-// A finding is the only thing that can lead here, so this placement is lit throughout: the cover at
-// full size, the Log ID coordinate in Eclipse Gold, the whole card a link to `/log/<id>`. An
-// uncertified track can never reach this slot, and the surface never says so — the register IS the
-// claim (DESIGN.md's Unlit Rule).
-//
-// The placement carries the full instrument readout (The Readout Rule): the chip row — duration,
-// then BPM, then key — and the release year on its metadata line beside the imprint, wherever the
-// data exists. A missing chip is a data gap upstream, never a layout choice.
-//
-// ── IT PLAYS WHERE IT SITS ─────────────────────────────────────────────────────────────────
-// The lead's primary action is its preview, and that play control is the band's ONE gold (The One
-// Sun Rule): the coordinate above steps back to cream so the light has one place to land. It plays
-// the lead and then the findings band beneath it, one list to the player, and nothing on the page
-// moves because it did: the scroll is never gated (PRODUCT.md "The front door"). "Read the log
-// entry" stays beside it as the way into the entry itself.
-//
-// ── LCP ──────────────────────────────────────────────────────────────────────────────────────
-// This cover is the front door's largest contentful element. It fetches EAGERLY at high priority
-// (`priority`, which `TrackArtwork` turns into `loading="eager" fetchpriority="high"`), and the route
-// preloads this exact URL from its `head()` so the fetch starts before the parser reaches the tag.
-// Every other cover on the page stays lazy: the signal only helps while it is scarce.
-//
-// `TrackArtwork` also carries the failed-cover contract — a third-party host that 404s or goes down
-// degrades to the eclipse-gradient fallback rather than a broken-image glyph, including when the
-// error fires before hydration.
-
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
@@ -43,7 +10,6 @@ import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tr
 import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize } from "@/lib/media";
 
-/** The cover rung for the lead's slot: it renders around 15rem, so a 2× screen wants ~480 device px. */
 const LEAD_COVER_SIZE = "large" as const;
 
 export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
@@ -53,7 +19,6 @@ export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
 
   return (
     <article className="fd-lead">
-      {/* The cover plays too: the biggest thing on the band is the sound, as on every row. */}
       {playable.previewable ? (
         <PlayCover className="fd-lead-cover-play" lit track={discoveryQueueTrack(playable)}>
           <TrackArtwork
@@ -74,10 +39,7 @@ export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
       <div className="fd-lead-body">
         {lead.logId ? <p className="fd-lead-coordinate">{lead.logId}</p> : undefined}
         <p className="fd-lead-line">{line}</p>
-        {/* The imprint line, the same one the Track Row prints: the label as a graph link when the
-            imprint has a page, plain text when it does not, with the release year beside it and
-            never inside the link (a year names no entity). A missing piece drops — an honest data
-            gap, never a layout choice (The Readout Rule). */}
+
         {lead.label || releaseYear ? (
           <p className="fd-lead-imprint">
             {lead.label && lead.labelSlug ? (
@@ -118,8 +80,6 @@ export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
               Read the log entry
             </Link>
           ) : (
-            // A finding with no coordinate has no log page to open. It still leads honestly: the
-            // listen link is the only destination that exists, so that is the one offered.
             <a
               aria-label={`Listen to ${line} on Spotify`}
               className="fd-lead-open"

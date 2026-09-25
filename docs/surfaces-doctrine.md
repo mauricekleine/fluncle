@@ -2,6 +2,8 @@
 
 The canonical map of every place Fluncle is reachable across the Galaxy — web routes, subdomains, the public API, the feeds, the agent-discovery maps, the delegated DNS zone, the SSH terminal, the MCP server, the CLI, and the on-box Hermes crons — and the checklist for wiring a new one in.
 
+Every route that emits JSON-LD through `head().scripts` must use `jsonLdScript` from `apps/web/src/lib/json-ld.ts`. TanStack inserts script children as raw HTML, and `JSON.stringify` alone leaves a stored `</script>` breakout possible in untrusted titles or notes. The serializer escapes `<`, `>`, `&`, U+2028, and U+2029 as JSON Unicode escapes while preserving the data parsed by JSON-LD readers. The enforced CSP does not prevent this breakout, so this serializer is the security boundary for inline structured data.
+
 ## 1. The registry is the source of truth
 
 Every surface is **one entry in `@fluncle/registry`** (`packages/registry/src/index.ts`) — a pure, typed catalog (`SURFACES`) plus a few selectors over it (`liveSurfaces`, `surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`). It is data, not a route table and not a secrets inventory: internal IPs, op-paths, and credentials never go in it.

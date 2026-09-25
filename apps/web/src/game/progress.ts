@@ -35,10 +35,6 @@ export function applyLifetimeMarkers(stars: Star[], logIds: Iterable<string>): v
   for (const star of stars) {
     star.lifetimeLogged = lifetime.has(star.logId.toLowerCase());
 
-    // Logged IS collected (the ruling): a star reached in any run stays reached.
-    // Re-collecting is not the game — the universe GROWS as new findings land,
-    // and the reward of returning is the new stars, not the old ones. The HUD
-    // counter reads lifetime + run against the whole growing field ("60/75").
     if (star.lifetimeLogged) {
       star.collected = true;
     }
@@ -76,13 +72,6 @@ export async function fetchLifetimeProgress(): Promise<LifetimeProgress | undefi
   return (await response.json()) as LifetimeProgress;
 }
 
-/**
- * The signed-in crew number, for the ship stamp (account brief, ruling #1). Reads the
- * same `/me` identity the account surfaces do, on the same fetch-and-tolerate seam as
- * the lifetime sync: an absent session, an unshipped field, or any failure all resolve
- * to `undefined`, and the HUD renders nothing. The field is optional server-side (a
- * parallel wave adds `crewNumber` to the PublicUser), so this reads it defensively.
- */
 export async function fetchCrewNumber(): Promise<number | undefined> {
   try {
     const response = await fetch("/api/v1/me");

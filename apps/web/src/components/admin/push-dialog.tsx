@@ -24,44 +24,25 @@ import { Label } from "@fluncle/ui/components/label";
 import { trackMedia } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
-// The one dialog the YouTube + TikTok cells open — the whole publish loop for a
-// finding on one platform, in the order the operator actually works it:
-//
-//   1. PREP   — copy the caption, grab the cover (what you paste into the app).
-//   2. PUSH   — send it: a public YouTube Short now, or a silent TikTok draft to
-//               the inbox you finish in-app.
-//   3. CONFIRM— once pushed, paste the live URL (lights up the finding's public
-//               row) or mark the push failed.
-//
-// The dialog reads the LIVE row each render (the board passes identity, not a
-// snapshot), so right after a push it shows the confirm step without reopening.
-// One surface for push and status: the cell
-// is "is this live?", and clicking it always lands you wherever the work is.
-
 type PushDialogProps = {
-  /** Lookup into the publish hook's busy map for `${trackId}:${platform}:${status}`. */
   busy: (status: string) => boolean;
-  /** True while this finding's caption is freshly copied (board-owned, gesture-safe). */
+
   copied: boolean;
-  /** Copy the caption — the board owns the gesture-safe clipboard write. */
+
   onCopyCaption: () => void;
   onMarkFailed: () => Promise<void> | void;
   onMarkLive: (url: string) => Promise<void> | void;
   onOpenChange: (open: boolean) => void;
   onPush: () => Promise<void> | void;
   platform: PlatformConfig | null;
-  /** True while the push to this platform is in flight. */
+
   pushing: boolean;
   row: BoardRow | null;
-  /** TikTok inbox drafts already pending (cap 5/24h) — a contextual heads-up. */
+
   tiktokPending: number;
 };
 
 export function PushDialog({ onOpenChange, platform, row, ...rest }: PushDialogProps) {
-  // One dialog instance, but the Live-URL field belongs to ONE (platform, finding)
-  // target. Key the body on that identity so switching platform/finding remounts
-  // it — the field seeds fresh from `useState`, never leaking an unsaved edit
-  // across targets — instead of syncing the field to props in an effect.
   return (
     <Dialog onOpenChange={onOpenChange} open={Boolean(row && platform)}>
       <DialogContent>
@@ -120,8 +101,7 @@ function PushDialogBody({
   row: BoardRow;
 }) {
   const post = row.posts.find((p) => p.platform === platform.key);
-  // Seed once from any recorded live URL; the parent's key remounts this body when
-  // the (platform, finding) target changes, so the field always re-seeds correctly.
+
   const [url, setUrl] = useState(post?.url ?? "");
 
   const pushed = Boolean(post && post.status !== "failed");
@@ -129,9 +109,7 @@ function PushDialogBody({
   const isTikTok = platform.key === "tiktok";
   const cover = row.logId ? trackMedia(row.logId).coverUrl : undefined;
   const capWarning = isTikTok && !pushed && tiktokPending >= 5;
-  // A TikTok draft past the 24h window has almost certainly bounced (TikTok drops the
-  // 6th+ pending draft silently). It stays `pushed`, so the button already reads
-  // "Re-push draft"; this just names WHY the re-push is needed.
+
   const now = Date.now();
   const { staleDraft, staleHours } = tiktokDraftAge(post, now);
 
@@ -145,7 +123,6 @@ function PushDialogBody({
         <DialogDescription>{pushDescription(platform)}</DialogDescription>
       </DialogHeader>
 
-      {/* 1. PREP — the two things you paste into the app. */}
       <div className="flex flex-col gap-2">
         <Label>Prep</Label>
         <div className="flex flex-wrap gap-2">
@@ -178,7 +155,6 @@ function PushDialogBody({
         </div>
       </div>
 
-      {/* 2. PUSH — send it (or re-send a failed/earlier push). */}
       <div className="flex flex-col gap-2">
         <Label>{pushed ? "Pushed" : "Push"}</Label>
         {staleDraft ? (
@@ -215,7 +191,6 @@ function PushDialogBody({
         ) : undefined}
       </div>
 
-      {/* 3. CONFIRM — paste the live URL (or flag a failed push). Only once pushed. */}
       {pushed ? (
         <div className="flex flex-col gap-2">
           <Label htmlFor="push-url">Live URL</Label>

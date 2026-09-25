@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readError } from "./read-error";
 
-// The one reader every client-side admin mutation puts behind its error toast (15 call
-// sites). Its whole job is to never fault on the way to reporting a fault, so each rung of
-// the ladder — JSON `message`, raw body text, the status line — is pinned here alongside
-// the two degradation paths that make the ladder safe.
-
-/** A Response whose body is exactly the given string, with no JSON guarantee. */
 function textResponse(body: string, status = 500, statusText = ""): Response {
   return new Response(body, { status, statusText });
 }
@@ -27,13 +21,11 @@ describe("readError", () => {
     const response = Response.json({ message: "No such track." }, { status: 404 });
 
     await expect(readError(response)).resolves.toBe("No such track.");
-    // The caller still owns the body: a consumed original would throw here.
+
     await expect(response.json()).resolves.toEqual({ message: "No such track." });
   });
 
   it("falls through a blank JSON message to the body text", async () => {
-    // A whitespace-only `message` is a present field carrying nothing — treated as absent,
-    // otherwise the toast renders empty and the operator learns nothing.
     const response = Response.json({ message: "   " }, { status: 502 });
 
     await expect(readError(response)).resolves.toBe('{"message":"   "}');
@@ -70,8 +62,6 @@ describe("readError", () => {
   });
 
   it("still reports when the body itself faults mid-read", async () => {
-    // The failure this function exists for: a body that dies on read must not take the
-    // error report down with it, so both the JSON rung and the text rung swallow.
     const response = new Response(
       new ReadableStream({
         start(controller) {

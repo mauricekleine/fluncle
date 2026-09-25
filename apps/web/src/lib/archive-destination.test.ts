@@ -1,13 +1,3 @@
-// ONE NOUN, ONE DESTINATION: the findings/archive navigation is `/findings`, and `/` is the front
-// door.
-//
-// The front door move made this distinction load-bearing. A navigation label that still points at
-// `/` does not 404; it quietly sends a reader to a different page. This guard sweeps the whole
-// shipped web source tree, reads each navigational control's own label and destination, and checks
-// the data-driven nav entries alongside JSX links. It deliberately does not inspect prose, headings,
-// or action buttons such as Search the archive and the Stories close button: those controls do not
-// claim to navigate to the archive.
-
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,7 +38,6 @@ type NounControl = {
 
 type StaticValues = Map<string, string>;
 
-/** Every `.ts`/`.tsx` source file under `src/`, tests excluded. */
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const full = join(dir, entry);
@@ -61,7 +50,6 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-/** Admin has a separate private shell; this guard covers the shipped public navigation tree. */
 function isPublicSource(file: string): boolean {
   const name = relative(srcRoot, file).replaceAll("\\", "/");
 
@@ -207,7 +195,6 @@ function staticString(
   return undefined;
 }
 
-/** Collect the small static label constants used by public controls, including `COPY.browse`. */
 function collectStaticValues(root: AstNode, source: string): StaticValues {
   const values: StaticValues = new Map();
 
@@ -505,8 +492,7 @@ describe("every public findings/archive navigation control goes to the archive",
     expect(names).toContain("lib/docs-layout.shared.tsx:Findings");
     expect(names).toContain("routes/device.tsx:Back to findings");
     expect(names).toContain("routes/mix.tsx:See the findings");
-    // 18 with `/search`, the persistent search surface, whose plate footer carries the same way
-    // home every other plate does.
+
     expect(names.filter((name) => name.endsWith(":Back to the archive"))).toHaveLength(18);
   });
 
@@ -543,7 +529,6 @@ describe("the two agent-facing documents name the same pages", () => {
   const llms = readFileSync(join(appRoot, "public", "llms.txt"), "utf8");
   const markdownHome = readFileSync(join(srcRoot, "lib", "server", "agent-discovery.ts"), "utf8");
 
-  /** The URL a markdown link list gives a named entry, with `${siteUrl}` folded to the real host. */
   function linkTarget(document: string, label: string): string | undefined {
     const match = new RegExp(`\\[${label}\\]\\(([^)]+)\\)`).exec(document);
 

@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import { isLogId, isMixtapeLogId } from "./log-id";
 import { isLogPageParam } from "./log-page-param";
 
-// The /log/$logId shape guard: the route's beforeLoad 404s anything this
-// predicate rejects, BEFORE the loader runs.
 describe("isLogPageParam (the /log param guard)", () => {
   it("accepts a Log ID coordinate", () => {
     expect(isLogPageParam("004.7.2I")).toBe(true);

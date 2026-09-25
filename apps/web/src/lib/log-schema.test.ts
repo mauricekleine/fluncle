@@ -69,12 +69,10 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
   });
 
   it("omits recordLabel when the finding carries no label entity", () => {
-    // The base fixture has no label/labelSlug — no recording→label edge to draw.
     expect(jsonLd).not.toHaveProperty("recordLabel");
   });
 
   it("omits the MusicBrainz recording anchor when the track carries no MBID (the base fixture)", () => {
-    // No mbRecordingId ⇒ no musicbrainz.org/recording sameAs and only the two Log-ID identifiers.
     expect(jsonLd.sameAs).not.toContain(expect.stringContaining("musicbrainz.org/recording"));
     expect((jsonLd.identifier as unknown[]).length).toBe(2);
   });
@@ -110,7 +108,6 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
   });
 
   it("omits recordLabel when the label has no resolved /label page (a bare string is silent)", () => {
-    // A label string with no entity has no `@id` to point at — the honest degrade is silence.
     const bareLabel = musicRecordingJsonLd(
       { ...track, label: "Some Bootleg", labelSlug: undefined },
       "https://img/cover.jpg",
@@ -162,8 +159,6 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
       "https://img/cover.jpg",
     );
 
-    // Tempo has no native schema.org property → additionalProperty PropertyValue,
-    // rounded to match the visible BPM. Key rides the native `musicalKey` (Text).
     expect(measured.recordingOf).toEqual({
       "@type": "MusicComposition",
       additionalProperty: {
@@ -187,7 +182,7 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
       unitText: "BPM",
       value: 172,
     });
-    // A NULL key is below the DSP floor — say nothing, never a guessed value.
+
     expect(composition).not.toHaveProperty("musicalKey");
   });
 
@@ -200,14 +195,10 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
   });
 
   it("omits recordingOf entirely when the finding carries neither tempo nor key", () => {
-    // The base fixture has no bpm/key — the un-enriched finding says nothing.
     expect(jsonLd).not.toHaveProperty("recordingOf");
   });
 
   it("stamps @id on a case/accent-variant display name (folded match, not exact)", () => {
-    // The slug map is keyed by the folded canonical name; the finding's display
-    // name drifted (accent + casing). An exact-name lookup would silently drop the
-    // link + the @id — the folded lookup still reconciles it.
     const drifted = musicRecordingJsonLd(
       { ...track, artistSlugs: { [fold("Axwell")]: "axwell" }, artists: ["ÁXWELL", "1991"] },
       "https://img/cover.jpg",
@@ -280,8 +271,6 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
   });
 
   it("orders sameAs Wikidata > MusicBrainz > Discogs > Last.fm > Spotify > socials, de-duplicated", () => {
-    // The two metadata anchors rank directly under MusicBrainz — an authority's record OF the
-    // artist outranks a channel the artist runs — mirroring the label Organization's sameAs.
     expect(jsonLd.sameAs).toEqual([
       "https://www.wikidata.org/wiki/Q123",
       "https://musicbrainz.org/artist/mbid-123",
@@ -293,8 +282,6 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
   });
 
   it("omits the Discogs + Last.fm anchors entirely when the artist carries neither", () => {
-    // The overwhelmingly common case today (only MB-resolved artists carry them): the anchors
-    // are simply absent from sameAs — never an empty string, never a synthesized guess.
     const bare = musicGroupJsonLd(
       { ...artist, discogsUrl: undefined, lastfmUrl: undefined },
       findings,
@@ -331,8 +318,6 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
       itemListElement: Array<{ item: { byArtist: unknown } }>;
     };
 
-    // Every finding on the page credits this artist, so each nested MusicRecording
-    // reconciles back to the artist's @id (the free graph reconciliation, RFC §3).
     expect(list.itemListElement[0]?.item.byArtist).toEqual([
       {
         "@id": "https://www.fluncle.com/artist/dimension",
@@ -340,7 +325,7 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
         name: "Dimension",
       },
     ]);
-    // A co-artist with no slug on this page stays a bare, id-less MusicGroup.
+
     expect(list.itemListElement[1]?.item.byArtist).toEqual([
       {
         "@id": "https://www.fluncle.com/artist/dimension",
@@ -361,7 +346,6 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
   });
 
   it("omits alternateName when the artist carries no aliases (the base fixture + an empty array)", () => {
-    // The MusicBrainz identity layer: no aliases ⇒ the key is absent, byte-identical to before.
     expect(jsonLd).not.toHaveProperty("alternateName");
 
     const emptied = musicGroupJsonLd(
@@ -401,7 +385,6 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
   });
 
   it("carries the factual bio as description only when one is authored", () => {
-    // No bio ⇒ no description key at all (never `description: null`).
     expect(jsonLd).not.toHaveProperty("description");
 
     const withBio = musicGroupJsonLd(
@@ -434,9 +417,6 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
   });
 
   it("omits track entirely on an artist with no certified finding (never an empty ItemList)", () => {
-    // The majority shape: a catalogue artist whose quieter rows the unnamed tier keeps unnamed,
-    // so there is nothing to list. An ItemList with no members would assert a track list that
-    // holds nothing, contradicting the page — the same omit-cleanly rule sameAs/description follow.
     const bare = musicGroupJsonLd(
       { imageUrl: "https://img/x.jpg", name: "Uncertified", slug: "uncertified", socials: [] },
       [],
@@ -482,8 +462,7 @@ describe("videoObjectJsonLd (the finding's video schema)", () => {
 
   it("mirrors the visible prose and dates the upload from the freshest stamp", () => {
     expect(jsonLd.description).toBe(definitionalProse(track));
-    // A full ISO 8601 datetime WITH a timezone (Google's VideoObject requirement) —
-    // not a bare date, which trips GSC's "invalid datetime"/"missing a timezone".
+
     expect(jsonLd.uploadDate).toBe("2026-06-12T09:30:00.000Z");
   });
 
@@ -524,8 +503,7 @@ describe("observationAudioObjectJsonLd (the finding's spoken observation schema)
   it("mirrors the visible prose and carries the ISO-8601 length + a zoned generated-at uploadDate", () => {
     expect(jsonLd.description).toBe(definitionalProse(track));
     expect(jsonLd.duration).toBe("PT0M34S");
-    // A full ISO 8601 datetime WITH a timezone — the same GSC rule the VideoObject's
-    // uploadDate obeys (a bare date trips "invalid datetime"/"missing a timezone").
+
     expect(jsonLd.uploadDate).toBe("2026-06-12T09:30:00.000Z");
   });
 
@@ -567,17 +545,13 @@ describe("breadcrumbsJsonLd", () => {
 });
 
 describe("the detail-page trails that had none", () => {
-  // A Logbook entry and a newsletter edition are detail pages under a real hub, exactly like a
-  // finding under /log or an artist under /artists, and both detail pages must carry a BreadcrumbList.
-  // The leaf is the BARE coordinate: VOICE.md §3 keeps "sector" as first-person colour, never
-  // a structural label, so the trail ends on the same `036` the page's h1 wears.
   it("walks Fluncle → Logbook → the entry's coordinate", () => {
     const jsonLd = logbookBreadcrumbsJsonLd("036") as {
       itemListElement: Array<{ item?: string; name: string; position: number }>;
     };
 
     expect(jsonLd.itemListElement.map((item) => item.name)).toEqual(["Fluncle", "Logbook", "036"]);
-    // The hub crumb points at the hub; the leaf carries no `item` (it IS this page).
+
     expect(jsonLd.itemListElement[1]?.item).toBe("https://www.fluncle.com/logbook");
     expect(jsonLd.itemListElement[2]?.item).toBeUndefined();
   });
@@ -595,9 +569,6 @@ describe("the detail-page trails that had none", () => {
     expect(jsonLd.itemListElement[1]?.item).toBe("https://www.fluncle.com/newsletter");
   });
 
-  // A doc page is the same shape, and the reason it is marked up HERE rather than in the chrome
-  // is the leaf: only the route holds the MDX front matter's real title. The chrome can read the
-  // slug and nothing else, so `/docs/log-id` would have ended the trail on "Log Id".
   it("walks Fluncle → Docs → the doc's own front-matter title", () => {
     const jsonLd = docsBreadcrumbsJsonLd("Log ID") as {
       itemListElement: Array<{ item?: string; name: string }>;
@@ -623,7 +594,7 @@ describe("recordLabelJsonLd (the label page schema — U2a alternateName)", () =
 
   it("omits alternateName entirely when the label carries no confirmed aliases", () => {
     expect(organizationOf(base)).not.toHaveProperty("alternateName");
-    // No aliases ⇒ byte-identical to the pre-U2a shape.
+
     expect(organizationOf({ ...base, alternateNames: [] })).not.toHaveProperty("alternateName");
   });
 
@@ -643,7 +614,6 @@ describe("recordLabelJsonLd (the label page schema — U2a alternateName)", () =
   });
 
   it("carries the factual bio as the Organization's description only when one is authored", () => {
-    // No bio ⇒ the Organization node has no description key at all (never `description: null`).
     expect(organizationOf(base)).not.toHaveProperty("description");
 
     expect(
@@ -652,14 +622,12 @@ describe("recordLabelJsonLd (the label page schema — U2a alternateName)", () =
   });
 
   it("emits the Organization's sameAs from the MusicBrainz + Discogs ids, and omits it when absent", () => {
-    // No anchors ⇒ no sameAs key at all.
     expect(organizationOf(base)).not.toHaveProperty("sameAs");
 
     expect(organizationOf({ ...base, discogsLabelId: 1111, mbLabelId: "mbid-med" }).sameAs).toEqual(
       ["https://musicbrainz.org/label/mbid-med", "https://www.discogs.com/label/1111"],
     );
 
-    // Only one anchor present ⇒ a one-element sameAs, not a hole.
     expect(organizationOf({ ...base, mbLabelId: "mbid-med" }).sameAs).toEqual([
       "https://musicbrainz.org/label/mbid-med",
     ]);
@@ -689,13 +657,10 @@ describe("musicAlbumJsonLd (the album page schema)", () => {
   });
 
   it("omits byArtist on a various-artists record (never `byArtist: []`)", () => {
-    // A compilation resolves no album-level artist entity. An empty array asserts the record was
-    // made by nobody while the track list below names an artist on every line; absence is true.
     expect(musicAlbumJsonLd({ ...base, artists: [] })).not.toHaveProperty("byArtist");
   });
 
   it("carries the factual bio as description only when one is authored", () => {
-    // No bio ⇒ no description key at all (never `description: null`).
     expect(musicAlbumJsonLd(base)).not.toHaveProperty("description");
 
     expect(
@@ -742,8 +707,6 @@ describe("musicAlbumJsonLd (the album page schema)", () => {
   });
 
   it("still emits the number when the record's label edge is missing", () => {
-    // A record can carry a number Fluncle read off Discogs while its `labels` row is unlinked.
-    // Dropping the number for want of the edge would throw away a true fact.
     const jsonLd = musicAlbumJsonLd({ ...base, catalogNumber: "RAMM123" });
 
     expect(jsonLd.albumRelease).toEqual({
@@ -778,7 +741,7 @@ describe("musicAlbumJsonLd (the album page schema)", () => {
           releaseDate: "2019-08-02",
           title: "Nobody Else",
         },
-        // A quieter catalogue row carries none of the per-track facts — it stays spare.
+
         { artists: ["Netsky"], spotifyUrl: "https://open.spotify.com/track/x", title: "Deep cut" },
       ],
     });
@@ -827,11 +790,10 @@ describe("mixtapeAlbumJsonLd", () => {
 
     expect(jsonLd["@type"]).toBe("MusicAlbum");
     expect(jsonLd.albumProductionType).toBe("https://schema.org/DJMixAlbum");
-    // The mix is by — and published by — the ONE canonical entity node (@id), never a dangling
-    // /about Person that reads as a different thing.
+
     expect(jsonLd.byArtist).toEqual({ "@id": fluncleEntityId, "@type": "Person", name: "Fluncle" });
     expect(jsonLd.publisher).toEqual({ "@id": fluncleEntityId });
-    // numTracks counts the renderable members (those with a /log coordinate).
+
     expect(jsonLd.numTracks).toBe(1);
     expect(jsonLd.identifier).toEqual([
       { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: "019.F.1A" },
@@ -848,7 +810,7 @@ describe("mixtapeAlbumJsonLd", () => {
         },
       ],
     });
-    // No recordedAt on this fixture ⇒ no datePublished key (never a null).
+
     expect(jsonLd).not.toHaveProperty("datePublished");
   });
 
@@ -867,15 +829,13 @@ describe("mixtapeAlbumJsonLd", () => {
     });
 
     expect(jsonLd.datePublished).toBe("2026-06-14");
-    // An empty tracklist ⇒ numTracks 0.
+
     expect(jsonLd.numTracks).toBe(0);
   });
 });
 
 describe("musicRecordingJsonLd remixer contributor (RFC label-lineage-remixer U2)", () => {
   it("emits the remixer as a schema.org contributor Role when the title names a credited artist", () => {
-    // The base fixture is "Nobody Else - 1991 Remix" credited to ["Axwell", "1991"], so 1991 is the
-    // remixer — the folded descriptor name matches a linked artist exactly.
     const jsonLd = musicRecordingJsonLd(track, "https://img/cover.jpg");
 
     expect(jsonLd.contributor).toEqual([

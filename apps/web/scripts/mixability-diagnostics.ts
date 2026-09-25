@@ -1,35 +1,5 @@
 #!/usr/bin/env bun
-/**
- * THE MIXABILITY DIAGNOSTIC — a characterization, NOT a fit.
- *
- * The draft planned a weight fit against Fluncle's own published sets. The panel ran
- * the data and it does not survive: over the real ordered transitions of mixtape
- * `019.F.1A`, the Camelot sub-score is AT CHANCE — indistinguishable from random key
- * pairs. Fluncle mixes on phrasing, intros/outros, and energy, not harmonic
- * adjacency. So the engine computes the well-defined clean-mixability objective, the
- * weights (`MIX_WEIGHTS`) are versioned product config, and this script CHARACTERIZES
- * the engine — it never trains it. Do not re-invent the fit.
- *
- * It prints three things:
- *   1. The floor check — the real consecutive-transition Camelot distribution vs the
- *      all-pairs random baseline (the same verdict the committed floor-check unit
- *      test pins, printed with detail).
- *   2. The within-set successor rank — for each set member, where the TRUE next track
- *      ranks by mixability among the remaining unplayed members (the uncontaminated
- *      pool — whole-archive MRR is contaminated because the other set members are
- *      near-perfect decoys). The random baseline (expected rank) is printed beside it.
- *   3. The join-coverage honesty numbers — how many set members carried key / features
- *      at run time.
- *
- * Reads the 17 set members off the PUBLIC API (key/bpm/features are public), so it is
- * reproducible with no DB. Embedding presence is NOT public — run against a
- * dev server (`--base http://localhost:3000`) if you want the embedding coverage line
- * populated; against the public API it prints "unknown (not public)".
- *
- * Usage:
- *   bun run scripts/mixability-diagnostics.ts
- *   bun run scripts/mixability-diagnostics.ts --base http://localhost:3000
- */
+
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseKey, toCamelot } from "../src/lib/key-camelot";
@@ -97,7 +67,6 @@ async function main(): Promise<void> {
     });
   }
 
-  // ── 1. Floor check ─────────────────────────────────────────────────────────
   const real = members.flatMap((member, index) => {
     const next = members[index + 1];
     const score = next ? harmonicScore(camelotOf(member.key), camelotOf(next.key)) : null;
@@ -125,7 +94,6 @@ async function main(): Promise<void> {
     `  verdict: ${mean(real) <= mean(baseline) + 0.05 ? "AT CHANCE — key does not predict Fluncle's sequencing" : "ABOVE BASELINE (investigate)"}`,
   );
 
-  // ── 2. Within-set successor rank (uncontaminated pool) ─────────────────────
   const ranks: number[] = [];
 
   for (let i = 0; i < members.length - 1; i += 1) {
@@ -136,7 +104,7 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const pool = members.slice(i + 1); // the remaining unplayed set members
+    const pool = members.slice(i + 1);
     const scored = pool
       .map((candidate) => ({
         logId: candidate.logId,
@@ -147,15 +115,12 @@ async function main(): Promise<void> {
     ranks.push(rank);
   }
 
-  const expectedRandomRank = mean(
-    members.slice(0, -1).map((_, i) => (members.length - i) / 2), // avg rank in a pool of size (n-i-1)+... ≈ half
-  );
+  const expectedRandomRank = mean(members.slice(0, -1).map((_, i) => (members.length - i) / 2));
 
   console.log("\n── Within-set successor rank (true next among remaining members) ──");
   console.log(`  mean true-next rank: ${mean(ranks).toFixed(2)}  (over ${ranks.length} steps)`);
   console.log(`  random-guess expected rank (~half the pool): ${expectedRandomRank.toFixed(2)}`);
 
-  // ── 3. Join coverage ───────────────────────────────────────────────────────
   const keyed = members.filter((m) => m.key).length;
   const featured = members.filter((m) => m.features).length;
 

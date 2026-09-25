@@ -1,62 +1,49 @@
 import { type FrontierConfig, fnv1a, frontierRadius, placeFrontier } from "./placement";
 import { type FrontierEntity, type FrontierKind, type Star } from "./types";
 
-// The flight sim. Fixed-timestep,
-// pure state-in/state-out — no canvas, no audio, no DOM — so the loop is
-// testable and the renderer/audio read from it without back-pressure.
-//
-// The stakes contract: fuel always burns (boost gulps), refuel only at Earth
-// or at a star during the visit in which it was logged (the listening moment
-// doubles as the pump). The dry tank is the one true failure: run dry and you
-// drift, get towed home, start at 0/N. Frontier hazards apply pressure but
-// never end the run — an asteroid hull-hit costs fuel, a black hole flings you
-// elsewhere (with a slingshot top-up); everything routes back through the tank.
-
-/** How fast the ship turns, radians/second. */
 const TURN_RATE = 1.9;
-/** Acceleration ease toward the target speed, 1/seconds. */
+
 const ACCEL = 2.2;
 const CRUISE_SPEED = 70;
 const BOOST_SPEED = 170;
-/** Drift speed while eased into a star's orbit (the listening moment). */
+
 const ORBIT_SPEED = 16;
 const TANK_CAPACITY = 100;
-/** Full tank from dry in ~12s of orbit — most of a preview's chorus. */
+
 const REFUEL_RATE = 8.5;
-/** Boost trades fuel for time: ~2.4x speed for 3.5x burn. */
+
 const BOOST_BURN_FACTOR = 3.5;
-/** One tank at cruise covers the frontier with this much slack. */
+
 const RANGE_FACTOR = 1.8;
 const MIN_RANGE = 3600;
 const STAR_ORBIT_RADIUS = 64;
 const EARTH_ORBIT_RADIUS = 110;
-/** Seconds adrift (dead stick, dimming instruments) before the tow home. */
+
 const ADRIFT_SECONDS = 4;
 const LOW_FUEL_FRACTION = 0.25;
-/** How fast an external push on the ship (black-hole gravity) bleeds off. */
+
 const EXTERNAL_DECAY = 1.6;
-/** Default session seed; the game passes a per-run one, tests pin this. */
+
 const DEFAULT_SEED = 0x9e3779b9;
-/** Outer reach of a black hole's pull (world units). Economy-tunable. */
+
 const BLACKHOLE_INFLUENCE = 260;
-/** Pull acceleration scale near the hole; the dread of being drawn in. */
+
 const BLACKHOLE_PULL = 340;
-/** The slingshot: an exit always leaves you with at least this much tank. */
+
 const SLINGSHOT_FUEL_FRACTION = 0.6;
-// The auto-clearing laser + asteroids (Unit D, flag-gated). Cosmic path-
-// clearing, never a dogfight: the ship thins the rocks dead ahead on its own.
+
 const BOLT_SPEED = 320;
-/** Seconds a bolt lives before it's culled. */
+
 const BOLT_TTL = 1.2;
 const BOLT_BODY = 4;
-/** Seconds between auto-shots. */
+
 const FIRE_COOLDOWN = 0.35;
-/** How far ahead the auto-fire reaches for a rock. */
+
 const FIRE_RANGE = 460;
-/** Reticle half-angle: a rock within this cone dead ahead gets cleared. */
+
 const FIRE_CONE = 0.22;
 const SHIP_HIT_RADIUS = 10;
-/** Fuel a hull-hit costs — pressure, not death (the tow stays the only end). */
+
 const ASTEROID_FUEL_COST = 12;
 
 type SimConfig = {
@@ -72,7 +59,6 @@ type SimConfig = {
 
 type SimPhase = "adrift" | "flying" | "home" | "orbiting";
 
-/** One-shot happenings for the audio/telemetry layers to consume. */
 export type SimEvent =
   | { kind: "adrift" }
   | { kind: "all-found" }
@@ -91,7 +77,7 @@ type ShipState = {
   fuel: number;
   heading: number;
   speed: number;
-  /** External velocity (black-hole gravity), bled off each step; 0 in normal flight. */
+
   vx: number;
   vy: number;
   x: number;
@@ -101,28 +87,27 @@ type ShipState = {
 export type SimState = {
   adriftT: number;
   atEarth: boolean;
-  /** collectedCount at run start — the win needs a HAUL (something logged this run). */
+
   runStartCollected: number;
-  /** Monotonic counter for spawned bolt ids (Unit D). */
+
   boltSeq: number;
   collectedCount: number;
   config: SimConfig;
   deaths: number;
-  /** The dynamic frontier: set-dressing, hazards, and spawned bolts. */
+
   entities: FrontierEntity[];
   events: SimEvent[];
-  /** Seconds until the auto-clearing laser can fire again (Unit D). */
+
   fireCooldown: number;
-  /** Placement inputs, kept so a tow can rebuild the same galaxy. */
+
   frontier: FrontierConfig;
   lowFuelWarned: boolean;
-  /** Index of the star whose orbit the ship is inside, or -1. Stable: the star
-   * list never gains or loses members mid-run, so the index is a durable handle. */
+
   orbitIndex: number;
-  /** True while still in the orbit of the star logged on this visit. */
+
   orbitFresh: boolean;
   phase: SimPhase;
-  /** Boot-time session seed; threads into frontier placement (kept pure). */
+
   seed: number;
   ship: ShipState;
   stars: Star[];
@@ -131,30 +116,22 @@ export type SimState = {
 
 export type SimInput = {
   boost: boolean;
-  /** Fire the auto-clearing laser (Unit D); flag-gated, off by default. */
+
   fire?: boolean;
-  /** -1 (port) .. 1 (starboard). */
+
   steer: number;
 };
 
-/** Extra per-kind behavior beyond vx/vy drift; collisions live in the step pass. */
 export type EntityBehavior = {
   onStep?: (entity: FrontierEntity, state: SimState, dt: number) => void;
 };
 
-// The per-kind behavior table. Set-dressing and asteroids drift on vx/vy alone
-// and need no entry; the units that add force (black-hole gravity) register
-// here. stepEntities iterates once and dispatches.
 const BEHAVIORS: Partial<Record<FrontierKind, EntityBehavior>> = {};
 
 export function registerBehavior(kind: FrontierKind, behavior: EntityBehavior): void {
   BEHAVIORS[kind] = behavior;
 }
 
-// The ship Fluncle lends you is fit for the current frontier: burn rates are
-// tuned at boot so one tank at cruise reaches the newest finding with slack.
-// When the frontier outgrows what one tank should cover, the answer is new
-// home planets out there, not a bigger tank.
 function tuneConfig(stars: Star[]): SimConfig {
   const range = Math.max(MIN_RANGE, frontierRadius(stars) * RANGE_FACTOR);
   const cruiseBurn = (CRUISE_SPEED * TANK_CAPACITY) / range;
@@ -173,7 +150,7 @@ function tuneConfig(stars: Star[]): SimConfig {
 
 export type SimOptions = {
   frontier?: FrontierConfig;
-  /** Per-run seed for the session-random frontier choices; tests pin it. */
+
   seed?: number;
 };
 
@@ -181,8 +158,7 @@ export function createSim(stars: Star[], options: SimOptions = {}): SimState {
   const config = tuneConfig(stars);
   const frontier = options.frontier ?? {};
   const seed = options.seed ?? DEFAULT_SEED;
-  // Lifetime-logged stars arrive already collected (logged IS collected), so the
-  // counter opens at the log's size — "2/60", growing toward the whole field.
+
   const alreadyCollected = stars.filter((star) => star.collected).length;
 
   return {
@@ -208,10 +184,7 @@ export function createSim(stars: Star[], options: SimOptions = {}): SimState {
   };
 }
 
-/** Fresh ship on the pad: just clear of Earth orbit, pointed at the stars. */
 function launchShip(config: SimConfig): ShipState {
-  // Heading -PI/2 flies toward -y, so the pad sits at -y too: Earth at your
-  // back (a bottom-of-scope radar blip), open galaxy ahead.
   return {
     boosting: false,
     fuel: TANK_CAPACITY,
@@ -224,13 +197,10 @@ function launchShip(config: SimConfig): ShipState {
   };
 }
 
-/** Restart after a tow (or a manual restart): same galaxy, the log endures, full tank. */
 export function resetSim(state: SimState, countDeath: boolean): void {
   state.adriftT = 0;
   state.atEarth = false;
 
-  // The log survives the tow: every star reached (this run or any before it)
-  // stays collected. Nobody re-collects; the universe grows instead.
   for (const star of state.stars) {
     star.collected = star.lifetimeLogged === true;
   }
@@ -239,7 +209,7 @@ export function resetSim(state: SimState, countDeath: boolean): void {
   state.runStartCollected = state.collectedCount;
 
   state.deaths += countDeath ? 1 : 0;
-  // Same galaxy, same seed: the frontier rebuilds identically (bolts clear).
+
   state.entities = placeFrontier(state.stars, state.frontier, state.seed);
   state.fireCooldown = 0;
   state.lowFuelWarned = false;
@@ -274,9 +244,6 @@ export function stepSim(state: SimState, input: SimInput, dt: number): void {
     return;
   }
 
-  // Parked on a banger: the listening moment. Time passes, nothing burns;
-  // a freshly logged star pumps the tank while the preview loops. The only
-  // way out is departOrbit() — any key, any tap.
   if (state.phase === "orbiting") {
     ship.speed = 0;
     ship.boosting = false;
@@ -298,7 +265,6 @@ export function stepSim(state: SimState, input: SimInput, dt: number): void {
     return;
   }
 
-  // Steering and speed. Boost only answers while there's fuel to gulp.
   const boosting = input.boost && ship.fuel > 0;
 
   ship.boosting = boosting;
@@ -308,8 +274,7 @@ export function stepSim(state: SimState, input: SimInput, dt: number): void {
   const targetSpeed = boosting ? BOOST_SPEED : inOrbit ? ORBIT_SPEED : CRUISE_SPEED;
 
   ship.speed = ease(ship.speed, targetSpeed, dt * ACCEL);
-  // The thrust vector plus any external push (black-hole gravity), which then
-  // bleeds off. With vx/vy at 0 (normal flight) this is the original motion.
+
   ship.x += (Math.cos(ship.heading) * ship.speed + ship.vx) * dt;
   ship.y += (Math.sin(ship.heading) * ship.speed + ship.vy) * dt;
   ship.vx = ease(ship.vx, 0, dt * EXTERNAL_DECAY);
@@ -326,10 +291,6 @@ export function stepSim(state: SimState, input: SimInput, dt: number): void {
   updateWin(state);
 }
 
-// Advance the dynamic frontier: drift on vx/vy, dispatch per-kind behavior
-// (black-hole gravity), then cull spent bolts. Collisions that mutate the ship
-// (hazards) or despawn entities (bolt hits) are handled by the units that own
-// them via their behavior + the dedicated passes layered on in those units.
 function stepEntities(state: SimState, dt: number): void {
   if (state.entities.length === 0) {
     return;
@@ -342,10 +303,6 @@ function stepEntities(state: SimState, dt: number): void {
   }
 }
 
-// The offensive verb (Unit D): auto-fire at a rock in the reticle, then resolve
-// bolts → asteroids and asteroids → hull. No score, no kills — the ship clears
-// its own path. Bolts only ever hit asteroids; a banger is reached by flying to
-// it, never shot. Only runs when the laser flag is on.
 function stepCombat(state: SimState, input: SimInput, dt: number): void {
   state.fireCooldown = Math.max(0, state.fireCooldown - dt);
   autoFire(state, input);
@@ -377,7 +334,6 @@ function autoFire(state: SimState, input: SimInput): void {
     }
   }
 
-  // Auto-clear a rock in the reticle; the optional F key forces a manual blip.
   if (!targeted && !input.fire) {
     return;
   }
@@ -429,7 +385,6 @@ function resolveProjectiles(state: SimState): void {
     }
   }
 
-  // A hull-hit costs fuel and shatters the rock — pressure, never instant death.
   for (const asteroid of asteroids) {
     if (remove.has(asteroid)) {
       continue;
@@ -476,8 +431,6 @@ function updateOrbit(state: SimState): void {
     return;
   }
 
-  // Reaching any star parks the ship: fresh ones get logged and pump fuel,
-  // logged ones replay. Flying resumes via departOrbit().
   state.orbitIndex = nearestIndex;
   state.orbitFresh = false;
   state.phase = "orbiting";
@@ -494,7 +447,6 @@ function updateOrbit(state: SimState): void {
   }
 }
 
-/** Leave the listening moment: nose pointed away from the star, cruise on. */
 export function departOrbit(state: SimState): void {
   if (state.phase !== "orbiting" || state.orbitIndex < 0) {
     return;
@@ -524,8 +476,7 @@ export function departOrbit(state: SimState): void {
 
 function updateFuel(state: SimState, boosting: boolean, dt: number): void {
   const { config, ship } = state;
-  // Star refuelling happens in the orbiting branch; in flight only Earth
-  // (home always tops you up) counts.
+
   const refueling = state.atEarth;
 
   if (refueling) {
@@ -559,16 +510,11 @@ function updateFuel(state: SimState, boosting: boolean, dt: number): void {
   }
 }
 
-/** Spend fuel on a hazard glance (asteroid hull-hit); never below empty. */
 function drainFuel(state: SimState, amount: number): void {
   state.ship.fuel = Math.max(0, state.ship.fuel - amount);
 }
 
 function updateWin(state: SimState): void {
-  // A run home needs a HAUL: at least one star logged THIS run. Without the gate,
-  // a fully-logged returning player would spawn beside Earth already at 100% and
-  // collect a free win on arrival — with it, a complete log simply means nothing
-  // left to haul until the universe grows.
   if (
     state.phase === "flying" &&
     state.atEarth &&
@@ -580,7 +526,6 @@ function updateWin(state: SimState): void {
   }
 }
 
-/** Drain one-shot events; the caller (game loop) fans them out. */
 export function drainEvents(state: SimState): SimEvent[] {
   const events = state.events;
 
@@ -589,7 +534,6 @@ export function drainEvents(state: SimState): SimEvent[] {
   return events;
 }
 
-/** Relative bearing from the ship's nose to a world point, [-PI, PI]. */
 function bearingTo(ship: ShipState, x: number, y: number): number {
   const absolute = Math.atan2(y - ship.y, x - ship.x);
 
@@ -614,11 +558,10 @@ export type CarrierInfo = {
   bearing: number;
   distance: number;
   starIndex: number;
-  /** 0 (out of range) .. 1 (on top of it). */
+
   strength: number;
 };
 
-/** The nearest uncollected star — the carrier the radar and audio chase. */
 export function nearestCarrier(state: SimState): CarrierInfo | undefined {
   const { config, ship } = state;
   let best: CarrierInfo | undefined;
@@ -661,9 +604,6 @@ export type ScopeContact = {
   kind: "asteroid" | "blackhole";
 };
 
-// Every uncollected star in radar range — multi-blip on purpose, so route
-// choice is a real decision. Earth joins the scope when it's in range, and
-// becomes the only blip once the galaxy is logged (the final carrier home).
 export function radarBlips(state: SimState): RadarBlip[] {
   const { config, ship } = state;
   const blips: RadarBlip[] = [];
@@ -736,12 +676,6 @@ function ease(current: number, target: number, t: number): number {
   return current + (target - current) * Math.min(1, t);
 }
 
-// The black hole (Unit C): not a death, a transport. An inverse-ish pull draws
-// the ship in within the influence radius (a real force term on ship.vx/vy);
-// crossing the event horizon flings you to one of the system's exit slots with
-// a slingshot fuel top-up, so the jump is always survivable — scary and
-// disorienting (flung into the unknown frontier), never punishing. Map
-// knowledge stays the skill: positions are fixed, only which slot bites varies.
 registerBehavior("blackhole", {
   onStep: (entity, state, dt) => {
     const { ship } = state;
@@ -771,8 +705,6 @@ function warpShip(entity: FrontierEntity, state: SimState): void {
   const { ship } = state;
 
   if (exits.length > 0) {
-    // Session-deterministic exit: this hole always flings to the same slot this
-    // run (learnable), but the seed varies the pick run to run.
     const exit = exits[fnv1a(`${entity.id}:${state.seed}`) % exits.length];
 
     if (exit !== undefined) {

@@ -185,7 +185,7 @@ export type PerformanceContract = {
     policy: ExplainPlanPolicy;
     statement: PerformanceStatement;
   };
-  /** Set only on contracts that reproduce a production-lock consumer outside the audit inventory. */
+
   productionLockEvidence?: ProductionLockEvidenceDefinition;
   terminalProof?: {
     execute: (context: ContractContext) => Promise<ContractExecution>;
@@ -510,9 +510,6 @@ async function attachTerminalContractEvidence(options: {
   profile: ScaleProfile;
   reports: ContractReport[];
 }): Promise<void> {
-  // The embedded local driver keeps EXPLAIN statements alive long enough to block a later explicit
-  // write-batch commit. Contracts therefore finish every production-shaped mutation first; plans
-  // and structural proofs remain mandatory evidence in this terminal read-only phase.
   for (const [index, contract] of options.contracts.entries()) {
     const report = options.reports[index];
     if (report === undefined || report.contractId !== contract.id) {

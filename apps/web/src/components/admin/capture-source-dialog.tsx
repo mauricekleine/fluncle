@@ -16,31 +16,9 @@ import { Label } from "@fluncle/ui/components/label";
 import { type BoardRow } from "@/components/admin/use-publish";
 import { type CaptureSourceState } from "@/lib/server/tracks";
 
-// The Embeddings cell's dialog — the capture stage's SOURCE control (docs/the-ear.md § Wrong
-// audio). An embedding needs a capture; a capture needs an upload the fingerprint gate accepts;
-// and the gate is precision-over-recall by design, so for some findings the only uploads that
-// exist (a different master or edit of the same release) are refused forever and the row lands
-// terminal UNMATCHED. The operator's ear is the only thing that outranks the gate. This dialog
-// shows where the capture stands and lets him PIN the one YouTube upload the sweep must download
-// (`pin_capture_source`, operator tier) or CLEAR a standing pin (`clear_capture_source`).
-// The paste is sent as-is — a bare id or any youtube.com / youtu.be / music.youtube.com URL —
-// and the server reduces it to the id; the CLI shares that one parser by not having one. The
-// "Accept a different length" checkbox is the duration guard's one waiver (`allowDurationMismatch`):
-// the operator has deliberately chosen a different edit of the same recording, and the finding
-// keeps its store length.
-//
-// Operator register: terse, em-dash joins, ALL-CAPS status words. Not public copy.
-
-/**
- * The dialog's data half: the lazily-read capture state for the OPEN row, refetched on focus and
- * after every write, plus the pin/clear mutation riding the operator-tier oRPC ops
- * (`pin_capture_source` / `clear_capture_source`) — the same PUT/DELETE the CLI's
- * `admin tracks pin-source` sends. One mutation, two verbs, so both buttons share the busy + error
- * state and the same refetch. The route hands in its gated `createServerFn` reader.
- */
 export function useCaptureSource(options: {
   fetchState: (trackId: string) => Promise<CaptureSourceState | null>;
-  /** Drop the dialog's identity (the route's `captureSourceId`) when it closes. */
+
   onClose: () => void;
   queryKey: readonly unknown[];
   row: BoardRow | undefined;
@@ -97,7 +75,7 @@ export function useCaptureSource(options: {
     clear: () => mutation.mutateAsync({ kind: "clear" }).then(() => undefined),
     error: mutation.error?.message,
     loading: query.isFetching && query.data === undefined,
-    // Closing drops the identity and forgets the last error, so the next open starts clean.
+
     onOpenChange: (open: boolean) => {
       if (!open) {
         onClose();
@@ -112,10 +90,9 @@ export function useCaptureSource(options: {
 }
 
 type CaptureSourceDialogProps = {
-  /** The row's live capture facts — lazily read for the OPEN row; undefined while loading. */
   state?: CaptureSourceState | null;
   loading: boolean;
-  /** The in-flight mutation, if any, so both buttons disable together. */
+
   busy: boolean;
   error?: string;
   onClear: () => Promise<void> | void;
@@ -124,7 +101,6 @@ type CaptureSourceDialogProps = {
   row: BoardRow | null;
 };
 
-/** The one status word per capture state, in the admin register. */
 function captureStatusWord(status: string): string {
   switch (status) {
     case "done":
@@ -144,7 +120,6 @@ function captureStatusWord(status: string): string {
   }
 }
 
-/** What the gate said about the audio on file, in the admin register. */
 function verificationWord(verification: null | string): string | undefined {
   switch (verification) {
     case "preview-match":
@@ -176,12 +151,9 @@ export function CaptureSourceDialog({
   const hintId = useId();
   const allowId = useId();
   const [youtube, setYoutube] = useState("");
-  // The duration waiver rides the NEXT pin only and starts unticked on every open: it is a
-  // deliberate, per-pin ruling, never a sticky preference.
+
   const [allowDurationMismatch, setAllowDurationMismatch] = useState(false);
 
-  // A fresh open starts on an empty field — the pin on file is shown as data, not pre-filled, so
-  // a stray submit can never re-pin the same id and re-queue the row by accident.
   useEffect(() => {
     if (row === null) {
       setYoutube("");

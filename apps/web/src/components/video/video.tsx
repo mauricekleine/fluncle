@@ -16,23 +16,8 @@ import { cn } from "@/lib/utils";
 import { type VideoSize, useVideoClock } from "./use-video-clock";
 import { clampFraction, formatClock, pointerFraction } from "./video-format";
 
-// The `<Video>` compound player. ONE state machine (the radio "one clock" discipline,
-// `useVideoClock`) lives in `Video.Root` and is shared through context; the surfaces
-// differ only in the CHROME mounted over the same element (a crop frame, an energy
-// lane, an auto-hiding scrubber), so this is a compound component, not a boolean-prop
-// one. Consumers read the machine via `use(VideoContext)` (or the `useVideo` helper) —
-// React 19, no `forwardRef`.
-//
-//   <Video.Root src autoPlay?>          owns the element + the clock + stall recovery
-//     <Video.Surface poster?>           the <video> in a position:relative stage; its
-//       …overlays…                      children slot overlays (crop frame, controls)
-//     <Video.Controls overlay?>         the controls bar; `overlay` = the auto-hiding
-//       <Video.PlayButton/>             scrim band pinned over the stage
-//       <Video.Scrubber/>               the seek bar (VibeMap pointer model + keyboard)
-//       <Video.Time/>                   the current/total readout
-
 const SEEK_STEP_SECONDS = 5;
-// Controls fade out this long after the last activity while playing (overlay surfaces).
+
 const CONTROLS_IDLE_MS = 2_500;
 
 type VideoContextValue = {
@@ -53,7 +38,6 @@ type VideoContextValue = {
 
 export const VideoContext = createContext<VideoContextValue | null>(null);
 
-/** Read the player machine. Throws if used outside `<Video.Root>`. */
 export function useVideo(): VideoContextValue {
   const value = use(VideoContext);
 
@@ -76,16 +60,11 @@ function Root({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const clock = useVideoClock({ autoPlay, src, videoRef });
 
-  // The auto-hide model for the overlay controls: visible whenever paused, recently
-  // active (hover/scrub bumps a 2.5s idle timer), or actively scrubbing; CSS keeps
-  // them up on hover / focus-within too. While PLAYING and idle they fade away.
   const [controlsActive, setControlsActive] = useState(false);
   const [scrubbing, setScrubbing] = useState(false);
   const idleTimer = useRef(0);
 
   const bumpActivity = useCallback(() => {
-    // setState bails when already `true`, so a continuous pointer-move re-renders only
-    // on the idle→active edge; the timer still slides forward each move.
     setControlsActive(true);
 
     if (idleTimer.current) {
@@ -173,9 +152,6 @@ function Controls({
   const { controlsVisible } = useVideo();
 
   if (overlay) {
-    // The auto-hiding scrim band pinned to the bottom of the stage. `data-visible`
-    // drives the playing-idle fade; CSS `:hover`/`:focus-within` on the stage override
-    // it so the bar always returns on hover or keyboard focus.
     return (
       <div className={cn("video-overlay-controls", className)} data-visible={controlsVisible}>
         {children}
@@ -192,7 +168,7 @@ function PlayButton({
   size = "icon",
 }: {
   className?: string;
-  /** A noun appended to the verb, e.g. `label="Crystal Visions"` → "Play Crystal Visions". */
+
   label?: string;
   size?: "icon" | "icon-sm";
 }) {
@@ -217,20 +193,11 @@ function PlayButton({
   );
 }
 
-/**
- * The controlled, canon-styled seek bar. Reads the clock from context; reuses the
- * VibeMap pointer model (getBoundingClientRect + setPointerCapture + clamp) for
- * click/drag-to-seek and carries full keyboard control (←/→ = ±5s, Home/End, Space
- * toggles playback). The thumb is content motion driven off `currentSeconds`
- * (clock-tracked, not CSS-animated), so only the eased hover/focus lift is
- * reduced-motion-gated. Dragging holds the overlay controls open via `setScrubbing`.
- */
 function Scrubber({ label = "Seek" }: { label?: string }) {
   const { currentSeconds, durationSeconds, seek, setScrubbing, togglePlay } = useVideo();
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
-  // While dragging, the thumb tracks the pointer directly so it never lags the
-  // (debounced) video seek; null hands display back to the clock-driven prop.
+
   const [dragFraction, setDragFraction] = useState<number | null>(null);
 
   const hasDuration = Number.isFinite(durationSeconds) && durationSeconds > 0;

@@ -50,9 +50,6 @@ describe("telemetry observability migration", () => {
         await client.execute(statement);
       }
 
-      // A rolling-deploy writer may still issue the old insert after expansion. Its
-      // classification stays unknown and outcome stays NULL rather than defaulting to a
-      // false verdict; the API reader derives that compatibility value from stored `ok`.
       await client.execute({
         args: [
           "rolling-success",

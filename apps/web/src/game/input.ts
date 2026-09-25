@@ -1,14 +1,7 @@
-// Keyboard + touch input. Keyboard: arrows or A/D steer, space (or up/W)
-// boosts. Touch: left/right halves steer, a bottom-center zone boosts. Any
-// key or tap doubles as the menu action (launch / skip / fly again); M
-// toggles mute, C toggles the atlas (the game says "Charting the Galaxy…" —
-// C is the chart key), Escape pauses.
-
 const STEER_LEFT_KEYS = new Set(["a", "arrowleft"]);
 const STEER_RIGHT_KEYS = new Set(["d", "arrowright"]);
 const BOOST_KEYS = new Set([" ", "arrowup", "w"]);
-// Optional manual fire (Unit D). The laser auto-clears the path; F is a desktop
-// blip on demand. No touch fire verb — auto-fire covers glass.
+
 const FIRE_KEYS = new Set(["f"]);
 
 type InputState = {
@@ -18,23 +11,22 @@ type InputState = {
 };
 
 export type InputManager = {
-  /** True once if an action (any key / tap) fired since the last call. */
   consumeAction: () => boolean;
-  /** True once if C (the atlas) was pressed since the last call. */
+
   consumeAtlasToggle: () => boolean;
-  /** True once if M was pressed since the last call. */
+
   consumeMuteToggle: () => boolean;
-  /** True once if Escape was pressed since the last call. */
+
   consumePauseToggle: () => boolean;
   destroy: () => void;
   state: () => InputState;
-  /** Whether the player has touched the screen at all this session. */
+
   touchSeen: () => boolean;
 };
 
 export function createInput(
   target: HTMLElement,
-  /** Returns true when a press hit an on-canvas control and is consumed. */
+
   isUiTap?: (clientX: number, clientY: number) => boolean,
 ): InputManager {
   const keysDown = new Set<string>();
@@ -71,15 +63,12 @@ export function createInput(
       return;
     }
 
-    // C is the chart key: it only ever toggles the atlas, never steers or
-    // fires the menu action (same contract as M).
     if (key === "c") {
       atlasPending = true;
 
       return;
     }
 
-    // Escape is the pause key, never a menu action.
     if (key === "escape") {
       pausePending = true;
 
@@ -87,7 +76,6 @@ export function createInput(
     }
 
     if (BOOST_KEYS.has(key) || STEER_LEFT_KEYS.has(key) || STEER_RIGHT_KEYS.has(key)) {
-      // Steering and boosting shouldn't scroll the page.
       event.preventDefault();
     }
 
@@ -106,8 +94,6 @@ export function createInput(
 
     event.preventDefault();
 
-    // On-canvas controls (the card's Spotify link) eat the press whole:
-    // no steer, no menu action, no orbit departure.
     if (isUiTap?.(event.clientX, event.clientY)) {
       return;
     }

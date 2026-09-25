@@ -1,14 +1,3 @@
-// The colophon — the site's whole navigation, banked at the bottom like a record
-// sleeve's liner notes. This is the crawl backbone: any deep page is within two hops
-// of every index (log ↔ artists ↔ galaxies ↔ logbook ↔ mixtapes ↔ labels ↔ albums),
-// which is where a footer earns its SEO keep. The plate grammar (crop-mark brackets +
-// register cross + grain) dresses it; a darker ground than the page plate is what
-// makes it read as a distinct object rather than as more page.
-//
-// The columns come from the nav model, headings and all — including the fork between
-// THE TRAIL (what Fluncle did) and THE CRATES (what he found it among). Add a link
-// there, not here.
-
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { HomeStatusPill } from "@/components/home/status-pill";
@@ -29,8 +18,6 @@ function FooterColumn({
   galaxiesLive: boolean;
   section: NavSection;
 }): ReactNode {
-  // Navigable pages only. The colophon is the crawl graph, so a dialog CTA (Submit a
-  // track) has no place in it — it lives on the home page, where the ask belongs.
   const items = renderableItems(section, galaxiesLive).filter((item) => item.kind !== "action");
 
   return (
@@ -69,8 +56,6 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
         </div>
       </div>
 
-      {/* Centered, label stacked over the marks — the row reads as one block rather
-          than as a label with a tail. */}
       <div className="nav-footer-followrow">
         <span className="nav-footer-rowlabel">Follow Fluncle</span>
         <nav aria-label="Fluncle on other platforms" className="nav-follow">
@@ -89,9 +74,6 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
         </nav>
       </div>
 
-      {/* The terminal surfaces close the plate, with the live status pill on its own
-          line beneath them. No label: CLI / DIG / GIT / MCP / SSH announce themselves.
-          The pill IS the link to /status, so /status never gets a second one. */}
       <div className="nav-footer-machinery">
         <nav aria-label="Developer surfaces" className="nav-nerds">
           {navNerds.map((nerd) =>
@@ -120,9 +102,6 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
         <HomeStatusPill />
       </div>
 
-      {/* The quietest band on the plate: the meta/legal pages. Kept out of the story
-          columns above (those are the crawl graph) and set small and low, where a
-          reader looks for them and nowhere else has to. */}
       <nav aria-label="Legal" className="nav-footer-legal">
         <Link className="nav-footer-legal-link" to="/privacy">
           Privacy

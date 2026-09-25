@@ -2,14 +2,6 @@ import { colors } from "@fluncle/tokens";
 import { telegramUrl } from "@/lib/fluncle-links";
 import { fluncleAsciiLogo } from "@/lib/identity";
 
-/**
- * The DELIBERATE console output on the homepage: the ASCII wordmark in Eclipse
- * Gold, then the Telegram invite. Anyone who opens devtools on a music site is
- * curious, and curiosity gets a door — this is the only place Fluncle speaks to
- * the console, and it is a greeting, never a debug leftover.
- *
- * Called once from the homepage mount effect, so it never runs during SSR.
- */
 export function printConsoleGreeting(): void {
   console.log(
     `%c${fluncleAsciiLogo}`,

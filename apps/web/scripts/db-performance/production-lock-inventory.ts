@@ -6,34 +6,16 @@ import {
 import { type IndexConsumerCoordinate, type IndexInventoryDocument } from "./index-inventory";
 import { SCALE_PROFILES, type ScaleProfile } from "./manifest";
 
-// The audit inventory is read from its JSON document directly so this module has no runtime
-// dependency on `index-inventory.ts`, which imports this inventory to report it.
 const AUDIT_INVENTORY = rawInventory as unknown as IndexInventoryDocument;
 const PRODUCTION_LOCK_PROFILES = [...SCALE_PROFILES] as const;
 
-/**
- * Production `INDEXED BY` locks whose index sits OUTSIDE the audit's contraction inventory.
- *
- * `index-inventory.json` is the audit's contraction set: exactly 32 `tracks` indexes and 32
- * database-scale indexes, counted as an invariant, so an index cannot be added there without
- * changing what that cohort means. These indexes still carry production planner locks, and a lock
- * is a standing claim that the planner would otherwise diverge. This inventory holds that claim in
- * its own strict structure: every lock site is a real consumer coordinate, every contract states
- * the exact number of locks its real statement carries, and both counts are validated at import
- * and against the consumer source by `index-evidence.test.ts`.
- *
- * A production-lock contract therefore needs no inventory entry: its evidence is keyed by this
- * inventory's contract id, and `buildIndexAudit` reports it in its own `productionLocks` section
- * next to, never inside, the inventory audit.
- */
 export type ProductionLockSite = IndexConsumerCoordinate & {
-  /** The production-lock contract whose statement reproduces this site. */
   contractId: string;
 };
 
 export type ProductionLockIndex = {
   columns: string[];
-  /** The fixture table the evidence statement locks; the fixture index is `perf_<name>`. */
+
   fixtureTable: string;
   name: string;
   partialPredicate: null | string;
@@ -43,7 +25,7 @@ export type ProductionLockIndex = {
 
 export type ProductionLockContract = {
   consumer: IndexConsumerCoordinate[];
-  /** Exact number of `INDEXED BY` clauses the real statement carries on the fixture. */
+
   expectedLockCount: number;
   id: string;
   indexes: string[];
@@ -51,7 +33,6 @@ export type ProductionLockContract = {
   requiredProfiles: ScaleProfile[];
 };
 
-/** Attached to a performance contract that reproduces a production-lock consumer. */
 export type ProductionLockEvidenceDefinition = {
   contractId: string;
   expectedLockCount: number;

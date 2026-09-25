@@ -54,7 +54,7 @@ The page's robots directive and the sitemap's membership **cannot drift**, becau
 
 It could have been a weighted score, and a score would have been prettier and unusable. This predicate runs over the whole `tracks` table for the sitemap — a table the crawler grows without bound — so it has to stay a shape the planner can drive off an index. The sitemap index's one-row count locks a covering index behind the simple catalogue partial predicate; its two Spotify-or-Apple branches still evaluate this full evidence predicate, so their sum remains exact. The child keyset window remains on `tracks_catalogue_active_track_id_idx`. The shared predicate keeps identity and evidence terms in one source, while the count index stores the remaining evidence columns as keys rather than claiming that its partial predicate is the whole rule.
 
-`is_catalogue` stays what its column comment says it is: internal bookkeeping, used to **select** and never to **render**.
+`is_catalogue` is internal bookkeeping, used to **select** and never to **render**.
 
 ## What the page shows
 
@@ -68,6 +68,8 @@ Every band is conditional, and an empty one renders nothing at all — no headin
 ### Beatport is rendered, never asserted
 
 `tracks.beatport_url`'s §F rail in `db/schema.ts` keeps the URL out of every derived corpus, because Beatport's terms bar using its content for text/data mining or for feeding AI. **A `sameAs` graph is a derived corpus** — `log-schema.ts` says in its own words that it exists "for crawlers + AI answer-engines" — and the certified `/log` page's `musicRecordingJsonLd` already withholds it. That shipped behaviour is the specification.
+
+Spotify `sameAs` values in structured data remain direct Spotify identity URLs even when visitor links use Fluncle's `/out/spotify/` redirect. A redirect URL inside `sameAs` would assert that the recording is identical to Fluncle's redirect resource instead of the Spotify recording; `log-schema-hop-carveout.test.ts` checks both the absence of hop URLs and the presence of the direct identity link.
 
 This page is the first surface that both renders a Beatport link _and_ composes a `sameAs` array from its outbound destinations, so it needs an explicit exclusion rather than an absence. The seam is `SAME_AS_EXCLUDED_LISTEN_KINDS` / `sameAsUrls` in [`apps/web/src/lib/track-page.ts`](../apps/web/src/lib/track-page.ts): the route's `head()` builds its `sameAs` input through it rather than mapping the destinations itself, the exclusion is keyed on the destination **kind** so it survives a rename or a URL-shape change, and `track-page.test.ts` fails if a future edit lets the kind through. The rendered control is untouched.
 

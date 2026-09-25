@@ -2,11 +2,6 @@ import { describe, expect, it } from "vitest";
 import { type FluncleUIMessage } from "@/lib/server/chat";
 import { collectChatFindings, planListOutput } from "./chat-output";
 
-// The pure half of ChatDnB's tool-output rendering: the register-split render plan and the
-// transcript's finding walk. These pin the two guarantees Unit C rests on — that a two-bucket
-// output composes BOTH buckets (never either/or) with the heading gated on findings, and that a
-// catalogue row is NEVER swept into the previewable-finding map (the distinct-key guarantee).
-
 describe("planListOutput — the register-split render plan", () => {
   const finding = { artists: ["Nu:Tone"], coordinate: "004.7.2I", title: "Better Places" };
   const catalogue = { artists: ["Ghost"], title: "Out There" };
@@ -16,12 +11,11 @@ describe("planListOutput — the register-split render plan", () => {
 
     expect(plan?.findings).toHaveLength(1);
     expect(plan?.catalogue).toHaveLength(1);
-    // A mixed result heads the catalogue block with the true superset — findings render above it.
+
     expect(plan?.catalogueHeading).toBe("Tracks");
   });
 
   it("leaves a catalogue-only answer BARE (no heading — a heading would name the tier)", () => {
-    // The wire drops the empty findings bucket (dropEmpty), so the key may be absent entirely.
     const plan = planListOutput({ catalogue: [catalogue], ok: true });
 
     expect(plan?.findings).toHaveLength(0);
@@ -33,8 +27,7 @@ describe("planListOutput — the register-split render plan", () => {
     const plan = planListOutput({ findings: [finding], ok: true });
 
     expect(plan?.findings).toHaveLength(1);
-    // No catalogue rows ⇒ no catalogue block renders; the heading value is inert (the render gates
-    // the whole block on catalogue.length > 0).
+
     expect(plan?.catalogue).toHaveLength(0);
   });
 
@@ -43,7 +36,7 @@ describe("planListOutput — the register-split render plan", () => {
     const plan = planListOutput({ anchor, catalogue: [catalogue], ok: true });
 
     expect(plan?.anchor?.coordinate).toBe("009.1.1A");
-    // findings is empty, so the block stays bare even though a named anchor renders above it.
+
     expect(plan?.catalogueHeading).toBeUndefined();
   });
 
@@ -87,7 +80,6 @@ describe("collectChatFindings — the transcript's finding walk", () => {
       }),
     ]);
 
-    // Only the finding's coordinate is a key — the catalogue bucket is never read.
     expect([...map.keys()]).toEqual(["004.7.2I"]);
     expect([...map.values()].some((finding) => finding.title === "Out There One")).toBe(false);
   });
@@ -111,7 +103,6 @@ describe("collectChatFindings — the transcript's finding walk", () => {
       }),
     ]);
 
-    // The seed + the certified step are keyed; the coordinate-less catalogue step is not.
     expect([...map.keys()].sort()).toEqual(["004.7.2I", "005.1.3B"]);
     expect([...map.values()].some((finding) => finding.title === "Catalogue Cut")).toBe(false);
   });

@@ -1,46 +1,3 @@
-// The identity answer, rendered — one recording's identifiers and its links out, with the honest
-// negative said in words rather than left as a gap.
-//
-// THE WHOLE POINT OF THIS FILE is the states that are not "here it is". A link resolver that only
-// prints what it holds leaves a reader unable to tell "we never looked" from "we looked and it is
-// genuinely not there", and those are opposite facts. Every line below is computed from a real
-// column in the envelope (lib/server/identity-envelope.ts holds the discipline); where no column
-// backs a claim, the line says nothing rather than inventing one.
-//
-// ── THE REGISTER: A RECEIPT ───────────────────────────────────────────────────────────────────
-// The page is a receipt from a person who checked, and a receipt is legitimately AGENTLESS. The
-// reader is a stranger holding an ISRC asking two things: where does this recording live, and can I
-// trust the answer. Trust comes from precision and brevity, not personality. So the content of a row
-// is a method, a date, and a status, and it renders as exactly that: status-vocabulary fragments
-// joined by middots, with no subject, no sentences, and no idioms. Voice lives in the page's one
-// intro line (identity.$key.tsx) and nowhere else here. The rows remain terse status-vocabulary
-// fragments rather than prose or narrated folksiness.
-//
-// ── THE COVERAGE SET ──────────────────────────────────────────────────────────────────────────
-// The page renders rows ONLY for what the archive covers: ISRC, MusicBrainz, Spotify, Apple Music,
-// Deezer, Discogs, Beatport, YouTube. Tidal is absent by design — a "not covered" row is the API
-// contract leaking into a human surface, and it reads as a roadmap promise. The API still answers
-// all seven platforms explicitly, `unsupported` included, because a machine needs the field to
-// exist; the SCOPE of what Fluncle covers is stated once in `/docs/identity` rather than once per
-// recording.
-//
-// READING ORDER, and why the tail is not sorted by what the link does. Spotify → Apple Music →
-// Deezer are the players, Discogs is the reference, and then two rows that are each qualified in
-// their own way: Beatport is the only link that opens a CHECKOUT, so it comes after the ways to
-// hear and look the recording up; YouTube comes after Beatport because it is the only link Fluncle
-// did not go looking for. It is a by-product of the audio — the upload his fingerprint gate
-// happened to accept, while buying the capture or while re-deriving an older one's provenance —
-// and it renders at all only when the upload is an
-// official one. THE ONE ROW NOBODY WENT LOOKING FOR READS LAST, which is a claim about how the
-// link was come by and NOT about how good the evidence is: the fingerprint is the strongest
-// evidence on this page, being the only method here that compared the sound itself.
-//
-// ── THE UNLIT RULE (DESIGN.md) ────────────────────────────────────────────────────────────────
-// A recording Fluncle has certified reads LIT: cream ink and its coordinate, linking home to its
-// `/log` page. One he has not reads UNLIT: stardust ink, no coordinate, no gold at rest or on
-// hover, and its only way onward is the link OUT that its own state carries. The tier itself is
-// never named, headed, or counted — the distinction is carried by the register, not by a noun.
-
 import { Link } from "@tanstack/react-router";
 import { artistTitleLine } from "@/lib/log-prose";
 import { formatDateLong } from "@/lib/format";
@@ -51,14 +8,11 @@ import {
 } from "@/lib/server/identity-envelope";
 import { type AnchorRefusalReason } from "@/lib/server/track-work";
 
-/** The rows of one recording's answer, in reading order: what it IS, then where it goes. */
 const IDENTIFIER_ROWS = [
   { key: "isrc", label: "ISRC" },
   { key: "mbRecordingId", label: "MusicBrainz" },
 ] as const;
 
-/** The covered platforms, and only those, in reading order — where you listen, where you look it
- *  up, where you buy it, and what his own capture turned up. See the file header. */
 const LINK_ROWS = [
   { key: "spotify", label: "Spotify" },
   { key: "appleMusic", label: "Apple Music" },
@@ -68,14 +22,6 @@ const LINK_ROWS = [
   { key: "youtube", label: "YouTube" },
 ] as const;
 
-/** The literal label on the link a `verified` state carries. "Listen on Spotify" is the ratified
- *  string for that action across the app (VOICE.md's Chrome Rule: one action, one label).
- *
- *  Beatport reads "Buy" rather than "Listen" because it is a STORE, not a player — the label names
- *  what the link actually does, and promising a listen where a reader gets a checkout is the small
- *  dishonesty this whole page exists to avoid. It is a different action from the admin-side
- *  "Search on Beatport", which opens a search rather than one record, so the Chrome Rule is
- *  satisfied by both: one action, one label. */
 const OPEN_LABEL: Record<string, string> = {
   "Apple Music": "Listen on Apple Music",
   Beatport: "Buy on Beatport",
@@ -83,32 +29,16 @@ const OPEN_LABEL: Record<string, string> = {
   Discogs: "Open on Discogs",
   MusicBrainz: "Open on MusicBrainz",
   Spotify: "Listen on Spotify",
-  // "Watch", not "Listen": the link opens a video. Naming what the link actually does is the same
-  // rule that made Beatport read "Buy".
+
   YouTube: "Watch on YouTube",
 };
 
-/** The fragment separator, matching the middot the rest of the site already joins facts with. */
 function fragmentLine(...parts: (string | undefined)[]): string {
   return parts.filter((part): part is string => Boolean(part)).join(" · ");
 }
 
-/**
- * HOW the row was decided, as a status fragment rather than a claim about anybody. Two families:
- * `matched by …` where Fluncle ran a comparison, `from …` where the identifier is the record's own.
- *
- * `unknown-legacy` returns nothing at all. No column records how that row came to be trusted, so the
- * receipt makes no method claim and carries only its date — an absent fragment, never a vague one.
- *
- * `confirmed` and `checked` are RESERVED for the date fragment beside this one, where they carry the
- * verified-vs-attempted distinction. No method fragment spends either word, or a line reads
- * "confirmed by hand · confirmed Jul 1, 2026" and the distinction stops being legible.
- */
 function methodFragment(method: IdentityMethod, label: string): string | undefined {
   switch (method) {
-    // The one method whose evidence is the SOUND. "matched by" keeps it in the comparison family
-    // beside ISRC; "audio fingerprint" says what was compared without spending `confirmed` or
-    // `checked`, which the date fragment beside this one owns.
     case "fingerprint":
       return "matched by audio fingerprint";
 
@@ -118,8 +48,6 @@ function methodFragment(method: IdentityMethod, label: string): string | undefin
     case "operator":
       return "set by hand";
 
-    // The identifier IS this row's origin rather than a lookup result, which is the one thing the
-    // row cannot say by naming its own platform again.
     case "pk-derived":
       return "the id it arrived under";
 
@@ -137,11 +65,6 @@ function methodFragment(method: IdentityMethod, label: string): string | undefin
   }
 }
 
-/**
- * WHEN, and honest about what the date marks. A verified stamp is the moment the link was written
- * ("confirmed"); an attempted stamp is the moment a look concluded ("checked"). Serving one as the
- * other is the easiest lie in this envelope to tell by accident, so the two words never swap.
- */
 function whenFragment(
   at: null | string,
   atMeaning: "attempted" | "verified" | null,
@@ -157,17 +80,10 @@ function whenFragment(
 
 type AbsentState = Extract<IdentityState, { state: "absent" }>;
 
-/** Whether more looks are coming, off the two columns that decide it. Drives "checked" vs "last
- *  checked": a row that will be asked again has a LAST check, one that will not simply has one. */
 function moreLooksComing(state: AbsentState): boolean {
   return state.terminal !== true && state.retry !== "single-shot";
 }
 
-/**
- * The count-and-date fragment of a miss. The tally is printed ONLY where a monotone counter backs it
- * (the envelope withholds Spotify's, which is a spend budget the requeue decrements), and a row with
- * neither a tally nor a stamp contributes nothing rather than a hedge.
- */
 function checkedFragment(state: AbsentState): string | undefined {
   const when = state.lastAttemptedAt ? formatDateLong(state.lastAttemptedAt) : undefined;
 
@@ -184,15 +100,6 @@ function checkedFragment(state: AbsentState): string | undefined {
   return moreLooksComing(state) ? `last checked ${when}` : `checked ${when}`;
 }
 
-/**
- * What happens after a miss, off the retry class the acquisition queue itself is built on.
- *
- * `terminal` is the only column that can say "never again", so it alone earns `retired`. A capped
- * row that is not terminal is still under its budget and says so with the ceiling attached. A
- * `single-shot` row with no terminal verdict on file gets NO fragment: that Fluncle holds no opinion
- * is itself the honest answer, and inventing one either way would be the guess this surface exists
- * to avoid.
- */
 function outlookFragment(state: AbsentState): string | undefined {
   if (state.terminal === true) {
     return "retired";
@@ -211,7 +118,6 @@ function outlookFragment(state: AbsentState): string | undefined {
   return undefined;
 }
 
-/** Which condition of this recording's own row stops Fluncle looking. A closed set. */
 function refusalLine(reason: AnchorRefusalReason): string {
   switch (reason) {
     case "attempt-cap-reached":
@@ -231,23 +137,8 @@ function refusalLine(reason: AnchorRefusalReason): string {
   }
 }
 
-/** Every state that gets a row. `unsupported` is the one that does not — {@link StateRow} drops it
- *  before this function is reached, so "not covered" can never render as a line. */
 type RenderedState = Exclude<IdentityState, { state: "unsupported" }>;
 
-/**
- * One row's answer: the status fragments, plus the link where there is one.
- *
- * The four rendered states, and what each of them is honestly claiming:
- *   · verified    — it is held, and here is how and when it came to be trusted.
- *   · absent      — a look ran to the end and came back empty, and here is whether another is coming.
- *   · refused     — no look will run, and here is which condition of the row stops it.
- *   · unattempted — nobody has gone looking.
- *
- * A `verified` line starts lowercase because it CAPTIONS the value or link above it; every other
- * state starts capitalized because the fragment IS the answer and has nothing above it to hang from.
- * Both are sentence case; the split is the grammar of the row, not an oversight.
- */
 function StateLine({ label, state }: { label: string; state: RenderedState }) {
   if (state.state === "verified") {
     const line = fragmentLine(
@@ -255,7 +146,6 @@ function StateLine({ label, state }: { label: string; state: RenderedState }) {
       whenFragment(state.verification.at, state.verification.atMeaning),
     );
 
-    // An identifier is worth printing (a reader copies it); a platform link is worth following.
     const openLabel = OPEN_LABEL[label];
 
     return (
@@ -287,14 +177,6 @@ function StateLine({ label, state }: { label: string; state: RenderedState }) {
   return <span className="identity-provenance">Not checked yet</span>;
 }
 
-/**
- * One definition row: the platform or identifier, then its answer.
- *
- * `unsupported` gets NO ROW, and the guard lives here so that is true by construction rather than by
- * the coverage list happening to exclude the two platforms that answer it today. A row reading "not
- * covered" is the API's contract leaking onto a human surface, and to a reader it reads as a promise
- * to add the platform later. Scope belongs in `/docs/identity`, said once, not once per recording.
- */
 function StateRow({ label, state }: { label: string; state: IdentityState }) {
   if (state.state === "unsupported") {
     return undefined;
@@ -310,16 +192,6 @@ function StateRow({ label, state }: { label: string; state: IdentityState }) {
   );
 }
 
-/**
- * How this recording stands to the others the same identifier returned — but only the part that is
- * about THIS one. `ambiguous` is a property of the whole answer, not of any block in it, so it is
- * said once in the page's opening line instead of repeated over every block (the Recap Tell: a
- * sentence that restates what the reader already has advances nothing). `canonical` says nothing at
- * all: over a lone block, "this is the only one" is noise.
- *
- * Worded in the same status vocabulary the `duplicate` refusal carries, because it is the same fact
- * said at block scale rather than row scale.
- */
 function RelationNote({ relation }: { relation: IdentityRecording["relation"] }) {
   if (relation === "canonical" || relation === "ambiguous") {
     return undefined;
@@ -338,10 +210,6 @@ function RelationNote({ relation }: { relation: IdentityRecording["relation"] })
   );
 }
 
-/**
- * One recording, lit or unlit. The certified one carries its coordinate and links home; the
- * uncertified one carries neither, and leaves by whichever link its own state holds.
- */
 export function IdentityRecordingBlock({ recording }: { recording: IdentityRecording }) {
   const line = artistTitleLine(recording);
   const logId = recording.logId;
@@ -355,14 +223,10 @@ export function IdentityRecordingBlock({ recording }: { recording: IdentityRecor
               {line}
             </Link>
           </h2>
-          {/* ONE composed string: a `fluncle://{logId}` JSX pair SSRs as comment-split text
-              nodes, which naive text extraction (and a crawler's) reads as a broken coordinate. */}
+
           <p className="log-coordinate-uri">{`fluncle://${logId}`}</p>
         </>
       ) : (
-        // UNLIT: named so a reader can tell the returned rows apart, and no further. No
-        // coordinate (it has none), no link home (there is no page here to send you to), and
-        // no noun for what it is — the tier has no public name (docs/album-entity.md).
         <h2 className="identity-title identity-title--unlit">{line}</h2>
       )}
 

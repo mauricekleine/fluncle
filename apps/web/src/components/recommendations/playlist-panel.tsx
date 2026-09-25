@@ -1,17 +1,3 @@
-// THE PLAYLIST PANEL — the artifact itself, crowned by its header (the 2×2 collage cut
-// from the picks' covers, Spotify's own auto-cover grammar; the name; the one meta fact
-// the interface can't carry — the weekly freshening; the gold Get-playlist CTA — the
-// page's One Sun). Under it, the tracklist being assembled: the search to add, the
-// candidates the search returns, then the numbered picks with their remove controls, and
-// a dashed ghost slot where the next pick lands. The interface carries the meaning; no
-// helper prose.
-//
-// The header CTA is phase-driven (`resolvePlaylistCta`): the DRAFT phase shows the one-time
-// "Get playlist" commitment (the mint gesture, lifted into `useFrontierMint` and handed down),
-// the COMMITTED phase opens the synced Spotify playlist or — while the Spotify half is still
-// dark — shows the honest waiting line. There is no refresh control: the engine's only user
-// trigger is that first commit (the other is the Friday sweep).
-
 import { MagnifyingGlassIcon, PlaylistIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -36,11 +22,6 @@ import { type FrontierMint } from "./use-frontier-mint";
 
 type SearchResponse = { results?: SearchHit[] };
 
-/**
- * Three real example queries, a lesson disguised as a shortcut (the ⌘K precedent): a bare
- * artist, a label, and a sonic "sounds like". Each returns rows against the live archive, so
- * clicking one always fills the panel with something pickable.
- */
 const EXAMPLE_QUERIES = ["netsky", "hospital records", "tracks that sound like Nine Clouds"];
 
 const MIN_QUERY_LENGTH = 2;
@@ -94,9 +75,6 @@ export function PlaylistPanel({
   const atCap = seeds.length >= SEED_CAP;
   const queryActive = debounced.length >= MIN_QUERY_LENGTH;
 
-  // A secondary, on-demand panel the loader does not carry, so it rides its own UNSEEDED
-  // query (the account convention allows this for data the loader never returned). Never
-  // refetches on focus — the playlist doesn't change under the reader's feet mid-session.
   const statusQuery = useQuery({
     queryFn: readFrontier,
     queryKey: ["frontier"],
@@ -106,14 +84,8 @@ export function PlaylistPanel({
 
   const frontier = statusQuery.data ?? FRONTIER_CLOSED;
 
-  // The one CTA the header shows, by phase (the shelf-from-editions triggers): DRAFT offers
-  // the one-time "Get playlist" commitment; COMMITTED opens the synced playlist, or — for an
-  // edition-only user whose Spotify half is still dark — shows nothing but the honest waiting
-  // line. There is no refresh control: the engine's only user trigger is that first commit.
   const cta = resolvePlaylistCta({ phase, playlistUrl: frontier.playlistUrl });
 
-  // A keystroke is not a query — the same 180ms debounce the ⌘K dialog uses, so a typed word
-  // fires one resolver round trip on its way to being one, not five.
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query.trim()), 180);
 
@@ -159,10 +131,6 @@ export function PlaylistPanel({
     }
   }
 
-  // The one meta fact the interface can't carry: the weekly freshening. One quiet line above
-  // the CTA — the last refresh once the playlist exists ("Refreshed Jul 17, 2026"), the standing
-  // weekly promise before it. The refresh now drains paced across the day rather than on a fixed
-  // wall-clock slot, so the line stays honestly "every week" and never names a specific time.
   const meta = !frontier.playlistUrl
     ? "Refreshed every week"
     : frontier.lastSyncedAt
@@ -178,8 +146,6 @@ export function PlaylistPanel({
           {meta ? <p className="rec-playlist-meta">{meta}</p> : null}
 
           {cta.kind === "waiting" ? (
-            // Committed, but the Spotify half is still dark — the set is saved, the playlist
-            // follows when the mirror opens. The honest resting line, no control.
             <p className="rec-playlist-note">Your Spotify playlist follows soon.</p>
           ) : (
             <div className="rec-playlist-cta">
@@ -201,10 +167,6 @@ export function PlaylistPanel({
             </div>
           )}
 
-          {/* The live region is mounted UNCONDITIONALLY and only its text toggles — a "Get
-              playlist" click updates the text in a region already on the page, so a screen
-              reader announces the outcome (a region inserted together with its content is
-              skipped). */}
           <p aria-live="polite" className="rec-message">
             {mint.message || null}
           </p>
@@ -225,14 +187,10 @@ export function PlaylistPanel({
           />
         </div>
 
-        {/* Same unconditional-mount rule as the mint toast: the seed-write message (a cap 409,
-            say) toggles inside a region already on the page, so a screen reader announces it. */}
         <p aria-live="polite" className="rec-message">
           {message || null}
         </p>
 
-        {/* Candidates — the search's reply, inline under the field. The row carries the
-            music, the pill carries the pick (the one gesture grammar). */}
         {queryActive ? (
           results.length > 0 ? (
             <ul className="rec-candidates">
@@ -261,7 +219,6 @@ export function PlaylistPanel({
           )
         ) : null}
 
-        {/* The playlist's tracklist — numbered like the positions it fills. */}
         {hasPicks ? (
           <>
             <div className="rec-picks-head">
@@ -323,12 +280,6 @@ export function PlaylistPanel({
   );
 }
 
-/**
- * The playlist's cover — Spotify's 2×2 auto-collage, cut from the first four picks. A
- * quadrant with no cover yet falls back to the eclipse gradient over Dust Veil (the
- * artwork-fallback grammar); at zero picks the whole frame is the fallback, the artifact
- * not yet revealed.
- */
 function PlaylistCollage({ covers }: { covers: (string | undefined)[] }) {
   return (
     <span aria-hidden className="rec-collage">
@@ -345,11 +296,6 @@ function PlaylistCollage({ covers }: { covers: (string | undefined)[] }) {
   );
 }
 
-/**
- * One pick in the tracklist — the playlist's own row: the position numeral, the cover, the
- * fused Artist — Title, and the remove control. The row itself is inert (reordering would
- * be a fake affordance — the engine is order-blind); the X is the only control.
- */
 function PickRow({
   busy,
   index,
@@ -383,13 +329,6 @@ function PickRow({
   );
 }
 
-/**
- * One candidate. Cover-led, the register carried by the mark beside the pill exactly as the
- * ⌘K rows do it (a finding shows its Log ID, an uncertified track a Spotify mark). The row
- * itself is inert; the Add pill is the gesture. A row already picked reads "Added"; at the
- * cap an un-picked pill disables. An uncertified candidate hovers cold (the Dust Veil, the
- * Unlit Rule), a finding catches gold.
- */
 function CandidateRow({
   atCap,
   busy,

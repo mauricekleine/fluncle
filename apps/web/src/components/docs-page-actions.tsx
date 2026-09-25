@@ -1,33 +1,14 @@
 import { usePathname } from "fumadocs-core/framework";
 import { buttonVariants } from "fumadocs-ui/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "fumadocs-ui/components/ui/popover";
-// MarkdownCopyButton is re-exported from the public docs/page entry (the
-// `shared/page-actions` path itself is not in fumadocs-ui's exports map). Same
-// entry the docs page renders from.
+
 import { MarkdownCopyButton } from "fumadocs-ui/layouts/docs/page";
-// Chrome glyphs from the app's icon set (@phosphor-icons/react), not lucide —
-// lucide isn't a direct dependency here, and Phosphor already voices every other
-// control. Brand marks quote the official simple-icons glyph via BrandIcon
-// (DESIGN.md Iconography — never a hand-redraw); only OpenAI stays inline below,
-// as simple-icons delisted it (no siOpenai/siChatgpt in the package).
+
 import { ArrowSquareOutIcon, CaretDownIcon, FileTextIcon } from "@phosphor-icons/react";
 import { type ReactNode } from "react";
 import { siAnthropic, siCursor } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { cn } from "@/lib/utils";
-
-// The per-page "Copy page / LLM" affordance, on every docs page. Fumadocs 16
-// ships MarkdownCopyButton (fetch + copy the page Markdown) and its own
-// ViewOptionsPopover (the "Open" dropdown). We keep the copy button as-is but
-// render OUR own dropdown: Fumadocs' ViewOptionsPopover hardcodes its link list
-// with no prop to drop a single entry, and we want "Open in Scira AI" gone while
-// the other four stay (View as Markdown, ChatGPT, Claude, Cursor). This mirrors
-// Fumadocs' component exactly — same Popover primitives, same buttonVariants,
-// same item markup — minus Scira (and minus the GitHub link: the repo is
-// private). Both pieces key off `markdownUrl`, pointed at the per-page Markdown
-// route (routes/docs[.]md.$.ts): `/docs.md/<slug>`. That sibling path can never
-// shadow a doc page (the HTML lives at `/docs/<slug>`). We derive the slug from
-// the current pathname so this one component serves every page, the index too.
 
 type OpenItem = {
   href: string;
@@ -50,9 +31,6 @@ function useOpenItems(markdownUrl: string): OpenItem[] {
     {
       href: `https://chatgpt.com/?${new URLSearchParams({ hints: "search", q })}`,
       icon: (
-        // Inline rather than a BrandIcon because simple-icons no longer ships an OpenAI
-        // mark; this is the forced exception to DESIGN.md's iconography rule, not a redraw
-        // by preference.
         // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- an inline <svg> carries role="img" by convention; swapping to <img> would need an external asset.
         <svg fill="currentColor" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
           <title>OpenAI</title>
@@ -109,8 +87,7 @@ function ViewOptionsPopover({ markdownUrl }: { markdownUrl: string }) {
 
 export function DocsPageActions() {
   const pathname = usePathname();
-  // "/docs" or "/docs/" -> "" (the index, served at /docs.md/); "/docs/cli" ->
-  // "cli". Map onto the markdown sibling: /docs.md/<slug>.
+
   const slug = pathname.replace(/^\/docs\/?/, "").replace(/\/$/, "");
   const markdownUrl = `/docs.md/${slug}`;
 

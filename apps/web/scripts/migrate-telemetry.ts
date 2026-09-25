@@ -1,12 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Apply the SECOND database's migrations: `./drizzle-telemetry` against the run ledger.
- *
- * The primary and telemetry folders/configs remain disjoint. A manual/local run may skip an
- * unprovisioned telemetry database. The production deploy calls this script with `--required`
- * before `wrangler deploy`; missing credentials or a failed migration then exits non-zero, so a
- * Worker that writes the additive schema can never race that schema into production.
- */
+
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +9,6 @@ const webDir = dirname(dirname(fileURLToPath(import.meta.url)));
 export type TelemetryMigrationVerdict = "failed" | "ok" | "skipped";
 
 export type TelemetryMigrationOutcome = {
-  /** Everything an operator needs after the verdict word — never a secret value. */
   detail: string;
   verdict: TelemetryMigrationVerdict;
 };
@@ -34,7 +26,6 @@ export function parseTelemetryMigrationRequired(args: readonly string[]): boolea
   throw new Error("telemetry migration: the only supported argument is --required");
 }
 
-/** Decide the outcome without connecting unless the credential pair is complete. */
 export function telemetryMigration(deps: {
   env: Record<string, string | undefined>;
   migrate: () => { status: null | number };
@@ -70,7 +61,6 @@ export function telemetryMigration(deps: {
   return { detail: "drizzle-telemetry applied to the run ledger.", verdict: "ok" };
 }
 
-/** The one stable line, with a banner around the failure branch. */
 export function reportTelemetryMigration(
   outcome: TelemetryMigrationOutcome,
   log: Pick<Console, "error" | "warn"> = console,

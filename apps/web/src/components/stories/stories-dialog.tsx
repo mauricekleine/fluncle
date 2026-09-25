@@ -4,11 +4,6 @@ import { StoriesSkeleton } from "@/components/stories/stories-skeleton";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
 import { fetchStories } from "@/lib/story-feed";
 
-// Stories as a routed dialog over the home feed: the feed stays mounted (and
-// keeps its scroll) underneath while the player runs full-screen on top. The
-// URL is masked to /log/<id> by the opener, so refresh or share lands on the
-// standalone archival plate — the dialog itself is client-only by
-// construction; SSR never produces it.
 export function StoriesDialog({
   initialLogId,
   onClose,
@@ -17,12 +12,10 @@ export function StoriesDialog({
 }: {
   initialLogId?: string;
   onClose: () => void;
-  /** Per-flick URL owner: a masked replace-navigation from the home route. */
+
   onStoryChange: (logId: string) => void;
   open: boolean;
 }) {
-  // Fetch the stories feed on first open; keep it for re-opens this session
-  // (staleTime: Infinity — the feed is fetched lazily, never refetched on focus).
   const { data: tracks } = useQuery({
     enabled: open,
     queryFn: fetchStories,

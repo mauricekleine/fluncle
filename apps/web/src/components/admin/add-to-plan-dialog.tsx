@@ -22,16 +22,6 @@ import { mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type MixtapeMembership } from "@/lib/server/mixtapes";
 import { type PlanMembership } from "@/lib/server/recordings";
 
-// The board's Mixtape-cell picker: pencil one finding into a PLAN (a videoless
-// `recordings` row — the pre-publish authoring surface since draft mixtapes
-// retired; RFC plan→recording→mixtape), or start a fresh plan around it. A minted
-// tape never appears as a target — a mixtape is only ever born via
-// `promote_recording`, and its tracklist is frozen at the mint. Adding APPENDS a
-// cue (`replace_recording_cues` with the plan's current cues + this finding), so
-// the plan's tracklist is never clobbered; a plan already carrying the finding is
-// disabled rather than duplicated. The finding carries a Beatport search link so
-// the buy-then-mix run starts right here.
-
 type DialogTrack = {
   albumImageUrl?: string;
   artists: string[];
@@ -40,9 +30,6 @@ type DialogTrack = {
   trackId: string;
 };
 
-// One cue of a plan, in the `replace_recording_cues` body shape — the dialog
-// carries the plan's CURRENT cues so an append can replay them untouched
-// (including non-finding snapshot rows and any marked start times).
 export type PlanTargetCue = {
   artistsText?: string;
   findingId?: string;
@@ -50,7 +37,6 @@ export type PlanTargetCue = {
   titleText?: string;
 };
 
-// A plan the picker can pencil the finding into.
 export type PlanTarget = {
   cues: PlanTargetCue[];
   id: string;
@@ -195,9 +181,6 @@ export function AddToPlanDialog({
             <div className="space-y-2">
               <p className="text-xs font-bold text-muted-foreground">Plans</p>
 
-              {/* The plans are the primary target — listed first and prominent. A
-                  plan row is a filled action button; "New plan" sits below as the
-                  secondary path (promoted to primary only when there are no plans). */}
               {plansLoading ? (
                 <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
                   <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
@@ -207,8 +190,7 @@ export function AddToPlanDialog({
                 <ul className="space-y-1.5">
                   {plans.map((plan) => {
                     const pencilled = plan.cues.some((cue) => cue.findingId === track.trackId);
-                    // Count only finding-linked cues, not text-only snapshot rows — the
-                    // "banger" is the certified finding, and /admin/plans counts the same.
+
                     const bangerCount = plan.cues.filter((cue) => cue.findingId).length;
                     return (
                       <li key={plan.id}>
@@ -270,8 +252,6 @@ export function AddToPlanDialog({
   );
 }
 
-// Start a fresh plan (`create_recording` kind=plan) — the server mints its
-// Galaxy-vocab handle; the caller then appends the finding as its first cue.
 async function createPlan(): Promise<string> {
   const response = await fetch("/api/v1/admin/recordings", {
     body: JSON.stringify({ kind: "plan" }),
@@ -290,9 +270,6 @@ async function createPlan(): Promise<string> {
   return id;
 }
 
-// Append the finding as a cue: replay the plan's current cues untouched and add
-// this finding at the end (`replace_recording_cues` reindexes positions from the
-// array order). The cue carries the honest `finding_id` plus the snapshot text.
 async function appendCue(plan: PlanTarget, track: DialogTrack): Promise<void> {
   const response = await fetch(`/api/v1/admin/recordings/${encodeURIComponent(plan.id)}/cues`, {
     body: JSON.stringify({

@@ -10,17 +10,6 @@ import {
   uploadFileToPresign,
 } from "./recording-upload";
 
-// The BROWSER multipart uploader's failure ladder. Everything here is the half that the CLI
-// sibling cannot share: the XHR transport, the per-part retry/backoff, the CORS ETag
-// contract, and the best-effort abort that keeps a failed upload from stranding parts on R2.
-// The pure core (planMultipart / buildCompleteXml) is tested in @fluncle/contracts; this file
-// tests the transport policy wrapped around it.
-//
-// It runs under `environment: "node"`, so `XMLHttpRequest` is stubbed below rather than
-// mocked out of a DOM — that stub IS the seam, and it lets every branch of `putPartOnce`
-// (2xx-with-ETag, 2xx-without, 4xx, 5xx, network error, abort) be driven deterministically.
-// Backoff runs on fake timers, so nothing here waits on a wall clock.
-
 type PartOutcome =
   | { etag: string; kind: "ok" }
   | { kind: "abort-hangs" }
@@ -39,9 +28,8 @@ type XhrLike = {
   upload: { onprogress: ((event: { lengthComputable: boolean; loaded: number }) => void) | null };
 };
 
-/** Every PUT the uploader made, in order — url + the outcome the script handed it. */
 const sent: { outcome: PartOutcome; url: string }[] = [];
-/** The scripted outcome queue, consumed one per PUT. Exhausted ⇒ a successful part. */
+
 let outcomes: PartOutcome[] = [];
 
 function nextOutcome(): PartOutcome {
@@ -77,19 +65,15 @@ function installFakeXhr(): void {
       this.outcome = nextOutcome();
       sent.push({ outcome: this.outcome, url: this.url });
 
-      // Settle on a microtask, the way a real XHR settles off the call stack — the awaiting
-      // promise chain in putPartWithRetry is what we are exercising.
       void Promise.resolve().then(() => {
         if (this.settled) {
           return;
         }
 
-        // A byte tick before the terminal event, so the progress plumbing is exercised too.
         this.upload.onprogress?.({ lengthComputable: true, loaded: 1 });
 
         switch (this.outcome.kind) {
           case "abort-hangs":
-            // Never settles on its own: only `abort()` (the signal) can end this one.
             return;
           case "network-error":
             this.settled = true;
@@ -127,11 +111,6 @@ function installFakeXhr(): void {
   vi.stubGlobal("XMLHttpRequest", FakeXhr);
 }
 
-/**
- * A File stand-in. `uploadFileToPresign` touches exactly `size` and `slice()`, so a real
- * multi-megabyte buffer would buy nothing but allocation (the smallest plan with two parts
- * is 16 MB + 1 byte).
- */
 function fakeFile(size: number): File {
   return {
     size,
@@ -153,11 +132,6 @@ function presignFor(partCount: number): RecordingPresign {
   };
 }
 
-/**
- * Drive the retry backoff on fake timers and hand back whatever the upload REJECTED with.
- * The rejection handler is attached before the timers advance, so the promise is never
- * momentarily unhandled, and the timer drain is what lets the backoff sleeps complete.
- */
 async function rejection(pending: Promise<unknown>): Promise<unknown> {
   const settled = pending.then(
     () => ({ resolved: true }) as const,
@@ -175,15 +149,14 @@ async function rejection(pending: Promise<unknown>): Promise<unknown> {
   return outcome.error;
 }
 
-/** The message of a rejection, for the cases where the wording is the contract. */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 const PART_SIZE = 16 * 1024 * 1024;
-/** Every `fetch` the uploader made: the complete POST and/or the abort DELETE. */
+
 let fetches: { method?: string; url: string }[] = [];
-/** The XML body of the completion POST, so the assembled part list itself can be asserted. */
+
 let completeBody: string | undefined;
 let fetchImpl: (url: string) => Response;
 
@@ -225,9 +198,7 @@ describe("uploadFileToPresign — the happy path", () => {
       "https://r2.example/part/1",
       "https://r2.example/part/2",
     ]);
-    // Nothing was aborted, and the completion really carries each part's OWN ETag in
-    // ascending part order — the pairing R2 assembles the object from, and the one thing a
-    // shuffled `completed.push` would corrupt while every other assertion here still passed.
+
     expect(fetches).toEqual([{ method: "POST", url: "https://r2.example/complete" }]);
     expect(completeBody).toBe(
       "<CompleteMultipartUpload>" +
@@ -253,7 +224,6 @@ describe("uploadFileToPresign — the happy path", () => {
       expect(progress.uploadedBytes).toBeGreaterThanOrEqual(0);
     }
 
-    // The last tick is the terminal one: both parts done, all bytes accounted for.
     const last = seen[seen.length - 1];
 
     expect(last?.completedParts).toBe(2);
@@ -282,7 +252,7 @@ describe("uploadFileToPresign — retry policy", () => {
 
     await expect(pending).resolves.toEqual({ key: "recordings/set.mp4" });
     expect(sent).toHaveLength(3);
-    // 500 · 2^(n-1): the backoff really doubles rather than sitting at a constant.
+
     expect(retries.map((retry) => retry.backoffMs)).toEqual([500, 1000]);
     expect(retries.map((retry) => retry.attempt)).toEqual([1, 2]);
   });
@@ -308,7 +278,7 @@ describe("uploadFileToPresign — retry policy", () => {
 
     expect(messageOf(error)).toContain(`Part 1 failed after ${MAX_PART_ATTEMPTS} attempts`);
     expect(sent).toHaveLength(MAX_PART_ATTEMPTS);
-    // The orphan-cleanup rail: a failed upload never leaves parts sitting on R2.
+
     expect(fetches).toEqual([{ method: "DELETE", url: "https://r2.example/abort" }]);
   });
 });
@@ -325,9 +295,6 @@ describe("uploadFileToPresign — permanent failures never retry", () => {
   });
 
   it("names the CORS misconfiguration when R2 answers 200 with no readable ETag", async () => {
-    // THE CORS CONTRACT (recording-upload.ts's header): a 200 whose ETag the browser cannot
-    // read means the bucket policy does not expose the header. Retrying would hang the
-    // operator on a config problem, so it is permanent and it says what to fix.
     outcomes = [{ kind: "no-etag" }];
 
     const error = await rejection(uploadFileToPresign(fakeFile(1024), presignFor(1)));
@@ -338,9 +305,6 @@ describe("uploadFileToPresign — permanent failures never retry", () => {
   });
 
   it("refuses to start a part the presign never signed", async () => {
-    // A two-part plan against a one-part presign: part 1 uploads, then the missing part 2
-    // is caught BEFORE its PUT and before the completion POST — so a truncated object is
-    // never assembled from a partial part list.
     const error = await rejection(uploadFileToPresign(fakeFile(PART_SIZE + 1), presignFor(1)));
 
     expect(messageOf(error)).toBe("The upload was not signed for part 2 of 2");
@@ -357,8 +321,6 @@ describe("uploadFileToPresign — abort", () => {
       signal: controller.signal,
     });
 
-    // Let the PUT start before cancelling, so this is a mid-flight abort rather than a
-    // pre-aborted signal.
     await vi.advanceTimersByTimeAsync(0);
     controller.abort();
 
@@ -377,7 +339,6 @@ describe("uploadFileToPresign — abort", () => {
       signal: controller.signal,
     });
 
-    // Inside the 500ms backoff, before the second PUT is issued.
     await vi.advanceTimersByTimeAsync(100);
     expect(sent).toHaveLength(1);
 
@@ -386,7 +347,7 @@ describe("uploadFileToPresign — abort", () => {
     const error = await pending.catch((thrown: unknown) => thrown);
 
     expect(isAbortError(error)).toBe(true);
-    // The sleep rejected instead of resolving, so the retry never fired.
+
     expect(sent).toHaveLength(1);
   });
 });
@@ -436,8 +397,7 @@ describe("presignRecordingUpload", () => {
     fetchImpl = () => new Response(JSON.stringify(body), { status: 200 });
 
     await expect(presignRecordingUpload("rec 1", 2, "video/mp4")).resolves.toEqual(body);
-    // The id rides in the PATH, so it must be encoded — an unescaped id would silently
-    // address a different recording.
+
     expect(fetches[0]?.url).toBe("/api/v1/admin/recordings/rec%201/set-video/presign");
   });
 
