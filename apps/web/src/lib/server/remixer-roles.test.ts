@@ -1,8 +1,3 @@
-// The remixer-credit stamp (RFC label-lineage-remixer U2), proven against the REAL migrated schema
-// on an in-memory libSQL engine (the labels.test.ts harness). `getDb` is mocked to hand back the
-// integration client so the REAL `stampRemixerRoles` (artists.ts) SQL runs; the deploy backfill
-// (`backfillRemixerRoles`, scripts/backfill-remixer-roles.ts) takes a client directly.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -73,7 +68,6 @@ describe("stampRemixerRoles", () => {
   });
 
   it("stamps nothing when the remixer is not a linked (certified) artist", async () => {
-    // The title names Calibre, but only the original artist is linked — no row to stamp.
     await seedTrack("t2", "Nobody Else (Calibre Remix)", ["Marcus Intalex"]);
     await seedArtist("a_marcus2", "Marcus Intalex");
     await link("t2", "a_marcus2", 1);
@@ -109,7 +103,7 @@ describe("stampRemixerRoles", () => {
 describe("backfillRemixerRoles (the deploy history catch-up)", () => {
   it("stamps remixers across history and leaves non-remixes untouched, idempotently", async () => {
     await seedTrack("h1", "Nobody Else (Calibre Remix)", ["Marcus Intalex", "Calibre"]);
-    await seedTrack("h2", "Straight Up", ["Lenzman"]); // non-remix, no bracket/dash
+    await seedTrack("h2", "Straight Up", ["Lenzman"]);
     await seedTrack("h3", "Valley - Alix Perez VIP", ["Origin Unknown", "Alix Perez"]);
     await seedArtist("a_marcus", "Marcus Intalex");
     await seedArtist("a_calibre", "Calibre");
@@ -124,13 +118,12 @@ describe("backfillRemixerRoles (the deploy history catch-up)", () => {
 
     const first = await backfillRemixerRoles(db);
 
-    expect(first.stamped).toBe(2); // Calibre on h1, Alix Perez on h3
+    expect(first.stamped).toBe(2);
     expect(await roleOf("h1", "a_calibre")).toBe("remixer");
     expect(await roleOf("h1", "a_marcus")).toBeNull();
     expect(await roleOf("h3", "a_ap")).toBe("remixer");
     expect(await roleOf("h2", "a_lenzman")).toBeNull();
 
-    // Idempotent: a re-run stamps nothing more.
     expect((await backfillRemixerRoles(db)).stamped).toBe(0);
   });
 });

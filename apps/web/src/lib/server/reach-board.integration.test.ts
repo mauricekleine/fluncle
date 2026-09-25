@@ -4,11 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { getSocialMetricsBoard } from "./reach-board";
 
-// THE BOARD SQL, PROVEN AGAINST THE REAL SCHEMA. The unit tests cover the pure velocity/pivot
-// helpers; THIS file proves the board's SQL reads `video_structure` from the RIGHT TABLE
-// (`findings`, not `tracks`). A query built from the generated migrations is the only honest
-// oracle: if a column moves tables, this fails at build time.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -79,7 +74,6 @@ describe("getSocialMetricsBoard against the generated schema", () => {
     expect(row.structure).toBe("flow");
     expect(row.plateSubject).toBe("creature");
     expect(row.views).toBe(3000);
-    // 2,000 views over a 2-day gap — the gap-aware rate, straight from the SQL's components.
     expect(row.dailyViewVelocity).toBe(1000);
   });
 

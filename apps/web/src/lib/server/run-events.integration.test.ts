@@ -6,19 +6,6 @@ import { resolveDatabaseOperationOwner } from "./database-operation-registry";
 import { readClientProperty } from "./db";
 import { createTelemetryIntegrationDb } from "./telemetry-integration-db";
 
-// The run ledger's SQL half — the REAL parameterized insert against the REAL generated
-// telemetry migrations (`apps/web/drizzle-telemetry`), in an in-memory libSQL database.
-//
-// WHY THIS FILE IS NOT OPTIONAL: `insertRunEvent` writes through a hand-built column list
-// and a positional argument tuple. Nothing else in the suite touches this table's DDL, so
-// a column renamed in the schema and not in the tuple, or a value pushed one slot out of
-// place, would typecheck cleanly and lint cleanly and silently write `checked` into
-// `errors`. A slice adding SQL against a new table without an integration test is exactly
-// how a wrong-table read has reached production in this repo before.
-//
-// The unprovisioned path is exercised here too, by handing the accessor `undefined` — the
-// state every local checkout, test run, and preview deployment is actually in.
-
 let telemetryDb: Client | undefined;
 
 vi.mock("./db", async (importOriginal) => {
@@ -27,7 +14,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getTelemetryDb: () => Promise.resolve(telemetryDb) };
 });
 
-/** The envelope `emit_cron_output` POSTs, with the fields a case does not care about filled in. */
 function envelope(over: Partial<Parameters<typeof insertRunEvent>[0]> = {}) {
   return {
     ended_at: "2026-07-29T03:00:12.500Z",
@@ -57,10 +43,6 @@ type InsertFault = {
   error: Error;
 };
 
-/**
- * Fault only the run-event INSERT while leaving the real in-memory libSQL client underneath.
- * `afterExecute` is the production incident: the row landed, but the gateway lost its receipt.
- */
 function faultRunEventInsert(
   client: Client,
   faults: InsertFault[],
@@ -104,7 +86,6 @@ function faultRunEventInsert(
   };
 }
 
-/** Every column of the single stored row, as libSQL hands it back. */
 async function onlyRow(): Promise<Record<string, unknown>> {
   const client = telemetryDb;
 
@@ -125,8 +106,6 @@ beforeEach(async () => {
 
 describe("insertRunEvent — the round trip", () => {
   it("lands every normalized value in its own column", async () => {
-    // The tuple-alignment check. Each expectation below is a DISTINCT value, so a single
-    // off-by-one in the argument list cannot pass by coincidence.
     const recorded = await insertRunEvent(
       envelope({ attempt_count: 3, batch_count: 11, release: "emitter-build-abc123" }),
     );
@@ -155,7 +134,6 @@ describe("insertRunEvent — the round trip", () => {
       ended_at: "2026-07-29T03:00:12.500Z",
       errors: 0,
       exit_code: 0,
-      // Registry cadence wins over the summary's fake one-hour value.
       expected_interval_ms: 300_000,
       gate_state: null,
       id: "fluncle-enrich:2026-07-29T03:00:00.000Z",
@@ -174,15 +152,11 @@ describe("insertRunEvent — the round trip", () => {
       unrecognised_fields: "[]",
       vendor_calls: null,
     });
-    // `created_at` is the WORKER's write time and must be its own value, not a copy of the
-    // box's `occurred_at` — under clock skew a box row's run time precedes its write.
     expect(typeof row.created_at).toBe("string");
     expect(row.created_at).not.toBe(row.occurred_at);
   });
 
   it("keeps the raw summary verbatim, including one that never parsed", async () => {
-    // The unparseable text is EVIDENCE. A ledger that stored only what it understood would
-    // discard the crash it exists to record.
     await insertRunEvent(envelope({ exit_code: 137, summary_raw: "Killed (OOM)" }));
 
     const row = await onlyRow();
@@ -316,9 +290,6 @@ describe("insertRunEvent — idempotency", () => {
   });
 
   it("collapses a retried POST to ONE row", async () => {
-    // The POST is best-effort, so it WILL be retried. An append-only ledger double-counts a
-    // retry without `on conflict(id) do nothing`, and a doubled run count is a lie about
-    // how often a sweep fired.
     const first = await insertRunEvent(envelope());
     const second = await insertRunEvent(envelope());
 
@@ -329,8 +300,6 @@ describe("insertRunEvent — idempotency", () => {
   });
 
   it("does NOT overwrite the stored row on the retry", async () => {
-    // DO NOTHING, not DO UPDATE: the first write is the record. A retry carrying a
-    // different summary must not be able to rewrite history under the same id.
     await insertRunEvent(envelope());
     await insertRunEvent(envelope({ summary_raw: '{"errors":9,"produced":0}' }));
 
@@ -355,7 +324,6 @@ describe("insertRunEvent — idempotency", () => {
 
 describe("insertRunEvent — the derived verdict reaches the column", () => {
   it("stores ok=0 for a sweep that exited 0 while reporting errors", async () => {
-    // The eleven-night defect, end to end: the summary cannot talk the row into ok=1.
     await insertRunEvent(envelope({ exit_code: 0, summary_raw: '{"errors":2,"produced":3}' }));
 
     const row = await onlyRow();
@@ -366,12 +334,6 @@ describe("insertRunEvent — the derived verdict reaches the column", () => {
   });
 
   it("WRITES the row for the real Sentry-sweep summary, and files its claim beside the verdict", async () => {
-    // THE FOUNDING CASE, with the real fixture:
-    // docs/agents/hermes/scripts/sentry-triage-sweep.ts:489 prints
-    // `{"candidates":N,"ok":true,"resolved":N}` — the self-asserted lie this whole ledger
-    // exists to catch. A hard 400 on a summary carrying `ok` meant NO ROW for it, so the
-    // founding case would have been the one case the ledger could not see, and a rowless
-    // sweep reads as a dead one.
     const recorded = await insertRunEvent(
       envelope({ exit_code: 1, summary_raw: '{"candidates":3,"ok":true,"resolved":3}' }),
     );
@@ -381,20 +343,15 @@ describe("insertRunEvent — the derived verdict reaches the column", () => {
 
     const row = await onlyRow();
 
-    // The row exists, the DERIVED verdict is false, and the CLAIM is on the row as `true`.
     expect(row.ok).toBe(0);
     expect(row.self_asserted_ok).toBe(1);
     expect(row.summary_raw).toBe('{"candidates":3,"ok":true,"resolved":3}');
     expect(row.summary_status).toBe("parsed");
-    // And the un-actioned numbers land on the rename queue instead of vanishing.
     expect(row.unrecognised_fields).toBe('["candidates","resolved"]');
   });
 
   it("makes 'the sweep is lying about itself' a one-line query", async () => {
-    // An exit-code-only failure: the summary reports zero errors and claims ok, but the
-    // stored verdict is false. A liar query coupled only to the error count loses this row.
     await insertRunEvent(envelope({ exit_code: 1, summary_raw: '{"errors":0,"ok":true}' }));
-    // A control row: the same claim beside a true stored verdict must NOT appear.
     await insertRunEvent(
       envelope({
         started_at: "2026-07-29T04:00:00.000Z",
@@ -506,7 +463,6 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
     expect(row.queue_depth).toBeNull();
     expect(row.checked).toBeNull();
 
-    // The alarm as the reader will actually write it. A paused sweep must not appear.
     const client = telemetryDb;
     const alarmed = await client?.execute(
       "select id from run_events where produced = 0 and queue_depth > 0",
@@ -516,10 +472,6 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
   });
 
   it("stores the REAL lock-skipped sonar-freshen line, nulls and all", async () => {
-    // Copied verbatim from apps/sonar/deploy/fluncle-sonar-freshen.sh: on a held
-    // single-flight lock it prints its counters as literal `null`. Those nulls failed the
-    // integer check and the ordinary tick's `"gateState":null` failed the enum check — so
-    // this unit wrote NOTHING on every tick and would have read as permanently dead.
     const recorded = await insertRunEvent(
       envelope({
         summary_raw:
@@ -538,7 +490,6 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
       errors: 0,
       expected_interval_ms: 3_600_000,
       gate_state: "paused",
-      // NOT an upgrade-queue item: the sweep told us it does not know, which is not a gap.
       missing_fields: "[]",
       produced: null,
       queue_depth: null,
@@ -547,14 +498,10 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
       unit: "fluncle-sonar-freshen",
       unrecognised_fields: "[]",
     });
-    // Exit 0 and zero errors: a lock-skip is not a failure, and the derived verdict says so.
     expect(row.ok).toBe(1);
   });
 
   it("stores the REAL ordinary timer-watchdog tick, whose only gate signal is a null", async () => {
-    // docs/agents/hermes/timer-watchdog/timer-watchdog.sh, verbatim. A healthy watchdog
-    // legitimately re-arms nothing forever, so `produced: 0` beside `checked: 9` is the
-    // shape that separates health from blindness — and it was a 400 for the `gateState`.
     await insertRunEvent(
       envelope({
         summary_raw:
@@ -576,11 +523,6 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
   });
 
   it("would keep an operator mode's measurements and let the reader exclude the gate", async () => {
-    // Forward compatibility: `forced` and `dry-run` LOOKED, so their numbers must survive
-    // if an emitter ever names them. The false `produced == 0 AND queue_depth > 0` reading a
-    // dry-run would raise is the READER's to exclude — that is what `gate_state` is on the
-    // row for, and excluding a gate at read time is strictly safer than laundering a
-    // measured number at write time.
     await insertRunEvent(
       envelope({
         summary_raw: '{"gateState":"forced","checked":1,"errors":0,"produced":1,"queueDepth":0}',
@@ -605,7 +547,6 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
       ["dry-run", 0, 7],
     ]);
 
-    // The alarm, written as it must be written: scheduled ticks only.
     const alarmed = await client?.execute(
       `select id from run_events
        where produced = 0 and queue_depth > 0
@@ -622,8 +563,6 @@ describe("insertRunEvent — unprovisioned degrades, it never breaks", () => {
   });
 
   it("no-ops without throwing when there is no telemetry database", async () => {
-    // Local dev, the test suite, and every preview deployment are in this state. A missing
-    // diagnostics store must never break the product path it observes.
     const recorded = await insertRunEvent(envelope());
 
     expect(recorded.stored).toBe(false);
@@ -632,8 +571,6 @@ describe("insertRunEvent — unprovisioned degrades, it never breaks", () => {
   });
 
   it("distinguishes 'no ledger' from 'already recorded'", async () => {
-    // Both give `inserted: 0`. Without `stored`, the ack would be exactly the ambiguous
-    // diagnostic this whole design was built to abolish.
     const unprovisioned = await insertRunEvent(envelope());
 
     telemetryDb = await createTelemetryIntegrationDb();
@@ -646,8 +583,6 @@ describe("insertRunEvent — unprovisioned degrades, it never breaks", () => {
   });
 
   it("STILL rejects a self-contradicting summary with no database present", async () => {
-    // An unprovisioned deployment must not become the place where bad emitters go
-    // unnoticed — validation is not a side effect of having somewhere to write.
     await expect(insertRunEvent(envelope({ summary_raw: '{"errors":[]}' }))).rejects.toThrow(
       /non-negative integer/,
     );
@@ -657,8 +592,6 @@ describe("insertRunEvent — unprovisioned degrades, it never breaks", () => {
   });
 
   it("still hands back the derived verdict AND the claim with no ledger to write to", async () => {
-    // The ack is the fastest way to see the Worker's judgement of a run, and it must not
-    // go quiet just because there is nowhere to store it.
     const recorded = await insertRunEvent(
       envelope({ exit_code: 0, summary_raw: '{"errors":2,"ok":true}' }),
     );
@@ -725,8 +658,6 @@ describe("run_events — the three reads the ledger was indexed for", () => {
   });
 
   it("answers 'which units have no row in the last N hours' — the absence alarm", async () => {
-    // ABSENCE IS THE LOUD SIGNAL. Delivery is best-effort precisely because a dropped POST
-    // leaves a hole this read finds, so this query is the ledger's whole safety net.
     await insertRunEvent(
       envelope({
         ended_at: "2026-07-29T09:00:05.000Z",
@@ -812,9 +743,6 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
         (row) => row.checked === null && row.produced === null && row.queueDepth === null,
       ),
     ).toMatchObject({
-      // `expected_interval_ms` is NOT here: it is filled server-side from the derived
-      // roster, so a unit on the roster never reports it missing. The remaining four are
-      // the sweep's own upgrade queue.
       missingFields: ["checked", "errors", "produced", "queue_depth"],
       unit: "fluncle-sentry-triage",
     });
@@ -1133,13 +1061,6 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
   });
 });
 
-// ── The ledger's own JSON must stay parseable ────────────────────────────────
-// `summary_raw` is the one column carrying a string a SWEEP wrote — a box tick's last stdout line,
-// itself a JSON document, routinely quoting a vendor's error text. A raw control character in there
-// survives the ingest schema (`z.string()`) and SQLite, and then breaks the reader: the outer
-// `fluncle admin telemetry read --json` document, and `jq '.rows[].summaryRaw | fromjson'` — the
-// shape every recipe in the fluncle-ledger skill is built on. The escape is the same evidence.
-
 describe("insertRunEvent — the ledger's text stays JSON-safe", () => {
   it("escapes raw control characters in a summary line rather than storing them", async () => {
     const poisoned = '{"ok":false,"error":"yt-dlp said:\u0000\u001b[31mboom\u001b[0m\u0007"}';
@@ -1149,7 +1070,6 @@ describe("insertRunEvent — the ledger's text stays JSON-safe", () => {
     const page = await readRunLedger({ limit: 10, unit: "fluncle-anchor" });
     const summaryRaw = page.rows[0]?.summaryRaw ?? "";
 
-    // Not a control character left — the outer document and the inner one both parse.
     const controls = summaryRaw.split("").filter((character) => character.charCodeAt(0) < 0x20);
 
     expect(controls).toEqual([]);

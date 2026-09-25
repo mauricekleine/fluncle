@@ -8,10 +8,6 @@ import {
 import { type PublicUser } from "./public-auth";
 import { buildRecsGate, type RecsGateDeps } from "./recs-gate";
 
-// The gate's ONE invariant: a COMMITTED page view reads a stored edition and NEVER runs the
-// engine (the shelf-from-editions RFC is pruned, see git history). Pinned off the DI seam — the engine, the
-// reads, and the token mint are injected, so these are plain units with no database.
-
 const USER: PublicUser = {
   createdAt: "2026-01-01T00:00:00.000Z",
   email: "crew@example.com",
@@ -80,7 +76,6 @@ describe("buildRecsGate", () => {
     const gate = await buildRecsGate(USER, d);
 
     expect(d.runDraftEngine).not.toHaveBeenCalled();
-    // The latest is the newest-first head — edition 2, not 1.
     expect(getFrontierEdition).toHaveBeenCalledWith("u-1", 2);
 
     if (gate.state !== "verified") {

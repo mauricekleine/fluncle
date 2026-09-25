@@ -1,17 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Unit coverage for the Expo push fan-out (lib/server/push.ts). The load-bearing,
-// easy-to-get-wrong bits are pinned here:
-//   - chunking ≤100 (Expo's hard per-request ceiling),
-//   - the per-category mute filter (a muted device is dropped from that fan-out),
-//   - the NO-OP-when-unset property (EXPO_ACCESS_TOKEN absent ⇒ nothing happens —
-//     the whole feature ships dark, never touching a publish),
-//   - DeviceNotRegistered pruning (immediate, off the send tickets).
-//
-// `cloudflare:workers` resolves to the inert test stub (vitest.config.ts), whose
-// `waitUntil` runs the promise synchronously — so the scheduled fan-out completes
-// within the test. `./env` and `./db` are mocked so no real secret or DB is touched.
-
 const readOptionalEnv = vi.fn();
 const execute = vi.fn();
 const batch = vi.fn();
@@ -45,9 +33,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// Drain the microtask queue so the fire-and-forget `waitUntil` fan-out (run
-// synchronously by the test stub, but still async internally) settles before the
-// assertions read the fetch/db spies.
 async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -61,7 +46,6 @@ describe("chunkMessages", () => {
     expect(chunks[0]).toHaveLength(100);
     expect(chunks[1]).toHaveLength(100);
     expect(chunks[2]).toHaveLength(50);
-    // No data lost or duplicated across the split.
     expect(chunks.flat()).toEqual(items);
   });
 
@@ -81,7 +65,6 @@ describe("tokensForCategory", () => {
   ];
 
   it("drops devices that muted the findings category", () => {
-    // a (no mutes), b (muted mixtapes only), e (malformed ⇒ no mutes) get findings.
     expect(tokensForCategory(rows, "findings")).toEqual([
       "ExponentPushToken[a]",
       "ExponentPushToken[b]",
@@ -154,11 +137,9 @@ describe("notifyNewFinding — configured fan-out", () => {
       data: { url: string };
       to: string;
     }[];
-    // Only the un-muted device (a); b muted "findings".
     expect(sent).toHaveLength(1);
     expect(sent[0]?.to).toBe("ExponentPushToken[a]");
     expect(sent[0]?.data.url).toContain("/log/2026.A.01");
-    // The receipt id is parked for the later receipts sweep.
     expect(batch).toHaveBeenCalled();
   });
 
@@ -189,7 +170,6 @@ describe("notifyNewFinding — configured fan-out", () => {
     notifyNewFinding({ artists: ["X"], title: "Y" }, "2026.A.01");
     await flush();
 
-    // The dead token is deleted from push_tokens (the immediate-ticket reap path).
     const deleteCall = execute.mock.calls.find(
       ([arg]) =>
         typeof arg === "object" && /delete from push_tokens/.test((arg as { sql: string }).sql),
@@ -203,7 +183,6 @@ describe("notifyNewFinding — configured fan-out", () => {
     execute.mockResolvedValue({ rows: [{ muted_json: null, token: "ExponentPushToken[a]" }] });
     FETCH.mockRejectedValue(new Error("network down"));
 
-    // The notify itself is synchronous (schedules waitUntil); the fan-out swallows.
     expect(() => notifyNewFinding({ artists: ["X"], title: "Y" }, "2026.A.01")).not.toThrow();
     await expect(flush()).resolves.toBeUndefined();
   });
@@ -223,18 +202,14 @@ describe("sweepPushReceipts — receipts-driven dead-token reaping", () => {
   it("prunes tokens Expo reports DeviceNotRegistered via receipts and clears the ledger", async () => {
     readOptionalEnv.mockResolvedValue("expo_token");
     execute
-      // count(*) pending
       .mockResolvedValueOnce({ rows: [{ c: 2 }] })
-      // the parked receipt batch
       .mockResolvedValueOnce({
         rows: [
           { id: "r-dead", token: "ExponentPushToken[dead]" },
           { id: "r-ok", token: "ExponentPushToken[ok]" },
         ],
       })
-      // delete push_tokens
       .mockResolvedValueOnce({ rows: [] })
-      // delete push_receipts
       .mockResolvedValueOnce({ rows: [] });
     FETCH.mockResolvedValue({
       json: async () => ({

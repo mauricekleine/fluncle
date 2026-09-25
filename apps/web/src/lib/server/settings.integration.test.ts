@@ -3,22 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
 
-// THE KV EVERY KILL SWITCH RIDES, PROVEN AGAINST THE REAL SCHEMA.
-//
-// `settings` is three statements holding 36 keys across 16 modules — every operator flip, the
-// six sonar dark flags, the capture budget, the voice-gate dials, the rate-limit windows, and
-// the two catalogue JSON caches (see the module header). All of that rests on the upsert being
-// an upsert and the read being a read, so the primitives get a real-libSQL test rather than
-// trusting three hand-read SQL strings: the harness applies the generated migrations, so the
-// `on conflict(key)` arm is checked against the ACTUAL primary key the DDL declares.
-//
-// The behaviours pinned here are the ones every caller assumes:
-//   - an unset key reads `undefined` (that is how "unset ⇒ the documented default" works),
-//   - a second `setSetting` on the same key OVERWRITES rather than throwing or duplicating —
-//     the whole point of a flip,
-//   - `deleteSetting` is idempotent (a pause/resume that runs twice must not error), and
-//   - keys are independent, so flipping one switch cannot disturb another.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -27,10 +11,8 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-// Imported AFTER the mock so the module's `getDb` is the mocked one.
 const { deleteSetting, getSetting, setSetting } = await import("./settings");
 
-/** How many rows the `settings` table holds — the guard that an upsert did not insert a twin. */
 async function rowsFor(key: string): Promise<number> {
   const result = await db.execute({
     args: [key],
@@ -60,8 +42,6 @@ describe("the settings KV — get / set / delete", () => {
     await setSetting("sonar_sonic_enabled", "false");
 
     expect(await getSetting("sonar_sonic_enabled")).toBe("false");
-    // The conflict arm updates. A missing `on conflict` would have thrown on the second
-    // write; a wrong conflict target would have left two rows and made the read a coin flip.
     expect(await rowsFor("sonar_sonic_enabled")).toBe(1);
   });
 
@@ -94,9 +74,6 @@ describe("the settings KV — get / set / delete", () => {
   });
 
   it("stores an empty string as a PRESENT value, distinct from unset", async () => {
-    // The Apple breaker clears its trip marker by writing "" rather than deleting the row
-    // (./apple-breaker.ts), so "" must survive the round-trip as a value. `getSetting` returns
-    // it verbatim; readers that treat "" as cleared do so on purpose.
     await setSetting("apple_auth_breaker_tripped_at", "");
 
     expect(await getSetting("apple_auth_breaker_tripped_at")).toBe("");

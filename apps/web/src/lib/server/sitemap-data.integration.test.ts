@@ -1,20 +1,3 @@
-// THE SITEMAP'S TWO READS, PROVEN AGAINST EACH OTHER — over a REAL libSQL database with the
-// generated migrations applied, because both halves of this are SQL.
-//
-// `/sitemap.xml` reads AGGREGATES (`collectSitemapIndexStats`) for its ~eight `<sitemap>` lines,
-// and a child reads ONE bag (`collectSitemapBag`). The index carries no `<url>` at all, so neither
-// read evaluates the full archive's thin-content gates.
-//
-// That split is only safe while the cheap read and the rows AGREE, and a mocked-DB test could not
-// tell: the agreement lives entirely in whether a `count(*)`/`max()` covers the same set its row
-// reader enumerates. So the proof here is differential — build the index BOTH ways over the same
-// seeded archive and demand the same answer:
-//
-//   - the aggregates vs `sitemapIndexStatsFromBags` over the real rows (counts AND dates);
-//   - the rendered index XML, byte for byte;
-//   - each child's XML from its OWN bag vs from the merged all-bags world, so no kind can quietly
-//     grow a dependency on a bag the one-bag fetch no longer loads.
-
 import { type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -53,9 +36,7 @@ type TrackFixture = {
   artistId: string;
   artistName: string;
   label: string;
-  /** Set ⇒ this track is a CERTIFIED finding at that coordinate; absent ⇒ a catalogue row. */
   logId?: string;
-  /** The finding's `added_at`; also what every entity's `lastmod` derives from. */
   addedAt?: string;
   title: string;
   trackId: string;
@@ -64,12 +45,6 @@ type TrackFixture = {
   videoUrl?: string;
 };
 
-/**
- * One track, wired the way production wires it: the row, its optional `findings` certification
- * (with the `is_catalogue` flip `publishTrack` does), its artist edge, and its label/album
- * pointers written by the REAL link functions — so the joins the sitemap readers walk are the
- * ones the publish path actually creates.
- */
 async function seedTrack(track: TrackFixture): Promise<void> {
   await db.execute({
     args: [
@@ -174,15 +149,12 @@ async function seedGalaxyMembers(galaxyId: string, count: number): Promise<void>
   for (let index = 0; index < count; index += 1) {
     await db.execute({
       args: [`${galaxyId}-member-${index}`, galaxyId],
-      // Galaxy membership is derived from `findings.galaxy_id`; this fixture isolates that count
-      // contract, so the no-log members do not alter the sitemap's certified-log bag.
       sql: `insert into findings (track_id, galaxy_id, added_at)
             values (?, ?, '2026-07-01T00:00:00.000Z')`,
     });
   }
 }
 
-/** Every row bag, each fetched the way its own child route fetches it. */
 async function readRowBags(): Promise<SitemapRowBags> {
   const [albums, artists, docs, galaxies, labels, logbook, logs, tracks] = await Promise.all([
     collectSitemapBag("albums"),
@@ -207,7 +179,6 @@ async function readRowBags(): Promise<SitemapRowBags> {
   };
 }
 
-/** The merged world the sitemap USED to build every document from — the reference. */
 async function readAllBags(): Promise<SitemapBags> {
   const rows = await readRowBags();
   const { pages } = await collectSitemapBag("pages");
@@ -218,10 +189,6 @@ async function readAllBags(): Promise<SitemapBags> {
 beforeEach(async () => {
   db = await createIntegrationDb();
 
-  // A world with all three tiers in it: certified findings (one carrying a squared video, whose
-  // `video_squared_at` must LIFT its lastmod past its `added_at`), quieter catalogue rows that
-  // push the entities over the thin-content floor without certifying anything, and an entity set
-  // that stays BELOW the floor so the gate is actually exercised rather than trivially satisfied.
   await seedTrack({
     addedAt: "2026-06-03T10:00:00.000Z",
     album: "Wormhole",
@@ -252,8 +219,6 @@ beforeEach(async () => {
     title: "Quiet One",
     trackId: "track-3",
   });
-  // A second entity family, deliberately BELOW the 3-renderable-track floor: it must be absent
-  // from the rows AND uncounted by the aggregate, which is the gate both sides have to agree on.
   await seedTrack({
     album: "Thin Record",
     artistId: "artist-stranger",
@@ -281,8 +246,6 @@ beforeEach(async () => {
 
   await seedLogbookEntry(36, "2026-07-04T02:11:00.000Z");
   await seedLogbookEntry(37, "2026-07-05T02:11:00.000Z");
-  // A public map with the three sitemap-relevant states: exactly at the floor, thin, and retired.
-  // All live rows are named, so the launch gate is open; the child may publish only the first.
   await seedGalaxy({ id: "gal-live", name: "The Liquid Deep", slug: "the-liquid-deep" });
   await seedGalaxyMembers("gal-live", 4);
   await seedGalaxy({ id: "gal-thin", name: "Weightless Rollers", slug: "weightless-rollers" });
@@ -295,17 +258,8 @@ beforeEach(async () => {
   });
   await seedGalaxyMembers("gal-retired", 8);
 
-  // The maintained hub counters the thin-content gate reads. Production moves them as deltas on
-  // every write; a fixture that inserts rows directly has to run the real backfill or its world
-  // would hold edges with counters at the DDL default of 0.
   await syncHubCounts(db);
 
-  // AN UNLISTED ARTIST INSIDE THE WINDOW, seeded after the counter backfill so its counters stand
-  // as stated. It clears the thin-content floor and sorts FIRST, so it is exactly the row that
-  // splits the artists child's three legs apart if any one of them forgets the visibility gate:
-  // an ungated boundary probe hands back `adele` while the gated row reader emits `dimension`, so
-  // the next shard restarts after `adele` and re-emits `dimension`. The union-equality law below
-  // is what catches it. It shares an existing track, so no album, label or track bag moves.
   await db.execute({
     args: ["artist-adele", "Adele", "adele", "11111111-1111-4111-8111-111111111111"],
     sql: `insert into artists
@@ -317,9 +271,6 @@ beforeEach(async () => {
     args: ["track-3", "artist-adele"],
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
   });
-  // A SECOND visible artist, so the artists child is genuinely multi-shard at shard size 1 and the
-  // boundary probe actually runs. Without it the gated total is 1 and every page past the first is
-  // short-circuited as past-end, which is how an ungated probe hid.
   await db.execute({
     args: ["artist-eleven", "Eleven", "eleven"],
     sql: `insert into artists
@@ -366,21 +317,14 @@ describe("the sitemap index reads aggregates that match the rows", () => {
   it("carries the real dates the fixture states — a squared video lifts the findings child", async () => {
     const stats = await collectSitemapIndexStats();
 
-    // Three certified findings' worth of pages: two findings + two published mixtapes.
     expect(stats.findings.count).toBe(4);
-    // The freshest `/log` date is the SQUARED VIDEO's, not the newest `added_at` — the scalar
-    // three-argument max() inside the aggregate one-argument max(), the shape the row read uses.
     expect(stats.findings.lastmod).toBe("2026-07-14T09:00:00.000Z");
-    // Two VISIBLE artists clear the floor; one label / album does, and the thin family does not.
-    // The third floor-clearing artist is unlisted, so it is counted by nothing and emitted nowhere.
     expect(stats.artists.count).toBe(2);
     expect(stats.labels.count).toBe(1);
     expect(stats.albums.count).toBe(1);
-    // An entity dates from its freshest CERTIFIED finding (`added_at`), never from a catalogue row.
     expect(stats.albums.lastmod).toBe("2026-06-10T14:57:38.786Z");
     expect(stats.logbook).toEqual({ count: 2, lastmod: "2026-07-05T02:11:00.000Z" });
     expect(stats.galaxies.count).toBe(1);
-    // Undated by design: the MDX carries no timestamp, and a lens page has no honest date.
     expect(stats.docs.lastmod).toBeUndefined();
     expect(stats.galaxies.lastmod).toBeUndefined();
   });
@@ -388,9 +332,7 @@ describe("the sitemap index reads aggregates that match the rows", () => {
   it("derives the static child's timestamps and gates from the same aggregates", async () => {
     const [{ pages }, rows] = await Promise.all([collectSitemapBag("pages"), readRowBags()]);
 
-    // `mixOpen` is passed through: it is `getMixChainDepth().open`, which no bag implies.
     expect(pages).toEqual(sitemapPagesFromBags(rows, pages.mixOpen));
-    // The hubs' shared stamp is the freshest date ANYWHERE, which here is the squared video.
     expect(pages.latest).toBe("2026-07-14T09:00:00.000Z");
     expect(pages.logbookLatest).toBe("2026-07-05T02:11:00.000Z");
   });
