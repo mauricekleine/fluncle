@@ -1,16 +1,3 @@
-// The synthetic E2E seed — a small, deterministic, COMMITTED dataset.
-//
-// Everyday local dev seeds its DB from a PROD SNAPSHOT (`.dev/seed.sql`,
-// gitignored). This repo is public and CI has no snapshot, so the e2e stack seeds
-// a fresh empty DB with these fixtures instead: real generated migrations
-// (applied by `db:migrate` before this runs) + this handful of rows. Everything
-// here is invented — no real artists, no prod IDs, no external media URLs.
-//
-// It REUSES the `integration-db.ts` seed factories (the same ones the vitest
-// integration suite uses), so the fixture shapes can never drift from the schema.
-// Media fields are left null: no fixture points at the prod CDN, so every seeded
-// page renders with zero external fetches.
-
 import { createClient, type Client } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import {
@@ -26,16 +13,10 @@ import { EMBEDDING_DIMS } from "../../src/lib/server/embedding";
 import { SEARCH_STYLES } from "../../src/lib/search-styles";
 import { LIBSQL_URL } from "./stack";
 
-// One graph entity of each kind, so the `/artist`, `/label`, `/album`, and
-// `/mixtapes` pages a follow-up spec exercises have a real row to resolve.
 const ARTIST = { id: "e2e-artist-nova", name: "Nova Kestrel", slug: "nova-kestrel" };
 const LABEL = { id: "e2e-label-driftwave", name: "Driftwave Audio", slug: "driftwave-audio" };
 const ALBUM = { id: "e2e-album-signal", name: "Signal Bloom", slug: "signal-bloom" };
 
-// Eight findings with distinct titles, artists, and Log IDs. The titles are the
-// pilot spec's assertion targets, so they are intentionally unmistakable strings
-// no real archive would carry. `addedAt` descends so the newest-first feed order
-// is deterministic (FINDING_LOG_ID_PATTERN: `\d{3,4}\.\d\.\d[A-Z]`).
 type FindingFixture = { artist: string; logId: string; title: string };
 
 const FINDINGS: FindingFixture[] = [
@@ -51,104 +32,47 @@ const FINDINGS: FindingFixture[] = [
 
 const MIXTAPE = { id: "e2e-mixtape-1", logId: "700.F.1A", title: "Dream Sector One" };
 
-/** The seeded finding titles, exported so the spec asserts on identity, not counts. */
 export const SEEDED_FINDING_TITLES = FINDINGS.map((finding) => finding.title);
 export const SEEDED_MIXTAPE_TITLE = MIXTAPE.title;
 
-// ── APPENDED (account journey) ────────────────────────────────────────────────
-// The account journey (tests/e2e/account.spec.ts) saves ONE finding and then looks
-// for it on `/account?tab=saves`, so it needs that finding's Log ID as well as its
-// title. It uses the FIRST fixture — the one wired into the full artist ↔ label ↔
-// album graph above — so the page it saves from is the richest one seeded. Derived
-// from `FINDINGS`, never re-typed, so the two can never disagree.
 export const SEEDED_SAVE_TARGET_LOG_ID = FINDINGS[0]?.logId ?? "";
 export const SEEDED_SAVE_TARGET_TITLE = FINDINGS[0]?.title ?? "";
 
-// ── APPENDED: the reader/graph specs' identity handles ──────────────────────────────
-// Derived from the fixtures above, never a second description of them. The `/log` and graph
-// specs assert on identity (a coordinate, a slug, a name), so they need the values the base
-// fixtures already carry — not new rows. Nothing here changes what is seeded.
-
-/** The seeded finding coordinates, in feed order (index 0 is the newest). */
 export const SEEDED_FINDING_LOG_IDS = FINDINGS.map((finding) => finding.logId);
 
-/**
- * The one finding wired into the FULL graph (artist ↔ label ↔ album) by `seedE2eData` below.
- * Its `/log/<logId>` page is the reader spec's subject, and every graph page resolves through it.
- */
 export const SEEDED_GRAPH_FINDING = {
   artist: FINDINGS[0]?.artist ?? "",
   logId: FINDINGS[0]?.logId ?? "",
   title: FINDINGS[0]?.title ?? "",
 };
 
-/** The seeded graph entities — the `/artist`, `/label`, and `/album` pages' identities. */
 export const SEEDED_GRAPH_ENTITIES = {
   album: { name: ALBUM.name, slug: ALBUM.slug },
   artist: { name: ARTIST.name, slug: ARTIST.slug },
   label: { name: LABEL.name, slug: LABEL.slug },
 };
 
-/** A base epoch for the descending `added_at` values (fixed, so runs are identical). */
 const BASE_EPOCH_MS = Date.UTC(2026, 0, 1, 12, 0, 0);
 
-// ── APPENDED: the RADIO fixture (radio.spec.ts) ──────────────────────────────
-//
-// `/radio` plays only a RADIO-ELIGIBLE finding, and eligibility is a real
-// predicate on `findings` (tracks.ts `getRadioEligibleTracks`): a clean square
-// master (`video_squared_at`), an observation (`observation_audio_url`), its
-// length (`observation_duration_ms` — the audio IS the schedule clock), and a
-// Log ID. None of the eight findings above carries any of that, so the eligible
-// set would be EMPTY and the surface would only ever speak its quiet-sector copy.
-// This is the one finding that satisfies the predicate.
-//
-// It is a SEPARATE row rather than an upgrade of an existing fixture, so the
-// eight above (and the specs asserting on them) are untouched.
-//
-// The observation URL points at the same absolute media host the product derives
-// its video crops from; `blockExternalRequests` stubs both, so the surface still
-// makes zero live requests — radio's entry gate opens on its own bounded timer
-// when the media cannot start, which is exactly the state the spec drives.
 const RADIO_FINDING = {
   artist: "Lantern Wick",
   logId: "709.9.0J",
   observationAudioUrl: "https://found.fluncle.com/709.9.0J/observation.mp3",
-  // Ten minutes: far longer than any spec run, so the shared schedule cannot roll
-  // to another segment mid-assertion. With one eligible finding the loop is this
-  // finding, forever, and `nextTrack` is (correctly) omitted as self-referential.
+
   observationDurationMs: 600_000,
   title: "Salt Marsh Signal",
   trackId: "e2e-track-radio",
 } as const;
 
-/** The one radio-eligible seeded finding — the only thing `/radio` can ever resolve to. */
 export const SEEDED_RADIO_FINDING = {
   artist: RADIO_FINDING.artist,
   logId: RADIO_FINDING.logId,
   title: RADIO_FINDING.title,
 };
 
-// ── APPENDED: the FRONT DOOR's fixtures (front-door.spec.ts) ─────────────────
-//
-// The front door (`/`) renders four bands the eight base findings alone cannot fill honestly:
-//
-//   - the EDITED LEAD is the newest finding carrying a NOTE, so at least one fixture has to
-//     carry one — otherwise the loader's fallback path is the only one a browser ever exercises;
-//   - the RELEASE band reads `tracks.release_date` inside a trailing window, and no base fixture
-//     has a release date at all, so the band would only ever speak its empty state;
-//   - that band carries BOTH registers, so it needs one UNCERTIFIED row (a `tracks` row with no
-//     `findings` row) to prove the unlit half renders unlit, coordinate-free, and unnamed;
-//   - the LEAD's cover is the page's LCP element, so one fixture needs an `album_image_url` for
-//     the preload/eager contract and the failed-cover fallback to be observable at all.
-//
-// All of it is stamped onto rows that already exist (plus the one catalogue row), so the base
-// eight and every spec asserting on them are untouched.
-
-/** The lead's note — asserted verbatim, so the spec proves the EDITED placement, not just a slot. */
 export const SEEDED_LEAD_NOTE =
   "Came down through a green sector and the air went thick before I clocked the coordinate.";
 
-/** The finding the front door leads with: the one carrying a note (never the newest by date). */
 export const SEEDED_LEAD = {
   artist: FINDINGS[1]?.artist ?? "",
   logId: FINDINGS[1]?.logId ?? "",
@@ -156,33 +80,13 @@ export const SEEDED_LEAD = {
   trackId: "e2e-track-2",
 };
 
-/**
- * The lead's cover, pointed at the absolute prod media host. `blockExternalRequests` stubs it with
- * a real 1×1 PNG, so the happy path renders an `<img>`; the failed-cover spec overrides that one
- * route with a 404 to drive `TrackArtwork`'s fallback. A relative URL could not do either job.
- */
 export const SEEDED_LEAD_COVER_URL = "https://found.fluncle.com/e2e/lead-cover.jpg";
 
-/**
- * Two NON-lead findings that also carry cover art. Without them every tile in the findings band
- * would render the coverless fallback, and the "one eager image, everything else lazy" contract
- * would have nothing to measure — the assertion would pass vacuously on an empty set.
- */
 export const SEEDED_COVERED_FINDINGS = [
   { coverUrl: "https://found.fluncle.com/e2e/cover-3.jpg", trackId: "e2e-track-3" },
   { coverUrl: "https://found.fluncle.com/e2e/cover-4.jpg", trackId: "e2e-track-4" },
 ] as const;
 
-/**
- * The one finding carrying FOOTAGE (`findings.video_url`), which is the whole gate on the Stories
- * affordance: `TrackRow` renders its artwork as a play link only when a row has video, and the
- * `/findings` cover ring opens at the newest finding that does. Without a row here both paths fall
- * back to a plain cover and a `/log` link, so the Stories route is dark in every spec — it is the
- * one part of the incumbent archive page that has no coverage until this fixture exists.
- *
- * It rides `e2e-track-3`, which already carries cover art, so the play glyph sits over a real
- * `<img>` rather than the coverless fallback.
- */
 export const SEEDED_STORY_FINDING = {
   logId: FINDINGS[2]?.logId ?? "",
   title: FINDINGS[2]?.title ?? "",
@@ -190,7 +94,6 @@ export const SEEDED_STORY_FINDING = {
   videoUrl: "https://found.fluncle.com/e2e/story-3.mp4",
 } as const;
 
-/** The UNCERTIFIED row in the release band — no `findings` row, so no coordinate and no name. */
 export const SEEDED_CATALOGUE_RELEASE = {
   artist: "Ashen Relay",
   title: "Undertow Ledger",
@@ -209,33 +112,9 @@ export const SEEDED_PARTIAL_RELEASE = {
   trackId: "e2e-track-year",
 } as const;
 
-/**
- * The release dates the front door's window reads. They are a fixed offset back from the seed's own
- * epoch rather than from the clock, so a run is identical every time — but the WINDOW is measured
- * from `new Date()` at request time, so they are also stamped relative to today at seed time. The
- * two are reconciled by seeding "yesterday" and "three days ago" off the real clock: inside every
- * window the page ever asks for, and never a future-dated pre-order (which `/fresh` drops).
- */
 function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
-
-// ── APPENDED: the ARCHIVE TRACK DESTINATION's fixtures (track.spec.ts) ───────────────────────
-//
-// The destination (`/track/<trackId>`) needs a world the base fixtures cannot describe, because
-// every one of them is either a certified finding or a bare crawl row:
-//
-//   - an EVIDENCE-RICH uncertified track, so the indexed half of the surface exists at all: a
-//     record, a release date, a cover, and two outbound services. It is the journey's first stop.
-//   - a NEIGHBOUR for it to continue into — a SECOND uncertified track, so the journey's middle
-//     step lands somewhere unfamiliar rather than back on a finding, with an outbound service of
-//     its own so the journey can finish where it is meant to.
-//   - a THIN uncertified track, so the noindex half of the evidence gate is observable.
-//   - MuQ embeddings on all three, because "close in sound" is a vector scan and without vectors
-//     the band correctly renders nothing — which would make the journey untestable rather than
-//     absent.
-//
-// Nothing here touches the base eight or the front door's rows.
 
 const DESTINATION_ALBUM = {
   id: "e2e-album-ledger",
@@ -243,7 +122,6 @@ const DESTINATION_ALBUM = {
   slug: "undertow-ledger",
 };
 
-/** The journey's first stop: the evidence-rich uncertified track. Indexed, and in the sitemap. */
 export const SEEDED_DESTINATION_TRACK = {
   appleMusicUrl: "https://music.apple.com/us/album/undertow/1?i=2",
   artist: "Ashen Relay",
@@ -252,35 +130,24 @@ export const SEEDED_DESTINATION_TRACK = {
   trackId: "e2e-track-destination",
 } as const;
 
-/** The journey's second stop: an unfamiliar neighbour, itself uncertified, with a way out. */
 export const SEEDED_DESTINATION_NEIGHBOUR = {
   artist: "Cinder Vane",
   title: "Halide Drift",
   trackId: "e2e-track-neighbour",
 } as const;
 
-/** The low-evidence page: reachable and navigable, deliberately not indexed and not in the sitemap. */
 export const SEEDED_THIN_TRACK = {
   artist: "Pale Kestrel",
   title: "Nettle Dust",
   trackId: "e2e-track-thin",
 } as const;
 
-/**
- * The BARE row: a name, and nothing else at all. No streaming presence (the crawler writes NULL
- * `spotify_uri`/`spotify_url` for a MusicBrainz-born row), no ISRC, no embedding.
- *
- * It is the fixture for the hardest honesty case: a page that has nowhere to send you and nothing
- * close in sound must render NEITHER band and must not PROMISE either in its meta description. The
- * three rows above all carry an outbound link and a vector, so none of them can prove it.
- */
 export const SEEDED_BARE_TRACK = {
   artist: "Winter Aerial",
   title: "Gravel Sky",
   trackId: "e2e-track-bare",
 } as const;
 
-/** A unit vector on one axis — nearness is how close two axes are, so the order is deterministic. */
 function axisVector(axis: number): number[] {
   return Array.from({ length: 1024 }, (_unused, index) => (index === axis ? 1 : 0));
 }
@@ -302,10 +169,6 @@ async function seedDestinationFixtures(client: Client): Promise<void> {
     });
   }
 
-  // The EVIDENCE the gate reads, on the first two only: a record, a date, a cover, and a second
-  // outbound service beside the Spotify anchor `seedCatalogueTrack` already minted. The tempo, key
-  // and ISRC ride along because a real enriched row carries them and the page prints them; they are
-  // not gates.
   for (const track of [SEEDED_DESTINATION_TRACK, SEEDED_DESTINATION_NEIGHBOUR]) {
     await client.execute({
       args: [
@@ -325,12 +188,6 @@ async function seedDestinationFixtures(client: Client): Promise<void> {
     });
   }
 
-  // The BARE row loses the Spotify anchor `seedCatalogueTrack` mints for every fixture, and never
-  // gets a vector below — so its page has no outbound control and no neighbour band, which is the
-  // whole reason it exists. Its `duration_ms` goes to 0 as well: that is what the crawler actually
-  // writes when MusicBrainz does not know a recording's length (`recording.length ?? track.length
-  // ?? 0`, "the honest 'unknown'"), and it is the value the page must NOT render as "0:00" or
-  // assert as `"duration": "PT0M0S"`.
   await client.execute({
     args: [SEEDED_BARE_TRACK.trackId],
     sql: `update tracks
@@ -338,29 +195,11 @@ async function seedDestinationFixtures(client: Client): Promise<void> {
            where track_id = ?`,
   });
 
-  // The vectors, so "close in sound" has something to answer with. The bare row gets none,
-  // deliberately — a page with no vector renders no band at all, which is what it exists to prove.
-  // Axes 5/6/900, not 0/1: the sonic tier's fixtures below occupy the (0,1) plane, and a
-  // destination sharing an axis with one of them would sit at zero distance from it. Keeping the
-  // two fixture families on disjoint axes leaves each one's expected order arithmetic.
   await seedEmbedding(client, SEEDED_DESTINATION_TRACK.trackId, axisVector(5));
   await seedEmbedding(client, SEEDED_DESTINATION_NEIGHBOUR.trackId, axisVector(6));
   await seedEmbedding(client, SEEDED_THIN_TRACK.trackId, axisVector(900));
 }
 
-// ── The sonic tier's fixtures ────────────────────────────────────────────────
-// `sounds like <a real track>` is the one resolver tier that answers out of the VECTOR space, and
-// it is deliberately anchored on a row that exists: `resolveAnchor` resolves the reference through
-// FTS joined INNER to `track_embeddings`, so a seed with no embeddings can only ever prove the
-// tier DECLINING. These give it something real to answer with.
-//
-// The vectors are unit vectors at a known angle in one plane of the MuQ space (the integration
-// suite's `angleVector` shape), so cosine distance between any two is exactly `1 − cos(a − b)` and
-// the expected neighbour ORDER is arithmetic rather than a guess. The anchor is the first finding
-// — the one already wired into the whole artist ↔ label ↔ album graph — and the neighbour sits one
-// small step away from it, so it is the nearest row every time.
-
-/** A unit vector at `angle` radians in the (0,1) plane. Cosine similarity is exactly cos(a − b). */
 function angleVector(angle: number): number[] {
   const vector: number[] = Array.from({ length: EMBEDDING_DIMS }, () => 0);
 
@@ -370,9 +209,8 @@ function angleVector(angle: number): number[] {
   return vector;
 }
 
-/** The track a `sounds like` query resolves its anchor to — the first finding. */
 export const SEEDED_SONIC_ANCHOR = { title: FINDINGS[0]?.title ?? "", trackId: "e2e-track-1" };
-/** The nearest embedded row to that anchor, so the tier has a deterministic first result. */
+
 export const SEEDED_SONIC_NEIGHBOUR = { title: FINDINGS[1]?.title ?? "", trackId: "e2e-track-2" };
 
 const STYLE = SEARCH_STYLES[0];
@@ -385,14 +223,12 @@ const STYLE_TITLES = [
   "Quiet Orbit",
 ] as const;
 
-/** Liquid's six embedded catalogue tracks, nearest first by increasing angle from axis 40. */
 export const SEEDED_STYLE = {
   rankedTitles: [...STYLE_TITLES],
   rankedTrackIds: STYLE_TITLES.map((_title, index) => `e2e-style-${index + 1}`),
   slug: STYLE.slug,
 } as const;
 
-/** No embedding: `/search?like=` uses the lead performer's centroid as its probe. */
 export const SEEDED_LEAD_CENTROID_TRACK = {
   artist: STYLE.anchors[0],
   title: "Satellite Without a Signal",
@@ -462,7 +298,6 @@ async function seedStyleFixtures(client: Client): Promise<void> {
   });
 }
 
-/** Anchor first, then three neighbours fanning away from it in a fixed, arithmetic order. */
 const EMBEDDED_TRACKS: { angle: number; trackId: string }[] = [
   { angle: 0, trackId: SEEDED_SONIC_ANCHOR.trackId },
   { angle: 0.1, trackId: SEEDED_SONIC_NEIGHBOUR.trackId },
@@ -481,7 +316,7 @@ export async function seedE2eData(client: Client): Promise<void> {
 
   for (const [index, finding] of FINDINGS.entries()) {
     const trackId = `e2e-track-${index + 1}`;
-    // Newer findings first: index 0 is the most recent.
+
     const addedAt = new Date(BASE_EPOCH_MS - index * 60_000).toISOString();
 
     await seedTrack(client, {
@@ -494,8 +329,6 @@ export async function seedE2eData(client: Client): Promise<void> {
     });
   }
 
-  // Wire the first finding into the full graph (album ↔ label ↔ artist) so a
-  // follow-up spec has one finding that resolves every entity page with content.
   await client.execute({
     args: [ALBUM.id, LABEL.id, "e2e-track-1"],
     sql: `update tracks set album_id = ?, label_id = ? where track_id = ?`,
@@ -504,11 +337,7 @@ export async function seedE2eData(client: Client): Promise<void> {
     args: ["e2e-track-1", ARTIST.id],
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
   });
-  // The maintained hub counts the real write paths would have moved (keystone 2,
-  // lib/server/hub-counts.ts): one certified finding on each of the ALBUM and ARTIST entities,
-  // which are wired to that one track. Seeded here rather than left at the DDL default so the
-  // fixture matches what production holds — the entity hubs read these columns. The LABEL's pair
-  // is set by `stampLabelPointers` below, once every track that carries its name is pointed at it.
+
   for (const table of ["albums", "artists"]) {
     await client.execute({
       args: [table === "albums" ? ALBUM.id : ARTIST.id],
@@ -516,8 +345,6 @@ export async function seedE2eData(client: Client): Promise<void> {
     });
   }
 
-  // The radio-eligible finding (see RADIO_FINDING above). Seeded like any other,
-  // then given the four eligibility columns the base factory does not carry.
   await seedTrack(client, {
     addedAt: new Date(BASE_EPOCH_MS - FINDINGS.length * 60_000).toISOString(),
     artists: [RADIO_FINDING.artist],
@@ -587,24 +414,7 @@ async function stampLatestReleaseDates(client: Client): Promise<void> {
   });
 }
 
-/**
- * EVERY track pressed by the seeded label points AT it — the pointer and the raw string say the
- * same thing, matching the production invariant.
- *
- * `linkTrackToLabel` runs on every publish, so a label's name on `tracks.label` and its id on
- * `tracks.label_id` arrive together; `scripts/backfill-labels.ts` (in the deploy chain) reconciles
- * any row that predates its entity. Left half-wired here — one pointer, nine name strings, and a
- * counter claiming one renderable track — the fixture described a world the archive cannot be in,
- * and the `/tracks?label=` filter (which resolves the typed name to `labels.id` and seeks
- * `tracks.label_id`) would read one row where the reader can see nine.
- *
- * The counters are then DERIVED from those pointers rather than typed, so they cannot drift from
- * the rows: `certified_finding_count` reads keystone 1's `is_catalogue = 0` discriminator, exactly
- * as the write sites do.
- */
 async function seedFrontDoorFixtures(client: Client): Promise<void> {
-  // The EDITED lead: a note on the SECOND finding, so the lead is provably the noted one rather
-  // than whichever row happens to be newest. Its cover comes with it — the lead is the LCP element.
   await client.execute({
     args: [SEEDED_LEAD_NOTE, SEEDED_LEAD.trackId],
     sql: `update findings set note = ? where track_id = ?`,
@@ -613,8 +423,7 @@ async function seedFrontDoorFixtures(client: Client): Promise<void> {
     args: [SEEDED_LEAD_COVER_URL, SEEDED_LEAD.trackId],
     sql: `update tracks set album_image_url = ? where track_id = ?`,
   });
-  // A resolvable preview so `/log/<lead>` paints the in-place play control. Discovery's
-  // analytics-absent spec clicks that button; without a URL the pane has no preview to start.
+
   await client.execute({
     args: ["https://found.fluncle.com/e2e/lead-preview.mp3", SEEDED_LEAD.trackId],
     sql: `update tracks set preview_url = ? where track_id = ?`,
@@ -627,20 +436,16 @@ async function seedFrontDoorFixtures(client: Client): Promise<void> {
     });
   }
 
-  // FOOTAGE on one finding, so the Stories affordance is reachable at all (see SEEDED_STORY_FINDING).
   await client.execute({
     args: [SEEDED_STORY_FINDING.videoUrl, SEEDED_STORY_FINDING.trackId],
     sql: `update findings set video_url = ? where track_id = ?`,
   });
 
-  // The release window: one CERTIFIED finding dated inside it, so the band's lit half has a row.
   await client.execute({
     args: [daysAgo(1), SEEDED_LEAD.trackId],
     sql: `update tracks set release_date = ? where track_id = ?`,
   });
 
-  // The UNCERTIFIED half: a `tracks` row with no `findings` row. It is the fixture that proves the
-  // release band renders both registers without ever naming the second one.
   await seedCatalogueTrack(client, {
     artists: [SEEDED_CATALOGUE_RELEASE.artist],
     label: LABEL.name,
@@ -652,10 +457,6 @@ async function seedFrontDoorFixtures(client: Client): Promise<void> {
     sql: `update tracks set release_date = ? where track_id = ?`,
   });
 
-  // A live preview source on every finding (a stored preview URL) and on the catalogue release (an
-  // ISRC), so every discovery list has tracks that play and a queue longer than one. No spec ever
-  // reaches the preview hosts: the player specs answer `/api/preview` themselves
-  // (`tests/e2e/player.ts`).
   for (const [index] of FINDINGS.entries()) {
     await client.execute({
       args: [`https://found.fluncle.com/e2e/preview-${index + 1}.mp3`, `e2e-track-${index + 1}`],
@@ -707,12 +508,6 @@ async function stampLabelPointers(client: Client): Promise<void> {
   });
 }
 
-/**
- * Every album's maintained counters, DERIVED from the rows that point at it once every fixture is in
- * (the `stampLabelPointers` rule): the real write paths move them on every link, and `/fresh`'s
- * "Albums & EPs" reads `renderable_track_count` to tell a record from a single. A two-track record
- * left at the DDL default of 0 would describe a world the archive cannot be in.
- */
 async function stampAlbumCounters(client: Client): Promise<void> {
   await client.execute(`update albums
      set renderable_track_count =
@@ -722,7 +517,6 @@ async function stampAlbumCounters(client: Client): Promise<void> {
              where tracks.album_id = albums.id and tracks.is_catalogue = 0)`);
 }
 
-/** Standalone entry point (`bun run tests/e2e/seed.ts`) — global-setup imports `seedE2eData`. */
 async function main(): Promise<void> {
   const client = createClient({
     authToken: "e2e-local",

@@ -23,45 +23,11 @@ import {
 } from "@/lib/server/status";
 import { SELF_POSTED_AUTOMATION_ORDER } from "@/lib/status-services";
 
-// The PUBLIC service-health status dashboard. No admin guard — anyone can read
-// the current state of Fluncle's services. A Hermes cron probes each service and
-// POSTs a snapshot to the agent-tier `record_health` op (POST /admin/health);
-// this page renders ONLY what that snapshot persisted: service name, status, a
-// short message, latency, and the since/checked timestamps. Never an internal IP,
-// hostname, op-path, or raw error body — that public-safety constraint is enforced
-// at the write (the probe + the `record_health` handler), and this surface simply
-// never reaches for anything else.
-//
-// One derived read on top of the snapshot: each automation row shows its next run. A cron
-// with a fixed wall-clock `schedule` in the registry (the 01:00 audit, the Friday newsletter)
-// shows its EXACT next fire, DST and all; an interval cron shows a "next ≈ …" estimate from
-// its declared cadence + last probe timestamp (see @/lib/next-run + CRON_SCHEDULE /
-// CRON_CADENCE_MS below). Public-safe by construction (both schedule and cadence are already
-// declared in the public registry), and the operator's window onto "when does each system
-// fire next" without the box.
-
-// The on-box Hermes crons, in @fluncle/registry catalog order — the single source of
-// truth for which crons exist + how they're ordered. The healthcheck cron POSTs one
-// `service_status` row per cron (service id = the registry surface name, e.g.
-// `cron.enrich`); this page reads that list back to render every humming system on its
-// own row, grouped under the "Track automation" / "Ops automation" headings. A cron added
-// to the registry surfaces here automatically (as track automation) — no edit to this file.
 const CRON_SURFACES = cronSurfaces();
 export const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
 
-// The declared run cadence per cron service id, read straight from the registry's
-// `probeConfig.cadenceMs` (service id = the cron surface name, e.g. `cron.enrich`).
-// This is the fuel for the INTERVAL crons' next-run estimate: their row shows "next ≈ …"
-// from the cadence + the last probe timestamp, so the operator can see when each fires
-// next — no box round-trip. A cron added to the
-// registry with a cadence surfaces its next-run here automatically; a self-posted
-// automation with no declared cadence (e.g. `self-deploy`) simply shows none.
 const CRON_CADENCE_MS: Record<string, number> = {};
 
-// The subset of crons that fire at a FIXED wall-clock time (the 01:00 audit, the Friday
-// newsletter) carry a registry `schedule`; those get an ACCURATE next-fire instead of the
-// cadence estimate (which anchors to the last probe, not the cron's own clock). Interval
-// crons have no schedule and keep the honest `≈` estimate.
 const CRON_SCHEDULE: Record<string, CronSchedule> = {};
 
 for (const surface of CRON_SURFACES) {
@@ -77,20 +43,10 @@ for (const surface of CRON_SURFACES) {
   }
 }
 
-// Self-posted automations that belong under the automation headings but are NOT registry
-// crons. The shared server read owns this explicit non-registry roster too, so the page cannot
-// expect a writer that absence detection forgot (the original `self-deploy-sonar` hole).
 export { SELF_POSTED_AUTOMATION_ORDER } from "@/lib/status-services";
 const AUTOMATION_ORDER = [...SELF_POSTED_AUTOMATION_ORDER, ...CRON_ORDER];
 const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
 
-// Within the automation group, split by WHAT the cron serves. OPS automation is the box
-// maintaining ITSELF — self-deploy (pin-watch), the off-site backup, the nightly audit +
-// reviewer, and the healthcheck prober. Everything else is TRACK automation: the findings
-// pipeline (analysis, enrichment, videos, notes). Track leads the section (it's the point of
-// the machine), ops follows. A new cron defaults to track unless it is named here. Note the
-// split around sonar: its freshen TIMER is ops automation, while the engine itself is a
-// running service and stays in SERVICE_ORDER below.
 const OPS_AUTOMATION_IDS = new Set([
   "cron.audit",
   "cron.audit-review",
@@ -98,8 +54,7 @@ const OPS_AUTOMATION_IDS = new Set([
   "cron.healthcheck",
   "cron.pipeline-watch",
   "cron.reach",
-  // The hub-counts drift backstop is DB hygiene, not track pipeline — it files with the backup
-  // and the health prober, not with the crawl/rank/render crons.
+
   "cron.reconcile-hub-counts",
   "cron.sentry-triage",
   "self-deploy",
@@ -107,11 +62,6 @@ const OPS_AUTOMATION_IDS = new Set([
   "self-deploy-ssh",
 ]);
 
-// The deliberate, fixed display order for the CORE services (the reachability/health of a
-// running thing, not a scheduled job). They lead the page; the automation groups render
-// after them under the Track/Ops automation headings. Any service the snapshot reports that isn't named
-// here (and isn't an automation) is appended alphabetically, so a newly-probed service
-// surfaces without a code change.
 export const SERVICE_ORDER = [
   "web",
   "db",
@@ -123,21 +73,10 @@ export const SERVICE_ORDER = [
   "hermes",
   "render-box",
   "disk",
-  // The box-condition sibling of `disk`, and the one row that is ABOUT the automation rather
-  // than being a cron: each `cron.*` row reports the verdict its sweep gave itself, while this
-  // one reports what those sweeps LOGGED — the errors a tick can pile up while still ending
-  // `{ ok: true }`. Core, next to disk, because both answer "how is the box holding up", and
-  // deliberately NOT under the automation headings, where it would read as a 36th cron.
+
   "sweep-errors",
 ];
 
-// The registry is the SINGLE SOURCE OF TRUTH for a cron row's title + one-line
-// description. A cron surface's `title`/`statusDescription` (keyed by its registry
-// surface name, which IS the /status service id, e.g. `cron.enrich`) flows straight
-// onto its /status row — so adding a cron to @fluncle/registry with those two fields
-// makes it render correctly here with NO second edit, and the registry enforcement
-// test build-fails a status-visible surface that omits either. These two lookups
-// carry them; the explicit infra maps below hold ONLY the non-registry probes.
 const REGISTRY_STATUS_TITLES = new Map<string, string>(
   CRON_SURFACES.flatMap((surface) =>
     surface.title === undefined ? [] : [[surface.name, surface.title] as const],
@@ -151,13 +90,6 @@ const REGISTRY_STATUS_DESCRIPTIONS = new Map<string, string>(
   ),
 );
 
-// The MINIMAL explicit label map — ONLY the genuine NON-registry infra probes, the
-// core services that have no `@fluncle/registry` surface to carry their title (their
-// /status service id is a short infra alias like `web`/`db`/`r2`, not a registry
-// `name`). Every registry surface (every `cron.*`) reads its title from the registry
-// above instead. `render-box` is the scale-to-zero box's reachability, distinct from
-// the `cron.render` conductor row; `sonar` is the similarity engine's own liveness,
-// distinct from the `self-deploy-sonar` freshen timer that keeps its build current.
 export const INFRA_SERVICE_LABELS: Record<string, string> = {
   db: "Database",
   disk: "Disk headroom",
@@ -175,10 +107,6 @@ export const INFRA_SERVICE_LABELS: Record<string, string> = {
   web: "Web",
 };
 
-// The subtitle sibling of INFRA_SERVICE_LABELS — a quiet one-line description per
-// non-registry infra probe (the public domain it lives at, or what it does).
-// Public-safe (every domain here is already public; the descriptions name no internal
-// host). A registry cron's subtitle comes from REGISTRY_STATUS_DESCRIPTIONS instead.
 export const INFRA_SERVICE_SUBTITLES: Record<string, string> = {
   db: "the archive's persistence",
   disk: "the agent box's free space",
@@ -196,9 +124,6 @@ export const INFRA_SERVICE_SUBTITLES: Record<string, string> = {
   web: "www.fluncle.com",
 };
 
-// A label for a service id: the registry surface's `title` for a registry cron, else
-// the explicit infra label, else the cron-slug fallback (strip `cron.`) for a probe
-// that carries neither — kept only so an unknown id still reads cleanly.
 export function serviceLabel(service: string): string {
   const registryTitle = REGISTRY_STATUS_TITLES.get(service);
   if (registryTitle) {
@@ -212,16 +137,10 @@ export function serviceLabel(service: string): string {
   return service.startsWith("cron.") ? service.slice("cron.".length) : service;
 }
 
-// The registry surface's `statusDescription` for a registry cron, else the explicit
-// infra subtitle. Absent for an unknown service.
 export function serviceSubtitle(service: string): string | undefined {
   return REGISTRY_STATUS_DESCRIPTIONS.get(service) ?? INFRA_SERVICE_SUBTITLES[service];
 }
 
-// The section heading — a prominent uppercase label with a hairline rule beneath it.
-// Shared by the service groups (Services / Automation) and the events feed so the
-// page's three sections read at one consistent, visible weight (they were near-hidden
-// muted-xs labels before).
 const SECTION_HEADING_CLASS =
   "mb-4 border-b border-border pb-2 text-sm font-semibold uppercase tracking-wide text-foreground";
 
@@ -239,8 +158,6 @@ const fetchStatus = createServerFn({ method: "GET" }).handler(async (): Promise<
     getServiceCheckSamples(),
   ]);
 
-  // The reference instant for every relative-time render, fixed in the loader so
-  // the server-rendered "up 3d" matches hydration exactly (no client clock drift).
   return { events, now: new Date().toISOString(), samples, services };
 });
 
@@ -260,8 +177,6 @@ function statusHead() {
   };
 }
 
-// Route options follow TanStack's create-route-property-order (each step feeds the
-// next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/status")({
   loader: () => fetchStatus(),
@@ -275,22 +190,12 @@ const STATUS_LABEL: Record<ServiceHealthStatus, string> = {
   ok: "Operational",
 };
 
-// The canon mapping (DESIGN.md — the Nostalgic Cosmos has no green, and The One Sun
-// Rule caps Eclipse Gold at ~10% of a view) — escalating by LOUDNESS so the eye lands
-// on trouble, not on the calm (a grid of filled gold "ok" badges blew that budget):
-//   ok       → a small Eclipse-Gold dot that gently pings (motion-safe), with a
-//              quiet muted label. Healthy is the baseline, so it stays calm and
-//              gold reads as a living signal, not wallpaper.
-//   degraded → Eclipse Glow (#ffd057) filled chip — the warm amber caution.
-//   down     → Re-entry Red filled chip — the `destructive` variant, errors only.
 function StatusIndicator({ status }: { status: ServiceHealthStatus }) {
   if (status === "down") {
     return <Badge variant="destructive">{STATUS_LABEL.down}</Badge>;
   }
 
   if (status === "degraded") {
-    // Eclipse Glow as a caution chip (the design system carries no amber badge
-    // variant, so the token is applied inline, dark-only by construction).
     return (
       <Badge className="border-transparent bg-[var(--eclipse-glow)]/15 text-[var(--eclipse-glow)]">
         {STATUS_LABEL.degraded}
@@ -298,8 +203,6 @@ function StatusIndicator({ status }: { status: ServiceHealthStatus }) {
     );
   }
 
-  // ok — the alive baseline: a steady gold dot under an expanding gold "ping" ring
-  // (the heartbeat). motion-safe so reduced-motion users get a calm static dot.
   return (
     <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
       <span className="relative flex size-1.5">
@@ -314,9 +217,6 @@ function StatusIndicator({ status }: { status: ServiceHealthStatus }) {
   );
 }
 
-// "up 3d" / "down 12m" / "ok 5h" — the elapsed time since the CURRENT status
-// began, with the verb tuned to the status. Whole-unit and quiet (VOICE.md keeps
-// the tabular register terse); a fresh transition reads "just now".
 function humanizeSince(sinceIso: string, nowIso: string, status: ServiceHealthStatus): string {
   const verb = status === "down" ? "down" : status === "degraded" ? "degraded" : "up";
   const elapsedMs = new Date(nowIso).getTime() - new Date(sinceIso).getTime();
@@ -342,8 +242,6 @@ function humanizeSince(sinceIso: string, nowIso: string, status: ServiceHealthSt
   return `${verb} ${days}d`;
 }
 
-// A fixed, locale-stable "Jun 4, 14:32 UTC" for the last-checked / event times, so
-// the server render matches hydration (the @/lib/format precedent).
 const timeFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   hour: "2-digit",
@@ -361,15 +259,8 @@ export function serviceCheckedAtLabel(value: string): string {
   return `as of ${formatCheckedAt(value)}`;
 }
 
-// The recent-uptime bar holds this many fixed ticks; real samples are right-aligned
-// (newest = "now" at the far right) and the unfilled left is padded with faint
-// placeholders, so the strip is always full-width and visibly FILLS IN as the ledger
-// grows (≈ BAR_SLOTS × the 10m cadence of history).
 const BAR_SLOTS = 90;
 
-// Tick tone per status — a calm dim neutral for ok (Eclipse Gold is reserved for the
-// live edge + the status dot, per The One Sun Rule), amber for degraded, red for down,
-// a faint placeholder for a slot the ledger hasn't reached yet.
 function tickClass(status: ServiceHealthStatus | null): string {
   if (status === "down") {
     return "bg-destructive";
@@ -401,8 +292,6 @@ function UptimeBar({
   return (
     <div aria-hidden className="flex h-8 w-full items-stretch gap-px">
       {slots.map((slot) => {
-        // The live edge (the "now" tick) pulses in its status colour — gold when ok
-        // (the heartbeat), amber/red when not; motion-safe so reduce-motion is calm.
         const isLive = slot.key === liveKey && slot.status !== null;
         const liveClass = isLive
           ? status === "ok"
@@ -421,8 +310,6 @@ function UptimeBar({
   );
 }
 
-// Uptime % over the recorded window (ok ÷ total samples), one decimal. Null until the
-// ledger has its first sample.
 function uptimePercent(samples: ServiceCheckSampleRow[]): number | null {
   if (samples.length === 0) {
     return null;
@@ -433,9 +320,6 @@ function uptimePercent(samples: ServiceCheckSampleRow[]): number | null {
   return Math.round((ok / samples.length) * 1000) / 10;
 }
 
-// Sort by a fixed order array; an unranked (unknown) service sorts after every ranked
-// one, then alphabetically among themselves. Shared by the core list (SERVICE_ORDER)
-// and the cron group (CRON_ORDER, the registry's catalog order).
 function sortByOrder(services: ServiceStatusRow[], order: string[]): ServiceStatusRow[] {
   return [...services].sort((a, b) => {
     const ai = order.indexOf(a.service);
@@ -447,13 +331,6 @@ function sortByOrder(services: ServiceStatusRow[], order: string[]): ServiceStat
   });
 }
 
-// Split the reported services into the core list and the two automation groups, each in its
-// own fixed order. A row joins automation if it is a registry cron (`cron.*`) OR a self-posted
-// automation (`self-deploy`); it then falls to `opsCrons` (OPS_AUTOMATION_IDS) or `trackCrons`
-// (everything else). The three lists never overlap, and a brand-new cron lands in track
-// automation automatically. Both cron lists sort by the same AUTOMATION_ORDER, so self-deploy
-// still leads ops and each keeps registry catalog order. Retired/orphaned ids (e.g. the
-// pre-split `automation` aggregate) are already filtered out upstream at `getServiceStatuses`.
 function groupServices(services: ServiceStatusRow[]): {
   core: ServiceStatusRow[];
   opsCrons: ServiceStatusRow[];
@@ -480,7 +357,6 @@ function groupServices(services: ServiceStatusRow[]): {
   };
 }
 
-// The overall headline: down beats degraded beats all-operational.
 function overallHeadline(services: ServiceStatusRow[]): string {
   if (services.length === 0) {
     return "No services reporting yet";
@@ -497,9 +373,6 @@ function overallHeadline(services: ServiceStatusRow[]): string {
   return "All systems nominal";
 }
 
-// One service row — the masthead (label + indicator), the subtitle/message line, the
-// uptime bar, and the footer (history span · uptime% · now). Shared by the core list
-// and the Automation (per-cron) group so both render identically.
 export function ServiceRow({
   now,
   samples,
@@ -519,11 +392,6 @@ export function ServiceRow({
         ? null
         : humanizeSince(service.since, now, service.status);
 
-  // Scheduled automations (the registry crons) show their next run so the operator can see
-  // when each fires without SSHing the box. A cron with a fixed wall-clock `schedule` (the
-  // 01:00 audit, the Friday newsletter) gets its TRUE next fire, DST and all; an interval
-  // cron keeps the honestly-approximate `≈` estimate (its cadence + the ~10m probe, not the
-  // cron's own last-run wall-clock). A row with no declared cadence shows none.
   const cadence = CRON_CADENCE_MS[service.service];
   const schedule = CRON_SCHEDULE[service.service];
   const nextRun =
@@ -577,8 +445,6 @@ export function ServiceRow({
   );
 }
 
-// One labeled group of service rows (the core services, or the per-cron Automation
-// group). The label is a quiet uppercase header matching "Recent events".
 function ServiceGroup({
   label,
   now,
@@ -596,8 +462,6 @@ function ServiceGroup({
 
   return (
     <section aria-label={label}>
-      {/* The count sits at the far end of the rule — how many rows the section watches,
-          quiet data rather than a second heading. */}
       <h2 className={cn(SECTION_HEADING_CLASS, "flex items-baseline justify-between")}>
         {label}
         <span className="text-xs font-normal normal-case tracking-normal text-muted-foreground">

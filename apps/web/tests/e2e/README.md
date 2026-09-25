@@ -2,6 +2,8 @@
 
 Browser tests for Fluncle's **public** surfaces, run against a fully isolated throwaway stack. Distinct from `tests/browser/` — those are hand-rolled operator smokes that drive a live dev server as the admin; this suite owns its own stack and its own data.
 
+The stack swaps in a dummy `.dev.vars`, starts a fresh local libSQL database, and restores any previous environment file on teardown, including after an interrupted run. The browser stubs external requests, while the Vite server installs the same outbound-network guard used by package tests before server modules load; browser interception alone cannot stop server-side preview, feed, or search requests. Loopback remains available for the local app and database. A test that intentionally exercises a failed resource must allow only that specific browser error, then reject every other console or page error.
+
 ```bash
 bun run --cwd apps/web test:e2e:install   # once: fetch the bundled chromium
 bun run --cwd apps/web test:e2e           # boot the stack, run the suite, tear it down

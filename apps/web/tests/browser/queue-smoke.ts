@@ -1,23 +1,3 @@
-// The attention-queue browser smoke (docs/admin-shell.md §Verifying): drives the
-// `/admin` queue in a real Chrome as the operator, past hydration — the keyboard
-// loop, an action fire, snooze, won't-do, the zero state, and the legacy
-// ?stage/?mix redirect — at desktop and phone widths, screenshotting each stop.
-// Run against a live dev server; `SEED=1` seeds the local dev DB with rows for
-// every source around the run (two TikTok drafts, a cue-less take, a
-// distributing mixtape; the drip-empty row is free) and removes them in a
-// `finally`, so the run is self-contained:
-//
-//   BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/queue-smoke SEED=1 \
-//     bun tests/browser/queue-smoke.ts
-//
-// Seeding refuses any non-local database URL. Snooze/won't-do prefs live in the
-// browser context's localStorage, so a run leaves no operator state behind (the
-// one action fired is a clipboard copy).
-// NOTE: the working set REFILLS from the backlog, so a cleared row keeps the
-// visible count constant until the backlog drains — assertions compare row
-// identities, never bare counts. Exits non-zero on a failed expectation or any
-// page error.
-
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { type Client, createClient } from "@libsql/client";
@@ -34,8 +14,6 @@ const failures: string[] = [];
 function watchErrors(page: Page, label: string): void {
   page.on("pageerror", (error) => failures.push(`[${label}] pageerror: ${error.message}`));
   page.on("console", (message) => {
-    // Resource-load failures (a dev cover 404) aren't queue failures; real
-    // console.error output is.
     if (message.type() === "error" && !message.text().includes("Failed to load resource")) {
       failures.push(`[${label}] console.error: ${message.text()}`);
     }
@@ -49,12 +27,10 @@ function expect(condition: boolean, label: string): void {
   console.log(`${condition ? "ok" : "FAIL"} — ${label}`);
 }
 
-/** The queue's own rows (never the sidebar's list items). */
 function queueRows(page: Page): Locator {
   return page.locator('ul[aria-label="Attention queue"] > li');
 }
 
-/** The selected row's object title (first bold span of the gold-washed row). */
 async function selectedTitle(page: Page): Promise<string> {
   return (
     (await page
@@ -64,12 +40,6 @@ async function selectedTitle(page: Page): Promise<string> {
   ).trim();
 }
 
-// A row's identity in the DOM: its source label (the first sr-only span, from
-// SOURCE_LABELS — "YouTube", "TikTok draft", "Mixtape", …) plus its title. A title
-// ALONE is not an identity: one finding raises several rows (its YouTube-post row
-// and its seeded TikTok-draft row carry the same title), so snoozing one leaves the
-// sibling — and a title-only check reads that sibling as "still here" and fails a
-// working snooze. Keyed on (source, title), the snoozed row is unambiguous.
 async function rowIdentity(row: Locator): Promise<string> {
   const title = ((await row.locator("span.font-bold").first().textContent()) ?? "").trim();
   const source = ((await row.locator("span.sr-only").first().textContent()) ?? "").trim();
@@ -92,9 +62,6 @@ async function rowIds(page: Page): Promise<string[]> {
   return ids;
 }
 
-// Past-hydration gate. The DEFAULT selection (row 0) is server-rendered, so the
-// gold wash existing proves nothing — hydration is proven the moment `j`
-// actually MOVES the cursor (which needs ≥2 rows; the seeded set guarantees it).
 async function waitForHydration(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
   const deadline = Date.now() + 20_000;
@@ -114,8 +81,6 @@ async function waitForHydration(page: Page): Promise<void> {
     }
   }
 }
-
-// ── Seeding (SEED=1): rows for every source, local dev DB only ───────────────
 
 const QA_IDS = {
   cue: "qa-queue-cue-1",
@@ -141,9 +106,6 @@ function seedClient(): Client {
   });
 }
 
-/** Seed one row per source: a fresh + a bounced TikTok draft (on the two newest
- * dressed findings without a TikTok post), a cue-less take, and a distributing
- * mixtape missing its Mixcloud leg. Unposted findings + the empty drip come free. */
 async function seedQueueRows(db: Client): Promise<void> {
   const now = Date.now();
   const iso = (ms: number) => new Date(ms).toISOString();
@@ -205,8 +167,7 @@ async function seedQueueRows(db: Client): Promise<void> {
           values (?, ?, 'youtube', 'published', 'https://youtu.be/qa', ?, ?, ?)
           on conflict(mixtape_id, platform) do nothing`,
   });
-  // A pending crew submission — the submission queue source, carrying a pre-chew
-  // triage verdict so the row's advisory line renders.
+
   await db.execute({
     args: [QA_IDS.submission, iso(now - 3 * 3_600_000)],
     sql: `insert or replace into submissions
@@ -230,7 +191,6 @@ async function cleanupQueueRows(db: Client): Promise<void> {
 }
 
 async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promise<void> {
-  // ── Desktop: the loop ───────────────────────────────────────────────────────
   const desktop = await newAdminPage(browser, BASE_URL, { height: 900, width: 1440 });
   await desktop.context.grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: BASE_URL,
@@ -247,7 +207,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   );
   await page.screenshot({ fullPage: true, path: join(OUT_DIR, "queue-desktop.png") });
 
-  // The keyboard cursor: exactly one gold selection, and j moves it.
   const firstSelected = await selectedTitle(page);
   await page.keyboard.press("j");
   await page.waitForTimeout(150);
@@ -256,7 +215,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   await page.keyboard.press("k");
   await page.waitForTimeout(150);
 
-  // Fire the primary on a copy-caption row: non-mutating, clipboard only.
   const copyButton = page.getByRole("button", { name: "Copy caption" }).first();
   await copyButton.click();
   await page
@@ -270,24 +228,18 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   const clipboard = await page.evaluate(() => navigator.clipboard.readText().catch(() => ""));
   expect(clipboard.length > 0, "the caption reached the clipboard");
 
-  // Snooze the selected row (s → the +3h slot): that ROW leaves the active list
-  // (the working set refills behind it, so counts stay put — identities move).
-  // Keyed on (source, title): the same finding also raises a sibling row with the
-  // same title, so a title-only check would read the sibling as "still here".
   const toSnooze = await selectedRowId(page);
   await page.keyboard.press("s");
   await page.getByRole("button", { name: "+3h" }).click();
   await page.waitForTimeout(500);
   expect(!(await rowIds(page)).includes(toSnooze), `snoozed row left the list (${toSnooze})`);
 
-  // Won't-do the selected row (x) — permanent, with the Undo toast.
   const toDismiss = await selectedRowId(page);
   await page.keyboard.press("x");
   await page.waitForTimeout(500);
   expect(!(await rowIds(page)).includes(toDismiss), `won't-do row left the list (${toDismiss})`);
   expect((await page.getByRole("button", { name: "Undo" }).count()) > 0, "won't-do offered Undo");
 
-  // [Show all] reveals the backlog + the snoozed and dismissed rows.
   await page.getByRole("button", { name: "Show all" }).click();
   await page.waitForTimeout(500);
   expect(page.url().includes("all=true"), "show-all deep-links ?all");
@@ -297,7 +249,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   await page.getByRole("button", { name: "Show less" }).click();
   await page.waitForTimeout(400);
 
-  // Clear the working set (x through every row) — zero must celebrate.
   const deadline = Date.now() + 60_000;
   while ((await queueRows(page).count()) > 0 && Date.now() < deadline) {
     await page.keyboard.press("x");
@@ -314,12 +265,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   await page.waitForTimeout(400);
   await page.screenshot({ fullPage: true, path: join(OUT_DIR, "queue-zero.png") });
 
-  // ── The legacy board deep-links survive ────────────────────────────────────
-  // `/admin` owned the findings board before the queue, so its old ?stage/?mix
-  // bookmarks redirect to the board at /admin/findings. The `needs-tagging` stage
-  // retired with vibe-tagging, so the board validates that legacy value back to
-  // `all` (the mix filter carries over) — the point is a legacy link lands somewhere
-  // sane, not that a dead stage survives.
   await page.goto(`${BASE_URL}/admin?stage=needs-tagging&mix=open`);
   await page.waitForLoadState("networkidle");
   await page
@@ -341,7 +286,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
 
   await desktop.context.close();
 
-  // ── Phone: fresh context (no prefs), rows back, layout intact ──────────────
   const phone = await newAdminPage(browser, BASE_URL, { height: 844, width: 390 });
   watchErrors(phone.page, "phone");
   await phone.page.goto(`${BASE_URL}/admin`);
@@ -361,8 +305,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
 async function main(): Promise<void> {
   mkdirSync(OUT_DIR, { recursive: true });
 
-  // Seed the local dev DB around the whole run; the `finally` guarantees the
-  // shared dev database is left exactly as found, even on a failing drive.
   const db = SEED ? seedClient() : undefined;
   if (db) {
     await seedQueueRows(db);

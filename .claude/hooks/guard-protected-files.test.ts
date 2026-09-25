@@ -1,15 +1,3 @@
-// Tests for the PreToolUse guard — the hook that turns three prompt-only "hard rails" into actual
-// refusals for the unattended box sweeps.
-//
-//   bun test .claude/hooks/guard-protected-files.test.ts
-//
-// These exist because the guard shipped BROKEN and looked fine. It parsed its payload with `jq`,
-// `jq` is absent from the Hermes container, and without `set -e` the empty result fell through the
-// `[ -z "$file" ] && exit 0` line as "nothing to check". Every edit on the box was allowed, by a
-// hook that reported success every time. So the suite asserts BOTH halves: that a forbidden call is
-// refused, AND that a guard which cannot parse refuses rather than waves through. A test that only
-// checked the happy path would have passed against the broken version.
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
@@ -28,7 +16,6 @@ const HOOK = join(import.meta.dir, "guard-protected-files.sh");
 
 type Payload = { command?: string; file_path?: string; tool: string };
 
-/** Feed the hook one payload. exit 2 = refused (and the reason goes to Claude on stderr). */
 function runGuard(p: Payload, env: Record<string, string> = {}): { code: number; why: string } {
   const body = JSON.stringify({
     tool_input: {
@@ -69,13 +56,11 @@ describe("always-on rules — every session, operator included", () => {
 
 describe("Bash is matched — the hole the Edit|Write-only matcher left open", () => {
   test("a shell redirection into a protected path is refused", () => {
-    // The exact shape that walked past the previous guard.
     expect(runGuard({ command: "cat > /ws/.env", tool: "Bash" }).code).toBe(2);
     expect(runGuard({ command: "tee /ws/apps/web/drizzle/0099_x.sql", tool: "Bash" }).code).toBe(2);
   });
 
   test("interactively, merely READING a local .env is allowed", () => {
-    // The operator debugging their own machine is not the threat model.
     expect(runGuard({ command: "cat .env", tool: "Bash" }).code).toBe(0);
   });
 
@@ -84,7 +69,6 @@ describe("Bash is matched — the hole the Edit|Write-only matcher left open", (
   });
 
   test("an ordinary build command is not caught by the .env pattern", () => {
-    // Guards against the obvious false positive: substrings like "environment" or "--env".
     for (const c of [
       "bun run build",
       "echo environment",
@@ -114,18 +98,12 @@ describe("unattended tier — prompt rails become refusals", () => {
       expect(runGuard(payload, UNATTENDED).code).toBe(2);
     });
     test(`${name} is still editable interactively`, () => {
-      // The operator must be able to maintain these; the tier split is the whole design.
       expect(runGuard(payload).code).toBe(0);
     });
   }
 });
 
 describe("FAIL CLOSED — the failure mode that shipped", () => {
-  /**
-   * Model the container precisely: bash and the coreutils the hook itself needs are present, and
-   * bun/node/jq are NOT. Starving PATH entirely would only prove that `bash` cannot be launched,
-   * which tests nothing about the guard.
-   */
   function starvedPath(): { dir: string; path: string } {
     const dir = mkdtempSync(join(tmpdir(), "fluncle-guard-starved-"));
     try {
@@ -146,8 +124,6 @@ describe("FAIL CLOSED — the failure mode that shipped", () => {
   }
 
   test("with no bun, node, or jq on PATH the guard REFUSES instead of allowing", () => {
-    // Reproduces the container the sweeps actually run in. The old hook exited 0 here, for every
-    // call, forever. If this test ever goes green with code 0 again, the guard is decorative.
     const starved = starvedPath();
     try {
       const r = runGuard(

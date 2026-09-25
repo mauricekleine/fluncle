@@ -6,11 +6,6 @@ import { Label } from "@fluncle/ui/components/label";
 import { authClient } from "@/lib/auth-client";
 import { siteUrl } from "@/lib/fluncle-links";
 
-// The password-reset surface. Better Auth's reset email links to its
-// `/api/auth/reset-password/:token` endpoint, which validates the token then
-// redirects here with the token (or `?error=INVALID_TOKEN`) in the query. A quiet
-// form takes the new password and posts it back via `authClient.resetPassword`.
-
 type ResetSearch = {
   error?: string;
   token?: string;
@@ -18,8 +13,6 @@ type ResetSearch = {
 
 type Phase = "done" | "error" | "idle" | "working";
 
-// TanStack's canonical option order (validateSearch feeds the next step's
-// inference), which isn't alphabetical — so sort-keys is off here. See AGENTS.md.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/reset-password")({
   validateSearch: (search: Record<string, unknown>): ResetSearch => ({
@@ -34,7 +27,7 @@ export const Route = createFileRoute("/reset-password")({
         content: "Set a new password on your private Fluncle account.",
         name: "description",
       },
-      // A one-time-token form — never index it.
+
       { content: "noindex, nofollow", name: "robots" },
     ],
   }),

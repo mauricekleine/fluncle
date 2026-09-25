@@ -1,13 +1,3 @@
-// THE DISCOVERY LOOP, AS TWO PEOPLE WALK IT (docs/planning/discovery-ux personas), at 390×844.
-//
-//   - Jade, from the front door: hears three different tracks inside a minute without leaving the
-//     page, follows the lead into "Similar tracks", and sends a track to Spotify.
-//   - Priya: starts a list with one tap, lets it advance on its own, then pauses it from the player
-//     on a different page.
-//
-// The preview relay is answered with silence (`tests/e2e/player.ts`), so the queue advances on the
-// clip's real `ended`, in a real browser, past hydration.
-
 import { expect, test, type Page } from "@playwright/test";
 import { blockExternalRequests } from "./browser";
 import { routePreviews } from "./player";
@@ -34,15 +24,12 @@ test("Jade hears three tracks from the front door inside a minute, without leavi
   const started = Date.now();
   const player = page.getByRole("region", { name: "Player" });
 
-  // One: the lead plays where it sits.
   await page
     .getByRole("button", { name: /^Play the preview of / })
     .first()
     .click();
   await expect(player).toContainText(SEEDED_LEAD.title);
 
-  // Two and three: tiles in the findings band, each its own cover. The band can hold the lead
-  // too (it is the newest noted finding), so each press picks a tile that is not already sounding.
   const idleTiles = page.locator('#fd-findings [data-discovery-play][data-status="idle"]');
 
   await expect(idleTiles.first()).toBeVisible();
@@ -59,13 +46,10 @@ test("Jade hears three tracks from the front door inside a minute, without leavi
     ).toHaveAttribute("data-status", /^(loading|playing)$/);
   }
 
-  // A control reads "loading" the moment it is pressed, a beat before its clip is requested, so
-  // the count is polled rather than read once.
   await expect.poll(() => new Set(requested).size).toBeGreaterThanOrEqual(3);
   expect(Date.now() - started).toBeLessThan(60_000);
   await expect(page).toHaveURL(/\/$/);
 
-  // Something that sounds like it: the player's ⋮ carries the playing track's actions.
   await player.getByRole("button", { name: /^Actions for / }).click();
 
   const spotify = page.getByRole("menuitem", { name: "Listen on Spotify" });
@@ -80,11 +64,11 @@ test("Jade hears three tracks from the front door inside a minute, without leavi
   await player.getByRole("button", { name: /^Actions for / }).click();
   await page.getByRole("menuitem", { name: "Similar tracks" }).click();
   await expect(page).toHaveURL(/\/search\?like=e2e-track-/);
-  // The sonic view names its seed once, in the matchline.
+
   await expect(page.locator(".search-page-matchline")).toContainText("close to");
   await expect(page.getByText("Reading by name only right now.", { exact: false })).toHaveCount(0);
   await expect(page.locator(".search-page-tracks .discovery-row-link").first()).toBeVisible();
-  // The player comes along into the results.
+
   await expect(player).toBeVisible();
 });
 
@@ -103,10 +87,9 @@ test("Priya starts a list with one tap, lets it run, and pauses it from another 
   const position = player.locator(".player-position--inline");
 
   await expect(position).toHaveText(/^1\/\d+$/);
-  // The list runs on by itself: nobody touches anything between these.
+
   await expect(position).toHaveText(/^3\/\d+$/, { timeout: 15_000 });
 
-  // A different page, by client navigation: the sound and its control come along.
   await page.getByRole("banner").getByRole("link", { name: "Fluncle home" }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(player).toBeVisible();
