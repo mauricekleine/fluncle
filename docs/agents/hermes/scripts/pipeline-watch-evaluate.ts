@@ -426,13 +426,14 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       .filter((marker) => !withinFrontierRefreshWindow(new Date(marker.at)))
       .slice(0, PIPELINE_SLOS.anchor.ticks);
     const anchorOutput = total(expected, "produced");
+
     if (
-      expected.length === PIPELINE_SLOS.anchor.ticks &&
-      expected.every(
+      expected.some(
         (marker) =>
           marker.summary.gateReason === "quota_hold" ||
           marker.summary.blockedReason === "quota_hold",
-      )
+      ) &&
+      (anchorOutput ?? 0) < PIPELINE_SLOS.anchor.minOutput
     ) {
       return result(
         stage,

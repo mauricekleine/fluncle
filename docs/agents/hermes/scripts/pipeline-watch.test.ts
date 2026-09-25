@@ -142,6 +142,34 @@ describe("real box journal summary replay", () => {
     expect(planIncidents({}, [verdict], first + 3 * 60 * 60_000).alerts).toEqual([]);
   });
 
+  test("a held tick beside a briefly open zero-output tick is still the planned pause", () => {
+    const first = Date.parse("2026-09-24T00:30:00.000Z");
+    const markers = [
+      { at: first, summary: { gateReason: "quota_hold", produced: 0, queueDepth: 2000 } },
+      {
+        at: first + 60 * 60_000,
+        summary: {
+          blockedReason: "mostly_deferred",
+          gateReason: "open",
+          produced: 0,
+          queueDepth: 2000,
+        },
+      },
+    ];
+    const verdict = evaluate("anchor", markers);
+    expect(verdict.state).toBe("scheduled_pause");
+    expect(planIncidents({}, [verdict], first + 2 * 60 * 60_000).alerts).toEqual([]);
+  });
+
+  test("a held window that still produced its minimum is judged on output", () => {
+    const first = Date.parse("2026-09-24T00:30:00.000Z");
+    const markers = [0, 1].map((hour) => ({
+      at: first + hour * 60 * 60_000,
+      summary: { gateReason: "quota_hold", produced: 15, queueDepth: 2000 },
+    }));
+    expect(evaluate("anchor", markers).state).toBe("healthy");
+  });
+
   test("enrich repair pending remains a stall with a counted backlog", () => {
     const verdict = evaluate("analyze", asMarkers(fixtures.enrichRepair), {
       queues: { analyze: 100, capture: 5, embed: 5 },
